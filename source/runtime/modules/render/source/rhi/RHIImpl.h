@@ -596,7 +596,6 @@ namespace Moer::Render {
         mutable PipelineHandle*            pipeline{};
         RenderPassInfo                     render_pass_info;
         Array<MeshDrawData>                mesh_data;
-        uint                               vtx_cnt;
         ArrayArguments                     args;
         GraphEventRef                      evaluate_mesh_task = nullptr;
         UnorderedMap<Buffer*, BufferRange> vertex_buffers;
@@ -614,8 +613,7 @@ namespace Moer::Render {
                                                                                          args(std::move(_args)),
                                                                                          pipeline(&_pipeline),
                                                                                          render_pass_info(std::move(_info)),
-                                                                                         mesh_data(std::move(_draw_data)),
-                                                                                         vtx_cnt(0) {
+                                                                                         mesh_data(std::move(_draw_data)) {
             evaluate_mesh_task = LambdaTask::Create([this]() {
                                      for (const auto& mesh : mesh_data) {
                                          for (uint vtx_idx = 0; vtx_idx < mesh.vtx_cnt; ++vtx_idx) {

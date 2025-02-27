@@ -294,10 +294,6 @@ namespace Moer {
 
     void SceneCache::ReadSceneGeomInfo(FInputStream& _stream, SceneData& _scene_data) {
         _stream >>
-            _scene_data.m_meshlet_descs >>
-            _scene_data.m_meshlet_bounds;
-
-        _stream >>
             _scene_data.m_mesh_buffers >>
             _scene_data.m_mesh_instances >>
             _scene_data.m_mesh_geometries >>
@@ -411,9 +407,6 @@ namespace Moer {
     }
 
     void SceneCache::WriteSceneGeomInfo(FOutputStream& _stream, const SceneData& _scene_data) {
-        _stream << _scene_data.m_meshlet_descs;
-        _stream << _scene_data.m_meshlet_bounds;
-
         //cpu data
         _stream << _scene_data.m_mesh_buffers;
         _stream << _scene_data.m_mesh_instances;
@@ -689,13 +682,6 @@ namespace Moer {
 
         auto& copy_queue = device.GetCopyQueue();
 
-        // The following 3 buffers are not used, so I comment them.
-        // BE CAREFUL: `mesh_infos_buffer` should not be created, because it's a SharedPtr<..> vector! It may cause random crash.
-        //
-        // auto meshlet_bounds_buffer = device.CreateBuffer<byte>(_scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound), EBufferUsageFlags::UNORDERED_ACCESS);
-        // auto meshlet_descs_buffer  = device.CreateBuffer<byte>(_scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc), EBufferUsageFlags::UNORDERED_ACCESS);
-        // // auto mesh_infos_buffer     = device.CreateBuffer<byte>(_scene_data.m_mesh_infos.size() * sizeof(MeshInfo), EBufferUsageFlags::UNORDERED_ACCESS);
-
         auto instance_data_buffer = device.CreateBuffer<byte>(_scene->GetInstanceDatas().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
         auto material_buffer      = device.CreateBuffer<byte>(_scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
 
@@ -708,22 +694,6 @@ namespace Moer {
         }
 
         BufferRef light_buffer = device.CreateBuffer<byte>(lights.size() * sizeof(LightComponentData), EBufferUsageFlags::UNORDERED_ACCESS);
-
-        // The following 3 buffers are not used, so I comment them.
-        // BE CAREFUL: `mesh_infos_buffer` should not be created, because it's a SharedPtr<..> vector! It may cause random crash.
-        //
-        // cmd_list.CopyFrom(
-        //     std::span<byte>((byte*)_scene_data.m_meshlet_bounds.data(), _scene_data.m_meshlet_bounds.size() * sizeof(MeshletBound)),
-        //     meshlet_bounds_buffer->GetView(),
-        //     "CopyFrom meshlet_bounds_buffer");
-        // cmd_list.CopyFrom(
-        //     std::span<byte>((byte*)_scene_data.m_meshlet_descs.data(), _scene_data.m_meshlet_descs.size() * sizeof(MeshletDesc)),
-        //     meshlet_descs_buffer->GetView(),
-        //     "CopyFrom meshlet_descs_buffer");
-        // // cmd_list.CopyFrom(
-        // //     std::span<byte>((byte*)_scene_data.m_mesh_infos.data(), _scene_data.m_mesh_infos.size() * sizeof(MeshInfo)),
-        // //     mesh_infos_buffer->GetView(),
-        // //     "CopyFrom mesh_infos_buffer");
 
         cmd_list.CopyFrom(
             material_data,
@@ -757,8 +727,6 @@ namespace Moer {
         _scene->SetBuffer(EGpuSceneResource::MaterialInfo, material_buffer);
         _scene->SetBuffer(EGpuSceneResource::GeometryInfo, geometry_data_buffer);
         _scene->SetBuffer(EGpuSceneResource::GeometryInstance, geometry_instance_buffer);
-        // _scene->SetBuffer(EGpuSceneResource::RTInstance, rt_instance_buffer);
-
         _scene->SetBuffer(EGpuSceneResource::LightInfo, light_buffer);
 
         light_buffer->SetName("light_buffer");

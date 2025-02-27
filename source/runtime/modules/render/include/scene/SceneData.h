@@ -51,11 +51,7 @@ namespace Moer {
         // Path
         std::filesystem::path m_path;
 
-        // Data obtained from Part 1 Meshlet:
-        Moer::Array<MeshletDesc>        m_meshlet_descs{};
-        Moer::Array<Moer::MeshletBound> m_meshlet_bounds{};
-
-        // Data obtained from Part 2 Nodes Prev:
+        // Data obtained from Part 1 Nodes Prev:
         Moer::Array<Render::InstanceData> m_instance_infos{};// gpu data, instance_info alse for cpu
         Moer::Array<MeshInstance>         m_mesh_instances{};// loaded data
 
@@ -69,10 +65,10 @@ namespace Moer {
         Moer::UnorderedMap<std::string, Moer::MaterialRef>      m_materials{};
         Moer::UnorderedMap<std::string, MatInstanceTextureInfo> m_mat_instance_textures{};
 
-        // Data obtained from Part 3 Nodes Post:
+        // Data obtained from Part 2 Nodes Post:
         Moer::Array<SharedPtr<MeshBuffers>> m_mesh_buffers{};// loaded data
 
-        // Data obtained from Part 4 Camera&Light:
+        // Data obtained from Part 3 Camera&Light:
         Moer::Array<CameraRef>         m_cameras{};
         Moer::Array<LightComponentRef> m_lights{};
     };

@@ -896,13 +896,7 @@ int main(int argc, const char** argv) {
 
             // MARK: GBuffer Pass
             Array<MeshDrawData> mesh_draw_datas{};
-            // draw_datas.emplace_back(SingleDrawParam{uint(index_buffer->GetByteSize()/sizeof(uint)), 1, 0, 0, 0});
 
-            uint instance_count = 0;
-            // for (auto entity : scene.GetEntities()) {
-            //     auto& mesh = RenderableManager::Get().GetMeshInfo(entity);
-            //     draw_datas.emplace_back(SingleDrawParam{mesh->idx_count, 1, mesh->idx_offset, mesh->vtx_offset, instance_count++});
-            // }
             std::span<const StaticArray<VertexBuffer, VA_NUM>> vertex_buffers = scene.GetVertexBufferViews();
             std::span<const IndexBuffer>                       index_buffers  = scene.GetIndexBufferViews();
 
@@ -911,9 +905,11 @@ int main(int argc, const char** argv) {
                 auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
 
                 const StaticArray<VertexBuffer, VA_NUM>& vertex_buffer = vertex_buffers[mesh->global_mesh_idx];
-                auto&                                    mesh_draw_dat = mesh_draw_datas.emplace_back(
+
+                auto& mesh_draw_dat = mesh_draw_datas.emplace_back(
                     std::span<VertexBuffer>((VertexBuffer*)vertex_buffer.data(), 4),
                     index_buffers[mesh->global_mesh_idx]);
+
                 for (uint i = 0; i < mesh->geometries.size(); i++) {
                     uint                idx              = geom_idx + i;
                     const MeshGeometry& geom             = *mesh->geometries[i];
@@ -1146,7 +1142,7 @@ int main(int argc, const char** argv) {
                         uint filter  = uint(sampler.filter);
                         uint address = uint(sampler.address_mode);
                         uint compare = uint(sampler.compare_function);
-                        return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
+                        return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num))*address + filter;
                         // method 2
                         // uint bdls_tex_handle = bindless_array->AllocateTexture(antialiasing_output, sampler);
                         // uint sampler_idx     = bdls_tex_handle & 0xff;

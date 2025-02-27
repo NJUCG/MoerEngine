@@ -67,7 +67,7 @@ namespace Moer::Resource::JsonScene {
 
         void PushbackMeshInfo(SharedPtr<MeshInfo> info, const MeshProcessOutput& output) {
             scn_dat->m_mesh_infos.push_back(info);
-            PushbackMeshlets(output);
+            // PushbackMeshlets(output);
             // scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
             // scn_dat->m_index_data.insert(scn_dat->m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
             vertex_cnt += info->vtx_count;
@@ -103,11 +103,11 @@ namespace Moer::Resource::JsonScene {
         // }
 
     private:
-        void PushbackMeshlets(const MeshProcessOutput& output) {
-            scn_dat->m_meshlet_bounds.insert(scn_dat->m_meshlet_bounds.end(), output.meshlet_bounds.begin(), output.meshlet_bounds.end());
-            scn_dat->m_meshlet_descs.insert(scn_dat->m_meshlet_descs.end(), output.meshlets.begin(), output.meshlets.end());
-            meshlet_cnt += output.meshlets.size();
-        }
+        // void PushbackMeshlets(const MeshProcessOutput& output) {
+        //     scn_dat->m_meshlet_bounds.insert(scn_dat->m_meshlet_bounds.end(), output.meshlet_bounds.begin(), output.meshlet_bounds.end());
+        //     scn_dat->m_meshlet_descs.insert(scn_dat->m_meshlet_descs.end(), output.meshlets.begin(), output.meshlets.end());
+        //     meshlet_cnt += output.meshlets.size();
+        // }
     };
 
     UniquePtr<EntityVertexData>    GetEntityVertexData(const aiMesh* mesh);

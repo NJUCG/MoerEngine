@@ -471,50 +471,17 @@ namespace Moer::Resource::Gltf {
         auto     attribute = GetAttribute(gltf_scene->mMeshes[0], stride);
         stride *= sizeof(float);
 
-        data->m_mesh_infos.reserve(gltf_scene->mNumMeshes);
+        // MARK: Part 0 Generate Meshlet (Deprecated)
+        //
+        // Meshlet is deprecated in current version, needs to be re-implemented.
+        // You can refer to the old implementation in this commit (browse the file in this commit): 937c1dac60c94d602f000e52f927e33b40a19dae
 
-        // MARK: Part 1 Meshlet
-        // The following code obtains these data:
-        //   - m_meshlet_bounds, m_meshlet_descs
-
-        uint32_t vertex_count = 0, index_count = 0, meshlet_count = 0;
-        for (uint32_t i = 0; i < gltf_scene->mNumMeshes; i++) {
-            const auto* mesh = gltf_scene->mMeshes[i];
-
-            uint32_t temp_stride;
-            auto     flags = GetAttribute(gltf_scene->mMeshes[i], temp_stride);
-            assert(attribute == flags && "Meshes have different attribute");
-            assert(temp_stride == stride / 4 && "Meshes have different attribute");
-            Moer::Array<float> temp_vertex_data(mesh->mNumVertices * stride / sizeof(float));
-            GetVertexData(mesh, temp_vertex_data.data());
-
-            Moer::MeshProcessInput input;
-            input.vertex_data   = temp_vertex_data.data();
-            input.vertex_count  = mesh->mNumVertices;
-            input.vertex_stride = stride;
-
-            Moer::Array<uint32_t> indices;
-            indices.reserve(mesh->mNumFaces * 3);// NOLINT(cppcoreguidelines-pro-bounds-constant-array-index)
-            for (uint32_t i = 0; i < mesh->mNumFaces; i++) {
-                const auto& face = mesh->mFaces[i];
-                indices.push_back(face.mIndices[0]);
-                indices.push_back(face.mIndices[1]);
-                indices.push_back(face.mIndices[2]);
-            }
-
-            input.index_data  = indices.data();
-            input.index_count = indices.size();
-
-            Moer::MeshProcessOutput&& output = Moer::MeshProcessor::GenerateMeshlets(input);
-
-            data->m_meshlet_bounds.insert(data->m_meshlet_bounds.end(), output.meshlet_bounds.begin(), output.meshlet_bounds.end());
-            data->m_meshlet_descs.insert(data->m_meshlet_descs.end(), output.meshlets.begin(), output.meshlets.end());
-        }
-
-        // MARK: Part 2 LoadNode Prev
+        // MARK: Part 1 LoadNode Prev
         // The following code obtains these data:
         //   - m_instance_infos, m_mesh_instances, m_mesh_infos
         //   - all about materials & textures (m_materials, m_material_instances, m_material_instance_indexes, m_textures)
+
+        data->m_mesh_infos.reserve(gltf_scene->mNumMeshes);
 
         GeomRecord                        geom_record;
         UnorderedMap<const aiNode*, uint> node2instance;
@@ -548,8 +515,6 @@ namespace Moer::Resource::Gltf {
                         mesh_info->global_mesh_idx = data->m_mesh_infos.size() - 1;
                         mesh_info->name            = _node->mName.C_Str();
 
-                        //for serialization
-                        mesh_info->buf_idx = 0;
                         for (uint32_t i = 0; i < _node->mNumMeshes; i++) {
                             auto* mesh = gltf_scene->mMeshes[_node->mMeshes[i]];
 
@@ -622,7 +587,7 @@ namespace Moer::Resource::Gltf {
             LoadNodes(gltf_scene, gltf_scene->mRootNode, on_load_node_prev);
         }
 
-        // MARK: Part 3 LoadNode Post
+        // MARK: Part 2 LoadNode Post
         // The following code obtains these data:
         //   - m_mesh_buffers
 
@@ -641,9 +606,11 @@ namespace Moer::Resource::Gltf {
 
             mesh_buffer->indices.resize(total_idx_cnt);
 
-            total_idx_cnt = 0;
             total_vtx_cnt = 0;
+            total_idx_cnt = 0;
+
             geom_record.clear();
+
             std::function<void(const aiNode*)> on_load_node_post = [&](const aiNode* _node) {
                 if (!_node->mMeshes) return;
                 uint idx = node2instance[_node];
@@ -658,14 +625,15 @@ namespace Moer::Resource::Gltf {
                     geo_set.insert(mesh);
                 }
 
-                auto geo_iter      = geom_record.find(geo_set);
-                mesh_info->buffers = mesh_buffer;
+                auto geo_iter = geom_record.find(geo_set);
                 //already loaded
                 if (geo_iter != geom_record.end()) {
                     return;
                 }
-
                 geom_record[geo_set] = mesh_info;
+
+                mesh_info->buffers = mesh_buffer;
+                mesh_info->buf_idx = data->m_mesh_buffers.size() - 1;// For serialization
 
                 for (uint32_t i = 0; i < _node->mNumMeshes; i++) {
 
@@ -720,7 +688,7 @@ namespace Moer::Resource::Gltf {
             mesh_buffer->FillRanges();
         }
 
-        // MARK: Part 4 Camera&Light
+        // MARK: Part 3 Camera&Light
 
         LoadCameras(gltf_scene);
         LoadLights(gltf_scene);
@@ -729,6 +697,8 @@ namespace Moer::Resource::Gltf {
         data->m_path = _file_path.string();
 
         /**
+         * Old code:
+         * 
          * // Basic information:
          * m_scene_data->m_path = _file_path.string();
          * 
