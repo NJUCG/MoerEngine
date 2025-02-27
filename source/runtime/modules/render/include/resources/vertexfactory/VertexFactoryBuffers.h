@@ -29,7 +29,7 @@ namespace Moer {
 
         Array<Array<uint8>>         m_buffers;// Buffer length == m_buffers[0].length() / m_attribute_sizes[0]
         Array<EVertexAttributes>    m_attributes;
-        StaticArray<size_t, VA_NUM> m_attributes_map;
+        StaticArray<size_t, VA_NUM> m_attribute_to_index_map;
 
         Array<EPixelFormat> m_pixel_formats;  // cache, could be instead by VertexAttributesTool
         Array<size_t>       m_attribute_sizes;// cache, could be instead by VertexAttributesTool

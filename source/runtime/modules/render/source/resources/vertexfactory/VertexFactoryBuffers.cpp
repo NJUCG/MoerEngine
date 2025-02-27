@@ -24,12 +24,12 @@ namespace Moer {
           m_attribute_sizes(m_num_of_attributes) {
 
         for (size_t i = 0; i < VA_NUM; i++) {
-            m_attributes_map[i] = std::numeric_limits<size_t>::max();
+            m_attribute_to_index_map[i] = std::numeric_limits<size_t>::max();
         }
 
         for (size_t i = 0; i < m_num_of_attributes; i++) {
-            m_attributes[i]                                        = *(attributes.begin() + i);
-            m_attributes_map[static_cast<size_t>(m_attributes[i])] = i;
+            m_attributes[i]                                                = *(attributes.begin() + i);
+            m_attribute_to_index_map[static_cast<size_t>(m_attributes[i])] = i;
 
             m_pixel_formats[i]   = VertexAttributesTool::GetPixelFormat(m_attributes[i]);
             m_attribute_sizes[i] = VertexAttributesTool::GetSize(m_attributes[i]);
@@ -93,14 +93,14 @@ namespace Moer {
         m_attribute_sizes.resize(m_num_of_attributes);
 
         for (size_t i = 0; i < VA_NUM; i++) {
-            m_attributes_map[i] = std::numeric_limits<size_t>::max();
+            m_attribute_to_index_map[i] = std::numeric_limits<size_t>::max();
         }
 
         for (size_t i = 0; i < m_num_of_attributes; i++) {
             size_t tmp;
             _stream >> tmp;
-            m_attributes[i]                                        = static_cast<EVertexAttributes>(tmp);
-            m_attributes_map[static_cast<size_t>(m_attributes[i])] = i;
+            m_attributes[i]                                                = static_cast<EVertexAttributes>(tmp);
+            m_attribute_to_index_map[static_cast<size_t>(m_attributes[i])] = i;
 
             m_pixel_formats[i]   = VertexAttributesTool::GetPixelFormat(m_attributes[i]);
             m_attribute_sizes[i] = VertexAttributesTool::GetSize(m_attributes[i]);
@@ -126,20 +126,20 @@ namespace Moer {
     // private:
 
     size_t VertexFactoryBuffers::GetAttributeIndex(EVertexAttributes attr) const {
-        if (m_attributes_map[static_cast<size_t>(attr)] >= m_num_of_attributes) {
+        if (m_attribute_to_index_map[static_cast<size_t>(attr)] >= m_num_of_attributes) {
             if (m_num_of_attributes == 0) {
                 LOG_ERROR("VertexFactoryBuffers is not initialized correctly");
                 assert(false);
             } else {
                 LOG_ERROR(
-                    "Invalid EVertexAttributes: {}, and m_attributes_map[{}] = {}",
+                    "Invalid EVertexAttributes: {}, and m_attribute_to_index_map[{}] = {}",
                     static_cast<size_t>(attr),
                     static_cast<size_t>(attr),
-                    m_attributes_map[static_cast<size_t>(attr)]);
+                    m_attribute_to_index_map[static_cast<size_t>(attr)]);
                 assert(false);
             }
         }
-        return m_attributes_map[static_cast<size_t>(attr)];
+        return m_attribute_to_index_map[static_cast<size_t>(attr)];
     }
 
     // test:
