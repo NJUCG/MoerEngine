@@ -967,8 +967,6 @@ RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingP
     vk_pso->CreateRayTracingPipeline(pipeline_create_info);
 
     //create SBTs
-#define ALIGNUP(x, y) ((x + (y - 1)) & (~(y - 1)))
-
     uint32_t miss_count     = _init.ray_miss_table.size();
     uint32_t hit_count      = _init.ray_hit_table.size();
     uint32_t callable_count = _init.ray_callable_table.size();
@@ -976,14 +974,14 @@ RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingP
 
     auto     rt_props             = m_device->GetOptionalProperties().ray_tracing_pipeline_properties;
     uint32_t handlesize           = rt_props.shaderGroupHandleSize;
-    uint32_t handlesize_aligned   = ALIGNUP(handlesize, rt_props.shaderGroupHandleAlignment);
-    vk_pso->m_raygen_sbt.size     = ALIGNUP(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
+    uint32_t handlesize_aligned   = Moer::AlignUp(handlesize, rt_props.shaderGroupHandleAlignment);
+    vk_pso->m_raygen_sbt.size     = Moer::AlignUp(handlesize_aligned, rt_props.shaderGroupBaseAlignment);
     vk_pso->m_raygen_sbt.stride   = vk_pso->m_raygen_sbt.size;
-    vk_pso->m_miss_sbt.size       = ALIGNUP(handlesize_aligned * miss_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_miss_sbt.size       = Moer::AlignUp(handlesize_aligned * miss_count, rt_props.shaderGroupBaseAlignment);
     vk_pso->m_miss_sbt.stride     = handlesize_aligned;
-    vk_pso->m_hit_sbt.size        = ALIGNUP(handlesize_aligned * hit_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_hit_sbt.size        = Moer::AlignUp(handlesize_aligned * hit_count, rt_props.shaderGroupBaseAlignment);
     vk_pso->m_hit_sbt.stride      = handlesize_aligned;
-    vk_pso->m_callable_sbt.size   = ALIGNUP(handlesize_aligned * callable_count, rt_props.shaderGroupBaseAlignment);
+    vk_pso->m_callable_sbt.size   = Moer::AlignUp(handlesize_aligned * callable_count, rt_props.shaderGroupBaseAlignment);
     vk_pso->m_callable_sbt.stride = handlesize_aligned;
 
     uint32_t             datasize = handlecount * handlesize;
@@ -1027,7 +1025,6 @@ RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingP
     RHIUnmapBuffer(vk_pso->m_sbt_buffer);
 
     return RHIRTPsoRef();
-#undef ALIGNUP
 }
 
 void VulkanRHIImpl::RHIBatchedBuildRayTracingBLAS(int batch_size, const RHIRayTracingBLASInitializer* _inits, RHIRayTracingBLASRef* results) {

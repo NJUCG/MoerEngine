@@ -254,7 +254,7 @@ namespace Moer::Render {
         //upload texture
         {
             const uint32_t alignment    = 256;
-            uint32_t       upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
+            uint32_t       upload_pitch = Moer::AlignUp(width * 4, alignment);
             uint32_t       upload_size  = height * upload_pitch;
             TextureRef     font_tex     = rd_device.CreateTexture(
                 Extent2D(width, height),

@@ -16,6 +16,7 @@
 
 #include "misc/MMemory.h"
 #include "misc/STL.h"
+#include "misc/Alignment.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -1169,7 +1170,7 @@ namespace Moer::Render {
                     vkGetDescriptorSetLayoutSizeEXT(m_device->GetDevice(), descriptor_set_layouts[set], &_binder.size);
                     //align to 16 bytes
                     uint64 align = m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
-                    _binder.size = (_binder.size + align - 1) & ~(align - 1);
+                    _binder.size = Moer::AlignUp(_binder.size, align);
                 }
             }, binder);
 
@@ -2536,11 +2537,12 @@ namespace Moer::Render {
             alloc_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
             if(build_sizes_info.build_scratch_size > size_infos.build_scratch_size){
-            //scratch buffer
-                buffer_ci.size = build_sizes_info.build_scratch_size;
+                //scratch buffer
+                const uint64 alignment = m_device->GetOptionalProperties().acceleration_structure_properties.minAccelerationStructureScratchOffsetAlignment;
+                buffer_ci.size = Moer::AlignUp(build_sizes_info.build_scratch_size, alignment);
                 buffer_ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
                 VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-                    
+                
                 scratch_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
             }
             //TLAS
