@@ -766,6 +766,16 @@ namespace Moer::Resource::Gltf {
                         }
                     }
 
+                    if (mesh->HasTextureCoords(1)) {
+                        auto texcoord1_buffer =
+                            reinterpret_cast<VertexAttributesType<EVertexAttributes::VA_TEXCOORD1>::type*>(
+                                vf_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD1));
+                        for (uint32_t j = 0; j < mesh->mNumVertices; j++) {
+                            const auto& uv1                    = mesh->mTextureCoords[1][j];
+                            texcoord1_buffer[vertex_count + j] = {uv1.x, uv1.y};
+                        }
+                    }
+
                     for (uint32_t j = 0; j < mesh->mNumFaces; j++) {
                         const auto& face                               = mesh->mFaces[j];
                         mesh_buffers->indices[index_count + j * 3 + 0] = face.mIndices[0];

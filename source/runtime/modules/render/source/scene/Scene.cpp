@@ -137,14 +137,14 @@ namespace Moer {
 
                 bitmask_to_mesh_buffers_map[buffers.vertex_factory_buffers.GetAttributesBitmask()] = geo->mesh_buffers;
 
-                geo_data.num_indices        = geo->local_idx_count;
-                geo_data.num_vertices       = geo->local_vtx_count;
-                geo_data.vertex_offset      = vtx_offset * sizeof(float3);
-                geo_data.prev_vertex_offset = ~0u;
-                geo_data.normal_offset      = buffers.GetAttributeRange(EVertexAttributes::VA_NORMAL).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_NORMAL);
-                geo_data.tangent_offset     = buffers.GetAttributeRange(EVertexAttributes::VA_TANGENT).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TANGENT);
-                geo_data.texcoord0_offset   = buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD0);
-                // geo_data.texcoord1_offset     = buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD1);
+                geo_data.num_indices          = geo->local_idx_count;
+                geo_data.num_vertices         = geo->local_vtx_count;
+                geo_data.vertex_offset        = vtx_offset * sizeof(float3);
+                geo_data.prev_vertex_offset   = ~0u;
+                geo_data.normal_offset        = buffers.GetAttributeRange(EVertexAttributes::VA_NORMAL).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_NORMAL);
+                geo_data.tangent_offset       = buffers.GetAttributeRange(EVertexAttributes::VA_TANGENT).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TANGENT);
+                geo_data.texcoord0_offset     = buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD0);
+                geo_data.texcoord1_offset     = buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD1);
                 geo_data.mat_idx_and_type     = geo->material_id << 8 | (uint)mat_instances[geo_idx]->GetMaterial()->GetType();
                 geo_data.index_offset         = geo->local_idx_offset * sizeof(uint);
                 geo_data.index_buffer_handle  = buffers.idx_bdls_handle;

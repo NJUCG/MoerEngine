@@ -647,12 +647,18 @@ namespace Moer {
                 buf->vertex_factory_buffers.HasAttribute(EVertexAttributes::VA_TEXCOORD0)
                 ? buf->vertex_factory_buffers.GetBufferByteSize(EVertexAttributes::VA_TEXCOORD0)
                 : 0;
+            
+            size_t texcoord1_buffer_size =
+                buf->vertex_factory_buffers.HasAttribute(EVertexAttributes::VA_TEXCOORD1)
+                ? buf->vertex_factory_buffers.GetBufferByteSize(EVertexAttributes::VA_TEXCOORD1)
+                : 0;
             // clang-format on
 
             vertex_size += position_buffer_size;
             vertex_size += normal_buffer_size;
             vertex_size += tangent_buffer_size;
             vertex_size += texcoord0_buffer_size;
+            vertex_size += texcoord1_buffer_size;
 
             buf->vertex_buffer = device.CreateBuffer<byte>(vertex_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
             buf->vertex_buffer->SetName("soa_vertex_buffer");
@@ -684,6 +690,13 @@ namespace Moer {
                     std::span<byte>((byte*)texcoord0_buffer_ptr, texcoord0_buffer_size),
                     buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).size),
                     "CopyFrom MeshBuffers texcoord0_buffer");
+            }
+            if (texcoord1_buffer_size > 0) {
+                auto texcoord1_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD1);
+                cmd_list.CopyFrom(
+                    std::span<byte>((byte*)texcoord1_buffer_ptr, texcoord1_buffer_size),
+                    buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).size),
+                    "CopyFrom MeshBuffers texcoord1_buffer");
             }
 
             // index buffer

@@ -38,6 +38,7 @@
 #include "utils/smaa/SmaaPrecomputedTextures.h"
 
 #include "RHIUI.h"
+#include "SimplifiedGbufferPsoManager.h"// 遇到了一个动态库导出模板类的问题，难以解决，所以先把pso挪到test中了
 
 using namespace Moer::Render;
 using namespace Moer;
@@ -536,40 +537,46 @@ int main(int argc, const char** argv) {
             }
         }
         assert(false && "Invalid default selected frame buffer index");
+        return uint(0);
     }();
 
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
-    // MARK: Pipeline Variable
+    // MARK: PSO
 
-    auto raster_pipeline_constant_color = [&]() {
-        VertexStream vertex_stream;
-        //pos
-        vertex_stream.EmplacePerVertex(
-            {Moer::Render::VertexElement(PF_R32G32B32_SFLOAT)});
-        //normal
-        vertex_stream.EmplacePerVertex({Moer::Render::VertexElement(PF_R32_UINT)});
-        //tangent
-        vertex_stream.EmplacePerVertex({Moer::Render::VertexElement(PF_R32_UINT)});
-        //uv
-        vertex_stream.EmplacePerVertex({Moer::Render::VertexElement(PF_R32G32_SFLOAT)});
-
-        GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
-                                  vertex_stream,
-                                  {RHIColorAttachmentInfo::Preset(PF_R32_UINT),
-                                   RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM),
-                                   RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT),
-                                   RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)},
-                                  RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),
-                                  PF_D32_SFLOAT_S8_UINT);
-
-        return manager
-            .Raster()
-            .Vertex("test/BasicVertex.hlsl")
-            .Pixel("test/BasicFragConstant.hlsl")
-            .Build<TestTrianglePipelineConstColor>(std::move(pso_info));
-    }();
+    // clang-format off
+    // TODO: update this simplified pso manager to shader mutation pso manager
+    auto gbuffer_pso_manager = SimplifiedGbufferPsoManager<TestTrianglePipelineConstColor>(manager, {
+        {
+            .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
+                EVertexAttributes::VA_POSITION,
+                EVertexAttributes::VA_NORMAL,
+                EVertexAttributes::VA_TANGENT,
+                EVertexAttributes::VA_TEXCOORD0
+            }),
+            .vertex_shader_path = "test/gbuffer/VertexBitmask15.hlsl",
+            .pixel_shader_path = "test/BasicFragConstant.hlsl",
+        }, {
+            .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
+                EVertexAttributes::VA_POSITION,
+                EVertexAttributes::VA_NORMAL,
+                EVertexAttributes::VA_TANGENT,
+                EVertexAttributes::VA_TEXCOORD0,
+                EVertexAttributes::VA_TEXCOORD1
+            }),
+            .vertex_shader_path = "test/gbuffer/VertexBitmask31.hlsl",
+            .pixel_shader_path = "test/BasicFragConstant.hlsl",
+        }, {
+            .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
+                EVertexAttributes::VA_POSITION,
+                EVertexAttributes::VA_NORMAL,
+            }),
+            .vertex_shader_path = "test/gbuffer/VertexBitmask3.hlsl",
+            .pixel_shader_path = "test/BasicFragConstant.hlsl",
+        }
+    });
+    // clang-format on
 
     auto pbr_pipeline = [&]() {
         GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
@@ -974,12 +981,30 @@ int main(int argc, const char** argv) {
             param.geometry_instance_handle = geom_instance_buffer_handle;
             param.camera_view_proj         = Transpose(camera->GetViewProjectionMatrix());
 
-            // use for test
-            auto default_bitmask = VertexAttributesTool::GetBitmaskFromArray(
-                {EVertexAttributes::VA_POSITION, EVertexAttributes::VA_NORMAL, EVertexAttributes::VA_TANGENT, EVertexAttributes::VA_TEXCOORD0});
+            // FIXME: use a better way to render gbuffer
+            bool is_first = true;
+            for (auto& [bitmask, mesh_draw_datas] : mesh_draw_datas_map) {
+                auto& pso = gbuffer_pso_manager.Get(bitmask);
 
-            cmd_list.Gfx(raster_pipeline_constant_color, sampler, camera_buffer, red_tex, bindless_array, param)
-                .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(mesh_draw_datas_map[default_bitmask]), DepthAttachment(depth->GetView().GetTexture()), ColorAttachment(vbuffer), ColorAttachment(normal), ColorAttachment(uv), ColorAttachment(position));
+                EAttachmentAction action    = AC_CLEAR_STORE;
+                EAttachmentAction ds_action = AC_DS_CLEAR_STORE;
+                if (is_first) {
+                    is_first = false;
+                } else {
+                    action    = AC_NO_LOAD_STORE;
+                    ds_action = AC_DS_STORE;
+                }
+
+                cmd_list.Gfx(pso, sampler, camera_buffer, red_tex, bindless_array, param)
+                    .Draw(
+                        Rect2D(0, 0, resolution.x, resolution.y),
+                        std::move(mesh_draw_datas),
+                        DepthAttachment(depth->GetView().GetTexture(), ds_action),
+                        ColorAttachment(vbuffer, action),
+                        ColorAttachment(normal, action),
+                        ColorAttachment(uv, action),
+                        ColorAttachment(position, action));
+            }
 
             // MARK: PBR Pass
 
