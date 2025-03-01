@@ -70,8 +70,8 @@ namespace Moer::Resource::JsonScene {
             // PushbackMeshlets(output);
             // scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
             // scn_dat->m_index_data.insert(scn_dat->m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
-            vertex_cnt += info->vtx_count;
-            index_cnt += info->idx_count;
+            // vertex_cnt += info->vtx_count;
+            // index_cnt += info->idx_count;
         }
         // void PushbackVertexData(const Array<float>& data) {
         //     scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), data.begin(), data.end());

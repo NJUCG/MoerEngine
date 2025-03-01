@@ -871,11 +871,15 @@ namespace Moer::Render {
         void VisitCmd(const BuildAccelerationStructuresCmd* _cmd) {
             int64 layer = 0;
             for (const auto& cmd : _cmd->Params()) {
-                Buffer* vtx = cmd.geometry->GetInfo().vertex_buffer.Get();
-                Buffer* idx = cmd.geometry->GetInfo().index_buffer.Get();
+                // FIXME: 不确定这里的修改是否正确。因为MeshBuffers的信息被分散到了每个MeshGeometry中，所以这里就需要对应遍历所有Segment
+                //        类似场景见 VulkanQueue.cpp:393附近
+                for (const auto& segment : cmd.geometry->GetInfo().segments) {
+                    Buffer* vtx = segment.vertex_buffer.Get();
+                    Buffer* idx = segment.index_buffer.Get();
 
-                layer = std::max(layer, SetRead((uint64)vtx, Range(0, vtx->GetByteSize()), ResourceType::Texture_Buffer));
-                layer = std::max(layer, SetRead((uint64)idx, Range(0, idx->GetByteSize()), ResourceType::Texture_Buffer));
+                    layer = std::max(layer, SetRead((uint64)vtx, Range(0, vtx->GetByteSize()), ResourceType::Texture_Buffer));
+                    layer = std::max(layer, SetRead((uint64)idx, Range(0, idx->GetByteSize()), ResourceType::Texture_Buffer));
+                }
                 layer = std::max(layer, SetWrite((uint64)cmd.geometry.Get(), Range(0), ResourceType::Accel));
 
                 m_writed_geometry.emplace((uint64)cmd.geometry.Get());

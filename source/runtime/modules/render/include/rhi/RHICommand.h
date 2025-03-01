@@ -363,9 +363,11 @@ namespace Moer::Render {
         uint first_instance;
     };
     struct MeshDrawData {
-        StaticArray<VertexBuffer, VA_NUM> vtx_views;
-        std::variant<IndexBuffer, uint>   idx_view = 0u;
-        uint                              vtx_cnt  = 0;
+        // 注意！为了性能，MeshDrawData内没有记录任何关于vtx_views的顶点布局信息。
+        // vtx_views的数量与顺序应该在外部代码进行维护！MeshDrawData没有任何保护措施！
+        // 关于内部顺序：buffer顺序应当按照EVertexAttributes枚举值的顺序排列。例如，PositionBuffer应该在NormalBuffer之前。（最自然的顺序）
+        Array<VertexBuffer>             vtx_views;
+        std::variant<IndexBuffer, uint> idx_view = 0u;
 
         Array<SingleDrawParam> draw_params;
 
@@ -374,30 +376,31 @@ namespace Moer::Render {
         MeshDrawData(MeshDrawData&& _other) noexcept {
             vtx_views   = std::move(_other.vtx_views);
             idx_view    = std::move(_other.idx_view);
-            vtx_cnt     = _other.vtx_cnt;
             draw_params = std::move(_other.draw_params);
         }
         MeshDrawData& operator=(MeshDrawData&& _other) noexcept {
             vtx_views   = std::move(_other.vtx_views);
             idx_view    = std::move(_other.idx_view);
-            vtx_cnt     = _other.vtx_cnt;
             draw_params = std::move(_other.draw_params);
             return *this;
         }
 
+        // For better performance
         MeshDrawData(
-            std::span<VertexBuffer> _vertex_buffers,
-            IndexBuffer             _index_buffer) : idx_view(_index_buffer) {
-            vtx_views.fill({nullptr, 0});
-            vtx_cnt = _vertex_buffers.size();
-            memcpy(vtx_views.data(), _vertex_buffers.data(), _vertex_buffers.size() * sizeof(VertexBuffer));
+            Array<VertexBuffer> _vtx_views,
+            IndexBuffer         _index_buffer) : vtx_views(std::move(_vtx_views)), idx_view(std::move(_index_buffer)) {
         }
 
         MeshDrawData(
             std::span<VertexBuffer> _vtx_views,
-            uint                    _vtx_cnt) : idx_view(_vtx_cnt) {
-            vtx_views.fill({nullptr, 0});
-            memcpy(vtx_views.data(), _vtx_views.data(), _vtx_views.size() * sizeof(VertexBuffer));
+            IndexBuffer             _index_buffer) : idx_view(_index_buffer) {
+            vtx_views.assign(_vtx_views.begin(), _vtx_views.end());
+        }
+
+        MeshDrawData(
+            std::span<VertexBuffer> _vtx_views,
+            uint                    _index_cnt) : idx_view(_index_cnt) {
+            vtx_views.assign(_vtx_views.begin(), _vtx_views.end());
         }
 
         void EmplaceDrawIndexed(

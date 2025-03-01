@@ -301,9 +301,12 @@ namespace Moer {
 
         //fill mesh infos
         for (auto& mesh_info : _scene_data.m_mesh_infos) {
-            mesh_info->buffers = _scene_data.m_mesh_buffers[mesh_info->buf_idx];
             for (uint i = 0; i < mesh_info->geometries.size(); ++i) {
+                // intialize mesh_info -> mesh_geo
                 mesh_info->geometries[i] = _scene_data.m_mesh_geometries[mesh_info->geom_start_idx + i];
+                // intialize mesh_geo -> mesh_buffers
+                auto geo          = mesh_info->geometries[i];
+                geo->mesh_buffers = _scene_data.m_mesh_buffers[geo->mesh_buffers_idx];
             }
         }
         //fill mesh instances
@@ -620,62 +623,82 @@ namespace Moer {
 
         for (auto& buf : _scene_data.m_mesh_buffers) {
 
-            buf->index_buffer = device.CreateBuffer<uint32_t>(buf->indices.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
-            //calculate vertex buffer size
+            // vertex buffer
+
             uint vertex_size = 0;
 
-            size_t position_buffer_length  = buf->vertex_factory_buffers.GetBufferLength(EVertexAttributes::VA_POSITION);
-            size_t normal_buffer_length    = buf->vertex_factory_buffers.GetBufferLength(EVertexAttributes::VA_NORMAL);
-            size_t tangent_buffer_length   = buf->vertex_factory_buffers.GetBufferLength(EVertexAttributes::VA_TANGENT);
-            size_t texcoord0_buffer_length = buf->vertex_factory_buffers.GetBufferLength(EVertexAttributes::VA_TEXCOORD0);
-            // size_t texcoord1_buffer_length = buf->vertex_factory_buffers.GetBufferLength(EVertexAttributes::VA_TEXCOORD1);
+            // clang-format off
+            size_t position_buffer_size =
+                buf->vertex_factory_buffers.HasAttribute(EVertexAttributes::VA_POSITION)
+                ? buf->vertex_factory_buffers.GetBufferByteSize(EVertexAttributes::VA_POSITION)
+                : 0;
 
-            size_t position_buffer_size  = position_buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_POSITION);
-            size_t normal_buffer_size    = normal_buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_NORMAL);
-            size_t tangent_buffer_size   = tangent_buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TANGENT);
-            size_t texcoord0_buffer_size = texcoord0_buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD0);
-            // size_t texcoord1_buffer_size = texcoord1_buffer_length * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD1);
-
-            auto position_buffer_ptr  = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_POSITION);
-            auto normal_buffer_ptr    = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_NORMAL);
-            auto tangent_buffer_ptr   = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TANGENT);
-            auto texcoord0_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD0);
-            // auto texcoord1_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD1);
+            size_t normal_buffer_size =
+                buf->vertex_factory_buffers.HasAttribute(EVertexAttributes::VA_NORMAL)
+                ? buf->vertex_factory_buffers.GetBufferByteSize(EVertexAttributes::VA_NORMAL)
+                : 0;
+            
+            size_t tangent_buffer_size =
+                buf->vertex_factory_buffers.HasAttribute(EVertexAttributes::VA_TANGENT)
+                ? buf->vertex_factory_buffers.GetBufferByteSize(EVertexAttributes::VA_TANGENT)
+                : 0;
+            
+            size_t texcoord0_buffer_size =
+                buf->vertex_factory_buffers.HasAttribute(EVertexAttributes::VA_TEXCOORD0)
+                ? buf->vertex_factory_buffers.GetBufferByteSize(EVertexAttributes::VA_TEXCOORD0)
+                : 0;
+            // clang-format on
 
             vertex_size += position_buffer_size;
             vertex_size += normal_buffer_size;
             vertex_size += tangent_buffer_size;
             vertex_size += texcoord0_buffer_size;
-            // vertex_size += texcoord1_buffer_size;
 
-            buf->vertex_buffer   = device.CreateBuffer<byte>(vertex_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
-            buf->idx_bdls_handle = bindless_array->AllocateBuffer(buf->index_buffer->GetView());
-            buf->vtx_bdls_handle = bindless_array->AllocateBuffer(buf->vertex_buffer->GetView());
+            buf->vertex_buffer = device.CreateBuffer<byte>(vertex_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
             buf->vertex_buffer->SetName("soa_vertex_buffer");
+
+            if (position_buffer_size > 0) {
+                auto position_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_POSITION);
+                cmd_list.CopyFrom(
+                    std::span<byte>((byte*)position_buffer_ptr, position_buffer_size),
+                    buf->vertex_buffer->GetView(0, buf->GetAttributeRange(EVertexAttributes::VA_POSITION).size),
+                    "CopyFrom MeshBuffers position_buffer");
+            }
+            if (normal_buffer_size > 0) {
+                auto normal_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_NORMAL);
+                cmd_list.CopyFrom(
+                    std::span<byte>((byte*)normal_buffer_ptr, normal_buffer_size),
+                    buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).offset, buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).size),
+                    "CopyFrom MeshBuffers normal_buffer");
+            }
+            if (tangent_buffer_size > 0) {
+                auto tangent_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TANGENT);
+                cmd_list.CopyFrom(
+                    std::span<byte>((byte*)tangent_buffer_ptr, tangent_buffer_size),
+                    buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).offset, buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).size),
+                    "CopyFrom MeshBuffers tangent_buffer");
+            }
+            if (texcoord0_buffer_size > 0) {
+                auto texcoord0_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD0);
+                cmd_list.CopyFrom(
+                    std::span<byte>((byte*)texcoord0_buffer_ptr, texcoord0_buffer_size),
+                    buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).size),
+                    "CopyFrom MeshBuffers texcoord0_buffer");
+            }
+
+            // index buffer
+
+            buf->index_buffer = device.CreateBuffer<uint32_t>(buf->indices.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
             buf->index_buffer->SetName("index_buffer");
-            cmd_list.CopyFrom(
-                std::span<byte>((byte*)position_buffer_ptr, position_buffer_size),
-                buf->vertex_buffer->GetView(0, buf->GetAttributeRange(EVertexAttributes::VA_POSITION).size),
-                "CopyFrom MeshBuffers position_buffer");
-            cmd_list.CopyFrom(
-                std::span<byte>((byte*)normal_buffer_ptr, normal_buffer_size),
-                buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).offset, buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).size),
-                "CopyFrom MeshBuffers normal_buffer");
-            cmd_list.CopyFrom(
-                std::span<byte>((byte*)tangent_buffer_ptr, tangent_buffer_size),
-                buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).offset, buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).size),
-                "CopyFrom MeshBuffers tangent_buffer");
-            cmd_list.CopyFrom(
-                std::span<byte>((byte*)texcoord0_buffer_ptr, texcoord0_buffer_size),
-                buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).size),
-                "CopyFrom MeshBuffers texcoord0_buffer");
-            // if (buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).size > 0)
-            //     cmd_list.CopyFrom(std::span<byte>((byte*)texcoord1_buffer_ptr, texcoord1_buffer_size), buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).size));
 
             cmd_list.CopyFrom(
                 std::span<byte>((byte*)buf->indices.data(), buf->indices.size() * sizeof(uint32_t)),
                 buf->index_buffer->GetView(),
                 "CopyFrom MeshBuffers index_buffer");
+
+            // bindless handle
+            buf->idx_bdls_handle = bindless_array->AllocateBuffer(buf->index_buffer->GetView());
+            buf->vtx_bdls_handle = bindless_array->AllocateBuffer(buf->vertex_buffer->GetView());
         }
 
         _scene->UpdateGpuData();

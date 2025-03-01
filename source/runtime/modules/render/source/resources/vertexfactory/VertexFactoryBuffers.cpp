@@ -14,7 +14,7 @@ namespace Moer {
     VertexFactoryBuffers::VertexFactoryBuffers() {}// In this case, VFB will be initialized by InputStream
 
     VertexFactoryBuffers::VertexFactoryBuffers(
-        const std::initializer_list<EVertexAttributes>& attributes)
+        const Moer::Array<EVertexAttributes>& attributes)
         : m_num_of_attributes(attributes.size()),
 
           m_buffers(m_num_of_attributes),
@@ -28,12 +28,22 @@ namespace Moer {
         }
 
         for (size_t i = 0; i < m_num_of_attributes; i++) {
-            m_attributes[i]                                                = *(attributes.begin() + i);
+            m_attributes[i]                                                = attributes[i];
             m_attribute_to_index_map[static_cast<size_t>(m_attributes[i])] = i;
 
             m_pixel_formats[i]   = VertexAttributesTool::GetPixelFormat(m_attributes[i]);
             m_attribute_sizes[i] = VertexAttributesTool::GetSize(m_attributes[i]);
         }
+
+        m_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray(m_attributes);
+    }
+
+    bool VertexFactoryBuffers::HasAttribute(EVertexAttributes attr) const {
+        return m_attribute_to_index_map[static_cast<size_t>(attr)] < m_num_of_attributes;
+    }
+
+    VertexAttributesBitmask VertexFactoryBuffers::GetAttributesBitmask() const {
+        return m_attributes_bitmask;
     }
 
     size_t VertexFactoryBuffers::GetAttributesCount() const {
@@ -55,6 +65,11 @@ namespace Moer {
     size_t VertexFactoryBuffers::GetBufferLength(EVertexAttributes attr) const {
         size_t idx = GetAttributeIndex(attr);
         return m_buffers[idx].size() / m_attribute_sizes[idx];
+    }
+
+    size_t VertexFactoryBuffers::GetBufferByteSize(EVertexAttributes attr) const {
+        size_t idx = GetAttributeIndex(attr);
+        return m_buffers[idx].size();
     }
 
     const void* VertexFactoryBuffers::GetBufferData(EVertexAttributes attr) const {
@@ -105,6 +120,8 @@ namespace Moer {
             m_pixel_formats[i]   = VertexAttributesTool::GetPixelFormat(m_attributes[i]);
             m_attribute_sizes[i] = VertexAttributesTool::GetSize(m_attributes[i]);
         }
+
+        m_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray(m_attributes);
 
         for (size_t i = 0; i < m_num_of_attributes; i++) {
             _stream >> m_buffers[i];

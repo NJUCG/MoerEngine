@@ -66,11 +66,11 @@ namespace Moer {
         static AsyncSceneLoadInfoRef m_load_info;
         GpuScene                     gpu_scene;
 
-        Array<Render::GeometryData>                      geometry_datas;
-        Array<Render::InstanceData>                      instance_datas;
-        Array<StaticArray<Render::VertexBuffer, VA_NUM>> vtx_views;
-        Array<Render::IndexBuffer>                       idx_views;
-        Array<Render::GeometryInstance>                  geom_instances;
+        Array<Render::GeometryData>                                               geometry_datas;
+        Array<Render::InstanceData>                                               instance_datas;
+        Array<UnorderedMap<VertexAttributesBitmask, Array<Render::VertexBuffer>>> vtx_views;
+        Array<UnorderedMap<VertexAttributesBitmask, Render::IndexBuffer>>         idx_views;
+        Array<Render::GeometryInstance>                                           geom_instances;
     };
     AsyncSceneLoadInfoRef Scene::Impl::m_load_info{nullptr};
 
@@ -125,11 +125,18 @@ namespace Moer {
         for (auto& entity : m_entities) {
             const MeshInfo&                info          = *RenderableManager::Get().GetMeshInfo(entity);
             std::span<MaterialInstanceRef> mat_instances = RenderableManager::Get().GetMaterialInstances(entity);
-            const MeshBuffers&             buffers       = *info.buffers;
+
+            UnorderedMap<VertexAttributesBitmask, SharedPtr<MeshBuffers>> bitmask_to_mesh_buffers_map;
+
             for (auto& geo : info.geometries) {
-                uint  vtx_offset            = geo->local_vtx_offset + info.vtx_offset;
-                uint  geo_idx               = &geo - info.geometries.data();
-                auto& geo_data              = geometry_datas[geo->global_geom_idx];
+                // uint               vtx_offset = geo->local_vtx_offset + info.vtx_offset;
+                uint               vtx_offset = geo->local_vtx_offset;// FIXME
+                uint               geo_idx    = &geo - info.geometries.data();
+                auto&              geo_data   = geometry_datas[geo->global_geom_idx];
+                const MeshBuffers& buffers    = *geo->mesh_buffers;
+
+                bitmask_to_mesh_buffers_map[buffers.vertex_factory_buffers.GetAttributesBitmask()] = geo->mesh_buffers;
+
                 geo_data.num_indices        = geo->local_idx_count;
                 geo_data.num_vertices       = geo->local_vtx_count;
                 geo_data.vertex_offset      = vtx_offset * sizeof(float3);
@@ -139,7 +146,7 @@ namespace Moer {
                 geo_data.texcoord0_offset   = buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD0);
                 // geo_data.texcoord1_offset     = buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset + vtx_offset * VertexAttributesTool::GetSize(EVertexAttributes::VA_TEXCOORD1);
                 geo_data.mat_idx_and_type     = geo->material_id << 8 | (uint)mat_instances[geo_idx]->GetMaterial()->GetType();
-                geo_data.index_offset         = (geo->local_idx_offset + info.idx_offset) * sizeof(uint);
+                geo_data.index_offset         = geo->local_idx_offset * sizeof(uint);
                 geo_data.index_buffer_handle  = buffers.idx_bdls_handle;
                 geo_data.vertex_buffer_handle = buffers.vtx_bdls_handle;
 
@@ -148,16 +155,28 @@ namespace Moer {
                 geom_instance.geom_idx     = geo->global_geom_idx;
             }
 
-            StaticArray<Render::VertexBuffer, VA_NUM>& vtx_view = vtx_views[info.global_mesh_idx];
+            {
+                // Initialize vtx_view & idx_view
+                UnorderedMap<VertexAttributesBitmask, Array<Render::VertexBuffer>>& vtx_view = vtx_views[info.global_mesh_idx];
+                UnorderedMap<VertexAttributesBitmask, Render::IndexBuffer>&         idx_view = idx_views[info.global_mesh_idx];
 
-            vtx_view[static_cast<size_t>(EVertexAttributes::VA_POSITION)]  = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::VA_POSITION).offset};
-            vtx_view[static_cast<size_t>(EVertexAttributes::VA_NORMAL)]    = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::VA_NORMAL).offset};
-            vtx_view[static_cast<size_t>(EVertexAttributes::VA_TANGENT)]   = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::VA_TANGENT).offset};
-            vtx_view[static_cast<size_t>(EVertexAttributes::VA_TEXCOORD0)] = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset};
-            // vtx_view[static_cast<size_t>(EVertexAttributes::VA_TEXCOORD1)] = {buffers.vertex_buffer.Get(), buffers.GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset};
+                for (auto& [bitmask, mesh_buffers] : bitmask_to_mesh_buffers_map) {
+                    Array<Render::VertexBuffer> vtxs;
 
-            idx_views[info.global_mesh_idx] = {buffers.index_buffer->GetView(),
-                                               EIndexElementType::IET_UINT32};
+                    // 注意，这里vtxs的顺序不能被改变！具体顺序应当由VertexAttributesTool::GetArrayFromBitmask返回的数组决定！
+                    // => 逻辑关联处：RHICommand.h -> MeshDrawData
+                    auto attrs = VertexAttributesTool::GetArrayFromBitmask(bitmask);
+
+                    vtxs.reserve(attrs.size());
+                    for (auto& attr : attrs) {
+                        vtxs.push_back({mesh_buffers->vertex_buffer.Get(), mesh_buffers->GetAttributeRange(attr).offset});
+                    }
+                    vtx_view[bitmask] = std::move(vtxs);
+
+                    idx_view[bitmask] = {mesh_buffers->index_buffer->GetView(),
+                                         EIndexElementType::IET_UINT32};
+                }
+            }
 
             uint  id                          = RenderableManager::Get().GetInstanceID(entity);
             auto& inst_data                   = instance_datas[id];
@@ -176,10 +195,13 @@ namespace Moer {
     Scene::Impl::~Impl() noexcept {
 
         for (auto& entity : m_entities) {
-            MeshInfo&    info     = *RenderableManager::Get().GetMeshInfo(entity);
-            MeshBuffers& buffers  = *info.buffers;
-            buffers.index_buffer  = nullptr;
-            buffers.vertex_buffer = nullptr;
+            MeshInfo& info = *RenderableManager::Get().GetMeshInfo(entity);
+            for (auto& geo : info.geometries) {
+                MeshBuffers& buffers = *geo->mesh_buffers;// 这里会重复访问同一个mesh_buffersss，重复清空，但是只会略微影响析构效率，问题不大
+
+                buffers.index_buffer  = nullptr;
+                buffers.vertex_buffer = nullptr;
+            }
         }
     }
 
@@ -299,11 +321,11 @@ namespace Moer {
         return m_impl->GetInstanceDatas();
     }
 
-    std::span<const StaticArray<Render::VertexBuffer, VA_NUM>> Scene::GetVertexBufferViews() {
+    std::span<const UnorderedMap<VertexAttributesBitmask, Array<Render::VertexBuffer>>> Scene::GetVertexBufferViews() {
         return m_impl->vtx_views;
     }
 
-    std::span<const Render::IndexBuffer> Scene::GetIndexBufferViews() {
+    std::span<const UnorderedMap<VertexAttributesBitmask, Render::IndexBuffer>> Scene::GetIndexBufferViews() {
         return m_impl->idx_views;
     }
 

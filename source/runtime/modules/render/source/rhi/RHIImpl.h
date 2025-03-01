@@ -616,8 +616,7 @@ namespace Moer::Render {
                                                                                          mesh_data(std::move(_draw_data)) {
             evaluate_mesh_task = LambdaTask::Create([this]() {
                                      for (const auto& mesh : mesh_data) {
-                                         for (uint vtx_idx = 0; vtx_idx < mesh.vtx_cnt; ++vtx_idx) {
-                                             const auto& vtx_view = mesh.vtx_views[vtx_idx];
+                                         for (const auto& vtx_view : mesh.vtx_views) {
                                              BufferRange range(vtx_view.offset, vtx_view.buffer->GetByteSize());
                                              if (vertex_buffers.find(vtx_view.buffer) == vertex_buffers.end()) {
                                                  vertex_buffers[vtx_view.buffer] = range;

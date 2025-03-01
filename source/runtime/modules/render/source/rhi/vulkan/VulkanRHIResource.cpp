@@ -2122,11 +2122,6 @@ namespace Moer::Render {
             _build_ranges.reserve(_info.segments.size());
             _primitive_counts.reserve(_info.segments.size());
 
-            VulkanBuffer* vertex_buffer =  ResourceCast(_info.vertex_buffer.Get());
-            VulkanBuffer* index_buffer =  ResourceCast(_info.index_buffer.Get());
-            uint64 vtx_addr =  vertex_buffer->DeviceAddress();
-            uint64 idx_addr =  index_buffer->DeviceAddress();
-            assert(vtx_addr != 0 && idx_addr != 0 && "Invalid buffer address");
             assert(_info.segments.size() > 0 && "No segment to build");
 
             VkGeometryTypeKHR geometry_type = VulkanEnumTranslator::METoVKGeometryType(_info.segments[0].type);
@@ -2134,6 +2129,11 @@ namespace Moer::Render {
             for (const auto& segment : _info.segments) {
                 //TODO: currently only support triangle
                 assert(segment.type == RTGT_TRIANGLES && "Unsupported geometry type");
+
+                uint64 vtx_addr =  ResourceCast(segment.vertex_buffer.Get())->DeviceAddress();
+                uint64 idx_addr =  ResourceCast(segment.index_buffer.Get())->DeviceAddress();
+                assert(vtx_addr != 0 && idx_addr != 0 && "Invalid buffer address");
+
                 VkAccelerationStructureGeometryKHR geometry{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
                 geometry.geometryType = VulkanEnumTranslator::METoVKGeometryType(segment.type);
                 geometry.flags = VulkanEnumTranslator::METoVKGeometryFlags(segment.flags);
@@ -2141,7 +2141,8 @@ namespace Moer::Render {
                 geometry.geometry.triangles.vertexFormat = g_platform_pixel_formats[_info.vertex_format].format;
                 geometry.geometry.triangles.vertexStride = segment.vertex_stride;
                 geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset;
-                geometry.geometry.triangles.maxVertex = _info.max_vertex_count - segment.vertex_offset;
+                // 下一个变量maxVertex，定义了允许的最大顶点索引值。此处应为 first_vertex + vertex_count
+                geometry.geometry.triangles.maxVertex = segment.first_vertex - segment.vertex_count;
                 geometry.geometry.triangles.indexType = VulkanEnumTranslator::METoVKIndexType(_info.index_type);
                 geometry.geometry.triangles.indexData.deviceAddress = idx_addr + segment.index_offset; 
                 geometry.geometry.triangles.transformData.deviceAddress = 0;

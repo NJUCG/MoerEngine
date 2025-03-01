@@ -12,6 +12,7 @@
 #include "contrib/Open3DGC/o3dgcTimer.h"
 #include "imgui.h"
 #include "math/Matrix.h"
+#include "misc/RAII.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "platform/Platform.h"
@@ -506,23 +507,36 @@ int main(int argc, const char** argv) {
                 g_scene.ForEach([&](Entity _entity) {
                     auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
 
-                    const MeshBuffers&     mesh_buffers = *mesh->buffers;
                     RaytracingGeometryInfo rt_geo_info{};
-                    rt_geo_info.build_flags      = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
-                    rt_geo_info.vertex_format    = PF_R32G32B32_SFLOAT;
-                    rt_geo_info.vertex_buffer    = mesh_buffers.vertex_buffer;
-                    rt_geo_info.index_buffer     = mesh_buffers.index_buffer;
-                    rt_geo_info.index_type       = IET_UINT32;
-                    rt_geo_info.max_vertex_count = mesh->vtx_count;
-                    rt_geo_info.primitive_count  = mesh->idx_count / 3;
+                    rt_geo_info.build_flags   = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
+                    rt_geo_info.vertex_format = PF_R32G32B32_SFLOAT;
+                    rt_geo_info.index_type    = IET_UINT32;
 
                     for (uint i = 0; i < mesh->geometries.size(); i++) {
-                        uint vtx_offset = mesh->vtx_offset + mesh->geometries[i]->local_vtx_offset;
+                        uint vtx_offset = mesh->geometries[i]->local_vtx_offset;
                         uint vtx_count  = mesh->geometries[i]->local_vtx_count;
-                        uint idx_offset = mesh->idx_offset + mesh->geometries[i]->local_idx_offset;
+                        uint idx_offset = mesh->geometries[i]->local_idx_offset;
                         uint idx_count  = mesh->geometries[i]->local_idx_count;
 
-                        rt_geo_info.segments.emplace_back(0, 0, vtx_offset, vtx_count, sizeof(float3), idx_offset / 3, idx_count / 3, RTGT_TRIANGLES, ERayTracingGeometryFlags::GEOMETRY_OPAQUE);
+                        auto vtx_buffer = mesh->geometries[i]->mesh_buffers->vertex_buffer;
+                        auto idx_buffer = mesh->geometries[i]->mesh_buffers->index_buffer;
+
+                        rt_geo_info.segments.emplace_back(
+                            0,                                        // vertex_offset
+                            0,                                        // index_offset
+                            vtx_offset,                               // first_vertex
+                            vtx_count,                                // vertex_count
+                            sizeof(float3),                           // vertex_stride
+                            idx_offset / 3,                           // first_primitive
+                            idx_count / 3,                            // primitive_count
+                            vtx_buffer,                               // vertex_buffer
+                            idx_buffer,                               // index_buffer
+                            RTGT_TRIANGLES,                           // type
+                            ERayTracingGeometryFlags::GEOMETRY_OPAQUE,// flags
+                            false,                                    // b_force_opaque
+                            false,                                    // b_cull_back_face
+                            false                                     // b_flip_face
+                        );
                     }
 
                     RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);

@@ -31,13 +31,18 @@ namespace Moer {
         Array<EVertexAttributes>    m_attributes;
         StaticArray<size_t, VA_NUM> m_attribute_to_index_map;
 
-        Array<EPixelFormat> m_pixel_formats;  // cache, could be instead by VertexAttributesTool
-        Array<size_t>       m_attribute_sizes;// cache, could be instead by VertexAttributesTool
+        VertexAttributesBitmask m_attributes_bitmask;// cache, could be instead by VertexAttributesTool
+        Array<EPixelFormat>     m_pixel_formats;     // cache, could be instead by VertexAttributesTool
+        Array<size_t>           m_attribute_sizes;   // cache, could be instead by VertexAttributesTool
 
     public:
         VertexFactoryBuffers();
 
-        VertexFactoryBuffers(const std::initializer_list<EVertexAttributes>& attributes);
+        VertexFactoryBuffers(const Moer::Array<EVertexAttributes>& attributes);
+
+        bool HasAttribute(EVertexAttributes attr) const;
+
+        VertexAttributesBitmask GetAttributesBitmask() const;
 
         size_t GetAttributesCount() const;
 
@@ -48,6 +53,8 @@ namespace Moer {
         EPixelFormat GetPixelFormatOfAttribute(EVertexAttributes attr) const;
 
         size_t GetBufferLength(EVertexAttributes attr) const;
+
+        size_t GetBufferByteSize(EVertexAttributes attr) const;
 
         const void* GetBufferData(EVertexAttributes attr) const;
 

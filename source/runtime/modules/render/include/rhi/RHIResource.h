@@ -650,7 +650,7 @@ namespace Moer::Render {
         BufferView(Buffer* _buffer, uint64 _byte_offset, uint64 _num_elements, uint _stride) : buffer(_buffer),
                                                                                                byte_offset(_byte_offset),
                                                                                                num_elements(_num_elements),
-                                                                                               stride(_stride){};
+                                                                                               stride(_stride) {};
         uint          GetNumElements() const { return num_elements; }
         uint          GetStride() const { return stride; }
         uint64        GetByteOffset() const { return byte_offset; }
@@ -919,6 +919,9 @@ namespace Moer::Render {
         uint first_primitive;
         uint primitive_count;
 
+        BufferRef vertex_buffer = nullptr;
+        BufferRef index_buffer  = nullptr;
+
         ERayTracingGeometryType  type             = RTGT_TRIANGLES;
         ERayTracingGeometryFlags flags            = ERayTracingGeometryFlags::NONE;
         bool                     b_force_opaque   = false;
@@ -926,14 +929,10 @@ namespace Moer::Render {
         bool                     b_flip_face      = false;
     };
     struct RaytracingGeometryInfo {
-        BufferRef                vertex_buffer = nullptr;
-        BufferRef                index_buffer  = nullptr;
-        Array<RaytracingSegment> segments      = {};
+        Array<RaytracingSegment> segments = {};
 
-        uint              max_vertex_count = 0;
-        uint              primitive_count  = 0;
-        EIndexElementType index_type       = EIndexElementType::IET_UINT32;
-        EPixelFormat      vertex_format    = PF_R32G32B32_SFLOAT;
+        EIndexElementType index_type    = EIndexElementType::IET_UINT32;
+        EPixelFormat      vertex_format = PF_R32G32B32_SFLOAT;
 
         ERayTracingAccelerationStructureBuildFlags build_flags = ERayTracingAccelerationStructureBuildFlags::NONE;
     };
@@ -1705,7 +1704,7 @@ class RHIViewport : public RHIResource {
 
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
-    virtual ~RHIViewport(){};
+    virtual ~RHIViewport() {};
     virtual void* GetNativeSwapchain() const { return nullptr; }
     virtual void* GetNativeWindow(void** _params) const { return nullptr; }
 
@@ -2544,7 +2543,7 @@ struct RHIShaderMapRef {
 
 struct RHIShaderBoundStateInput : public RHIResource {
 
-    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE){};
+    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE) {};
 
     RHIShaderBoundStateInput(
         RHIVertexInputState* _vertex_input_state,
@@ -3462,7 +3461,7 @@ namespace Moer::Render {
 
     class RENDER_API Swapchain : public RHIResource {
     protected:
-        Swapchain() : RHIResource(RRT_SWAPCHAIN){};
+        Swapchain() : RHIResource(RRT_SWAPCHAIN) {};
 
     public:
         virtual void Recreate(const SwapchainCreateInfo&) = 0;

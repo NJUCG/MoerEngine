@@ -72,92 +72,92 @@ namespace Moer::Resource::Gltf {
 
     Transform GetTransform(const aiNode* node);
 
-    uint32_t GetVertexData(const aiMesh* mesh, float* data) {
-        //  Moer::Array<float> data;
-        bool   has_position = mesh->HasPositions();
-        bool   has_normal   = mesh->HasNormals();
-        bool   has_tangent  = mesh->HasTangentsAndBitangents();
-        bool   has_uv       = mesh->HasTextureCoords(0);
-        size_t stride       = 0;
-        size_t attr_offset[4];
-        if (has_position) {
-            attr_offset[0] = stride;
-            stride += 3;
-        }
-        if (has_normal) {
-            attr_offset[1] = stride;
-            stride += 3;
-        }
-        if (has_tangent) {
-            attr_offset[2] = stride;
-            stride += 3;
-        }
-        if (has_uv) {
-            attr_offset[3] = stride;
-            stride += 2;
-            // FIXME: Assimp库的uv貌似是float3来着，步长应该从2改为3。但我看了下，不太敢修，后面Meshlet还有用到，怕修完爆炸了
-        }
+    // uint32_t GetVertexData(const aiMesh* mesh, float* data) {
+    //     //  Moer::Array<float> data;
+    //     bool   has_position = mesh->HasPositions();
+    //     bool   has_normal   = mesh->HasNormals();
+    //     bool   has_tangent  = mesh->HasTangentsAndBitangents();
+    //     bool   has_uv       = mesh->HasTextureCoords(0);
+    //     size_t stride       = 0;
+    //     size_t attr_offset[4];
+    //     if (has_position) {
+    //         attr_offset[0] = stride;
+    //         stride += 3;
+    //     }
+    //     if (has_normal) {
+    //         attr_offset[1] = stride;
+    //         stride += 3;
+    //     }
+    //     if (has_tangent) {
+    //         attr_offset[2] = stride;
+    //         stride += 3;
+    //     }
+    //     if (has_uv) {
+    //         attr_offset[3] = stride;
+    //         stride += 2;
+    //         // FIXME: Assimp库的uv貌似是float3来着，步长应该从2改为3。但我看了下，不太敢修，后面Meshlet还有用到，怕修完爆炸了
+    //     }
 
-        uint32_t vertex_num = mesh->mNumVertices;
-        // data.resize(vertex_num * stride);
-        for (uint32_t i = 0; i < vertex_num; i++) {
-            if (has_position) {
-                auto* const copy_src = reinterpret_cast<float*>(mesh->mVertices + i);
-                std::copy(copy_src, copy_src + 3, data + attr_offset[0] + i * stride);
-            }
-            if (has_normal) {
-                auto* const copy_src = reinterpret_cast<float*>(mesh->mNormals + i);
-                std::copy(copy_src, copy_src + 3, data + attr_offset[1] + i * stride);
-            }
-            if (has_tangent) {
-                auto* copy_src = reinterpret_cast<float*>(mesh->mTangents + i);
-                std::copy(copy_src, copy_src + 3, data + attr_offset[2] + i * stride);
-                // copy_src = reinterpret_cast<float*>(mesh->mBitangents + i);
-                // std::copy(copy_src, copy_src + 3, data + attr_offset[2] + i * stride + 3);
-            }
-            if (has_uv) {
-                auto* const copy_src = reinterpret_cast<float*>(mesh->mTextureCoords[0] + i);
-                std::copy(copy_src, copy_src + 2, data + attr_offset[3] + i * stride);
-            }
-        }
+    //     uint32_t vertex_num = mesh->mNumVertices;
+    //     // data.resize(vertex_num * stride);
+    //     for (uint32_t i = 0; i < vertex_num; i++) {
+    //         if (has_position) {
+    //             auto* const copy_src = reinterpret_cast<float*>(mesh->mVertices + i);
+    //             std::copy(copy_src, copy_src + 3, data + attr_offset[0] + i * stride);
+    //         }
+    //         if (has_normal) {
+    //             auto* const copy_src = reinterpret_cast<float*>(mesh->mNormals + i);
+    //             std::copy(copy_src, copy_src + 3, data + attr_offset[1] + i * stride);
+    //         }
+    //         if (has_tangent) {
+    //             auto* copy_src = reinterpret_cast<float*>(mesh->mTangents + i);
+    //             std::copy(copy_src, copy_src + 3, data + attr_offset[2] + i * stride);
+    //             // copy_src = reinterpret_cast<float*>(mesh->mBitangents + i);
+    //             // std::copy(copy_src, copy_src + 3, data + attr_offset[2] + i * stride + 3);
+    //         }
+    //         if (has_uv) {
+    //             auto* const copy_src = reinterpret_cast<float*>(mesh->mTextureCoords[0] + i);
+    //             std::copy(copy_src, copy_src + 2, data + attr_offset[3] + i * stride);
+    //         }
+    //     }
 
-        return vertex_num;
-    }
+    //     return vertex_num;
+    // }
 
-    uint32_t GetIndexData(const aiMesh* mesh, uint32_t* data) {
-        uint32_t offset = 0;
-        if (mesh->HasFaces()) {
-            for (uint32_t i = 0; i < mesh->mNumFaces; i++) {
-                const auto& face = mesh->mFaces[i];
-                std::copy_n(face.mIndices, face.mNumIndices, data + offset);
-                offset += face.mNumIndices;
-            }
-        }
-        return offset;
-    }
+    // uint32_t GetIndexData(const aiMesh* mesh, uint32_t* data) {
+    //     uint32_t offset = 0;
+    //     if (mesh->HasFaces()) {
+    //         for (uint32_t i = 0; i < mesh->mNumFaces; i++) {
+    //             const auto& face = mesh->mFaces[i];
+    //             std::copy_n(face.mIndices, face.mNumIndices, data + offset);
+    //             offset += face.mNumIndices;
+    //         }
+    //     }
+    //     return offset;
+    // }
 
-    VertexAttributeFlags GetAttribute(const aiMesh* mesh, uint32_t& stride) {
-        stride                         = 0;
-        VertexAttributeFlags attribute = 0;
-        if (mesh->HasPositions()) {
-            attribute |= EVertexAttributeFlags::E_POSITION;
-            stride += 3;
-        }
-        if (mesh->HasNormals()) {
-            attribute |= EVertexAttributeFlags::E_NORMAL;
-            stride += 3;
-        }
-        if (mesh->HasTangentsAndBitangents()) {
-            attribute |= EVertexAttributeFlags::E_TANGENT;
-            // attribute |= E_VERTEX_ATTRIBUTE::E_BITANGENT;
-            stride += 3;
-        }
-        if (mesh->HasTextureCoords(0)) {
-            attribute |= EVertexAttributeFlags::E_UV0;
-            stride += 2;
-        }
-        return attribute;
-    }
+    // VertexAttributeFlags GetAttribute(const aiMesh* mesh, uint32_t& stride) {
+    //     stride                         = 0;
+    //     VertexAttributeFlags attribute = 0;
+    //     if (mesh->HasPositions()) {
+    //         attribute |= EVertexAttributeFlags::E_POSITION;
+    //         stride += 3;
+    //     }
+    //     if (mesh->HasNormals()) {
+    //         attribute |= EVertexAttributeFlags::E_NORMAL;
+    //         stride += 3;
+    //     }
+    //     if (mesh->HasTangentsAndBitangents()) {
+    //         attribute |= EVertexAttributeFlags::E_TANGENT;
+    //         // attribute |= E_VERTEX_ATTRIBUTE::E_BITANGENT;
+    //         stride += 3;
+    //     }
+    //     if (mesh->HasTextureCoords(0)) {
+    //         attribute |= EVertexAttributeFlags::E_UV0;
+    //         stride += 2;
+    //     }
+    //     return attribute;
+    // }
 
     int32_t GetEmbeddedTextureId(const aiString& path) {
         const char* pathStr = path.C_Str();
@@ -446,7 +446,41 @@ namespace Moer::Resource::Gltf {
     };
     using GeomRecord = UnorderedMap<GeomSet, SharedPtr<MeshInfo>, GeomSetHash, GeomSetEqual>;
 
-    UniquePtr<SceneData> Parser::Impl::LoadSceneFromFile(const std::filesystem::path& _file_path, bool _delete_after_load) {
+    struct Counter {
+        uint32_t vertex = 0;
+        uint32_t index  = 0;
+
+        Counter& operator+=(const Counter& _rhs) {
+            vertex += _rhs.vertex;
+            index += _rhs.index;
+            return *this;
+        }
+    };
+
+    VertexAttributesBitmask GetAttributesBitmask(const aiMesh* mesh) {
+        Moer::Array<EVertexAttributes> attributes;
+
+        if (mesh->HasPositions()) {
+            attributes.push_back(EVertexAttributes::VA_POSITION);
+        }
+        if (mesh->HasNormals()) {
+            attributes.push_back(EVertexAttributes::VA_NORMAL);
+        }
+        if (mesh->HasTangentsAndBitangents()) {
+            attributes.push_back(EVertexAttributes::VA_TANGENT);
+        }
+        if (mesh->HasTextureCoords(0)) {
+            attributes.push_back(EVertexAttributes::VA_TEXCOORD0);
+        }
+        if (mesh->HasTextureCoords(1)) {
+            attributes.push_back(EVertexAttributes::VA_TEXCOORD1);
+        }
+
+        return VertexAttributesTool::GetBitmaskFromArray(attributes);
+    }
+
+    UniquePtr<SceneData>
+    Parser::Impl::LoadSceneFromFile(const std::filesystem::path& _file_path, bool _delete_after_load) {
 
         GpuPrimitiveBuilder::InitBuild();
         Assimp::Importer importer;
@@ -463,13 +497,6 @@ namespace Moer::Resource::Gltf {
         }
 
         m_file_parent_path = _file_path.parent_path();
-
-        // MARK: Prepare
-
-        // Assume all mesh has same attribute
-        uint32_t stride;
-        auto     attribute = GetAttribute(gltf_scene->mMeshes[0], stride);
-        stride *= sizeof(float);
 
         // MARK: Part 0 Generate Meshlet (Deprecated)
         //
@@ -544,21 +571,19 @@ namespace Moer::Resource::Gltf {
                             SharedPtr<MeshGeometry> mesh_geometry = data->m_mesh_geometries.emplace_back(MakeShared<MeshGeometry>());
                             mesh_geometry->local_idx_count        = mesh->mNumFaces * 3;
                             mesh_geometry->local_vtx_count        = mesh->mNumVertices;
-                            mesh_geometry->local_idx_offset       = local_idx_cnt;
-                            mesh_geometry->local_vtx_offset       = local_vtx_cnt;
-                            mesh_geometry->material_id            = data->m_material_instance_indexes[material_name];
-                            mesh_geometry->global_geom_idx        = data->m_mesh_geometries.size() - 1;
+                            // In new MeshBuffers structure, the following 2 offsets needs to be calculated according to Vertex Attributes Layout.
+                            // So, the following 2 offsets will be calculated with MeshBuffers. (See the following code)
+                            // mesh_geometry->local_idx_offset       = local_idx_cnt;
+                            // mesh_geometry->local_vtx_offset       = local_vtx_cnt;
+                            mesh_geometry->material_id     = data->m_material_instance_indexes[material_name];
+                            mesh_geometry->global_geom_idx = data->m_mesh_geometries.size() - 1;
 
                             local_vtx_cnt += mesh->mNumVertices;
                             local_idx_cnt += mesh->mNumFaces * 3;
 
                             mesh_info->geometries[i] = mesh_geometry;
-                        }
+                        }// Every mesh in the node
 
-                        mesh_info->vtx_offset   = total_vtx_cnt;
-                        mesh_info->idx_offset   = total_idx_cnt;
-                        mesh_info->vtx_count    = local_vtx_cnt;
-                        mesh_info->idx_count    = local_idx_cnt;
                         mesh_info->bounding_box = bounding_box;
 
                         //for serialization
@@ -568,7 +593,7 @@ namespace Moer::Resource::Gltf {
                         total_idx_cnt += local_idx_cnt;
 
                         geom_record[geo_set] = mesh_info;
-                    }
+                    }// if new geo_set
                     geo_iter = geom_record.find(geo_set);
 
                     Render::InstanceData& inst   = data->m_instance_infos.emplace_back();
@@ -582,7 +607,7 @@ namespace Moer::Resource::Gltf {
                     mesh_instance.mesh_info_idx = geo_iter->second->global_mesh_idx;
                     mesh_instance.mesh_info     = geo_iter->second;
                     geom_instance_offset += _node->mNumMeshes;
-                }
+                }// Every node
             };
             LoadNodes(gltf_scene, gltf_scene->mRootNode, on_load_node_prev);
         }
@@ -591,23 +616,66 @@ namespace Moer::Resource::Gltf {
         // The following code obtains these data:
         //   - m_mesh_buffers
 
+        // 预处理，生成Mesh Buffers
+        // 扫描场景中所有的Mesh，记录下所有顶点属性组合，并且创建对应的MeshBuffers(VertexFactoryBuffers)
+        //
+        // 例子：一些Mesh有position+normal+tangent+uv0，而另一些Mesh只有position+normal，那么就会创建两个MeshBuffers(VertexFactoryBuffers)
+        // 在之后的代码中，会直接将Mesh的数据填充到对应的MeshBuffers中
+        auto create_empty_mesh_buffers = [&](const aiScene* scene) {
+            Moer::UnorderedMap<VertexAttributesBitmask, Counter> bitmask_to_counter_map;
+
+            // 预处理出所有不同的顶点属性组合
+            for (uint32_t i = 0; i < scene->mNumMeshes; i++) {
+                const auto* mesh    = scene->mMeshes[i];
+                const auto& bitmask = GetAttributesBitmask(mesh);
+
+                const auto& counter = Counter{mesh->mNumVertices, mesh->mNumFaces * 3};
+
+                if (bitmask_to_counter_map.contains(bitmask)) {
+                    bitmask_to_counter_map[bitmask] += counter;
+                } else {
+                    bitmask_to_counter_map[bitmask] = counter;
+                }
+            }
+
+            Moer::UnorderedMap<VertexAttributesBitmask, uint> bitmask_to_mesh_buffers_idx_map;
+
+            // 创建MeshBuffers
+            for (const auto& [bitmask, counter] : bitmask_to_counter_map) {
+                // create mesh buffers
+                SharedPtr<MeshBuffers> mesh_buffer = MakeShared<MeshBuffers>();
+                data->m_mesh_buffers.emplace_back(mesh_buffer);
+
+                // extract array<attr> from bitmask
+                const auto& vertex_attributes = VertexAttributesTool::GetArrayFromBitmask(bitmask);
+
+                // initialize vertex factory buffers' length
+                mesh_buffer->vertex_factory_buffers = VertexFactoryBuffers(vertex_attributes);
+                for (const auto& attr : vertex_attributes) {
+                    mesh_buffer->vertex_factory_buffers.SetBufferLength(attr, counter.vertex);
+                }
+                // initialize index buffer's length
+                mesh_buffer->indices.resize(counter.index);
+
+                // 塞进map里
+                bitmask_to_mesh_buffers_idx_map[bitmask] = data->m_mesh_buffers.size() - 1;
+            }
+
+            return std::make_tuple(
+                std::move(bitmask_to_mesh_buffers_idx_map),
+                std::move(bitmask_to_counter_map));
+        };
+        auto [bitmask_to_mesh_buffers_idx_map, bitmask_to_counter_map] = create_empty_mesh_buffers(gltf_scene);
+        LOG_INFO("MeshBuffers creation info:");
+        for (const auto& [bitmask, counter] : bitmask_to_counter_map) {
+            LOG_INFO("\tBitmask: {}, Vertex Count: {}, Index Count: {}", bitmask, counter.vertex, counter.index);
+        }
+
         {
-            SharedPtr<MeshBuffers> mesh_buffer = MakeShared<MeshBuffers>();
-            data->m_mesh_buffers.emplace_back(mesh_buffer);
-
-            mesh_buffer->vertex_factory_buffers = VertexFactoryBuffers(
-                {EVertexAttributes::VA_POSITION, EVertexAttributes::VA_NORMAL, EVertexAttributes::VA_TANGENT, EVertexAttributes::VA_TEXCOORD0});
-
-            // create temp buffers
-            Array<float3> position_buffer(total_vtx_cnt);
-            Array<uint>   normal_buffer(total_vtx_cnt);
-            Array<uint>   tangent_buffer(total_vtx_cnt);
-            Array<float2> texcoord0_buffer(total_vtx_cnt);
-
-            mesh_buffer->indices.resize(total_idx_cnt);
-
-            total_vtx_cnt = 0;
-            total_idx_cnt = 0;
+            // 清空counter
+            for (auto& [_, counter] : bitmask_to_counter_map) {
+                counter = Counter{0, 0};
+            }
 
             geom_record.clear();
 
@@ -632,60 +700,93 @@ namespace Moer::Resource::Gltf {
                 }
                 geom_record[geo_set] = mesh_info;
 
-                mesh_info->buffers = mesh_buffer;
-                mesh_info->buf_idx = data->m_mesh_buffers.size() - 1;// For serialization
-
                 for (uint32_t i = 0; i < _node->mNumMeshes; i++) {
-
                     const auto* mesh = gltf_scene->mMeshes[_node->mMeshes[i]];
 
-                    for (uint32_t j = 0; j < mesh->mNumVertices; j++) {
-                        if (mesh->HasPositions()) {
-                            const auto& pos                    = mesh->mVertices[j];
-                            position_buffer[total_vtx_cnt + j] = {pos.x, pos.y, pos.z};
-                        } else {
-                            assert(false && "Mesh has no position");
-                        }
+                    SharedPtr<MeshGeometry> geom = mesh_info->geometries[i];
 
-                        if (mesh->HasNormals()) {
-                            const auto& nor                  = mesh->mNormals[j];
-                            float3      normal               = {nor.x, nor.y, nor.z};
-                            normal_buffer[total_vtx_cnt + j] = Pack_RGB8_SNORM(normal);
-                        }
-                        if (mesh->HasTangentsAndBitangents()) {
-                            const auto& tan                   = mesh->mTangents[j];
-                            float3      tangent               = {tan.x, tan.y, tan.z};
-                            tangent_buffer[total_vtx_cnt + j] = Pack_RGB8_SNORM(tangent);
-                        }
-                        if (mesh->HasTextureCoords(0)) {
-                            const auto& uv0                     = mesh->mTextureCoords[0][j];
-                            texcoord0_buffer[total_vtx_cnt + j] = {uv0.x, uv0.y};
+                    // get vertex attributes bitmask
+                    const auto& bitmask = GetAttributesBitmask(mesh);
+
+                    uint                   mesh_buffers_idx = bitmask_to_mesh_buffers_idx_map[bitmask];
+                    SharedPtr<MeshBuffers> mesh_buffers     = data->m_mesh_buffers[mesh_buffers_idx];
+                    VertexFactoryBuffers&  vf_buffers       = mesh_buffers->vertex_factory_buffers;
+
+                    uint32& vertex_count = bitmask_to_counter_map[bitmask].vertex;
+                    uint32& index_count  = bitmask_to_counter_map[bitmask].index;
+
+                    // LOG_INFO("Bitmask: {}; vertex_count: {}; index_count: {}", bitmask, vertex_count, index_count);
+
+                    // build index (mesh geometry -> mesh buffer)
+
+                    geom->mesh_buffers_idx = mesh_buffers_idx;
+                    geom->mesh_buffers     = mesh_buffers;
+
+                    // fill buffers
+
+                    if (mesh->HasPositions()) {
+                        auto position_buffer =
+                            reinterpret_cast<VertexAttributesType<EVertexAttributes::VA_POSITION>::type*>(
+                                vf_buffers.GetBufferData(EVertexAttributes::VA_POSITION));
+                        for (uint32_t j = 0; j < mesh->mNumVertices; j++) {
+                            const auto& pos                   = mesh->mVertices[j];
+                            position_buffer[vertex_count + j] = {pos.x, pos.y, pos.z};
                         }
                     }
+
+                    if (mesh->HasNormals()) {
+                        auto normal_buffer =
+                            reinterpret_cast<VertexAttributesType<EVertexAttributes::VA_NORMAL>::type*>(
+                                vf_buffers.GetBufferData(EVertexAttributes::VA_NORMAL));
+                        for (uint32_t j = 0; j < mesh->mNumVertices; j++) {
+                            const auto& nor                 = mesh->mNormals[j];
+                            float3      normal              = {nor.x, nor.y, nor.z};
+                            normal_buffer[vertex_count + j] = Pack_RGB8_SNORM(normal);
+                        }
+                    }
+
+                    if (mesh->HasTangentsAndBitangents()) {
+                        auto tangent_buffer =
+                            reinterpret_cast<VertexAttributesType<EVertexAttributes::VA_TANGENT>::type*>(
+                                vf_buffers.GetBufferData(EVertexAttributes::VA_TANGENT));
+                        for (uint32_t j = 0; j < mesh->mNumVertices; j++) {
+                            const auto& tan                  = mesh->mTangents[j];
+                            float3      tangent              = {tan.x, tan.y, tan.z};
+                            tangent_buffer[vertex_count + j] = Pack_RGB8_SNORM(tangent);
+                        }
+                    }
+
+                    if (mesh->HasTextureCoords(0)) {
+                        auto texcoord0_buffer =
+                            reinterpret_cast<VertexAttributesType<EVertexAttributes::VA_TEXCOORD0>::type*>(
+                                vf_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD0));
+                        for (uint32_t j = 0; j < mesh->mNumVertices; j++) {
+                            const auto& uv0                    = mesh->mTextureCoords[0][j];
+                            texcoord0_buffer[vertex_count + j] = {uv0.x, uv0.y};
+                        }
+                    }
+
                     for (uint32_t j = 0; j < mesh->mNumFaces; j++) {
-                        const auto& face                                = mesh->mFaces[j];
-                        mesh_buffer->indices[total_idx_cnt + j * 3 + 0] = face.mIndices[0];
-                        mesh_buffer->indices[total_idx_cnt + j * 3 + 1] = face.mIndices[1];
-                        mesh_buffer->indices[total_idx_cnt + j * 3 + 2] = face.mIndices[2];
+                        const auto& face                               = mesh->mFaces[j];
+                        mesh_buffers->indices[index_count + j * 3 + 0] = face.mIndices[0];
+                        mesh_buffers->indices[index_count + j * 3 + 1] = face.mIndices[1];
+                        mesh_buffers->indices[index_count + j * 3 + 2] = face.mIndices[2];
                     }
 
-                    total_vtx_cnt += mesh->mNumVertices;
-                    total_idx_cnt += mesh->mNumFaces * 3;
+                    geom->local_vtx_offset = vertex_count;
+                    geom->local_idx_offset = index_count;
+
+                    vertex_count += mesh->mNumVertices;
+                    index_count += mesh->mNumFaces * 3;
                 }
             };
 
             LoadNodes(gltf_scene, gltf_scene->mRootNode, on_load_node_post);
 
-            // use temp buffers to initialize vertex_factory_buffers
-            assert(total_vtx_cnt == position_buffer.size());
-            mesh_buffer->vertex_factory_buffers.AssignAllBuffers({
-                {EVertexAttributes::VA_POSITION, position_buffer.data(), position_buffer.size()},
-                {EVertexAttributes::VA_NORMAL, normal_buffer.data(), normal_buffer.size()},
-                {EVertexAttributes::VA_TANGENT, tangent_buffer.data(), tangent_buffer.size()},
-                {EVertexAttributes::VA_TEXCOORD0, texcoord0_buffer.data(), texcoord0_buffer.size()},
-            });
-
-            mesh_buffer->FillRanges();
+            for (auto& [_, mesh_buffers_idx] : bitmask_to_mesh_buffers_idx_map) {
+                auto mesh_buffers = data->m_mesh_buffers[mesh_buffers_idx];
+                mesh_buffers->FillRanges();
+            }
         }
 
         // MARK: Part 3 Camera&Light

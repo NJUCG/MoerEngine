@@ -895,27 +895,63 @@ int main(int argc, const char** argv) {
             camera->Tick(rhi_ui.GetSceneColorAspectRatio());
 
             // MARK: GBuffer Pass
-            Array<MeshDrawData> mesh_draw_datas{};
 
-            std::span<const StaticArray<VertexBuffer, VA_NUM>> vertex_buffers = scene.GetVertexBufferViews();
-            std::span<const IndexBuffer>                       index_buffers  = scene.GetIndexBufferViews();
+            // 将每种不同顶点类型的Mesh分发到不同的MeshDrawDatas中。在Draw时，调用不同的PSO处理对应的MeshDrawDatas！
+            // 所以，下面这段scene.ForEach的代码，也可以理解成将 “按Entity分组的Mesh” 转换为 “按顶点类型分组的Mesh的DrawDatas”
+            UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>> mesh_draw_datas_map;
 
+            std::span<const UnorderedMap<VertexAttributesBitmask, Array<Render::VertexBuffer>>> vertex_buffer_maps = scene.GetVertexBufferViews();
+            std::span<const UnorderedMap<VertexAttributesBitmask, Render::IndexBuffer>>         index_buffer_maps  = scene.GetIndexBufferViews();
+
+            // LOG_INFO("");
+            // LOG_INFO("New Render:");
             uint geom_idx = 0;
             scene.ForEach([&](Entity _entity) {
                 auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
 
-                const StaticArray<VertexBuffer, VA_NUM>& vertex_buffer = vertex_buffers[mesh->global_mesh_idx];
+                const UnorderedMap<VertexAttributesBitmask, Array<Render::VertexBuffer>>& vertex_buffer_map = vertex_buffer_maps[mesh->global_mesh_idx];
+                const UnorderedMap<VertexAttributesBitmask, Render::IndexBuffer>&         index_buffer_map  = index_buffer_maps[mesh->global_mesh_idx];
 
-                auto& mesh_draw_dat = mesh_draw_datas.emplace_back(
-                    std::span<VertexBuffer>((VertexBuffer*)vertex_buffer.data(), 4),
-                    index_buffers[mesh->global_mesh_idx]);
+                // LOG_INFO("  Entity <-> Mesh info addr {}", (void*)mesh.get());
+
+                for (const auto& [bitmask, vertex_buffer] : vertex_buffer_map) {// for each vertex buffer (index buffer is the same)
+                    const auto& index_buffer = index_buffer_map.at(bitmask);
+
+                    auto& mesh_draw_datas = mesh_draw_datas_map[bitmask];
+
+                    // 注意，请不要改变Array内部的顺序
+                    // => 逻辑关联处：RHICommand.h -> MeshDrawData
+                    auto& mesh_draw_data = mesh_draw_datas.emplace_back(
+                        vertex_buffer,
+                        index_buffer);
+
+                    // LOG_INFO("    Bitmask {}; index buf: {}, {}", bitmask, index_buffer.buffer.GetNumElements(), index_buffer.buffer.GetByteOffset());
+                }
 
                 for (uint i = 0; i < mesh->geometries.size(); i++) {
-                    uint                idx              = geom_idx + i;
-                    const MeshGeometry& geom             = *mesh->geometries[i];
-                    uint                first_idx        = geom.local_idx_offset + mesh->idx_offset;
-                    uint                first_vertex_idx = geom.local_vtx_offset + mesh->vtx_offset;
-                    mesh_draw_dat.EmplaceDrawIndexed(first_idx, geom.local_idx_count, first_vertex_idx, idx);
+                    uint                idx  = geom_idx + i;
+                    const MeshGeometry& geom = *mesh->geometries[i];
+
+                    uint first_index    = geom.local_idx_offset;
+                    uint index_count    = geom.local_idx_count;
+                    uint first_vertex   = geom.local_vtx_offset;
+                    uint first_instance = idx;
+
+                    // LOG_INFO("    Geom {}; first_index {}, index_count {}, first_vertex {}, first_instance {}; geom offset {} {}; geom count {} {}",
+                    //          i,
+                    //          first_index,
+                    //          index_count,
+                    //          first_vertex,
+                    //          first_instance,
+                    //          geom.local_idx_offset,
+                    //          geom.local_vtx_offset,
+                    //          geom.local_idx_count,
+                    //          geom.local_vtx_count);
+
+                    auto  bitmask         = geom.mesh_buffers->vertex_factory_buffers.GetAttributesBitmask();
+                    auto& mesh_draw_datas = mesh_draw_datas_map[bitmask];
+
+                    mesh_draw_datas.back().EmplaceDrawIndexed(first_index, index_count, first_vertex, first_instance);
                 }
                 geom_idx += mesh->geometries.size();
             });
@@ -937,8 +973,13 @@ int main(int argc, const char** argv) {
             param.geometry_data_handle     = geom_data_buffer_handle;
             param.geometry_instance_handle = geom_instance_buffer_handle;
             param.camera_view_proj         = Transpose(camera->GetViewProjectionMatrix());
+
+            // use for test
+            auto default_bitmask = VertexAttributesTool::GetBitmaskFromArray(
+                {EVertexAttributes::VA_POSITION, EVertexAttributes::VA_NORMAL, EVertexAttributes::VA_TANGENT, EVertexAttributes::VA_TEXCOORD0});
+
             cmd_list.Gfx(raster_pipeline_constant_color, sampler, camera_buffer, red_tex, bindless_array, param)
-                .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(mesh_draw_datas), DepthAttachment(depth->GetView().GetTexture()), ColorAttachment(vbuffer), ColorAttachment(normal), ColorAttachment(uv), ColorAttachment(position));
+                .Draw(Rect2D(0, 0, resolution.x, resolution.y), std::move(mesh_draw_datas_map[default_bitmask]), DepthAttachment(depth->GetView().GetTexture()), ColorAttachment(vbuffer), ColorAttachment(normal), ColorAttachment(uv), ColorAttachment(position));
 
             // MARK: PBR Pass
 

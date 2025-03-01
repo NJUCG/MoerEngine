@@ -154,33 +154,46 @@ namespace Moer {
         uint  local_vtx_offset;
         uint  local_vtx_count;
         uint  global_geom_idx;
+
+        uint                   mesh_buffers_idx;// For serialization
+        SharedPtr<MeshBuffers> mesh_buffers;
+
+        InputStream& operator>>(InputStream& _stream) {
+            _stream >> bounding_box >> material_id;
+            _stream >> local_idx_offset >> local_idx_count >> local_vtx_offset >> local_vtx_count;
+            _stream >> global_geom_idx >> mesh_buffers_idx;
+            // 'buffers' will be filled in SceneCache::ReadSceneGeomInfo(..)
+            return _stream;
+        }
+
+        OutputStream& operator<<(OutputStream& _stream) const {
+            _stream << bounding_box << material_id;
+            _stream << local_idx_offset << local_idx_count << local_vtx_offset << local_vtx_count;
+            _stream << global_geom_idx << mesh_buffers_idx;
+            // 'buffers' shouldn't be serialized
+            return _stream;
+        }
     };
 
     struct MeshInfo {
-        SharedPtr<MeshBuffers>         buffers{nullptr};
-        uint                           buf_idx;//for serialization
         std::string                    name;
         Array<SharedPtr<MeshGeometry>> geometries;
         uint                           geom_start_idx;//for serialization
         Box3D                          bounding_box;
 
-        uint idx_offset;
-        uint idx_count;
-        uint vtx_offset;
-        uint vtx_count;
         uint global_mesh_idx;
 
         InputStream& operator>>(InputStream& _stream) {
-            _stream >> buf_idx >> name;
+            _stream >> name;
             uint size;
             _stream >> size;
             geometries.resize(size);
-            _stream >> geom_start_idx >> bounding_box >> idx_offset >> idx_count >> vtx_offset >> vtx_count >> global_mesh_idx;
+            _stream >> geom_start_idx >> bounding_box >> global_mesh_idx;
             return _stream;
         }
 
         OutputStream& operator<<(OutputStream& _stream) const {
-            _stream << buf_idx << name << uint(geometries.size()) << geom_start_idx << bounding_box << idx_offset << idx_count << vtx_offset << vtx_count << global_mesh_idx;
+            _stream << name << uint(geometries.size()) << geom_start_idx << bounding_box << global_mesh_idx;
             return _stream;
         }
     };
@@ -314,12 +327,12 @@ namespace Moer {
         Render::BufferRef        GetInstanceBuffer() const noexcept;
         Render::BindlessArrayRef GetBindlessArray() const noexcept;
 
-        void                                                       UpdateGpuData();
-        std::span<const Render::GeometryData>                      GetGeometryDatas() const noexcept;
-        std::span<const Render::InstanceData>                      GetInstanceDatas() const noexcept;
-        std::span<const StaticArray<Render::VertexBuffer, VA_NUM>> GetVertexBufferViews();
-        std::span<const Render::IndexBuffer>                       GetIndexBufferViews();
-        std::span<const Render::GeometryInstance>                  GetGeometryInstances() const noexcept;
+        void                                                                                UpdateGpuData();
+        std::span<const Render::GeometryData>                                               GetGeometryDatas() const noexcept;
+        std::span<const Render::InstanceData>                                               GetInstanceDatas() const noexcept;
+        std::span<const UnorderedMap<VertexAttributesBitmask, Array<Render::VertexBuffer>>> GetVertexBufferViews();
+        std::span<const UnorderedMap<VertexAttributesBitmask, Render::IndexBuffer>>         GetIndexBufferViews();
+        std::span<const Render::GeometryInstance>                                           GetGeometryInstances() const noexcept;
 
     protected:
         class Impl;

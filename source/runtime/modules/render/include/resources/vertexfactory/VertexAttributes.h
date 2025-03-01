@@ -32,6 +32,8 @@ namespace Moer {
 
     // VertexAttributes Tool of Run Time
 
+    using VertexAttributesBitmask = uint64;
+
     class VertexAttributesTool {
     public:
         static size_t GetSize(EVertexAttributes attr) {
@@ -54,6 +56,25 @@ namespace Moer {
             }
             assert(false && "Invalid EVertexAttributes");
             return EPixelFormat::PF_UNDEFINED;
+        }
+
+        static VertexAttributesBitmask GetBitmaskFromArray(Moer::Array<EVertexAttributes> attrs) {
+            VertexAttributesBitmask mask = 0;
+            for (auto attr : attrs) {
+                mask |= 1 << static_cast<size_t>(attr);
+            }
+            return mask;
+        }
+
+        // 注意，这里返回的Array顺序不能被随意改变，顺序应该按照EVertexAttributes枚举值的顺序（从小到大）
+        static Moer::Array<EVertexAttributes> GetArrayFromBitmask(VertexAttributesBitmask mask) {
+            Moer::Array<EVertexAttributes> attrs;
+            for (size_t i = 0; i < VA_NUM; i++) {
+                if (mask & (1 << i)) {
+                    attrs.push_back(static_cast<EVertexAttributes>(i));
+                }
+            }
+            return attrs;
         }
     };
 

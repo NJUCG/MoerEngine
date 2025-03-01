@@ -390,12 +390,16 @@ namespace Moer::Render {
                 auto* vk_geo    = ResourceCast(param.geometry.Get());
                 auto* vk_buffer = vk_geo->GetUnderlyingBuffer();
 
-                auto* vtx_buffer = ResourceCast(vk_geo->GetInfo().vertex_buffer.Get());
-                auto* idx_buffer = ResourceCast(vk_geo->GetInfo().index_buffer.Get());
-
                 tracker.RecordState(vk_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
-                tracker.RecordState(vtx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
-                tracker.RecordState(idx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+
+                // FIXME: 我不确定这里的修改是否正确。类似场景见 RHICmdReorderer.h:875附近
+                for (const auto& segment : vk_geo->GetInfo().segments) {
+                    auto* vtx_buffer = ResourceCast(segment.vertex_buffer.Get());
+                    auto* idx_buffer = ResourceCast(segment.index_buffer.Get());
+
+                    tracker.RecordState(vtx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+                    tracker.RecordState(idx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+                }
 
                 tracker.EmplaceWriteBLAS(uint64(vk_geo));
             }
@@ -975,23 +979,27 @@ namespace Moer::Render {
             cmd_list.SetViewPort(viewport);
             cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
             for (const auto& draw_data : draw_datas) {
-                if (draw_data.vtx_cnt > 0) {
-                    StaticArray<VkBuffer, 4>     vertex_buffers{};
-                    StaticArray<VkDeviceSize, 4> vtx_offsets{};
+                auto num_of_vertex_buffers = draw_data.vtx_views.size();
+                if (num_of_vertex_buffers > 0) {
 
-                    for (size_t i = 0; i < draw_data.vtx_cnt; ++i) {
-                        vertex_buffers[i] = ResourceCast(draw_data.vtx_views[i].buffer)->GetHandle();
-                        vtx_offsets[i]    = draw_data.vtx_views[i].offset;
+                    Array<VkBuffer>     vertex_buffers;
+                    Array<VkDeviceSize> vtx_offsets;
+
+                    vertex_buffers.reserve(num_of_vertex_buffers);
+                    vtx_offsets.reserve(num_of_vertex_buffers);
+
+                    for (const auto& vtx_view : draw_data.vtx_views) {
+                        vertex_buffers.emplace_back(ResourceCast(vtx_view.buffer)->GetHandle());
+                        vtx_offsets.emplace_back(vtx_view.offset);
                     }
-                    cmd_list.SetVertexBuffers(0,
-                                              draw_data.vtx_cnt,
-                                              std::span<VkBuffer>(vertex_buffers.data(),
-                                                                  draw_data.vtx_cnt),
-                                              std::span<VkDeviceSize>(vtx_offsets.data(),
-                                                                      draw_data.vtx_cnt));
-                }
 
-                // uint vtx_offset = draw_data.vtx_cnt != 0 ? draw_data.vtx_views[0].offset / draw_data.vtx_views[0].buffer->GetStride() : 0;
+                    cmd_list.SetVertexBuffers(0,
+                                              num_of_vertex_buffers,
+                                              std::span<VkBuffer>(vertex_buffers.data(),
+                                                                  num_of_vertex_buffers),
+                                              std::span<VkDeviceSize>(vtx_offsets.data(),
+                                                                      num_of_vertex_buffers));
+                }
 
                 std::visit(
                     [&](auto&& _idx_input) {
@@ -1005,8 +1013,7 @@ namespace Moer::Render {
                                 index_buffer.GetByteOffset(),
                                 VulkanEnumTranslator::METoVKIndexType(_idx_input.stride));
 
-                            for (size_t i = 0; i < draw_data.draw_params.size(); ++i) {
-                                const SingleDrawParam& draw_param = draw_data.draw_params[i];
+                            for (const auto& draw_param : draw_data.draw_params) {
                                 cmd_list.DrawIndexedInstanced(draw_param.index_cnt,
                                                               draw_param.instance_cnt,
                                                               draw_param.first_index,
@@ -1014,8 +1021,7 @@ namespace Moer::Render {
                                                               draw_param.first_instance);
                             }
                         } else if constexpr (std::is_same_v<IdxType, uint>) {
-                            for (size_t i = 0; i < draw_data.draw_params.size(); ++i) {
-                                const SingleDrawParam& draw_param = draw_data.draw_params[i];
+                            for (const auto& draw_param : draw_data.draw_params) {
                                 cmd_list.DrawInstanced(draw_param.index_cnt,
                                                        draw_param.instance_cnt,
                                                        draw_param.vertex_offset,
