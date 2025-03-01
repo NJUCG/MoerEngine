@@ -16,6 +16,6 @@ void main(uint gtid: SV_DISPATCHTHREADID){
         return;
     }
     
-    float2 result = STL::Sequence::Hammersley2D(gtid, param.num_samples);
+    float2 result = STL::Sequence::Hammersley2D(gtid, param.num_samples) * 2.0f - 1.0f;
     output[gtid] = result;
 }

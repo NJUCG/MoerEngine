@@ -6,6 +6,7 @@
 #include "io/IOCommon.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
+#include "misc/Alignment.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -378,7 +379,7 @@ namespace Moer::Render {
 
                 for (const AccelerationStructureBuildParam& param : params) {
                     auto* vk_geo = ResourceCast(param.geometry.Get());
-                    scratch_size = (scratch_size + scratch_alignment - 1) & ~(scratch_alignment - 1);
+                    scratch_size = Moer::AlignUp(scratch_size, scratch_alignment);
                     scratch_size += param.mode == ERaytracingBuildMode::BUILD ? vk_geo->build_sizes_info.buildScratchSize : vk_geo->build_sizes_info.updateScratchSize;
                 }
                 scratch_size += scratch_alignment;
@@ -1187,10 +1188,6 @@ namespace Moer::Render {
             if (b_array) {
                 uint storage_alignment = 256u;
 
-                auto align2 = [](uint _val, uint _align) -> uint {
-                    return (_val + _align - 1) & ~(_align - 1);
-                };
-
                 //calculate all staging size
                 uint current_offset = 0;
                 uint staging_size = 0, array_staging_offset = 0, texture_staging_offset = 0, buffer_staging_offset = 0;
@@ -1201,29 +1198,29 @@ namespace Moer::Render {
                 if (b_array) {
                     array_staging_size   = array_data.size();
                     staging_size         = array_staging_size;
-                    array_indices_offset = align2(array_staging_size, storage_alignment);
+                    array_indices_offset = Moer::AlignUp(array_staging_size, storage_alignment);
 
                     array_indices_size = sizeof(uint) * (array_indices_dat.size()) * 2;
 
-                    current_offset = align2(array_indices_size + array_indices_offset, storage_alignment);
+                    current_offset = Moer::AlignUp(array_indices_size + array_indices_offset, storage_alignment);
                 }
 
                 if (b_texture) {
                     texture_staging_size   = texture_data.size();
                     texture_staging_offset = current_offset;
 
-                    texture_indices_offset = align2(texture_staging_size + texture_staging_offset, storage_alignment);
+                    texture_indices_offset = Moer::AlignUp(texture_staging_size + texture_staging_offset, storage_alignment);
                     texture_indices_size   = sizeof(uint) * texture_indices_dat.size() * 2;
-                    current_offset         = align2(texture_indices_size + texture_indices_offset, storage_alignment);
+                    current_offset         = Moer::AlignUp(texture_indices_size + texture_indices_offset, storage_alignment);
                 }
 
                 if (b_buffer) {
                     buffer_staging_size   = buffer_data.size();
                     buffer_staging_offset = current_offset;
-                    buffer_indices_offset = align2(buffer_staging_size + buffer_staging_offset, storage_alignment);
+                    buffer_indices_offset = Moer::AlignUp(buffer_staging_size + buffer_staging_offset, storage_alignment);
                     buffer_indices_size   = sizeof(uint) * buffer_indices_dat.size() * 2;
 
-                    current_offset = align2(buffer_indices_size + buffer_indices_offset, storage_alignment);
+                    current_offset = Moer::AlignUp(buffer_indices_size + buffer_indices_offset, storage_alignment);
                 }
 
                 staging_size = current_offset;
@@ -1307,7 +1304,7 @@ namespace Moer::Render {
             VulkanBuffer* scratch_buf     = ResourceCast(scratch_view.GetBuffer());
             uint64        scratch_address = scratch_buf->DeviceAddress();
             //align scratch address
-            scratch_address = (scratch_address + scratch_alignment - 1) & ~(scratch_alignment - 1);
+            scratch_address = Moer::AlignUp(scratch_address, scratch_alignment);
 
             build_infos.reserve(build_params.size());
             build_ranges.reserve(build_params.size());
@@ -1332,7 +1329,7 @@ namespace Moer::Render {
                 build_info.scratchData.deviceAddress = scratch_address + scratch_offset;
                 build_infos.emplace_back(build_info);
 
-                scratch_offset = (scratch_offset + scratch_alignment - 1) & ~(scratch_alignment - 1);
+                scratch_offset = Moer::AlignUp(scratch_offset, scratch_alignment);
                 scratch_offset += build_param.mode == ERaytracingBuildMode::BUILD ? geometry->build_sizes_info.buildScratchSize : geometry->build_sizes_info.updateScratchSize;
             }
             cmd_list.BeginLabel(std::format("BuildBLAS {}", build_infos.size()), {});
@@ -1426,7 +1423,8 @@ namespace Moer::Render {
             assert(size_infos.accelerationStructureSize > 0 && "Invalid acceleration structure size!");
             assert(size_infos.buildScratchSize <= scratch_buffer->GetByteSize() && "Invalid scratch buffer size!");
 
-            build_info.scratchData.deviceAddress = scratch_buffer->DeviceAddress();
+            const uint64 scratch_alignment       = m_device->GetOptionalProperties().acceleration_structure_properties.minAccelerationStructureScratchOffsetAlignment;
+            build_info.scratchData.deviceAddress = Moer::AlignUp(scratch_buffer->DeviceAddress(), scratch_alignment);
 
             cmd_list.BeginLabel(std::format("UpdateTLAS with {} instances", _cmd.InstanceCount()), {});
             vkCmdBuildAccelerationStructuresKHR(cmd_list.GetHandle(), 1, &build_info, &range);

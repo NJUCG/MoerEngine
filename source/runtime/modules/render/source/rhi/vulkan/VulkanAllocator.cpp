@@ -261,7 +261,7 @@ namespace Moer::Render {
 
         auto align_size = std::max(_align, 16u);
         for (auto& alloc_buf : allocated_buffers) {
-            auto offset = (alloc_buf.offset + align_size - 1) & ~(align_size - 1);
+            auto offset = Moer::AlignUp(alloc_buf.offset, align_size);
             if (alloc_buf.size - offset >= _size) {
                 alloc_buf.offset = offset + _size;
                 return {alloc_buf.handle, offset};

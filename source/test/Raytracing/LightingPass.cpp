@@ -119,9 +119,9 @@ namespace Moer::Render {
                               DI_BINDING_ARGS(_rt_ctx))
                 .Dispatch(uint3(dispatch_size, 1), "TemporalResample");
 
-            // _cmd_list.Compute(spatial_resample_pipeline,
-            //                   DI_BINDING_ARGS(_rt_ctx))
-            //     .Dispatch(uint3(dispatch_size, 1), "SpatialResample");
+            _cmd_list.Compute(spatial_resample_pipeline,
+                              DI_BINDING_ARGS(_rt_ctx))
+                .Dispatch(uint3(dispatch_size, 1), "SpatialResample");
 
             _cmd_list.Compute(di_shade_sample_pipeline,
                               DI_BINDING_ARGS(_rt_ctx))

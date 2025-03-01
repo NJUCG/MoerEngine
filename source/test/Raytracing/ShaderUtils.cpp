@@ -1,6 +1,7 @@
 #include "ShaderUtils.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
+#include "shaderheaders/shared/utils/Packing.h"
 #include <type_traits>
 
 namespace Moer::Render {
@@ -17,7 +18,32 @@ namespace Moer::Render {
     void ShaderUtils::GenerateLowDiscrepancySequence(CommandList& _cmd_list, GenLowDiscrepancySequenceParam _param, BufferView _output) {
         assert(_param.num_dimensions == 2);
         assert(_param.num_samples * _param.num_dimensions * sizeof(uint) <= _output.GetByteSize());
-        _cmd_list.Compute(gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), "GenerateLowDiscrepancySequence");
+        // _cmd_list.Compute(gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), "GenerateLowDiscrepancySequence");
+
+        Array<float> data(_param.num_samples * 2);
+        int          R    = 250;
+        const float  phi2 = 1.0f / 1.3247179572447f;
+        uint32_t     num  = 0;
+        float        u    = 0.5f;
+        float        v    = 0.5f;
+        while (num < _param.num_samples * 2) {
+            u += phi2;
+            v += phi2 * phi2;
+            if (u >= 1.0f) u -= 1.0f;
+            if (v >= 1.0f) v -= 1.0f;
+
+            float rSq = (u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f);
+            if (rSq > 0.25f)
+                continue;
+
+            data[num++] = Moer::Unpack_R8_SNORM(int8((u - 0.5f) * R));
+            data[num++] = Moer::Unpack_R8_SNORM((v - 0.5f) * R);
+        }
+
+        _cmd_list.CopyFrom(std::span<byte>((byte*)data.data(), data.size() * sizeof(float)), _output);
+
+        _cmd_list.AddCallback([data(std::move(data))]() {
+        });
     }
 
     void ShaderUtils::GenerateMipPdf(CommandList& _cmd_list, const TextureView& _env_map, std::span<TextureView> _integrated_mips) {

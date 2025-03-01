@@ -91,19 +91,20 @@ namespace Moer::Render {
         params.discard_inviable_samples     = 0;
         params.max_history_length           = 16;
         params.bias_correction_mode         = s_di_bias_correction_traced;
-        params.depth_threshold              = 10.1f;
+        params.depth_threshold              = 2.f;
         params.normal_threshold             = 0.5f;
         return params;
     }
 
     inline static DI::ReSTIRDISpatialResampleParams GetDefaultReSTIRDISpatialResampleParams() {
         DI::ReSTIRDISpatialResampleParams params;
-        params.bias_correction_mode     = s_di_bias_correction_traced;
-        params.depth_threshold          = 0.1f;
+        params.bias_correction_mode     = s_di_bias_correction_pair_wise;
+        params.depth_threshold          = 0.2f;
         params.normal_threshold         = 0.6f;
         params.num_disocclusion_samples = 8;
         params.num_spatial_samples      = 2;
         params.radius                   = 32.f;
+        params.discount_native_samples  = false;
         return params;
     }
 
@@ -213,6 +214,18 @@ namespace Moer::Render {
 
         void SetReSTIRDIInitialSampleMode(uint _sample_mode) {
             di_initial_sample_params.local_light_sample_mode = _sample_mode;
+        }
+
+        void SetReSTIRDIIInitialSampleParams(const DI::ReSTIRDIInitialSampleParams& _params) {
+            di_initial_sample_params = _params;
+        }
+
+        void SetReSTIRDITemporalResampleParams(const DI::ReSTIRDITemporalResampleParams& _params) {
+            di_temporal_resample_params = _params;
+        }
+
+        void SetReSTIRDISpatialResampleParams(const DI::ReSTIRDISpatialResampleParams& _params) {
+            di_spatial_resample_settings = _params;
         }
 
         //called in prepare lights in each frame

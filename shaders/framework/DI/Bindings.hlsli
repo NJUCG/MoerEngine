@@ -258,6 +258,9 @@ struct Surface {
     const float roughness_threshold = 0.15f;
     const float reflectance_threshold = 0.25f;
     const float albedo_threshold = 0.25f;
+    if(_other.roughness * roughness == 0.f){
+      return false;
+    }
 
     if (!Math::CompareDifferance(roughness, _other.roughness,
                                  roughness_threshold))

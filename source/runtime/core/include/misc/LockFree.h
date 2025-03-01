@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "API_Macro.h"
 #include "log/LogSystem.h"
+#include "misc/Alignment.h"
 #include "misc/MMemory.h"
 #include "misc/MacroUtils.h"
 #include "misc/STL.h"

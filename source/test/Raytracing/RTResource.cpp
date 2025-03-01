@@ -208,6 +208,7 @@ namespace Moer::Render {
 
     void RTContext::SetResolution(uint2 _resolution) {
         FillFrameResources(_resolution);
+        b_current_frame = true;
     }
 
     void RTContext::FillLowDiscrepancySequence(CommandList& _cmd_list) {

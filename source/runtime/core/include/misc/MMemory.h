@@ -34,10 +34,4 @@ struct MoerDeleter {
         MoerDelete(p);
     }
 };
-namespace Moer {
-    static inline bool IsAligned(void* p, size_t alignment) {
-        assert(alignment != 0);
-        return (((uintptr_t)p % alignment) == 0);
-    }
-}// namespace Moer
 #endif//MOER_ENGINE_MEMORY_H

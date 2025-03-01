@@ -17,6 +17,14 @@ namespace Moer::Render {
         EGLPM_Num
     };
 
+    enum EBiasCorrectionMode {
+        EBCM_None      = s_di_bias_correction_none,
+        EBCM_Basic     = s_di_bias_correction_basic,
+        EBCM_Pair_Wise = s_di_bias_correction_pair_wise,
+        EBCM_Traced    = s_di_bias_correction_traced,
+        EBCM_Num
+    };
+
     static constexpr std::string_view s_local_light_sample_mode_names[] = {
         "Uniform",
         "Power RIS",
@@ -25,6 +33,12 @@ namespace Moer::Render {
     static constexpr std::string_view s_grid_light_presample_mode_names[] = {
         "Uniform",
         "Power RIS"};
+
+    static constexpr std::string_view s_bias_correction_mode_names[] = {
+        "None",
+        "Basic",
+        "Pair Wise",
+        "Traced"};
 
     static constexpr std::string_view s_final_color_names[] = {
         "SceneColor"
@@ -222,8 +236,8 @@ namespace Moer::Render {
                 if (ImGui::TreeNode("LocalLightSelection")) {
                     for (auto& name : s_local_light_sample_mode_names) {
                         uint idx = &name - s_local_light_sample_mode_names;
-                        if (ImGui::Selectable(name.data(), config.restir_di_cfg.initial_local_light_sample_mode == idx)) {
-                            config.restir_di_cfg.initial_local_light_sample_mode = idx;
+                        if (ImGui::Selectable(name.data(), config.restir_di_cfg.initial_sample_config.local_light_sample_mode == idx)) {
+                            config.restir_di_cfg.initial_sample_config.local_light_sample_mode = idx;
                         }
                     }
                     ImGui::TreePop();
@@ -232,11 +246,28 @@ namespace Moer::Render {
             }
 
             if (ImGui::TreeNode("TemporalResampleSettings")) {
-
+                if (ImGui::TreeNode("BiasCorrection")) {
+                    for (auto& name : s_bias_correction_mode_names) {
+                        uint idx = &name - s_bias_correction_mode_names;
+                        if (ImGui::Selectable(name.data(), config.restir_di_cfg.temporal_resample_config.bias_correction == idx)) {
+                            config.restir_di_cfg.temporal_resample_config.bias_correction = idx;
+                        }
+                    }
+                    ImGui::TreePop();
+                }
                 ImGui::TreePop();
             }
 
             if (ImGui::TreeNode("SpatialResampleSettings")) {
+                if (ImGui::TreeNode("BiasCorrection")) {
+                    for (auto& name : s_bias_correction_mode_names) {
+                        uint idx = &name - s_bias_correction_mode_names;
+                        if (ImGui::Selectable(name.data(), config.restir_di_cfg.spatial_resample_config.bias_correction == idx)) {
+                            config.restir_di_cfg.spatial_resample_config.bias_correction = idx;
+                        }
+                    }
+                    ImGui::TreePop();
+                }
                 ImGui::TreePop();
             }
 

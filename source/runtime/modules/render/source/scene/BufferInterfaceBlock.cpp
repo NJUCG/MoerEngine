@@ -2,6 +2,7 @@
 
 #include "log/LogSystem.h"
 #include "math/Base.h"
+#include "misc/Alignment.h"
 namespace Moer {
 
     BufferInterfaceBlock::Builder& BufferInterfaceBlock::Builder::name(std::string_view interfaceBlockName) {
@@ -92,7 +93,7 @@ namespace Moer {
                     alignment = 4;
                 }
                 // the stride of an array is always rounded to its alignment (which is POT)
-                stride = (stride + alignment - 1) & ~(alignment - 1);
+                stride = Moer::AlignUp(stride, alignment);
             }
 
             // calculate the offset for this uniform

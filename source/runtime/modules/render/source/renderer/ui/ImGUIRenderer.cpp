@@ -254,7 +254,7 @@ namespace Moer::Render {
         //upload texture
         {
             const uint32_t alignment    = 256;
-            uint32_t       upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
+            uint32_t       upload_pitch = Moer::AlignUp(width * 4, alignment);
             uint32_t       upload_size  = height * upload_pitch;
             TextureRef     font_tex     = rd_device.CreateTexture(
                 Extent2D(width, height),
@@ -517,15 +517,15 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
         global_vertex_offset += cmd_list->VtxBuffer.Size;
     }
 
-    auto            vtx_view = render_buffers->vtx_buffer->GetView();
-    auto            idx_view = render_buffers->idx_buffer->GetView();
-    auto            arg_view = render_buffers->arg_buffer->GetView();
-    Array<ImGUIArg> copy_back_args(render_buffers->arg_buffer->GetNumElement());
+    auto vtx_view = render_buffers->vtx_buffer->GetView();
+    auto idx_view = render_buffers->idx_buffer->GetView();
+    auto arg_view = render_buffers->arg_buffer->GetView();
+    // Array<ImGUIArg> copy_back_args(render_buffers->arg_buffer->GetNumElement());
 
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), vtx_view);
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), idx_view);
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)args.data(), args.size() * sizeof(ImGUIArg)), arg_view);
-    _cmdlist.CopyFrom(arg_view, std::span<Moer::byte>((Moer::byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
+    // _cmdlist.CopyFrom(arg_view, std::span<Moer::byte>((Moer::byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
 
     _cmdlist.Gfx(backend_data.rast_pso, render_buffers->arg_buffer, render_backend.bindless_array, constant)
         .Draw("ImGui Draws",
@@ -535,8 +535,9 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
 
     _cmdlist.AddCallback([vtx(std::move(vertices)),
                           idx(std::move(indices)),
-                          arg(std::move(args)),
-                          copy_back_args(std::move(copy_back_args))]() {
+                          arg(std::move(args))
+                          //   copy_back_args(std::move(copy_back_args))
+    ]() {
     });
 }
 

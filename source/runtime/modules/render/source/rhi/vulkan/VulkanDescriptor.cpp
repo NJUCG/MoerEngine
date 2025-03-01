@@ -474,13 +474,10 @@ namespace Moer::Render {
         //fill offsets
         ring_buffer_offsets.resize(m_device->cmd_alloc_limits);
 
-        auto align_up = [](uint32_t _value, uint32_t _alignment) -> uint32_t {
-            return (_value + _alignment - 1) & ~(_alignment - 1);
-        };
         uint64 alignment = m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
 
         for (uint32_t i = 0; i < m_device->cmd_alloc_limits; ++i) {
-            ring_buffer_offsets[i] = align_up(buffer_ci.size / m_device->cmd_alloc_limits * i, alignment);
+            ring_buffer_offsets[i] = Moer::AlignUp(buffer_ci.size / m_device->cmd_alloc_limits * i, alignment);
         }
         current_offset = 0;
         vmaMapMemory(m_device->GetVmaAllocator(), ring_desc_buffer->GetAllocation(), (void**)&map_ptr);
