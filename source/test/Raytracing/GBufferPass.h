@@ -36,6 +36,22 @@ namespace Moer::Render {
                            bdls);
     };
 
+    class PostProcessGBufferPipeline : public ComputePipeline {
+    public:
+        DEFINE_COMPUTE_PIPELINE_CLASS(PostProcessGBufferPipeline);
+
+        DEFINE_SHADER_TEX(rw_specular_roughness);
+        DEFINE_SHADER_TEX(rw_normal_roughness);
+        DEFINE_SHADER_TEX(r_normal);
+        DEFINE_SHADER_TEX(r_view_depth);
+
+        DEFINE_SHADER_ARGS(
+            rw_specular_roughness,
+            rw_normal_roughness,
+            r_normal,
+            r_view_depth);
+    };
+
     class GBufferPass {
     public:
         GBufferPass(class RenderDevice& _device, class ShaderManager& _manager, Scene& _scene);
@@ -50,7 +66,8 @@ namespace Moer::Render {
         GBufferConstants constants{};
         Array<byte>      upload_data;
 
-        RaytracingGBufferPipeline gbuffer_pass_pipeline;
+        RaytracingGBufferPipeline  gbuffer_pass_pipeline;
+        PostProcessGBufferPipeline post_process_pipeline;
     };
 }// namespace Moer::Render
 #endif
