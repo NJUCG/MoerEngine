@@ -34,6 +34,25 @@ namespace Moer::Render {
             ReSTIRDITemporalResampleConfig temporal_resample_config;
             ReSTIRDISpatialResampleConfig  spatial_resample_config;
         };
+        struct ReBlurHitDistParams {
+            float A = 3.f;
+            float B = 0.1f;
+            float C = 20.f;
+            float D = -25.f;
+        };
+
+        struct ReBlurAntilagParams {
+            float luminance_sigma_scale = 2.f;
+            float hit_dist_sigma_scale  = 2.f;
+
+            float luminance_antilag_power = .5f;
+            float hit_dist_antilag_power  = 1.f;
+        };
+        struct DenoiserConfig {
+            ReBlurHitDistParams hit_dist_params{};
+            ReBlurAntilagParams antilag_params{};
+            uint                denoiser_type = s_denoiser_mode_relax;
+        };
         struct Config {
             float3 sun_direction        = float3(0.f, 0.5f, 0.16f);
             float  exposure             = 6.f;
@@ -42,7 +61,8 @@ namespace Moer::Render {
 
             GridConfig     grid_config{};
             ReSTIRDIConfig restir_di_cfg{};
-            EFinalColor    final_color = EFinalColor::EFC_DI;
+            DenoiserConfig denoiser_cfg{};
+            EFinalColor    final_color = EFinalColor::EFC_SceneColor;
         };
         RTUI(UIRenderer& _renderer);
         ~RTUI() = default;

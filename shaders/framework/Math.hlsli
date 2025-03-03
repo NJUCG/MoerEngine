@@ -166,9 +166,9 @@ float3 EquirectangularUVToDir(float2 _uv, out float _cos) {
 float2 DirToEquirectangularUV(float3 _dir) {
   float phi = asin(_dir.y);
   float theta = 0.f;
-  if (abs(_dir.y) < 1.f)
+  if (abs(_dir.y) < 1.f){
     theta = atan2(_dir.z, _dir.x);
-
+  }
   float2 uv;
   uv.x = theta / (2.f * PI) - 0.25f;
   uv.y = 0.5f - phi / PI;

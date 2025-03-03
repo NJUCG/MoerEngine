@@ -59,6 +59,11 @@ namespace Moer::Render {
         constants.enable_accumulation     = 1;
         constants.discount_native_samples = 1;
         constants.visualize_cells         = 0;
+
+        constants.denoiser_mode               = _rt_ctx.config.denoiser_mode;
+        constants.reblur_diff_hit_dist_params = _rt_ctx.config.reblur_diffuse_hit_dist_params;
+        constants.reblur_spec_hit_dist_params = _rt_ctx.config.reblur_specular_hit_dist_params;
+
         upload_data.resize(sizeof(ResampleConstants));
         std::memcpy(upload_data.data(), &constants, sizeof(ResampleConstants));
         _cmd_list.CopyFrom(std::move(upload_data), resample_params->GetView());

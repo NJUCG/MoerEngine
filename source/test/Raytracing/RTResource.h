@@ -66,7 +66,10 @@ namespace Moer::Render {
     struct RTContext {
 
         struct Config {
+            float4      reblur_diffuse_hit_dist_params;
+            float4      reblur_specular_hit_dist_params;
             EFinalColor final_color;
+            uint        denoiser_mode;
         };
 
     public:

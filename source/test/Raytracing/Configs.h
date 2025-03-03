@@ -99,7 +99,7 @@ namespace Moer::Render {
     inline static DI::ReSTIRDISpatialResampleParams GetDefaultReSTIRDISpatialResampleParams() {
         DI::ReSTIRDISpatialResampleParams params;
         params.bias_correction_mode     = s_di_bias_correction_pair_wise;
-        params.depth_threshold          = 0.2f;
+        params.depth_threshold          = 0.1f;
         params.normal_threshold         = 0.6f;
         params.num_disocclusion_samples = 8;
         params.num_spatial_samples      = 2;

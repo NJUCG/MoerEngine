@@ -1,5 +1,6 @@
 #include <atomic>
 #include <filesystem>
+#include "CompositionPass.h"
 #include "Configs.h"
 #include "Core.h"
 #include "GBufferPass.h"
@@ -42,6 +43,8 @@
 #include "scene/Scene.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 #include "shaderheaders/shared/utils/ShaderParameters.h"
+#include "rhi/extension//NrdExtension.h"
+#include "shaderheaders/shared/nrd/NRDDefinition.h"
 
 #include "RTUI.h"
 #include "ShaderUtils.h"
@@ -184,7 +187,8 @@ public:
     DEFINE_SHADER_ARGS(src_color, spl);
 };
 
-static Box3D scene_bounding{};
+static Box3D          scene_bounding{};
+static constexpr uint max_frame_in_flight = 3;
 
 int main(int argc, const char** argv) {
 
@@ -412,9 +416,16 @@ int main(int argc, const char** argv) {
     UniquePtr<PrepareLightPass> prepare_light_pass = MakeUnique<PrepareLightPass>(device, manager, g_scene);
     UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager, g_scene);
     UniquePtr<LightingPass>     lighting_pass      = MakeUnique<LightingPass>(manager, g_scene);
+    UniquePtr<CompositionPass>  composition_pass   = MakeUnique<CompositionPass>(device, manager, g_scene);
     UniquePtr<VisualizePass>    visualize_pass     = MakeUnique<VisualizePass>(device, manager);
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
     rt_ctx->SetResolution(resolution);
+
+    //////////////////////////////////////////////////////////////////////////
+    //NRD
+    //////////////////////////////////////////////////////////////////////////
+    auto* nrd_ext       = device.LoadExtension<Ext::NRDExtension>();
+    auto  nrd_interface = nrd_ext->CreateInterface(max_frame_in_flight, resolution.x, resolution.y);
 
     VisualizeConfig visualize_config{};
     visualize_config.b_split        = false;
@@ -430,7 +441,7 @@ int main(int argc, const char** argv) {
         gui.EndGUIFrame();
         int w_width, w_height;
         if (time >= 3) {
-            timeline->Wait(time - 2);
+            timeline->Wait(max_frame_in_flight - 2);
         }
         timer.Stop();
         auto frame_time = timer.ElapsedMilliseconds();
@@ -460,6 +471,7 @@ int main(int argc, const char** argv) {
             is_ctx.~ImportanceSamplingContext();
             is_params.render_size = resolution;
             new (&is_ctx) ImportanceSamplingContext(is_params);
+            nrd_interface = nrd_ext->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -591,7 +603,7 @@ int main(int argc, const char** argv) {
                 }
 
                 assert(env_map && "env map is null");
-                Sampler sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
+                Sampler sampler{SF_CUBIC, SAM_REPEAT};
 
                 Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f), env_map->GetExtent().xy);
                 env_light->bdls_handle                     = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
@@ -674,6 +686,7 @@ int main(int argc, const char** argv) {
 
             //fill ui data
             {
+
                 auto        grid_cfg           = is_ctx.GetGridChangableConfig();
                 const auto& ui_cfg             = rt_ui.GetConfig();
                 grid_cfg.cell_size             = rt_ui.GetConfig().grid_config.cell_size;
@@ -683,6 +696,10 @@ int main(int argc, const char** argv) {
                 grid_static_cfg.grid_mode      = rt_ui.GetConfig().grid_config.grid_mode;
                 is_ctx.SetGridConfig(grid_static_cfg);
                 is_ctx.SetChangeableGridConfig(grid_cfg);
+
+                rt_ctx->config.reblur_diffuse_hit_dist_params  = *reinterpret_cast<const float4*>(&ui_cfg.denoiser_cfg.hit_dist_params);
+                rt_ctx->config.reblur_specular_hit_dist_params = *reinterpret_cast<const float4*>(&ui_cfg.denoiser_cfg.hit_dist_params);
+                rt_ctx->config.denoiser_mode                   = ui_cfg.denoiser_cfg.denoiser_type;
 
                 auto di_initial_sample_config                      = is_ctx.GetDIInitialSampleParams();
                 auto di_temporal_resampling_config                 = is_ctx.GetDITemporalResampleParams();
@@ -712,16 +729,56 @@ int main(int argc, const char** argv) {
             g_buffer_pass->Process(cmd_list, *rt_ctx);
             lighting_pass->Process(cmd_list, *rt_ctx);
 
-            TestInlineRTShader::Param param;
-            param.global_param_handle    = view_buffer_handle;
-            param.material_buffer_handle = material_buffer_idx;
-            param.instance_buffer_handle = instance_buffer_handle;
-            param.geometry_buffer_handle = geometry_buffer_handle;
-            param.light_buffer_handle    = light_buffer_handle;
-            param.rect                   = uint2(resolution.x, resolution.y);
-            param.inv_rect               = float2(1.f / resolution.x, 1.f / resolution.y);
-            param.jitter                 = float2(0, 0);
-            param.frame_idx              = time;
+            //////////////////////////////////////////////////////////////////////////
+            //NRD
+            //////////////////////////////////////////////////////////////////////////
+            {
+                bool          b_current_frame = rt_ctx->b_current_frame;
+                const auto&   frame_rt        = rt_ctx->frame_rt;
+                nrd::Denoiser denoiser        = nrd::Denoiser::MAX_NUM;
+                switch (rt_ui.GetConfig().denoiser_cfg.denoiser_type) {
+                    case s_denoiser_mode_reblur:
+                        denoiser = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
+                    case s_denoiser_mode_relax:
+                        denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
+                        break;
+                }
+                // denoise
+                nrd_interface->Begin();
+                nrd_interface->UpdateCommonSettings(
+                    time,
+                    Vector2ui(resolution.x, resolution.y),
+                    Vector2f(0.f, 0.f),
+                    Transpose(camera->GetViewMatrix()),
+                    Transpose(camera->GetProjectionMatrix()));
+
+                // opaque
+                {
+                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, rt_ctx->frame_rt.motion);
+                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, frame_rt.normal_roughness);
+                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::VIEW_Z, b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth);
+                    // nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::BASECOLOR_METALNESS, b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo);
+                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, frame_rt.diffuse_lighting);
+                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_SPECULAR, frame_rt.specular_lighting);
+                    nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE, frame_rt.denoised_diffuse_lighting);
+                    nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_SPECULAR, frame_rt.denoised_specular_lighting);
+
+                    nrd_interface->Denoise(cmd_list, denoiser, "Radiance Denoising");
+                }
+            }
+
+            composition_pass->Process(cmd_list, *rt_ctx);
+
+            // TestInlineRTShader::Param param;
+            // param.global_param_handle    = view_buffer_handle;
+            // param.material_buffer_handle = material_buffer_idx;
+            // param.instance_buffer_handle = instance_buffer_handle;
+            // param.geometry_buffer_handle = geometry_buffer_handle;
+            // param.light_buffer_handle    = light_buffer_handle;
+            // param.rect                   = uint2(resolution.x, resolution.y);
+            // param.inv_rect               = float2(1.f / resolution.x, 1.f / resolution.y);
+            // param.jitter                 = float2(0, 0);
+            // param.frame_idx              = time;
 
             // cmd_list.Compute(rt_shader,
             //                  param,
