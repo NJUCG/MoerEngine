@@ -1,10 +1,14 @@
+#define BOILING_FILTER_GROUP_SIZE DI_SCREEN_TILE_SIZE
+#define USE_BOILING_FILTER 1
+
 #include <framework/DI/Bindings.hlsli>
 #include <framework/DI/ReSampleFunctions.hlsli>
 #include <hwrt/GBufferUtils.hlsli>
 
 [numthreads(DI_SCREEN_TILE_SIZE, DI_SCREEN_TILE_SIZE, 1)] void
 main(uint2 dtid
-     : SV_DispatchThreadID) {
+     : SV_DispatchThreadID, uint2 gtid
+     : SV_GroupThreadID) {
   uint2 pixel_pos = dtid.xy;
   // printf("pixel_pos: %d %d\n", pixel_pos.x, pixel_pos.y);
 
@@ -62,6 +66,15 @@ main(uint2 dtid
         resample_params.restir_di_params.reservoir_buffer_params, t_params,
         temporal_pixel_pos, selected_sample);
   }
+#ifdef USE_BOILING_FILTER
+  if (resample_params.restir_di_params.temporal_resample_params
+          .enbale_boiling_filter) {
+    Moer::DI::BoilingFilter(gtid,
+                            resample_params.restir_di_params
+                                .temporal_resample_params.boiling_filter_scale,
+                            res);
+  }
+#endif
 
   rw_temporal_sample_pos[pixel_pos] = temporal_pixel_pos;
   Moer::DI::StoreReservoir(

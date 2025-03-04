@@ -118,6 +118,8 @@ namespace Moer {
         InputStream&  operator>>(InputStream& _stream);
         OutputStream& operator<<(OutputStream& _stream) const;
 
+        float GetDeletaTime() const noexcept;
+
         std::string ToString();
 
     private:
@@ -204,6 +206,7 @@ namespace Moer {
 
         Matrix4x4f m_view_projection_matrix;
         Matrix4x4f m_view_projection_matrix_inv;
+        float      elapsed_time = 0.0f;
     };
 
     using CameraRef = CountableRef<Camera>;

@@ -188,9 +188,9 @@ namespace Moer::Render {
         frame_rt.denoised_diffuse_lighting  = device.CreateTexture("denoised_diffuse_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.denoised_specular_lighting = device.CreateTexture("denoised_specular_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-        frame_rt.debug_color = device.CreateTexture("debug_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        frame_rt.scene_color = device.CreateTexture("scene_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
+        frame_rt.debug_color    = device.CreateTexture("debug_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.scene_color    = device.CreateTexture("scene_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+        frame_rt.resolved_color = device.CreateTexture("resolved_color", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         Sampler spl{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE};
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_depth, frame_rt.view_depth->GetView(), spl);
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_normal, frame_rt.normal->GetView(), spl);
@@ -372,6 +372,14 @@ namespace Moer::Render {
                 ris_light_data_buf->SetName("ris_light_data_buf");
             }
         }
+    }
+
+    void RTContext::LoadDefaultResources(RTResource& _rt_res) {
+        TextureRef white = _rt_res.GetTexture("white.png");
+        TextureRef black = _rt_res.GetTexture("black.png");
+
+        default_res.white_tex = white;
+        default_res.black_tex = black;
     }
 
     void RTContext::AdvanceFrame() {

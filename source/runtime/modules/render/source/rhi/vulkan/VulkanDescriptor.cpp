@@ -552,7 +552,7 @@ namespace Moer::Render {
                 case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
                     buffer_info.format                   = _format;
                     buffer_desc_info.data.pUniformBuffer = &buffer_info;
-                    desc_size                            = uniform_desc_stride;
+                    desc_size                            = uniform_texel_desc_stride;
                     break;
                 default:
                     LOG_ERROR("Unsupported buffer descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type));

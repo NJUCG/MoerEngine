@@ -472,6 +472,7 @@ namespace Moer {
         }
 
         UpdateAllDerivedProperties();
+        elapsed_time = wndInput.delta_time;
     }
 
     CameraRef Camera::CreateDefaultCamera() {
@@ -492,6 +493,10 @@ namespace Moer {
     OutputStream& Camera::operator<<(OutputStream& _stream) const {
         _stream << m_position << m_yaw << m_pitch << m_fov_y << m_aspect_ratio << m_near_clip << m_far_clip;
         return _stream;
+    }
+
+    float Camera::GetDeletaTime() const noexcept {
+        return wndInput.delta_time;
     }
 
     std::string Camera::ToString() {

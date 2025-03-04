@@ -8,6 +8,7 @@
 #include "PixelFormat.h"
 #include "PreprocessLightPass.h"
 #include "RTResource.h"
+#include "ToneMappingPass.h"
 #include "VisualizePass.h"
 #include "config/ConfigManager.h"
 #include "contrib/Open3DGC/o3dgcTimer.h"
@@ -242,10 +243,7 @@ int main(int argc, const char** argv) {
     Array<TextureView> env_mips;
     TextureRef         env_pdf{};
     Array<TextureView>
-        env_pdf_mips;
-
-    bool b_new_env_pdf = false;
-
+                     env_pdf_mips;
     BindlessArrayRef bindless_array = g_scene.GetBindlessArray();
 
     CommandList cmd_list;
@@ -314,8 +312,10 @@ int main(int argc, const char** argv) {
 
     Array<RaytracingGeometryRef> rt_geometries;
 
-    auto   timeline = device.CreateFence();
-    uint64 time     = 0ull;
+    auto   timeline     = device.CreateFence();
+    uint64 time         = 0ull;
+    uint64 nrd_time     = 0ull;
+    float  elapsed_time = 0.0f;
 
     TextureRef output = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
@@ -419,6 +419,7 @@ int main(int argc, const char** argv) {
     UniquePtr<CompositionPass>  composition_pass   = MakeUnique<CompositionPass>(device, manager, g_scene);
     UniquePtr<VisualizePass>    visualize_pass     = MakeUnique<VisualizePass>(device, manager);
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
+    UniquePtr<ToneMappingPass>  tone_mapping_pass;
     rt_ctx->SetResolution(resolution);
 
     //////////////////////////////////////////////////////////////////////////
@@ -441,7 +442,7 @@ int main(int argc, const char** argv) {
         gui.EndGUIFrame();
         int w_width, w_height;
         if (time >= 3) {
-            timeline->Wait(max_frame_in_flight - 2);
+            timeline->Wait(time - max_frame_in_flight + 1);
         }
         timer.Stop();
         auto frame_time = timer.ElapsedMilliseconds();
@@ -474,8 +475,7 @@ int main(int argc, const char** argv) {
             nrd_interface = nrd_ext->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
         }
 
-        if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
-
+        if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady() && load_res_event->IsComplete()) {
             //load scene
             if (first_load) {
                 //calculate bounding box
@@ -588,7 +588,7 @@ int main(int argc, const char** argv) {
                 // gfx_queue.Sync();
             }
 
-            if (b_new_env_map && load_res_event->IsComplete()) {
+            if (b_new_env_map) {
                 env_map = rt_res.GetDefaultEnvMap();
 
                 Array<ImportTexture> import_textures;
@@ -616,13 +616,10 @@ int main(int argc, const char** argv) {
                     env_mips.push_back(env_map->GetView(i));
                 }
                 sd_utils.GenerateMips(cmd_list, env_mips);
-                b_new_env_pdf = true;
                 b_new_env_map = false;
-            }
 
-            if (b_new_env_pdf && rt_ctx) {
+                rt_ctx->LoadDefaultResources(rt_res);
                 rt_ctx->CreateEnvMapResources(env_map, cmd_list);
-                b_new_env_pdf = false;
             }
 
             if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -633,6 +630,11 @@ int main(int argc, const char** argv) {
                     rt_scene->MarkModified(instance.instance_id);
                 }
                 cmd_list.UpdateRaytracingScene(rt_scene);
+            }
+            if (!tone_mapping_pass) {
+                ToneMappingPass::CreateInfo info{};
+                info.color_lut    = rt_ctx->default_res.black_tex;
+                tone_mapping_pass = MakeUnique<ToneMappingPass>(device, manager, g_scene, info);
             }
             auto camera_entity = g_scene.GetCameras()[0];
             auto camera        = CameraManager::Get().Get(camera_entity);
@@ -645,7 +647,6 @@ int main(int argc, const char** argv) {
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
 
                 camera->Tick();
-
                 rt_view_param.view2world = Transpose(camera->GetToWorldMatrix());
                 rt_view_param.world2view = Transpose(camera->GetViewMatrix());
                 rt_view_param.frustum    = camera->GetFrustum();
@@ -681,6 +682,7 @@ int main(int argc, const char** argv) {
                     DirectionalLightComponent* dir_light = static_cast<DirectionalLightComponent*>(light.Get());
                     dir_light->SetDirection(-rt_ui.GetConfig().sun_direction);
                     dir_light->SetIntensity(rt_ui.GetConfig().exposure);
+                    dir_light->SetColor(float3(0.9f, 0.65f, 0.4f));
                 }
             }
 
@@ -743,32 +745,41 @@ int main(int argc, const char** argv) {
                         denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
                         break;
                 }
-                // denoise
-                nrd_interface->Begin();
-                nrd_interface->UpdateCommonSettings(
-                    time,
-                    Vector2ui(resolution.x, resolution.y),
-                    Vector2f(0.f, 0.f),
-                    Transpose(camera->GetViewMatrix()),
-                    Transpose(camera->GetProjectionMatrix()));
 
-                // opaque
-                {
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, rt_ctx->frame_rt.motion);
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, frame_rt.normal_roughness);
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::VIEW_Z, b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth);
-                    // nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::BASECOLOR_METALNESS, b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo);
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, frame_rt.diffuse_lighting);
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_SPECULAR, frame_rt.specular_lighting);
-                    nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE, frame_rt.denoised_diffuse_lighting);
-                    nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_SPECULAR, frame_rt.denoised_specular_lighting);
+                if (denoiser != nrd::Denoiser::MAX_NUM) {
+                    // denoise
+                    nrd_interface->Begin();
+                    nrd_interface->UpdateCommonSettings(
+                        nrd_time++,
+                        Vector2ui(resolution.x, resolution.y),
+                        Vector2f(0.f, 0.f),
+                        Transpose(camera->GetViewMatrix()),
+                        Transpose(camera->GetProjectionMatrix()));
 
-                    nrd_interface->Denoise(cmd_list, denoiser, "Radiance Denoising");
+                    // opaque
+                    {
+                        nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, rt_ctx->frame_rt.motion);
+                        nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, frame_rt.normal_roughness);
+                        nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::VIEW_Z, b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth);
+                        // nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::BASECOLOR_METALNESS, b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo);
+                        nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, frame_rt.diffuse_lighting);
+                        nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_SPECULAR, frame_rt.specular_lighting);
+                        nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE, frame_rt.denoised_diffuse_lighting);
+                        nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_SPECULAR, frame_rt.denoised_specular_lighting);
+
+                        nrd_interface->Denoise(cmd_list, denoiser, "Radiance Denoising");
+                    }
                 }
             }
 
             composition_pass->Process(cmd_list, *rt_ctx);
-
+            ToneMappingPass::Params params{};
+            params.min_adapted_luminance   = 0.002f;
+            params.max_adapted_luminance   = 0.3f;
+            params.exposure_bias           = -1.f;
+            params.eye_adaptation_speed_up = 2.f;
+            params.eye_adaptation_speed_up = 1.f;
+            tone_mapping_pass->Process(cmd_list, *rt_ctx, params, rt_ctx->frame_rt.resolved_color, rt_ctx->frame_rt.scene_color);
             // TestInlineRTShader::Param param;
             // param.global_param_handle    = view_buffer_handle;
             // param.material_buffer_handle = material_buffer_idx;
@@ -800,6 +811,7 @@ int main(int argc, const char** argv) {
             //copy normal to output
             // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
             rt_ctx->AdvanceFrame();
+            tone_mapping_pass->AdvanceFrame(camera->GetDeletaTime());
         }
 
         // rt_scene->MarkModified(0);

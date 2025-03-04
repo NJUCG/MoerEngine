@@ -7,6 +7,7 @@ namespace Moer::Render {
 #else
 namespace Moer {
 #endif
+#define HISTOGRAM_BINS 256
 
     struct ToneMappingParams {
         uint2 view_origin;
