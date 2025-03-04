@@ -7,7 +7,10 @@
 #include "scene/Scene.h"
 namespace Moer::Render {
     GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager, Scene& _scene)
-        : device(_device), manager(_manager), scene(_scene), gbuffer_pass_pipeline{manager.Compute<RaytracingGBufferPipeline>("hwrt/GBufferRT.hlsl")} {
+        : device(_device), manager(_manager), scene(_scene),
+          gbuffer_pass_pipeline{manager.Compute<RaytracingGBufferPipeline>("hwrt/GBufferRT.hlsl")},
+          post_process_pipeline{manager.Compute<PostProcessGBufferPipeline>("hwrt/PostProcessGBuffer.hlsl")} {
+
         gbuffer_constants = device.CreateBuffer<Moer::byte>(sizeof(GBufferConstants), EBufferUsageFlags::CONSTANT_BUFFER);
         gbuffer_constants->SetName("gbuffer_constants");
     }
@@ -42,6 +45,13 @@ namespace Moer::Render {
                           frame_rt.clip_depth,
                           _rt_ctx.rt_scene->GetTlas(),
                           scene.GetBindlessArray())
+            .Dispatch(uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1));
+
+        _cmd_list.Compute(post_process_pipeline,
+                          b_current_frame ? frame_rt.specular_roughness : frame_rt.prev_specular_roughness,
+                          frame_rt.normal_roughness,
+                          b_current_frame ? frame_rt.normal : frame_rt.prev_normal,
+                          b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth)
             .Dispatch(uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1));
     }
 }// namespace Moer::Render

@@ -40,6 +40,11 @@ namespace Moer::Render {
         "Pair Wise",
         "Traced"};
 
+    static constexpr std::string_view s_denoiser_mode_names[] = {
+        "None",
+        "ReBlur",
+        "Relax"};
+
     static constexpr std::string_view s_final_color_names[] = {
         "SceneColor"
         "DI",
@@ -267,6 +272,15 @@ namespace Moer::Render {
                         }
                     }
                     ImGui::TreePop();
+                }
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("DenoiserConfig")) {
+                for (auto& name : s_denoiser_mode_names) {
+                    uint idx = &name - s_denoiser_mode_names;
+                    if (ImGui::Selectable(name.data(), config.denoiser_cfg.denoiser_type == idx)) {
+                        config.denoiser_cfg.denoiser_type = idx;
+                    }
                 }
                 ImGui::TreePop();
             }

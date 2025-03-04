@@ -241,7 +241,7 @@ namespace Moer::Render {
         sd_utils.GenerateMipPdf(_cmd_list, _env_map, env_pdf_mips);
 
         AllocateAndFreeBdlsIfNeeded(bindless_handles.env_pdf, env_pdf_tex->GetView(0, env_pdf_tex->GetNumMips()), Sampler{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE});
-        AllocateAndFreeBdlsIfNeeded(scene_params.env_map_handle, _env_map->GetView(0, _env_map->GetNumMips()), Sampler{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE});
+        AllocateAndFreeBdlsIfNeeded(scene_params.env_map_handle, _env_map->GetView(0, _env_map->GetNumMips()), Sampler{ESamplerFilter::SF_CUBIC, ESamplerAddressMode::SAM_REPEAT});
         scene_params.enable_env_map = 1;
         SetEnvMapInfos(1.f, 0.f);
     }

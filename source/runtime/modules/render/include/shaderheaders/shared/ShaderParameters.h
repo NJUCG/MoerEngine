@@ -41,6 +41,10 @@ namespace Moer {
     static CONST uint s_vis_mode_specular_lighting = 4;
     static CONST uint s_vis_mode_grid              = 5;
 
+    static CONST uint s_denoiser_mode_off    = 0;
+    static CONST uint s_denoiser_mode_reblur = 1;
+    static CONST uint s_denoiser_mode_relax  = 2;
+
 #define DI_SCREEN_TILE_SIZE 16
 
 #ifdef __cplusplus
@@ -178,6 +182,9 @@ namespace Moer {
         DI::ReSTIRDIParams restir_di_params;
         Grid::Params       grid_params;
 
+        float4 reblur_diff_hit_dist_params;
+        float4 reblur_spec_hit_dist_params;
+
         uint frame_idx;
         uint enable_accumulation;
         uint discount_native_samples;
@@ -187,6 +194,20 @@ namespace Moer {
         uint2 local_light_pdf_size;
 
         uint enable_prev_tlas;
+        uint denoiser_mode;
+    };
+
+    struct CompositingConstants {
+        ViewParam main_view;
+        ViewParam prev_view;
+
+        uint enable_textures;
+        uint denoiser_mode;
+        uint enable_env_map;
+        uint env_map_handle;
+
+        float env_scale;
+        float env_rotation;
     };
 
     struct VisualizeParams {
