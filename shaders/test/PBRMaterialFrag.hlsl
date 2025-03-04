@@ -100,14 +100,17 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
         discard;
     }
     float2 uv = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
+    float depth = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
+
+    // empty
+    if (depth == 0.0) {
+        // TODO: Image Based Lighting or Skybox
+        discard;
+    }
+
     uint mat_id = (gbuffer_mat & 0xFFFFFF00) >> 8;
     MaterialData mat = UnpackMaterialData<MaterialData>(param.material_buffer, mat_id);
-    float4 base_color;
-    if (mat.albedo_map == -1) {
-        base_color = mat.base_color_factor;
-    } else {
-        base_color = TextureHandle(mat.albedo_map).Sample2D<float4>(uv);
-    }
+
     PBRInfo pbrInfo;
     float2 metallic_roughness = GetTextureData<float2>(mat.metallic_roughness_map, uv, float2(mat.metallic_factor, mat.roughness_factor));
     pbrInfo.roughness = metallic_roughness.y;
@@ -115,11 +118,20 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 packed_normal = TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv);
     float3 normal = DeferedRendering::UnpackNormal(packed_normal);
     pbrInfo.normal = normal;
-    pbrInfo.albedo = GetTextureData<float3>(mat.albedo_map, uv, base_color.xyz);
+
+    if (mat.albedo_map == -1) {
+        pbrInfo.albedo = mat.base_color_factor.xyz;
+    } else if (mat.albedo_map == 0) { // use 0.0 presents missing texture
+        // FIXME: use a better way to present missing texture
+        // FIXME: use a MACRO to define missing texture color
+        pbrInfo.albedo = float3(1.0, 0.0, 1.0);
+    } else {
+        pbrInfo.albedo = TextureHandle(mat.albedo_map).Sample2D<float3>(uv);
+    }
+
     ArrayBuffer global_params = ArrayBuffer(param.global_param_handle);
     LightingData lighting_data = global_params.Load<LightingData>(0);
 
-    float depth = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
     //Shoude be reconstructed from depth
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
     // float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);

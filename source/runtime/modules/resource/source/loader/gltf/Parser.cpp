@@ -381,6 +381,7 @@ namespace Moer::Resource::Gltf {
 
         if (_ai_material->Get(AI_MATKEY_COLOR_DIFFUSE, base_color_factor) == AI_SUCCESS) {
             Vector4f base_color_factor_cast = *reinterpret_cast<Vector4f*>(&base_color_factor);
+            mi->SetParameter("albedo_map", int(-1));
             mi->SetParameter("base_color_factor", base_color_factor_cast);
         }
 
