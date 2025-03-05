@@ -45,13 +45,13 @@ namespace Moer::Render {
                           frame_rt.clip_depth,
                           _rt_ctx.rt_scene->GetTlas(),
                           scene.GetBindlessArray())
-            .Dispatch(uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1));
+            .Dispatch(uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1), "RaytracingGbuffer");
 
         _cmd_list.Compute(post_process_pipeline,
                           b_current_frame ? frame_rt.specular_roughness : frame_rt.prev_specular_roughness,
                           frame_rt.normal_roughness,
                           b_current_frame ? frame_rt.normal : frame_rt.prev_normal,
                           b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth)
-            .Dispatch(uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1));
+            .Dispatch(uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1), "PostProcessGBuffer");
     }
 }// namespace Moer::Render

@@ -48,13 +48,25 @@ float3 ApplyColorLUT(float3 color) {
   return lerp(c1, c2, frac(b));
 }
 
+float3 Dither(float3 input, float2 seed)
+{
+    float rand = frac(sin(dot(seed, float2(12.9898, 78.233) * 2.0)) * 43758.5453);
+    input = 255 * saturate(input);
+    input = select(rand.xxx < (input - floor(input)), ceil(input), floor(input));
+    input *= 1.0 / 255;
+    return input;
+}
+
 void main(in float4 pos
           : SV_Position, in float2 uv
           : TEXCOORD0, out float4 target
           : SV_Target) {
+  
+  STL::Rng::Hash::Initialize(uint2(pos.xy), 0);
+  float2 seed = STL::Rng::Hash::GetFloat2();
 
   float4 hdr_color = source_tex[pos.xy];
-  target.rgb = ConvertToLDR(hdr_color.rgb);
+  target.rgb = Dither(ConvertToLDR(hdr_color.rgb), seed);
     // target.rgb = hdr_color.rgb;
   target.a = hdr_color.a;
 

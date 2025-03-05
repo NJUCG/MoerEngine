@@ -188,8 +188,13 @@ namespace Moer::Render {
         frame_rt.denoised_diffuse_lighting  = device.CreateTexture("denoised_diffuse_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.denoised_specular_lighting = device.CreateTexture("denoised_specular_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
-        frame_rt.debug_color    = device.CreateTexture("debug_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        frame_rt.scene_color    = device.CreateTexture("scene_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+        frame_rt.debug_color = device.CreateTexture("debug_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
+        frame_rt.ldr_color           = device.CreateTexture("ldr_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
+        frame_rt.hdr_color           = device.CreateTexture("hdr_color", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.feedback_color_ping = device.CreateTexture("feedback_color", Extent2D(_resolution), PF_R16G16B16A16_SNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+        frame_rt.feedback_color_pong = device.CreateTexture("rw_feedback_color", Extent2D(_resolution), PF_R16G16B16A16_SNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
+
         frame_rt.resolved_color = device.CreateTexture("resolved_color", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         Sampler spl{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE};
         AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_depth, frame_rt.view_depth->GetView(), spl);
@@ -353,6 +358,7 @@ namespace Moer::Render {
         main_view.clip2window_bias  = float2(0.5f * main_view.rect.x, 0.5f * main_view.rect.y);
         main_view.window2clip_scale = float2(2.f / main_view.rect.x, -2.f / main_view.rect.y);
         main_view.window2clip_bias  = float2(-1.f, 1.f);
+        main_view.jitter            = _camera->GetJitter();
         //restir
         {
 

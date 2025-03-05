@@ -8,7 +8,10 @@
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 namespace Moer::Render {
-
+    enum EAnitiAliasMode {
+        EAA_TAA = 0,
+        EAA_Num
+    };
     class RTUI {
     public:
         struct GridConfig {
@@ -53,16 +56,38 @@ namespace Moer::Render {
             ReBlurAntilagParams antilag_params{};
             uint                denoiser_type = s_denoiser_mode_relax;
         };
+
+        struct ToneMappingConfig {
+            float histogram_low_percentile  = 0.8f;
+            float histogram_high_percentile = 0.95f;
+            float eye_adaptation_speed_up   = 1.f;
+            float eye_adaptation_speed_down = 0.5f;
+            float min_adapted_luminance     = 0.02f;
+            float max_adapted_luminance     = 0.5f;
+            float exposure_bias             = -0.5f;
+            float white_point               = 1.5f;
+            bool  enable_color_lut          = true;
+        };
+
+        struct AntiAliasConfig {
+            EAnitiAliasMode aa_mode                 = EAnitiAliasMode::EAA_TAA;
+            float           new_frame_weight        = 0.04f;
+            float           clamping_factor         = 1.3f;
+            float           max_radiance            = 200.f;
+            bool            enable_history_clamping = true;
+        };
         struct Config {
             float3 sun_direction        = float3(0.f, 0.5f, 0.16f);
             float  exposure             = 6.f;
             float  sun_angular_diameter = 0.533f;
             uint   max_bounce           = 4;
 
-            GridConfig     grid_config{};
-            ReSTIRDIConfig restir_di_cfg{};
-            DenoiserConfig denoiser_cfg{};
-            EFinalColor    final_color = EFinalColor::EFC_SceneColor;
+            GridConfig        grid_config{};
+            ReSTIRDIConfig    restir_di_cfg{};
+            DenoiserConfig    denoiser_cfg{};
+            ToneMappingConfig tone_mapping_cfg{};
+            AntiAliasConfig   aa_cfg{};
+            EFinalColor       final_color = EFinalColor::EFC_SceneColor;
         };
         RTUI(UIRenderer& _renderer);
         ~RTUI() = default;

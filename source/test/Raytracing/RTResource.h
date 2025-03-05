@@ -60,7 +60,10 @@ namespace Moer::Render {
         TextureRef denoised_specular_lighting;
 
         TextureRef debug_color;
-        TextureRef scene_color;
+        TextureRef ldr_color;
+        TextureRef hdr_color;
+        TextureRef feedback_color_ping;
+        TextureRef feedback_color_pong;
         TextureRef resolved_color;
     };
 
@@ -121,8 +124,8 @@ namespace Moer::Render {
         Config            config;
         SceneGlobalParams scene_params{};
 
-        ViewParam main_view;
-        ViewParam prev_view;
+        ViewParam main_view{};
+        ViewParam prev_view{};
 
         BufferRef geo_instance_to_light_buf;
         BufferRef light_mapping_buf;

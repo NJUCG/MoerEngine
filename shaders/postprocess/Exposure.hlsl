@@ -26,8 +26,8 @@ void main() {
         float bin_val = float(histogram[i]) / POINT_FRAC_MULTIPLIER;
         if (low_cdf <= cdf + bin_val && cdf < high_cdf) {
           float histogram_bin_luminance =
-              exp2((i / (float)HISTOGRAM_BINS) * params.log_luminance_scale +
-                   params.log_luminance_bias);
+              exp2((i / (float)HISTOGRAM_BINS) * params.log_luminance_scale_exposure +
+                   params.log_luminance_bias_exposure);
           weight_sum += histogram_bin_luminance * bin_val;
           bin_sum += bin_val;
         }
@@ -47,7 +47,7 @@ void main() {
       if (adaption_speed > 0.0f) {
         target_exposure += diff * exp2(-params.frame_time * adaption_speed);
       }
-      if(target_exposure <= 0.0f) {
+      if(params.frame_time <= 0.0f) {
         printf("target exposure is %f, old exposure %f frame time %f\n",target_exposure, old_exposure, params.frame_time);
       }
 

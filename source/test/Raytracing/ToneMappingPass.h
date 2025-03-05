@@ -91,10 +91,10 @@ namespace Moer::Render {
 
         BufferRef         tone_mapping_constants;
         BufferRef         tone_mapping_constants2;
+        ToneMappingParams test_copy_back;
         BufferRef         histogram_buffer;
         BufferRef         exposure_buffer;
         TextureRef        color_lut;
-        ToneMappingParams constants{};
         Array<byte>       upload_data;
 
         ToneMappingPassPipeline tone_mapping_pass_pipeline;

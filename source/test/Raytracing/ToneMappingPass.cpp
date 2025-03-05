@@ -46,6 +46,8 @@ namespace Moer::Render {
             }
         }
     }
+    static constexpr float g_min_log_luminance = -10;// TODO: figure out how to set these properly
+    static constexpr float g_max_log_luminamce = 4;
 
     void ToneMappingPass::Process(
         CommandList& _cmd_list,
@@ -53,6 +55,32 @@ namespace Moer::Render {
         Params       _params,
         TextureRef   _src_tex,
         TextureRef   _target) {
+        bool b_enable_lut = _params.enable_color_lut && color_lut_size > 0;
+
+        ToneMappingParams params{};
+        params.log_luminance_scale          = 1.f / (g_max_log_luminamce - g_min_log_luminance);
+        params.log_luminance_bias           = -g_min_log_luminance * params.log_luminance_scale;
+        params.log_luminance_scale_exposure = g_max_log_luminamce - g_min_log_luminance;
+        params.log_luminance_bias_exposure  = g_min_log_luminance;
+        params.histogram_low_percentile     = std::min(0.99f, std::max(0.f, _params.histogram_low_percentile));
+        params.histogram_high_percentile    = std::min(1.f, std::max(_params.histogram_high_percentile, _params.histogram_low_percentile));
+        params.eye_adaptation_speed_up      = _params.eye_adaptation_speed_up;
+        params.eye_adaptation_speed_down    = _params.eye_adaptation_speed_down;
+        params.min_adapted_luminance        = _params.min_adapted_luminance;
+        params.max_adapted_luminance        = _params.max_adapted_luminance;
+        params.frame_time                   = frame_time;
+        params.view_origin                  = uint2(0, 0);
+        params.view_size                    = uint2(_src_tex->GetExtent().x, _src_tex->GetExtent().y);
+        params.exposure_scale               = std::exp2f(_params.exposure_bias);
+        params.white_point_inv_squared      = 1.f / (_params.white_point * _params.white_point);
+        params.source_slice                 = 0;
+        params.color_lut_size               = b_enable_lut ? float2(color_lut_size * color_lut_size, color_lut_size) : float2(0.f);
+        params.color_lut_size_inv           = b_enable_lut ? float2(1.f / (color_lut_size * color_lut_size), 1.f / color_lut_size) : float2(0.f);
+
+        upload_data.resize(sizeof(ToneMappingParams));
+        upload_data.assign((byte*)&params, (byte*)&params + sizeof(ToneMappingParams));
+
+        _cmd_list.CopyFrom(std::move(upload_data), tone_mapping_constants->GetView());
 
         ResetHistogram(_cmd_list);
         ComputeHistogram(_cmd_list, _src_tex);
@@ -66,21 +94,6 @@ namespace Moer::Render {
         Params       _params,
         TextureRef   _src_tex,
         TextureRef   _target) {
-
-        bool              b_enable_lut = _params.enable_color_lut && color_lut_size > 0;
-        ToneMappingParams params{};
-        params.exposure_scale          = std::exp2f(_params.exposure_bias);
-        params.white_point_inv_squared = 1.f / (_params.white_point * _params.white_point);
-        params.min_adapted_luminance   = _params.min_adapted_luminance;
-        params.max_adapted_luminance   = _params.max_adapted_luminance;
-        params.source_slice            = 0;
-        params.color_lut_size          = b_enable_lut ? float2(color_lut_size * color_lut_size, color_lut_size) : float2(0.f);
-        params.color_lut_size_inv      = b_enable_lut ? float2(1.f / (color_lut_size * color_lut_size), 1.f / color_lut_size) : float2(0.f);
-
-        upload_data.resize(sizeof(ToneMappingParams));
-        std::memcpy(upload_data.data(), &params, sizeof(ToneMappingParams));
-
-        _cmd_list.CopyFrom(std::move(upload_data), tone_mapping_constants->GetView());
 
         auto get_full_screen_draw_datas = [&]() {
             Array<SingleDrawParam> full_screen_draw_datas;
@@ -102,45 +115,15 @@ namespace Moer::Render {
     void ToneMappingPass::ResetExposure(CommandList& _cmd_list) {
         _cmd_list.ClearResource(exposure_buffer->GetView(), 0);
     }
-    static constexpr float g_min_log_luminance = -10;// TODO: figure out how to set these properly
-    static constexpr float g_max_log_luminamce = 4;
 
     void ToneMappingPass::ComputeHistogram(CommandList& _cmd_list, TextureRef _src_tex) {
-
-        ToneMappingParams params{};
-        params.log_luminance_scale = 1.f / (g_max_log_luminamce - g_min_log_luminance);
-        params.log_luminance_bias  = -g_min_log_luminance * params.log_luminance_scale;
-
-        params.view_origin = uint2(0, 0);
-        params.view_size   = uint2(_src_tex->GetExtent().x, _src_tex->GetExtent().y);
-
-        upload_data.resize(sizeof(ToneMappingParams));
-        std::memcpy(upload_data.data(), &params, sizeof(ToneMappingParams));
-
-        _cmd_list.CopyFrom(std::move(upload_data), tone_mapping_constants->GetView());
 
         _cmd_list.Compute(histogram_pipeline, tone_mapping_constants, _src_tex, histogram_buffer)
             .Dispatch(uint3((_src_tex->GetExtent().x + 15) / 16, (_src_tex->GetExtent().y + 15) / 16, 1), "Calculate Histogram");
     }
 
     void ToneMappingPass::ComputeExposure(CommandList& _cmd_list, Params _params) {
-        ToneMappingParams params{};
-        params.log_luminance_scale       = g_max_log_luminamce - g_min_log_luminance;
-        params.log_luminance_bias        = g_min_log_luminance;
-        params.histogram_low_percentile  = std::min(0.99f, std::max(0.f, _params.histogram_low_percentile));
-        params.histogram_high_percentile = std::min(1.f, std::max(_params.histogram_high_percentile, _params.histogram_low_percentile));
-        params.eye_adaptation_speed_up   = _params.eye_adaptation_speed_up;
-        params.eye_adaptation_speed_down = _params.eye_adaptation_speed_down;
-        params.min_adapted_luminance     = _params.min_adapted_luminance;
-        params.max_adapted_luminance     = _params.max_adapted_luminance;
-        params.frame_time                = frame_time;
-
-        upload_data.resize(sizeof(ToneMappingParams));
-        std::memcpy(upload_data.data(), &params, sizeof(ToneMappingParams));
-
-        _cmd_list.CopyFrom(std::move(upload_data), tone_mapping_constants2->GetView());
-
-        _cmd_list.Compute(exposure_pipeline, tone_mapping_constants2, histogram_buffer, exposure_buffer)
+        _cmd_list.Compute(exposure_pipeline, tone_mapping_constants, histogram_buffer, exposure_buffer)
             .Dispatch(uint3(1, 1, 1), "Calculate Exposure");
     }
 

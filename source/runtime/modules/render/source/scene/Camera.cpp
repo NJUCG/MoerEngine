@@ -569,4 +569,8 @@ namespace Moer {
         return str;
     }
 
+    float2 Camera::GetJitter() const noexcept {
+        return jitter;
+    }
+
 }// namespace Moer
