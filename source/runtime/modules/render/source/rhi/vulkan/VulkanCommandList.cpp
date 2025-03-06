@@ -1487,7 +1487,6 @@ namespace Moer::Render {
                                     descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
-                                case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
                                 case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
                                     // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
                                     uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]), writer.descriptorType, format);
@@ -1495,6 +1494,7 @@ namespace Moer::Render {
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+                                case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
                                 case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
                                     if (writer.descriptorCount > 1) {
                                         std::span<BufferView> buffers = std::get<std::span<BufferView>>(_args[set_info.param_idx]);

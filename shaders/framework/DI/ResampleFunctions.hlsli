@@ -1,6 +1,8 @@
 #ifndef MOER_DI_RESAMPLE_FUNCTIONS_HLSLI
 #define MOER_DI_RESAMPLE_FUNCTIONS_HLSLI
 #include <framework/DI/Reservoirs.hlsli>
+#include <hwrt/ReSTIRDI/Utils.hlsli>
+
 #define NAIVE_SAMPLING_M_THRESHOLD 2
 namespace Moer {
 namespace DI {
@@ -51,9 +53,9 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
   Reservoir res = Reservoir::EmptyReservoir();
   res.Combine(_cur_res, 0.5f, _cur_res.target_pdf);
 
-  //DEBUG
-  // res.FinalizeRIS(1.f, _cur_res.M);
-  // return res;
+  // DEBUG
+  //  res.FinalizeRIS(1.f, _cur_res.M);
+  //  return res;
 
   bool b_valid_cur_res = res.IsValid();
   float3 motion = _t_params.screen_motion;
@@ -164,8 +166,7 @@ Reservoir TemporalResampling(uint2 _pixel_pos, Surface _surface,
       if (_t_params.bias_correction_mode >= s_di_bias_correction_traced &&
           temporal_p > 0.f &&
           (!selected_prev_sample || !_t_params.enable_prior_visibility)) {
-        if (!GetPreviousConservativeVisibility(_surface,
-                                               selected_temporal.x)) {
+        if (!GetPreviousConservativeVisibility(_surface, selected_temporal.x)) {
           temporal_p = 0.f;
         }
       }
@@ -416,8 +417,6 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
       l_sample =
           _surface.SamplePolymorphicLight(light_info, neighbor_res.GetUV());
       neighbor_weight = _surface.GetLightSampleTargetPdf(l_sample);
-
-
     }
 
     if (res.Combine(neighbor_res, _rng.GetFloat(), neighbor_weight)) {
@@ -425,7 +424,6 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
       selected_light_info = light_info;
       _out_sample = l_sample;
     }
-
   }
 
   if (res.IsValid()) {
@@ -439,16 +437,17 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
           continue;
         }
         uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
-        int2 spatial_offset = int2(neighbor_offset_buf.Load<float2>(sample_idx) *
-                                  _s_params.sampling_radius);
+        int2 spatial_offset =
+            int2(neighbor_offset_buf.Load<float2>(sample_idx) *
+                 _s_params.sampling_radius);
 
         int2 idx = int2(_pixel_pos) + spatial_offset;
         idx = ClampScreenPosition(idx);
 
         Surface neighbor_surface = GetGBufferSurface(idx);
 
-        LightSample neighbor_sample = _surface.SamplePolymorphicLight(
-            selected_light_info, res.GetUV());
+        LightSample neighbor_sample =
+            _surface.SamplePolymorphicLight(selected_light_info, res.GetUV());
         float ps = neighbor_surface.GetLightSampleTargetPdf(neighbor_sample);
 
         if (_s_params.bias_correction_mode >= s_di_bias_correction_traced &&
@@ -477,6 +476,16 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
 
   return res;
 }
+
+#ifdef USE_BOILING_FILTER
+
+void BoilingFilter(uint2 _local_idx, float _strength, inout Reservoir _res) {
+  if (Moer::BoilingFilter(_local_idx, _strength, _res.weight_sum)) {
+    _res = Reservoir::EmptyReservoir();
+  }
+}
+
+#endif
 } // namespace DI
 } // namespace Moer
 #endif // MOER_DI_RESAMPLE_FUNCTIONS_HLSLI

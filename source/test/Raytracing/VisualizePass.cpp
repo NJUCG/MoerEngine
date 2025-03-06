@@ -20,7 +20,7 @@ namespace Moer::Render {
         params.visualize_mode   = _cfg.visualize_mode;
         params.main_view        = _ctx.main_view;
         params.bindless_handles = _ctx.GetBindlessHandles();
-        params.output_size      = _ctx.frame_rt.scene_color->GetExtent().xy;
+        params.output_size      = _ctx.frame_rt.ldr_color->GetExtent().xy;
 
         _cmdlist.CopyFrom(
             std::span<Moer::byte>((Moer::byte*)&params, sizeof(VisualizeParams)),
@@ -31,7 +31,7 @@ namespace Moer::Render {
         };
         _cmdlist.Compute(visualize_pipeline,
                          visualize_params_buffer,
-                         _ctx.frame_rt.scene_color,
+                         _ctx.frame_rt.ldr_color,
                          _ctx.frame_rt.diffuse_lighting,
                          _ctx.frame_rt.specular_lighting,
                          _ctx.b_current_frame ? _ctx.frame_rt.view_depth : _ctx.frame_rt.prev_view_depth,

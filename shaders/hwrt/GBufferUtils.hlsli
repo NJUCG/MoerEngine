@@ -7,7 +7,7 @@ namespace Moer {
 
 RayDesc SetupPrimaryRay(uint2 pixelPosition, Moer::ViewParam _view) {
   float2 uv = (float2(pixelPosition) + 0.5) * _view.inv_rect;
-  float4 clip_pos = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.f, 1.f);
+  float4 clip_pos = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.f / 256.f, 1.f);
   float4 world_pos = mul(_view.clip2world, clip_pos);
   world_pos.xyz /= world_pos.w;
 
@@ -44,7 +44,7 @@ float3 GetMotion(Moer::ViewParam _view, Moer::ViewParam _prev_view,
 
   float3 motion;
   motion.xy = (clip_pos_prev.xy - clip_pos.xy) * _view.clip2window_scale;
-  // float3 motion_w = clip_pos_prev - clip_pos;
+  motion.xy += (_view.jitter - _prev_view.jitter);
   motion.z = -clip_pos_prev.w + clip_pos.w;
 
   return motion; // 2.5D motion
@@ -63,6 +63,7 @@ float2 GetEnvMotion(Moer::ViewParam _view, Moer::ViewParam _prev_view,
   prev_clip_pos.xyz /= prev_clip_pos.w;
 
   float2 motion = (prev_clip_pos.xy - clip_pos.xy) * _view.clip2window_scale;
+  motion += (_view.jitter - _prev_view.jitter);
   return motion;
 }
 

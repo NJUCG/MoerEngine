@@ -31,7 +31,7 @@ namespace Moer::Render {
         const auto& frame_rt        = _rt_ctx.frame_rt;
         _cmd_list.Compute(gbuffer_pass_pipeline,
                           gbuffer_constants,
-                          _rt_ctx.frame_rt.scene_color,
+                          _rt_ctx.frame_rt.hdr_color,
                           _rt_ctx.frame_rt.motion,
                           b_current_frame ? _rt_ctx.frame_rt.view_depth : _rt_ctx.frame_rt.prev_view_depth,
                           b_current_frame ? _rt_ctx.frame_rt.diffuse_albedo : _rt_ctx.frame_rt.prev_diffuse_albedo,
@@ -43,6 +43,6 @@ namespace Moer::Render {
                           _rt_ctx.frame_rt.denoised_diffuse_lighting,
                           _rt_ctx.frame_rt.denoised_specular_lighting,
                           scene.GetBindlessArray())
-            .Dispatch(uint3(ceil(constants.main_view.rect.x / 8), ceil(constants.main_view.rect.y / 8), 1));
+            .Dispatch(uint3(ceil(constants.main_view.rect.x / 8), ceil(constants.main_view.rect.y / 8), 1), "CompositionPass");
     }
 }// namespace Moer::Render

@@ -44,8 +44,12 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 [[vk::binding(11, 0)]] Texture2D<float4> denoised_specular_lighting
     : register(t8, space0);
 
+
+
 [numthreads(8, 8, 1)] void main(uint2 gtid
                                 : SV_DISPATCHTHREADID) {
+
+
   float3 composited_color = float3(0, 0, 0);
   float view_z = gbuffer_view_depth[gtid];
 
@@ -61,7 +65,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
     float4 diffuse = diffuse_lighting[gtid];
     float4 specular = specular_lighting[gtid];
 
-#if WITH_NRD
+#ifdef WITH_NRD
     if (params.denoiser_mode != Moer::s_denoiser_mode_off) {
       float4 denoised_diffuse = denoised_diffuse_lighting[gtid];
       float4 denoised_specular = denoised_specular_lighting[gtid];
@@ -79,7 +83,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
     }
 #endif
     diffuse.rgb *= diffuse_albedo;
-    specular.rgb *= specular_rf0;
+    specular.rgb *= max(specular_rf0, 0.001f);
 
     composited_color += diffuse.rgb + specular.rgb;
     composited_color += emissive;

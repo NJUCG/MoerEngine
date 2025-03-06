@@ -1,5 +1,6 @@
 #include <atomic>
 #include <filesystem>
+#include "AntiAliasPass.h"
 #include "CompositionPass.h"
 #include "Configs.h"
 #include "Core.h"
@@ -8,6 +9,7 @@
 #include "PixelFormat.h"
 #include "PreprocessLightPass.h"
 #include "RTResource.h"
+#include "ToneMappingPass.h"
 #include "VisualizePass.h"
 #include "config/ConfigManager.h"
 #include "contrib/Open3DGC/o3dgcTimer.h"
@@ -242,10 +244,7 @@ int main(int argc, const char** argv) {
     Array<TextureView> env_mips;
     TextureRef         env_pdf{};
     Array<TextureView>
-        env_pdf_mips;
-
-    bool b_new_env_pdf = false;
-
+                     env_pdf_mips;
     BindlessArrayRef bindless_array = g_scene.GetBindlessArray();
 
     CommandList cmd_list;
@@ -314,8 +313,10 @@ int main(int argc, const char** argv) {
 
     Array<RaytracingGeometryRef> rt_geometries;
 
-    auto   timeline = device.CreateFence();
-    uint64 time     = 0ull;
+    auto   timeline     = device.CreateFence();
+    uint64 time         = 0ull;
+    uint64 nrd_time     = 0ull;
+    float  elapsed_time = 0.0f;
 
     TextureRef output = device.CreateTexture(
         Extent2D(resolution.x, resolution.y),
@@ -410,6 +411,8 @@ int main(int argc, const char** argv) {
     timer.Start();
     uint64 last_time = 0ull;
 
+    bool b_feedback_valid = false;
+
     //////////////////////////////////////////////////////////////////////////
     //passes
     //////////////////////////////////////////////////////////////////////////
@@ -419,7 +422,17 @@ int main(int argc, const char** argv) {
     UniquePtr<CompositionPass>  composition_pass   = MakeUnique<CompositionPass>(device, manager, g_scene);
     UniquePtr<VisualizePass>    visualize_pass     = MakeUnique<VisualizePass>(device, manager);
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
+    UniquePtr<ToneMappingPass>  tone_mapping_pass;
+
     rt_ctx->SetResolution(resolution);
+    AntialiasPass::CreateInfo antialias_pass_info{
+        .motion              = rt_ctx->frame_rt.motion,
+        .feedback_color_ping = rt_ctx->frame_rt.feedback_color_ping,
+        .feedback_color_pong = rt_ctx->frame_rt.feedback_color_pong,
+        .resolved_color      = rt_ctx->frame_rt.resolved_color,
+        .hdr_color           = rt_ctx->frame_rt.hdr_color};
+    UniquePtr<AntialiasPass> antialias_pass = MakeUnique<AntialiasPass>(device, manager, g_scene, antialias_pass_info);
+    antialias_pass->SetJitter(AntialiasPass::EJitter::Halton);
 
     //////////////////////////////////////////////////////////////////////////
     //NRD
@@ -441,7 +454,7 @@ int main(int argc, const char** argv) {
         gui.EndGUIFrame();
         int w_width, w_height;
         if (time >= 3) {
-            timeline->Wait(max_frame_in_flight - 2);
+            timeline->Wait(time - max_frame_in_flight);
         }
         timer.Stop();
         auto frame_time = timer.ElapsedMilliseconds();
@@ -466,16 +479,25 @@ int main(int argc, const char** argv) {
                 ETextureUsageFlags::COLOR_ATTACHMENT);
 
             create_frame_buffers(resolution);
-            if (rt_ctx)
-                rt_ctx->SetResolution(resolution);
+
+            rt_ctx->SetResolution(resolution);
+
             is_ctx.~ImportanceSamplingContext();
             is_params.render_size = resolution;
             new (&is_ctx) ImportanceSamplingContext(is_params);
             nrd_interface = nrd_ext->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
+
+            antialias_pass_info.motion              = rt_ctx->frame_rt.motion;
+            antialias_pass_info.feedback_color_ping = rt_ctx->frame_rt.feedback_color_ping;
+            antialias_pass_info.feedback_color_pong = rt_ctx->frame_rt.feedback_color_pong;
+            antialias_pass_info.resolved_color      = rt_ctx->frame_rt.resolved_color;
+            antialias_pass_info.hdr_color           = rt_ctx->frame_rt.hdr_color;
+            antialias_pass                          = MakeUnique<AntialiasPass>(device, manager, g_scene, antialias_pass_info);
+            b_feedback_valid                        = false;
+            antialias_pass->SetJitter(AntialiasPass::EJitter::Halton);
         }
 
-        if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
-
+        if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady() && load_res_event->IsComplete()) {
             //load scene
             if (first_load) {
                 //calculate bounding box
@@ -588,7 +610,7 @@ int main(int argc, const char** argv) {
                 // gfx_queue.Sync();
             }
 
-            if (b_new_env_map && load_res_event->IsComplete()) {
+            if (b_new_env_map) {
                 env_map = rt_res.GetDefaultEnvMap();
 
                 Array<ImportTexture> import_textures;
@@ -616,13 +638,10 @@ int main(int argc, const char** argv) {
                     env_mips.push_back(env_map->GetView(i));
                 }
                 sd_utils.GenerateMips(cmd_list, env_mips);
-                b_new_env_pdf = true;
                 b_new_env_map = false;
-            }
 
-            if (b_new_env_pdf && rt_ctx) {
+                rt_ctx->LoadDefaultResources(rt_res);
                 rt_ctx->CreateEnvMapResources(env_map, cmd_list);
-                b_new_env_pdf = false;
             }
 
             if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -634,6 +653,11 @@ int main(int argc, const char** argv) {
                 }
                 cmd_list.UpdateRaytracingScene(rt_scene);
             }
+            if (!tone_mapping_pass) {
+                ToneMappingPass::CreateInfo info{};
+                info.color_lut    = rt_ctx->default_res.black_tex;
+                tone_mapping_pass = MakeUnique<ToneMappingPass>(device, manager, g_scene, info);
+            }
             auto camera_entity = g_scene.GetCameras()[0];
             auto camera        = CameraManager::Get().Get(camera_entity);
             //prepare frame
@@ -643,7 +667,7 @@ int main(int argc, const char** argv) {
                 rt_config_param.world2clip_prev = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
 
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
-
+                camera->SetJitterMatrix(antialias_pass->GetPixelOffset());
                 camera->Tick();
 
                 rt_view_param.view2world = Transpose(camera->GetToWorldMatrix());
@@ -681,9 +705,11 @@ int main(int argc, const char** argv) {
                     DirectionalLightComponent* dir_light = static_cast<DirectionalLightComponent*>(light.Get());
                     dir_light->SetDirection(-rt_ui.GetConfig().sun_direction);
                     dir_light->SetIntensity(rt_ui.GetConfig().exposure);
+                    dir_light->SetColor(float3(0.9f, 0.65f, 0.4f));
                 }
             }
-
+            ToneMappingPass::Params tone_params{};
+            AntialiasPass::Params   aa_params{};
             //fill ui data
             {
 
@@ -711,6 +737,27 @@ int main(int argc, const char** argv) {
                 is_ctx.SetReSTIRDIIInitialSampleParams(di_initial_sample_config);
                 is_ctx.SetReSTIRDITemporalResampleParams(di_temporal_resampling_config);
                 is_ctx.SetReSTIRDISpatialResampleParams(di_spatial_resampling_config);
+
+                // params.min_adapted_luminance   = 0.002f;
+                // params.max_adapted_luminance   = 0.5f;
+                // params.exposure_bias           = -1.f;
+                // params.eye_adaptation_speed_up = 2.f;
+                // params.eye_adaptation_speed_up = 1.f;
+                const auto& tone_cfg                  = rt_ui.GetConfig().tone_mapping_cfg;
+                tone_params.eye_adaptation_speed_down = tone_cfg.eye_adaptation_speed_down;
+                tone_params.eye_adaptation_speed_up   = tone_cfg.eye_adaptation_speed_up;
+                tone_params.exposure_bias             = tone_cfg.exposure_bias;
+                tone_params.max_adapted_luminance     = tone_cfg.max_adapted_luminance;
+                tone_params.min_adapted_luminance     = tone_cfg.min_adapted_luminance;
+                tone_params.histogram_low_percentile  = tone_cfg.histogram_low_percentile;
+                tone_params.histogram_high_percentile = tone_cfg.histogram_high_percentile;
+                tone_params.white_point               = tone_cfg.white_point;
+
+                const auto& aa_cfg             = rt_ui.GetConfig().aa_cfg;
+                aa_params.clamping_factor      = aa_cfg.clamping_factor;
+                aa_params.new_frame_weight     = aa_cfg.new_frame_weight;
+                aa_params.max_radiance         = aa_cfg.max_radiance;
+                aa_params.enable_history_clamp = aa_cfg.enable_history_clamping;
             }
 
             is_ctx.TickFrame(time);
@@ -743,32 +790,41 @@ int main(int argc, const char** argv) {
                         denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
                         break;
                 }
-                // denoise
-                nrd_interface->Begin();
-                nrd_interface->UpdateCommonSettings(
-                    time,
-                    Vector2ui(resolution.x, resolution.y),
-                    Vector2f(0.f, 0.f),
-                    Transpose(camera->GetViewMatrix()),
-                    Transpose(camera->GetProjectionMatrix()));
 
-                // opaque
-                {
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, rt_ctx->frame_rt.motion);
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, frame_rt.normal_roughness);
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::VIEW_Z, b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth);
-                    // nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::BASECOLOR_METALNESS, b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo);
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, frame_rt.diffuse_lighting);
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_SPECULAR, frame_rt.specular_lighting);
-                    nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE, frame_rt.denoised_diffuse_lighting);
-                    nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_SPECULAR, frame_rt.denoised_specular_lighting);
+                if (denoiser != nrd::Denoiser::MAX_NUM) {
+                    // denoise
+                    nrd_interface->Begin();
+                    nrd_interface->UpdateCommonSettings(
+                        nrd_time++,
+                        Vector2ui(resolution.x, resolution.y),
+                        Vector2f(0.f, 0.f),
+                        Transpose(camera->GetViewMatrix()),
+                        Transpose(camera->GetProjectionMatrix()));
 
-                    nrd_interface->Denoise(cmd_list, denoiser, "Radiance Denoising");
+                    // opaque
+                    {
+                        nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, rt_ctx->frame_rt.motion);
+                        nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, frame_rt.normal_roughness);
+                        nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::VIEW_Z, b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth);
+                        // nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::BASECOLOR_METALNESS, b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo);
+                        nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, frame_rt.diffuse_lighting);
+                        nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_SPECULAR, frame_rt.specular_lighting);
+                        nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE, frame_rt.denoised_diffuse_lighting);
+                        nrd_interface->SetOutput(Ext::NRDInterface::EResourceSlot::OUT_SPECULAR, frame_rt.denoised_specular_lighting);
+
+                        nrd_interface->Denoise(cmd_list, denoiser, "Radiance Denoising");
+                    }
                 }
             }
 
             composition_pass->Process(cmd_list, *rt_ctx);
-
+            antialias_pass->Process(cmd_list,
+                                    *rt_ctx,
+                                    aa_params,
+                                    b_feedback_valid,
+                                    rt_ctx->frame_rt.hdr_color,
+                                    rt_ctx->frame_rt.resolved_color);
+            tone_mapping_pass->Process(cmd_list, *rt_ctx, tone_params, rt_ctx->frame_rt.resolved_color, rt_ctx->frame_rt.ldr_color);
             // TestInlineRTShader::Param param;
             // param.global_param_handle    = view_buffer_handle;
             // param.material_buffer_handle = material_buffer_idx;
@@ -800,6 +856,9 @@ int main(int argc, const char** argv) {
             //copy normal to output
             // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
             rt_ctx->AdvanceFrame();
+            tone_mapping_pass->AdvanceFrame(camera->GetDeletaTime());
+            antialias_pass->AdvanceFrame();
+            b_feedback_valid = true;
         }
 
         // rt_scene->MarkModified(0);

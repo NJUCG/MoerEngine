@@ -60,7 +60,16 @@ namespace Moer::Render {
         TextureRef denoised_specular_lighting;
 
         TextureRef debug_color;
-        TextureRef scene_color;
+        TextureRef ldr_color;
+        TextureRef hdr_color;
+        TextureRef feedback_color_ping;
+        TextureRef feedback_color_pong;
+        TextureRef resolved_color;
+    };
+
+    struct DefaultResources {
+        TextureRef black_tex;
+        TextureRef white_tex;
     };
 
     struct RTContext {
@@ -105,6 +114,8 @@ namespace Moer::Render {
 
         const RaytracingBindlessHandles& GetBindlessHandles() const { return bindless_handles; }
 
+        void LoadDefaultResources(RTResource& _rt_res);
+
     private:
         void AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _view, Sampler _sampler);
         void AllocateAndFreeBdlsIfNeeded(uint& _target, const BufferView& _view);
@@ -113,8 +124,8 @@ namespace Moer::Render {
         Config            config;
         SceneGlobalParams scene_params{};
 
-        ViewParam main_view;
-        ViewParam prev_view;
+        ViewParam main_view{};
+        ViewParam prev_view{};
 
         BufferRef geo_instance_to_light_buf;
         BufferRef light_mapping_buf;
@@ -143,7 +154,8 @@ namespace Moer::Render {
         uint max_geom_instance;
         uint max_prim_lights;
 
-        FrameResources frame_rt;
+        FrameResources   frame_rt;
+        DefaultResources default_res;
 
         ImportanceSamplingContext& is_ctx;
         ShaderUtils&               sd_utils;
