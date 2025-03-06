@@ -432,8 +432,6 @@ int main(int argc, const char** argv) {
         .resolved_color      = rt_ctx->frame_rt.resolved_color,
         .hdr_color           = rt_ctx->frame_rt.hdr_color};
     UniquePtr<AntialiasPass> antialias_pass = MakeUnique<AntialiasPass>(device, manager, g_scene, antialias_pass_info);
-    antialias_pass->SetJitter(AntialiasPass::EJitter::Halton);
-
     //////////////////////////////////////////////////////////////////////////
     //NRD
     //////////////////////////////////////////////////////////////////////////
@@ -494,7 +492,6 @@ int main(int argc, const char** argv) {
             antialias_pass_info.hdr_color           = rt_ctx->frame_rt.hdr_color;
             antialias_pass                          = MakeUnique<AntialiasPass>(device, manager, g_scene, antialias_pass_info);
             b_feedback_valid                        = false;
-            antialias_pass->SetJitter(AntialiasPass::EJitter::Halton);
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady() && load_res_event->IsComplete()) {
@@ -667,7 +664,7 @@ int main(int argc, const char** argv) {
                 rt_config_param.world2clip_prev = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
 
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
-                camera->SetJitterMatrix(antialias_pass->GetPixelOffset());
+                // camera->SetJitterMatrix(antialias_pass->GetPixelOffset());
                 camera->Tick();
 
                 rt_view_param.view2world = Transpose(camera->GetToWorldMatrix());
@@ -758,6 +755,8 @@ int main(int argc, const char** argv) {
                 aa_params.new_frame_weight     = aa_cfg.new_frame_weight;
                 aa_params.max_radiance         = aa_cfg.max_radiance;
                 aa_params.enable_history_clamp = aa_cfg.enable_history_clamping;
+
+                antialias_pass->SetJitter(aa_cfg.jitter_mode);
             }
 
             is_ctx.TickFrame(time);
@@ -769,7 +768,7 @@ int main(int argc, const char** argv) {
             rt_ctx->CreateBuffersIfNeeded(num_emissive_meshes, num_emissive_triangles, g_scene.GetLights().size(), g_scene.GetGeometryInstances().size());
             cmd_list.UpdateBindlessArray(bindless_array);
 
-            rt_ctx->Tick(camera);
+            rt_ctx->Tick(camera, antialias_pass->GetPixelOffset());
 
             prepare_light_pass->Process(cmd_list, *rt_ctx);
 

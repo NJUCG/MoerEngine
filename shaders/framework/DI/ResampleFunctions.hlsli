@@ -452,7 +452,7 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
 
         if (_s_params.bias_correction_mode >= s_di_bias_correction_traced &&
             ps > 0.f) {
-          if (!GetCurrentConservativeVisibility(_surface, neighbor_sample.x)) {
+          if (!GetCurrentConservativeVisibility(neighbor_surface, neighbor_sample.x)) {
             ps = 0.f;
           }
         }

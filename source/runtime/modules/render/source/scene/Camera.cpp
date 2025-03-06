@@ -281,10 +281,10 @@ namespace Moer {
         if (m_is_rotation_modified) {
             UpdateVectors();
         }
-        if (m_is_position_modified || m_is_rotation_modified || m_is_jittered_matrix_modified) {
+        if (m_is_position_modified || m_is_rotation_modified) {
             UpdateViewMatrix();
         }
-        if (m_is_options_modified) {
+        if (m_is_options_modified || m_is_jittered_matrix_modified) {
             UpdateProjectionMatrix();
         }
         if (m_is_position_modified || m_is_rotation_modified || m_is_jittered_matrix_modified || m_is_options_modified) {
@@ -314,7 +314,7 @@ namespace Moer {
         m_view_matrix              = view_matrix_transform.matrix;
         // m_view_matrix     = MakeLookatViewMatrixRH(m_position, m_position + m_front, m_up);
 
-        m_view_matrix = m_view_matrix * m_jittered_matrix;
+        // m_view_matrix = m_view_matrix * m_jittered_matrix;
 
         m_view_matrix_inv = Inverse(m_view_matrix);
 
@@ -328,7 +328,7 @@ namespace Moer {
     void Camera::UpdateProjectionMatrix() {
         // The m_far_clip and m_near_clip is swapped on purpose.
         // Inverse Depth Projection: https://forums.developer.nvidia.com/t/inverse-depth-projection-tutorial-or-code-sample/219704
-        m_projection_matrix     = MakePerspectiveMatrixRH(Angle::DegreeToRadian(m_fov_y), m_aspect_ratio, m_far_clip, m_near_clip);
+        m_projection_matrix     = m_jittered_matrix * MakePerspectiveMatrixRH(Angle::DegreeToRadian(m_fov_y), m_aspect_ratio, m_far_clip, m_near_clip);
         m_projection_matrix_inv = Inverse(m_projection_matrix);
     }
 

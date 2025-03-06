@@ -339,16 +339,39 @@ namespace Moer::Render {
     }
 
     void
-    RTContext::Tick(CameraRef _camera) {
+    RTContext::Tick(CameraRef _camera, float2 _jitter) {
         auto& device = RenderDevice::Get();
         prev_view    = main_view;
 
-        main_view.view2world        = Transpose(_camera->GetToWorldMatrix());
-        main_view.world2view        = Transpose(_camera->GetViewMatrix());
-        main_view.world2clip        = Transpose(_camera->GetViewProjectionMatrix());
-        main_view.view2clip         = Transpose(_camera->GetProjectionMatrix());
-        main_view.clip2view         = Transpose(_camera->GetProjectionMatrixInv());
-        main_view.clip2world        = Transpose(_camera->GetViewProjectionMatrixInv());
+        float2 delta = 2.f / float2(frame_rt.ldr_color->GetExtent().xy);
+
+        main_view.view2world = Transpose(_camera->GetToWorldMatrix());
+        main_view.world2view = Transpose(_camera->GetViewMatrix());
+
+        float4x4 view = _camera->GetViewMatrix();
+        float4x4 proj = _camera->GetProjectionMatrix();
+
+        // float4 test_prev = float4(0, 0, -1, 1);
+        // test_prev        = proj * test_prev;
+        // //apply jitter
+        // proj[0][3] += _jitter.x * delta.x;
+        // proj[1][3] += _jitter.y * delta.y;
+
+        // float4 test = float4(0, 0, -1, 1);
+        // test        = proj * test;
+
+        float4x4 jitter_matrix = MakeTranslation(_jitter.x * delta.x, -_jitter.y * delta.y, 0.f);
+        proj                   = jitter_matrix * proj;
+
+        main_view.view2clip  = Transpose(proj);
+        main_view.clip2view  = Transpose(Inverse(proj));
+        main_view.clip2world = Transpose(Inverse(proj * view));
+        main_view.world2clip = Transpose(proj * view);
+
+        // main_view.world2clip        = Transpose(_camera->GetViewProjectionMatrix());
+        // main_view.view2clip         = Transpose(_camera->GetProjectionMatrix());
+        // main_view.clip2view         = Transpose(_camera->GetProjectionMatrixInv());
+        // main_view.clip2world        = Transpose(_camera->GetViewProjectionMatrixInv());
         main_view.frustum           = _camera->GetFrustum();
         main_view.near_far          = float2(_camera->GetNearClip(), _camera->GetFarClip());
         main_view.rect              = float2(is_ctx.GetReSTIRDIConfig().render_width, is_ctx.GetReSTIRDIConfig().render_height);
@@ -358,7 +381,7 @@ namespace Moer::Render {
         main_view.clip2window_bias  = float2(0.5f * main_view.rect.x, 0.5f * main_view.rect.y);
         main_view.window2clip_scale = float2(2.f / main_view.rect.x, -2.f / main_view.rect.y);
         main_view.window2clip_bias  = float2(-1.f, 1.f);
-        main_view.jitter            = _camera->GetJitter();
+        main_view.jitter            = _jitter;
         //restir
         {
 

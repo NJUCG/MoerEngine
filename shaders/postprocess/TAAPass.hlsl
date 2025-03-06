@@ -234,11 +234,9 @@ float2 OutputToInput(int2 _pixel_pos_to_origin) {
   } else {
     result_pq = this_pixel_color;
   }
-    result_pq = PQEncode(unfiltered_rt[dtid.xy].rgb);
+    // result_pq = PQEncode(unfiltered_rt[dtid.xy].rgb);
 
   float3 result = PQDecode(result_pq);
-//   float3 test = PQDecode(PQEncode(float3(0.5, 0.5, 0.5)));
-//   printf("pqtest %f %f %f\n", test.x, test.y, test.z);
   output_rt[out_pixel_pos] = float4(result, 1.f);
   rw_feedback_rt[out_pixel_pos] = float4(result_pq, 0.f);
 }

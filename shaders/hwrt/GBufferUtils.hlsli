@@ -45,6 +45,7 @@ float3 GetMotion(Moer::ViewParam _view, Moer::ViewParam _prev_view,
   float3 motion;
   motion.xy = (clip_pos_prev.xy - clip_pos.xy) * _view.clip2window_scale;
   motion.xy += (_view.jitter - _prev_view.jitter);
+  // printf("motion.xy %f %f\n", motion.x, motion.y);
   motion.z = -clip_pos_prev.w + clip_pos.w;
 
   return motion; // 2.5D motion
