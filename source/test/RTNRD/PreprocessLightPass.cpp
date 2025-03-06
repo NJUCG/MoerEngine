@@ -283,7 +283,8 @@ namespace Moer::Render {
         param.geometry_data_handle = _rt_ctx.geom_data_buf_handle;
         param.instance_data_handle = _rt_ctx.instance_data_buf_handle;
         param.material_data_handle = _rt_ctx.material_data_buf_handle;
-        param.geom_inst_to_light   = _rt_ctx.GetBindlessHandles().geo_instance_to_light;
+
+        param.geom_inst_to_light = 0;// FIXME: RTNRD needs an update
 
         uint max_lights_in_buffer = uint(_rt_ctx.light_data_buf->GetNumElement() / 2);
         param.cur_light_offset    = max_lights_in_buffer * b_odd_frame;
