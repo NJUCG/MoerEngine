@@ -7,7 +7,7 @@
 
 #include <cassert>
 #include <numeric>
-#include <stb/stb_image_resize.h>
+#include <stb/stb_image_resize2.h>
 #include <dds.hpp>
 #include <gl_format.h>
 
@@ -256,7 +256,20 @@ namespace Moer {
                 auto&    next_mipmap         = mipmaps[mip];
                 uint32_t prev_mip_map_offset = desc.mip_offsets[layer * desc.mips + mip - 1];
                 uint32_t next_mip_map_offset = desc.mip_offsets[layer * desc.mips + mip];
-                stbir_resize_uint8(mip_mapped_data + prev_mip_map_offset, prev_mipmap.extent.width, prev_mipmap.extent.height, 0, mip_mapped_data + next_mip_map_offset, next_mipmap.extent.width, next_mipmap.extent.height, 0, channels);
+
+                assert(channels == 4 && "Default support 4 channels. If you need more, please modify the code");
+                auto channel_in_stbir = stbir_pixel_layout::STBIR_4CHANNEL;
+
+                stbir_resize_uint8_linear(
+                    mip_mapped_data + prev_mip_map_offset,
+                    prev_mipmap.extent.width,
+                    prev_mipmap.extent.height,
+                    0,
+                    mip_mapped_data + next_mip_map_offset,
+                    next_mipmap.extent.width,
+                    next_mipmap.extent.height,
+                    0,
+                    channel_in_stbir);
             }
         }
         desc.data_size = old_size;
@@ -402,4 +415,4 @@ namespace Moer {
         return desc;
     }
 
-}
+}// namespace Moer
