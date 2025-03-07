@@ -516,56 +516,6 @@ int main(int argc, const char** argv) {
 
     // MARK: PSO
 
-    // // clang-format off
-    // // TODO: update this simplified pso manager to shader mutation pso manager
-    // auto gbuffer_pso_manager = SimplifiedGbufferPsoManager<GeometryPassPipeline>(manager, {
-    //     {
-    //         .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
-    //             EVertexAttributes::VA_POSITION,
-    //             EVertexAttributes::VA_NORMAL,
-    //             EVertexAttributes::VA_TANGENT,
-    //             EVertexAttributes::VA_TEXCOORD0
-    //         }),
-    //         .vertex_shader_path = "test/geometry_pass/GeometryPassCommonVertex.hlsl",
-    //         .pixel_shader_path = "test/geometry_pass/GeometryPassCommonPixel.hlsl",
-    //         .vertex_shader_environment = [&]() -> ShaderCompilerEnvironment {
-    //             ShaderCompilerEnvironment env;
-    //             env.SetDefine("HAS_TANGENT", 1);
-    //             env.SetDefine("HAS_TEXCOORD0", 1);
-    //             return env;
-    //         }(),
-    //     }, {
-    //         .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
-    //             EVertexAttributes::VA_POSITION,
-    //             EVertexAttributes::VA_NORMAL,
-    //             EVertexAttributes::VA_TANGENT,
-    //             EVertexAttributes::VA_TEXCOORD0,
-    //             EVertexAttributes::VA_TEXCOORD1
-    //         }),
-    //         .vertex_shader_path = "test/geometry_pass/GeometryPassCommonVertex.hlsl",
-    //         .pixel_shader_path = "test/geometry_pass/GeometryPassCommonPixel.hlsl",
-    //         .vertex_shader_environment = [&]() -> ShaderCompilerEnvironment {
-    //             ShaderCompilerEnvironment env;
-    //             env.SetDefine("HAS_TANGENT", 1);
-    //             env.SetDefine("HAS_TEXCOORD0", 1);
-    //             env.SetDefine("HAS_TEXCOORD1", 1);
-    //             return env;
-    //         }(),
-    //     }, {
-    //         .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
-    //             EVertexAttributes::VA_POSITION,
-    //             EVertexAttributes::VA_NORMAL,
-    //         }),
-    //         .vertex_shader_path = "test/geometry_pass/GeometryPassCommonVertex.hlsl",
-    //         .pixel_shader_path = "test/geometry_pass/GeometryPassCommonPixel.hlsl",
-    //         .vertex_shader_environment = [&]() -> ShaderCompilerEnvironment {
-    //             ShaderCompilerEnvironment env;
-    //             return env;
-    //         }(),
-    //     }
-    // });
-    // // clang-format on
-
     auto pbr_pipeline = [&]() {
         GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
                                               {},
@@ -584,8 +534,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(ao_output->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
-            .Pixel("test/post_process/Ao.hlsl")
+            .Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl")
+            .Pixel("raster/post_process/Ao.hlsl")
             .Build<AoPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -595,8 +545,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(ssr_output->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
-            .Pixel("test/post_process/Ssr.hlsl")
+            .Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl")
+            .Pixel("raster/post_process/Ssr.hlsl")
             .Build<SsrPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -609,8 +559,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_1->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SmaaWrapper.hlsl", "SMAAEdgeDetectionVS_Wrapper")
-            .Pixel("test/post_process/SmaaWrapper.hlsl", "SMAALumaEdgeDetectionPS_Wrapper")
+            .Vertex("raster/post_process/SmaaWrapper.hlsl", "SMAAEdgeDetectionVS_Wrapper")
+            .Pixel("raster/post_process/SmaaWrapper.hlsl", "SMAALumaEdgeDetectionPS_Wrapper")
             .Build<SmaaEdgeDetectionPipeline>(std::move(pso_full_screen_info));
     }();// IILE(Immediately Invoked Lambda Expression), usually for complex varaible initialization and avoid naming conflicts
 
@@ -620,8 +570,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_2->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper")
-            .Pixel("test/post_process/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
+            .Vertex("raster/post_process/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper")
+            .Pixel("raster/post_process/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
             .Build<SmaaBlendingWeightPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -631,8 +581,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_output->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-            .Pixel("test/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
+            .Vertex("raster/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
+            .Pixel("raster/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
             .Build<SmaaNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -642,8 +592,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_34[0]->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-            .Pixel("test/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
+            .Vertex("raster/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
+            .Pixel("raster/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
             .Build<SmaaT2xNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -653,8 +603,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_output->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/SmaaWrapper.hlsl", "SMAAResolveVS_Wrapper")
-            .Pixel("test/post_process/SmaaWrapper.hlsl", "SMAAResolvePS_Wrapper")
+            .Vertex("raster/post_process/SmaaWrapper.hlsl", "SMAAResolveVS_Wrapper")
+            .Pixel("raster/post_process/SmaaWrapper.hlsl", "SMAAResolvePS_Wrapper")
             .Build<SmaaT2xResolvePipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -665,8 +615,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_temporal_texture_1->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
-            .Pixel("test/post_process/FxaaPrecompute.hlsl")
+            .Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl")
+            .Pixel("raster/post_process/FxaaPrecompute.hlsl")
             .Build<FxaaPrecomputePipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -676,8 +626,8 @@ int main(int argc, const char** argv) {
                                               {RHIColorAttachmentInfo::Preset(antialiasing_output->GetFormat())});
         return manager
             .Raster()
-            .Vertex("test/post_process/PostProcessFullScreenQuad.hlsl")
-            .Pixel("test/post_process/Fxaa.hlsl")
+            .Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl")
+            .Pixel("raster/post_process/Fxaa.hlsl")
             .Build<FxaaPipeline>(std::move(pso_full_screen_info));
     }();
 
@@ -969,30 +919,6 @@ int main(int argc, const char** argv) {
             param.geometry_instance_handle = geom_instance_buffer_handle;
             param.camera_view_proj         = Transpose(camera->GetViewProjectionMatrix());
 
-            // // FIXME: use a better way to render gbuffer
-            // bool is_first = true;
-            // for (auto& [bitmask, mesh_draw_datas] : mesh_draw_datas_map) {
-            //     auto& pso = gbuffer_pso_manager.Get(bitmask);
-
-            //     EAttachmentAction action    = AC_CLEAR_STORE;
-            //     EAttachmentAction ds_action = AC_DS_CLEAR_STORE;
-            //     if (is_first) {
-            //         is_first = false;
-            //     } else {
-            //         action    = AC_NO_LOAD_STORE;
-            //         ds_action = AC_DS_STORE;
-            //     }
-
-            //     cmd_list.Gfx(pso, sampler, camera_buffer, bindless_array, param)
-            //         .Draw(
-            //             Rect2D(0, 0, resolution.x, resolution.y),
-            //             std::move(mesh_draw_datas),
-            //             DepthAttachment(depth->GetView().GetTexture(), ds_action),
-            //             ColorAttachment(vbuffer, action),
-            //             ColorAttachment(normal, action),
-            //             ColorAttachment(uv, action),
-            //             ColorAttachment(position, action));
-            // }
             {
                 cmd_list.GfxGeometryPass<GeometryPassPipeline>(sampler, camera_buffer, bindless_array, param)
                     .Draw(
