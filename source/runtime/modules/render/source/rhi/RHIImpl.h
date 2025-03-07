@@ -6,6 +6,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/GraphTask.h"
@@ -679,12 +680,13 @@ namespace Moer::Render {
         const auto& DrawData() const { return mesh_data; }
         const auto& Args() const { return args; }
 
-        void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
-            for (int i = 0; i < args.args.size(); i++) {
-                if (pipeline->valid_bits & (1 << i))
-                    _func(args.args[i], pipeline->binding_infos[i]);
-            }
-        }
+        // Note: This function is never used, so I comment it out.
+        // void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
+        //     for (int i = 0; i < args.args.size(); i++) {
+        //         if (pipeline->valid_bits & (1 << i))
+        //             _func(args.args[i], pipeline->binding_infos[i]);
+        //     }
+        // }
 
         void IterateArgs(std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) const {
             int bdls_idx = -1;
@@ -708,6 +710,100 @@ namespace Moer::Render {
         const auto& IndexBuffers() const {
             if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
             return index_buffers;
+        }
+    };
+
+    // Specialized version of SetDrawStateCmd for geometry pass
+    struct SetGeometryPassDrawStateCmd : public Command {
+    private:
+        // Origin parameters
+        ArrayArguments                                             args;
+        RenderPassInfo                                             render_pass_info;
+        UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>> mesh_data_array_map;
+        // Derived parameters
+        GraphEventRef                                          evaluate_mesh_task = nullptr;
+        UnorderedMap<Buffer*, BufferRange>                     vertex_buffers;
+        UnorderedMap<Buffer*, BufferRange>                     index_buffers;
+        UnorderedMap<VertexAttributesBitmask, PipelineHandle&> pipeline_map;
+
+    public:
+        // clang-format off
+        SetGeometryPassDrawStateCmd(
+            ArrayArguments&&                                             _args,
+            RenderPassInfo&&                                             _info,
+            UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
+            std::string_view                                             _name
+        ) : Command(EType::SetGeometryPassDrawState, _name),
+            args(std::move(_args)),
+            render_pass_info(std::move(_info)),
+            mesh_data_array_map(std::move(_mesh_data_array_map))
+        {
+            evaluate_mesh_task = LambdaTask::Create([this]() {
+                // TODO: 检查一下是否所有MeshData可以直接全部塞进一个vertex buffer和一个index buffer里
+                for (const auto& [bitmask, mesh_data_array] : mesh_data_array_map) {
+
+                    pipeline_map.emplace(bitmask, GeometryPassPsoManager::Get().GetPso(bitmask).handle);
+
+                    for (const auto& mesh : mesh_data_array) {
+                        for (const auto& vtx_view : mesh.vtx_views) {
+                            BufferRange range(vtx_view.offset, vtx_view.buffer->GetByteSize());
+                            if (vertex_buffers.find(vtx_view.buffer) == vertex_buffers.end()) {
+                                vertex_buffers[vtx_view.buffer] = range;
+                            } else {
+                                auto [offset, size] = vertex_buffers[vtx_view.buffer];
+                                vertex_buffers[vtx_view.buffer].Merge(range);
+                            }
+                        }
+                        if (std::holds_alternative<IndexBuffer>(mesh.idx_view)) {
+                            const auto&       idx_buffer = std::get<IndexBuffer>(mesh.idx_view);
+                            const BufferView& idx_view   = idx_buffer.buffer;
+                            BufferRange       range(idx_view.GetByteOffset(), idx_view.GetByteSize());
+                            if (index_buffers.find(idx_view.GetBuffer()) == index_buffers.end()) {
+                                index_buffers[idx_view.GetBuffer()] = range;
+                            } else {
+                                auto [offset, size] = index_buffers[idx_view.GetBuffer()];
+                                index_buffers[idx_view.GetBuffer()].Merge(range);
+                            }
+                        }
+                    }
+                }
+            }).Dispatch();
+        }
+        // clang-format on
+
+        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+
+        const auto& Args() const { return args; }
+        const auto& RenderPassInfo() const { return render_pass_info; }
+        const auto& DrawDataArrayMap() const { return mesh_data_array_map; }
+
+        const auto& VertexBuffers() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return vertex_buffers;
+        }
+        const auto& IndexBuffers() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return index_buffers;
+        }
+        const auto& PipelineMap() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return pipeline_map;
+        }
+
+        void IterateArgs(std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) const {
+            int bdls_idx = -1;
+            for (int i = 0; i < args.args.size(); i++) {
+                if (std::holds_alternative<BindlessArrayRef>(args.args[i])) {
+                    bdls_idx = i;
+                    continue;
+                    ;
+                }
+                _func(args.args[i], i);
+            }
+
+            if (bdls_idx != -1) {
+                _bdls_post_func(args.args[bdls_idx], bdls_idx);
+            }
         }
     };
     struct DispatchIndirectParam {

@@ -243,8 +243,10 @@ int main(int argc, const char** argv) {
         .name           = "RHITest",
         .config_as_json = rhi_config_as_json};
     RenderDevice::Init(std::move(info));
-    auto&           device = RenderDevice::Get();
-    ShaderManager   manager(device);
+
+    auto& device  = RenderDevice::Get();
+    auto& manager = ShaderManager::Get();
+
     uint2           resolution = {1920, 1080};
     SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RaytracingTest", false);
     WindowContext::Init(surface_info);

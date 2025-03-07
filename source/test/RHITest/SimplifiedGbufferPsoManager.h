@@ -19,11 +19,13 @@ namespace Moer::Render {
      * Simplified PSO Manager
      */
     struct GbufferPsoRecord {
-        VertexAttributesBitmask vertex_attributes_bitmask;
-        std::string_view        vertex_shader_path;
-        std::string_view        pixel_shader_path;
-        std::string_view        vertex_shader_entry = "main";
-        std::string_view        pixel_shader_entry  = "main";
+        VertexAttributesBitmask   vertex_attributes_bitmask;
+        std::string_view          vertex_shader_path;
+        std::string_view          pixel_shader_path;
+        std::string_view          vertex_shader_entry       = "main";
+        std::string_view          pixel_shader_entry        = "main";
+        ShaderCompilerEnvironment vertex_shader_environment = {};
+        ShaderCompilerEnvironment pixel_shader_environment  = {};
     };
 
     template<typename TPipeline>
@@ -74,8 +76,8 @@ namespace Moer::Render {
 
             return m_shader_manager
                 .Raster()
-                .Vertex(record.vertex_shader_path)
-                .Pixel(record.pixel_shader_path)
+                .Vertex(record.vertex_shader_path, record.vertex_shader_entry, record.vertex_shader_environment)
+                .Pixel(record.pixel_shader_path, record.pixel_shader_entry, record.pixel_shader_environment)
                 .Build<TPipeline>(std::move(pso_info));
         }
 
@@ -87,4 +89,4 @@ namespace Moer::Render {
         UnorderedMap<VertexAttributesBitmask, TPipeline> m_pso_map;
     };
 
-}// namespace Moer
+}// namespace Moer::Render

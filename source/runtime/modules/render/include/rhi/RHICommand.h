@@ -304,6 +304,7 @@ namespace Moer::Render {
             Barrier,
             QueueTransfer,
             SetDrawState,
+            SetGeometryPassDrawState,
             UpdateBindlessArray,
             ClearResource,
             // UpdateDrawState,
@@ -328,6 +329,7 @@ namespace Moer::Render {
             "Barrier",
             "QueueTransfer",
             "SetDrawState",
+            "SetGeometryPassDrawState",
             "UpdateBindlessArray",
             "ClearResource",
             "Custom"};
@@ -467,6 +469,16 @@ namespace Moer::Render {
             return *this;
         }
         CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks, BindlessArrayRef _bindless_array) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)), bindless_array(_bindless_array) {
+        }
+
+        std::string ToString() const {
+            std::string str = "Commands: [";
+            for (auto& cmd : cmds) {
+                str += cmd->name;
+                str += ", ";
+            }
+            str += "]";
+            return str;
         }
     };
 
@@ -655,6 +667,30 @@ namespace Moer::Render {
             // bool      b_set_consts = false;
         };
 
+        struct RENDER_API DrawGeometryPassDispatcher {
+            DrawGeometryPassDispatcher(CommandList& _cmd_list);
+            DrawGeometryPassDispatcher(CommandList& _cmd_list, ArrayArguments&& _args);
+
+            template<typename... TRenderTarget>
+            void Draw(
+                std::string_view                                             _name,
+                Rect2D                                                       _rect,
+                UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
+                DepthAttachment                                              _depth,
+                TRenderTarget&&... _render_targets
+                //
+            ) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    _depth,
+                    _rect);
+                cmd_list.SetRenderGeometryPassCmds(std::move(args), std::move(pass_info), std::move(_mesh_data_array_map), _name);
+            };
+
+            CommandList&   cmd_list;
+            ArrayArguments args;
+        };
+
         struct RENDER_API RaytracingDispatcher {
             CommandList&   cmd_list;
             ArrayArguments args;
@@ -712,6 +748,16 @@ namespace Moer::Render {
                 return DrawDispatcher(_pso, *this, std::move(args));
             }
             return DrawDispatcher(_pso, *this);
+        }
+
+        // call this func like this: cmd_list.GfxGeometryPass<PSO_Definition>(args...).Draw(...);
+        template<typename TGfxPso, typename... TArgs>
+        DrawGeometryPassDispatcher GfxGeometryPass(TArgs&&... _args) {
+            if constexpr (sizeof...(TArgs) > 0) {
+                ArrayArguments&& args = TGfxPso::SetArgs(_args...);
+                return DrawGeometryPassDispatcher(*this, std::move(args));
+            }
+            return DrawGeometryPassDispatcher(*this);
         }
 
         template<typename TComputePso, typename... TArgs>
@@ -858,6 +904,13 @@ namespace Moer::Render {
         RENDER_API void SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&&, Array<MeshDrawData>&&, std::optional<std::string_view> _name = std::nullopt);
         // void SubmitArgs(ShaderPipeline&, Arguments&&);
         // void SubmitConstants(ShaderPipeline&, Array<uint>&&);
+
+        // Specialized for Geometry Pass
+        RENDER_API void SetRenderGeometryPassCmds(
+            ArrayArguments&&                                             _args,
+            RenderPassInfo&&                                             _info,
+            UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
+            std::string_view                                             _name);
 
         RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt, EQueueType _src_queue, EQueueType _dst_queue);
         RENDER_API void InnerBarrier(ReadBuffer _buffer, EPassType _pass) {
