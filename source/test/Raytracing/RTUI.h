@@ -65,7 +65,7 @@ namespace Moer::Render {
         struct DenoiserConfig {
             ReBlurHitDistParams hit_dist_params{};
             ReBlurAntilagParams antilag_params{};
-            uint                denoiser_type = s_denoiser_mode_relax;
+            uint                denoiser_type = s_denoiser_mode_reblur;
         };
 
         struct ToneMappingConfig {
