@@ -39,7 +39,6 @@
 #include "utils/smaa/SmaaPrecomputedTextures.h"
 
 #include "RHIUI.h"
-#include "SimplifiedGbufferPsoManager.h"// 遇到了一个动态库导出模板类的问题，难以解决，所以先把pso挪到test中了
 
 using namespace Moer::Render;
 using namespace Moer;
@@ -1134,7 +1133,7 @@ int main(int argc, const char** argv) {
                         uint filter  = uint(sampler.filter);
                         uint address = uint(sampler.address_mode);
                         uint compare = uint(sampler.compare_function);
-                        return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
+                        return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num))*address + filter;
                         // method 2
                         // uint bdls_tex_handle = bindless_array->AllocateTexture(antialiasing_output, sampler);
                         // uint sampler_idx     = bdls_tex_handle & 0xff;
