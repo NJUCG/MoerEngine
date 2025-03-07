@@ -434,8 +434,6 @@ int main(int argc, const char** argv) {
         .resolved_color      = rt_ctx->frame_rt.resolved_color,
         .hdr_color           = rt_ctx->frame_rt.hdr_color};
     UniquePtr<AntialiasPass> antialias_pass = MakeUnique<AntialiasPass>(device, manager, g_scene, antialias_pass_info);
-    antialias_pass->SetJitter(AntialiasPass::EJitter::Halton);
-
     //////////////////////////////////////////////////////////////////////////
     //NRD
     //////////////////////////////////////////////////////////////////////////
@@ -496,7 +494,6 @@ int main(int argc, const char** argv) {
             antialias_pass_info.hdr_color           = rt_ctx->frame_rt.hdr_color;
             antialias_pass                          = MakeUnique<AntialiasPass>(device, manager, g_scene, antialias_pass_info);
             b_feedback_valid                        = false;
-            antialias_pass->SetJitter(AntialiasPass::EJitter::Halton);
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady() && load_res_event->IsComplete()) {
@@ -669,7 +666,7 @@ int main(int argc, const char** argv) {
                 rt_config_param.world2clip_prev = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
 
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
-                camera->SetJitterMatrix(antialias_pass->GetPixelOffset());
+                // camera->SetJitterMatrix(antialias_pass->GetPixelOffset());
                 camera->Tick();
 
                 rt_view_param.view2world = Transpose(camera->GetToWorldMatrix());
@@ -734,7 +731,13 @@ int main(int argc, const char** argv) {
                 auto di_spatial_resampling_config                  = is_ctx.GetDISpatialResampleParams();
                 di_initial_sample_config.local_light_sample_mode   = ui_cfg.restir_di_cfg.initial_sample_config.local_light_sample_mode;
                 di_temporal_resampling_config.bias_correction_mode = ui_cfg.restir_di_cfg.temporal_resample_config.bias_correction;
-                di_spatial_resampling_config.bias_correction_mode  = ui_cfg.restir_di_cfg.spatial_resample_config.bias_correction;
+                di_temporal_resampling_config.depth_threshold      = ui_cfg.restir_di_cfg.temporal_resample_config.depth_threshold;
+                di_temporal_resampling_config.normal_threshold     = ui_cfg.restir_di_cfg.temporal_resample_config.normal_threshold;
+
+                di_spatial_resampling_config.bias_correction_mode = ui_cfg.restir_di_cfg.spatial_resample_config.bias_correction;
+                di_spatial_resampling_config.depth_threshold      = ui_cfg.restir_di_cfg.spatial_resample_config.depth_threshold;
+                di_spatial_resampling_config.normal_threshold     = ui_cfg.restir_di_cfg.spatial_resample_config.normal_threshold;
+                di_spatial_resampling_config.num_spatial_samples  = ui_cfg.restir_di_cfg.spatial_resample_config.num_spatial_samples;
 
                 is_ctx.SetReSTIRDIIInitialSampleParams(di_initial_sample_config);
                 is_ctx.SetReSTIRDITemporalResampleParams(di_temporal_resampling_config);
@@ -760,6 +763,8 @@ int main(int argc, const char** argv) {
                 aa_params.new_frame_weight     = aa_cfg.new_frame_weight;
                 aa_params.max_radiance         = aa_cfg.max_radiance;
                 aa_params.enable_history_clamp = aa_cfg.enable_history_clamping;
+
+                antialias_pass->SetJitter(aa_cfg.jitter_mode);
             }
 
             is_ctx.TickFrame(time);
@@ -771,7 +776,7 @@ int main(int argc, const char** argv) {
             rt_ctx->CreateBuffersIfNeeded(num_emissive_meshes, num_emissive_triangles, g_scene.GetLights().size(), g_scene.GetGeometryInstances().size());
             cmd_list.UpdateBindlessArray(bindless_array);
 
-            rt_ctx->Tick(camera);
+            rt_ctx->Tick(camera, antialias_pass->GetPixelOffset());
 
             prepare_light_pass->Process(cmd_list, *rt_ctx);
 
@@ -799,7 +804,7 @@ int main(int argc, const char** argv) {
                     nrd_interface->UpdateCommonSettings(
                         nrd_time++,
                         Vector2ui(resolution.x, resolution.y),
-                        Vector2f(0.f, 0.f),
+                        antialias_pass->GetPixelOffset(),
                         Transpose(camera->GetViewMatrix()),
                         Transpose(camera->GetProjectionMatrix()));
 

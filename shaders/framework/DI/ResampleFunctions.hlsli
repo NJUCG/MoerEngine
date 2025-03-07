@@ -376,9 +376,7 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
     int2 spatial_offset = int2(neighbor_offset_buf.Load<float2>(sample_idx) *
                                _s_params.sampling_radius);
     int2 idx = int2(_pixel_pos) + spatial_offset;
-    int2 test_idx = idx;
     idx = ClampScreenPosition(idx);
-
     Surface neighbor_surface = GetGBufferSurface(idx);
 
     if (!neighbor_surface.IsValid()) {
@@ -416,6 +414,7 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
       light_info = LoadLightInfo(neighbor_res.GetLightIndex());
       l_sample =
           _surface.SamplePolymorphicLight(light_info, neighbor_res.GetUV());
+
       neighbor_weight = _surface.GetLightSampleTargetPdf(l_sample);
     }
 
@@ -452,7 +451,7 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
 
         if (_s_params.bias_correction_mode >= s_di_bias_correction_traced &&
             ps > 0.f) {
-          if (!GetCurrentConservativeVisibility(_surface, neighbor_sample.x)) {
+          if (!GetCurrentConservativeVisibility(neighbor_surface, neighbor_sample.x)) {
             ps = 0.f;
           }
         }
@@ -460,10 +459,6 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
         Reservoir neighbor_res = LoadReservoir(_reservoir_buffer_params, idx,
                                                _s_params.src_buffer_idx);
 
-        // if(!neighbor_res.IsValid() && ps > 0.f) {
-        //   // printf("neighbor_res is invalid\n");
-        //   continue;
-        // }
         pi = selected == i ? ps : pi;
         pi_sum += ps * neighbor_res.M;
       }

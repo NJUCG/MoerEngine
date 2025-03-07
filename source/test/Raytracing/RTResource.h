@@ -107,7 +107,7 @@ namespace Moer::Render {
             uint _num_prim_lights,
             uint _num_geom_instance);
 
-        void Tick(CameraRef _camera);
+        void Tick(CameraRef _camera, float2 _jitter);
         void AdvanceFrame();
 
         void SetEnvMapInfos(float _scale, float _rotation);

@@ -1,4 +1,5 @@
 #include "RTUI.h"
+#include "AntiAliasPass.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "math/Function.h"
@@ -47,7 +48,11 @@ namespace Moer::Render {
 
     static constexpr std::string_view s_aa_mode_names[] = {
         "TAA"};
-
+    static constexpr std::string_view s_jitter_mode_names[] = {
+        "MSAA",
+        "Halton",
+        "R2",
+        "White Noise"};
     static constexpr std::string_view s_final_color_names[] = {
         "SceneColor"
         "DI",
@@ -349,6 +354,8 @@ namespace Moer::Render {
                     }
                     ImGui::TreePop();
                 }
+                ImGui::SliderFloat("depth threshold", &config.restir_di_cfg.temporal_resample_config.depth_threshold, 0.1f, 30.0f);
+                ImGui::SliderFloat("normal threshold", &config.restir_di_cfg.temporal_resample_config.normal_threshold, 0.0f, 1.0f);
                 ImGui::TreePop();
             }
 
@@ -362,6 +369,9 @@ namespace Moer::Render {
                     }
                     ImGui::TreePop();
                 }
+                ImGui::SliderFloat("depth threshold", &config.restir_di_cfg.spatial_resample_config.depth_threshold, 0.0f, 1.0f);
+                ImGui::SliderFloat("normal threshold", &config.restir_di_cfg.spatial_resample_config.normal_threshold, 0.0f, 1.0f);
+                ImGui::SliderInt("num spatial samples", &config.restir_di_cfg.spatial_resample_config.num_spatial_samples, 1, 32);
                 ImGui::TreePop();
             }
 
@@ -390,10 +400,22 @@ namespace Moer::Render {
         }
 
         if (ImGui::TreeNode("AntiAlias")) {
-            for (uint i = 0; i < EAnitiAliasMode::EAA_Num; i++) {
-                if (ImGui::Selectable(s_aa_mode_names[i].data(), config.aa_cfg.aa_mode == i)) {
-                    config.aa_cfg.aa_mode = (EAnitiAliasMode)i;
+            if (ImGui::TreeNode("AA Settings")) {
+                for (uint i = 0; i < EAnitiAliasMode::EAA_Num; i++) {
+                    if (ImGui::Selectable(s_aa_mode_names[i].data(), config.aa_cfg.aa_mode == i)) {
+                        config.aa_cfg.aa_mode = (EAnitiAliasMode)i;
+                    }
                 }
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNode("Jitter Settings")) {
+                for (uint i = 0; i < uint(AntialiasPass::EJitter::WhiteNoise) + 1; i++) {
+                    if (ImGui::Selectable(s_jitter_mode_names[i].data(), uint(config.aa_cfg.jitter_mode) == i)) {
+                        config.aa_cfg.jitter_mode = (AntialiasPass::EJitter)i;
+                    }
+                }
+                ImGui::TreePop();
             }
             ImGui::SliderFloat("New Frame Weight", &config.aa_cfg.new_frame_weight, 0.0f, 1.0f);
             ImGui::SliderFloat("Clamping Factor", &config.aa_cfg.clamping_factor, 0.0f, 10.0f);

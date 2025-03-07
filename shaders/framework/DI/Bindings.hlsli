@@ -232,12 +232,35 @@ struct Surface {
     }
   }
 
+  float3 Xoffset(float3 X, float3 N) {
+    // TODO: try out:
+    // https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/
+
+    // RT Gems "A Fast and Robust Method for Avoiding Self-Intersection" ( updated
+    // version taken from Falcor ) Moves the ray origin further from surface to
+    // prevent self-intersections, minimizes the distance.
+    const float origin = 1.0 / 16.0;
+    const float fScale = 3.0 / 65536.0;
+    const float iScale = 3.0 * 256.0;
+
+    // Per-component integer offset to bit representation of FP32 position
+    int3 iOff = int3(N * iScale);
+
+    // Select per-component between small fixed offset or variable offset
+    // depending on distance to origin
+    float3 iPos = asfloat(asint(X) + select(X < 0.0, -iOff, iOff));
+    float3 fOff = N * fScale;
+
+    return select(abs(X) < origin, X + fOff, iPos);
+  
+  }
   RayDesc SetupVisibilityRay(float3 _sample_pos, float _x_offset = 0.1f) {
 
-    float3 l = _sample_pos - x;
+    float3 start_point = Xoffset(x, n);
+    float3 l = _sample_pos - start_point;
 
     RayDesc ray;
-    ray.Origin = x;
+    ray.Origin = start_point;
     ray.Direction = normalize(l);
     ray.TMin = _x_offset;
     ray.TMax = max(_x_offset, length(l) - 2 * _x_offset);

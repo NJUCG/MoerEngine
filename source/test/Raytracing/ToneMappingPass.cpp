@@ -76,7 +76,7 @@ namespace Moer::Render {
         params.source_slice                 = 0;
         params.color_lut_size               = b_enable_lut ? float2(color_lut_size * color_lut_size, color_lut_size) : float2(0.f);
         params.color_lut_size_inv           = b_enable_lut ? float2(1.f / (color_lut_size * color_lut_size), 1.f / color_lut_size) : float2(0.f);
-
+        params.frame_idx                    = frame_idx;
         upload_data.resize(sizeof(ToneMappingParams));
         upload_data.assign((byte*)&params, (byte*)&params + sizeof(ToneMappingParams));
 
@@ -129,6 +129,7 @@ namespace Moer::Render {
 
     void ToneMappingPass::AdvanceFrame(float _elapsed_time) {
         frame_time = _elapsed_time;
+        ++frame_idx;
     }
 
 }// namespace Moer::Render

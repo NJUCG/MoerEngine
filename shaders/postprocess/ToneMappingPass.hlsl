@@ -62,7 +62,7 @@ void main(in float4 pos
           : TEXCOORD0, out float4 target
           : SV_Target) {
   
-  STL::Rng::Hash::Initialize(uint2(pos.xy), 0);
+  STL::Rng::Hash::Initialize(uint2(pos.xy), params.frame_idx);
   float2 seed = STL::Rng::Hash::GetFloat2();
 
   float4 hdr_color = source_tex[pos.xy];

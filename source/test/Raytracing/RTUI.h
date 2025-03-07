@@ -1,5 +1,6 @@
 #ifndef MOER_TEST_RTUI_H
 #define MOER_TEST_RTUI_H
+#include "AntiAliasPass.h"
 #include "Configs.h"
 #include "Core.h"
 #include "misc/STL.h"
@@ -25,11 +26,16 @@ namespace Moer::Render {
         };
 
         struct ReSTIRDITemporalResampleConfig {
-            uint bias_correction = s_di_bias_correction_traced;
+            uint  bias_correction  = s_di_bias_correction_traced;
+            float depth_threshold  = 10.f;
+            float normal_threshold = 0.5f;
         };
 
         struct ReSTIRDISpatialResampleConfig {
-            uint bias_correction = s_di_bias_correction_pair_wise;
+            uint  bias_correction     = s_di_bias_correction_pair_wise;
+            float depth_threshold     = 0.2f;
+            float normal_threshold    = 0.5f;
+            int   num_spatial_samples = 2;
         };
 
         struct ReSTIRDIConfig {
@@ -70,11 +76,12 @@ namespace Moer::Render {
         };
 
         struct AntiAliasConfig {
-            EAnitiAliasMode aa_mode                 = EAnitiAliasMode::EAA_TAA;
-            float           new_frame_weight        = 0.04f;
-            float           clamping_factor         = 1.3f;
-            float           max_radiance            = 200.f;
-            bool            enable_history_clamping = true;
+            EAnitiAliasMode        aa_mode                 = EAnitiAliasMode::EAA_TAA;
+            AntialiasPass::EJitter jitter_mode             = AntialiasPass::EJitter::MSAA;
+            float                  new_frame_weight        = 0.04f;
+            float                  clamping_factor         = 1.3f;
+            float                  max_radiance            = 200.f;
+            bool                   enable_history_clamping = true;
         };
         struct Config {
             float3 sun_direction        = float3(0.f, 0.5f, 0.16f);

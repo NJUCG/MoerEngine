@@ -87,6 +87,7 @@ namespace Moer::Render {
         class ShaderManager& manager;
         Scene&               scene;
         float                frame_time     = 0;
+        uint                 frame_idx      = 0;
         uint                 color_lut_size = 0;
 
         BufferRef         tone_mapping_constants;
