@@ -200,6 +200,25 @@ namespace Moer::Render {
             _name));
     }
 
+    void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
+        //check if size is 0
+        bool b_valid_size = _data.size() > 0 && _src.GetTexture();
+        if (!b_valid_size) {
+            return;
+        }
+        uint mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
+        b_valid_size &= mip_size <= _data.size();
+
+        assert(b_valid_size && "Fatal: Copy back data size is less than texture mip size");
+        commands.push_back(MakeUnique<CopyBackTextureCmd>(
+            reinterpret_cast<uint64>(_src.texture),
+            _src.mip_level,
+            _src.offset,
+            _src.extent,
+            std::span<byte>(_data.data(), mip_size),
+            _name));
+    }
+
     void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name) {
         //
         if (_data.size() == 0) {

@@ -67,6 +67,10 @@ namespace Moer::Render {
         "Material",
         "Position"};
 
+    static constexpr std::string_view s_exported_texture_names[] = {
+        "LDR",
+        "HDR"};
+
     void StyleColorsDark(ImGuiStyle* _dst = nullptr) {
         auto& colors = ImGui::GetStyle().Colors;
 
@@ -312,6 +316,7 @@ namespace Moer::Render {
 
             ImGui::TreePop();
         }
+        ImGui::Separator();
 
         //Grid Config
         if (ImGui::TreeNode("Grid Config")) {
@@ -329,6 +334,7 @@ namespace Moer::Render {
             ImGui::SliderFloat("Cell Size", &config.grid_config.cell_size, 1.f, 400.f);
             ImGui::TreePop();
         }
+        ImGui::Separator();
 
         if (ImGui::TreeNode("ReSTIRDI")) {
             if (ImGui::TreeNode("InitialSampleSettings")) {
@@ -377,6 +383,8 @@ namespace Moer::Render {
 
             ImGui::TreePop();
         }
+        ImGui::Separator();
+        ImGui::Text("NRD Config");
         if (ImGui::TreeNode("DenoiserConfig")) {
             for (auto& name : s_denoiser_mode_names) {
                 uint idx = &name - s_denoiser_mode_names;
@@ -386,6 +394,8 @@ namespace Moer::Render {
             }
             ImGui::TreePop();
         }
+        ImGui::Separator();
+        ImGui::Text("Post-Process Config");
 
         if (ImGui::TreeNode("ToneMapping")) {
             ImGui::SliderFloat("Histogram Low Percentile", &config.tone_mapping_cfg.histogram_low_percentile, 0.0f, 1.0f);
@@ -398,7 +408,6 @@ namespace Moer::Render {
             ImGui::SliderFloat("WhitePoint", &config.tone_mapping_cfg.white_point, 0.0f, 10.0f);
             ImGui::TreePop();
         }
-
         if (ImGui::TreeNode("AntiAlias")) {
             if (ImGui::TreeNode("AA Settings")) {
                 for (uint i = 0; i < EAnitiAliasMode::EAA_Num; i++) {
@@ -423,18 +432,33 @@ namespace Moer::Render {
             ImGui::Checkbox("Enable History Clamping", &config.aa_cfg.enable_history_clamping);
             ImGui::TreePop();
         }
+        ImGui::Separator();
+        ImGui::Text("Directional Light Config");
         config.sun_direction = Normalizef(config.sun_direction);
         ImGui::SliderFloat3("Sun Direction", &config.sun_direction.x, -1.0f, 1.0f);
         ImGui::SliderFloat("Exposure", &config.exposure, 0.0f, 10.0f);
-        ImGui::SliderFloat("Sun Angular Diameter", &config.sun_angular_diameter, 0.0f, 1.0f);
+        // ImGui::SliderFloat("Sun Angular Diameter", &config.sun_angular_diameter, 0.0f, 1.0f);
 
         int max_bounce = config.max_bounce;
-        ImGui::SliderInt("Max Bounce", &max_bounce, 1, 5);
+        // ImGui::SliderInt("Max Bounce", &max_bounce, 1, 5);
         config.max_bounce = max_bounce;
         //show fps
-        ImGui::Text("FPS: %.1f", io.Framerate);
-        ImGui::Text("Frame Time: %.1f ms", 1000.0f / io.Framerate);
+        ImGui::Separator();
 
+        ImGui::Text("Infos: ");
+        ImGui::Text("\tFPS: %.1f", io.Framerate);
+        ImGui::Text("\tFrame Time: %.1f ms", 1000.0f / io.Framerate);
+
+        ImGui::Separator();
+        ImGui::Text("Capture Settings");
+        for (uint i = 0; i < EOutputTexture::EOT_Num; i++) {
+            if (ImGui::Selectable(s_exported_texture_names[i].data(), config.export_cfg.output_texture == i)) {
+                config.export_cfg.output_texture = (EOutputTexture)i;
+            }
+        }
+        if (ImGui::Button("Capture Screen")) {
+            config.export_cfg.b_export = true;
+        }
         ImGui::End();
     }
 

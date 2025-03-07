@@ -27,7 +27,7 @@ namespace Moer::Render {
             {RHIColorAttachmentInfo::Preset(
                 PF_R8G8B8A8_UNORM)});
 
-        tone_mapping_pass_pipeline = manager.Raster().Vertex("test/post_process/PostProcessFullScreenQuad.hlsl").Pixel("postprocess/ToneMappingPass.hlsl").Build<ToneMappingPassPipeline>(std::move(pso_info));
+        tone_mapping_pass_pipeline = manager.Raster().Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl").Pixel("postprocess/ToneMappingPass.hlsl").Build<ToneMappingPassPipeline>(std::move(pso_info));
 
         tone_mapping_constants = device.CreateBuffer<Moer::byte>(sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER);
         tone_mapping_constants->SetName("tone_mapping_constants");

@@ -176,6 +176,38 @@ namespace Moer::Render {
         auto       Data() const { return data; }
     };
 
+    struct CopyBackTextureCmd : public Command {
+    private:
+        uint64          handle{};
+        uint            mip_level{};
+        uint3           offset{};
+        uint3           size{};
+        std::span<byte> data;
+        CopyBackTextureCmd() : Command(EType::CopyBackTexture) {}
+
+    public:
+        CopyBackTextureCmd(
+            uint64           _handle,
+            uint             _mip_level,
+            uint3            _offset,
+            uint3            _size,
+            std::span<byte>  _data,
+            std::string_view _name = typenames[uint(EType::CopyBackTexture)]) : Command(EType::CopyBackTexture, _name),
+                                                                                handle(_handle),
+                                                                                mip_level(_mip_level),
+                                                                                offset{_offset.x, _offset.y, _offset.z},
+                                                                                size{_size.x, _size.y, _size.z},
+                                                                                data(_data) {}
+
+        EQueueType GetQueueType() const override { return EQueueType::Copy; }
+
+        auto Handle() const { return handle; }
+        auto MipLevel() const { return mip_level; }
+        auto Offset() const { return offset; }
+        auto Size() const { return size; }
+        auto Data() const { return data; }
+    };
+
     struct CopyBufferCmd : public Command {
     public:
         uint64 src_handle{};
