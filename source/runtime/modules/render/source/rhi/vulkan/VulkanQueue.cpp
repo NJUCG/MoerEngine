@@ -261,6 +261,9 @@ namespace Moer::Render {
                 case Command::EType::CopyBackBuffer:
                     Visit(static_cast<const CopyBackBufferCmd*>(_cmd));
                     break;
+                case Command::EType::CopyBackTexture:
+                    Visit(static_cast<const CopyBackTextureCmd*>(_cmd));
+                    break;
                 case Command::EType::ShaderDispatch:
                     Visit(static_cast<const DispatchCmd*>(_cmd));
                     break;
@@ -332,6 +335,11 @@ namespace Moer::Render {
         void Visit(const CopyBackBufferCmd* _cmd) {
             auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
             tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+        }
+
+        void Visit(const CopyBackTextureCmd* _cmd) {
+            auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
+            tracker.RecordState(vk_texture, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, _cmd->MipLevel());
         }
 
         void Visit(const DispatchCmd* _cmd) {
@@ -718,6 +726,9 @@ namespace Moer::Render {
                 case Command::EType::CopyBackBuffer:
                     Visit(static_cast<const CopyBackBufferCmd&>(*_cmd));
                     break;
+                case Command::EType::CopyBackTexture:
+                    Visit(static_cast<const CopyBackTextureCmd&>(*_cmd));
+                    break;
                 case Command::EType::BufferToBuffer:
                     Visit(static_cast<const CopyBufferCmd&>(*_cmd));
                     break;
@@ -821,6 +832,27 @@ namespace Moer::Render {
             // tracker.RegisterFlushBuffer(VulkanBuffer *_buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage)
             allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), src_data(_cmd.Data())]() {
                 cmd_list.CopyData(src_data, tmp_buffer, tmp_buffer.GetByteSize());
+            });
+        }
+
+        void Visit(const CopyBackTextureCmd& _cmd) {
+            VulkanTexture* src_texture = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
+            auto           tmp_buffer  = allocator.AllocateReadbackBuffer(_cmd.Data().size_bytes(), 16);
+
+            tracker.RegisterFlushBuffer(tmp_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+            tracker.DispatchBarriers(cmd_list);
+            cmd_list.CopyTextureToBuffer(src_texture,
+                                         reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
+                                         _cmd.Data().size_bytes(),
+                                         _cmd.Offset(),
+                                         tmp_buffer.GetByteOffset(),
+                                         _cmd.Size(),
+                                         _cmd.MipLevel());
+
+            // LOG_INFO("copyback temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
+
+            allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), src_data(_cmd.Data())]() {
+                cmd_list.CopyData(src_data.data(), tmp_buffer, tmp_buffer.GetByteSize());
             });
         }
 

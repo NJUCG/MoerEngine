@@ -1208,7 +1208,7 @@ int main(int argc, const char** argv) {
                         uint filter  = uint(sampler.filter);
                         uint address = uint(sampler.address_mode);
                         uint compare = uint(sampler.compare_function);
-                        return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num))*address + filter;
+                        return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
                         // method 2
                         // uint bdls_tex_handle = bindless_array->AllocateTexture(antialiasing_output, sampler);
                         // uint sampler_idx     = bdls_tex_handle & 0xff;

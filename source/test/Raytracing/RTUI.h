@@ -13,6 +13,11 @@ namespace Moer::Render {
         EAA_TAA = 0,
         EAA_Num
     };
+    enum EOutputTexture {
+        EOT_LDR = 0,
+        EOT_HDR,
+        EOT_Num
+    };
     class RTUI {
     public:
         struct GridConfig {
@@ -32,7 +37,7 @@ namespace Moer::Render {
         };
 
         struct ReSTIRDISpatialResampleConfig {
-            uint  bias_correction     = s_di_bias_correction_pair_wise;
+            uint  bias_correction     = s_di_bias_correction_traced;
             float depth_threshold     = 0.2f;
             float normal_threshold    = 0.5f;
             int   num_spatial_samples = 2;
@@ -83,6 +88,11 @@ namespace Moer::Render {
             float                  max_radiance            = 200.f;
             bool                   enable_history_clamping = true;
         };
+
+        struct ExportConfig {
+            EOutputTexture output_texture = EOutputTexture::EOT_LDR;
+            bool           b_export       = false;
+        };
         struct Config {
             float3 sun_direction        = float3(0.f, 0.5f, 0.16f);
             float  exposure             = 6.f;
@@ -94,6 +104,7 @@ namespace Moer::Render {
             DenoiserConfig    denoiser_cfg{};
             ToneMappingConfig tone_mapping_cfg{};
             AntiAliasConfig   aa_cfg{};
+            ExportConfig      export_cfg{};
             EFinalColor       final_color = EFinalColor::EFC_SceneColor;
         };
         RTUI(UIRenderer& _renderer);

@@ -650,6 +650,11 @@ namespace Moer::Render {
         void VisitCmd(const CopyBackBufferCmd* _cmd) {
             AddCmd(_cmd, SetRead(_cmd->Handle(), Range(_cmd->Offset(), _cmd->ByteSize()), ResourceType::Texture_Buffer));
         }
+
+        void VisitCmd(const CopyBackTextureCmd* _cmd) {
+            AddCmd(_cmd, SetRead(_cmd->Handle(), Range(_cmd->MipLevel()), ResourceType::Texture_Buffer));
+        }
+
         void VisitCmd(const CopyBufferCmd* _cmd) {
             AddCmd(_cmd, SetRW(_cmd->SrcHandle(), Range(_cmd->SrcOffset(), _cmd->ByteSize()), ResourceType::Texture_Buffer, _cmd->DstHandle(), Range(_cmd->DstOffset(), _cmd->ByteSize()), ResourceType::Texture_Buffer));
         }
@@ -960,6 +965,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::CopyBackBuffer:
                     VisitCmd(static_cast<const CopyBackBufferCmd*>(_cmd));
+                    break;
+                case Command::EType::CopyBackTexture:
+                    VisitCmd(static_cast<const CopyBackTextureCmd*>(_cmd));
                     break;
                 case Command::EType::BufferToBuffer:
                     VisitCmd(static_cast<const CopyBufferCmd*>(_cmd));

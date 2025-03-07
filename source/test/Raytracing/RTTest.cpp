@@ -47,13 +47,17 @@
 #include "shaderheaders/shared/utils/ShaderParameters.h"
 #include "rhi/extension//NrdExtension.h"
 #include "shaderheaders/shared/nrd/NRDDefinition.h"
-
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb/stb_image_write.h"
 #include "RTUI.h"
 #include "ShaderUtils.h"
 
 using namespace Moer::Render;
 using namespace Moer;
-
+union FloatBits {
+    float        f;
+    unsigned int ui;
+};
 struct RTViewParam {
 
     Matrix4x4f view2world;
@@ -411,8 +415,12 @@ int main(int argc, const char** argv) {
     timer.Start();
     uint64 last_time = 0ull;
 
-    bool b_feedback_valid = false;
-
+    bool                  b_feedback_valid   = false;
+    bool                  b_export           = false;
+    std::filesystem::path exported_file_path = path / "saved";
+    if (!std::filesystem::exists(exported_file_path)) {
+        std::filesystem::create_directory(exported_file_path);
+    }
     //////////////////////////////////////////////////////////////////////////
     //passes
     //////////////////////////////////////////////////////////////////////////
@@ -601,10 +609,6 @@ int main(int argc, const char** argv) {
                 // cmd_list.UpdateRaytracingScene(rt_scene);
                 gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, last_io_change_timeline));
                 gfx_queue.Sync();
-                // rt_scene->AdvanceFrame();
-                // cmd_list.UpdateRaytracingScene(rt_scene);
-                // gfx_queue.Execute(cmd_list.Submit());
-                // gfx_queue.Sync();
             }
 
             if (b_new_env_map) {
@@ -696,6 +700,8 @@ int main(int argc, const char** argv) {
 
             //update light direction from ui data
             {
+                b_export = rt_ui.GetConfig().export_cfg.b_export;
+
                 auto light_entity = g_scene.GetLights()[0];
                 auto light        = LightComponentManager::Get().Get(light_entity);
                 if (light->GetType() == ELightComponentType::DIRECTIONAL) {
@@ -864,6 +870,121 @@ int main(int argc, const char** argv) {
             tone_mapping_pass->AdvanceFrame(camera->GetDeletaTime());
             antialias_pass->AdvanceFrame();
             b_feedback_valid = true;
+
+            //////////////////////////////////////////////////////////////////////////
+            //handle export
+            //////////////////////////////////////////////////////////////////////////
+            {
+                auto dequantentize_half = [](short _h, bool _gamma_correct = true) {
+                    unsigned int s  = unsigned(_h & 0x8000) << 16;
+                    int          em = _h & 0x7fff;
+
+                    // bias exponent and pad mantissa with 0; 112 is relative exponent bias (127-15)
+                    int r = (em + (112 << 10)) << 13;
+
+                    // denormal: flush to zero
+                    r = (em < (1 << 10)) ? 0 : r;
+
+                    // infinity/NaN; note that we preserve NaN payload as a byproduct of unifying inf/nan cases
+                    // 112 is an exponent bias fixup; since we already applied it once, applying it twice converts 31 to 255
+                    r += (em >= (31 << 10)) ? (112 << 23) : 0;
+
+                    FloatBits u;
+                    u.ui = s | r;
+                    if (_gamma_correct) {
+                        u.f = u.f <= 0.0031308f ? 12.92f * u.f : 1.055f * std::pow(u.f, 1.f / 2.4f) - 0.055f;
+                    }
+                    return u.f;
+                };
+
+                auto dequantentize_byte = [](unsigned char _b) {
+                    return _b / 255.f;
+                };
+
+                auto dequantentize_byte_to_srgb = [](unsigned char _b) {
+                    float c = _b / 255.f;
+                    c       = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f;
+
+                    //to byte
+                    return (unsigned char)(c * 255.f);
+                };
+
+                if (b_export) {
+
+                    size_t            size;
+                    Array<Moer::byte> copy_back_data;
+                    std::string       file_name = "exported_";
+                    bool              hdr       = false;
+
+                    switch (rt_ui.GetConfig().export_cfg.output_texture) {
+                        case EOT_LDR: {
+                            size = sizeof(uint) * resolution.x * resolution.y;
+                            copy_back_data.resize(size);
+                            cmd_list.CopyFrom(rt_ctx->frame_rt.ldr_color->GetView(), copy_back_data);
+                            file_name += std::to_string(time) + ".png";
+                            break;
+                        }
+                        case EOT_HDR: {
+                            size = sizeof(float2) * resolution.x * resolution.y;
+                            copy_back_data.resize(size);
+                            cmd_list.CopyFrom(rt_ctx->frame_rt.resolved_color->GetView(), copy_back_data);
+                            file_name += std::to_string(time) + ".exr";
+                            hdr = true;
+                            break;
+                        }
+                        default:
+                            size = 0;
+                    }
+                    if (size != 0) {
+                        gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
+                        gfx_queue.Sync();
+
+                        if (hdr) {
+                            //export to exr
+                            //cast r16g16b16a16_sfloat to r32g32b32a32_sfloat
+                            assert(rt_ctx->frame_rt.resolved_color->GetFormat() == PF_R16G16B16A16_SFLOAT && "resolved color format must be r16g16b16a16_sfloat");
+                            uint          range_cnt = 8;
+                            uint          range     = copy_back_data.size() / range_cnt;
+                            Array<float4> copy_back_data_f4(copy_back_data.size() / 8);
+                            ParallelFor(range_cnt, [&](uint _idx) {
+                                size_t start = range * _idx;
+                                size_t end   = range * (_idx + 1);
+                                for (size_t i = start; i < copy_back_data.size() && i < end; i += 8) {
+                                    float4* data   = &copy_back_data_f4[i / 8];
+                                    short*  data_s = (short*)&copy_back_data[i];
+                                    data->x        = dequantentize_half(data_s[0]);
+                                    data->y        = dequantentize_half(data_s[1]);
+                                    data->z        = dequantentize_half(data_s[2]);
+                                    data->w        = dequantentize_half(data_s[3]);
+                                }
+                            });
+                            stbi_write_hdr((exported_file_path / file_name).generic_string().data(), resolution.x, resolution.y, 4, (float*)copy_back_data_f4.data());
+                        } else {
+                            //ldr format must be r8g8b8a8_unorm
+                            assert(rt_ctx->frame_rt.ldr_color->GetFormat() == PF_R8G8B8A8_UNORM && "ldr format must be r8g8b8a8_unorm");
+                            //cast r8g8b8a8_unorm to srgb
+                            //parallel to 4 threads
+                            uint range_cnt = 8;
+                            uint range     = copy_back_data.size() / range_cnt;
+                            ParallelFor(range_cnt, [&](uint _idx) {
+                                size_t start = range * _idx;
+                                size_t end   = range * (_idx + 1);
+                                for (size_t i = start; i < copy_back_data.size() && i < end; i += 4) {
+                                    copy_back_data[i]     = (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i]));
+                                    copy_back_data[i + 1] = (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i + 1]));
+                                    copy_back_data[i + 2] = (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i + 2]));
+                                    copy_back_data[i + 3] = (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i + 3]));
+                                }
+                            });
+                            stbi_write_png((exported_file_path / file_name).generic_string().data(), resolution.x, resolution.y, 4, (void*)copy_back_data.data(), 4 * resolution.x);
+                            // stbi_write_bmp((exported_file_path / file_name).generic_string().data(), resolution.x, resolution.y, 4, (void*)copy_back_data.data());
+                        }
+                    }
+
+                    b_export                              = false;
+                    rt_ui.GetConfig().export_cfg.b_export = false;
+                }
+            }
         }
 
         // rt_scene->MarkModified(0);

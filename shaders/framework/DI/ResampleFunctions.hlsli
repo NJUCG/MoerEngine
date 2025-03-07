@@ -447,11 +447,11 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
 
         LightSample neighbor_sample =
             _surface.SamplePolymorphicLight(selected_light_info, res.GetUV());
-        float ps = neighbor_surface.GetLightSampleTargetPdf(neighbor_sample);
+        float ps = _surface.GetLightSampleTargetPdf(neighbor_sample);
 
         if (_s_params.bias_correction_mode >= s_di_bias_correction_traced &&
             ps > 0.f) {
-          if (!GetCurrentConservativeVisibility(neighbor_surface, neighbor_sample.x)) {
+          if (!GetCurrentConservativeVisibility(_surface, neighbor_sample.x)) {
             ps = 0.f;
           }
         }
