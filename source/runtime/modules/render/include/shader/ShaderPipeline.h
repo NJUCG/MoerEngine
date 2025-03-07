@@ -79,7 +79,7 @@ namespace Moer::Render {
 public:                                                                                                                    \
     using InnerArgs = ShaderArgs<TPipeline __VA_OPT__(, ) __VA_ARGS__>;                                                    \
     template<typename... T>                                                                                                \
-    ArrayArguments SetArgs(T&&... _args) {                                                                                 \
+    static ArrayArguments SetArgs(T&&... _args) {                                                                          \
         return std::move(InnerArgs::SetParams(std::make_index_sequence<sizeof...(T)>(), std::forward<T>(_args)...));       \
     }                                                                                                                      \
                                                                                                                            \

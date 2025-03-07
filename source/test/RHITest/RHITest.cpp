@@ -16,6 +16,7 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "scene/Scene.h"
+#include "shader/GeometryPassPsoManager.h"
 #include "shader/Shader.h"
 #include "shader/ShaderParameterMacros.h"
 #include "shader/ShaderPipeline.h"
@@ -43,23 +44,6 @@
 using namespace Moer::Render;
 using namespace Moer;
 
-class TestTrianglePipeline : public RasterPipeline {
-public:
-    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipeline);
-    DEFINE_SHADER_BUFFER(buffer);
-    DEFINE_SHADER_ARGS(buffer);
-};
-
-struct TestBindlessParam {
-    float4     color;
-    uint       texture_handle;
-    uint       buffer_handle;
-    uint       instance_buffer_handle;
-    uint       geometry_data_handle;
-    uint       geometry_instance_handle;
-    Matrix4x4f camera_view_proj;
-};
-
 struct MaterialPassBindlessParam {
     uint material_type;
     uint light_buffer;
@@ -80,23 +64,6 @@ struct LightingData {
 };
 
 // MARK: Pipeline Structures
-
-class TestTrianglePipelineConstColor : public RasterPipeline {
-public:
-    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineConstColor);
-    DEFINE_SHADER_CONSTANT_STRUCT(TestBindlessParam, param);
-    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_TEX(texture);
-    DEFINE_SHADER_SAMPLER(defaultSampler);
-    DEFINE_SHADER_BUFFER(constants);
-    DEFINE_SHADER_ARGS(defaultSampler, constants, texture, bdls, param);
-};
-
-class TestTrianglePipelineBdls : public RasterPipeline {
-public:
-    DEFINE_RASTER_PIPELINE_CLASS(TestTrianglePipelineBdls);
-    DEFINE_SHADER_ARGS();
-};
 
 class CombineUIPipeline : public RasterPipeline {
 
@@ -278,13 +245,17 @@ int main(int argc, const char** argv) {
         .name           = "RHITest",
         .config_as_json = rhi_config_as_json};
     RenderDevice::Init(std::move(info));
-    auto&           device = RenderDevice::Get();
-    ShaderManager   manager(device);
+
+    auto& device  = RenderDevice::Get();
+    auto& manager = ShaderManager::Get();
+
     uint2           resolution = {1280, 720};
     SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RHITest", false);
     WindowContext::Init(surface_info);
 
     auto&& scope_exit_window_context_and_etc = OnScopeExit([&] {
+        GeometryPassPsoManager::ShutDown();
+        ShaderManager::ShutDown();
         WindowContext::ShutDown();
         RenderDevice::Dispose();
         TaskSystem::ShutDown();
@@ -545,38 +516,55 @@ int main(int argc, const char** argv) {
 
     // MARK: PSO
 
-    // clang-format off
-    // TODO: update this simplified pso manager to shader mutation pso manager
-    auto gbuffer_pso_manager = SimplifiedGbufferPsoManager<TestTrianglePipelineConstColor>(manager, {
-        {
-            .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
-                EVertexAttributes::VA_POSITION,
-                EVertexAttributes::VA_NORMAL,
-                EVertexAttributes::VA_TANGENT,
-                EVertexAttributes::VA_TEXCOORD0
-            }),
-            .vertex_shader_path = "test/gbuffer/VertexBitmask15.hlsl",
-            .pixel_shader_path = "test/BasicFragConstant.hlsl",
-        }, {
-            .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
-                EVertexAttributes::VA_POSITION,
-                EVertexAttributes::VA_NORMAL,
-                EVertexAttributes::VA_TANGENT,
-                EVertexAttributes::VA_TEXCOORD0,
-                EVertexAttributes::VA_TEXCOORD1
-            }),
-            .vertex_shader_path = "test/gbuffer/VertexBitmask31.hlsl",
-            .pixel_shader_path = "test/BasicFragConstant.hlsl",
-        }, {
-            .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
-                EVertexAttributes::VA_POSITION,
-                EVertexAttributes::VA_NORMAL,
-            }),
-            .vertex_shader_path = "test/gbuffer/VertexBitmask3.hlsl",
-            .pixel_shader_path = "test/BasicFragConstant.hlsl",
-        }
-    });
-    // clang-format on
+    // // clang-format off
+    // // TODO: update this simplified pso manager to shader mutation pso manager
+    // auto gbuffer_pso_manager = SimplifiedGbufferPsoManager<GeometryPassPipeline>(manager, {
+    //     {
+    //         .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
+    //             EVertexAttributes::VA_POSITION,
+    //             EVertexAttributes::VA_NORMAL,
+    //             EVertexAttributes::VA_TANGENT,
+    //             EVertexAttributes::VA_TEXCOORD0
+    //         }),
+    //         .vertex_shader_path = "test/geometry_pass/GeometryPassCommonVertex.hlsl",
+    //         .pixel_shader_path = "test/geometry_pass/GeometryPassCommonPixel.hlsl",
+    //         .vertex_shader_environment = [&]() -> ShaderCompilerEnvironment {
+    //             ShaderCompilerEnvironment env;
+    //             env.SetDefine("HAS_TANGENT", 1);
+    //             env.SetDefine("HAS_TEXCOORD0", 1);
+    //             return env;
+    //         }(),
+    //     }, {
+    //         .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
+    //             EVertexAttributes::VA_POSITION,
+    //             EVertexAttributes::VA_NORMAL,
+    //             EVertexAttributes::VA_TANGENT,
+    //             EVertexAttributes::VA_TEXCOORD0,
+    //             EVertexAttributes::VA_TEXCOORD1
+    //         }),
+    //         .vertex_shader_path = "test/geometry_pass/GeometryPassCommonVertex.hlsl",
+    //         .pixel_shader_path = "test/geometry_pass/GeometryPassCommonPixel.hlsl",
+    //         .vertex_shader_environment = [&]() -> ShaderCompilerEnvironment {
+    //             ShaderCompilerEnvironment env;
+    //             env.SetDefine("HAS_TANGENT", 1);
+    //             env.SetDefine("HAS_TEXCOORD0", 1);
+    //             env.SetDefine("HAS_TEXCOORD1", 1);
+    //             return env;
+    //         }(),
+    //     }, {
+    //         .vertex_attributes_bitmask = VertexAttributesTool::GetBitmaskFromArray({
+    //             EVertexAttributes::VA_POSITION,
+    //             EVertexAttributes::VA_NORMAL,
+    //         }),
+    //         .vertex_shader_path = "test/geometry_pass/GeometryPassCommonVertex.hlsl",
+    //         .pixel_shader_path = "test/geometry_pass/GeometryPassCommonPixel.hlsl",
+    //         .vertex_shader_environment = [&]() -> ShaderCompilerEnvironment {
+    //             ShaderCompilerEnvironment env;
+    //             return env;
+    //         }(),
+    //     }
+    // });
+    // // clang-format on
 
     auto pbr_pipeline = [&]() {
         GfxPsoCreateInfo pso_full_screen_info(RHIRasterizeInfo::Preset(),
@@ -901,7 +889,7 @@ int main(int argc, const char** argv) {
             // TODO: fix the same issue in RTTest
             camera->Tick(rhi_ui.GetSceneColorAspectRatio());
 
-            // MARK: GBuffer Pass
+            // MARK: Geometry Pass
 
             // 将每种不同顶点类型的Mesh分发到不同的MeshDrawDatas中。在Draw时，调用不同的PSO处理对应的MeshDrawDatas！
             // 所以，下面这段scene.ForEach的代码，也可以理解成将 “按Entity分组的Mesh” 转换为 “按顶点类型分组的Mesh的DrawDatas”
@@ -972,7 +960,7 @@ int main(int argc, const char** argv) {
 
             cmd_list.CopyFrom(std::span<byte>((byte*)&view_param, sizeof(view_param)), camera_buffer->GetView());
 
-            TestBindlessParam param;
+            GeometryPassBindlessParam param;
             param.color                    = color_red;
             param.texture_handle           = bdls_tex_handle_red;
             param.buffer_handle            = bdls_buffer_handle_red;
@@ -981,32 +969,44 @@ int main(int argc, const char** argv) {
             param.geometry_instance_handle = geom_instance_buffer_handle;
             param.camera_view_proj         = Transpose(camera->GetViewProjectionMatrix());
 
-            // FIXME: use a better way to render gbuffer
-            bool is_first = true;
-            for (auto& [bitmask, mesh_draw_datas] : mesh_draw_datas_map) {
-                auto& pso = gbuffer_pso_manager.Get(bitmask);
+            // // FIXME: use a better way to render gbuffer
+            // bool is_first = true;
+            // for (auto& [bitmask, mesh_draw_datas] : mesh_draw_datas_map) {
+            //     auto& pso = gbuffer_pso_manager.Get(bitmask);
 
-                EAttachmentAction action    = AC_CLEAR_STORE;
-                EAttachmentAction ds_action = AC_DS_CLEAR_STORE;
-                if (is_first) {
-                    is_first = false;
-                } else {
-                    action    = AC_NO_LOAD_STORE;
-                    ds_action = AC_DS_STORE;
-                }
+            //     EAttachmentAction action    = AC_CLEAR_STORE;
+            //     EAttachmentAction ds_action = AC_DS_CLEAR_STORE;
+            //     if (is_first) {
+            //         is_first = false;
+            //     } else {
+            //         action    = AC_NO_LOAD_STORE;
+            //         ds_action = AC_DS_STORE;
+            //     }
 
-                cmd_list.Gfx(pso, sampler, camera_buffer, red_tex, bindless_array, param)
+            //     cmd_list.Gfx(pso, sampler, camera_buffer, bindless_array, param)
+            //         .Draw(
+            //             Rect2D(0, 0, resolution.x, resolution.y),
+            //             std::move(mesh_draw_datas),
+            //             DepthAttachment(depth->GetView().GetTexture(), ds_action),
+            //             ColorAttachment(vbuffer, action),
+            //             ColorAttachment(normal, action),
+            //             ColorAttachment(uv, action),
+            //             ColorAttachment(position, action));
+            // }
+            {
+                cmd_list.GfxGeometryPass<GeometryPassPipeline>(sampler, camera_buffer, bindless_array, param)
                     .Draw(
+                        "Geometry Pass (MultiPasses)",
                         Rect2D(0, 0, resolution.x, resolution.y),
-                        std::move(mesh_draw_datas),
-                        DepthAttachment(depth->GetView().GetTexture(), ds_action),
-                        ColorAttachment(vbuffer, action),
-                        ColorAttachment(normal, action),
-                        ColorAttachment(uv, action),
-                        ColorAttachment(position, action));
+                        std::move(mesh_draw_datas_map),
+                        DepthAttachment(depth->GetView().GetTexture()),
+                        ColorAttachment(vbuffer),
+                        ColorAttachment(normal),
+                        ColorAttachment(uv),
+                        ColorAttachment(position));
             }
 
-            // MARK: PBR Pass
+            // MARK: Lighting Pass
 
             MaterialPassBindlessParam material_param;
             // material_param.material_buffer = bdls_buffer_handle_red;

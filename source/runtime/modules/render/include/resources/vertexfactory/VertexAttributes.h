@@ -76,6 +76,10 @@ namespace Moer {
             }
             return attrs;
         }
+
+        static bool HasAttribute(VertexAttributesBitmask mask, EVertexAttributes attr) {
+            return mask & (1 << static_cast<size_t>(attr));
+        }
     };
 
     // VertexAttributes Tool of Compile Time

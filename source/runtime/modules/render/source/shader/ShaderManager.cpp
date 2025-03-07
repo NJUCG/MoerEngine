@@ -37,6 +37,14 @@ namespace Moer::Render {
         static ShaderManager manager(Render::RenderDevice::Get());
         return manager;
     }
+
+    void ShaderManager::ShutDown() {
+        if (Get().impl) {
+            MoerDelete(Get().impl);
+            Get().impl = nullptr;
+        }
+    }
+
     RenderDevice& ShaderManager::GetDevice() {
         return impl->device;
     }

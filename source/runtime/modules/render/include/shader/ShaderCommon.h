@@ -447,6 +447,14 @@ public:
                           _value);
     }
 
+    std::string ToString() const {
+        std::string str = "Defines: ";
+        for (auto& [key, value] : macro_defines.defines) {
+            str += "[" + key + " " + value + "] ";
+        }
+        return str;
+    }
+
 private:
     ShaderCompilerDefines macro_defines;
 

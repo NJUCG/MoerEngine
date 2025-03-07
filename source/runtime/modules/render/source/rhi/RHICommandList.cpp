@@ -17,8 +17,7 @@ RHICommandListBase::~RHICommandListBase() {
 namespace Moer::Render {
 
     void CommandQueue::Test() {
-        RenderDevice* device;
-        ShaderManager manager(*device);
+        ShaderManager manager = ShaderManager::Get();
 
         GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
                                   VertexStream(),
@@ -88,6 +87,17 @@ namespace Moer::Render {
         RasterPipeline& _pso,
         CommandList&    _cmd_list)
         : cmd_list(_cmd_list), pso(_pso), args({}) {
+    }
+
+    CommandList::DrawGeometryPassDispatcher::DrawGeometryPassDispatcher(
+        CommandList&     _cmd_list,
+        ArrayArguments&& _args)
+        : cmd_list(_cmd_list), args(std::move(_args)) {
+    }
+
+    CommandList::DrawGeometryPassDispatcher::DrawGeometryPassDispatcher(
+        CommandList& _cmd_list)
+        : cmd_list(_cmd_list), args({}) {
     }
 
     void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count, std::string_view _name, ProfileSection _section) {
@@ -223,6 +233,17 @@ namespace Moer::Render {
         if (_name.has_value()) {
             commands.back()->name = *_name;
         }
+    }
+
+    // Specialized for Geometry Pass
+    void CommandList::SetRenderGeometryPassCmds(
+        ArrayArguments&&                                             _args,
+        RenderPassInfo&&                                             _info,
+        UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
+        std::string_view                                             _name
+        //
+    ) {
+        commands.push_back(MakeUnique<SetGeometryPassDrawStateCmd>(std::move(_args), std::move(_info), std::move(_mesh_data_array_map), _name));
     }
 
     void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
