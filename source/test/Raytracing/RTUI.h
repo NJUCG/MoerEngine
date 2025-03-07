@@ -26,11 +26,16 @@ namespace Moer::Render {
         };
 
         struct ReSTIRDITemporalResampleConfig {
-            uint bias_correction = s_di_bias_correction_traced;
+            uint  bias_correction  = s_di_bias_correction_traced;
+            float depth_threshold  = 10.f;
+            float normal_threshold = 0.5f;
         };
 
         struct ReSTIRDISpatialResampleConfig {
-            uint bias_correction = s_di_bias_correction_pair_wise;
+            uint  bias_correction     = s_di_bias_correction_pair_wise;
+            float depth_threshold     = 0.2f;
+            float normal_threshold    = 0.5f;
+            int   num_spatial_samples = 2;
         };
 
         struct ReSTIRDIConfig {

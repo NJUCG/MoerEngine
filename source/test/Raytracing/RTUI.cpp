@@ -354,6 +354,8 @@ namespace Moer::Render {
                     }
                     ImGui::TreePop();
                 }
+                ImGui::SliderFloat("depth threshold", &config.restir_di_cfg.temporal_resample_config.depth_threshold, 0.1f, 30.0f);
+                ImGui::SliderFloat("normal threshold", &config.restir_di_cfg.temporal_resample_config.normal_threshold, 0.0f, 1.0f);
                 ImGui::TreePop();
             }
 
@@ -367,6 +369,9 @@ namespace Moer::Render {
                     }
                     ImGui::TreePop();
                 }
+                ImGui::SliderFloat("depth threshold", &config.restir_di_cfg.spatial_resample_config.depth_threshold, 0.0f, 1.0f);
+                ImGui::SliderFloat("normal threshold", &config.restir_di_cfg.spatial_resample_config.normal_threshold, 0.0f, 1.0f);
+                ImGui::SliderInt("num spatial samples", &config.restir_di_cfg.spatial_resample_config.num_spatial_samples, 1, 32);
                 ImGui::TreePop();
             }
 

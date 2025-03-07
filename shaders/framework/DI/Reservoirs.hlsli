@@ -158,6 +158,10 @@ struct Reservoir {
   }
 
   PackedReservoir Pack() {
+    int2 clamped_spatial_dist = clamp(spatial_dist, -s_packed_di_reservoir_max_distance,
+                                      s_packed_di_reservoir_max_distance);
+    uint clamped_age = clamp(age, 0, s_packed_di_reservoir_max_age);
+
     PackedReservoir packed;
     packed.light_data = light_data;
     packed.uv_data = uv_data;
@@ -166,11 +170,11 @@ struct Reservoir {
         packed_visibility | (min(uint(M), s_packed_di_reservoir_max_M)
                              << s_packed_di_reservoir_M_shift);
     packed.distance_age =
-        (uint(spatial_dist.x) & s_packed_di_reservoir_distance_mask)
+        ((clamped_spatial_dist.x) & s_packed_di_reservoir_distance_mask)
             << s_packed_di_reservoir_distance_x_shift |
-        (uint(spatial_dist.y) & s_packed_di_reservoir_distance_mask)
+        ((clamped_spatial_dist.y) & s_packed_di_reservoir_distance_mask)
             << s_packed_di_reservoir_distance_y_shift |
-        clamp(age, 0, s_packed_di_reservoir_max_age)
+        clamped_age
             << s_packed_di_reservoir_age_shift;
     packed.weight = weight_sum;
     return packed;
@@ -181,17 +185,16 @@ struct Reservoir {
     unpacked.light_data = r.light_data;
     unpacked.uv_data = r.uv_data;
     unpacked.target_pdf = r.target_pdf;
-    unpacked.packed_visibility = r.visibility;
+    unpacked.packed_visibility = r.visibility & s_packed_di_reservoir_visibility_mask;
     unpacked.M = (r.visibility >> s_packed_di_reservoir_M_shift) &
                  s_packed_di_reservoir_max_M;
     unpacked.spatial_dist =
-        int2((r.distance_age >> s_packed_di_reservoir_distance_x_shift) &
-                 s_packed_di_reservoir_distance_mask,
-             (r.distance_age >> s_packed_di_reservoir_distance_y_shift) &
-                 s_packed_di_reservoir_distance_mask);
+        int2(int(r.distance_age << (32 - s_packed_di_reservoir_distance_x_shift - s_packed_di_reservoir_distance_channel_bits)) >> (32 - s_packed_di_reservoir_distance_channel_bits),
+             int(r.distance_age << (32 - s_packed_di_reservoir_distance_y_shift - s_packed_di_reservoir_distance_channel_bits)) >> (32 - s_packed_di_reservoir_distance_channel_bits));
     unpacked.age = (r.distance_age >> s_packed_di_reservoir_age_shift) &
                    s_packed_di_reservoir_max_age;
     unpacked.weight_sum = r.weight;
+    unpacked.canonical_weight = 0.f;
 
     if (isinf(unpacked.weight_sum) || isnan(unpacked.weight_sum))
       unpacked = Reservoir::EmptyReservoir();

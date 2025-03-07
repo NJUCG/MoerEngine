@@ -729,7 +729,13 @@ int main(int argc, const char** argv) {
                 auto di_spatial_resampling_config                  = is_ctx.GetDISpatialResampleParams();
                 di_initial_sample_config.local_light_sample_mode   = ui_cfg.restir_di_cfg.initial_sample_config.local_light_sample_mode;
                 di_temporal_resampling_config.bias_correction_mode = ui_cfg.restir_di_cfg.temporal_resample_config.bias_correction;
-                di_spatial_resampling_config.bias_correction_mode  = ui_cfg.restir_di_cfg.spatial_resample_config.bias_correction;
+                di_temporal_resampling_config.depth_threshold      = ui_cfg.restir_di_cfg.temporal_resample_config.depth_threshold;
+                di_temporal_resampling_config.normal_threshold     = ui_cfg.restir_di_cfg.temporal_resample_config.normal_threshold;
+
+                di_spatial_resampling_config.bias_correction_mode = ui_cfg.restir_di_cfg.spatial_resample_config.bias_correction;
+                di_spatial_resampling_config.depth_threshold      = ui_cfg.restir_di_cfg.spatial_resample_config.depth_threshold;
+                di_spatial_resampling_config.normal_threshold     = ui_cfg.restir_di_cfg.spatial_resample_config.normal_threshold;
+                di_spatial_resampling_config.num_spatial_samples  = ui_cfg.restir_di_cfg.spatial_resample_config.num_spatial_samples;
 
                 is_ctx.SetReSTIRDIIInitialSampleParams(di_initial_sample_config);
                 is_ctx.SetReSTIRDITemporalResampleParams(di_temporal_resampling_config);
@@ -796,7 +802,7 @@ int main(int argc, const char** argv) {
                     nrd_interface->UpdateCommonSettings(
                         nrd_time++,
                         Vector2ui(resolution.x, resolution.y),
-                        Vector2f(0.f, 0.f),
+                        antialias_pass->GetPixelOffset(),
                         Transpose(camera->GetViewMatrix()),
                         Transpose(camera->GetProjectionMatrix()));
 
