@@ -38,7 +38,7 @@ Engine for Realtime Rendering
   cd MoerEngine
   
   # Download Sponza scene to `./asset/scenes/`
-  git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/
+  git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
   
   # Configure the engine (use default settings)
   cp source/configs/MoerEngine.ini.template source/configs/MoerEngine.ini
@@ -53,7 +53,7 @@ Engine for Realtime Rendering
   
   # Run `Ray Tracing`
   # - `RTTest.exe` needs to be modified according to your platform
-  ./target/bin/Debug/RTTest.exe
+  ./target/bin/Debug/RaytracingTest.exe
   ```
 
 * Rider
