@@ -308,7 +308,7 @@ namespace Moer {
         return (data != nullptr && width != 0 && height != 0 && layers != 0 && mips != 0 && channal != 0 && data_size != 0);
     }
 
-    ImageReadDesc ImageIO::ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal) {
+    ImageReadDesc ImageIO::ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal, EPixelFormat _fmt) {
         ImageReadDesc desc;
         const auto&   path_str = path.string();
         if (path_str.ends_with(".png") || path_str.ends_with("jpg") || path_str.ends_with("jpeg")) {
@@ -316,8 +316,24 @@ namespace Moer {
             if (!desc.data) {
                 return desc;
             }
+            // uint packed = (((uint*)desc.data)[1747170]);
+            // //unpack r8g8b8a8 uint32 to float4
+            // auto unpack8bit = [](uint packed) -> float4 {
+            //     float4 unpacked;
+            //     unpacked.r = (packed & 0x000000FF) / 255.0f;
+            //     unpacked.g = ((packed & 0x0000FF00) >> 8) / 255.0f;
+            //     unpacked.b = ((packed & 0x00FF0000) >> 16) / 255.0f;
+            //     unpacked.a = ((packed & 0xFF000000) >> 24) / 255.0f;
+            //     return unpacked;
+            // };
+            // auto unpacked = unpack8bit(packed);
+            // unpacked.x    = std::powf(unpacked.x, 2.2f);
+            // unpacked.y    = std::powf(unpacked.y, 2.2f);
+            // unpacked.z    = std::powf(unpacked.z, 2.2f);
+            // unpacked.w    = std::powf(unpacked.w, 2.2f);
+
             desc.data_callback = stbi_image_free;
-            desc.format        = EPixelFormat::PF_R8G8B8A8_UNORM;
+            desc.format        = _fmt;
             desc.data_size     = desc.width * desc.height * desc.channal;
             Generatemipmaps(desc);
         } else if (path_str.ends_with("ktx")) {

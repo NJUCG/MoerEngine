@@ -1,6 +1,7 @@
 #include "loader/gltf/Parser.h"
 
 #include "Core.h"
+#include "PixelFormat.h"
 #include "RenderThread.h"
 #include "../io/ImageIO.h"
 #include "../sceneCache/SceneCache.h"
@@ -61,7 +62,7 @@ namespace Moer::Resource::Gltf {
         void LoadNodes(const aiScene* scene, const aiNode* node, std::function<void(const aiNode*)>& _on_load_node);
         void LoadCameras(const aiScene* scene);
         void LoadMaterial(const aiScene* _ai_scene, const aiMaterial* _ai_material, const std::string& _material_name);
-        void LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name);
+        void LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name, EPixelFormat _preferred_format = PF_R8G8B8A8_UNORM);
         void LoadLights(const aiScene* scene);
         ~Impl() = default;
 
@@ -172,7 +173,7 @@ namespace Moer::Resource::Gltf {
         return -1;
     }
 
-    void Parser::Impl::LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name) {
+    void Parser::Impl::LoadTexture(const aiScene* scene, const aiString& texture_path, MaterialInstanceRef& mat, const std::string& param_name, EPixelFormat _preferred_format) {
         if (data->m_textures.contains(texture_path.C_Str())) {
             auto texture = data->m_textures[texture_path.C_Str()];
             data->m_mat_instance_textures[mat->GetName()].textures.push_back({param_name, texture_path.C_Str()});
@@ -191,7 +192,7 @@ namespace Moer::Resource::Gltf {
             //todo
         } else {
             std::filesystem::path texture_file_path = m_file_parent_path / texture_path.C_Str();
-            image_desc                              = ImageIO::ReadFromFile(texture_file_path);
+            image_desc                              = ImageIO::ReadFromFile(texture_file_path, 4, _preferred_format);
         }
 
         if (!image_desc.IsValid()) {

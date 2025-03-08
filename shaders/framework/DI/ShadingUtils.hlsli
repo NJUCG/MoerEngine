@@ -37,8 +37,8 @@ bool ShadeSurface(inout DI::Reservoir _res, Surface _surface,
           vis, resample_params.restir_di_params.temporal_resample_params
                    .discard_inviable_samples);
       b_store = true;
+    //   printf("vis: %f %f %f\n", vis.x, vis.y, vis.z);
     }
-
     _sample.radiance *= vis;
   }
   _sample.radiance *= _res.GetInvPdf() / _sample.solid_angle_pdf;
@@ -52,6 +52,7 @@ bool ShadeSurface(inout DI::Reservoir _res, Surface _surface,
     _specular = _sample.radiance * specular_term;
 
     _light_dist = length(_sample.x - _surface.GetWorldPos());
+
   }
 
   return b_store;

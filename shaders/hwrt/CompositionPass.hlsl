@@ -44,12 +44,8 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 [[vk::binding(11, 0)]] Texture2D<float4> denoised_specular_lighting
     : register(t8, space0);
 
-
-
 [numthreads(8, 8, 1)] void main(uint2 gtid
                                 : SV_DISPATCHTHREADID) {
-
-
   float3 composited_color = float3(0, 0, 0);
   float view_z = gbuffer_view_depth[gtid];
 
@@ -97,11 +93,11 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
       uv.x -= params.env_rotation;
       composited_color = env_handle.SampleLevel<float3>(uv, 0);
 
-    //     uint tex_handle =                                                        
-    //     g__array_114514_bdls[NonUniformResourceIndex(env_handle.handle)];  
-    // uint tex_idx = tex_handle >> 8;                                           
-    // uint sampler_idx = tex_handle & 0xff; 
-    // printf("sampler_idx %d\n", tex_handle);
+      //     uint tex_handle =
+      //     g__array_114514_bdls[NonUniformResourceIndex(env_handle.handle)];
+      // uint tex_idx = tex_handle >> 8;
+      // uint sampler_idx = tex_handle & 0xff;
+      // printf("sampler_idx %d\n", tex_handle);
 
       composited_color *= params.env_scale;
     }

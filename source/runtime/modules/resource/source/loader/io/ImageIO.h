@@ -19,7 +19,7 @@ namespace Moer {
 
     class ImageIO {
     public:
-        static ImageReadDesc ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal = 4);
+        static ImageReadDesc ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal = 4, EPixelFormat _fmt = PF_R8G8B8A8_UNORM);
         static ImageReadDesc ReadFromMemory(const unsigned char* memory_data, size_t len, uint32_t desired_channal = 4);
     };
 }// namespace Moer
