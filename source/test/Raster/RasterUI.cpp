@@ -1,4 +1,5 @@
-#include "RHIUI.h"
+#include "RasterUI.h"
+
 #include "imgui.h"
 #include "imgui_internal.h"
 
@@ -6,16 +7,13 @@ namespace Moer::Render {
 
     // TODO: merge common code into a base class
 
-    RHIUI::RHIUI(
-        UIRenderer&                                       _renderer,
-        const Array<std::pair<TextureView, std::string>>& frame_buffer_and_name_array,
-        uint                                              default_selected_frame_buffer_index)
-        : m_ui_renderer(_renderer) {
+    RasterUI::RasterUI(UIRenderer& _renderer, const Array<TextureView>& frame_buffer_and_name_array) :
+        m_ui_renderer(_renderer) {
 
-        RegisterFrameBuffers(frame_buffer_and_name_array, default_selected_frame_buffer_index);
+        RegisterFrameBuffers(frame_buffer_and_name_array);
     }
 
-    void RHIUI::TickUI() {
+    void RasterUI::TickUI() {
 
         static bool               opt_fullscreen  = true;
         static bool               opt_padding     = false;
@@ -31,7 +29,8 @@ namespace Moer::Render {
             ImGui::SetNextWindowViewport(viewport->ID);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-            window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+            window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
             window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
             window_flags |= ImGuiWindowFlags_NoBackground;
         } else {
@@ -48,14 +47,11 @@ namespace Moer::Render {
         // all active windows docked into it will lose their parent and become undocked.
         // We cannot preserve the docking relationship between an active window and an inactive docking, otherwise
         // any change of dockspace/settings would lead to windows being stuck in limbo and never being visible.
-        if (!opt_padding)
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        if (!opt_padding) ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
         ImGui::Begin("Editor Menu", &m_b_show, window_flags);
-        if (!opt_padding)
-            ImGui::PopStyleVar();
+        if (!opt_padding) ImGui::PopStyleVar();
 
-        if (opt_fullscreen)
-            ImGui::PopStyleVar(2);
+        if (opt_fullscreen) ImGui::PopStyleVar(2);
 
         // Submit the DockSpace
         ImGuiIO& io = ImGui::GetIO();
@@ -69,9 +65,7 @@ namespace Moer::Render {
                 // }
                 // if (ImGui::MenuItem("Save Current Level")) {
                 // }
-                if (ImGui::MenuItem("Exit")) {
-                    exit(0);
-                }
+                if (ImGui::MenuItem("Exit")) { exit(0); }
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Window")) {
@@ -91,18 +85,12 @@ namespace Moer::Render {
         ShowConfig();
     }
 
-    void RHIUI::RegisterFrameBuffers(const Array<std::pair<TextureView, std::string>>& frame_buffer_and_name_array, uint default_selected_frame_buffer_index) {
-        assert(default_selected_frame_buffer_index < frame_buffer_and_name_array.size() && "Invalid default selected frame buffer index");
-        m_frame_buffer_and_name_array        = frame_buffer_and_name_array;
-        m_config.selected_frame_buffer_index = default_selected_frame_buffer_index;
-    }
-
-    bool RHIUI::IsSeperateWindow() const {
+    bool RasterUI::IsSeperateWindow() const {
         auto* current_window = ImGui::FindWindowByName("Scene Color");
         return current_window->ParentWindow == nullptr;
     }
 
-    TextureView RHIUI::GetWindowFrameBuffer() {
+    TextureView RasterUI::GetWindowFrameBuffer() {
         auto* current_window = ImGui::FindWindowByName("Scene Color");
         if (current_window->ParentWindow == nullptr) {
             return m_ui_renderer.GetWindowFrameBuffer(current_window->Viewport);
@@ -110,19 +98,26 @@ namespace Moer::Render {
         return TextureView();
     }
 
-    void RHIUI::InitUIStyle() {
-        ImGuiStyle& style   = ImGui::GetStyle();
-        style.ItemSpacing.y = 7.f;// default is 4.f
+    void RasterUI::RegisterFrameBuffers(const Array<TextureView>& frame_buffer_and_name_array) {
+        m_frame_buffer_and_name_array        = frame_buffer_and_name_array;
+        m_config.selected_frame_buffer_index = GetDefaultSelectedFrameBufferIndex();
+        assert(
+            m_config.selected_frame_buffer_index < m_frame_buffer_and_name_array.size() &&
+            "Invalid default selected frame buffer index"
+        );
     }
 
-    void RHIUI::ShowSceneColor() {
+    void RasterUI::InitUIStyle() {
+        ImGuiStyle& style   = ImGui::GetStyle();
+        style.ItemSpacing.y = 7.f; // default is 4.f
+    }
+
+    void RasterUI::ShowSceneColor() {
         ImGuiIO&         io           = ImGui::GetIO();
         ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
 
         const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
-        if (!m_b_show_scene_color) {
-            return;
-        }
+        if (!m_b_show_scene_color) { return; }
         if (!ImGui::Begin("Scene Color", &m_b_show_scene_color, window_flags)) {
 
             ImGui::End();
@@ -142,11 +137,16 @@ namespace Moer::Render {
         // scene_size.y = current_window->Size.y + current_window->Pos.y - menu_rect.Max.y;
         scene_size.y = current_window->Size.y;
 
-        auto   window_rect = current_window->Rect();// this is main window rect
+        auto   window_rect = current_window->Rect(); // this is main window rect
         ImRect parent_rect{};
 
         if (m_b_separate_window) {
-            parent_rect = {current_window->Pos.x, current_window->Pos.y, current_window->Pos.x + current_window->Size.x, current_window->Pos.y + current_window->Size.y};
+            parent_rect = {
+                current_window->Pos.x,
+                current_window->Pos.y,
+                current_window->Pos.x + current_window->Size.x,
+                current_window->Pos.y + current_window->Size.y
+            };
         } else {
             parent_rect = current_window->ParentWindow->Rect();
         }
@@ -158,13 +158,11 @@ namespace Moer::Render {
         ImGui::End();
     }
 
-    void RHIUI::ShowConfig() {
+    void RasterUI::ShowConfig() {
         ImGuiIO&         io           = ImGui::GetIO();
         ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
 
-        if (!m_b_show_config) {
-            return;
-        }
+        if (!m_b_show_config) { return; }
         if (!ImGui::Begin("Configs", &m_b_show_config, window_flags)) {
             ImGui::End();
             return;
@@ -180,11 +178,19 @@ namespace Moer::Render {
             ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
         };
 
-        if (ImGui::TreeNode("Output Frame Buffer", "Output: [%s]", m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index].second.c_str())) {
+        if (ImGui::TreeNode(
+                "Output Frame Buffer",
+                "Output: [%s]",
+                m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index]
+                    .GetTexture()
+                    ->GetName()
+                    .data()
+            )) {
             for (uint i = 0; i < m_frame_buffer_and_name_array.size(); i++) {
                 if (ImGui::Selectable(
-                        m_frame_buffer_and_name_array[i].second.c_str(),
-                        m_config.selected_frame_buffer_index == i)) {
+                        m_frame_buffer_and_name_array[i].GetTexture()->GetName().data(),
+                        m_config.selected_frame_buffer_index == i
+                    )) {
                     m_config.selected_frame_buffer_index = i;
                 }
                 draw_border();
@@ -194,8 +200,8 @@ namespace Moer::Render {
 
         if (ImGui::TreeNode("AO Mode", "AO Mode: [%s]", k_ao_mode_name_array[m_config.ao_mode].c_str())) {
             for (uint i = 0; i < k_ao_mode_name_array.size(); i++) {
-                if (
-                    ImGui::Selectable(k_ao_mode_name_array[i].c_str(), m_config.ao_mode == i) && i != 3 && i != 4// SSDO is not implemented yet
+                if (ImGui::Selectable(k_ao_mode_name_array[i].c_str(), m_config.ao_mode == i) && i != 3 &&
+                    i != 4 // SSDO is not implemented yet
                 ) {
                     m_config.ao_mode = i;
                 }
@@ -210,7 +216,9 @@ namespace Moer::Render {
             ImGui::TreePop();
         }
 
-        if (ImGui::TreeNode("SSR Mode", "SSR: [%s]", (m_config.ssr_is_enable_ssr == 1 ? "Enable" : "Disable"))) {
+        if (ImGui::TreeNode(
+                "SSR Mode", "SSR: [%s]", (m_config.ssr_is_enable_ssr == 1 ? "Enable" : "Disable")
+            )) {
             if (ImGui::Selectable("Enable", m_config.ssr_is_enable_ssr == 1)) {
                 m_config.ssr_is_enable_ssr = 1;
             }
@@ -232,7 +240,9 @@ namespace Moer::Render {
             ImGui::TreePop();
         }
 
-        if (ImGui::TreeNode("AA Mode", "Anti-Aliasing Mode: [%s]", k_aa_mode_name_array[m_config.aa_mode].c_str())) {
+        if (ImGui::TreeNode(
+                "AA Mode", "Anti-Aliasing Mode: [%s]", k_aa_mode_name_array[m_config.aa_mode].c_str()
+            )) {
             for (uint i = 0; i < k_aa_mode_name_array.size(); i++) {
                 if (ImGui::Selectable(k_aa_mode_name_array[i].c_str(), m_config.aa_mode == i)) {
                     m_config.aa_mode = i;
@@ -244,4 +254,18 @@ namespace Moer::Render {
 
         ImGui::End();
     }
-}// namespace Moer::Render
+
+    uint RasterUI::GetDefaultSelectedFrameBufferIndex() const {
+        const std::string default_selected_frame_buffer_name = "aa_output";
+
+        for (uint i = 0; i < m_frame_buffer_and_name_array.size(); ++i) {
+            if (m_frame_buffer_and_name_array[i].GetTexture()->GetName() ==
+                default_selected_frame_buffer_name) {
+                return i;
+            }
+        }
+
+        assert(false && "Invalid default selected frame buffer index");
+        return uint(0);
+    }
+} // namespace Moer::Render

@@ -112,6 +112,8 @@ namespace Moer::Render {
 
     CmdSubmit CommandList::Submit() {
         CmdSubmit submit(std::move(commands), std::move(callbacks), bindless_array);
+        commands.clear();
+        callbacks.clear();
         return std::move(submit);
     }
 
@@ -161,6 +163,7 @@ namespace Moer::Render {
             _name));
     }
 
+    // Be careful with the Lifetime of the data!
     void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
         //
         uint3 extent = uint3(
@@ -177,6 +180,7 @@ namespace Moer::Render {
             _name));
     }
 
+    // Be careful with the Lifetime of the data!
     void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::string_view _name) {
         //
         if (_data.size() == 0) {

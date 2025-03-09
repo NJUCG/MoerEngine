@@ -17,6 +17,7 @@ namespace Resource {
     static Moer::Map<std::string, LoadFunction> scene_load_function_maps = {{"gltf", Gltf::Parser::LoadSceneFromFile},
                                                                             {"glb", Gltf::Parser::LoadSceneFromFile},
                                                                             {"fbx", Gltf::Parser::LoadSceneFromFile},
+                                                                            {"obj", Gltf::Parser::LoadSceneFromFile},
                                                                             {"json", JsonScene::JsonSceneParser::LoadSceneFromFile}};
 
     void LoadFromFile(const std::filesystem::path& _file_path, Scene* _scene) {
