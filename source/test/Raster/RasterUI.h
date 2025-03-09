@@ -1,5 +1,5 @@
-#ifndef MOER_TEST_RHIUI_H
-#define MOER_TEST_RHIUI_H
+#pragma once
+
 #include "Core.h"
 #include "renderer/UIRenderer.h"
 #include "rhi/RHIResource.h"
@@ -11,7 +11,7 @@ namespace Moer::Render {
      * 
      * TODO: merge common code into a base class
      */
-    class RHIUI {
+    class RasterUI {
 
     public:
         const Array<std::string> k_aa_mode_name_array = {
@@ -31,9 +31,9 @@ namespace Moer::Render {
         };
 
         struct Config {
-            uint aa_mode = 3;// default ssma 1x
+            uint aa_mode = 3; // default ssma 1x
 
-            uint  ao_mode           = 1;// default ssao
+            uint  ao_mode           = 1; // default ssao
             float ssao_intensity    = 1.0f;
             int   ssao_sample_count = 8;
             int   ssao_radius       = 2;
@@ -47,32 +47,35 @@ namespace Moer::Render {
             float ssr_metallic_threshold         = 0.5;
             float ssr_step_base                  = 0.025;
 
-            uint selected_frame_buffer_index = 0;
+            std::string default_selected_frame_buffer_name = "aa_output";
+            uint        selected_frame_buffer_index        = 0;
         };
 
-        RHIUI(
-            UIRenderer&                                       _renderer,
-            const Array<std::pair<TextureView, std::string>>& frame_buffer_and_name_array,
-            uint                                              default_selected_frame_buffer_index);
-        ~RHIUI() = default;
+        RasterUI(UIRenderer& _renderer, const Array<TextureView>& frame_buffer_and_name_array);
+        ~RasterUI() = default;
         void TickUI();
 
         float2        GetSceneColorResolution() const { return m_scene_color_resolution; }
         float2        GetSceneColorPos() const { return m_scene_color_pos; }
         const Config& GetConfig() const { return m_config; }
-        float         GetSceneColorAspectRatio() const { return m_scene_color_resolution.x / m_scene_color_resolution.y; }
+        float         GetSceneColorAspectRatio() const {
+            return m_scene_color_resolution.x / m_scene_color_resolution.y;
+        }
 
-        void        RegisterFrameBuffers(const Array<std::pair<TextureView, std::string>>& frame_buffer_and_name_array,
-                                         uint                                              default_selected_frame_buffer_index);
-        TextureView GetSelectedFrameBuffer() const { return m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index].first; }
+        TextureView GetSelectedFrameBuffer() const {
+            return m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index];
+        }
 
         bool        IsSeperateWindow() const;
         TextureView GetWindowFrameBuffer();
+        void        RegisterFrameBuffers(const Array<TextureView>& frame_buffer_and_name_array);
 
     private:
         void InitUIStyle();
         void ShowSceneColor();
         void ShowConfig();
+
+        uint GetDefaultSelectedFrameBufferIndex() const;
 
     private:
         bool   m_b_show_scene_color = true;
@@ -81,11 +84,10 @@ namespace Moer::Render {
         float2 m_scene_color_pos;
         bool   m_b_show = true;
 
-        Array<std::pair<TextureView, std::string>> m_frame_buffer_and_name_array;
+        Array<TextureView> m_frame_buffer_and_name_array;
 
         Config m_config;
 
         UIRenderer& m_ui_renderer;
     };
-}// namespace Moer::Render
-#endif
+} // namespace Moer::Render

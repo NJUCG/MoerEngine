@@ -21,7 +21,7 @@ struct Constsant {
 };
 
 struct PS_OUTPUT {
-  uint mat : SV_TARGET0;
+  uint vbuffer : SV_TARGET0;
   float4 normal : SV_TARGET1;
   float2 uv : SV_TARGET2;
   float4 position : SV_TARGET3;
@@ -38,7 +38,7 @@ PS_OUTPUT main(PixelInput input) : SV_TARGET {
   Moer::GeometryData geom_data = Moer::LoadGeometryData(geometry_data_array.GetByteAddressBuffer(), input.InstanceID * sizeof(Moer::GeometryData));
 
   PS_OUTPUT output;
-  output.mat = geom_data.mat_idx_and_type;
+  output.vbuffer = geom_data.mat_idx_and_type;
   output.normal = float4(input.normal * 0.5f + 0.5f, 1.0f);
   output.uv = input.uv;
   output.position = float4(input.world_position, 1.0f);

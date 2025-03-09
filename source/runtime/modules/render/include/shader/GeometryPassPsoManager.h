@@ -22,11 +22,10 @@ namespace Moer::Render {
     class GeometryPassPipeline : public RasterPipeline {
     public:
         DEFINE_RASTER_PIPELINE_CLASS(GeometryPassPipeline);
-        DEFINE_SHADER_SAMPLER(defaultSampler);
-        DEFINE_SHADER_BUFFER(camera_buffer);
+        DEFINE_SHADER_BUFFER(view_param_buffer);
         DEFINE_SHADER_BINDLESS_ARRAY(bdls);
         DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
-        DEFINE_SHADER_ARGS(defaultSampler, camera_buffer, bdls, param);
+        DEFINE_SHADER_ARGS(view_param_buffer, bdls, param);
     };
 
     struct GeometryPassPsoRecord {

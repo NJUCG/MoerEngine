@@ -17,7 +17,7 @@ struct Constsant {
     float4x4 camera_view_proj;
 };
 [[vk::push_constant]] ConstantBuffer<Constsant> param;
-[[vk::binding(0, 0)]] ConstantBuffer<Moer::ViewParam> camera_buffer : register(b0);
+[[vk::binding(0, 0)]] ConstantBuffer<Moer::ViewParam> view_param_buffer : register(b0);
 
 VertexFactory::OutVertexAttributes main(VertexFactory::InVertexAttributes input, uint instance_id : SV_InstanceID) {
 
@@ -26,5 +26,5 @@ VertexFactory::OutVertexAttributes main(VertexFactory::InVertexAttributes input,
     Moer::GeometryInstance geom_instance = geom_instance_array.Load<Moer::GeometryInstance>(instance_id);
     Moer::InstanceData instance_data = Moer::LoadInstanceData(instance_data_array.GetByteAddressBuffer(), geom_instance.instance_idx * sizeof(Moer::InstanceData));
 
-    return VertexFactory::GetConvertedAttributes(input, instance_data.model2world, camera_buffer.world2clip, instance_id);
+    return VertexFactory::GetConvertedAttributes(input, instance_data.model2world, view_param_buffer.world2clip, instance_id);
 }
