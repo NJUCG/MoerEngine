@@ -109,8 +109,7 @@ struct Surface {
   float diffuse_prob;
 
   float GetDiffuseProbability() {
-    float3 fresnel =
-        STL::BRDF::FresnelTerm_Schlick(specular_f0, abs(dot(v, n)));
+    float3 fresnel = STL::BRDF::FresnelTerm_Schlick(specular_f0, (dot(v, n)));
     float specular_weight = STL::Color::Luminance(fresnel);
     float diffuse_weight =
         STL::Color::Luminance(diffuse_albedo * (1.f - fresnel));
@@ -168,15 +167,20 @@ struct Surface {
 
   float GetBrdfPdf(float3 _dir) {
     float cos_theta = saturate(dot(_dir, n));
-    float diffuse_pdf = cos_theta / PI;
 
     float3 h = normalize(_dir + v);
     float noh = saturate(dot(n, h));
     float nov = saturate(dot(n, v));
+
+    float voh = saturate(dot(v, h));
+    float nol = saturate(dot(n, _dir));
+
+    float diffuse_pdf = cos_theta / PI;
     float specular_pdf =
         STL::ImportanceSampling::VNDF::GetPDF(nov, noh, roughness);
 
-    return cos_theta > 0.f ? specular_pdf : 0.f;
+    return cos_theta > 0.f ? lerp(specular_pdf, diffuse_pdf, diffuse_prob)
+                           : 0.f;
   }
 
   float GetLightSampleTargetPdf(LightSample _sample) {
@@ -253,23 +257,23 @@ struct Surface {
 
     return select(abs(X) < origin, X + fOff, iPos);
   }
-  RayDesc SetupVisibilityRay(float3 _sample_pos, float _x_offset = 0.1f) {
+  RayDesc SetupVisibilityRay(float3 _sample_pos, float _x_offset = 0.01f) {
 
-    float3 start_point = Xoffset(x, n);
+    float3 start_point = x;
     float3 l = _sample_pos - start_point;
 
     RayDesc ray;
     ray.Origin = start_point;
     ray.Direction = normalize(l);
-    ray.TMin = 0.f;
-    ray.TMax = max(_x_offset, length(l));
+    ray.TMin = _x_offset;
+    ray.TMax = max(_x_offset, length(l) - 2 * _x_offset);
     return ray;
   }
 
   void EvalBrdf(float3 _sample_pos, out float3 _diffuse, out float3 _specular) {
     float3 l = _sample_pos - x;
     _diffuse = DiffuseTerm(v, n, normalize(l), roughness);
-    float3 fresnel;
+    float3 fresnel = 0.f;
     _specular =
         SpecularTerm(v, normalize(l), n, roughness, specular_f0, fresnel);
     _diffuse *= (1.f - fresnel);
@@ -470,6 +474,9 @@ uint GetLightIndex(uint _instance_idx, uint _geom_idx, uint _prim_idx) {
   ArrayBuffer geom_to_light_arr =
       (ArrayBuffer)resample_params.bindless_handles.geo_instance_to_light;
   light_idx = geom_to_light_arr.Load<uint>(geom_idx);
+  if(_instance_idx == 5 && light_idx < 0)
+  printf("instance_idx %d, geom_idx %d, prim_idx %d, light_idx %d\n",
+         _instance_idx, _geom_idx, _prim_idx, light_idx);
   if (light_idx == s_invalid_light_idx)
     return light_idx;
   return light_idx + _prim_idx;
@@ -651,9 +658,7 @@ float3 GetFinalVisibility(RaytracingAccelerationStructure _tlas,
     payload.barycentrics = ray_query.CommittedTriangleBarycentrics();
     payload.committed_ray_t = ray_query.CommittedRayT();
     payload.front_face = ray_query.CommittedTriangleFrontFace();
-
   }
-
 
   if (payload.instance_id == ~0u)
     return payload.throughput.xyz;

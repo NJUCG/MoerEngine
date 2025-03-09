@@ -198,7 +198,7 @@ float3 UintHashToColor(uint _idx) {
     gbuffer_view_depth[pixel_pos] = view_depth;
     gbuffer_clip_depth[pixel_pos] = clip_depth;
     gbuffer_diffuse_albedo[pixel_pos] =
-        Moer::Pack_R11G11B10_UFLOAT(mat_sample.base_color);
+        Moer::Pack_R11G11B10_UFLOAT(mat_sample.diffuse_albedo);
     // gbuffer_specular_roughness[pixel_pos] = Moer::Pack_R8G8B8A8_Gamma_UFLOAT(
     //     float4(mat_sample.specular_f0, mat_sample.roughness));
     gbuffer_specular_roughness[pixel_pos] = Moer::Pack_R8G8B8A8_Gamma_UFLOAT(

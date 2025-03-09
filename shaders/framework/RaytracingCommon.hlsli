@@ -189,14 +189,14 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
                                       float2 _grad_x, float2 _grad_y,
                                       float _mip, EMaterialAttribute _attribs) {
 
-  float4 base_color = 0.f;
+  float4 base_color = 1.f;
   float4 emissive = float4(_geo_record.material.emissive_factor, 1.f);
   float4 normal = float4(_geo_record.normal, 0.f);
   float4 metallic_roughness = float4(0.f, 1.f, 1.f, 0.f);
   float4 transmission = 0.f;
 
   bool has_base_color =
-      _attribs & EMA_BaseColor && _geo_record.material.albedo_map != 0;
+      _attribs & EMA_BaseColor && _geo_record.material.albedo_map > 0;
   if (has_base_color) {
     TextureHandle albedo_tex = TextureHandle(_geo_record.material.albedo_map);
     if (_mip >= 0.f) {
@@ -206,10 +206,10 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
           albedo_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x, _grad_y);
     }
     //do gamma correction
-    base_color.xyz = pow(base_color.xyz, 2.2);
+    // base_color.xyz = pow(base_color.xyz, 2.2);
   }
 
-  if (_attribs & EMA_Emissive && _geo_record.material.emissive_map != 0) {
+  if (_attribs & EMA_Emissive && _geo_record.material.emissive_map > 0) {
     TextureHandle emissive_tex =
         TextureHandle(_geo_record.material.emissive_map);
     if (_mip >= 0.f) {
@@ -222,7 +222,7 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
     emissive.xyz = pow(emissive.xyz, 2.2);
   }
 
-  if (_attribs & EMA_Normal && _geo_record.material.normal_map != 0) {
+  if (_attribs & EMA_Normal && _geo_record.material.normal_map > 0) {
     TextureHandle normal_tex = TextureHandle(_geo_record.material.normal_map);
     if (_mip >= 0.f) {
       normal = normal_tex.SampleLevel<float4>(_geo_record.texcoord, _mip);
@@ -234,7 +234,7 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
       normal = normal_.SampleGrad(g_sampler_linear_repeat,_geo_record.texcoord, _grad_x, _grad_y);
     }
     //gamma correction
-    normal.xyz = pow(normal.xyz, 2.2);
+    // normal.xyz = pow(normal.xyz, 2.2);
 
     // transform normal from tangent space to world space
     normal.xyz = ApplyNormal(normal.xyz, _geo_record.normal, _geo_record.tangent);
@@ -251,20 +251,9 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
       metallic_roughness = metal_rough_tex.SampleGrad<float4>(
           _geo_record.texcoord, _grad_x, _grad_y);
       //gamma correction
-      // metallic_roughness.xyz = pow(metallic_roughness.xyz, 2.2);
-
-          // float2 test_uv = float2(0.1069, 0.4126);
-          // float4 test = metal_rough_tex.SampleGrad<float4>(test_uv, _grad_x, _grad_y);
-          // printf("test g:%f\n", test.g );
-
+      metallic_roughness.xyz = pow(metallic_roughness.xyz, 2.2);
     }
-    //do gamma correction
-    // metallic_roughness.y = pow(metallic_roughness.y, 2.2);
   }
-
-  // if(_attribs & EMA_Transmission && _geo_record.material.transmission_map !=
-  // 0){
-  //     TextureHandle transmission_tex = TextureHandle(_hit
 
   /////////////////////////////////////////////////
   // Material evaluation, use material flags in the future
@@ -272,18 +261,11 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
 
   MaterialSample result = MaterialSample::ConstructDefault();
   // currently use geometry normal
-  result.normal = normal;
-
-  {
-    // todo: add specular glossiness workflow
-  }
+  result.normal = normalize(normal.xyz);
 
   // use metallic roughness workflow
 
-  result.base_color =
-      has_base_color
-          ? base_color.xyz * _geo_record.material.base_color_factor.xyz
-          : _geo_record.material.base_color_factor.xyz;
+  result.base_color = base_color.xyz * _geo_record.material.base_color_factor.xyz;
 
   result.roughness = _geo_record.material.roughness_factor * metallic_roughness.g;
   result.metalness =
@@ -298,7 +280,6 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
   STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(
       result.base_color, result.metalness, result.diffuse_albedo,
       result.specular_f0);
-
   return result;
 }
 

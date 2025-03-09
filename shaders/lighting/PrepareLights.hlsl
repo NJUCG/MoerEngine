@@ -93,7 +93,7 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
 
     // TODO: handle emissive texture
     // printf("mat.emissive_map %d\n", mat.emissive_map);
-    if(mat.emissive_map != 0){
+    if(mat.emissive_map > 0){
       TextureHandle emissive_tex = (TextureHandle)mat.emissive_map;
       float2 uvs[3];
       uvs[0] = vtx_buffer.Load<float2>(idx.x, geom.texcoord0_offset);
