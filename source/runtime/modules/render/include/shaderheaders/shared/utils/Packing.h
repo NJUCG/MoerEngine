@@ -14,7 +14,7 @@
 namespace Moer {
 
 #ifdef __cplusplus
-
+#include "math/Math.h"
     template<typename T>
     static T clamp(const T& v, const T& lo, const T& hi) {
         if constexpr (std::is_floating_point_v<T>) {

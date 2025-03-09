@@ -381,7 +381,6 @@ Reservoir SampleBrdf(inout RandomState _rng, SampleConfigs _sample_configs,
       if (light_idx != s_invalid_light_idx) {
         PolymorphicLightInfo light_info = LoadLightInfo(light_idx);
         candidate = _surface.SamplePolymorphicLight(light_info, rnd);
-
         if (_sample_configs.brdf_cutoff > 0.f) {
           float3 light_dir;
           float light_dist;

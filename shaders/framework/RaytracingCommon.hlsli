@@ -1,5 +1,10 @@
 #ifndef MOER_RAYTRACING_COMMON_HLSLI
 #define MOER_RAYTRACING_COMMON_HLSLI
+static SamplerState g_sampler_linear_repeat {
+  Filter = MIN_MAG_MIP_LINEAR;
+  AddressU = Repeat;
+  AddressV = Repeat;
+};
 namespace Moer {
 enum EGeometryAttrib {
   EGA_Position = 0x1,
@@ -81,7 +86,7 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
       _instance_data, _instance_idx * sizeof(Moer::InstanceData));
   geo_record.geometry = Moer::LoadGeometryData(
       _geometry_data, (_geometry_idx + geo_record.instance.first_geom_idx) *
-                                          sizeof(Moer::GeometryData));
+                          sizeof(Moer::GeometryData));
   geo_record.material = UnpackMaterialData<MaterialData>(
       _material_data, geo_record.geometry.GetMaterialIdx());
 
@@ -147,8 +152,9 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
         vtx_buffer.Load<uint>(indices.z, geo_record.geometry.normal_offset));
 
     float3 local_normal = Moer::Interpolate(normals, barycentrics);
-    
-    geo_record.normal = normalize(mul((float3x3)geo_record.instance.model2world, local_normal));
+
+    geo_record.normal =
+        normalize(mul((float3x3)geo_record.instance.model2world, local_normal));
   }
 
   if (_attrib & EGA_Tangent) {
@@ -163,10 +169,20 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
         vtx_buffer.Load<uint>(indices.z, geo_record.geometry.tangent_offset));
 
     geo_record.tangent = Moer::Interpolate(tangents, barycentrics);
-    geo_record.tangent = normalize(mul((float3x3)geo_record.instance.model2world, geo_record.tangent));
+    geo_record.tangent = normalize(
+        mul((float3x3)geo_record.instance.model2world, geo_record.tangent));
   }
 
   return geo_record;
+}
+
+float3 ApplyNormal(float3 _normal, float3 _geom_normal, float3 _tangent) {
+
+  float3 bitangent = cross(_geom_normal, _tangent);
+  float3 normal = _normal.x * _tangent + _normal.y * bitangent +
+                 _normal.z * _geom_normal;
+
+  return normal;
 }
 
 MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
@@ -174,9 +190,9 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
                                       float _mip, EMaterialAttribute _attribs) {
 
   float4 base_color = 0.f;
-  float4 emissive = 0.f;
-  float4 normal = 0.f;
-  float4 materlic_roughness = 0.f;
+  float4 emissive = float4(_geo_record.material.emissive_factor, 1.f);
+  float4 normal = float4(_geo_record.normal, 0.f);
+  float4 metallic_roughness = float4(0.f, 1.f, 1.f, 0.f);
   float4 transmission = 0.f;
 
   bool has_base_color =
@@ -189,17 +205,21 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
       base_color =
           albedo_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x, _grad_y);
     }
+    //do gamma correction
+    base_color.xyz = pow(base_color.xyz, 2.2);
   }
 
   if (_attribs & EMA_Emissive && _geo_record.material.emissive_map != 0) {
     TextureHandle emissive_tex =
         TextureHandle(_geo_record.material.emissive_map);
     if (_mip >= 0.f) {
-      emissive = emissive_tex.SampleLevel<float4>(_geo_record.texcoord, _mip);
+      emissive *= emissive_tex.SampleLevel<float4>(_geo_record.texcoord, _mip);
     } else {
-      emissive = emissive_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x,
-                                                 _grad_y);
+      emissive *= emissive_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x,
+                                                  _grad_y);
     }
+    //do gamma correction
+    emissive.xyz = pow(emissive.xyz, 2.2);
   }
 
   if (_attribs & EMA_Normal && _geo_record.material.normal_map != 0) {
@@ -209,7 +229,15 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
     } else {
       normal =
           normal_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x, _grad_y);
+
+      Texture2D<float4> normal_ = normal_tex.GetTexture2D<float4>();
+      normal = normal_.SampleGrad(g_sampler_linear_repeat,_geo_record.texcoord, _grad_x, _grad_y);
     }
+    //gamma correction
+    normal.xyz = pow(normal.xyz, 2.2);
+
+    // transform normal from tangent space to world space
+    normal.xyz = ApplyNormal(normal.xyz, _geo_record.normal, _geo_record.tangent);
   }
 
   if (_attribs & EMA_MetalRough &&
@@ -217,12 +245,21 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
     TextureHandle metal_rough_tex =
         TextureHandle(_geo_record.material.metallic_roughness_map);
     if (_mip >= 0.f) {
-      materlic_roughness =
+      metallic_roughness =
           metal_rough_tex.SampleLevel<float4>(_geo_record.texcoord, _mip);
     } else {
-      materlic_roughness = metal_rough_tex.SampleGrad<float4>(
+      metallic_roughness = metal_rough_tex.SampleGrad<float4>(
           _geo_record.texcoord, _grad_x, _grad_y);
+      //gamma correction
+      // metallic_roughness.xyz = pow(metallic_roughness.xyz, 2.2);
+
+          // float2 test_uv = float2(0.1069, 0.4126);
+          // float4 test = metal_rough_tex.SampleGrad<float4>(test_uv, _grad_x, _grad_y);
+          // printf("test g:%f\n", test.g );
+
     }
+    //do gamma correction
+    // metallic_roughness.y = pow(metallic_roughness.y, 2.2);
   }
 
   // if(_attribs & EMA_Transmission && _geo_record.material.transmission_map !=
@@ -235,7 +272,7 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
 
   MaterialSample result = MaterialSample::ConstructDefault();
   // currently use geometry normal
-  result.normal = _geo_record.normal;
+  result.normal = normal;
 
   {
     // todo: add specular glossiness workflow
@@ -247,31 +284,20 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
       has_base_color
           ? base_color.xyz * _geo_record.material.base_color_factor.xyz
           : _geo_record.material.base_color_factor.xyz;
-  result.roughness = _geo_record.material.roughness_factor;
-  result.metalness = _geo_record.material.metallic_factor;
 
-  result.emissive = _geo_record.material.emissive_factor;
+  result.roughness = _geo_record.material.roughness_factor * metallic_roughness.g;
+  result.metalness =
+      _geo_record.material.metallic_factor * metallic_roughness.b;
 
+  result.emissive = emissive.xyz;
 
   result.occlusion = 1.f;
   result.opacity = 1.f; // todo: support opacity map and factor
   result.transmission = 0.f;
 
-  float emission_level = STL::Color::Luminance(result.emissive);
-  emission_level = saturate(emission_level * 50.0);
-
-  result.metalness = lerp(result.metalness, 0.0, emission_level);
-  result.roughness = lerp(result.roughness, 1.0, emission_level);
-
   STL::BRDF::ConvertBaseColorMetalnessToAlbedoRf0(
       result.base_color, result.metalness, result.diffuse_albedo,
       result.specular_f0);
-  //   if(_geo_record.geometry.GetMaterialIdx() != 1)
-  //   printf("material_id %d base_color %f %f %f matalic %f roughness %f
-  //   emissive %f %f %f\n", _geo_record.geometry.GetMaterialIdx(),
-  //   result.base_color.x, result.base_color.y, result.base_color.z,
-  //   result.metalness, result.roughness,
-  //          result.emissive.x, result.emissive.y, result.emissive.z);
 
   return result;
 }

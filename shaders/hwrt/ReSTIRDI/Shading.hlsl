@@ -31,7 +31,6 @@ main(uint2 dtid
   float3 debug_color_green = float3(0, 1, 0);
   bool b_use_red = false;
   float3 test_color = 0.f;
-  float3 diffuse_prob = 0.f;
   if (res.IsValid()) {
 
     Moer::PolymorphicLightInfo light_info =
@@ -45,7 +44,6 @@ main(uint2 dtid
 
     cur_luminance.x = STL::Color::Luminance(diffuse * surface.diffuse_albedo);
     cur_luminance.y = STL::Color::Luminance(specular);
-    diffuse_prob.r = surface.diffuse_prob;
     specular /= max(surface.specular_f0, 0.001f);
 
 

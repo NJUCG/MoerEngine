@@ -194,7 +194,7 @@ struct Surface {
     s = SpecularTerm(v, l, n, roughness, specular_f0, fresnel);
     if (roughness == 0.f) {
       // perfect reflection, diffuse term is 0
-      d = 0.f;
+      // d = 0.f;
     }
     float3 reflect_radiance =
         ((1.f - fresnel) * d * diffuse_albedo + s) * _sample.radiance;
@@ -236,9 +236,9 @@ struct Surface {
     // TODO: try out:
     // https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/
 
-    // RT Gems "A Fast and Robust Method for Avoiding Self-Intersection" ( updated
-    // version taken from Falcor ) Moves the ray origin further from surface to
-    // prevent self-intersections, minimizes the distance.
+    // RT Gems "A Fast and Robust Method for Avoiding Self-Intersection" (
+    // updated version taken from Falcor ) Moves the ray origin further from
+    // surface to prevent self-intersections, minimizes the distance.
     const float origin = 1.0 / 16.0;
     const float fScale = 3.0 / 65536.0;
     const float iScale = 3.0 * 256.0;
@@ -252,7 +252,6 @@ struct Surface {
     float3 fOff = N * fScale;
 
     return select(abs(X) < origin, X + fOff, iPos);
-  
   }
   RayDesc SetupVisibilityRay(float3 _sample_pos, float _x_offset = 0.1f) {
 
@@ -262,8 +261,8 @@ struct Surface {
     RayDesc ray;
     ray.Origin = start_point;
     ray.Direction = normalize(l);
-    ray.TMin = _x_offset;
-    ray.TMax = max(_x_offset, length(l) - 2 * _x_offset);
+    ray.TMin = 0.f;
+    ray.TMax = max(_x_offset, length(l));
     return ray;
   }
 
@@ -281,7 +280,7 @@ struct Surface {
     const float roughness_threshold = 0.15f;
     const float reflectance_threshold = 0.25f;
     const float albedo_threshold = 0.25f;
-    if(_other.roughness * roughness == 0.f){
+    if (_other.roughness * roughness == 0.f) {
       return false;
     }
 
@@ -521,18 +520,6 @@ bool RaytraceLocalLightVisibility(float3 _origin, float3 _direction,
                                ray_query.CommittedGeometryIndex(),
                                ray_query.CommittedPrimitiveIndex());
     uv = ray_query.CommittedTriangleBarycentrics();
-
-    // calculate intersection point
-    // if (_light_idx != s_invalid_light_idx) {
-    //   float3 pos = ray_query.CommittedRayT() * _direction + _origin;
-    //   float2 rand = Math::BaryCentricsToRand2(Math::HitUVToBarycentrics(uv));
-    //   PolymorphicLightSample sp =
-    //       TriangleLight::Create(LoadLightInfo(_light_idx))
-    //           .Sample(rand, _origin);
-    //   printf("pos %f %f %f sample pos %f %f %f\n", pos.x, pos.y, pos.z,
-    //          sp.pos.x, sp.pos.y, sp.pos.z);
-    // }
-    // printf("calc dir dot ray dir %f\n", dot(calc_dir, _direction));
   }
 #else
 #endif
@@ -657,14 +644,16 @@ float3 GetFinalVisibility(RaytracingAccelerationStructure _tlas,
       }
     }
   }
-  if (ray_query.CandidateType() == COMMITTED_TRIANGLE_HIT) {
+  if (ray_query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
     payload.instance_id = ray_query.CommittedInstanceID();
     payload.geom_id = ray_query.CommittedGeometryIndex();
     payload.prim_id = ray_query.CommittedPrimitiveIndex();
     payload.barycentrics = ray_query.CommittedTriangleBarycentrics();
     payload.committed_ray_t = ray_query.CommittedRayT();
     payload.front_face = ray_query.CommittedTriangleFrontFace();
+
   }
+
 
   if (payload.instance_id == ~0u)
     return payload.throughput.xyz;

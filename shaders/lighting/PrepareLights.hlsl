@@ -92,6 +92,47 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
     float3 emissive = mat.emissive_factor;
 
     // TODO: handle emissive texture
+    // printf("mat.emissive_map %d\n", mat.emissive_map);
+    if(mat.emissive_map != 0){
+      TextureHandle emissive_tex = (TextureHandle)mat.emissive_map;
+      float2 uvs[3];
+      uvs[0] = vtx_buffer.Load<float2>(idx.x, geom.texcoord0_offset);
+      uvs[1] = vtx_buffer.Load<float2>(idx.y, geom.texcoord0_offset);
+      uvs[2] = vtx_buffer.Load<float2>(idx.z, geom.texcoord0_offset);
+
+      float2 edges[3];
+      edges[0] = uvs[1] - uvs[0];
+      edges[1] = uvs[2] - uvs[0];
+      edges[2] = uvs[2] - uvs[1];
+
+      float3 edge_lengths = float3(length(edges[0]), length(edges[1]), length(edges[2]));
+      float2 short_edge;
+      float2 long_edge1;
+      float2 long_edge2;
+
+      if(edge_lengths.x < edge_lengths.y && edge_lengths.x < edge_lengths.z){
+        short_edge = edges[0];
+        long_edge1 = edges[1];
+        long_edge2 = edges[2];
+      }
+      else if(edge_lengths.y < edge_lengths.x && edge_lengths.y < edge_lengths.z){
+        short_edge = edges[1];
+        long_edge1 = edges[0];
+        long_edge2 = edges[2];
+      }
+      else{
+        short_edge = edges[2];
+        long_edge1 = edges[0];
+        long_edge2 = edges[1];
+      }
+
+      float2 short_grad = short_edge * 2.f / 3.f;
+      float2 long_grad = (long_edge1 + long_edge2) / 3.f;
+
+      float2 center_uv = (uvs[0] + uvs[1] + uvs[2]) / 3.f;
+      float3 emissive_mask = emissive_tex.SampleGrad<float3>(center_uv, short_grad, long_grad);
+      emissive *= emissive_mask;
+    }
 
     emissive.rgb = max(emissive.rgb, 0.0f);
     Moer::TriangleLight tri_light = (Moer::TriangleLight)0;
