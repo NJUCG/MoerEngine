@@ -78,7 +78,8 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
                                      EGeometryAttrib _attrib,
                                      ByteAddressBuffer _instance_data,
                                      ByteAddressBuffer _geometry_data,
-                                     ByteAddressBuffer _material_data) {
+                                     ByteAddressBuffer _material_data,
+                                     bool _b_backface = false) {
 
   GeometryRecord geo_record = (GeometryRecord)0;
 
@@ -155,6 +156,10 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
 
     geo_record.normal =
         normalize(mul((float3x3)geo_record.instance.model2world, local_normal));
+
+    if (_b_backface) {
+      geo_record.normal = -geo_record.normal;
+    }
   }
 
   if (_attrib & EGA_Tangent) {
@@ -179,8 +184,8 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
 float3 ApplyNormal(float3 _normal, float3 _geom_normal, float3 _tangent) {
 
   float3 bitangent = cross(_geom_normal, _tangent);
-  float3 normal = _normal.x * _tangent + _normal.y * bitangent +
-                 _normal.z * _geom_normal;
+  float3 normal =
+      _normal.x * _tangent + _normal.y * bitangent + _normal.z * _geom_normal;
 
   return normal;
 }
@@ -205,8 +210,8 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
       base_color =
           albedo_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x, _grad_y);
     }
-    //do gamma correction
-    // base_color.xyz = pow(base_color.xyz, 2.2);
+    // do gamma correction
+    //  base_color.xyz = pow(base_color.xyz, 2.2);
   }
 
   if (_attribs & EMA_Emissive && _geo_record.material.emissive_map > 0) {
@@ -218,7 +223,7 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
       emissive *= emissive_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x,
                                                   _grad_y);
     }
-    //do gamma correction
+    // do gamma correction
     emissive.xyz = pow(emissive.xyz, 2.2);
   }
 
@@ -231,13 +236,15 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
           normal_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x, _grad_y);
 
       Texture2D<float4> normal_ = normal_tex.GetTexture2D<float4>();
-      normal = normal_.SampleGrad(g_sampler_linear_repeat,_geo_record.texcoord, _grad_x, _grad_y);
+      normal = normal_.SampleGrad(g_sampler_linear_repeat, _geo_record.texcoord,
+                                  _grad_x, _grad_y);
     }
-    //gamma correction
-    // normal.xyz = pow(normal.xyz, 2.2);
+    // gamma correction
+    //  normal.xyz = pow(normal.xyz, 2.2);
 
     // transform normal from tangent space to world space
-    normal.xyz = ApplyNormal(normal.xyz, _geo_record.normal, _geo_record.tangent);
+    normal.xyz =
+        ApplyNormal(normal.xyz, _geo_record.normal, _geo_record.tangent);
   }
 
   if (_attribs & EMA_MetalRough &&
@@ -250,7 +257,7 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
     } else {
       metallic_roughness = metal_rough_tex.SampleGrad<float4>(
           _geo_record.texcoord, _grad_x, _grad_y);
-      //gamma correction
+      // gamma correction
       metallic_roughness.xyz = pow(metallic_roughness.xyz, 2.2);
     }
   }
@@ -265,9 +272,11 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
 
   // use metallic roughness workflow
 
-  result.base_color = base_color.xyz * _geo_record.material.base_color_factor.xyz;
+  result.base_color =
+      base_color.xyz * _geo_record.material.base_color_factor.xyz;
 
-  result.roughness = _geo_record.material.roughness_factor * metallic_roughness.g;
+  result.roughness =
+      _geo_record.material.roughness_factor * metallic_roughness.g;
   result.metalness =
       _geo_record.material.metallic_factor * metallic_roughness.b;
 

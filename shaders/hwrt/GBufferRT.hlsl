@@ -43,10 +43,12 @@ struct RayPayload {
   uint geom_id;
   uint prim_id;
   float2 barycentrics;
+  bool b_backface;
 };
 
 bool ProcessAnyHit(inout RayPayload payload, uint instance_id, uint geom_id,
-                   uint prim_id, float2 barycentrics, float t) {
+                   uint prim_id, float2 barycentrics, float t,
+                   bool b_backface = false) {
 
   ArrayBuffer instance_data_array = ArrayBuffer(param.instance_data_handle);
   ArrayBuffer geom_data_array = ArrayBuffer(param.geometry_data_handle);
@@ -103,6 +105,7 @@ float3 UintHashToColor(uint _idx) {
   payload.instance_id = ~0u;
   payload.prim_id = 0;
   payload.barycentrics = 0.f;
+  payload.b_backface = false;
 
 #if USE_RAYQUERY
   RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> ray_query;
@@ -125,7 +128,7 @@ float3 UintHashToColor(uint _idx) {
     payload.prim_id = ray_query.CommittedPrimitiveIndex();
     payload.barycentrics = ray_query.CommittedTriangleBarycentrics();
     payload.committed_ray_t = ray_query.CommittedRayT();
-
+    payload.b_backface = !ray_query.CommittedTriangleFrontFace();
     // printf("hit instance %d\n", payload.instance_id);
   }
 #else
@@ -148,7 +151,7 @@ float3 UintHashToColor(uint _idx) {
         payload.barycentrics, Moer::EGA_All,
         instance_data_array.GetByteAddressBuffer(),
         geom_data_array.GetByteAddressBuffer(),
-        material_data_array.GetByteAddressBuffer());
+        material_data_array.GetByteAddressBuffer(), payload.b_backface);
 
     // compute gradient
     RayDesc r0 = ray;
@@ -199,16 +202,8 @@ float3 UintHashToColor(uint _idx) {
     gbuffer_clip_depth[pixel_pos] = clip_depth;
     gbuffer_diffuse_albedo[pixel_pos] =
         Moer::Pack_R11G11B10_UFLOAT(mat_sample.diffuse_albedo);
-    // gbuffer_specular_roughness[pixel_pos] = Moer::Pack_R8G8B8A8_Gamma_UFLOAT(
-    //     float4(mat_sample.specular_f0, mat_sample.roughness));
     gbuffer_specular_roughness[pixel_pos] = Moer::Pack_R8G8B8A8_Gamma_UFLOAT(
         float4(mat_sample.specular_f0, mat_sample.roughness));
-    // float4 before_pack = float4(mat_sample.specular_f0,
-    // mat_sample.roughness); float4 unpacked =
-    // Moer::Unpack_R8G8B8A8_Gamma_UFLOAT(gbuffer_specular_roughness[pixel_pos]);
-    // printf("before pack %f %f %f %f unpacked %f %f %f %f\n", before_pack.x,
-    // before_pack.y, before_pack.z,
-    //        before_pack.w, unpacked.x, unpacked.y, unpacked.z, unpacked.w);
     gbuffer_normal[pixel_pos] = Math::NdirToOctUnorm32(mat_sample.normal);
 
     gbuffer_emissive[pixel_pos] = float4(mat_sample.emissive, max_glass_hit_t);
