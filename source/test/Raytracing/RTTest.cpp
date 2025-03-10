@@ -417,9 +417,13 @@ int main(int argc, const char** argv) {
     timer.Start();
     uint64 last_time = 0ull;
 
-    bool                  b_feedback_valid   = false;
-    bool                  b_export           = false;
-    std::filesystem::path exported_file_path = path / "saved";
+    bool                  b_feedback_valid               = false;
+    bool                  b_export                       = false;
+    std::string           selected_material_texture_name = "";
+    bool                  b_final_show_texture           = false;
+    bool                  b_use_bindless                 = true;
+    uint                  mip_level                      = 0;
+    std::filesystem::path exported_file_path             = path / "saved";
     if (!std::filesystem::exists(exported_file_path)) {
         std::filesystem::create_directory(exported_file_path);
     }
@@ -532,8 +536,6 @@ int main(int argc, const char** argv) {
                 rt_ctx->SetRaytracingScene(rt_scene);
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
 
-                if (env_map) {
-                }
                 first_load = false;
 
                 cmd_list.UpdateBindlessArray(bindless_array);
@@ -546,9 +548,9 @@ int main(int argc, const char** argv) {
                 build_params.reserve(g_scene.GetEntityCount());
 
                 g_scene.ForEach([&](Entity _entity) {
-                    auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
-
-                    RaytracingGeometryInfo rt_geo_info{};
+                    auto&                          mesh      = RenderableManager::Get().GetMeshInfo(_entity);
+                    std::span<MaterialInstanceRef> materials = RenderableManager::Get().GetMaterialInstances(_entity);
+                    RaytracingGeometryInfo         rt_geo_info{};
                     rt_geo_info.build_flags   = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
                     rt_geo_info.vertex_format = PF_R32G32B32_SFLOAT;
                     rt_geo_info.index_type    = IET_UINT32;
@@ -558,9 +560,12 @@ int main(int argc, const char** argv) {
                         uint vtx_count  = mesh->geometries[i]->local_vtx_count;
                         uint idx_offset = mesh->geometries[i]->local_idx_offset;
                         uint idx_count  = mesh->geometries[i]->local_idx_count;
-
                         auto vtx_buffer = mesh->geometries[i]->mesh_buffers->vertex_buffer;
                         auto idx_buffer = mesh->geometries[i]->mesh_buffers->index_buffer;
+
+                        //evaluate material
+                        MaterialInstanceRef mat_instance = materials[i];
+                        mat_instance->GetMaterial()->GetType();
 
                         rt_geo_info.segments.emplace_back(
                             0,                                        // vertex_offset
@@ -602,11 +607,26 @@ int main(int argc, const char** argv) {
                 sampled_textures.reserve((g_scene.GetGpuScene().material_textures.size()));
 
                 for (auto& [name, tex] : g_scene.GetGpuScene().material_textures) {
-                    sampled_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+                    sampled_textures.emplace_back(ImportTexture(tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE));
                 }
 
                 cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
                 cmd_list.UpdateRaytracingScene(rt_scene);
+
+                rt_ui.RegisterUIFunc("Display MaterialTexture", [&g_scene, &selected_material_texture_name, &b_use_bindless, &b_final_show_texture, &mip_level]() {
+                    ImGui::Checkbox("Show Final Texture", &b_final_show_texture);
+                    ImGui::SliderInt("Mip Level", (int*)&mip_level, 0, 12);
+                    ImGui::Checkbox("Use Bindless", &b_use_bindless);
+                    if (ImGui::TreeNode("MaterialTexture")) {
+                        for (auto& [name, tex] : g_scene.GetGpuScene().material_textures) {
+                            //selectable
+                            if (ImGui::Selectable(name.data(), selected_material_texture_name == name)) {
+                                selected_material_texture_name = name;
+                            }
+                        }
+                        ImGui::TreePop();
+                    }
+                });
 
                 // cmd_list.UpdateRaytracingScene(rt_scene);
                 gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, last_io_change_timeline));
@@ -648,7 +668,6 @@ int main(int argc, const char** argv) {
             }
 
             if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
-
                 for (size_t i = 0; i < g_scene.GetEntityCount(); i++) {
                     auto& instance = rt_scene->GetInstance(i);
                     // instance.transform = TransformManager::Get().Get(g_scene.GetEntities()[i]).GetMatrix3x4();
@@ -665,7 +684,6 @@ int main(int argc, const char** argv) {
             auto camera        = CameraManager::Get().Get(camera_entity);
             //prepare frame
             {
-
                 rt_config_param.world2view_prev = Transpose(camera->GetViewMatrix());
                 rt_config_param.world2clip_prev = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
 
@@ -717,7 +735,6 @@ int main(int argc, const char** argv) {
             AntialiasPass::Params   aa_params{};
             //fill ui data
             {
-
                 auto        grid_cfg           = is_ctx.GetGridChangableConfig();
                 const auto& ui_cfg             = rt_ui.GetConfig();
                 grid_cfg.cell_size             = rt_ui.GetConfig().grid_config.cell_size;
@@ -838,34 +855,16 @@ int main(int argc, const char** argv) {
                                     rt_ctx->frame_rt.hdr_color,
                                     rt_ctx->frame_rt.resolved_color);
             tone_mapping_pass->Process(cmd_list, *rt_ctx, tone_params, rt_ctx->frame_rt.resolved_color, rt_ctx->frame_rt.ldr_color);
-            // TestInlineRTShader::Param param;
-            // param.global_param_handle    = view_buffer_handle;
-            // param.material_buffer_handle = material_buffer_idx;
-            // param.instance_buffer_handle = instance_buffer_handle;
-            // param.geometry_buffer_handle = geometry_buffer_handle;
-            // param.light_buffer_handle    = light_buffer_handle;
-            // param.rect                   = uint2(resolution.x, resolution.y);
-            // param.inv_rect               = float2(1.f / resolution.x, 1.f / resolution.y);
-            // param.jitter                 = float2(0, 0);
-            // param.frame_idx              = time;
-
-            // cmd_list.Compute(rt_shader,
-            //                  param,
-            //                  rt_config_param_buffer,
-            //                  out_normal_roughness,
-            //                  out_basecolor_metalness,
-            //                  out_direct_lighting,
-            //                  out_emission,
-            //                  out_diffuse,
-            //                  out_specular,
-            //                  out_view_z,
-            //                  out_mv,
-            //                  out_shadow_info,
-            //                  rt_ctx->frame_rt.scene_color,
-            //                  bindless_array,
-            //                  rt_scene->GetTlas())
-            //     .Dispatch(uint3((resolution.x + 15) >> 4, (resolution.y + 15) >> 4, 1), "PathTracing");
             visualize_pass->Process(cmd_list, *rt_ctx, visualize_config, bindless_array);
+            if (b_final_show_texture && g_scene.GetGpuScene().material_textures.contains(selected_material_texture_name)) {
+                TextureRef        texture = g_scene.GetGpuScene().material_textures[selected_material_texture_name].texture;
+                ShowTextureParams show_texture_params{};
+                show_texture_params.dst_dim      = resolution;
+                show_texture_params.bdls_handle  = g_scene.GetGpuScene().material_textures[selected_material_texture_name].bindless_handle;
+                show_texture_params.mip_level    = mip_level;
+                show_texture_params.use_bindless = b_use_bindless;
+                sd_utils.ShowTexture(cmd_list, bindless_array, show_texture_params, texture, rt_ctx->frame_rt.ldr_color);
+            }
             //copy normal to output
             // cmd_list.CopyFrom(out_direct_lighting->GetView(), scene_color->GetView());
             rt_ctx->AdvanceFrame();
@@ -991,18 +990,18 @@ int main(int argc, const char** argv) {
 
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);
-        Sampler linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
-
+        Sampler    linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
+        TextureRef final_color = b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color;
         if (rt_ui.IsSeperateWindow() && rt_ui.GetWindowFrameBuffer().GetTexture()) {
             auto frame_buffer = rt_ui.GetWindowFrameBuffer();
             auto scene_res    = rt_ui.GetSceneColorResolution();
             auto scene_pos    = rt_ui.GetSceneColorPos();
-            cmd_list.Gfx(sample_tex, rt_ctx->frame_rt.debug_color, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
+            cmd_list.Gfx(sample_tex, final_color, linear_sampler).Draw("SampleTexture", Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(frame_buffer.GetTexture()));
         } else {
             float2 f_res  = float2(resolution.x, resolution.y);
             float2 min_xy = rt_ui.GetSceneColorPos() / f_res;
             float2 max_xy = (rt_ui.GetSceneColorPos() + rt_ui.GetSceneColorResolution()) / f_res;
-            cmd_list.Gfx(combine_ui, rt_ctx->frame_rt.debug_color, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
+            cmd_list.Gfx(combine_ui, final_color, ui_frame_buffer, linear_sampler, CombineUIPipeline::Param{min_xy, max_xy})
                 .Draw("CombineUI",
                       Rect2D(0, 0, resolution.x, resolution.y),
                       {},

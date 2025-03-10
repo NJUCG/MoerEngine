@@ -1,4 +1,5 @@
 #include "ShaderUtils.h"
+#include "PixelFormat.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/utils/Packing.h"
@@ -13,6 +14,13 @@ namespace Moer::Render {
         gen_low_discrepancy_pipeline = std::move(manager.Compute<GenLowDiscrepancyPipeline>("utils/GenLowDiscrepancySequence.hlsl"));
         generate_mip_pdf_pipeline    = std::move(manager.Compute<GenerateMipPdfPipeline>("lighting/ProcessEnvironmentMap.hlsl"));
         generate_mips_pipeline       = std::move(manager.Compute<GenerateMipsPipeline>("utils/BuildMips.hlsl"));
+
+        GfxPsoCreateInfo show_texture_pso_info(RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)});
+        show_texture_pipeline = std::move(manager
+                                              .Raster()
+                                              .Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl")
+                                              .Pixel("utils/ShowTexture.frag.hlsl")
+                                              .Build<ShowTexturePipeline>(std::move(show_texture_pso_info)));
     }
 
     void ShaderUtils::GenerateLowDiscrepancySequence(CommandList& _cmd_list, GenLowDiscrepancySequenceParam _param, BufferView _output) {
@@ -76,5 +84,9 @@ namespace Moer::Render {
             width  = std::max(1u, width >> 5);
             height = std::max(1u, height >> 5);
         }
+    }
+
+    void ShaderUtils::ShowTexture(CommandList& _cmd_list, BindlessArrayRef _bdls, const ShowTextureParams& _param, TextureRef _src_tex, TextureRef _dst_texture) {
+        _cmd_list.Gfx(show_texture_pipeline, _param, _src_tex->GetView(0, _src_tex->GetNumMips()), _bdls).Draw("ShowTexture", Rect2D(0, 0, _dst_texture->GetExtent().x, _dst_texture->GetExtent().y), {}, 3, {SingleDrawParam(3, 1, 0, 0, 0)}, ColorAttachment(_dst_texture));
     }
 }// namespace Moer::Render

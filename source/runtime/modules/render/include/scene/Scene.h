@@ -92,6 +92,11 @@ namespace Moer {
         }
     };
 
+    struct SceneTexture {
+        Render::TextureRef texture;
+        uint               bindless_handle;
+    };
+
     //////////////////////////////////////////////////////////////////////////
     //cpu data
     //////////////////////////////////////////////////////////////////////////
@@ -306,7 +311,7 @@ namespace Moer {
         uint              GetEntityCount() const noexcept;
 
         // [temperory]
-        void RegisterMaterialTextures(UnorderedMap<std::string, Render::TextureRef> _textures) noexcept;
+        void RegisterMaterialTextures(UnorderedMap<std::string, SceneTexture> _textures) noexcept;
 
         static Scene* GetCurrentScene() noexcept;
         static void   SetCurrentScene(Scene* _scene) noexcept;
@@ -349,7 +354,7 @@ namespace Moer {
         Render::BufferRef          vertex_buffer{nullptr}, index_buffer{nullptr};
         Render::BindlessArrayRef   bindless_array{nullptr};
 
-        UnorderedMap<std::string, Render::TextureRef> material_textures;
+        UnorderedMap<std::string, SceneTexture> material_textures;
     };
 
     extern RENDER_API Scene* g_scene;

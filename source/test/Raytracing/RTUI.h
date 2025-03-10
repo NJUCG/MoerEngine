@@ -118,6 +118,9 @@ namespace Moer::Render {
         bool        IsSeperateWindow() const;
         TextureView GetWindowFrameBuffer();
 
+        void RegisterUIFunc(std::string_view _name, std::function<void()>&& _func);
+        void UnregisterUIFunc(std::string_view _name);
+
     private:
         void ShowSceneColor();
         void ShowConfig();
@@ -130,7 +133,8 @@ namespace Moer::Render {
         bool   b_show = true;
         Config config;
 
-        UnorderedMap<std::string, uint> final_color_map;
+        UnorderedMap<std::string, uint>                       final_color_map;
+        UnorderedMap<std::string_view, std::function<void()>> show_func_map;
 
         UIRenderer& ui_renderer;
     };

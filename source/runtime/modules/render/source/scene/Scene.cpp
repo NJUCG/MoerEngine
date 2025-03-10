@@ -301,7 +301,7 @@ namespace Moer {
         return m_impl->m_entities.size();
     }
 
-    void Scene::RegisterMaterialTextures(UnorderedMap<std::string, Render::TextureRef> _textures) noexcept {
+    void Scene::RegisterMaterialTextures(UnorderedMap<std::string, SceneTexture> _textures) noexcept {
         m_impl->gpu_scene.material_textures.insert(_textures.begin(), _textures.end());
     }
 

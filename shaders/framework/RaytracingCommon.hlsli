@@ -205,7 +205,7 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
   if (has_base_color) {
     TextureHandle albedo_tex = TextureHandle(_geo_record.material.albedo_map);
     if (_mip >= 0.f) {
-      base_color = albedo_tex.SampleLevel<float4>(_geo_record.texcoord, _mip);
+      base_color = albedo_tex.SampleLevel(_geo_record.texcoord, _mip);
     } else {
       base_color =
           albedo_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x, _grad_y);

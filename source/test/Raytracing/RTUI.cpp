@@ -167,6 +167,7 @@ namespace Moer::Render {
         final_color_map["Grid"]       = EFinalColor::EFC_GRID;
         final_color_map["Material"]   = EFinalColor::EFC_MATERIAL;
         final_color_map["Position"]   = EFinalColor::EFC_POSITION;
+        final_color_map["Custom"]     = EFinalColor::EFC_CUSTOM;
 
         StyleColorsDark();
     }
@@ -459,6 +460,11 @@ namespace Moer::Render {
         if (ImGui::Button("Capture Screen")) {
             config.export_cfg.b_export = true;
         }
+
+        for (auto& [name, func] : show_func_map) {
+            ImGui::Separator();
+            func();
+        }
         ImGui::End();
     }
 
@@ -474,5 +480,13 @@ namespace Moer::Render {
             return ui_renderer.GetWindowFrameBuffer(current_window->Viewport);
         }
         return TextureView();
+    }
+
+    void RTUI::RegisterUIFunc(std::string_view _name, std::function<void()>&& _func) {
+        show_func_map[_name] = std::move(_func);
+    }
+
+    void RTUI::UnregisterUIFunc(std::string_view _name) {
+        show_func_map.erase(_name);
     }
 }// namespace Moer::Render

@@ -74,9 +74,37 @@ namespace Moer {
         EFC_MATERIAL,
         EFC_INSTANCE,
         EFC_POSITION,
+        EFC_CUSTOM,
         EFC_NUM
     };
+#ifdef __cplusplus
+    enum EMaterialDomain : uint8 {
+#else
+    enum EMaterialDomain {
+#endif
+        MD_Opaque,
+        MD_AlphaTested,
+        MD_AlphaBlended,
+        MD_Transmissive,
+        MD_TransmissiveAlphaTested,
+        MD_TransmissiveAlphaBlended,
+        MD_Num
+    };
 
+#ifdef __cplusplus
+    enum EMaterialFlags : uint {
+#else
+    enum EMaterialFlags {
+#endif
+
+        MF_DoubleSided                 = 1 << 0,
+        MF_UseMetallicRoughnessTexture = 1 << 1,
+        MF_UseBaseColorTexture         = 1 << 2,
+        MF_UseEmmissiveTexture         = 1 << 3,
+        MF_UseNormalTexture            = 1 << 4,
+        MF_UseOcclusionTexture         = 1 << 5,
+        MF_UseTransmissionTexture      = 1 << 6
+    };
     struct ViewParam {
         float4x4 view2world;
         float4x4 world2view;

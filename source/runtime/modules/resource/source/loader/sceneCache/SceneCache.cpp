@@ -1,6 +1,7 @@
 #include "SceneCache.h"
 
 #include "config/ConfigManager.h"
+#include "misc/STL.h"
 #include "misc/Timer.h"
 #include "resources/GpuScene.h"
 #include "rhi/RHI.h"
@@ -25,6 +26,7 @@
 #include <serialize/Serializer.h>
 #include <span>
 #include <sstream>
+#include <string>
 namespace Moer {
 
     class MaterialSystem {
@@ -596,8 +598,8 @@ namespace Moer {
             builder.Name(texture.first);
         }
         textures = TextureBuilder::BuildTexturesInBatch(texture_builders);
-        Render::Sampler sampler(SF_LINEAR, SAM_REPEAT);
-
+        Render::Sampler                         sampler(SF_LINEAR, SAM_REPEAT);
+        UnorderedMap<std::string, SceneTexture> scene_textures;
         //  scene_data.m_textures = GpuSceneBufferBuilder::
         for (auto& material_instance : _scene_data.m_material_instances) {
 
@@ -607,9 +609,10 @@ namespace Moer {
             for (auto& texture : _scene_data.m_mat_instance_textures[material_instance->GetName()].textures) {
                 uint32_t handle = _scene->GetBindlessArray()->AllocateTexture(textures[texture.second]->GetView(0, textures[texture.second]->GetNumMips()), sampler);
                 material_instance->SetParameter(texture.first, handle);
+                scene_textures[texture.second] = {textures[texture.second], handle};
             }
         }
-        _scene->RegisterMaterialTextures(textures);
+        _scene->RegisterMaterialTextures(scene_textures);
 
         Moer::Array<byte> material_data(_scene_data.m_material_instances.size() * Material::MaterialBytesNum);
         for (auto [name, index] : _scene_data.m_material_instance_indexes) {

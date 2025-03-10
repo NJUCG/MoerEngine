@@ -189,7 +189,7 @@ namespace Moer::Render {
         frame_rt.denoised_specular_lighting = device.CreateTexture("denoised_specular_lighting", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
 
         frame_rt.debug_color = device.CreateTexture("debug_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
+        // frame_rt.final_color = device.CreateTexture("final_color", Extent2D(_resolution), PF_R8G8B8A8_SRGB, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.ldr_color           = device.CreateTexture("ldr_color", Extent2D(_resolution), PF_R8G8B8A8_UNORM, ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
         frame_rt.hdr_color           = device.CreateTexture("hdr_color", Extent2D(_resolution), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         frame_rt.feedback_color_ping = device.CreateTexture("feedback_color", Extent2D(_resolution), PF_R16G16B16A16_SNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
