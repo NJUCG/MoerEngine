@@ -471,7 +471,7 @@ namespace Moer::Render {
         sampler_create_info.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
         sampler_create_info.mipLodBias              = 0.0f;
         sampler_create_info.minLod                  = 0.0f;
-        sampler_create_info.maxLod                  = 0.0f;
+        sampler_create_info.maxLod                  = VK_LOD_CLAMP_NONE;
         for (uint i = 0; i < immutable_sampler_count; ++i) {
             ESamplerFilter          filter           = ESamplerFilter(i % SF_Num);
             ESamplerAddressMode     address_mode     = ESamplerAddressMode((i / SF_Num) % SAM_Num);

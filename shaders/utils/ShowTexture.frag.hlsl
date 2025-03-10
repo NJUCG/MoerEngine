@@ -8,10 +8,15 @@
 
 BINDLESS_BINDINGS(1, 2, 3, 4)
 
-static SamplerState g_spl {
+static SamplerState g_spl{
   Filter = MIN_MAG_MIP_LINEAR;
   AddressU = CLAMP;
   AddressV = CLAMP;
+  AddressW = CLAMP;
+  ComparisonFunc = NEVER;
+  MipLODBias = 0.0f;
+  MinLOD = 1.0f;
+  MaxLOD = 3000.f;
 };
 
 void GetDimensions(out int2 _dimensions) {
@@ -38,6 +43,7 @@ float4 SampleTexture(float2 uv, float mip_level) {
       return float4(0.0f, 0.0f, 0.0f, 1.0f);
     }
     return src_tex.Load(int3(int2(coord), int(mip_level)));
+    // return src_tex.SampleLevel(g_spl, uv, mip_level);
   }
 }
 
