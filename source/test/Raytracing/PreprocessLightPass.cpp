@@ -1,6 +1,8 @@
 #include "PreprocessLightPass.h"
 #include "misc/Hash.h"
 #include "misc/STL.h"
+#include "misc/Timer.h"
+#include "scene/Entity.h"
 #include "scene/MaterialInstance.h"
 #include "scene/RenderableManager.h"
 #include "scene/light/DirectionalLightComponent.h"
@@ -227,19 +229,22 @@ namespace Moer::Render {
             }
             idx++;
         });
+        Timer timer;
+        timer.Start();
 
-        auto light_entities = scene.GetLights();
-        for (auto& entity : light_entities) {
-            LightComponentRef light_data = LightComponentManager::Get().Get(entity);
-        }
+        std::span<const Entity> light_entities_src = scene.GetLights();
+        Array<Entity>           light_entities(light_entities_src.begin(), light_entities_src.end());
+
         std::sort(light_entities.begin(), light_entities.end(), [](Entity _lhs, Entity _rhs) {
             return LightPriority(LightComponentManager::Get().Get(_lhs)) < LightPriority(LightComponentManager::Get().Get(_rhs));
         });
+        timer.Stop();
+        // LOG_INFO("PrepareLightPass::Process, sort time:{}", timer.ElapsedMilliseconds());
+        timer.Start();
         num_prim_lights               = light_buf_offset;
         uint num_finite_prim_lights   = 0;
         uint num_infinite_prim_lights = 0;
         uint num_is_env_lights        = 0;
-
         for (auto& entity : light_entities) {
             LightComponentRef light_data = LightComponentManager::Get().Get(entity);
 
@@ -270,6 +275,8 @@ namespace Moer::Render {
                 num_finite_prim_lights++;
             }
         }
+        timer.Stop();
+        // LOG_INFO("PrepareLightPass::Process, convert time:{}", timer.ElapsedMilliseconds());
         _cmd_list.PushScope("PrepareLights");
         _cmd_list.CopyFrom(std::span<byte>((byte*)geo_instance_to_light.data(), geo_instance_to_light.size() * sizeof(uint)), _rt_ctx.geo_instance_to_light_buf->GetView());
         _cmd_list.CopyFrom(std::span<byte>((byte*)tasks.data(), tasks.size() * sizeof(PrepareLightsTask)), _rt_ctx.task_buf->GetView(0, tasks.size() * sizeof(PrepareLightsTask)));

@@ -521,7 +521,6 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     auto idx_view = render_buffers->idx_buffer->GetView();
     auto arg_view = render_buffers->arg_buffer->GetView();
     // Array<ImGUIArg> copy_back_args(render_buffers->arg_buffer->GetNumElement());
-
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), vtx_view);
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), idx_view);
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)args.data(), args.size() * sizeof(ImGUIArg)), arg_view);

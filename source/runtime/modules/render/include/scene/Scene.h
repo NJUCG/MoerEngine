@@ -267,7 +267,35 @@ namespace Moer {
         uint32_t meshlet_count;
     };
 
-    using EntitySet = Moer::UnorderedSet<Entity, Entity::Hasher>;
+    // using EntitySet = Moer::UnorderedSet<Entity, Entity::Hasher>;
+
+    struct UniqueEntityArray {
+        Array<Entity>            entities;
+        UnorderedMap<uint, uint> entity_map;
+        Array<uint>              free_indices;
+
+        void AddEntity(Entity _entity) {
+            if (free_indices.empty()) {
+                entity_map[_entity.mIdentity] = entities.size();
+                entities.push_back(_entity);
+            } else {
+                uint idx = free_indices.back();
+                free_indices.pop_back();
+                entity_map[_entity.mIdentity] = idx;
+                entities[idx]                 = _entity;
+            }
+        }
+
+        void RemoveEntity(Entity _entity) {
+            auto it = entity_map.find(_entity.mIdentity);
+            if (it != entity_map.end()) {
+                free_indices.push_back(it->second);
+                entity_map.erase(it);
+            }
+        }
+
+        std::span<const Entity> GetEntities() const noexcept { return entities; }
+    };
 
     struct AsyncSceneLoadInfo {
 
@@ -288,27 +316,27 @@ namespace Moer {
     public:
         Scene() noexcept;
         ~Scene() noexcept;
-        void              AddEntity(Entity _entity) noexcept;
-        void              AddCamera(Entity _entity) noexcept;
-        void              AddLight(Entity _entity) noexcept;
-        void              SetTlas(RHIRayTracingTLASRef _tlas) noexcept;
-        void              SetBlasList(Moer::Array<RHIRayTracingBLASRef> _blas_list) noexcept;
-        void              SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept;
-        void              RemoveEntity(Entity _entity) noexcept;
-        void              SetBuffer(const std::string& _name, RHIBufferRef _buffer) noexcept;
-        void              SetBuffer(EGpuSceneResource _type, Render::BufferRef _buffer) noexcept;
-        Render::BufferRef GetBuffer(EGpuSceneResource _type) const noexcept;
-        RHIBufferRef      GetBuffer(const std::string& _name) const noexcept;
-        Array<Entity>     GetEntities() const noexcept;
-        Array<Entity>     GetLights() const noexcept;
-        Array<Entity>     GetCameras() const noexcept;
-        Entity            GetMainCamera() const noexcept;
-        bool              IsEntitiesEmpty() const noexcept;
-        bool              IsLightsEmpty() const noexcept;
-        bool              IsCamerasEmpty() const noexcept;
-        void              ForEach(std::function<void(Entity)> _func) const noexcept;
-        bool              IsReady() const noexcept;
-        uint              GetEntityCount() const noexcept;
+        void                    AddEntity(Entity _entity) noexcept;
+        void                    AddCamera(Entity _entity) noexcept;
+        void                    AddLight(Entity _entity) noexcept;
+        void                    SetTlas(RHIRayTracingTLASRef _tlas) noexcept;
+        void                    SetBlasList(Moer::Array<RHIRayTracingBLASRef> _blas_list) noexcept;
+        void                    SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept;
+        void                    RemoveEntity(Entity _entity) noexcept;
+        void                    SetBuffer(const std::string& _name, RHIBufferRef _buffer) noexcept;
+        void                    SetBuffer(EGpuSceneResource _type, Render::BufferRef _buffer) noexcept;
+        Render::BufferRef       GetBuffer(EGpuSceneResource _type) const noexcept;
+        RHIBufferRef            GetBuffer(const std::string& _name) const noexcept;
+        std::span<const Entity> GetEntities() const noexcept;
+        std::span<const Entity> GetLights() const noexcept;
+        std::span<const Entity> GetCameras() const noexcept;
+        Entity                  GetMainCamera() const noexcept;
+        bool                    IsEntitiesEmpty() const noexcept;
+        bool                    IsLightsEmpty() const noexcept;
+        bool                    IsCamerasEmpty() const noexcept;
+        void                    ForEach(std::function<void(Entity)> _func) const noexcept;
+        bool                    IsReady() const noexcept;
+        uint                    GetEntityCount() const noexcept;
 
         // [temperory]
         void RegisterMaterialTextures(UnorderedMap<std::string, SceneTexture> _textures) noexcept;
