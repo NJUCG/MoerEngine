@@ -31,6 +31,8 @@ namespace Moer::Render {
         };
 
         struct Config {
+            bool b_reset = false;
+
             uint aa_mode = 3; // default ssma 1x
 
             uint  ao_mode           = 1; // default ssao
@@ -51,7 +53,7 @@ namespace Moer::Render {
             uint        selected_frame_buffer_index        = 0;
         };
 
-        RasterUI(UIRenderer& _renderer, const Array<TextureView>& frame_buffer_and_name_array);
+        RasterUI(UIRenderer& _renderer);
         ~RasterUI() = default;
         void TickUI();
 

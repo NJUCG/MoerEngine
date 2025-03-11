@@ -308,6 +308,11 @@ namespace Moer::Render {
 
         ShowStyleSelector("Colors##Default");
 
+        config.b_reset = false;
+        if (ImGui::Button("Reset")) {
+            config.b_reset = true;
+        }
+
         if (ImGui::TreeNode("Final Color")) {
             for (auto& [name, index] : final_color_map) {
                 if (ImGui::Selectable(name.c_str(), config.final_color == index)) {

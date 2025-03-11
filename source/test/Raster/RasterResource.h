@@ -101,15 +101,21 @@ namespace Moer::Render {
             gpu_light_info_handle =
                 bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
 
-            // Textures
-            Array<ImportTexture> sampled_textures;
-            sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
-            for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
-                sampled_textures.emplace_back(
-                    ImportTexture(tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE)
-                );
+            static bool first_load = true;
+
+            if (first_load) {
+                first_load = false;
+
+                // Textures
+                Array<ImportTexture> sampled_textures;
+                sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
+                for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
+                    sampled_textures.emplace_back(ImportTexture(
+                        tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE
+                    ));
+                }
+                cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
             }
-            cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
 
             // Bindless
             cmd_list.UpdateBindlessArray(bdls);
