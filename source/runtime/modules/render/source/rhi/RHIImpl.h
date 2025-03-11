@@ -963,6 +963,22 @@ namespace Moer::Render {
         UnorderedMap<uint64, uint> related_geometries;
     };
 
+    //command for push/pop debug scope
+    struct ScopeCmd : public Command {
+    public:
+        ScopeCmd(std::string_view _name, bool _push) : Command(EType::Scope, _name), b_push(_push), scope_name(_name) {}
+
+    public:
+        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+        bool       IsPush() const { return b_push; }
+        bool       IsPop() const { return !b_push; }
+        auto       ScopeName() const { return scope_name; }
+
+    private:
+        bool             b_push = false;
+        std::string_view scope_name;
+    };
+
     struct CustomCmd : public Command {
     public:
         enum class CustomCmdId : uint8 {

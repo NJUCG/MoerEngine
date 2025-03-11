@@ -6,9 +6,11 @@
 #include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
+#include "vulkan/vulkan_core.h"
 #include <functional>
 #include <mutex>
 namespace Moer::Render {
+    static constexpr uint s_queue_max_frame_in_flight = 3;
     class VkNativeQueue {
     public:
         VkNativeQueue(EQueueType _type, VulkanDevice& _device);
@@ -59,7 +61,10 @@ namespace Moer::Render {
             }
         };
 
-        VkCommandQueue(VulkanDevice& _device, EQueueType _type) : CommandQueue(), vk_device(_device), queue(_type, _device) {
+        VkCommandQueue(VulkanDevice& _device, EQueueType _type) : CommandQueue(),
+                                                                  vk_device(_device),
+                                                                  queue(_type, _device),
+                                                                  timestamp_pool(_device, VK_QUERY_TYPE_TIMESTAMP, s_queue_max_frame_in_flight * 1000) {
             timeline = MoerNew(VulkanFence(vk_device));
             thread   = std::jthread(&VkCommandQueue::ExecuteThread, this);
             enabled  = true;
@@ -106,15 +111,16 @@ namespace Moer::Render {
         void                       Signal();
 
     private:
-        uint64                   last_frame = 0;
-        CircularQueue<uint64, 3> executed_queue;
-        std::atomic<uint64>      executed_frame = 0;
-        CircularQueue<uint64, 3> presented_queue;
-        VulkanFence*             timeline = nullptr;
-        std::mutex               event_mutex;
-        bool                     enabled{false};
-        std::condition_variable  queue_cv;// wake up execute thread from sleeping
-        VkNativeQueue            queue;
+        uint64                                             last_frame = 0;
+        CircularQueue<uint64, s_queue_max_frame_in_flight> executed_queue;
+        std::atomic<uint64>                                executed_frame = 0;
+        CircularQueue<uint64, s_queue_max_frame_in_flight> presented_queue;
+        VulkanFence*                                       timeline = nullptr;
+        std::mutex                                         event_mutex;
+        bool                                               enabled{false};
+        std::condition_variable                            queue_cv;// wake up execute thread from sleeping
+        VkNativeQueue                                      queue;
+        VkNativeQueryPool                                  timestamp_pool;
 
         std::mutex   exec_mtx;
         std::jthread thread;

@@ -3,6 +3,7 @@
 //
 
 #include "PixelFormat.h"
+#include "VulkanQueue.h"
 #include "VulkanResourceTracker.h"
 #include "log/LogSystem.h"
 #include "math/Constant.h"
@@ -1378,6 +1379,14 @@ namespace Moer::Render {
 
     void VulkanCmdList::ClearTexture(VulkanTexture* _texture, const VkClearColorValue& _color, const VkImageSubresourceRange& _range) {
         vkCmdClearColorImage(command_buffer, _texture->GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &_color, 1, &_range);
+    }
+
+    void VulkanCmdList::ResetQueryPool(VkNativeQueryPool& _query_pool, uint32 _first_query, uint32 _query_cnt) {
+        vkCmdResetQueryPool(command_buffer, _query_pool.GetHandle(), _first_query, _query_cnt);
+    }
+
+    void VulkanCmdList::WriteTimeStamp(VkNativeQueryPool& _query_pool, uint32 _query_idx, VkPipelineStageFlagBits2 _stage) {
+        vkCmdWriteTimestamp2(command_buffer, _stage, _query_pool.GetHandle(), _query_idx);
     }
 
     void VulkanCmdList::Dispatch(uint _group_count_x, uint _group_count_y, uint _group_count_z) {

@@ -57,6 +57,7 @@ namespace Moer::Render {
         TextureRef   _target) {
         bool b_enable_lut = _params.enable_color_lut && color_lut_size > 0;
 
+        _cmd_list.PushScope("ToneMappingPass");
         ToneMappingParams params{};
         params.log_luminance_scale          = 1.f / (g_max_log_luminamce - g_min_log_luminance);
         params.log_luminance_bias           = -g_min_log_luminance * params.log_luminance_scale;
@@ -86,6 +87,7 @@ namespace Moer::Render {
         ComputeHistogram(_cmd_list, _src_tex);
         ComputeExposure(_cmd_list, _params);
         Render(_cmd_list, _rt_ctx, _params, _src_tex, _target);
+        _cmd_list.PopScope();
     }
 
     void ToneMappingPass::Render(

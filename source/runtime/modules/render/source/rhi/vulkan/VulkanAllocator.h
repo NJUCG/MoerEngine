@@ -59,6 +59,21 @@ namespace Moer::Render {
         VkTracker tracker;
     };
 
+    class VkNativeQueryPool {
+    public:
+        VkNativeQueryPool(VulkanDevice& _device, VkQueryType _type, uint32 _count);
+        ~VkNativeQueryPool();
+        VkQueryPool GetHandle() const { return query_pool; }
+        uint32      GetCount() const { return count; }
+        void        GetResults(std::span<uint64> _results, uint32 _first_query, uint32 _query_cnt, VkQueryResultFlags _flags);
+
+    private:
+        VulkanDevice& device;
+        VkQueryPool   query_pool;
+        uint32        count;
+        VkQueryType   type;
+    };
+
     class VulkanPresentor : public VulkanAllocatorBase {
     public:
         VulkanPresentor(VulkanDevice* _device, EQueueType _queue_type);
@@ -136,5 +151,7 @@ namespace Moer::Render {
 
         ScratchAllocator      scratch_allocator;
         ShaderBufferAllocator shader_buffer_allocator;
+
+        VkNativeQueryPool timestamp_pool;
     };
 }// namespace Moer::Render

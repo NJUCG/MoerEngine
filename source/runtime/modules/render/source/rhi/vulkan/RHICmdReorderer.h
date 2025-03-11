@@ -296,6 +296,9 @@ namespace Moer::Render {
         struct NoRangeHandle : public ResourceHandle {
             ResourceView view{-1, -1};
         };
+        struct BindlessHandle : public ResourceHandle {
+            ResourceView view{-1, -1};
+        };
         struct CommandListNode {
             Command const*         cmd;
             CommandListNode const* next;
@@ -306,8 +309,9 @@ namespace Moer::Render {
         };
         Array<LinkedCommandList> m_cmd_lists;
 
-        UnorderedMap<uint64, RangeHandle*>   m_range_handles;
-        UnorderedMap<uint64, NoRangeHandle*> m_no_range_handles;
+        UnorderedMap<uint64, RangeHandle*>    m_range_handles;
+        UnorderedMap<uint64, NoRangeHandle*>  m_no_range_handles;
+        UnorderedMap<uint64, BindlessHandle*> m_bindless_handles;
 
         UnorderedSet<uint64> m_write_resources;
         UnorderedSet<uint64> m_writed_geometry;
@@ -323,6 +327,8 @@ namespace Moer::Render {
         ArenaAllocator                      m_arena;
         ArenaAllocatorWrapper<ResourceView> m_arena_stl;
         FunctionTable                       m_funcs;
+
+        int64 layer_offset = -1;
 
     public:
         ResourceHandle* GetHandle(uint64 _handle, ResourceType _type) {
@@ -349,6 +355,7 @@ namespace Moer::Render {
                     return func_emplace(m_range_handles);
                 case ResourceType::Mesh:
                 case ResourceType::Bindless:
+                    return func_emplace(m_bindless_handles);
                 case ResourceType::Accel:
                     return func_emplace(m_no_range_handles);
                 default: {
@@ -357,42 +364,49 @@ namespace Moer::Render {
             }
         }
 
-        //Important: sometimes we use barrier as previous states, last read-write already set by the last command, so we just read
-        int64 GetLastLayer(uint64 _handle, const Range& _range, ResourceType _type) {
-            auto* handle = GetHandle(_handle, _type);
-            switch (_type) {
-                case ResourceType::Texture_Buffer: {
-                    auto* range_handle = static_cast<RangeHandle*>(handle);
-                    return std::max((range_handle->GetMaxReadLayer(_range) - 1), 0ll);
-                }
-                case ResourceType::Mesh:
-                case ResourceType::Bindless:
-                case ResourceType::Accel: {
-                    auto* no_range_handle = static_cast<NoRangeHandle*>(handle);
-                    return std::max(no_range_handle->view.read_layer - 1, 0ll);
-                }
-            }
+        int64 GetLayerWithOffset(int64 _layer) {
+            return std::max(_layer, (int64)layer_offset);
         }
 
         int64 GetLastLayerWrite(RangeHandle* _handle, const Range& _range) {
             int64 layer = _handle->GetMaxReadLayer(_range);
-            return layer + 1;
+            if (m_max_bdls_layer >= layer) {
+                //check contains certain resource
+                for (auto&& i : m_bindless_handles) {
+                    m_funcs.lock_bdls_array(i.first);
+                    if (m_funcs.is_resource_in_bindless(_handle->handle, i.first)) {
+                        layer = std::max(layer, i.second->view.read_layer);
+                    }
+                    m_funcs.unlock_bdls_array(i.first);
+                }
+            }
+            return GetLayerWithOffset(layer + 1);
         }
 
         int64 GetLastLayerWrite(NoRangeHandle* _handle) {
             int64 layer = std::max(_handle->view.read_layer, _handle->view.write_layer);
             //todo: specific layer need to be take cared, like mesh blas build or tlas build
-            return layer + 1;
+            return GetLayerWithOffset(layer + 1);
+        }
+
+        int64 GetLastLayerWrite(BindlessHandle* _handle) {
+            int64 layer = std::max(_handle->view.read_layer, _handle->view.write_layer);
+            return GetLayerWithOffset(layer + 1);
         }
 
         int64 GetLastLayerRead(RangeHandle* _handle, const Range& _range) {
             int64 layer = _handle->GetMaxWriteLayer(_range);
-            return layer + 1;
+            return GetLayerWithOffset(layer + 1);
         }
 
         int64 GetLastLayerRead(NoRangeHandle* _handle) {
             int64 layer = _handle->view.read_layer;
-            return layer + 1;
+            return GetLayerWithOffset(layer + 1);
+        }
+
+        int64 GetLastLayerRead(BindlessHandle* _handle) {
+            int64 layer = _handle->view.write_layer + 1;
+            return GetLayerWithOffset(layer + 1);
         }
 
         void AddCmd(Command const* _cmd, uint64 _layer) {
@@ -412,19 +426,23 @@ namespace Moer::Render {
         int64 SetRead(ResourceHandle* _handle, const Range& _range) {
             int64 layer = 0;
             switch (_handle->type) {
-
-                case ResourceType::Texture_Buffer: {
-                    auto* range_handle = static_cast<RangeHandle*>(_handle);
-                    layer              = GetLastLayerRead(range_handle, _range);
-                    range_handle->EmplaceReadLayer(_range, layer);
+                case ResourceType::Mesh:
+                case ResourceType::Bindless: {
+                    auto* bindless_handle            = static_cast<BindlessHandle*>(_handle);
+                    layer                            = GetLastLayerRead(bindless_handle);
+                    bindless_handle->view.read_layer = layer;
                     break;
                 }
-                case ResourceType::Mesh:
-                case ResourceType::Bindless:
                 case ResourceType::Accel: {
                     auto* no_range_handle            = static_cast<NoRangeHandle*>(_handle);
                     layer                            = GetLastLayerRead(no_range_handle);
                     no_range_handle->view.read_layer = layer;
+                    break;
+                }
+                default: {
+                    auto* range_handle = static_cast<RangeHandle*>(_handle);
+                    layer              = GetLastLayerRead(range_handle, _range);
+                    range_handle->EmplaceReadLayer(_range, layer);
                 }
             }
             return layer;
@@ -437,32 +455,42 @@ namespace Moer::Render {
 
         void RecordRead(ResourceHandle* _handle, Range _range, int64 _layer) {
             switch (_handle->type) {
-                case ResourceType::Texture_Buffer: {
-                    auto* range_handle = static_cast<RangeHandle*>(_handle);
-                    range_handle->EmplaceReadLayer(_range, _layer);
+
+                case ResourceType::Mesh:
+                case ResourceType::Bindless: {
+                    auto* bindless_handle            = static_cast<BindlessHandle*>(_handle);
+                    bindless_handle->view.read_layer = std::max(bindless_handle->view.read_layer, _layer);
                     break;
                 }
-                case ResourceType::Mesh:
-                case ResourceType::Bindless:
                 case ResourceType::Accel: {
                     auto* no_range_handle            = static_cast<NoRangeHandle*>(_handle);
                     no_range_handle->view.read_layer = _layer;
+                    break;
+                }
+                default: {
+
+                    auto* range_handle = static_cast<RangeHandle*>(_handle);
+                    range_handle->EmplaceReadLayer(_range, _layer);
                 }
             }
         }
 
         void RecordWrite(ResourceHandle* _handle, Range _range, int64 _layer) {
             switch (_handle->type) {
-                case ResourceType::Texture_Buffer: {
-                    auto* range_handle = static_cast<RangeHandle*>(_handle);
-                    range_handle->EmplaceWriteLayer(_range, _layer);
+                case ResourceType::Mesh:
+                case ResourceType::Bindless: {
+                    auto* bindless_handle             = static_cast<BindlessHandle*>(_handle);
+                    bindless_handle->view.write_layer = _layer;
                     break;
                 }
-                case ResourceType::Mesh:
-                case ResourceType::Bindless:
                 case ResourceType::Accel: {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(_handle);
                     no_range_handle->view.write_layer = _layer;
+                    break;
+                }
+                default: {
+                    auto* range_handle = static_cast<RangeHandle*>(_handle);
+                    range_handle->EmplaceWriteLayer(_range, _layer);
                 }
             }
         }
@@ -470,22 +498,25 @@ namespace Moer::Render {
         int64 SetWrite(ResourceHandle* _handle, const Range& _range) {
             int64 layer = 0;
             switch (_handle->type) {
-
-                case ResourceType::Texture_Buffer: {
-                    auto* range_handle = static_cast<RangeHandle*>(_handle);
-                    layer              = GetLastLayerWrite(range_handle, _range);
-                    range_handle->EmplaceWriteLayer(_range, layer);
-                    m_write_resources.emplace(_handle->handle);
+                case ResourceType::Mesh:
+                case ResourceType::Bindless: {
+                    auto* bindless_handle             = static_cast<BindlessHandle*>(_handle);
+                    layer                             = GetLastLayerWrite(bindless_handle);
+                    bindless_handle->view.write_layer = layer;
                     break;
                 }
-                case ResourceType::Mesh:
-                case ResourceType::Bindless:
                 case ResourceType::Accel: {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(_handle);
                     layer                             = GetLastLayerWrite(no_range_handle);
                     no_range_handle->view.write_layer = layer;
                     no_range_handle->view.read_layer  = layer;
                     break;
+                }
+                default: {
+                    auto* range_handle = static_cast<RangeHandle*>(_handle);
+                    layer              = GetLastLayerWrite(range_handle, _range);
+                    range_handle->EmplaceWriteLayer(_range, layer);
+                    m_write_resources.emplace(_handle->handle);
                 }
             }
             return layer;
@@ -507,17 +538,19 @@ namespace Moer::Render {
             auto* write_handle = GetHandle(_write_handle, _write_type);
             switch (_read_type) {
                 case ResourceType::Mesh:
-                case ResourceType::Bindless:
-                case ResourceType::Accel: {
-                    auto* no_range_handle = static_cast<NoRangeHandle*>(read_handle);
-                    layer                 = GetLastLayerWrite(no_range_handle);
+                case ResourceType::Bindless: {
+                    auto* bindless_handle = static_cast<BindlessHandle*>(read_handle);
+                    layer                 = GetLastLayerRead(bindless_handle);
                     break;
                 }
-                case ResourceType::Texture_Buffer:
+                case ResourceType::Accel: {
+                    auto* no_range_handle = static_cast<NoRangeHandle*>(read_handle);
+                    layer                 = GetLastLayerRead(no_range_handle);
+                    break;
+                }
                 default: {
-
                     auto* range_handle = static_cast<RangeHandle*>(read_handle);
-                    layer              = GetLastLayerWrite(range_handle, _read_range);
+                    layer              = GetLastLayerRead(range_handle, _read_range);
                 }
             }
 
@@ -530,7 +563,6 @@ namespace Moer::Render {
                     no_range_handle->view.write_layer = layer;
                     break;
                 }
-                case ResourceType::Texture_Buffer:
                 default: {
                     auto* range_handle = static_cast<RangeHandle*>(write_handle);
                     layer              = std::max(GetLastLayerWrite(range_handle, _write_range), layer);
@@ -542,14 +574,16 @@ namespace Moer::Render {
             //now set read
             switch (_read_type) {
                 case ResourceType::Mesh:
-                case ResourceType::Bindless:
+                case ResourceType::Bindless: {
+                    auto* bindless_handle            = static_cast<BindlessHandle*>(read_handle);
+                    bindless_handle->view.read_layer = std::max(bindless_handle->view.read_layer, layer);
+                    break;
+                }
                 case ResourceType::Accel: {
                     auto* no_range_handle            = static_cast<NoRangeHandle*>(read_handle);
                     no_range_handle->view.read_layer = std::max(no_range_handle->view.read_layer, layer);
                     break;
                 }
-                case ResourceType::Texture_Buffer:
-
                 default: {
                     auto* range_handle = static_cast<RangeHandle*>(read_handle);
                     range_handle->EmplaceReadLayer(_read_range, layer);
@@ -562,31 +596,35 @@ namespace Moer::Render {
             ResourceHandle* handle = GetHandle(_handle, _type);
             if (_b_write) {
                 switch (_type) {
-
-                    case ResourceType::Texture_Buffer: {
-                        m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerWrite(static_cast<RangeHandle*>(handle), _range));
+                    case ResourceType::Bindless: {
+                        m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerWrite(static_cast<BindlessHandle*>(handle)));
                         break;
                     }
-                    case ResourceType::Bindless:
                     case ResourceType::Mesh:
                     case ResourceType::Accel: {
                         m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerWrite(static_cast<NoRangeHandle*>(handle)));
-
-                    } break;
+                        break;
+                    }
+                    default: {
+                        m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerWrite(static_cast<RangeHandle*>(handle), _range));
+                    }
                 }
                 m_arg_write_resources.emplace_back(_range, handle);
                 temp_writed_resources.emplace(_handle);
             } else {
                 switch (_type) {
-                    case ResourceType::Texture_Buffer: {
-                        m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerRead(static_cast<RangeHandle*>(handle), _range));
+                    case ResourceType::Bindless: {
+                        m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerRead(static_cast<BindlessHandle*>(handle)));
                         break;
                     }
-                    case ResourceType::Bindless:
                     case ResourceType::Mesh:
                     case ResourceType::Accel: {
                         m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerRead(static_cast<NoRangeHandle*>(handle)));
-                    } break;
+                        break;
+                    }
+                    default: {
+                        m_dispatch_layer = std::max(m_dispatch_layer, GetLastLayerRead(static_cast<RangeHandle*>(handle), _range));
+                    }
                 }
                 m_arg_read_resources.emplace_back(_range, handle);
             }
@@ -615,16 +653,6 @@ namespace Moer::Render {
                 else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
                     EmplaceArg((uint64)(_arg.Get()), ResourceType::Accel, Range{}, false);
                 } else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                    // m_funcs.lock_bdls_array((uint64)(_arg.Get()));
-                    // for (auto&& res : m_write_resources) {
-                    //     if (m_funcs.is_resource_in_bindless(res, (uint64)(_arg.Get()))) {
-                    //         EmplaceArg(res, ResourceType::Texture_Buffer, Range{}, false);
-                    //     }
-                    // }
-                    // m_funcs.unlock_bdls_array((uint64)(_arg.Get()));
-                    // //emplace self
-                    // EmplaceArg((uint64)(_arg->ArrayHandle()), ResourceType::Bindless, Range{}, false);
-
                     assert(false && "Not support iterate BindlessArrayRef with other args");
                 }
             },
@@ -640,7 +668,7 @@ namespace Moer::Render {
             }
             m_funcs.unlock_bdls_array((uint64)(_bdls.Get()));
             //emplace self
-            EmplaceArg((uint64)(_bdls->ArrayHandle()), ResourceType::Bindless, Range{}, false);
+            EmplaceArg((uint64)(_bdls.Get()), ResourceType::Bindless, Range{}, false);
         }
 
         void VisitCmd(const UploadBufferCmd* _cmd) {
@@ -681,28 +709,15 @@ namespace Moer::Render {
             barrier_ranges.reserve(_cmd->ReadBuffers().size() + _cmd->ReadTextures().size() + _cmd->WriteBuffers().size() + _cmd->WriteTextures().size());
 
             for (const auto& [handle, state, pass_type, offset, size] : _cmd->ReadBuffers()) {
-                // layer = std::max(
-                //     SetRead(handle, Range(offset, size), ResourceType::Texture_Buffer),
-                //     layer);
                 RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
                 layer                     = GetLastLayerRead(range_handle, Range(offset, size));
-                // barrier_resources.emplace_back(range_handle);
-                // barrier_ranges.emplace_back(Range(offset, size));
             }
             for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->ReadTextures()) {
-                // layer = std::max(
-                //     SetRead(handle, Range(mip_level, mip_cnt), ResourceType::Texture_Buffer),
-                //     layer);
                 RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
                 layer                     = GetLastLayerRead(range_handle, Range(mip_level, mip_cnt));
-                // barrier_resources.emplace_back(range_handle);
-                // barrier_ranges.emplace_back(Range(mip_level, mip_cnt));
             }
 
             for (auto& [handle, state, pass_type, offset, size] : _cmd->WriteBuffers()) {
-                // layer = std::max(
-                //     SetWrite(handle, Range(offset, size), ResourceType::Texture_Buffer),
-                //     layer);
                 RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
                 layer                     = GetLastLayerRead(range_handle, Range(offset, size));
                 barrier_resources.emplace_back(range_handle);
@@ -710,9 +725,6 @@ namespace Moer::Render {
             }
 
             for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->WriteTextures()) {
-                // layer = std::max(
-                //     SetWrite(handle, Range(mip_level, mip_cnt), ResourceType::Texture_Buffer),
-                //     layer);
                 RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
                 layer                     = GetLastLayerRead(range_handle, Range(mip_level, mip_cnt));
                 barrier_resources.emplace_back(range_handle);
@@ -767,18 +779,23 @@ namespace Moer::Render {
         }
 
         void VisitCmd(const SetDrawStateCmd* _cmd) {
-            int64 layer = 0;
+            int64 layer      = 0;
+            bool  b_use_bdls = false;
             m_arg_read_resources.clear();
             m_arg_write_resources.clear();
             temp_writed_resources.clear();
 
             const auto& pipeline = _cmd->Pipeline();
             auto        func     = [&](const TArg& _arg, uint _idx) {
-                VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags);
+                if (pipeline.valid_bits & (1 << _idx))
+                    VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags);
             };
 
             auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-                VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
+                if (pipeline.valid_bits & (1 << _idx)) {
+                    VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
+                    b_use_bdls = true;
+                }
             };
 
             _cmd->IterateArgs(func, bdls_post_func);
@@ -786,11 +803,9 @@ namespace Moer::Render {
             const auto& vbs = _cmd->VertexBuffers();
             for (const auto& vb : vbs) {
                 EmplaceArg((uint64)(vb.first), ResourceType::Texture_Buffer, Range(vb.second.min, vb.second.max - vb.second.min), false);
-                // m_dispatch_layer = std::max(SetRead((uint64)(vb.first), Range(vb.second.min, vb.second.max - vb.second.min), ResourceType::Texture_Buffer), layer);
             }
             const auto& ibs = _cmd->IndexBuffers();
             for (const auto& ib : ibs) {
-                // m_dispatch_layer = std::max(SetRead((uint64)(ib.first), Range(ib.second.min, ib.second.max - ib.second.min), ResourceType::Texture_Buffer), layer);
                 EmplaceArg((uint64)(ib.first), ResourceType::Texture_Buffer, Range(ib.second.min, ib.second.max - ib.second.min), false);
             }
             //depth and render targets
@@ -820,6 +835,10 @@ namespace Moer::Render {
 
             for (const auto& read_res : m_arg_read_resources) {
                 RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
+            }
+
+            if (b_use_bdls) {
+                m_max_bdls_layer = std::max(m_max_bdls_layer, m_dispatch_layer);
             }
             AddCmd(_cmd, m_dispatch_layer);
         }
@@ -883,7 +902,7 @@ namespace Moer::Render {
 
         void VisitCmd(const UpdateBindlessArrayCmd* _cmd) {
             //TODO: important here
-            AddCmd(_cmd, SetWrite((uint64)(_cmd->Handle()->ArrayHandle()), Range(), ResourceType::Bindless));
+            AddCmd(_cmd, SetWrite((uint64)(_cmd->Handle()), Range(), ResourceType::Bindless));
         }
 
         void VisitCmd(const ClearResourceCmd* _cmd) {
@@ -899,13 +918,10 @@ namespace Moer::Render {
         }
 
         void VisitCmd(const DispatchCmd* _cmd) {
+            bool b_use_bdls = false;
             m_arg_write_resources.clear();
             m_arg_read_resources.clear();
             temp_writed_resources.clear();
-            // auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
-            //     VisitArgs(_arg, _flag.state_flags);
-            // };
-            // _cmd->IterateArgs(func);
 
             const auto& pipeline = _cmd->Pipeline();
 
@@ -915,8 +931,10 @@ namespace Moer::Render {
             };
 
             auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-                if (pipeline.valid_bits & (1 << _idx))
+                if (pipeline.valid_bits & (1 << _idx)) {
                     VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
+                    b_use_bdls = true;
+                }
             };
 
             _cmd->IterateArgs(func, bdls_post_func);
@@ -927,6 +945,9 @@ namespace Moer::Render {
             for (const auto& read_res : m_arg_read_resources) {
                 RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
             }
+            if (b_use_bdls) {
+                m_max_bdls_layer = std::max(m_max_bdls_layer, m_dispatch_layer);
+            }
             AddCmd(_cmd, m_dispatch_layer);
         }
 
@@ -935,6 +956,8 @@ namespace Moer::Render {
             for (const auto& cmd : _cmd->Params()) {
                 // FIXME: 不确定这里的修改是否正确。因为MeshBuffers的信息被分散到了每个MeshGeometry中，所以这里就需要对应遍历所有Segment
                 //        类似场景见 VulkanQueue.cpp:393附近
+                //@@WX: 是对的，但是可能会慢
+                // 可以在Command内部加一个Set，并行/异步收集所有的Buffer，然后在这里遍历
                 for (const auto& segment : cmd.geometry->GetInfo().segments) {
                     Buffer* vtx = segment.vertex_buffer.Get();
                     Buffer* idx = segment.index_buffer.Get();
@@ -962,8 +985,6 @@ namespace Moer::Render {
             }
             for (const uint64& handle : m_writed_geometry) {
                 if (_cmd->HasGeometry(handle)) {
-                    // layer = std::max(layer, SetRead(handle, Range(0), ResourceType::Accel));
-
                     auto* geo_handle = GetHandle((uint64)handle, ResourceType::Accel);
                     layer            = std::max(layer, GetLastLayerRead(static_cast<NoRangeHandle*>(geo_handle)));
                 }
@@ -981,6 +1002,11 @@ namespace Moer::Render {
             tlas_handle->view.read_layer  = layer;
 
             AddCmd(_cmd, layer);
+        }
+
+        void VisitCmd(const ScopeCmd* _cmd) {
+            layer_offset = m_cmd_lists.size();
+            AddCmd(_cmd, layer_offset);
         }
 
         void VisitCmd(const CustomCmd* _cmd) {
@@ -1012,6 +1038,7 @@ namespace Moer::Render {
             }
             AddCmd(_cmd, m_dispatch_layer);
             ++m_dispatch_layer;// make custom dispatch command in a separate layer
+            layer_offset = m_cmd_lists.size();
         }
 
         void AcceptCmd(const Command* _cmd) {
@@ -1067,6 +1094,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::ClearResource:
                     VisitCmd(static_cast<const ClearResourceCmd*>(_cmd));
+                    break;
+                case Command::EType::Scope:
+                    VisitCmd(static_cast<const ScopeCmd*>(_cmd));
                     break;
                 case Command::EType::Custom:
                     VisitCmd(static_cast<const CustomCmd*>(_cmd));

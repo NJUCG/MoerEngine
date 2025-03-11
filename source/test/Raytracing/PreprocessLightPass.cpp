@@ -270,7 +270,7 @@ namespace Moer::Render {
                 num_finite_prim_lights++;
             }
         }
-
+        _cmd_list.PushScope("PrepareLights");
         _cmd_list.CopyFrom(std::span<byte>((byte*)geo_instance_to_light.data(), geo_instance_to_light.size() * sizeof(uint)), _rt_ctx.geo_instance_to_light_buf->GetView());
         _cmd_list.CopyFrom(std::span<byte>((byte*)tasks.data(), tasks.size() * sizeof(PrepareLightsTask)), _rt_ctx.task_buf->GetView(0, tasks.size() * sizeof(PrepareLightsTask)));
         if (!prim_light_infos.empty()) {
@@ -311,6 +311,7 @@ namespace Moer::Render {
                                tasks(std::move(tasks))]() {
 
         });
+        _cmd_list.PopScope();
         b_odd_frame = !b_odd_frame;
     }
 

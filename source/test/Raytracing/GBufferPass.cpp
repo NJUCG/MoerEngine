@@ -31,6 +31,7 @@ namespace Moer::Render {
 
         FrameResources& frame_rt        = _rt_ctx.frame_rt;
         bool            b_current_frame = _rt_ctx.b_current_frame;
+        _cmd_list.PushScope("GBufferPass");
         _cmd_list.CopyFrom(std::move(upload_data), gbuffer_constants->GetView());
 
         _cmd_list.Compute(gbuffer_pass_pipeline,
@@ -53,5 +54,7 @@ namespace Moer::Render {
                           b_current_frame ? frame_rt.normal : frame_rt.prev_normal,
                           b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth)
             .Dispatch(uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1), "PostProcessGBuffer");
+
+        _cmd_list.PopScope();
     }
 }// namespace Moer::Render

@@ -286,6 +286,14 @@ namespace Moer::Render {
     void CommandList::ClearResource(TextureView _texture, uint _value) {
         commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _value));
     }
+
+    void CommandList::PushScope(std::string_view _name) {
+        commands.push_back(MakeUnique<ScopeCmd>(_name, true));
+    }
+
+    void CommandList::PopScope() {
+        commands.push_back(MakeUnique<ScopeCmd>("", false));
+    }
 #pragma region[ raytracing ]
 
     void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _geometries) {

@@ -307,9 +307,7 @@ namespace Moer::Render {
             SetGeometryPassDrawState,
             UpdateBindlessArray,
             ClearResource,
-            // UpdateDrawState,
-            // SetParams,
-            // SetConstants,
+            Scope,
             Custom
         };
 
@@ -332,6 +330,7 @@ namespace Moer::Render {
             "SetGeometryPassDrawState",
             "UpdateBindlessArray",
             "ClearResource",
+            "Scope",
             "Custom"};
 
     private:
@@ -791,6 +790,9 @@ namespace Moer::Render {
         RENDER_API void ClearResource(BufferView _buffer, uint32_t _value);
         RENDER_API void ClearResource(TextureView _texture, float4 _color);
         RENDER_API void ClearResource(TextureView _texture, uint32_t _value);
+
+        RENDER_API void PushScope(std::string_view _name);
+        RENDER_API void PopScope();
 
         template<typename T, typename... Args>
         struct CountType;

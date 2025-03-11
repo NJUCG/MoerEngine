@@ -137,6 +137,8 @@ namespace Moer::Render {
         void  SetViewPort(const VkViewport& _viewport);
         void  ClearBufferUInt(VulkanBuffer* _buffer, uint64 _offset, uint64 _size, uint _data);
         void  ClearTexture(VulkanTexture* _texture, const VkClearColorValue& _color, const VkImageSubresourceRange& _range);
+        void  ResetQueryPool(class VkNativeQueryPool& _query_pool, uint32 _first_query, uint32 _query_count);
+        void  WriteTimeStamp(VkNativeQueryPool& _query_pool, uint32 _query, VkPipelineStageFlagBits2 _stage);
 
         void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z);
         void DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset);

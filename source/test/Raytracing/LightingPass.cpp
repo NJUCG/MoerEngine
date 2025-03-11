@@ -66,6 +66,7 @@ namespace Moer::Render {
 
         upload_data.resize(sizeof(ResampleConstants));
         std::memcpy(upload_data.data(), &constants, sizeof(ResampleConstants));
+        _cmd_list.PushScope("LightingPass");
         _cmd_list.CopyFrom(std::move(upload_data), resample_params->GetView());
         bool b_current_frame = _rt_ctx.b_current_frame;
 
@@ -132,6 +133,8 @@ namespace Moer::Render {
                               DI_BINDING_ARGS(_rt_ctx))
                 .Dispatch(uint3(dispatch_size, 1), "ShadeSample");
         }
+
+        _cmd_list.PopScope();
 #undef DI_BINDING_ARGS
     }
 
