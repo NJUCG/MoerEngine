@@ -655,7 +655,7 @@ int main(int argc, const char** argv) {
                 sampled_textures.reserve((g_scene.GetGpuScene().material_textures.size()));
 
                 for (auto& [name, tex] : g_scene.GetGpuScene().material_textures) {
-                    sampled_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+                    sampled_textures.emplace_back(ImportTexture(tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE));
                 }
 
                 cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));

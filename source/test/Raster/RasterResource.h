@@ -106,7 +106,7 @@ namespace Moer::Render {
             sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
             for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
                 sampled_textures.emplace_back(
-                    ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE)
+                    ImportTexture(tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE)
                 );
             }
             cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
