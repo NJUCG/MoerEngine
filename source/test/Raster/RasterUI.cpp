@@ -7,11 +7,7 @@ namespace Moer::Render {
 
     // TODO: merge common code into a base class
 
-    RasterUI::RasterUI(UIRenderer& _renderer, const Array<TextureView>& frame_buffer_and_name_array) :
-        m_ui_renderer(_renderer) {
-
-        RegisterFrameBuffers(frame_buffer_and_name_array);
-    }
+    RasterUI::RasterUI(UIRenderer& _renderer) : m_ui_renderer(_renderer) {}
 
     void RasterUI::TickUI() {
 
@@ -177,6 +173,9 @@ namespace Moer::Render {
             // 绘制边框
             ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
         };
+
+        m_config.b_reset = false;
+        if (ImGui::Button("Reset")) { m_config.b_reset = true; }
 
         if (ImGui::TreeNode(
                 "Output Frame Buffer",

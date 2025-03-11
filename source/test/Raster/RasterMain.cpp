@@ -44,66 +44,35 @@
 #include "SsrPass.h"
 #include "UiCombinePass.h"
 
-// MARK: Main Function
-int main(int argc, const char** argv) {
+using namespace Moer::Render;
+using namespace Moer;
 
-    using namespace Moer::Render;
-    using namespace Moer;
-
-    // TODO:
-    std::filesystem::path path = argv[0];
-    path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
-    ConfigManager::GetInstance().Init(path);
-    TaskSystem::Init();
-    const auto& rhi_config_as_json = ConfigManager::GetInstance().GetRHIConfigAsJSON();
-
-    DeviceInitInfo info{.type = ERHIType::Vulkan, .name = "Raster", .config_as_json = rhi_config_as_json};
-    RenderDevice::Init(std::move(info));
-
-    auto& device  = RenderDevice::Get();
-    auto& manager = ShaderManager::Get();
-
-    uint2           resolution = {1280, 720};
-    SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "Raster", false);
-    WindowContext::Init(surface_info);
-
-    auto&& scope_exit_window_context_and_etc = OnScopeExit([&] {
-        GeometryPassPsoManager::ShutDown();
-        ShaderManager::ShutDown();
-        WindowContext::ShutDown();
-        RenderDevice::Dispose();
-        TaskSystem::ShutDown();
-    });
-
-    Moer::Render::UIRenderer gui(device);
-
-    auto* window_handle = WindowContext::GetMainWindow();
-
-    SwapchainCreateInfo sc_info{
-        .window_handle    = (uintptr_t)window_handle,
-        .size             = {resolution.x, resolution.y},
-        .back_buffer_sz   = 2,
-        .preferred_format = PF_R8G8B8A8_SRGB
-    };
-    auto             sc             = device.CreateSwapchain(sc_info);
-    Scene            scene          = {};
-    BindlessArrayRef bindless_array = scene.GetBindlessArray();
-    auto&            gfx_queue      = device.GetCommandQueue(EQueueType::Graphics);
-    auto&            copy_queue     = device.GetCopyQueue();
-
-    auto        copy_queue_timeline = copy_queue.GetFenceHandle();
-    CommandList cmd_list{};
-
-    // MARK: Raster Context
+void RasterMain(
+    RenderDevice&             device,
+    ShaderManager&            manager,
+    BindlessArrayRef          bindless_array,
+    CommandList&              cmd_list,
+    Scene&                    scene,
+    uint2&                    resolution,
+    SwapchainRef              sc,
+    CommandQueue&             gfx_queue,
+    CopyQueue&                copy_queue,
+    FenceRef                  copy_queue_timeline,
+    Moer::Render::UIRenderer& gui,
+    WindowHandle*             window_handle,
+    SurfaceInitInfo&          surface_info,
+    SwapchainCreateInfo&      sc_info,
+    RasterUI&                 raster_ui
+) {
 
     RasterContext raster_context(device, manager, bindless_array, cmd_list, scene, resolution);
 
     raster_context.CreateFrameBuffers();
     raster_context.AllocateFrameBuffers();
+    raster_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());
 
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
-
     // MARK: Passes
 
     GeometryPass  geometry_pass(raster_context);
@@ -117,14 +86,7 @@ int main(int argc, const char** argv) {
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
-    // MARK: Scene
-
-    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &scene);
-    auto&& scope_exit_reset_async_load_info = OnScopeExit([&] { Scene::ResetAsyncLoadInfo(); });
-
     // MARK: UI
-
-    RasterUI raster_ui(gui, raster_context.GetDisplayableFrameBuffersView());
 
     FenceRef timeline   = device.CreateFence();
     uint64   time       = 0;
@@ -137,7 +99,6 @@ int main(int argc, const char** argv) {
         { raster_ui.TickUI(); }
         gui.EndGUIFrame();
         if (time > 2) { timeline->Wait(time - 2); }
-
         const RasterUI::Config& ui_config = raster_ui.GetConfig();
 
         // MARK: Window Resizing
@@ -160,7 +121,6 @@ int main(int argc, const char** argv) {
 
             raster_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());
         }
-
         TextureRef final_output = raster_context.textures.output.tex;
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
             // MARK: First Load
@@ -214,8 +174,93 @@ int main(int argc, const char** argv) {
          */
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).Wait(copy_queue_timeline, 0));
         gfx_queue.Present(sc, final_output);
+
+        if (raster_ui.GetConfig().b_reset) { break; }
     }
     gfx_queue.Sync();
+}
+
+// MARK: Main Function
+int main(int argc, const char** argv) {
+
+    using namespace Moer::Render;
+    using namespace Moer;
+
+    // TODO:
+    std::filesystem::path path = argv[0];
+    path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
+    ConfigManager::GetInstance().Init(path);
+    TaskSystem::Init();
+    const auto& rhi_config_as_json = ConfigManager::GetInstance().GetRHIConfigAsJSON();
+
+    DeviceInitInfo info{.type = ERHIType::Vulkan, .name = "Raster", .config_as_json = rhi_config_as_json};
+    RenderDevice::Init(std::move(info));
+
+    auto& device  = RenderDevice::Get();
+    auto& manager = ShaderManager::Get();
+
+    uint2           resolution = {1280, 720};
+    SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "Raster", false);
+    WindowContext::Init(surface_info);
+
+    auto&& scope_exit_window_context_and_etc = OnScopeExit([&] {
+        GeometryPassPsoManager::ShutDown();
+        ShaderManager::ShutDown();
+        WindowContext::ShutDown();
+        RenderDevice::Dispose();
+        TaskSystem::ShutDown();
+    });
+
+    Moer::Render::UIRenderer gui(device);
+
+    auto* window_handle = WindowContext::GetMainWindow();
+
+    SwapchainCreateInfo sc_info{
+        .window_handle    = (uintptr_t)window_handle,
+        .size             = {resolution.x, resolution.y},
+        .back_buffer_sz   = 2,
+        .preferred_format = PF_R8G8B8A8_SRGB
+    };
+    auto             sc             = device.CreateSwapchain(sc_info);
+    Scene            scene          = {};
+    BindlessArrayRef bindless_array = scene.GetBindlessArray();
+    auto&            gfx_queue      = device.GetCommandQueue(EQueueType::Graphics);
+    auto&            copy_queue     = device.GetCopyQueue();
+
+    auto        copy_queue_timeline = copy_queue.GetFenceHandle();
+    CommandList cmd_list{};
+
+    // MARK: Scene
+
+    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &scene);
+    auto&& scope_exit_reset_async_load_info = OnScopeExit([&] { Scene::ResetAsyncLoadInfo(); });
+
+    // MARK: Raster Context
+
+    // Raster starts from here
+
+    RasterUI raster_ui(gui);
+
+    while (WindowContext::ShouldClose(window_handle) == false) {
+        LOG_INFO("RasterMain");
+        RasterMain(
+            device,
+            manager,
+            bindless_array,
+            cmd_list,
+            scene,
+            resolution,
+            sc,
+            gfx_queue,
+            copy_queue,
+            copy_queue_timeline,
+            gui,
+            window_handle,
+            surface_info,
+            sc_info,
+            raster_ui
+        );
+    }
 
     return 0;
 }

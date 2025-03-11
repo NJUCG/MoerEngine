@@ -196,46 +196,23 @@ public:
 static Box3D          scene_bounding{};
 static constexpr uint max_frame_in_flight = 3;
 
-int main(int argc, const char** argv) {
+void RaytracingMain(
+    RenderDevice&             device,
+    ShaderManager&            manager,
+    Scene&                    g_scene,
+    BindlessArrayRef&         bindless_array,
+    CommandList&              cmd_list,
+    SwapchainRef&             sc,
+    FenceRef&                 copy_queue_timeline,
+    Moer::Render::UIRenderer& gui,
+    RTUI&                     rt_ui,
+    uint2&                    resolution,
+    WindowHandle*             window_handle,
+    CommandQueue&             gfx_queue,
+    CopyQueue&                copy_queue,
+    std::filesystem::path     path,
+    SwapchainCreateInfo&      sc_info) {
 
-    using namespace Moer::Render;
-    using namespace Moer;
-    std::filesystem::path path = argv[0];
-    path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
-    ConfigManager::GetInstance().Init(path);
-    TaskSystem::Init();
-    const auto& rhi_config_as_json = ConfigManager::GetInstance().GetRHIConfigAsJSON();
-
-    DeviceInitInfo info{
-        .type           = ERHIType::Vulkan,
-        .name           = "RHITest",
-        .config_as_json = rhi_config_as_json};
-    RenderDevice::Init(std::move(info));
-
-    auto& device  = RenderDevice::Get();
-    auto& manager = ShaderManager::Get();
-
-    uint2           resolution = {1920, 1080};
-    SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RaytracingTest", false);
-    WindowContext::Init(surface_info);
-    auto&& scope_exit    = OnScopeExit([&] {
-        WindowContext::ShutDown();
-        RenderDevice::Dispose();
-        TaskSystem::ShutDown();
-    });
-    auto*  window_handle = WindowContext::GetMainWindow();
-
-    SwapchainCreateInfo      sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 3, .preferred_format = PF_R8G8B8A8_SRGB};
-    auto                     sc         = device.CreateSwapchain(sc_info);
-    auto&                    gfx_queue  = device.GetCommandQueue(EQueueType::Graphics);
-    auto&                    copy_queue = device.GetCopyQueue();
-    Moer::Render::UIRenderer gui(device);
-
-    Scene g_scene{};
-    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &g_scene);
-    auto&&     load_scene_scope = OnScopeExit([&] {
-        Scene::ResetAsyncLoadInfo();
-    });
     RTResource rt_res(ConfigManager::GetInstance().GetEditorResourcePath());
     bool       b_new_env_map = false;
 
@@ -250,17 +227,7 @@ int main(int argc, const char** argv) {
     Array<TextureView> env_mips;
     TextureRef         env_pdf{};
     Array<TextureView>
-                     env_pdf_mips;
-    BindlessArrayRef bindless_array = g_scene.GetBindlessArray();
-
-    CommandList cmd_list;
-
-    struct Vertex {
-        float3 pos;
-        float3 normal;
-        float3 tangent;
-        float2 uv;
-    };
+        env_pdf_mips;
 
     RTViewParam   rt_view_param{};
     RTConfigParam rt_config_param{};
@@ -299,8 +266,6 @@ int main(int argc, const char** argv) {
     is_params.render_size = resolution;
     ImportanceSamplingContext
         is_ctx(is_params);
-
-    auto copy_queue_timeline = copy_queue.GetFenceHandle();
 
     bool   first_load = true;
     uint   instance_buffer_handle;
@@ -410,8 +375,6 @@ int main(int argc, const char** argv) {
         out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(_new_extent.x, _new_extent.y), PF_R32G32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
         out_mv          = device.CreateTexture("out_mv", Extent2D(_new_extent.x, _new_extent.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     };
-
-    RTUI rt_ui{gui};
 
     Timer timer;
     timer.Start();
@@ -603,15 +566,21 @@ int main(int argc, const char** argv) {
 
                 last_io_change_timeline = copy_queue_timeline->GetValue();
 
-                Array<ImportTexture> sampled_textures;
-                sampled_textures.reserve((g_scene.GetGpuScene().material_textures.size()));
+                {
+                    static bool first_load = true;
+                    if (first_load) {
+                        first_load = false;
+                        Array<ImportTexture> sampled_textures;
+                        sampled_textures.reserve((g_scene.GetGpuScene().material_textures.size()));
 
-                for (auto& [name, tex] : g_scene.GetGpuScene().material_textures) {
-                    sampled_textures.emplace_back(ImportTexture(tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE));
+                        for (auto& [name, tex] : g_scene.GetGpuScene().material_textures) {
+                            sampled_textures.emplace_back(ImportTexture(tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE));
+                        }
+
+                        cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
+                    }
+                    cmd_list.UpdateRaytracingScene(rt_scene);
                 }
-
-                cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
-                cmd_list.UpdateRaytracingScene(rt_scene);
 
                 rt_ui.RegisterUIFunc("Display MaterialTexture", [&g_scene, &selected_material_texture_name, &b_use_bindless, &b_final_show_texture, &mip_level]() {
                     ImGui::Checkbox("Show Final Texture", &b_final_show_texture);
@@ -636,13 +605,17 @@ int main(int argc, const char** argv) {
             if (b_new_env_map) {
                 env_map = rt_res.GetDefaultEnvMap();
 
-                Array<ImportTexture> import_textures;
                 {
-                    const auto& rt_res_textures = rt_res.GetTextures();
-                    for (auto& [name, tex] : rt_res_textures) {
-                        import_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+                    static bool first_load = true;
+                    if (first_load) {
+                        first_load = false;
+                        Array<ImportTexture> import_textures;
+                        const auto&          rt_res_textures = rt_res.GetTextures();
+                        for (auto& [name, tex] : rt_res_textures) {
+                            import_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+                        }
+                        cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(import_textures));
                     }
-                    cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(import_textures));
                     gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
                     gfx_queue.Sync();
                 }
@@ -1026,6 +999,90 @@ int main(int argc, const char** argv) {
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
         gfx_queue.Present(sc, output);
         gui.PresentWindows();
+
+        if (rt_ui.GetConfig().b_reset) {
+            gfx_queue.Sync();
+            break;
+        }
     }
     gfx_queue.Sync();
+}
+
+int main(int argc, const char** argv) {
+
+    using namespace Moer::Render;
+    using namespace Moer;
+    std::filesystem::path path = argv[0];
+    path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
+    ConfigManager::GetInstance().Init(path);
+    TaskSystem::Init();
+    const auto& rhi_config_as_json = ConfigManager::GetInstance().GetRHIConfigAsJSON();
+
+    DeviceInitInfo info{
+        .type           = ERHIType::Vulkan,
+        .name           = "RHITest",
+        .config_as_json = rhi_config_as_json};
+    RenderDevice::Init(std::move(info));
+
+    auto& device  = RenderDevice::Get();
+    auto& manager = ShaderManager::Get();
+
+    uint2           resolution = {1920, 1080};
+    SurfaceInitInfo surface_info("Vulkan", resolution.x, resolution.y, "RaytracingTest", false);
+    WindowContext::Init(surface_info);
+    auto&& scope_exit    = OnScopeExit([&] {
+        WindowContext::ShutDown();
+        RenderDevice::Dispose();
+        TaskSystem::ShutDown();
+    });
+    auto*  window_handle = WindowContext::GetMainWindow();
+
+    SwapchainCreateInfo      sc_info{.window_handle = (uintptr_t)window_handle, .size = {resolution.x, resolution.y}, .back_buffer_sz = 3, .preferred_format = PF_R8G8B8A8_SRGB};
+    auto                     sc         = device.CreateSwapchain(sc_info);
+    auto&                    gfx_queue  = device.GetCommandQueue(EQueueType::Graphics);
+    auto&                    copy_queue = device.GetCopyQueue();
+    Moer::Render::UIRenderer gui(device);
+
+    Scene g_scene{};
+    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &g_scene);
+    auto&& load_scene_scope = OnScopeExit([&] {
+        Scene::ResetAsyncLoadInfo();
+    });
+
+    BindlessArrayRef bindless_array = g_scene.GetBindlessArray();
+
+    CommandList cmd_list;
+
+    auto copy_queue_timeline = copy_queue.GetFenceHandle();
+
+    struct Vertex {
+        float3 pos;
+        float3 normal;
+        float3 tangent;
+        float2 uv;
+    };
+
+    // RT starts from here
+
+    RTUI rt_ui{gui};
+
+    while (WindowContext::ShouldClose(window_handle) == false) {
+        LOG_INFO("RaytracingMain");
+        RaytracingMain(
+            device,
+            manager,
+            g_scene,
+            bindless_array,
+            cmd_list,
+            sc,
+            copy_queue_timeline,
+            gui,
+            rt_ui,
+            resolution,
+            window_handle,
+            gfx_queue,
+            copy_queue,
+            path,
+            sc_info);
+    }
 }
