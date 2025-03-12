@@ -1,25 +1,27 @@
-out
-.vs
-.vscode
-target
-build
-/.idea/codeStyles/codeStyleConfig.xml
-/.idea/codeStyles/Project.xml
-/.idea/.gitignore
-/.idea/misc.xml
-/.idea/modules.xml
-/.idea/MoerEngine.iml
-/.idea/vcs.xml
-build_vs2022
-cmake-build-*/
-/.cache/
-.vscode/launch.json
-.vscode/settings.json
-/.idea
-logs/
+# IDE files
+# Tip: 这里优先忽略所有文件，而不是忽略文件夹的原因，是为了下文的 !/.vscode/.. 能够生效。如果忽略了父文件夹，那么!将无法生效
+/.vscode/*
+/.vs/*
+/.idea/*
+
+# Compiled
+/out/*
+/build/*
+/target/*
 
 # Ignore scene cache
 *.MOERSCENE
 
-# Ignore imgui.ini in the root directory (prevent conflicts)
-/imgui.ini
+# Ignore all imgui.ini in project (prevent conflicts)
+imgui.ini
+
+# I don't know what these files are. Add some comments if you know.
+build_vs2022
+cmake-build-*/
+/.cache/
+logs/
+
+# MARK: something should not be ignored
+
+# VS Code debugger config
+!/.vscode/launch.json
