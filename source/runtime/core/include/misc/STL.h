@@ -72,7 +72,7 @@ namespace Moer {
     template<typename T, typename... Args>
         requires std::is_constructible_v<T, Args...>
     constexpr SharedPtr<T> MakeShared(Args&&... _args) {
-        return SharedPtr<T>(MoerNew(T)(std::forward(_args)...), MoerDelete<T>);
+        return SharedPtr<T>(MoerNew(T)(std::forward<Args>(_args)...), MoerDelete<T>);
     }
 
     template<typename T>
