@@ -229,17 +229,13 @@ void RaytracingMain(
     Array<TextureView>
         env_pdf_mips;
 
-    RTViewParam   rt_view_param{};
     RTConfigParam rt_config_param{};
 
-    BufferRef rt_view_param_buffer   = device.CreateBuffer<Moer::byte>(sizeof(RTViewParam) * 1, EBufferUsageFlags::UNORDERED_ACCESS);
     BufferRef rt_config_param_buffer = device.CreateBuffer<Moer::byte>(sizeof(RTConfigParam) * 1, EBufferUsageFlags::CONSTANT_BUFFER);
 
-    rt_view_param_buffer->SetName("rt_view_param_buffer");
     rt_config_param_buffer->SetName("rt_config_param_buffer");
 
-    RaytracingSceneRef rt_scene  = device.CreateRaytracingScene();
-    TestInlineRTShader rt_shader = manager.Compute<TestInlineRTShader>("hwrt/InlineRayTracing.hlsl");
+    RaytracingSceneRef rt_scene = device.CreateRaytracingScene();
 
     GfxPsoCreateInfo  combine_pso_info(RHIRasterizeInfo::Preset(),
                                        {},
@@ -272,7 +268,6 @@ void RaytracingMain(
     uint   geometry_buffer_handle;
     uint   geometry_instance_buffer_handle;
     uint   material_buffer_idx;
-    uint   light_buffer_handle     = 0;
     uint64 last_io_change_timeline = 0;
     uint   view_buffer_handle      = 0;
 
@@ -300,37 +295,6 @@ void RaytracingMain(
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
 
-    TextureRef out_normal_roughness = device.CreateTexture(
-        "out_normal_roughness",
-        Extent3D(resolution.x, resolution.y),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-    TextureRef out_basecolor_metalness = device.CreateTexture(
-        "out_basecolor_metalness",
-        Extent3D(resolution.x, resolution.y),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-    TextureRef out_direct_lighting = device.CreateTexture(
-        "out_direct_lighting",
-        Extent2D(resolution.x, resolution.y),
-        PF_B10G11R11_UFLOAT_PACK32,
-        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-    TextureRef scene_color = device.CreateTexture(
-        "scene_color",
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-
-    TextureRef out_emission    = device.CreateTexture("out_emission", Extent2D(resolution.x, resolution.y), PF_B10G11R11_UFLOAT_PACK32, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_diffuse     = device.CreateTexture("out_diffuse", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_specular    = device.CreateTexture("out_specular", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_view_z      = device.CreateTexture("out_view_z", Extent2D(resolution.x, resolution.y), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(resolution.x, resolution.y), PF_R32G32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-    TextureRef out_mv          = device.CreateTexture("out_mv", Extent2D(resolution.x, resolution.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
     auto create_frame_buffers = [&](uint2 _new_extent) {
         output = device.CreateTexture(
             "output",
@@ -338,42 +302,11 @@ void RaytracingMain(
             PF_R8G8B8A8_SRGB,
             ETextureUsageFlags::COLOR_ATTACHMENT);
 
-        out_normal_roughness = device.CreateTexture(
-            "out_normal_roughness",
-            Extent2D(_new_extent.x, _new_extent.y),
-            PF_R8G8B8A8_UNORM,
-            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-        out_basecolor_metalness = device.CreateTexture(
-            "out_basecolor_metalness",
-            Extent2D(_new_extent.x, _new_extent.y),
-            PF_R8G8B8A8_UNORM,
-            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-        out_direct_lighting = device.CreateTexture(
-            "out_direct_lighting",
-            Extent2D(_new_extent.x, _new_extent.y),
-            PF_B10G11R11_UFLOAT_PACK32,
-            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-
-        scene_color = device.CreateTexture(
-            "scene_color",
-            Extent2D(_new_extent.x, _new_extent.y),
-            PF_R8G8B8A8_SRGB,
-            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-
         ui_frame_buffer = device.CreateTexture(
             "ui_frame_buffer",
             Extent2D(_new_extent.x, _new_extent.y),
             PF_R8G8B8A8_SRGB,
             ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED);
-
-        out_emission    = device.CreateTexture("out_emission", Extent2D(_new_extent.x, _new_extent.y), PF_B10G11R11_UFLOAT_PACK32, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_diffuse     = device.CreateTexture("out_diffuse", Extent2D(_new_extent.x, _new_extent.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_specular    = device.CreateTexture("out_specular", Extent2D(_new_extent.x, _new_extent.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_view_z      = device.CreateTexture("out_view_z", Extent2D(_new_extent.x, _new_extent.y), PF_R32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_shadow_info = device.CreateTexture("out_shadow_info", Extent2D(_new_extent.x, _new_extent.y), PF_R32G32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
-        out_mv          = device.CreateTexture("out_mv", Extent2D(_new_extent.x, _new_extent.y), PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     };
 
     Timer timer;
@@ -419,6 +352,20 @@ void RaytracingMain(
     visualize_config.b_split        = false;
     visualize_config.split_ratio    = 0.5f;
     visualize_config.visualize_mode = EFC_DI;
+
+    Array<std::function<void(uint)>> on_free_buffer_callbacks;
+
+    auto add_on_free_buffer = [&](uint _buffer_handle) {
+        on_free_buffer_callbacks.emplace_back([&, _buffer_handle](uint _timeline) {
+            bindless_array->FreeBuffer(_buffer_handle);
+        });
+    };
+
+    auto add_on_free_texture = [&](uint _texture_handle) {
+        on_free_buffer_callbacks.emplace_back([&, _texture_handle](uint _timeline) {
+            bindless_array->FreeTexture(_texture_handle);
+        });
+    };
 
     while (WindowContext::ShouldClose(window_handle) == false) {
         WindowContext::Tick();
@@ -492,8 +439,11 @@ void RaytracingMain(
                 geometry_buffer_handle          = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView());
                 geometry_instance_buffer_handle = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView());
                 material_buffer_idx             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
-                view_buffer_handle              = bindless_array->AllocateBuffer(rt_view_param_buffer->GetView());
-                light_buffer_handle             = bindless_array->AllocateBuffer(g_scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
+
+                add_on_free_buffer(instance_buffer_handle);
+                add_on_free_buffer(geometry_buffer_handle);
+                add_on_free_buffer(geometry_instance_buffer_handle);
+                add_on_free_buffer(material_buffer_idx);
 
                 rt_ctx->SetBindlessHandles(geometry_buffer_handle, instance_buffer_handle, material_buffer_idx);
                 rt_ctx->SetRaytracingScene(rt_scene);
@@ -603,7 +553,6 @@ void RaytracingMain(
             }
 
             if (b_new_env_map) {
-                env_map = rt_res.GetDefaultEnvMap();
 
                 {
                     static bool first_load = true;
@@ -619,16 +568,32 @@ void RaytracingMain(
                     gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
                     gfx_queue.Sync();
                 }
-
-                assert(env_map && "env map is null");
-                Sampler sampler{SF_CUBIC, SAM_REPEAT};
-
+                env_map                                    = rt_res.GetDefaultEnvMap();
+                auto                             cur_env   = g_scene.GetCurrentEnvMap();
                 Moer::EnvironmentLightComponent* env_light = MoerNew(Moer::EnvironmentLightComponent)(float3(1.f), env_map->GetExtent().xy);
-                env_light->bdls_handle                     = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
 
-                auto entity = EntityManager::Get().Create();
-                LightComponentManager::Get().Put(entity, env_light);
-                g_scene.AddLight(entity);
+                Sampler sampler{SF_CUBIC, SAM_REPEAT};
+                env_light->bdls_handle = bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
+                add_on_free_texture(env_light->bdls_handle);
+
+                Entity env_entity;
+
+                //replace entity
+                if (cur_env.texture != nullptr) {
+                    assert(env_map && "env map is null");
+                    env_entity = cur_env.entity;
+                    LightComponentManager::Get().Put(env_entity, env_light);
+
+                } else {
+                    env_entity = EntityManager::Get().Create();
+                    LightComponentManager::Get().Put(env_entity, env_light);
+
+                    g_scene.AddLight(env_entity);
+                }
+                EnvMapResource env_tex{env_map, env_light->bdls_handle, env_entity};
+                g_scene.SetCurrentEnvMap(env_tex);
+
+                env_map = g_scene.GetCurrentEnvMap().texture;
 
                 for (int i = 0; i < env_map->GetNumMips(); ++i) {
                     env_mips.push_back(env_map->GetView(i));
@@ -637,7 +602,7 @@ void RaytracingMain(
                 b_new_env_map = false;
 
                 rt_ctx->LoadDefaultResources(rt_res);
-                rt_ctx->CreateEnvMapResources(env_map, cmd_list);
+                rt_ctx->CreateEnvMapResources(g_scene.GetCurrentEnvMap(), cmd_list);
             }
 
             if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
@@ -661,18 +626,7 @@ void RaytracingMain(
                 rt_config_param.world2clip_prev = Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
 
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
-                // camera->SetJitterMatrix(antialias_pass->GetPixelOffset());
                 camera->Tick();
-
-                rt_view_param.view2world = Transpose(camera->GetToWorldMatrix());
-                rt_view_param.world2view = Transpose(camera->GetViewMatrix());
-                rt_view_param.frustum    = camera->GetFrustum();
-                rt_view_param.near_far   = float2(camera->GetNearClip(), camera->GetFarClip());
-                rt_view_param.rect       = uint2(resolution.x, resolution.y);
-                rt_view_param.inv_rect   = float2(1.f / resolution.x, 1.f / resolution.y);
-                rt_view_param.jitter     = float2(0, 0);
-                rt_view_param.dir        = camera->GetDirection();
-                rt_view_param.orthomode  = 0;
 
                 const RTUI::Config& rt_ui_config = rt_ui.GetConfig();
 
@@ -687,8 +641,6 @@ void RaytracingMain(
                 float3 sun_dir                           = Normalizef(rt_ui_config.sun_direction);
                 rt_config_param.sun_direction_gexposure  = float4(sun_dir, rt_ui_config.exposure);
                 cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)), rt_config_param_buffer->GetView());
-
-                cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)&rt_view_param, sizeof(RTViewParam)), rt_view_param_buffer->GetView());
             }
 
             //update light direction from ui data
@@ -998,13 +950,29 @@ void RaytracingMain(
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
         gfx_queue.Present(sc, output);
-        gui.PresentWindows();
+        // gui.PresentWindows();
 
         if (rt_ui.GetConfig().b_reset) {
             gfx_queue.Sync();
             break;
         }
     }
+    const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
+    for (auto& buf : allocated_buf) {
+        bindless_array->FreeBuffer(buf);
+    }
+
+    const auto& allocated_tex = rt_ctx->GetAllocatedBdlsTex();
+    for (auto& tex : allocated_tex) {
+        bindless_array->FreeTexture(tex);
+    }
+
+    for (auto& callback : on_free_buffer_callbacks) {
+        callback(copy_queue_timeline->GetValue());
+    }
+
+    cmd_list.UpdateBindlessArray(bindless_array);
+    gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 }
 

@@ -29,6 +29,7 @@ namespace Moer {
         void         AddEntity(Entity _entity) noexcept { m_entities.emplace(_entity); }
         void         AddCamera(Entity _entity) noexcept { m_cameras.emplace(_entity); }
         void         AddLight(Entity _entity) noexcept { m_lights.emplace(_entity); }
+        void         RemoveLight(Entity _entity) noexcept { m_lights.erase(_entity); }
         void         RemoveEntity(Entity _entity) noexcept { m_entities.erase(_entity); };
         void         SetBuffer(const std::string& _name, RHIBufferRef _buffer) { m_buffers[_name] = _buffer; }
         RHIBufferRef GetBuffer(const std::string& _name) const { return m_buffers.at(_name); }
@@ -53,6 +54,8 @@ namespace Moer {
         std::span<const Render::GeometryData>     GetGeometryDatas() const noexcept { return geometry_datas; }
         std::span<const Render::InstanceData>     GetInstanceDatas() const noexcept { return instance_datas; }
         std::span<const Render::GeometryInstance> GetGeometryInstances() { return geom_instances; }
+        void                                      SetCurrentEnvMap(EnvMapResource _env_map) { cur_env_map = _env_map; }
+        EnvMapResource                            GetCurrentEnvMap() const { return cur_env_map; }
 
     protected:
         Map<std::string, RHIBufferRef> m_buffers;
@@ -71,6 +74,8 @@ namespace Moer {
         Array<UnorderedMap<VertexAttributesBitmask, Array<Render::VertexBuffer>>> vtx_views;
         Array<UnorderedMap<VertexAttributesBitmask, Render::IndexBuffer>>         idx_views;
         Array<Render::GeometryInstance>                                           geom_instances;
+
+        EnvMapResource cur_env_map{};
     };
     AsyncSceneLoadInfoRef Scene::Impl::m_load_info{nullptr};
 
@@ -254,6 +259,10 @@ namespace Moer {
         m_impl->AddLight(entity);
     }
 
+    void Scene::RemoveLight(Entity entity) noexcept {
+        m_impl->RemoveLight(entity);
+    }
+
     Array<Entity> Scene::GetEntities() const noexcept {
         return m_impl->GetEntities();
     }
@@ -299,6 +308,14 @@ namespace Moer {
 
     uint Scene::GetEntityCount() const noexcept {
         return m_impl->m_entities.size();
+    }
+
+    EnvMapResource Scene::GetCurrentEnvMap() const noexcept {
+        return m_impl->GetCurrentEnvMap();
+    }
+
+    void Scene::SetCurrentEnvMap(EnvMapResource _env_map) {
+        m_impl->SetCurrentEnvMap(_env_map);
     }
 
     void Scene::RegisterMaterialTextures(UnorderedMap<std::string, SceneTexture> _textures) noexcept {
