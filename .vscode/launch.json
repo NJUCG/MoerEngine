@@ -9,7 +9,7 @@
             "program": "${workspaceFolder}/target/bin/Debug/MoerEditor.exe", // 修改为你的可执行文件路径
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${fileDirname}",
+            "cwd": "${workspaceFolder}",
             "environment": [],
             "externalConsole": false,
             "preLaunchTask": "CMake: build" // 自动构建任务
