@@ -382,7 +382,7 @@ namespace Moer::Render {
             }
         } else {
             // 我参考VkSwapchain::WaitFrameInFlight，添加了vkWaitForFences。但我不确定这里是否应该加这句话，错误的话请删掉
-            vkWaitForFences(device.GetDevice(), in_flight_fences.size(), in_flight_fences.data(), VK_TRUE, UINT64_MAX);
+            // vkWaitForFences(device.GetDevice(), in_flight_fences.size(), in_flight_fences.data(), VK_TRUE, UINT64_MAX);
             vkResetFences(device.GetDevice(), in_flight_fences.size(), in_flight_fences.data());
         }
         image_idx = 0;

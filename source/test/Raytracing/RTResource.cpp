@@ -14,6 +14,7 @@
 
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "scene/Scene.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 #include "tinyexr.h"
 
@@ -228,9 +229,9 @@ namespace Moer::Render {
         // _cmd_list.Compute(sd_utils.gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), "GenerateLowDiscrepancySequence");
     }
 
-    void RTContext::CreateEnvMapResources(TextureRef _env_map, CommandList& _cmd_list) {
+    void RTContext::CreateEnvMapResources(EnvMapResource _env_tex, CommandList& _cmd_list) {
 
-        uint2         extent = _env_map->GetExtent().xy;
+        uint2         extent = _env_tex.texture->GetExtent().xy;
         RenderDevice& device = RenderDevice::Get();
 
         env_pdf_mips.clear();
@@ -243,10 +244,10 @@ namespace Moer::Render {
         for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) {
             env_pdf_mips.push_back(env_pdf_tex->GetView(i));
         }
-        sd_utils.GenerateMipPdf(_cmd_list, _env_map, env_pdf_mips);
+        sd_utils.GenerateMipPdf(_cmd_list, _env_tex.texture, env_pdf_mips);
 
         AllocateAndFreeBdlsIfNeeded(bindless_handles.env_pdf, env_pdf_tex->GetView(0, env_pdf_tex->GetNumMips()), Sampler{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE});
-        AllocateAndFreeBdlsIfNeeded(scene_params.env_map_handle, _env_map->GetView(0, _env_map->GetNumMips()), Sampler{ESamplerFilter::SF_CUBIC, ESamplerAddressMode::SAM_REPEAT});
+        scene_params.env_map_handle = _env_tex.bindless_handle;
         scene_params.enable_env_map = 1;
         SetEnvMapInfos(1.f, 0.f);
     }
@@ -322,15 +323,23 @@ namespace Moer::Render {
     void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _view, Sampler _sampler) {
         if (_target) {
             bdls->FreeTexture(_target);
+            if (allocated_bdls_tex.contains(_target)) {
+                allocated_bdls_tex.erase(_target);
+            }
         }
         _target = bdls->AllocateTexture(_view, _sampler);
+        allocated_bdls_tex.insert(_target);
     }
 
     void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const BufferView& _view) {
         if (_target) {
             bdls->FreeBuffer(_target);
+            if (allocated_bdls_buf.contains(_target)) {
+                allocated_bdls_buf.erase(_target);
+            }
         }
         _target = bdls->AllocateBuffer(_view);
+        allocated_bdls_buf.insert(_target);
     }
 
     void RTContext::SetEnvMapInfos(float _scale, float _rotation) {

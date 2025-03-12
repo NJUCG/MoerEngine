@@ -97,6 +97,12 @@ namespace Moer {
         uint               bindless_handle;
     };
 
+    struct EnvMapResource {
+        Render::TextureRef texture;
+        uint               bindless_handle;
+        Entity             entity;
+    };
+
     //////////////////////////////////////////////////////////////////////////
     //cpu data
     //////////////////////////////////////////////////////////////////////////
@@ -319,6 +325,7 @@ namespace Moer {
         void                    AddEntity(Entity _entity) noexcept;
         void                    AddCamera(Entity _entity) noexcept;
         void                    AddLight(Entity _entity) noexcept;
+        void                    RemoveLight(Entity _entity) noexcept;
         void                    SetTlas(RHIRayTracingTLASRef _tlas) noexcept;
         void                    SetBlasList(Moer::Array<RHIRayTracingBLASRef> _blas_list) noexcept;
         void                    SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept;
@@ -337,6 +344,8 @@ namespace Moer {
         void                    ForEach(std::function<void(Entity)> _func) const noexcept;
         bool                    IsReady() const noexcept;
         uint                    GetEntityCount() const noexcept;
+        EnvMapResource          GetCurrentEnvMap() const noexcept;
+        void                    SetCurrentEnvMap(EnvMapResource _env_map);
 
         // [temperory]
         void RegisterMaterialTextures(UnorderedMap<std::string, SceneTexture> _textures) noexcept;

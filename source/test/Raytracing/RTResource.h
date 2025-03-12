@@ -98,7 +98,7 @@ namespace Moer::Render {
 
         void FillLowDiscrepancySequence(CommandList& _cmd_list);
 
-        void CreateEnvMapResources(TextureRef _env_map, CommandList& _cmd_list);
+        void CreateEnvMapResources(EnvMapResource _env_map, CommandList& _cmd_list);
 
         //Create light sampling buffers
         void CreateBuffersIfNeeded(
@@ -116,9 +116,15 @@ namespace Moer::Render {
 
         void LoadDefaultResources(RTResource& _rt_res);
 
+        const UnorderedSet<uint>& GetAllocatedBdlsBuf() { return allocated_bdls_buf; }
+        const UnorderedSet<uint>& GetAllocatedBdlsTex() { return allocated_bdls_tex; }
+
     private:
         void AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _view, Sampler _sampler);
         void AllocateAndFreeBdlsIfNeeded(uint& _target, const BufferView& _view);
+
+        UnorderedSet<uint> allocated_bdls_buf;
+        UnorderedSet<uint> allocated_bdls_tex;
 
     public:
         Config            config;

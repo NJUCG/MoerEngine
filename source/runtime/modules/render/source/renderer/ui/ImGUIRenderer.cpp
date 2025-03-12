@@ -4,6 +4,7 @@
 #include "PixelFormat.h"
 #include "RenderThread.h"
 #include "config/ConfigManager.h"
+#include "log/LogSystem.h"
 #include "math/Constant.h"
 #include "math/Matrix.h"
 #include "misc/MMemory.h"
@@ -318,12 +319,12 @@ namespace Moer::Render {
         ImGuiIO& io = ImGui::GetIO();
         _cmd_list.UpdateBindlessArray(bindless_array);
 
-        if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f)
-            return;
+        // if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f)
+        //     return;
 
         ImDrawData* draw_data = ImGui::GetDrawData();
-        if (!draw_data)
-            return;
+        // if (!draw_data)
+        //     return;
 
         ImDrawData* main_draw_data     = ImGui::GetDrawData();
         const bool  b_window_minimized = main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f;
@@ -378,6 +379,8 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
         return;
 
+    if (_frame_buffer.extent.x <= 0 || _frame_buffer.extent.y <= 0)
+        return;
     // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
     uint32_t total_size_vert = draw_data->TotalVtxCount;
     uint32_t total_size_idx  = draw_data->TotalIdxCount * sizeof(ImDrawIdx);
@@ -587,6 +590,9 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
         .back_buffer_sz   = backend_data.num_frames_in_flight,
         .preferred_format = PF_R8G8B8A8_SRGB};
 
+    if (width == 0 || height == 0) {
+        return;
+    }
     viewport_data->sc          = rd_device.CreateSwapchain(swapchain_info);
     viewport_data->framebuffer = rd_device.CreateTexture(
         Extent2D(_viewport->Size.x, _viewport->Size.y),
@@ -632,6 +638,8 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         .size             = {(uint)_size.x, (uint)_size.y},
         .back_buffer_sz   = 2,
         .preferred_format = PF_R8G8B8A8_SRGB};
+
+    if (_size.x == 0 || _size.y == 0) return;
     viewport_data->sc->Recreate(swapchain_info);
     viewport_data->framebuffer = rd_device.CreateTexture(
         Extent2D(_viewport->Size.x, _viewport->Size.y),

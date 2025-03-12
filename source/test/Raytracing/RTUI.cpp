@@ -266,6 +266,7 @@ namespace Moer::Render {
         auto* current_window    = ImGui::FindWindowByName("Scene Color");
         bool  b_separate_window = current_window->ParentWindow == nullptr;
         auto  menu_rect         = current_window->MenuBarRect();
+        auto  menu_bar          = current_window->MenuBarHeight();
 
         scene_size.x = current_window->Size.x;
         scene_size.y = current_window->Size.y + current_window->Pos.y - menu_rect.Max.y;
@@ -284,7 +285,7 @@ namespace Moer::Render {
         } else {
             parent_rect = current_window->ParentWindow->Rect();
 
-            float2 local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y - parent_rect.Min.y};
+            float2 local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y + menu_bar - parent_rect.Min.y};
 
             scene_color_resolution = {scene_size.x, scene_size.y};
             scene_color_pos        = {local_pos.x, local_pos.y};
