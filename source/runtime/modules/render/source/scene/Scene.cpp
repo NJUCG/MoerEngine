@@ -26,26 +26,27 @@ namespace Moer {
     public:
         Impl() noexcept;
         ~Impl() noexcept;
-        void         AddEntity(Entity _entity) noexcept { m_entities.emplace(_entity); }
-        void         AddCamera(Entity _entity) noexcept { m_cameras.emplace(_entity); }
-        void         AddLight(Entity _entity) noexcept { m_lights.emplace(_entity); }
-        void         RemoveLight(Entity _entity) noexcept { m_lights.erase(_entity); }
-        void         RemoveEntity(Entity _entity) noexcept { m_entities.erase(_entity); };
+        void         AddEntity(Entity _entity) noexcept { m_entities.AddEntity(_entity); }
+        void         AddCamera(Entity _entity) noexcept { m_cameras.AddEntity(_entity); }
+        void         AddLight(Entity _entity) noexcept { m_lights.AddEntity(_entity); }
+        void         RemoveLight(Entity _entity) noexcept { m_lights.RemoveEntity(_entity); }
+        void         RemoveEntity(Entity _entity) noexcept { m_entities.RemoveEntity(_entity); };
         void         SetBuffer(const std::string& _name, RHIBufferRef _buffer) { m_buffers[_name] = _buffer; }
         RHIBufferRef GetBuffer(const std::string& _name) const { return m_buffers.at(_name); }
         RHIUAVRef    GetUAV(const std::string& _name) const { return m_uavs.at(_name); }
         RHISRVRef    GetSRV(const std::string& _name) const { return m_srvs.at(_name); }
         void         ForEach(std::function<void(Entity)> _func) const noexcept {
-            for (auto& entity : m_entities) {
+            auto span = m_entities.GetEntities();
+            for (auto& entity : span) {
                 _func(entity);
             }
         }
-        Array<Entity>                GetEntities() const noexcept;
-        Array<Entity>                GetCameras() const noexcept;
-        Array<Entity>                GetLights() const noexcept;
-        bool                         IsEntitiesEmpty() const noexcept { return m_entities.empty(); }
-        bool                         IsCamerasEmpty() const noexcept { return m_cameras.empty(); }
-        bool                         IsLightsEmpty() const noexcept { return m_lights.empty(); }
+        std::span<const Entity>      GetEntities() const noexcept;
+        std::span<const Entity>      GetCameras() const noexcept;
+        std::span<const Entity>      GetLights() const noexcept;
+        bool                         IsEntitiesEmpty() const noexcept { return m_entities.GetEntities().empty(); }
+        bool                         IsCamerasEmpty() const noexcept { return m_cameras.GetEntities().empty(); }
+        bool                         IsLightsEmpty() const noexcept { return m_lights.GetEntities().empty(); }
         static AsyncSceneLoadInfoRef GetCurrentSceneLoadInfo() noexcept { return m_load_info; }
 
         GpuScene& GetGpuScene() noexcept { return gpu_scene; }
@@ -62,9 +63,9 @@ namespace Moer {
         Map<std::string, RHIUAVRef>    m_uavs;
         Map<std::string, RHISRVRef>    m_srvs;
 
-        EntitySet m_entities;
-        EntitySet m_cameras;
-        EntitySet m_lights;
+        UniqueEntityArray m_entities;
+        UniqueEntityArray m_cameras;
+        UniqueEntityArray m_lights;
 
         static AsyncSceneLoadInfoRef m_load_info;
         GpuScene                     gpu_scene;
@@ -82,38 +83,22 @@ namespace Moer {
     Scene::Impl::Impl() noexcept {
         gpu_scene.bindless_array = Render::RenderDevice::Get().CreateBindlessArray();
     }
-    Array<Entity> Scene::Impl::GetEntities() const noexcept {
-        Array<Entity> result;
-        // result.reserve(m_entities.size());
-        for (const Entity& entity : m_entities) {
-
-            result.push_back(entity);
-        }
-        return result;
+    std::span<const Entity> Scene::Impl::GetEntities() const noexcept {
+        return m_entities.GetEntities();
     }
 
-    Array<Entity> Scene::Impl::GetCameras() const noexcept {
-        Array<Entity> result;
-        result.reserve(m_cameras.size());
-        for (auto& entity : m_cameras) {
-            result.push_back(entity);
-        }
-        return result;
+    std::span<const Entity> Scene::Impl::GetCameras() const noexcept {
+        return m_cameras.GetEntities();
     }
 
-    Array<Entity> Scene::Impl::GetLights() const noexcept {
-        Array<Entity> result;
-        result.reserve(m_lights.size());
-        for (auto& entity : m_lights) {
-            result.push_back(entity);
-        }
-        return result;
+    std::span<const Entity> Scene::Impl::GetLights() const noexcept {
+        return m_lights.GetEntities();
     }
 
     void Scene::Impl::UpdateGpuData() {
         uint geometry_count = 0;
         uint instance_count = 0;
-        for (auto& entity : m_entities) {
+        for (auto& entity : m_entities.GetEntities()) {
             const MeshInfo& info = *RenderableManager::Get().GetMeshInfo(entity);
             geometry_count += info.geometries.size();
             instance_count += 1;
@@ -127,7 +112,7 @@ namespace Moer {
         idx_views.resize(instance_count);
         instance_datas.resize(instance_count);
 
-        for (auto& entity : m_entities) {
+        for (auto& entity : m_entities.GetEntities()) {
             const MeshInfo&                info          = *RenderableManager::Get().GetMeshInfo(entity);
             std::span<MaterialInstanceRef> mat_instances = RenderableManager::Get().GetMaterialInstances(entity);
 
@@ -199,7 +184,7 @@ namespace Moer {
 
     Scene::Impl::~Impl() noexcept {
 
-        for (auto& entity : m_entities) {
+        for (auto& entity : m_entities.GetEntities()) {
             MeshInfo& info = *RenderableManager::Get().GetMeshInfo(entity);
             for (auto& geo : info.geometries) {
                 MeshBuffers& buffers = *geo->mesh_buffers;// 这里会重复访问同一个mesh_buffersss，重复清空，但是只会略微影响析构效率，问题不大
@@ -263,15 +248,15 @@ namespace Moer {
         m_impl->RemoveLight(entity);
     }
 
-    Array<Entity> Scene::GetEntities() const noexcept {
+    std::span<const Entity> Scene::GetEntities() const noexcept {
         return m_impl->GetEntities();
     }
 
-    Array<Entity> Scene::GetLights() const noexcept {
+    std::span<const Entity> Scene::GetLights() const noexcept {
         return m_impl->GetLights();
     }
 
-    Array<Entity> Scene::GetCameras() const noexcept {
+    std::span<const Entity> Scene::GetCameras() const noexcept {
         return m_impl->GetCameras();
     }
 
@@ -307,7 +292,7 @@ namespace Moer {
     }
 
     uint Scene::GetEntityCount() const noexcept {
-        return m_impl->m_entities.size();
+        return m_impl->m_entities.GetEntities().size();
     }
 
     EnvMapResource Scene::GetCurrentEnvMap() const noexcept {

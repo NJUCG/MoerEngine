@@ -174,7 +174,7 @@ namespace Moer::Render {
                     RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
                 );
                 return context.manager.Raster()
-                    .Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl")
+                    .Vertex("utils/FullScreenQuad.hlsl")
                     .Pixel("raster/post_process/FxaaPrecompute.hlsl")
                     .Build<FxaaPrecomputePipeline>(std::move(pso_full_screen_info));
             }();
@@ -184,7 +184,7 @@ namespace Moer::Render {
                     RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
                 );
                 return context.manager.Raster()
-                    .Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl")
+                    .Vertex("utils/FullScreenQuad.hlsl")
                     .Pixel("raster/post_process/Fxaa.hlsl")
                     .Build<FxaaPipeline>(std::move(pso_full_screen_info));
             }();

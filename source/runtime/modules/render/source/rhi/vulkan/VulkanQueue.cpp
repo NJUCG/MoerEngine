@@ -12,6 +12,7 @@
 #include "rhi/RHIResource.h"
 
 #include "VulkanCustomCommand.h"
+#include "vulkan/vulkan_core.h"
 
 #include <memory>
 #include <mutex>
@@ -294,6 +295,8 @@ namespace Moer::Render {
                     break;
                 case Command::EType::Custom:
                     Visit(static_cast<const CustomCmd*>(_cmd));
+                    break;
+                case Command::EType::Scope:
                     break;
                 default:
                     assert(false && "Invalid command type");
@@ -839,6 +842,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::UpdateBindlessArray:
                     Visit(static_cast<const UpdateBindlessArrayCmd&>(*_cmd));
+                    break;
+                case Command::EType::Scope:
+                    Visit(static_cast<const ScopeCmd&>(*_cmd));
                     break;
                 case Command::EType::Custom:
                     Visit(static_cast<const CustomCmd&>(*_cmd));
@@ -1507,6 +1513,14 @@ namespace Moer::Render {
             // });
         }
 
+        void Visit(const ScopeCmd& _cmd) {
+            if (_cmd.IsPush()) {
+                cmd_list.BeginLabel(_cmd.ScopeName(), {0.0f, 1.0f, 0.0f, 1.0f});
+            } else {
+                cmd_list.EndLabel();
+            }
+        }
+
         void Visit(const BuildAccelerationStructuresCmd& _cmd) {
             const Array<AccelerationStructureBuildParam>& build_params = _cmd.Params();
 
@@ -1866,17 +1880,23 @@ namespace Moer::Render {
             .unlock_bdls_array       = &UnlockBindlessArray};
 
         CmdReorderer reorderer{function_table};
+        //reorder commands base on resource read/write and manual scope
         for (const auto& cmd : _submit.cmds) {
             reorderer.AcceptCmd(cmd.get());
         }
         std::unique_lock<std::mutex> lock(exec_mtx);//currently only one thread can execute commands at a time
 
+        //Get Allocators for buffer, texture and commandlist
         auto  allocator_ptr = std::move(GetAllocator());
         auto& vk_allocator  = *allocator_ptr;
-        auto& tracker       = vk_allocator.GetTracker();
 
+        //Get Resource State Tracker
+        auto& tracker = vk_allocator.GetTracker();
+
+        //Visitor for actual command recording
         VkCmdVisitor visitor(vk_device, vk_allocator, tracker, vk_allocator.GetCmdList());
 
+        //Visitor for barrier generation
         VkCmdPreprocessor preprocessor(vk_device, tracker, vk_allocator, function_table);
 
         timer.Stop();
@@ -1886,6 +1906,7 @@ namespace Moer::Render {
         bool        has_cmd   = !reorderer.m_cmd_lists.empty();
         uint64      last_time = last_frame;
 
+        //Set Descriptor buffer ringbuffer offset and start debug region
         if (has_cmd) {
             vk_allocator.GetCmdList().Begin();
             if (queue.GetType() != EQueueType::Copy) {

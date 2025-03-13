@@ -375,7 +375,7 @@ void RaytracingMain(
         }
         gui.EndGUIFrame();
         int w_width, w_height;
-        if (time >= 3) {
+        if (time >= max_frame_in_flight) {
             timeline->Wait(time - max_frame_in_flight);
         }
         timer.Stop();
@@ -384,6 +384,7 @@ void RaytracingMain(
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
             std::this_thread::yield();
+            gui.RenderGUI(cmd_list, output);
             continue;
         }
         if (w_width != resolution.x || w_height != resolution.y) {
@@ -950,7 +951,7 @@ void RaytracingMain(
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
         gfx_queue.Present(sc, output);
-        // gui.PresentWindows();
+        gui.PresentWindows();
 
         if (rt_ui.GetConfig().b_reset) {
             gfx_queue.Sync();

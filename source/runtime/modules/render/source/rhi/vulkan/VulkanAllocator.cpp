@@ -55,6 +55,25 @@ namespace Moer::Render {
         on_complete.clear();
     }
 
+#pragma region[ Query Pool ]
+
+    VkNativeQueryPool::VkNativeQueryPool(VulkanDevice& _device, VkQueryType _type, uint32 _query_count) : device(_device), type(_type), count(_query_count) {
+        VkQueryPoolCreateInfo create_info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        create_info.queryType  = _type;
+        create_info.queryCount = _query_count;
+        vkCreateQueryPool(device.GetDevice(), &create_info, nullptr, &query_pool);
+    }
+
+    VkNativeQueryPool::~VkNativeQueryPool() {
+        vkDestroyQueryPool(device.GetDevice(), query_pool, nullptr);
+    }
+
+    void VkNativeQueryPool::GetResults(std::span<uint64> _data, uint32 _first_query, uint32 _query_count, VkQueryResultFlags _flags) {
+        vkGetQueryPoolResults(device.GetDevice(), query_pool, _first_query, _query_count, _data.size(), _data.data(), sizeof(uint64), VK_QUERY_RESULT_64_BIT | _flags);
+    }
+
+#pragma endregion
+
     // VulkanAllocator
     VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type)
         : VulkanAllocatorBase(_device, _type),
@@ -62,7 +81,8 @@ namespace Moer::Render {
           upload_allocator(&allocator, small_block_size, 1.5),
           readback_allocator(&allocator, small_block_size, 1.5),
           scratch_allocator(_device, &allocator),
-          shader_buffer_allocator(_device, &allocator) {}
+          shader_buffer_allocator(_device, &allocator),
+          timestamp_pool(*_device, VK_QUERY_TYPE_TIMESTAMP, 1000) {}
 
     VulkanAllocator::~VulkanAllocator() {
         upload_allocator.Dispose();

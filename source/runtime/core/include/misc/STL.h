@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <stack>
 #include <any>
 
 #include "MMemory.h"
@@ -79,6 +80,9 @@ namespace Moer {
     constexpr bool StringEqual(const T& a, const T& b) {
         return std::strcmp(a.c_str(), b.c_str()) == 0;
     }
+
+    template<typename T>
+    using Stack = std::stack<T, DEQueue<T>>;
 
     template<typename T, size_t N>
         requires std::is_trivially_copyable_v<T>

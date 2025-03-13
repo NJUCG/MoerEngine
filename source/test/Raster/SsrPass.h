@@ -43,7 +43,7 @@ namespace Moer::Render {
             );
 
             ssr_pipeline = context.manager.Raster()
-                               .Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl")
+                               .Vertex("utils/FullScreenQuad.hlsl")
                                .Pixel("raster/post_process/Ssr.hlsl")
                                .Build<SsrPipeline>(std::move(pso_full_screen_info));
         }
