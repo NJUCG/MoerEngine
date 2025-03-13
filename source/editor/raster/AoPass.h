@@ -32,7 +32,7 @@ public:
         );
 
         ao_pipeline = context.manager.Raster()
-                          .Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl")
+                          .Vertex("utils/FullScreenQuad.hlsl")
                           .Pixel("raster/post_process/Ao.hlsl")
                           .Build<AoPipeline>(std::move(pso_full_screen_info));
     }

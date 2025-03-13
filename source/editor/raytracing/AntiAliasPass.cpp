@@ -2,6 +2,7 @@
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/postprocess/ShaderParameters.h"
+#include <cmath>
 #include <random>
 
 namespace Moer::Render::Raytracing {
@@ -48,8 +49,10 @@ void AntialiasPass::Process(
     params.pqc                    = std::clamp(_param.max_radiance, 1e-4f, 1e8f);
     params.inv_pqc                = 1.f / params.pqc;
 
+    _cmd_list.PushScope("AntiAliasPass");
     Array<Moer::byte> upload_data(sizeof(TAAParams));
     upload_data.assign((Moer::byte*)&params, (Moer::byte*)&params + sizeof(TAAParams));
+
     _cmd_list.CopyFrom(std::move(upload_data), constant_buffer->GetView());
 
     uint2 grid_size = uint2((_output->GetExtent().x + 15) / 16, ((_output->GetExtent().y + 15) / 16));
@@ -67,6 +70,8 @@ void AntialiasPass::Process(
             feedback_color_pong
         )
         .Dispatch(uint3(grid_size.x, grid_size.y, 1), "TAAPass");
+
+    _cmd_list.PopScope();
 }
 
 void AntialiasPass::AdvanceFrame() {

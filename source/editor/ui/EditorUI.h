@@ -28,6 +28,7 @@ public:
     ~EditorUI() = default;
     void TickUI();
     void RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output);
+    void PresentWindows();
 
     float2        GetSceneColorResolution() const { return m_scene_color_resolution; }
     float2        GetSceneColorPos() const { return m_scene_color_pos; }

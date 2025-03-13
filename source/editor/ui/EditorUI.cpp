@@ -97,6 +97,8 @@ void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureVie
     m_ui_renderer->RenderGUI(cmd_list, final_output);
 }
 
+void EditorUI::PresentWindows() { m_ui_renderer->PresentWindows(); }
+
 bool EditorUI::IsSeperateWindow() const {
     auto* current_window = ImGui::FindWindowByName("Scene Color");
     return current_window->ParentWindow == nullptr;
@@ -128,29 +130,37 @@ void EditorUI::ShowSceneColor() {
     auto* current_window      = ImGui::FindWindowByName("Scene Color");
     bool  m_b_separate_window = current_window->ParentWindow == nullptr;
     auto  menu_rect           = current_window->MenuBarRect();
+    auto  menu_bar            = current_window->MenuBarHeight();
 
     scene_size.x = current_window->Size.x;
-    // why use this formula?
-    // scene_size.y = current_window->Size.y + current_window->Pos.y - menu_rect.Max.y;
-    scene_size.y = current_window->Size.y;
+    scene_size.y = current_window->Size.y + current_window->Pos.y - menu_rect.Max.y; // what is this?
 
     auto   window_rect = current_window->Rect(); // this is main window rect
     ImRect parent_rect{};
 
     if (m_b_separate_window) {
+
         parent_rect = {
             current_window->Pos.x,
             current_window->Pos.y,
             current_window->Pos.x + current_window->Size.x,
             current_window->Pos.y + current_window->Size.y
         };
+
+        float2 local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y - parent_rect.Min.y};
+
+        m_scene_color_resolution = {scene_size.x, scene_size.y};
+        m_scene_color_pos        = {local_pos.x, local_pos.y};
     } else {
         parent_rect = current_window->ParentWindow->Rect();
-    }
-    float2 local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y - parent_rect.Min.y};
 
-    m_scene_color_resolution = {scene_size.x, scene_size.y};
-    m_scene_color_pos        = {local_pos.x, local_pos.y};
+        float2 local_pos = {
+            window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y + menu_bar - parent_rect.Min.y
+        };
+
+        m_scene_color_resolution = {scene_size.x, scene_size.y};
+        m_scene_color_pos        = {local_pos.x, local_pos.y};
+    }
 
     ImGui::End();
 }

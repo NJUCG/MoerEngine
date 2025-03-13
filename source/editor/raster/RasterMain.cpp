@@ -93,6 +93,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
             std::this_thread::yield();
+            editor_ui->RenderGUI(cmd_list, raster_context.textures.output.tex);
             continue;
         }
         if (w_width != resolution.x || w_height != resolution.y) {
@@ -170,6 +171,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
          */
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).Wait(copy_queue_timeline, 0));
         gfx_queue.Present(sc, final_output);
+        editor_ui->PresentWindows();
 
         if (editor_ui->GetConfig().selected_render_method != ERenderMethod::Raster) { break; }
     }

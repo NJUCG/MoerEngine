@@ -358,7 +358,7 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
         WindowContext::Tick();
         editor_ui->TickUI();
         int w_width, w_height;
-        if (time >= 3) { timeline->Wait(time - max_frame_in_flight); }
+        if (time >= max_frame_in_flight) { timeline->Wait(time - max_frame_in_flight); }
         RaytracingConfig& ui_config = editor_ui->m_raytracing_ui.GetEditableConfig();
 
         timer.Stop();
@@ -368,6 +368,7 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
             std::this_thread::yield();
+            editor_ui->RenderGUI(cmd_list, output);
             continue;
         }
         if (w_width != resolution.x || w_height != resolution.y) {
@@ -1011,7 +1012,7 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
         gfx_queue.Present(sc, output);
-        // gui.PresentWindows();
+        editor_ui->PresentWindows();
 
         if (editor_ui->GetConfig().selected_render_method != ERenderMethod::Raytracing) { break; }
     }

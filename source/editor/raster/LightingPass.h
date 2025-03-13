@@ -13,9 +13,9 @@
 
 namespace Moer::Render::Raster {
 
-class MaterialShadingPipeline : public RasterPipeline {
+class PbrMaterialShadingPipeline : public RasterPipeline {
 public:
-    DEFINE_RASTER_PIPELINE_CLASS(MaterialShadingPipeline);
+    DEFINE_RASTER_PIPELINE_CLASS(PbrMaterialShadingPipeline);
     DEFINE_SHADER_CONSTANT_STRUCT(MaterialPassBindlessParam, param);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_ARGS(bdls, param);
@@ -32,9 +32,9 @@ public:
         );
 
         pbr_pipeline = context.manager.Raster()
-                           .Vertex("test/PBRMaterialVertex.hlsl")
-                           .Pixel("test/PBRMaterialFrag.hlsl")
-                           .Build<MaterialShadingPipeline>(std::move(pso_full_screen_info));
+                           .Vertex("utils/FullScreenQuad.hlsl")
+                           .Pixel("raster/lighting_pass/PbrMaterial.frag.hlsl")
+                           .Build<PbrMaterialShadingPipeline>(std::move(pso_full_screen_info));
 
         CreateLightingData(context);
     }
@@ -86,9 +86,9 @@ public:
     }
 
 private:
-    MaterialShadingPipeline pbr_pipeline;
+    PbrMaterialShadingPipeline pbr_pipeline;
 
     BufferWithHandle lighting_data_buffer;
 };
 
-} // namespace Moer::Render
+} // namespace Moer::Render::Raster

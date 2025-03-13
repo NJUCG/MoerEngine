@@ -22,7 +22,7 @@ ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
         RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)}
     );
     show_texture_pipeline = std::move(manager.Raster()
-                                          .Vertex("raster/post_process/PostProcessFullScreenQuad.hlsl")
+                                          .Vertex("utils/FullScreenQuad.hlsl")
                                           .Pixel("utils/ShowTexture.frag.hlsl")
                                           .Build<ShowTexturePipeline>(std::move(show_texture_pso_info)));
 }
