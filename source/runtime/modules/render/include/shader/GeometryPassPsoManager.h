@@ -45,7 +45,7 @@ namespace Moer::Render {
         GeometryPassPsoManager(const GeometryPassPsoManager&)            = delete;
         GeometryPassPsoManager& operator=(const GeometryPassPsoManager&) = delete;
 
-        // 获取单例并且自动初始化
+        // 获取单例并且自动初始化（非线程安全）
         static GeometryPassPsoManager& Get();
         // 显式销毁单例
         static void ShutDown();

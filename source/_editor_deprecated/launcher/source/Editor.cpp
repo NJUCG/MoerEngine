@@ -1,5 +1,5 @@
 #include "Editor.h"
-#include "EditorUI.h"
+#include "ui/EditorUI.h"
 #include "Engine.h"
 #include "ui/UIBase.h"
 #include "window/WindowContext.h"

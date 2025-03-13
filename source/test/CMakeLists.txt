@@ -10,7 +10,7 @@ target_include_directories(RuntimeTest
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
 )
 
-target_link_libraries(RuntimeTest PUBLIC MoerEngineRuntime)
+target_link_libraries(RuntimeTest PUBLIC MoerRuntime)
 set_target_properties(RuntimeTest PROPERTIES FOLDER ${moer_test_folder})
 
 add_executable(ShaderReflectionTest ShaderReflectionTest.cpp)
@@ -43,7 +43,7 @@ PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
 )
 target_link_libraries(TaskGraphTest
         # PUBLIC mimalloc
-        PUBLIC MoerRuntimeCore
+        PUBLIC MoerCore
 )
 set_target_properties(TaskGraphTest PROPERTIES FOLDER ${moer_test_folder})
 

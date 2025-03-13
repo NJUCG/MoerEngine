@@ -170,16 +170,22 @@ namespace Moer::Render {
 
     // MARK: Origin Funcs
 
+    // 为了在ShutDown时能访问instance，并且在尚未初始化时0开销ShutDown
+    // 只允许Get()和ShutDown()访问这个变量
+    static GeometryPassPsoManager* instance;
+
     GeometryPassPsoManager& GeometryPassPsoManager::Get() {
-        static GeometryPassPsoManager instance;
-        return instance;
+        if (instance == nullptr) {
+            instance = MoerNew(GeometryPassPsoManager);
+        }
+        return *instance;
     }
 
     void GeometryPassPsoManager::ShutDown() {
-        if (Get().m_impl) {
-            MoerDelete(Get().m_impl);
-            Get().m_impl = nullptr;
-        }
+        if (instance == nullptr) { return; }
+
+        // 调用~GeometryPassPsoManager()，释放资源
+        MoerDelete(instance);
     }
 
     GeometryPassPipeline& GeometryPassPsoManager::GetPso(const VertexAttributesBitmask& bitmask) {

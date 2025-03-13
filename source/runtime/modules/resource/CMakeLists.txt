@@ -20,7 +20,7 @@ target_include_directories(${MODULE_NAME}
 )
 target_link_libraries(${MODULE_NAME}
     PUBLIC AssetLoad
-    PUBLIC MoerRuntimeCore
+    PUBLIC MoerCore
     PUBLIC MoerRender
     PUBLIC MeshProcess
     PUBLIC nlohmann_json::nlohmann_json

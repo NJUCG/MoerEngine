@@ -42,7 +42,7 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC volk
     PRIVATE spirv-reflect-static
 	PUBLIC dxc
-    PUBLIC MoerRuntimeCore
+    PUBLIC MoerCore
     PUBLIC Microsoft::DirectX-Guids
     PUBLIC Microsoft::DirectX-Headers
     PUBLIC glfw
@@ -82,7 +82,7 @@ if(MSVC)
 endif() 
 
 if(WIN32)
-target_compile_definitions(MoerRuntimeCore
+target_compile_definitions(MoerCore
     PUBLIC "DEVELOP_SHADER_SHARED_PATH=${CMAKE_CURRENT_SOURCE_DIR}/include/shaderheaders"
     )
 endif()

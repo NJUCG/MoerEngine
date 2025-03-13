@@ -186,7 +186,6 @@ int main(int argc, const char** argv) {
     using namespace Moer::Render;
     using namespace Moer;
 
-    // TODO:
     std::filesystem::path path = argv[0];
     path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
     ConfigManager::GetInstance().Init(path);

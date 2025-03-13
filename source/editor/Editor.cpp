@@ -1,0 +1,92 @@
+#include "Editor.h"
+
+// Runtime
+#include "config/ConfigManager.h"
+#include "misc/MMemory.h"
+#include "renderer/UIRenderer.h"
+#include "rhi/RHI.h"
+#include "shader/GeometryPassPsoManager.h"
+#include "shader/ShaderResourceManager.h"
+#include "taskgraph/TaskSystem.h"
+#include "window/WindowContext.h"
+
+// Editor
+#include "raster/RasterMain.h"
+#include "raytracing/RaytracingMain.h"
+#include "ui/EditorUI.h"
+
+// 3rd party (std)
+#include <cassert>
+
+// namespace
+using namespace Moer::Render;
+
+namespace Moer {
+
+Editor::Editor() {}
+
+Editor::~Editor() {}
+
+void Editor::Init(int argc, const char** argv) {
+    // Init ConfigManager
+    std::filesystem::path path = argv[0];
+    ConfigManager::GetInstance().Init(
+        path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path
+    );
+
+    // Init TaskSystem
+    TaskSystem::Init();
+
+    // Init RenderDevice
+    RenderDevice::Init(std::move(DeviceInitInfo{
+        .type           = ERHIType::Vulkan,
+        .name           = "MoerEngine",
+        .config_as_json = ConfigManager::GetInstance().GetRHIConfigAsJSON()
+    }));
+
+    ShaderManager::Get(); // Explicit Init ShaderManager
+
+    // Init WindowContext
+    // uint2 resolution = {1920, 1080};
+    uint2 resolution = {1280, 720};
+    WindowContext::Init(SurfaceInitInfo("Vulkan", resolution.x, resolution.y, "MoerEditor", false));
+
+    // Init EditorUI
+    auto ui_renderer = MakeUnique<Render::UIRenderer>(RenderDevice::Get());
+
+    m_editor_ui = MakeShared<EditorUI>(std::move(ui_renderer), resolution);
+}
+
+void Editor::Run() {
+    while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+        const auto& config = m_editor_ui->GetConfig();
+
+        LOG_INFO(
+            "Selecting Render Method : {}",
+            k_render_method_names[static_cast<uint>(config.selected_render_method)]
+        );
+
+        if (config.selected_render_method == ERenderMethod::Raster) {
+            Render::Raster::RasterMain(m_editor_ui);
+
+        } else if (config.selected_render_method == ERenderMethod::Raytracing) {
+            Render::Raytracing::RaytracingMain(m_editor_ui);
+
+        } else {
+            assert(false && "Unknown render method");
+        }
+    }
+}
+
+void Editor::ShutDown() {
+    GeometryPassPsoManager::ShutDown(); // 如果这个单例没有Get过，则ShutDown时不会消耗额外资源
+
+    m_editor_ui.reset(); // 释放EditorUI资源
+
+    WindowContext::ShutDown();
+    ShaderManager::ShutDown();
+    RenderDevice::Dispose();
+    TaskSystem::ShutDown();
+}
+
+} // namespace Moer
