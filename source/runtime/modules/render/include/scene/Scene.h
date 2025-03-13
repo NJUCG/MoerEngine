@@ -164,7 +164,8 @@ namespace Moer {
         uint  local_idx_count;
         uint  local_vtx_offset;
         uint  local_vtx_count;
-        uint  global_geom_idx;
+        //IMPORTANT: Global Index for Mesh Goemetry, NOT for Geometry Instance
+        uint global_geom_idx;
 
         uint                   mesh_buffers_idx;// For serialization
         SharedPtr<MeshBuffers> mesh_buffers;

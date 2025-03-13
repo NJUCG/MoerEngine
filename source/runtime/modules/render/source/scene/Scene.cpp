@@ -96,22 +96,23 @@ namespace Moer {
     }
 
     void Scene::Impl::UpdateGpuData() {
-        uint geometry_count = 0;
-        uint instance_count = 0;
+        uint geom_instance_cnt = 0;
+        uint instance_count    = 0;
         for (auto& entity : m_entities.GetEntities()) {
             const MeshInfo& info = *RenderableManager::Get().GetMeshInfo(entity);
-            geometry_count += info.geometries.size();
+            geom_instance_cnt += info.geometries.size();
             instance_count += 1;
         }
 
-        LOG_INFO("UpdateGpuData, geometry_count:{}, instance_count:{}", geometry_count, instance_count);
+        LOG_INFO("UpdateGpuData, geometry_count:{}, instance_count:{}", geom_instance_cnt, instance_count);
 
-        geometry_datas.resize(geometry_count);
-        geom_instances.resize(geometry_count);
+        geometry_datas.resize(geom_instance_cnt);//reserve more space than needed
+        geom_instances.resize(geom_instance_cnt);
         vtx_views.resize(instance_count);
         idx_views.resize(instance_count);
         instance_datas.resize(instance_count);
 
+        geom_instance_cnt = 0;
         for (auto& entity : m_entities.GetEntities()) {
             const MeshInfo&                info          = *RenderableManager::Get().GetMeshInfo(entity);
             std::span<MaterialInstanceRef> mat_instances = RenderableManager::Get().GetMaterialInstances(entity);
@@ -140,9 +141,11 @@ namespace Moer {
                 geo_data.index_buffer_handle  = buffers.idx_bdls_handle;
                 geo_data.vertex_buffer_handle = buffers.vtx_bdls_handle;
 
-                auto& geom_instance        = geom_instances[geo->global_geom_idx];
+                auto& geom_instance        = geom_instances[geom_instance_cnt];
                 geom_instance.instance_idx = RenderableManager::Get().GetInstanceID(entity);
                 geom_instance.geom_idx     = geo->global_geom_idx;
+
+                geom_instance_cnt++;
             }
 
             {

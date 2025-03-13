@@ -26,5 +26,5 @@ VertexFactory::OutVertexAttributes main(VertexFactory::InVertexAttributes input,
     Moer::GeometryInstance geom_instance = geom_instance_array.Load<Moer::GeometryInstance>(instance_id);
     Moer::InstanceData instance_data = Moer::LoadInstanceData(instance_data_array.GetByteAddressBuffer(), geom_instance.instance_idx * sizeof(Moer::InstanceData));
 
-    return VertexFactory::GetConvertedAttributes(input, instance_data.model2world, view_param_buffer.world2clip, instance_id);
+    return VertexFactory::GetConvertedAttributes(input, instance_data.model2world, view_param_buffer.world2clip, geom_instance.geom_idx);
 }
