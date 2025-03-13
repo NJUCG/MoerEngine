@@ -169,8 +169,15 @@ static Box3D          scene_bounding{};
 static constexpr uint max_frame_in_flight = 3;
 
 void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
-
-    auto& device = RenderDevice::Get();
+    // Get a lot of things
+    auto&            device              = RenderDevice::Get();
+    auto&            manager             = ShaderManager::Get();
+    Scene            scene               = {};
+    BindlessArrayRef bindless_array      = scene.GetBindlessArray();
+    auto&            gfx_queue           = device.GetCommandQueue(EQueueType::Graphics);
+    auto&            copy_queue          = device.GetCopyQueue();
+    auto             copy_queue_timeline = copy_queue.GetFenceHandle();
+    CommandList      cmd_list            = {};
 
     // Initialize Swapchain
     auto resolution = editor_ui->GetResolution(); // TODO: 是否要从WindowContext中获取resolution?
@@ -182,17 +189,6 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
         .preferred_format = PF_R8G8B8A8_SRGB
     };
     auto sc = device.CreateSwapchain(sc_info);
-
-    // TODO: 改一下顺序
-
-    // Get a lot of things
-    auto&            manager             = ShaderManager::Get();
-    Scene            scene               = {};
-    BindlessArrayRef bindless_array      = scene.GetBindlessArray();
-    auto&            gfx_queue           = device.GetCommandQueue(EQueueType::Graphics);
-    auto&            copy_queue          = device.GetCopyQueue();
-    auto             copy_queue_timeline = copy_queue.GetFenceHandle();
-    CommandList      cmd_list            = {};
 
     // MARK: Scene
     Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &scene);

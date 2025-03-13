@@ -24,11 +24,15 @@ namespace Moer::Render::Raster {
 
 void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
-    auto& device = RenderDevice::Get();
-
-    auto&& scope_exit_window_context_and_etc = OnScopeExit([&] {
-        // nothing to do
-    });
+    // Get a lot of things
+    auto&            device              = RenderDevice::Get();
+    auto&            manager             = ShaderManager::Get();
+    Scene            scene               = {};
+    BindlessArrayRef bindless_array      = scene.GetBindlessArray();
+    auto&            gfx_queue           = device.GetCommandQueue(EQueueType::Graphics);
+    auto&            copy_queue          = device.GetCopyQueue();
+    auto             copy_queue_timeline = copy_queue.GetFenceHandle();
+    CommandList      cmd_list            = {};
 
     // Initialize Swapchain
     auto resolution = editor_ui->GetResolution(); // TODO: 是否要从WindowContext中获取resolution?
@@ -40,15 +44,6 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
         .preferred_format = PF_R8G8B8A8_SRGB
     };
     auto sc = device.CreateSwapchain(sc_info);
-
-    // Get a lot of things
-    auto&            manager             = ShaderManager::Get();
-    Scene            scene               = {};
-    BindlessArrayRef bindless_array      = scene.GetBindlessArray();
-    auto&            gfx_queue           = device.GetCommandQueue(EQueueType::Graphics);
-    auto&            copy_queue          = device.GetCopyQueue();
-    auto             copy_queue_timeline = copy_queue.GetFenceHandle();
-    CommandList      cmd_list            = {};
 
     // MARK: Scene
     Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &scene);

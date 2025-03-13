@@ -59,11 +59,11 @@ public:
     }
 
     TextureRef Process(
-        CommandList& cmd_list,
-        uint2        resolution,
-        TextureView  input_color_texture,
-        TextureRef   input_ui_texture,       // TODO: is this necessary?
-        TextureRef   default_output_texture, // TODO: 看一下是否这里要用TextureView还是TextureRef，统一一下
+        CommandList&        cmd_list,
+        uint2               resolution,
+        TextureView         input_color_texture,
+        TextureView         input_ui_texture, // TODO: is this necessary?
+        TextureView         default_output_texture,
         SharedPtr<EditorUI> editor_ui
     ) {
         // TextureView input_image = editor_ui->m_raster_ui.GetSelectedFrameBuffer();
@@ -101,9 +101,9 @@ public:
                     {},
                     3,
                     {SingleDrawParam(3, 1, 0, 0, 0)},
-                    ColorAttachment(default_output_texture)
+                    ColorAttachment(default_output_texture.GetTexture())
                 );
-            return default_output_texture;
+            return default_output_texture.GetTexture();
         }
     }
 
