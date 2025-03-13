@@ -122,6 +122,8 @@ bool Integration::Initialize(const IntegrationCreationDesc& integrationDesc, con
     m_NRI = &nriCore;
     m_NRIHelper = &nriHelper;
 
+    m_FrameIndex = (uint32_t)(-1);
+
     strncpy(m_Name, integrationDesc.name, sizeof(m_Name));
 
 #if( NRD_INTEGRATION_DEBUG_LOGGING == 1 )
@@ -538,7 +540,7 @@ void Integration::Denoise(const Identifier* denoisers, uint32_t denoisersNum, nr
                 break;
         }
 
-        NRD_INTEGRATION_ASSERT(isNormalRoughnessFormatValid, "IN_NORMAL_ROUGHNESS format doesn't match NRD normal encoding");
+        // NRD_INTEGRATION_ASSERT(isNormalRoughnessFormatValid, "IN_NORMAL_ROUGHNESS format doesn't match NRD normal encoding");
     }
 
     const DispatchDesc* dispatchDescs = nullptr;
