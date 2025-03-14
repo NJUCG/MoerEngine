@@ -6,8 +6,6 @@
 #include "misc/STL.h"
 
 #include <filesystem>
-#include <nlohmann/json.hpp>
-using MoerRHIConfigAsJSON = nlohmann::json;
 
 //implement ConfigManager as Singleton
 #define FONTS_DIR  "fonts"
@@ -30,7 +28,6 @@ namespace Moer {
 
         //call after config manager init
         const Config::GlobalConfig& GetConfig() const { return m_config; }
-        const MoerRHIConfigAsJSON&  GetRHIConfigAsJSON() const { return m_rhi_config_as_json; }
 
     private:
         static ConfigManager* instance;
@@ -39,8 +36,6 @@ namespace Moer {
 
     private:
         Config::GlobalConfig m_config;
-
-        MoerRHIConfigAsJSON m_rhi_config_as_json;
 
         std::filesystem::path workspace_path;
         std::filesystem::path editor_resource_path;

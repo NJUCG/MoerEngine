@@ -4,7 +4,6 @@
 #include "platform/Platform.h"
 #include "taskgraph/TaskSystem.h"
 #include "taskgraph/GraphTask.h"
-#include "config/ConfigManager.h"
 #include "misc/EnumBitOperation.h"
 #include "misc/LockFree.h"
 #include "misc/Hash.h"

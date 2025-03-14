@@ -1,7 +1,5 @@
 #include "scene/Scene.h"
 
-#include "config/ConfigManager.h"
-// #include "loader/gltf/Parser.h"
 #include "log/LogSystem.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"

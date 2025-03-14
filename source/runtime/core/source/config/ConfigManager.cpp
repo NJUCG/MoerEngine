@@ -42,18 +42,6 @@ namespace Moer {
         // load config from .toml
         m_config   = Config::GlobalConfig::LoadConfigFromTomlFile(config_path.generic_string());
         scene_path = m_config.engine.scene.scene_path;
-
-        LOG_INFO("RHI Config Name: {}", m_config.engine.rhi.rhi_config_name);
-        LOG_INFO("Default RHI: {}", m_config.engine.rhi.default_rhi);
-        LOG_INFO("Default render method: {}", m_config.engine.render.default_render_method);
-        LOG_INFO("scene path: {}", m_config.engine.scene.scene_path);
-
-        // load rhi configs from .json
-        std::filesystem::path rhi_config_path = _workspace_path / CONFIG_DIR / m_config.engine.rhi.rhi_config_name;
-        if (!std::filesystem::exists(rhi_config_path)) {
-            throw std::runtime_error("RHIConfig directory does not exist");
-        }
-        m_rhi_config_as_json = nlohmann::json::parse(std::ifstream(rhi_config_path.generic_string()));
     }
 
     const std::filesystem::path& ConfigManager::GetWorkspacePath() const {

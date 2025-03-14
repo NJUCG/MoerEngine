@@ -1,6 +1,7 @@
 #include "RasterMain.h"
 
 // Runtime
+#include "config/ConfigManager.h"
 #include "loader/LoaderInterface.h"
 #include "rhi/RHI.h"
 #include "scene/CameraManager.h"

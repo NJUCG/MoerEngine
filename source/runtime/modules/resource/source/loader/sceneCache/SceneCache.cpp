@@ -1,6 +1,5 @@
 #include "SceneCache.h"
 
-#include "config/ConfigManager.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
 #include "resources/GpuScene.h"

@@ -53,9 +53,10 @@ struct RHIInfo {
     bool     ray_tracing;
 };
 struct DeviceInitInfo {
-    ERHIType            type;
-    std::string_view    name;
-    MoerRHIConfigAsJSON config_as_json;
+    ERHIType         type;
+    std::string_view name;
+    std::string_view rhi;
+    std::string_view rhi_api_version;
 };
 
 template<typename T>
@@ -266,7 +267,7 @@ protected:
 namespace Moer::Render {
 
     template<typename T>
-    static T ResolveConfigAs(const MoerRHIConfigAsJSON& _config_as_json);
+    static T ResolveConfigAs(const DeviceInitInfo& _info);
 
     template<typename T>
     struct user_trivial_type {

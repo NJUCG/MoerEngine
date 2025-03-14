@@ -1,6 +1,7 @@
 #include "RaytracingMain.h"
 
 // Runtime
+#include "config/ConfigManager.h"
 #include "loader/LoaderInterface.h"
 #include "misc/Timer.h"
 #include "rhi/RHI.h"

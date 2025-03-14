@@ -1,5 +1,4 @@
 #include "GLFWWindowImpl.h"
-#include "config/ConfigManager.h"
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/vulkan/VulkanRHI.h"

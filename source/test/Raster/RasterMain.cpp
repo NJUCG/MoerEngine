@@ -190,10 +190,13 @@ int main(int argc, const char** argv) {
     path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
     ConfigManager::GetInstance().Init(path);
     TaskSystem::Init();
-    const auto& rhi_config_as_json = ConfigManager::GetInstance().GetRHIConfigAsJSON();
 
-    DeviceInitInfo info{.type = ERHIType::Vulkan, .name = "Raster", .config_as_json = rhi_config_as_json};
-    RenderDevice::Init(std::move(info));
+    RenderDevice::Init(std::move(DeviceInitInfo{
+        .type            = ERHIType::Vulkan,
+        .name            = "MoerEngine",
+        .rhi             = ConfigManager::GetInstance().GetConfig().engine.rhi.rhi,
+        .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.vulkan.api_version,
+    }));
 
     auto& device  = RenderDevice::Get();
     auto& manager = ShaderManager::Get();

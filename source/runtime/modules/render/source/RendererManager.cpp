@@ -1,6 +1,6 @@
 #include "RendererManager.h"
 
-#include "config/ConfigManager.h"
+// #include "config/ConfigManager.h"
 #include "misc/STL.h"
 #include "renderer/BackendRenderer.h"
 #include "renderer/backend/DeferredRenderer.h"
@@ -34,7 +34,9 @@ namespace Moer {
     void RendererManager::Init() {
         data = MoerNew(RendererManagerData)();
 
-        std::string render_name = ConfigManager::GetInstance().GetConfig().engine.render.default_render_method;
+        std::string render_name = "Raster";
+        LOG_WARNING("RendererManager needs to be refactored");
+        // ConfigManager::GetInstance().GetConfig().engine.render.default_render_method;
         RegisterRenderer(render_name, GetRender(render_name));
         //  RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
         // RegisterRenderer(MOER_MESH_RENDERER_NAME, MoerNew(MeshDebugRenderer));
