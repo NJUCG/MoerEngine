@@ -41,31 +41,28 @@ Engine for Realtime Rendering
   git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
   
   # Configure the engine (use default settings)
-  cp source/configs/MoerEngine.ini.template source/configs/MoerEngine.ini
+  cp source/configs/template.MoerEngine.toml source/configs/MoerEngine.toml
   
   # Build
   cmake -B build
   cmake --build build -j16 # change 16 to your cpu core count
   
-  # Run `Raster`
-  # - `RHITest.exe` needs to be modified according to your platform
-  ./target/bin/Debug/RHITest.exe
-  
-  # Run `Ray Tracing`
-  # - `RTTest.exe` needs to be modified according to your platform
-  ./target/bin/Debug/RaytracingTest.exe
+  # Run
+  # - MoerEditor.exe needs to be modified according to your platform
+  # - You can switch from Raster to RayTracing by GUI or Config.
+  ./target/bin/Debug/MoerEditor.exe
   ```
-
+  
 * Rider
   * TODO
 
 ## How to render other scenes
 
 * How to render other scenes
-  * If you succeed to run Moer Engine, open the configuration file `./target/bin/Debug/config/MoerEngine.ini`.
+  * If you succeed to run Moer Engine, open the configuration file `./target/bin/Debug/config/MoerEngine.toml`.
   * Then, change `scene_path` to any other scene files in your machine.
     * Such as `scene_path = E:\Data\Models\BlueArchive\aris\CH0200.fbx.`
-  * Run `./target/bin/Debug/RHITest.exe` again, you will see the new scene.
+  * Run `./target/bin/Debug/MoerEditor.exe` again, you will see the new scene.
 * Tip
   * `./target/bin/Debug/config/*` will be replaced with `./source/configs/*`, every time you compile.
 
