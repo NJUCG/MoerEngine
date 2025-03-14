@@ -4,10 +4,10 @@
 [editor]
 width = 1920
 height = 1080
-fullscreen = 0
-vsync = 0
+fullscreen = false
+vsync = false
 
-lock_frame_rate = 0
+lock_frame_rate = false
 fps = 60
 max_fps = 170
 font_size = 17.0

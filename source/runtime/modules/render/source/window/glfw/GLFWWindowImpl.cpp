@@ -57,7 +57,18 @@ namespace Moer {
             rhi_type = ERHIType::Vulkan;
         }
 
-        GLFWwindow* window = glfwCreateWindow(info.width, info.height, info.title.c_str(), nullptr, nullptr);
+        int          width   = info.width;
+        int          height  = info.height;
+        GLFWmonitor* monitor = nullptr;
+        if (info.b_fullscreen) {
+            // 全屏模式
+            monitor                 = glfwGetPrimaryMonitor();
+            const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+            width                   = mode->width;
+            height                  = mode->height;
+        }
+
+        GLFWwindow* window = glfwCreateWindow(width, height, info.title.c_str(), monitor, nullptr);
 
         glfwSetWindowUserPointer(window, this);
 

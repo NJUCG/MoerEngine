@@ -48,9 +48,13 @@ void Editor::Init(int argc, const char** argv) {
     ShaderManager::Get(); // Explicit Init ShaderManager
 
     // Init WindowContext
-    // uint2 resolution = {1920, 1080};
-    uint2 resolution = {1280, 720};
-    WindowContext::Init(SurfaceInitInfo("Vulkan", resolution.x, resolution.y, "MoerEditor", false));
+    uint2 resolution = {
+        ConfigManager::GetInstance().GetConfig().editor.width,
+        ConfigManager::GetInstance().GetConfig().editor.height
+    };
+    bool b_fullscreen = ConfigManager::GetInstance().GetConfig().editor.fullscreen;
+    LOG_INFO("Editor Window Resolution : {}x{}; Fullscreen : {}", resolution.x, resolution.y, b_fullscreen);
+    WindowContext::Init(SurfaceInitInfo("Vulkan", resolution.x, resolution.y, "MoerEditor", b_fullscreen));
 
     // Init EditorUI
     auto ui_renderer = MakeUnique<Render::UIRenderer>(RenderDevice::Get());
