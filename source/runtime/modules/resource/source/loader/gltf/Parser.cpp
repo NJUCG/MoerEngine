@@ -489,7 +489,7 @@ namespace Moer::Resource::Gltf {
         auto             real_path = std::filesystem::weakly_canonical(_file_path);
         if (!std::filesystem::exists(real_path)) {
             LOG_WARNING("File not exist: {}", real_path.string());
-            LOG_WARNING("Please check the `scenepath` in source/configs/MoerEngine.ini.");
+            LOG_WARNING("Please check the `scene_path` in source/configs/MoerEngine.toml.");
             return nullptr;
         }
         const auto* gltf_scene = importer.ReadFile(_file_path.string(), aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);

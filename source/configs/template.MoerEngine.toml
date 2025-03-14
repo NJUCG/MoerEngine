@@ -1,0 +1,28 @@
+# MoerEngine Config
+# C++ side definition in: source/runtime/core/include/config/GlobalConfig.h
+
+[editor]
+width = 1920
+height = 1080
+fullscreen = 0
+vsync = 0
+
+lock_frame_rate = 0
+fps = 60
+max_fps = 170
+font_size = 17.0
+
+[engine]
+
+[engine.rhi]
+default_rhi = "Vulkan"
+rhi_config_name = "VkConfigs.json"
+max_frame_in_flight = 3
+
+[engine.render]
+default_render_method = "Raster"
+# default_render_method = "Raytracing"
+
+[engine.scene]
+# 注：Toml中使用单引号包裹路径，可以避免反斜杠被识别为转义符
+scene_path = './asset/scenes/sponza/Sponza.gltf'

@@ -34,7 +34,7 @@ namespace Moer {
     void RendererManager::Init() {
         data = MoerNew(RendererManagerData)();
 
-        std::string render_name = ConfigManager::GetInstance().GetInitConfig().default_render_name;
+        std::string render_name = ConfigManager::GetInstance().GetConfig().engine.render.default_render_method;
         RegisterRenderer(render_name, GetRender(render_name));
         //  RegisterRenderer(MOER_DEFAULT_RENDERER_NAME, MoerNew(DeferredRenderer));
         // RegisterRenderer(MOER_MESH_RENDERER_NAME, MoerNew(MeshDebugRenderer));

@@ -62,9 +62,9 @@ void Init(int argc, char** argv) {
     ShaderResourceManager::Init(platform);
     ShaderResourceManager::GetInstance().PrepareGlobalShaderResources();
 
-    const auto& config_data = Moer::ConfigManager::GetInstance().GetInitConfig();
+    const auto& config_data = Moer::ConfigManager::GetInstance().GetConfig();
 
-    g_rhi->Initialize({config_data.max_frame_in_flight, config_data.ray_tracing});
+    g_rhi->Initialize({config_data.engine.rhi.max_frame_in_flight, false});
     g_rhi->PostInit();
 }
 

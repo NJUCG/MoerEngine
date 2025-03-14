@@ -12,7 +12,7 @@ namespace Moer {
         void GenericRenderPlatformInfo::Initialize() {
         }
 
-        void GenericRenderPlatformInfo::ParseValuesFromConfiguration(const ConfigMap& _value_map, GenericRenderPlatformInfo& target_platform_info) {
+        void GenericRenderPlatformInfo::ParseValuesFromConfiguration(GenericRenderPlatformInfo& target_platform_info) {
         }
     }// namespace RHI
 }// namespace Moer

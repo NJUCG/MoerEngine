@@ -214,8 +214,8 @@ namespace Moer::Render {
         ImGuiIO& io = ImGui::GetIO();
         assert(io.BackendRendererUserData == nullptr && "GUI backend already initialized.");
 
-        const Moer::ConfigManager& config_manager      = Moer::ConfigManager::GetInstance();
-        uint32_t                   max_frame_in_flight = config_manager.GetInitConfig().max_frame_in_flight;
+        auto     config              = Moer::ConfigManager::GetInstance().GetConfig();
+        uint32_t max_frame_in_flight = config.engine.rhi.max_frame_in_flight;
 
         auto& sd_mgr = ShaderManager::Get();
 

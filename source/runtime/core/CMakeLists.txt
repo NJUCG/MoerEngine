@@ -27,6 +27,7 @@ target_link_libraries(${target_name}
     PUBLIC mimalloc-static
     PUBLIC spdlog
     PUBLIC nlohmann_json::nlohmann_json
+    PUBLIC tomlplusplus
 )
 target_compile_definitions(${target_name} 
     PRIVATE "DEVELOP_SHADER_PATH=${moer_root_dir}/shaders"

@@ -157,7 +157,7 @@ void MainWindow::Show() {
     }
 
     auto& render_manager = Moer::RendererManager::GetInstance();
-    auto  renderer_id    = render_manager.GetRendererID(Moer::ConfigManager::GetInstance().GetInitConfig().default_render_name);
+    auto  renderer_id    = render_manager.GetRendererID(Moer::ConfigManager::GetInstance().GetConfig().engine.render.default_render_method);
 
     render_manager.UpdateGUI(renderer_id);
 

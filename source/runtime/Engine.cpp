@@ -84,12 +84,13 @@ namespace Moer {
     void Engine::InitWindow() {
         SurfaceInitInfo info;
 #if defined(EDITOR_MODE_ON)
-        const auto& config_data = ConfigManager::GetInstance().GetInitConfig();
-        info.width              = config_data.editor_width;
-        info.height             = config_data.editor_height;
-        info.title              = "MoerEditor";
-        info.b_fullscreen       = config_data.editor_fullscreen;
-        info.b_vsync            = config_data.editor_vsync;
+        // deprecated
+        // const auto& config_data = ConfigManager::GetInstance().GetInitConfig();
+        // info.width              = config_data.editor_width;
+        // info.height             = config_data.editor_height;
+        // info.title              = "MoerEditor";
+        // info.b_fullscreen       = config_data.editor_fullscreen;
+        // info.b_vsync            = config_data.editor_vsync;
 #else
         //load application info
 

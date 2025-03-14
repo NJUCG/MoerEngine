@@ -1,13 +1,14 @@
-#include <filesystem>
-#include <fstream>
-#include <sstream>
-// #include <string.h>
-#include <string>
 #include "config/ConfigManager.h"
 
 #include "log/LogSystem.h"
 #include "config/ini.h"
 #include "misc/MacroUtils.h"
+
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <toml++/toml.hpp>
 
 #ifndef DEVELOP_SHADER_PATH
 #define DEVELOP_SHADER_PATH resource / shaders
@@ -23,55 +24,37 @@ namespace Moer {
     }
 
     void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
+        // pathes
         workspace_path            = _workspace_path;
         editor_resource_path      = _workspace_path / "resource";
         engine_shader_path        = MACRO_STR(DEVELOP_SHADER_PATH);
         engine_shader_cached_path = _workspace_path / "resource" / "shader_cache";
         engine_shader_shared_path = MACRO_STR(DEVELOP_SHADER_SHARED_PATH);
 
-        std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.ini";
+        // check config exists
+        std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.toml";
         if (!std::filesystem::exists(config_path)) {
-            LOG_ERROR("Config `MoerEngine.ini` does not exist.");
-            LOG_ERROR("Please enter `./source/configs/` and copy `MoerEngine.ini.template` to `MoerEngine.ini`. You can read README.md for details. MoerEngine will abort.", config_path.generic_string());
-            throw std::runtime_error("Config directory does not exist");
+            LOG_ERROR("Config `MoerEngine.toml` does not exist.");
+            LOG_ERROR("Please enter `./source/configs/` and copy `template.MoerEngine.toml` to `MoerEngine.toml`. You can read README.md for details. MoerEngine will abort.", config_path.generic_string());
+            throw std::runtime_error("Config file does not exist");
         }
 
-        //load init config to init_config by ini.h
-        inih::INIReader r{config_path.generic_string()};
-        if (r.ParseError() < 0) {
-            throw std::runtime_error("Can't load 'MoerEditor.ini'");
-        }
-#if defined(EDITOR_MODE_ON)
-        init_config.editor_width           = r.Get<int>("editor", "editor_width", 1920);
-        init_config.editor_height          = r.Get<int>("editor", "editor_height", 1080);
-        init_config.editor_fullscreen      = r.Get<int>("editor", "editor_fullscreen", 0);
-        init_config.editor_vsync           = r.Get<int>("editor", "editor_vsync", 1);
-        init_config.editor_lock_frame_rate = r.Get<int>("editor", "editor_lock_frame_rate", 0);
-        init_config.editor_fps             = r.Get<int>("editor", "editor_fps", 60);
-        init_config.editor_max_fps         = r.Get<int>("editor", "editor_max_fps", 120);
-        init_config.editor_font_size       = r.Get<float>("editor", "editor_font_size", 16.f);
-#endif
-        init_config.max_frame_in_flight = r.Get<int>("engine", "max_frame_in_flight", 3);
-        auto rhi_config_name            = r.Get<std::string>("engine", "rhi_config_name", "VkConfigs.json");
-        auto default_rhi                = r.Get<std::string>("engine", "default_rhi", "Vulkan");
-        strcpy_s(init_config.default_rhi, default_rhi.c_str());
+        // load config from .toml
+        m_config   = Config::GlobalConfig::LoadConfigFromTomlFile(config_path.generic_string());
+        scene_path = m_config.engine.scene.scene_path;
+
+        LOG_INFO("RHI Config Name: {}", m_config.engine.rhi.rhi_config_name);
+        LOG_INFO("Default RHI: {}", m_config.engine.rhi.default_rhi);
+        LOG_INFO("Default render method: {}", m_config.engine.render.default_render_method);
+        LOG_INFO("scene path: {}", m_config.engine.scene.scene_path);
 
         // load rhi configs from .json
-        std::filesystem::path rhi_config_path = _workspace_path / CONFIG_DIR / rhi_config_name;
+        std::filesystem::path rhi_config_path = _workspace_path / CONFIG_DIR / m_config.engine.rhi.rhi_config_name;
         if (!std::filesystem::exists(rhi_config_path)) {
             throw std::runtime_error("RHIConfig directory does not exist");
         }
-        rhi_config_as_json = nlohmann::json::parse(std::ifstream(rhi_config_path.generic_string()));
-
-        scene_path = r.Get<std::string>("engine", "scene_path", "resource/scenes");
-
-        auto defulat_render_name = r.Get<std::string>("engine", "render", "DeferredRenderer");
-        strcpy_s(init_config.default_render_name, defulat_render_name.c_str());
+        m_rhi_config_as_json = nlohmann::json::parse(std::ifstream(rhi_config_path.generic_string()));
     }
-
-    // std::string ConfigManager::GetConfig(const std::string& key) {
-    //     return configs[key];
-    // }
 
     const std::filesystem::path& ConfigManager::GetWorkspacePath() const {
         return workspace_path;

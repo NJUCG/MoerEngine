@@ -1,11 +1,15 @@
 #include "ui/EditorUI.h"
 
+// Runtime
+#include "config/ConfigManager.h"
+
+// Editor
+#include "EditorUIStyle.h"
+
+// 3rd party (std)
 #include <imgui.h>
 #include <imgui_internal.h>
-
 #include <string_view>
-
-#include "EditorUIStyle.h"
 
 using namespace Moer::Render;
 
@@ -14,6 +18,20 @@ namespace Moer {
 EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, uint2 resolution) :
     m_ui_renderer(std::move(renderer)),
     m_resolution(resolution) {
+
+    // load config
+    auto config = ConfigManager::GetInstance().GetConfig();
+    if (config.engine.render.default_render_method == "Raster") {
+        m_config.selected_render_method = ERenderMethod::Raster;
+    } else if (config.engine.render.default_render_method == "Raytracing") {
+        m_config.selected_render_method = ERenderMethod::Raytracing;
+    } else {
+        LOG_WARNING(
+            "Invalid default render method: {}. Use Raster instead.",
+            config.engine.render.default_render_method
+        );
+        m_config.selected_render_method = ERenderMethod::Raster;
+    }
 
     // default style
     EditorUIStyle::ApplyDefaultStyle();
