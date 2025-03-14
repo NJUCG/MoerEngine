@@ -50,10 +50,10 @@ namespace Moer::Render {
 
             MaterialPassBindlessParam material_param;
             material_param.material_buffer     = context.gpu_material_info_handle;
-            material_param.g_buffer_uv         = context.textures.uv.handle;
-            material_param.g_buffer_normal     = context.textures.normal.handle;
-            material_param.v_buffer            = context.textures.vbuffer.handle;
-            material_param.g_buffer_depth      = context.textures.depth_nearest_sampler.handle;
+            material_param.gbuffer_uv          = context.textures.uv.handle;
+            material_param.gbuffer_normal      = context.textures.normal.handle;
+            material_param.vbuffer             = context.textures.vbuffer.handle;
+            material_param.gbuffer_depth       = context.textures.depth_nearest_sampler.handle;
             material_param.gbuffer_position    = context.textures.position.handle;
             material_param.global_param_handle = lighting_data_buffer.handle;
             material_param.light_buffer        = context.gpu_light_info_handle;

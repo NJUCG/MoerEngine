@@ -20,19 +20,19 @@ namespace Moer {
         uint material_type;
         uint light_buffer;
         uint material_buffer;
-        uint v_buffer;
-        uint g_buffer_normal;
-        uint g_buffer_uv;
-        uint g_buffer_depth;
+        uint vbuffer;
+        uint gbuffer_normal;
+        uint gbuffer_uv;
+        uint gbuffer_depth;
         uint gbuffer_position;
         uint global_param_handle;
     };
 
     struct LightingData {
-        Matrix4x4f inv_view_proj;
-        uint       light_count;
-        uint3      padding;
-        float3     camera_position;
+        float4x4 inv_view_proj;
+        uint     light_count;
+        uint3    padding;
+        float3   camera_position;
     };
 
     // MARK: Main Content End

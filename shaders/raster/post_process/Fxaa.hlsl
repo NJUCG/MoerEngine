@@ -7,20 +7,14 @@
 #include "framework/Bindless.hlsl"
 #include "framework/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
-
-struct Constant {
-    uint input_image;
-    uint fxaa_mode;
-    float2 resolution;
-    float2 inv_resolution;
-};
+#include "shared/raster/post_process/ShaderParameters.h"
 
 static const float fxaa_contrast_threshold = 0.025;
 static const uint fxaa_search_limit = 8;
 
 static const float Epsilon = 0.0001; // same with PBRMaterialFrag.hlsl
 
-[[vk::push_constant]] ConstantBuffer<Constant> param;
+[[vk::push_constant]] ConstantBuffer<Moer::FxaaPipelineBindlessParam> param;
 
 float get_luminance(float2 uv) {
     return TextureHandle(param.input_image).Sample2D<float4>(uv).a;

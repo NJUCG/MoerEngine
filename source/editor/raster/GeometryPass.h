@@ -6,7 +6,7 @@
 #include "scene/RenderableManager.h"
 #include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderPipeline.h"
-#include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
+#include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 
 #include "RasterResource.h"
 #include "RasterTool.h"
@@ -107,13 +107,13 @@ public:
         context.cmd_list.AddCallback([view_param]() { delete view_param; });
 
         GeometryPassBindlessParam param;
-        param.color                    = float4(0., 0., 0., 0.);
-        param.texture_handle           = 0;
-        param.buffer_handle            = 0;
-        param.instance_buffer_handle   = context.gpu_instance_info_handle;
-        param.geometry_data_handle     = context.gpu_geometry_info_handle;
-        param.geometry_instance_handle = context.gpu_geometry_instance_handle;
-        param.camera_view_proj         = Transpose(camera->GetViewProjectionMatrix());
+        param.color                  = float4(0., 0., 0., 0.);
+        param.texture                = 0;
+        param.buffer                 = 0;
+        param.instance_data          = context.gpu_instance_info_handle;
+        param.geometry_data          = context.gpu_geometry_info_handle;
+        param.geometry_instance_data = context.gpu_geometry_instance_handle;
+        param.camera_view_proj       = Transpose(camera->GetViewProjectionMatrix());
 
         context.cmd_list.GfxGeometryPass<GeometryPassPipeline>(view_param_buffer, context.bdls, param)
             .Draw(
@@ -132,4 +132,4 @@ public:
     BufferRef view_param_buffer; // no bindless
 };
 
-} // namespace Moer::Render
+} // namespace Moer::Render::Raster

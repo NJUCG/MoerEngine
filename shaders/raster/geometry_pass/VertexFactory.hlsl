@@ -1,7 +1,9 @@
 
+#include "shared/utils/Packing.h"
+
 namespace VertexFactory {
 
-struct InVertexAttributes {
+struct VsInput {
     
     // MARK: Attributes
 
@@ -25,19 +27,21 @@ struct InVertexAttributes {
 
     float3 GetPosition() { return position; }
 
-    uint GetNormal() { return normal; }
+    float3 GetNormal() {
+        return Moer::Unpack_RGB8_SNORM(normal);
+    }
 
-    float2 GetTangent() {
+    float3 GetTangent() {
 #ifdef HAS_TANGENT
-        return tangent;
+        return Moer::Unpack_RGB8_SNORM(tangent);
 #else
-        return float2(0, 0);
+        return float3(0, 0, 0);
 #endif
     }
 
-    float2 GetTangentWithTransformedNormal(float3 transfromed_normal) {
+    float3 GetTangentWithTransformedNormal(float3 transfromed_normal) {
 #ifdef HAS_TANGENT
-        return tangent;
+        return Moer::Unpack_RGB8_SNORM(tangent);
 #else
         float3 tangent = cross(transfromed_normal, float3(0, 0, 1));
         if (length(tangent) < 1e-2) {
@@ -64,31 +68,37 @@ struct InVertexAttributes {
     }
 };
 
-struct OutVertexAttributes {
+struct VsOutput {
     float4 position : SV_POSITION;
-    float3 world_positon : POSITION;
+    float3 world_position : POSITION;
     float2 texcoord0 : TEXCOORD0;
     float3 normal : NORMAL;
     float3 tangent : TANGENT;
     int instance_id : INSTANCEID;
 };
 
-OutVertexAttributes GetConvertedAttributes(InVertexAttributes input, float3x4 model2world, float4x4 world2clip, int instance_id) {
+VsOutput GetConvertedAttributes(VsInput input, float3x4 model2world, float4x4 world2clip, int instance_id) {
     float3x3 model = (float3x3)model2world;
 
-    float3 world_position = mul(model2world, float4(input.GetPosition(), 1.0f)).xyz;
+    float3 world_position = mul(model2world, float4(input.GetPosition(), 1.0));
+    float4 pos = mul(world2clip, float4(world_position, 1.0));
 
-    float4 pos = mul(world2clip, float4(world_position, 1.0f));
+    float3 normal = input.GetNormal();
+    float3 tangent = input.GetTangentWithTransformedNormal(normal);
 
-    OutVertexAttributes output;
+    // FIXME: use NormalMatrix to transform normal
+
+    VsOutput output;
     output.position = pos;
-    output.world_positon = world_position;
+    output.world_position = world_position;
     output.texcoord0 = input.GetTexcoord0();
-    output.normal = normalize(mul(model, Moer::Unpack_RGB8_SNORM(input.GetNormal())));
-    output.tangent = normalize(mul(model, Moer::Unpack_RGB8_SNORM(input.GetTangentWithTransformedNormal(output.normal))));
+    output.normal = normalize(mul(model, normal));
+    output.tangent = normalize(mul(model, tangent));
     output.instance_id = instance_id;
 
+#ifdef HAS_TEXCOORD1
     float2 x = input.GetTexcoord1(); // comsume texcoord1 to avoid warning
+#endif
 
     return output;
 }

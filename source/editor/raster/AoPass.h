@@ -49,7 +49,7 @@ public:
         param.ao_mode           = ui_config.ao_mode;
         param.input_image       = input_image;
         param.normal_tex        = context.textures.normal.handle;
-        param.position_tex      = context.textures.normal.handle;
+        param.position_tex      = context.textures.position.handle;
         param.noise_tex         = context.noise_tex.handle;
 
         context.cmd_list.Gfx(ao_pipeline, context.bdls, param)

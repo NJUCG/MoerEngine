@@ -6,18 +6,9 @@
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "resources/vertexfactory/VertexAttributes.h"
+#include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 
 namespace Moer::Render {
-
-    struct GeometryPassBindlessParam {
-        float4     color;
-        uint       texture_handle;
-        uint       buffer_handle;
-        uint       instance_buffer_handle;
-        uint       geometry_data_handle;
-        uint       geometry_instance_handle;
-        Matrix4x4f camera_view_proj;
-    };
 
     class GeometryPassPipeline : public RasterPipeline {
     public:

@@ -6,30 +6,10 @@
 #include "framework/Bindless.hlsl"
 #include "framework/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
-
 #include "framework/Material.hlsl"
+#include "shared/raster/post_process/ShaderParameters.h"
 
-struct Constant {
-    float4x4 view_projection_matrix;
-    float3   camera_position;
-    float    near_clip;
-    float2   resolution;
-    float    far_clip;
-    float    ssr_roughness_threshold;
-    float    ssr_metallic_threshold;
-    float    ssr_step_base;
-    uint     ssr_sample_count;
-    uint     ssr_is_enable_jitter;
-    uint     ssr_is_force_ground_enable_ssr;
-    uint     color_tex;
-    uint     position_tex;
-    uint     normal_tex;
-    uint     depth_tex;
-    uint     vbuffer;
-    uint     gbuffer_uv;
-    uint     material_buffer;
-};
-[[vk::push_constant]] ConstantBuffer<Constant> param;
+[[vk::push_constant]] ConstantBuffer<Moer::SsrPipelineBindlessParam> param;
 
 static const float Epsilon = 0.0001; // same with PBRMaterialFrag.hlsl
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
@@ -45,7 +25,7 @@ float get_depth(float2 uv) {
 
 bool should_apply_ssr(float2 uv) { // the performance cost is so high
     if (param.ssr_is_force_ground_enable_ssr == 1) {
-        float3 normal = TextureHandle(param.normal_tex).Sample2D<float4>(uv).rgb * 2.0 - 1.0;
+        float3 normal = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
         if (normal.y + 0.001 >= 1.0) return true;
     }
 

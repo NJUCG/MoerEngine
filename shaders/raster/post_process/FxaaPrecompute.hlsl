@@ -9,12 +9,9 @@
 #include "framework/Bindless.hlsl"
 #include "framework/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
+#include "shared/raster/post_process/ShaderParameters.h"
 
-struct Constant {
-    uint input_image;
-};
-
-[[vk::push_constant]] ConstantBuffer<Constant> param;
+[[vk::push_constant]] ConstantBuffer<Moer::FxaaPrecomputePipelineBindlessParam> param;
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 color = TextureHandle(param.input_image).Sample2D<float3>(in_uv);

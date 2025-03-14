@@ -3,26 +3,9 @@
 #include "framework/Bindless.hlsl"
 #include "framework/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
+#include "shared/raster/post_process/ShaderParameters.h"
 
-struct Constant {
-    float4x4 curr_inv_vp_and_prev_vp;// = previous_view_projection * current_inverse_view_projection
-    float4   rt_metrics;             // float4(inv_resolution.xy, resolution.xy)
-    uint     aa_mode;
-    uint     color_tex;   // initial input image
-    uint     position_tex;// position gbuffer
-    uint     depth_tex;   // depth gbuffer
-    uint     search_tex;
-    uint     area_tex;
-    uint     edges_tex;
-    uint     blend_tex;
-    uint     current_color_tex; // current output image (without temporal AA)
-    uint     previous_color_tex;// previous output image (without temporal AA)
-    uint     frame_index;
-    uint     point_sampler;
-    uint     linear_sampler;
-    uint     padding[3];
-};
-[[vk::push_constant]] ConstantBuffer<Constant> param;
+[[vk::push_constant]] ConstantBuffer<Moer::SmaaSharedPipelineBindlessParam> param;
 
 // 2. extracting bindless sampler & textures
 

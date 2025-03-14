@@ -6,20 +6,9 @@
 #include "framework/Bindless.hlsl"
 #include "framework/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
+#include "shared/raster/post_process/ShaderParameters.h"
 
-struct Constant {
-    float2 inv_resolution;
-    float  ssao_intensity;
-    float  ssao_max_distance;
-    uint   ssao_sample_count;
-    uint   ssao_radius;
-    uint   ao_mode;
-    uint   input_image;
-    uint   normal_tex;
-    uint   position_tex;
-    uint   noise_tex;// linear & repeat sampler
-};
-[[vk::push_constant]] ConstantBuffer<Constant> param;
+[[vk::push_constant]] ConstantBuffer<Moer::AoPipelineBindlessParam> param;
 
 #define AO_MODE_NONE 0
 #define AO_MODE_SSAO 1
@@ -37,11 +26,12 @@ float2 random_2to2(float2 uv) {
 
 // reference: games202 & https://www.shadertoy.com/view/Ms33WB
 float ssao_games202(float2 uv) {
-    float3 normal = TextureHandle(param.normal_tex).Sample2D<float4>(uv).rgb * 2.0 - 1.0;
-    float3 position = TextureHandle(param.position_tex).Sample2D<float4>(uv).rgb;
+    float3 normal = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
+    float3 position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
 
     float ao = 0.0;
     float2 tmp1 = param.ssao_radius * param.inv_resolution;
+
     for (uint i = 0; i < param.ssao_sample_count; i++) {
         float2 offset = random_2to2(uv + 0.093 * float2(i, i)) * 2.0 - 1.0;
         float3 sample_position = TextureHandle(param.position_tex).Sample2D<float4>(uv + offset * tmp1).rgb;
@@ -50,7 +40,7 @@ float ssao_games202(float2 uv) {
         float3 len = length(vec);
         float3 norm_vec = vec / len;
 
-        ao += max(0.0, dot(normal, norm_vec) - 0.01) * smoothstep(param.ssao_max_distance, param.ssao_max_distance * 0.5, len);
+        ao += max(0.0, dot(normal, norm_vec) - 0.05) * smoothstep(param.ssao_max_distance, param.ssao_max_distance * 0.5, len);
     }
     ao = clamp(1.0 - ao / param.ssao_sample_count * param.ssao_intensity, 0.0, 1.0);
 

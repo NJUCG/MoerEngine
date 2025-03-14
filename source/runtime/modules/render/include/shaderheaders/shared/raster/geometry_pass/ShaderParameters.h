@@ -16,7 +16,15 @@ namespace Moer {
 
     // MARK: Main Content Begin
 
-    // todo: add your code here
+    struct GeometryPassBindlessParam {
+        float4x4 camera_view_proj;
+        float4   color;
+        uint     texture;
+        uint     buffer;
+        uint     instance_data;
+        uint     geometry_data;
+        uint     geometry_instance_data;
+    };
 
     // MARK: Main Content End
 

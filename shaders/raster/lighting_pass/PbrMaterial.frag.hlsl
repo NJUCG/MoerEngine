@@ -5,39 +5,9 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "framework/Lighting.hlsl"
 #include "framework/Material.hlsl"
 
-struct LightingData {
-    column_major float4x4 inv_view_proj;
-    uint light_count;
-    uint3 padding;
-    float3 camera_position;
-};
+#include "shared/raster/lighting_pass/ShaderParameters.h"
 
-static const uint CUR_MATERIAL_TYPE = 0;
-
-struct PackedMaterialData {
-    float4 packed_0;
-    float4 packed_1;
-    float4 packed_2;
-    float4 packed_3;
-    float4 packed_4;
-    float4 packed_5;
-    float4 packed_6;
-    float4 packed_7;
-};
-
-struct Constant {
-    uint material_type;
-    uint light_buffer;
-    uint material_buffer;
-    uint vbuffer;
-    uint gbuffer_normal;
-    uint gbuffer_uv;
-    uint gbuffer_depth;
-    uint gbuffer_position;
-    uint global_param_handle;
-};
-
-[[vk::push_constant]] ConstantBuffer<Constant> param;
+[[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
 
 float ndfGGX(float cosLh, float roughness) {
     float alpha = roughness * roughness;
@@ -115,8 +85,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float2 metallic_roughness = GetTextureData<float2>(mat.metallic_roughness_map, uv, float2(mat.metallic_factor, mat.roughness_factor));
     pbrInfo.roughness = metallic_roughness.y;
     pbrInfo.metalness = metallic_roughness.x;
-    float3 packed_normal = TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv);
-    float3 normal = DeferedRendering::UnpackNormal(packed_normal);
+    float3 normal = Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv));
     pbrInfo.normal = normal;
 
     if (mat.albedo_map == -1) {
@@ -130,7 +99,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     }
 
     ArrayBuffer global_params = ArrayBuffer(param.global_param_handle);
-    LightingData lighting_data = global_params.Load<LightingData>(0);
+    Moer::LightingData lighting_data = global_params.Load<Moer::LightingData>(0);
 
     //Shoude be reconstructed from depth
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
