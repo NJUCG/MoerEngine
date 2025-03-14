@@ -238,9 +238,7 @@ public:
         const CameraRef&    camera,
         uint                input_image
     ) {
-        if (ui_config.aa_mode == 0) { return input_image; }
-
-        if (1 <= ui_config.aa_mode && ui_config.aa_mode <= 2) {
+        if (0 <= ui_config.aa_mode && ui_config.aa_mode <= 2) {
             return ProcessFxaa(context, ui_config, camera, input_image);
         }
 
