@@ -139,7 +139,8 @@ namespace Moer::Render {
             // whether initialized
             if (!m_b_initialized) {
                 // You can initialize this outside. `m_b_initialized` records the state.
-                assert(Initialize(std::move(GetDefaultInitializers())));
+                auto res = Initialize(std::move(GetDefaultInitializers()));
+                assert(res);
             }
 
             // whether pso exists
