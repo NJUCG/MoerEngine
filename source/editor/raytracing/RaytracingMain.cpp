@@ -182,7 +182,7 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
 
   // MARK: Scene
   Resource::LoaderInterface::LoadSceneFromFileAsync(
-      ConfigManager::GetInstance().GetScenePath(), &scene);
+      editor_ui->GetConfig().scene_path, &scene);
   auto &&scope_exit_reset_async_load_info =
       OnScopeExit([&] { Scene::ResetAsyncLoadInfo(); });
 

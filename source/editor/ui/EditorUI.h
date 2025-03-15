@@ -22,10 +22,12 @@ class EditorUI {
 public:
     struct Config {
         ERenderMethod selected_render_method = ERenderMethod::Raster;
+        std::string   scene_path             = "";
     };
 
     EditorUI(UniquePtr<Render::UIRenderer> renderer, uint2 resolution);
     ~EditorUI() = default;
+    void InitFromConfigManager(); // will be called by Constructor
     void TickUI();
     void RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output);
     void PresentWindows();

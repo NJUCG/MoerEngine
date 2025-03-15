@@ -47,7 +47,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
     auto sc = device.CreateSwapchain(sc_info);
 
     // MARK: Scene
-    Resource::LoaderInterface::LoadSceneFromFileAsync(ConfigManager::GetInstance().GetScenePath(), &scene);
+    Resource::LoaderInterface::LoadSceneFromFileAsync(editor_ui->GetConfig().scene_path, &scene);
     auto&& scope_exit_reset_async_load_info = OnScopeExit([&] { Scene::ResetAsyncLoadInfo(); });
 
     // TODO: combine RasterMain and RaytracingMain common part (above code)

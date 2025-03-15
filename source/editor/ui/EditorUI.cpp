@@ -19,8 +19,17 @@ EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, uint2 resolution) :
     m_ui_renderer(std::move(renderer)),
     m_resolution(resolution) {
 
-    // load config
+    // Load Config
+    InitFromConfigManager();
+
+    // Init Style
+    EditorUIStyle::ApplyDefaultStyle();
+}
+
+void EditorUI::InitFromConfigManager() {
     auto config = ConfigManager::GetInstance().GetConfig();
+
+    // render method
     if (config.engine.render.default_render_method == "Raster") {
         m_config.selected_render_method = ERenderMethod::Raster;
     } else if (config.engine.render.default_render_method == "Raytracing") {
@@ -33,8 +42,8 @@ EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, uint2 resolution) :
         m_config.selected_render_method = ERenderMethod::Raster;
     }
 
-    // default style
-    EditorUIStyle::ApplyDefaultStyle();
+    // scene path
+    m_config.scene_path = config.engine.scene.scene_path;
 }
 
 void EditorUI::TickUI() {
