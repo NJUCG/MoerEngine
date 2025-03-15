@@ -9,6 +9,7 @@
 // 3rd party (std)
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <nfd.hpp>
 #include <string_view>
 
 using namespace Moer::Render;
@@ -114,6 +115,7 @@ void EditorUI::TickUI() {
     }
     ImGui::End();
 
+    ResetState();
     ShowSceneColor();
     ShowConfig();
 
@@ -214,7 +216,41 @@ void EditorUI::ShowConfig() {
         }
         ImGui::EndCombo();
     }
-    if (last_selected_render_method != m_config.selected_render_method) { SetShowSubUI(false); }
+    if (last_selected_render_method != m_config.selected_render_method) {
+        m_b_need_reload = true;
+        SetShowSubUI(false);
+    }
+
+    { // Scene Path
+        size_t      last_slash = m_config.scene_path.find_last_of("/\\");
+        std::string scene_name = (last_slash == std::string::npos) ?
+                                     m_config.scene_path :
+                                     m_config.scene_path.substr(last_slash + 1);
+        if (ImGui::Button("Open Scene")) {
+            NFD::UniquePath        selected_path = nullptr;
+            Array<nfdfilteritem_t> filters       = {
+                {"glTF 2.0", "glb,gltf"},
+                {"FBX", "fbx"},
+                {"Wavefront", "obj"},
+                {"Moer Renderer Scene (WIP)", "json"},
+                {"All Files", "*"},
+            };
+            nfdresult_t result = NFD::OpenDialog(selected_path, filters.data(), filters.size());
+            if (result == NFD_OKAY) {
+                LOG_INFO("User selected file: {}", selected_path.get());
+
+                // Prepare for reload
+                m_b_need_reload     = true;
+                m_config.scene_path = selected_path.get();
+            } else if (result == NFD_CANCEL) {
+                LOG_INFO("User pressed cancel.");
+            } else {
+                LOG_ERROR("NFD Error: {}", NFD_GetError());
+            }
+        }
+        ImGui::SameLine();
+        ImGui::Text("Current Scene: [%s]", scene_name.c_str());
+    }
 
     if (m_b_show_sub_ui) {
         ImGui::Separator();
@@ -239,6 +275,8 @@ void EditorUI::ShowConfig() {
 
     ImGui::End();
 }
+
+void EditorUI::ResetState() { m_b_need_reload = false; }
 
 void EditorUI::RegisterUIFunc(std::string_view _name, std::function<void()>&& _func) {
     m_show_func_map[_name] = std::move(_func);

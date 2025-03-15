@@ -36,6 +36,7 @@ public:
     float2        GetSceneColorPos() const { return m_scene_color_pos; }
     uint2         GetResolution() const { return m_resolution; }
     const Config& GetConfig() const { return m_config; }
+    bool          IsNeedReload() const { return m_b_need_reload; }
     float GetSceneColorAspectRatio() const { return m_scene_color_resolution.x / m_scene_color_resolution.y; }
 
     void SetShowSubUI(bool show) { m_b_show_sub_ui = show; }
@@ -51,16 +52,19 @@ public: // Sub UI
     RaytracingUI m_raytracing_ui;
 
 private:
+    void ResetState(); // reset m_b_need_reload, etc..
     void ShowSceneColor();
     void ShowConfig();
 
 private:
     bool   m_b_show_scene_color = true;
     bool   m_b_show_config      = true;
-    bool   m_b_show_sub_ui      = false;
     float2 m_scene_color_resolution; // TODO: why float2? not uint2?
     float2 m_scene_color_pos;
     bool   m_b_show = true;
+
+    bool m_b_need_reload = false;
+    bool m_b_show_sub_ui = false;
 
     Config m_config;
 

@@ -1043,10 +1043,7 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
     gfx_queue.Present(sc, output);
     editor_ui->PresentWindows();
 
-    if (editor_ui->GetConfig().selected_render_method !=
-        ERenderMethod::Raytracing) {
-      break;
-    }
+    if (editor_ui->IsNeedReload()) { break; }
   }
 
   const auto &allocated_buf = rt_ctx->GetAllocatedBdlsBuf();

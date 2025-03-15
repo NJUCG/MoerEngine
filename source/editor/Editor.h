@@ -19,6 +19,10 @@ public:
     void ShutDown();
 
 private:
+    void Init3rdParty();
+    void ShutDown3rdParty();
+
+private:
     SharedPtr<EditorUI> m_editor_ui;
 };
 

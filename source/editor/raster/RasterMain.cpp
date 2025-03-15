@@ -174,7 +174,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
         gfx_queue.Present(sc, final_output);
         editor_ui->PresentWindows();
 
-        if (editor_ui->GetConfig().selected_render_method != ERenderMethod::Raster) { break; }
+        if (editor_ui->IsNeedReload()) { break; }
     }
     gfx_queue.Sync();
 }

@@ -17,11 +17,14 @@
 
 // 3rd party (std)
 #include <cassert>
+#include <nfd.hpp>
 
 // namespace
 using namespace Moer::Render;
 
 namespace Moer {
+
+static UniquePtr<NFD::Guard> nfd_guard = nullptr;
 
 Editor::Editor() {}
 
@@ -92,6 +95,13 @@ void Editor::ShutDown() {
     ShaderManager::ShutDown();
     RenderDevice::Dispose();
     TaskSystem::ShutDown();
+}
+
+void Editor::Init3rdParty() { nfd_guard = MakeUnique<NFD::Guard>(); }
+
+void Editor::ShutDown3rdParty() {
+    nfd_guard.release();
+    // TODO: check nfd_guard
 }
 
 } // namespace Moer
