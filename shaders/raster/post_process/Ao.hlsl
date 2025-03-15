@@ -29,6 +29,10 @@ float ssao_games202(float2 uv) {
     float3 normal = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
     float3 position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
 
+    // if (uv.x < param.inv_resolution.x && uv.y < param.inv_resolution.y) {
+    //     printf("uv: %f, %f; pos: %f, %f, %f\n", uv.x, uv.y, position.x, position.y, position.z);
+    // }
+
     float ao = 0.0;
     float2 tmp1 = param.ssao_radius * param.inv_resolution;
 

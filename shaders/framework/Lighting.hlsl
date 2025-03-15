@@ -1,12 +1,11 @@
 #ifndef FRAMEWORK_LIGHTING_HLSL
 #define FRAMEWORK_LIGHTING_HLSL
 
-// #define Directional_LIGHT_TYPE 1
-// #define Point_LIGHT_TYPE 2
-// #define Spot_LIGHT_TYPE 3
 static const uint Directional_LIGHT_TYPE = 1;
 static const uint Point_LIGHT_TYPE = 2;
 static const uint Spot_LIGHT_TYPE = 3;
+static const uint Environment_LIGHT_TYPE = 4;
+static const uint Ambient_LIGHT_TYPE = 5;
 
 struct LightData{
     float3 color;
@@ -16,8 +15,9 @@ struct LightData{
     float3 position;
     float3 direction;
     float4 info;
-
 };
+
+static const float POINT_LIGHT_ATTENUATION_FACTOR = 0.9f;
 
 float3 apply_directional_light(LightData light, float3 normal)
 {
@@ -31,7 +31,7 @@ float3 apply_point_light(LightData light, float3 pos, float3 normal)
 {
     
     float3  world_to_light = light.position.xyz - pos;
-    float dist           = length(world_to_light) * 0.005f;
+    float dist           = length(world_to_light) * POINT_LIGHT_ATTENUATION_FACTOR;
     float atten          = 1.0 / (dist * dist);
     world_to_light       = normalize(world_to_light);
     float ndotl          = clamp((dot(normal, world_to_light)), 0.0, 1.0);
@@ -48,34 +48,55 @@ float3 apply_spot_light(LightData light, float3 pos, float3 normal)
     return intensity * light.intensity * light.color.rgb;
 }
 
-float3 apply_light(LightData light, float3 pos, float3 normal)
+float3 apply_ambient_light(LightData light)
 {
-    int light_type = light.type;
-    if (light_type == Directional_LIGHT_TYPE)
+    return light.color.rgb;
+}
+
+float3 apply_light(LightData light, float3 pos, float3 normal, float3 brdf)
+{
+    if (light.type == Directional_LIGHT_TYPE)
     {
-        return apply_directional_light(light, normal);
+        return apply_directional_light(light, normal) * brdf;
     }
-    else if (light_type == Point_LIGHT_TYPE)
+    else if (light.type == Point_LIGHT_TYPE)
     {
-        return apply_point_light(light, pos, normal);
+        return apply_point_light(light, pos, normal) * brdf;
     }
-    else if (light_type == Spot_LIGHT_TYPE)
+    else if (light.type == Spot_LIGHT_TYPE)
     {
-        return apply_spot_light(light, pos, normal);
+        return apply_spot_light(light, pos, normal) * brdf;
+    }
+    else if (light.type == Environment_LIGHT_TYPE)
+    {
+        return light.color.rgb; // TODO: apply environment light
+    }
+    else if (light.type == Ambient_LIGHT_TYPE)
+    {
+        return apply_ambient_light(light) * brdf;
     }
     return float3(0.0f, 0.0f, 0.0f);
 }
 
-float3 calculate_light_dir(LightData light, float3 pos)
+float3 calculate_light_dir(LightData light, float3 pos, float3 normal)
 {
     if (light.type == Directional_LIGHT_TYPE)
     {
         return -light.direction.xyz;
     }
-    else
+    else if (light.type == Point_LIGHT_TYPE || light.type == Spot_LIGHT_TYPE)
     {
         return light.position.xyz - pos;
     }
+    else if (light.type == Environment_LIGHT_TYPE)
+    {
+        return normal; // TODO: apply environment light
+    }
+    else if (light.type == Ambient_LIGHT_TYPE)
+    {
+        return normal;
+    }
+    return light.position.xyz - pos;
 }
 
 #define DISTANCE_ATTENUATION_FACTOR 0.006f

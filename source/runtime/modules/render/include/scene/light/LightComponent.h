@@ -5,18 +5,19 @@
 #include "math/Base.h"
 #include "RenderAPI.h"
 #include "misc/Traits.h"
+#include "serialize/Serializer.h"
 
 #include <cstdint>
 
 namespace Moer {
 
-    // In shader, assume that only directional light has a strong ambient (in blinn phong model)
     enum class ELightComponentType : uint8_t {
         NONE = 0,
         DIRECTIONAL,
         POINT,
         SPOT,
-        ENV
+        ENVIRONMENT,
+        AMBIENT,
     };
 
     struct LightComponentData {
@@ -57,6 +58,10 @@ namespace Moer {
 
         static Array<CountableRef<LightComponent>> CreateDefaultLightComponents();
 
+        void WriteToStream(OutputStream& _stream) const;
+
+        static CountableRef<LightComponent> ReadFromStream(InputStream& _stream);
+
     private:
         Vector3f            m_color;
         float               m_intensity;
@@ -65,13 +70,112 @@ namespace Moer {
 
     using LightComponentRef = CountableRef<LightComponent>;
 
+    // MARK: Directional
+    class RENDER_API DirectionalLightComponent : public LightComponent {
+    public:
+        DirectionalLightComponent() noexcept {}
+        DirectionalLightComponent(Vector3f color, float intensity, Vector3f direction, float angular_size) noexcept
+            : LightComponent(color, intensity, ELightComponentType::DIRECTIONAL), m_direction(direction), m_angluar_size(angular_size) {}
+
+        Vector3f GetDirection() const noexcept { return m_direction; }
+        void     SetDirection(Vector3f direction) noexcept { m_direction = direction; }
+        float    GetAngularSize() const noexcept { return m_angluar_size; }
+        void     SetAngularSize(float angular_size) noexcept { m_angluar_size = angular_size; }
+        //Todo Handle Position for Shadow Map
+        LightComponentData ToData() const noexcept override {
+            LightComponentData data;
+            data.color     = GetColor();
+            data.intensity = GetIntensity();
+            data.position  = Vector3f(0.0f);
+            data.direction = m_direction;
+            data.info      = Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
+            data.type      = static_cast<uint32_t>(GetType());
+            return data;
+        }
+
+    private:
+        Vector3f m_direction{};
+        float    m_angluar_size{0.f};
+    };
+
+    // MARK: Point
+    class RENDER_API PointLightComponent : public LightComponent {
+
+    public:
+        PointLightComponent() noexcept {}
+        PointLightComponent(Vector3f color, float intensity, Vector3f position) noexcept
+            : LightComponent(color, intensity, ELightComponentType::POINT), m_position(position) {}
+
+        Vector3f           GetPosition() const noexcept { return m_position; }
+        void               SetPosition(Vector3f position) noexcept { m_position = position; }
+        LightComponentData ToData() const noexcept override {
+            LightComponentData data;
+            data.color     = GetColor();
+            data.intensity = GetIntensity();
+            data.position  = m_position;
+            data.direction = Vector3f(0.0f);
+            data.info      = Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
+            data.type      = static_cast<uint32_t>(GetType());
+            return data;
+        }
+
+    private:
+        Vector3f m_position{};
+    };
+
+    // MARK: Spot
+    class RENDER_API SpotLightComponent : public LightComponent {
+    public:
+        SpotLightComponent() noexcept {}
+        SpotLightComponent(
+            Vector3f color,
+            float    intensity,
+            Vector3f position,
+            Vector3f direction,
+            float    inner_cone_angle,
+            float    outer_cone_angle) noexcept
+            : LightComponent(color, intensity, ELightComponentType::SPOT),
+              m_position(position),
+              m_direction(direction),
+              m_inner_cone_angle(inner_cone_angle),
+              m_outer_cone_angle(outer_cone_angle) {}
+
+        Vector3f           GetPosition() const noexcept { return m_position; }
+        void               SetPosition(Vector3f position) noexcept { m_position = position; }
+        Vector3f           GetDirection() const noexcept { return m_direction; }
+        void               SetDirection(Vector3f direction) noexcept { m_direction = direction; }
+        float              GetInnerConeAngle() const noexcept { return m_inner_cone_angle; }
+        void               SetInnerConeAngle(float inner_cone_angle) noexcept { m_inner_cone_angle = inner_cone_angle; }
+        float              GetOuterConeAngle() const noexcept { return m_outer_cone_angle; }
+        void               SetOuterConeAngle(float outer_cone_angle) noexcept { m_outer_cone_angle = outer_cone_angle; }
+        LightComponentData ToData() const noexcept override {
+            LightComponentData data;
+            data.color     = GetColor();
+            data.intensity = GetIntensity();
+            data.position  = m_position;
+            data.direction = m_direction;
+            data.info      = Vector4f(m_inner_cone_angle, m_outer_cone_angle, 0.0f, 0.0f);
+            data.type      = static_cast<uint32_t>(GetType());
+            return data;
+        }
+
+    private:
+        Vector3f m_position{};
+        Vector3f m_direction{};
+        float    m_inner_cone_angle = 0.0f;
+        float    m_outer_cone_angle = 0.0f;
+    };
+
+    // MARK: Environment
     class RENDER_API EnvironmentLightComponent : public LightComponent {
     public:
         EnvironmentLightComponent() noexcept
-            : LightComponent(Vector3f(1.0f), 1.0f, ELightComponentType::ENV), rotation(0.f) {}
+            : LightComponent(Vector3f(1.0f), 1.0f, ELightComponentType::ENVIRONMENT), rotation(0.f) {}
 
         EnvironmentLightComponent(float3 _scale, uint2 _size) noexcept
-            : LightComponent(_scale, 1.0f, ELightComponentType::ENV), size(_size), rotation(0.f) {}
+            : LightComponent(_scale, 1.0f, ELightComponentType::ENVIRONMENT), size(_size), rotation(0.f) {}
+
+        // TODO: use getter and setter (or delete all other light components getter and setter)
 
         float3                     GetColorScale() const noexcept { return GetColor(); }
         virtual LightComponentData ToData() const noexcept override {
@@ -87,6 +191,25 @@ namespace Moer {
         uint  bdls_handle;
         uint2 size;
         float rotation;
+    };
+
+    // MARK: Ambienf
+    class RENDER_API AmbientLightComponent : public LightComponent {
+    public:
+        AmbientLightComponent() noexcept {}
+        AmbientLightComponent(Vector3f color) noexcept
+            : LightComponent(color, 0.f, ELightComponentType::AMBIENT) {}
+
+        LightComponentData ToData() const noexcept override {
+            LightComponentData data;
+            data.color     = GetColor();
+            data.intensity = 0.0f;
+            data.position  = Vector3f(0.0f);
+            data.direction = Vector3f(0.0f);
+            data.info      = Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
+            data.type      = static_cast<uint32_t>(GetType());
+            return data;
+        }
     };
 
 }// namespace Moer

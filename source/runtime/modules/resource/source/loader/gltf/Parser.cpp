@@ -30,9 +30,6 @@
 #include "scene/Scene.h"
 #include "scene/TransformManager.h"
 #include "scene/light/LightComponent.h"
-#include "scene/light/DirectionalLightComponent.h"
-#include "scene/light/PointLightComponent.h"
-#include "scene/light/SpotLightComponent.h"
 #include "taskgraph/Event.h"
 #include "taskgraph/GraphTask.h"
 

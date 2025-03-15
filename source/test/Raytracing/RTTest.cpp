@@ -27,7 +27,6 @@
 #include "scene/EntityManager.h"
 #include "scene/Scene.h"
 #include "scene/TransformManager.h"
-#include "scene/light/DirectionalLightComponent.h"
 #include "scene/light/LightComponent.h"
 #include "scene/light/LightComponentManager.h"
 #include "shader/ShaderPipeline.h"

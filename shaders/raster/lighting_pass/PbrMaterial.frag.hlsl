@@ -101,7 +101,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     ArrayBuffer global_params = ArrayBuffer(param.global_param_handle);
     Moer::LightingData lighting_data = global_params.Load<Moer::LightingData>(0);
 
-    //Shoude be reconstructed from depth
+    // Shoude be reconstructed from depth
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
     // float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
 
@@ -112,12 +112,13 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     for (uint i = 0; i < lighting_data.light_count; i++) {
         LightData light = light_buffer.Load<LightData>(i);
-       // printf("light_type:%d light_color:%f %f %f position:%f %f %f\n", light.type, light.color.x, light.color.y, light.color.z, light.position.x, light.position.y, light.position.z);
-        float3 lightDir = calculate_light_dir(light, position);
-        color += pbrInfo.Evaluate(lightDir) * apply_light(light, position, normal);
+
+        float3 light_dir = calculate_light_dir(light, position, normal);
+
+        float3 brdf = pbrInfo.Evaluate(light_dir);
+
+        color += apply_light(light, position, normal, brdf);
     }
-    //color = position;
-    //color = pbrInfo.albedo;
-    //printf("light_count:%d camera_position:%f %f %f\n", lighting_data.light_count, lighting_data.camera_position.x, lighting_data.camera_position.y, lighting_data.camera_position.z);
+    
     return float4(color, 1.0);
 }

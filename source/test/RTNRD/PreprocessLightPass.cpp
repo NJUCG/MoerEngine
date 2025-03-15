@@ -3,11 +3,8 @@
 #include "misc/STL.h"
 #include "scene/MaterialInstance.h"
 #include "scene/RenderableManager.h"
-#include "scene/light/DirectionalLightComponent.h"
 #include "scene/light/LightComponent.h"
 #include "scene/light/LightComponentManager.h"
-#include "scene/light/PointLightComponent.h"
-#include "scene/light/SpotLightComponent.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 #include "rhi/RHI.h"
@@ -45,7 +42,7 @@ namespace Moer::Render {
     static uint LightPriority(LightComponentRef _light) {
         switch (_light->GetType()) {
             case ELightComponentType::DIRECTIONAL: return 1;
-            case ELightComponentType::ENV: return 2;
+            case ELightComponentType::ENVIRONMENT: return 2;
             default: return 0;
         }
     }
@@ -160,7 +157,7 @@ namespace Moer::Render {
                 return true;
                 break;
             }
-            case Moer::ELightComponentType::ENV: {
+            case Moer::ELightComponentType::ENVIRONMENT: {
                 EnvironmentLightComponent* env_light = static_cast<EnvironmentLightComponent*>(&_light);
                 if (!env_light->bdls_handle) return false;
                 _info.color_type_flags = (uint)EPolyLightType::ELEnv << g_poly_morphic_light_type_shift;
@@ -262,7 +259,7 @@ namespace Moer::Render {
 
             if (light_data->GetType() == ELightComponentType::DIRECTIONAL) {
                 num_infinite_prim_lights++;
-            } else if (light_data->GetType() == ELightComponentType::ENV) {
+            } else if (light_data->GetType() == ELightComponentType::ENVIRONMENT) {
                 num_is_env_lights++;
             } else {
                 num_finite_prim_lights++;

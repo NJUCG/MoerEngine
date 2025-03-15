@@ -11,7 +11,6 @@
 #include "scene/Material.h"
 #include "scene/MaterialInstance.h"
 #include "scene/RenderableManager.h"
-#include "scene/light/DirectionalLightComponent.h"
 #include "scene/light/LightComponent.h"
 #include "scene/light/LightComponentManager.h"
 #include "shader/GeometryPassPsoManager.h"
