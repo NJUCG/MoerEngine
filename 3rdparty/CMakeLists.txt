@@ -28,6 +28,11 @@ set_target_folder(update_mappings ${third_party_folder}/GLFW3)
 include(${CMAKE_CURRENT_SOURCE_DIR}/imgui.cmake)
 set_target_folder(imgui ${third_party_folder}/imgui)
 
+# nfd (NativeFileDialogExtended, used by imgui, for file selection)
+# Tip: dependencies: https://github.com/btzy/nativefiledialog-extended?tab=readme-ov-file#dependencies
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nativefiledialog-extended-1.2.1)
+set_target_folder(native_file_dialog_extended ${third_party_folder}/nativefiledialog-extended-1.2.1)
+
 # spirv-reflect
 set(SPIRV_REFLECT_EXECUTABLE OFF)
 set(SPIRV_REFLECT_STATIC_LIB ON)
@@ -114,7 +119,7 @@ add_subdirectory(NRD)
 
 # toml++
 include(${CMAKE_CURRENT_SOURCE_DIR}/tomlplusplus.cmake)
-set_target_folder(tomlplusplus ${third_party_folder}/tomlplusplus)
+set_target_folder(tomlplusplus ${third_party_folder}/tomlplusplus-3.4.0)
 
 # post build
 set(NRD_ENCODING_FILE "${moer_third_party_dir}/NRD/Shaders/Include/NRDEncoding.hlsli")
