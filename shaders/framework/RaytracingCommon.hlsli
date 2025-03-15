@@ -183,11 +183,16 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
 
 float3 ApplyNormal(float3 _normal, float3 _geom_normal, float3 _tangent) {
 
-  float3 bitangent = cross(_geom_normal, _tangent);
-  float3 normal =
-      _normal.x * _tangent + _normal.y * bitangent + _normal.z * _geom_normal;
+  // float3 bitangent = cross(_geom_normal, _tangent);
+  // float3 normal =
+  //     _normal.x * _tangent + _normal.y * bitangent + _normal.z * _geom_normal;
+  float3 T = normalize(_tangent);
+  float3 N = normalize(_geom_normal);
+  float3 B = cross(T, N);
 
-  return normal;
+  return normalize(_normal.x * T + _normal.y * B + _normal.z * N);
+
+  // return normal;
 }
 
 MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
@@ -234,13 +239,11 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
     } else {
       normal =
           normal_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x, _grad_y);
-
-      Texture2D<float4> normal_ = normal_tex.GetTexture2D<float4>();
-      normal = normal_.SampleGrad(g_sampler_linear_repeat, _geo_record.texcoord,
-                                  _grad_x, _grad_y);
     }
+    //reverse rgb mapping
+    normal.xyz = 2.f * normal.xyz - 1.f;
+    normal.xyz = normalize(normal.xyz);
     // gamma correction
-    //  normal.xyz = pow(normal.xyz, 2.2);
 
     // transform normal from tangent space to world space
     normal.xyz =
@@ -269,6 +272,7 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
   MaterialSample result = MaterialSample::ConstructDefault();
   // currently use geometry normal
   result.normal = normalize(normal.xyz);
+  // result.normal = _geo_record.normal;
 
   // use metallic roughness workflow
 

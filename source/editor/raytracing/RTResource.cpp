@@ -398,7 +398,7 @@ void RTContext::CreateEnvMapResources(EnvMapResource _env_tex, CommandList& _cmd
         Extent2D(extent.x, extent.y),
         PF_R16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
-        uint(ceilf(log2f(float(std::max(extent.x, extent.y)))))
+        _env_tex.texture->GetNumMips()
     );
 
     for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) { env_pdf_mips.push_back(env_pdf_tex->GetView(i)); }

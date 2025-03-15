@@ -206,7 +206,18 @@ static bool ConvertLight(LightComponent &_light, PolymorphicLightInfo &_info) {
     return true;
     break;
   }
+  case Moer::ELightComponentType::AMBIENT: {
+    // AmbientLightComponent *ambient_light =
+    //     static_cast<AmbientLightComponent *>(&_light);
+    // float3 flux = ambient_light->GetColor() * ambient_light->GetIntensity();
+    // _info.color_type_flags = (uint)EPolyLightType::ELSphere
+    //                          << g_poly_morphic_light_type_shift;
+    // PackPolyLightColor(flux, _info);
+    return false;
+    break;
+  }
   default: {
+    LOG_INFO("Light Type {} not supported", uint(_light.GetType()));
     return false;
   }
   }
@@ -308,9 +319,9 @@ void PrepareLightPass::Process(CommandList &_cmd_list, RTContext &_rt_ctx) {
 
         PolymorphicLightInfo light_info{};
 
-        //   if (!ConvertLight(*light_data, light_info)) {
-        //     continue;
-        //   }
+        if (!ConvertLight(*light_data, light_info)) {
+          continue;
+        }
 
         if (light_data->GetType() == ELightComponentType::DIRECTIONAL) {
           inf_light_cnt++;
