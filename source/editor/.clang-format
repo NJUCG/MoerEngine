@@ -1,15 +1,15 @@
+---
 Language: Cpp
-
-BasedOnStyle: LLVM
-
+# BasedOnStyle: LLVM
 AccessModifierOffset: -4
-# AlignAfterOpenBracket: Align 
+AlignAfterOpenBracket: BlockIndent
 AlignConsecutiveAssignments: true 
 AlignConsecutiveDeclarations: true
 AlignEscapedNewlines: Left
 AlignOperands: Align
 AlignTrailingComments: true
 AllowAllParametersOfDeclarationOnNextLine: false
+AllowAllConstructorInitializersOnNextLine: false
 AllowShortBlocksOnASingleLine: Always
 AllowShortCaseLabelsOnASingleLine: true
 AllowShortFunctionsOnASingleLine: All
@@ -46,11 +46,13 @@ BreakBeforeBinaryOperators: None
 BreakBeforeTernaryOperators: false
 BreakBeforeConceptDeclarations: true
 BreakBeforeInheritanceComma: false
+BreakConstructorInitializers: AfterColon
 BreakAfterJavaFieldAnnotations: true
 BreakStringLiterals: true
 BreakConstructorInitializersBeforeComma: false
-# ColumnLimit: 0
-# SortIncludes: false
+ColumnLimit: 110
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+SortIncludes: true
 CompactNamespaces: true
 ContinuationIndentWidth: 4
 IndentCaseLabels: true
@@ -59,7 +61,7 @@ IndentExternBlock: NoIndent
 IndentWidth: 4
 KeepEmptyLinesAtTheStartOfBlocks: true
 MaxEmptyLinesToKeep: 1
-; NamespaceIndentation: All
+NamespaceIndentation: None
 ObjCSpaceAfterProperty: false
 ObjCSpaceBeforeProtocolList: false
 PointerAlignment: Left
@@ -74,7 +76,7 @@ SpaceBeforeInheritanceColon: true
 SpaceBeforeParens: ControlStatements
 SpaceBeforeRangeBasedForLoopColon: true
 SpaceInEmptyParentheses: false
-# SpacesBeforeTrailingComments: 0
+SpacesBeforeTrailingComments: 1
 SpacesInAngles: false
 SpacesInCStyleCastParentheses: false
 SpacesInContainerLiterals: false
@@ -86,30 +88,31 @@ IndentRequires: true
 SpacesInConditionalStatement: false
 SortUsingDeclarations: true
 Standard: c++20
+...
 
-# Added by YXHXianYu, Override above settings
+# # Added by YXHXianYu, Override above settings
 
-# Reference1: https://github.com/YXHXianYu/BJTU-Game-Engine/blob/main/.clang-format
-# Reference2: https://github.com/SJTU-RoboMaster-Team/style-team/blob/main/.clang-format
+# # Reference1: https://github.com/YXHXianYu/BJTU-Game-Engine/blob/main/.clang-format
+# # Reference2: https://github.com/SJTU-RoboMaster-Team/style-team/blob/main/.clang-format
 
-# 同一行长度限制
-ColumnLimit: 110
+# # 同一行长度限制
+# ColumnLimit: 110
 
-# 排序include
-SortIncludes: true
+# # 排序include
+# SortIncludes: true
 
-# 注释前面需要有1个空格
-SpacesBeforeTrailingComments: 1
+# # 注释前面需要有1个空格
+# SpacesBeforeTrailingComments: 1
 
-# 如果某行太长，则总是在左小括号后换行，同时右小括号也换行
-AlignAfterOpenBracket: BlockIndent
+# # 如果某行太长，则总是在左小括号后换行，同时右小括号也换行
+# AlignAfterOpenBracket: BlockIndent
 
-# 构造函数的初始化列表前需要换行
-BreakConstructorInitializers: AfterColon
-# 构造函数的初始化列表必须换行
-AllowAllConstructorInitializersOnNextLine: false
-# 构造函数的初始化列表要么都在同一行，要么都各自一行
-ConstructorInitializerAllOnOneLineOrOnePerLine: true
+# # 构造函数的初始化列表前需要换行
+# BreakConstructorInitializers: AfterColon
+# # 构造函数的初始化列表必须换行
+# AllowAllConstructorInitializersOnNextLine: false
+# # 构造函数的初始化列表要么都在同一行，要么都各自一行
+# ConstructorInitializerAllOnOneLineOrOnePerLine: true
 
-# 命名空间前面不空格
-NamespaceIndentation: None
+# # 命名空间前面不空格
+# NamespaceIndentation: None

@@ -132,4 +132,4 @@ struct RasterContext {
     Array<TextureView> GetDisplayableFrameBuffersView() { return textures.GetDisplayableFrameBuffersView(); }
 };
 
-} // namespace Moer::Render
+} // namespace Moer::Render::Raster

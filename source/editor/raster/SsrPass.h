@@ -91,4 +91,4 @@ private:
     SsrPipeline ssr_pipeline;
 };
 
-} // namespace Moer::Render
+} // namespace Moer::Render::Raster

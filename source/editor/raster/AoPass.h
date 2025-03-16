@@ -67,4 +67,4 @@ private:
     AoPipeline ao_pipeline;
 };
 
-} // namespace Moer::Render
+} // namespace Moer::Render::Raster

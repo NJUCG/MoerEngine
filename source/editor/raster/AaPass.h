@@ -306,7 +306,7 @@ public:
             uint filter  = uint(sampler.filter);
             uint address = uint(sampler.address_mode);
             uint compare = uint(sampler.compare_function);
-            return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num))*address + filter;
+            return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
             // method 2
             // uint bdls_tex_handle = context.bdls->AllocateTexture(antialiasing_output, sampler);
             // uint sampler_idx     = bdls_tex_handle & 0xff;
@@ -415,4 +415,4 @@ private:
     FxaaPipeline           fxaa_pipeline;
 };
 
-} // namespace Moer::Render
+} // namespace Moer::Render::Raster

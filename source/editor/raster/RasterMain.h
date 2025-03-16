@@ -7,4 +7,4 @@ namespace Moer::Render::Raster {
 
 void RasterMain(SharedPtr<EditorUI> editor_ui);
 
-} // namespace Moer
+} // namespace Moer::Render::Raster
