@@ -143,85 +143,13 @@ namespace Moer::Render::Ext {
         void Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) override;
 
         void Reinitialize(uint16 _frame_width, uint16 _frame_height) override {
-            //=======================================================================================================
-            // INITIALIZATION - INITIALIZE NRD && RESOURCES && SETTINGS
-            //=======================================================================================================
-            auto& nri_entry = nrd.nri;
+            nrd.frame_width  = _frame_width;
+            nrd.frame_height = _frame_height;
+            nrd.integration.RecreateResources(_frame_width, _frame_height);
 
-            {
-                nrd.integration.Destroy();
-            }
+            SetDefaultCommonSettings(_frame_width, _frame_height);
 
-            {
-                nrd.frame_width  = _frame_width;
-                nrd.frame_height = _frame_height;
-
-                nrd::IntegrationCreationDesc integration_desc = {};
-                integration_desc.name                         = "NRD Integration for MoerEngine VkBackend";
-                integration_desc.resourceWidth                = _frame_width;
-                integration_desc.resourceHeight               = _frame_height;
-                integration_desc.bufferedFramesNum            = nrd.max_frame_in_flight;
-
-#define NRD_ID(x) nrd::Identifier(nrd::Denoiser::x)
-                // Denoisers
-                // NRD sample doesn't use several instances of the same denoiser in one NRD instance (like REBLUR_DIFFUSE x 3),
-                // thus we can use fields of "nrd::Denoiser" enum as unique identifiers
-                const Array<nrd::DenoiserDesc> denoiser_descs = {
-                    // REBLUR
-                    // {NRD_ID(REBLUR_DIFFUSE_SPECULAR_SH), nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR_SH},
-                    // {NRD_ID(REBLUR_DIFFUSE_SH), nrd::Denoiser::REBLUR_DIFFUSE_SH},
-                    // {NRD_ID(REBLUR_SPECULAR_SH), nrd::Denoiser::REBLUR_SPECULAR_SH},
-                    // {NRD_ID(REBLUR_DIFFUSE_SPECULAR_OCCLUSION), nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR_OCCLUSION},
-                    // {NRD_ID(REBLUR_DIFFUSE_OCCLUSION), nrd::Denoiser::REBLUR_DIFFUSE_OCCLUSION},
-                    // {NRD_ID(REBLUR_SPECULAR_OCCLUSION), nrd::Denoiser::REBLUR_SPECULAR_OCCLUSION},
-                    // {NRD_ID(REBLUR_DIFFUSE_DIRECTIONAL_OCCLUSION), nrd::Denoiser::REBLUR_DIFFUSE_DIRECTIONAL_OCCLUSION},
-                    {NRD_ID(REBLUR_DIFFUSE_SPECULAR), nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR},
-                    {NRD_ID(REBLUR_DIFFUSE), nrd::Denoiser::REBLUR_DIFFUSE},
-                    {NRD_ID(REBLUR_SPECULAR), nrd::Denoiser::REBLUR_SPECULAR},
-                    // RELAX
-                    // {NRD_ID(RELAX_DIFFUSE_SPECULAR_SH), nrd::Denoiser::RELAX_DIFFUSE_SPECULAR_SH},
-                    // {NRD_ID(RELAX_DIFFUSE_SH), nrd::Denoiser::RELAX_DIFFUSE_SH},
-                    // {NRD_ID(RELAX_SPECULAR_SH), nrd::Denoiser::RELAX_SPECULAR_SH},
-                    {NRD_ID(RELAX_DIFFUSE_SPECULAR), nrd::Denoiser::RELAX_DIFFUSE_SPECULAR},
-                    {NRD_ID(RELAX_DIFFUSE), nrd::Denoiser::RELAX_DIFFUSE},
-                    {NRD_ID(RELAX_SPECULAR), nrd::Denoiser::RELAX_SPECULAR},
-                    // SIGMA
-                    {NRD_ID(SIGMA_SHADOW_TRANSLUCENCY), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
-                    {NRD_ID(SIGMA_SHADOW), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
-                    // REFERENCE
-                    // {NRD_ID(REFERENCE), nrd::Denoiser::REFERENCE},
-                };
-
-                nrd::InstanceCreationDesc instance_desc = {};
-                instance_desc.denoisers                 = denoiser_descs.data();
-                instance_desc.denoisersNum              = denoiser_descs.size();
-
-                // NRD itself is flexible and supports any kind of dynamic resolution scaling, but NRD INTEGRATION pre-
-                // allocates resources with statically defined dimensions. DRS is only supported by adjusting the viewport
-                // via "CommonSettings::rectSize"
-                CHECK_ASSERT(nrd.integration.Initialize(
-                                 integration_desc,
-                                 instance_desc,
-                                 *nri_entry.device,
-                                 nri_entry.rhi,
-                                 nri_entry.rhi),
-                             "Failed to initialize NRD Integration");
-
-                LOG_INFO("[NRD]: NRD Integration recreated.");
-            }
-
-            {
-                SetDefaultCommonSettings(_frame_width, _frame_height);
-                SetDefaultDenoiserSettings(NRD_ID(REBLUR_DIFFUSE_SPECULAR));
-                SetDefaultDenoiserSettings(NRD_ID(REBLUR_DIFFUSE));
-                SetDefaultDenoiserSettings(NRD_ID(REBLUR_SPECULAR));
-                SetDefaultDenoiserSettings(NRD_ID(RELAX_DIFFUSE_SPECULAR));
-                SetDefaultDenoiserSettings(NRD_ID(RELAX_DIFFUSE));
-                SetDefaultDenoiserSettings(NRD_ID(RELAX_SPECULAR));
-                SetDefaultDenoiserSettings(NRD_ID(SIGMA_SHADOW_TRANSLUCENCY));
-                SetDefaultDenoiserSettings(NRD_ID(SIGMA_SHADOW));
-            }
-#undef NRD_ID
+            LOG_INFO("[NRD]: NRD Texture Resources recreated.");
         }
 
         void SetInput(EResourceSlot _index, TextureRef _texture) override {
