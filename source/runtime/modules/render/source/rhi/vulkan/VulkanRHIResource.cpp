@@ -2484,7 +2484,7 @@ namespace Moer::Render {
     }
 
     RaytracingSizeInfos VulkanRaytracingScene::CalculateSizeInfos(){
-         VkAccelerationStructureBuildGeometryInfoKHR build_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        VkAccelerationStructureBuildGeometryInfoKHR build_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
 
         VkAccelerationStructureGeometryKHR geometry{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
         geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
@@ -2512,8 +2512,11 @@ namespace Moer::Render {
             &build_info, 
             &instance_cnt, 
             &build_sizes_info);
-
-
+        
+        // reserve more space for buffer device address alignment
+        const uint64 alignment = m_device->GetOptionalProperties().acceleration_structure_properties.minAccelerationStructureScratchOffsetAlignment;
+        build_sizes_info.buildScratchSize = Moer::AlignUp(build_sizes_info.buildScratchSize + alignment, alignment);
+        build_sizes_info.updateScratchSize = Moer::AlignUp(build_sizes_info.updateScratchSize + alignment, alignment);
         return {build_sizes_info.buildScratchSize, build_sizes_info.updateScratchSize, build_sizes_info.accelerationStructureSize};
     }
 
@@ -2539,8 +2542,7 @@ namespace Moer::Render {
 
             if(build_sizes_info.build_scratch_size > size_infos.build_scratch_size){
                 //scratch buffer
-                const uint64 alignment = m_device->GetOptionalProperties().acceleration_structure_properties.minAccelerationStructureScratchOffsetAlignment;
-                buffer_ci.size = Moer::AlignUp(build_sizes_info.build_scratch_size, alignment);
+                buffer_ci.size = build_sizes_info.build_scratch_size;
                 buffer_ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
                 VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
                 
