@@ -176,7 +176,7 @@ namespace Moer {
     }
 
     GLOBAL_FUNC float2 Unpack_R16G16_FLOAT(uint rg) {
-        uint2 d = uint2(rg, rg >> 16);
+        uint2 d = uint2(rg & 0xffff, rg >> 16);
         return f16tof32(d);
     }
 
@@ -202,6 +202,14 @@ namespace Moer {
             Unpack_R8_SNORM(_value & 0xFF),
             Unpack_R8_SNORM((_value >> 8) & 0xFF),
             Unpack_R8_SNORM((_value >> 16) & 0xFF));
+    }
+
+    GLOBAL_FUNC float3 Unpack_Normal(uint _val) {
+        return Unpack_R11G11B10_UFLOAT(_val) * 2.f - 1.f;
+    }
+
+    GLOBAL_FUNC uint Pack_Normal(float3 _val) {
+        return Pack_R11G11B10_UFLOAT(_val * .5f + .5f);
     }
 
     GLOBAL_FUNC float3 Interpolate(float3 _val[3], float3 _bary) {

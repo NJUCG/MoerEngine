@@ -740,7 +740,7 @@ namespace Moer::Resource::Gltf {
                         for (uint32_t j = 0; j < mesh->mNumVertices; j++) {
                             const auto& nor                 = mesh->mNormals[j];
                             float3      normal              = {nor.x, nor.y, nor.z};
-                            normal_buffer[vertex_count + j] = Pack_RGB8_SNORM(normal);
+                            normal_buffer[vertex_count + j] = Pack_Normal(normal);
                         }
                     }
 
@@ -751,7 +751,7 @@ namespace Moer::Resource::Gltf {
                         for (uint32_t j = 0; j < mesh->mNumVertices; j++) {
                             const auto& tan                  = mesh->mTangents[j];
                             float3      tangent              = {tan.x, tan.y, tan.z};
-                            tangent_buffer[vertex_count + j] = Pack_RGB8_SNORM(tangent);
+                            tangent_buffer[vertex_count + j] = Pack_Normal(tangent);
                         }
                     }
 

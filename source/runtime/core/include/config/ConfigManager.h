@@ -25,6 +25,7 @@ namespace Moer {
         const std::filesystem::path& GetEngineShaderSharedPath() const;
         const std::filesystem::path& GetEngineShaderCachedPath() const;
         const std::filesystem::path& GetScenePath() const;
+        const std::filesystem::path& GetCachePath() const;
 
         //call after config manager init
         const Config::GlobalConfig& GetConfig() const { return m_config; }
@@ -43,6 +44,7 @@ namespace Moer {
         std::filesystem::path engine_shader_shared_path;
         std::filesystem::path engine_shader_cached_path;
         std::filesystem::path scene_path;
+        std::filesystem::path cache_path;
     };
 
 }// namespace Moer

@@ -42,6 +42,7 @@ namespace Moer {
         // load config from .toml
         m_config   = Config::GlobalConfig::LoadConfigFromTomlFile(config_path.generic_string());
         scene_path = m_config.engine.scene.scene_path;
+        cache_path = _workspace_path / "cache";
     }
 
     const std::filesystem::path& ConfigManager::GetWorkspacePath() const {
@@ -66,5 +67,9 @@ namespace Moer {
 
     const std::filesystem::path& ConfigManager::GetScenePath() const {
         return scene_path;
+    }
+
+    const std::filesystem::path& ConfigManager::GetCachePath() const {
+        return cache_path;
     }
 }// namespace Moer

@@ -1,5 +1,6 @@
 #include "SceneCache.h"
 
+#include "config/ConfigManager.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
 #include "resources/GpuScene.h"
@@ -166,7 +167,9 @@ namespace Moer {
     // static constexpr std::string SCENE_CACHE_EXT_SPECIFY = ".MOERSCENE";
 
     static std::filesystem::path RemapScenePath(const std::filesystem::path& path) {
-        return path.string() + ".MOERSCENE";
+        long long time       = std::filesystem::last_write_time(path).time_since_epoch().count();
+        auto      cache_path = (ConfigManager::GetInstance().GetCachePath() / std::format("{}_{}", path.filename().generic_string(), uint64(time)));
+        return cache_path.generic_string() + ".MOERSCENE";
     }
 
     void SceneCache::FromFile(const std::filesystem::path& _path, Scene* _scene) {
@@ -188,8 +191,8 @@ namespace Moer {
         timer.Stop();
         LOG_INFO("Load Scene Cache Time(ms): {}", timer.ElapsedMilliseconds());
     }
-    bool SceneCache::HasValidCache(const std::filesystem::path& path) {
-        auto cache_path = RemapScenePath(path);
+    bool SceneCache::HasValidCache(const std::filesystem::path& _path) {
+        auto cache_path = RemapScenePath(_path);
         return std::filesystem::exists(cache_path);
     }
     void SceneCache::ToFile(const Scene& scene, const std::filesystem::path& path) {
@@ -468,8 +471,11 @@ namespace Moer {
 
     void SceneCache::Cache(const SceneData& _scene_data, size_t _key) {
         std::filesystem::path path = RemapScenePath(_scene_data.m_path);
-        std::ofstream         fs(path, std::ios::binary);
-        OutputStream          stream(fs);
+        if (!std::filesystem::exists(path.parent_path())) {
+            std::filesystem::create_directories(path.parent_path());
+        }
+        std::ofstream fs(path, std::ios::binary);
+        OutputStream  stream(fs);
         WriteSceneGeomInfo(stream, _scene_data);
         WriteSceneTextures(stream, _scene_data);
         WriteSceneMaterial(stream, _scene_data);

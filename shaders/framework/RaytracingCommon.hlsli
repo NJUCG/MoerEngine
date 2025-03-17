@@ -145,11 +145,11 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
 
     float3 normals[3];
 
-    normals[0] = Moer::Unpack_RGB8_SNORM(
+    normals[0] = Moer::Unpack_Normal(
         vtx_buffer.Load<uint>(indices.x, geo_record.geometry.normal_offset));
-    normals[1] = Moer::Unpack_RGB8_SNORM(
+    normals[1] = Moer::Unpack_Normal(
         vtx_buffer.Load<uint>(indices.y, geo_record.geometry.normal_offset));
-    normals[2] = Moer::Unpack_RGB8_SNORM(
+    normals[2] = Moer::Unpack_Normal(
         vtx_buffer.Load<uint>(indices.z, geo_record.geometry.normal_offset));
 
     float3 local_normal = Moer::Interpolate(normals, barycentrics);
@@ -166,11 +166,11 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
 
     float3 tangents[3];
 
-    tangents[0] = Moer::Unpack_RGB8_SNORM(
+    tangents[0] = Moer::Unpack_Normal(
         vtx_buffer.Load<uint>(indices.x, geo_record.geometry.tangent_offset));
-    tangents[1] = Moer::Unpack_RGB8_SNORM(
+    tangents[1] = Moer::Unpack_Normal(
         vtx_buffer.Load<uint>(indices.y, geo_record.geometry.tangent_offset));
-    tangents[2] = Moer::Unpack_RGB8_SNORM(
+    tangents[2] = Moer::Unpack_Normal(
         vtx_buffer.Load<uint>(indices.z, geo_record.geometry.tangent_offset));
 
     geo_record.tangent = Moer::Interpolate(tangents, barycentrics);
@@ -185,7 +185,8 @@ float3 ApplyNormal(float3 _normal, float3 _geom_normal, float3 _tangent) {
 
   // float3 bitangent = cross(_geom_normal, _tangent);
   // float3 normal =
-  //     _normal.x * _tangent + _normal.y * bitangent + _normal.z * _geom_normal;
+  //     _normal.x * _tangent + _normal.y * bitangent + _normal.z *
+  //     _geom_normal;
   float3 T = normalize(_tangent);
   float3 N = normalize(_geom_normal);
   float3 B = cross(T, N);
@@ -240,7 +241,7 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
       normal =
           normal_tex.SampleGrad<float4>(_geo_record.texcoord, _grad_x, _grad_y);
     }
-    //reverse rgb mapping
+    // reverse rgb mapping
     normal.xyz = 2.f * normal.xyz - 1.f;
     normal.xyz = normalize(normal.xyz);
     // gamma correction
@@ -271,8 +272,8 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
 
   MaterialSample result = MaterialSample::ConstructDefault();
   // currently use geometry normal
-  result.normal = normalize(normal.xyz);
-  // result.normal = _geo_record.normal;
+  // result.normal = normalize(normal.xyz);
+  result.normal = _geo_record.normal;
 
   // use metallic roughness workflow
 
