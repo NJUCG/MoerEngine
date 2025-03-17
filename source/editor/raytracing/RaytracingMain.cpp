@@ -409,6 +409,8 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
             // load scene
             if (first_load) {
                 // calculate bounding box
+                scene_bounding.min = float3(0.f);
+                scene_bounding.max = float3(0.f);
 
                 scene.ForEach([&](Entity _entity) {
                     auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
@@ -515,20 +517,18 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
                 last_io_change_timeline = copy_queue_timeline->GetValue();
 
                 {
-                    static bool first_load = true;
-                    if (first_load) {
-                        first_load = false;
-                        Array<ImportTexture> sampled_textures;
-                        sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
 
-                        for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
-                            sampled_textures.emplace_back(ImportTexture(
-                                tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE
-                            ));
-                        }
+                    Array<ImportTexture> sampled_textures;
+                    sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
 
-                        cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
+                    for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
+                        sampled_textures.emplace_back(ImportTexture(
+                            tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE
+                        ));
                     }
+
+                    cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
+
                     cmd_list.UpdateRaytracingScene(rt_scene);
                 }
 

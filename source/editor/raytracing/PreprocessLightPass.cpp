@@ -3,6 +3,7 @@
 #include "misc/Hash.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
+#include "platform/Platform.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "scene/Entity.h"
@@ -17,8 +18,27 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 
 namespace Moer::Render::Raytracing {
+
+template<typename T>
+struct CachelineStruct {
+    union {
+        byte padding[PLATFORM_CACHELINE_SIZE];
+        T    data;
+    };
+    CachelineStruct() noexcept { memset(padding, 0, sizeof(padding)); }
+    CachelineStruct(const T& _data) : data(_data) {}
+    CachelineStruct(const CachelineStruct& _rhs) : data(_rhs.data) {}
+    CachelineStruct& operator=(const CachelineStruct& _rhs) {
+        data = _rhs.data;
+        return *this;
+    }
+
+    operator T&() { return data; }
+    operator const T&() const { return data; }
+};
 
 PrepareLightPass::PrepareLightPass(RenderDevice& _device, ShaderManager& _manager, Scene& _scene) :
     device(_device),
@@ -128,8 +148,18 @@ static uint32_t PackNormalizedVector(const float3 _x) {
     packed_output |= y << 16;
     return packed_output;
 }
+static bool CanConvert(LightComponent& _light) {
+    switch (_light.GetType()) {
+        case Moer::ELightComponentType::DIRECTIONAL:
+        case Moer::ELightComponentType::SPOT:
+        case Moer::ELightComponentType::POINT:
+        case Moer::ELightComponentType::ENVIRONMENT: return true;
+        default: return false;
+    }
+}
 
 static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
+    if (!CanConvert(_light)) return false;
     switch (_light.GetType()) {
         case Moer::ELightComponentType::DIRECTIONAL: {
             DirectionalLightComponent* dir_light = static_cast<DirectionalLightComponent*>(&_light);
@@ -142,7 +172,6 @@ static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
             PackPolyLightColor(radiance, _info);
             _info.direction1 = PackNormalizedVector(Normalizef(dir_light->GetDirection()));
             _info.scalars    = Fp32ToFp16(half_angluar_size_rad) | (Fp32ToFp16(solid_angle) << 16);
-            return true;
             break;
         }
         case Moer::ELightComponentType::SPOT: {
@@ -159,7 +188,6 @@ static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
             _info.cos_cone_angle_softness =
                 Fp32ToFp16(Angle::DegreeToRadian(spot_light->GetOuterConeAngle())) |
                 (Fp32ToFp16(softness) << 16);
-            return true;
             break;
         }
         case Moer::ELightComponentType::POINT: {
@@ -168,7 +196,6 @@ static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
             _info.color_type_flags = (uint)EPolyLightType::ELSphere << g_poly_morphic_light_type_shift;
             PackPolyLightColor(flux, _info);
             _info.center = point_light->GetPosition();
-            return true;
             break;
         }
         case Moer::ELightComponentType::ENVIRONMENT: {
@@ -180,17 +207,6 @@ static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
             _info.direction2 = env_light->size.x | (env_light->size.y << 16);
             _info.scalars    = Fp32ToFp16(env_light->rotation);
             _info.scalars |= g_poly_morphic_light_env_is_scalar_bit;
-            return true;
-            break;
-        }
-        case Moer::ELightComponentType::AMBIENT: {
-            // AmbientLightComponent *ambient_light =
-            //     static_cast<AmbientLightComponent *>(&_light);
-            // float3 flux = ambient_light->GetColor() * ambient_light->GetIntensity();
-            // _info.color_type_flags = (uint)EPolyLightType::ELSphere
-            //                          << g_poly_morphic_light_type_shift;
-            // PackPolyLightColor(flux, _info);
-            return false;
             break;
         }
         default: {
@@ -198,6 +214,7 @@ static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
             return false;
         }
     }
+    return true;
 }
 
 void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
@@ -252,11 +269,9 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     });
 
     Timer timer;
-    timer.Start();
 
     std::span<const Entity> light_entities_src = scene.GetLights();
 
-    timer.Stop();
     // LOG_INFO("PrepareLightPass::Process, sort time:{}",
     // timer.ElapsedMilliseconds());
     timer.Start();
@@ -265,13 +280,17 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     uint num_infinite_prim_lights = 0;
     uint num_is_env_lights        = 0;
 
+    uint chunk_size    = 1024;
     uint parrallel_cnt = std::max(_rt_ctx.num_threads, 1u);
+    parrallel_cnt      = std::min(parrallel_cnt, (uint)light_entities_src.size() / chunk_size + 1);
     if (_rt_ctx.b_parallel_process_light) {
-        Array<uint2> light_cnt(parrallel_cnt,
-                               uint2(0)); // normal light, inf light
+        Array<CachelineStruct<uint2>> light_cnt(
+            parrallel_cnt,
+            CachelineStruct<uint2>(uint2(0.f))
+        ); // normal light, inf light
 
-        Array<StaticArray<Array<uint>, 2>> entity_idx_parrallel(parrallel_cnt);
-        Array<UnorderedMap<uint64, uint>>  prev_light_buffer_offsets_parallel(parrallel_cnt);
+        Array<StaticArray<Array<CachelineStruct<uint>>, 2>> entity_idx_parrallel(parrallel_cnt);
+        Array<UnorderedMap<uint64, uint>>                   prev_light_buffer_offsets_parallel(parrallel_cnt);
         for (uint i = 0; i < parrallel_cnt; i++) {
             // reserve space for normal lights
             entity_idx_parrallel[i][0].reserve(light_entities_src.size() / parrallel_cnt);
@@ -300,12 +319,6 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
                     norm_light_cnt++;
                 }
 
-                PrepareLightsTask task{};
-                task.instance_geo_idx  = prim_light_infos.size() | g_task_prim_light_bit;
-                task.light_offset      = 0;
-                task.num_triangles     = 1;
-                task.prev_light_offset = -1;
-
                 switch (light_data->GetType()) {
                     case ELightComponentType::DIRECTIONAL: {
                         // tasks_parrallel[_idx][1].emplace_back(task);
@@ -324,33 +337,34 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
                     }
                 }
             }
-            light_cnt[_idx].x = norm_light_cnt;
-            light_cnt[_idx].y = inf_light_cnt;
+            light_cnt[_idx].data.x = norm_light_cnt;
+            light_cnt[_idx].data.y = inf_light_cnt;
         });
 
         // calculate offsets
-        for (uint i = 1; i < parrallel_cnt; i++) { light_cnt[i].x += light_cnt[i - 1].x; }
-        num_finite_prim_lights = light_cnt[parrallel_cnt - 1].x;
+        for (uint i = 1; i < parrallel_cnt; i++) { light_cnt[i].data.x += light_cnt[i - 1].data.x; }
+        num_finite_prim_lights = light_cnt[parrallel_cnt - 1].data.x;
 
-        light_cnt[0].y += light_cnt[parrallel_cnt - 1].x;
-        for (uint i = 1; i < parrallel_cnt; i++) { light_cnt[i].y += light_cnt[i - 1].y; }
-        num_infinite_prim_lights = light_cnt[parrallel_cnt - 1].y - num_finite_prim_lights;
+        light_cnt[0].data.y += light_cnt[parrallel_cnt - 1].data.x;
+        for (uint i = 1; i < parrallel_cnt; i++) { light_cnt[i].data.y += light_cnt[i - 1].data.y; }
+        num_infinite_prim_lights = light_cnt[parrallel_cnt - 1].data.y - num_finite_prim_lights;
 
-        uint total_task_cnt = light_cnt[parrallel_cnt - 1].y;
+        uint total_task_cnt = light_cnt[parrallel_cnt - 1].data.y;
 
         uint task_offset = tasks.size();
         tasks.resize(total_task_cnt + task_offset);
         tasks.reserve(total_task_cnt + task_offset + 1);
         prim_light_infos.resize(total_task_cnt);
         prim_light_infos.reserve(total_task_cnt + 1);
-
-        uint test = 0;
+        timer.Stop();
+        float sort_time = timer.ElapsedMilliseconds();
+        timer.Start();
         ParallelFor(parrallel_cnt, [&](uint _idx) {
             for (uint light_type = 0; light_type < 2; light_type++) {
                 if (entity_idx_parrallel[_idx][light_type].size() > 0) {
                     uint cur_offset =
-                        light_cnt[_idx][light_type] - entity_idx_parrallel[_idx][light_type].size();
-                    uint cur_task_offset = light_cnt[_idx][light_type] -
+                        light_cnt[_idx].data[light_type] - entity_idx_parrallel[_idx][light_type].size();
+                    uint cur_task_offset = light_cnt[_idx].data[light_type] -
                                            entity_idx_parrallel[_idx][light_type].size() + task_offset;
                     uint total_light_offset = cur_offset + light_buf_offset;
                     for (uint i = 0; i < entity_idx_parrallel[_idx][light_type].size(); i++) {
@@ -358,8 +372,8 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
                         task.light_offset     = total_light_offset + i;
                         task.instance_geo_idx = (cur_offset + i) | g_task_prim_light_bit;
                         task.num_triangles    = 1;
-                        Entity entity         = light_entities_src[entity_idx_parrallel[_idx][light_type][i]];
-                        auto   light_data     = LightComponentManager::Get().Get(entity);
+                        Entity entity = light_entities_src[entity_idx_parrallel[_idx][light_type][i].data];
+                        auto   light_data = LightComponentManager::Get().Get(entity);
 
                         uint64 key  = uint64(light_data.Get());
                         auto   iter = primitive_light_buffer_offsets.find(key);
@@ -373,7 +387,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
                         PolymorphicLightInfo& light_info = prim_light_infos[cur_offset + i];
                         if (!ConvertLight(
                                 *LightComponentManager::Get().Get(
-                                    light_entities_src[entity_idx_parrallel[_idx][light_type][i]]
+                                    light_entities_src[entity_idx_parrallel[_idx][light_type][i].data]
                                 ),
                                 light_info
                             )) {
@@ -382,10 +396,10 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
                     }
                 }
             }
-            if (_idx == 0) { test = 1; }
         });
 
-        assert(test == 1 && "test");
+        timer.Stop();
+        float convert_time = timer.ElapsedMilliseconds();
 
         // merge prev light buffer offsets
         for (uint i = 0; i < parrallel_cnt; i++) {
@@ -394,7 +408,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             );
         }
 
-        light_buf_offset += light_cnt[parrallel_cnt - 1].y;
+        light_buf_offset += light_cnt[parrallel_cnt - 1].data.y;
 
         if (auto cur_env = this->scene.GetCurrentEnvMap(); cur_env.texture) {
             auto                 env_comp = LightComponentManager::Get().Get(cur_env.entity);
@@ -417,12 +431,14 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         }
     } else {
         Array<Entity> light_entities(light_entities_src.begin(), light_entities_src.end());
-
-        std::sort(light_entities.begin(), light_entities.end(), [](Entity _lhs, Entity _rhs) {
+        std::ranges::sort(light_entities, [&](Entity _lhs, Entity _rhs) {
             return LightPriority(LightComponentManager::Get().Get(_lhs)) <
                    LightPriority(LightComponentManager::Get().Get(_rhs));
         });
-        for (auto& entity : light_entities) {
+
+        std::span<Entity> view = light_entities;
+
+        for (auto entity : view) {
             LightComponentRef light_data = LightComponentManager::Get().Get(entity);
 
             PolymorphicLightInfo light_info{};
