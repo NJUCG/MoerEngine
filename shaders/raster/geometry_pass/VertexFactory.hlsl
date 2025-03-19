@@ -28,12 +28,12 @@ struct VsInput {
     float3 GetPosition() { return position; }
 
     float3 GetNormal() {
-        return Moer::Unpack_RGB8_SNORM(normal);
+        return Moer::Unpack_Normal(normal);
     }
 
     float3 GetTangent() {
 #ifdef HAS_TANGENT
-        return Moer::Unpack_RGB8_SNORM(tangent);
+        return Moer::Unpack_Normal(tangent);
 #else
         return float3(0, 0, 0);
 #endif
@@ -41,7 +41,7 @@ struct VsInput {
 
     float3 GetTangentWithTransformedNormal(float3 transfromed_normal) {
 #ifdef HAS_TANGENT
-        return Moer::Unpack_RGB8_SNORM(tangent);
+        return Moer::Unpack_Normal(tangent);
 #else
         float3 tangent = cross(transfromed_normal, float3(0, 0, 1));
         if (length(tangent) < 1e-2) {

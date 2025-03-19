@@ -176,6 +176,8 @@ RTHitInfo CastRay(float3 origin, float3 direction, float tmin, float tmax,
 
     float3 pos = Moer::Interpolate(positions, barycentrics);
 
+    // FIXME: Unpack_RGB8_SNORM and this function is deprecated. Need to be updated.
+
     float3 normals[3];
     normals[0] = Moer::Unpack_RGB8_SNORM(
         vtx_buffer.Load<uint>(indices.x, geom_data.normal_offset));

@@ -193,10 +193,12 @@ namespace Moer {
         return clamp(float(signed_value) / 127.f, -1.f, 1.f);
     }
 
+    // This function is deprecated. Use `Pack_Normal` instead.
     GLOBAL_FUNC uint Pack_RGB8_SNORM(float3 _value) {
         return Pack_R8_SNORM(_value.x) | (Pack_R8_SNORM(_value.y) << 8) | (Pack_R8_SNORM(_value.z) << 16);
     }
 
+    // This function is deprecated. Use `Unpack_Normal` instead.
     GLOBAL_FUNC float3 Unpack_RGB8_SNORM(uint _value) {
         return float3(
             Unpack_R8_SNORM(_value & 0xFF),
