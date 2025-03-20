@@ -82,11 +82,11 @@ float3 calculate_light_dir(LightData light, float3 pos, float3 normal)
 {
     if (light.type == Directional_LIGHT_TYPE)
     {
-        return -light.direction.xyz;
+        return normalize(-light.direction.xyz);
     }
     else if (light.type == Point_LIGHT_TYPE || light.type == Spot_LIGHT_TYPE)
     {
-        return light.position.xyz - pos;
+        return normalize(light.position.xyz - pos);
     }
     else if (light.type == Environment_LIGHT_TYPE)
     {
@@ -96,7 +96,7 @@ float3 calculate_light_dir(LightData light, float3 pos, float3 normal)
     {
         return normal;
     }
-    return light.position.xyz - pos;
+    return normalize(light.position.xyz - pos);
 }
 
 #define DISTANCE_ATTENUATION_FACTOR 0.006f

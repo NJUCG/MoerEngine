@@ -176,7 +176,7 @@ namespace Moer::Resource::Gltf {
             data->m_mat_instance_textures[mat->GetName()].textures.push_back({param_name, texture_path.C_Str()});
             SamplerParams params{};
             params.max_mip_level = texture.mips;
-            LOG_DEBUG("\tLoad Texture, texture is already loaded: {}", texture_path.C_Str());
+            LOG_DEBUG("\tLoad Texture, texture is already loaded {} for {}", texture_path.C_Str(), param_name);
             return;
         }
 
@@ -194,7 +194,7 @@ namespace Moer::Resource::Gltf {
         }
 
         if (!image_desc.IsValid()) {
-            LOG_WARNING("Load Texture Failed: {}", texture_path.C_Str());
+            LOG_WARNING("Load Texture Failed {} for {}", texture_path.C_Str(), param_name);
             return;
         }
 
@@ -217,7 +217,7 @@ namespace Moer::Resource::Gltf {
 
         data->m_textures[texture_path.C_Str()] = texture_data;
         data->m_mat_instance_textures[mat->GetName()].textures.push_back({param_name, texture_path.C_Str()});
-        LOG_DEBUG("\tLoad Texture Success: {}", texture_path.C_Str());
+        LOG_DEBUG("\tLoad Texture Success {} for {}", texture_path.C_Str(), param_name);
     }
 
     static Vector3f ToVector3f(const aiVector3D& vec) {
@@ -318,6 +318,9 @@ namespace Moer::Resource::Gltf {
 
                 } else if (light->mType == aiLightSourceType::aiLightSource_AREA) {
                     LOG_WARNING("Unsupported light type `Area Light` in loading scene");
+
+                } else {
+                    LOG_WARNING("Unsupported light type in loading scene. Light type: {}", static_cast<int>(light->mType));
                 }
             }
         }
@@ -368,73 +371,115 @@ namespace Moer::Resource::Gltf {
          * |  false  | false  | -2  |
          */
 
-        // MARK: Factors
+        // MARK: Base Color
+        {
+            // base color factor
+            aiColor4D base_color_factor;
 
-        aiColor4D base_color_factor;
-        aiColor3D emissive_factor;
-        float     metallic_factor  = 1.0;
-        float     roughness_factor = 1.0;
+            if (_ai_material->Get(AI_MATKEY_COLOR_DIFFUSE, base_color_factor) == AI_SUCCESS) {
+                Vector4f base_color_factor_cast = *reinterpret_cast<Vector4f*>(&base_color_factor);
+                mi->SetParameter("albedo_map", int(-1));
+                mi->SetParameter("base_color_factor", base_color_factor_cast);
+                LOG_DEBUG("\tLoad Base Color Factor: {}", base_color_factor_cast.ToString());
+            } else {
+                mi->SetParameter("albedo_map", int(-2));
+            }
 
-        // base color factor
-        if (_ai_material->Get(AI_MATKEY_COLOR_DIFFUSE, base_color_factor) == AI_SUCCESS) {
-            Vector4f base_color_factor_cast = *reinterpret_cast<Vector4f*>(&base_color_factor);
-            mi->SetParameter("albedo_map", int(-1));
-            mi->SetParameter("base_color_factor", base_color_factor_cast);
-            LOG_DEBUG("\tLoad Base Color Factor: {}", base_color_factor_cast.ToString());
-        } else {
-            mi->SetParameter("albedo_map", int(-2));
-        }
+            // base color texture
+            aiString base_color_path;
 
-        // metallic roughness factor
-        int metalic_roughness_map_value = -2;
-        if (_ai_material->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLIC_FACTOR, metallic_factor) == AI_SUCCESS) {
-            metalic_roughness_map_value = -1;
-            mi->SetParameter("metalic_factor", metallic_factor);
-            LOG_DEBUG("\tLoad Metallic Factor: {}", metallic_factor);
-        }
-        if (_ai_material->Get(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_ROUGHNESS_FACTOR, roughness_factor) == AI_SUCCESS) {
-            metalic_roughness_map_value = -1;
-            mi->SetParameter("roughness_factor", roughness_factor);
-            LOG_DEBUG("\tLoad Roughness Factor: {}", roughness_factor);
-        }
-        mi->SetParameter("metallic_roughness_map", metalic_roughness_map_value);
-
-        // emissive factor
-        if (_ai_material->Get(AI_MATKEY_COLOR_EMISSIVE, emissive_factor) == AI_SUCCESS) {
-            Vector3f emissive_factor_cast = *reinterpret_cast<Vector3f*>(&emissive_factor);
-            mi->SetParameter("emissive_map", int(-1));
-            mi->SetParameter("emissive_factor", emissive_factor_cast);
-            LOG_DEBUG("\tLoad Emissive Factor: {}", emissive_factor_cast.ToString());
-        } else {
-            mi->SetParameter("emissive_map", int(-2));
+            if (_ai_material->GetTexture(aiTextureType_BASE_COLOR, 0, &base_color_path) == AI_SUCCESS) {
+                LoadTexture(_ai_scene, base_color_path, mi, "albedo_map");
+            } else if (_ai_material->GetTexture(aiTextureType_DIFFUSE, 0, &base_color_path) == AI_SUCCESS) {
+                LoadTexture(_ai_scene, base_color_path, mi, "albedo_map");
+            }
         }
 
-        // ao factor
-        mi->SetParameter("ao", 1.0f);
-        LOG_DEBUG("\tLoad AO Factor: 1.0");
+        // MARK: Normal Map
+        {
+            // normal
+            mi->SetParameter("normal_map", int(-1));
+            // -1 means use mesh normals! This default value is important!
 
-        // MARK: Textures
+            // normal texture
+            aiString normal_path;
 
-        aiString base_color_path, normal_path, metallic_roughness_path, ao_path, emissive_path;
-        // base color texture
-        if (_ai_material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_color_path) == AI_SUCCESS) {
-            LoadTexture(_ai_scene, base_color_path, mi, "albedo_map");
+            if (_ai_material->GetTexture(aiTextureType_NORMALS, 0, &normal_path) == AI_SUCCESS) {
+                LoadTexture(_ai_scene, normal_path, mi, "normal_map");
+            } else if (_ai_material->GetTexture(aiTextureType_NORMAL_CAMERA, 0, &normal_path) == AI_SUCCESS) {
+                LoadTexture(_ai_scene, normal_path, mi, "normal_map");
+            }
         }
-        // normal texture
-        if (_ai_material->GetTexture(aiTextureType_NORMALS, 0, &normal_path) == AI_SUCCESS) {
-            LoadTexture(_ai_scene, normal_path, mi, "normal_map");
+
+        // MARK: Metallic Roughness
+        {
+            // metallic roughness factor
+            float metallic_factor  = 0.0;// default value
+            float roughness_factor = 0.5;// default value
+
+            mi->SetParameter("metallic_roughness_map", int(-1));
+            if (_ai_material->Get(AI_MATKEY_METALLIC_FACTOR, metallic_factor) == AI_SUCCESS) {
+                mi->SetParameter("metalic_factor", metallic_factor);
+                LOG_DEBUG("\tLoad Metallic Factor: {}", metallic_factor);
+            } else {
+                mi->SetParameter("metalic_factor", metallic_factor);
+                LOG_DEBUG("\tLoad Metallic Factor (Default Value): {}", metallic_factor);
+            }
+            if (_ai_material->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness_factor) == AI_SUCCESS) {
+                mi->SetParameter("roughness_factor", roughness_factor);
+                LOG_DEBUG("\tLoad Roughness Factor: {}", roughness_factor);
+            } else {
+                mi->SetParameter("roughness_factor", roughness_factor);
+                LOG_DEBUG("\tLoad Roughness Factor (Default Value): {}", roughness_factor);
+            }
+
+            // metallic roughness texture
+            aiString metallic_roughness_path;
+
+            if (_ai_material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &metallic_roughness_path) == AI_SUCCESS) {
+                LoadTexture(_ai_scene, metallic_roughness_path, mi, "metallic_roughness_map");
+            }
         }
-        // metallic roughness texture
-        if (_ai_material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &metallic_roughness_path) == AI_SUCCESS) {
-            LoadTexture(_ai_scene, metallic_roughness_path, mi, "metallic_roughness_map");
+
+        // MARK: Emissive
+        {
+            // emissive factor
+            aiColor3D emissive_factor;
+
+            if (_ai_material->Get(AI_MATKEY_COLOR_EMISSIVE, emissive_factor) == AI_SUCCESS) {
+                Vector3f emissive_factor_cast = *reinterpret_cast<Vector3f*>(&emissive_factor);
+                mi->SetParameter("emissive_map", int(-1));
+                mi->SetParameter("emissive_factor", emissive_factor_cast);
+                LOG_DEBUG("\tLoad Emissive Factor: {}", emissive_factor_cast.ToString());
+            } else {
+                mi->SetParameter("emissive_map", int(-2));
+            }
+
+            // emissive texture
+            aiString emissive_path;
+
+            if (_ai_material->GetTexture(aiTextureType_EMISSION_COLOR, 0, &emissive_path) == AI_SUCCESS) {
+                LoadTexture(_ai_scene, emissive_path, mi, "emissive_map");
+            } else if (_ai_material->GetTexture(aiTextureType_EMISSIVE, 0, &emissive_path) == AI_SUCCESS) {
+                LoadTexture(_ai_scene, emissive_path, mi, "emissive_map");
+            }
         }
-        // emissive texture
-        if (_ai_material->GetTexture(aiTextureType_EMISSIVE, 0, &emissive_path) == AI_SUCCESS) {
-            LoadTexture(_ai_scene, emissive_path, mi, "emissive_map");
-        }
-        // ao texture
-        if (_ai_material->GetTexture(aiTextureType_LIGHTMAP, 0, &ao_path) == AI_SUCCESS) {
-            LoadTexture(_ai_scene, ao_path, mi, "ao_map");
+
+        // MARK: AO
+        {
+            // ao factor
+            mi->SetParameter("ao_map", int(-1));
+            mi->SetParameter("ao", 1.0f);
+            LOG_DEBUG("\tLoad AO Factor (Default Value): 1.0");
+
+            // ao texture
+            aiString ao_path;
+
+            if (_ai_material->GetTexture(aiTextureType_AMBIENT_OCCLUSION, 0, &ao_path) == AI_SUCCESS) {
+                LoadTexture(_ai_scene, ao_path, mi, "ao_map");
+            } else if (_ai_material->GetTexture(aiTextureType_LIGHTMAP, 0, &ao_path) == AI_SUCCESS) {
+                LoadTexture(_ai_scene, ao_path, mi, "ao_map");
+            }
         }
     }
     static float CalculateWorldToUvUnits(const RTVertex& _v0, const RTVertex& _v1, const RTVertex& _v2) {

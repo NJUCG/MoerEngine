@@ -104,11 +104,22 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
         float2(mat.metallic_factor, mat.roughness_factor),
         float2(mat.metallic_factor, mat.roughness_factor)
     );
-    pbrInfo.roughness = metallic_roughness.y;
     pbrInfo.metalness = metallic_roughness.x;
+    pbrInfo.roughness = metallic_roughness.y;
 
     // - Normal
     pbrInfo.normal = GetNormalFromNormalMap(mat.normal_map, uv, normal, tangent);
+
+
+    // FIXME: sponze - normal_map == 64 - bug
+    if (mat.normal_map == 64) { // wtf...
+        pbrInfo.normal = normal;
+    }
+    // float3 normal_map_test = TextureHandle(mat.normal_map).Sample2D<float3>(uv);
+    // if (in_uv.x < 0.00032 && in_uv.y < 0.00056) {
+    //     printf("normal_map: %d\n", mat.normal_map);
+    // }
+    // return float4(normal_map_test, 1.0);
 
     // MARK: Shading
     float3 color = float3(0, 0, 0);
@@ -129,6 +140,55 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
         color += apply_light(light, position, normal, brdf);
     }
-    
+
     return float4(color, 1.0);
 }
+
+/*
+Debug Prints:
+        // // uv: 0.000312, 0.000556
+        // if (in_uv.x < 0.00032 && in_uv.y < 0.00056 && i <= 5) {
+
+        //     float3 albedo = pbrInfo.albedo;
+        //     float metalness = pbrInfo.metalness;
+        //     float roughness = pbrInfo.roughness;
+        //     float3 viewDir = pbrInfo.viewDir;
+        //     float3 normal = pbrInfo.normal;
+        //     float3 lightDir = light_dir;
+
+        //     float3 F0 = lerp(Fdielectric, albedo, metalness);
+        //     float3 halfDir = normalize(lightDir + viewDir);
+        //     float cosLi = saturate(dot(normal, lightDir));
+        //     float cosLh = saturate(dot(normal, halfDir));
+        //     float cosLo = saturate(dot(normal, viewDir));
+        //     float3 F = fresnelSchlick(F0, cosLo);
+        //     float D = ndfGGX(cosLh, roughness);
+        //     float G = gaSchlickGGX(cosLi, cosLo, roughness);
+        //     float3 kd = lerp(float3(1, 1, 1) - F, float3(0, 0, 0), metalness);
+        //     float3 diffuseBRDF = kd * albedo;
+        //     float3 specularBRDF = (F * D * G) / max(Epsilon, 4.0 * cosLi * cosLo);
+
+        //     printf("\n");
+        //     printf(
+        //         "Light Count: %d/%d; albedo %f; metalness %f; roughness %f; viewDir %f %f %f; normal %f %f %f; lightDir %f %f %f\n",
+        //         i, lighting_data.light_count,
+        //         albedo.x, metalness, roughness,
+        //         viewDir.x, viewDir.y, viewDir.z,
+        //         normal.x, normal.y, normal.z,
+        //         lightDir.x, lightDir.y, lightDir.z
+        //     );
+        //     printf(
+        //         "F0 %f; halfDir %f; cosLi %f; cosLh %f; cosLo %f; D %f; G %f; kd %f; diffuseBRDF %f; specularBRDF %f\n",
+        //         F0.x, halfDir.x, cosLi, cosLh, cosLo, D, G, kd.x, diffuseBRDF.x, specularBRDF.x
+        //     );
+        //     printf(
+        //         "metallic_roughness_map: %d; albedo_map: %d; normal_map: %d; mat.roughness_factor: %f (%f %f);\n",
+        //         mat.metallic_roughness_map,
+        //         mat.albedo_map,
+        //         mat.normal_map,
+        //         mat.roughness_factor,
+        //         metallic_roughness.x,
+        //         metallic_roughness.y
+        //     );
+        // }
+*/

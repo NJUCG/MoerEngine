@@ -38,8 +38,6 @@ public:
     }
 
     uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image) {
-        if (ui_config.ao_mode == 0) { return input_image; }
-
         AoPipelineBindlessParam param;
         param.inv_resolution    = float2(1.0f) / float2(context.resolution);
         param.ssao_intensity    = ui_config.ssao_intensity;
