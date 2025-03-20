@@ -15,17 +15,30 @@ T UnpackMaterialData(ByteAddressBuffer _material_buffer, uint material_index) {
 }
 
 template <typename T>
-T GetTextureData(uint bindless_handle, float2 uv, T defaultVal, T missingVal) {
+T GetTextureData(uint bindless_handle, float2 uv, T default_value, T missing_value) {
   if (bindless_handle >= 0) {
     return TextureHandle(bindless_handle).Sample2D<T>(uv);
 
   } else if (bindless_handle == -1) {
-    return defaultVal;
+    return default_value;
 
   } else {
     // assert bindless_handle == -2
     // use -2 presents missing texture
-    return missingVal;
+    return missing_value;
+  }
+}
+
+float3 GetNormalFromNormalMap(uint normal_map, float2 uv, float3 normal, float3 tangent) {
+  if (normal_map >= 0) {
+    float3 normal_in_tbn = (TextureHandle(normal_map).Sample2D<float3>(uv) * 2.0) - 1.0;
+    float3 bitangent = cross(normal, tangent);
+    float3x3 tbn = float3x3(tangent, bitangent, normal);
+    // return normalize(mul(tbn, normal_in_tbn));
+    return normalize(mul(normal_in_tbn, tbn));
+    // return mul(tbn, normal_in_tbn);
+  } else {
+    return normal;
   }
 }
 

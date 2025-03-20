@@ -30,20 +30,21 @@ struct BufferWithHandle {
 #define ETUF_COLOR_ATTACH ETextureUsageFlags::COLOR_ATTACHMENT
 #define ETUF_D_S_ATTACH   ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
 
-#define RASTER_TEXTURES_TABLE                                                                  \
-    X(TextureWithHandle, vbuffer, PF_R32_UINT, ETUF_SAMPLED | ETUF_COLOR_ATTACH)               \
-    X(TextureWithHandle, normal, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)          \
-    X(TextureWithHandle, uv, PF_R32G32_SFLOAT, ETUF_SAMPLED | ETUF_COLOR_ATTACH)               \
-    X(TextureWithHandle, position, PF_R32G32B32A32_SFLOAT, ETUF_SAMPLED | ETUF_COLOR_ATTACH)   \
-    X(TextureWithHandle, lighting_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH) \
-    X(TextureWithHandle, ao_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)       \
-    X(TextureWithHandle, ssr_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)      \
-    X(TextureWithHandle, aa_texture_1, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)    \
-    X(TextureWithHandle, aa_texture_2, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)    \
-    X(TextureWithHandle, aa_texture_3, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)    \
-    X(TextureWithHandle, aa_texture_4, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)    \
-    X(TextureWithHandle, aa_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)       \
-    X(TextureWithHandle, ui_frame_buffer, PF_R8G8B8A8_SRGB, ETUF_SAMPLED | ETUF_COLOR_ATTACH)  \
+#define RASTER_TEXTURES_TABLE                                                                    \
+    X(TextureWithHandle, vbuffer, PF_R32_UINT, ETUF_SAMPLED | ETUF_COLOR_ATTACH)                 \
+    X(TextureWithHandle, normal, PF_A2R10G10B10_UNORM_PACK32, ETUF_SAMPLED | ETUF_COLOR_ATTACH)  \
+    X(TextureWithHandle, tangent, PF_A2R10G10B10_UNORM_PACK32, ETUF_SAMPLED | ETUF_COLOR_ATTACH) \
+    X(TextureWithHandle, uv, PF_R32G32_SFLOAT, ETUF_SAMPLED | ETUF_COLOR_ATTACH)                 \
+    X(TextureWithHandle, position, PF_R32G32B32A32_SFLOAT, ETUF_SAMPLED | ETUF_COLOR_ATTACH)     \
+    X(TextureWithHandle, lighting_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)   \
+    X(TextureWithHandle, ao_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)         \
+    X(TextureWithHandle, ssr_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)        \
+    X(TextureWithHandle, aa_texture_1, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)      \
+    X(TextureWithHandle, aa_texture_2, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)      \
+    X(TextureWithHandle, aa_texture_3, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)      \
+    X(TextureWithHandle, aa_texture_4, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)      \
+    X(TextureWithHandle, aa_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)         \
+    X(TextureWithHandle, ui_frame_buffer, PF_R8G8B8A8_SRGB, ETUF_SAMPLED | ETUF_COLOR_ATTACH)    \
     X(TextureWithHandle, output, PF_R8G8B8A8_SRGB, ETUF_COLOR_ATTACH)
 
 struct RasterTextures {

@@ -123,9 +123,11 @@ public:
                 DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture()),
                 ColorAttachment(context.textures.vbuffer.tex),
                 ColorAttachment(context.textures.normal.tex),
+                ColorAttachment(context.textures.tangent.tex),
                 ColorAttachment(context.textures.uv.tex),
                 ColorAttachment(context.textures.position.tex)
             );
+        // 注：此处ColorAttachment的顺序需要和 GeometryPassPsoManager.cpp 中的 RHIColorAttachmentInfo::Preset 顺序一致
     }
 
 public:

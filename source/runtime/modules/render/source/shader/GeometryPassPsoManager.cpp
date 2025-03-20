@@ -118,13 +118,15 @@ namespace Moer::Render {
             GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
                                       vertex_stream,
                                       {
-                                          RHIColorAttachmentInfo::Preset(PF_R32_UINT),          // vbuffer
-                                          RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM),    // normal
-                                          RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT),     // uv
-                                          RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)// position
+                                          RHIColorAttachmentInfo::Preset(PF_R32_UINT),                // vbuffer
+                                          RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32),// normal
+                                          RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32),// tangent
+                                          RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT),           // uv
+                                          RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)      // position
                                       },
                                       RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),// depth buf
                                       PF_D32_SFLOAT_S8_UINT);
+            // 注：此处 RHIColorAttachmentInfo 的顺序需要和 GeometryPass.h 中的 ColorAttachment 顺序一致
 
             const auto& record = m_pso_records[m_pso_records_map[bitmask]];
 

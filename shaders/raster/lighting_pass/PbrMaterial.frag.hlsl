@@ -62,8 +62,6 @@ float3 WorldPosFromDepth(float depth, float2 screen_uv,float4x4 inv_view_proj) {
     return pos;
 }
 
-
-
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
     uint gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
@@ -82,6 +80,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float2 uv = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
     float depth = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
     float3 normal = Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv));
+    float3 tangent = Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv));
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
     // Shoude be reconstructed from depth
     // Old code: float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
@@ -109,7 +108,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     pbrInfo.metalness = metallic_roughness.x;
 
     // - Normal
-    pbrInfo.normal = normal; // TODO: normal map
+    pbrInfo.normal = GetNormalFromNormalMap(mat.normal_map, uv, normal, tangent);
 
     // MARK: Shading
     float3 color = float3(0, 0, 0);

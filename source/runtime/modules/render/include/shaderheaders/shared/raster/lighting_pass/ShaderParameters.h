@@ -22,6 +22,7 @@ namespace Moer {
         uint material_buffer;
         uint vbuffer;
         uint gbuffer_normal;
+        uint gbuffer_tangent;
         uint gbuffer_uv;
         uint gbuffer_depth;
         uint gbuffer_position;

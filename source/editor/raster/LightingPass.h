@@ -52,6 +52,7 @@ public:
         material_param.material_buffer     = context.gpu_material_info_handle;
         material_param.vbuffer             = context.textures.vbuffer.handle;
         material_param.gbuffer_normal      = context.textures.normal.handle;
+        material_param.gbuffer_tangent     = context.textures.tangent.handle;
         material_param.gbuffer_uv          = context.textures.uv.handle;
         material_param.gbuffer_depth       = context.textures.depth_nearest_sampler.handle;
         material_param.gbuffer_position    = context.textures.position.handle;
