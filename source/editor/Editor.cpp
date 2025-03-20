@@ -102,9 +102,6 @@ void Editor::ShutDown() {
 
 void Editor::Init3rdParty() { nfd_guard = MakeUnique<NFD::Guard>(); }
 
-void Editor::ShutDown3rdParty() {
-    nfd_guard.release();
-    // TODO: check nfd_guard
-}
+void Editor::ShutDown3rdParty() { nfd_guard.release(); }
 
 } // namespace Moer

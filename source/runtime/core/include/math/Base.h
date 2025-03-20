@@ -2,6 +2,7 @@
 
 #include <type_traits>
 #include <cstdint>
+#include <format>
 
 namespace Moer {
     template<typename T>
@@ -51,6 +52,10 @@ namespace Moer {
 
         T  operator[](size_t i) const { return e[i]; }
         T& operator[](size_t i) { return e[i]; }
+
+        std::string ToString() const {
+            return std::format("({},{})", x, y);
+        }
     };
 
     template<NumericType T>
@@ -100,6 +105,10 @@ namespace Moer {
 
         T  operator[](size_t i) const { return e[i]; }
         T& operator[](size_t i) { return e[i]; }
+
+        std::string ToString() const {
+            return std::format("({},{},{})", x, y, z);
+        }
     };
 
     template<NumericType T>
@@ -142,6 +151,10 @@ namespace Moer {
 
         T  operator[](size_t i) const { return e[i]; }
         T& operator[](size_t i) { return e[i]; }
+
+        std::string ToString() const {
+            return std::format("({},{},{},{})", x, y, z, w);
+        }
     };
 
     // clang-format off

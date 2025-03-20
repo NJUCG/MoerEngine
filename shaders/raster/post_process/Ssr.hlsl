@@ -35,6 +35,7 @@ bool should_apply_ssr(float2 uv) { // the performance cost is so high
     float2 metallic_roughness = GetTextureData<float2>(
         mat.metallic_roughness_map,
         TextureHandle(param.gbuffer_uv).Sample2D<float2>(uv),
+        float2(mat.metallic_factor, mat.roughness_factor),
         float2(mat.metallic_factor, mat.roughness_factor)
     );
 

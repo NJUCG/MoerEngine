@@ -7,6 +7,9 @@
 
 #define MAX_MIP 11
 
+// Missing Texture Color (purple)
+#define MISSING_TEXTURE_COLOR float3(1.0, 0.0, 1.0)
+
 // Mip mode
 #define MIP_VISIBILITY 0 // for visibility: emission, shadow and alpha mask
 #define MIP_LESS_SHARP 1 // for normal

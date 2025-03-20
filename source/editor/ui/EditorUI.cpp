@@ -233,7 +233,6 @@ void EditorUI::ShowConfig() {
                 {"FBX", "fbx"},
                 {"Wavefront", "obj"},
                 {"Moer Renderer Scene (WIP)", "json"},
-                {"All Files", "*"},
             };
             nfdresult_t result = NFD::OpenDialog(selected_path, filters.data(), filters.size());
             if (result == NFD_OKAY) {
