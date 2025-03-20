@@ -50,6 +50,12 @@ public:
 
             for (const auto& [bitmask, vertex_buffer] :
                  vertex_buffer_map) { // for each vertex buffer (index buffer is the same)
+
+                if (bitmask == 3) {
+                    continue;
+                    // TODO: bitmask == 3，即只有position和normal，这些Mesh应该是用于动画等功能的。不应该被正常渲染
+                }
+
                 const auto& index_buffer = index_buffer_map.at(bitmask);
 
                 auto& mesh_draw_datas = mesh_draw_datas_map[bitmask];
@@ -62,7 +68,7 @@ public:
             }
 
             for (uint i = 0; i < mesh->geometries.size(); i++) {
-                uint                idx  = geom_idx + i;
+                uint                idx  = geom_idx++;
                 const MeshGeometry& geom = *mesh->geometries[i];
 
                 uint first_index    = geom.local_idx_offset;
@@ -81,14 +87,19 @@ public:
                 //          geom.local_idx_count,
                 //          geom.local_vtx_count);
 
-                auto  bitmask         = geom.mesh_buffers->vertex_factory_buffers.GetAttributesBitmask();
+                auto bitmask = geom.mesh_buffers->vertex_factory_buffers.GetAttributesBitmask();
+
+                if (bitmask == 3) {
+                    continue;
+                    // TODO: bitmask == 3，即只有position和normal，这些Mesh应该是用于动画等功能的。不应该被正常渲染
+                }
+
                 auto& mesh_draw_datas = mesh_draw_datas_map[bitmask];
 
                 mesh_draw_datas.back().EmplaceDrawIndexed(
                     first_index, index_count, first_vertex, first_instance
                 );
             }
-            geom_idx += mesh->geometries.size();
         });
 
         // 注意生命周期！
