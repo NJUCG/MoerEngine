@@ -6,7 +6,6 @@
 #include "math/Function.h"
 
 namespace Moer {
-    extern WindowInput& wndInput;
 
     //camera space axis
     const Vector3f Camera::X           = Vector3f(1.f, 0.f, 0.f);
@@ -140,7 +139,7 @@ namespace Moer {
     }
 
     void Camera::SetJitterMatrix(const Vector2f& jitter) noexcept {
-        m_jittered_matrix             = MakeTranslation(2.0f * jitter.x / wndInput.width, 2.0f * jitter.y / wndInput.height, 0.f);
+        m_jittered_matrix             = MakeTranslation(2.0f * jitter.x / WindowInput::Get().width, 2.0f * jitter.y / WindowInput::Get().height, 0.f);
         m_is_jittered_matrix_modified = true;
     }
 
@@ -376,15 +375,15 @@ namespace Moer {
     void Camera::Tick(float aspect_ratio) {
 
         if (aspect_ratio <= EPS) {
-            this->SetAspectRatio(wndInput.aspect_ratio);
+            this->SetAspectRatio(WindowInput::Get().aspect_ratio);
         } else {
             this->SetAspectRatio(aspect_ratio);
         }
 
-        if (!wndInput.is_cursor_hiding) {
+        if (!WindowInput::Get().is_cursor_hiding) {
 
             // fov & aspect_ratio
-            if (!IsZero(wndInput.scroll_offset)) {
+            if (!IsZero(WindowInput::Get().scroll_offset)) {
                 float coef;
                 if (Compare(m_fov_y, k_fov_default) <= 0) {
                     coef = (Min(k_fov_default, m_fov_y) - k_fov_min) / (k_fov_default - k_fov_min);
@@ -392,87 +391,87 @@ namespace Moer {
                     coef = (k_fov_max - Max(k_fov_default, m_fov_y)) / (k_fov_max - k_fov_default);
                 }
 
-                this->SetFov(m_fov_y - wndInput.scroll_offset * coef * k_fov_multiplier);
-                wndInput.scroll_offset = 0.0f;
+                this->SetFov(m_fov_y - WindowInput::Get().scroll_offset * coef * k_fov_multiplier);
+                WindowInput::Get().scroll_offset = 0.0f;
             }
 
         } else {
 
             // camera speed
 
-            if (wndInput.speed_up) {
-                camera_speed += k_camera_speed_up_delta * wndInput.delta_time;
+            if (WindowInput::Get().speed_up) {
+                camera_speed += k_camera_speed_up_delta * WindowInput::Get().delta_time;
                 if (camera_speed > k_camera_speed_max)
                     camera_speed = k_camera_speed_max;
             }
-            if (wndInput.speed_down) {
-                camera_speed -= k_camera_speed_down_delta * wndInput.delta_time;
+            if (WindowInput::Get().speed_down) {
+                camera_speed -= k_camera_speed_down_delta * WindowInput::Get().delta_time;
                 if (camera_speed < k_camera_speed_min)
                     camera_speed = k_camera_speed_min;
             }
-            if (wndInput.reset_speed) {
+            if (WindowInput::Get().reset_speed) {
                 camera_speed = k_camera_speed_default;
             }
 
-            float speed = 1.0 * camera_speed * k_camera_speed_multiplier * wndInput.delta_time;
+            float speed = 1.0 * camera_speed * k_camera_speed_multiplier * WindowInput::Get().delta_time;
 
             // movement
-            if (wndInput.camera_forward)
+            if (WindowInput::Get().camera_forward)
                 this->MoveFront(speed);
-            if (wndInput.camera_backward)
+            if (WindowInput::Get().camera_backward)
                 this->MoveFront(-speed);
-            if (wndInput.camera_left)
+            if (WindowInput::Get().camera_left)
                 this->MoveRight(-speed);
-            if (wndInput.camera_right)
+            if (WindowInput::Get().camera_right)
                 this->MoveRight(speed);
-            if (wndInput.camera_up)
+            if (WindowInput::Get().camera_up)
                 this->MoveUp(speed);
-            if (wndInput.camera_down)
+            if (WindowInput::Get().camera_down)
                 this->MoveUp(-speed);
 
             // rotation
 
             auto pure_rotate = [&]() {
-                this->ApplyRotation(wndInput.cursor_delta_x, wndInput.cursor_delta_y);
+                this->ApplyRotation(WindowInput::Get().cursor_delta_x, WindowInput::Get().cursor_delta_y);
             };
 
             auto rotate_with_moving = [&]() {
-                this->ApplyRotation(wndInput.cursor_delta_x, 0.f);
+                this->ApplyRotation(WindowInput::Get().cursor_delta_x, 0.f);
 
-                float speed_y = wndInput.cursor_delta_y * k_mouse_sensitivity_mouse_moving * wndInput.delta_time;
+                float speed_y = WindowInput::Get().cursor_delta_y * k_mouse_sensitivity_mouse_moving * WindowInput::Get().delta_time;
                 this->MoveForward(-speed_y);
             };
 
             auto pure_move = [&]() {
-                float speed_x = wndInput.cursor_delta_x * k_mouse_sensitivity_mouse_moving * wndInput.delta_time;
-                float speed_y = wndInput.cursor_delta_y * k_mouse_sensitivity_mouse_moving * wndInput.delta_time;
+                float speed_x = WindowInput::Get().cursor_delta_x * k_mouse_sensitivity_mouse_moving * WindowInput::Get().delta_time;
+                float speed_y = WindowInput::Get().cursor_delta_y * k_mouse_sensitivity_mouse_moving * WindowInput::Get().delta_time;
 
                 this->MoveRight(speed_x);
                 this->MoveUp(-speed_y);
             };
 
-            if (wndInput.cursor_delta_x || wndInput.cursor_delta_y) {
+            if (WindowInput::Get().cursor_delta_x || WindowInput::Get().cursor_delta_y) {
 
                 // unreal style camera control
-                if (wndInput.key_button_switch_state[KeyButtons::F]) {
+                if (WindowInput::Get().key_button_switch_state[KeyButtons::F]) {
                     pure_rotate();
-                } else if (wndInput.mouse_button_state[MouseButtons::Left] && wndInput.mouse_button_state[MouseButtons::Right]) {
+                } else if (WindowInput::Get().mouse_button_state[MouseButtons::Left] && WindowInput::Get().mouse_button_state[MouseButtons::Right]) {
                     pure_move();
-                } else if (wndInput.mouse_button_state[MouseButtons::Middle]) {
+                } else if (WindowInput::Get().mouse_button_state[MouseButtons::Middle]) {
                     pure_move();
-                } else if (wndInput.mouse_button_state[MouseButtons::Right]) {
+                } else if (WindowInput::Get().mouse_button_state[MouseButtons::Right]) {
                     pure_rotate();
-                } else if (wndInput.mouse_button_state[MouseButtons::Left]) {
+                } else if (WindowInput::Get().mouse_button_state[MouseButtons::Left]) {
                     rotate_with_moving();
                 }
 
-                wndInput.cursor_delta_x = 0.0f;
-                wndInput.cursor_delta_y = 0.0f;
+                WindowInput::Get().cursor_delta_x = 0.0f;
+                WindowInput::Get().cursor_delta_y = 0.0f;
             }
         }
 
         UpdateAllDerivedProperties();
-        elapsed_time = wndInput.delta_time;
+        elapsed_time = WindowInput::Get().delta_time;
     }
 
     CameraRef Camera::CreateDefaultCamera() {
@@ -496,7 +495,7 @@ namespace Moer {
     }
 
     float Camera::GetDeletaTime() const noexcept {
-        return wndInput.delta_time;
+        return WindowInput::Get().delta_time;
     }
 
     std::string Camera::ToString() {

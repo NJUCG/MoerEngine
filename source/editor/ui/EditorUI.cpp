@@ -2,6 +2,7 @@
 
 // Runtime
 #include "config/ConfigManager.h"
+#include "window/WindowInput.h"
 
 // Editor
 #include "EditorUIStyle.h"
@@ -151,6 +152,13 @@ void EditorUI::ShowSceneColor() {
         // Should not call ImGui::End() here
         return;
     }
+
+    // inject. Needs to be refactored (camera control)
+    // 只有在Cursor位于SceneColor窗口上时，才可以控制摄像机
+    if (WindowInput::Get().is_cursor_hiding == false) {
+        WindowInput::Get().is_active = ImGui::IsWindowHovered();
+    }
+
     float2 scene_size = {0, 0};
 
     static float2 xy_ratio = {16, 9};

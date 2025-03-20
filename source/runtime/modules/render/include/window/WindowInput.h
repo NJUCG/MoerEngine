@@ -52,7 +52,10 @@ namespace Moer {
 
     // restores the input information after processing (including camera control logic)
 
-    struct WindowInput {
+    struct RENDER_API WindowInput {
+        // inject
+        bool is_active = true;
+
         // cursor
         float cursor_last_x  = 0.0f;
         float cursor_last_y  = 0.0f;
@@ -91,13 +94,11 @@ namespace Moer {
         StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_switch_state = {false};// Press once to switch state
 
         // singleton
-        static WindowInput& GetInstance();
+        static WindowInput& Get() {
+            static WindowInput wndInput;
+            return wndInput;
+        }
     };
-
-    inline WindowInput& WindowInput::GetInstance() {
-        static WindowInput wndInput;
-        return wndInput;
-    }
 }// namespace Moer
 
 #endif
