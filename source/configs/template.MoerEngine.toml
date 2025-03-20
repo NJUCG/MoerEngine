@@ -27,4 +27,5 @@ default_render_method = "Raster"
 
 [engine.scene]
 # 注：Toml中使用单引号包裹路径，可以避免反斜杠被识别为转义符
+# 注：scene_path支持绝对路径
 scene_path = './asset/scenes/sponza/Sponza.gltf'

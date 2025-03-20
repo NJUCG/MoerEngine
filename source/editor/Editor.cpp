@@ -31,6 +31,9 @@ Editor::Editor() {}
 Editor::~Editor() {}
 
 void Editor::Init(int argc, const char** argv) {
+    // Init LogSystem
+    LogSystem::Init(); // for LOG_DEBUG & LOG_TRACE when debug mode
+
     // Init ConfigManager
     std::filesystem::path path = argv[0];
     ConfigManager::GetInstance().Init(

@@ -64,7 +64,7 @@ namespace Moer {
     void Engine::InitCore(const std::filesystem::path& workspace_path) {
         ConfigManager::GetInstance().Init(workspace_path);
         TaskSystem::Init();
-        LogSystem::Init();
+        // LogSystem::Init();
     }
     void Engine::ShutDownCore() {
         TaskSystem::ShutDown();

@@ -5,7 +5,6 @@
 #include <functional>
 #include <algorithm>
 #include <iostream>
-#include "spdlog/spdlog.h"
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
 
