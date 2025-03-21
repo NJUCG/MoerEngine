@@ -23,7 +23,7 @@ namespace Moer {
         return instance;
     }
 
-    void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
+    void ConfigManager::Init(const std::filesystem::path _workspace_path) {
         // pathes
         workspace_path            = _workspace_path;
         editor_resource_path      = _workspace_path / "resource";

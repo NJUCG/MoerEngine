@@ -155,7 +155,7 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
     float3 local_normal = Moer::Interpolate(normals, barycentrics);
 
     geo_record.normal =
-        normalize(mul((float3x3)geo_record.instance.model2world, local_normal));
+        normalize(mul(geo_record.instance.model2world, float4(local_normal, 0.f)));
 
     if (_b_backface) {
       geo_record.normal = -geo_record.normal;
@@ -175,7 +175,7 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
 
     geo_record.tangent = Moer::Interpolate(tangents, barycentrics);
     geo_record.tangent = normalize(
-        mul((float3x3)geo_record.instance.model2world, geo_record.tangent));
+        mul(geo_record.instance.model2world, float4(geo_record.tangent, 0.f)));
   }
 
   return geo_record;
@@ -272,8 +272,8 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
 
   MaterialSample result = MaterialSample::ConstructDefault();
   // currently use geometry normal
-  // result.normal = normalize(normal.xyz);
-  result.normal = _geo_record.normal;
+  result.normal = normalize(normal.xyz);
+  // result.normal = _geo_record.normal;
 
   // use metallic roughness workflow
 

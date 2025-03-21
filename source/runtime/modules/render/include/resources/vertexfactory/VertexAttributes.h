@@ -36,23 +36,27 @@ namespace Moer {
 
     class VertexAttributesTool {
     public:
-        static size_t GetSize(EVertexAttributes attr) {
-            switch (attr) {
+        static size_t GetSize(EVertexAttributes _attr) {
+            switch (_attr) {
 #define X(E, T, PF) \
     case EVertexAttributes::E: return sizeof(T);
                 VERTEX_ATTRIBUTES_TABLE
 #undef X
+                default:
+                    break;
             }
             assert(false && "Invalid EVertexAttributes");
             return 0;
         }
 
-        static EPixelFormat GetPixelFormat(EVertexAttributes attr) {
-            switch (attr) {
+        static EPixelFormat GetPixelFormat(EVertexAttributes _attr) {
+            switch (_attr) {
 #define X(E, T, PF) \
     case EVertexAttributes::E: return PF;
                 VERTEX_ATTRIBUTES_TABLE
 #undef X
+                default:
+                    break;
             }
             assert(false && "Invalid EVertexAttributes");
             return EPixelFormat::PF_UNDEFINED;

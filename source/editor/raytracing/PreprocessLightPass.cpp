@@ -193,7 +193,7 @@ static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
         case Moer::ELightComponentType::POINT: {
             PointLightComponent* point_light = static_cast<PointLightComponent*>(&_light);
             float3               flux        = point_light->GetColor() * point_light->GetIntensity();
-            _info.color_type_flags = (uint)EPolyLightType::ELSphere << g_poly_morphic_light_type_shift;
+            _info.color_type_flags = (uint)EPolyLightType::ELPoint << g_poly_morphic_light_type_shift;
             PackPolyLightColor(flux, _info);
             _info.center = point_light->GetPosition();
             break;

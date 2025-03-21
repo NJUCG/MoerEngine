@@ -166,9 +166,9 @@ namespace Moer {
 
     // static constexpr std::string SCENE_CACHE_EXT_SPECIFY = ".MOERSCENE";
 
-    static std::filesystem::path RemapScenePath(const std::filesystem::path& path) {
-        long long time       = std::filesystem::last_write_time(path).time_since_epoch().count();
-        auto      cache_path = (ConfigManager::GetInstance().GetCachePath() / std::format("{}_{}", path.filename().generic_string(), uint64(time)));
+    static std::filesystem::path RemapScenePath(const std::filesystem::path& _path) {
+        long long time       = std::filesystem::exists(_path) ?  std::filesystem::last_write_time(_path).time_since_epoch().count() : 0;
+        auto      cache_path = (ConfigManager::GetInstance().GetCachePath() / std::format("{}_{}", _path.filename().generic_string(), uint64(time)));
         return cache_path.generic_string() + ".MOERSCENE";
     }
 
