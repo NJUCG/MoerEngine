@@ -142,6 +142,7 @@ namespace Moer::Render {
         UnorderedMap<VulkanBuffer*, BufferState>   buffer_states;
         UnorderedMap<VulkanTexture*, TextureState> texture_states;
         Set<VulkanTexture*>                        exported_textures;
+        Set<VulkanBuffer*>                         exported_buffers;
 
         Set<VulkanBuffer*>  pending_buffers;
         Set<VulkanTexture*> pending_textures;

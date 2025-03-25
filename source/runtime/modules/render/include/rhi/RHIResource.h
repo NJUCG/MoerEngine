@@ -650,7 +650,7 @@ namespace Moer::Render {
         BufferView(Buffer* _buffer, uint64 _byte_offset, uint64 _num_elements, uint _stride) : buffer(_buffer),
                                                                                                byte_offset(_byte_offset),
                                                                                                num_elements(_num_elements),
-                                                                                               stride(_stride) {};
+                                                                                               stride(_stride){};
         uint          GetNumElements() const { return num_elements; }
         uint          GetStride() const { return stride; }
         uint64        GetByteOffset() const { return byte_offset; }
@@ -896,6 +896,12 @@ namespace Moer::Render {
         friend class UpdateBindlessArrayCmd;
 
         virtual UniquePtr<class Command> CreateUpdateCommand() = 0;
+    };
+
+    struct ArrayArgReference {
+        uint handle;
+
+        uint operator()() const { return handle; }
     };
 
     /// <summary>
@@ -1704,7 +1710,7 @@ class RHIViewport : public RHIResource {
 
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
-    virtual ~RHIViewport() {};
+    virtual ~RHIViewport(){};
     virtual void* GetNativeSwapchain() const { return nullptr; }
     virtual void* GetNativeWindow(void** _params) const { return nullptr; }
 
@@ -2543,7 +2549,7 @@ struct RHIShaderMapRef {
 
 struct RHIShaderBoundStateInput : public RHIResource {
 
-    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE) {};
+    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE){};
 
     RHIShaderBoundStateInput(
         RHIVertexInputState* _vertex_input_state,
@@ -3047,6 +3053,7 @@ namespace Moer::Render {
         SDA_Constant,
         SDA_BindlessArray,
         SDA_TLAS,
+        SDA_Reference,
         SDA_Num
     };
 
@@ -3461,7 +3468,7 @@ namespace Moer::Render {
 
     class RENDER_API Swapchain : public RHIResource {
     protected:
-        Swapchain() : RHIResource(RRT_SWAPCHAIN) {};
+        Swapchain() : RHIResource(RRT_SWAPCHAIN){};
 
     public:
         virtual void Recreate(const SwapchainCreateInfo&) = 0;

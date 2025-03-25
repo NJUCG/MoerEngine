@@ -111,7 +111,7 @@ void RTResource::LoadResources() {
         // auto          sync_time = device.GetCopyQueue().Execute(cmd_list.Submit());
         // device.GetCopyQueue().Sync(sync_time.timeline);
 
-        cmd_list.ExportTextureToQueue(EQueueType::Graphics, std::move(exp_textures));
+        cmd_list.ExportResourcesToQueue(EQueueType::Graphics, std::move(exp_textures), {});
 
         auto sync_time = device.GetCopyQueue().Execute(cmd_list.Submit());
         device.GetCopyQueue().Sync(sync_time.timeline);

@@ -73,7 +73,14 @@ namespace Moer::Render {
     CommandList::ComputeDispatcher::ComputeDispatcher(
         ComputePipeline& _pso,
         CommandList&     _cmd_list)
-        : cmd_list(_cmd_list), pso(_pso), args({}) {
+        : cmd_list(_cmd_list), pso(_pso), args(TEmptyShaderArg{}) {
+    }
+
+    CommandList::ComputeDispatcher::ComputeDispatcher(
+        ComputePipeline&  _pso,
+        CommandList&      _cmd_list,
+        ArrayArgReference _arg_ref)
+        : cmd_list(_cmd_list), pso(_pso), args(_arg_ref) {
     }
 
     CommandList::DrawDispatcher::DrawDispatcher(
@@ -111,7 +118,7 @@ namespace Moer::Render {
     }
 
     CmdSubmit CommandList::Submit() {
-        CmdSubmit submit(std::move(commands), std::move(callbacks), bindless_array);
+        CmdSubmit submit(std::move(commands), std::move(callbacks), std::move(cached_args));
         commands.clear();
         callbacks.clear();
         return std::move(submit);
@@ -354,13 +361,18 @@ namespace Moer::Render {
         current_barriers = nullptr;
     }
 
-    void CommandList::ImportTextureFromQueue(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import) {
+    void CommandList::ImportResourcesFromQueue(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import, Array<ImportBuffer>&& _buffers_to_import) {
         // QueueTransferCmd cmd(_src_queue, std::move(_textures_to_import));
-        commands.emplace_back(MakeUnique<QueueTransferCmd>(_src_queue, std::move(_textures_to_import)));
+        commands.emplace_back(MakeUnique<QueueTransferCmd>(_src_queue, std::move(_textures_to_import), std::move(_buffers_to_import)));
     }
 
-    void CommandList::ExportTextureToQueue(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export) {
-        commands.emplace_back(MakeUnique<QueueTransferCmd>(_dst_queue, std::move(_textures_to_export)));
+    void CommandList::ExportResourcesToQueue(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export, Array<ExportBuffer>&& _buffers_to_export) {
+        commands.emplace_back(MakeUnique<QueueTransferCmd>(_dst_queue, std::move(_textures_to_export), std::move(_buffers_to_export)));
+    }
+
+    ArrayArgReference CommandList::RegisterArgs(ArrayArguments&& _args) {
+        cached_args.push_back(std::move(_args));
+        return ArrayArgReference(cached_args.size() - 1);
     }
 
 }// namespace Moer::Render

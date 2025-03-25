@@ -12,6 +12,7 @@
 #include "rhi/RHIResource.h"
 
 #include "VulkanCustomCommand.h"
+#include "shader/ShaderPipeline.h"
 #include "vulkan/vulkan_core.h"
 
 #include <memory>
@@ -111,9 +112,10 @@ namespace Moer::Render {
         VulkanDevice&    device;
         EQueueType       current_queue;
 
-        UnorderedSet<uint64> writed_resources;
+        UnorderedSet<uint64>   writed_resources;
+        const TCachedArgArray& cached_args;
 
-        VkCmdPreprocessor(VulkanDevice& _device, VkTracker& _tracker, VulkanAllocator& _allocator, FunctionTable _funcs, EQueueType _current_queue = EQueueType::Graphics) : device(_device), tracker(_tracker), allocator(_allocator), m_funcs(_funcs), current_queue(_current_queue) {}
+        VkCmdPreprocessor(VulkanDevice& _device, VkTracker& _tracker, VulkanAllocator& _allocator, FunctionTable _funcs, const TCachedArgArray& _cached_args, EQueueType _current_queue = EQueueType::Graphics) : device(_device), tracker(_tracker), allocator(_allocator), m_funcs(_funcs), cached_args(_cached_args), current_queue(_current_queue) {}
         void HandleBindless(BindlessArrayRef _bindless_array, VkPipelineStageFlagBits2 _pipeline_stages) {
             EPassType pass_type = EPassType::Graphics;
             if (_pipeline_stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT) {
@@ -372,7 +374,7 @@ namespace Moer::Render {
                     HandleBindless(std::get<BindlessArrayRef>(_arg), pipeline.binding_infos[_idx].pipeline_flags);
             };
 
-            _cmd->IterateArgs(func, bdls_post_func);
+            IterateArgs(_cmd->Args(cached_args), func, bdls_post_func);
 
             // auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
             //     VisitArgs(_arg, _flag.state_flags, _flag.pipeline_flags);
@@ -537,6 +539,17 @@ namespace Moer::Render {
                         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
                 }
 
+                for (auto& barrier : _cmd->ImportBuffers()) {
+                    auto* vk_buffer = ResourceCast(barrier.buffer.GetBuffer());
+                    auto  access    = tracker.ReadBuffer(vk_buffer, barrier.state);
+                    tracker.QueueTransferAcquireResource(
+                        vk_buffer,
+                        device.GetQueueFamilyIndex(_cmd->src_queue),
+                        device.GetQueueFamilyIndex(_cmd->dst_queue),
+                        VK_ACCESS_2_NONE,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+                }
+
             } else {
                 _cmd->src_queue = temp_queue;
 
@@ -549,6 +562,15 @@ namespace Moer::Render {
                         device.GetQueueFamilyIndex(_cmd->dst_queue),
                         vk_texture->GetQueuePreferredLayout(_cmd->src_queue),
                         std::get<1>(access));
+                }
+
+                for (auto& barrier : _cmd->ExportBuffers()) {
+                    auto* vk_buffer = ResourceCast(barrier.buffer.GetBuffer());
+                    auto  access    = tracker.ReadBuffer(vk_buffer, barrier.state);
+                    tracker.QueueTransferReleaseResource(
+                        vk_buffer,
+                        device.GetQueueFamilyIndex(_cmd->src_queue),
+                        device.GetQueueFamilyIndex(_cmd->dst_queue));
                 }
             }
         }
@@ -778,14 +800,15 @@ namespace Moer::Render {
             Draw,
             Common
         } state = EState::Common;
-        VulkanCmdList&   cmd_list;
-        VulkanAllocator& allocator;
-        VkTracker&       tracker;
+        VulkanCmdList&         cmd_list;
+        VulkanAllocator&       allocator;
+        VkTracker&             tracker;
+        const TCachedArgArray& cached_args;
 
     public:
-        VkCmdVisitor(VulkanDevice& _device, VulkanAllocator& _allocator, VkTracker& _tracker, VulkanCmdList& _cmd_list) : VulkanDeviceObject(&_device),
-                                                                                                                          allocator(_allocator), tracker(_tracker),
-                                                                                                                          cmd_list(_cmd_list) {}
+        VkCmdVisitor(VulkanDevice& _device, VulkanAllocator& _allocator, VkTracker& _tracker, VulkanCmdList& _cmd_list, const TCachedArgArray& _cached_args) : VulkanDeviceObject(&_device),
+                                                                                                                                                               allocator(_allocator), tracker(_tracker),
+                                                                                                                                                               cmd_list(_cmd_list), cached_args(_cached_args) {}
 
         void VisitCmd(const Command* _cmd) {
             switch (_cmd->Type()) {
@@ -977,7 +1000,7 @@ namespace Moer::Render {
 
             PipelineHandle& pso = _cmd.Pipeline();
             cmd_list.SetPso(_cmd.Pipeline());
-            const auto& args = _cmd.Args();
+            const auto& args = _cmd.Args(cached_args);
 
             cmd_list.BindDescriptors(pso, args);
 
@@ -1879,7 +1902,7 @@ namespace Moer::Render {
             .lock_bdls_array         = &LockBindlessArray,
             .unlock_bdls_array       = &UnlockBindlessArray};
 
-        CmdReorderer reorderer{function_table};
+        CmdReorderer reorderer{function_table, _submit.cached_args};
         //reorder commands base on resource read/write and manual scope
         for (const auto& cmd : _submit.cmds) {
             reorderer.AcceptCmd(cmd.get());
@@ -1894,10 +1917,10 @@ namespace Moer::Render {
         auto& tracker = vk_allocator.GetTracker();
 
         //Visitor for actual command recording
-        VkCmdVisitor visitor(vk_device, vk_allocator, tracker, vk_allocator.GetCmdList());
+        VkCmdVisitor visitor(vk_device, vk_allocator, tracker, vk_allocator.GetCmdList(), _submit.cached_args);
 
         //Visitor for barrier generation
-        VkCmdPreprocessor preprocessor(vk_device, tracker, vk_allocator, function_table);
+        VkCmdPreprocessor preprocessor(vk_device, tracker, vk_allocator, function_table, _submit.cached_args);
 
         timer.Stop();
         // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
@@ -2251,7 +2274,7 @@ namespace Moer::Render {
                 .is_resource_read        = &IsBufferTextureRead,
                 .is_texture_sampled      = &IsTextureSampled,
                 .is_resource_in_bindless = &IsResourceInBindlessArray};
-            CmdReorderer reorderer{function_table};
+            CmdReorderer reorderer{function_table, _evt.cached_args};
 
             std::unique_lock<std::mutex> lk(exec_mutex);
             auto                         allocator    = GetAllocator();
@@ -2259,8 +2282,8 @@ namespace Moer::Render {
             auto&                        vk_cmd_list  = vk_allocator.GetCmdList();
             auto&                        vk_tracker   = vk_allocator.GetTracker();
 
-            VkCmdPreprocessor preprocessor(device, vk_tracker, vk_allocator, {}, EQueueType::Copy);
-            VkCmdVisitor      visitor(device, vk_allocator, vk_tracker, vk_cmd_list);
+            VkCmdPreprocessor preprocessor(device, vk_tracker, vk_allocator, {}, _evt.cached_args, EQueueType::Copy);
+            VkCmdVisitor      visitor(device, vk_allocator, vk_tracker, vk_cmd_list, _evt.cached_args);
 
             for (const auto& cmd : cmds) {
                 // preprocessor.VisitCmd(cmd.get());

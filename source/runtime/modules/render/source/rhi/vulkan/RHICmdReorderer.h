@@ -11,6 +11,7 @@
 #include <variant>
 #include "../RHIImpl.h"
 #include "rhi/RHIResource.h"
+#include "shader/ShaderPipeline.h"
 /**
  * @brief Copy From Luisa Runtime(LC) src/backends/common/command_reorder_visitor.h with respect
  * 
@@ -143,7 +144,7 @@ namespace Moer::Render {
     class CmdReorderer {
 
     public:
-        CmdReorderer(FunctionTable _funcs) : m_arena(65556), m_arena_stl(m_arena), m_funcs(_funcs) {}
+        CmdReorderer(FunctionTable _funcs, const TCachedArgArray& _arg) : m_arena(65556), m_arena_stl(m_arena), m_funcs(_funcs), m_cached_arg_refs(_arg) {}
         ~CmdReorderer() {
         }
         enum class ResourceRW : uint8 {
@@ -327,6 +328,8 @@ namespace Moer::Render {
         ArenaAllocator                      m_arena;
         ArenaAllocatorWrapper<ResourceView> m_arena_stl;
         FunctionTable                       m_funcs;
+
+        const TCachedArgArray& m_cached_arg_refs;
 
         int64 layer_offset = -1;
 
@@ -937,7 +940,7 @@ namespace Moer::Render {
                 }
             };
 
-            _cmd->IterateArgs(func, bdls_post_func);
+            IterateArgs(_cmd->Args(m_cached_arg_refs), func, bdls_post_func);
 
             for (const auto& write_res : m_arg_write_resources) {
                 RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);

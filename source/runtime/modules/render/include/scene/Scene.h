@@ -365,8 +365,6 @@ namespace Moer {
         void SetIndexBuffer(Render::BufferRef _buffer) noexcept;
         void SetInstanceBuffer(Render::BufferRef _buffer) noexcept;
 
-        Render::BufferRef        GetVertexBuffer() const noexcept;
-        Render::BufferRef        GetIndexBuffer() const noexcept;
         Render::BufferRef        GetInstanceBuffer() const noexcept;
         Render::BindlessArrayRef GetBindlessArray() const noexcept;
 
@@ -377,7 +375,14 @@ namespace Moer {
         std::span<const UnorderedMap<VertexAttributesBitmask, Render::IndexBuffer>>         GetIndexBufferViews();
         std::span<const Render::GeometryInstance>                                           GetGeometryInstances() const noexcept;
 
+        std::span<const Render::BufferRef> GetIOPendingBuffers() const noexcept;
+        void                               ClearIOPendingBuffers() noexcept;
+
     protected:
+        friend class SceneCache;
+        void EmplaceIOImportedBuffer(Render::BufferRef _buffer);
+
+    private:
         class Impl;
         Impl* m_impl = nullptr;
     };
@@ -389,7 +394,6 @@ namespace Moer {
             StaticArray<Render::BufferRef, (uint32_t)EGpuSceneResource::Num> buffers;
         } global_resources;
         Render::RaytracingSceneRef rt_scene{nullptr};
-        Render::BufferRef          vertex_buffer{nullptr}, index_buffer{nullptr};
         Render::BindlessArrayRef   bindless_array{nullptr};
 
         UnorderedMap<std::string, SceneTexture> material_textures;

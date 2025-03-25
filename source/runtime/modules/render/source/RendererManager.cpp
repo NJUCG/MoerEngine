@@ -19,15 +19,15 @@ namespace Moer {
     };
 
     BackendRenderer* GetRender(std::string renderer_name) {
-        if (renderer_name == MOER_3D_GAUSSIAN_SPLATTING_RENDERER_NAME) {
-            return MoerNew(SplattingRender);
-        }
-        if (renderer_name == MOER_DEFERRED_RENDERER_NAME) {
-            return MoerNew(DeferredRenderer);
-        }
-        if (renderer_name == MOER_MESH_RENDERER_NAME) {
-            return MoerNew(MeshDebugRenderer);
-        }
+        // if (renderer_name == MOER_3D_GAUSSIAN_SPLATTING_RENDERER_NAME) {
+        //     return MoerNew(SplattingRender);
+        // }
+        // if (renderer_name == MOER_DEFERRED_RENDERER_NAME) {
+        //     return MoerNew(DeferredRenderer);
+        // }
+        // if (renderer_name == MOER_MESH_RENDERER_NAME) {
+        //     return MoerNew(MeshDebugRenderer);
+        // }
         return nullptr;
     }
 

@@ -6,6 +6,8 @@
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
 #include "RasterTextures.h"
+#include <config/ConfigManager.h>
+#include <shader/ShaderResourceManager.h>
 
 namespace Moer::Render {
 

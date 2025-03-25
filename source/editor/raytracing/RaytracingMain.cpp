@@ -5,6 +5,7 @@
 #include "loader/LoaderInterface.h"
 #include "misc/Timer.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
 #include "rhi/extension//NrdExtension.h"
 #include "scene/CameraManager.h"
 #include "scene/EntityManager.h"
@@ -527,7 +528,16 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
                         ));
                     }
 
-                    cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
+                    Array<ImportBuffer> io_buffers;
+                    io_buffers.reserve(scene.GetIOPendingBuffers().size());
+
+                    for (auto& buffer : scene.GetIOPendingBuffers()) {
+                        io_buffers.emplace_back(ImportBuffer(buffer->GetView()));
+                    }
+
+                    cmd_list.ImportResourcesFromQueue(
+                        EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers)
+                    );
 
                     cmd_list.UpdateRaytracingScene(rt_scene);
                 }
@@ -572,7 +582,7 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
                                 ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE)
                             );
                         }
-                        cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(import_textures));
+                        cmd_list.ImportResourcesFromQueue(EQueueType::Copy, std::move(import_textures), {});
                     }
                     gfx_queue.Execute(
                         cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue())

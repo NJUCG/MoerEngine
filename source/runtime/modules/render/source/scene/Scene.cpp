@@ -53,10 +53,15 @@ namespace Moer {
         std::span<const Render::GeometryData>     GetGeometryDatas() const noexcept { return geometry_datas; }
         std::span<const Render::InstanceData>     GetInstanceDatas() const noexcept { return instance_datas; }
         std::span<const Render::GeometryInstance> GetGeometryInstances() { return geom_instances; }
-        void                                      SetCurrentEnvMap(EnvMapResource _env_map) { cur_env_map = _env_map; }
-        EnvMapResource                            GetCurrentEnvMap() const { return cur_env_map; }
+        std::span<const Render::BufferRef>        GetIOPendingBuffers() const noexcept { return io_pending_buffers; }
+        void                                      ClearIOPendingBuffers() noexcept { io_pending_buffers.clear(); }
+
+        void           SetCurrentEnvMap(EnvMapResource _env_map) { cur_env_map = _env_map; }
+        EnvMapResource GetCurrentEnvMap() const { return cur_env_map; }
+        void           EmplaceIOImportedBuffer(Render::BufferRef _buffer) { io_pending_buffers.emplace_back(_buffer); }
 
     protected:
+    private:
         Map<std::string, RHIBufferRef> m_buffers;
         Map<std::string, RHIUAVRef>    m_uavs;
         Map<std::string, RHISRVRef>    m_srvs;
@@ -75,6 +80,8 @@ namespace Moer {
         Array<Render::GeometryInstance>                                           geom_instances;
 
         EnvMapResource cur_env_map{};
+
+        Array<Render::BufferRef> io_pending_buffers;
     };
     AsyncSceneLoadInfoRef Scene::Impl::m_load_info{nullptr};
 
@@ -336,27 +343,27 @@ namespace Moer {
         return m_impl->GetGeometryInstances();
     }
 
-    void Scene::SetVertexBuffer(Render::BufferRef _buffer) noexcept {
-        m_impl->gpu_scene.vertex_buffer = _buffer;
-    }
-
-    void Scene::SetIndexBuffer(Render::BufferRef _buffer) noexcept {
-        m_impl->gpu_scene.index_buffer = _buffer;
-    }
     void Scene::SetInstanceBuffer(Render::BufferRef _buffer) noexcept {
         m_impl->gpu_scene.global_resources.buffers[(uint32_t)EGpuSceneResource::InstanceInfo] = _buffer;
     }
-    Render::BufferRef Scene::GetVertexBuffer() const noexcept {
-        return m_impl->gpu_scene.vertex_buffer;
-    }
-    Render::BufferRef Scene::GetIndexBuffer() const noexcept {
-        return m_impl->gpu_scene.index_buffer;
-    }
+
     Render::BufferRef Scene::GetInstanceBuffer() const noexcept {
         return m_impl->gpu_scene.GetGpuBuffer(EGpuSceneResource::InstanceInfo);
     }
     Render::BindlessArrayRef Scene::GetBindlessArray() const noexcept {
         return m_impl->gpu_scene.bindless_array;
+    }
+
+    std::span<const Render::BufferRef> Scene::GetIOPendingBuffers() const noexcept {
+        return m_impl->GetIOPendingBuffers();
+    }
+
+    void Scene::ClearIOPendingBuffers() noexcept {
+        m_impl->ClearIOPendingBuffers();
+    }
+
+    void Scene::EmplaceIOImportedBuffer(Render::BufferRef _buffer) {
+        m_impl->EmplaceIOImportedBuffer(_buffer);
     }
 
     AsyncSceneLoadInfoRef Scene::GetCurrentSceneLoadInfo() noexcept {

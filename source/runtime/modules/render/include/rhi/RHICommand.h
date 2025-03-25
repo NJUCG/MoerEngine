@@ -431,7 +431,7 @@ namespace Moer::Render {
     struct CmdSubmit {
         Array<UniquePtr<Command>>        cmds;
         Array<std::function<void(void)>> callbacks;
-        BindlessArrayRef                 bindless_array{nullptr};
+        TCachedArgArray                  cached_args;
 
         Array<WaitEvent>   wait_events;
         Array<SignalEvent> signal_events;
@@ -456,6 +456,7 @@ namespace Moer::Render {
             callbacks     = std::move(_other.callbacks);
             wait_events   = std::move(_other.wait_events);
             signal_events = std::move(_other.signal_events);
+            cached_args   = std::move(_other.cached_args);
             b_sync        = _other.b_sync;
         }
 
@@ -464,10 +465,12 @@ namespace Moer::Render {
             callbacks     = std::move(_other.callbacks);
             wait_events   = std::move(_other.wait_events);
             signal_events = std::move(_other.signal_events);
+            cached_args   = std::move(_other.cached_args);
             b_sync        = _other.b_sync;
             return *this;
         }
-        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks, BindlessArrayRef _bindless_array) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)), bindless_array(_bindless_array) {
+        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks, TCachedArgArray&& _cached_args) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)),
+                                                                                                                                      cached_args(std::move(_cached_args)) {
         }
 
         std::string ToString() const {
@@ -656,14 +659,7 @@ namespace Moer::Render {
             ArrayArguments  args;
 
         private:
-            // void SubmitArgsIfPossible();
-
-            // bool HasParams() const {
-            //     return b_set_params;
-            // }
-            // ArgSetter arg_setter;
-            // bool      b_set_params = false;
-            // bool      b_set_consts = false;
+            TCachedArgArray args_cache;
         };
 
         struct RENDER_API DrawGeometryPassDispatcher {
@@ -706,6 +702,7 @@ namespace Moer::Render {
             void DispatchIndirect(BufferView, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch], ProfileSection _section = ProfileSection("Other"));
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list);
+            ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArgReference _args);
             // template<typename T>
             // ComputeDispatcher& SetParam(std::string_view _name, T&& _param) {
             //     arg_setter.SetParam(_name, std::forward<T>(_param));
@@ -720,7 +717,7 @@ namespace Moer::Render {
             // }
             ComputePipeline& pso;
             CommandList&     cmd_list;
-            ArrayArguments   args;
+            TShaderArgArray  args;
 
         private:
             // void SubmitArgsIfPossible();
@@ -766,6 +763,11 @@ namespace Moer::Render {
                 return ComputeDispatcher(_pso, *this, std::move(args));
             }
             return ComputeDispatcher(_pso, *this);
+        };
+
+        template<typename TComputePso>
+        ComputeDispatcher Compute(TComputePso& _pso, ArrayArgReference _arg_ref) {
+            return ComputeDispatcher(_pso, *this, _arg_ref);
         };
 
         template<typename TRTPso, typename... TArgs>
@@ -878,8 +880,8 @@ namespace Moer::Render {
             EndBarriers();
         }
 
-        RENDER_API void ImportTextureFromQueue(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import);
-        RENDER_API void ExportTextureToQueue(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export);
+        RENDER_API void ImportResourcesFromQueue(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import, Array<ImportBuffer>&& _buffers_to_import);
+        RENDER_API void ExportResourcesToQueue(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export, Array<ExportBuffer>&& _buffers_to_export);
 
 #pragma region[ raytracing ]
 
@@ -896,6 +898,8 @@ namespace Moer::Render {
 #pragma endregion
 
         RENDER_API void AddCallback(std::function<void()>&& _callback);
+
+        RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
         RENDER_API CmdSubmit Submit();
 
@@ -942,7 +946,7 @@ namespace Moer::Render {
         Array<UniquePtr<Command>>    commands;
         Command*                     current_barriers{nullptr};
         Array<std::function<void()>> callbacks;
-        BindlessArrayRef             bindless_array{nullptr};
+        TCachedArgArray              cached_args;
     };
     class QueueCmd {};
 

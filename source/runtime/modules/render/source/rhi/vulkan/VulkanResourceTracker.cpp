@@ -451,18 +451,6 @@ namespace Moer::Render {
         RecordState(_texture, std::get<0>(_state), std::get<1>(_state), std::get<2>(_state), 0, _texture->GetNumMips(), _src_queue_family, _dst_queue_family);
     }
 
-    void VkTracker::QueueTransferReleaseResource(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue) {
-
-        pending_buffers.insert(_buffer);
-        if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
-            auto& state            = it->second;
-            state.src_queue_family = _src_queue;
-            state.dst_queue_family = _dst_queue;
-        } else {
-            buffer_states[_buffer] = {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_NONE, _src_queue, _dst_queue};
-        }
-    }
-
     void GetInitImageLayoutAndAccess(VulkanTexture* _texture, VkImageLayout& _layout, VkAccessFlags2& _access, EQueueType _queue) {
         if (!_texture->b_has_preferred_state) {
             _layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -495,6 +483,20 @@ namespace Moer::Render {
             texture_states[_texture] = state;
         }
         exported_textures.insert(_texture);
+    }
+
+    void VkTracker::QueueTransferReleaseResource(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue) {
+
+        pending_buffers.insert(_buffer);
+        if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
+            auto& state            = it->second;
+            state.src_queue_family = _src_queue;
+            state.dst_queue_family = _dst_queue;
+            state.dst_stage        = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        } else {
+            buffer_states[_buffer] = {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_NONE, _src_queue, _dst_queue};
+        }
+        exported_buffers.insert(_buffer);
     }
 
     void VkTracker::QueueTransferAcquireResource(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue, VkAccessFlagBits2 _dst_access, VkPipelineStageFlagBits2 _dst_stage) {
@@ -612,7 +614,7 @@ namespace Moer::Render {
 
         for (VulkanBuffer* buffer : pending_buffers) {
 
-            if (auto it = buffer_states.find(buffer); it != buffer_states.end()) {
+            if (auto it = buffer_states.find(buffer); it != buffer_states.end() && exported_buffers.find(buffer) == exported_buffers.end()) {
                 auto& state = it->second;
                 if (((state.dst_access & VK_ACCESS_2_SHADER_WRITE_BIT) == 0) && state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
                     state.dst_access       = VK_ACCESS_2_NONE;
@@ -738,6 +740,7 @@ namespace Moer::Render {
         VkAccessFlags2        src_buffer_access = VK_ACCESS_2_NONE;
         VkPipelineStageFlags2 src_buffer_stages = VK_PIPELINE_STAGE_2_NONE;
         for (auto& [buffer, state] : buffer_states) {
+            if (exported_buffers.find(buffer) != exported_buffers.end()) continue;
             src_buffer_access |= state.src_access;
             src_buffer_stages |= state.src_stage;
             state.dst_access = VK_ACCESS_2_NONE;

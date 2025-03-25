@@ -509,12 +509,25 @@ namespace Moer::Render {
         QueueTransferCmd() : Command(EType::QueueTransfer) {}
 
     public:
-        QueueTransferCmd(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import) : Command(EType::QueueTransfer), src_queue(_src_queue), import_textures(std::move(_textures_to_import)), b_is_import(true) {}
-        QueueTransferCmd(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export) : Command(EType::QueueTransfer), dst_queue(_dst_queue), export_textures(std::move(_textures_to_export)) {}
+        QueueTransferCmd(EQueueType             _src_queue,
+                         Array<ImportTexture>&& _textures_to_import,
+                         Array<ImportBuffer>&&  _buffer_to_import) : Command(EType::QueueTransfer),
+                                                                    src_queue(_src_queue),
+                                                                    import_textures(std::move(_textures_to_import)),
+                                                                    import_buffers(std::move(_buffer_to_import)),
+                                                                    b_is_import(true) {}
+        QueueTransferCmd(EQueueType             _dst_queue,
+                         Array<ExportTexture>&& _textures_to_export,
+                         Array<ExportBuffer>&&  _buffer_to_export) : Command(EType::QueueTransfer),
+                                                                    dst_queue(_dst_queue),
+                                                                    export_textures(std::move(_textures_to_export)),
+                                                                    export_buffers(std::move(_buffer_to_export)) {}
 
     private:
         Array<ImportTexture> import_textures;
         Array<ExportTexture> export_textures;
+        Array<ImportBuffer>  import_buffers;
+        Array<ExportBuffer>  export_buffers;
         bool                 b_is_import = false;
 
     public:
@@ -523,6 +536,8 @@ namespace Moer::Render {
         mutable EQueueType dst_queue;
         const auto&        ImportTextures() const { return import_textures; }
         const auto&        ExportTextures() const { return export_textures; }
+        const auto&        ImportBuffers() const { return import_buffers; }
+        const auto&        ExportBuffers() const { return export_buffers; }
         const bool         IsImport() const { return b_is_import; }
     };
 
@@ -809,6 +824,21 @@ namespace Moer::Render {
     struct DispatchIndirectParam {
         BufferView indirect;
     };
+
+    static void IterateArgs(const ArrayArguments& _args, std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) {
+        int bdls_idx = -1;
+        for (int i = 0; i < _args.args.size(); i++) {
+            if (std::holds_alternative<BindlessArrayRef>(_args.args[i])) {
+                bdls_idx = i;
+                continue;
+            }
+            _func(_args.args[i], i);
+        }
+
+        if (bdls_idx != -1) {
+            _bdls_post_func(_args.args[bdls_idx], bdls_idx);
+        }
+    }
     struct DispatchCmd : public Command {
     public:
         using DispatchParam = std::variant<uint3, DispatchIndirectParam>;
@@ -817,40 +847,25 @@ namespace Moer::Render {
         // const PipelineHandle& pipeline;
         mutable PipelineHandle* pipeline = nullptr;
         DispatchParam           param;
-        ArrayArguments          args;
+        // ArrayArguments          args;
+        TShaderArgArray args;
         DispatchCmd(ArrayArguments&& _args) : Command(EType::ShaderDispatch), args(std::move(_args)) {
         }
 
     public:
-        DispatchCmd(ArrayArguments&& _args, PipelineHandle& _handle, uint3 _param, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), param(_param), pipeline(&_handle), args(std::move(_args)) {}
-        DispatchCmd(ArrayArguments&& _args, PipelineHandle& _handle, BufferView _indirect, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), pipeline(&_handle), param(DispatchIndirectParam{_indirect}), args(std::move(_args)) {}
+        DispatchCmd(TShaderArgArray&& _args, PipelineHandle& _handle, uint3 _param, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), param(_param), pipeline(&_handle), args(std::move(_args)) {}
+        DispatchCmd(TShaderArgArray&& _args, PipelineHandle& _handle, BufferView _indirect, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), pipeline(&_handle), param(DispatchIndirectParam{_indirect}), args(std::move(_args)) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
-        const auto& Args() const { return args; }
-        auto&       Pipeline() const { return *pipeline; }
-        auto        Param() const { return param; }
-        // void        IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
-        //     for (int i = 0; i < args.args.size(); i++) {
-        //         if (pipeline->valid_bits & (1 << i))
-        //             _func(args.args[i], pipeline->binding_infos[i]);
-        //     }
-        // }
-
-        void IterateArgs(std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) const {
-            int bdls_idx = -1;
-            for (int i = 0; i < args.args.size(); i++) {
-                if (std::holds_alternative<BindlessArrayRef>(args.args[i])) {
-                    bdls_idx = i;
-                    continue;
-                }
-                _func(args.args[i], i);
+        const auto& Args(const TCachedArgArray& _args_cache) const {
+            if (std::holds_alternative<ArrayArguments>(args)) {
+                return std::get<ArrayArguments>(args);
             }
-
-            if (bdls_idx != -1) {
-                _bdls_post_func(args.args[bdls_idx], bdls_idx);
-            }
+            return _args_cache[std::get<ArrayArgReference>(args).handle];
         }
+        auto& Pipeline() const { return *pipeline; }
+        auto  Param() const { return param; }
     };
 
     struct TraceRayCmd : public Command {

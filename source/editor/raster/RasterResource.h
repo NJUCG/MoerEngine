@@ -1,12 +1,15 @@
 #pragma once
 
 #include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
 #include "scene/Scene.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
 #include "RasterTextures.h"
 
+#include <config/ConfigManager.h>
+#include <shader/ShaderResourceManager.h>
 #include <stb_image.h>
 
 namespace Moer::Render::Raster {
@@ -114,7 +117,16 @@ struct RasterContext {
                     ImportTexture(tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE)
                 );
             }
-            cmd_list.ImportTextureFromQueue(EQueueType::Copy, std::move(sampled_textures));
+
+            Array<ImportBuffer> io_buffers;
+            io_buffers.reserve(scene.GetIOPendingBuffers().size());
+            for (auto& buf : scene.GetIOPendingBuffers()) {
+                io_buffers.emplace_back(ImportBuffer(buf->GetView()));
+            }
+
+            cmd_list.ImportResourcesFromQueue(
+                EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers)
+            );
         }
 
         // Bindless

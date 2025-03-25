@@ -167,7 +167,7 @@ namespace Moer {
     // static constexpr std::string SCENE_CACHE_EXT_SPECIFY = ".MOERSCENE";
 
     static std::filesystem::path RemapScenePath(const std::filesystem::path& _path) {
-        long long time       = std::filesystem::exists(_path) ?  std::filesystem::last_write_time(_path).time_since_epoch().count() : 0;
+        long long time       = std::filesystem::exists(_path) ? std::filesystem::last_write_time(_path).time_since_epoch().count() : 0;
         auto      cache_path = (ConfigManager::GetInstance().GetCachePath() / std::format("{}_{}", _path.filename().generic_string(), uint64(time)));
         return cache_path.generic_string() + ".MOERSCENE";
     }
@@ -603,35 +603,35 @@ namespace Moer {
             buf->vertex_buffer->SetName("soa_vertex_buffer");
 
             if (position_buffer_size > 0) {
-                auto position_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_POSITION);
+                auto* position_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_POSITION);
                 cmd_list.CopyFrom(
                     std::span<byte>((byte*)position_buffer_ptr, position_buffer_size),
                     buf->vertex_buffer->GetView(0, buf->GetAttributeRange(EVertexAttributes::VA_POSITION).size),
                     "CopyFrom MeshBuffers position_buffer");
             }
             if (normal_buffer_size > 0) {
-                auto normal_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_NORMAL);
+                auto* normal_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_NORMAL);
                 cmd_list.CopyFrom(
                     std::span<byte>((byte*)normal_buffer_ptr, normal_buffer_size),
                     buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).offset, buf->GetAttributeRange(EVertexAttributes::VA_NORMAL).size),
                     "CopyFrom MeshBuffers normal_buffer");
             }
             if (tangent_buffer_size > 0) {
-                auto tangent_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TANGENT);
+                auto* tangent_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TANGENT);
                 cmd_list.CopyFrom(
                     std::span<byte>((byte*)tangent_buffer_ptr, tangent_buffer_size),
                     buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).offset, buf->GetAttributeRange(EVertexAttributes::VA_TANGENT).size),
                     "CopyFrom MeshBuffers tangent_buffer");
             }
             if (texcoord0_buffer_size > 0) {
-                auto texcoord0_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD0);
+                auto* texcoord0_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD0);
                 cmd_list.CopyFrom(
                     std::span<byte>((byte*)texcoord0_buffer_ptr, texcoord0_buffer_size),
                     buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD0).size),
                     "CopyFrom MeshBuffers texcoord0_buffer");
             }
             if (texcoord1_buffer_size > 0) {
-                auto texcoord1_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD1);
+                auto* texcoord1_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_TEXCOORD1);
                 cmd_list.CopyFrom(
                     std::span<byte>((byte*)texcoord1_buffer_ptr, texcoord1_buffer_size),
                     buf->vertex_buffer->GetView(buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).offset, buf->GetAttributeRange(EVertexAttributes::VA_TEXCOORD1).size),
@@ -651,6 +651,9 @@ namespace Moer {
             // bindless handle
             buf->idx_bdls_handle = bindless_array->AllocateBuffer(buf->index_buffer->GetView());
             buf->vtx_bdls_handle = bindless_array->AllocateBuffer(buf->vertex_buffer->GetView());
+
+            _scene->EmplaceIOImportedBuffer(buf->vertex_buffer);
+            _scene->EmplaceIOImportedBuffer(buf->index_buffer);
         }
 
         _scene->UpdateGpuData();
@@ -710,13 +713,28 @@ namespace Moer {
         instance_data_buffer->SetName("instance_data_buffer");
         geometry_instance_buffer->SetName("geometry_instance_buffer");
 
-        Array<Render::ExportTexture> export_textures;
+        _scene->EmplaceIOImportedBuffer(light_buffer);
+        _scene->EmplaceIOImportedBuffer(material_buffer);
+        _scene->EmplaceIOImportedBuffer(geometry_data_buffer);
+        _scene->EmplaceIOImportedBuffer(instance_data_buffer);
+        _scene->EmplaceIOImportedBuffer(geometry_instance_buffer);
+
+        Array<Render::ExportTexture>
+            export_textures;
         export_textures.reserve(textures.size());
 
         for (auto& texture : textures) {
             export_textures.push_back({texture.second->GetView(), ETextureState::SAMPLE});
         }
-        cmd_list.ExportTextureToQueue(EQueueType::Graphics, std::move(export_textures));
+
+        Array<Render::ExportBuffer> export_buffers;
+        export_buffers.reserve(_scene->GetIOPendingBuffers().size());
+
+        for (auto& buffer : _scene->GetIOPendingBuffers()) {
+            export_buffers.push_back({buffer->GetView(), EBufferState::UNORDERED_ACCESS});
+        }
+
+        cmd_list.ExportResourcesToQueue(EQueueType::Graphics, std::move(export_textures), std::move(export_buffers));
 
         auto copy_handle = copy_queue.GetFenceHandle();
 

@@ -203,7 +203,7 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
   float4 base_color = 1.f;
   float4 emissive = float4(_geo_record.material.emissive_factor, 1.f);
   float4 normal = float4(_geo_record.normal, 0.f);
-  float4 metallic_roughness = float4(0.f, 1.f, 1.f, 0.f);
+  float4 metallic_roughness = float4(0.f, _geo_record.material.roughness_factor, _geo_record.material.metallic_factor, 0.f);
   float4 transmission = 0.f;
 
   bool has_base_color =
@@ -252,7 +252,7 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
   }
 
   if (_attribs & EMA_MetalRough &&
-      _geo_record.material.metallic_roughness_map != 0) {
+      _geo_record.material.metallic_roughness_map > 0) {
     TextureHandle metal_rough_tex =
         TextureHandle(_geo_record.material.metallic_roughness_map);
     if (_mip >= 0.f) {
@@ -281,9 +281,9 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
       base_color.xyz * _geo_record.material.base_color_factor.xyz;
 
   result.roughness =
-      _geo_record.material.roughness_factor * metallic_roughness.g;
+      metallic_roughness.g;
   result.metalness =
-      _geo_record.material.metallic_factor * metallic_roughness.b;
+      metallic_roughness.b;
 
   result.emissive = emissive.xyz;
 

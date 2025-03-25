@@ -272,8 +272,8 @@ namespace Moer::Resource::Gltf {
      * Load lights from gltf scene
      * Refer to: https://assimp-docs.readthedocs.io/en/latest/API/API-Documentation.html#_CPPv47aiLight
      */
-    void Parser::Impl::LoadLights(const aiScene* scene) {
-        const uint32_t light_num = scene->mNumLights;
+    void Parser::Impl::LoadLights(const aiScene* _scene) {
+        const uint32_t light_num = _scene->mNumLights;
         if (light_num == 0) {
             LOG_INFO("No lights found, loader will use default lights");
             data->m_lights = std::move(LightComponent::CreateDefaultLightComponents());
@@ -284,7 +284,9 @@ namespace Moer::Resource::Gltf {
             // The following code isn't tested fully. It may not work as expected.
             // TODO: Add a new scene with lights to test the following code
             for (uint32_t i = 0; i < light_num; i++) {
-                const auto* light = scene->mLights[i];
+                const auto* light = _scene->mLights[i];
+                const auto* node  = _scene->mRootNode->FindNode(light->mName);
+                float3x4    model = GetTransform(node).GetMatrix3x4();
                 if (light->mType == aiLightSourceType::aiLightSource_DIRECTIONAL) {
                     LightComponentRef light_component = MoerNew(DirectionalLightComponent)(
                         ToVector3f(light->mColorDiffuse),// color
@@ -295,19 +297,26 @@ namespace Moer::Resource::Gltf {
                     data->m_lights.push_back(light_component);
 
                 } else if (light->mType == aiLightSourceType::aiLightSource_POINT) {
+                    float3            pos             = model * float4(ToVector3f(light->mPosition), 1.f);
                     LightComponentRef light_component = MoerNew(PointLightComponent)(
-                        ToVector3f(light->mColorDiffuse),// color
-                        1.0f,                            // intensity
-                        ToVector3f(light->mPosition)     // position
+                        Min(ToVector3f(light->mColorDiffuse), float3(1.f)),// color
+                        1.0f,                                              // intensity
+                        pos                                                // position
                     );
+                    LOG_INFO("Point Light Position: {}", pos.ToString());
+                    LOG_INFO("Diffuse  Color: {}", ToVector3f(light->mColorDiffuse).ToString());
+                    LOG_INFO("Specular Color: {}", ToVector3f(light->mColorSpecular).ToString());
+                    LOG_INFO("Ambient  Color: {}", ToVector3f(light->mColorAmbient).ToString());
                     data->m_lights.push_back(light_component);
 
                 } else if (light->mType == aiLightSourceType::aiLightSource_SPOT) {
+                    float3            pos             = model * float4(ToVector3f(light->mPosition), 1.f);
+                    float3            dir             = model * float4(ToVector3f(light->mDirection), 0.f);
                     LightComponentRef light_component = MoerNew(SpotLightComponent)(
                         ToVector3f(light->mColorDiffuse),// color
                         1.0f,                            // intensity
-                        ToVector3f(light->mPosition),    // position
-                        ToVector3f(light->mDirection),   // direction
+                        pos,                             // position
+                        dir,                             // direction
                         light->mAngleInnerCone,          // inner_cone_angle
                         light->mAngleOuterCone           // outer_cone_angle
                     );

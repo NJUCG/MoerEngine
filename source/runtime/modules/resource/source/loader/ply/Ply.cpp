@@ -140,7 +140,8 @@ namespace Moer::Resource {
         Scene* scene = m_scene.get();
         EnqueueRenderTask([scene, verteces = std::move(verteces)]() {
             auto gs_vertex_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, verteces.data(), verteces.size() * sizeof(Vertex));
-            scene->SetBuffer("gs_scene_buffer", gs_vertex_buffer);
+            assert(false && "Not implemented");
+            // scene->SetBuffer("gs_scene_buffer", gs_vertex_buffer);
         });
         auto      camera_entity = EntityManager::Get().Create();
         auto      camera        = CameraManager::Get().Create(camera_entity);

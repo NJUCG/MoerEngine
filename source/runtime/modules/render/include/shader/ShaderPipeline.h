@@ -186,6 +186,10 @@ namespace Moer::Render {
             return {max_array_size, arg_type};
         }
     };
+
+    struct TEmptyShaderArg {};
+    using TShaderArgArray = std::variant<ArrayArguments, ArrayArgReference, TEmptyShaderArg>;
+    using TCachedArgArray = Array<ArrayArguments>;
     struct NonConstant {};
 
     template<uint array_size>
@@ -215,6 +219,9 @@ namespace Moer::Render {
     };
 
     struct TLASArg {
+        using type = NonConstant;
+    };
+    struct ReferenceArg {
         using type = NonConstant;
     };
 
@@ -251,6 +258,12 @@ namespace Moer::Render {
     template<>
     struct ShaderArgEnum<TLASArg> {
         static constexpr EShaderArgType arg_type   = SDA_TLAS;
+        static constexpr uint           array_size = 1;
+    };
+
+    template<>
+    struct ShaderArgEnum<ReferenceArg> {
+        static constexpr EShaderArgType arg_type   = SDA_Reference;
         static constexpr uint           array_size = 1;
     };
 
@@ -304,7 +317,8 @@ namespace Moer::Render {
             requires std::is_same_v<RemoveConstRefT<T>, TextureView> || std::is_same_v<RemoveConstRefT<T>, t_texture_array_arg> ||
                      std::is_same_v<RemoveConstRefT<T>, BufferView> || std::is_same_v<RemoveConstRefT<T>, t_buffer_array_arg> || std::is_same_v<RemoveConstRefT<T>, Sampler> ||
                      std::is_same_v<RemoveConstRefT<T>, TextureRef> || std::is_same_v<RemoveConstRefT<T>, BufferRef> || std::is_same_v<typename TArg::type, TConstsant<RemoveConstRefT<T>>> ||
-                     std::is_same_v<RemoveConstRefT<T>, BindlessArrayRef> || std::is_same_v<RemoveConstRefT<T>, RaytracingTlasRef>
+                     std::is_same_v<RemoveConstRefT<T>, BindlessArrayRef> || std::is_same_v<RemoveConstRefT<T>, RaytracingTlasRef> ||
+                     std::is_same_v<RemoveConstRefT<T>, ArrayArgReference>
         static void SetParam(T&& _t, ArrayArguments& _arg_setter) {
             using cpp_type       = typename TArg::type;
             constexpr auto index = Index<TArg, tuple_helper>::value;

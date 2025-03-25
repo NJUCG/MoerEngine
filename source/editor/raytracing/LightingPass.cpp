@@ -3,6 +3,8 @@
 #include "Configs.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIResource.h"
+#include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
@@ -91,12 +93,18 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     auto div_ceil = [](uint _a, uint _b) -> uint { return (_a + _b - 1) / _b; };
     int  i        = s_di_light_compact_bit;
 
+    ArrayArgReference arg_ref =
+        _cmd_list.RegisterArgs(presample_light_pipeline.SetArgs(DI_BINDING_ARGS(_rt_ctx)));
+
     if (is_ctx.GetLightBufferParams().local_light_region.light_cnt) {
         uint2 dispatch_size = uint2(
             div_ceil(is_ctx.GetLocalLightRISBufferParams().tile_size, 256),
             is_ctx.GetLocalLightRISBufferParams().tile_cnt
         );
-        _cmd_list.Compute(presample_light_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        // _cmd_list.Compute(presample_light_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        //     .Dispatch(uint3(dispatch_size, 1), "PresampleLight");
+
+        _cmd_list.Compute(presample_light_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "PresampleLight");
     }
 
@@ -105,13 +113,19 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             div_ceil(is_ctx.GetEnvLightRISBufferParams().tile_size, 256),
             is_ctx.GetEnvLightRISBufferParams().tile_cnt
         );
-        _cmd_list.Compute(presample_env_map_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        // _cmd_list.Compute(presample_env_map_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        //     .Dispatch(uint3(dispatch_size, 1), "PresampleEnvMap");
+
+        _cmd_list.Compute(presample_env_map_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "PresampleEnvMap");
     }
 
     if (is_ctx.GetLightBufferParams().local_light_region.light_cnt) {
         uint2 dispatch_size = uint2(div_ceil(is_ctx.GetGridRuntimeConfig().num_light_slot, 256), 1);
-        _cmd_list.Compute(presample_light_grid_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        // _cmd_list.Compute(presample_light_grid_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        //     .Dispatch(uint3(dispatch_size, 1), "PresampleLightGrid");
+
+        _cmd_list.Compute(presample_light_grid_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "PresampleLightGrid");
     }
 
@@ -121,17 +135,30 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         dispatch_size.x     = div_ceil(dispatch_size.x, DI_SCREEN_TILE_SIZE);
         dispatch_size.y     = div_ceil(dispatch_size.y, DI_SCREEN_TILE_SIZE);
 
-        _cmd_list.Compute(generate_initial_sample_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        // _cmd_list.Compute(generate_initial_sample_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        //     .Dispatch(uint3(dispatch_size, 1), "GenerateInitialSample");
+
+        // _cmd_list.Compute(temporal_resmaple_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        //     .Dispatch(uint3(dispatch_size, 1), "TemporalResample");
+
+        // _cmd_list.Compute(spatial_resample_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        //     .Dispatch(uint3(dispatch_size, 1), "SpatialResample");
+
+        // _cmd_list.Compute(di_shade_sample_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        //     .Dispatch(uint3(dispatch_size, 1), "ShadeSample");
+
+        //use arg ref
+
+        _cmd_list.Compute(generate_initial_sample_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "GenerateInitialSample");
 
-        _cmd_list.Compute(temporal_resmaple_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        _cmd_list.Compute(temporal_resmaple_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "TemporalResample");
 
-        _cmd_list.Compute(spatial_resample_pipeline, DI_BINDING_ARGS(_rt_ctx))
+        _cmd_list.Compute(spatial_resample_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "SpatialResample");
 
-        _cmd_list.Compute(di_shade_sample_pipeline, DI_BINDING_ARGS(_rt_ctx))
-            .Dispatch(uint3(dispatch_size, 1), "ShadeSample");
+        _cmd_list.Compute(di_shade_sample_pipeline, arg_ref).Dispatch(uint3(dispatch_size, 1), "ShadeSample");
     }
 
     _cmd_list.PopScope();
