@@ -17,17 +17,9 @@
 #include "m_vector/m_vector.h"
 #include <deque>
 
-#if USE_MIMALLOC
-// #if 0
-
-#include <mimalloc.h>
-
 template<typename T>
-using m_defualt_allocator = mi_stl_allocator<T>;
-#else
-template<typename T>
-using m_defualt_allocator = std::allocator<T>;
-#endif
+using m_defualt_allocator = MoerStlAllocator<T>;
+
 namespace Moer {
     template<typename T, class allocator = m_defualt_allocator<T>>
     using Array = std::vector<T, allocator>;

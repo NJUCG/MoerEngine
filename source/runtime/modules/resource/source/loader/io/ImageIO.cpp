@@ -374,7 +374,7 @@ namespace Moer {
                 }
             } else {
                 desc.mips        = ktx_texture->numLevels;
-                desc.mip_offsets = std::vector<uint32_t>(ktx_texture->numLevels);
+                desc.mip_offsets = Array<uint32_t>(ktx_texture->numLevels);
                 for (uint32_t layer = 0; layer < desc.layers; layer++) {
                     for (uint32_t miplevel = 0; miplevel < desc.mips; ++miplevel) {
                         ktx_size_t offset;

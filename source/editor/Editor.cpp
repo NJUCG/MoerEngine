@@ -36,9 +36,9 @@ void Editor::Init(int argc, const char** argv) {
 
     // Init ConfigManager
     std::filesystem::path path = argv[0];
-    ConfigManager::GetInstance().Init(
-        path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path
-    );
+    path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
+
+    ConfigManager::GetInstance().Init(path);
 
     // Init TaskSystem
     TaskSystem::Init();

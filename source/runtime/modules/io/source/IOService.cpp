@@ -1,7 +1,6 @@
 #include "IOService.h"
 #include "rhi/RHI.h"
 #include <mutex>
-#include <queue>
 #include <spdlog/spdlog.h>
 #include "rhi/RHICommand.h"
 namespace Moer {
@@ -119,7 +118,7 @@ namespace Moer {
         void InnerWorkLoop() {
             SPDLOG_INFO("IOLooper started");
             while (enabled) {
-                std::vector<std::function<void(void)>> requests_copy;
+                Array<std::function<void(void)>> requests_copy;
                 {
                     std::lock_guard<std::mutex> lk(mutex);
                     requests_copy = std::move(requests);
@@ -136,23 +135,23 @@ namespace Moer {
     };
 
     struct IOCommandListHolder {
-        std::vector<IOCmd>      cmds;
-        std::vector<IOCallBack> callbacks;
-        std::vector<FileHandle> files;
-        uint64_t                time_stamp;
+        Array<IOCmd>      cmds;
+        Array<IOCallBack> callbacks;
+        Array<FileHandle> files;
+        uint64_t          time_stamp;
     };
 
     struct IOHandler {
         struct CallBacks {
-            std::vector<IOCallBack> callbacks;
-            std::vector<FileHandle> files;
-            uint64_t                time_stamp;
+            Array<IOCallBack> callbacks;
+            Array<FileHandle> files;
+            uint64_t          time_stamp;
         };
-        uint64_t                        time_stamp;
-        std::queue<IOCommandListHolder> cmd_batches;
-        std::mutex                      mutex;
-        Event                           event;
-        uint64_t                        EnqueueCmds(IOCommandList& cmd_list) {
+        uint64_t                   time_stamp;
+        Queue<IOCommandListHolder> cmd_batches;
+        std::mutex                 mutex;
+        Event                      event;
+        uint64_t                   EnqueueCmds(IOCommandList& cmd_list) {
             if (cmd_list.cmds.empty()) {
                 return time_stamp;
             }
@@ -165,8 +164,8 @@ namespace Moer {
             }
             return time_stamp;
         }
-        std::queue<CallBacks> m_callbacks;
-        void                  Tick() {
+        Queue<CallBacks> m_callbacks;
+        void             Tick() {
             IOCommandListHolder cmds_batch;
             bool                has_cmds = false;
             {

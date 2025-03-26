@@ -17,7 +17,7 @@ namespace Moer {
     public:
         static ConfigManager& GetInstance();
 
-        void Init(const std::filesystem::path _workspace_path);
+        void Init(const std::filesystem::path& _workspace_path);
 
         const std::filesystem::path& GetWorkspacePath() const;
         const std::filesystem::path& GetEditorResourcePath() const;

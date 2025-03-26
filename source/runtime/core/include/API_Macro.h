@@ -22,5 +22,17 @@
 
 #endif
 
+#if defined(__cplusplus) && (__cplusplus >= 201703)
+#define MOER_NODISCARD [[nodiscard]]
+#elif (defined(__GNUC__) && (__GNUC__ >= 4)) || defined(__clang__)// includes clang, icc, and clang-cl
+#define MOER_NODISCARD __attribute__((warn_unused_result))
+#elif defined(_HAS_NODISCARD)
+#define MOER_NODISCARD _NODISCARD
+#elif (_MSC_VER >= 1700)
+#define MOER_NODISCARD _Check_return_
+#else
+#define MOER_NODISCARD
+#endif
+
 #pragma endregion
 #endif// !API_MACRO_H

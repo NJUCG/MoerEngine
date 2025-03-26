@@ -54,13 +54,31 @@ add_subdirectory(AssetLoad)
 # mimalloc
 set(MI_USE_CXX OFF)
 set(MI_BUILD_STATIC      ON)
+set(MI_BUILD_SHARED      ON)
 set(MI_BUILD_OBJECT      OFF)
+set(MI_WIN_REDIRECT      ON)
 set(MI_BUILD_TESTS       OFF)
 add_subdirectory(mimalloc)
-target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-strict-prototypes>")
-set_target_folder(mimalloc-static ${third_party_folder}/mimalloc)
-set_target_folder(mimalloc ${third_party_folder}/mimalloc)
 
+string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LC)
+target_compile_options(mimalloc PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-strict-prototypes>")
+set_target_properties(mimalloc PROPERTIES
+        MSVC_RUNTIME_LIBRARY MultiThreaded$<$<CONFIG:Debug>:DebugDLL>
+)
+# set_target_folder(mimalloc-${CMAKE_BUILD_TYPE_LC} ${third_party_folder}/mimalloc)
+set_target_folder(mimalloc ${third_party_folder}/mimalloc)
+# if(CMAKE_GENERATOR MATCHES "Ninja" OR UNIX AND NOT APPLE) 
+#     set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}") 
+# else() 
+#     set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") 
+# endif()
+# # post build mimalloc copy dlls from mimalloc/bin
+# add_custom_target(CopyMimallocDlls ALL
+#     COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}"
+#     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_third_party_dir}/mimalloc/bin" "${output_dir}"
+#     COMMENT "Copying mimalloc dlls to ${output_dir}"
+# )
+# message(STATUS "Found mimalloc installed at: ${MIMALLOC_LIBRARY_DIR} (${MIMALLOC_VERSION_DIR})")
 # mesh process
 add_subdirectory(MeshProcess)
 set_target_folder(MeshProcess ${third_party_folder})
