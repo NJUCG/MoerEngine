@@ -1,10 +1,5 @@
 #ifndef MOER_RAYTRACING_COMMON_HLSLI
 #define MOER_RAYTRACING_COMMON_HLSLI
-static SamplerState g_sampler_linear_repeat {
-  Filter = MIN_MAG_MIP_LINEAR;
-  AddressU = Repeat;
-  AddressV = Repeat;
-};
 namespace Moer {
 enum EGeometryAttrib {
   EGA_Position = 0x1,
@@ -154,8 +149,8 @@ GeometryRecord GetGeometryRecordFrom(uint _instance_idx, uint _geometry_idx,
 
     float3 local_normal = Moer::Interpolate(normals, barycentrics);
 
-    geo_record.normal =
-        normalize(mul(geo_record.instance.model2world, float4(local_normal, 0.f)));
+    geo_record.normal = normalize(
+        mul(geo_record.instance.model2world, float4(local_normal, 0.f)));
 
     if (_b_backface) {
       geo_record.normal = -geo_record.normal;
@@ -203,7 +198,8 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
   float4 base_color = 1.f;
   float4 emissive = float4(_geo_record.material.emissive_factor, 1.f);
   float4 normal = float4(_geo_record.normal, 0.f);
-  float4 metallic_roughness = float4(0.f, _geo_record.material.roughness_factor, _geo_record.material.metallic_factor, 0.f);
+  float4 metallic_roughness = float4(0.f, _geo_record.material.roughness_factor,
+                                     _geo_record.material.metallic_factor, 0.f);
   float4 transmission = 0.f;
 
   bool has_base_color =
@@ -280,10 +276,8 @@ MaterialSample SampleGeometryMaterial(GeometryRecord _geo_record,
   result.base_color =
       base_color.xyz * _geo_record.material.base_color_factor.xyz;
 
-  result.roughness =
-      metallic_roughness.g;
-  result.metalness =
-      metallic_roughness.b;
+  result.roughness = metallic_roughness.g;
+  result.metalness = metallic_roughness.b;
 
   result.emissive = emissive.xyz;
 

@@ -87,6 +87,8 @@ target_compile_definitions(MoerCore
     )
 endif()
 
+add_dependencies(${MODULE_NAME} CopyNRDEncodingFile)
+
 
 
 

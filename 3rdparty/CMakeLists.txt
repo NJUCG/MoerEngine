@@ -1,5 +1,5 @@
 
-set(third_party_folder "3rdParty")
+set(third_party_folder "3rdparty")
 
 include(vulkan.cmake)
 include(${moer_root_dir}/cmake/functions.cmake)
@@ -61,23 +61,12 @@ set(MI_BUILD_TESTS       OFF)
 add_subdirectory(mimalloc)
 
 string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LC)
-target_compile_options(mimalloc PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-strict-prototypes>")
-set_target_properties(mimalloc PROPERTIES
-        MSVC_RUNTIME_LIBRARY MultiThreaded$<$<CONFIG:Debug>:DebugDLL>
-)
+target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-strict-prototypes>")
+target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-unused-variable>")
+target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-missing-field-initializers>")
 # set_target_folder(mimalloc-${CMAKE_BUILD_TYPE_LC} ${third_party_folder}/mimalloc)
-set_target_folder(mimalloc ${third_party_folder}/mimalloc)
-# if(CMAKE_GENERATOR MATCHES "Ninja" OR UNIX AND NOT APPLE) 
-#     set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}") 
-# else() 
-#     set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") 
-# endif()
-# # post build mimalloc copy dlls from mimalloc/bin
-# add_custom_target(CopyMimallocDlls ALL
-#     COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}"
-#     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_third_party_dir}/mimalloc/bin" "${output_dir}"
-#     COMMENT "Copying mimalloc dlls to ${output_dir}"
-# )
+set_target_folder(mimalloc-static ${third_party_folder}/mimalloc)
+
 # message(STATUS "Found mimalloc installed at: ${MIMALLOC_LIBRARY_DIR} (${MIMALLOC_VERSION_DIR})")
 # mesh process
 add_subdirectory(MeshProcess)
@@ -123,34 +112,12 @@ else ()
     message(WARNING "Windows SDK not found. DirectX backend, NRI and NRD may not build correctly.")
 endif ()
 
-# NRI
 set(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION ${MOER_WINDOWS_SDK_VERSION})
-add_subdirectory(NRI)
 
-# NRD
-set(NRD_SHADERS_PATH ${moer_third_party_dir}/NRD/Shaders/Binary)
-set(NRD_NORMAL_ENCODING "0")
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    add_compile_options(-msse4.1)
-endif()
-add_subdirectory(NRD)
 
 # toml++
 include(${CMAKE_CURRENT_SOURCE_DIR}/tomlplusplus.cmake)
 set_target_folder(tomlplusplus ${third_party_folder}/tomlplusplus-3.4.0)
 
-# post build
-set(NRD_ENCODING_FILE "${moer_third_party_dir}/NRD/Shaders/Include/NRDEncoding.hlsli")
-set(MOER_SHADER_NRD_DIR "${moer_shader_dir}/nrd")
-add_custom_command(
-    OUTPUT "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
-    COMMAND ${CMAKE_COMMAND} -E copy "${NRD_ENCODING_FILE}" "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
-    DEPENDS "${NRD_ENCODING_FILE}"
-    COMMENT "Copying NRDEncoding.hlsli to ${MOER_SHADER_NRD_DIR}"
-)
-
-add_custom_target(CopyNRDEncodingFile ALL
-    DEPENDS "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
-)
-
-add_dependencies(NRD CopyNRDEncodingFile)
+include(NRI.cmake)
+include(NRD.cmake)

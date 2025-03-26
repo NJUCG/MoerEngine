@@ -45,6 +45,6 @@ if(${MSVC})
     add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 endif()
 
-add_subdirectory("3rdParty")
+add_subdirectory("3rdparty")
 add_subdirectory("source")
 
