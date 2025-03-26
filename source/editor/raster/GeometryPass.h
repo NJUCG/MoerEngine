@@ -115,7 +115,7 @@ public:
         context.cmd_list.CopyFrom(
             std::span<byte>((byte*)view_param, sizeof(ViewParam)), view_param_buffer->GetView()
         );
-        context.cmd_list.AddCallback([view_param]() { delete view_param; });
+        context.cmd_list.AddCallback([view_param]() { MoerDelete(view_param); });
 
         GeometryPassBindlessParam param;
         param.color                  = float4(0., 0., 0., 0.);
