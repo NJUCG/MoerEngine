@@ -330,8 +330,8 @@ namespace Moer::Render {
     public:
         template<typename TElement>
             requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement> || NumericType<TElement> || user_trivial_type_v<TElement>)
-        BufferRef CreateBuffer(uint _element_cnt, EBufferUsageFlags _usage) {
-            return CreateBuffer(_element_cnt, sizeof(TElement), _usage);
+        BufferRef CreateBuffer(uint _element_cnt, EBufferUsageFlags _usage, EPixelFormat _format = PF_UNDEFINED) {
+            return CreateBuffer(_element_cnt, sizeof(TElement), _usage, _format);
         }
 
         RENDER_API BufferRef CreateStagingBuffer(uint64_t _byte_size);
@@ -382,7 +382,7 @@ namespace Moer::Render {
 
     protected:
     private:
-        RENDER_API BufferRef CreateBuffer(uint _element_cnt, uint _stride, EBufferUsageFlags _usage);
+        RENDER_API BufferRef CreateBuffer(uint _element_cnt, uint _stride, EBufferUsageFlags _usage, EPixelFormat _format);
 
         RenderDevice() = default;
         UniquePtr<Impl>

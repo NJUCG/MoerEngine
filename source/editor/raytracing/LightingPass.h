@@ -22,12 +22,13 @@ namespace Render::Raytracing {
     DEFINE_SHADER_TEX(rw_diffuse_lighting_prev);    \
     DEFINE_SHADER_BUFFER(rw_ris_buffer);            \
     DEFINE_SHADER_BUFFER(rw_ris_light_data_buffer); \
+    DEFINE_SHADER_BUFFER(neighbor_offset_buf);      \
     DEFINE_SHADER_BINDLESS_ARRAY(bdls)
 
 #define DI_SHADER_ARGS()                                                                                    \
     tlas, prev_tlas, resample_params, light_reservoirs, rw_diffuse_lighting, rw_specular_lighting,          \
         rw_temporal_sample_pos, rw_gradients, rw_restir_luminance, rw_diffuse_lighting_prev, rw_ris_buffer, \
-        rw_ris_light_data_buffer, bdls
+        rw_ris_light_data_buffer, neighbor_offset_buf, bdls
 
 class PresampleLightPipeline : public ComputePipeline {
 public:

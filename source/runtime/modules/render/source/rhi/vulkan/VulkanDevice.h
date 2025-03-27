@@ -1,6 +1,7 @@
 #ifndef VULKAN_DEVICE_H
 #define VULKAN_DEVICE_H
 
+#include "PixelFormat.h"
 #include "taskgraph/Event.h"
 #include "misc/STL.h"
 
@@ -73,7 +74,7 @@ namespace Moer::Render {
 
         TextureRef CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint _array_size) override;
 
-        BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) override;
+        BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) override;
 
         BindlessArrayRef CreateBindlessArray(uint _max_size) override;
         FenceRef         CreateFence() override;

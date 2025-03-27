@@ -178,15 +178,15 @@ namespace Moer {
         uint poly_light_data;
         uint light_index;
 
-        uint neighbor_offset;
+        uint restir_luminance;
         uint geo_instance_to_light;
         uint local_light_pdf;
         uint env_pdf;
 
-        uint env_map;
-        uint restir_luminance;
-        uint padding1;
-        uint padding2;
+        // uint env_map;
+        // uint padding1;
+        // uint padding2;
+        // uint padding3;
     };
 
     struct SceneGlobalParams {

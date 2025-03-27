@@ -645,12 +645,13 @@ namespace Moer::Render {
     class BufferView {
     public:
         BufferView() = default;
-        BufferView(Buffer* _buffer);
+        BufferView(Buffer* _buffer, EPixelFormat _fmt = PF_UNDEFINED);
 
-        BufferView(Buffer* _buffer, uint64 _byte_offset, uint64 _num_elements, uint _stride) : buffer(_buffer),
-                                                                                               byte_offset(_byte_offset),
-                                                                                               num_elements(_num_elements),
-                                                                                               stride(_stride){};
+        BufferView(Buffer* _buffer, uint64 _byte_offset, uint64 _num_elements, uint _stride, EPixelFormat _fmt = PF_UNDEFINED) : buffer(_buffer),
+                                                                                                                                 byte_offset(_byte_offset),
+                                                                                                                                 num_elements(_num_elements),
+                                                                                                                                 stride(_stride),
+                                                                                                                                 format(_fmt){};
         uint          GetNumElements() const { return num_elements; }
         uint          GetStride() const { return stride; }
         uint64        GetByteOffset() const { return byte_offset; }
@@ -661,19 +662,22 @@ namespace Moer::Render {
         uint64        byte_offset;
         uint64        num_elements;
         uint32        stride;
+        EPixelFormat  format = PF_UNDEFINED;
     };
 
     struct BufferInfo {
         uint64_t          size;
         uint32_t          stride;
         EBufferUsageFlags usage;
+        EPixelFormat      format = PF_UNDEFINED;
 
         BufferInfo() = default;
 
-        BufferInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage)
+        BufferInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage, EPixelFormat _fmt = PF_UNDEFINED)
             : size(_size),
               stride(_stride),
-              usage(_usage) {}
+              usage(_usage),
+              format(_fmt) {}
 
         static BufferInfo GetNull() {
             return {
@@ -701,6 +705,7 @@ namespace Moer::Render {
         const std::string_view GetName() const { return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data()); }
 
         RENDER_API BufferView   GetView(uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
+        RENDER_API BufferView   GetView(EPixelFormat _fmt, uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
         virtual RENDER_API void SetName(const std::string_view _name) = 0;
 
     protected:
@@ -869,10 +874,11 @@ namespace Moer::Render {
         };
 
         struct BufferUpdateInfo {
-            BufferRef buffer;
-            uint      array_idx;
-            uint      slot;
-            bool      free;
+            BufferRef    buffer;
+            uint         array_idx;
+            uint         slot;
+            EPixelFormat format;
+            bool         free;
         };
 
         struct InvalidUpdateInfo {

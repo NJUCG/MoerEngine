@@ -1,4 +1,5 @@
 #include "rhi/RHIResource.h"
+#include "PixelFormat.h"
 #include "misc/Crc32.h"
 #include "misc/STL.h"
 #include "resources/ResourceTransition.h"
@@ -194,14 +195,22 @@ namespace Moer::Render {
         return TextureView(this, _format, _mip_level, _mip_cnt);
     }
 
-    BufferView::BufferView(Buffer* _buffer) : buffer(_buffer), byte_offset(0), num_elements(_buffer->GetNumElement()), stride(_buffer->GetStride()) {
+    BufferView::BufferView(Buffer* _buffer, EPixelFormat _fmt) : buffer(_buffer), byte_offset(0), num_elements(_buffer->GetNumElement()), stride(_buffer->GetStride()), format(_fmt) {
     }
     BufferView Buffer::GetView(uint64_t _byte_offset, uint64_t _byte_size) {
         if (_byte_size == UINT64_MAX && _byte_offset == 0) {
-            return BufferView(this);
+            return BufferView(this, info.format);
         }
         _byte_size = std::min(_byte_size, GetByteSize() - _byte_offset);
-        return BufferView(this, _byte_offset, _byte_size / GetStride(), GetStride());
+        return BufferView(this, _byte_offset, _byte_size / GetStride(), GetStride(), info.format);
+    }
+
+    BufferView Buffer::GetView(EPixelFormat _fmt, uint64_t _byte_offset, uint64_t _byte_size) {
+        if (_byte_size == UINT64_MAX && _byte_offset == 0) {
+            return BufferView(this, _fmt);
+        }
+        _byte_size = std::min(_byte_size, GetByteSize() - _byte_offset);
+        return BufferView(this, _byte_offset, _byte_size / GetStride(), GetStride(), _fmt);
     }
 
     // void BindlessArray::FreeBufferFrameEnd() {

@@ -1058,8 +1058,8 @@ namespace Moer::Render {
         virtual void PostInit() {}
 
     public:
-        virtual FenceRef  CreateFence()                                                                = 0;
-        virtual BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) = 0;
+        virtual FenceRef  CreateFence()                                                                                      = 0;
+        virtual BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) = 0;
 
         virtual TextureRef CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint _array_size = 1) = 0;
 

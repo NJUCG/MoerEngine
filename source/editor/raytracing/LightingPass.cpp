@@ -82,13 +82,14 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     _cmd_list.CopyFrom(std::move(upload_data), resample_params->GetView());
     bool b_current_frame = _rt_ctx.b_current_frame;
 
-#define DI_BINDING_ARGS(ctx)                                                                      \
-    ctx.rt_scene->GetTlas(),                                                                      \
-        ctx.rt_scene->GetPrevTlas() ? ctx.rt_scene->GetPrevTlas() : ctx.rt_scene->GetTlas(),      \
-        resample_params, ctx.light_reservoir_buf, ctx.frame_rt.diffuse_lighting,                  \
-        ctx.frame_rt.specular_lighting, ctx.frame_rt.temporal_sample_pos, ctx.frame_rt.gradients, \
-        b_current_frame ? ctx.frame_rt.restir_luminance : ctx.frame_rt.prev_luminance,            \
-        ctx.frame_rt.prev_diffuse_lighting, ctx.ris_buf, ctx.ris_light_data_buf, scene.GetBindlessArray()
+#define DI_BINDING_ARGS(ctx)                                                                              \
+    ctx.rt_scene->GetTlas(),                                                                              \
+        ctx.rt_scene->GetPrevTlas() ? ctx.rt_scene->GetPrevTlas() : ctx.rt_scene->GetTlas(),              \
+        resample_params, ctx.light_reservoir_buf, ctx.frame_rt.diffuse_lighting,                          \
+        ctx.frame_rt.specular_lighting, ctx.frame_rt.temporal_sample_pos, ctx.frame_rt.gradients,         \
+        b_current_frame ? ctx.frame_rt.restir_luminance : ctx.frame_rt.prev_luminance,                    \
+        ctx.frame_rt.prev_diffuse_lighting, ctx.ris_buf, ctx.ris_light_data_buf, ctx.neighbor_offset_buf, \
+        scene.GetBindlessArray()
 
     auto div_ceil = [](uint _a, uint _b) -> uint { return (_a + _b - 1) / _b; };
     int  i        = s_di_light_compact_bit;

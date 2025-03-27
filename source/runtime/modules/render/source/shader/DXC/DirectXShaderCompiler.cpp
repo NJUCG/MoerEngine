@@ -421,7 +421,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
             static constexpr std::string_view real_name  = ReflectParamInfo::bdls_name;
             ReflectParamInfo::BindlessArray&  bdls_param = reflect_map[real_name.data()].spirv.bindless;
             ReflectParamInfo::Bindless*       target     = nullptr;
-            if (binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+            if (binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER || binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER) {
                 if (is_bdls_array(binding.name)) {
                     SetZeroIfEmpty(bdls_param.array);
                     target = &bdls_param.array.value();

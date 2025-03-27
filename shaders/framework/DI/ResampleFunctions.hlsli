@@ -276,12 +276,9 @@ Reservoir SpatialResampleWithPairwiseMIS(
   uint num_valid_samples = 0;
   uint i;
 
-  ArrayBuffer neighbor_offset_buf =
-      (ArrayBuffer)resample_params.bindless_handles.neighbor_offset;
-
   for (i = 0; i < num_samples; i++) {
     uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
-    int2 spatial_offset = int2(neighbor_offset_buf.Load<float2>(sample_idx) *
+    int2 spatial_offset = int2(neighbor_offset_buf[sample_idx] *
                                _s_params.sampling_radius);
     int2 idx = int2(_pixel_pos) + spatial_offset;
     idx = ClampScreenPosition(idx);
@@ -368,12 +365,10 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
   num_samples = min(num_samples, 32);
   uint result_mask = 0;
   uint i;
-  ArrayBuffer neighbor_offset_buf =
-      (ArrayBuffer)resample_params.bindless_handles.neighbor_offset;
   // two iteration over the samples
   for (i = 0; i < num_samples; i++) {
     uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
-    int2 spatial_offset = int2(neighbor_offset_buf.Load<float2>(sample_idx) *
+    int2 spatial_offset = int2(neighbor_offset_buf[sample_idx] *
                                _s_params.sampling_radius);
     int2 idx = int2(_pixel_pos) + spatial_offset;
     idx = ClampScreenPosition(idx);
@@ -437,7 +432,7 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
         }
         uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
         int2 spatial_offset =
-            int2(neighbor_offset_buf.Load<float2>(sample_idx) *
+            int2(neighbor_offset_buf[sample_idx] *
                  _s_params.sampling_radius);
 
         int2 idx = int2(_pixel_pos) + spatial_offset;

@@ -1,4 +1,5 @@
 #include <volk.h>
+#include "PixelFormat.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanDescriptor.h"
 #include "VulkanPipelineResourceCache.h"
@@ -533,8 +534,10 @@ namespace Moer::Render {
             buffer_info.address = vk_buffer->DeviceAddress() + _in_buffer.byte_offset;
             buffer_info.range   = _in_buffer.GetByteSize();
             VkDescriptorGetInfoEXT buffer_desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
-            buffer_desc_info.type = _type;
-            uint desc_size        = 0;
+            buffer_desc_info.type  = _type;
+            uint     desc_size     = 0;
+            VkFormat buffer_format = VulkanEnumTranslator::METoVKFormat(_in_buffer.format);
+            _format                = buffer_format == VK_FORMAT_UNDEFINED ? _format : buffer_format;
             switch (_type) {
                 case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
                     buffer_info.format                        = _format;
@@ -550,9 +553,9 @@ namespace Moer::Render {
                     desc_size                            = uniform_desc_stride;
                     break;
                 case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-                    buffer_info.format                   = _format;
-                    buffer_desc_info.data.pUniformBuffer = &buffer_info;
-                    desc_size                            = uniform_texel_desc_stride;
+                    buffer_info.format                        = _format;
+                    buffer_desc_info.data.pUniformTexelBuffer = &buffer_info;
+                    desc_size                                 = uniform_texel_desc_stride;
                     break;
                 default:
                     LOG_ERROR("Unsupported buffer descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type));

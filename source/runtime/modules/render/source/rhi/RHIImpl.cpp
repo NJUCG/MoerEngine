@@ -1,4 +1,5 @@
 #include "RHIImpl.h"
+#include "PixelFormat.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -48,8 +49,8 @@ namespace Moer::Render {
         return impl->CreateSwapchain(_info);
     }
 
-    BufferRef RenderDevice::CreateBuffer(uint _element_cnt, uint _stride, EBufferUsageFlags _usage) {
-        return impl->CreateBuffer(_element_cnt, _stride, _usage);
+    BufferRef RenderDevice::CreateBuffer(uint _element_cnt, uint _stride, EBufferUsageFlags _usage, EPixelFormat _format) {
+        return impl->CreateBuffer(_element_cnt, _stride, _usage, _format);
     }
 
     const EShaderPlatform RenderDevice::GetShaderPlatform() const {

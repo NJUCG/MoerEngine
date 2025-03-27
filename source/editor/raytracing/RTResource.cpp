@@ -147,12 +147,12 @@ RTContext::RTContext(
 
     RenderDevice& device = RenderDevice::Get();
     neighbor_offset_buf  = device.CreateBuffer<byte>(
-        is_ctx.GetNeighborOffsetCnt() * 2 * sizeof(float), EBufferUsageFlags::UNORDERED_ACCESS
+        is_ctx.GetNeighborOffsetCnt() * 2, EBufferUsageFlags::UNORDERED_ACCESS, PF_R8G8_SNORM
     );
 
     neighbor_offset_buf->SetName("neighbor_offset_buf");
 
-    AllocateAndFreeBdlsIfNeeded(bindless_handles.neighbor_offset, neighbor_offset_buf->GetView());
+    // AllocateAndFreeBdlsIfNeeded(bindless_handles.neighbor_offset, neighbor_offset_buf->GetView());
 }
 
 void RTContext::SetBindlessHandles(

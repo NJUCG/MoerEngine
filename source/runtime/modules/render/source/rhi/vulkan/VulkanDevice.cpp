@@ -4,6 +4,7 @@
 
 #include <string_view>
 #include <volk.h>
+#include "PixelFormat.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanExtension.h"
 #include "VulkanDevice.h"
@@ -1335,8 +1336,8 @@ namespace Moer::Render {
         return TextureRef{MoerNew(VulkanTexture)(info, this)};
     }
 
-    BufferRef VulkanDevice::CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) {
-        BufferInfo info{_element_cnt, _byte_stride, _usage};
+    BufferRef VulkanDevice::CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) {
+        BufferInfo info{_element_cnt, _byte_stride, _usage, _format};
         return BufferRef{MoerNew(VulkanBuffer)(info, *this)};
     }
 

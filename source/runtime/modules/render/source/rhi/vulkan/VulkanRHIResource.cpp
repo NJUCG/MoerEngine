@@ -1900,7 +1900,11 @@ namespace Moer::Render {
                             if(!_cmd.free){
                                 handles[_cmd.array_idx] = Handle((uint64)_cmd.buffer.Get(), _cmd.slot, 0, VulkanBindlessArray::Buffer);
                                 VulkanBuffer* vk_buffer = ResourceCast(_cmd.buffer.Get());
-                                uint          src_idx   = heap.GetBufferDescIdx(vk_buffer->GetView(), VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                                VkDescriptorType type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                                if(_cmd.format != PF_UNDEFINED){
+                                    LOG_WARNING("Bindless buffer with format is not supported yet, current buffer: {}", _cmd.buffer->GetName());
+                                }
+                                uint src_idx = heap.GetBufferDescIdx(vk_buffer->GetView(_cmd.format), type);
                                 
                                 memcpy(buffer_dat.data() + buffer_cnt * buffer_handle_stride, &heap.buffer_desc_data[src_idx], buffer_handle_stride);
                                 memcpy(array_dat.data() + array_idx * array_handle_stride, &_cmd.slot, sizeof(uint));
@@ -1963,7 +1967,7 @@ namespace Moer::Render {
         uint buffer_slot_ptr = free_buffer_slots.Pop();
         if (buffer_slot_ptr == 0) { buffer_slot = buffer_slot_offset++; } else { buffer_slot = buffer_slot_ptr; }
 
-        update_cmds.emplace_back(BufferUpdateInfo{_buffer.buffer, slot_idx, buffer_slot, false});
+        update_cmds.emplace_back(BufferUpdateInfo{_buffer.buffer, slot_idx, buffer_slot,_buffer.format, false});
         temp_slot_to_cmd[slot_idx] = update_cmds.size() - 1;
         std::unique_lock<std::mutex> lk(mtx);
         // buffers_allocated.emplace_back(_buffer.buffer, slot_idx, buffer_slot);
@@ -2016,12 +2020,9 @@ namespace Moer::Render {
         const auto& handle = handles[_array_idx];
         if(handle.type == Texture){
             update_cmds.emplace_back(TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, true});
-            // textures_freed.push_back(handle.slot);
         }else if (handle.type == Buffer){
-            // buffers_freed.push_back(handle.slot);
-            update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, true});
+            update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, PF_UNDEFINED, true});
         }
-        // resource_allocated_set.erase((uint64)(textures_allocated[handle.slot].texture.Get()));
     }
 
     void VulkanBindlessArray::FreeBuffer(uint _array_idx) {
@@ -2069,7 +2070,7 @@ namespace Moer::Render {
             update_cmds.emplace_back(TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, true});
         }else if (handle.type == Buffer){
             // buffers_freed.push_back(handle.slot);
-            update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, true});
+            update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, PF_UNDEFINED, true});
         }
         // resource_allocated_set.erase((uint64)(buffers_allocated[handle.slot].buffer.Get()));
     }

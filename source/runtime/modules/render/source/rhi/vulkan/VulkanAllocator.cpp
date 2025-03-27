@@ -1,4 +1,5 @@
 #include "VulkanAllocator.h"
+#include "PixelFormat.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
