@@ -778,6 +778,8 @@ namespace Moer::Render {
         writed_state_buffers.clear();
         write_blas_states.clear();
         flush_buffer_states.clear();
+        exported_buffers.clear();
+        exported_textures.clear();
     }
 
 }// namespace Moer::Render

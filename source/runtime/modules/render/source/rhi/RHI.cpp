@@ -1,4 +1,3 @@
-#pragma once
 #include "rhi/RHI.h"
 #include "PixelFormat.h"
 #include "log/LogSystem.h"

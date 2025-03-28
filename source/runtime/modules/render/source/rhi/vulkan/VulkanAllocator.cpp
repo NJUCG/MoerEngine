@@ -101,12 +101,19 @@ namespace Moer::Render {
         if (_size < small_block_size) {
             auto          handle = upload_allocator.Allocate(_size, _alignment);
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
+#if _DEBUG
+            if(handle.offset != 0){
+                buffer->SetName(std::format("SmallUploadBuffer_{}", upload_allocator.capacity));
+            }
+#endif
             return {buffer, handle.offset, _size, 1u};
         }
         auto          handle = allocator.Allocate(_size);
         VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
         large_buffers.push_back(buffer);
-
+#if _DEBUG
+        buffer->SetName(std::format("LargeUploadBuffer_{}", _size));
+#endif
         return {buffer, 0, _size, 1u};
     }
 
@@ -115,10 +122,18 @@ namespace Moer::Render {
         if (_size < small_block_size) {
             auto          handle = readback_allocator.Allocate(_size, _alignment);
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
+#if _DEBUG
+            if(handle.offset != 0){
+                buffer->SetName(std::format("SmallReadbackBuffer_{}", readback_allocator.capacity));
+            }
+#endif
             return {buffer, handle.offset, _size, 1u};
         }
         auto          handle = allocator.Allocate(_size);
         VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
+#if _DEBUG
+        buffer->SetName(std::format("LargeReadbackBuffer_{}", _size));
+#endif
         large_buffers.push_back(buffer);
 
         return {buffer, 0, _size, 1u};

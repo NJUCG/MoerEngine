@@ -456,7 +456,7 @@ namespace Moer::Render {
         VkBuffer           desc_buffer            = VK_NULL_HANDLE;
         VmaAllocation      desc_buffer_allocation = VK_NULL_HANDLE;
         VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        buffer_ci.size  = 114514 * 16;
+        buffer_ci.size  = s_queue_max_frame_in_flight * 256 * 16 * 100;
         buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
                           VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;

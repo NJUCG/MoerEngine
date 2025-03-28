@@ -51,18 +51,6 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC NRI
     PUBLIC NRD
 )
-# function(enable_sanitizer target_name)
-#     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-#         message(FATAL_ERROR "Sanitizer supported only for gcc/clang")
-#     endif()
-#     message(STATUS "Address sanitizer enabled")
-#     target_compile_options(${target_name} PRIVATE -fsanitize=address,undefined)
-#     target_compile_options(${target_name} PRIVATE -fno-sanitize=signed-integer-overflow)
-#     target_compile_options(${target_name} PRIVATE -fno-sanitize-recover=all)
-#     target_compile_options(${target_name} PRIVATE -fno-omit-frame-pointer)
-#     target_link_libraries(${target_name} PRIVATE -fsanitize=address,undefined -fuse-ld=gold)
-# endfunction()
-# enable_sanitizer(${MODULE_NAME})
 if(WIN32)
 target_compile_definitions(${MODULE_NAME}
     PUBLIC "MOER_VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Windows"

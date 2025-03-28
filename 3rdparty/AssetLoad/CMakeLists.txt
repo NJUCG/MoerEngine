@@ -66,6 +66,8 @@ add_sub_target(exr tinyexr ${third_party_folder}/tinyexr "")
 set_ide_folder(miniz ${third_party_folder}/tinyexr)
 
 add_sub_target(ktx ktx ${third_party_folder}/ktx "")
+target_compile_options(ktx INTERFACE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-macro-redefined>")
+
 add_sub_target(astc astc ${third_party_folder}/astc "")
 target_compile_options(astc PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-deprecated-declarations>")
 
