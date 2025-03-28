@@ -471,7 +471,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     auto time = timer.ElapsedMilliseconds();
     // LOG_INFO("PrepareLightPass::Process, convert time:{}",
     // timer.ElapsedMilliseconds());
-    _cmd_list.PushScope("PrepareLights");
+    _cmd_list.PushScopeWithTimeScope("PrepareLights");
     _cmd_list.CopyFrom(
         std::span<byte>((byte*)geo_instance_to_light.data(), geo_instance_to_light.size() * sizeof(uint)),
         _rt_ctx.geo_instance_to_light_buf->GetView()
@@ -537,7 +537,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
                            tasks(std::move(tasks))]() {
 
     });
-    _cmd_list.PopScope();
+    _cmd_list.PopScopeWithTimeScope();
     b_odd_frame = !b_odd_frame;
 }
 

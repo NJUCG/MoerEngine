@@ -1,5 +1,7 @@
 #include "VulkanQueue.h"
 #include "RHICmdReorderer.h"
+#include "VulkanAllocator.h"
+#include "VulkanCommand.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanRHIResource.h"
@@ -804,11 +806,12 @@ namespace Moer::Render {
         VulkanAllocator&       allocator;
         VkTracker&             tracker;
         const TCachedArgArray& cached_args;
+        ProfilerStorage*       profiler = nullptr;
 
     public:
-        VkCmdVisitor(VulkanDevice& _device, VulkanAllocator& _allocator, VkTracker& _tracker, VulkanCmdList& _cmd_list, const TCachedArgArray& _cached_args) : VulkanDeviceObject(&_device),
-                                                                                                                                                               allocator(_allocator), tracker(_tracker),
-                                                                                                                                                               cmd_list(_cmd_list), cached_args(_cached_args) {}
+        VkCmdVisitor(VulkanDevice& _device, VulkanAllocator& _allocator, VkTracker& _tracker, VulkanCmdList& _cmd_list, const TCachedArgArray& _cached_args, ProfilerStorage* _profiler = nullptr) : VulkanDeviceObject(&_device),
+                                                                                                                                                                                                     allocator(_allocator), tracker(_tracker),
+                                                                                                                                                                                                     cmd_list(_cmd_list), cached_args(_cached_args), profiler(_profiler) {}
 
         void VisitCmd(const Command* _cmd) {
             switch (_cmd->Type()) {
@@ -1539,8 +1542,16 @@ namespace Moer::Render {
         void Visit(const ScopeCmd& _cmd) {
             if (_cmd.IsPush()) {
                 cmd_list.BeginLabel(_cmd.ScopeName(), {0.0f, 1.0f, 0.0f, 1.0f});
+                if (_cmd.QueryTimestamp()) {
+                    assert(profiler && "profiler is not set");
+                    profiler->BeginProfilerSession(cmd_list, _cmd.ScopeName());
+                }
             } else {
                 cmd_list.EndLabel();
+                if (_cmd.QueryTimestamp()) {
+                    assert(profiler && "profiler is not set");
+                    profiler->EndProfilerSession(cmd_list, _cmd.ScopeName());
+                }
             }
         }
 
@@ -1889,10 +1900,95 @@ namespace Moer::Render {
 
 #pragma endregion
 
+#pragma region[ Profiler ]
+    ProfilerStorage::ProfilerStorage(VkNativeQueryPool& _pool) : timestamp_pool(_pool) {
+
+        std::memset(queries_used, 0, sizeof(queries_used));
+        std::memset(query_pool_results, 0, sizeof(query_pool_results));
+        timestamp_period = timestamp_pool.GetDevice().GetCoreProperties().core_1_0.limits.timestampPeriod;
+        active           = true;
+        name2sample.reserve(100);
+    }
+    void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
+        if (!active) {
+            return;
+        }
+        bool b_any_query_used = false;
+        //maybe should use last frame
+        for (uint idx = 0; idx < s_max_num_profiler_queries_per_frame / 8; ++idx) {
+            if (queries_used[idx + cur_frame * s_max_num_profiler_queries_per_frame / 8]) {
+                b_any_query_used = true;
+                break;
+            }
+        }
+        if (b_any_query_used) {
+            VkResult result = vkGetQueryPoolResults(timestamp_pool.GetDevice().GetDevice(), timestamp_pool.GetHandle(), s_max_num_profiler_queries_per_frame * cur_frame, s_max_num_profiler_queries_per_frame, sizeof(query_pool_results), query_pool_results,
+                                                    sizeof(query_pool_results[0]) * 2,// each result contain two int
+                                                    VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+
+            if (result != VK_SUCCESS && result != VK_NOT_READY) {
+                LOG_ERROR("Failed call to vkGetQueryPoolResults, error code = {}\n", uint64(result));
+                b_any_query_used = false;
+            }
+        }
+
+        if (b_any_query_used) {
+            for (auto& [name, sample] : name2sample) {
+                // clang-format off
+                if (IsQueryUsed (sample.index * 2 + 0 + cur_frame * s_max_num_profiler_queries_per_frame)
+                    && IsQueryUsed(sample.index * 2 + 1 + cur_frame * s_max_num_profiler_queries_per_frame)
+                    && query_pool_results[sample.index * 2 * 2 + 1] != 0 // first *2 for begin/end, second *2 for query result
+                    && query_pool_results[(sample.index * 2 + 1) * 2 + 1] != 0) {
+                    // clang-format on
+
+                    uint64_t begin = query_pool_results[sample.index * 2 * 2 + 0];
+                    uint64_t end   = query_pool_results[(sample.index * 2 + 1) * 2 + 0];
+                    sample.Record(end - begin);
+                } else {
+                    // not valid
+                    sample.Reset();
+                }
+            }
+        } else {
+            memset(query_pool_results, 0, sizeof(query_pool_results));
+        }
+
+        vkCmdResetQueryPool(_cb, timestamp_pool.GetHandle(), s_max_num_profiler_queries_per_frame * cur_frame, s_max_num_profiler_queries_per_frame);
+
+        memset(queries_used + s_max_num_profiler_queries_per_frame * cur_frame / 8, 0, s_max_num_profiler_queries_per_frame / 8);
+    }
+
+    int ProfilerStorage::GetQueryStorageIndex(std::string_view _name) {
+        if (name2sample.find(_name.data()) == name2sample.end()) {
+            name2sample[_name.data()] = Sample(name2sample.size());
+        }
+        return name2sample[_name.data()].index;
+    }
+
+    void ProfilerStorage::BeginProfilerSession(VulkanCmdList& _cmd_list, std::string_view _name) {
+        if (!active) {
+            return;
+        }
+        uint idx = GetQueryStorageIndex(_name) * 2 + 0 + cur_frame * s_max_num_profiler_queries_per_frame;
+        vkCmdWriteTimestamp(_cmd_list.GetHandle(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestamp_pool.GetHandle(), idx);
+        SetQueryUsed(idx);
+        assert(IsQueryUsed(idx + 1) == false && "Query already used");
+    }
+
+    void ProfilerStorage::EndProfilerSession(VulkanCmdList& _cmd_list, std::string_view _name) {
+        if (!active) {
+            return;
+        }
+        uint idx = GetQueryStorageIndex(_name) * 2 + 1 + cur_frame * s_max_num_profiler_queries_per_frame;
+        vkCmdWriteTimestamp(_cmd_list.GetHandle(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestamp_pool.GetHandle(), idx);
+        SetQueryUsed(idx);
+        assert(IsQueryUsed(idx - 1) == true && "Query not used");
+    }
+#pragma endregion
+
 #pragma region[ VkCommandQueue ]
     WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
         Timer timer{};
-        timer.Start();
 
         FunctionTable function_table{
             .is_resource_write       = &IsBufferTextureWrite,
@@ -1917,14 +2013,12 @@ namespace Moer::Render {
         auto& tracker = vk_allocator.GetTracker();
 
         //Visitor for actual command recording
-        VkCmdVisitor visitor(vk_device, vk_allocator, tracker, vk_allocator.GetCmdList(), _submit.cached_args);
+        VkCmdVisitor visitor(vk_device, vk_allocator, tracker, vk_allocator.GetCmdList(), _submit.cached_args, &profiler_storage);
 
         //Visitor for barrier generation
         VkCmdPreprocessor preprocessor(vk_device, tracker, vk_allocator, function_table, _submit.cached_args);
 
-        timer.Stop();
         // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
-        timer.Start();
         const auto& cmd_lists = reorderer.m_cmd_lists;
         bool        has_cmd   = !reorderer.m_cmd_lists.empty();
         uint64      last_time = last_frame;
@@ -1932,6 +2026,12 @@ namespace Moer::Render {
         //Set Descriptor buffer ringbuffer offset and start debug region
         if (has_cmd) {
             vk_allocator.GetCmdList().Begin();
+            if (_submit.b_tick_profiling) {
+                profiler_storage.CollectProfiling(vk_allocator.GetCmdList().GetHandle());
+                cached_profiler_entry = profiler_storage.GetProfilerEntry();
+                timer.Start();
+            }
+
             if (queue.GetType() != EQueueType::Copy) {
                 vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(last_time + 1);
             }
@@ -1983,7 +2083,13 @@ namespace Moer::Render {
                 MoerDelete(resource);
             }
         });
-        timer.Stop();
+        // auto&& on_scope_exit = OnScopeExit([&]() {
+        //     if (_submit.b_tick_profiling) {
+        //         timer.Stop();
+        //         profiler_storage.RegisterCpuTimestamp(timer.ElapsedMilliseconds());
+        //         profiler_storage.AdvanceFrame();
+        //     }
+        // });
         // LOG_INFO("Command Recording time {}", timer.ElapsedMilliseconds());
         if (_submit.cmds.empty()) {
             allocators.Push(allocator_ptr.release());
@@ -2009,7 +2115,6 @@ namespace Moer::Render {
             }
             return {uint64(timeline), last_time};
         } else {
-            timer.Start();
             auto current_timeline = ++last_frame;
             // LOG_INFO("signal timeline {}", current_timeline);
 
@@ -2032,8 +2137,12 @@ namespace Moer::Render {
                 event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, false);
             }
             queue_cv.notify_one();
-            timer.Stop();
             executed_queue.Enqueue(current_timeline);
+            if (_submit.b_tick_profiling) {
+                timer.Stop();
+                profiler_storage.RegisterCpuTimestamp(timer.ElapsedMilliseconds());
+                profiler_storage.AdvanceFrame();
+            }
             // LOG_INFO("Submit time {}", timer.ElapsedMilliseconds());
             return {uint64(timeline), current_timeline};
         }
@@ -2103,6 +2212,10 @@ namespace Moer::Render {
 
     void VkCommandQueue::Sync() {
         Complete(last_frame);
+    }
+
+    Array<ProfileResultEntry> VkCommandQueue::GetProfilerEntry() {
+        return profiler_storage.GetProfilerEntry();
     }
 
     UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {

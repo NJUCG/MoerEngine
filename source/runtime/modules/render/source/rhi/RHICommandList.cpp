@@ -117,8 +117,8 @@ namespace Moer::Render {
         cmd_list.commands.back()->name = _name;
     }
 
-    CmdSubmit CommandList::Submit() {
-        CmdSubmit submit(std::move(commands), std::move(callbacks), std::move(cached_args));
+    CmdSubmit CommandList::Submit(bool _tick_profiler) {
+        CmdSubmit submit(std::move(commands), std::move(callbacks), std::move(cached_args), _tick_profiler);
         commands.clear();
         callbacks.clear();
         return std::move(submit);
@@ -295,11 +295,23 @@ namespace Moer::Render {
     }
 
     void CommandList::PushScope(std::string_view _name) {
-        commands.push_back(MakeUnique<ScopeCmd>(_name, true));
+        commands.push_back(MakeUnique<ScopeCmd>(_name, true, false));
+        scope_stack.push(_name);
+    }
+
+    void CommandList::PushScopeWithTimeScope(std::string_view _name) {
+        commands.push_back(MakeUnique<ScopeCmd>(_name, true, true));
+        scope_stack.push(_name);
     }
 
     void CommandList::PopScope() {
-        commands.push_back(MakeUnique<ScopeCmd>("", false));
+        commands.push_back(MakeUnique<ScopeCmd>(scope_stack.front(), false, false));
+        scope_stack.pop();
+    }
+
+    void CommandList::PopScopeWithTimeScope() {
+        commands.push_back(MakeUnique<ScopeCmd>(scope_stack.front(), false, true));
+        scope_stack.pop();
     }
 #pragma region[ raytracing ]
 

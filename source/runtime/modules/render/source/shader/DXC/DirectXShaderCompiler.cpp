@@ -155,6 +155,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(L"-fvk-use-dx-position-w");
         arguments.push_back(L"-fvk-use-dx-layout");
         arguments.push_back(L"-fvk-auto-shift-bindings");
+        arguments.push_back(L"-fspv-preserve-interface");
         arguments.push_back(L"-DVULKAN=1");
         // arguments.push_back(L"-fspv-flatten-resource-arrays");
     };

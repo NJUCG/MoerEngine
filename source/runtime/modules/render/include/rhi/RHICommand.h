@@ -436,6 +436,7 @@ namespace Moer::Render {
         Array<WaitEvent>   wait_events;
         Array<SignalEvent> signal_events;
         bool               b_sync{false};//force sync queue timeline
+        bool               b_tick_profiling{false};
         CmdSubmit&&        Wait(Fence* _fence, uint64 _wait_value) {
             wait_events.emplace_back(uint64(_fence), _wait_value);
             return std::move(*this);
@@ -452,25 +453,27 @@ namespace Moer::Render {
         }
 
         CmdSubmit(CmdSubmit&& _other) noexcept {
-            cmds          = std::move(_other.cmds);
-            callbacks     = std::move(_other.callbacks);
-            wait_events   = std::move(_other.wait_events);
-            signal_events = std::move(_other.signal_events);
-            cached_args   = std::move(_other.cached_args);
-            b_sync        = _other.b_sync;
+            cmds             = std::move(_other.cmds);
+            callbacks        = std::move(_other.callbacks);
+            wait_events      = std::move(_other.wait_events);
+            signal_events    = std::move(_other.signal_events);
+            cached_args      = std::move(_other.cached_args);
+            b_sync           = _other.b_sync;
+            b_tick_profiling = _other.b_tick_profiling;
         }
 
         CmdSubmit& operator=(CmdSubmit&& _other) noexcept {
-            cmds          = std::move(_other.cmds);
-            callbacks     = std::move(_other.callbacks);
-            wait_events   = std::move(_other.wait_events);
-            signal_events = std::move(_other.signal_events);
-            cached_args   = std::move(_other.cached_args);
-            b_sync        = _other.b_sync;
+            cmds             = std::move(_other.cmds);
+            callbacks        = std::move(_other.callbacks);
+            wait_events      = std::move(_other.wait_events);
+            signal_events    = std::move(_other.signal_events);
+            cached_args      = std::move(_other.cached_args);
+            b_sync           = _other.b_sync;
+            b_tick_profiling = _other.b_tick_profiling;
             return *this;
         }
-        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks, TCachedArgArray&& _cached_args) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)),
-                                                                                                                                      cached_args(std::move(_cached_args)) {
+        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks, TCachedArgArray&& _cached_args, bool _b_tick_profiler) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)),
+                                                                                                                                                             cached_args(std::move(_cached_args)), b_tick_profiling(_b_tick_profiler) {
         }
 
         std::string ToString() const {
@@ -796,6 +799,9 @@ namespace Moer::Render {
         RENDER_API void PushScope(std::string_view _name);
         RENDER_API void PopScope();
 
+        RENDER_API void PushScopeWithTimeScope(std::string_view _name);
+        RENDER_API void PopScopeWithTimeScope();
+
         template<typename T, typename... Args>
         struct CountType;
 
@@ -901,7 +907,7 @@ namespace Moer::Render {
 
         RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
-        RENDER_API CmdSubmit Submit();
+        RENDER_API CmdSubmit Submit(bool _b_tick_profiler = false);
 
     private:
         friend DrawDispatcher;
@@ -947,18 +953,24 @@ namespace Moer::Render {
         Command*                     current_barriers{nullptr};
         Array<std::function<void()>> callbacks;
         TCachedArgArray              cached_args;
+        Queue<std::string_view>      scope_stack;
     };
     class QueueCmd {};
 
+    struct ProfileResultEntry {
+        std::string name;
+        double      time;
+    };
     class RENDER_API CommandQueue {
     public:
         CommandQueue(){};
         CommandQueue(EQueueType _type, RenderDevice& _device);
-        void              Test();
-        virtual void      Wait(WaitEvent _event)                                = 0;
-        virtual WaitEvent Execute(CmdSubmit&& _submit)                          = 0;
-        virtual void      Present(SwapchainRef _swapchain, TextureView _target) = 0;
-        virtual void      Sync()                                                = 0;
+        void                              Test();
+        virtual void                      Wait(WaitEvent _event)                                = 0;
+        virtual WaitEvent                 Execute(CmdSubmit&& _submit)                          = 0;
+        virtual void                      Present(SwapchainRef _swapchain, TextureView _target) = 0;
+        virtual void                      Sync()                                                = 0;
+        virtual Array<ProfileResultEntry> GetProfilerEntry()                                    = 0;
     };
 
     class RENDER_API CopyQueue {

@@ -49,7 +49,7 @@ void AntialiasPass::Process(
     params.pqc                    = std::clamp(_param.max_radiance, 1e-4f, 1e8f);
     params.inv_pqc                = 1.f / params.pqc;
 
-    _cmd_list.PushScope("AntiAliasPass");
+    _cmd_list.PushScopeWithTimeScope("AntiAliasPass");
     Array<Moer::byte> upload_data(sizeof(TAAParams));
     upload_data.assign((Moer::byte*)&params, (Moer::byte*)&params + sizeof(TAAParams));
 
@@ -71,7 +71,7 @@ void AntialiasPass::Process(
         )
         .Dispatch(uint3(grid_size.x, grid_size.y, 1), "TAAPass");
 
-    _cmd_list.PopScope();
+    _cmd_list.PopScopeWithTimeScope();
 }
 
 void AntialiasPass::AdvanceFrame() {

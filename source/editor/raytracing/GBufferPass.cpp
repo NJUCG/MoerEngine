@@ -37,7 +37,7 @@ void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     FrameResources& frame_rt        = _rt_ctx.frame_rt;
     bool            b_current_frame = _rt_ctx.b_current_frame;
-    _cmd_list.PushScope("GBufferPass");
+    _cmd_list.PushScopeWithTimeScope("GBufferPass");
     _cmd_list.CopyFrom(std::move(upload_data), gbuffer_constants->GetView());
 
     _cmd_list
@@ -73,6 +73,6 @@ void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             "PostProcessGBuffer"
         );
 
-    _cmd_list.PopScope();
+    _cmd_list.PopScopeWithTimeScope();
 }
 } // namespace Moer::Render::Raytracing

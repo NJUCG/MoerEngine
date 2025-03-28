@@ -981,16 +981,18 @@ namespace Moer::Render {
     //command for push/pop debug scope
     struct ScopeCmd : public Command {
     public:
-        ScopeCmd(std::string_view _name, bool _push) : Command(EType::Scope, _name), b_push(_push), scope_name(_name) {}
+        ScopeCmd(std::string_view _name, bool _push, bool _query_timestamp) : Command(EType::Scope, _name), b_push(_push), scope_name(_name), b_query_timestamp(_query_timestamp) {}
 
     public:
         EQueueType GetQueueType() const override { return EQueueType::Graphics; }
         bool       IsPush() const { return b_push; }
         bool       IsPop() const { return !b_push; }
         auto       ScopeName() const { return scope_name; }
+        bool       QueryTimestamp() const { return b_query_timestamp; }
 
     private:
-        bool             b_push = false;
+        bool             b_push            = false;
+        bool             b_query_timestamp = false;
         std::string_view scope_name;
     };
 

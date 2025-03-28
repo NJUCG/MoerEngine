@@ -63,9 +63,10 @@ namespace Moer::Render {
     public:
         VkNativeQueryPool(VulkanDevice& _device, VkQueryType _type, uint32 _count);
         ~VkNativeQueryPool();
-        VkQueryPool GetHandle() const { return query_pool; }
-        uint32      GetCount() const { return count; }
-        void        GetResults(std::span<uint64> _results, uint32 _first_query, uint32 _query_cnt, VkQueryResultFlags _flags);
+        VkQueryPool   GetHandle() const { return query_pool; }
+        uint32        GetCount() const { return count; }
+        void          GetResults(std::span<uint64> _results, uint32 _first_query, uint32 _query_cnt, VkQueryResultFlags _flags);
+        VulkanDevice& GetDevice() const { return device; }
 
     private:
         VulkanDevice& device;

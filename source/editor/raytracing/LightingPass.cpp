@@ -78,7 +78,7 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     upload_data.resize(sizeof(ResampleConstants));
     std::memcpy(upload_data.data(), &constants, sizeof(ResampleConstants));
-    _cmd_list.PushScope("LightingPass");
+    _cmd_list.PushScopeWithTimeScope("LightingPass");
     _cmd_list.CopyFrom(std::move(upload_data), resample_params->GetView());
     bool b_current_frame = _rt_ctx.b_current_frame;
 
@@ -162,7 +162,7 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         _cmd_list.Compute(di_shade_sample_pipeline, arg_ref).Dispatch(uint3(dispatch_size, 1), "ShadeSample");
     }
 
-    _cmd_list.PopScope();
+    _cmd_list.PopScopeWithTimeScope();
 #undef DI_BINDING_ARGS
 }
 

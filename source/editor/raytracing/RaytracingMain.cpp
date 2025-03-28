@@ -169,7 +169,7 @@ public:
 static Box3D          scene_bounding{};
 static constexpr uint max_frame_in_flight = 3;
 
-void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
+void RaytracingMain(SharedPtr<EditorUI> _editor_ui) {
     // Get a lot of things
     auto&            device              = RenderDevice::Get();
     auto&            manager             = ShaderManager::Get();
@@ -181,7 +181,7 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
     CommandList      cmd_list            = {};
 
     // Initialize Swapchain
-    auto resolution = editor_ui->GetResolution(); // TODO: 是否要从WindowContext中获取resolution?
+    auto resolution = _editor_ui->GetResolution(); // TODO: 是否要从WindowContext中获取resolution?
 
     auto sc_info = SwapchainCreateInfo{
         .window_handle    = (uintptr_t)WindowContext::GetMainWindow(),
@@ -192,7 +192,7 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
     auto sc = device.CreateSwapchain(sc_info);
 
     // MARK: Scene
-    Resource::LoaderInterface::LoadSceneFromFileAsync(editor_ui->GetConfig().scene_path, &scene);
+    Resource::LoaderInterface::LoadSceneFromFileAsync(_editor_ui->GetConfig().scene_path, &scene);
     auto&& scope_exit_reset_async_load_info = OnScopeExit([&] { Scene::ResetAsyncLoadInfo(); });
 
     // TODO: combine RasterMain and RaytracingMain common part (above code)
@@ -353,14 +353,14 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
         });
     };
 
-    editor_ui->SetShowSubUI(true);
+    _editor_ui->SetShowSubUI(true);
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         WindowContext::Tick();
-        editor_ui->TickUI();
+        _editor_ui->TickUI();
         int w_width, w_height;
         if (time >= max_frame_in_flight) { timeline->Wait(time - max_frame_in_flight); }
-        RaytracingConfig& ui_config = editor_ui->m_raytracing_ui.GetEditableConfig();
+        RaytracingConfig& ui_config = _editor_ui->m_raytracing_ui.GetEditableConfig();
 
         timer.Stop();
         auto frame_time = timer.ElapsedMilliseconds();
@@ -369,7 +369,7 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
             std::this_thread::yield();
-            editor_ui->RenderGUI(cmd_list, output);
+            _editor_ui->RenderGUI(cmd_list, output);
             continue;
         }
         if (w_width != resolution.x || w_height != resolution.y) {
@@ -542,13 +542,14 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
                     cmd_list.UpdateRaytracingScene(rt_scene);
                 }
 
-                editor_ui->RegisterUIFunc(
+                _editor_ui->RegisterUIFunc(
                     "Display MaterialTexture",
                     [&scene,
                      &selected_material_texture_name,
                      &b_use_bindless,
                      &b_final_show_texture,
-                     &mip_level]() {
+                     &mip_level,
+                     &gfx_queue]() {
                         ImGui::Checkbox("Show Final Texture", &b_final_show_texture);
                         ImGui::SliderInt("Mip Level", (int*)&mip_level, 0, 12);
                         ImGui::Checkbox("Use Bindless", &b_use_bindless);
@@ -561,6 +562,10 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
                             }
                             ImGui::TreePop();
                         }
+
+                        //Pass profiling
+                        auto entrys = gfx_queue.GetProfilerEntry();
+                        for (auto& [name, time] : entrys) { ImGui::Text("%s: %.3f ms", name.c_str(), time); }
                     }
                 );
 
@@ -1015,9 +1020,9 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
         TextureRef final_color =
             b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color;
 
-        ui_combine_pass->Process(cmd_list, resolution, final_color, ui_frame_buffer, output, editor_ui);
+        ui_combine_pass->Process(cmd_list, resolution, final_color, ui_frame_buffer, output, _editor_ui);
 
-        editor_ui->RenderGUI(cmd_list, output);
+        _editor_ui->RenderGUI(cmd_list, output);
 
         // {
         //     for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
@@ -1035,11 +1040,11 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
         rt_scene->AdvanceFrame();
 
         time++;
-        gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
+        gfx_queue.Execute(cmd_list.Submit(true).Signal(timeline, time));
         gfx_queue.Present(sc, output);
-        editor_ui->PresentWindows();
+        _editor_ui->PresentWindows();
 
-        if (editor_ui->IsNeedReload()) { break; }
+        if (_editor_ui->IsNeedReload()) { break; }
     }
 
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
@@ -1054,7 +1059,7 @@ void RaytracingMain(SharedPtr<EditorUI> editor_ui) {
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
-    editor_ui->UnregisterUIFunc("Display MaterialTexture");
+    _editor_ui->UnregisterUIFunc("Display MaterialTexture");
 }
 
 } // namespace Moer::Render::Raytracing
