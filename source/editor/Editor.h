@@ -5,6 +5,7 @@
 namespace Moer {
 
 class EditorUI;
+class EditorAssets;
 
 /**
  * TODO: 将Runtime和Editor分离
@@ -23,7 +24,8 @@ private:
     void ShutDown3rdParty();
 
 private:
-    SharedPtr<EditorUI> m_editor_ui;
+    SharedPtr<EditorUI>     m_editor_ui;
+    UniquePtr<EditorAssets> m_editor_assets;
 };
 
 } // namespace Moer

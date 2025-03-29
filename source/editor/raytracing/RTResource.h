@@ -3,6 +3,7 @@
 
 #include "Configs.h"
 #include "ShaderUtils.h"
+#include "common/EditorAssets.h"
 #include "misc/STL.h"
 #include "rhi/RHIResource.h"
 #include "scene/Camera.h"
@@ -13,26 +14,6 @@
 #include <string_view>
 
 namespace Moer::Render::Raytracing {
-
-class RTResource {
-public:
-    RTResource(const std::filesystem::path& _resouce_path);
-    ~RTResource();
-    void LoadResources();
-    void UnloadResources();
-
-    TextureRef                                   GetTexture(std::string_view _name) const;
-    BufferRef                                    GetBuffer(std::string_view _name) const;
-    TextureRef                                   GetDefaultEnvMap();
-    const UnorderedMap<std::string, TextureRef>& GetTextures() const { return textures; }
-
-private:
-    bool                  b_loaded;
-    std::filesystem::path resource_path;
-    std::string_view      default_env_map_name;
-
-    UnorderedMap<std::string, TextureRef> textures;
-};
 
 struct FrameResources {
     TextureRef view_depth;
@@ -116,7 +97,7 @@ public:
 
     const RaytracingBindlessHandles& GetBindlessHandles() const { return bindless_handles; }
 
-    void LoadDefaultResources(RTResource& _rt_res);
+    void LoadDefaultResources(EditorAssets& _rt_res);
 
     const UnorderedSet<uint>& GetAllocatedBdlsBuf() { return allocated_bdls_buf; }
     const UnorderedSet<uint>& GetAllocatedBdlsTex() { return allocated_bdls_tex; }

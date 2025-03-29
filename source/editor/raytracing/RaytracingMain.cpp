@@ -1,6 +1,7 @@
 #include "RaytracingMain.h"
 
 // Runtime
+#include "common/EditorAssets.h"
 #include "config/ConfigManager.h"
 #include "loader/LoaderInterface.h"
 #include "misc/Timer.h"
@@ -42,134 +43,11 @@ union FloatBits {
     float        f;
     unsigned int ui;
 };
-struct RTViewParam {
-
-    Matrix4x4f view2world;
-    Matrix4x4f world2view;
-    float4     frustum;
-    float2     near_far;
-    uint2      rect;
-    float2     inv_rect;
-    float2     jitter;
-    float3     dir;
-    float      orthomode;
-};
-
-struct RTConfigParam {
-    Matrix4x4f view2world;
-    Matrix4x4f view2clip;
-    Matrix4x4f world2view;
-    Matrix4x4f world2view_prev;
-    Matrix4x4f world2clip;
-    Matrix4x4f world2clip_prev;
-    float4     nrd_hit_dist_params_dummy;
-    float4     sun_direction_gexposure;
-    float4     camera_origin_gmipbias;
-    float4     view_direction_gorthomode;
-    // float4 HairBaseColorOverride; // w is alpha or blend factor
-    // float2 HairBetasOverride;
-    float2   window_size;
-    float2   inv_window_size;
-    float2   output_size;
-    float2   inv_output_size;
-    float2   render_size;
-    float2   inv_render_size;
-    float2   rect_size;
-    float2   inv_rect_size;
-    float2   rect_size_prev;
-    float2   jitter;
-    float    emission_intensity;
-    float    separator;
-    float    roughness_override;
-    float    metalness_override;
-    float    unit_to_meters_multiplier;
-    float    indirect_diffuse;
-    float    indirect_specular;
-    float    tan_sun_angular_radius;
-    float    tan_pixel_angular_radius;
-    float    debug;
-    float    transparent;
-    float    prev_frame_confidence;
-    float    min_probability;
-    float    unproject;
-    float    aperture;
-    float    focal_distance;
-    float    focal_length;
-    uint32_t denoiser_type;
-    uint32_t on_screen;
-    uint32_t frame_index;
-    uint32_t forced_material;
-    uint32_t use_normalmap;
-    uint32_t b_worldspace_motion;
-    uint32_t tracing_mode;
-    uint32_t sample_num;
-    uint32_t bounce_num;
-    uint32_t taa;
-    uint32_t resolve;
-    uint32_t psr;
-    uint32_t validation;
-    uint32_t trim_lobe;
-    // uint32_t highlight_ahs;
-    // uint32_t ahs_dynamic_mip;
-
-    // Ambient
-    float ambient_max_accumulated_frames_num;
-    float ambient;
-};
-
-class TestInlineRTShader : public ComputePipeline {
-public:
-    struct Param {
-        uint   instance_buffer_handle;
-        uint   geometry_buffer_handle;
-        uint   material_buffer_handle;
-        uint   global_param_handle;
-        uint   light_buffer_handle;
-        uint2  rect;
-        float2 inv_rect;
-        float2 jitter;
-        uint   frame_idx;
-    };
-    DEFINE_COMPUTE_PIPELINE_CLASS(TestInlineRTShader);
-
-    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_BUFFER(rt_config);
-    DEFINE_SHADER_TEX(out_normal_roughness);
-    DEFINE_SHADER_TEX(out_basecolor_metalness);
-    DEFINE_SHADER_TEX(out_direct_lighting);
-    DEFINE_SHADER_TEX(out_emission);
-    DEFINE_SHADER_TEX(out_diffuse);
-    DEFINE_SHADER_TEX(out_specular);
-    DEFINE_SHADER_TEX(out_view_z);
-    DEFINE_SHADER_TEX(out_mv);
-    DEFINE_SHADER_TEX(out_shadow_info);
-    DEFINE_SHADER_TEX(out_scene_color);
-
-    DEFINE_SHADER_TLAS(tlas);
-    DEFINE_SHADER_CONSTANT_STRUCT(Param, param);
-
-    DEFINE_SHADER_ARGS(
-        param,
-        rt_config,
-        out_normal_roughness,
-        out_basecolor_metalness,
-        out_direct_lighting,
-        out_emission,
-        out_diffuse,
-        out_specular,
-        out_view_z,
-        out_mv,
-        out_shadow_info,
-        out_scene_color,
-        bdls,
-        tlas
-    );
-};
 
 static Box3D          scene_bounding{};
 static constexpr uint max_frame_in_flight = 3;
 
-void RaytracingMain(SharedPtr<EditorUI> _editor_ui) {
+void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets) {
     // Get a lot of things
     auto&            device              = RenderDevice::Get();
     auto&            manager             = ShaderManager::Get();
@@ -197,27 +75,20 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui) {
 
     // TODO: combine RasterMain and RaytracingMain common part (above code)
 
-    RTResource rt_res(ConfigManager::GetInstance().GetEditorResourcePath());
-    bool       b_new_env_map = false;
+    // RTResource rt_res(ConfigManager::GetInstance().GetEditorResourcePath());
+    bool b_new_env_map = false;
 
-    GraphEventRef load_res_event = LambdaTask::Create([&rt_res, &b_new_env_map]() {
-                                       rt_res.LoadResources();
-                                       // memory barrier
-                                       std::atomic_thread_fence(std::memory_order_acq_rel);
-                                       b_new_env_map = true;
-                                   }).Dispatch();
+    // GraphEventRef load_res_event = LambdaTask::Create([&rt_res, &b_new_env_map]() {
+    //                                    rt_res.LoadResources();
+    //                                    // memory barrier
+    //                                    std::atomic_thread_fence(std::memory_order_acq_rel);
+    //                                    b_new_env_map = true;
+    //                                }).Dispatch();
 
     TextureRef         env_map{};
     Array<TextureView> env_mips;
     TextureRef         env_pdf{};
     Array<TextureView> env_pdf_mips;
-
-    RTConfigParam rt_config_param{};
-
-    BufferRef rt_config_param_buffer =
-        device.CreateBuffer<Moer::byte>(sizeof(RTConfigParam) * 1, EBufferUsageFlags::CONSTANT_BUFFER);
-
-    rt_config_param_buffer->SetName("rt_config_param_buffer");
 
     RaytracingSceneRef rt_scene = device.CreateRaytracingScene();
 
@@ -406,9 +277,10 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui) {
         }
 
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady() &&
-            load_res_event->IsComplete()) {
+            _editor_assets.IsReady()) {
             // load scene
             if (first_load) {
+                b_new_env_map = true;
                 // calculate bounding box
                 scene_bounding.min = float3(0.f);
                 scene_bounding.max = float3(0.f);
@@ -577,24 +449,24 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui) {
             if (b_new_env_map) {
 
                 {
-                    static bool first_load = true;
-                    if (first_load) {
-                        first_load = false;
-                        Array<ImportTexture> import_textures;
-                        const auto&          rt_res_textures = rt_res.GetTextures();
-                        for (auto& [name, tex] : rt_res_textures) {
-                            import_textures.emplace_back(
-                                ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE)
-                            );
-                        }
-                        cmd_list.ImportResourcesFromQueue(EQueueType::Copy, std::move(import_textures), {});
-                    }
-                    gfx_queue.Execute(
-                        cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue())
-                    );
-                    gfx_queue.Sync();
+                    // static bool first_load = true;
+                    // if (first_load) {
+                    //     first_load = false;
+                    //     Array<ImportTexture> import_textures;
+                    //     const auto&          rt_res_textures = rt_res.GetTextures();
+                    //     for (auto& [name, tex] : rt_res_textures) {
+                    //         import_textures.emplace_back(
+                    //             ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE)
+                    //         );
+                    //     }
+                    //     cmd_list.ImportResourcesFromQueue(EQueueType::Copy, std::move(import_textures), {});
+                    // }
+                    // gfx_queue.Execute(
+                    //     cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue())
+                    // );
+                    // gfx_queue.Sync();
                 }
-                env_map                                  = rt_res.GetDefaultEnvMap();
+                env_map                                  = _editor_assets.GetDefaultEnvMap();
                 auto                             cur_env = scene.GetCurrentEnvMap();
                 Moer::EnvironmentLightComponent* env_light =
                     MoerNew(Moer::EnvironmentLightComponent)(float3(1.f), env_map->GetExtent().xy);
@@ -627,7 +499,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui) {
                 sd_utils.GenerateMips(cmd_list, env_mips);
                 b_new_env_map = false;
 
-                rt_ctx->LoadDefaultResources(rt_res);
+                rt_ctx->LoadDefaultResources(_editor_assets);
                 rt_ctx->CreateEnvMapResources(scene.GetCurrentEnvMap(), cmd_list);
             }
 
@@ -649,28 +521,8 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui) {
             auto camera        = CameraManager::Get().Get(camera_entity);
             // prepare frame
             {
-                rt_config_param.world2view_prev = Transpose(camera->GetViewMatrix());
-                rt_config_param.world2clip_prev =
-                    Transpose(camera->GetProjectionMatrix() * camera->GetViewMatrix());
-
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
                 camera->Tick();
-
-                rt_config_param.view2world = Transpose(camera->GetToWorldMatrix());
-                rt_config_param.view2clip  = Transpose(camera->GetProjectionMatrix());
-                rt_config_param.world2view = Transpose(camera->GetViewMatrix());
-                rt_config_param.world2clip = Transpose(camera->GetViewProjectionMatrix());
-
-                rt_config_param.tan_pixel_angular_radius = tanf(Angle::DegreeToRadian(camera->GetFov()));
-                rt_config_param.tan_sun_angular_radius =
-                    tanf(Angle::DegreeToRadian(ui_config.sun_angular_diameter * 0.5f));
-                rt_config_param.bounce_num              = ui_config.max_bounce;
-                float3 sun_dir                          = Normalizef(ui_config.sun_direction);
-                rt_config_param.sun_direction_gexposure = float4(sun_dir, ui_config.exposure);
-                cmd_list.CopyFrom(
-                    std::span<Moer::byte>((Moer::byte*)&rt_config_param, sizeof(RTConfigParam)),
-                    rt_config_param_buffer->GetView()
-                );
             }
 
             // update light direction from ui data
@@ -1024,19 +876,6 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui) {
 
         _editor_ui->RenderGUI(cmd_list, output);
 
-        // {
-        //     for (uint i = 0; i < env_map->GetNumMips(); i += 5) {
-        //         BuildMipsParam param{};
-        //         param.num_mip_levels = std::min(5u, env_map->GetNumMips() - i);
-        //         param.src_mip_level  = i;
-        //         param.src_size       = uint2(env_map->GetExtent().x >> (i + 1),
-        //         env_map->GetExtent().y >> (i + 1));
-        //         cmd_list.Compute(sd_generate_mips,
-        //         std::span<TextureView>(env_mips.data(), env_mips.size()),
-        //         param).Dispatch(uint3(env_map->GetExtent().x,
-        //         env_map->GetExtent().y, 1));
-        //     }
-        // }
         rt_scene->AdvanceFrame();
 
         time++;

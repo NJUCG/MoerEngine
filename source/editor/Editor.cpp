@@ -11,6 +11,7 @@
 #include "window/WindowContext.h"
 
 // Editor
+#include "common/EditorAssets.h"
 #include "raster/RasterMain.h"
 #include "raytracing/RaytracingMain.h"
 #include "ui/EditorUI.h"
@@ -66,6 +67,8 @@ void Editor::Init(int argc, const char** argv) {
     auto ui_renderer = MakeUnique<Render::UIRenderer>(RenderDevice::Get());
 
     m_editor_ui = MakeShared<EditorUI>(std::move(ui_renderer), resolution);
+    m_editor_assets =
+        MakeUnique<EditorAssets>(ConfigManager::GetInstance().GetEditorResourcePath(), RenderDevice::Get());
 }
 
 void Editor::Run() {
@@ -81,7 +84,7 @@ void Editor::Run() {
             Render::Raster::RasterMain(m_editor_ui);
 
         } else if (config.selected_render_method == ERenderMethod::Raytracing) {
-            Render::Raytracing::RaytracingMain(m_editor_ui);
+            Render::Raytracing::RaytracingMain(m_editor_ui, *m_editor_assets);
 
         } else {
             assert(false && "Unknown render method");
@@ -92,7 +95,8 @@ void Editor::Run() {
 void Editor::ShutDown() {
     GeometryPassPsoManager::ShutDown(); // 如果这个单例没有Get过，则ShutDown时不会消耗额外资源
 
-    m_editor_ui.reset(); // 释放EditorUI资源
+    m_editor_ui.reset();     // 释放EditorUI资源
+    m_editor_assets.reset(); // 释放EditorAssets资源
 
     WindowContext::ShutDown();
     ShaderManager::ShutDown();
