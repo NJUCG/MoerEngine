@@ -23,11 +23,9 @@ set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include>
     PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}/include>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Reflect>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectX-Headers/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
-	# PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/volk>
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectXShaderCompiler/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
@@ -36,11 +34,11 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRI/Include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRD/Include>
     PUBLUC $<BUILD_INTERFACE:${moer_third_party_dir}/NRD/Integration>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Cross>
 )
 target_link_libraries(${MODULE_NAME}
     # PUBLIC ${vulkan_lib}
     PUBLIC volk
-    PRIVATE spirv-reflect-static
 	PUBLIC dxc
     PUBLIC MoerCore
     PUBLIC Microsoft::DirectX-Guids
@@ -50,6 +48,7 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC smaa
     PUBLIC NRI
     PUBLIC NRD
+    PRIVATE spirv-cross-cpp
 )
 if(WIN32)
 target_compile_definitions(${MODULE_NAME}

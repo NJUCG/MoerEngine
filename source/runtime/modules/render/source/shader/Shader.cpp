@@ -123,55 +123,55 @@ namespace Utils {
 //construct root parameter layout info by reflection and meta_data
 void Shader::ConstructRootParameterLayoutInfo(const ShaderParametersInfoMap& _param_map) {
 
-    const auto& parameter_meta_data = type->GetParameterMetaData();
+    // const auto& parameter_meta_data = type->GetParameterMetaData();
 
-    Moer::Array<ShaderParameterLayoutInfo> binding_infos;
+    // Moer::Array<ShaderParameterLayoutInfo> binding_infos;
 
-    const auto& reflect_map = _param_map.GetShaderParameterInfoMap();
-    for (const auto& member : parameter_meta_data->GetMembers()) {
-        int16_t                        slot = -1, space = -1, num = 0;
-        EShaderParameterType           param_type = EShaderParameterType::UNKNOWN;
-        EShaderCodeResourceBindingType resource_type{EShaderCodeResourceBindingType::INVALID};
+    // const auto& reflect_map = _param_map.GetShaderParameterInfoMap();
+    // for (const auto& member : parameter_meta_data->GetMembers()) {
+    //     int16_t                        slot = -1, space = -1, num = 0;
+    //     EShaderParameterType           param_type = EShaderParameterType::UNKNOWN;
+    //     EShaderCodeResourceBindingType resource_type{EShaderCodeResourceBindingType::INVALID};
 
-        bool b_valid = reflect_map.count(member.GetName().data()) > 0;
+    //     bool b_valid = reflect_map.count(member.GetName().data()) > 0;
 
-        auto binding_type_str = member.GetShaderBindingTypeStr();
-        resource_type         = Utils::BindingTypeStrToEnum(binding_type_str);
+    //     auto binding_type_str = member.GetShaderBindingTypeStr();
+    //     resource_type         = Utils::BindingTypeStrToEnum(binding_type_str);
 
-        if (b_valid) {
-            const auto& iter = reflect_map.find(member.GetName().data());
-            slot             = iter->second.slot;
-            space            = iter->second.space;
-            num              = iter->second.num;
-            param_type       = iter->second.type;
-        }
-        uint32_t step = 0;
+    //     if (b_valid) {
+    //         const auto& iter = reflect_map.find(member.GetName().data());
+    //         slot             = iter->second.slot;
+    //         space            = iter->second.space;
+    //         num              = iter->second.num;
+    //         param_type       = iter->second.type;
+    //     }
+    //     uint32_t step = 0;
 
-        step = (num > 0 ? (member.GetStride() / num) : member.GetStride());
-        //for root constants
-        if (param_type == EShaderParameterType::CONSTANT_STRUCT) {
-            param_layout_info.constant_infos.emplace_back(member.GetOffset(), member.GetStride(), slot, space, num, param_type);
-            continue;
-        }
-        //for resources
-        for (uint32_t i = 0; i < num; i++) {
-            binding_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset() + step * i,
-                                                                 step,
-                                                                 slot++,
-                                                                 space,
-                                                                 1,
-                                                                 param_type,
-                                                                 resource_type));
-        }
-        // binding_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset(),
-        //                                                      member.GetStride(),
-        //                                                      slot,
-        //                                                      space,
-        //                                                      num,
-        //                                                      param_type,
-        //                                                      resource_type));
-    }
-    param_layout_info.binding_infos.swap(binding_infos);
+    //     step = (num > 0 ? (member.GetStride() / num) : member.GetStride());
+    //     //for root constants
+    //     if (param_type == EShaderParameterType::CONSTANT_STRUCT) {
+    //         param_layout_info.constant_infos.emplace_back(member.GetOffset(), member.GetStride(), slot, space, num, param_type);
+    //         continue;
+    //     }
+    //     //for resources
+    //     for (uint32_t i = 0; i < num; i++) {
+    //         binding_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset() + step * i,
+    //                                                              step,
+    //                                                              slot++,
+    //                                                              space,
+    //                                                              1,
+    //                                                              param_type,
+    //                                                              resource_type));
+    //     }
+    //     // binding_infos.emplace_back(ShaderParameterLayoutInfo(member.GetOffset(),
+    //     //                                                      member.GetStride(),
+    //     //                                                      slot,
+    //     //                                                      space,
+    //     //                                                      num,
+    //     //                                                      param_type,
+    //     //                                                      resource_type));
+    // }
+    // param_layout_info.binding_infos.swap(binding_infos);
 }
 
 // class TestReflectionShad : public Shader {

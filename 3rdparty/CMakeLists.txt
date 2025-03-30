@@ -33,12 +33,6 @@ set_target_folder(imgui ${third_party_folder}/imgui)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nativefiledialog-extended-1.2.1)
 set_target_folder(native_file_dialog_extended ${third_party_folder}/nativefiledialog-extended-1.2.1)
 
-# spirv-reflect
-set(SPIRV_REFLECT_EXECUTABLE OFF)
-set(SPIRV_REFLECT_STATIC_LIB ON)
-add_subdirectory(SPIRV-Reflect)
-set_target_folder(spirv-reflect-static ${third_party_folder}/spirv-reflect)
-
 # directx-headers
 add_subdirectory(DirectX-Headers)
 set_target_folder(DirectX-Headers ${third_party_folder}/dxheaders)
@@ -121,3 +115,4 @@ set_target_folder(tomlplusplus ${third_party_folder}/tomlplusplus-3.4.0)
 
 include(NRI.cmake)
 include(NRD.cmake)
+include(SPIRV-Cross.cmake)

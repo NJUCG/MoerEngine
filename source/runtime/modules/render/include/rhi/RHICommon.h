@@ -851,6 +851,33 @@ ENUM_STR_ELEMENT(SBT_UAV)
 ENUM_STR_ELEMENT(SBT_SAMPLER)
 END_ENUM_STR_DEFINITION(EShaderBindingBaseType)
 static_assert(SBT_Num <= (1 << SBT_NumBits), "SBT_Num will not fit on SBT_NumBits");
+
+enum EShaderResourceType : uint8_t {
+    SRT_INVALID,
+
+    SRT_CBV,
+    SRT_SRV,
+    SRT_UAV,
+    SRT_SAMPLER,
+    SRT_Num
+};
+
+enum EVulkanDescriptorType : uint8_t {
+    VDT_SAMPLER,
+    VDT_COMBINED_IMAGE_SAMPLER,
+    VDT_SAMPLED_IMAGE,
+    VDT_STORAGE_IMAGE,
+    VDT_UNIFORM_TEXEL_BUFFER,
+    VDT_STORAGE_TEXEL_BUFFER,
+    VDT_UNIFORM_BUFFER,
+    VDT_STORAGE_BUFFER,
+    VDT_UNIFORM_BUFFER_DYNAMIC,
+    VDT_STORAGE_BUFFER_DYNAMIC,
+    VDT_INPUT_ATTACHMENT,
+    VDT_ACCELERATION_STRUCTURE,
+    VDT_Num
+};
+
 using GlobalBufferStaticBindingPoint = uint8_t;
 
 enum {
@@ -1157,6 +1184,10 @@ namespace Moer {
         ReflectParamInfo() {
             memset(this, 0, sizeof(ReflectParamInfo));
         };
+        struct CustomFlags {
+            uint active : 1;
+            uint padding : 31;
+        };
         struct Resource {
             uint         set;
             uint         binding;
@@ -1164,20 +1195,24 @@ namespace Moer {
             uint         desc_type;
             uint         resource_type;
             uint         count;
+            CustomFlags  custom_flag;
             EPixelFormat format;
         };
         struct Constant {
-            uint size;
-            uint padded_size;
+            uint        offset;
+            uint        size;
+            uint        padded_size;
+            CustomFlags custom_flag;
         };
         static constexpr std::string_view bdls_name = "bdls_114514";
         struct Bindless {
-            uint set;
-            uint binding;
-            uint count;
-            uint desc_type;
-            uint resource_type;
-            uint stage_bits = 0;
+            uint        set;
+            uint        binding;
+            uint        count;
+            uint        desc_type;
+            uint        resource_type;
+            uint        stage_bits = 0;
+            CustomFlags custom_flag;
         };
         struct BindlessArray {
             std::optional<Bindless> array;
@@ -1240,14 +1275,13 @@ struct ShaderParametersInfoMap {
     friend class DXCompiler;
 
 public:
-    const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
-        return param_map;
-    }
+    // const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
+    //     return param_map;
+    // }
 
     // private:
-    Moer::UnorderedMap<std::string, ParameterInfo>          param_map;
+    // Moer::UnorderedMap<std::string, ParameterInfo>          param_map;
     Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
-    Moer::uint                                              space_cnt;
 };
 
 #pragma endregion

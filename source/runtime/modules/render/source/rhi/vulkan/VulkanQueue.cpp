@@ -65,7 +65,7 @@ namespace Moer::Render {
 
     static bool IsBufferTextureWrite(VulkanShaderResourceState _state) {
         switch (_state.resource_type) {
-            case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
+            case SRT_UAV:
                 return true;
             default: return false;
         }
@@ -88,7 +88,7 @@ namespace Moer::Render {
     static bool IsBufferTextureRead(uint64 _flags) {
         VulkanShaderResourceState state(_flags);
         switch (state.resource_type) {
-            case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV:
+            case SRT_SRV:
                 return true;
             default: return false;
         }
@@ -159,11 +159,11 @@ namespace Moer::Render {
 
         static VkAccessFlagBits2 GetBufferAccess(VulkanShaderResourceState _flag) {
             switch (_flag.resource_type) {
-                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_CBV:
+                case SRT_CBV:
                     return VK_ACCESS_2_SHADER_READ_BIT;
-                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV:
+                case SRT_SRV:
                     return VK_ACCESS_2_SHADER_READ_BIT;
-                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
+                case SRT_UAV:
                     return VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
                 default:
                     return VK_ACCESS_2_SHADER_READ_BIT;
@@ -172,11 +172,11 @@ namespace Moer::Render {
 
         static VkAccessFlagBits2 GetTextureAccess(VulkanShaderResourceState _flag) {
             switch (_flag.resource_type) {
-                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
+                // case SRT_SAMPLER:
+                //     return VK_ACCESS_2_SHADER_READ_BIT;
+                case SRT_SRV:
                     return VK_ACCESS_2_SHADER_READ_BIT;
-                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV:
-                    return VK_ACCESS_2_SHADER_READ_BIT;
-                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
+                case SRT_UAV:
                     return VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
                 default:
                     assert(false && "Invalid texture resource type");
@@ -186,16 +186,16 @@ namespace Moer::Render {
 
         static VkImageLayout GetTextureLayout(VulkanShaderResourceState _flag) {
             switch (_flag.resource_type) {
-                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
-                    return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV: {
+                // case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
+                //     return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                case SRT_SRV: {
                     if (_flag.b_sampled)
                         return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
                     return VK_IMAGE_LAYOUT_GENERAL;
                 }
 
-                case SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV:
+                case SRT_UAV:
                     return VK_IMAGE_LAYOUT_GENERAL;
                 default:
                     assert(false && "Invalid texture resource type");
@@ -208,14 +208,14 @@ namespace Moer::Render {
             std::visit([&](auto&& _arg) {
                 using T = std::decay_t<decltype(_arg)>;
                 if constexpr (std::is_same_v<T, BufferView>) {
-                    if (_flag.resource_type == SPV_REFLECT_RESOURCE_FLAG_UNDEFINED) return;
+                    if (_flag.resource_type == SRT_INVALID) return;
                     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer());
                     tracker.RecordState(vk_buffer, GetBufferAccess(_flag), _pipelines);
                     if (IsBufferTextureWrite(_flag)) {
                         writed_resources.insert(uint64(vk_buffer));
                     }
                 } else if constexpr (std::is_same_v<T, TextureView>) {
-                    if (_flag.resource_type == SPV_REFLECT_RESOURCE_FLAG_UNDEFINED) return;
+                    if (_flag.resource_type == SRT_INVALID) return;
                     auto* vk_texture = reinterpret_cast<VulkanTexture*>(_arg.GetTexture());
                     tracker.RecordState(vk_texture, GetTextureAccess(_flag), GetTextureLayout(_flag), _pipelines, _arg.mip_level, _arg.num_mips);
                     if (IsBufferTextureWrite(_flag)) {
@@ -716,13 +716,6 @@ namespace Moer::Render {
 
             VulkanBindlessArray* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd->Handle());
             tracker.RecordState(vk_bindless_array->bindless_array_buffer, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-            // if (!_cmd->TextureUpdates().empty()) {
-            //     tracker.RecordState(vk_bindless_array->bindless_texture_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-            // }
-
-            // if (!_cmd->BufferUpdates().empty()) {
-            //     tracker.RecordState(vk_bindless_array->bindless_buffer_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-            // }
 
             if (_cmd->HasBufferUpdates()) {
                 tracker.RecordState(vk_bindless_array->bindless_buffer_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
@@ -731,24 +724,6 @@ namespace Moer::Render {
             if (_cmd->HasTextureUpdates()) {
                 tracker.RecordState(vk_bindless_array->bindless_texture_descs, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
             }
-
-            // const Array<BindlessArray::UpdateCmd>& update_cmds = _cmd->UpdateCommands();
-            // for (const BindlessArray::UpdateCmd& cmd : update_cmds) {
-            //     std::visit(
-            //         [&](auto&& _arg) {
-            //             using T = std::decay_t<decltype(_arg)>;
-            //             if constexpr (std::is_same_v<T, BindlessArray::TextureUpdateInfo>) {
-            //                 if (_arg.free) return;
-            //                 auto* vk_texture = ResourceCast(_arg.texture.Get());
-            //                 tracker.RecordState(vk_texture, VK_ACCESS_2_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-            //             } else if constexpr (std::is_same_v<T, BindlessArray::BufferUpdateInfo>) {
-            //                 if (_arg.free) return;
-            //                 auto* vk_buffer = ResourceCast(_arg.buffer.Get());
-            //                 tracker.RecordState(vk_buffer, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-            //             }
-            //         },
-            //         cmd);
-            // }
         }
 
         void Visit(const ClearResourceCmd* _cmd) {
@@ -1007,21 +982,15 @@ namespace Moer::Render {
 
             cmd_list.BindDescriptors(pso, args);
 
-            if (args.constants.size() > 0) {
-                cmd_list.UploadPushConstants(
-                    pso,
-                    std::span<const uint>(args.constants.data(), args.constants.size()));
-            }
             std::visit(
-                [&](auto&& _param) {
-                    using TParam = std::decay_t<decltype(_param)>;
-                    if constexpr (std::is_same_v<TParam, uint3>) {
+                Overload{
+                    [&](uint3 _param) {
                         cmd_list.Dispatch(_param.x, _param.y, _param.z);
-                    } else if constexpr (std::is_same_v<TParam, DispatchIndirectParam>) {
+                    },
+                    [&](const DispatchIndirectParam& _param) {
                         cmd_list.DispatchIndirect(
                             reinterpret_cast<VulkanBuffer*>(_param.indirect.GetBuffer()), _param.indirect.GetByteOffset());
-                    }
-                },
+                    }},
                 param);
 
             cmd_list.EndLabel();
@@ -1136,9 +1105,8 @@ namespace Moer::Render {
                 }
 
                 std::visit(
-                    [&](auto&& _idx_input) {
-                        using IdxType = std::decay_t<decltype(_idx_input)>;
-                        if constexpr (std::is_same_v<IdxType, IndexBuffer>) {
+                    Overload{
+                        [&](const IndexBuffer& _idx_input) {
                             const auto& index_buffer = _idx_input.buffer;
                             uint64      offset       = index_buffer.GetByteOffset();
 
@@ -1154,15 +1122,15 @@ namespace Moer::Render {
                                                               draw_param.vertex_offset,
                                                               draw_param.first_instance);
                             }
-                        } else if constexpr (std::is_same_v<IdxType, uint>) {
+                        },
+                        [&](uint _idx_input) {
                             for (const auto& draw_param : draw_data.draw_params) {
                                 cmd_list.DrawInstanced(draw_param.index_cnt,
                                                        draw_param.instance_cnt,
                                                        draw_param.vertex_offset,
                                                        draw_param.first_instance);
                             }
-                        }
-                    },
+                        }},
                     draw_data.idx_view);
             }
             cmd_list.EndRendering();
@@ -1249,33 +1217,31 @@ namespace Moer::Render {
                     }
 
                     std::visit(
-                        [&](auto&& _idx_input) {
-                            using IdxType = std::decay_t<decltype(_idx_input)>;
-                            if constexpr (std::is_same_v<IdxType, IndexBuffer>) {
-                                const auto& index_buffer = _idx_input.buffer;
-                                uint64      offset       = index_buffer.GetByteOffset();
+                        Overload{[&](const IndexBuffer& _idx_input) {
+                                     const auto& index_buffer = _idx_input.buffer;
+                                     uint64      offset       = index_buffer.GetByteOffset();
 
-                                cmd_list.SetIndexBuffer(
-                                    reinterpret_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
-                                    index_buffer.GetByteOffset(),
-                                    VulkanEnumTranslator::METoVKIndexType(_idx_input.stride));
+                                     cmd_list.SetIndexBuffer(
+                                         reinterpret_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
+                                         index_buffer.GetByteOffset(),
+                                         VulkanEnumTranslator::METoVKIndexType(_idx_input.stride));
 
-                                for (const auto& draw_param : draw_data.draw_params) {
-                                    cmd_list.DrawIndexedInstanced(draw_param.index_cnt,
-                                                                  draw_param.instance_cnt,
-                                                                  draw_param.first_index,
-                                                                  draw_param.vertex_offset,
-                                                                  draw_param.first_instance);
-                                }
-                            } else if constexpr (std::is_same_v<IdxType, uint>) {
-                                for (const auto& draw_param : draw_data.draw_params) {
-                                    cmd_list.DrawInstanced(draw_param.index_cnt,
-                                                           draw_param.instance_cnt,
-                                                           draw_param.vertex_offset,
-                                                           draw_param.first_instance);
-                                }
-                            }
-                        },
+                                     for (const auto& draw_param : draw_data.draw_params) {
+                                         cmd_list.DrawIndexedInstanced(draw_param.index_cnt,
+                                                                       draw_param.instance_cnt,
+                                                                       draw_param.first_index,
+                                                                       draw_param.vertex_offset,
+                                                                       draw_param.first_instance);
+                                     }
+                                 },
+                                 [&](uint _idx_input) {
+                                     for (const auto& draw_param : draw_data.draw_params) {
+                                         cmd_list.DrawInstanced(draw_param.index_cnt,
+                                                                draw_param.instance_cnt,
+                                                                draw_param.vertex_offset,
+                                                                draw_param.first_instance);
+                                     }
+                                 }},
                         draw_data.idx_view);
                 }
             }
@@ -1285,9 +1251,8 @@ namespace Moer::Render {
 
         void Visit(const ClearResourceCmd& _cmd) {
             std::visit(
-                [&](auto&& _arg) {
-                    using T = std::decay_t<decltype(_arg)>;
-                    if constexpr (std::is_same_v<T, TextureView>) {
+                Overload{
+                    [&](const TextureView& _arg) {
                         auto*                   vk_texture = ResourceCast(_arg.GetTexture());
                         VkImageSubresourceRange range{
                             .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1296,21 +1261,20 @@ namespace Moer::Render {
                             .baseArrayLayer = 0,
                             .layerCount     = 1};
                         VkClearColorValue value;
-                        std::visit([&](auto&& _val) {
-                            using T = std::decay_t<decltype(_val)>;
-                            if constexpr (std::is_same_v<T, float4>) {
-                                value = VkClearColorValue{.float32 = {_val.x, _val.y, _val.z, _val.w}};
-                            } else if constexpr (std::is_same_v<T, uint4>) {
-                                value = VkClearColorValue{.uint32 = {_val, _val, _val, _val}};
-                            }
-                        },
+                        std::visit(Overload{
+                                       [&](float4 _val) {
+                                           value = VkClearColorValue{.float32 = {_val.x, _val.y, _val.z, _val.w}};
+                                       },
+                                       [&](uint _val) {
+                                           value = VkClearColorValue{.uint32 = {_val, _val, _val, _val}};
+                                       }},
                                    _cmd.ClearValue());
                         cmd_list.ClearTexture(vk_texture, value, range);
-                    } else if constexpr (std::is_same_v<T, BufferView>) {
+                    },
+                    [&](BufferView _arg) {
                         auto* vk_buffer = ResourceCast(_arg.GetBuffer());
                         cmd_list.ClearBufferUInt(vk_buffer, _arg.GetByteOffset(), _arg.GetByteSize(), _cmd.UIntValue());
-                    }
-                },
+                    }},
                 _cmd.Resource());
         }
 
@@ -2302,22 +2266,20 @@ namespace Moer::Render {
                 }
                 timeline  = evt->timeline;
                 b_wake_up = evt->wake_thread;
-                std::visit(
-                    [&](auto& _evt) {
-                        using TEvent = std::decay_t<decltype(_evt)>;
-                        if constexpr (std::is_same_v<TEvent, UniquePtr<VulkanAllocator>>) {
-                            visit_allocator(_evt);
-                        } else if constexpr (std::is_same_v<TEvent, UniquePtr<VulkanPresentor>>) {
-                            visit_presentor(_evt);
-                        } else if constexpr (std::is_same_v<TEvent, FencePlaceHoler>) {
-                            visit_fence(_evt);
-                        } else if constexpr (std::is_same_v<TEvent, Array<std::function<void()>>>) {
-                            visit_funcs(_evt);
-                        } else if constexpr (std::is_same_v<TEvent, SignalEvent>) {
-                            visit_signal_event(_evt);
-                        }
-                    },
-                    evt->event);
+
+                std::visit(Overload{
+                               [&](UniquePtr<VulkanAllocator>& _allocator) { visit_allocator(_allocator); },
+                               [&](UniquePtr<VulkanPresentor>& _presentor) { visit_presentor(_presentor); },
+                               [&](FencePlaceHoler& _fence) { visit_fence(_fence); },
+                               [&](Array<std::function<void()>>& _funcs) { visit_funcs(_funcs); },
+                               [&](SignalEvent& _evt) { visit_signal_event(_evt); },
+                               [&](WaitEvent& _evt) {
+                                   // visit_wait_event(_evt);
+                               },
+                               [&](VulkanFence* _fence) {
+                                   assert(false && "Invalid event");
+                               }},
+                           evt->event);
             }
             {
                 //wait for queue submission
@@ -2524,17 +2486,29 @@ namespace Moer::Render {
                 timeline  = evt->timeline;
                 b_wake_up = evt->wake_thread;
                 std::visit(
-                    [&](auto& _evt) {
-                        using TEvent = std::decay_t<decltype(_evt)>;
-                        if constexpr (std::is_same_v<TEvent, UniquePtr<VulkanAllocator>>) {
+                    Overload{
+                        [&](UniquePtr<VulkanAllocator>& _evt) {
                             visit_allocator(_evt);
-                        } else if constexpr (std::is_same_v<TEvent, Placeholder>) {
+                        },
+                        [&](Placeholder& _evt) {
                             visit_fence(_evt);
-                        } else if constexpr (std::is_same_v<TEvent, Array<std::function<void()>>>) {
+                        },
+                        [&](Array<std::function<void()>>& _evt) {
                             visit_funcs(_evt);
-                        } else if constexpr (std::is_same_v<TEvent, IOSignalEvt>) {
+                        },
+                        [&](IOSignalEvt& _evt) {
                             visit_signal_event(_evt);
+                        },
+                        [&](IOWaitEvt& _evt) {
+                            // visit_wait_event(_evt);
+                        },
+                        [&](VulkanFence* _fence) {
+                            assert(false && "Invalid event");
+                        },
+                        [&](UniquePtr<VulkanPresentor>& _evt) {
+                            assert(false && "Invalid event");
                         }
+
                     },
                     evt->event);
             }

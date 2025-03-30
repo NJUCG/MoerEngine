@@ -29,7 +29,6 @@
 
 #include "RHICmdReorderer.h"
 #include "shader/ShaderPipeline.h"
-#include "spirv_reflect.h"
 #include "vulkan/vulkan_core.h"
 #include "VulkanAllocator.h"
 
@@ -1432,24 +1431,23 @@ namespace Moer::Render {
 
         for (auto& [set, binder] : set_binders) {
             std::visit(
-                [&](auto& _binder) {
-                    using T = std::decay_t<decltype(_binder)>;
-
-                    if constexpr (std::is_same_v<T, VulkanBindlessSetArray>) {
+                Overload{
+                    [&](const VulkanBindlessSetArray& _binder) {
                         BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
                         VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
                         bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_buffer_descs->DeviceAddress();
-                    } else if constexpr (std::is_same_v<T, VulkanBindlessSetImage>) {
+                    },
+                    [&](const VulkanBindlessSetSampler& _binder) {
                         BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
                         VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
                         bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_texture_descs->DeviceAddress();
-
-                    } else if constexpr (std::is_same_v<T, VulkanBindlessSetSampler>) {
+                    },
+                    [&](const VulkanBindlessSetImage& _binder) {
                         BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
                         VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
                         bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_texture_descs->DeviceAddress();
-
-                    } else if constexpr (std::is_same_v<T, VulkanDescriptorSetBinder>) {
+                    },
+                    [&](const VulkanDescriptorSetBinder& _binder) {
                         //normal resources
                         for (uint i = 0; i < _binder.writers.size(); ++i) {
                             auto& writer = _binder.writers[i];
@@ -1538,8 +1536,7 @@ namespace Moer::Render {
                         bind_template.desc_buffer_offsets[_binder.offset_idx].offset = descriptor_heap.current_offset;
                         descriptor_heap.IncrementOffset(_binder.size);
                         // device.vk_cmd_push_descriptor_set(command_buffer, _binder.bind_point, _binder.push_info.layout, _binder.push_info.set, _binder.writers.size(), _binder.writers.data());
-                    }
-                },
+                    }},
                 binder);
         }
         if (!bind_template.desc_buffers.empty()) {

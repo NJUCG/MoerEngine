@@ -76,6 +76,14 @@ namespace Moer {
     template<typename T>
     using Stack = std::stack<T, DEQueue<T>>;
 
+    //Visitor Overload Template
+    template<typename... Ts>
+    struct Overload : Ts... {
+        using Ts::operator()...;
+    };
+    template<typename... Ts>
+    Overload(Ts...) -> Overload<Ts...>;
+
     template<typename T, size_t N>
         requires std::is_trivially_copyable_v<T>
     class CircularQueue {

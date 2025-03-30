@@ -4,6 +4,7 @@
 #include "../../vulkan/VulkanRHIResource.h"
 #include "../../vulkan/VulkanDescriptor.h"
 #include "../../vulkan/VulkanCustomCommand.h"
+#include "vulkan/vulkan_core.h"
 
 namespace Moer::Render::Ext {
 
@@ -205,9 +206,9 @@ namespace Moer::Render::Ext {
             // Resource usage
             if (resource_usages_indices[uint8(_index)] == 0) {
                 VulkanShaderResourceState pipeline_flags{};
-                pipeline_flags.desc_type     = SpvReflectDescriptorType::SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                pipeline_flags.desc_type     = VDT_SAMPLED_IMAGE;
                 pipeline_flags.b_sampled     = 1;
-                pipeline_flags.resource_type = SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_SRV;
+                pipeline_flags.resource_type = SRT_SRV;
 
                 ParamInfoFlags read_flag = {
                     pipeline_flags(),
@@ -270,9 +271,9 @@ namespace Moer::Render::Ext {
             // Resource usage
             if (resource_usages_indices[uint8(_index)] == 0) {
                 VulkanShaderResourceState pipeline_flags{};
-                pipeline_flags.desc_type     = SpvReflectDescriptorType::SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                pipeline_flags.desc_type     = VDT_STORAGE_IMAGE;
                 pipeline_flags.b_sampled     = 1;
-                pipeline_flags.resource_type = SpvReflectResourceType::SPV_REFLECT_RESOURCE_FLAG_UAV;
+                pipeline_flags.resource_type = SRT_UAV;
 
                 ParamInfoFlags write_flag = {
                     pipeline_flags(),

@@ -6,7 +6,7 @@
 #include "rhi/RHIResource.h"
 #include "VulkanTypeDefs.h"
 #include "VulkanRHIResource.h"
-#include "spirv_reflect.h"
+// #include "spirv_reflect.h"
 #include "vulkan/vulkan_core.h"
 
 #define VK_DESCRIPTOR_TYPE_BEGIN_RANGE (VK_DESCRIPTOR_TYPE_SAMPLER)
@@ -45,13 +45,13 @@ namespace Moer::Render {
     };
 
     struct VulkanShaderResourceState {
-        SpvReflectDescriptorType desc_type;
-        uint8                    resource_type;//SpvReflectResourceType
-        uint8                    b_sampled;
-        EPixelFormat             format;
+        uint         desc_type;
+        uint8        resource_type;//SpvReflectResourceType
+        uint8        b_sampled;
+        EPixelFormat format;
 
         VulkanShaderResourceState() = default;
-        VulkanShaderResourceState(SpvReflectDescriptorType _type, SpvReflectResourceType _resource_type, EPixelFormat _fmt) : desc_type(_type), resource_type(_resource_type), b_sampled(0), format(_fmt) {}
+        VulkanShaderResourceState(uint _type, uint8 _resource_type, EPixelFormat _fmt) : desc_type(_type), resource_type(_resource_type), b_sampled(0), format(_fmt) {}
 
         VulkanShaderResourceState(uint64 _value) {
             memcpy(this, &_value, sizeof(VulkanShaderResourceState));
