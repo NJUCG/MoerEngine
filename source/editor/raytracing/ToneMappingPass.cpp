@@ -89,8 +89,8 @@ void ToneMappingPass::Process(
     params.frame_idx = frame_idx;
     params.enabled   = _params.enable_tone_mapping ? 1 : 0;
 
-    if (!b_enabled && _params.enable_tone_mapping) {
-        b_enabled = true;
+    if (!b_enabled != _params.enable_tone_mapping) {
+        b_enabled = _params.enable_tone_mapping;
         ResetExposure(_cmd_list);
     }
 
