@@ -64,6 +64,7 @@ public:
         float exposure_bias             = -0.5f;
         float white_point               = 3.f;
         bool  enable_color_lut          = true;
+        bool  enable_tone_mapping       = true;
     };
 
 public:
@@ -108,6 +109,7 @@ private:
     BufferRef         exposure_buffer;
     TextureRef        color_lut;
     Array<byte>       upload_data;
+    bool              b_enabled = false;
 
     ToneMappingPassPipeline tone_mapping_pass_pipeline;
     HistogramPipeline       histogram_pipeline;

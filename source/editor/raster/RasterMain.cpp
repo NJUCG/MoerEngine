@@ -170,7 +170,9 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
         we're not waiting for the copy queue to finish, because operations we wanted are synced on host side, we use this timeline just to notifiy the validation layer
         that we've done flushing copy queue resources
          */
-        gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).Wait(copy_queue_timeline, 0));
+        gfx_queue.Execute(
+            cmd_list.Submit().Signal(timeline, time).Wait(copy_queue_timeline, 0).DeleteResources()
+        );
         gfx_queue.Present(sc, final_output);
         editor_ui->PresentWindows();
 

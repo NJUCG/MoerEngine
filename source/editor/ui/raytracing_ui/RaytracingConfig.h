@@ -55,7 +55,7 @@ struct ReBlurAntilagParams {
 struct DenoiserConfig {
     ReBlurHitDistParams hit_dist_params{};
     ReBlurAntilagParams antilag_params{};
-    uint                denoiser_type = Render::s_denoiser_mode_reblur;
+    uint                denoiser_type = Render::s_denoiser_mode_relax;
 };
 
 struct ToneMappingConfig {
@@ -68,6 +68,7 @@ struct ToneMappingConfig {
     float exposure_bias             = -0.5f;
     float white_point               = 1.5f;
     bool  enable_color_lut          = true;
+    bool  enable_tone_mapping       = true;
 };
 
 struct AntiAliasConfig {

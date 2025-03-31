@@ -437,7 +437,9 @@ namespace Moer::Render {
         Array<SignalEvent> signal_events;
         bool               b_sync{false};//force sync queue timeline
         bool               b_tick_profiling{false};
-        CmdSubmit&&        Wait(Fence* _fence, uint64 _wait_value) {
+        bool               b_delete_resources{false};
+
+        CmdSubmit&& Wait(Fence* _fence, uint64 _wait_value) {
             wait_events.emplace_back(uint64(_fence), _wait_value);
             return std::move(*this);
         }
@@ -452,28 +454,40 @@ namespace Moer::Render {
             return std::move(*this);
         }
 
+        CmdSubmit&& DeleteResources() {
+            b_delete_resources = true;
+            return std::move(*this);
+        }
+
+        CmdSubmit&& TickProfiling() {
+            b_tick_profiling = true;
+            return std::move(*this);
+        }
+
         CmdSubmit(CmdSubmit&& _other) noexcept {
-            cmds             = std::move(_other.cmds);
-            callbacks        = std::move(_other.callbacks);
-            wait_events      = std::move(_other.wait_events);
-            signal_events    = std::move(_other.signal_events);
-            cached_args      = std::move(_other.cached_args);
-            b_sync           = _other.b_sync;
-            b_tick_profiling = _other.b_tick_profiling;
+            cmds               = std::move(_other.cmds);
+            callbacks          = std::move(_other.callbacks);
+            wait_events        = std::move(_other.wait_events);
+            signal_events      = std::move(_other.signal_events);
+            cached_args        = std::move(_other.cached_args);
+            b_sync             = _other.b_sync;
+            b_tick_profiling   = _other.b_tick_profiling;
+            b_delete_resources = _other.b_delete_resources;
         }
 
         CmdSubmit& operator=(CmdSubmit&& _other) noexcept {
-            cmds             = std::move(_other.cmds);
-            callbacks        = std::move(_other.callbacks);
-            wait_events      = std::move(_other.wait_events);
-            signal_events    = std::move(_other.signal_events);
-            cached_args      = std::move(_other.cached_args);
-            b_sync           = _other.b_sync;
-            b_tick_profiling = _other.b_tick_profiling;
+            cmds               = std::move(_other.cmds);
+            callbacks          = std::move(_other.callbacks);
+            wait_events        = std::move(_other.wait_events);
+            signal_events      = std::move(_other.signal_events);
+            cached_args        = std::move(_other.cached_args);
+            b_sync             = _other.b_sync;
+            b_tick_profiling   = _other.b_tick_profiling;
+            b_delete_resources = _other.b_delete_resources;
             return *this;
         }
-        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks, TCachedArgArray&& _cached_args, bool _b_tick_profiler) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)),
-                                                                                                                                                             cached_args(std::move(_cached_args)), b_tick_profiling(_b_tick_profiler) {
+        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks, TCachedArgArray&& _cached_args) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)),
+                                                                                                                                      cached_args(std::move(_cached_args)) {
         }
 
         std::string ToString() const {
@@ -907,7 +921,7 @@ namespace Moer::Render {
 
         RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
-        RENDER_API CmdSubmit Submit(bool _b_tick_profiler = false);
+        RENDER_API CmdSubmit Submit();
 
     private:
         friend DrawDispatcher;

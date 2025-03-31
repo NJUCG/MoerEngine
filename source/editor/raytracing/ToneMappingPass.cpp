@@ -87,6 +87,13 @@ void ToneMappingPass::Process(
     params.color_lut_size_inv =
         b_enable_lut ? float2(1.f / (color_lut_size * color_lut_size), 1.f / color_lut_size) : float2(0.f);
     params.frame_idx = frame_idx;
+    params.enabled   = _params.enable_tone_mapping ? 1 : 0;
+
+    if (!b_enabled && _params.enable_tone_mapping) {
+        b_enabled = true;
+        ResetExposure(_cmd_list);
+    }
+
     upload_data.resize(sizeof(ToneMappingParams));
     upload_data.assign((byte*)&params, (byte*)&params + sizeof(ToneMappingParams));
 

@@ -207,7 +207,7 @@ void RaytracingUI::ShowConfig() {
     }
     ImGui::Separator();
     ImGui::Text("Post-Process Config");
-
+    ImGui::Checkbox("Enable ToneMapping", &config.tone_mapping_cfg.enable_tone_mapping);
     if (ImGui::TreeNode("ToneMapping")) {
         ImGui::SliderFloat(
             "Histogram Low Percentile", &config.tone_mapping_cfg.histogram_low_percentile, 0.0f, 1.0f

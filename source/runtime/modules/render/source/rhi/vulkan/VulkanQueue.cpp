@@ -2040,21 +2040,16 @@ namespace Moer::Render {
             tracker.Reset();
         }
 
-        Array<RHIResource*> deleted_resources;
-        vk_device.deferred_release_queue.PopAll(deleted_resources);
-        _submit.callbacks.emplace_back([deleted_resources(std::move(deleted_resources))]() {
-            for (auto* resource : deleted_resources) {
-                MoerDelete(resource);
-            }
-        });
-        // auto&& on_scope_exit = OnScopeExit([&]() {
-        //     if (_submit.b_tick_profiling) {
-        //         timer.Stop();
-        //         profiler_storage.RegisterCpuTimestamp(timer.ElapsedMilliseconds());
-        //         profiler_storage.AdvanceFrame();
-        //     }
-        // });
-        // LOG_INFO("Command Recording time {}", timer.ElapsedMilliseconds());
+        if (_submit.b_delete_resources) {
+            Array<RHIResource*> deleted_resources;
+            vk_device.deferred_release_queue.PopAll(deleted_resources);
+            _submit.callbacks.emplace_back([deleted_resources(std::move(deleted_resources))]() {
+                for (auto* resource : deleted_resources) {
+                    MoerDelete(resource);
+                }
+            });
+        }
+
         if (_submit.cmds.empty()) {
             allocators.Push(allocator_ptr.release());
             std::unique_lock<std::mutex> lock(event_mutex);
@@ -2080,7 +2075,6 @@ namespace Moer::Render {
             return {uint64(timeline), last_time};
         } else {
             auto current_timeline = ++last_frame;
-            // LOG_INFO("signal timeline {}", current_timeline);
 
             auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             queue.Signal(timeline, current_timeline, end_tag);

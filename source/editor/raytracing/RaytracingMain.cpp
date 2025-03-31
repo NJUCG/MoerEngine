@@ -598,6 +598,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 tone_params.histogram_low_percentile  = tone_cfg.histogram_low_percentile;
                 tone_params.histogram_high_percentile = tone_cfg.histogram_high_percentile;
                 tone_params.white_point               = tone_cfg.white_point;
+                tone_params.enable_tone_mapping       = tone_cfg.enable_tone_mapping;
 
                 const auto& aa_cfg             = ui_config.aa_cfg;
                 aa_params.clamping_factor      = aa_cfg.clamping_factor;
@@ -879,7 +880,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
         rt_scene->AdvanceFrame();
 
         time++;
-        gfx_queue.Execute(cmd_list.Submit(true).Signal(timeline, time));
+        gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
         gfx_queue.Present(sc, output);
         _editor_ui->PresentWindows();
 
@@ -895,7 +896,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
     for (auto& callback : on_free_buffer_callbacks) { callback(copy_queue_timeline->GetValue()); }
 
     cmd_list.UpdateBindlessArray(bindless_array);
-    gfx_queue.Execute(cmd_list.Submit());
+    gfx_queue.Execute(cmd_list.Submit().DeleteResources());
     gfx_queue.Sync();
 
     _editor_ui->UnregisterUIFunc("Display MaterialTexture");

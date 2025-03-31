@@ -132,6 +132,26 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
       float2 center_uv = (uvs[0] + uvs[1] + uvs[2]) / 3.f;
       float3 emissive_mask = emissive_tex.SampleGrad<float3>(center_uv, short_grad, long_grad);
       emissive *= emissive_mask;
+
+      Moer::TriangleIndirectLight tri_light_indirect = (Moer::TriangleIndirectLight)0;
+      tri_light_indirect.v0 = positions[0];
+      tri_light_indirect.edge1 = positions[1] - positions[0];
+      tri_light_indirect.edge2 = positions[2] - positions[0];
+      tri_light_indirect.avg_radiance = emissive;
+      tri_light_indirect.uv0 = uvs[0];
+      tri_light_indirect.edge_uv1 = uvs[1] - uvs[0];
+      tri_light_indirect.edge_uv2 = uvs[2] - uvs[0];
+      tri_light_indirect.tex_handle = mat.emissive_map;
+
+      // printf("src avg_radiance %f %f %f uv0 %f %f edg_uv1 %f %f edg_uv2 %f %f tex_handle %d\n", tri_light_indirect.avg_radiance.x, tri_light_indirect.avg_radiance.y, tri_light_indirect.avg_radiance.z, tri_light_indirect.uv0.x, tri_light_indirect.uv0.y, tri_light_indirect.edge_uv1.x, tri_light_indirect.edge_uv1.y, tri_light_indirect.edge_uv2.x, tri_light_indirect.edge_uv2.y, tri_light_indirect.tex_handle);
+
+      // light_info = tri_light_indirect.ToLightInfo();
+
+      // Moer::TriangleIndirectLight tri_light_indirect2 = (Moer::TriangleIndirectLight)0;
+      // tri_light_indirect2 = Moer::TriangleIndirectLight::Create(light_info);
+      // printf("dst avg_radiance %f %f %f uv0 %f %f edg_uv1 %f %f edg_uv2 %f %f tex_handle %d\n", tri_light_indirect2.avg_radiance.x, tri_light_indirect2.avg_radiance.y, tri_light_indirect2.avg_radiance.z, tri_light_indirect2.uv0.x, tri_light_indirect2.uv0.y, tri_light_indirect2.edge_uv1.x, tri_light_indirect2.edge_uv1.y, tri_light_indirect2.edge_uv2.x, tri_light_indirect2.edge_uv2.y, tri_light_indirect2.tex_handle);
+
+      return;
     }
 
     emissive.rgb = max(emissive.rgb, 0.0f);

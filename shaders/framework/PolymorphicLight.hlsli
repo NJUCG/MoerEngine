@@ -154,9 +154,38 @@ void PackLightColor(inout PolymorphicLightInfo _info, float3 _radiance) {
   }
 }
 
+// IMPORANT!!! conflict with LightShaping
+void PackUVandHandle(inout PolymorphicLightInfo _info, float2 _uv0, float2 _uv1,
+                     float2 _uv2, uint _handle) {
+  // pack handle as 16bits to color_type_flags
+  _info.cos_cone_angle_softness = _handle & 0xffff;
+  // overlap light shaping data
+  _info.profile_idx = f32tof16(_uv0.x) | (f32tof16(_uv0.y) << 16);
+  // pack d ro reserved
+  float4 d1d2 = float4(_uv1 - _uv0, _uv2 - _uv0);
+  _info.reserved = f32tof16(d1d2.x) | (f32tof16(d1d2.y) << 16);
+  _info.primary_axis = f32tof16(d1d2.z) | (f32tof16(d1d2.w) << 16);
+}
+
+// IMPORANT!!! conflict with LightShaping
+void UnpackUVandHandle(in PolymorphicLightInfo _info, out float2 _uv0,
+                       out float2 _uv1, out float2 _uv2, out uint _handle) {
+  _handle = _info.cos_cone_angle_softness & 0xffff;
+  _uv0 =  float2(f16tof32(_info.profile_idx & 0xffff),
+                   f16tof32(_info.profile_idx >> 16));
+  float4 d1d2 = float4(f16tof32(_info.reserved & 0xffff),
+                       f16tof32(_info.reserved >> 16),
+                       f16tof32(_info.primary_axis & 0xffff),
+                       f16tof32(_info.primary_axis >> 16));
+
+  _uv1 = _uv0 + d1d2.xy;
+  _uv2 = _uv0 + d1d2.zw;
+}
+
 bool PackCompactLightInfo(PolymorphicLightInfo _info, out uint4 _res1,
                           out uint4 _res2) {
-  if (UnpackLightShaping(_info).is_spot) {
+  if (UnpackLightShaping(_info).is_spot ||
+      GetLightType(_info) == ELTriangleIndirect) {
     _res1 = 0;
     _res2 = 0;
     return false;
@@ -652,6 +681,114 @@ struct TriangleLight {
   }
 };
 
+struct TriangleIndirectLight {
+  float3 v0;
+  float3 edge1;
+  float3 edge2;
+  float3 normal;
+  float3 avg_radiance;
+  float2 uv0;
+  float2 edge_uv1;
+  float2 edge_uv2;
+  int tex_handle;
+  float area; // precomputed area
+
+  PolymorphicLightSample Sample(in const float2 _rnd, in const float3 _vp) {
+    PolymorphicLightSample ls;
+
+    const float3 bary = Math::Rand2ToBaryCentrics(_rnd);
+    const float3 sample_pos = v0 + edge1 * bary.y + edge2 * bary.z;
+    // need to calculate normal
+    const float3 sample_normal = normalize(cross(edge1, edge2));
+
+    ls.solid_angle_pdf = SolidAnglePdf(_vp, sample_pos, sample_normal);
+    ls.pos = sample_pos;
+    ls.normal = sample_normal;
+    float2 uv = uv0 + bary.y * edge_uv1 + bary.z * edge_uv2;
+
+    // sample bindless texture
+    if (tex_handle > 0) {
+      TextureHandle tex = TextureHandle(tex_handle);
+      ls.radiance = tex.SampleLevel<float4>(uv, 0).rgb;
+    } else {
+      ls.radiance = .0f;
+    }
+
+    return ls;
+  }
+
+  float GetPower() { return area * STL::Color::Luminance(avg_radiance) * PI; }
+
+  float SolidAnglePdf(in const float3 _vp, in const float3 _sample_pos,
+                      in const float3 _sample_normal) {
+    float3 l2p = _sample_pos - _vp;
+    const float dist = length(l2p);
+    l2p /= dist;
+
+    const float area_pdf = 1.0f / area;
+    const float cos_theta = saturate(dot(l2p, -_sample_normal));
+
+    return area_pdf * square(dist) / cos_theta;
+  }
+
+  float GetVolumeWeight(in const float3 _center, in const float _radius) {
+    float dist = dot(_center - v0, normal);
+    if (dist < -_radius) {
+      return 0.0f;
+    }
+    float3 bary_center = v0 + (edge1 + edge2) / 3.0f;
+
+    dist = length(bary_center - _center);
+    dist = AvgDistanceToVolume(dist, _radius);
+
+    float approx_solid_angle = area / square(dist);
+    approx_solid_angle = min(approx_solid_angle, 2 * PI);
+    return approx_solid_angle * STL::Color::Luminance(avg_radiance);
+  }
+
+  PolymorphicLightInfo ToLightInfo() {
+    PolymorphicLightInfo info = (PolymorphicLightInfo)0;
+    float2 uv1 = uv0 + edge_uv1;
+    float2 uv2 = uv0 + edge_uv2;
+    PackUVandHandle(info, uv0, uv1, uv2, tex_handle);
+    PackLightColor(info, avg_radiance);
+
+    info.center.xyz = v0 + (edge1 + edge2) / 3.0f;
+    info.direction1 = Math::NdirToOctUnorm32(normalize(edge1));
+    info.direction2 = Math::NdirToOctUnorm32(normalize(edge2));
+    info.color_type_flags |= uint(EPolyLightType::ELTriangleIndirect)
+                             << g_poly_morphic_light_type_shift;
+    info.scalars = f32tof16(length(edge1)) | (f32tof16(length(edge2)) << 16);
+    return info;
+  }
+
+  static TriangleIndirectLight Create(in const PolymorphicLightInfo _info) {
+    TriangleIndirectLight tl;
+    tl.edge1 = Math::OctToNdirUnorm32(_info.direction1) *
+               f16tof32(_info.scalars & 0xffff);
+    tl.edge2 = Math::OctToNdirUnorm32(_info.direction2) *
+               f16tof32(_info.scalars >> 16);
+
+    tl.v0 = _info.center.xyz - (tl.edge1 + tl.edge2) / 3.0f;
+    UnpackUVandHandle(_info, tl.uv0, tl.edge_uv1, tl.edge_uv2, tl.tex_handle);
+    tl.edge_uv1 = tl.edge_uv1 - tl.uv0;
+    tl.edge_uv2 = tl.edge_uv2 - tl.uv0;
+
+    tl.avg_radiance = UnpackLightColor(_info);
+    tl.normal = cross(tl.edge1, tl.edge2);
+
+    float normal_length = length(tl.normal);
+    if (normal_length > 0.0f) {
+      tl.area = 0.5f * normal_length;
+      tl.normal /= normal_length;
+    } else {
+      tl.area = 0.0f;
+      tl.normal = 0.0f;
+    }
+    return tl;
+  }
+};
+
 struct EnvironmentLight {
   int tex_handle;
   bool b_importance_sampled;
@@ -732,6 +869,8 @@ struct PolymorphicLight {
       return TriangleLight::Create(_info).Sample(_rnd, _vp);
     case EPolyLightType::ELEnv:
       return EnvironmentLight::Create(_info).Sample(_rnd, _vp);
+    case EPolyLightType::ELTriangleIndirect:
+      return TriangleIndirectLight::Create(_info).Sample(_rnd, _vp);
     default:
       PolymorphicLightSample ls;
       ls.radiance = 0.0f;
@@ -758,6 +897,8 @@ struct PolymorphicLight {
       return TriangleLight::Create(_info).GetPower();
     case EPolyLightType::ELEnv:
       return 0.f;
+    case EPolyLightType::ELTriangleIndirect:
+      return TriangleIndirectLight::Create(_info).GetPower();
     default:
       return 0.0f;
     }
@@ -784,6 +925,9 @@ struct PolymorphicLight {
       return TriangleLight::Create(_info).GetVolumeWeight(_center, _radius);
     case EPolyLightType::ELEnv:
       return 0.f;
+    case EPolyLightType::ELTriangleIndirect:
+      return TriangleIndirectLight::Create(_info).GetVolumeWeight(_center,
+                                                                  _radius);
     default:
       return 0.0f;
     }

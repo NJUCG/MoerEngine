@@ -30,7 +30,8 @@ namespace Moer {
         ELTriangle,
         ELDirectional,
         ELEnv,
-        ELPoint
+        ELPoint,
+        ELTriangleIndirect
     };
     static const uint  g_poly_morphic_light_type_shift        = 24;
     static const uint  g_poly_morphic_light_type_mask         = 0xf;

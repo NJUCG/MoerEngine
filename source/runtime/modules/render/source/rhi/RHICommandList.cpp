@@ -117,8 +117,8 @@ namespace Moer::Render {
         cmd_list.commands.back()->name = _name;
     }
 
-    CmdSubmit CommandList::Submit(bool _tick_profiler) {
-        CmdSubmit submit(std::move(commands), std::move(callbacks), std::move(cached_args), _tick_profiler);
+    CmdSubmit CommandList::Submit() {
+        CmdSubmit submit(std::move(commands), std::move(callbacks), std::move(cached_args));
         commands.clear();
         callbacks.clear();
         return std::move(submit);

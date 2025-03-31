@@ -34,7 +34,7 @@ namespace Moer {
         float log_luminance_scale_exposure;
         float log_luminance_bias_exposure;
         uint  frame_idx;
-        uint  padding;
+        uint  enabled;
     };
 
     struct TAAParams {
