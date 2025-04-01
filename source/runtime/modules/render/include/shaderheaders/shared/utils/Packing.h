@@ -63,6 +63,43 @@ namespace Moer {
     static float2 f16tof32(uint2 _h) {
         return float2(f16tof32(_h.x), f16tof32(_h.y));
     }
+    namespace Math {
+        float2 OctWarp(float2 _v) {
+            return (1.f - Abs(float2(_v.y, _v.x))) * Select(_v - float2(0.f), float2(1.f), float2(-1.f));
+        }
+
+        float2 NdirToOctSigned(float3 _v) {
+            float2 _v2 = _v.xy * (1.f / (abs(_v.x) + abs(_v.y) + abs(_v.z)));
+            return _v.z < 0.f ? OctWarp(_v2) : _v2;
+        }
+
+        float3 OctToNdirSigned(float2 _p) {
+            float3 n = float3(_p.x, _p.y, 1.f - abs(_p.x) - abs(_p.y));
+            float  t = Max(-n.z, 0.f);
+            n.xy += Select(n.xy, float2(t), float2(-t));// flip xy back alone corresponding
+                                                        // diagnal
+
+            return Normalizef(n);
+        }
+
+        int NdirToOctUnorm32(float3 _v) {
+            float2 p = NdirToOctSigned(_v) * 0.5f + 0.5f;
+            return int(p.x * 65535.f) | (int(p.y * 65535.f) << 16);
+        }
+
+        float3 OctToNdirUnorm32(uint _p) {
+            float2 p = float2(float(_p & 0xffff), float(_p >> 16)) * (1.f / 65535.f);
+            return OctToNdirSigned(p * 2.f - 1.f);
+        }
+
+        float3 OctToNdir(float2 _p) {
+            return OctToNdirSigned(_p * 2.f - 1.f);
+        }
+
+        float2 NdirToOct(float3 _v) {
+            return NdirToOctSigned(_v) * 0.5f + 0.5f;
+        }
+    }// namespace Math
 
 #else
 
@@ -212,6 +249,14 @@ namespace Moer {
 
     GLOBAL_FUNC uint Pack_Normal(float3 _val) {
         return Pack_R11G11B10_UFLOAT(_val * .5f + .5f);
+    }
+
+    GLOBAL_FUNC float3 Unpack_NormalOct(float2 _val) {
+        return Math::OctToNdir(_val);
+    }
+
+    GLOBAL_FUNC float2 Pack_NormalOct(float3 _normal) {
+        return Math::NdirToOct(_normal);
     }
 
     GLOBAL_FUNC float3 Interpolate(float3 _val[3], float3 _bary) {

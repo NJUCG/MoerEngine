@@ -425,6 +425,30 @@ namespace Moer {
     }
 
     template<NumericFloatType T>
+    inline T Signed(T v) noexcept {
+        return v < T(0) ? T(-1) : T(1);
+    }
+
+    template<VectorFloatType T>
+    inline T Signed(const T& v) noexcept {
+        T ret;
+        for (int i = 0; i < T::size; i++) ret[i] = Signed(v[i]);
+        return ret;
+    }
+
+    template<NumericFloatType T>
+    inline T Select(T _comp, T _v1, T _v2) noexcept {
+        return Signed(_comp) == T(1) ? _v1 : _v2;
+    }
+
+    template<VectorFloatType T>
+    inline T Select(const T& _comp, const T& _v1, const T& _v2) noexcept {
+        T ret;
+        for (int i = 0; i < T::size; i++) ret[i] = Select(_comp[i], _v1[i], _v2[i]);
+        return ret;
+    }
+
+    template<NumericFloatType T>
     inline bool IsZero(T v) noexcept {
         return Abs(v) < T(EPS);
     }

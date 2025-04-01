@@ -213,8 +213,8 @@ namespace Moer {
             using TTangent = VertexAttributesType<EVertexAttributes::VA_TANGENT>::type;
 
             Array<float3>   default_position_data = {float3(1, 2, 3), float3(4, 5, 6)};
-            Array<TNormal>  default_tangent_data  = {TNormal(1), TNormal(2)};
-            Array<TTangent> default_normal_data   = {TTangent(3), TTangent(4)};
+            Array<TTangent> default_tangent_data  = {TTangent(1), TTangent(2)};
+            Array<TNormal>  default_normal_data   = {TNormal(3), TNormal(4)};
             Array<float2>   default_texcoord_data = {float2(1, 2), float2(3, 4)};
 
             Array<float3> only_position_data = {float3(1, 2, 3), float3(4, 5, 6), float3(7, 8, 9), float3(10, 11, 12)};
@@ -319,11 +319,11 @@ namespace Moer {
             default_vf.SetBufferLength(EVertexAttributes::VA_NORMAL, 0);
             default_vf.SetBufferLength(EVertexAttributes::VA_TEXCOORD0, 2);
 
-            using TNormal                         = VertexAttributesType<EVertexAttributes::VA_TANGENT>::type;
-            using TTangent                        = VertexAttributesType<EVertexAttributes::VA_NORMAL>::type;
+            using TNormal                         = VertexAttributesType<EVertexAttributes::VA_NORMAL>::type;
+            using TTangent                        = VertexAttributesType<EVertexAttributes::VA_TANGENT>::type;
             Array<float3>   default_position_data = {float3(1, 2, 3), float3(4, 5, 6), float3(7, 8, 9)};
-            Array<TNormal>  default_tangent_data  = {TNormal(1), TNormal(2), TNormal(3)};
-            Array<TTangent> default_normal_data   = {};
+            Array<TTangent> default_tangent_data  = {TTangent(1), TTangent(2), TTangent(3)};
+            Array<TNormal>  default_normal_data   = {};
             Array<float2>   default_texcoord_data = {float2(1, 2), float2(3, 4)};
 
             auto* position_buffer =

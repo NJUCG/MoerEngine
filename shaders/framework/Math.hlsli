@@ -103,6 +103,14 @@ float3 OctToNdirUnorm32(uint _p) {
   return OctToNdirSigned(p * 2.f - 1.f);
 }
 
+float3 OctToNdir(float2 _p) {
+  return OctToNdirSigned(_p * 2.f - 1.f);
+}
+
+float2 NdirToOct(float3 _v) {
+  return NdirToOctSigned(_v) * 0.5f + 0.5f;
+}
+
 /*https://graphics.pixar.com/library/OrthonormalB/paper.pdf*/
 void BranchlessONB(in float3 n, out float3 b1, out float3 b2) {
   float sign = n.z >= 0.0f ? 1.0f : -1.0f;

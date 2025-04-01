@@ -127,7 +127,10 @@ namespace Moer::Render {
         void  UnmapBuffer(const BufferView& _buffer);
         void  DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, uint32_t _base_vertex_location, uint32_t _start_instance_location);
         void  DrawInstanced(uint32_t _vertex_count, uint32_t _instance_count, uint32_t _start_vertex_location, uint32_t _start_instance_location);
+        void  DrawIndexedIndirectCnt(VulkanBuffer* _arg_buffer, uint64 _arg_offset, VulkanBuffer* _count_buffer, uint64 _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride);
         void  DrawIndirectCnt(VulkanBuffer* _arg_buffer, uint64 _arg_offset, VulkanBuffer* _count_buffer, uint64 _count_buffer_offset, uint32_t _max_draw_count, uint32_t _stride);
+        void  DrawIndexedIndirect(VulkanBuffer* _arg_buffer, uint64 _arg_offset, uint32_t _draw_count, uint32_t _stride);
+        void  DrawIndirect(VulkanBuffer* _arg_buffer, uint64 _arg_offset, uint32_t _draw_count, uint32_t _stride);
         void  CopyTexture(VulkanTexture* _src, VulkanTexture* _dst, uint3 _extent, uint3 _src_offset, uint3 _dst_offset, uint32 _src_mip_level, uint32 _dst_mip_level);
         void  BeginRendering(VkRenderingInfo&& _info);
         void  EndRendering();

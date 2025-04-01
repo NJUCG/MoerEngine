@@ -589,6 +589,18 @@ namespace Moer::Render {
                 tracker.RecordState(vk_buffer, VK_ACCESS_2_INDEX_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
             }
 
+            const auto& indirect_buffers = _cmd->IndirectBuffers();
+            for (const auto& ib : indirect_buffers) {
+                auto* vk_buffer = ResourceCast(ib.first);
+                tracker.RecordState(vk_buffer, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT);
+            }
+
+            const auto& count_buffers = _cmd->DrawCountBuffers();
+            for (const auto& ib : count_buffers) {
+                auto* vk_buffer = ResourceCast(ib.first);
+                tracker.RecordState(vk_buffer, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT);
+            }
+
             // auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
             //     VisitArgs(_arg, (VulkanShaderResourceState)_flag.state_flags, _flag.pipeline_flags);
             // };
@@ -1122,6 +1134,29 @@ namespace Moer::Render {
                                                               draw_param.vertex_offset,
                                                               draw_param.first_instance);
                             }
+
+                            if (draw_data.indirect_draw_param.has_value()) {
+                                VulkanBuffer* indirect_buffer = ResourceCast(draw_data.indirect_draw_param->buffer.GetBuffer());
+                                if (draw_data.indirect_draw_param->count_buffer.has_value()) {
+                                    //draw indirect with count buffer
+                                    auto* count_buffer = ResourceCast(draw_data.indirect_draw_param->count_buffer->GetBuffer());
+                                    cmd_list.DrawIndexedIndirectCnt(
+                                        indirect_buffer,
+                                        draw_data.indirect_draw_param->buffer.GetByteOffset(),
+                                        count_buffer,
+                                        draw_data.indirect_draw_param->count_buffer->GetByteOffset(),
+                                        draw_data.indirect_draw_param->count,
+                                        draw_data.indirect_draw_param->stride);
+
+                                } else {
+                                    //draw indirect without count buffer
+                                    cmd_list.DrawIndexedIndirect(
+                                        indirect_buffer,
+                                        draw_data.indirect_draw_param->buffer.GetByteOffset(),
+                                        draw_data.indirect_draw_param->count,
+                                        draw_data.indirect_draw_param->stride);
+                                }
+                            }
                         },
                         [&](uint _idx_input) {
                             for (const auto& draw_param : draw_data.draw_params) {
@@ -1129,6 +1164,30 @@ namespace Moer::Render {
                                                        draw_param.instance_cnt,
                                                        draw_param.vertex_offset,
                                                        draw_param.first_instance);
+                            }
+
+                            //draw indirect
+                            if (draw_data.indirect_draw_param.has_value()) {
+                                VulkanBuffer* indirect_buffer = ResourceCast(draw_data.indirect_draw_param->buffer.GetBuffer());
+                                if (draw_data.indirect_draw_param->count_buffer.has_value()) {
+                                    //draw indirect with count buffer
+                                    auto* count_buffer = ResourceCast(draw_data.indirect_draw_param->count_buffer->GetBuffer());
+                                    cmd_list.DrawIndirectCnt(
+                                        indirect_buffer,
+                                        draw_data.indirect_draw_param->buffer.GetByteOffset(),
+                                        count_buffer,
+                                        draw_data.indirect_draw_param->count_buffer->GetByteOffset(),
+                                        draw_data.indirect_draw_param->count,
+                                        draw_data.indirect_draw_param->stride);
+
+                                } else {
+                                    //draw indirect without count buffer
+                                    cmd_list.DrawIndirect(
+                                        indirect_buffer,
+                                        draw_data.indirect_draw_param->buffer.GetByteOffset(),
+                                        draw_data.indirect_draw_param->count,
+                                        draw_data.indirect_draw_param->stride);
+                                }
                             }
                         }},
                     draw_data.idx_view);

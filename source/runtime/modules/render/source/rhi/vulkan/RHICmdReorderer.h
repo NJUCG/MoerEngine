@@ -811,6 +811,17 @@ namespace Moer::Render {
             for (const auto& ib : ibs) {
                 EmplaceArg((uint64)(ib.first), ResourceType::Texture_Buffer, Range(ib.second.min, ib.second.max - ib.second.min), false);
             }
+
+            const auto& indirect = _cmd->IndirectBuffers();
+            for (const auto& ind : indirect) {
+                EmplaceArg((uint64)(ind.first), ResourceType::Texture_Buffer, Range(ind.second.min, ind.second.max - ind.second.min), false);
+            }
+
+            const auto& count_buffers = _cmd->DrawCountBuffers();
+            for (const auto& count : count_buffers) {
+                EmplaceArg((uint64)(count.first), ResourceType::Texture_Buffer, Range(count.second.min, count.second.max - count.second.min), false);
+            }
+
             //depth and render targets
             const auto& pass_info = _cmd->RenderPassInfo();
             if (pass_info.depth_attachment.Valid()) {

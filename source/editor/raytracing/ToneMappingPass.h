@@ -114,6 +114,11 @@ private:
     ToneMappingPassPipeline tone_mapping_pass_pipeline;
     HistogramPipeline       histogram_pipeline;
     ExposurePipeline        exposure_pipeline;
+
+    //Test DrawIndirect samples
+    BufferRef indirect_buffer;
+    BufferRef count_buffer;
+    BufferRef index_buffer;
 };
 } // namespace Moer::Render::Raytracing
 #endif

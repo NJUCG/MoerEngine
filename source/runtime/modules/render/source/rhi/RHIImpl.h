@@ -648,6 +648,8 @@ namespace Moer::Render {
         GraphEventRef                      evaluate_mesh_task = nullptr;
         UnorderedMap<Buffer*, BufferRange> vertex_buffers;
         UnorderedMap<Buffer*, BufferRange> index_buffers;
+        UnorderedMap<Buffer*, BufferRange> indirect_buffers;
+        UnorderedMap<Buffer*, BufferRange> draw_count_buffers;
 
         SetDrawStateCmd(ArrayArguments&& _args) : Command(EType::SetDrawState), args(std::move(_args)) {
         }
@@ -682,6 +684,28 @@ namespace Moer::Render {
                                              } else {
                                                  auto [offset, size] = index_buffers[idx_view.GetBuffer()];
                                                  index_buffers[idx_view.GetBuffer()].Merge(range);
+                                             }
+                                         }
+
+                                         if (mesh.indirect_draw_param.has_value()) {
+                                             if (mesh.indirect_draw_param->count_buffer.has_value()) {
+                                                 const BufferView& count_view = mesh.indirect_draw_param->count_buffer.value();
+                                                 BufferRange       range(count_view.GetByteOffset(), count_view.GetByteSize());
+                                                 if (draw_count_buffers.find(count_view.GetBuffer()) == draw_count_buffers.end()) {
+                                                     draw_count_buffers[count_view.GetBuffer()] = range;
+                                                 } else {
+                                                     auto [offset, size] = draw_count_buffers[count_view.GetBuffer()];
+                                                     draw_count_buffers[count_view.GetBuffer()].Merge(range);
+                                                 }
+                                             }
+
+                                             const BufferView& indirect_view = mesh.indirect_draw_param->buffer;
+                                             BufferRange       range(indirect_view.GetByteOffset(), indirect_view.GetByteSize());
+                                             if (indirect_buffers.find(indirect_view.GetBuffer()) == indirect_buffers.end()) {
+                                                 indirect_buffers[indirect_view.GetBuffer()] = range;
+                                             } else {
+                                                 auto [offset, size] = indirect_buffers[indirect_view.GetBuffer()];
+                                                 indirect_buffers[indirect_view.GetBuffer()].Merge(range);
                                              }
                                          }
                                      }
@@ -725,6 +749,15 @@ namespace Moer::Render {
         const auto& IndexBuffers() const {
             if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
             return index_buffers;
+        }
+        const auto& IndirectBuffers() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return indirect_buffers;
+        }
+
+        const auto& DrawCountBuffers() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return draw_count_buffers;
         }
     };
 

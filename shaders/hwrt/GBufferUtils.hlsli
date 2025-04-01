@@ -88,6 +88,22 @@ float3 MotionToPixelSpace(Moer::ViewParam _view, Moer::ViewParam _prev_view,
   return _motion;
 }
 
+float3 GetPrevWorldPos(Moer::ViewParam _prev_view,
+                       int2 _pixel_pos, float _view_depth, float3 _motion) {
+  
+  float2 prev_pos = float2(_pixel_pos) + 0.5f + _motion.xy;
+  float prev_view_depth = _view_depth + _motion.z;
+
+  float2 uv = prev_pos * _prev_view.inv_rect;
+  float4 clip_pos = float4(uv.x * 2.f - 1.f, 1.f - uv.y * 2.f, 0.5f, 1.f);
+  
+  float4 view_pos = mul(_prev_view.clip2view, clip_pos);
+  view_pos.xy /= view_pos.z;
+  view_pos.zw = float2(1.f, 1.f);
+  view_pos.xyz *= -prev_view_depth;
+  return mul(_prev_view.view2world, view_pos).xyz;
+}
+
 } // namespace Moer
 
 #endif // MOER_GBUFFER_UTILS_HLSLI

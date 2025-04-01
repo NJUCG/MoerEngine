@@ -1314,7 +1314,7 @@ namespace Moer::Render {
         vkCmdDraw(command_buffer, _vertex_cnt, _instance_cnt, _first_vertex, _first_instance);
     }
 
-    void VulkanCmdList::DrawIndirectCnt(
+    void VulkanCmdList::DrawIndexedIndirectCnt(
         VulkanBuffer* _commands,
         uint64        _commands_offset,
         VulkanBuffer* _count,
@@ -1322,6 +1322,32 @@ namespace Moer::Render {
         uint32_t      _max_cnt,
         uint32_t      _stride) {
         vkCmdDrawIndexedIndirectCount(command_buffer, _commands->GetHandle(), _commands_offset, _count->GetHandle(), _count_offset, _max_cnt, _stride);
+    }
+
+    void VulkanCmdList::DrawIndirectCnt(
+        VulkanBuffer* _commands,
+        uint64        _commands_offset,
+        VulkanBuffer* _count,
+        uint64        _count_offset,
+        uint32_t      _max_cnt,
+        uint32_t      _stride) {
+        vkCmdDrawIndirectCount(command_buffer, _commands->GetHandle(), _commands_offset, _count->GetHandle(), _count_offset, _max_cnt, _stride);
+    }
+
+    void VulkanCmdList::DrawIndexedIndirect(
+        VulkanBuffer* _buffer,
+        uint64        _offset,
+        uint32_t      _draw_cnt,
+        uint32_t      _stride) {
+        vkCmdDrawIndexedIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+    }
+
+    void VulkanCmdList::DrawIndirect(
+        VulkanBuffer* _buffer,
+        uint64        _offset,
+        uint32_t      _draw_cnt,
+        uint32_t      _stride) {
+        vkCmdDrawIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
     }
 
     void VulkanCmdList::CopyTexture(

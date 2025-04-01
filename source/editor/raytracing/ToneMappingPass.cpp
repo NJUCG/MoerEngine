@@ -2,6 +2,7 @@
 
 #include "PixelFormat.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/ShaderResourceManager.h"
@@ -50,6 +51,12 @@ ToneMappingPass::ToneMappingPass(
             color_lut_size = 0;
         }
     }
+
+    indirect_buffer = device.CreateBuffer<byte>(
+        sizeof(DrawCmdData) + sizeof(DrawIndexedCmdData), EBufferUsageFlags::INDIRECT_BUFFER
+    );
+    count_buffer = device.CreateBuffer<uint>(1, EBufferUsageFlags::INDIRECT_BUFFER);
+    index_buffer = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
 }
 static constexpr float g_min_log_luminance = -10; // TODO: figure out how to set these properly
 static constexpr float g_max_log_luminamce = 4;
@@ -114,27 +121,108 @@ void ToneMappingPass::Render(
     TextureRef   _target
 ) {
 
-    auto get_full_screen_draw_datas = [&]() {
-        Array<SingleDrawParam> full_screen_draw_datas;
-        full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
-        return full_screen_draw_datas;
-    };
-    Sampler linear_clamp_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
-    _cmd_list
-        .Gfx(
-            tone_mapping_pass_pipeline,
-            tone_mapping_constants,
-            _src_tex,
-            exposure_buffer,
-            color_lut,
-            linear_clamp_sampler
-        )
-        .Draw(
-            "ToneMapping",
-            Rect2D(0, 0, _target->GetExtent().x, _target->GetExtent().y),
-            std::move(get_full_screen_draw_datas()),
-            ColorAttachment(_target)
-        );
+    bool draw_indirect = false;
+
+    if (draw_indirect) {
+        DrawCmdData draw_cmd_data{};
+        draw_cmd_data.first_vtx      = 0;
+        draw_cmd_data.first_instance = 0;
+        draw_cmd_data.instance_cnt   = 1;
+        draw_cmd_data.vertex_cnt     = 3;
+
+        DrawIndexedCmdData draw_indexed_cmd_data{};
+        draw_indexed_cmd_data.first_index    = 0;
+        draw_indexed_cmd_data.first_instance = 0;
+        draw_indexed_cmd_data.instance_cnt   = 1;
+        draw_indexed_cmd_data.vertex_offset  = 0;
+        draw_indexed_cmd_data.index_cnt      = 3;
+
+        upload_data.resize(sizeof(DrawCmdData));
+        std::memcpy(upload_data.data(), &draw_cmd_data, sizeof(DrawCmdData));
+        _cmd_list.CopyFrom(std::move(upload_data), indirect_buffer->GetView(0, sizeof(DrawCmdData)));
+
+        upload_data.resize(sizeof(DrawIndexedCmdData));
+        std::memcpy(upload_data.data(), &draw_indexed_cmd_data, sizeof(DrawIndexedCmdData));
+        _cmd_list.CopyFrom(std::move(upload_data), indirect_buffer->GetView(sizeof(DrawCmdData)));
+
+        uint count = 1;
+        upload_data.resize(sizeof(uint));
+        std::memcpy(upload_data.data(), &count, sizeof(uint));
+        _cmd_list.CopyFrom(std::move(upload_data), count_buffer->GetView());
+
+        Array<uint> indices{0, 1, 2};
+        upload_data.resize(sizeof(uint) * 3);
+        std::memcpy(upload_data.data(), indices.data(), sizeof(uint) * 3);
+        _cmd_list.CopyFrom(std::move(upload_data), index_buffer->GetView());
+
+        Sampler linear_clamp_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
+        _cmd_list
+            .Gfx(
+                tone_mapping_pass_pipeline,
+                tone_mapping_constants,
+                _src_tex,
+                exposure_buffer,
+                color_lut,
+                linear_clamp_sampler
+            )
+            ////////////////////////////////////////////// DrawIndexedIndirect using gpu counter buffer
+            // .DrawIndirect(
+            //     "ToneMapping",
+            //     Rect2D(0, 0, _target->GetExtent().x, _target->GetExtent().y),
+            //     {},
+            //     IndexBuffer{index_buffer->GetView(), EIndexElementType::IET_UINT32},
+            //     indirect_buffer->GetView(sizeof(DrawCmdData)),
+            //     count_buffer->GetView(),
+            //     1,
+            //     sizeof(DrawIndexedCmdData),
+            //     ColorAttachment(_target)
+            // );
+            ////////////////////////////////////////////// DrawIndirect without index using gpu counter buffer
+            // .DrawIndirect(
+            //     "ToneMapping",
+            //     Rect2D(0, 0, _target->GetExtent().x, _target->GetExtent().y),
+            //     {},
+            //     0, //0 for draw, struct for draw indexed
+            //     indirect_buffer->GetView(0, sizeof(DrawCmdData)),
+            //     count_buffer->GetView(), //uint for count, BufferView for
+            //     1,
+            //     sizeof(DrawCmdData),
+            //     ColorAttachment(_target)
+            // );
+            ////////////////////////////////////////////// DrawIndirect without index using cpu count
+            .DrawIndirect(
+                "ToneMapping",
+                Rect2D(0, 0, _target->GetExtent().x, _target->GetExtent().y),
+                {},
+                0, //0 for draw, struct for draw indexed
+                indirect_buffer->GetView(0, sizeof(DrawCmdData)),
+                1, // cpu count
+                sizeof(DrawCmdData),
+                ColorAttachment(_target)
+            );
+    } else {
+        auto get_full_screen_draw_datas = [&]() {
+            Array<SingleDrawParam> full_screen_draw_datas;
+            full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
+            return full_screen_draw_datas;
+        };
+        Sampler linear_clamp_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
+        _cmd_list
+            .Gfx(
+                tone_mapping_pass_pipeline,
+                tone_mapping_constants,
+                _src_tex,
+                exposure_buffer,
+                color_lut,
+                linear_clamp_sampler
+            )
+            .Draw(
+                "ToneMapping",
+                Rect2D(0, 0, _target->GetExtent().x, _target->GetExtent().y),
+                std::move(get_full_screen_draw_datas()),
+                ColorAttachment(_target)
+            );
+    }
 }
 
 void ToneMappingPass::ResetHistogram(CommandList& _cmd_list) {
