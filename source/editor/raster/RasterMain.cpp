@@ -149,8 +149,6 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
             uint ssr_output = ssr_pass.Process(raster_context, ui_config, camera, ao_output);
             uint _aa_output = aa_pass.Process(raster_context, ui_config, camera, ssr_output);
 
-            // FIXME: TODO: SMAA 1x broken
-
             // Ui Combine Pass
             final_output = ui_combine_pass.Process(
                 raster_context.cmd_list,

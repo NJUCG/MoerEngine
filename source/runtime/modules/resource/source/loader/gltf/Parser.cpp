@@ -280,9 +280,6 @@ namespace Moer::Resource::Gltf {
         } else {
             LOG_INFO("Found {} lights in the scene", light_num);
 
-            LOG_WARNING("gltf LoadLights function isn't tested fully. It may not work as expected.");
-            // The following code isn't tested fully. It may not work as expected.
-            // TODO: Add a new scene with lights to test the following code
             for (uint32_t i = 0; i < light_num; i++) {
                 const auto* light = _scene->mLights[i];
                 const auto* node  = _scene->mRootNode->FindNode(light->mName);
@@ -303,10 +300,10 @@ namespace Moer::Resource::Gltf {
                         1.0f,                                              // intensity
                         pos                                                // position
                     );
-                    LOG_INFO("Point Light Position: {}", pos.ToString());
-                    LOG_INFO("Diffuse  Color: {}", ToVector3f(light->mColorDiffuse).ToString());
-                    LOG_INFO("Specular Color: {}", ToVector3f(light->mColorSpecular).ToString());
-                    LOG_INFO("Ambient  Color: {}", ToVector3f(light->mColorAmbient).ToString());
+                    // LOG_DEBUG("Point Light Position: {}", pos.ToString());
+                    // LOG_DEBUG("Diffuse  Color: {}", ToVector3f(light->mColorDiffuse).ToString());
+                    // LOG_DEBUG("Specular Color: {}", ToVector3f(light->mColorSpecular).ToString());
+                    // LOG_DEBUG("Ambient  Color: {}", ToVector3f(light->mColorAmbient).ToString());
                     data->m_lights.push_back(light_component);
 
                 } else if (light->mType == aiLightSourceType::aiLightSource_SPOT) {
