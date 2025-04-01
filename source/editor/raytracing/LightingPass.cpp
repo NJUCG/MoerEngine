@@ -29,10 +29,10 @@ LightingPass::LightingPass(ShaderManager& _manager, Scene& _scene) : scene(_scen
     di_shade_sample_pipeline =
         std::move(_manager.Compute<DIShadeSamplePipeline>("hwrt/ReSTIRDI/Shading.hlsl"));
 
-    auto& device = RenderDevice::Get();
-    resample_params =
-        device.CreateBuffer<byte>(sizeof(ResampleConstants), EBufferUsageFlags::CONSTANT_BUFFER);
-    resample_params->SetName("DI::resample_params");
+    auto& device    = RenderDevice::Get();
+    resample_params = device.CreateBuffer<byte>(
+        "Raytracing::resample_params", sizeof(ResampleConstants), EBufferUsageFlags::CONSTANT_BUFFER
+    );
 }
 
 void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {

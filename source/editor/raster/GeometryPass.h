@@ -20,8 +20,9 @@ public:
     GeometryPass(RasterContext& context) { CreateViewData(context); }
 
     void CreateViewData(RasterContext& context) {
-        view_param_buffer =
-            context.device.CreateBuffer<byte>(sizeof(ViewParam), EBufferUsageFlags::CONSTANT_BUFFER);
+        view_param_buffer = context.device.CreateBuffer<byte>(
+            "Raster::ViewParamBuffer", sizeof(ViewParam), EBufferUsageFlags::CONSTANT_BUFFER
+        );
     }
 
     void Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {

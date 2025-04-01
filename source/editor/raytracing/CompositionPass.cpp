@@ -11,9 +11,9 @@ CompositionPass::CompositionPass(RenderDevice& _device, ShaderManager& _manager,
     manager(_manager),
     scene(_scene),
     gbuffer_pass_pipeline{manager.Compute<CompositionPassPipeline>("hwrt/CompositionPass.hlsl")} {
-    gbuffer_constants =
-        device.CreateBuffer<Moer::byte>(sizeof(CompositingConstants), EBufferUsageFlags::CONSTANT_BUFFER);
-    gbuffer_constants->SetName("gbuffer_constants");
+    gbuffer_constants = device.CreateBuffer<Moer::byte>(
+        "CompositionPass::constant_buffer", sizeof(CompositingConstants), EBufferUsageFlags::CONSTANT_BUFFER
+    );
 }
 
 void CompositionPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {

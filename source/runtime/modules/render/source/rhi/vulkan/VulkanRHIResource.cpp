@@ -33,6 +33,16 @@
 
 #pragma region utils definition
 namespace Moer::Render {
+
+    static constexpr std::string_view s_tlas_underlying_buffer_name = "VkRaytracing::TLASUnderlyingBuffer";
+    static constexpr std::string_view s_blas_underlying_buffer_name = "VkRaytracing::BLASUnderlyingBuffer";
+    static constexpr std::string_view s_blas_scratch_buffer_name    = "VkRaytracing::BLASScratchBuffer";
+    static constexpr std::string_view s_tlas_scratch_buffer_name    = "VkRaytracing::TLASScratchBuffer";
+    static constexpr std::string_view s_tlas_instance_buffer_name   = "VkRaytracing::TLASInstanceBuffer";
+    static constexpr std::string_view s_bdls_array_name             = "VkBindless::BindlessArrayBuffer";
+    static constexpr std::string_view s_bdls_array_buffer_name      = "VkBindless::BindlessBuffuerBuffer";
+    static constexpr std::string_view s_bdls_array_image_name       = "VkBindless::BindlessImageBuffer";
+
     VmaAllocationCreateFlags VulkanMemoryManager::MEGenerateVmaMemoryFlags(EBufferUsageFlags _flags) {
         if ((_flags & EBufferUsageFlags::CPU_VISIBLE) == EBufferUsageFlags::CPU_VISIBLE) return VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         return 0;
@@ -1585,7 +1595,7 @@ namespace Moer::Render {
         }
     }
 
-    VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device) {
+    VulkanBuffer::VulkanBuffer(std::string_view _name,const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device) {
         VkBufferCreateInfo buffer_create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         buffer_create_info.size  = _info.size * _info.stride;
         buffer_create_info.usage = VulkanEnumTranslator::METoVKBufferUsageFlags(_info.usage) |
@@ -1611,12 +1621,12 @@ namespace Moer::Render {
         info.buffer      = m_alloc.buffer;
         m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
         m_descriptor_type = VulkanEnumTranslator::METoVkBufferDescriptorType(_info.usage);
-        SetName("UserBuffer");
+        SetName(_name);
     }
 
     uint64 VulkanBuffer::DeviceAddress() const { return m_device_address; }
 
-    VulkanBuffer::VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy, bool _get_address): Buffer(_info), VulkanDeviceObject(&_device) {
+    VulkanBuffer::VulkanBuffer(std::string_view _name, const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy, bool _get_address): Buffer(_info), VulkanDeviceObject(&_device) {
         m_alloc.buffer    = _handle;
         m_alloc.alloc     = _alloc;
         b_deferred_delete = _defer_destroy;
@@ -1625,7 +1635,8 @@ namespace Moer::Render {
             VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
             info.buffer      = m_alloc.buffer;
             m_device_address = vkGetBufferDeviceAddress(m_device->GetDevice(), &info);
-        }       
+        }
+        SetName(_name);      
     }
 
     UnorderedMap<uint64, uint>& VulkanBuffer::GetDescriptorIndices(VkDescriptorType _type) { 
@@ -1670,8 +1681,7 @@ namespace Moer::Render {
         alloc_ci.flags                    = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-        bindless_array_buffer = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
-        bindless_array_buffer->SetName("BindlessArrayBuffer");
+        bindless_array_buffer = MoerNew(VulkanBuffer)(s_bdls_array_name,buffer_info, *m_device, current_handle, alloc, false, true);
         
         buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
@@ -1682,8 +1692,7 @@ namespace Moer::Render {
         buffer_info.size = _max_size;
         buffer_info.stride = m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize;
 
-        bindless_buffer_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
-        bindless_buffer_descs->SetName("BindlessBufferDescs");
+        bindless_buffer_descs = MoerNew(VulkanBuffer)(s_bdls_array_buffer_name, buffer_info, *m_device, current_handle, alloc, false, true);
 
         buffer_ci.usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
@@ -1693,8 +1702,7 @@ namespace Moer::Render {
         
         buffer_info.size = _max_size;
         buffer_info.stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
-        bindless_texture_descs = MoerNew(VulkanBuffer)(buffer_info, *m_device, current_handle, alloc, false, true);
-        bindless_texture_descs->SetName("BindlessTextureDescs");
+        bindless_texture_descs = MoerNew(VulkanBuffer)(s_bdls_array_image_name, buffer_info, *m_device, current_handle, alloc, false, true);
 
         CommandList cmd_list{};
         auto& gfx_queue = m_device->GetCommandQueue(EQueueType::Graphics);
@@ -1791,6 +1799,7 @@ namespace Moer::Render {
     }
 
     UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand(){
+        std::unique_lock<std::mutex> lk(mtx);
 
         {
             uint64 texture_handle_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
@@ -1807,7 +1816,6 @@ namespace Moer::Render {
             uint buffer_cnt = 0;
 
             //lock for resource_allocated_set
-            Lock();
             for(const UpdateCmd& cmd : update_cmds){
                 std::visit(
                     [&](auto&& _cmd){
@@ -1846,7 +1854,6 @@ namespace Moer::Render {
                     }, cmd
                 );
             }
-            Unlock();
 
             array_indices_dat.resize(array_idx);
             texture_indices_dat.resize(texture_cnt);
@@ -1922,7 +1929,6 @@ namespace Moer::Render {
 
         }
         temp_slot_to_cmd.clear();
-        std::unique_lock<std::mutex> lk(mtx);
         UniquePtr<Command> cmd = MakeUnique<UpdateBindlessArrayCmd>(this, 
         std::move(update_cmds),
         std::move(array_dat),
@@ -1946,10 +1952,10 @@ namespace Moer::Render {
         uint  texture_slot     = 0;
         uint texture_slot_ptr = free_texture_slots.Pop();
         if (texture_slot_ptr == 0) { texture_slot = texture_slot_offset++; } else { texture_slot = texture_slot_ptr; }
+        std::unique_lock<std::mutex> lk(mtx);
 
         update_cmds.emplace_back(TextureUpdateInfo{_texture.texture, _sampler, _texture.format, slot_idx, texture_slot, _texture.mip_level, _texture.num_mips, false});
         temp_slot_to_cmd[slot_idx] = update_cmds.size() - 1;
-        std::unique_lock<std::mutex> lk(mtx);
         // textures_allocated.emplace_back(_texture.texture, _sampler, _texture.format, slot_idx, texture_slot, _texture.mip_level, _texture.num_mips);
         resource_allocated_set.insert(uint64(_texture.texture));
         return slot_idx;
@@ -1966,18 +1972,16 @@ namespace Moer::Render {
         uint  buffer_slot;
         uint buffer_slot_ptr = free_buffer_slots.Pop();
         if (buffer_slot_ptr == 0) { buffer_slot = buffer_slot_offset++; } else { buffer_slot = buffer_slot_ptr; }
-
+        std::unique_lock<std::mutex> lk(mtx);
         update_cmds.emplace_back(BufferUpdateInfo{_buffer.buffer, slot_idx, buffer_slot,_buffer.format, false});
         temp_slot_to_cmd[slot_idx] = update_cmds.size() - 1;
-        std::unique_lock<std::mutex> lk(mtx);
         // buffers_allocated.emplace_back(_buffer.buffer, slot_idx, buffer_slot);
         resource_allocated_set.insert(uint64(_buffer.buffer));
         return slot_idx;
     }
     static const Sampler s_spl = {ESamplerFilter::SF_LINEAR, SAM_CLAMP_TO_BORDER};
     void VulkanBindlessArray::FreeTexture(uint _array_idx) {
-        // std::unique_lock<std::mutex> lk(mtx);
-
+        std::unique_lock<std::mutex> lk(mtx);
         if(auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()){
             const UpdateCmd& src_cmd = update_cmds[iter->second];
 
@@ -2026,7 +2030,7 @@ namespace Moer::Render {
     }
 
     void VulkanBindlessArray::FreeBuffer(uint _array_idx) {
-        // std::unique_lock<std::mutex> lk(mtx);
+        std::unique_lock<std::mutex> lk(mtx);
 
         if(auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()){
             const UpdateCmd& src_cmd = update_cmds[iter->second];
@@ -2201,7 +2205,7 @@ namespace Moer::Render {
             
             vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &buffer, &alloc, nullptr);
 
-            underlying_buffer = MoerNew(VulkanBuffer)(buffer_info, *m_device, buffer, alloc, false, true);
+            underlying_buffer = MoerNew(VulkanBuffer)(s_blas_underlying_buffer_name,buffer_info, *m_device, buffer, alloc, false, true);
 
         }
         
@@ -2272,7 +2276,7 @@ namespace Moer::Render {
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
 
-        instance_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
+        instance_buffer = MoerNew(VulkanBuffer)(s_tlas_instance_buffer_name,BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
 
     }
 
@@ -2480,7 +2484,7 @@ namespace Moer::Render {
         alloc_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-        instance_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
+        instance_buffer = MoerNew(VulkanBuffer)(s_tlas_instance_buffer_name,BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
         
     }
 
@@ -2547,7 +2551,7 @@ namespace Moer::Render {
                 buffer_ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
                 VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
                 
-                scratch_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
+                scratch_buffer = MoerNew(VulkanBuffer)(s_tlas_scratch_buffer_name, BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
             }
             //TLAS
             if(build_sizes_info.result_size > size_infos.result_size){
@@ -2557,8 +2561,7 @@ namespace Moer::Render {
                 
                 tlas = MoerNew(VulkanAccelerationStructure)(*m_device, *this);
 
-                tlas->underlying_buffer = MoerNew(VulkanBuffer)(BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
-                tlas->underlying_buffer->SetName("TLAS underly buffer Ping");
+                tlas->underlying_buffer = MoerNew(VulkanBuffer)(s_tlas_underlying_buffer_name,BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
 
                 //create new TLAS
                 VkAccelerationStructureCreateInfoKHR create_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};

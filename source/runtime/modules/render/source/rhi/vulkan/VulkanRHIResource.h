@@ -815,8 +815,8 @@ namespace Moer::Render {
         virtual void Destroy() override;
         void         SetName(const std::string_view _name) override;
 
-        VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device);
-        VulkanBuffer(const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy, bool _get_address = false);
+        VulkanBuffer(std::string_view _name, const BufferInfo& _info, VulkanDevice& _device);
+        VulkanBuffer(std::string_view _name, const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy, bool _get_address = false);
         uint64                     DeviceAddress() const;
         inline const VmaAllocation GetAllocation() const {
             return m_alloc.alloc;

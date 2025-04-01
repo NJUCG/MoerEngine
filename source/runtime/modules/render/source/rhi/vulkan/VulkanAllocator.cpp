@@ -101,19 +101,11 @@ namespace Moer::Render {
         if (_size < small_block_size) {
             auto          handle = upload_allocator.Allocate(_size, _alignment);
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
-#if _DEBUG
-            if(handle.offset != 0){
-                buffer->SetName(std::format("SmallUploadBuffer_{}", upload_allocator.capacity));
-            }
-#endif
             return {buffer, handle.offset, _size, 1u};
         }
-        auto          handle = allocator.Allocate(_size);
+        auto          handle = allocator.Allocate(_size, std::format("VkBackend::LargeUploadBuffer_{}", _size));
         VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
         large_buffers.push_back(buffer);
-#if _DEBUG
-        buffer->SetName(std::format("LargeUploadBuffer_{}", _size));
-#endif
         return {buffer, 0, _size, 1u};
     }
 
@@ -122,18 +114,10 @@ namespace Moer::Render {
         if (_size < small_block_size) {
             auto          handle = readback_allocator.Allocate(_size, _alignment);
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
-#if _DEBUG
-            if(handle.offset != 0){
-                buffer->SetName(std::format("SmallReadbackBuffer_{}", readback_allocator.capacity));
-            }
-#endif
             return {buffer, handle.offset, _size, 1u};
         }
-        auto          handle = allocator.Allocate(_size);
+        auto          handle = allocator.Allocate(_size, std::format("VkBackend::LargeReadbackBuffer_{}", _size));
         VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
-#if _DEBUG
-        buffer->SetName(std::format("LargeReadbackBuffer_{}", _size));
-#endif
         large_buffers.push_back(buffer);
 
         return {buffer, 0, _size, 1u};
@@ -166,7 +150,7 @@ namespace Moer::Render {
     }
 
     VkTmpBufferAllocator::VkTmpBufferAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device) {}
-    uint64 VkTmpBufferAllocator::Allocate(uint64 _size) {
+    uint64 VkTmpBufferAllocator::Allocate(uint64 _size, std::string_view _name) {
         VkBufferCreateInfo buffer_info = {
             .sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .pNext                 = nullptr,
@@ -187,7 +171,7 @@ namespace Moer::Render {
             EBufferUsageFlags::CPU_VISIBLE);
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_info, &alloc_info, &buffer_alloc.buffer, &buffer_alloc.alloc, nullptr));
-        VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false);
+        VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(_name, info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false);
 
         return reinterpret_cast<uint64>(vk_buffer);
     }
@@ -249,10 +233,9 @@ namespace Moer::Render {
             EBufferUsageFlags::NONE);
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_info, &alloc_info, &buffer_alloc.buffer, &buffer_alloc.alloc, nullptr));
-        VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false, devce_address);
 
-        static constexpr std::string_view usage_str[] = {"Upload", "Readback", "Scratch", "ShaderBuffer", "ShaderBuffer_Constant"};
-        vk_buffer->SetName(usage_str[static_cast<uint>(_usage)]);
+        static constexpr std::string_view usage_str[] = {"VkBackend::Upload", "VkBackend::Readback", "VkBackend::Scratch", "VkBackend::ShaderBuffer", "VkBackend::ShaderBuffer_Constant"};
+        VulkanBuffer*                     vk_buffer   = MoerNew(VulkanBuffer)(usage_str[uint(_usage)], info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false, devce_address);
         return reinterpret_cast<uint64>(vk_buffer);
     }
 
@@ -290,7 +273,7 @@ namespace Moer::Render {
 
     VulkanAllocator::StackAllocator::StackAllocator(VkTmpBufferAllocator* _alloc, uint64 _init_cap, double _grouth_factor) : allocator(_alloc), init_capacity(_init_cap), growth_factor(_grouth_factor) {
         capacity = std::max<uint64>(init_capacity, 1);
-        allocated_buffers.push_back({allocator->Allocate(capacity), capacity, 0});
+        allocated_buffers.push_back({allocator->Allocate(capacity, "VkBackend::StackAllocBuffer"), capacity, 0});
     }
 
     VulkanAllocator::StackAllocator::Chunk VulkanAllocator::StackAllocator::Allocate(uint64 _size, uint _align) {
@@ -306,7 +289,7 @@ namespace Moer::Render {
         if (capacity < align_size) {
             capacity = std::max<uint64>(capacity * growth_factor, align_size);
         }
-        auto buffer = allocator->Allocate(capacity);
+        auto buffer = allocator->Allocate(capacity, "VkBackend::StackAllocBuffer");
         allocated_buffers.push_back({buffer, capacity, align_size});
         return {buffer, 0};
     }
@@ -322,7 +305,7 @@ namespace Moer::Render {
         if (capacity < _size) {
             capacity = std::max<uint64>(capacity * growth_factor, _size);
         }
-        auto buffer = allocator->Allocate(capacity);
+        auto buffer = allocator->Allocate(capacity, "VkBackend::StackAllocBuffer");
         allocated_buffers.push_back({buffer, capacity, _size});
         return {buffer, 0};
     }
@@ -339,7 +322,7 @@ namespace Moer::Render {
                 allocator->DeAllocate(alloc_buf.handle);
             }
             allocated_buffers.clear();
-            allocated_buffers.push_back({allocator->Allocate(sum_size), sum_size, 0});
+            allocated_buffers.push_back({allocator->Allocate(sum_size, "VkBackend::StackAllocBuffer"), sum_size, 0});
         }
     }
 

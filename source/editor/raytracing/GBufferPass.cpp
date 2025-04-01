@@ -16,9 +16,9 @@ GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager, Scene& 
     gbuffer_pass_pipeline{manager.Compute<RaytracingGBufferPipeline>("hwrt/GBufferRT.hlsl")},
     post_process_pipeline{manager.Compute<PostProcessGBufferPipeline>("hwrt/PostProcessGBuffer.hlsl")} {
 
-    gbuffer_constants =
-        device.CreateBuffer<Moer::byte>(sizeof(GBufferConstants), EBufferUsageFlags::CONSTANT_BUFFER);
-    gbuffer_constants->SetName("gbuffer_constants");
+    gbuffer_constants = device.CreateBuffer<Moer::byte>(
+        "Raytracing::gbuffer_constants", sizeof(GBufferConstants), EBufferUsageFlags::CONSTANT_BUFFER
+    );
 }
 
 void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {

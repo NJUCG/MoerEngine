@@ -33,16 +33,17 @@ ToneMappingPass::ToneMappingPass(
                                      .Pixel("postprocess/ToneMappingPass.hlsl")
                                      .Build<ToneMappingPassPipeline>(std::move(pso_info));
 
-    tone_mapping_constants =
-        device.CreateBuffer<Moer::byte>(sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER);
-    tone_mapping_constants->SetName("tone_mapping_constants");
-    tone_mapping_constants2 =
-        device.CreateBuffer<Moer::byte>(sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER);
-    tone_mapping_constants2->SetName("tone_mapping_constants2");
-    histogram_buffer = device.CreateBuffer<uint>(_info.histogram_bins, EBufferUsageFlags::UNORDERED_ACCESS);
+    tone_mapping_constants = device.CreateBuffer<Moer::byte>(
+        "tone_mapping_constants", sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER
+    );
+    tone_mapping_constants2 = device.CreateBuffer<Moer::byte>(
+        "tone_mapping_constants2", sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER
+    );
+    histogram_buffer = device.CreateBuffer<uint>(
+        "histogram_buffer", _info.histogram_bins, EBufferUsageFlags::UNORDERED_ACCESS
+    );
     histogram_buffer->SetName("histogram_buffer");
-    exposure_buffer = device.CreateBuffer<uint>(1, EBufferUsageFlags::UNORDERED_ACCESS);
-    exposure_buffer->SetName("exposure_buffer");
+    exposure_buffer = device.CreateBuffer<uint>("exposure_buffer", 1, EBufferUsageFlags::UNORDERED_ACCESS);
 
     if (_info.color_lut) {
         color_lut = _info.color_lut;
@@ -53,10 +54,13 @@ ToneMappingPass::ToneMappingPass(
     }
 
     indirect_buffer = device.CreateBuffer<byte>(
-        sizeof(DrawCmdData) + sizeof(DrawIndexedCmdData), EBufferUsageFlags::INDIRECT_BUFFER
+        "ToneMapping::IndirectBuffer",
+        sizeof(DrawCmdData) + sizeof(DrawIndexedCmdData),
+        EBufferUsageFlags::INDIRECT_BUFFER
     );
-    count_buffer = device.CreateBuffer<uint>(1, EBufferUsageFlags::INDIRECT_BUFFER);
-    index_buffer = device.CreateBuffer<uint>(3, EBufferUsageFlags::INDEX_BUFFER);
+    count_buffer =
+        device.CreateBuffer<uint>("ToneMapping::CountBuffer", 1, EBufferUsageFlags::INDIRECT_BUFFER);
+    index_buffer = device.CreateBuffer<uint>("ToneMapping::IndexBuffer", 3, EBufferUsageFlags::INDEX_BUFFER);
 }
 static constexpr float g_min_log_luminance = -10; // TODO: figure out how to set these properly
 static constexpr float g_max_log_luminamce = 4;

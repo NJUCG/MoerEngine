@@ -27,6 +27,9 @@ const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
     //1 / 8.0 // VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT
 };
 namespace Moer::Render {
+
+    static constexpr std::string_view s_ring_desc_buffer_name = "VkDescriporHeap::RingDescriptorBuffer";
+
     VulkanDescriptorSetsLayout::VulkanDescriptorSetsLayout(VulkanDevice* _device, const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) : VulkanDeviceObject(_device) {
         m_layouts.resize(_descriptor_bindings.size(), VK_NULL_HANDLE);
         for (uint32_t set_idx = 0; set_idx < _descriptor_bindings.size(); ++set_idx) {
@@ -470,7 +473,7 @@ namespace Moer::Render {
         buffer_info.stride = 1;
         buffer_info.usage  = EBufferUsageFlags::UNORDERED_ACCESS;
 
-        ring_desc_buffer = MoerNew(VulkanBuffer)(buffer_info, *m_device, desc_buffer, desc_buffer_allocation, false, true);
+        ring_desc_buffer = MoerNew(VulkanBuffer)(s_ring_desc_buffer_name, buffer_info, *m_device, desc_buffer, desc_buffer_allocation, false, true);
 
         //fill offsets
         ring_buffer_offsets.resize(m_device->cmd_alloc_limits);

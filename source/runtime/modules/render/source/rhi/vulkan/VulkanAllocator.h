@@ -26,7 +26,7 @@ namespace Moer::Render {
     };
     struct VkTmpBufferAllocator : VulkanDeviceObject {
         VkTmpBufferAllocator(VulkanDevice* _device);
-        uint64 Allocate(uint64 _size);
+        uint64 Allocate(uint64 _size, std::string_view _name);
         uint64 Allocate(uint64 _size, EVkInternalBufferUsage _usage);
         void   DeAllocate(uint64 _handle);
     };

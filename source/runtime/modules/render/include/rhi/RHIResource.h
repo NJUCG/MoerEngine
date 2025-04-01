@@ -888,7 +888,8 @@ namespace Moer::Render {
         using UpdateCmd = std::variant<TextureUpdateInfo, BufferUpdateInfo, InvalidUpdateInfo>;
 
         BindlessArray();
-        virtual ~BindlessArray()                                                    = default;
+        virtual ~BindlessArray() = default;
+
         virtual uint AllocateTexture(const TextureView& _texture, Sampler _sampler) = 0;
         virtual uint AllocateBuffer(BufferView _buffer)                             = 0;
 

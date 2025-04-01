@@ -24,7 +24,9 @@ AntialiasPass::AntialiasPass(
     feedback_color_pong(_info.feedback_color_pong),
     resolved_color(_info.resolved_color),
     hdr_color(_info.hdr_color) {
-    constant_buffer = _device.CreateBuffer<Moer::byte>(sizeof(TAAParams), EBufferUsageFlags::CONSTANT_BUFFER);
+    constant_buffer = _device.CreateBuffer<Moer::byte>(
+        "PostProcess::TAAConstantBuffer", sizeof(TAAParams), EBufferUsageFlags::CONSTANT_BUFFER
+    );
 }
 
 void AntialiasPass::Process(

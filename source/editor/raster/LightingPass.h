@@ -40,8 +40,9 @@ public:
     }
 
     void CreateLightingData(RasterContext& context) {
-        lighting_data_buffer.buf =
-            context.device.CreateBuffer<byte>(sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS);
+        lighting_data_buffer.buf = context.device.CreateBuffer<byte>(
+            "Raster::LightData", sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS
+        );
 
         lighting_data_buffer.handle = context.bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
     }

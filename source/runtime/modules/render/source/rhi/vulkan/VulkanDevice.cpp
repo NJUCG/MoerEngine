@@ -1358,9 +1358,9 @@ namespace Moer::Render {
         return TextureRef{MoerNew(VulkanTexture)(info, this)};
     }
 
-    BufferRef VulkanDevice::CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) {
+    BufferRef VulkanDevice::CreateBuffer(std::string_view _name, uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) {
         BufferInfo info{_element_cnt, _byte_stride, _usage, _format};
-        return BufferRef{MoerNew(VulkanBuffer)(info, *this)};
+        return BufferRef{MoerNew(VulkanBuffer)(_name, info, *this)};
     }
 
     BindlessArrayRef VulkanDevice::CreateBindlessArray(uint _max_size) {

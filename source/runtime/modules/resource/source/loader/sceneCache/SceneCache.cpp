@@ -599,8 +599,7 @@ namespace Moer {
             vertex_size += texcoord0_buffer_size;
             vertex_size += texcoord1_buffer_size;
 
-            buf->vertex_buffer = device.CreateBuffer<byte>(vertex_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
-            buf->vertex_buffer->SetName("soa_vertex_buffer");
+            buf->vertex_buffer = device.CreateBuffer<byte>("Scene::soa_vertex_buffer", vertex_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
 
             if (position_buffer_size > 0) {
                 auto* position_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_POSITION);
@@ -640,8 +639,7 @@ namespace Moer {
 
             // index buffer
 
-            buf->index_buffer = device.CreateBuffer<uint32_t>(buf->indices.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
-            buf->index_buffer->SetName("index_buffer");
+            buf->index_buffer = device.CreateBuffer<uint32_t>("Scene::index_buffer", buf->indices.size(), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
 
             cmd_list.CopyFrom(
                 std::span<byte>((byte*)buf->indices.data(), buf->indices.size() * sizeof(uint32_t)),
@@ -660,18 +658,18 @@ namespace Moer {
 
         auto& copy_queue = device.GetCopyQueue();
 
-        auto instance_data_buffer = device.CreateBuffer<byte>(_scene->GetInstanceDatas().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto material_buffer      = device.CreateBuffer<byte>(_scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
+        auto instance_data_buffer = device.CreateBuffer<byte>("Scene::InstanceDataBuffer", _scene->GetInstanceDatas().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto material_buffer      = device.CreateBuffer<byte>("Scene::MaterialInstanceBuffer", _scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
 
-        auto geometry_data_buffer     = device.CreateBuffer<byte>(_scene->GetGeometryDatas().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
-        auto geometry_instance_buffer = device.CreateBuffer<byte>(_scene->GetGeometryInstances().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto geometry_data_buffer     = device.CreateBuffer<byte>("Scene::GeometryDataBuffer", _scene->GetGeometryDatas().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
+        auto geometry_instance_buffer = device.CreateBuffer<byte>("Scene::GeometryInstanceBuffer", _scene->GetGeometryInstances().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
 
         Array<LightComponentData> lights(_scene_data.m_lights.size());
         for (uint i = 0; i < _scene_data.m_lights.size(); ++i) {
             lights[i] = _scene_data.m_lights[i]->ToData();
         }
 
-        BufferRef light_buffer = device.CreateBuffer<byte>(lights.size() * sizeof(LightComponentData), EBufferUsageFlags::UNORDERED_ACCESS);
+        BufferRef light_buffer = device.CreateBuffer<byte>("Scene::LightBuffer", lights.size() * sizeof(LightComponentData), EBufferUsageFlags::UNORDERED_ACCESS);
 
         cmd_list.CopyFrom(
             material_data,

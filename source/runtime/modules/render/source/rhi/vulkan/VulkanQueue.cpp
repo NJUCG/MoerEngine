@@ -2099,7 +2099,7 @@ namespace Moer::Render {
             tracker.Reset();
         }
 
-        if (_submit.b_delete_resources) {
+        if (has_cmd) {
             Array<RHIResource*> deleted_resources;
             vk_device.deferred_release_queue.PopAll(deleted_resources);
             _submit.callbacks.emplace_back([deleted_resources(std::move(deleted_resources))]() {

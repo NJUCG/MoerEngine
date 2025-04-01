@@ -886,6 +886,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
         if (_editor_ui->IsNeedReload()) { break; }
     }
+    gfx_queue.Sync();
 
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
     for (auto& buf : allocated_buf) { bindless_array->FreeBuffer(buf); }

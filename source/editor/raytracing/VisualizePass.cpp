@@ -11,9 +11,10 @@ VisualizePass::VisualizePass(RenderDevice& _device, ShaderManager& _manager) :
     device(_device),
     manager(_manager) {
 
-    visualize_pipeline = _manager.Compute<VisualizePipeline>("hwrt/VisualizePass.hlsl");
-    visualize_params_buffer =
-        device.CreateBuffer<Moer::byte>(sizeof(VisualizeParams), EBufferUsageFlags::CONSTANT_BUFFER);
+    visualize_pipeline      = _manager.Compute<VisualizePipeline>("hwrt/VisualizePass.hlsl");
+    visualize_params_buffer = device.CreateBuffer<Moer::byte>(
+        "Raytracing::VisualizeBuffer", sizeof(VisualizeParams), EBufferUsageFlags::CONSTANT_BUFFER
+    );
 }
 
 void VisualizePass::Process(

@@ -37,11 +37,11 @@ RTContext::RTContext(
 
     RenderDevice& device = RenderDevice::Get();
     neighbor_offset_buf  = device.CreateBuffer<byte>(
-        is_ctx.GetNeighborOffsetCnt() * 2, EBufferUsageFlags::UNORDERED_ACCESS, PF_R8G8_SNORM
+        "Raytracing::neighbor_offset_buf",
+        is_ctx.GetNeighborOffsetCnt() * 2,
+        EBufferUsageFlags::UNORDERED_ACCESS,
+        PF_R8G8_SNORM
     );
-
-    neighbor_offset_buf->SetName("neighbor_offset_buf");
-
     // AllocateAndFreeBdlsIfNeeded(bindless_handles.neighbor_offset, neighbor_offset_buf->GetView());
 }
 
@@ -316,16 +316,16 @@ void RTContext::CreateBuffersIfNeeded(
     uint          task_num = _num_emissive_meshes + _num_prim_lights;
 
     if (!task_buf || task_num > task_buf->GetNumElement()) {
-        task_buf = device.CreateBuffer<PrepareLightsTask>(task_num, EBufferUsageFlags::UNORDERED_ACCESS);
-        task_buf->SetName("task_buf");
+        task_buf = device.CreateBuffer<PrepareLightsTask>(
+            "Raytracing::task_buf", task_num, EBufferUsageFlags::UNORDERED_ACCESS
+        );
     }
 
     // task_buf             = device.CreateBuffer<PrepareLightsTask>(max_emissive_meshes + max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS);
     if (!geo_instance_to_light_buf || _num_geom_instance > max_geom_instance) {
-        geo_instance_to_light_buf =
-            device.CreateBuffer<uint>(_num_geom_instance, EBufferUsageFlags::UNORDERED_ACCESS);
-        geo_instance_to_light_buf->SetName("geo_instance_to_light_buf");
-
+        geo_instance_to_light_buf = device.CreateBuffer<uint>(
+            "Raytracing::geo_instance_to_light_buf", _num_geom_instance, EBufferUsageFlags::UNORDERED_ACCESS
+        );
         AllocateAndFreeBdlsIfNeeded(
             bindless_handles.geo_instance_to_light, geo_instance_to_light_buf->GetView()
         );
@@ -339,21 +339,21 @@ void RTContext::CreateBuffersIfNeeded(
     uint light_buf_element = max_local_lights * 2;
 
     if (!light_mapping_buf || light_buf_element > light_data_buf->GetNumElement()) {
-        light_mapping_buf = device.CreateBuffer<uint>(light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS);
-        light_data_buf =
-            device.CreateBuffer<PolymorphicLightInfo>(light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS);
-
-        light_mapping_buf->SetName("light_mapping_buf");
-        light_data_buf->SetName("light_data_buf");
+        light_mapping_buf = device.CreateBuffer<uint>(
+            "Raytracing::light_mapping_buf", light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS
+        );
+        light_data_buf = device.CreateBuffer<PolymorphicLightInfo>(
+            "Raytracing::light_data_buf", light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS
+        );
 
         AllocateAndFreeBdlsIfNeeded(bindless_handles.light_index, light_mapping_buf->GetView());
         AllocateAndFreeBdlsIfNeeded(bindless_handles.poly_light_data, light_data_buf->GetView());
     }
 
     if (!prim_light_buf || max_prim_lights > prim_light_buf->GetNumElement()) {
-        prim_light_buf =
-            device.CreateBuffer<PolymorphicLightInfo>(max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS);
-        prim_light_buf->SetName("prim_light_buf");
+        prim_light_buf = device.CreateBuffer<PolymorphicLightInfo>(
+            "Raytracing::prim_light_buf", max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS
+        );
     }
     //
     {
@@ -460,27 +460,26 @@ void RTContext::Tick(CameraRef _camera, float2 _jitter) {
                     s_num_restirdi_reservoir_buffer >
                 light_reservoir_buf->GetNumElement()) {
             light_reservoir_buf = device.CreateBuffer<DI::PackedReservoir>(
+                "Raytracing::light_reservoir_buf",
                 is_ctx.GetReSTIRDIRuntimeConfig().reservoir_buffer_params.block_array_pitch *
                     s_num_restirdi_reservoir_buffer,
                 EBufferUsageFlags::UNORDERED_ACCESS
             );
-
-            light_reservoir_buf->SetName("light_reservoir_buf");
         }
 
         if (!ris_buf ||
             2 * std::max(is_ctx.GetSegmentAllocator().GetTotalSize(), 1u) > ris_buf->GetNumElement()) {
             ris_buf = device.CreateBuffer<uint>(
+                "Raytracing::ris_buf",
                 2 * std::max(is_ctx.GetSegmentAllocator().GetTotalSize(), 1u),
                 EBufferUsageFlags::UNORDERED_ACCESS
             );
-            ris_buf->SetName("ris_buf");
 
             ris_light_data_buf = device.CreateBuffer<uint4>(
+                "Raytracing::ris_light_data_buf",
                 2 * std::max(is_ctx.GetSegmentAllocator().GetTotalSize(), 1u),
                 EBufferUsageFlags::UNORDERED_ACCESS
             );
-            ris_light_data_buf->SetName("ris_light_data_buf");
         }
     }
 }
