@@ -1995,8 +1995,6 @@ namespace Moer::Render {
                         }else{
                             //TODO: invalidate update command
                             LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
-                            std::unique_lock<std::mutex> lk(mtx);
-
                             resource_allocated_set.erase((uint64)_cmd.texture.Get());
 
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
@@ -2007,8 +2005,6 @@ namespace Moer::Render {
                             return;
                         }else{
                             LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
-                            std::unique_lock<std::mutex> lk(mtx);
-
                             resource_allocated_set.erase((uint64)_cmd.buffer.Get());
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
                         }
@@ -2044,7 +2040,6 @@ namespace Moer::Render {
                             return;
                         }else{
                             LOG_WARNING("You are releasing a bindless buffer that's pending updating, array index: {}", _array_idx);
-                            std::unique_lock<std::mutex> lk(mtx);
 
                             resource_allocated_set.erase((uint64)_cmd.texture.Get());
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
@@ -2055,7 +2050,6 @@ namespace Moer::Render {
                             return;
                         }else{
                             LOG_WARNING("You are releasing a bindless buffer that's pending updating, array index: {}", _array_idx);
-                            std::unique_lock<std::mutex> lk(mtx);
 
                             resource_allocated_set.erase((uint64)_cmd.buffer.Get());
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
