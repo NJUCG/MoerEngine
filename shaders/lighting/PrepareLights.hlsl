@@ -151,7 +151,7 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
       // tri_light_indirect2 = Moer::TriangleIndirectLight::Create(light_info);
       // printf("dst avg_radiance %f %f %f uv0 %f %f edg_uv1 %f %f edg_uv2 %f %f tex_handle %d\n", tri_light_indirect2.avg_radiance.x, tri_light_indirect2.avg_radiance.y, tri_light_indirect2.avg_radiance.z, tri_light_indirect2.uv0.x, tri_light_indirect2.uv0.y, tri_light_indirect2.edge_uv1.x, tri_light_indirect2.edge_uv1.y, tri_light_indirect2.edge_uv2.x, tri_light_indirect2.edge_uv2.y, tri_light_indirect2.tex_handle);
 
-      return;
+      // return;
     }
 
     emissive.rgb = max(emissive.rgb, 0.0f);
