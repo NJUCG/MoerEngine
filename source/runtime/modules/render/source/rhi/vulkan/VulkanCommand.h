@@ -134,7 +134,7 @@ namespace Moer::Render {
         void  CopyTexture(VulkanTexture* _src, VulkanTexture* _dst, uint3 _extent, uint3 _src_offset, uint3 _dst_offset, uint32 _src_mip_level, uint32 _dst_mip_level);
         void  BeginRendering(VkRenderingInfo&& _info);
         void  EndRendering();
-        void  SetVertexBuffers(uint _start_index, uint _num_buffers, std::span<VkBuffer>, std::span<uint64> _offsets);
+        void  SetVertexBuffers(uint _first_binding, uint _binding_cnt, std::span<VkBuffer> _buffers, std::span<uint64> _offsets);
         void  SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _type);
         void  SetPso(const PipelineHandle& _pso_handle);
         void  SetScissor(const VkRect2D& _scissor);

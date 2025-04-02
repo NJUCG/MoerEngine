@@ -1381,8 +1381,8 @@ namespace Moer::Render {
         vkCmdEndRendering(command_buffer);
     }
 
-    void VulkanCmdList::SetVertexBuffers(uint _first_binding, uint _binding_cnt, std::span<VkBuffer> _buffers, std::span<uint64> offsets) {
-        vkCmdBindVertexBuffers(command_buffer, _first_binding, _binding_cnt, _buffers.data(), offsets.data());
+    void VulkanCmdList::SetVertexBuffers(uint _first_binding, uint _binding_cnt, std::span<VkBuffer> _buffers, std::span<uint64> _offsets) {
+        vkCmdBindVertexBuffers(command_buffer, _first_binding, _binding_cnt, _buffers.data(), _offsets.data());
     }
 
     void VulkanCmdList::SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _index_type) {
