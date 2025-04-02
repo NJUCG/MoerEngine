@@ -51,9 +51,6 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
     auto&& scope_exit_reset_async_load_info = OnScopeExit([&] { Scene::ResetAsyncLoadInfo(); });
 
     // TODO: combine RasterMain and RaytracingMain common part (above code)
-    while (!Scene::GetCurrentSceneLoadInfo().Get() || !Scene::GetCurrentSceneLoadInfo()->IsReady()) {
-        std::this_thread::yield();
-    }
     RasterContext raster_context(device, manager, bindless_array, cmd_list, scene, resolution);
 
     raster_context.CreateFrameBuffers();
@@ -122,6 +119,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
                 uint last_io_change_timeline = copy_queue_timeline->GetValue();
                 gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, last_io_change_timeline));
+                gfx_queue.Sync();
             }
 
             // MARK: Camera
