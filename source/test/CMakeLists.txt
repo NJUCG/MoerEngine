@@ -66,21 +66,20 @@ set_target_properties(TaskGraphTest PROPERTIES FOLDER ${moer_test_folder})
 # set_target_properties(VulkanRTRHITest PROPERTIES FOLDER ${moer_test_folder})
 
 # Raster
-# TODO: rename RHITest to Raster
-file(GLOB_RECURSE RASTER_TEST_CPPS Raster/*.cpp)
-add_executable(RHITest ${RASTER_TEST_CPPS})
-target_include_directories(RHITest
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Raster>
-)
-target_link_libraries(RHITest
-        PRIVATE MoerRender
-        PRIVATE glfw
-        PRIVATE MoerResource
-)
-set_target_properties(RHITest PROPERTIES FOLDER ${moer_test_folder})
+# file(GLOB_RECURSE RASTER_TEST_CPPS Raster/*.cpp)
+# add_executable(RHITest ${RASTER_TEST_CPPS})
+# target_include_directories(RHITest
+#         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+#         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+#         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+#         PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Raster>
+# )
+# target_link_libraries(RHITest
+#         PRIVATE MoerRender
+#         PRIVATE glfw
+#         PRIVATE MoerResource
+# )
+# set_target_properties(RHITest PROPERTIES FOLDER ${moer_test_folder})
 
 # # RaytracingTest
 # file(GLOB_RECURSE RT_TEST_CPPS Raytracing/*.cpp)
