@@ -1,7 +1,9 @@
 #ifndef MOER_SHADER_UTILS_H
 #define MOER_SHADER_UTILS_H
 
+#include "PixelFormat.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include <shader/ShaderPipeline.h>
@@ -54,6 +56,25 @@ public:
     DEFINE_SHADER_ARGS(param, src_tex, bdls);
 };
 
+class UtilsSampleTexturePipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(UtilsSampleTexturePipeline);
+    DEFINE_SHADER_TEX(src_color);
+    DEFINE_SHADER_SAMPLER(spl);
+
+    DEFINE_SHADER_ARGS(src_color, spl);
+};
+
+class UtilsSampleTexturePipelineCS : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(UtilsSampleTexturePipelineCS);
+    DEFINE_SHADER_TEX(src_color);
+    DEFINE_SHADER_SAMPLER(spl);
+    DEFINE_SHADER_TEX(dst_color);
+
+    DEFINE_SHADER_ARGS(src_color, spl, dst_color);
+};
+
 class ShaderUtils {
 public:
     ShaderUtils(RenderDevice& _device, ShaderManager& _manager);
@@ -82,11 +103,28 @@ public:
         TextureRef               _dst_texture
     );
 
+    void SampleTextureRaster(
+        CommandList& _cmd_list,
+        TextureView  _input_texture,
+        TextureView  _output_texture,
+        EPixelFormat _output_format
+    );
+
+    void SampleTextureCS(
+        CommandList& _cmd_list,
+        TextureView  _input_texture,
+        TextureView  _output_texture,
+        EPixelFormat _output_format
+    );
+
 private:
-    GenLowDiscrepancyPipeline gen_low_discrepancy_pipeline;
-    GenerateMipPdfPipeline    generate_mip_pdf_pipeline;
-    GenerateMipsPipeline      generate_mips_pipeline;
-    ShowTexturePipeline       show_texture_pipeline;
+    GenLowDiscrepancyPipeline    gen_low_discrepancy_pipeline;
+    GenerateMipPdfPipeline       generate_mip_pdf_pipeline;
+    GenerateMipsPipeline         generate_mips_pipeline;
+    ShowTexturePipeline          show_texture_pipeline;
+    UtilsSampleTexturePipelineCS sample_texture_cs_pipeline;
+
+    UnorderedMap<EPixelFormat, UtilsSampleTexturePipeline> sample_texture_pipeline_map;
 
     ShaderManager& manager;
     RenderDevice&  device;

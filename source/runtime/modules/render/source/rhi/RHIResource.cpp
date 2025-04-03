@@ -179,7 +179,8 @@ namespace Moer::Render {
                                                   mip_level(0),
                                                   array_index(0),
                                                   num_array(_texture->GetNumArray()),
-                                                  num_mips(1) {
+                                                  num_mips(1),
+                                                  format(_texture->GetFormat()) {
     }
     TextureView::TextureView(TextureRef _texture_ref) : TextureView(_texture_ref.Get()) {
     }

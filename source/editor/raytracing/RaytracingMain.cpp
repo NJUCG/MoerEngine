@@ -1,6 +1,7 @@
 #include "RaytracingMain.h"
 
 // Runtime
+#include "PixelFormat.h"
 #include "common/EditorAssets.h"
 #include "config/ConfigManager.h"
 #include "loader/LoaderInterface.h"
@@ -65,7 +66,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
         .window_handle    = (uintptr_t)WindowContext::GetMainWindow(),
         .size             = {resolution.x, resolution.y},
         .back_buffer_sz   = 2,
-        .preferred_format = PF_R8G8B8A8_SRGB
+        .preferred_format = PF_B8G8R8A8_SRGB
     };
     auto sc = device.CreateSwapchain(sc_info);
 
@@ -75,15 +76,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
     // TODO: combine RasterMain and RaytracingMain common part (above code)
 
-    // RTResource rt_res(ConfigManager::GetInstance().GetEditorResourcePath());
     bool b_new_env_map = false;
-
-    // GraphEventRef load_res_event = LambdaTask::Create([&rt_res, &b_new_env_map]() {
-    //                                    rt_res.LoadResources();
-    //                                    // memory barrier
-    //                                    std::atomic_thread_fence(std::memory_order_acq_rel);
-    //                                    b_new_env_map = true;
-    //                                }).Dispatch();
 
     TextureRef         env_map{};
     Array<TextureView> env_mips;
@@ -91,23 +84,6 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
     Array<TextureView> env_pdf_mips;
 
     RaytracingSceneRef rt_scene = device.CreateRaytracingScene();
-
-    GfxPsoCreateInfo combine_pso_info(
-        RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)}
-    );
-    CombineUIPipeline combine_ui = manager.Raster()
-                                       .Vertex("CombineGuiVert.hlsl")
-                                       .Pixel("CombineGuiFrag.hlsl")
-                                       .Build<CombineUIPipeline>(std::move(combine_pso_info));
-
-    GfxPsoCreateInfo sample_tex_pso_info(
-        RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_SRGB)}
-    );
-
-    SampleTexturePipeline sample_tex = manager.Raster()
-                                           .Vertex("framework/FullScreen.vert.hlsl")
-                                           .Pixel("utils/CopyTexture.frag.hlsl")
-                                           .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
 
     ShaderUtils sd_utils(device, manager);
 
@@ -137,7 +113,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
     float  elapsed_time = 0.0f;
 
     TextureRef output = device.CreateTexture(
-        Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_SRGB, ETextureUsageFlags::COLOR_ATTACHMENT
+        Extent2D(resolution.x, resolution.y), sc->format, ETextureUsageFlags::COLOR_ATTACHMENT
     );
 
     TextureRef ui_frame_buffer = device.CreateTexture(
@@ -149,10 +125,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
     auto create_frame_buffers = [&](uint2 _new_extent) {
         output = device.CreateTexture(
-            "output",
-            Extent2D(_new_extent.x, _new_extent.y),
-            PF_R8G8B8A8_SRGB,
-            ETextureUsageFlags::COLOR_ATTACHMENT
+            "output", Extent2D(_new_extent.x, _new_extent.y), sc->format, ETextureUsageFlags::COLOR_ATTACHMENT
         );
 
         ui_frame_buffer = device.CreateTexture(
@@ -187,7 +160,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
     UniquePtr<VisualizePass>    visualize_pass     = MakeUnique<VisualizePass>(device, manager);
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
     UniquePtr<ToneMappingPass>  tone_mapping_pass;
-    UniquePtr<UiCombinePass>    ui_combine_pass = MakeUnique<UiCombinePass>(manager, output->GetFormat());
+    UniquePtr<UiCombinePass>    ui_combine_pass = MakeUnique<UiCombinePass>(manager);
 
     rt_ctx->SetResolution(resolution);
     AntialiasPass::CreateInfo antialias_pass_info{
@@ -466,8 +439,19 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                     // );
                     // gfx_queue.Sync();
                 }
-                env_map                                  = _editor_assets.GetDefaultEnvMap();
-                auto                             cur_env = scene.GetCurrentEnvMap();
+                auto src_env_map = _editor_assets.GetDefaultEnvMap();
+
+                env_map = device.CreateTexture(
+                    src_env_map->GetName(),
+                    Extent3D(src_env_map->GetExtent()),
+                    PF_R16G16B16A16_SFLOAT,
+                    ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
+                    src_env_map->GetNumMips()
+                );
+                auto cur_env = scene.GetCurrentEnvMap();
+                sd_utils.SampleTextureCS(
+                    cmd_list, src_env_map->GetView(0, 1), env_map->GetView(0, 1), src_env_map->GetFormat()
+                );
                 Moer::EnvironmentLightComponent* env_light =
                     MoerNew(Moer::EnvironmentLightComponent)(float3(1.f), env_map->GetExtent().xy);
 

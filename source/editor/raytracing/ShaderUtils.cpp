@@ -9,6 +9,18 @@ namespace Moer::Render::Raytracing {
 
 inline static uint DivCeil(uint _a, uint _b) { return (_a + _b - 1) / _b; }
 
+static constexpr EPixelFormat s_supported_formats[] = {
+    PF_R32G32B32_SFLOAT,
+    PF_R32G32B32A32_SFLOAT,
+    PF_R16G16B16A16_SFLOAT,
+    PF_R16G16B16A16_UNORM,
+    PF_R16G16B16A16_UINT,
+    PF_R16G16B16A16_SNORM,
+    PF_R8G8B8A8_SNORM,
+    PF_R8G8B8A8_UNORM,
+    PF_R8G8B8A8_SRGB
+};
+
 ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
     manager(_manager),
     device(_device) {
@@ -25,6 +37,20 @@ ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
                                           .Vertex("utils/FullScreenQuad.hlsl")
                                           .Pixel("utils/ShowTexture.frag.hlsl")
                                           .Build<ShowTexturePipeline>(std::move(show_texture_pso_info)));
+
+    // for (auto format : s_supported_formats) {
+    //     GfxPsoCreateInfo sample_tex_pso_info(
+    //         RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
+    //     );
+    //     sample_texture_pipeline_map[format] =
+    //         std::move(manager.Raster()
+    //                       .Vertex("utils/FullScreenQuad.hlsl")
+    //                       .Pixel("utils/CopyTexture.frag.hlsl")
+    //                       .Build<UtilsSampleTexturePipeline>(std::move(sample_tex_pso_info)));
+    // }
+
+    sample_texture_cs_pipeline =
+        std::move(manager.Compute<UtilsSampleTexturePipelineCS>("utils/CopyTexture.cs.hlsl"));
 }
 
 void ShaderUtils::GenerateLowDiscrepancySequence(
@@ -113,6 +139,45 @@ void ShaderUtils::ShowTexture(
             3,
             {SingleDrawParam(3, 1, 0, 0, 0)},
             ColorAttachment(_dst_texture)
+        );
+}
+
+void ShaderUtils::SampleTextureRaster(
+    CommandList& _cmd_list,
+    TextureView  _src_tex,
+    TextureView  _dst_texture,
+    EPixelFormat _format
+) {
+    assert(0 && "SampleTextureRaster not implemented");
+    Sampler linear_clamp_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
+    //find dst pso
+    if (!sample_texture_pipeline_map.contains(_format)) { assert(false && "Unsupported format"); }
+
+    auto& sample_texture_pipeline = sample_texture_pipeline_map[_format];
+
+    _cmd_list.Gfx(sample_texture_pipeline, _src_tex, linear_clamp_sampler)
+        .Draw(
+            "SampleTexture",
+            Rect2D(0, 0, _dst_texture.extent.x, _dst_texture.extent.y),
+            {},
+            3,
+            {SingleDrawParam(3, 1, 0, 0, 0)},
+            ColorAttachment{_dst_texture.GetTexture()}
+        );
+}
+
+void ShaderUtils::SampleTextureCS(
+    CommandList& _cmd_list,
+    TextureView  _src_tex,
+    TextureView  _dst_texture,
+    EPixelFormat _format
+) {
+    Sampler linear_clamp_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
+    //find dst pso
+    _cmd_list.Compute(sample_texture_cs_pipeline, _src_tex, linear_clamp_sampler, _dst_texture)
+        .Dispatch(
+            uint3(DivCeil(_dst_texture.extent.x, 16), DivCeil(_dst_texture.extent.y, 16), 1),
+            "SampleTextureCS"
         );
 }
 

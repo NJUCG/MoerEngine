@@ -62,12 +62,13 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
     // MARK: Passes
 
-    GeometryPass  geometry_pass(raster_context);
-    LightingPass  lighting_pass(raster_context);
-    AoPass        ao_pass(raster_context);
-    SsrPass       ssr_pass(raster_context);
-    AaPass        aa_pass(raster_context);
-    UiCombinePass ui_combine_pass(manager, raster_context.textures.output.tex->GetFormat());
+    GeometryPass geometry_pass(raster_context);
+    LightingPass lighting_pass(raster_context);
+    AoPass       ao_pass(raster_context);
+    SsrPass      ssr_pass(raster_context);
+    AaPass       aa_pass(raster_context);
+
+    UiCombinePass ui_combine_pass(manager);
 
     cmd_list.UpdateBindlessArray(bindless_array);
     gfx_queue.Execute(cmd_list.Submit());

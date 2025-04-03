@@ -5,6 +5,7 @@
 #ifndef VULKAN_SWAP_CHAIN_H
 #define VULKAN_SWAP_CHAIN_H
 
+#include "PixelFormat.h"
 #include "misc/CountableRef.h"
 #include "rhi/RHI.h"
 #include "rhi/RHIResource.h"
@@ -25,7 +26,7 @@ namespace Moer::Render {
         Array<VkPresentModeKHR>   present_modes;
     };
     SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface);
-    VkSurfaceFormatKHR      ChooseSwapSurfaceFormat(const Array<VkSurfaceFormatKHR>& _available_formats, bool _prefer_hdr = false);
+    VkSurfaceFormatKHR      ChooseSwapSurfaceFormat(const Array<VkSurfaceFormatKHR>& _available_formats, EPixelFormat _preferred_format, bool _prefer_hdr = false);
     VkPresentModeKHR        ChooseSwapPresentMode(const Array<VkPresentModeKHR>& _available_present_modes, bool vsync = false);
     VkExtent2D              ChooseSwapExtent(uint32_t* _width, uint32_t* _height, const VkSurfaceCapabilitiesKHR& _capabilities);
     class VulkanSwapChain {

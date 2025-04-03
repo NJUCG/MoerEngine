@@ -18,6 +18,7 @@
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 #include "VulkanCommand.h"
+#include "vulkan/vulkan_core.h"
 #include "window/WindowContext.h"
 #include "VulkanDevice.h"
 
@@ -54,7 +55,7 @@ namespace Moer::Render {
         auto* device = m_device;
 
         auto details      = VkUtil::QuerySwapChainSupport(device->GetGpu(), m_surface);
-        surface_format    = ChooseSwapSurfaceFormat(details.formats);
+        surface_format    = ChooseSwapSurfaceFormat(details.formats, PF_R8G8B8A8_SRGB);
         auto present_mode = ChooseSwapPresentMode(details.present_modes, vsync);
         extent            = ChooseSwapExtent(width, height, details.capabilities);
         extent.width      = *width;
@@ -232,9 +233,11 @@ namespace Moer::Render {
         return details;
     }
 
-    VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const Moer::Array<VkSurfaceFormatKHR>& _available_formats, bool _prefer_hdr) {
+    VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const Moer::Array<VkSurfaceFormatKHR>& _available_formats, EPixelFormat _preferred_format, bool _prefer_hdr) {
+        VkFormat preferred_format = VulkanEnumTranslator::METoVKFormat(_preferred_format);
+
         for (const auto& format : _available_formats) {
-            if (format.format == VK_FORMAT_R8G8B8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            if (format.format == preferred_format && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
                 return format;
             }
         }
@@ -301,7 +304,7 @@ namespace Moer::Render {
         VkSurfaceCapabilitiesKHR capabilities;
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.GetGpu(), surface, &capabilities);
         auto details = VkUtil::QuerySwapChainSupport(device.GetGpu(), surface);
-        fmt          = ChooseSwapSurfaceFormat(details.formats);
+        fmt          = ChooseSwapSurfaceFormat(details.formats, _info.preferred_format);
         ChooseSwapExtent(&size.x, &size.y, details.capabilities);
         VkPresentModeKHR present_mode               = ChooseSwapPresentMode(details.present_modes, false);
         format                                      = (EPixelFormat)fmt.format;
