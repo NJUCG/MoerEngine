@@ -1039,7 +1039,8 @@ namespace Moer::Render {
         void VisitCmd(const CustomDispatchCmd* _cmd) {
             m_arg_write_resources.clear();
             m_arg_read_resources.clear();
-            auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+            layer_offset = m_cmd_lists.size();// make sure the custom dispatch command is in a separate scope
+            auto func    = [&](const TArg& _arg, ParamInfoFlags _flag) {
                 VisitArgs(_arg, _flag.state_flags);
             };
             _cmd->IterateArgs(func);
@@ -1051,7 +1052,6 @@ namespace Moer::Render {
                 RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
             }
             AddCmd(_cmd, m_dispatch_layer);
-            ++m_dispatch_layer;// make custom dispatch command in a separate layer
             layer_offset = m_cmd_lists.size();
         }
 

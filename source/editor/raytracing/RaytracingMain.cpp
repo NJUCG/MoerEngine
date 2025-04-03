@@ -751,9 +751,10 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                         default: size = 0;
                     }
                     if (size != 0) {
-                        gfx_queue.Execute(
-                            cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue())
-                        );
+                        gfx_queue.Sync();
+                        gfx_queue.Execute(cmd_list.Submit()
+                                              .Wait(copy_queue_timeline, copy_queue_timeline->GetValue())
+                                              .TickProfiling());
                         gfx_queue.Sync();
 
                         if (hdr) {

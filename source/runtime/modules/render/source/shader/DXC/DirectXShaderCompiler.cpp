@@ -180,8 +180,8 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
     };
     auto add_debug_arg = [](Moer::Array<std::wstring>& arguments) {
         arguments.push_back(DXC_ARG_ALL_RESOURCES_BOUND);
-        arguments.push_back(DXC_ARG_DEBUG);
-        arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
+        arguments.push_back(DXC_ARG_OPTIMIZATION_LEVEL3);
+        // arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
     };
 
     auto add_define_arg = [](Moer::Array<std::wstring>& arguments, const Moer::UnorderedMap<std::string, std::string>& _defines) {
