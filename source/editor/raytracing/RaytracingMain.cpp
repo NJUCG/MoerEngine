@@ -413,28 +413,8 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
             }
 
             if (b_new_env_map) {
-
-                {
-                    // static bool first_load = true;
-                    // if (first_load) {
-                    //     first_load = false;
-                    //     Array<ImportTexture> import_textures;
-                    //     const auto&          rt_res_textures = rt_res.GetTextures();
-                    //     for (auto& [name, tex] : rt_res_textures) {
-                    //         import_textures.emplace_back(
-                    //             ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE)
-                    //         );
-                    //     }
-                    //     cmd_list.ImportResourcesFromQueue(EQueueType::Copy, std::move(import_textures), {});
-                    // }
-                    // gfx_queue.Execute(
-                    //     cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue())
-                    // );
-                    // gfx_queue.Sync();
-                }
                 auto src_env_map = _editor_assets.GetDefaultEnvMap();
-
-                env_map = device.CreateTexture(
+                env_map          = device.CreateTexture(
                     src_env_map->GetName(),
                     Extent3D(src_env_map->GetExtent()),
                     PF_R16G16B16A16_SFLOAT,
@@ -483,8 +463,6 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
             if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
                 for (size_t i = 0; i < scene.GetEntityCount(); i++) {
                     auto& instance = rt_scene->GetInstance(i);
-                    // instance.transform =
-                    // TransformManager::Get().Get(scene.GetEntities()[i]).GetMatrix3x4();
                     rt_scene->MarkModified(instance.instance_id);
                 }
                 cmd_list.UpdateRaytracingScene(rt_scene);
