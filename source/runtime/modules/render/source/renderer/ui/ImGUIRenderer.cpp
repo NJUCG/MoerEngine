@@ -114,14 +114,18 @@ namespace Moer::Render {
         }
     };
     struct ImGUIData {
-        GUIPipelineBdls rast_pso;
+        static constexpr EPixelFormat               s_supported_formats[] = {PF_R8G8B8A8_SRGB,
+                                                                             PF_R8G8B8A8_UNORM,
+                                                                             PF_B8G8R8A8_SRGB,
+                                                                             PF_B8G8R8A8_UNORM};
+        UnorderedMap<EPixelFormat, GUIPipelineBdls> rast_psos;
 
         TextureRef font_texture;
         // Render buffers for main window
         uint32_t num_frames_in_flight;
 
         ImGUIRenderBackend* render_backend = nullptr;
-        ImGUIData(GUIPipelineBdls&& _rast_pso) : rast_pso(std::move(_rast_pso)) {}
+        ImGUIData() {}
     };
     const ImWchar* FontTypeToRange(EFontType _font_range_type) {
         using namespace Moer;
@@ -224,15 +228,22 @@ namespace Moer::Render {
             {Moer::Render::VertexElement(PF_R32G32_SFLOAT),
              Moer::Render::VertexElement(PF_R32G32_SFLOAT),
              Moer::Render::VertexElement(PF_R8G8B8A8_UNORM)});
-        GfxPsoCreateInfo pso_info(
-            RHIRasterizeInfo::Preset<Rast::CULL_NONE, FrontFace::CW>(),
-            vertex_stream,
-            {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB)});
-        ImGUIData* render_backend_data            = MoerNew(ImGUIData)(sd_mgr
-                                                                .Raster()
-                                                                .Vertex("GuiVert.hlsl")
-                                                                .Pixel("GuiFrag.hlsl")
-                                                                .Build<GUIPipelineBdls>(std::move(pso_info)));
+
+        ImGUIData* render_backend_data = MoerNew(ImGUIData)();
+
+        for (auto format : ImGUIData::s_supported_formats) {
+            GfxPsoCreateInfo pso_info(
+                RHIRasterizeInfo::Preset<Rast::CULL_NONE, FrontFace::CW>(),
+                vertex_stream,
+                {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(format)});
+            auto rast_pso = sd_mgr.Raster()
+                                .Vertex("GuiVert.hlsl")
+                                .Pixel("GuiFrag.hlsl")
+                                .Build<GUIPipelineBdls>(std::move(pso_info));
+
+            render_backend_data->rast_psos[format] = std::move(rast_pso);
+        }
+
         render_backend_data->num_frames_in_flight = max_frame_in_flight;
 
         io.BackendRendererUserData = render_backend_data;
@@ -525,8 +536,8 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), idx_view);
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)args.data(), args.size() * sizeof(ImGUIArg)), arg_view);
     // _cmdlist.CopyFrom(arg_view, std::span<Moer::byte>((Moer::byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
-
-    _cmdlist.Gfx(backend_data.rast_pso, render_buffers->arg_buffer, render_backend.bindless_array, constant)
+    assert(backend_data.rast_psos.contains(_frame_buffer.format) && "Unsupported GUI format");
+    _cmdlist.Gfx(backend_data.rast_psos[_frame_buffer.format], render_buffers->arg_buffer, render_backend.bindless_array, constant)
         .Draw("ImGui Draws",
               {0, 0, (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x), uint(draw_data->DisplaySize.y * draw_data->FramebufferScale.y)},
               std::move(draw_meshes),
