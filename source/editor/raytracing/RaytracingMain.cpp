@@ -224,13 +224,6 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
 
-            output = device.CreateTexture(
-                "output",
-                Extent2D(resolution.x, resolution.y),
-                PF_R8G8B8A8_SRGB,
-                ETextureUsageFlags::COLOR_ATTACHMENT
-            );
-
             create_frame_buffers(resolution);
 
             rt_ctx->SetResolution(resolution);
