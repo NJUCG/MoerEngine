@@ -503,7 +503,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
             auto type = comp.get_type(resource.base_type_id);
 
             if (type.image.dim == spv::DimBuffer) {
-                handle_res(resource, VDT_STORAGE_TEXEL_BUFFER, EShaderResourceType::SRT_SRV);
+                handle_res(resource, VDT_STORAGE_TEXEL_BUFFER, EShaderResourceType::SRT_UAV);
 
             } else {
                 handle_all_res(resource, VDT_STORAGE_IMAGE, EShaderResourceType::SRT_UAV);
