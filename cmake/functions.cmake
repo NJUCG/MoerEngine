@@ -27,8 +27,8 @@ function(copy_dll target_name dll_name type src_root )
         add_custom_command(
             TARGET copy_dll_${target_name}
             POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${dll}"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${src_root}/bin/Windows"
             ${real_out_put_dir}
         )
 

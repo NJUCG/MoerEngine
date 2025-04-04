@@ -1,4 +1,5 @@
 #include "VulkanAllocator.h"
+#include "PixelFormat.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
@@ -55,6 +56,25 @@ namespace Moer::Render {
         on_complete.clear();
     }
 
+#pragma region[ Query Pool ]
+
+    VkNativeQueryPool::VkNativeQueryPool(VulkanDevice& _device, VkQueryType _type, uint32 _query_count) : device(_device), type(_type), count(_query_count) {
+        VkQueryPoolCreateInfo create_info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        create_info.queryType  = _type;
+        create_info.queryCount = _query_count;
+        vkCreateQueryPool(device.GetDevice(), &create_info, nullptr, &query_pool);
+    }
+
+    VkNativeQueryPool::~VkNativeQueryPool() {
+        vkDestroyQueryPool(device.GetDevice(), query_pool, nullptr);
+    }
+
+    void VkNativeQueryPool::GetResults(std::span<uint64> _data, uint32 _first_query, uint32 _query_count, VkQueryResultFlags _flags) {
+        vkGetQueryPoolResults(device.GetDevice(), query_pool, _first_query, _query_count, _data.size(), _data.data(), sizeof(uint64), VK_QUERY_RESULT_64_BIT | _flags);
+    }
+
+#pragma endregion
+
     // VulkanAllocator
     VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type)
         : VulkanAllocatorBase(_device, _type),
@@ -62,7 +82,8 @@ namespace Moer::Render {
           upload_allocator(&allocator, small_block_size, 1.5),
           readback_allocator(&allocator, small_block_size, 1.5),
           scratch_allocator(_device, &allocator),
-          shader_buffer_allocator(_device, &allocator) {}
+          shader_buffer_allocator(_device, &allocator),
+          timestamp_pool(*_device, VK_QUERY_TYPE_TIMESTAMP, 1000) {}
 
     VulkanAllocator::~VulkanAllocator() {
         upload_allocator.Dispose();
@@ -82,10 +103,9 @@ namespace Moer::Render {
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
             return {buffer, handle.offset, _size, 1u};
         }
-        auto          handle = allocator.Allocate(_size);
+        auto          handle = allocator.Allocate(_size, std::format("VkBackend::LargeUploadBuffer_{}", _size));
         VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
         large_buffers.push_back(buffer);
-
         return {buffer, 0, _size, 1u};
     }
 
@@ -96,7 +116,7 @@ namespace Moer::Render {
             VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
             return {buffer, handle.offset, _size, 1u};
         }
-        auto          handle = allocator.Allocate(_size);
+        auto          handle = allocator.Allocate(_size, std::format("VkBackend::LargeReadbackBuffer_{}", _size));
         VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
         large_buffers.push_back(buffer);
 
@@ -130,7 +150,7 @@ namespace Moer::Render {
     }
 
     VkTmpBufferAllocator::VkTmpBufferAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device) {}
-    uint64 VkTmpBufferAllocator::Allocate(uint64 _size) {
+    uint64 VkTmpBufferAllocator::Allocate(uint64 _size, std::string_view _name) {
         VkBufferCreateInfo buffer_info = {
             .sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .pNext                 = nullptr,
@@ -151,7 +171,7 @@ namespace Moer::Render {
             EBufferUsageFlags::CPU_VISIBLE);
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_info, &alloc_info, &buffer_alloc.buffer, &buffer_alloc.alloc, nullptr));
-        VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false);
+        VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(_name, info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false);
 
         return reinterpret_cast<uint64>(vk_buffer);
     }
@@ -213,10 +233,9 @@ namespace Moer::Render {
             EBufferUsageFlags::NONE);
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_info, &alloc_info, &buffer_alloc.buffer, &buffer_alloc.alloc, nullptr));
-        VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false, devce_address);
 
-        static constexpr std::string_view usage_str[] = {"Upload", "Readback", "Scratch", "ShaderBuffer", "ShaderBuffer_Constant"};
-        vk_buffer->SetName(usage_str[static_cast<uint>(_usage)]);
+        static constexpr std::string_view usage_str[] = {"VkBackend::Upload", "VkBackend::Readback", "VkBackend::Scratch", "VkBackend::ShaderBuffer", "VkBackend::ShaderBuffer_Constant"};
+        VulkanBuffer*                     vk_buffer   = MoerNew(VulkanBuffer)(usage_str[uint(_usage)], info, *m_device, buffer_alloc.buffer, buffer_alloc.alloc, false, devce_address);
         return reinterpret_cast<uint64>(vk_buffer);
     }
 
@@ -254,14 +273,14 @@ namespace Moer::Render {
 
     VulkanAllocator::StackAllocator::StackAllocator(VkTmpBufferAllocator* _alloc, uint64 _init_cap, double _grouth_factor) : allocator(_alloc), init_capacity(_init_cap), growth_factor(_grouth_factor) {
         capacity = std::max<uint64>(init_capacity, 1);
-        allocated_buffers.push_back({allocator->Allocate(capacity), capacity, 0});
+        allocated_buffers.push_back({allocator->Allocate(capacity, "VkBackend::StackAllocBuffer"), capacity, 0});
     }
 
     VulkanAllocator::StackAllocator::Chunk VulkanAllocator::StackAllocator::Allocate(uint64 _size, uint _align) {
 
         auto align_size = std::max(_align, 16u);
         for (auto& alloc_buf : allocated_buffers) {
-            auto offset = (alloc_buf.offset + align_size - 1) & ~(align_size - 1);
+            auto offset = Moer::AlignUp(alloc_buf.offset, align_size);
             if (alloc_buf.size - offset >= _size) {
                 alloc_buf.offset = offset + _size;
                 return {alloc_buf.handle, offset};
@@ -270,7 +289,7 @@ namespace Moer::Render {
         if (capacity < align_size) {
             capacity = std::max<uint64>(capacity * growth_factor, align_size);
         }
-        auto buffer = allocator->Allocate(capacity);
+        auto buffer = allocator->Allocate(capacity, "VkBackend::StackAllocBuffer");
         allocated_buffers.push_back({buffer, capacity, align_size});
         return {buffer, 0};
     }
@@ -286,7 +305,7 @@ namespace Moer::Render {
         if (capacity < _size) {
             capacity = std::max<uint64>(capacity * growth_factor, _size);
         }
-        auto buffer = allocator->Allocate(capacity);
+        auto buffer = allocator->Allocate(capacity, "VkBackend::StackAllocBuffer");
         allocated_buffers.push_back({buffer, capacity, _size});
         return {buffer, 0};
     }
@@ -303,7 +322,7 @@ namespace Moer::Render {
                 allocator->DeAllocate(alloc_buf.handle);
             }
             allocated_buffers.clear();
-            allocated_buffers.push_back({allocator->Allocate(sum_size), sum_size, 0});
+            allocated_buffers.push_back({allocator->Allocate(sum_size, "VkBackend::StackAllocBuffer"), sum_size, 0});
         }
     }
 

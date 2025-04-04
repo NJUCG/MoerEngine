@@ -26,9 +26,12 @@ namespace Moer {
 
         const static float k_pitch_min;
         const static float k_pitch_max;
+        const static float k_fov_default;
         const static float k_fov_min;
         const static float k_fov_max;
+        const static float k_fov_multiplier;
         const static float k_mouse_sensitivity;
+        const static float k_mouse_sensitivity_mouse_moving;
         const static float k_camera_speed_multiplier;
 
         const static float k_camera_speed_default;
@@ -115,7 +118,10 @@ namespace Moer {
         InputStream&  operator>>(InputStream& _stream);
         OutputStream& operator<<(OutputStream& _stream) const;
 
+        float GetDeletaTime() const noexcept;
+
         std::string ToString();
+        float2      GetJitter() const noexcept;
 
     private:
         /**
@@ -134,6 +140,7 @@ namespace Moer {
         void UpdatePlanesAndFrustum();
 
         void MoveForward(float);
+        void MoveFront(float);
         void MoveRight(float);
         void MoveUp(float);
         void ApplyRotation(float, float);
@@ -200,6 +207,9 @@ namespace Moer {
 
         Matrix4x4f m_view_projection_matrix;
         Matrix4x4f m_view_projection_matrix_inv;
+        float      elapsed_time = 0.0f;
+
+        float2 jitter = {0, 0};
     };
 
     using CameraRef = CountableRef<Camera>;

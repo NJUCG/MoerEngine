@@ -44,7 +44,7 @@ namespace Moer {
             scene_path = std::filesystem::canonical(ConfigManager::GetInstance().GetEditorResourcePath() / "default" / "scenes" / "sponza" / "Sponza01.gltf");
         }
         //Config this in MoerEngine.ini
-        Scene* scene;
+        Scene* scene = nullptr;
         Resource::LoaderInterface::LoadSceneFromFileAsync(scene_path, scene);
     }
     void Engine::Run() {
@@ -64,7 +64,7 @@ namespace Moer {
     void Engine::InitCore(const std::filesystem::path& workspace_path) {
         ConfigManager::GetInstance().Init(workspace_path);
         TaskSystem::Init();
-        LogSystem::Init();
+        // LogSystem::Init();
     }
     void Engine::ShutDownCore() {
         TaskSystem::ShutDown();
@@ -84,12 +84,13 @@ namespace Moer {
     void Engine::InitWindow() {
         SurfaceInitInfo info;
 #if defined(EDITOR_MODE_ON)
-        const auto& config_data = ConfigManager::GetInstance().GetInitConfig();
-        info.width              = config_data.editor_width;
-        info.height             = config_data.editor_height;
-        info.title              = "MoerEditor";
-        info.b_fullscreen       = config_data.editor_fullscreen;
-        info.b_vsync            = config_data.editor_vsync;
+        // deprecated
+        // const auto& config_data = ConfigManager::GetInstance().GetInitConfig();
+        // info.width              = config_data.editor_width;
+        // info.height             = config_data.editor_height;
+        // info.title              = "MoerEditor";
+        // info.b_fullscreen       = config_data.editor_fullscreen;
+        // info.b_vsync            = config_data.editor_vsync;
 #else
         //load application info
 

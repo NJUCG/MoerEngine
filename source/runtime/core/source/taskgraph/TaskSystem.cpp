@@ -8,7 +8,6 @@
 #include "taskgraph/ThreadManager.h"
 #include "platform/Platform.h"
 #include "taskgraph/GraphTask.h"
-#include "spdlog/spdlog.h"
 #include <functional>
 
 using namespace std;

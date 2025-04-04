@@ -23,25 +23,29 @@ set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/include>
     PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}/include>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Reflect>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
-	# PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanSDK/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/volk>
 	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectXShaderCompiler/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/imgui>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/smaa>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRI/Include>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRD/Include>
+    PUBLUC $<BUILD_INTERFACE:${moer_third_party_dir}/NRD/Integration>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Cross>
 )
 target_link_libraries(${MODULE_NAME}
     # PUBLIC ${vulkan_lib}
     PUBLIC volk
-    PRIVATE spirv-reflect-static
 	PUBLIC dxc
-    PUBLIC MoerRuntimeCore
     PUBLIC glfw
     PUBLIC ImGui::imgui
     PUBLIC smaa
+    PUBLIC MoerCore
+    PUBLIC NRI
+    PUBLIC NRD
+    PRIVATE spirv-cross-cpp
     # dx, maybe add a option based on platform
     PUBLIC d3d12_agilitysdk
     PUBLIC d3d12_agilitysdk_d3dx12
@@ -68,6 +72,7 @@ target_compile_definitions(${MODULE_NAME} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MO
 #     target_link_libraries(${target_name} PRIVATE -fsanitize=address,undefined -fuse-ld=gold)
 # endfunction()
 # enable_sanitizer(${MODULE_NAME})
+
 if(WIN32)
 target_compile_definitions(${MODULE_NAME}
     PUBLIC "MOER_VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Windows"
@@ -87,10 +92,12 @@ if(MSVC)
 endif() 
 
 if(WIN32)
-target_compile_definitions(MoerRuntimeCore
+target_compile_definitions(MoerCore
     PUBLIC "DEVELOP_SHADER_SHARED_PATH=${CMAKE_CURRENT_SOURCE_DIR}/include/shaderheaders"
     )
 endif()
+
+add_dependencies(${MODULE_NAME} CopyNRDEncodingFile)
 
 
 

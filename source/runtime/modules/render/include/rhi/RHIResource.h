@@ -150,6 +150,7 @@ namespace Moer::Render {
     class BindlessArray;
     class RaytracingGeometry;
     class RaytracingScene;
+    class RaytracingTlas;
     using TextureRef            = CountableRef<Texture>;
     using BufferRef             = CountableRef<Buffer>;
     using FenceRef              = CountableRef<Fence>;
@@ -159,6 +160,7 @@ namespace Moer::Render {
     using BindlessArrayRef      = CountableRef<BindlessArray>;
     using RaytracingGeometryRef = CountableRef<RaytracingGeometry>;
     using RaytracingSceneRef    = CountableRef<RaytracingScene>;
+    using RaytracingTlasRef     = CountableRef<RaytracingTlas>;
 };// namespace Moer::Render
 
 class Shader;
@@ -643,12 +645,13 @@ namespace Moer::Render {
     class BufferView {
     public:
         BufferView() = default;
-        BufferView(Buffer* _buffer);
+        BufferView(Buffer* _buffer, EPixelFormat _fmt = PF_UNDEFINED);
 
-        BufferView(Buffer* _buffer, uint64 _byte_offset, uint64 _num_elements, uint _stride) : buffer(_buffer),
-                                                                                               byte_offset(_byte_offset),
-                                                                                               num_elements(_num_elements),
-                                                                                               stride(_stride){};
+        BufferView(Buffer* _buffer, uint64 _byte_offset, uint64 _num_elements, uint _stride, EPixelFormat _fmt = PF_UNDEFINED) : buffer(_buffer),
+                                                                                                                                 byte_offset(_byte_offset),
+                                                                                                                                 num_elements(_num_elements),
+                                                                                                                                 stride(_stride),
+                                                                                                                                 format(_fmt){};
         uint          GetNumElements() const { return num_elements; }
         uint          GetStride() const { return stride; }
         uint64        GetByteOffset() const { return byte_offset; }
@@ -659,19 +662,22 @@ namespace Moer::Render {
         uint64        byte_offset;
         uint64        num_elements;
         uint32        stride;
+        EPixelFormat  format = PF_UNDEFINED;
     };
 
     struct BufferInfo {
         uint64_t          size;
         uint32_t          stride;
         EBufferUsageFlags usage;
+        EPixelFormat      format = PF_UNDEFINED;
 
         BufferInfo() = default;
 
-        BufferInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage)
+        BufferInfo(uint64_t _size, uint32_t _stride, EBufferUsageFlags _usage, EPixelFormat _fmt = PF_UNDEFINED)
             : size(_size),
               stride(_stride),
-              usage(_usage) {}
+              usage(_usage),
+              format(_fmt) {}
 
         static BufferInfo GetNull() {
             return {
@@ -699,6 +705,7 @@ namespace Moer::Render {
         const std::string_view GetName() const { return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data()); }
 
         RENDER_API BufferView   GetView(uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
+        RENDER_API BufferView   GetView(EPixelFormat _fmt, uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
         virtual RENDER_API void SetName(const std::string_view _name) = 0;
 
     protected:
@@ -844,26 +851,45 @@ namespace Moer::Render {
         TextureRef tex_handle;
     };
 
+    struct VertexBuffer {
+        Buffer* buffer;
+        uint64  offset{0};
+    };
+    struct IndexBuffer {
+        BufferView        buffer;
+        EIndexElementType stride;
+    };
+
     class RENDER_API BindlessArray : public RHIResource {
     public:
         struct TextureUpdateInfo {
-            Texture*     texture;
+            TextureRef   texture;
             Sampler      sampler;
             EPixelFormat format;
             uint         array_idx;
             uint         slot;
             uint8        mip_level;
             uint8        num_mips;
+            bool         free;
         };
 
         struct BufferUpdateInfo {
-            Buffer* buffer;
-            uint    array_idx;
-            uint    slot;
+            BufferRef    buffer;
+            uint         array_idx;
+            uint         slot;
+            EPixelFormat format;
+            bool         free;
         };
 
+        struct InvalidUpdateInfo {
+            uint array_idx;
+        };
+
+        using UpdateCmd = std::variant<TextureUpdateInfo, BufferUpdateInfo, InvalidUpdateInfo>;
+
         BindlessArray();
-        virtual ~BindlessArray()                                                    = default;
+        virtual ~BindlessArray() = default;
+
         virtual uint AllocateTexture(const TextureView& _texture, Sampler _sampler) = 0;
         virtual uint AllocateBuffer(BufferView _buffer)                             = 0;
 
@@ -879,6 +905,12 @@ namespace Moer::Render {
         virtual UniquePtr<class Command> CreateUpdateCommand() = 0;
     };
 
+    struct ArrayArgReference {
+        uint handle;
+
+        uint operator()() const { return handle; }
+    };
+
     /// <summary>
     /// HWRayTracing
     /// </summary>
@@ -892,10 +924,16 @@ namespace Moer::Render {
     };
     struct RaytracingSegment {
         uint vertex_offset;
+        uint index_offset;
+
+        uint first_vertex;
         uint vertex_count;
         uint vertex_stride;
-        uint primitive_offset;
+        uint first_primitive;
         uint primitive_count;
+
+        BufferRef vertex_buffer = nullptr;
+        BufferRef index_buffer  = nullptr;
 
         ERayTracingGeometryType  type             = RTGT_TRIANGLES;
         ERayTracingGeometryFlags flags            = ERayTracingGeometryFlags::NONE;
@@ -904,14 +942,10 @@ namespace Moer::Render {
         bool                     b_flip_face      = false;
     };
     struct RaytracingGeometryInfo {
-        BufferRef                vertex_buffer = nullptr;
-        BufferRef                index_buffer  = nullptr;
-        Array<RaytracingSegment> segments      = {};
+        Array<RaytracingSegment> segments = {};
 
-        uint              max_vertex_count = 0;
-        uint              primitive_count  = 0;
-        EIndexElementType index_type       = EIndexElementType::IET_UINT32;
-        EPixelFormat      vertex_format    = PF_R32G32B32_SFLOAT;
+        EIndexElementType index_type    = EIndexElementType::IET_UINT32;
+        EPixelFormat      vertex_format = PF_R32G32B32_SFLOAT;
 
         ERayTracingAccelerationStructureBuildFlags build_flags = ERayTracingAccelerationStructureBuildFlags::NONE;
     };
@@ -928,15 +962,6 @@ namespace Moer::Render {
     struct AccelerationStructureBuildParam {
         RaytracingGeometryRef geometry;
         ERaytracingBuildMode  mode;
-    };
-
-    enum RTVisibleMask : uint8 {
-        RTVM_NONE,
-        RTVM_DISABLE     = 0x1,
-        RTVM_DEFAULT     = 0x2,
-        RTVM_TRANSPARANT = 0x4,
-        RTVM_EMISSION    = 0x8,
-        RTVM_ALL         = 0xff
     };
 
     struct RaytracingMaterial {
@@ -962,6 +987,12 @@ namespace Moer::Render {
         Flag          flag;
     };
 
+    class RaytracingTlas : public RHIResource {
+    public:
+        RaytracingTlas() : RHIResource(RRT_RAYTRACING_TLAS) {}
+        virtual ~RaytracingTlas() = default;
+    };
+
     //container for scene TLAS and rt instances
     class RaytracingScene : public RHIResource {
     public:
@@ -973,16 +1004,19 @@ namespace Moer::Render {
         virtual void                FreeInstance(uint _array_idx) = 0;
         virtual void                MarkModified(uint _array_idx) = 0;
         virtual UniquePtr<Command>  UpdateScene()                 = 0;
+        virtual void                AdvanceFrame()                = 0;
 
         virtual void RegisterGeometry(RaytracingGeometryRef _geom)   = 0;
         virtual void UnregisterGeometry(RaytracingGeometryRef _geom) = 0;
+
+        virtual RaytracingTlasRef GetTlas() const     = 0;
+        virtual RaytracingTlasRef GetPrevTlas() const = 0;
 
         RENDER_API RaytracingInstance&       GetInstance(uint _array_idx);
         RENDER_API const RaytracingInstance& GetInstance(uint _array_idx) const;
 
     protected:
         Array<RaytracingInstance> instances;
-        RaytracingSizeInfos       size_infos;
     };
 
 }// namespace Moer::Render
@@ -3026,6 +3060,7 @@ namespace Moer::Render {
         SDA_Constant,
         SDA_BindlessArray,
         SDA_TLAS,
+        SDA_Reference,
         SDA_Num
     };
 

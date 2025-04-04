@@ -1,6 +1,7 @@
 #ifndef VULKAN_DEVICE_H
 #define VULKAN_DEVICE_H
 
+#include "PixelFormat.h"
 #include "taskgraph/Event.h"
 #include "misc/STL.h"
 
@@ -73,7 +74,7 @@ namespace Moer::Render {
 
         TextureRef CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint _array_size) override;
 
-        BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) override;
+        BufferRef CreateBuffer(std::string_view _name, uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) override;
 
         BindlessArrayRef CreateBindlessArray(uint _max_size) override;
         FenceRef         CreateFence() override;
@@ -105,6 +106,32 @@ namespace Moer::Render {
         void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
 
     public:
+        DeviceExtension* LoadExtension(std::string_view _name) override;
+
+        struct Ext {
+            using Ctor = std::function<DeviceExtension*(VulkanDevice*)>;
+            using Dtor = std::function<void(DeviceExtension*)>;
+            DeviceExtension* ext;
+            Ctor             ctor;
+            Dtor             dtor;
+            Ext(Ctor ctor, Dtor dtor) : ext{nullptr}, ctor{ctor}, dtor{dtor} {}
+            Ext(Ext const&) = delete;
+            Ext(Ext&& rhs) : ext{rhs.ext}, ctor{rhs.ctor}, dtor{rhs.dtor} {
+                rhs.ext = nullptr;
+            }
+            ~Ext() {
+                if (ext) {
+                    dtor(ext);
+                }
+            }
+        };
+
+    private:
+        std::mutex                     ext_mutex;
+        UnorderedMap<std::string, Ext> exts;
+
+        void LoadDefaultExtensions();
+
     public:
         inline VkPhysicalDevice GetGpu() const {
             return m_gpu;

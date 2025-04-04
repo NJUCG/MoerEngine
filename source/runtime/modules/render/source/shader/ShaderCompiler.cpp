@@ -21,7 +21,6 @@
 
 #include "shader/ShaderCompiler.h"
 #include "shader/Shader.h"
-#include "spirv_reflect.h"
 
 #include <filesystem>
 #include <fstream>

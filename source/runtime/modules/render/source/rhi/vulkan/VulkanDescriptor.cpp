@@ -1,4 +1,5 @@
 #include <volk.h>
+#include "PixelFormat.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanDescriptor.h"
 #include "VulkanPipelineResourceCache.h"
@@ -26,6 +27,9 @@ const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
     //1 / 8.0 // VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT
 };
 namespace Moer::Render {
+
+    static constexpr std::string_view s_ring_desc_buffer_name = "VkDescriporHeap::RingDescriptorBuffer";
+
     VulkanDescriptorSetsLayout::VulkanDescriptorSetsLayout(VulkanDevice* _device, const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) : VulkanDeviceObject(_device) {
         m_layouts.resize(_descriptor_bindings.size(), VK_NULL_HANDLE);
         for (uint32_t set_idx = 0; set_idx < _descriptor_bindings.size(); ++set_idx) {
@@ -171,6 +175,7 @@ namespace Moer::Render {
         pool_info.pPoolSizes    = pool_sizes;
 
         VK_CHECK_RESULT(vkCreateDescriptorPool(m_device->GetDevice(), &pool_info, nullptr, &m_bindless_pool));
+        // m_device->SetResourceName((uint64)m_bindless_pool, VK_OBJECT_TYPE_DESCRIPTOR_POOL, "Bindless Descriptor Pool");
     }
 
     VulkanDescriptorSetAllocator::VulkanDescriptorSetCachePool::~VulkanDescriptorSetCachePool() {
@@ -437,6 +442,8 @@ namespace Moer::Render {
     VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) : m_device(&_device),
                                                                         storage_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize),
                                                                         uniform_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.uniformBufferDescriptorSize),
+                                                                        storage_texel_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.storageTexelBufferDescriptorSize),
+                                                                        uniform_texel_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.uniformTexelBufferDescriptorSize),
                                                                         buffer_desc_stride(std::max(_device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize,
                                                                                                     _device.GetOptionalProperties().descriptor_buffer_properties.uniformBufferDescriptorSize)),
                                                                         image_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize),
@@ -452,7 +459,7 @@ namespace Moer::Render {
         VkBuffer           desc_buffer            = VK_NULL_HANDLE;
         VmaAllocation      desc_buffer_allocation = VK_NULL_HANDLE;
         VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        buffer_ci.size  = 114514 * 16;
+        buffer_ci.size  = s_queue_max_frame_in_flight * 256 * 16 * 100;
         buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
                           VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
@@ -466,18 +473,15 @@ namespace Moer::Render {
         buffer_info.stride = 1;
         buffer_info.usage  = EBufferUsageFlags::UNORDERED_ACCESS;
 
-        ring_desc_buffer = MoerNew(VulkanBuffer)(buffer_info, *m_device, desc_buffer, desc_buffer_allocation, false, true);
+        ring_desc_buffer = MoerNew(VulkanBuffer)(s_ring_desc_buffer_name, buffer_info, *m_device, desc_buffer, desc_buffer_allocation, false, true);
 
         //fill offsets
         ring_buffer_offsets.resize(m_device->cmd_alloc_limits);
 
-        auto align_up = [](uint32_t _value, uint32_t _alignment) -> uint32_t {
-            return (_value + _alignment - 1) & ~(_alignment - 1);
-        };
         uint64 alignment = m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
 
         for (uint32_t i = 0; i < m_device->cmd_alloc_limits; ++i) {
-            ring_buffer_offsets[i] = align_up(buffer_ci.size / m_device->cmd_alloc_limits * i, alignment);
+            ring_buffer_offsets[i] = Moer::AlignUp(buffer_ci.size / m_device->cmd_alloc_limits * i, alignment);
         }
         current_offset = 0;
         vmaMapMemory(m_device->GetVmaAllocator(), ring_desc_buffer->GetAllocation(), (void**)&map_ptr);
@@ -518,24 +522,31 @@ namespace Moer::Render {
             sizeof(VulkanHashableDescriptorInfo) * (m_write_count + 1));
     }
 
-    uint VulkanDescriptorHeap::GetBufferDescIdx(const BufferView& _in_buffer) {
+    uint VulkanDescriptorHeap::GetBufferDescIdx(const BufferView& _in_buffer, VkDescriptorType _type, VkFormat _format) {
         assert(_in_buffer.GetBuffer() != nullptr && "buffer is nullptr");
-        uint          idx       = 0;
+        uint idx = 0;
+
         VulkanBuffer* vk_buffer = ResourceCast(_in_buffer.GetBuffer());
-        if (_in_buffer.byte_offset != 0 && vk_buffer->m_descriptor_indices.find(_in_buffer.byte_offset) != vk_buffer->m_descriptor_indices.end()) {
-            idx = vk_buffer->m_descriptor_indices[_in_buffer.byte_offset];
-        } else if (_in_buffer.byte_offset == 0 && vk_buffer->m_descriptor_idx >= 0) {
-            idx = vk_buffer->m_descriptor_idx;
+        auto&         indices   = vk_buffer->GetDescriptorIndices(_type);
+
+        auto it = indices.find(_in_buffer.byte_offset);
+        if (it != indices.end()) {
+            return it->second * buffer_desc_stride;
         } else {
             VkDescriptorAddressInfoEXT buffer_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
             buffer_info.address = vk_buffer->DeviceAddress() + _in_buffer.byte_offset;
             buffer_info.range   = _in_buffer.GetByteSize();
             VkDescriptorGetInfoEXT buffer_desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
-
-            VkDescriptorType desc_type = vk_buffer->GetDescriptorType();
-            buffer_desc_info.type      = desc_type;
-            uint desc_size             = 0;
-            switch (desc_type) {
+            buffer_desc_info.type  = _type;
+            uint     desc_size     = 0;
+            VkFormat buffer_format = VulkanEnumTranslator::METoVKFormat(_in_buffer.format);
+            _format                = buffer_format == VK_FORMAT_UNDEFINED ? _format : buffer_format;
+            switch (_type) {
+                case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+                    buffer_info.format                        = _format;
+                    buffer_desc_info.data.pStorageTexelBuffer = &buffer_info;
+                    desc_size                                 = storage_texel_desc_stride;
+                    break;
                 case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
                     buffer_desc_info.data.pStorageBuffer = &buffer_info;
                     desc_size                            = storage_desc_stride;
@@ -544,8 +555,13 @@ namespace Moer::Render {
                     buffer_desc_info.data.pUniformBuffer = &buffer_info;
                     desc_size                            = uniform_desc_stride;
                     break;
+                case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+                    buffer_info.format                        = _format;
+                    buffer_desc_info.data.pUniformTexelBuffer = &buffer_info;
+                    desc_size                                 = uniform_texel_desc_stride;
+                    break;
                 default:
-                    LOG_ERROR("Unsupported buffer descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, desc_type));
+                    LOG_ERROR("Unsupported buffer descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type));
                     assert(false && "Unsupported buffer descriptor type");
                     return 0;
             }
@@ -559,11 +575,9 @@ namespace Moer::Render {
                 idx = buffer_free_list.back();
                 buffer_free_list.pop_back();
             }
-            if (_in_buffer.GetByteOffset() == 0) {
-                vk_buffer->m_descriptor_idx = idx;
-            } else {
-                vk_buffer->m_descriptor_indices[_in_buffer.byte_offset] = idx;
-            }
+
+            indices[_in_buffer.byte_offset] = idx;
+
             vkGetDescriptorEXT(m_device->GetDevice(), &buffer_desc_info, desc_size, buffer_desc_data.data() + idx * buffer_desc_stride);
         }
         return idx * buffer_desc_stride;

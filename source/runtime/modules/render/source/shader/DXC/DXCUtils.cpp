@@ -1,59 +1,35 @@
 #include "DXCUtils.h"
+#include "PixelFormat.h"
 #include "config/ConfigManager.h"
 #include "platform/Platform.h"
 #include <format>
 #include "shader/ShaderCommon.h"
-#include "spirv_reflect.h"
+#include "spirv.hpp"
 
-EShaderParameterType ToShaderParameterType(SpvReflectResourceType _type, SpvReflectDescriptorType _desc_type) {
-    switch (_type) {
-
-        case SPV_REFLECT_RESOURCE_FLAG_UNDEFINED:
-            return EShaderParameterType::Num;
-        case SPV_REFLECT_RESOURCE_FLAG_SAMPLER:
-            return EShaderParameterType::SAMPLER;
-        case SPV_REFLECT_RESOURCE_FLAG_CBV:
-            if (_desc_type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
-                return EShaderParameterType::CBUFFER;
-
-        case SPV_REFLECT_RESOURCE_FLAG_SRV:
-            if (_desc_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE || _desc_type == SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                return EShaderParameterType::TEXTURE;
-
-            if (_desc_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                return EShaderParameterType::CBUFFER;
-            break;
-        case SPV_REFLECT_RESOURCE_FLAG_UAV:
-
-            return EShaderParameterType::UAV;
-            break;
-    }
-    return EShaderParameterType::Num;
-}
-
-ERHIPipelineStageFlags ToPipelineStageFlag(SpvReflectShaderStageFlagBits _stage) {
+ERHIPipelineStageFlags ToPipelineStageFlag(spv::ExecutionModel _stage) {
     switch (_stage) {
-
-        case SPV_REFLECT_SHADER_STAGE_VERTEX_BIT:
+        case spv::ExecutionModelVertex:
             return ERHIPipelineStageFlags::PS_VERTEX_SHADER;
+        case spv::ExecutionModelFragment:
 
-        case SPV_REFLECT_SHADER_STAGE_GEOMETRY_BIT:
-            return ERHIPipelineStageFlags::PS_GEOMETRY_SHADER;
-        case SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT:
             return ERHIPipelineStageFlags::PS_FRAGMENT_SHADER;
-        case SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT:
+        case spv::ExecutionModelGLCompute:
             return ERHIPipelineStageFlags::PS_COMPUTE_SHADER;
-        case SPV_REFLECT_SHADER_STAGE_RAYGEN_BIT_KHR:
-        case SPV_REFLECT_SHADER_STAGE_ANY_HIT_BIT_KHR:
-        case SPV_REFLECT_SHADER_STAGE_CLOSEST_HIT_BIT_KHR:
-        case SPV_REFLECT_SHADER_STAGE_MISS_BIT_KHR:
-        case SPV_REFLECT_SHADER_STAGE_INTERSECTION_BIT_KHR:
+        case spv::ExecutionModelGeometry:
+            return ERHIPipelineStageFlags::PS_GEOMETRY_SHADER;
+        case spv::ExecutionModelTaskNV:
+            return ERHIPipelineStageFlags::PS_TASK_SHADER;
+        case spv::ExecutionModelMeshNV:
+            return ERHIPipelineStageFlags::PS_MESH_SHADER;
+        case spv::ExecutionModelRayGenerationKHR:
+        case spv::ExecutionModelIntersectionKHR:
+        case spv::ExecutionModelAnyHitKHR:
+        case spv::ExecutionModelClosestHitKHR:
+        case spv::ExecutionModelMissKHR:
+        case spv::ExecutionModelCallableKHR:
             return ERHIPipelineStageFlags::PS_RAY_TRACING_SHADER;
-        case SPV_REFLECT_SHADER_STAGE_TASK_BIT_NV:
-        case SPV_REFLECT_SHADER_STAGE_MESH_BIT_NV:
-        case SPV_REFLECT_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
-        case SPV_REFLECT_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
-        case SPV_REFLECT_SHADER_STAGE_CALLABLE_BIT_KHR: break;
+        defualt:
+            break;
     }
     return ERHIPipelineStageFlags::PS_NONE;
 }
@@ -114,6 +90,98 @@ const auto* GetShaderTypeWChar(EShaderType _type) {
         default: break;
     }
     return L"";
+}
+
+EPixelFormat ToPixelFormat(spv::ImageFormat _format) {
+    switch (_format) {
+        case spv::ImageFormat::ImageFormatRgba32f:
+            return EPixelFormat::PF_R32G32B32A32_SFLOAT;
+
+        case spv::ImageFormat::ImageFormatRgba16f:
+            return EPixelFormat::PF_R16G16B16A16_SFLOAT;
+        case spv::ImageFormat::ImageFormatR32f:
+            return EPixelFormat::PF_R32_SFLOAT;
+        case spv::ImageFormat::ImageFormatRgba8:
+            return EPixelFormat::PF_R8G8B8A8_UNORM;
+        case spv::ImageFormat::ImageFormatRgba8Snorm:
+            return EPixelFormat::PF_R8G8B8A8_SNORM;
+        case spv::ImageFormat::ImageFormatRg32f:
+            return EPixelFormat::PF_R32G32_SFLOAT;
+        case spv::ImageFormat::ImageFormatRg16f:
+            return EPixelFormat::PF_R16G16_SFLOAT;
+        case spv::ImageFormat::ImageFormatR11fG11fB10f:
+            return EPixelFormat::PF_B10G11R11_UFLOAT_PACK32;
+        case spv::ImageFormat::ImageFormatR16f:
+            return EPixelFormat::PF_R16_SFLOAT;
+        case spv::ImageFormat::ImageFormatRgba16:
+            return EPixelFormat::PF_R16G16B16A16_UNORM;
+        case spv::ImageFormat::ImageFormatRgb10A2:
+            return EPixelFormat::PF_A2B10G10R10_UNORM_PACK32;
+        case spv::ImageFormat::ImageFormatRg16:
+            return EPixelFormat::PF_R16G16_UNORM;
+        case spv::ImageFormat::ImageFormatRg8:
+            return EPixelFormat::PF_R8G8_UNORM;
+        case spv::ImageFormat::ImageFormatR16:
+            return EPixelFormat::PF_R16_UNORM;
+        case spv::ImageFormat::ImageFormatR8:
+            return EPixelFormat::PF_R8_UNORM;
+        case spv::ImageFormat::ImageFormatRgba16Snorm:
+            return EPixelFormat::PF_R16G16B16A16_SNORM;
+        case spv::ImageFormat::ImageFormatRg16Snorm:
+            return EPixelFormat::PF_R16G16_SNORM;
+        case spv::ImageFormat::ImageFormatRg8Snorm:
+            return EPixelFormat::PF_R8G8_SNORM;
+        case spv::ImageFormat::ImageFormatR16Snorm:
+            return EPixelFormat::PF_R16_SNORM;
+        case spv::ImageFormat::ImageFormatR8Snorm:
+            return EPixelFormat::PF_R8_SNORM;
+        case spv::ImageFormat::ImageFormatRgba32i:
+            return EPixelFormat::PF_R32G32B32A32_SINT;
+        case spv::ImageFormat::ImageFormatRgba16i:
+            return EPixelFormat::PF_R16G16B16A16_SINT;
+        case spv::ImageFormat::ImageFormatRgba8i:
+            return EPixelFormat::PF_R8G8B8A8_SINT;
+        case spv::ImageFormat::ImageFormatR32i:
+            return EPixelFormat::PF_R32_SINT;
+        case spv::ImageFormat::ImageFormatRg32i:
+            return EPixelFormat::PF_R32G32_SINT;
+        case spv::ImageFormat::ImageFormatRg16i:
+            return EPixelFormat::PF_R16G16_SINT;
+        case spv::ImageFormat::ImageFormatRg8i:
+            return EPixelFormat::PF_R8G8_SINT;
+        case spv::ImageFormat::ImageFormatR16i:
+            return EPixelFormat::PF_R16_SINT;
+        case spv::ImageFormat::ImageFormatR8i:
+            return EPixelFormat::PF_R8_SINT;
+        case spv::ImageFormat::ImageFormatRgba32ui:
+            return EPixelFormat::PF_R32G32B32A32_UINT;
+        case spv::ImageFormat::ImageFormatRgba16ui:
+            return EPixelFormat::PF_R16G16B16A16_UINT;
+        case spv::ImageFormat::ImageFormatRgba8ui:
+
+            return EPixelFormat::PF_R8G8B8A8_UINT;
+        case spv::ImageFormat::ImageFormatR32ui:
+            return EPixelFormat::PF_R32_UINT;
+        case spv::ImageFormat::ImageFormatRg32ui:
+            return EPixelFormat::PF_R32G32_UINT;
+        case spv::ImageFormat::ImageFormatRg16ui:
+            return EPixelFormat::PF_R16G16_UINT;
+        case spv::ImageFormat::ImageFormatRgb10a2ui:
+            return EPixelFormat::PF_A2B10G10R10_UINT_PACK32;
+        case spv::ImageFormat::ImageFormatRg8ui:
+            return EPixelFormat::PF_R8G8_UINT;
+        case spv::ImageFormat::ImageFormatR16ui:
+            return EPixelFormat::PF_R16_UINT;
+        case spv::ImageFormat::ImageFormatR8ui:
+            return EPixelFormat::PF_R8_UINT;
+        case spv::ImageFormat::ImageFormatR64ui:
+            return EPixelFormat::PF_R64_UINT;
+        case spv::ImageFormat::ImageFormatR64i:
+            return EPixelFormat::PF_R64_SINT;
+        default:
+            break;
+    }
+    return EPixelFormat::PF_Num;
 }
 
 const auto* GetShaderModel(EShaderPlatform _type) {

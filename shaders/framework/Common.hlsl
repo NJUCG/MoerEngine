@@ -7,6 +7,9 @@
 
 #define MAX_MIP 11
 
+// Missing Texture Color (purple)
+#define MISSING_TEXTURE_COLOR float3(1.0, 0.0, 1.0)
+
 // Mip mode
 #define MIP_VISIBILITY 0 // for visibility: emission, shadow and alpha mask
 #define MIP_LESS_SHARP 1 // for normal
@@ -92,6 +95,7 @@ struct RTConfigParam {
   float4x4 world2view_prev;
   float4x4 world2clip;
   float4x4 world2clip_prev;
+  float4 nrd_hit_dist_params;
   float4 sun_direction_gexposure;
   float4 camera_origin_gmip_bias;
   float4 view_direction_gorthomode;
@@ -228,10 +232,10 @@ float GetSpecularLobeHalfAngle(float linear_roughness,
 }
 } // namespace ImportanceSampling
 
-namespace DeferedRendering {
+namespace Raster {
 float3 PackNormal(float3 n) { return n * 0.5 + 0.5; }
-float3 UnpackNormal(float3 n) { return n * 2 - 1; }
-} // namespace DeferedRendering
+float3 UnpackNormal(float3 n) { return n * 2.0 - 1.0; }
+}
 
 namespace Moer {
 

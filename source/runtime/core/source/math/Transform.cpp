@@ -1,6 +1,7 @@
 #include "math/Transform.h"
 #include "math/Function.h"
 #include <assert.h>
+#include "misc/Traits.h"
 
 namespace {
     // from Piccolo
@@ -115,6 +116,12 @@ namespace Moer {
         affine_trans.translation = Vector3f(matrix.GetColumn(3));
 
         return affine_trans;
+    }
+
+    Matrix3x4f Transform::GetMatrix3x4ColumnMajor() const noexcept {
+        return Matrix3x4f(float4(matrix.GetColumn(0).xyz, matrix.r0.w),
+                          float4(matrix.GetColumn(1).xyz, matrix.r1.w),
+                          float4(matrix.GetColumn(2).xyz, matrix.r2.w));
     }
 
     Vector4f Transform::operator*(const Vector4f& v) const noexcept {

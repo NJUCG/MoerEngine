@@ -2,12 +2,22 @@
 
 #include <type_traits>
 #include <cstdint>
+#include <format>
 
 namespace Moer {
     template<typename T>
     concept NumericType =
         requires(T param) {
             requires std::is_integral_v<T> || std::is_floating_point_v<T>;
+            requires !std::is_same_v<bool, T>;
+            requires std::is_arithmetic_v<decltype(param + 1)>;
+            requires !std::is_pointer_v<T>;
+        };
+
+    template<typename T>
+    concept NumericFloatType =
+        requires(T param) {
+            requires std::is_floating_point_v<T>;
             requires !std::is_same_v<bool, T>;
             requires std::is_arithmetic_v<decltype(param + 1)>;
             requires !std::is_pointer_v<T>;
@@ -23,6 +33,9 @@ namespace Moer {
             struct {
                 T x, y;
             };
+            struct {
+                T r, g;
+            };
             T e[2];
         };
         static constexpr size_t size = 2;
@@ -30,7 +43,6 @@ namespace Moer {
         Vector() noexcept : x(0), y(0) {}
         Vector(T x, T y) noexcept : x(x), y(y) {}
         Vector(const Vector<T, 2>& v) noexcept : x(v.x), y(v.y) {}
-
         explicit Vector(const Vector<T, 3>& v) noexcept : x(v.x), y(v.y) {}
         explicit Vector(const Vector<T, 4>& v) noexcept : x(v.x), y(v.y) {}
         explicit Vector(T xy) noexcept : x(xy), y(xy) {}
@@ -40,6 +52,10 @@ namespace Moer {
 
         T  operator[](size_t i) const { return e[i]; }
         T& operator[](size_t i) { return e[i]; }
+
+        std::string ToString() const {
+            return std::format("({},{})", x, y);
+        }
     };
 
     template<NumericType T>
@@ -48,6 +64,30 @@ namespace Moer {
             struct {
                 T x, y, z;
             };
+            struct {
+                T r, g, b;
+            };
+
+            struct {
+                Vector<T, 2> xy;
+                T            _z;
+            };
+
+            struct {
+                T            _x;
+                Vector<T, 2> yz;
+            };
+
+            struct {
+                Vector<T, 2> rg;
+                T            _b;
+            };
+
+            struct {
+                T            _r;
+                Vector<T, 2> gb;
+            };
+
             T e[3];
         };
         static constexpr size_t size = 3;
@@ -65,6 +105,10 @@ namespace Moer {
 
         T  operator[](size_t i) const { return e[i]; }
         T& operator[](size_t i) { return e[i]; }
+
+        std::string ToString() const {
+            return std::format("({},{},{})", x, y, z);
+        }
     };
 
     template<NumericType T>
@@ -72,6 +116,22 @@ namespace Moer {
         union {
             struct {
                 T x, y, z, w;
+            };
+            struct {
+                T r, g, b, a;
+            };
+
+            struct {
+                Vector<T, 2> xy, zw;
+            };
+
+            struct {
+                Vector<T, 2> rg, ba;
+            };
+
+            struct {
+                Vector<T, 3> xyz;
+                T            _w;
             };
             T e[4];
         };
@@ -82,6 +142,7 @@ namespace Moer {
         Vector(const Vector<T, 4>& v) noexcept : x(v.x), y(v.y), z(v.z), w(v.w) {}
 
         explicit Vector(const Vector<T, 2>& v, T z = 0, T w = 0) noexcept : x(v.x), y(v.y), z(z), w(w) {}
+        explicit Vector(const Vector<T, 2>& v, const Vector<T, 2>& zw) noexcept : x(v.x), y(v.y), z(zw.x), w(zw.y) {}
         explicit Vector(const Vector<T, 3>& v, T w = 0) noexcept : x(v.x), y(v.y), z(v.z), w(w) {}
         explicit Vector(T xyzw) noexcept : x(xyzw), y(xyzw), z(xyzw), w(xyzw) {}
 
@@ -90,6 +151,10 @@ namespace Moer {
 
         T  operator[](size_t i) const { return e[i]; }
         T& operator[](size_t i) { return e[i]; }
+
+        std::string ToString() const {
+            return std::format("({},{},{},{})", x, y, z, w);
+        }
     };
 
     // clang-format off
@@ -99,6 +164,12 @@ namespace Moer {
     template<NumericType T> struct IsVectorType<Vector<T, 4>> { static constexpr bool value = true; };
 
     template<typename T> concept VectorType = IsVectorType<T>::value;
+
+    template<typename T> struct IsVectorFloatType { static constexpr bool value = false; };
+    template<NumericFloatType T> struct IsVectorFloatType<Vector<T, 2>> { static constexpr bool value = std::is_floating_point_v<T>; };
+    template<NumericFloatType T> struct IsVectorFloatType<Vector<T, 3>> { static constexpr bool value = std::is_floating_point_v<T>; };
+    template<NumericFloatType T> struct IsVectorFloatType<Vector<T, 4>> { static constexpr bool value = std::is_floating_point_v<T>; };
+    template<typename T> concept VectorFloatType = IsVectorFloatType<T>::value;
 
     template<size_t N> using Vectori  = Vector<int, N>;
     template<size_t N> using Vectorf  = Vector<float, N>;

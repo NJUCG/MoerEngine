@@ -70,6 +70,7 @@ namespace Moer::Render {
             uint32_t                 _dst_queue_family = VK_QUEUE_FAMILY_IGNORED);
 
         void FlushSrcState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage);
+        void FlushSrcState(VulkanTexture* _texture, VkAccessFlagBits2 _access, VkImageLayout _layout, VkPipelineStageFlagBits2 _stage);
 
         void RecordState(
             VulkanBuffer* _texture,
@@ -141,6 +142,7 @@ namespace Moer::Render {
         UnorderedMap<VulkanBuffer*, BufferState>   buffer_states;
         UnorderedMap<VulkanTexture*, TextureState> texture_states;
         Set<VulkanTexture*>                        exported_textures;
+        Set<VulkanBuffer*>                         exported_buffers;
 
         Set<VulkanBuffer*>  pending_buffers;
         Set<VulkanTexture*> pending_textures;

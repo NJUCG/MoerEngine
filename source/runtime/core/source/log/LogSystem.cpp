@@ -136,14 +136,9 @@
 namespace Moer {
 namespace LogSystem {
     void Init() {
-        // auto console_sink = std::make_shared<Sink>();
-        // #if PLATFORM_WINDOWS
-        //             console_sink->set_color_mode(spdlog::color_mode::always);
-        //             console_sink->set_level(spdlog::level::debug);
-        // #endif
-        //             spdlog::sinks::stderr_sink_st stl;
-        //             spdlog::logger                console("console", {console_sink});
-        //             console.set_level(spdlog::level::debug);
+#if !defined(NDEBUG)
+        spdlog::set_level(spdlog::level::trace);
+#endif
     }
 }
 }// namespace Moer::LogSystem

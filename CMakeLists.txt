@@ -40,8 +40,11 @@ if(${MSVC})
     add_compile_options("/wd5104")
     add_compile_options("/FS")
     add_compile_options("/MP")
+    # Support Chinese Comments
+    add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
+    add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 endif()
 
-add_subdirectory("3rdParty")
+add_subdirectory("3rdparty")
 add_subdirectory("source")
 

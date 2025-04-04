@@ -1,5 +1,4 @@
 #include "GLFWWindowImpl.h"
-#include "config/ConfigManager.h"
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/vulkan/VulkanRHI.h"
@@ -24,7 +23,6 @@
 #include "window/WindowInput.h"
 
 namespace Moer {
-    WindowInput& wndInput = WindowInput::GetInstance();
 
     //------------------------call back functions---------------------------
     static void UpdateKeyStateWithActionIsPress(bool& key_state, int action);                  // tool func
@@ -58,7 +56,18 @@ namespace Moer {
             rhi_type = ERHIType::Vulkan;
         }
 
-        GLFWwindow* window = glfwCreateWindow(info.width, info.height, info.title.c_str(), nullptr, nullptr);
+        int          width   = info.width;
+        int          height  = info.height;
+        GLFWmonitor* monitor = nullptr;
+        if (info.b_fullscreen) {
+            // 全屏模式
+            monitor                 = glfwGetPrimaryMonitor();
+            const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+            width                   = mode->width;
+            height                  = mode->height;
+        }
+
+        GLFWwindow* window = glfwCreateWindow(width, height, info.title.c_str(), monitor, nullptr);
 
         glfwSetWindowUserPointer(window, this);
 
@@ -155,16 +164,45 @@ namespace Moer {
 
     void GLFWWindowImpl::Tick() {
         // per-frame time logic
-        float current_frame_time = static_cast<float>(glfwGetTime());
-        wndInput.delta_time      = current_frame_time - wndInput.last_frame_time;
-        wndInput.last_frame_time = current_frame_time;
+        float current_frame_time           = static_cast<float>(glfwGetTime());
+        WindowInput::Get().delta_time      = current_frame_time - WindowInput::Get().last_frame_time;
+        WindowInput::Get().last_frame_time = current_frame_time;
 
         PollEvents();
         // GuiUpdate();
+
+        TickCursorState();
     }
     void GLFWWindowImpl::ShutDown() {
         // GuiShutDown();
         glfwDestroyWindow((GLFWwindow*)main_window_handle.window);
+    }
+
+    void GLFWWindowImpl::TickCursorState() {
+        // hide cursor when **left or right** mouse button is pressed
+        bool b_should_hide =
+            WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
+            WindowInput::Get().mouse_button_state[MouseButtons::Right] ||
+            WindowInput::Get().mouse_button_state[MouseButtons::Middle] ||
+            WindowInput::Get().key_button_switch_state[KeyButtons::F];
+
+        // is_active <=> cursor is hovering on the SceneColor window
+        if (WindowInput::Get().is_active && b_should_hide) {
+            SetCursorHide();
+        } else {
+            SetCursorNormal();
+        }
+    }
+
+    void GLFWWindowImpl::SetCursorHide() {
+        glfwSetInputMode((GLFWwindow*)main_window_handle.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        WindowInput::Get().is_cursor_hiding = true;
+    }
+
+    void GLFWWindowImpl::SetCursorNormal() {
+        glfwSetInputMode((GLFWwindow*)main_window_handle.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        WindowInput::Get().is_cursor_hiding = false;
+        WindowInput::Get().is_cursor_dirty  = true;
     }
 
     void GLFWWindowImpl::InitVulkan() {
@@ -264,47 +302,68 @@ namespace Moer {
         return false;
     }
 
-    static void UpdateAllKeyStates(int key, int action, int mods) {
-        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_forward, key == GLFW_KEY_W, action)) return;
-        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_backward, key == GLFW_KEY_S, action)) return;
-        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_left, key == GLFW_KEY_A, action)) return;
-        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_right, key == GLFW_KEY_D, action)) return;
-        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_up, key == GLFW_KEY_Q, action)) return;
-        if (UpdateKeyStateWhenBoolExpression(wndInput.camera_down, key == GLFW_KEY_E, action)) return;
+    static void UpdateCameraControlState(int key, int action, int mods) {
+        if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().camera_forward, key == GLFW_KEY_W, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().camera_backward, key == GLFW_KEY_S, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().camera_left, key == GLFW_KEY_A, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().camera_right, key == GLFW_KEY_D, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().camera_up, key == GLFW_KEY_E, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().camera_down, key == GLFW_KEY_Q, action)) return;
 
-        if (UpdateKeyStateWhenBoolExpression(wndInput.speed_up, key == GLFW_KEY_UP, action)) return;
-        if (UpdateKeyStateWhenBoolExpression(wndInput.speed_down, key == GLFW_KEY_DOWN, action)) return;
-        if (UpdateKeyStateWhenBoolExpression(wndInput.reset_speed,
+        if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().speed_up, key == GLFW_KEY_UP, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().speed_down, key == GLFW_KEY_DOWN, action)) return;
+        if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().reset_speed,
                                              key == GLFW_KEY_KP_0 && mods == GLFW_MOD_CONTROL,
                                              action)) return;
     }
 
-    static void KeyCallbackFunc(GLFWwindow* window, int key, int scancode, int action, int mods) {
-
-        auto set_cursor_hide = [&]() {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            wndInput.is_cursor_hiding = true;
+    static void UpdateAllKeyStates(int key, int action, int mods) {
+        // Generated by copilot
+        static const std::unordered_map<int, int> key_map = {
+            {GLFW_KEY_A, KeyButtons::A},
+            {GLFW_KEY_B, KeyButtons::B},
+            {GLFW_KEY_C, KeyButtons::C},
+            {GLFW_KEY_D, KeyButtons::D},
+            {GLFW_KEY_E, KeyButtons::E},
+            {GLFW_KEY_F, KeyButtons::F},
+            {GLFW_KEY_G, KeyButtons::G},
+            {GLFW_KEY_H, KeyButtons::H},
+            {GLFW_KEY_I, KeyButtons::I},
+            {GLFW_KEY_J, KeyButtons::J},
+            {GLFW_KEY_K, KeyButtons::K},
+            {GLFW_KEY_L, KeyButtons::L},
+            {GLFW_KEY_M, KeyButtons::M},
+            {GLFW_KEY_N, KeyButtons::N},
+            {GLFW_KEY_O, KeyButtons::O},
+            {GLFW_KEY_P, KeyButtons::P},
+            {GLFW_KEY_Q, KeyButtons::Q},
+            {GLFW_KEY_R, KeyButtons::R},
+            {GLFW_KEY_S, KeyButtons::S},
+            {GLFW_KEY_T, KeyButtons::T},
+            {GLFW_KEY_U, KeyButtons::U},
+            {GLFW_KEY_V, KeyButtons::V},
+            {GLFW_KEY_W, KeyButtons::W},
+            {GLFW_KEY_X, KeyButtons::X},
+            {GLFW_KEY_Y, KeyButtons::Y},
+            {GLFW_KEY_Z, KeyButtons::Z},
+            {GLFW_KEY_UP, KeyButtons::UP},
+            {GLFW_KEY_DOWN, KeyButtons::DOWN},
+            {GLFW_KEY_LEFT, KeyButtons::LEFT},
+            {GLFW_KEY_RIGHT, KeyButtons::RIGHT},
+            {GLFW_KEY_ESCAPE, KeyButtons::ESCAPE},
         };
-
-        auto set_cursor_normal = [&]() {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-            wndInput.is_cursor_hiding = false;
-            wndInput.is_cursor_dirty  = true;
-        };
-
-        if (key == GLFW_KEY_F && action == GLFW_RELEASE && !wndInput.is_cursor_hiding) {
-            // Press F
-            set_cursor_hide();
-
-        } else if (key == GLFW_KEY_F && action == GLFW_RELEASE && wndInput.is_cursor_hiding) {
-            // Press F
-            set_cursor_normal();
-
-        } else if (key == GLFW_KEY_ESCAPE && action == GLFW_RELEASE) {
-            // Press escape
-            set_cursor_normal();
+        if (key_map.find(key) == key_map.end()) {
+            return;
         }
+        auto cameraKey = key_map.at(key);
+        UpdateKeyStateWithActionIsPress(WindowInput::Get().key_button_state[cameraKey], action);
+        if (action == GLFW_RELEASE) {// when key is pressed, switch the state
+            WindowInput::Get().key_button_switch_state[cameraKey] ^= 1;
+        }
+    }
 
+    static void KeyCallbackFunc(GLFWwindow* window, int key, int scancode, int action, int mods) {
+        UpdateCameraControlState(key, action, mods);
         UpdateAllKeyStates(key, action, mods);
     }
 
@@ -312,33 +371,27 @@ namespace Moer {
         float xPos = static_cast<float>(xpos);
         float yPos = static_cast<float>(ypos);
 
-        if (wndInput.is_cursor_dirty) {
-            wndInput.cursor_last_x   = xPos;
-            wndInput.cursor_last_y   = yPos;
-            wndInput.is_cursor_dirty = false;
+        if (WindowInput::Get().is_cursor_dirty) {
+            WindowInput::Get().cursor_last_x   = xPos;
+            WindowInput::Get().cursor_last_y   = yPos;
+            WindowInput::Get().is_cursor_dirty = false;
         }
 
-        wndInput.cursor_delta_x = xPos - wndInput.cursor_last_x;
-        wndInput.cursor_delta_y = yPos - wndInput.cursor_last_y;
+        WindowInput::Get().cursor_delta_x = xPos - WindowInput::Get().cursor_last_x;
+        WindowInput::Get().cursor_delta_y = yPos - WindowInput::Get().cursor_last_y;
 
-        wndInput.cursor_last_x = xPos;
-        wndInput.cursor_last_y = yPos;
+        WindowInput::Get().cursor_last_x = xPos;
+        WindowInput::Get().cursor_last_y = yPos;
     }
 
     static void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height) {
-        wndInput.width        = width;
-        wndInput.height       = height;
-        wndInput.aspect_ratio = height == 0 ? 0 : (float)width / height;
+        WindowInput::Get().width        = width;
+        WindowInput::Get().height       = height;
+        WindowInput::Get().aspect_ratio = height == 0 ? 0 : (float)width / height;
     }
 
     static void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset) {
-        if (wndInput.is_cursor_hiding) {
-            wndInput.fov -= (float)yoffset * 2.f;
-            if (wndInput.fov < 10.0f)
-                wndInput.fov = 10.0f;
-            if (wndInput.fov > 120.0f)
-                wndInput.fov = 120.0f;
-        }
+        WindowInput::Get().scroll_offset = static_cast<float>(yoffset);
     }
 
     static void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode) {
@@ -351,7 +404,7 @@ namespace Moer {
             return;
         }
         auto cameraButton = mouse_button_map.at(button);
-        UpdateKeyStateWithActionIsPress(wndInput.mouse_button_state[cameraButton], action);
+        UpdateKeyStateWithActionIsPress(WindowInput::Get().mouse_button_state[cameraButton], action);
     }
 
 }// namespace Moer

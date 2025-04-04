@@ -5,7 +5,6 @@
 #include <functional>
 #include <algorithm>
 #include <iostream>
-#include "spdlog/spdlog.h"
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
 
@@ -158,7 +157,7 @@ RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attribu
         Run();
     });
     create_event.Wait();
-    this->name = name;
+    this->name = _attributes.name;
 
     SPDLOG_INFO("[{}] {} thread created", name, this->id);
 }

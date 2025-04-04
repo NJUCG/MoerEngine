@@ -1,6 +1,6 @@
 #include "resources/GlobalRenderResources.h"
 #include "PixelFormat.h"
-#include "config/ConfigManager.h"
+// #include "config/ConfigManager.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -22,7 +22,7 @@ namespace Moer {
         // ...
         auto& instance = GetInstance();
 
-        uint32_t frame_count = ConfigManager::GetInstance().GetInitConfig().max_frame_in_flight;
+        // uint32_t frame_count = ConfigManager::GetInstance().GetConfig().engine.rhi.max_frame_in_flight;
 
         // instance.global_render_data.frame_datas.resize(frame_count);
 

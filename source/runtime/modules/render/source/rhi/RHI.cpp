@@ -1,4 +1,3 @@
-#pragma once
 #include "rhi/RHI.h"
 #include "PixelFormat.h"
 #include "log/LogSystem.h"
@@ -98,21 +97,24 @@ RHISRVRef RHI::RHICreateAccelerationStructureSRV(RHIRayTracingTLAS* _tlas) {
 }
 
 namespace Moer::Render {
+
     template<>
-    VulkanRHIConfig ResolveConfigAs(const MoerRHIConfigAsJSON& _config_as_json) {
+    VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
         using std::string;
-        assert(_config_as_json["rhi"].get<string>() == "vulkan");
+        assert(_info.rhi == "vulkan");
 
         VulkanRHIConfig config;
 
-        float api = _config_as_json["api_version"].get<float>();
-        if (api == 1.f)
+        std::string_view api = _info.rhi_api_version;
+
+        api = api.substr(0, 3);// 1.0, 1.1, 1.2, 1.3
+        if (api == "1.0")
             config.api_version = VK_API_VERSION_1_0;
-        else if (api == 1.1f)
+        else if (api == "1.1")
             config.api_version = VK_API_VERSION_1_1;
-        else if (api == 1.2f)
+        else if (api == "1.2")
             config.api_version = VK_API_VERSION_1_2;
-        else if (api == 1.3f)
+        else if (api == "1.3")
             config.api_version = VK_API_VERSION_1_3;
         else {
             LOG_ERROR("Unsupported vulkan api version: {}", api);
@@ -141,7 +143,7 @@ namespace Moer::Render {
     void RenderDevice::Init(DeviceInitInfo&& _info) {
         switch (_info.type) {
             case ERHIType::Vulkan:
-                Get().impl = std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info.config_as_json))));
+                Get().impl = std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info))));
                 break;
             case ERHIType::D3D12:
                 Get().impl = std::move(UniquePtr<Impl>(MoerNew(D3D12Device)(ResolveConfigAs<D3D12RHIConfig>(_info.config_as_json))));

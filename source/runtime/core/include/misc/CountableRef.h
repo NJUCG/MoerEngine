@@ -66,6 +66,7 @@ protected:
 template<typename T>
 class CountableRef {
 public:
+    using CountableType = T;
     CountableRef() : ptr{nullptr} {
         //if(std::is_convertible<T, Countable>::value) return;
         //assert(false);

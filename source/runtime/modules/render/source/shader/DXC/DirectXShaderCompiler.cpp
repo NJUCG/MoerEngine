@@ -5,24 +5,24 @@
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResource.h"
 #include "shader/ShaderResourceManager.h"
+#include "spirv.hpp"
+#include "spirv_common.hpp"
 #include <cassert>
 #include <optional>
+#include <variant>
 #if PLATFORM_WINDOWS
 #ifndef NOMINMAX
 #define NOMINMAX 1
 #endif
-// #include <zpp_bits.h>
 #endif
 
 #include "rhi/RHI.h"
 #include <wrl/client.h>
-// #include "wsl/wrladapter.h"
 
 #include <filesystem>
 #include "log/LogSystem.h"
 #include "rhi/RHICommon.h"
 #include "DXCUtils.h"
-#include "spirv_reflect.h"
 #include <format>
 #include <fstream>
 #include <sstream>
@@ -32,7 +32,7 @@
 
 #include "dxc/dxcapi.h"
 #include "shader/ShaderCommon.h"
-#include "DirectXShaderReflectorVulkan.h"
+#include "spirv_cross.hpp"
 
 // std::function<ShaderCompilerOutput*(const ShaderCompilerInput& input)> DXCompiler::s_compiler_func_table[EShaderPlatform::SP_Num]{};
 
@@ -155,6 +155,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(L"-fvk-use-dx-position-w");
         arguments.push_back(L"-fvk-use-dx-layout");
         arguments.push_back(L"-fvk-auto-shift-bindings");
+        arguments.push_back(L"-fspv-preserve-interface");
         arguments.push_back(L"-DVULKAN=1");
         // arguments.push_back(L"-fspv-flatten-resource-arrays");
     };
@@ -170,7 +171,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(Moer::ConfigManager::GetInstance().GetEngineShaderPath().generic_wstring());
         arguments.push_back(L"-I");
         arguments.push_back(Moer::ConfigManager::GetInstance().GetEngineShaderSharedPath().generic_wstring());
-        arguments.push_back(L"-Zpr");
+        // arguments.push_back(L"-Zpr");
         // arguments.push_back(L"-all-resources-bound");
         if (_platform == SP_WIN_D3D_SM6)
             add_dx_arg(arguments);
@@ -179,8 +180,8 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
     };
     auto add_debug_arg = [](Moer::Array<std::wstring>& arguments) {
         arguments.push_back(DXC_ARG_ALL_RESOURCES_BOUND);
-        arguments.push_back(DXC_ARG_DEBUG);
-        arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
+        arguments.push_back(DXC_ARG_OPTIMIZATION_LEVEL3);
+        // arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
     };
 
     auto add_define_arg = [](Moer::Array<std::wstring>& arguments, const Moer::UnorderedMap<std::string, std::string>& _defines) {
@@ -364,47 +365,17 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     const uint8_t* data = (uint8_t*)code->GetBufferPointer();
     uint32_t       size = code->GetBufferSize();
 
-    SpvReflectShaderModule reflect_module;
-    SpvReflectResult       ref_result = spvReflectCreateShaderModule(size, data, &reflect_module);
-    assert(ref_result == SPV_REFLECT_RESULT_SUCCESS);
-
-    Moer::Array<SpvReflectInterfaceVariable*> input_vars(reflect_module.input_variable_count);
-    spvReflectEnumerateInputVariables(&reflect_module, &reflect_module.input_variable_count, input_vars.data());
-
     ShaderReflectInfo reflect_info;
     auto&             vertex_inputs = reflect_info.vertex_input_info;
 
     Moer::UnorderedMap<std::string, ParameterInfo>
                                     param_map;
     const ShaderParametersMetadata* meta_data = _meta_param;
-
-    for (uint32_t binding_index = 0; binding_index < reflect_module.descriptor_binding_count; ++binding_index) {
-        auto& binding = reflect_module.descriptor_bindings[binding_index];
-        auto& param   = param_map[binding.name];
-        param.slot    = binding.binding;
-        param.space   = binding.set;
-        param.type    = ToShaderParameterType(binding.resource_type, binding.descriptor_type);
-        param.stage |= ToPipelineStageFlag(reflect_module.shader_stage);
-        param.type_flags = binding.resource_type | binding.descriptor_type << 4u;
-        param.num        = binding.count;
-    }
-    for (uint32_t push_constant_index = 0; push_constant_index < reflect_module.push_constant_block_count; ++push_constant_index) {
-        auto& push_constant = reflect_module.push_constant_blocks[push_constant_index];
-        auto& param         = param_map[push_constant.name];
-        param.slot          = -1;
-        param.space         = -1;
-        param.type          = EShaderParameterType::CONSTANT_STRUCT;
-        param.stage |= ToPipelineStageFlag(reflect_module.shader_stage);
-        param.type_flags = push_constant.padded_size | 1u << 20u;
-        param.num        = push_constant.size;
-    }
-
     using namespace Moer;
 
-    Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
-    constexpr std::string_view                              bdles_suffix      = "_114514_bdls";
-    constexpr std::string_view                              bdls_array_suffix = "_array_114514_bdls";
-    auto                                                    is_bdls           = [&](const std::string& _name) {
+    constexpr std::string_view bdles_suffix      = "_114514_bdls";
+    constexpr std::string_view bdls_array_suffix = "_array_114514_bdls";
+    auto                       is_bdls           = [&](const std::string& _name) {
         return _name.ends_with(bdles_suffix);
     };
     auto get_real_name = [](const std::string& _name) {
@@ -415,107 +386,182 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     };
 #define SetZeroIfEmpty(_param) \
     if (!_param.has_value()) _param = ReflectParamInfo::Bindless();
-    for (uint32_t binding_index = 0; binding_index < reflect_module.descriptor_binding_count; ++binding_index) {
-        const SpvReflectDescriptorBinding& binding = reflect_module.descriptor_bindings[binding_index];
-        if (is_bdls(binding.name)) {
+
+    Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
+
+    {
+        std::span<Moer::uint> spirv_code_span((Moer::uint*)data, size / sizeof(Moer::uint));
+        //spirv-cross test
+        spirv_cross::Compiler        comp(spirv_code_span.data(), spirv_code_span.size());
+        spirv_cross::ShaderResources resources = comp.get_shader_resources();
+
+        auto active     = comp.get_active_interface_variables();
+        auto active_res = comp.get_shader_resources(active);
+
+        Moer::UnorderedSet<std::string> active_res_names;
+        for (auto& res : active_res.separate_images) {
+            active_res_names.insert(comp.get_name(res.id));
+        }
+        for (auto& res : active_res.storage_images) {
+            active_res_names.insert(comp.get_name(res.id));
+        }
+        for (auto& res : active_res.storage_buffers) {
+            active_res_names.insert(comp.get_name(res.id));
+        }
+        for (auto& res : active_res.uniform_buffers) {
+            active_res_names.insert(comp.get_name(res.id));
+        }
+        for (auto& res : active_res.push_constant_buffers) {
+            active_res_names.insert(comp.get_name(res.id));
+        }
+        for (auto& res : active_res.acceleration_structures) {
+            active_res_names.insert(comp.get_name(res.id));
+        }
+        for (auto& res : active_res.separate_samplers) {
+            active_res_names.insert(comp.get_name(res.id));
+        }
+
+        auto res_is_active = [&](spirv_cross::Resource& _res) {
+            auto name = comp.get_name(_res.id);
+            return active_res_names.contains(name);
+        };
+
+#define GET_RESOURCE_DEFAULT_INFOS(resource)                                         \
+    auto set       = comp.get_decoration(resource.id, spv::DecorationDescriptorSet); \
+    auto binding   = comp.get_decoration(resource.id, spv::DecorationBinding);       \
+    auto name      = comp.get_name(resource.id);                                     \
+    auto type      = comp.get_type(resource.base_type_id);                           \
+    auto count     = type.array.size() > 0 ? type.array[0] : 1;                      \
+    auto is_active = res_is_active(resource)
+
+        auto handle_bdls_res_tex = [&](spirv_cross::Resource& _res, EVulkanDescriptorType _desc_type, EShaderResourceType _srt) {
+            GET_RESOURCE_DEFAULT_INFOS(_res);
             static constexpr std::string_view real_name  = ReflectParamInfo::bdls_name;
             ReflectParamInfo::BindlessArray&  bdls_param = reflect_map[real_name.data()].spirv.bindless;
             ReflectParamInfo::Bindless*       target     = nullptr;
-            if (binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
-                if (is_bdls_array(binding.name)) {
+
+            if (_desc_type == VDT_STORAGE_BUFFER) {
+                if (is_bdls_array(name)) {
                     SetZeroIfEmpty(bdls_param.array);
                     target = &bdls_param.array.value();
                 } else {
                     SetZeroIfEmpty(bdls_param.buffer);
                     target = &bdls_param.buffer.value();
                 }
-            } else if (binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
+            } else if (_desc_type == VDT_SAMPLED_IMAGE) {
                 SetZeroIfEmpty(bdls_param.image);
                 target = &bdls_param.image.value();
 
-            } else if (binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER) {
+            } else if (_desc_type == VDT_SAMPLER) {
                 SetZeroIfEmpty(bdls_param.sampler);
                 target = &bdls_param.sampler.value();
-            } else if (binding.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR) {
+            } else if (_desc_type == VDT_ACCELERATION_STRUCTURE) {
                 SetZeroIfEmpty(bdls_param.acceleration_structure);
                 target = &bdls_param.acceleration_structure.value();
             } else {
-                LOG_INFO("unknown bindless type {}", uint(binding.descriptor_type));
+                LOG_INFO("unknown bindless type {}", uint(_desc_type));
                 assert(false && "unknown bindless type");
             }
-            target->set           = binding.set;
-            target->binding       = binding.binding;
-            target->count         = binding.count;
-            target->desc_type     = binding.descriptor_type;
-            target->resource_type = binding.resource_type;
-            target->stage_bits |= uint(ToPipelineStageFlag(reflect_module.shader_stage));
+            target->set           = set;
+            target->binding       = binding;
+            target->count         = count;
+            target->desc_type     = _desc_type;
+            target->resource_type = _srt;
+            target->stage_bits    = ToPipelineStageFlag(comp.get_execution_model());
+            target->custom_flag.active |= is_active;
+            // if (is_active) {
+            //     LOG_INFO("active bdls name : {}", name);
+            // }
+        };
 
-        } else {
-            ReflectParamInfo& param = reflect_map[binding.name];
-            param.spirv.resources.stage_bits |= uint(ToPipelineStageFlag(reflect_module.shader_stage));
+        auto handle_res = [&](spirv_cross::Resource& _res, EVulkanDescriptorType _desc_type, EShaderResourceType _srt) {
+            GET_RESOURCE_DEFAULT_INFOS(_res);
+            ReflectParamInfo& param = reflect_map[name];
+            param.spirv.resources.stage_bits |= ToPipelineStageFlag(comp.get_execution_model());
             ReflectParamInfo::Resource res{};
-            res.set                    = binding.set;
-            res.binding                = binding.binding;
-            res.sampled                = binding.image.sampled;
-            res.desc_type              = binding.descriptor_type;
-            res.resource_type          = binding.resource_type;
-            res.count                  = binding.count;
+            res.set                    = set;
+            res.binding                = binding;
+            res.sampled                = type.image.sampled;
+            res.desc_type              = _desc_type;
+            res.resource_type          = _srt;
+            res.count                  = count;
+            res.format                 = ToPixelFormat(type.image.format);
+            res.custom_flag.active     = is_active;
             param.spirv.resources.data = res;
-        }
-    }
-    for (uint32_t push_constant_index = 0; push_constant_index < reflect_module.push_constant_block_count; ++push_constant_index) {
-        auto& push_constant = reflect_module.push_constant_blocks[push_constant_index];
-        auto& param         = reflect_map[push_constant.name];
-        param.spirv.resources.stage_bits |= uint(ToPipelineStageFlag(reflect_module.shader_stage));
-        ReflectParamInfo::Constant constant{};
-        constant.size              = push_constant.size;
-        constant.padded_size       = push_constant.padded_size;
-        param.spirv.resources.data = constant;
-    }
+        };
 
-    const auto&              members = meta_data->GetMembers();
-    Moer::Array<std::string> error_msgs;
-#if OLD_REFLECT
-    for (const ShaderParametersMetadata::Member& member : members) {
-        EShaderBindingBaseType base_type = member.GetBaseType();
-        std::string_view       name      = member.GetName();
-
-        auto entry = param_map.find(name.data());
-        auto end   = param_map.end();
-        auto count = param_map.count(name.data());
-
-        if (count <= 0) {
-            {
-                error_msgs.push_back(std::format("param {} not found in shader {}", member.GetName(), reflect_module.entry_point_name));
+        auto handle_all_res = [&](spirv_cross::Resource& _res, EVulkanDescriptorType _desc_type, EShaderResourceType _srt) {
+            if (is_bdls(_res.name)) {
+                handle_bdls_res_tex(_res, _desc_type, _srt);
+            } else {
+                handle_res(_res, _desc_type, _srt);
             }
-            continue;
-        }
-        //param reflected
-        const auto& param            = entry->second;
-        auto        cpp_binding_type = BindingTypeToParameterType(base_type);
-        if (cpp_binding_type != param.type) {
-            //type mismatch
-            if (base_type == SBT_CONST_STRUCT) {
-                error_msgs.push_back(std::format("push constant member define error, should be writen as\n"
-                                                 "\t[[vk::push_constant]]\nConstantBuffer<YourConstantStruct> {};",
-                                                 member.GetName()));
-                continue;
-            }
-            error_msgs.push_back(std::format("param {} format mismatch! param format: {}, shader format {}", member.GetName(), ToString(base_type), ToString(param.type)));
-            continue;
-        }
-        // LOG_INFO("param {}: {{ slot:{}, set:{}, array_num:{} }}", member.GetName(), param.slot, param.space, param.num);
-    }
+        };
 
-    for (const auto& msg : error_msgs) {
-        LOG_WARNING(msg);
+        for (auto& resource : resources.storage_images) {
+            auto name = comp.get_name(resource.id);
+            auto type = comp.get_type(resource.base_type_id);
+
+            if (type.image.dim == spv::DimBuffer) {
+                handle_res(resource, VDT_STORAGE_TEXEL_BUFFER, EShaderResourceType::SRT_UAV);
+
+            } else {
+                handle_all_res(resource, VDT_STORAGE_IMAGE, EShaderResourceType::SRT_UAV);
+            }
+        }
+
+        for (auto& resource : resources.separate_images) {
+            auto type = comp.get_type(resource.base_type_id);
+            if (type.image.dim == spv::DimBuffer) {
+                // LOG_INFO("Buffer name : {} set : {} binding : {}", name, set, binding);
+                handle_res(resource, VDT_UNIFORM_TEXEL_BUFFER, EShaderResourceType::SRT_SRV);
+            } else {
+                // LOG_INFO("Texture name : {} set : {} binding : {}", name, set, binding);
+                handle_all_res(resource, VDT_SAMPLED_IMAGE, EShaderResourceType::SRT_SRV);
+            }
+        }
+
+        for (auto& resource : resources.separate_samplers) {
+            handle_all_res(resource, VDT_SAMPLER, EShaderResourceType::SRT_SAMPLER);
+        }
+
+        for (auto& resource : resources.storage_buffers) {
+            spirv_cross::Bitset buffer_flags = comp.get_buffer_block_flags(resource.id);
+            // GET_RESOURCE_DEFAULT_INFOS(resource);
+            // LOG_INFO("storage buffer name : {} set : {} binding : {}", name, set, binding);
+            handle_all_res(resource, VDT_STORAGE_BUFFER, buffer_flags.get(spv::DecorationNonWritable) ? EShaderResourceType::SRT_SRV : EShaderResourceType::SRT_UAV);
+        }
+
+        for (auto& resource : resources.uniform_buffers) {
+            handle_all_res(resource, VDT_UNIFORM_BUFFER, EShaderResourceType::SRT_CBV);
+        }
+
+        for (auto& resource : resources.push_constant_buffers) {
+
+            GET_RESOURCE_DEFAULT_INFOS(resource);
+            auto ranges = comp.get_active_buffer_ranges(resource.id);
+            auto block  = comp.get_decoration(resource.base_type_id, spv::DecorationBufferBlock);
+
+            uint  offset                     = 0;
+            uint  constant_size              = comp.get_declared_struct_size(type);
+            auto& param                      = reflect_map[name];
+            param.spirv.resources.stage_bits = ToPipelineStageFlag(comp.get_execution_model());
+            ReflectParamInfo::Constant constant{};
+            constant.size               = constant_size;
+            constant.padded_size        = constant_size;
+            constant.offset             = offset;
+            constant.custom_flag.active = is_active;
+            param.spirv.resources.data  = constant;
+        }
+
+        //accel
+        for (auto& resource : resources.acceleration_structures) {
+            handle_all_res(resource, VDT_ACCELERATION_STRUCTURE, SRT_SRV);
+        }
     }
-    if (!error_msgs.empty()) {
-        // assert(false && "shader reflection error");
-    }
-#endif
-    _param_map.param_map.swap(param_map);
+#undef SetZeroIfEmpty
+
+#undef GET_RESOURCE_DEFAULT_INFOS
+
     _param_map.reflect_map.swap(reflect_map);
-    _param_map.space_cnt = reflect_module.descriptor_set_count;
-    spvReflectDestroyShaderModule(&reflect_module);
 }

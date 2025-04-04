@@ -62,6 +62,13 @@ void* Memory::MallocAligned(size_t size, size_t alignment) noexcept {
 #endif
 }
 
+void* Memory::MallocN(size_t count, size_t size) noexcept {
+#if USE_MIMALLOC
+    return mi_new_n(count, size);
+#else
+    return malloc(count * size);
+#endif
+}
 void* Memory::CallocAligned(size_t count, size_t size, size_t alignment) noexcept {
 #if USE_MIMALLOC
     return mi_calloc_aligned(count, size, alignment);

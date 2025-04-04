@@ -9,23 +9,17 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <stack>
+#include <any>
 
 #include "MMemory.h"
 #include <memory>
 #include "m_vector/m_vector.h"
 #include <deque>
 
-#if USE_MIMALLOC
-// #if 0
-
-#include <mimalloc.h>
-
 template<typename T>
-using m_defualt_allocator = mi_stl_allocator<T>;
-#else
-template<typename T>
-using m_defualt_allocator = std::allocator<T>;
-#endif
+using m_defualt_allocator = MoerStlAllocator<T>;
+
 namespace Moer {
     template<typename T, class allocator = m_defualt_allocator<T>>
     using Array = std::vector<T, allocator>;
@@ -48,6 +42,8 @@ namespace Moer {
     template<typename T, size_t N>
     using StaticArray = std::array<T, N>;
 
+    using Any = std::any;
+
     template<typename T, class Deleter = MoerDeleter>
     using UniquePtr = std::unique_ptr<T, Deleter>;
 
@@ -64,9 +60,29 @@ namespace Moer {
     }
 
     template<typename T>
+    using SharedPtr = std::shared_ptr<T>;
+
+    template<typename T, typename... Args>
+        requires std::is_constructible_v<T, Args...>
+    constexpr SharedPtr<T> MakeShared(Args&&... _args) {
+        return SharedPtr<T>(MoerNew(T)(std::forward<Args>(_args)...), MoerDelete<T>);
+    }
+
+    template<typename T>
     constexpr bool StringEqual(const T& a, const T& b) {
         return std::strcmp(a.c_str(), b.c_str()) == 0;
     }
+
+    template<typename T>
+    using Stack = std::stack<T, DEQueue<T>>;
+
+    //Visitor Overload Template
+    template<typename... Ts>
+    struct Overload : Ts... {
+        using Ts::operator()...;
+    };
+    template<typename... Ts>
+    Overload(Ts...) -> Overload<Ts...>;
 
     template<typename T, size_t N>
         requires std::is_trivially_copyable_v<T>

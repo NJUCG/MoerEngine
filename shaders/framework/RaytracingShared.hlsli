@@ -1,18 +1,11 @@
 #ifndef MOER_RT_SHARED_HLSL
 #define MOER_RT_SHARED_HLSL
 
-// #include "framework/Common.hlsl"
 #include "MathLib/STL.hlsli"
+#include "shared/ShaderParameters.h"
+
 
 #pragma region[ rt geometry ]
-
-#define INSTANCE_FLAG_DISABLE 0x1
-#define INSTANCE_FLAG_DEFAULT 0x2
-#define INSTANCE_FLAG_TRANSPARANT 0x4
-#define INSTANCE_FLAG_EMISSION 0x8
-
-#define INSTANCE_FLAG_GEOMETRY_ALL 0xff
-#define INSTANCE_FLAG_GEOMETRY_NONE 0x00
 
 struct RTVertex {
   float3 position;
@@ -67,10 +60,6 @@ float3 _GetXoffset(float3 X, float3 N) {
 
   return select(abs(X) < origin, X + fOff, iPos);
 }
-struct RTPrimitive {
-  uint3 indices;
-  float world_uv_units;
-};
 
 #define RT_MATERIAL_INDEX_BIT_OFFSET 8
 #define RT_MATERIAL_TYPE_MASK 0xff
@@ -84,12 +73,13 @@ struct RTHitInfo {
   float mip;
   float tmin;
   uint instance_id;
+  uint geometry_idx;
   uint material_type_and_id;
   uint flags;
 
   bool IsSky() { return tmin == INF; }
   float3 GetXOffset() { return _GetXoffset(x, n); }
-  bool IsTransparent() { return (flags & INSTANCE_FLAG_TRANSPARANT) != 0; }
+  bool IsTransparent() { return (flags & Moer::RTVM_TRANSPARANT) != 0; }
 
   uint GetMaterialType() {
     return material_type_and_id & RT_MATERIAL_TYPE_MASK;
@@ -114,23 +104,6 @@ struct RTViewParam {
   float orthomode;
 };
 
-struct RTInstanceData {
-  float4 overload_m1;
-  float4 overload_m2;
-  float4 overload_m3;
-  uint material_type_and_id;
-  uint flags;
-  uint prim_offset;
-  uint vtx_offset;
-
-  uint GetMaterialType() {
-    return material_type_and_id & RT_MATERIAL_TYPE_MASK;
-  }
-  uint GetMaterialID() {
-    return material_type_and_id >> RT_MATERIAL_INDEX_BIT_OFFSET;
-  }
-};
-
 struct RTMaterialProp {
   float3 l_direct; // unshadowed
   float3 l_emi;
@@ -141,6 +114,12 @@ struct RTMaterialProp {
   float metalness;
   float curvature;
 };
+namespace Moer {
+#pragma region[ ReSTIR ]
+
+namespace DI {}; // namespace DI
+#pragma endregion
+} // namespace Moer
 
 namespace Raytracing {
 #pragma region[ material ]
@@ -309,5 +288,6 @@ float3 GetMotionWorld(float3 x, float3 x_prev) {
 
   return motion;
 }
-}; // namespace Raytracing
+} // namespace Raytracing
+
 #endif

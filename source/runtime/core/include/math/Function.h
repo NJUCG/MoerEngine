@@ -55,6 +55,16 @@ namespace Moer {
     template<NumericType T> inline T Abs(T v) noexcept;
     template<VectorType  T> inline T Abs(const T& v) noexcept;
 
+    template<NumericFloatType T> inline T Sign(T v) noexcept;
+    template<VectorFloatType  T> inline T Sign(const T& v) noexcept;
+
+    // Compare(v1, v2) ? 0 === v1 ? v2;
+    // e.g. Compare(v1, v2) > 0 === v1 > v2
+    template<NumericFloatType T> inline T Compare(T v1, T v2) noexcept;
+
+    template<NumericFloatType T> inline bool IsZero(T v) noexcept;
+    template<VectorFloatType  T> inline bool IsZero(const T& v) noexcept;
+
                        inline float      Lerp(float a, float b, float t) noexcept;
     template<size_t N> inline Vectorf<N> Lerp(const Vectorf<N>& a, const Vectorf<N>& b, const Vectorf<N>& t) noexcept;
                        inline double     Lerp(double a, double b, double t) noexcept;
@@ -394,6 +404,59 @@ namespace Moer {
     inline T Abs(const T& v) noexcept {
         T ret;
         for (int i = 0; i < T::size; i++) ret[i] = std::abs(v[i]);
+        return ret;
+    }
+
+    template<NumericFloatType T>
+    inline T Sign(T v) noexcept {
+        return v < T(-EPS) ? T(-1) : (v > T(EPS) ? T(1) : T(0));
+    }
+
+    template<VectorFloatType T>
+    inline T Sign(const T& v) noexcept {
+        T ret;
+        for (int i = 0; i < T::size; i++) ret[i] = Sign(v[i]);
+        return ret;
+    }
+
+    template<NumericFloatType T>
+    inline T Compare(T v1, T v2) noexcept {
+        return Sign(v1 - v2);
+    }
+
+    template<NumericFloatType T>
+    inline T Signed(T v) noexcept {
+        return v < T(0) ? T(-1) : T(1);
+    }
+
+    template<VectorFloatType T>
+    inline T Signed(const T& v) noexcept {
+        T ret;
+        for (int i = 0; i < T::size; i++) ret[i] = Signed(v[i]);
+        return ret;
+    }
+
+    template<NumericFloatType T>
+    inline T Select(T _comp, T _v1, T _v2) noexcept {
+        return Signed(_comp) == T(1) ? _v1 : _v2;
+    }
+
+    template<VectorFloatType T>
+    inline T Select(const T& _comp, const T& _v1, const T& _v2) noexcept {
+        T ret;
+        for (int i = 0; i < T::size; i++) ret[i] = Select(_comp[i], _v1[i], _v2[i]);
+        return ret;
+    }
+
+    template<NumericFloatType T>
+    inline bool IsZero(T v) noexcept {
+        return Abs(v) < T(EPS);
+    }
+
+    template<VectorFloatType T>
+    inline bool IsZero(const T& v) noexcept {
+        bool ret = true;
+        for (int i = 0; i < T::size; i++) ret &= IsZero(v[i]);
         return ret;
     }
 

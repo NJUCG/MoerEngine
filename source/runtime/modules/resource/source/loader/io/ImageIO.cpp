@@ -7,7 +7,7 @@
 
 #include <cassert>
 #include <numeric>
-#include <stb/stb_image_resize.h>
+#include <stb/stb_image_resize2.h>
 #include <dds.hpp>
 #include <gl_format.h>
 
@@ -256,7 +256,20 @@ namespace Moer {
                 auto&    next_mipmap         = mipmaps[mip];
                 uint32_t prev_mip_map_offset = desc.mip_offsets[layer * desc.mips + mip - 1];
                 uint32_t next_mip_map_offset = desc.mip_offsets[layer * desc.mips + mip];
-                stbir_resize_uint8(mip_mapped_data + prev_mip_map_offset, prev_mipmap.extent.width, prev_mipmap.extent.height, 0, mip_mapped_data + next_mip_map_offset, next_mipmap.extent.width, next_mipmap.extent.height, 0, channels);
+
+                assert(channels == 4 && "Default support 4 channels. If you need more, please modify the code");
+                auto channel_in_stbir = stbir_pixel_layout::STBIR_4CHANNEL;
+
+                stbir_resize_uint8_linear(
+                    mip_mapped_data + prev_mip_map_offset,
+                    prev_mipmap.extent.width,
+                    prev_mipmap.extent.height,
+                    0,
+                    mip_mapped_data + next_mip_map_offset,
+                    next_mipmap.extent.width,
+                    next_mipmap.extent.height,
+                    0,
+                    channel_in_stbir);
             }
         }
         desc.data_size = old_size;
@@ -295,16 +308,32 @@ namespace Moer {
         return (data != nullptr && width != 0 && height != 0 && layers != 0 && mips != 0 && channal != 0 && data_size != 0);
     }
 
-    ImageReadDesc ImageIO::ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal) {
+    ImageReadDesc ImageIO::ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal, EPixelFormat _fmt) {
         ImageReadDesc desc;
         const auto&   path_str = path.string();
-        if (path_str.ends_with(".png") || path_str.ends_with("jpg")) {
+        if (path_str.ends_with(".png") || path_str.ends_with("jpg") || path_str.ends_with("jpeg")) {
             desc.data = stbi_load(path_str.c_str(), reinterpret_cast<int*>(&desc.width), reinterpret_cast<int*>(&desc.height), reinterpret_cast<int*>(&desc.channal), desired_channal);
             if (!desc.data) {
                 return desc;
             }
+            // uint packed = (((uint*)desc.data)[1747170]);
+            // //unpack r8g8b8a8 uint32 to float4
+            // auto unpack8bit = [](uint packed) -> float4 {
+            //     float4 unpacked;
+            //     unpacked.r = (packed & 0x000000FF) / 255.0f;
+            //     unpacked.g = ((packed & 0x0000FF00) >> 8) / 255.0f;
+            //     unpacked.b = ((packed & 0x00FF0000) >> 16) / 255.0f;
+            //     unpacked.a = ((packed & 0xFF000000) >> 24) / 255.0f;
+            //     return unpacked;
+            // };
+            // auto unpacked = unpack8bit(packed);
+            // unpacked.x    = std::powf(unpacked.x, 2.2f);
+            // unpacked.y    = std::powf(unpacked.y, 2.2f);
+            // unpacked.z    = std::powf(unpacked.z, 2.2f);
+            // unpacked.w    = std::powf(unpacked.w, 2.2f);
+
             desc.data_callback = stbi_image_free;
-            desc.format        = EPixelFormat::PF_R8G8B8A8_UNORM;
+            desc.format        = _fmt;
             desc.data_size     = desc.width * desc.height * desc.channal;
             Generatemipmaps(desc);
         } else if (path_str.ends_with("ktx")) {
@@ -345,7 +374,7 @@ namespace Moer {
                 }
             } else {
                 desc.mips        = ktx_texture->numLevels;
-                desc.mip_offsets = std::vector<uint32_t>(ktx_texture->numLevels);
+                desc.mip_offsets = Array<uint32_t>(ktx_texture->numLevels);
                 for (uint32_t layer = 0; layer < desc.layers; layer++) {
                     for (uint32_t miplevel = 0; miplevel < desc.mips; ++miplevel) {
                         ktx_size_t offset;
@@ -402,4 +431,4 @@ namespace Moer {
         return desc;
     }
 
-}
+}// namespace Moer

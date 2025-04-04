@@ -26,7 +26,7 @@ namespace Moer::Render {
     };
     struct VkTmpBufferAllocator : VulkanDeviceObject {
         VkTmpBufferAllocator(VulkanDevice* _device);
-        uint64 Allocate(uint64 _size);
+        uint64 Allocate(uint64 _size, std::string_view _name);
         uint64 Allocate(uint64 _size, EVkInternalBufferUsage _usage);
         void   DeAllocate(uint64 _handle);
     };
@@ -57,6 +57,22 @@ namespace Moer::Render {
         Array<std::function<void()>> on_complete;
 
         VkTracker tracker;
+    };
+
+    class VkNativeQueryPool {
+    public:
+        VkNativeQueryPool(VulkanDevice& _device, VkQueryType _type, uint32 _count);
+        ~VkNativeQueryPool();
+        VkQueryPool   GetHandle() const { return query_pool; }
+        uint32        GetCount() const { return count; }
+        void          GetResults(std::span<uint64> _results, uint32 _first_query, uint32 _query_cnt, VkQueryResultFlags _flags);
+        VulkanDevice& GetDevice() const { return device; }
+
+    private:
+        VulkanDevice& device;
+        VkQueryPool   query_pool;
+        uint32        count;
+        VkQueryType   type;
     };
 
     class VulkanPresentor : public VulkanAllocatorBase {
@@ -136,5 +152,7 @@ namespace Moer::Render {
 
         ScratchAllocator      scratch_allocator;
         ShaderBufferAllocator shader_buffer_allocator;
+
+        VkNativeQueryPool timestamp_pool;
     };
 }// namespace Moer::Render

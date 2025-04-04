@@ -5,12 +5,14 @@
 #include <limits>
 #include <optional>
 #include <variant>
+#include "PixelFormat.h"
 #include "RenderCommon.h"
 #include "RenderAPI.h"
 #include "math/Base.h"
 #include "misc/EnumBitOperation.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "shaderheaders/shared/ShaderParameters.h"
 #pragma region CommonEnums
 /** Maximum number of miplevels in a texture. */
 enum { MAX_TEXTURE_MIP_COUNT = 0xff };
@@ -113,6 +115,8 @@ struct Extent2D {
     Extent2D() : x(0), y(0) {
     }
     Extent2D(const Moer::Vector2i& _v) : x(_v.x), y(_v.y) {
+    }
+    Extent2D(Moer::uint2 _v) : x(_v.x), y(_v.y) {
     }
     operator Moer::Vector2i() {
         return Moer::Vector2i(x, y);
@@ -468,6 +472,7 @@ enum ERHIResourceType {
     RRT_CONSTANT_BUFFER_VIEW,
     RRT_RAYTRACING_ACCELERATION_STRUCTURE,
     RRT_RAYTRACING_GEOMETRY,
+    RRT_RAYTRACING_TLAS,
     RRT_RAYTRACING_SCENE,
     RRT_STAGING_BUFFER,
     RRT_SHADER_LIBRARY,
@@ -846,6 +851,33 @@ ENUM_STR_ELEMENT(SBT_UAV)
 ENUM_STR_ELEMENT(SBT_SAMPLER)
 END_ENUM_STR_DEFINITION(EShaderBindingBaseType)
 static_assert(SBT_Num <= (1 << SBT_NumBits), "SBT_Num will not fit on SBT_NumBits");
+
+enum EShaderResourceType : uint8_t {
+    SRT_INVALID,
+
+    SRT_CBV,
+    SRT_SRV,
+    SRT_UAV,
+    SRT_SAMPLER,
+    SRT_Num
+};
+
+enum EVulkanDescriptorType : uint8_t {
+    VDT_SAMPLER,
+    VDT_COMBINED_IMAGE_SAMPLER,
+    VDT_SAMPLED_IMAGE,
+    VDT_STORAGE_IMAGE,
+    VDT_UNIFORM_TEXEL_BUFFER,
+    VDT_STORAGE_TEXEL_BUFFER,
+    VDT_UNIFORM_BUFFER,
+    VDT_STORAGE_BUFFER,
+    VDT_UNIFORM_BUFFER_DYNAMIC,
+    VDT_STORAGE_BUFFER_DYNAMIC,
+    VDT_INPUT_ATTACHMENT,
+    VDT_ACCELERATION_STRUCTURE,
+    VDT_Num
+};
+
 using GlobalBufferStaticBindingPoint = uint8_t;
 
 enum {
@@ -1130,16 +1162,16 @@ struct ViewPort {
     float max_depth;
 };
 
-struct MeshInfo {
-    Moer::Vector3f center;
-    uint32_t       vertex_offset;
-    Moer::Vector3f extent;
-    uint32_t       index_offset;
-    uint32_t       vertex_count;
-    uint32_t       index_count;
-    uint32_t       meshlet_offset;
-    uint32_t       meshlet_count;
-};
+// struct MeshInfo {
+//     Moer::Vector3f center;
+//     uint32_t       vertex_offset;
+//     Moer::Vector3f extent;
+//     uint32_t       index_offset;
+//     uint32_t       vertex_count;
+//     uint32_t       index_count;
+//     uint32_t       meshlet_offset;
+//     uint32_t       meshlet_count;
+// };
 struct MeshBoundInfo {
     Moer::Vector3f center;
     float          padding;
@@ -1152,26 +1184,35 @@ namespace Moer {
         ReflectParamInfo() {
             memset(this, 0, sizeof(ReflectParamInfo));
         };
+        struct CustomFlags {
+            uint active : 1;
+            uint padding : 31;
+        };
         struct Resource {
-            uint set;
-            uint binding;
-            uint sampled;
-            uint desc_type;
-            uint resource_type;
-            uint count;
+            uint         set;
+            uint         binding;
+            uint         sampled;
+            uint         desc_type;
+            uint         resource_type;
+            uint         count;
+            CustomFlags  custom_flag;
+            EPixelFormat format;
         };
         struct Constant {
-            uint size;
-            uint padded_size;
+            uint        offset;
+            uint        size;
+            uint        padded_size;
+            CustomFlags custom_flag;
         };
         static constexpr std::string_view bdls_name = "bdls_114514";
         struct Bindless {
-            uint set;
-            uint binding;
-            uint count;
-            uint desc_type;
-            uint resource_type;
-            uint stage_bits = 0;
+            uint        set;
+            uint        binding;
+            uint        count;
+            uint        desc_type;
+            uint        resource_type;
+            uint        stage_bits = 0;
+            CustomFlags custom_flag;
         };
         struct BindlessArray {
             std::optional<Bindless> array;
@@ -1234,14 +1275,13 @@ struct ShaderParametersInfoMap {
     friend class DXCompiler;
 
 public:
-    const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
-        return param_map;
-    }
+    // const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
+    //     return param_map;
+    // }
 
     // private:
-    Moer::UnorderedMap<std::string, ParameterInfo>          param_map;
+    // Moer::UnorderedMap<std::string, ParameterInfo>          param_map;
     Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
-    Moer::uint                                              space_cnt;
 };
 
 #pragma endregion

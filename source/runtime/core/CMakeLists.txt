@@ -1,4 +1,4 @@
-set(target_name MoerRuntimeCore)
+set(target_name MoerCore)
 file(GLOB_RECURSE CORE_HEADERS "include/*.h" "include/*.inl")
 file(GLOB_RECURSE CORE_SOURCES "source/*.cpp")
 file(GLOB_RECURSE CORE_PRIVATE_HEADERS "source/*.h")
@@ -27,7 +27,10 @@ target_link_libraries(${target_name}
     PUBLIC mimalloc-static
     PUBLIC spdlog
     PUBLIC nlohmann_json::nlohmann_json
+    PUBLIC tomlplusplus
 )
 target_compile_definitions(${target_name} 
     PRIVATE "DEVELOP_SHADER_PATH=${moer_root_dir}/shaders"
 )
+
+# add_dependencies(${target_name} CopyMimallocDlls )

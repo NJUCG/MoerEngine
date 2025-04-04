@@ -4,6 +4,7 @@
 
 #include <string_view>
 #include <volk.h>
+#include "PixelFormat.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanExtension.h"
 #include "VulkanDevice.h"
@@ -12,6 +13,7 @@
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanPlatform.h"
+#include "extension/VulkanNrdExtension.h"
 
 #include "log/LogSystem.h"
 #include "misc/STL.h"
@@ -31,7 +33,6 @@
 #include <filesystem>
 #include <optional>
 #include <shared_mutex>
-#include <spirv_reflect.h>
 #include <variant>
 #include <config.h>
 #include <platform/Platform.h>
@@ -44,10 +45,6 @@
 namespace Moer::Render {
     namespace VkUtil = Moer::RHI::Vulkan::Util;
 
-    std::tuple<SpvReflectResourceType, SpvReflectDescriptorType> DecodeReflectType(uint32 _value) { return std::make_tuple(SpvReflectResourceType(_value), SpvReflectDescriptorType(_value >> 4)); }
-
-    std::tuple<uint32, uint32> DecodeConstant(uint32 _flag) { return std::make_tuple(_flag >> 20, (_flag & 0xFFFFF)); }
-
     VulkanDevice::VulkanDevice(const VulkanRHIConfig&& _config) : RenderDevice::Impl() {
         InitVulkanInstance(_config.api_version);
 
@@ -58,6 +55,8 @@ namespace Moer::Render {
         CreateMemoryAllocator(m_instance, _config.api_version);
 
         CreateInternalResources();
+
+        LoadDefaultExtensions();
     }
 
     void VulkanDevice::PostInit() {
@@ -468,7 +467,7 @@ namespace Moer::Render {
         sampler_create_info.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
         sampler_create_info.mipLodBias              = 0.0f;
         sampler_create_info.minLod                  = 0.0f;
-        sampler_create_info.maxLod                  = 0.0f;
+        sampler_create_info.maxLod                  = VK_LOD_CLAMP_NONE;
         for (uint i = 0; i < immutable_sampler_count; ++i) {
             ESamplerFilter          filter           = ESamplerFilter(i % SF_Num);
             ESamplerAddressMode     address_mode     = ESamplerAddressMode((i / SF_Num) % SAM_Num);
@@ -623,22 +622,32 @@ namespace Moer::Render {
         return indices;
     }
 
-    VkDescriptorType METoVkDescriptorType(SpvReflectDescriptorType _desc, SpvReflectResourceType _res) {
-        switch (_desc) {
-            case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER: return VK_DESCRIPTOR_TYPE_SAMPLER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-            case SPV_REFLECT_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-            default: return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    VkDescriptorType METoVkDescriptorType(uint _desc_type) {
+        EVulkanDescriptorType desc_type = EVulkanDescriptorType(_desc_type);
+        switch (desc_type) {
+            case VDT_UNIFORM_BUFFER:
+                return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            case VDT_STORAGE_BUFFER:
+                return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            case VDT_UNIFORM_TEXEL_BUFFER:
+                return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+            case VDT_STORAGE_TEXEL_BUFFER:
+                return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+            case VDT_SAMPLER:
+                return VK_DESCRIPTOR_TYPE_SAMPLER;
+            case VDT_SAMPLED_IMAGE:
+                return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            case VDT_STORAGE_IMAGE:
+                return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            case VDT_INPUT_ATTACHMENT:
+                return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+            case VDT_ACCELERATION_STRUCTURE:
+                return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+            default:
+                assert(false && "Invalid Descriptor Type.");
+                break;
         }
+        return VK_DESCRIPTOR_TYPE_MAX_ENUM;
     }
 
     void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info) {
@@ -719,6 +728,11 @@ namespace Moer::Render {
         // push constant index in cpp param
         uint& _max_set// max set index, calculate descriptor set count
     ) {
+        auto set_valid_bits = [&](uint _idx, bool _b_valid) {
+            if (_b_valid) {
+                _out_valid_bits |= 1ull << _idx;
+            }
+        };
         for (const auto& hash : _shader_info.layout_hash) {
             uint idx                         = uint(&hash - _shader_info.layout_hash.data());
             _out_hash_2_idx[GetHash(hash)]   = idx;
@@ -735,7 +749,6 @@ namespace Moer::Render {
                         // no bindless array found, skip
                         break;
                     }
-                    _out_valid_bits |= 1 << idx;
                     const ReflectParamInfo&                binding_info              = bdls_iter->second;
                     const ReflectParamInfo::BindlessArray& bdls_array                = binding_info.spirv.bindless;
                     bool                                   b_found_bindless_buffer   = bdls_array.buffer.has_value();
@@ -763,6 +776,7 @@ namespace Moer::Render {
                         buffer_set                                  = indirect_binding_info.set;
                         array_set.bindings[indirect_slot].param_idx = idx;
                         array_set.is_bindless                       = true;
+                        set_valid_bits(idx, bdls_array.array.value().custom_flag.active);
                         if (b_found_bindless_buffer) {
                             array_set.bindings[buffer_slot].param_idx = idx;
                             auto& temp_binding                        = array_set[buffer_slot];
@@ -771,6 +785,7 @@ namespace Moer::Render {
                             temp_binding.descriptorCount              = 5000;
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
+                            set_valid_bits(idx, bdls_array.buffer.value().custom_flag.active);
                         }
 
                         if (b_found_bindless_texture) {
@@ -786,6 +801,7 @@ namespace Moer::Render {
                             temp_binding.pImmutableSamplers = nullptr;
 
                             _max_set = uint(std::max(int(_max_set), int(bdls_array.image.value().set)));
+                            set_valid_bits(idx, bdls_array.image.value().custom_flag.active);
                         }
 
                         if (b_found_bindless_sampler) {
@@ -799,6 +815,7 @@ namespace Moer::Render {
                             temp_binding.stageFlags |= _stage;
                             temp_binding.pImmutableSamplers = nullptr;
                             _max_set                        = uint(std::max(int(_max_set), int(bdls_array.sampler.value().set)));
+                            set_valid_bits(idx, bdls_array.sampler.value().custom_flag.active);
                         }
                     }
                     _out_reflect_flags[idx].pipeline_flags |= VkShaderStage2PipelineStage(_stage);
@@ -806,26 +823,26 @@ namespace Moer::Render {
                     break;
                 }
                 case SDA_Constant: {
-                    _out_valid_bits |= 1 << idx;
                     const ReflectParamInfo&           binding_info = binding_iter->second;
                     const ReflectParamInfo::Constant& constant     = std::get<ReflectParamInfo::Constant>(binding_info.spirv.resources.data);
                     _out_constant_idx                              = idx;
                     _out_push_constant_ranges.size                 = std::max(_out_push_constant_ranges.size, constant.size);
                     _out_push_constant_ranges.stageFlags |= _stage;
                     // _out_reflect_flags[idx] = EncodeReflectInfo(0, constant.size, _out_push_constant_ranges.stageFlags);
+                    set_valid_bits(idx, constant.custom_flag.active);
                     break;
                 }
                 case SDA_Buffer:
                 case SDA_Texture:
                 case SDA_TLAS:
                 case SDA_Sampler: {
-                    _out_valid_bits |= 1 << idx;
+                    // _out_valid_bits |= 1 << idx;
                     const ReflectParamInfo&           binding_info = binding_iter->second;
                     const ReflectParamInfo::Resource& resource     = std::get<ReflectParamInfo::Resource>(binding_info.spirv.resources.data);
 
                     // auto  rel_desc_type        = std::get<SpvReflectDescriptorType>(desc_type);
                     // auto  rel_res_type         = std::get<SpvReflectResourceType>(resource_type);
-                    auto  desc_type            = METoVkDescriptorType(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type));
+                    auto  desc_type            = METoVkDescriptorType(resource.desc_type);
                     auto& set                  = _out_descriptor_bindings[resource.set];
                     auto& vk_binding           = set[resource.binding];
                     vk_binding.binding         = resource.binding;
@@ -836,13 +853,14 @@ namespace Moer::Render {
                     set.bindings[resource.binding].param_idx = idx;
                     // _out_reflect_flags[idx]       = EncodeReflectInfo(resource.set, resource.binding, vk_binding.stageFlags);
                     _max_set                        = uint(std::max(int(_max_set), int(resource.set)));
-                    VulkanShaderResourceState state = VulkanShaderResourceState(SpvReflectDescriptorType(resource.desc_type), SpvReflectResourceType(resource.resource_type));
+                    VulkanShaderResourceState state = VulkanShaderResourceState(resource.desc_type, resource.resource_type, resource.format);
                     if (arg_info.type == SDA_Buffer) {
                     } else if (arg_info.type == SDA_Texture) {
                         state.b_sampled = resource.sampled;
                     }
                     _out_reflect_flags[idx].state_flags = state();
                     _out_reflect_flags[idx].pipeline_flags |= VkShaderStage2PipelineStage(_stage);
+                    set_valid_bits(idx, resource.custom_flag.active);
                     break;
                 }
                 default:
@@ -916,7 +934,7 @@ namespace Moer::Render {
 
         Moer::Array<VkPipelineShaderStageCreateInfo> shader_stages;
 
-        auto emplace_shader = [&](SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
+        auto emplace_shader = [&](const SingleShaderInfo& _info, VkShaderStageFlagBits _stage) {
             VkShaderModuleCreateInfo shader_module_create_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             shader_module_create_info.codeSize = _info.shader_data.size();
             shader_module_create_info.pCode    = reinterpret_cast<const uint32_t*>(_info.shader_data.data());
@@ -955,38 +973,46 @@ namespace Moer::Render {
         };
 
         // shader stage
-        std::visit([&](auto&& _shader_info_group) {
-            using T = std::decay_t<decltype(_shader_info_group)>;
-            if constexpr (std::is_same_v<T, ShaderVsPs>) {
-                shader_stages.reserve(2);
-                emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            } else if constexpr (std::is_same_v<T, ShaderVsGsPs>) {
-                shader_stages.reserve(3);
-                emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                emplace_shader(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
-                merge_reflect_info(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            } else if constexpr (std::is_same_v<T, ShaderMsPs>) {
-                shader_stages.reserve(2);
-                emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            } else if constexpr (std::is_same_v<T, ShaderTsMsPs>) {
-                shader_stages.reserve(3);
-                emplace_shader(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
-                emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-                merge_reflect_info(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
-                merge_reflect_info(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
-                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
-            }
-        },
+        std::visit(Overload{
+                       [&](const ShaderVsPs& _shader_info_group) {
+                           shader_stages.reserve(2);
+                           emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                           emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                           merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                           merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                       },
+                       [&](const ShaderVsGsPs& _shader_info_group) {
+                           shader_stages.reserve(3);
+                           emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                           emplace_shader(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
+                           emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                           merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                           merge_reflect_info(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
+                           merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                       },
+                       [&](const ShaderMsPs& _shader_info_group) {
+                           shader_stages.reserve(2);
+                           emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
+                           emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                           merge_reflect_info(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
+                           merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                       },
+                       [&](const ShaderTsMsPs& _shader_info_group) {
+                           shader_stages.reserve(3);
+                           emplace_shader(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
+                           emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
+                           emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                           merge_reflect_info(_shader_info_group.ts, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
+                           merge_reflect_info(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
+                           merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                       },
+                       [&](const ShaderRT& _shader_info_group) {
+                           assert(false && "Should Use RT PSO.");
+                       },
+                       [&](const ShaderCs& _shader_info_group) {
+                           assert(false && "Should Use Compute PSO.");
+                       },
+                   },
                    _shader_info.shader_group);
 
         VkPipelineVertexInputStateCreateInfo           vertex_input_state{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -1332,9 +1358,9 @@ namespace Moer::Render {
         return TextureRef{MoerNew(VulkanTexture)(info, this)};
     }
 
-    BufferRef VulkanDevice::CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) {
-        BufferInfo info{_element_cnt, _byte_stride, _usage};
-        return BufferRef{MoerNew(VulkanBuffer)(info, *this)};
+    BufferRef VulkanDevice::CreateBuffer(std::string_view _name, uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) {
+        BufferInfo info{_element_cnt, _byte_stride, _usage, _format};
+        return BufferRef{MoerNew(VulkanBuffer)(_name, info, *this)};
     }
 
     BindlessArrayRef VulkanDevice::CreateBindlessArray(uint _max_size) {
@@ -1383,6 +1409,30 @@ namespace Moer::Render {
         name_info.objectHandle = _handle;
         name_info.pObjectName  = _name.data();
         vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
+    }
+
+    DeviceExtension* VulkanDevice::LoadExtension(std::string_view _name) {
+        auto ite = exts.find(_name.data());
+        if (ite == exts.end()) return nullptr;
+        auto& v = ite->second;
+        {
+            std::lock_guard lck{ext_mutex};
+            if (v.ext == nullptr) {
+                v.ext = v.ctor(this);
+            }
+        }
+        return v.ext;
+    }
+
+    void VulkanDevice::LoadDefaultExtensions() {
+        exts.try_emplace(
+            Moer::Render::Ext::NRDExtension::name.data(),
+            [](VulkanDevice* _device) -> DeviceExtension* {
+                return MoerNew(Moer::Render::Ext::VkNRDExtension(_device));
+            },
+            [](DeviceExtension* _ext) {
+                MoerDelete(static_cast<Moer::Render::Ext::VkNRDExtension*>(_ext));
+            });
     }
 
     // RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {

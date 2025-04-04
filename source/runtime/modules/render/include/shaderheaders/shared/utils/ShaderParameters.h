@@ -14,6 +14,18 @@ namespace Moer {
         uint  num_mip_levels;
     };
 
+    struct GenLowDiscrepancySequenceParam {
+        uint num_samples;
+        uint num_dimensions;
+    };
+
+    struct ShowTextureParams {
+        uint2 dst_dim;
+        uint  bdls_handle;
+        uint  mip_level;
+        bool  use_bindless;
+    };
+
 #ifdef __cplusplus
 }
 #else

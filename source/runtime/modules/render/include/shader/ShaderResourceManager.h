@@ -244,6 +244,7 @@ namespace Moer::Render {
 
     public:
         static ShaderManager& Get();
+        static void           ShutDown();
 
     private:
         Render::RenderDevice& GetDevice();

@@ -53,9 +53,10 @@ struct RHIInfo {
     bool     ray_tracing;
 };
 struct DeviceInitInfo {
-    ERHIType            type;
-    std::string_view    name;
-    MoerRHIConfigAsJSON config_as_json;
+    ERHIType         type;
+    std::string_view name;
+    std::string_view rhi;
+    std::string_view rhi_api_version;
 };
 
 template<typename T>
@@ -262,10 +263,45 @@ protected:
 protected:
     RHIInfo m_rhi_info;
 };
+
 namespace Moer::Render {
 
     template<typename T>
-    static T ResolveConfigAs(const MoerRHIConfigAsJSON& _config_as_json);
+    static T ResolveConfigAs(const DeviceInitInfo& _info);
+
+    template<typename T>
+    struct user_trivial_type {
+        //has user defined const expr user_flag
+        template<typename U>
+        static auto Test(U* _p) -> decltype(U::user_trival_type, std::true_type{});
+        static auto Test(...) -> std::false_type;
+
+        static constexpr bool value = decltype(Test(static_cast<T*>(nullptr)))::value;
+    };
+
+#define USER_TRIVIAL_TYPE(T)                \
+    template<>                              \
+    struct user_trivial_type<T> {           \
+        static constexpr bool value = true; \
+    }
+
+    USER_TRIVIAL_TYPE(uint2);
+    USER_TRIVIAL_TYPE(uint3);
+    USER_TRIVIAL_TYPE(uint4);
+    USER_TRIVIAL_TYPE(int2);
+    USER_TRIVIAL_TYPE(int3);
+    USER_TRIVIAL_TYPE(int4);
+    USER_TRIVIAL_TYPE(float2);
+    USER_TRIVIAL_TYPE(float3);
+    USER_TRIVIAL_TYPE(float4);
+    USER_TRIVIAL_TYPE(float2x2);
+    USER_TRIVIAL_TYPE(float3x3);
+    USER_TRIVIAL_TYPE(float4x4);
+
+#undef USER_TRIVIAL_TYPE
+
+    template<typename T>
+    static constexpr bool user_trivial_type_v = user_trivial_type<T>::value;
 
     struct DeviceConfig {
         uint b_support_ray_tracing : 1;
@@ -275,6 +311,16 @@ namespace Moer::Render {
         uint b_support_direct_storage : 1;
         uint b_support_virtual_texture : 1;
     };
+
+    class DeviceExtension {
+    protected:
+        virtual ~DeviceExtension() = default;
+    };
+
+    template<typename T>
+    concept DeviceExt = std::is_base_of_v<DeviceExtension, T> &&
+                        std::is_same_v<const std::string_view, decltype(T::name)>;
+
     class RenderDevice {
     public:
         RENDER_API static void          Init(DeviceInitInfo&& _info);
@@ -283,9 +329,9 @@ namespace Moer::Render {
 
     public:
         template<typename TElement>
-            requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement> || NumericType<TElement>)
-        BufferRef CreateBuffer(uint _element_cnt, EBufferUsageFlags _usage) {
-            return CreateBuffer(_element_cnt, sizeof(TElement), _usage);
+            requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement> || NumericType<TElement> || user_trivial_type_v<TElement>)
+        BufferRef CreateBuffer(std::string_view _name, uint _element_cnt, EBufferUsageFlags _usage, EPixelFormat _format = PF_UNDEFINED) {
+            return CreateBuffer(_name, _element_cnt, sizeof(TElement), _usage, _format);
         }
 
         RENDER_API BufferRef CreateStagingBuffer(uint64_t _byte_size);
@@ -329,9 +375,14 @@ namespace Moer::Render {
 
         class Impl;
 
+        RENDER_API Impl* GetImpl() const { return impl.get(); }
+
+        template<DeviceExt Ext>
+        RENDER_API Ext* LoadExtension() const;
+
     protected:
     private:
-        RENDER_API BufferRef CreateBuffer(uint _element_cnt, uint _stride, EBufferUsageFlags _usage);
+        RENDER_API BufferRef CreateBuffer(std::string_view _name, uint _element_cnt, uint _stride, EBufferUsageFlags _usage, EPixelFormat _format);
 
         RenderDevice() = default;
         UniquePtr<Impl>

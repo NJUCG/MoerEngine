@@ -4,6 +4,7 @@
 #include "PixelFormat.h"
 #include "RenderThread.h"
 #include "config/ConfigManager.h"
+#include "log/LogSystem.h"
 #include "math/Constant.h"
 #include "math/Matrix.h"
 #include "misc/MMemory.h"
@@ -113,14 +114,18 @@ namespace Moer::Render {
         }
     };
     struct ImGUIData {
-        GUIPipelineBdls rast_pso;
+        static constexpr EPixelFormat               s_supported_formats[] = {PF_R8G8B8A8_SRGB,
+                                                                             PF_R8G8B8A8_UNORM,
+                                                                             PF_B8G8R8A8_SRGB,
+                                                                             PF_B8G8R8A8_UNORM};
+        UnorderedMap<EPixelFormat, GUIPipelineBdls> rast_psos;
 
         TextureRef font_texture;
         // Render buffers for main window
         uint32_t num_frames_in_flight;
 
         ImGUIRenderBackend* render_backend = nullptr;
-        ImGUIData(GUIPipelineBdls&& _rast_pso) : rast_pso(std::move(_rast_pso)) {}
+        ImGUIData() {}
     };
     const ImWchar* FontTypeToRange(EFontType _font_range_type) {
         using namespace Moer;
@@ -213,8 +218,8 @@ namespace Moer::Render {
         ImGuiIO& io = ImGui::GetIO();
         assert(io.BackendRendererUserData == nullptr && "GUI backend already initialized.");
 
-        const Moer::ConfigManager& config_manager      = Moer::ConfigManager::GetInstance();
-        uint32_t                   max_frame_in_flight = config_manager.GetInitConfig().max_frame_in_flight;
+        auto     config              = Moer::ConfigManager::GetInstance().GetConfig();
+        uint32_t max_frame_in_flight = config.engine.rhi.max_frame_in_flight;
 
         auto& sd_mgr = ShaderManager::Get();
 
@@ -223,15 +228,22 @@ namespace Moer::Render {
             {Moer::Render::VertexElement(PF_R32G32_SFLOAT),
              Moer::Render::VertexElement(PF_R32G32_SFLOAT),
              Moer::Render::VertexElement(PF_R8G8B8A8_UNORM)});
-        GfxPsoCreateInfo pso_info(
-            RHIRasterizeInfo::Preset<Rast::CULL_NONE, FrontFace::CW>(),
-            vertex_stream,
-            {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(PF_R8G8B8A8_SRGB)});
-        ImGUIData* render_backend_data            = MoerNew(ImGUIData)(sd_mgr
-                                                                .Raster()
-                                                                .Vertex("GuiVert.hlsl")
-                                                                .Pixel("GuiFrag.hlsl")
-                                                                .Build<GUIPipelineBdls>(std::move(pso_info)));
+
+        ImGUIData* render_backend_data = MoerNew(ImGUIData)();
+
+        for (auto format : ImGUIData::s_supported_formats) {
+            GfxPsoCreateInfo pso_info(
+                RHIRasterizeInfo::Preset<Rast::CULL_NONE, FrontFace::CW>(),
+                vertex_stream,
+                {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(format)});
+            auto rast_pso = sd_mgr.Raster()
+                                .Vertex("GuiVert.hlsl")
+                                .Pixel("GuiFrag.hlsl")
+                                .Build<GUIPipelineBdls>(std::move(pso_info));
+
+            render_backend_data->rast_psos[format] = std::move(rast_pso);
+        }
+
         render_backend_data->num_frames_in_flight = max_frame_in_flight;
 
         io.BackendRendererUserData = render_backend_data;
@@ -254,7 +266,7 @@ namespace Moer::Render {
         //upload texture
         {
             const uint32_t alignment    = 256;
-            uint32_t       upload_pitch = (width * 4 + alignment - 1u) & ~(alignment - 1u);
+            uint32_t       upload_pitch = Moer::AlignUp(width * 4, alignment);
             uint32_t       upload_size  = height * upload_pitch;
             TextureRef     font_tex     = rd_device.CreateTexture(
                 Extent2D(width, height),
@@ -318,12 +330,12 @@ namespace Moer::Render {
         ImGuiIO& io = ImGui::GetIO();
         _cmd_list.UpdateBindlessArray(bindless_array);
 
-        if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f)
-            return;
+        // if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f)
+        //     return;
 
         ImDrawData* draw_data = ImGui::GetDrawData();
-        if (!draw_data)
-            return;
+        // if (!draw_data)
+        //     return;
 
         ImDrawData* main_draw_data     = ImGui::GetDrawData();
         const bool  b_window_minimized = main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f;
@@ -378,6 +390,8 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
         return;
 
+    if (_frame_buffer.extent.x <= 0 || _frame_buffer.extent.y <= 0)
+        return;
     // RHIFragmentShaderRef frag_rhi_shader = g_rhi->RHICreateFragmentShader(frag_shader);
     uint32_t total_size_vert = draw_data->TotalVtxCount;
     uint32_t total_size_idx  = draw_data->TotalIdxCount * sizeof(ImDrawIdx);
@@ -398,15 +412,13 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
         if (render_buffers->vtx_buffer != nullptr) {}
         // render_buffers->vertex_buffer->DeRef();
         uint32_t new_size          = 4096 + total_size_vert;
-        render_buffers->vtx_buffer = device.CreateBuffer<ImDrawVert>(new_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-        render_buffers->vtx_buffer->SetName("ImGUI Vertex Buffer");
+        render_buffers->vtx_buffer = device.CreateBuffer<ImDrawVert>("GUI::ImGUI Vertex Buffer", new_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
     }
     if (render_buffers->idx_buffer == nullptr || render_buffers->idx_buffer->GetNumElement() < total_size_idx) {
 
         if (render_buffers->idx_buffer != nullptr) {}
         uint32_t new_size          = 8192 + total_size_idx;
-        render_buffers->idx_buffer = device.CreateBuffer<ImDrawIdx>(new_size, EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-        render_buffers->idx_buffer->SetName("ImGUI Index Buffer");
+        render_buffers->idx_buffer = device.CreateBuffer<ImDrawIdx>("GUI::ImGUI Index Buffer", new_size, EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST);
     }
 
     size_t            vertex_offset = 0;
@@ -427,8 +439,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     args.reserve(total_cmd_cnt);
     if (render_buffers->arg_buffer == nullptr || render_buffers->arg_buffer->GetNumElement() < total_cmd_cnt) {
         uint32_t new_size          = 128 + total_cmd_cnt;
-        render_buffers->arg_buffer = device.CreateBuffer<ImGUIArg>(new_size, EBufferUsageFlags::TRANSFER_DST);
-        render_buffers->arg_buffer->SetName("ImGUI Arg Buffer");
+        render_buffers->arg_buffer = device.CreateBuffer<ImGUIArg>("GUI::ImGUI Arg Buffer", new_size, EBufferUsageFlags::TRANSFER_DST);
     }
 
     ImVec2 clip_off   = draw_data->DisplayPos;      // (0,0) unless using multi-viewports
@@ -455,16 +466,25 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     GUIPipelineBdls::Constant constant;
 
     {
-        float l         = draw_data->DisplayPos.x;
-        float r         = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
-        float t         = draw_data->DisplayPos.y;
-        float b         = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+        float l = draw_data->DisplayPos.x;
+        float r = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
+        float t = draw_data->DisplayPos.y;
+        float b = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+        // float mvp[4][4] = {
+        //     {2.0f / (r - l), 0.0f, 0.0f, (r + l) / (l - r)},
+        //     {0.0f, 2.0f / (t - b), 0.5f, (t + b) / (b - t)},
+        //     {0.0f, 0.0f, 0.f, 0.5f},
+        //     {0.f, 0.0f, 0.0f, 1.0f},
+        // };
+
+        //transposed
         float mvp[4][4] = {
-            {2.0f / (r - l), 0.0f, 0.0f, (r + l) / (l - r)},
-            {0.0f, 2.0f / (t - b), 0.5f, (t + b) / (b - t)},
-            {0.0f, 0.0f, 0.f, 0.5f},
-            {0.f, 0.0f, 0.0f, 1.0f},
+            {2.0f / (r - l), 0.0f, 0.0f, 0.0f},
+            {0.0f, 2.0f / (t - b), 0.0f, 0.0f},
+            {0.0f, 0.0f, 0.f, 0.0f},
+            {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
         };
+
         memcpy(&constant.mvp, mvp, sizeof(mvp));
     }
     for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
@@ -508,17 +528,16 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
         global_vertex_offset += cmd_list->VtxBuffer.Size;
     }
 
-    auto            vtx_view = render_buffers->vtx_buffer->GetView();
-    auto            idx_view = render_buffers->idx_buffer->GetView();
-    auto            arg_view = render_buffers->arg_buffer->GetView();
-    Array<ImGUIArg> copy_back_args(render_buffers->arg_buffer->GetNumElement());
-
+    auto vtx_view = render_buffers->vtx_buffer->GetView();
+    auto idx_view = render_buffers->idx_buffer->GetView();
+    auto arg_view = render_buffers->arg_buffer->GetView();
+    // Array<ImGUIArg> copy_back_args(render_buffers->arg_buffer->GetNumElement());
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), vtx_view);
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)indices.data(), indices.size() * sizeof(ImDrawIdx)), idx_view);
     _cmdlist.CopyFrom(std::span<Moer::byte>((Moer::byte*)args.data(), args.size() * sizeof(ImGUIArg)), arg_view);
-    _cmdlist.CopyFrom(arg_view, std::span<Moer::byte>((Moer::byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
-
-    _cmdlist.Gfx(backend_data.rast_pso, render_buffers->arg_buffer, render_backend.bindless_array, constant)
+    // _cmdlist.CopyFrom(arg_view, std::span<Moer::byte>((Moer::byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
+    assert(backend_data.rast_psos.contains(_frame_buffer.format) && "Unsupported GUI format");
+    _cmdlist.Gfx(backend_data.rast_psos[_frame_buffer.format], render_buffers->arg_buffer, render_backend.bindless_array, constant)
         .Draw("ImGui Draws",
               {0, 0, (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x), uint(draw_data->DisplaySize.y * draw_data->FramebufferScale.y)},
               std::move(draw_meshes),
@@ -526,8 +545,9 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
 
     _cmdlist.AddCallback([vtx(std::move(vertices)),
                           idx(std::move(indices)),
-                          arg(std::move(args)),
-                          copy_back_args(std::move(copy_back_args))]() {
+                          arg(std::move(args))
+                          //   copy_back_args(std::move(copy_back_args))
+    ]() {
     });
 }
 
@@ -578,6 +598,9 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
         .back_buffer_sz   = backend_data.num_frames_in_flight,
         .preferred_format = PF_R8G8B8A8_SRGB};
 
+    if (width == 0 || height == 0) {
+        return;
+    }
     viewport_data->sc          = rd_device.CreateSwapchain(swapchain_info);
     viewport_data->framebuffer = rd_device.CreateTexture(
         Extent2D(_viewport->Size.x, _viewport->Size.y),
@@ -623,6 +646,8 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         .size             = {(uint)_size.x, (uint)_size.y},
         .back_buffer_sz   = 2,
         .preferred_format = PF_R8G8B8A8_SRGB};
+
+    if (_size.x == 0 || _size.y == 0) return;
     viewport_data->sc->Recreate(swapchain_info);
     viewport_data->framebuffer = rd_device.CreateTexture(
         Extent2D(_viewport->Size.x, _viewport->Size.y),

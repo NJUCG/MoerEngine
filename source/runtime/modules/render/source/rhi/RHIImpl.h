@@ -6,6 +6,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/GraphTask.h"
@@ -173,6 +174,38 @@ namespace Moer::Render {
         auto       Offset() const { return offset; }
         auto       ByteSize() const { return byte_size; }
         auto       Data() const { return data; }
+    };
+
+    struct CopyBackTextureCmd : public Command {
+    private:
+        uint64          handle{};
+        uint            mip_level{};
+        uint3           offset{};
+        uint3           size{};
+        std::span<byte> data;
+        CopyBackTextureCmd() : Command(EType::CopyBackTexture) {}
+
+    public:
+        CopyBackTextureCmd(
+            uint64           _handle,
+            uint             _mip_level,
+            uint3            _offset,
+            uint3            _size,
+            std::span<byte>  _data,
+            std::string_view _name = typenames[uint(EType::CopyBackTexture)]) : Command(EType::CopyBackTexture, _name),
+                                                                                handle(_handle),
+                                                                                mip_level(_mip_level),
+                                                                                offset{_offset.x, _offset.y, _offset.z},
+                                                                                size{_size.x, _size.y, _size.z},
+                                                                                data(_data) {}
+
+        EQueueType GetQueueType() const override { return EQueueType::Copy; }
+
+        auto Handle() const { return handle; }
+        auto MipLevel() const { return mip_level; }
+        auto Offset() const { return offset; }
+        auto Size() const { return size; }
+        auto Data() const { return data; }
     };
 
     struct CopyBufferCmd : public Command {
@@ -476,12 +509,25 @@ namespace Moer::Render {
         QueueTransferCmd() : Command(EType::QueueTransfer) {}
 
     public:
-        QueueTransferCmd(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import) : Command(EType::QueueTransfer), src_queue(_src_queue), import_textures(std::move(_textures_to_import)), b_is_import(true) {}
-        QueueTransferCmd(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export) : Command(EType::QueueTransfer), dst_queue(_dst_queue), export_textures(std::move(_textures_to_export)) {}
+        QueueTransferCmd(EQueueType             _src_queue,
+                         Array<ImportTexture>&& _textures_to_import,
+                         Array<ImportBuffer>&&  _buffer_to_import) : Command(EType::QueueTransfer),
+                                                                    src_queue(_src_queue),
+                                                                    import_textures(std::move(_textures_to_import)),
+                                                                    import_buffers(std::move(_buffer_to_import)),
+                                                                    b_is_import(true) {}
+        QueueTransferCmd(EQueueType             _dst_queue,
+                         Array<ExportTexture>&& _textures_to_export,
+                         Array<ExportBuffer>&&  _buffer_to_export) : Command(EType::QueueTransfer),
+                                                                    dst_queue(_dst_queue),
+                                                                    export_textures(std::move(_textures_to_export)),
+                                                                    export_buffers(std::move(_buffer_to_export)) {}
 
     private:
         Array<ImportTexture> import_textures;
         Array<ExportTexture> export_textures;
+        Array<ImportBuffer>  import_buffers;
+        Array<ExportBuffer>  export_buffers;
         bool                 b_is_import = false;
 
     public:
@@ -490,45 +536,96 @@ namespace Moer::Render {
         mutable EQueueType dst_queue;
         const auto&        ImportTextures() const { return import_textures; }
         const auto&        ExportTextures() const { return export_textures; }
+        const auto&        ImportBuffers() const { return import_buffers; }
+        const auto&        ExportBuffers() const { return export_buffers; }
         const bool         IsImport() const { return b_is_import; }
     };
 
     struct UpdateBindlessArrayCmd : public Command {
     private:
         UpdateBindlessArrayCmd() : Command(EType::UpdateBindlessArray) {}
-        mutable BindlessArrayRef                        array;
-        mutable Array<BindlessArray::BufferUpdateInfo>  buffer_updates;
-        mutable Array<BindlessArray::TextureUpdateInfo> texture_updates;
-
-        mutable Array<uint> free_buffers;
-        mutable Array<uint> free_textures;
-        mutable Array<uint> free_slots;
+        mutable BindlessArrayRef        array;
+        Array<BindlessArray::UpdateCmd> update_cmds;
+        Array<byte>                     array_data;
+        Array<std::pair<uint, uint>>    array_indices_dat;
+        Array<byte>                     buffer_data;
+        Array<std::pair<uint, uint>>    buffer_indices_dat;
+        Array<byte>                     texture_data;
+        Array<std::pair<uint, uint>>    texture_indices_dat;
 
     public:
-        UpdateBindlessArrayCmd(BindlessArrayRef                          _array,
-                               Array<BindlessArray::BufferUpdateInfo>&&  _update_buffers,
-                               Array<BindlessArray::TextureUpdateInfo>&& _update_textures,
-                               Array<uint>&&                             _free_buffers,
-                               Array<uint>&&                             _free_textures,
-                               Array<uint>&&                             _free_slots,
-                               std::string_view                          _name = typenames[uint(EType::UpdateBindlessArray)]) : Command(EType::UpdateBindlessArray, _name), array(_array),
-                                                                                                       buffer_updates(std::move(_update_buffers)),
-                                                                                                       texture_updates(std::move(_update_textures)),
-                                                                                                       free_buffers(std::move(_free_buffers)),
-                                                                                                       free_textures(std::move(_free_textures)),
-                                                                                                       free_slots(std::move(_free_slots)) {
+        UpdateBindlessArrayCmd(BindlessArrayRef                  _array,
+                               Array<BindlessArray::UpdateCmd>&& _update_cmds,
+                               Array<byte>&&                     _array_data,
+                               Array<std::pair<uint, uint>>&&    _array_indices_dat,
+                               Array<byte>&&                     _buffer_data,
+                               Array<std::pair<uint, uint>>&&    _buffer_indices_dat,
+                               Array<byte>&&                     _texture_data,
+                               Array<std::pair<uint, uint>>&&    _texture_indices_dat,
+                               std::string_view                  _name = typenames[uint(EType::UpdateBindlessArray)]) : Command(EType::UpdateBindlessArray, _name), array(_array),
+                                                                                                       update_cmds(_update_cmds),
+                                                                                                       array_data(std::move(_array_data)),
+                                                                                                       array_indices_dat(std::move(_array_indices_dat)),
+                                                                                                       buffer_data(std::move(_buffer_data)),
+                                                                                                       buffer_indices_dat(std::move(_buffer_indices_dat)),
+                                                                                                       texture_data(std::move(_texture_data)),
+                                                                                                       texture_indices_dat(std::move(_texture_indices_dat)) {
 
             // assert(texture_updates.size() < 20 && "too many textures");
         }
-        auto*                                     Handle() const { return array.Get(); }
-        EQueueType                                GetQueueType() const override { return EQueueType::Graphics; }
-        const auto&                               BufferUpdates() const { return buffer_updates; }
-        const auto&                               TextureUpdates() const { return texture_updates; }
-        auto                                      StealBufferUpdates() const { return std::move(buffer_updates); }
-        Array<BindlessArray::TextureUpdateInfo>&& StealTextureUpdates() const { return std::move(texture_updates); }
-        auto                                      StealFreeBuffers() const { return std::move(free_buffers); }
-        auto                                      StealFreeTextures() const { return std::move(free_textures); }
-        auto                                      StealFreeSlots() const { return std::move(free_slots); }
+        auto*       Handle() const { return array.Get(); }
+        EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
+        const auto& UpdateCommands() const { return update_cmds; }
+
+        auto StealArrayData() const { return std::move(array_data); }
+        auto StealArrayIndicesData() const { return std::move(array_indices_dat); }
+        auto StealBufferIndicesData() const { return std::move(buffer_indices_dat); }
+        auto StealTextureIndicesData() const { return std::move(texture_indices_dat); }
+        auto StealBufferData() const { return std::move(buffer_data); }
+        auto StealTextureData() const { return std::move(texture_data); }
+
+        bool HasUpdates() const { return !array_indices_dat.empty(); }
+        bool HasBufferUpdates() const { return !buffer_indices_dat.empty(); }
+        bool HasTextureUpdates() const { return !texture_indices_dat.empty(); }
+    };
+
+    using TClearResource = std::variant<BufferView, TextureView>;
+    using TClearVar      = std::variant<uint, float4>;
+    struct ClearResourceCmd : public Command {
+    private:
+        ClearResourceCmd() : Command(EType::ClearResource) {}
+
+    public:
+        ClearResourceCmd(BufferView _buffer, uint _value, std::string_view _name = typenames[uint(EType::ClearResource)]) : Command(EType::ClearResource, _name), resource(_buffer), clear_value(_value) {}
+        ClearResourceCmd(TextureView _texture, float4 _value, std::string_view _name = typenames[uint(EType::ClearResource)]) : Command(EType::ClearResource, _name), resource(_texture), clear_value(_value) {}
+        ClearResourceCmd(TextureView _texture, uint _value, std::string_view _name = typenames[uint(EType::ClearResource)]) : Command(EType::ClearResource, _name), resource(_texture), clear_value(_value) {}
+
+        EQueueType  GetQueueType() const override { return EQueueType::Graphics; }
+        const auto& Resource() const { return resource; }
+        const auto& ClearValue() const { return clear_value; }
+
+        bool IsBuffer() const { return std::holds_alternative<BufferView>(resource); }
+        bool IsTexture() const { return std::holds_alternative<TextureView>(resource); }
+
+        const auto& Buffer() const { return std::get<BufferView>(resource); }
+        const auto& Texture() const { return std::get<TextureView>(resource); }
+
+        const auto& UIntValue() const { return std::get<uint>(clear_value); }
+        const auto& Float4Value() const { return std::get<float4>(clear_value); }
+
+        bool IsUInt() const { return std::holds_alternative<uint>(clear_value); }
+        bool IsFloat4() const { return std::holds_alternative<float4>(clear_value); }
+
+        uint64 UnderlyingHandle() const {
+            if (IsBuffer()) {
+                return uint64(Buffer().GetBuffer());
+            }
+            return uint64(Texture().texture);
+        }
+
+    private:
+        TClearResource resource;
+        TClearVar      clear_value;
     };
 
     struct BufferRange {
@@ -547,11 +644,12 @@ namespace Moer::Render {
         mutable PipelineHandle*            pipeline{};
         RenderPassInfo                     render_pass_info;
         Array<MeshDrawData>                mesh_data;
-        uint                               vtx_cnt;
         ArrayArguments                     args;
         GraphEventRef                      evaluate_mesh_task = nullptr;
         UnorderedMap<Buffer*, BufferRange> vertex_buffers;
         UnorderedMap<Buffer*, BufferRange> index_buffers;
+        UnorderedMap<Buffer*, BufferRange> indirect_buffers;
+        UnorderedMap<Buffer*, BufferRange> draw_count_buffers;
 
         SetDrawStateCmd(ArrayArguments&& _args) : Command(EType::SetDrawState), args(std::move(_args)) {
         }
@@ -565,12 +663,10 @@ namespace Moer::Render {
                                                                                          args(std::move(_args)),
                                                                                          pipeline(&_pipeline),
                                                                                          render_pass_info(std::move(_info)),
-                                                                                         mesh_data(std::move(_draw_data)),
-                                                                                         vtx_cnt(0) {
+                                                                                         mesh_data(std::move(_draw_data)) {
             evaluate_mesh_task = LambdaTask::Create([this]() {
                                      for (const auto& mesh : mesh_data) {
-                                         for (uint vtx_idx = 0; vtx_idx < mesh.vtx_cnt; ++vtx_idx) {
-                                             const auto& vtx_view = mesh.vtx_views[vtx_idx];
+                                         for (const auto& vtx_view : mesh.vtx_views) {
                                              BufferRange range(vtx_view.offset, vtx_view.buffer->GetByteSize());
                                              if (vertex_buffers.find(vtx_view.buffer) == vertex_buffers.end()) {
                                                  vertex_buffers[vtx_view.buffer] = range;
@@ -590,6 +686,28 @@ namespace Moer::Render {
                                                  index_buffers[idx_view.GetBuffer()].Merge(range);
                                              }
                                          }
+
+                                         if (mesh.indirect_draw_param.has_value()) {
+                                             if (mesh.indirect_draw_param->count_buffer.has_value()) {
+                                                 const BufferView& count_view = mesh.indirect_draw_param->count_buffer.value();
+                                                 BufferRange       range(count_view.GetByteOffset(), count_view.GetByteSize());
+                                                 if (draw_count_buffers.find(count_view.GetBuffer()) == draw_count_buffers.end()) {
+                                                     draw_count_buffers[count_view.GetBuffer()] = range;
+                                                 } else {
+                                                     auto [offset, size] = draw_count_buffers[count_view.GetBuffer()];
+                                                     draw_count_buffers[count_view.GetBuffer()].Merge(range);
+                                                 }
+                                             }
+
+                                             const BufferView& indirect_view = mesh.indirect_draw_param->buffer;
+                                             BufferRange       range(indirect_view.GetByteOffset(), indirect_view.GetByteSize());
+                                             if (indirect_buffers.find(indirect_view.GetBuffer()) == indirect_buffers.end()) {
+                                                 indirect_buffers[indirect_view.GetBuffer()] = range;
+                                             } else {
+                                                 auto [offset, size] = indirect_buffers[indirect_view.GetBuffer()];
+                                                 indirect_buffers[indirect_view.GetBuffer()].Merge(range);
+                                             }
+                                         }
                                      }
                                  }).Dispatch();
         }
@@ -601,9 +719,27 @@ namespace Moer::Render {
         const auto& DrawData() const { return mesh_data; }
         const auto& Args() const { return args; }
 
-        void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
+        // Note: This function is never used, so I comment it out.
+        // void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
+        //     for (int i = 0; i < args.args.size(); i++) {
+        //         if (pipeline->valid_bits & (1 << i))
+        //             _func(args.args[i], pipeline->binding_infos[i]);
+        //     }
+        // }
+
+        void IterateArgs(std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) const {
+            int bdls_idx = -1;
             for (int i = 0; i < args.args.size(); i++) {
-                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline->binding_infos[i]); }, args.args[i]);
+                if (std::holds_alternative<BindlessArrayRef>(args.args[i])) {
+                    bdls_idx = i;
+                    continue;
+                    ;
+                }
+                _func(args.args[i], i);
+            }
+
+            if (bdls_idx != -1) {
+                _bdls_post_func(args.args[bdls_idx], bdls_idx);
             }
         }
         const auto& VertexBuffers() const {
@@ -614,10 +750,128 @@ namespace Moer::Render {
             if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
             return index_buffers;
         }
+        const auto& IndirectBuffers() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return indirect_buffers;
+        }
+
+        const auto& DrawCountBuffers() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return draw_count_buffers;
+        }
+    };
+
+    // Specialized version of SetDrawStateCmd for geometry pass
+    struct SetGeometryPassDrawStateCmd : public Command {
+    private:
+        // Origin parameters
+        ArrayArguments                                             args;
+        RenderPassInfo                                             render_pass_info;
+        UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>> mesh_data_array_map;
+        // Derived parameters
+        GraphEventRef                                          evaluate_mesh_task = nullptr;
+        UnorderedMap<Buffer*, BufferRange>                     vertex_buffers;
+        UnorderedMap<Buffer*, BufferRange>                     index_buffers;
+        UnorderedMap<VertexAttributesBitmask, PipelineHandle&> pipeline_map;
+
+    public:
+        // clang-format off
+        SetGeometryPassDrawStateCmd(
+            ArrayArguments&&                                             _args,
+            RenderPassInfo&&                                             _info,
+            UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
+            std::string_view                                             _name
+        ) : Command(EType::SetGeometryPassDrawState, _name),
+            args(std::move(_args)),
+            render_pass_info(std::move(_info)),
+            mesh_data_array_map(std::move(_mesh_data_array_map))
+        {
+            evaluate_mesh_task = LambdaTask::Create([this]() {
+                // TODO: 检查一下是否所有MeshData可以直接全部塞进一个vertex buffer和一个index buffer里
+                for (const auto& [bitmask, mesh_data_array] : mesh_data_array_map) {
+
+                    pipeline_map.emplace(bitmask, GeometryPassPsoManager::Get().GetPso(bitmask).handle);
+
+                    for (const auto& mesh : mesh_data_array) {
+                        for (const auto& vtx_view : mesh.vtx_views) {
+                            BufferRange range(vtx_view.offset, vtx_view.buffer->GetByteSize());
+                            if (vertex_buffers.find(vtx_view.buffer) == vertex_buffers.end()) {
+                                vertex_buffers[vtx_view.buffer] = range;
+                            } else {
+                                auto [offset, size] = vertex_buffers[vtx_view.buffer];
+                                vertex_buffers[vtx_view.buffer].Merge(range);
+                            }
+                        }
+                        if (std::holds_alternative<IndexBuffer>(mesh.idx_view)) {
+                            const auto&       idx_buffer = std::get<IndexBuffer>(mesh.idx_view);
+                            const BufferView& idx_view   = idx_buffer.buffer;
+                            BufferRange       range(idx_view.GetByteOffset(), idx_view.GetByteSize());
+                            if (index_buffers.find(idx_view.GetBuffer()) == index_buffers.end()) {
+                                index_buffers[idx_view.GetBuffer()] = range;
+                            } else {
+                                auto [offset, size] = index_buffers[idx_view.GetBuffer()];
+                                index_buffers[idx_view.GetBuffer()].Merge(range);
+                            }
+                        }
+                    }
+                }
+            }).Dispatch();
+        }
+        // clang-format on
+
+        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+
+        const auto& Args() const { return args; }
+        const auto& RenderPassInfo() const { return render_pass_info; }
+        const auto& DrawDataArrayMap() const { return mesh_data_array_map; }
+
+        const auto& VertexBuffers() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return vertex_buffers;
+        }
+        const auto& IndexBuffers() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return index_buffers;
+        }
+        const auto& PipelineMap() const {
+            if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+            return pipeline_map;
+        }
+
+        void IterateArgs(std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) const {
+            int bdls_idx = -1;
+            for (int i = 0; i < args.args.size(); i++) {
+                if (std::holds_alternative<BindlessArrayRef>(args.args[i])) {
+                    bdls_idx = i;
+                    continue;
+                    ;
+                }
+                _func(args.args[i], i);
+            }
+
+            if (bdls_idx != -1) {
+                _bdls_post_func(args.args[bdls_idx], bdls_idx);
+            }
+        }
     };
     struct DispatchIndirectParam {
         BufferView indirect;
     };
+
+    static void IterateArgs(const ArrayArguments& _args, std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) {
+        int bdls_idx = -1;
+        for (int i = 0; i < _args.args.size(); i++) {
+            if (std::holds_alternative<BindlessArrayRef>(_args.args[i])) {
+                bdls_idx = i;
+                continue;
+            }
+            _func(_args.args[i], i);
+        }
+
+        if (bdls_idx != -1) {
+            _bdls_post_func(_args.args[bdls_idx], bdls_idx);
+        }
+    }
     struct DispatchCmd : public Command {
     public:
         using DispatchParam = std::variant<uint3, DispatchIndirectParam>;
@@ -626,24 +880,25 @@ namespace Moer::Render {
         // const PipelineHandle& pipeline;
         mutable PipelineHandle* pipeline = nullptr;
         DispatchParam           param;
-        ArrayArguments          args;
+        // ArrayArguments          args;
+        TShaderArgArray args;
         DispatchCmd(ArrayArguments&& _args) : Command(EType::ShaderDispatch), args(std::move(_args)) {
         }
 
     public:
-        DispatchCmd(ArrayArguments&& _args, PipelineHandle& _handle, uint3 _param, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), param(_param), pipeline(&_handle), args(std::move(_args)) {}
-        DispatchCmd(ArrayArguments&& _args, PipelineHandle& _handle, BufferView _indirect, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), pipeline(&_handle), param(DispatchIndirectParam{_indirect}), args(std::move(_args)) {}
+        DispatchCmd(TShaderArgArray&& _args, PipelineHandle& _handle, uint3 _param, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), param(_param), pipeline(&_handle), args(std::move(_args)) {}
+        DispatchCmd(TShaderArgArray&& _args, PipelineHandle& _handle, BufferView _indirect, std::string_view _name = typenames[uint(EType::ShaderDispatch)]) : Command(EType::ShaderDispatch, _name), pipeline(&_handle), param(DispatchIndirectParam{_indirect}), args(std::move(_args)) {}
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
-        const auto& Args() const { return args; }
-        auto&       Pipeline() const { return *pipeline; }
-        auto        Param() const { return param; }
-        void        IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
-            for (int i = 0; i < args.args.size(); i++) {
-                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline->binding_infos[i]); }, args.args[i]);
+        const auto& Args(const TCachedArgArray& _args_cache) const {
+            if (std::holds_alternative<ArrayArguments>(args)) {
+                return std::get<ArrayArguments>(args);
             }
+            return _args_cache[std::get<ArrayArgReference>(args).handle];
         }
+        auto& Pipeline() const { return *pipeline; }
+        auto  Param() const { return param; }
     };
 
     struct TraceRayCmd : public Command {
@@ -668,7 +923,8 @@ namespace Moer::Render {
         auto        Param() const { return param; }
         void        IterateArgs(const std::function<void(const TArg&, ParamInfoFlags _flag)>& _func) const {
             for (int i = 0; i < args.args.size(); i++) {
-                std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
+                if (pipeline.valid_bits & (1 << i))
+                    std::visit([&_func, i, this](const auto& _arg) { _func(_arg, pipeline.binding_infos[i]); }, args.args[i]);
             }
         }
     };
@@ -738,6 +994,8 @@ namespace Moer::Render {
 
         bool HasGeometry(uint64 _handle) const { return related_geometries.find(_handle) != related_geometries.end(); }
 
+        bool ForceUpdate() const { return b_full_refit; }
+
     private:
         uint64      scene_handle;
         Array<uint> instance_to_update_ids;
@@ -753,6 +1011,80 @@ namespace Moer::Render {
         UnorderedMap<uint64, uint> related_geometries;
     };
 
+    //command for push/pop debug scope
+    struct ScopeCmd : public Command {
+    public:
+        ScopeCmd(std::string_view _name, bool _push, bool _query_timestamp) : Command(EType::Scope, _name), b_push(_push), scope_name(_name), b_query_timestamp(_query_timestamp) {}
+
+    public:
+        EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+        bool       IsPush() const { return b_push; }
+        bool       IsPop() const { return !b_push; }
+        auto       ScopeName() const { return scope_name; }
+        bool       QueryTimestamp() const { return b_query_timestamp; }
+
+    private:
+        bool             b_push            = false;
+        bool             b_query_timestamp = false;
+        std::string_view scope_name;
+    };
+
+    struct CustomCmd : public Command {
+    public:
+        enum class CustomCmdId : uint8 {
+            CUSTOM_CMD_NONE = 0u,
+            CUSTOM_RASTER,
+            CUSTOM_DISPATCH,
+            // ...
+            CUSTOM_CMD_END = 0xffu,
+        };
+
+        static constexpr std::string_view custom_cmd_names[] = {
+            "CUSTOM_CMD_NONE",
+            "CUSTOM_RASTER",
+            "CUSTOM_DISPATCH",
+        };
+
+    private:
+        CustomCmd() : custom_id(CustomCmdId::CUSTOM_CMD_NONE), Command(EType::Custom) {}
+
+        CustomCmdId custom_id;
+
+    public:
+        explicit CustomCmd(CustomCmdId _id) : custom_id(_id), Command(EType::Custom, custom_cmd_names[uint(_id)]) {}
+        explicit CustomCmd(CustomCmdId _id, std::string_view _name) : custom_id(_id), Command(EType::Custom, _name) {}
+        virtual ~CustomCmd() = default;
+        CustomCmdId CustomId() const { return custom_id; }
+    };
+
+    struct CustomDispatchCmd : public CustomCmd {
+    public:
+        struct ResourceUsage {
+            TArg           resource;
+            ParamInfoFlags state_flags;
+            template<typename Arg>
+                requires(std::is_constructible_v<TArg, Arg &&>)
+            ResourceUsage(
+                Arg&&          _resource,
+                ParamInfoFlags _state_flags)
+                : resource{std::forward<Arg>(_resource)},
+                  state_flags{_state_flags} {}
+        };
+
+    private:
+        virtual std::span<const ResourceUsage> GetResourceUsages() const = 0;
+
+    public:
+        CustomDispatchCmd() : CustomCmd(CustomCmdId::CUSTOM_DISPATCH) {}
+        ~CustomDispatchCmd() = default;
+
+        void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _usage)> _func) const {
+            for (const auto& usage : GetResourceUsages()) {
+                _func(usage.resource, usage.state_flags);
+            }
+        }
+    };
+
     class RenderDevice::Impl {
     public:
         Impl() {}
@@ -761,8 +1093,8 @@ namespace Moer::Render {
         virtual void PostInit() {}
 
     public:
-        virtual FenceRef  CreateFence()                                                                = 0;
-        virtual BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) = 0;
+        virtual FenceRef  CreateFence()                                                                                                              = 0;
+        virtual BufferRef CreateBuffer(std::string_view _name, uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) = 0;
 
         virtual TextureRef CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt = 1, uint _array_size = 1) = 0;
 
@@ -794,6 +1126,8 @@ namespace Moer::Render {
 
         virtual PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) = 0;//gfx
         virtual PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders)                               = 0;//compute
+
+        virtual DeviceExtension* LoadExtension(std::string_view _name) { return nullptr; }
     };
 
 }// namespace Moer::Render

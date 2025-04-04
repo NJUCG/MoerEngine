@@ -6,6 +6,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "RenderAPI.h"
+#include "scene/Scene.h"
 #include "shader/ShaderPipeline.h"
 #include <functional>
 #include <optional>
@@ -295,6 +296,7 @@ namespace Moer::Render {
             TextureToBuffer,
             UploadTexture,
             TextureToTexture,
+            CopyBackTexture,
             ShaderDispatch,
             BuildAccel,
             BuildTLAS,
@@ -302,10 +304,10 @@ namespace Moer::Render {
             Barrier,
             QueueTransfer,
             SetDrawState,
+            SetGeometryPassDrawState,
             UpdateBindlessArray,
-            // UpdateDrawState,
-            // SetParams,
-            // SetConstants,
+            ClearResource,
+            Scope,
             Custom
         };
 
@@ -315,6 +317,7 @@ namespace Moer::Render {
             "BufferToBuffer",
             "BufferToTexture",
             "TextureToBuffer",
+            "CopyBackTexture",
             "UploadTexture",
             "TextureToTexture",
             "ShaderDispatch",
@@ -324,7 +327,10 @@ namespace Moer::Render {
             "Barrier",
             "QueueTransfer",
             "SetDrawState",
+            "SetGeometryPassDrawState",
             "UpdateBindlessArray",
+            "ClearResource",
+            "Scope",
             "Custom"};
 
     private:
@@ -352,15 +358,6 @@ namespace Moer::Render {
     template<typename TRenderTarget>
     concept is_render_target = std::is_same_v<TRenderTarget, ColorAttachment>;
 
-    struct VertexBuffer {
-        Buffer* buffer;
-        uint64  offset{0};
-    };
-    struct IndexBuffer {
-        BufferView        buffer;
-        EIndexElementType stride;
-    };
-
     struct SingleDrawParam {
         uint index_cnt;
         uint instance_cnt;
@@ -368,40 +365,74 @@ namespace Moer::Render {
         uint vertex_offset;
         uint first_instance;
     };
-    struct MeshDrawData {
-        StaticArray<VertexBuffer, 4>    vtx_views;
-        std::variant<IndexBuffer, uint> idx_view = 0u;
-        uint                            vtx_cnt  = 0;
 
-        Array<SingleDrawParam> draw_params;
+    struct IndirectDrawParam {
+        BufferView                buffer;
+        std::optional<BufferView> count_buffer;
+
+        //when count_buffer is not null, count is the max count of draw calls
+        uint count;
+        uint stride;
+    };
+
+    struct DrawCmdData {
+        uint vertex_cnt;
+        uint instance_cnt;
+        uint first_vtx;
+        uint first_instance;
+    };
+
+    struct DrawIndexedCmdData {
+        uint index_cnt;
+        uint instance_cnt;
+        uint first_index;
+        uint vertex_offset;
+        uint first_instance;
+    };
+
+    using TDrawParam = std::variant<Array<SingleDrawParam>, IndirectDrawParam>;
+    struct MeshDrawData {
+        // 注意！为了性能，MeshDrawData内没有记录任何关于vtx_views的顶点布局信息。
+        // vtx_views的数量与顺序应该在外部代码进行维护！MeshDrawData没有任何保护措施！
+        // 关于内部顺序：buffer顺序应当按照EVertexAttributes枚举值的顺序排列。例如，PositionBuffer应该在NormalBuffer之前。（最自然的顺序）
+        Array<VertexBuffer>             vtx_views;
+        std::variant<IndexBuffer, uint> idx_view = 0u;
+
+        Array<SingleDrawParam>           draw_params;
+        std::optional<IndirectDrawParam> indirect_draw_param;
 
     public:
         MeshDrawData() = default;
         MeshDrawData(MeshDrawData&& _other) noexcept {
-            vtx_views   = std::move(_other.vtx_views);
-            idx_view    = std::move(_other.idx_view);
-            draw_params = std::move(_other.draw_params);
+            vtx_views           = std::move(_other.vtx_views);
+            idx_view            = std::move(_other.idx_view);
+            draw_params         = std::move(_other.draw_params);
+            indirect_draw_param = std::move(_other.indirect_draw_param);
         }
         MeshDrawData& operator=(MeshDrawData&& _other) noexcept {
-            vtx_views   = std::move(_other.vtx_views);
-            idx_view    = std::move(_other.idx_view);
-            draw_params = std::move(_other.draw_params);
+            vtx_views           = std::move(_other.vtx_views);
+            idx_view            = std::move(_other.idx_view);
+            draw_params         = std::move(_other.draw_params);
+            indirect_draw_param = std::move(_other.indirect_draw_param);
             return *this;
         }
 
+        // For better performance
         MeshDrawData(
-            std::span<VertexBuffer> _vertex_buffers,
-            IndexBuffer             _index_buffer) : idx_view(_index_buffer) {
-            vtx_views.fill({nullptr, 0});
-            vtx_cnt = _vertex_buffers.size();
-            memcpy(vtx_views.data(), _vertex_buffers.data(), _vertex_buffers.size() * sizeof(VertexBuffer));
+            Array<VertexBuffer> _vtx_views,
+            IndexBuffer         _index_buffer) : vtx_views(std::move(_vtx_views)), idx_view(std::move(_index_buffer)) {
         }
 
         MeshDrawData(
             std::span<VertexBuffer> _vtx_views,
-            uint                    _vtx_cnt) : idx_view(_vtx_cnt) {
-            vtx_views.fill({nullptr, 0});
-            memcpy(vtx_views.data(), _vtx_views.data(), _vtx_views.size() * sizeof(VertexBuffer));
+            IndexBuffer             _index_buffer) : idx_view(_index_buffer) {
+            vtx_views.assign(_vtx_views.begin(), _vtx_views.end());
+        }
+
+        MeshDrawData(
+            std::span<VertexBuffer> _vtx_views,
+            uint                    _index_cnt) : idx_view(_index_cnt) {
+            vtx_views.assign(_vtx_views.begin(), _vtx_views.end());
         }
 
         void EmplaceDrawIndexed(
@@ -412,6 +443,21 @@ namespace Moer::Render {
             uint _instance_cnt = 1) {
 
             draw_params.emplace_back(SingleDrawParam{_index_cnt, _instance_cnt, _first_index, _first_vertex, _first_instance});
+        }
+
+        void DrawIndirect(
+            BufferView _buffer,
+            uint       _count,
+            uint       _stride) {
+            indirect_draw_param = IndirectDrawParam{_buffer, std::nullopt, _count, _stride};
+        }
+
+        void DrawIndirect(
+            BufferView _buffer,
+            BufferView _count_buffer,
+            uint       _max_cnt,
+            uint       _stride) {
+            indirect_draw_param = IndirectDrawParam{_buffer, _count_buffer, _max_cnt, _stride};
         }
 
         void EmplaceDraw(
@@ -429,12 +475,15 @@ namespace Moer::Render {
     struct CmdSubmit {
         Array<UniquePtr<Command>>        cmds;
         Array<std::function<void(void)>> callbacks;
-        BindlessArrayRef                 bindless_array{nullptr};
+        TCachedArgArray                  cached_args;
 
         Array<WaitEvent>   wait_events;
         Array<SignalEvent> signal_events;
         bool               b_sync{false};//force sync queue timeline
-        CmdSubmit&&        Wait(Fence* _fence, uint64 _wait_value) {
+        bool               b_tick_profiling{false};
+        bool               b_delete_resources{false};
+
+        CmdSubmit&& Wait(Fence* _fence, uint64 _wait_value) {
             wait_events.emplace_back(uint64(_fence), _wait_value);
             return std::move(*this);
         }
@@ -449,23 +498,50 @@ namespace Moer::Render {
             return std::move(*this);
         }
 
+        CmdSubmit&& DeleteResources() {
+            b_delete_resources = true;
+            return std::move(*this);
+        }
+
+        CmdSubmit&& TickProfiling() {
+            b_tick_profiling = true;
+            return std::move(*this);
+        }
+
         CmdSubmit(CmdSubmit&& _other) noexcept {
-            cmds          = std::move(_other.cmds);
-            callbacks     = std::move(_other.callbacks);
-            wait_events   = std::move(_other.wait_events);
-            signal_events = std::move(_other.signal_events);
-            b_sync        = _other.b_sync;
+            cmds               = std::move(_other.cmds);
+            callbacks          = std::move(_other.callbacks);
+            wait_events        = std::move(_other.wait_events);
+            signal_events      = std::move(_other.signal_events);
+            cached_args        = std::move(_other.cached_args);
+            b_sync             = _other.b_sync;
+            b_tick_profiling   = _other.b_tick_profiling;
+            b_delete_resources = _other.b_delete_resources;
         }
 
         CmdSubmit& operator=(CmdSubmit&& _other) noexcept {
-            cmds          = std::move(_other.cmds);
-            callbacks     = std::move(_other.callbacks);
-            wait_events   = std::move(_other.wait_events);
-            signal_events = std::move(_other.signal_events);
-            b_sync        = _other.b_sync;
+            cmds               = std::move(_other.cmds);
+            callbacks          = std::move(_other.callbacks);
+            wait_events        = std::move(_other.wait_events);
+            signal_events      = std::move(_other.signal_events);
+            cached_args        = std::move(_other.cached_args);
+            b_sync             = _other.b_sync;
+            b_tick_profiling   = _other.b_tick_profiling;
+            b_delete_resources = _other.b_delete_resources;
             return *this;
         }
-        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks, BindlessArrayRef _bindless_array) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)), bindless_array(_bindless_array) {
+        CmdSubmit(Array<UniquePtr<Command>>&& _cmds, Array<std::function<void(void)>>&& _callbacks, TCachedArgArray&& _cached_args) : cmds(std::move(_cmds)), callbacks(std::move(_callbacks)),
+                                                                                                                                      cached_args(std::move(_cached_args)) {
+        }
+
+        std::string ToString() const {
+            std::string str = "Commands: [";
+            for (auto& cmd : cmds) {
+                str += cmd->name;
+                str += ", ";
+            }
+            str += "]";
+            return str;
         }
     };
 
@@ -518,6 +594,7 @@ namespace Moer::Render {
 
             DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
 
+            // Unnamed Draw with mesh data list and depth attachment
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, Array<MeshDrawData>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
@@ -527,6 +604,7 @@ namespace Moer::Render {
                 cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(_mesh_data));
             };
 
+            // Unnamed Draw with mesh data and draw list and depth attachment
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, Array<SingleDrawParam>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
 
@@ -537,6 +615,7 @@ namespace Moer::Render {
                 Draw(_rect, std::move(mesh_data), _depth, std::forward<TRenderTarget>(_render_targets)...);
             };
 
+            // Unnamed Draw with mesh data and draw list
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, Array<SingleDrawParam>&& _mesh_data, TRenderTarget&&... _render_targets) {
 
@@ -547,6 +626,7 @@ namespace Moer::Render {
                 Draw(_rect, std::move(mesh_data), std::forward<TRenderTarget>(_render_targets)...);
             };
 
+            // Unnamed Draw with draw list and depth attachment
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, std::span<VertexBuffer> _vtx, uint _vtx_cnt, Array<SingleDrawParam>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
@@ -560,12 +640,13 @@ namespace Moer::Render {
                 cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data));
             };
 
+            // Unnamed Draw with mesh data list
             template<typename... TRenderTarget>
             void Draw(Rect2D _rect, Array<MeshDrawData>&& _mesh_data, TRenderTarget&&... _render_targets) {
                 Draw(_rect, std::move(_mesh_data), DepthAttachment{}, std::forward<TRenderTarget>(_render_targets)...);
             };
 
-            //draw with names
+            // Named Draw with mesh data list and depth attachment
             template<typename... TRenderTarget>
             void Draw(std::string_view _name, Rect2D _rect, Array<MeshDrawData>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
@@ -575,6 +656,7 @@ namespace Moer::Render {
                 cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(_mesh_data), _name);
             };
 
+            // Named Draw with mesh data and draw list and depth attachment
             template<typename... TRenderTarget>
             void Draw(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, Array<SingleDrawParam>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
 
@@ -585,6 +667,7 @@ namespace Moer::Render {
                 Draw(_name, _rect, std::move(mesh_data), _depth, std::forward<TRenderTarget>(_render_targets)...);
             };
 
+            // Named Draw with mesh data and draw list
             template<typename... TRenderTarget>
             void Draw(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, Array<SingleDrawParam>&& _mesh_data, TRenderTarget&&... _render_targets) {
 
@@ -595,6 +678,7 @@ namespace Moer::Render {
                 Draw(_name, _rect, std::move(mesh_data), std::forward<TRenderTarget>(_render_targets)...);
             };
 
+            // Named Draw with draw list and depth attachment
             template<typename... TRenderTarget>
             void Draw(std::string_view _name, Rect2D _rect, Array<SingleDrawParam>&& _mesh_data, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
@@ -608,6 +692,7 @@ namespace Moer::Render {
                 cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
             };
 
+            // Named Draw with mesh data and draw list and depth attachment
             template<typename... TRenderTarget>
             void Draw(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, uint _vtx_cnt, Array<SingleDrawParam>&& _mesh_data, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
@@ -621,6 +706,7 @@ namespace Moer::Render {
                 cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
             };
 
+            // Named Draw with mesh data and draw list
             template<typename... TRenderTarget>
             void Draw(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, uint _vtx_cnt, Array<SingleDrawParam>&& _mesh_data, TRenderTarget&&... _render_targets) {
                 RenderPassInfo pass_info(
@@ -634,9 +720,118 @@ namespace Moer::Render {
                 cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
             };
 
+            // Named Draw with mesh data list
             template<typename... TRenderTarget>
             void Draw(std::string_view _name, Rect2D _rect, Array<MeshDrawData>&& _mesh_data, TRenderTarget&&... _render_targets) {
                 Draw(_name, _rect, std::move(_mesh_data), DepthAttachment{}, std::forward<TRenderTarget>(_render_targets)...);
+            };
+
+            // Named Draw Indirect with mesh data and draw list
+            template<typename... TRenderTarget>
+            void DrawIndirect(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, BufferView _indirect_buffer, uint _count, uint _stride, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    DepthAttachment{},
+                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _idx);
+                mesh_data.back().DrawIndirect(_indirect_buffer, _count, _stride);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
+            };
+
+            // Named Draw Indirect with mesh data and draw list and depth attachment
+            template<typename... TRenderTarget>
+            void DrawIndirect(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, BufferView _indirect_buffer, uint _count, uint _stride, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    _depth,
+                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _idx);
+                mesh_data.back().DrawIndirect(_indirect_buffer, _count, _stride);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
+            };
+
+            // Named Draw Indirect with mesh data and draw list and depth attachment and count buffer
+            template<typename... TRenderTarget>
+            void DrawIndirect(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, BufferView _indirect_buffer, BufferView _count_buffer, uint _stride, uint _max_cnt, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    _depth,
+                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _idx);
+                mesh_data.back().DrawIndirect(_indirect_buffer, _count_buffer, _max_cnt, _stride);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
+            };
+
+            // Named Draw Indirect with mesh data and draw list and count buffer
+            template<typename... TRenderTarget>
+            void DrawIndirect(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, IndexBuffer _idx, BufferView _indirect_buffer, BufferView _count_buffer, uint _max_cnt, uint _stride, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    DepthAttachment{},
+                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _idx);
+                mesh_data.back().DrawIndirect(_indirect_buffer, _count_buffer, _max_cnt, _stride);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
+            };
+
+            template<typename... TRenderTarget>
+            void DrawIndirect(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, uint _vtx_cnt, BufferView _indirect_buffer, BufferView _count_buffer, uint _max_cnt, uint _stride, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    _depth,
+                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _vtx_cnt);
+                mesh_data.back().DrawIndirect(_indirect_buffer, _count_buffer, _max_cnt, _stride);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
+            };
+
+            template<typename... TRenderTarget>
+            void DrawIndirect(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, uint _vtx_cnt, BufferView _indirect_buffer, BufferView _count_buffer, uint _max_cnt, uint _stride, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    DepthAttachment{},
+                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _vtx_cnt);
+                mesh_data.back().DrawIndirect(_indirect_buffer, _count_buffer, _max_cnt, _stride);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
+            };
+
+            template<typename... TRenderTarget>
+            void DrawIndirect(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, uint _vtx_cnt, BufferView _indirect_buffer, uint _count, uint _stride, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    DepthAttachment{},
+                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _vtx_cnt);
+                mesh_data.back().DrawIndirect(_indirect_buffer, _count, _stride);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
+            };
+
+            template<typename... TRenderTarget>
+            void DrawIndirect(std::string_view _name, Rect2D _rect, std::span<VertexBuffer> _vtx, uint _vtx_cnt, BufferView _indirect_buffer, uint _count, uint _stride, DepthAttachment _depth, TRenderTarget&&... _render_targets) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    _depth,
+                    _rect);
+                Array<MeshDrawData> mesh_data;
+                mesh_data.emplace_back(_vtx, _vtx_cnt);
+                mesh_data.back().DrawIndirect(_indirect_buffer, _count, _stride);
+
+                cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name);
             };
 
             RasterPipeline& pso;
@@ -644,14 +839,31 @@ namespace Moer::Render {
             ArrayArguments  args;
 
         private:
-            // void SubmitArgsIfPossible();
+            TCachedArgArray args_cache;
+        };
 
-            // bool HasParams() const {
-            //     return b_set_params;
-            // }
-            // ArgSetter arg_setter;
-            // bool      b_set_params = false;
-            // bool      b_set_consts = false;
+        struct RENDER_API DrawGeometryPassDispatcher {
+            DrawGeometryPassDispatcher(CommandList& _cmd_list);
+            DrawGeometryPassDispatcher(CommandList& _cmd_list, ArrayArguments&& _args);
+
+            template<typename... TRenderTarget>
+            void Draw(
+                std::string_view                                             _name,
+                Rect2D                                                       _rect,
+                UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
+                DepthAttachment                                              _depth,
+                TRenderTarget&&... _render_targets
+                //
+            ) {
+                RenderPassInfo pass_info(
+                    {std::forward<TRenderTarget>(_render_targets)...},
+                    _depth,
+                    _rect);
+                cmd_list.SetRenderGeometryPassCmds(std::move(args), std::move(pass_info), std::move(_mesh_data_array_map), _name);
+            };
+
+            CommandList&   cmd_list;
+            ArrayArguments args;
         };
 
         struct RENDER_API RaytracingDispatcher {
@@ -670,6 +882,7 @@ namespace Moer::Render {
             void DispatchIndirect(BufferView, std::string_view _name = Command::typenames[(uint)Command::EType::ShaderDispatch], ProfileSection _section = ProfileSection("Other"));
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
             ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list);
+            ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArgReference _args);
             // template<typename T>
             // ComputeDispatcher& SetParam(std::string_view _name, T&& _param) {
             //     arg_setter.SetParam(_name, std::forward<T>(_param));
@@ -684,7 +897,7 @@ namespace Moer::Render {
             // }
             ComputePipeline& pso;
             CommandList&     cmd_list;
-            ArrayArguments   args;
+            TShaderArgArray  args;
 
         private:
             // void SubmitArgsIfPossible();
@@ -713,6 +926,16 @@ namespace Moer::Render {
             return DrawDispatcher(_pso, *this);
         }
 
+        // call this func like this: cmd_list.GfxGeometryPass<PSO_Definition>(args...).Draw(...);
+        template<typename TGfxPso, typename... TArgs>
+        DrawGeometryPassDispatcher GfxGeometryPass(TArgs&&... _args) {
+            if constexpr (sizeof...(TArgs) > 0) {
+                ArrayArguments&& args = TGfxPso::SetArgs(_args...);
+                return DrawGeometryPassDispatcher(*this, std::move(args));
+            }
+            return DrawGeometryPassDispatcher(*this);
+        }
+
         template<typename TComputePso, typename... TArgs>
         ComputeDispatcher Compute(TComputePso& _pso, TArgs&&... _args) {
             if constexpr (sizeof...(TArgs) > 0) {
@@ -720,6 +943,11 @@ namespace Moer::Render {
                 return ComputeDispatcher(_pso, *this, std::move(args));
             }
             return ComputeDispatcher(_pso, *this);
+        };
+
+        template<typename TComputePso>
+        ComputeDispatcher Compute(TComputePso& _pso, ArrayArgReference _arg_ref) {
+            return ComputeDispatcher(_pso, *this, _arg_ref);
         };
 
         template<typename TRTPso, typename... TArgs>
@@ -737,8 +965,19 @@ namespace Moer::Render {
         RENDER_API void CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]);
         RENDER_API void CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]);
         RENDER_API void CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]);
+        RENDER_API void CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]);
 
         RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
+
+        RENDER_API void ClearResource(BufferView _buffer, uint32_t _value);
+        RENDER_API void ClearResource(TextureView _texture, float4 _color);
+        RENDER_API void ClearResource(TextureView _texture, uint32_t _value);
+
+        RENDER_API void PushScope(std::string_view _name);
+        RENDER_API void PopScope();
+
+        RENDER_API void PushScopeWithTimeScope(std::string_view _name);
+        RENDER_API void PopScopeWithTimeScope();
 
         template<typename T, typename... Args>
         struct CountType;
@@ -824,8 +1063,8 @@ namespace Moer::Render {
             EndBarriers();
         }
 
-        RENDER_API void ImportTextureFromQueue(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import);
-        RENDER_API void ExportTextureToQueue(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export);
+        RENDER_API void ImportResourcesFromQueue(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import, Array<ImportBuffer>&& _buffers_to_import);
+        RENDER_API void ExportResourcesToQueue(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export, Array<ExportBuffer>&& _buffers_to_export);
 
 #pragma region[ raytracing ]
 
@@ -835,7 +1074,15 @@ namespace Moer::Render {
 
 #pragma endregion
 
+#pragma region[ custom commands ]
+
+        RENDER_API void AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _name = Command::typenames[(uint)Command::EType::Custom]);
+
+#pragma endregion
+
         RENDER_API void AddCallback(std::function<void()>&& _callback);
+
+        RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
         RENDER_API CmdSubmit Submit();
 
@@ -846,6 +1093,13 @@ namespace Moer::Render {
         RENDER_API void SetRenderCmds(PipelineHandle& _handle, ArrayArguments&& _args, RenderPassInfo&&, Array<MeshDrawData>&&, std::optional<std::string_view> _name = std::nullopt);
         // void SubmitArgs(ShaderPipeline&, Arguments&&);
         // void SubmitConstants(ShaderPipeline&, Array<uint>&&);
+
+        // Specialized for Geometry Pass
+        RENDER_API void SetRenderGeometryPassCmds(
+            ArrayArguments&&                                             _args,
+            RenderPassInfo&&                                             _info,
+            UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
+            std::string_view                                             _name);
 
         RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt, EQueueType _src_queue, EQueueType _dst_queue);
         RENDER_API void InnerBarrier(ReadBuffer _buffer, EPassType _pass) {
@@ -875,19 +1129,25 @@ namespace Moer::Render {
         Array<UniquePtr<Command>>    commands;
         Command*                     current_barriers{nullptr};
         Array<std::function<void()>> callbacks;
-        BindlessArrayRef             bindless_array{nullptr};
+        TCachedArgArray              cached_args;
+        Queue<std::string_view>      scope_stack;
     };
     class QueueCmd {};
 
+    struct ProfileResultEntry {
+        std::string name;
+        double      time;
+    };
     class RENDER_API CommandQueue {
     public:
         CommandQueue(){};
         CommandQueue(EQueueType _type, RenderDevice& _device);
-        void              Test();
-        virtual void      Wait(WaitEvent _event)                                = 0;
-        virtual WaitEvent Execute(CmdSubmit&& _submit)                          = 0;
-        virtual void      Present(SwapchainRef _swapchain, TextureView _target) = 0;
-        virtual void      Sync()                                                = 0;
+        void                              Test();
+        virtual void                      Wait(WaitEvent _event)                                = 0;
+        virtual WaitEvent                 Execute(CmdSubmit&& _submit)                          = 0;
+        virtual void                      Present(SwapchainRef _swapchain, TextureView _target) = 0;
+        virtual void                      Sync()                                                = 0;
+        virtual Array<ProfileResultEntry> GetProfilerEntry()                                    = 0;
     };
 
     class RENDER_API CopyQueue {

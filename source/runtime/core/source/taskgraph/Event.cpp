@@ -1,5 +1,4 @@
 #include "taskgraph/Event.h"
-#include "spdlog/spdlog.h"
 #include "platform/Platform.h"
 #include <chrono>
 

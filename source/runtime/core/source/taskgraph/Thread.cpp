@@ -2,7 +2,6 @@
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/GraphTask.h"
 #include "platform/Platform.h"
-#include "spdlog/spdlog.h"
 BaseGraphTask* TaskThreadAnyThread::FindTaskToDo() {
 
     return TaskGraph::GetInterface().DequeueTask(EThread::GetThreadIndex(m_thread_type));

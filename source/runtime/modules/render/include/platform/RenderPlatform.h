@@ -9,7 +9,6 @@
 #include <type_traits>
 #include <string>
 #include <cstdint>
-#include "config/ConfigMap.h"
 #include "RenderAPI.h"
 namespace Moer {
     RENDER_API extern const char* RHI_VULKAN_NAME;
@@ -95,7 +94,7 @@ namespace Moer {
 
         public:
             void Initialize();
-            void ParseValuesFromConfiguration(const Moer::ConfigMap& _value_map, GenericRenderPlatformInfo& target_platform_info);
+            void ParseValuesFromConfiguration(GenericRenderPlatformInfo& target_platform_info);
         };
     }// namespace RHI
 }// namespace Moer

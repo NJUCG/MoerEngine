@@ -6,9 +6,13 @@
 #include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
+#include "vulkan/vulkan_core.h"
 #include <functional>
 #include <mutex>
+#include <string_view>
 namespace Moer::Render {
+    static constexpr uint s_queue_max_frame_in_flight = 3;
+    static constexpr uint s_query_max_storage         = 8 * 64;
     class VkNativeQueue {
     public:
         VkNativeQueue(EQueueType _type, VulkanDevice& _device);
@@ -32,6 +36,84 @@ namespace Moer::Render {
         Array<VkSemaphoreSubmitInfo> signal_infos;
         VkQueue                      queue;
         EQueueType                   type;
+    };
+
+    struct ProfilerStorage {
+        static constexpr int s_max_num_profiler_queries_per_frame = s_query_max_storage * 2;// *2 is for begin&end
+        static constexpr int s_total_query_count                  = s_max_num_profiler_queries_per_frame * s_queue_max_frame_in_flight;
+
+        ProfilerStorage(VkNativeQueryPool& _timestamp_pool);
+        void CollectProfiling(VkCommandBuffer _cmd);
+        int  GetQueryStorageIndex(std::string_view _name);
+        bool IsQueryUsed(int _idx) {
+            return queries_used[_idx / 8] & (1 << (_idx % 8));
+        }
+        void SetQueryUsed(int _idx) {
+            queries_used[_idx / 8] |= (1 << (_idx % 8));
+        }
+        bool IsActive() const {
+            return active;
+        }
+        void RegisterCpuTimestamp(double _timestamp) {
+            cpu_timestamps[cur_frame] = _timestamp;
+        }
+        void AdvanceFrame() {
+            cur_frame = (cur_frame + 1) % s_queue_max_frame_in_flight;
+        }
+        Array<ProfileResultEntry> GetProfilerEntry() {
+            Array<ProfileResultEntry> entries;
+            entries.reserve(name2sample.size());
+            uint last_frame = (cur_frame + s_queue_max_frame_in_flight - 1) % s_queue_max_frame_in_flight;
+            for (auto& [name, sample] : name2sample) {
+                if (sample.accumulated > 0)
+                    entries.push_back({name, double(sample.accumulated) / (Sample::s_range * 1e6) * timestamp_period});
+            }
+            //cpu timestamp
+            entries.push_back({"CPU Execution", double(cpu_timestamps[cur_frame])});
+            return entries;
+        }
+
+        void BeginProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
+        void EndProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
+
+        bool               active = false;
+        VkNativeQueryPool& timestamp_pool;
+        float              timestamp_period = 0.0f;
+        uint64             query_pool_results[s_max_num_profiler_queries_per_frame * 2];
+        double             cpu_timestamps[s_queue_max_frame_in_flight];
+        // each result contain two int(VK_QUERY_RESULT_WITH_AVAILABILITY_BIT)
+        // first int contains the queried timestamp
+        // next(last) int contains availability of the timestamp, available if nonzero
+
+        struct Sample {
+            int                           index;
+            uint64_t                      accumulated;
+            size_t                        next_idx_to_store;
+            static constexpr int          s_range = 13;
+            std::array<uint64_t, s_range> deltas;
+
+            Sample(int _idx) : index(_idx), accumulated(0), next_idx_to_store(0) {
+                std::memset(deltas.data(), 0, sizeof(deltas));
+            }
+            Sample() : Sample(0) {}
+
+            void Reset() {
+                next_idx_to_store = 0;
+                accumulated       = 0;
+                std::memset(deltas.data(), 0, sizeof(deltas));
+            }
+            void Record(uint64_t _value) {
+                next_idx_to_store = (next_idx_to_store + 1) % s_range;
+                accumulated -= deltas[next_idx_to_store];
+                deltas[next_idx_to_store] = _value;
+                accumulated += _value;
+            }
+        };
+
+        UnorderedMap<std::string, Sample> name2sample;
+        ubyte                             queries_used[s_total_query_count / 8];
+
+        uint64 cur_frame = 0;
     };
 
     class VkCommandQueue : public CommandQueue {
@@ -59,7 +141,11 @@ namespace Moer::Render {
             }
         };
 
-        VkCommandQueue(VulkanDevice& _device, EQueueType _type) : CommandQueue(), vk_device(_device), queue(_type, _device) {
+        VkCommandQueue(VulkanDevice& _device, EQueueType _type) : CommandQueue(),
+                                                                  vk_device(_device),
+                                                                  queue(_type, _device),
+                                                                  timestamp_pool(_device, VK_QUERY_TYPE_TIMESTAMP, s_queue_max_frame_in_flight * s_query_max_storage * 4),
+                                                                  profiler_storage(timestamp_pool) {
             timeline = MoerNew(VulkanFence(vk_device));
             thread   = std::jthread(&VkCommandQueue::ExecuteThread, this);
             enabled  = true;
@@ -88,10 +174,11 @@ namespace Moer::Render {
             // LOG_INFO("Presentor count {}", present_count);
             MoerDelete(timeline);
         }
-        WaitEvent Execute(CmdSubmit&& _submit) override;
-        void      Wait(WaitEvent _event) override;
-        void      Present(SwapchainRef _viewport, TextureView _view) override;
-        void      Sync() override;
+        WaitEvent                 Execute(CmdSubmit&& _submit) override;
+        void                      Wait(WaitEvent _event) override;
+        void                      Present(SwapchainRef _viewport, TextureView _view) override;
+        void                      Sync() override;
+        Array<ProfileResultEntry> GetProfilerEntry() override;
 
         void                                      ExecuteThread();
         VulkanDevice&                             vk_device;
@@ -106,15 +193,18 @@ namespace Moer::Render {
         void                       Signal();
 
     private:
-        uint64                   last_frame = 0;
-        CircularQueue<uint64, 3> executed_queue;
-        std::atomic<uint64>      executed_frame = 0;
-        CircularQueue<uint64, 3> presented_queue;
-        VulkanFence*             timeline = nullptr;
-        std::mutex               event_mutex;
-        bool                     enabled{false};
-        std::condition_variable  queue_cv;// wake up execute thread from sleeping
-        VkNativeQueue            queue;
+        uint64                                             last_frame = 0;
+        CircularQueue<uint64, s_queue_max_frame_in_flight> executed_queue;
+        std::atomic<uint64>                                executed_frame = 0;
+        CircularQueue<uint64, s_queue_max_frame_in_flight> presented_queue;
+        VulkanFence*                                       timeline = nullptr;
+        std::mutex                                         event_mutex;
+        bool                                               enabled{false};
+        std::condition_variable                            queue_cv;// wake up execute thread from sleeping
+        VkNativeQueue                                      queue;
+        VkNativeQueryPool                                  timestamp_pool;
+        ProfilerStorage                                    profiler_storage;
+        Array<ProfileResultEntry>                          cached_profiler_entry;
 
         std::mutex   exec_mtx;
         std::jthread thread;

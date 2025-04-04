@@ -17,8 +17,7 @@ RHICommandListBase::~RHICommandListBase() {
 namespace Moer::Render {
 
     void CommandQueue::Test() {
-        RenderDevice* device;
-        ShaderManager manager(*device);
+        ShaderManager manager = ShaderManager::Get();
 
         GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
                                   VertexStream(),
@@ -74,7 +73,14 @@ namespace Moer::Render {
     CommandList::ComputeDispatcher::ComputeDispatcher(
         ComputePipeline& _pso,
         CommandList&     _cmd_list)
-        : cmd_list(_cmd_list), pso(_pso), args({}) {
+        : cmd_list(_cmd_list), pso(_pso), args(TEmptyShaderArg{}) {
+    }
+
+    CommandList::ComputeDispatcher::ComputeDispatcher(
+        ComputePipeline&  _pso,
+        CommandList&      _cmd_list,
+        ArrayArgReference _arg_ref)
+        : cmd_list(_cmd_list), pso(_pso), args(_arg_ref) {
     }
 
     CommandList::DrawDispatcher::DrawDispatcher(
@@ -90,6 +96,17 @@ namespace Moer::Render {
         : cmd_list(_cmd_list), pso(_pso), args({}) {
     }
 
+    CommandList::DrawGeometryPassDispatcher::DrawGeometryPassDispatcher(
+        CommandList&     _cmd_list,
+        ArrayArguments&& _args)
+        : cmd_list(_cmd_list), args(std::move(_args)) {
+    }
+
+    CommandList::DrawGeometryPassDispatcher::DrawGeometryPassDispatcher(
+        CommandList& _cmd_list)
+        : cmd_list(_cmd_list), args({}) {
+    }
+
     void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count, std::string_view _name, ProfileSection _section) {
         cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count));
         cmd_list.commands.back()->name = _name;
@@ -101,7 +118,9 @@ namespace Moer::Render {
     }
 
     CmdSubmit CommandList::Submit() {
-        CmdSubmit submit(std::move(commands), std::move(callbacks), bindless_array);
+        CmdSubmit submit(std::move(commands), std::move(callbacks), std::move(cached_args));
+        commands.clear();
+        callbacks.clear();
         return std::move(submit);
     }
 
@@ -151,6 +170,7 @@ namespace Moer::Render {
             _name));
     }
 
+    // Be careful with the Lifetime of the data!
     void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
         //
         uint3 extent = uint3(
@@ -167,6 +187,7 @@ namespace Moer::Render {
             _name));
     }
 
+    // Be careful with the Lifetime of the data!
     void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::string_view _name) {
         //
         if (_data.size() == 0) {
@@ -187,6 +208,25 @@ namespace Moer::Render {
             _src.GetByteOffset(),
             _src.GetByteSize(),
             _data.data(),
+            _name));
+    }
+
+    void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
+        //check if size is 0
+        bool b_valid_size = _data.size() > 0 && _src.GetTexture();
+        if (!b_valid_size) {
+            return;
+        }
+        uint mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
+        b_valid_size &= mip_size <= _data.size();
+
+        assert(b_valid_size && "Fatal: Copy back data size is less than texture mip size");
+        commands.push_back(MakeUnique<CopyBackTextureCmd>(
+            reinterpret_cast<uint64>(_src.texture),
+            _src.mip_level,
+            _src.offset,
+            _src.extent,
+            std::span<byte>(_data.data(), mip_size),
             _name));
     }
 
@@ -225,12 +265,54 @@ namespace Moer::Render {
         }
     }
 
+    // Specialized for Geometry Pass
+    void CommandList::SetRenderGeometryPassCmds(
+        ArrayArguments&&                                             _args,
+        RenderPassInfo&&                                             _info,
+        UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
+        std::string_view                                             _name
+        //
+    ) {
+        commands.push_back(MakeUnique<SetGeometryPassDrawStateCmd>(std::move(_args), std::move(_info), std::move(_mesh_data_array_map), _name));
+    }
+
     void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
         assert(_array && "Bindless array is null");
 
         commands.push_back(_array->CreateUpdateCommand());
     }
 
+    void CommandList::ClearResource(BufferView _buffer, uint _value) {
+        commands.emplace_back(MakeUnique<ClearResourceCmd>(_buffer, _value));
+    }
+
+    void CommandList::ClearResource(TextureView _texture, float4 _color) {
+        commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _color));
+    }
+
+    void CommandList::ClearResource(TextureView _texture, uint _value) {
+        commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _value));
+    }
+
+    void CommandList::PushScope(std::string_view _name) {
+        commands.push_back(MakeUnique<ScopeCmd>(_name, true, false));
+        scope_stack.push(_name);
+    }
+
+    void CommandList::PushScopeWithTimeScope(std::string_view _name) {
+        commands.push_back(MakeUnique<ScopeCmd>(_name, true, true));
+        scope_stack.push(_name);
+    }
+
+    void CommandList::PopScope() {
+        commands.push_back(MakeUnique<ScopeCmd>(scope_stack.front(), false, false));
+        scope_stack.pop();
+    }
+
+    void CommandList::PopScopeWithTimeScope() {
+        commands.push_back(MakeUnique<ScopeCmd>(scope_stack.front(), false, true));
+        scope_stack.pop();
+    }
 #pragma region[ raytracing ]
 
     void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _geometries) {
@@ -249,6 +331,15 @@ namespace Moer::Render {
     // void CommandList::SubmitConstants(ShaderPipeline& _pso, Array<uint>&& _constants) {
     //     commands.push_back(MakeUnique<SetConstantCmd>(_pso, std::move(_constants)));
     // }
+
+#pragma region[ custom commands ]
+
+    void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _name) {
+        commands.push_back(std::move(_cmd));
+        commands.back()->name = _name;
+    }
+
+#pragma endregion
 
     void CommandList::AddCallback(std::function<void()>&& _callback) {
         callbacks.emplace_back(std::move(_callback));
@@ -282,13 +373,18 @@ namespace Moer::Render {
         current_barriers = nullptr;
     }
 
-    void CommandList::ImportTextureFromQueue(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import) {
+    void CommandList::ImportResourcesFromQueue(EQueueType _src_queue, Array<ImportTexture>&& _textures_to_import, Array<ImportBuffer>&& _buffers_to_import) {
         // QueueTransferCmd cmd(_src_queue, std::move(_textures_to_import));
-        commands.emplace_back(MakeUnique<QueueTransferCmd>(_src_queue, std::move(_textures_to_import)));
+        commands.emplace_back(MakeUnique<QueueTransferCmd>(_src_queue, std::move(_textures_to_import), std::move(_buffers_to_import)));
     }
 
-    void CommandList::ExportTextureToQueue(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export) {
-        commands.emplace_back(MakeUnique<QueueTransferCmd>(_dst_queue, std::move(_textures_to_export)));
+    void CommandList::ExportResourcesToQueue(EQueueType _dst_queue, Array<ExportTexture>&& _textures_to_export, Array<ExportBuffer>&& _buffers_to_export) {
+        commands.emplace_back(MakeUnique<QueueTransferCmd>(_dst_queue, std::move(_textures_to_export), std::move(_buffers_to_export)));
+    }
+
+    ArrayArgReference CommandList::RegisterArgs(ArrayArguments&& _args) {
+        cached_args.push_back(std::move(_args));
+        return ArrayArgReference(cached_args.size() - 1);
     }
 
 }// namespace Moer::Render

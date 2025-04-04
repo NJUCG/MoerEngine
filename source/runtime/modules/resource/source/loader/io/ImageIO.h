@@ -12,14 +12,14 @@ namespace Moer {
         void*                      data{nullptr};
         std::function<void(void*)> data_callback{free};
         //size = layer * mips
-        std::vector<uint32_t> mip_offsets = {0};
-        std::vector<Extent3D> mip_extents;
-        bool                  IsValid();
+        Array<uint32_t> mip_offsets = {0};
+        Array<Extent3D> mip_extents;
+        bool            IsValid();
     };
 
     class ImageIO {
     public:
-        static ImageReadDesc ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal = 4);
+        static ImageReadDesc ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal = 4, EPixelFormat _fmt = PF_R8G8B8A8_UNORM);
         static ImageReadDesc ReadFromMemory(const unsigned char* memory_data, size_t len, uint32_t desired_channal = 4);
     };
 }// namespace Moer

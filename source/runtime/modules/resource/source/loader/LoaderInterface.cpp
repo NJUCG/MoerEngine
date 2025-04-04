@@ -1,4 +1,5 @@
 #include "loader/LoaderInterface.h"
+#include "scene/MaterialInstance.h"
 #include "ResourceAPI.h"
 #include "loader/gltf/Parser.h"
 #include "loader/ply/Ply.h"
@@ -14,7 +15,9 @@ namespace Resource {
 
     using LoadFunction                                                   = std::function<UniquePtr<SceneData>(const std::filesystem::path&)>;
     static Moer::Map<std::string, LoadFunction> scene_load_function_maps = {{"gltf", Gltf::Parser::LoadSceneFromFile},
+                                                                            {"glb", Gltf::Parser::LoadSceneFromFile},
                                                                             {"fbx", Gltf::Parser::LoadSceneFromFile},
+                                                                            {"obj", Gltf::Parser::LoadSceneFromFile},
                                                                             {"json", JsonScene::JsonSceneParser::LoadSceneFromFile}};
 
     void LoadFromFile(const std::filesystem::path& _file_path, Scene* _scene) {
@@ -29,8 +32,10 @@ namespace Resource {
         Scene::RegisterAsyncLoadInfo(load_info);
         LambdaTask::Dispatch([_file_path, _scene, load_info, ext]() {
             if (auto scene_data = std::move(scene_load_function_maps[ext](_file_path))) {
+                LOG_INFO("Raw data is loaded to SceneData successfully, converting to Scene...");
                 SceneCache::ConvertToScene(*scene_data, _scene, true);
                 load_info->progress.store(1);
+                LOG_INFO("Scene loaded successfully from file: {}", _file_path.string());
             }
         });
     }
@@ -39,13 +44,15 @@ namespace Resource {
         auto file_path_str = _file_path.string();
         LOG_INFO("Loading scene from file: {}", file_path_str);
         if (_file_path.string().ends_with(".ply")) {
-            auto gs_scene = PlyLoader::LoadSceneFromFile(_file_path);
-            scene->SetBuffer(EGpuSceneResource::GaussianSplattingVertex, gs_scene->GetBuffer(EGpuSceneResource::GaussianSplattingVertex));
+            assert(false && "Ply file is not supported yet");
+            // auto gs_scene = PlyLoader::LoadSceneFromFile(_file_path);
+            // scene->SetBuffer(EGpuSceneResource::GaussianSplattingVertex, gs_scene->GetBuffer(EGpuSceneResource::GaussianSplattingVertex));
         } else {
             if (SceneCache::HasValidCache(_file_path)) {
                 LambdaTask::Dispatch([_file_path, scene]() {
                     try {
                         SceneCache::LoadSceneFromCache(_file_path, scene);
+                        LOG_INFO("Scene loaded successfully from cache: {}", _file_path.string());
                     } catch (const std::exception& e) {
                         LOG_ERROR("Failed to load scene from cache: {} retrying to load from file", e.what());
                         Scene::ResetAsyncLoadInfo();

@@ -1,4 +1,8 @@
 #include "loader/jsonscene/JsonSceneParser.h"
+#include "math/Matrix.h"
+#include "misc/STL.h"
+#include "misc/Traits.h"
+#include "scene/Scene.h"
 #include "taskgraph/GraphTask.h"
 #include "misc/Timer.h"
 #include "rhi/RHI.h"
@@ -61,53 +65,49 @@ namespace Moer::Resource::JsonScene {
         ExtendedSceneData(const ExtendedSceneData&)            = delete;
         ExtendedSceneData& operator=(const ExtendedSceneData&) = delete;
 
-        void PushbackMeshInfo(const MeshInfo& info, const MeshProcessOutput& output) {
+        void PushbackMeshInfo(SharedPtr<MeshInfo> info, const MeshProcessOutput& output) {
             scn_dat->m_mesh_infos.push_back(info);
-            PushbackMeshlets(output);
-            scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
-            scn_dat->m_index_data.insert(scn_dat->m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
-            vertex_cnt += info.vertex_count;
-            index_cnt += info.index_count;
+            // PushbackMeshlets(output);
+            // scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), output.meshlet_vertex_data.begin(), output.meshlet_vertex_data.end());
+            // scn_dat->m_index_data.insert(scn_dat->m_index_data.end(), output.primitive_indices.begin(), output.primitive_indices.end());
+            // vertex_cnt += info->vtx_count;
+            // index_cnt += info->idx_count;
         }
-        void PushbackVertexData(const Array<float>& data) {
-            scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), data.begin(), data.end());
-        }
-        void PushbackIndexData(const Array<uint32_t>& data) {
-            scn_dat->m_index_data.insert(scn_dat->m_index_data.end(), data.begin(), data.end());
-        }
+        // void PushbackVertexData(const Array<float>& data) {
+        //     scn_dat->m_vertex_data.insert(scn_dat->m_vertex_data.end(), data.begin(), data.end());
+        // }
+        // void PushbackIndexData(const Array<uint32_t>& data) {
+        //     scn_dat->m_index_data.insert(scn_dat->m_index_data.end(), data.begin(), data.end());
+        // }
 
-        void PushbackInstanceMeshInfo(const InstanceMeshInfo& info) {
-            scn_dat->m_instance_mesh_info.push_back(info);
-        }
+        // void PushbackInstanceMeshInfo(const InstanceMeshInfo& info) {
+        //     scn_dat->m_instance_mesh_info.push_back(info);
+        // }
 
         void saveTextureData(const std::string& rel_texture_path, const TextureData& texture_data, MaterialInstanceRef& mat, const std::string& param_name) {
             scn_dat->m_textures[rel_texture_path] = texture_data;
             scn_dat->m_mat_instance_textures[mat->GetName()].textures.push_back({param_name, rel_texture_path});
         }
         void PushbackInstanceData(Matrix4x4f model2world, float max_scale, uint32_t padding) {
-            uint32_t instance_id = static_cast<uint32_t>(scn_dat->m_instance_data.size());
+            uint32_t instance_id = static_cast<uint32_t>(scn_dat->m_instance_infos.size());
 
-            InstanceData data{
-                .model2world     = model2world,
-                .inv_model2world = Inverse(model2world),
-                .scale           = max_scale,
-                .padding         = padding,
-                // FIXME: material_id and material_tpye is not correct! See gltf Parser Line 446
-                .material_id   = instance_id,
-                .material_type = 0};
-            scn_dat->m_instance_data.push_back(data);
-            scn_dat->m_instance_id.push_back(instance_id);
+            //TODO: use new instance data
+            float3x4             overload_m1 = Matrix3x4f{model2world.r0, model2world.r1, model2world.r2};
+            Render::InstanceData data{
+                .model2world      = overload_m1,
+                .prev_model2world = overload_m1};
+            scn_dat->m_instance_infos.push_back(data);
         }
-        void PushbackPrimInfo(const uint32_t& mesh_id, const std::string& material_name, const Transform& transform) {
-            scn_dat->m_prim_infos.emplace_back(mesh_id, material_name, transform);
-        }
+        // void PushbackPrimInfo(const uint32_t& mesh_id, const std::string& material_name, const Transform& transform) {
+        //     scn_dat->m_prim_infos.emplace_back(mesh_id, material_name, transform);
+        // }
 
     private:
-        void PushbackMeshlets(const MeshProcessOutput& output) {
-            scn_dat->m_meshlet_bounds.insert(scn_dat->m_meshlet_bounds.end(), output.meshlet_bounds.begin(), output.meshlet_bounds.end());
-            scn_dat->m_meshlet_descs.insert(scn_dat->m_meshlet_descs.end(), output.meshlets.begin(), output.meshlets.end());
-            meshlet_cnt += output.meshlets.size();
-        }
+        // void PushbackMeshlets(const MeshProcessOutput& output) {
+        //     scn_dat->m_meshlet_bounds.insert(scn_dat->m_meshlet_bounds.end(), output.meshlet_bounds.begin(), output.meshlet_bounds.end());
+        //     scn_dat->m_meshlet_descs.insert(scn_dat->m_meshlet_descs.end(), output.meshlets.begin(), output.meshlets.end());
+        //     meshlet_cnt += output.meshlets.size();
+        // }
     };
 
     UniquePtr<EntityVertexData>    GetEntityVertexData(const aiMesh* mesh);
@@ -121,7 +121,6 @@ namespace Moer::Resource::JsonScene {
     class JsonSceneParser::Impl {
     public:
         UniquePtr<SceneData> LoadSceneFromFile(const Path& abs_scn_json_path, bool _delete_after_load = false);
-        void                 LoadSceneFromFileAsync(const Path& abs_scn_json_path);
         ~Impl() = default;
 
     private:
@@ -164,34 +163,11 @@ namespace Moer::Resource::JsonScene {
         return std::move(UniquePtr<SceneData>(impl.LoadSceneFromFile(abs_scn_json_path)));
     }
 
-    RESOURCE_API void Moer::Resource::JsonScene::JsonSceneParser::LoadSceneFromFileAsync(const std::filesystem::path& abs_scn_json_path) noexcept {
-        // Impl* impl = MoerNew(Impl);
-        // impl->LoadSceneFromFileAsync(abs_scn_json_path);
-    }
-
-    // void JsonSceneParser::Impl::LoadSceneFromFileAsync(const Path& abs_scn_json_path) {
-    //     AsyncSceneLoadInfoRef load_info = MoerNew(AsyncSceneLoadInfo);
-    //     load_info->b_valid              = true;
-    //     load_info->progress.store(0);
-    //     Scene::RegisterAsyncLoadInfo(load_info);
-    //     LambdaTask::Dispatch(
-    //         [this, path(abs_scn_json_path), info(load_info)]() {
-    //             Timer* timer = MoerNew(Timer);
-    //             timer->Start();
-    //             auto load_info  = Scene::GetCurrentSceneLoadInfo();
-    //             auto scene_data = this->LoadSceneFromFile(path, true);
-    //             EnqueueRenderTask([load_info = std::move(load_info), scene_data = std::move(scene_data), timer]() {
-    //                 load_info->scene = SceneCache::ConvertToScene(*scene_data).release();
-    //                 Scene::SetCurrentScene(std::move(load_info->scene));
-    //                 load_info->progress.store(1);
-    //                 timer->Stop();
-    //                 LOG_INFO("Load Json Scene {} Success, Time:{}", scene_data->m_path.string(), timer->ElapsedMilliseconds());
-    //                 MoerDelete(timer);
-    //             });
-    //         });
-    // }
-
     UniquePtr<SceneData> JsonSceneParser::Impl::LoadSceneFromFile(const Path& abs_scn_json_path, bool _delete_after_load) {
+
+        LOG_ERROR("JSON Scene Loader needs a huge refactor. JSON scene is not supported yet.");
+        assert(false);
+
         GpuPrimitiveBuilder::InitBuild();
         ExtendedSceneData ret_scene;
         auto              real_path = std::filesystem::weakly_canonical(abs_scn_json_path);
@@ -233,12 +209,13 @@ namespace Moer::Resource::JsonScene {
             RenderThreadFence fence;
             fence.Wait();
         }
-        if (!IsCurrentlyRenderThread()) {
-            ScopeEventRef event;
-            EnqueueRenderTask([&event]() {
-                event.Trigger();
-            });
-        }
+        // FIXME: The following code will block the program. Maybe currently we have only one thread? Fix this in the future.
+        // if (!IsCurrentlyRenderThread()) {
+        //     ScopeEventRef event;
+        //     EnqueueRenderTask([&event]() {
+        //         event.Trigger();
+        //     });
+        // }
         return std::move(ret_scene.scn_dat);
     }
 
@@ -260,24 +237,25 @@ namespace Moer::Resource::JsonScene {
             if (entity_json["type"] == "quad") {
                 transform = transform * GetQuadTransform(entity_json);
             }
-            dst.PushbackPrimInfo(mesh_id, material_name, transform);
+            // dst.PushbackPrimInfo(mesh_id, material_name, transform);
 
             auto  model_2_world = transform.GetMatrix4x4();
             auto  scale         = transform.AffineDecomposition().scaling;
             float max_scale     = std::max(scale.x, std::max(scale.y, scale.z));
             dst.PushbackInstanceData(model_2_world, max_scale, 0);
 
-            auto [new_aabb_min, new_aabb_max] = GetTransformedAABB(mesh_info, model_2_world);
-            InstanceMeshInfo instance_mesh_info{
-                .center         = Vector3f(new_aabb_min + new_aabb_max) * 0.5f,
-                .vertex_offset  = mesh_info.vertex_offset,
-                .extent         = Vector3f(new_aabb_max - new_aabb_min) * 0.5f,
-                .vertex_count   = mesh_info.vertex_count,
-                .index_offset   = mesh_info.index_offset,
-                .index_count    = mesh_info.index_count,
-                .meshlet_offset = mesh_info.meshlet_offset,
-                .meshlet_count  = mesh_info.meshlet_count};
-            dst.PushbackInstanceMeshInfo(instance_mesh_info);
+            //TODO: new mesh info incomplete json loader
+            // auto [new_aabb_min, new_aabb_max] = GetTransformedAABB(mesh_info, model_2_world);
+            // InstanceMeshInfo instance_mesh_info{
+            //     .center         = Vector3f(new_aabb_min + new_aabb_max) * 0.5f,
+            //     .vertex_offset  = mesh_info.vertex_offset,
+            //     .extent         = Vector3f(new_aabb_max - new_aabb_min) * 0.5f,
+            //     .vertex_count   = mesh_info.vertex_count,
+            //     .index_offset   = mesh_info.index_offset,
+            //     .index_count    = mesh_info.index_count,
+            //     .meshlet_offset = mesh_info.meshlet_offset,
+            //     .meshlet_count  = mesh_info.meshlet_count};
+            // dst.PushbackInstanceMeshInfo(instance_mesh_info);
         }
 
         return true;
@@ -334,14 +312,9 @@ namespace Moer::Resource::JsonScene {
             auto        aabb_max    = mesh->mAABB.mMax;
             auto        aabb_center = (mesh->mAABB.mMin + mesh->mAABB.mMax) * 0.5f;
             auto        aabb_extent = mesh->mAABB.mMax - aabb_center;
-            MeshInfo    info        = {.center         = {aabb_center.x, aabb_center.y, aabb_center.z},
-                                       .vertex_offset  = dst.vertex_cnt,
-                                       .extent         = {aabb_extent.x, aabb_extent.y, aabb_extent.z},
-                                       .index_offset   = dst.index_cnt,
-                                       .vertex_count   = (uint32_t)(output.meshlet_vertex_data.size() / (data->attribute_info.stride)),
-                                       .index_count    = (uint32_t)output.primitive_indices.size(),
-                                       .meshlet_offset = dst.meshlet_cnt,
-                                       .meshlet_count  = (uint32_t)output.meshlets.size()};
+            //TODO: new mesh info incomplete json loader
+
+            auto info = MakeShared<MeshInfo>();
             dst.PushbackMeshInfo(info, output);
         }
     }
@@ -398,22 +371,22 @@ namespace Moer::Resource::JsonScene {
         constexpr uint32_t TANGENT_SIZE  = 3;
         constexpr uint32_t UV_SIZE       = 2;
         if (mesh->HasPositions()) {
-            info.attribute |= E_VERTEX_ATTRIBUTE::E_POSITION;
+            info.attribute |= EVertexAttributeFlags::E_POSITION;
             info.attr_offset[0] = info.stride;
             info.stride += POSITION_SIZE;
         }
         if (mesh->HasNormals()) {
-            info.attribute |= E_VERTEX_ATTRIBUTE::E_NORMAL;
+            info.attribute |= EVertexAttributeFlags::E_NORMAL;
             info.attr_offset[1] = info.stride;
             info.stride += NORMAL_SIZE;
         }
         if (mesh->HasTangentsAndBitangents()) {
-            info.attribute |= E_VERTEX_ATTRIBUTE::E_TANGENT;
+            info.attribute |= EVertexAttributeFlags::E_TANGENT;
             info.attr_offset[2] = info.stride;
             info.stride += TANGENT_SIZE;
         }
         if (mesh->HasTextureCoords(0)) {
-            info.attribute |= E_VERTEX_ATTRIBUTE::E_UV0;
+            info.attribute |= EVertexAttributeFlags::E_UV0;
             info.attr_offset[3] = info.stride;
             info.stride += UV_SIZE;
         }
@@ -541,9 +514,13 @@ namespace Moer::Resource::JsonScene {
             LOG_ERROR("Invalid material format: Missing 'name' for a lambert material.");
             return;
         }
-        std::string         name     = material_json.at("name");
-        const auto          material = dst.scn_dat->m_materials["standard"];
-        MaterialInstanceRef mi = dst.scn_dat->m_material_instances[name] = material->CreateInstance();
+        std::string name     = material_json.at("name");
+        const auto  material = dst.scn_dat->m_materials["standard"];
+        if (dst.scn_dat->m_material_instance_indexes.contains(name)) {
+            return;
+        }
+        MaterialInstanceRef mi                         = dst.scn_dat->m_material_instances.emplace_back(material->CreateInstance());
+        dst.scn_dat->m_material_instance_indexes[name] = dst.scn_dat->m_material_instances.size() - 1;
 
         std::variant<std::string, Vector3f> albedo_value = GetAlbedoValue(material_json);
         if (std::holds_alternative<Vector3f>(albedo_value)) {
@@ -565,9 +542,13 @@ namespace Moer::Resource::JsonScene {
             LOG_ERROR("Invalid material format: Missing 'name' for a conductor material.");
             return;
         }
-        std::string         name     = material_json.at("name");
-        const auto          material = dst.scn_dat->m_materials["standard"];
-        MaterialInstanceRef mi = dst.scn_dat->m_material_instances[name] = material->CreateInstance();
+        std::string name     = material_json.at("name");
+        const auto  material = dst.scn_dat->m_materials["standard"];
+        if (dst.scn_dat->m_material_instance_indexes.contains(name)) {
+            return;
+        }
+        MaterialInstanceRef mi                         = dst.scn_dat->m_material_instances.emplace_back(material->CreateInstance());
+        dst.scn_dat->m_material_instance_indexes[name] = dst.scn_dat->m_material_instances.size() - 1;
 
         std::variant<std::string, Vector3f> albedo_value = GetAlbedoValue(material_json);
         if (std::holds_alternative<Vector3f>(albedo_value)) {
@@ -586,9 +567,13 @@ namespace Moer::Resource::JsonScene {
             LOG_ERROR("Invalid material format: Missing 'name' for a conductor material.");
             return;
         }
-        std::string         name     = material_json.at("name");
-        const auto          material = dst.scn_dat->m_materials["standard"];
-        MaterialInstanceRef mi = dst.scn_dat->m_material_instances[name] = material->CreateInstance();
+        std::string name     = material_json.at("name");
+        const auto  material = dst.scn_dat->m_materials["standard"];
+        if (dst.scn_dat->m_material_instance_indexes.contains(name)) {
+            return;
+        }
+        MaterialInstanceRef mi                         = dst.scn_dat->m_material_instances.emplace_back(material->CreateInstance());
+        dst.scn_dat->m_material_instance_indexes[name] = dst.scn_dat->m_material_instances.size() - 1;
 
         Vector3f albedo_value(1.f, 1.f, 1.f);
         mi->SetParameter("base_color_factor", Vector4f(albedo_value, 1.f));
@@ -665,14 +650,14 @@ namespace Moer::Resource::JsonScene {
 
     std::tuple<Vector4f, Vector4f> GetTransformedAABB(MeshInfo& info, Matrix4x4f& model_2_world) {
         Vector4f corner[8];
-        corner[0]    = model_2_world * Vector4f(info.center + info.extent, 1.0f);
-        corner[1]    = model_2_world * Vector4f(info.center - Vector3f(info.extent.x, info.extent.y, -info.extent.z), 1.0f);
-        corner[2]    = model_2_world * Vector4f(info.center - Vector3f(info.extent.x, -info.extent.y, info.extent.z), 1.0f);
-        corner[3]    = model_2_world * Vector4f(info.center - Vector3f(info.extent.x, -info.extent.y, -info.extent.z), 1.0f);
-        corner[4]    = model_2_world * Vector4f(info.center - Vector3f(-info.extent.x, info.extent.y, info.extent.z), 1.0f);
-        corner[5]    = model_2_world * Vector4f(info.center - Vector3f(-info.extent.x, info.extent.y, -info.extent.z), 1.0f);
-        corner[6]    = model_2_world * Vector4f(info.center - Vector3f(-info.extent.x, -info.extent.y, info.extent.z), 1.0f);
-        corner[7]    = model_2_world * Vector4f(info.center - info.extent, 1.0f);
+        // corner[0]    = model_2_world * Vector4f(info.center + info.extent, 1.0f);
+        // corner[1]    = model_2_world * Vector4f(info.center - Vector3f(info.extent.x, info.extent.y, -info.extent.z), 1.0f);
+        // corner[2]    = model_2_world * Vector4f(info.center - Vector3f(info.extent.x, -info.extent.y, info.extent.z), 1.0f);
+        // corner[3]    = model_2_world * Vector4f(info.center - Vector3f(info.extent.x, -info.extent.y, -info.extent.z), 1.0f);
+        // corner[4]    = model_2_world * Vector4f(info.center - Vector3f(-info.extent.x, info.extent.y, info.extent.z), 1.0f);
+        // corner[5]    = model_2_world * Vector4f(info.center - Vector3f(-info.extent.x, info.extent.y, -info.extent.z), 1.0f);
+        // corner[6]    = model_2_world * Vector4f(info.center - Vector3f(-info.extent.x, -info.extent.y, info.extent.z), 1.0f);
+        // corner[7]    = model_2_world * Vector4f(info.center - info.extent, 1.0f);
         auto new_min = corner[0];
         auto new_max = corner[0];
         for (int i = 1; i < 8; i++) {

@@ -3,6 +3,7 @@
 //
 
 #include "PixelFormat.h"
+#include "VulkanQueue.h"
 #include "VulkanResourceTracker.h"
 #include "log/LogSystem.h"
 #include "math/Constant.h"
@@ -28,7 +29,6 @@
 
 #include "RHICmdReorderer.h"
 #include "shader/ShaderPipeline.h"
-#include "spirv_reflect.h"
 #include "vulkan/vulkan_core.h"
 #include "VulkanAllocator.h"
 
@@ -1314,7 +1314,7 @@ namespace Moer::Render {
         vkCmdDraw(command_buffer, _vertex_cnt, _instance_cnt, _first_vertex, _first_instance);
     }
 
-    void VulkanCmdList::DrawIndirectCnt(
+    void VulkanCmdList::DrawIndexedIndirectCnt(
         VulkanBuffer* _commands,
         uint64        _commands_offset,
         VulkanBuffer* _count,
@@ -1322,6 +1322,32 @@ namespace Moer::Render {
         uint32_t      _max_cnt,
         uint32_t      _stride) {
         vkCmdDrawIndexedIndirectCount(command_buffer, _commands->GetHandle(), _commands_offset, _count->GetHandle(), _count_offset, _max_cnt, _stride);
+    }
+
+    void VulkanCmdList::DrawIndirectCnt(
+        VulkanBuffer* _commands,
+        uint64        _commands_offset,
+        VulkanBuffer* _count,
+        uint64        _count_offset,
+        uint32_t      _max_cnt,
+        uint32_t      _stride) {
+        vkCmdDrawIndirectCount(command_buffer, _commands->GetHandle(), _commands_offset, _count->GetHandle(), _count_offset, _max_cnt, _stride);
+    }
+
+    void VulkanCmdList::DrawIndexedIndirect(
+        VulkanBuffer* _buffer,
+        uint64        _offset,
+        uint32_t      _draw_cnt,
+        uint32_t      _stride) {
+        vkCmdDrawIndexedIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+    }
+
+    void VulkanCmdList::DrawIndirect(
+        VulkanBuffer* _buffer,
+        uint64        _offset,
+        uint32_t      _draw_cnt,
+        uint32_t      _stride) {
+        vkCmdDrawIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
     }
 
     void VulkanCmdList::CopyTexture(
@@ -1355,8 +1381,8 @@ namespace Moer::Render {
         vkCmdEndRendering(command_buffer);
     }
 
-    void VulkanCmdList::SetVertexBuffers(uint _first_binding, uint _binding_cnt, std::span<VkBuffer> _buffers, std::span<uint64> offsets) {
-        vkCmdBindVertexBuffers(command_buffer, _first_binding, _binding_cnt, _buffers.data(), offsets.data());
+    void VulkanCmdList::SetVertexBuffers(uint _first_binding, uint _binding_cnt, std::span<VkBuffer> _buffers, std::span<uint64> _offsets) {
+        vkCmdBindVertexBuffers(command_buffer, _first_binding, _binding_cnt, _buffers.data(), _offsets.data());
     }
 
     void VulkanCmdList::SetIndexBuffer(VulkanBuffer* _buffer, uint64 _offset, VkIndexType _index_type) {
@@ -1370,6 +1396,22 @@ namespace Moer::Render {
 
     void VulkanCmdList::SetScissor(const VkRect2D& _scissor) {
         vkCmdSetScissor(command_buffer, 0, 1, &_scissor);
+    }
+
+    void VulkanCmdList::ClearBufferUInt(VulkanBuffer* _buffer, uint64 _offset, uint64 _size, uint32 _data) {
+        vkCmdFillBuffer(command_buffer, _buffer->GetHandle(), _offset, _size, _data);
+    }
+
+    void VulkanCmdList::ClearTexture(VulkanTexture* _texture, const VkClearColorValue& _color, const VkImageSubresourceRange& _range) {
+        vkCmdClearColorImage(command_buffer, _texture->GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &_color, 1, &_range);
+    }
+
+    void VulkanCmdList::ResetQueryPool(VkNativeQueryPool& _query_pool, uint32 _first_query, uint32 _query_cnt) {
+        vkCmdResetQueryPool(command_buffer, _query_pool.GetHandle(), _first_query, _query_cnt);
+    }
+
+    void VulkanCmdList::WriteTimeStamp(VkNativeQueryPool& _query_pool, uint32 _query_idx, VkPipelineStageFlagBits2 _stage) {
+        vkCmdWriteTimestamp2(command_buffer, _stage, _query_pool.GetHandle(), _query_idx);
     }
 
     void VulkanCmdList::Dispatch(uint _group_count_x, uint _group_count_y, uint _group_count_z) {
@@ -1412,30 +1454,34 @@ namespace Moer::Render {
         VulkanDescriptorHeap&      descriptor_heap      = device.GetGlobalDescriptorHeap();
         auto&                      set_binders          = bind_template.set_binders;
         uint64                     g_global_desc_offset = descriptor_heap.current_offset;
+
         for (auto& [set, binder] : set_binders) {
             std::visit(
-                [&](auto& _binder) {
-                    using T = std::decay_t<decltype(_binder)>;
-                    if constexpr (std::is_same_v<T, VulkanBindlessSetArray>) {
+                Overload{
+                    [&](const VulkanBindlessSetArray& _binder) {
                         BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
                         VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
                         bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_buffer_descs->DeviceAddress();
-                    } else if constexpr (std::is_same_v<T, VulkanBindlessSetImage>) {
+                    },
+                    [&](const VulkanBindlessSetSampler& _binder) {
                         BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
                         VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
                         bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_texture_descs->DeviceAddress();
-
-                    } else if constexpr (std::is_same_v<T, VulkanBindlessSetSampler>) {
+                    },
+                    [&](const VulkanBindlessSetImage& _binder) {
                         BindlessArrayRef     array                           = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
                         VulkanBindlessArray* bindless_array                  = static_cast<VulkanBindlessArray*>(array.Get());
                         bind_template.desc_buffers[_binder.desc_idx].address = bindless_array->bindless_texture_descs->DeviceAddress();
-
-                    } else if constexpr (std::is_same_v<T, VulkanDescriptorSetBinder>) {
+                    },
+                    [&](const VulkanDescriptorSetBinder& _binder) {
                         //normal resources
                         for (uint i = 0; i < _binder.writers.size(); ++i) {
                             auto& writer = _binder.writers[i];
                             if (writer.descriptorCount < 1) continue;
                             const VulkanDescriptorInfo& set_info = _binder.bind_infos[i];
+                            if (!(_pso_handle.valid_bits & (1 << set_info.param_idx))) continue;
+
+                            VkFormat format = g_platform_pixel_formats[VulkanShaderResourceState(_pso_handle.binding_infos[set_info.param_idx].state_flags).format].format;
                             switch (writer.descriptorType) {
                                 case VK_DESCRIPTOR_TYPE_SAMPLER: {
                                     uint64 src_handle = descriptor_heap.GetSamplerDescIdx(std::get<Sampler>(_args[set_info.param_idx]));
@@ -1445,8 +1491,9 @@ namespace Moer::Render {
                                 case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
 
                                     if (writer.descriptorCount > 1) {
-                                        std::span<TextureView> textures = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
-                                        for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                        std::span<TextureView> textures  = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
+                                        uint                   desc_size = std::min(writer.descriptorCount, uint(textures.size()));
+                                        for (uint j = 0; j < desc_size; ++j) {
                                             VkImageLayout layout     = GetSamplerImageLayout(textures[j]);
                                             uint64        src_handle = descriptor_heap.GetImageDescIdx(&textures[j], layout);
                                             descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize);
@@ -1461,8 +1508,9 @@ namespace Moer::Render {
                                 }
                                 case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
                                     if (writer.descriptorCount > 1) {
-                                        std::span<TextureView> textures = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
-                                        for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                        std::span<TextureView> textures  = std::get<std::span<TextureView>>(_args[set_info.param_idx]);
+                                        uint                   desc_size = std::min(writer.descriptorCount, uint(textures.size()));
+                                        for (uint j = 0; j < desc_size; ++j) {
                                             uint64 src_handle = descriptor_heap.GetImageDescIdx(&textures[j], VK_IMAGE_LAYOUT_GENERAL);
                                             descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.storageImageDescriptorSize);
                                         }
@@ -1474,26 +1522,28 @@ namespace Moer::Render {
                                 }
                                 case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
                                     // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
-                                    uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]));
+                                    uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]), writer.descriptorType, format);
                                     descriptor_heap.PushUniformDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
+                                case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+                                case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
                                 case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
                                     if (writer.descriptorCount > 1) {
                                         std::span<BufferView> buffers = std::get<std::span<BufferView>>(_args[set_info.param_idx]);
                                         for (uint j = 0; j < writer.descriptorCount; ++j) {
-                                            uint64 src_handle = descriptor_heap.GetBufferDescIdx(buffers[j]);
+                                            uint64 src_handle = descriptor_heap.GetBufferDescIdx(buffers[j], writer.descriptorType, format);
                                             descriptor_heap.PushStorageDesc(src_handle, _binder.binding_infos[i].offset + j * device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
                                         }
                                         break;
                                     }
                                     // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
-                                    uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]));
+                                    uint64 src_handle = descriptor_heap.GetBufferDescIdx(std::get<BufferView>(_args[set_info.param_idx]), writer.descriptorType, format);
                                     descriptor_heap.PushStorageDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
                                 }
                                 case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
-                                    VulkanAccelerationStructure* as         = ResourceCast(std::get<RaytracingSceneRef>(_args[set_info.param_idx]).Get())->tlas;
+                                    VulkanAccelerationStructure* as         = ResourceCast(std::get<RaytracingTlasRef>(_args[set_info.param_idx]).Get());
                                     uint64                       src_handle = descriptor_heap.GetAccelDescIdx(as);
                                     descriptor_heap.PushAccelDesc(src_handle, _binder.binding_infos[i].offset);
                                     break;
@@ -1507,12 +1557,12 @@ namespace Moer::Render {
                                 }
                             }
                         }
+
                         //set desc buffer offset
                         bind_template.desc_buffer_offsets[_binder.offset_idx].offset = descriptor_heap.current_offset;
                         descriptor_heap.IncrementOffset(_binder.size);
                         // device.vk_cmd_push_descriptor_set(command_buffer, _binder.bind_point, _binder.push_info.layout, _binder.push_info.set, _binder.writers.size(), _binder.writers.data());
-                    }
-                },
+                    }},
                 binder);
         }
         if (!bind_template.desc_buffers.empty()) {
