@@ -124,17 +124,17 @@ namespace Moer::Render {
         return config;
     }
 
-     template<>
-     D3D12RHIConfig ResolveConfigAs(const MoerRHIConfigAsJSON& _config_as_json) {
+    template<>
+    D3D12RHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
         using std::string;
-        assert(_config_as_json["rhi"].get<string>() == "d3d12");
+        assert(_info.rhi == "d3d12");
 
-         D3D12RHIConfig config;
+        D3D12RHIConfig config;
 
-         config.force_sync = _config_as_json.value("force_sync", false);
+        config.force_sync = false; //       _config_as_json.value("force_sync", false);
 
-         return config;
-     }
+        return config;
+    }
 
     RenderDevice& RenderDevice::Get() {
         static RenderDevice device;
@@ -146,7 +146,7 @@ namespace Moer::Render {
                 Get().impl = std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info))));
                 break;
             case ERHIType::D3D12:
-                Get().impl = std::move(UniquePtr<Impl>(MoerNew(D3D12Device)(ResolveConfigAs<D3D12RHIConfig>(_info.config_as_json))));
+                Get().impl = std::move(UniquePtr<Impl>(MoerNew(D3D12Device)(ResolveConfigAs<D3D12RHIConfig>(_info))));
                 //LOG_ERROR("D3D12 is not supported yet");
                 break;
         }

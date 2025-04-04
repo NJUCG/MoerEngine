@@ -13,7 +13,6 @@
 #include <filesystem>
 #include <optional>
 #include <shared_mutex>
-#include <spirv_reflect.h>
 #include <variant>
 #include <config.h>
 #include <platform/Platform.h>
@@ -181,8 +180,9 @@ namespace Moer::Render {
         return TextureRef{MoerNew(D3D12Texture)(this, info)};
     }
 
-    BufferRef D3D12Device::CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) {
-        BufferInfo info{_element_cnt, _byte_stride, _usage};
+    BufferRef D3D12Device::CreateBuffer(std::string_view _name, uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) {
+        BufferInfo info{_element_cnt, _byte_stride, _usage, _format};
+        // _name, _format unused TODO
         return BufferRef{MoerNew(D3D12Buffer)(this, info)};
     }
 
@@ -206,11 +206,12 @@ namespace Moer::Render {
         if (_type == EQueueType::Graphics) return *gfx_queue;
         // TODO: 在此处插入 return 语句
         struct DummyCommandQueue : CommandQueue {
-            void              Test();
-            virtual void      Wait(WaitEvent _event) {};
-            virtual WaitEvent Execute(CmdSubmit&& _submit) { return {}; };
-            virtual void      Present(SwapchainRef _swapchain, TextureView _target) {};
-            virtual void      Sync() {};
+            void                              Test();
+            virtual void                      Wait(WaitEvent _event) {};
+            virtual WaitEvent                 Execute(CmdSubmit&& _submit) { return {}; };
+            virtual void                      Present(SwapchainRef _swapchain, TextureView _target) {};
+            virtual void                      Sync() {};
+            virtual Array<ProfileResultEntry> GetProfilerEntry() { return {}; }
         };
         static DummyCommandQueue queue;
         return queue;
@@ -749,7 +750,7 @@ namespace Moer::Render {
     }
 
     D3D12GraphicsCommandQueue::D3D12GraphicsCommandQueue(D3D12Device* _device, EQueueType _type)
-        : D3D12DeviceChild(_device),
+        : CommandQueue(), D3D12DeviceChild(_device),
           queue_type(D3D12_COMMAND_LIST_TYPE_DIRECT),
           last_submitted_fence_value(0),
           last_completed_fence_value(0),

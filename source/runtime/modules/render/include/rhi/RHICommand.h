@@ -1141,7 +1141,7 @@ namespace Moer::Render {
     class RENDER_API CommandQueue {
     public:
         CommandQueue(){};
-        CommandQueue(EQueueType _type, RenderDevice& _device);
+        //CommandQueue(EQueueType _type, RenderDevice& _device);
         void                              Test();
         virtual void                      Wait(WaitEvent _event)                                = 0;
         virtual WaitEvent                 Execute(CmdSubmit&& _submit)                          = 0;

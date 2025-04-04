@@ -610,10 +610,11 @@ namespace Moer::Render {
         ~D3D12GraphicsCommandQueue();
 
         // queue.signal is not exposed, exist in cmdsubmit.signalevent
-        void      Wait(WaitEvent _event) override;
-        WaitEvent Execute(CmdSubmit&& _submit) override;
-        void      Present(SwapchainRef _swapchain, TextureView _target) override;
-        void      Sync() override;
+        void                      Wait(WaitEvent _event) override;
+        WaitEvent                 Execute(CmdSubmit&& _submit) override;
+        void                      Present(SwapchainRef _swapchain, TextureView _target) override;
+        void                      Sync() override;
+        Array<ProfileResultEntry> GetProfilerEntry() override { return {}; }
     };
 
     class D3D12Swapchain final : public Swapchain {
@@ -670,7 +671,7 @@ namespace Moer::Render {
 
         TextureRef CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint _array_size) override;
 
-        BufferRef CreateBuffer(uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage) override;
+        BufferRef CreateBuffer(std::string_view _name, uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) override;
 
         BindlessArrayRef CreateBindlessArray(uint _max_size) override;
         FenceRef         CreateFence() override;
