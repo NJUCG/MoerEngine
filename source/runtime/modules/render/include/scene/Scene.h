@@ -109,11 +109,9 @@ namespace Moer {
     struct MeshBuffers {
         Render::BufferRef vertex_buffer;
         Render::BufferRef index_buffer;
-        Render::BufferRef instance_buffer;
 
         int vtx_bdls_handle;
         int idx_bdls_handle;
-        int inst_bdls_handle;
 
         StaticArray<Range, VA_NUM> vertex_ranges;
 
@@ -211,10 +209,9 @@ namespace Moer {
     };
 
     struct MeshInstance {
-        int                 instance_id;
-        int                 geom_instance_id;
-        SharedPtr<MeshInfo> mesh_info;
-        uint                mesh_info_idx;//for serialization
+        int  instance_id;
+        int  geom_instance_id;
+        uint mesh_info_idx;//for serialization
 
         InputStream& operator>>(InputStream& _stream) {
             _stream >> instance_id >> geom_instance_id >> mesh_info_idx;
@@ -331,10 +328,8 @@ namespace Moer {
         void                    SetBlasList(Moer::Array<RHIRayTracingBLASRef> _blas_list) noexcept;
         void                    SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept;
         void                    RemoveEntity(Entity _entity) noexcept;
-        void                    SetBuffer(const std::string& _name, RHIBufferRef _buffer) noexcept;
         void                    SetBuffer(EGpuSceneResource _type, Render::BufferRef _buffer) noexcept;
         Render::BufferRef       GetBuffer(EGpuSceneResource _type) const noexcept;
-        RHIBufferRef            GetBuffer(const std::string& _name) const noexcept;
         std::span<const Entity> GetEntities() const noexcept;
         std::span<const Entity> GetLights() const noexcept;
         std::span<const Entity> GetCameras() const noexcept;

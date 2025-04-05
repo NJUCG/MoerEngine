@@ -935,7 +935,17 @@ namespace Moer::Render {
 
     public:
         BuildAccelerationStructuresCmd(const Array<AccelerationStructureBuildParam>& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(_params) {}
-        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(std::move(_params)) {}
+        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(std::move(_params)) {
+            complete_progress_event = LambdaTask::Create([this]() {
+                                          for (const auto& param : params) {
+                                              //per segment
+                                              for (const auto& segment : param.geometry->GetInfo().segments) {
+                                                  idx_buffers.insert(segment.index_buffer);
+                                                  vtx_buffers.insert(segment.vertex_buffer);
+                                              }
+                                          }
+                                      }).Dispatch();
+        }
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
@@ -943,9 +953,23 @@ namespace Moer::Render {
 
         auto& Scratch() const { return scratch_buffer; }
 
+        auto& VtxBuffers() const {
+            if (complete_progress_event && !complete_progress_event->IsComplete()) { complete_progress_event->Wait(); }
+            return vtx_buffers;
+        }
+        auto& IdxBuffers() const {
+            if (complete_progress_event && !complete_progress_event->IsComplete()) { complete_progress_event->Wait(); }
+            return idx_buffers;
+        }
+
     private:
         Array<AccelerationStructureBuildParam> params;
         mutable BufferView                     scratch_buffer{};
+
+        //Internal use only
+        UnorderedSet<Buffer*> vtx_buffers;
+        UnorderedSet<Buffer*> idx_buffers;
+        GraphEventRef         complete_progress_event = nullptr;
     };
 
     struct UpdateRaytracingSceneCmd : public Command {

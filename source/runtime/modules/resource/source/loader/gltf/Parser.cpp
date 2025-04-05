@@ -571,7 +571,7 @@ namespace Moer::Resource::Gltf {
     UniquePtr<SceneData>
     Parser::Impl::LoadSceneFromFile(const std::filesystem::path& _file_path, bool _delete_after_load) {
 
-        GpuPrimitiveBuilder::InitBuild();
+        // GpuPrimitiveBuilder::InitBuild();
         Assimp::Importer importer;
         auto             real_path = std::filesystem::weakly_canonical(_file_path);
         if (!std::filesystem::exists(real_path)) {
@@ -597,7 +597,8 @@ namespace Moer::Resource::Gltf {
         //   - m_instance_infos, m_mesh_instances, m_mesh_infos
         //   - all about materials & textures (m_materials, m_material_instances, m_material_instance_indexes, m_textures)
 
-        data->m_mesh_infos.reserve(gltf_scene->mNumMeshes);
+        // mesh info
+        data->m_mesh_infos.reserve(gltf_scene->mNumMeshes);// MARK: 似乎有问题，与Geometry Array重复了
 
         GeomRecord                        geom_record;
         UnorderedMap<const aiNode*, uint> node2instance;
@@ -685,16 +686,17 @@ namespace Moer::Resource::Gltf {
                     }// if new geo_set
                     geo_iter = geom_record.find(geo_set);
 
-                    Render::InstanceData& inst   = data->m_instance_infos.emplace_back();
-                    inst.geom_count              = _node->mNumMeshes;
-                    inst.first_geom_idx          = geo_iter->second->geometries[0]->global_geom_idx;
-                    inst.first_geom_instance_idx = mesh_instance.geom_instance_id;
-                    inst.model2world             = GetTransform(_node).GetMatrix3x4();
-                    inst.prev_model2world        = inst.model2world;
+                    // instance data: geo_idx, translation matrix
+                    // Render::InstanceData& inst   = data->m_instance_infos.emplace_back();
+                    // inst.geom_count              = _node->mNumMeshes;
+                    // inst.first_geom_idx          = geo_iter->second->geometries[0]->global_geom_idx;
+                    // inst.first_geom_instance_idx = mesh_instance.geom_instance_id;
+                    // inst.model2world             = GetTransform(_node).GetMatrix3x4();
+                    // inst.prev_model2world        = inst.model2world;
 
                     //for serialization
                     mesh_instance.mesh_info_idx = geo_iter->second->global_mesh_idx;
-                    mesh_instance.mesh_info     = geo_iter->second;
+                    // mesh_instance.mesh_info     = geo_iter->second;
                     geom_instance_offset += _node->mNumMeshes;
                 }// Every node
             };

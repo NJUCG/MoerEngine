@@ -492,9 +492,9 @@ namespace Moer::Render {
             auto& state            = it->second;
             state.src_queue_family = _src_queue;
             state.dst_queue_family = _dst_queue;
-            state.dst_stage        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            state.dst_stage        = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
         } else {
-            buffer_states[_buffer] = {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, _src_queue, _dst_queue};
+            buffer_states[_buffer] = {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, _src_queue, _dst_queue};
         }
         exported_buffers.insert(_buffer);
     }
@@ -613,10 +613,11 @@ namespace Moer::Render {
     void VkTracker::ResolveBarriers() {
 
         for (VulkanBuffer* buffer : pending_buffers) {
-
-            if (auto it = buffer_states.find(buffer); it != buffer_states.end() && exported_buffers.find(buffer) == exported_buffers.end()) {
-                auto& state = it->second;
-                if (((state.dst_access & VK_ACCESS_2_SHADER_WRITE_BIT) == 0) && state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
+            bool b_is_exported = exported_buffers.find(buffer) != exported_buffers.end();
+            if (auto it = buffer_states.find(buffer); it != buffer_states.end()) {
+                auto& state               = it->second;
+                bool  b_is_queue_transfer = state.src_queue_family != state.dst_queue_family || state.src_queue_family != VK_QUEUE_FAMILY_IGNORED || state.dst_queue_family != VK_QUEUE_FAMILY_IGNORED;
+                if (!b_is_queue_transfer && ((state.dst_access & VK_ACCESS_2_SHADER_WRITE_BIT) == 0) && state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
                     state.dst_access       = VK_ACCESS_2_NONE;
                     state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
                     state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
@@ -649,7 +650,7 @@ namespace Moer::Render {
         for (VulkanTexture* texture : pending_textures) {
             if (auto it = texture_states.find(texture); it != texture_states.end()) {
                 auto& state = it->second;
-                if (((state.dst_access & VK_ACCESS_2_SHADER_WRITE_BIT) == 0) && state.src_access == state.dst_access && state.src_stage == state.dst_stage && state.src_layout == state.dst_layout && exported_textures.find(texture) == exported_textures.end()) {
+                if (((state.dst_access & VK_ACCESS_2_SHADER_WRITE_BIT) == 0) && state.src_access == state.dst_access && state.src_stage == state.dst_stage && state.src_layout == state.dst_layout) {
                     state.dst_access       = VK_ACCESS_2_NONE;
                     state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
                     state.dst_layout       = VK_IMAGE_LAYOUT_UNDEFINED;

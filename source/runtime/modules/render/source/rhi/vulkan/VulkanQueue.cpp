@@ -411,16 +411,17 @@ namespace Moer::Render {
 
                 tracker.RecordState(vk_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
 
-                // FIXME: 我不确定这里的修改是否正确。类似场景见 RHICmdReorderer.h:875附近
-                for (const auto& segment : vk_geo->GetInfo().segments) {
-                    auto* vtx_buffer = ResourceCast(segment.vertex_buffer.Get());
-                    auto* idx_buffer = ResourceCast(segment.index_buffer.Get());
-
-                    tracker.RecordState(vtx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
-                    tracker.RecordState(idx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
-                }
-
                 tracker.EmplaceWriteBLAS(uint64(vk_geo));
+            }
+
+            for (const auto& buffer : _cmd->VtxBuffers()) {
+                VulkanBuffer* vtx_buffer = ResourceCast(buffer);
+                tracker.RecordState(vtx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+            }
+
+            for (const auto& buffer : _cmd->IdxBuffers()) {
+                VulkanBuffer* idx_buffer = ResourceCast(buffer);
+                tracker.RecordState(idx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
             }
         }
 
