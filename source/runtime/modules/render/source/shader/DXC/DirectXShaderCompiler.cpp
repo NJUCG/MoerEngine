@@ -158,6 +158,15 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(L"-fspv-preserve-interface");
         arguments.push_back(L"-DVULKAN=1");
         // arguments.push_back(L"-fspv-flatten-resource-arrays");
+
+        // - new dxc(like https://www.nuget.org/packages/Microsoft.Direct3D.DXC/1.8.2502.8) support ResourceDescriptorHeap for spirv
+        //   and require extra extension/capability for RT.
+        //   however now meet bug https://github.com/microsoft/DirectXShaderCompiler/issues/7181. seems fixed, but not release yet.
+        // - for dx, dxc output dxil by default, but not preserve inactive resource binding. while spirv can.
+        //   now still use dxil for dx due to above bug
+        //arguments.push_back(L"-fspv-extension=SPV_EXT_descriptor_indexing");
+        //arguments.push_back(L"-fspv-extension=SPV_KHR_ray_tracing");
+        //arguments.push_back(L"-fspv-extension=SPV_KHR_ray_query");
     };
 
     auto set_default_args = [add_dx_arg, add_vk_arg](Moer::Array<std::wstring>& arguments, EShaderPlatform _platform, EShaderType _type, std::string_view _entry_point) {
