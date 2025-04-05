@@ -1180,6 +1180,7 @@ namespace Moer::Render {
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1};
         VK_CHECK_RESULT(vkAllocateCommandBuffers(device.GetDevice(), &command_buffer_info, &command_buffer));
+        _device.SetResourceName((uint64)command_buffer, VK_OBJECT_TYPE_COMMAND_BUFFER, std::format("CommandBuffer_{}", allocator->GetQueueName()));
     }
 
     VulkanCmdList::~VulkanCmdList() {

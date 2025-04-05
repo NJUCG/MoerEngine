@@ -558,7 +558,8 @@ namespace Moer {
 
         Render::CommandList cmd_list{};
 
-        auto bindless_array = _scene->GetBindlessArray();
+        auto  bindless_array = _scene->GetBindlessArray();
+        auto& copy_queue     = device.GetCopyQueue();
 
         for (auto& buf : _scene_data.m_mesh_buffers) {
 
@@ -600,7 +601,6 @@ namespace Moer {
             vertex_size += texcoord1_buffer_size;
 
             buf->vertex_buffer = device.CreateBuffer<byte>("Scene::soa_vertex_buffer", vertex_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
-
             if (position_buffer_size > 0) {
                 auto* position_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_POSITION);
                 cmd_list.CopyFrom(
@@ -656,7 +656,8 @@ namespace Moer {
 
         _scene->UpdateGpuData();
 
-        auto& copy_queue = device.GetCopyQueue();
+        auto evt = copy_queue.Execute(cmd_list.Submit());
+        copy_queue.Sync(evt.timeline);
 
         auto instance_data_buffer = device.CreateBuffer<byte>("Scene::InstanceDataBuffer", _scene->GetInstanceDatas().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
         auto material_buffer      = device.CreateBuffer<byte>("Scene::MaterialInstanceBuffer", _scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
@@ -696,7 +697,7 @@ namespace Moer {
             geometry_instance_buffer->GetView(),
             "CopyFrom geometry_instance_buffer");
 
-        auto evt = copy_queue.Execute(cmd_list.Submit());
+        evt = copy_queue.Execute(cmd_list.Submit());
         copy_queue.Sync(evt.timeline);
 
         _scene->SetBuffer(EGpuSceneResource::InstanceInfo, instance_data_buffer);
@@ -704,12 +705,6 @@ namespace Moer {
         _scene->SetBuffer(EGpuSceneResource::GeometryInfo, geometry_data_buffer);
         _scene->SetBuffer(EGpuSceneResource::GeometryInstance, geometry_instance_buffer);
         _scene->SetBuffer(EGpuSceneResource::LightInfo, light_buffer);
-
-        light_buffer->SetName("light_buffer");
-        material_buffer->SetName("material_buffer");
-        geometry_data_buffer->SetName("geometry_data_buffer");
-        instance_data_buffer->SetName("instance_data_buffer");
-        geometry_instance_buffer->SetName("geometry_instance_buffer");
 
         _scene->EmplaceIOImportedBuffer(light_buffer);
         _scene->EmplaceIOImportedBuffer(material_buffer);

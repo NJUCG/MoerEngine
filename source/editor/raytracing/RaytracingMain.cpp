@@ -299,10 +299,29 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
                 first_load = false;
 
+                {
+
+                    Array<ImportTexture> sampled_textures;
+                    sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
+
+                    for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
+                        sampled_textures.emplace_back(ImportTexture(
+                            tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE
+                        ));
+                    }
+
+                    Array<ImportBuffer> io_buffers;
+                    io_buffers.reserve(scene.GetIOPendingBuffers().size());
+
+                    for (auto& buffer : scene.GetIOPendingBuffers()) {
+                        io_buffers.emplace_back(ImportBuffer(buffer->GetView()));
+                    }
+
+                    cmd_list.ImportResourcesFromQueue(
+                        EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers)
+                    );
+                }
                 cmd_list.UpdateBindlessArray(bindless_array);
-                // last_io_change_timeline = copy_queue_timeline->GetValue();
-                // gfx_queue.Wait({uint64(copy_queue_timeline.Get()),
-                // copy_timeline->GetValue()}); gfx_queue.Sync();
 
                 rt_geometries.reserve(scene.GetEntityCount());
                 Array<AccelerationStructureBuildParam> build_params;
@@ -362,33 +381,8 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 });
 
                 cmd_list.BuildAccelerationStructures(std::move(build_params));
-
+                cmd_list.UpdateRaytracingScene(rt_scene);
                 // last_io_change_timeline = copy_queue_timeline->GetValue();
-
-                {
-
-                    Array<ImportTexture> sampled_textures;
-                    sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
-
-                    for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
-                        sampled_textures.emplace_back(ImportTexture(
-                            tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE
-                        ));
-                    }
-
-                    Array<ImportBuffer> io_buffers;
-                    io_buffers.reserve(scene.GetIOPendingBuffers().size());
-
-                    for (auto& buffer : scene.GetIOPendingBuffers()) {
-                        io_buffers.emplace_back(ImportBuffer(buffer->GetView()));
-                    }
-
-                    cmd_list.ImportResourcesFromQueue(
-                        EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers)
-                    );
-
-                    cmd_list.UpdateRaytracingScene(rt_scene);
-                }
 
                 _editor_ui->RegisterUIFunc(
                     "Display MaterialTexture",
@@ -728,6 +722,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
         if (_editor_ui->IsNeedReload()) { break; }
     }
+    timeline->Wait(time);
     gfx_queue.Sync();
 
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();

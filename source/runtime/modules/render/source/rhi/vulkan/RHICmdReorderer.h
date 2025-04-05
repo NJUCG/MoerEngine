@@ -484,11 +484,13 @@ namespace Moer::Render {
                 case ResourceType::Bindless: {
                     auto* bindless_handle             = static_cast<BindlessHandle*>(_handle);
                     bindless_handle->view.write_layer = _layer;
+                    bindless_handle->view.read_layer  = _layer;
                     break;
                 }
                 case ResourceType::Accel: {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(_handle);
                     no_range_handle->view.write_layer = _layer;
+                    no_range_handle->view.read_layer  = _layer;
                     break;
                 }
                 default: {
@@ -506,6 +508,7 @@ namespace Moer::Render {
                     auto* bindless_handle             = static_cast<BindlessHandle*>(_handle);
                     layer                             = GetLastLayerWrite(bindless_handle);
                     bindless_handle->view.write_layer = layer;
+                    bindless_handle->view.read_layer  = layer;
                     break;
                 }
                 case ResourceType::Accel: {
@@ -564,6 +567,7 @@ namespace Moer::Render {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(write_handle);
                     layer                             = std::max(layer, GetLastLayerWrite(no_range_handle));
                     no_range_handle->view.write_layer = layer;
+                    no_range_handle->view.read_layer  = layer;
                     break;
                 }
                 default: {
@@ -754,12 +758,24 @@ namespace Moer::Render {
 
                 for (const auto& [handle, state] : _cmd->ImportTextures()) {
                     RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
-                    layer                     = GetLastLayerWrite(range_handle, Range(handle.mip_level, handle.num_mips));
+                    layer                     = GetLastLayerRead(range_handle, Range(handle.mip_level, handle.num_mips));
                     assert(layer == 0 && std::format("Import Texture {} should be the first command", handle.GetTexture()->GetName()).c_str());
                 }
+
+                for (const auto& [handle, state] : _cmd->ImportBuffers()) {
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer));
+                    layer                     = GetLastLayerRead(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()));
+                    assert(layer == 0 && std::format("Import Buffer {} should be the first command", handle.GetBuffer()->GetName()).c_str());
+                }
+
                 for (const auto& [handle, state] : _cmd->ImportTextures()) {
                     RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
                     range_handle->EmplaceWriteLayer(Range(handle.mip_level, handle.num_mips), layer);
+                }
+
+                for (const auto& [handle, state] : _cmd->ImportBuffers()) {
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer));
+                    range_handle->EmplaceWriteLayer(Range(handle.GetByteOffset(), handle.GetByteSize()), layer);
                 }
             } else {
                 barrier_resources.reserve(_cmd->ExportTextures().size());
@@ -768,13 +784,22 @@ namespace Moer::Render {
                 for (const auto& [handle, state] : _cmd->ExportTextures()) {
                     RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
                     layer                     = GetLastLayerWrite(range_handle, Range(handle.mip_level, handle.num_mips));
-                    //TODO: store export resources and check later usages
-                    // assert(layer == 0 && std::format("Export Texture {} should be the first command", handle.GetTexture()->GetName()).c_str());
+                }
+
+                for (const auto& [handle, state] : _cmd->ExportBuffers()) {
+
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer));
+                    layer                     = GetLastLayerWrite(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()));
                 }
 
                 for (const auto& [handle, state] : _cmd->ExportTextures()) {
                     RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
                     range_handle->EmplaceWriteLayer(Range(handle.mip_level, handle.num_mips), layer);
+                }
+
+                for (const auto& [handle, state] : _cmd->ExportBuffers()) {
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer));
+                    range_handle->EmplaceWriteLayer(Range(handle.GetByteOffset(), handle.GetByteSize()), layer);
                 }
             }
 
@@ -976,12 +1001,25 @@ namespace Moer::Render {
                     Buffer* vtx = segment.vertex_buffer.Get();
                     Buffer* idx = segment.index_buffer.Get();
 
-                    layer = std::max(layer, SetRead((uint64)vtx, Range(0, vtx->GetByteSize()), ResourceType::Texture_Buffer));
-                    layer = std::max(layer, SetRead((uint64)idx, Range(0, idx->GetByteSize()), ResourceType::Texture_Buffer));
+                    auto* vtx_range = static_cast<RangeHandle*>(GetHandle((uint64)vtx, ResourceType::Texture_Buffer));
+                    auto* idx_range = static_cast<RangeHandle*>(GetHandle((uint64)idx, ResourceType::Texture_Buffer));
+                    layer           = std::max(layer, GetLastLayerWrite(vtx_range, Range(0, vtx->GetByteSize())));
+                    layer           = std::max(layer, GetLastLayerWrite(idx_range, Range(0, idx->GetByteSize())));
                 }
-                layer = std::max(layer, SetWrite((uint64)cmd.geometry.Get(), Range(0), ResourceType::Accel));
+                layer = std::max(layer, GetLastLayerWrite(static_cast<NoRangeHandle*>(GetHandle((uint64)cmd.geometry.Get(), ResourceType::Accel))));
 
                 m_writed_geometry.emplace((uint64)cmd.geometry.Get());
+            }
+
+            for (const auto& cmd : _cmd->Params()) {
+                for (const auto& segment : cmd.geometry->GetInfo().segments) {
+                    Buffer* vtx = segment.vertex_buffer.Get();
+                    Buffer* idx = segment.index_buffer.Get();
+
+                    RecordRead(GetHandle((uint64)vtx, ResourceType::Texture_Buffer), Range(0, vtx->GetByteSize()), layer);
+                    RecordRead(GetHandle((uint64)idx, ResourceType::Texture_Buffer), Range(0, idx->GetByteSize()), layer);
+                }
+                RecordWrite(GetHandle((uint64)cmd.geometry.Get(), ResourceType::Accel), Range{}, layer);
             }
 
             AddCmd(_cmd, layer);
@@ -991,12 +1029,11 @@ namespace Moer::Render {
             if (_cmd->InstancesToUpdate().size() == 0 && !_cmd->ForceUpdate()) {
                 return;
             }
-            int64 layer       = SetWrite((uint64)_cmd->TlasHandle(), Range(0), ResourceType::Accel);
+            int64 layer       = 0;
             auto* tlas_handle = static_cast<NoRangeHandle*>(GetHandle((uint64)_cmd->TlasHandle(), ResourceType::Accel));
 
-            {
-                layer = GetLastLayerWrite(tlas_handle);
-            }
+            layer = GetLastLayerWrite(tlas_handle);
+
             for (const uint64& handle : m_writed_geometry) {
                 if (_cmd->HasGeometry(handle)) {
                     auto* geo_handle = GetHandle((uint64)handle, ResourceType::Accel);
@@ -1009,11 +1046,12 @@ namespace Moer::Render {
                 if (_cmd->HasGeometry(handle)) {
                     auto* geo_handle            = (NoRangeHandle*)GetHandle((uint64)handle, ResourceType::Accel);
                     geo_handle->view.read_layer = layer;
+
+                    RecordRead(geo_handle, Range{}, layer);
                 }
             }
 
-            tlas_handle->view.write_layer = layer;
-            tlas_handle->view.read_layer  = layer;
+            RecordWrite(tlas_handle, Range{}, layer);
 
             AddCmd(_cmd, layer);
         }
