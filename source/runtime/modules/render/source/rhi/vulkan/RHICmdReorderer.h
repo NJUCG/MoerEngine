@@ -993,33 +993,31 @@ namespace Moer::Render {
         void VisitCmd(const BuildAccelerationStructuresCmd* _cmd) {
             int64 layer = 0;
             for (const auto& cmd : _cmd->Params()) {
-                // FIXME: 不确定这里的修改是否正确。因为MeshBuffers的信息被分散到了每个MeshGeometry中，所以这里就需要对应遍历所有Segment
-                //        类似场景见 VulkanQueue.cpp:393附近
-                //@@WX: 是对的，但是可能会慢
-                // 可以在Command内部加一个Set，并行/异步收集所有的Buffer，然后在这里遍历
-                for (const auto& segment : cmd.geometry->GetInfo().segments) {
-                    Buffer* vtx = segment.vertex_buffer.Get();
-                    Buffer* idx = segment.index_buffer.Get();
-
-                    auto* vtx_range = static_cast<RangeHandle*>(GetHandle((uint64)vtx, ResourceType::Texture_Buffer));
-                    auto* idx_range = static_cast<RangeHandle*>(GetHandle((uint64)idx, ResourceType::Texture_Buffer));
-                    layer           = std::max(layer, GetLastLayerWrite(vtx_range, Range(0, vtx->GetByteSize())));
-                    layer           = std::max(layer, GetLastLayerWrite(idx_range, Range(0, idx->GetByteSize())));
-                }
                 layer = std::max(layer, GetLastLayerWrite(static_cast<NoRangeHandle*>(GetHandle((uint64)cmd.geometry.Get(), ResourceType::Accel))));
-
                 m_writed_geometry.emplace((uint64)cmd.geometry.Get());
             }
 
-            for (const auto& cmd : _cmd->Params()) {
-                for (const auto& segment : cmd.geometry->GetInfo().segments) {
-                    Buffer* vtx = segment.vertex_buffer.Get();
-                    Buffer* idx = segment.index_buffer.Get();
+            for (const auto& vtx : _cmd->VtxBuffers()) {
+                auto* vtx_range = static_cast<RangeHandle*>(GetHandle((uint64)vtx, ResourceType::Texture_Buffer));
+                layer           = std::max(layer, GetLastLayerRead(vtx_range, Range(0, vtx->GetByteSize())));
+            }
 
-                    RecordRead(GetHandle((uint64)vtx, ResourceType::Texture_Buffer), Range(0, vtx->GetByteSize()), layer);
-                    RecordRead(GetHandle((uint64)idx, ResourceType::Texture_Buffer), Range(0, idx->GetByteSize()), layer);
-                }
+            for (const auto& idx : _cmd->IdxBuffers()) {
+                auto* idx_range = static_cast<RangeHandle*>(GetHandle((uint64)idx, ResourceType::Texture_Buffer));
+                layer           = std::max(layer, GetLastLayerRead(idx_range, Range(0, idx->GetByteSize())));
+            }
+
+            // Record Reads and Writes
+            for (const auto& cmd : _cmd->Params()) {
                 RecordWrite(GetHandle((uint64)cmd.geometry.Get(), ResourceType::Accel), Range{}, layer);
+            }
+            for (const auto& vtx : _cmd->VtxBuffers()) {
+                auto* vtx_range = static_cast<RangeHandle*>(GetHandle((uint64)vtx, ResourceType::Texture_Buffer));
+                RecordRead(vtx_range, Range(0, vtx->GetByteSize()), layer);
+            }
+            for (const auto& idx : _cmd->IdxBuffers()) {
+                auto* idx_range = static_cast<RangeHandle*>(GetHandle((uint64)idx, ResourceType::Texture_Buffer));
+                RecordRead(idx_range, Range(0, idx->GetByteSize()), layer);
             }
 
             AddCmd(_cmd, layer);

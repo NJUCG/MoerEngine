@@ -299,28 +299,30 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
                 first_load = false;
 
-                {
+                // {
 
-                    Array<ImportTexture> sampled_textures;
-                    sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
+                //     Array<ImportTexture> sampled_textures;
+                //     sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
 
-                    for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
-                        sampled_textures.emplace_back(ImportTexture(
-                            tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE
-                        ));
-                    }
+                //     for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
+                //         sampled_textures.emplace_back(ImportTexture(
+                //             tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE
+                //         ));
+                //     }
 
-                    Array<ImportBuffer> io_buffers;
-                    io_buffers.reserve(scene.GetIOPendingBuffers().size());
+                //     Array<ImportBuffer> io_buffers;
+                //     io_buffers.reserve(scene.GetIOPendingBuffers().size());
 
-                    for (auto& buffer : scene.GetIOPendingBuffers()) {
-                        io_buffers.emplace_back(ImportBuffer(buffer->GetView()));
-                    }
+                //     for (auto& buffer : scene.GetIOPendingBuffers()) {
+                //         io_buffers.emplace_back(ImportBuffer(buffer->GetView()));
+                //     }
 
-                    cmd_list.ImportResourcesFromQueue(
-                        EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers)
-                    );
-                }
+                //     cmd_list.ImportResourcesFromQueue(
+                //         EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers)
+                //     );
+                //     gfx_queue.Execute(cmd_list.Submit());
+                //     gfx_queue.Sync();
+                // }
                 cmd_list.UpdateBindlessArray(bindless_array);
 
                 rt_geometries.reserve(scene.GetEntityCount());
@@ -412,6 +414,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 );
 
                 // cmd_list.UpdateRaytracingScene(rt_scene);
+                auto copy_timeline = device.GetCopyQueue().GetFenceHandle();
                 gfx_queue.Execute(cmd_list.Submit());
                 gfx_queue.Sync();
             }

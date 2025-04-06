@@ -291,6 +291,9 @@ namespace Moer::Render {
     }
 
     void VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
+        //FIXME: this is not a good way to do it, and it may have issue in multi-threaded env
+        //best do sync in a separate thread, and give sync op to user
+        vkQueueWaitIdle(device.GetPresentQueue());
         CreateOrRecreate(_info);
     }
     void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {

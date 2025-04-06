@@ -1208,7 +1208,6 @@ namespace Moer::Render {
             .srcOffset = _src_offset,
             .dstOffset = _dst_offset,
             .size      = _size};
-
         vkCmdCopyBuffer(command_buffer, _src->GetHandle(), _dst->GetHandle(), 1, &copy_region);
     }
     void VulkanCmdList::CopyBufferToTexture(

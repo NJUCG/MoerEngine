@@ -934,8 +934,12 @@ namespace Moer::Render {
         BuildAccelerationStructuresCmd() : Command(EType::BuildAccel) {}
 
     public:
-        BuildAccelerationStructuresCmd(const Array<AccelerationStructureBuildParam>& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(_params) {}
-        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(std::move(_params)) {}
+        BuildAccelerationStructuresCmd(const Array<AccelerationStructureBuildParam>& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(_params) {
+            AsyncPreprocess();
+        }
+        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(std::move(_params)) {
+            AsyncPreprocess();
+        }
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
@@ -943,9 +947,37 @@ namespace Moer::Render {
 
         auto& Scratch() const { return scratch_buffer; }
 
+        auto& VtxBuffers() const {
+            if (evaluate_task && !evaluate_task->IsComplete()) { evaluate_task->Wait(); }
+            return vtx_buffers;
+        }
+
+        auto& IdxBuffers() const {
+            if (evaluate_task && !evaluate_task->IsComplete()) { evaluate_task->Wait(); }
+            return idx_buffers;
+        }
+
     private:
+        void AsyncPreprocess() {
+            evaluate_task = LambdaTask::Create([this]() {
+                                for (const auto& param : params) {
+                                    //vtx buffers and idx buffers
+                                    for (const auto& segment : param.geometry->GetInfo().segments) {
+                                        if (segment.vertex_buffer) {
+                                            vtx_buffers.insert(segment.vertex_buffer);
+                                        }
+                                        if (segment.index_buffer) {
+                                            idx_buffers.insert(segment.index_buffer);
+                                        }
+                                    }
+                                }
+                            }).Dispatch();
+        }
         Array<AccelerationStructureBuildParam> params;
         mutable BufferView                     scratch_buffer{};
+        UnorderedSet<Buffer*>                  vtx_buffers;
+        UnorderedSet<Buffer*>                  idx_buffers;
+        GraphEventRef                          evaluate_task = nullptr;
     };
 
     struct UpdateRaytracingSceneCmd : public Command {

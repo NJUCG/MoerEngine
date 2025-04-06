@@ -12,6 +12,7 @@
 #include "rhi/vulkan/VulkanRHI.h"
 #include "window/WindowContext.h"
 
+#include <atomic>
 #include <volk.h>
 namespace Moer::Render {
     struct SwapChainBuffer {
@@ -95,6 +96,8 @@ namespace Moer::Render {
         VulkanDevice&  device;
         uint64         image_idx            = 0;
         uint           max_frames_in_flight = 3;
+
+        std::atomic_uint64_t present_timeline = 0;
     };
 }// namespace Moer::Render
 

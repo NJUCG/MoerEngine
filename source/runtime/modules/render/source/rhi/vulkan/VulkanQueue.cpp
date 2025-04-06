@@ -411,16 +411,17 @@ namespace Moer::Render {
 
                 tracker.RecordState(vk_buffer, {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
 
-                // FIXME: 我不确定这里的修改是否正确。类似场景见 RHICmdReorderer.h:875附近
-                for (const auto& segment : vk_geo->GetInfo().segments) {
-                    auto* vtx_buffer = ResourceCast(segment.vertex_buffer.Get());
-                    auto* idx_buffer = ResourceCast(segment.index_buffer.Get());
-
-                    tracker.RecordState(vtx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
-                    tracker.RecordState(idx_buffer, {VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
-                }
-
                 tracker.EmplaceWriteBLAS(uint64(vk_geo));
+            }
+
+            for (auto& vtx : _cmd->VtxBuffers()) {
+                auto* vk_buffer = ResourceCast(vtx);
+                tracker.RecordState(vk_buffer, {VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
+            }
+
+            for (auto& idx : _cmd->IdxBuffers()) {
+                auto* idx_buffer = ResourceCast(idx);
+                tracker.RecordState(idx_buffer, {VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR});
             }
         }
 
@@ -528,9 +529,8 @@ namespace Moer::Render {
                 _cmd->dst_queue = temp_queue;
 
                 for (auto& barrier : _cmd->ImportTextures()) {
-                    auto*         vk_texture = ResourceCast(barrier.texture.GetTexture());
-                    auto          access     = tracker.ReadTexture(vk_texture, barrier.state);
-                    VkImageLayout src_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    auto* vk_texture = ResourceCast(barrier.texture.GetTexture());
+                    auto  access     = tracker.ReadTexture(vk_texture, barrier.state);
                     tracker.QueueTransferAcquireResource(
                         vk_texture,
                         device.GetQueueFamilyIndex(_cmd->src_queue),
@@ -538,7 +538,7 @@ namespace Moer::Render {
                         vk_texture->GetQueuePreferredLayout(_cmd->src_queue),
                         std::get<1>(access),
                         VK_ACCESS_2_NONE,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
                 }
 
                 for (auto& barrier : _cmd->ImportBuffers()) {
@@ -549,7 +549,7 @@ namespace Moer::Render {
                         device.GetQueueFamilyIndex(_cmd->src_queue),
                         device.GetQueueFamilyIndex(_cmd->dst_queue),
                         VK_ACCESS_2_NONE,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
                 }
 
             } else {
@@ -1885,11 +1885,6 @@ namespace Moer::Render {
     void VkCommandQueue::Wait(WaitEvent _evt) {
         auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
         {
-            {
-                // queue.Wait(fence, _evt.value, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
-                // queue.SubmitEmpty();
-            }
-
             std::unique_lock<std::mutex> lock(event_mutex);
             event_queue.emplace_back(_evt, _evt.value, false);
 
@@ -2215,7 +2210,7 @@ namespace Moer::Render {
 
         auto current_timeline = ++last_frame;
         queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
-        queue.Wait(sc->GetImageReadyFence(idx), VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        queue.Wait(sc->GetImageReadyFence(idx), VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
         queue.Signal(sc->GetRenderFinishedFence(), VK_PIPELINE_STAGE_2_COPY_BIT);
         queue.Submit(vk_allocator.GetCmdList(), sc->GetInFlightFence(present_timeline));
         sc->Present(queue.GetHandle(), idx);
@@ -2453,7 +2448,7 @@ namespace Moer::Render {
             auto current_timeline = ++last_frame;
             queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
             if (current_timeline > 1) {
-                queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+                queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
             }
             for (auto& evt : _evt.wait_events) {
                 queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);

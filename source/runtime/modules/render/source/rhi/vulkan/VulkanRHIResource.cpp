@@ -2544,8 +2544,9 @@ namespace Moer::Render {
                 buffer_ci.size = build_sizes_info.build_scratch_size;
                 buffer_ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
                 VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
-                
+            
                 scratch_buffer = MoerNew(VulkanBuffer)(s_tlas_scratch_buffer_name, BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
+                
             }
             //TLAS
             if(build_sizes_info.result_size > size_infos.result_size){
@@ -2555,7 +2556,7 @@ namespace Moer::Render {
                 
                 tlas = MoerNew(VulkanAccelerationStructure)(*m_device, *this);
 
-                tlas->underlying_buffer = MoerNew(VulkanBuffer)(s_tlas_underlying_buffer_name,BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, false, true);
+                tlas->underlying_buffer = MoerNew(VulkanBuffer)(s_tlas_underlying_buffer_name,BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
 
                 //create new TLAS
                 VkAccelerationStructureCreateInfoKHR create_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};

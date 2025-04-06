@@ -736,6 +736,28 @@ namespace Moer {
 
         copy_queue.Sync(evt.timeline);
 
+        Array<ImportTexture> sampled_textures;
+        sampled_textures.reserve(textures.size());
+
+        for (auto& [name, tex] : textures) {
+            sampled_textures.emplace_back(ImportTexture(
+                tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+        }
+
+        Array<ImportBuffer> io_buffers;
+        io_buffers.reserve(_scene->GetIOPendingBuffers().size());
+
+        for (auto& buffer : _scene->GetIOPendingBuffers()) {
+            io_buffers.emplace_back(ImportBuffer(buffer->GetView()));
+        }
+
+        cmd_list.ImportResourcesFromQueue(
+            EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers));
+
+        auto& gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
+        gfx_queue.Execute(cmd_list.Submit());
+        gfx_queue.Sync();
+
         // BuildSceneRaytracing(scene_data,scene.get());
 
         // Cache the scene data

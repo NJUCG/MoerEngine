@@ -505,6 +505,7 @@ namespace Moer::Render {
         DestroyInternalShaders();
         FlushDeferredReleases();
         DestroyInternalResources();
+        FlushDeferredReleases();
         vmaDestroyAllocator(m_allocator);
         vkDestroyDevice(m_device, VK_NULL_HANDLE);
 

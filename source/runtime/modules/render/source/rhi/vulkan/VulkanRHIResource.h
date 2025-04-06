@@ -1171,6 +1171,13 @@ namespace Moer::Render {
 
 #pragma endregion
 
+#pragma region[ pipeline cache ]
+    class VulkanPipelineCache : public VulkanDeviceObject {
+    public:
+        VulkanPipelineCache(VulkanDevice* _device);
+        ~VulkanPipelineCache();
+    };
+
 #pragma region[ resource cast ]
     RESOURCE_CAST(Buffer, VulkanBuffer)
     RESOURCE_CAST(Texture, VulkanTexture)
