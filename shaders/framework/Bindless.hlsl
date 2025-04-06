@@ -295,8 +295,7 @@ struct SamplerHeapHandle {
         handle.internalIndex)];                                                \
   }
 #if VULKAN
-#define VK_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH,                  \
-                           INNER_GENERATE_BUFFER_FETCH)                        \
+#define VK_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH, INNER_GENERATE_BUFFER_FETCH) \
   struct VKResourceDescriptorHeap {                                            \
     DEFINE_FETCH_TEXTURE_TYPE_AND_FORMATS(Texture1D, float, int)               \
     DEFINE_FETCH_TEXTURE_TYPE_AND_FORMATS(Texture2D, float2, int2)             \
@@ -306,8 +305,8 @@ struct SamplerHeapHandle {
   };                                                                           \
   static VKResourceDescriptorHeap vkResourceDescriptorHeap;
 
-#define DX_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH,                  \
-                           INNER_GENERATE_BUFFER_FETCH)
+// #define DX_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH,                  \
+//                            INNER_GENERATE_BUFFER_FETCH)
 // struct VKResourceDescriptorHeap {
 //   INNER_GENERATE_BUFFER_FETCH(BINDLESS_NAME_SUFFIX, BINDLESS_SUFFIX)
 //   DEFINE_FETCH_TEXTURE_TYPE_AND_FORMATS(Texture1D, float, int)
@@ -330,14 +329,6 @@ struct SamplerHeapHandle {
   vkResourceDescriptorHeap.SampleGrad(HandleType(handle), uv, offset, grad_x,  \
                                       grad_y)
 
-#elif DXIL
-
-#define DESCRIPTOR_HEAP_UNIFORM(HandleType, handle)                            \
-  ResourceDescriptorHeap[NonUniformResourceIndex(handle.internalIndex)]
-
-#define DESCRIPTOR_HEAP(HandleType, handle)                                    \
-  ResourceDescriptorHeap[(handle.internalIndex)]
-#endif
 // define resources
 #define HANDLES(DESCRIPTOR_HEAP, DESCRIPTOR_HEAP_SAMPLE)                       \
   struct ArrayBuffer {                                                         \
@@ -408,8 +399,25 @@ struct SamplerHeapHandle {
   BINDLESS_ACCEL(AccelSpace)                                                   \
   VK_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH,                        \
                      INNER_GENERATE_BUFFER_FETCH)                              \
-  DX_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH,                        \
-                     INNER_GENERATE_BUFFER_FETCH)                              \
   HANDLES(DESCRIPTOR_HEAP, DESCRIPTOR_HEAP_SAMPLE)
+  // DX_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH,                        \
+  //                    INNER_GENERATE_BUFFER_FETCH)                              \
 
-#endif
+#elif DXIL
+
+// #define DESCRIPTOR_HEAP_UNIFORM(HandleType, handle)                            \
+//   ResourceDescriptorHeap[NonUniformResourceIndex(HandleType(handle).internalIndex)]
+
+// #define DESCRIPTOR_HEAP(HandleType, handle)                                    \
+//   ResourceDescriptorHeap[HandleType(handle).internalIndex]
+
+// // can't Heap[idx].Load(...), must have resource first
+
+// // todo bindless for dx
+
+#define BINDLESS_BINDINGS(BufferSpace, TextureSpace, SamplerSpace, AccelSpace) ;
+
+#endif  // VULKAN/DXIL
+
+
+#endif  // FRAMEWORK_BINDLESS_COMMON_HLSL

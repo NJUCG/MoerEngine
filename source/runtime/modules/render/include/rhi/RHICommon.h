@@ -1231,7 +1231,44 @@ namespace Moer {
                 BindlessArray bindless;
             };
         };
-        struct Dxil {};
+        struct Dxil {
+            enum EShaderVariableType : uint32_t {// ref D3D_SHADER_VARIABLE_TYPE
+                RootConstant,                    // can't get from shader reflection. get from cpp pipeline definition.
+                ConstantBuffer,
+                ByteAddressBuffer,
+                StructuredBuffer,
+                TypedBuffer,
+                RWByteAddressBuffer,
+                RWStructuredBuffer,
+                RWTypedBuffer,
+                Texture1D,
+                Texture1DArray,
+                Texture2D,
+                Texture2DArray,
+                Texture2DMS,// multisampled
+                Texture2DMSArray,
+                Texture3D,
+                TextureCube,
+                TextureCubeArray,
+                RWTexture1D,
+                RWTexture1DArray,
+                RWTexture2D,
+                RWTexture2DArray,
+                RWTexture3D,
+                Sampler,
+                RaytracingAccelerationStructure,
+                // no legacy append/consume buffer, as well as uav counter
+                // TODO ROV?  e.g. RasterizerOrderedTexture2D
+            };
+
+            uint                slot;
+            uint                space;
+            uint                count;
+            EShaderVariableType type : 16;     // for common resource
+            uint                byte_size : 16;// padded size, size for root constant
+
+            //bool IsBindless() const { return count == 0; }
+        };
         struct Memory {
             byte data[sizeof(Spirv)];
         };
