@@ -1020,6 +1020,17 @@ namespace Moer::Render {
                 RecordRead(idx_range, Range(0, idx->GetByteSize()), layer);
             }
 
+            for (const auto& vtx_buf : _cmd->VtxBuffers()) {
+                auto* vtx_handle = static_cast<RangeHandle*>(GetHandle((uint64)vtx_buf, ResourceType::Texture_Buffer));
+                //record read
+                RecordRead(vtx_handle, Range(0, vtx_buf->GetByteSize()), layer);
+            }
+            for (const auto& idx_buf : _cmd->IdxBuffers()) {
+                auto* idx_handle = static_cast<RangeHandle*>(GetHandle((uint64)idx_buf, ResourceType::Texture_Buffer));
+                //record read
+                RecordRead(idx_handle, Range(0, idx_buf->GetByteSize()), layer);
+            }
+
             AddCmd(_cmd, layer);
         }
 

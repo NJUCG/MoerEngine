@@ -16,8 +16,9 @@ namespace Moer {
     X(VA_NORMAL, uint, PF_R32_UINT)             \
     X(VA_TANGENT, uint, PF_R32_UINT)            \
     X(VA_TEXCOORD0, float2, PF_R32G32_SFLOAT)   \
-    X(VA_TEXCOORD1, float2, PF_R32G32_SFLOAT)
-    // *
+    X(VA_TEXCOORD1, float2, PF_R32G32_SFLOAT)   \
+    // X(VA_INSTANCEID, uint, PF_R32_UINT)         \
+    // *                                        \
     // *************************************************
 
     // EVertexAttributes

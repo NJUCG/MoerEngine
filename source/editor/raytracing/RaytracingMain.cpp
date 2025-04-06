@@ -330,9 +330,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 build_params.reserve(scene.GetEntityCount());
 
                 scene.ForEach([&](Entity _entity) {
-                    auto&                          mesh = RenderableManager::Get().GetMeshInfo(_entity);
-                    std::span<MaterialInstanceRef> materials =
-                        RenderableManager::Get().GetMaterialInstances(_entity);
+                    auto&                  mesh = RenderableManager::Get().GetMeshInfo(_entity);
                     RaytracingGeometryInfo rt_geo_info{};
                     rt_geo_info.build_flags   = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
                     rt_geo_info.vertex_format = PF_R32G32B32_SFLOAT;
@@ -345,10 +343,6 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                         uint idx_count  = mesh->geometries[i]->local_idx_count;
                         auto vtx_buffer = mesh->geometries[i]->mesh_buffers->vertex_buffer;
                         auto idx_buffer = mesh->geometries[i]->mesh_buffers->index_buffer;
-
-                        // evaluate material
-                        MaterialInstanceRef mat_instance = materials[i];
-                        mat_instance->GetMaterial()->GetType();
 
                         rt_geo_info.segments.emplace_back(
                             0,                                         // vertex_offset
@@ -603,7 +597,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 const auto&   frame_rt        = rt_ctx->frame_rt;
                 nrd::Denoiser denoiser        = nrd::Denoiser::MAX_NUM;
                 switch (ui_config.denoiser_cfg.denoiser_type) {
-                    case s_denoiser_mode_reblur: denoiser = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
+                    case s_denoiser_mode_reblur: denoiser = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR; break;
                     case s_denoiser_mode_relax: denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR; break;
                 }
 

@@ -24,16 +24,12 @@ namespace Moer {
     public:
         Impl() noexcept;
         ~Impl() noexcept;
-        void         AddEntity(Entity _entity) noexcept { m_entities.AddEntity(_entity); }
-        void         AddCamera(Entity _entity) noexcept { m_cameras.AddEntity(_entity); }
-        void         AddLight(Entity _entity) noexcept { m_lights.AddEntity(_entity); }
-        void         RemoveLight(Entity _entity) noexcept { m_lights.RemoveEntity(_entity); }
-        void         RemoveEntity(Entity _entity) noexcept { m_entities.RemoveEntity(_entity); };
-        void         SetBuffer(const std::string& _name, RHIBufferRef _buffer) { m_buffers[_name] = _buffer; }
-        RHIBufferRef GetBuffer(const std::string& _name) const { return m_buffers.at(_name); }
-        RHIUAVRef    GetUAV(const std::string& _name) const { return m_uavs.at(_name); }
-        RHISRVRef    GetSRV(const std::string& _name) const { return m_srvs.at(_name); }
-        void         ForEach(std::function<void(Entity)> _func) const noexcept {
+        void AddEntity(Entity _entity) noexcept { m_entities.AddEntity(_entity); }
+        void AddCamera(Entity _entity) noexcept { m_cameras.AddEntity(_entity); }
+        void AddLight(Entity _entity) noexcept { m_lights.AddEntity(_entity); }
+        void RemoveLight(Entity _entity) noexcept { m_lights.RemoveEntity(_entity); }
+        void RemoveEntity(Entity _entity) noexcept { m_entities.RemoveEntity(_entity); };
+        void ForEach(std::function<void(Entity)> _func) const noexcept {
             auto span = m_entities.GetEntities();
             for (auto& entity : span) {
                 _func(entity);
@@ -62,10 +58,6 @@ namespace Moer {
 
     protected:
     private:
-        Map<std::string, RHIBufferRef> m_buffers;
-        Map<std::string, RHIUAVRef>    m_uavs;
-        Map<std::string, RHISRVRef>    m_srvs;
-
         UniqueEntityArray m_entities;
         UniqueEntityArray m_cameras;
         UniqueEntityArray m_lights;
@@ -73,6 +65,7 @@ namespace Moer {
         static AsyncSceneLoadInfoRef m_load_info;
         GpuScene                     gpu_scene;
 
+        // CPU Scene
         Array<Render::GeometryData>                                               geometry_datas;
         Array<Render::InstanceData>                                               instance_datas;
         Array<UnorderedMap<VertexAttributesBitmask, Array<Render::VertexBuffer>>> vtx_views;
@@ -101,6 +94,7 @@ namespace Moer {
     }
 
     void Scene::Impl::UpdateGpuData() {
+        /** convert the original mesh vertex/index data to the geometry/instance structures */
         uint geom_instance_cnt = 0;
         uint instance_count    = 0;
         for (auto& entity : m_entities.GetEntities()) {
@@ -231,17 +225,11 @@ namespace Moer {
     void Scene::RemoveEntity(Entity entity) noexcept {
         m_impl->RemoveEntity(entity);
     }
-    void Scene::SetBuffer(const std::string& name, RHIBufferRef buffer) noexcept {
-        return m_impl->SetBuffer(name, buffer);
-    }
     void Scene::SetBuffer(EGpuSceneResource _type, Render::BufferRef _buffer) noexcept {
         m_impl->gpu_scene.global_resources.buffers[(uint32_t)_type] = _buffer;
     }
     Render::BufferRef Scene::GetBuffer(EGpuSceneResource _type) const noexcept {
         return m_impl->gpu_scene.global_resources.buffers[(uint32_t)_type];
-    }
-    RHIBufferRef Scene::GetBuffer(const std::string& _name) const noexcept {
-        return nullptr;
     }
 
     void Scene::AddCamera(Entity entity) noexcept {

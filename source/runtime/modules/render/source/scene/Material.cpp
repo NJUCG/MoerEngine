@@ -33,7 +33,6 @@ namespace Moer {
         Impl() = default;
         void                         SetSamplerInterfaceBlock(TextureInterfaceBlock& sampler_interface_block) noexcept;
         const TextureInterfaceBlock& GetSamplerInterfaceBlock() const noexcept;
-        void                         OrganizeInstancesAndBind(RHIBatchedShaderParameters& parameters, Moer::Array<MaterialInstanceRef> instances);
         void                         SetBufferInterfaceBlock(BufferInterfaceBlock& buffer_interface_block) noexcept;
         const BufferInterfaceBlock&  GetBufferInterfaceBlock() const noexcept;
         EMaterialType                GetType() const noexcept;
@@ -41,13 +40,10 @@ namespace Moer {
         void                         SetName(const std::string& name) noexcept;
         const std::string&           GetName() const noexcept;
 
-        std::string              m_name;
-        RHIShaderBoundStateInput m_shader_bound_state;
-        TextureInterfaceBlock    m_sampler_interface_block;
-        BufferInterfaceBlock     m_buffer_interface_block;
-        EMaterialType            m_type;
-        RHIBufferRef             m_material_data_buffer{nullptr};
-        RHISRVRef                m_material_data_srv{nullptr};
+        std::string           m_name;
+        TextureInterfaceBlock m_sampler_interface_block;
+        BufferInterfaceBlock  m_buffer_interface_block;
+        EMaterialType         m_type;
     };
 
     Material::Material() {
@@ -84,12 +80,6 @@ namespace Moer {
     void Material::SetType(EMaterialType type) noexcept {
         return m_impl->SetType(type);
     }
-    void Material::OrganizeInstancesAndBind(RHIBatchedShaderParameters& parameters, Moer::Array<MaterialInstanceRef> instances) {
-        return m_impl->OrganizeInstancesAndBind(parameters, instances);
-    }
-    // const RHIShaderBoundStateInput& Material::getShaderBoundStateInput() const noexcept {
-    //     return m_impl->m_shader_bound_state;
-    // }
     MaterialRef MaterialBuilder::Build() {
         TextureInterfaceBlock::Builder sampler_interface_block_builder;
         BufferInterfaceBlock::Builder  buffer_interface_block_builder;
@@ -155,73 +145,6 @@ namespace Moer {
     }
     const TextureInterfaceBlock& Material::Impl::GetSamplerInterfaceBlock() const noexcept {
         return m_sampler_interface_block;
-    }
-    void Material::Impl::OrganizeInstancesAndBind(RHIBatchedShaderParameters& parameters, Moer::Array<MaterialInstanceRef> instances) {
-        if (m_type == EMaterialType::E_PBR_STANDARD) {
-            Moer::Array<MaterialData>                    material_data(instances.size());
-            Moer::Array<Render::TextureRef>              textures;
-            RHISamplerRef                                default_sampler;
-            Moer::UnorderedMap<Render::Texture*, size_t> texture_idx;
-            uint32_t                                     instance_idx = 0;
-            //Just organize texture idx for material instances
-            for (auto& mi : instances) {
-                memcpy(&material_data[instance_idx], mi->GetUniformBuffer().GetData(), sizeof(MaterialData));
-                auto&            mat_data               = material_data[instance_idx++];
-                Render::Texture* albedo_map             = mi->GetTexture("albedo_map");
-                Render::Texture* normal_map             = mi->GetTexture("normal_map");
-                Render::Texture* metallic_roughness_map = mi->GetTexture("metallic_roughness_map");
-                Render::Texture* ao_map                 = mi->GetTexture("ao_map");
-                Render::Texture* emissive_map           = mi->GetTexture("emissive_map");
-
-                auto find_or_insert = [&](Render::Texture* texture, int* idx) {
-                    if (!texture) {
-                        *idx = -1;
-                        return;
-                    }
-                    auto it = texture_idx.find(texture);
-                    if (it == texture_idx.end()) {
-                        *idx = textures.size();
-                        textures.emplace_back(CountableRef(texture));
-                        texture_idx[texture] = *idx;
-                    }
-                };
-                find_or_insert(albedo_map, &mat_data.albedo_map);
-                find_or_insert(normal_map, &mat_data.normal_map);
-                find_or_insert(metallic_roughness_map, &mat_data.metallic_roughness_map);
-                find_or_insert(ao_map, &mat_data.ao_map);
-                find_or_insert(emissive_map, &mat_data.emissive_map);
-            }
-
-            default_sampler = SamplerCache::Get().GetSampler(SamplerParams(SF_CUBIC, TEXTURE_LAYOUT_UNDEFINED));
-
-            if (!m_material_data_buffer || m_material_data_buffer->GetByteSize() != sizeof(MaterialData) * instances.size()) {
-                m_material_data_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, material_data.data(), sizeof(MaterialData) * instances.size());
-                // void* mapped_data      = g_rhi->RHIMapBuffer(m_material_data_buffer, 0, sizeof(MaterialData) * instances.size());
-                // memcpy(mapped_data, material_data.data(), sizeof(MaterialData) * instances.size());
-                m_material_data_srv = g_rhi->RHICreateBufferSRV(m_material_data_buffer);
-            }
-            if (textures.empty())
-                return;
-            uint32_t       offset          = 0;
-            constexpr uint max_binding_cnt = 25;
-            uint           binding_size    = std::max(uint(textures.size()), max_binding_cnt);
-            // auto           last_srv        = RenderGraphResourceCache::Get().GetSRV(textures[0], textures[0]->GetFormat(), 0, textures[0]->GetNumMips(), 0, textures[0]->GetInfo().array_size);
-            // for (size_t i = 0; i < binding_size; i++) {
-            //     if (i >= textures.size()) {
-            //         parameters.SetParameters(last_srv, i + offset, 2);
-            //         continue;
-            //     }
-            //   //  RHISRVRef srv = RenderGraphResourceCache::Get().GetSRV(textures[i], textures[i]->GetFormat(), 0, textures[i]->GetNumMips(), 0, textures[i]->GetInfo().array_size);
-            //     parameters.SetParameters(srv, i + offset, 2);
-            //     // break;
-            // }
-            default_sampler = RenderGraphResourceCache::Get().GetSampler({});
-            parameters.SetParameters(default_sampler, 4, 1);
-            parameters.SetParameters(m_material_data_srv, 0, 0);
-            // Bind these resources
-        } else {
-            //todo
-        }
     }
     const BufferInterfaceBlock& Material::Impl::GetBufferInterfaceBlock() const noexcept {
         return m_buffer_interface_block;
