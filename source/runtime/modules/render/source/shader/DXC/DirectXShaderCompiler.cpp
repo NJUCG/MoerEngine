@@ -607,22 +607,28 @@ void DXCompiler::Impl::ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompil
 
     Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
 
-    constexpr std::string_view bdls_suffix = "_114514_bdls";
+    constexpr std::string_view bdls_suffix       = "_114514_bdls";
+    constexpr std::string_view bdls_array_suffix = "_array_114514_bdls";
+    auto                       is_bdls_array     = [&](const std::string& _name) { return _name.ends_with(bdls_array_suffix); };
 
     for (int i = 0; i < shaderDesc.BoundResources; ++i) {
         D3D12_SHADER_INPUT_BIND_DESC shaderInputBindDesc{};
         DX_CHECK_HRESULT(shaderReflection->GetResourceBindingDesc(i, &shaderInputBindDesc));
 
-        auto& param_info = reflect_map[shaderInputBindDesc.Name].dxil;
+        std::string name = shaderInputBindDesc.Name;
+        if (is_bdls_array(name)) {
+            name = Moer::ReflectParamInfo::bdls_name;// our internal appointment
+        }
+        auto& param_info = reflect_map[name].dxil;
         param_info.slot  = shaderInputBindDesc.BindPoint;
         param_info.space = shaderInputBindDesc.Space;
         param_info.count = shaderInputBindDesc.BindCount;
 
-        if (param_info.count == 0) {// Texture2D<float4> xxx[]; -> count=0
-            if (!std::string(shaderInputBindDesc.Name).ends_with(bdls_suffix)) {
-                LOG_ERROR("bindless shader resource '{}' should end with '_114514_bdls' in '{}'", shaderInputBindDesc.Name, _input.shader_name);
-            }
-        }
+        //if (param_info.count == 0) {// Texture2D<float4> xxx[]; -> count=0
+        //    if (!std::string(shaderInputBindDesc.Name).ends_with(bdls_suffix)) {
+        //        LOG_ERROR("bindless shader resource '{}' should end with '_114514_bdls' in '{}'", shaderInputBindDesc.Name, _input.shader_name);
+        //    }
+        //}
 
         switch (shaderInputBindDesc.Type) {
             case D3D_SIT_CBUFFER: {
@@ -633,6 +639,7 @@ void DXCompiler::Impl::ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompil
                 D3D12_SHADER_BUFFER_DESC desc{};
                 DX_CHECK_HRESULT(cb->GetDesc(&desc));
                 param_info.byte_size = desc.Size;
+                assert(shaderInputBindDesc.BindCount == 1);// ? array of constant buffer
             } break;
             case D3D_SIT_TEXTURE: {
                 const auto dim = shaderInputBindDesc.Dimension;
@@ -707,7 +714,7 @@ void DXCompiler::Impl::ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompil
                 }
             } break;
             case D3D_SIT_STRUCTURED:
-                param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::StructuredBuffer;  // todo struct size/stride?
+                param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::StructuredBuffer;// todo struct size/stride?
                 break;
             case D3D_SIT_UAV_RWSTRUCTURED:
                 param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::RWStructuredBuffer;

@@ -29,6 +29,41 @@ __declspec(dllexport) extern const char8_t* D3D12SDKPath = u8".\\D3D12\\";
 #include "shader/ShaderCompiler.h"
 #include <iostream>
 #include "d3dx12_property_format_table.h"
+#include "shader/ShaderPipeline.h"
+
+namespace Moer::Render {
+// copy from editor/raytracing/LightingPass.h
+#define DI_BINDINGS()                               \
+    DEFINE_SHADER_TLAS(tlas);                       \
+    DEFINE_SHADER_TLAS(prev_tlas);                  \
+    DEFINE_SHADER_BUFFER(resample_params);          \
+    DEFINE_SHADER_BUFFER(light_reservoirs);         \
+    DEFINE_SHADER_TEX(rw_diffuse_lighting);         \
+    DEFINE_SHADER_TEX(rw_specular_lighting);        \
+    DEFINE_SHADER_TEX(rw_temporal_sample_pos);      \
+    DEFINE_SHADER_TEX(rw_gradients);                \
+    DEFINE_SHADER_TEX(rw_restir_luminance);         \
+    DEFINE_SHADER_TEX(rw_diffuse_lighting_prev);    \
+    DEFINE_SHADER_BUFFER(rw_ris_buffer);            \
+    DEFINE_SHADER_BUFFER(rw_ris_light_data_buffer); \
+    DEFINE_SHADER_BUFFER(neighbor_offset_buf);      \
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls)
+
+#define DI_SHADER_ARGS()                                                                                    \
+    tlas, prev_tlas, resample_params, light_reservoirs, rw_diffuse_lighting, rw_specular_lighting,          \
+        rw_temporal_sample_pos, rw_gradients, rw_restir_luminance, rw_diffuse_lighting_prev, rw_ris_buffer, \
+        rw_ris_light_data_buffer, neighbor_offset_buf, bdls
+
+    class TemporalResmaplePipeline : public ComputePipeline {
+    public:
+        DEFINE_COMPUTE_PIPELINE_CLASS(TemporalResmaplePipeline);
+
+        DI_BINDINGS();
+
+        DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
+    };
+
+}// namespace Moer::Render
 
 template<typename T, int N>
 std::span<Moer::byte> ToSpan(const std::array<T, N>& arr) {
@@ -46,6 +81,12 @@ int main(int argc, char** argv) {
     std::filesystem::path path = argv[0];
     path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
     ConfigManager::GetInstance().Init(path);
+
+    DeviceInitInfo info{
+        .type = ERHIType::D3D12,
+        .name = "DXRHITest",
+        .rhi  = "d3d12"};
+    RenderDevice::Init(std::move(info));
 
     //try {
 
@@ -152,7 +193,9 @@ int main(int argc, char** argv) {
         .environment               = env};
 
     ShaderCompiler::Init();
-    auto output = ShaderCompiler::Compile(input);
+    //auto output = ShaderCompiler::Compile(input);
+
+    auto pipeline = ShaderManager::Get().Compute<TemporalResmaplePipeline>("hwrt/ReSTIRDI/TemporalResampling.hlsl");
 
     return 0;
 }

@@ -155,6 +155,7 @@ namespace Moer::Render {
     class D3D12Texture;
     class D3D12Buffer;
     class D3D12CommandResourceAllocator;
+    class D3D12PipelineState;
 
     // only to provide a 'device' as member
     class D3D12DeviceChild {
@@ -166,6 +167,31 @@ namespace Moer::Render {
         // note here no defer release, compare to VulkanDeviceObject
         // seems not very necessary because of heavily using countableref
         // if need, we can do it explicitly
+    };
+
+    class D3D12PipelineState final : public PipelineState, public D3D12DeviceChild {
+    public:
+        enum EType {
+            GFX,
+            Compute,
+            RT
+        };
+
+    private:
+        friend class D3D12Device;
+        ComPtr<ID3D12PipelineState> pipeline_state;
+        ComPtr<ID3D12RootSignature> root_signature;
+        EType                       type;
+
+    public:
+        D3D12PipelineState(D3D12Device* _device, EType _type) : PipelineState(), D3D12DeviceChild(_device), pipeline_state(nullptr), root_signature(nullptr), type(_type) {}
+
+        //create root_sig
+        //create pso
+
+        ID3D12PipelineState* Native() const { return pipeline_state.Get(); }
+
+        void Destroy() override;// from PipelineState.RHIResource
     };
 
     struct Allocation {
@@ -711,7 +737,8 @@ namespace Moer::Render {
         //void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
 
     private:
-        D3D12RHIConfig config;
+        D3D12RHIConfig        config;
+        CD3DX12FeatureSupport feature_supports;
 
         ComPtr<IDXGIInfoQueue> dxgi_info_queue;
         //ComPtr<IDXGIDebug>        dxgi_debug;

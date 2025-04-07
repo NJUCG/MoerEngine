@@ -1267,7 +1267,58 @@ namespace Moer {
             EShaderVariableType type : 16;     // for common resource
             uint                byte_size : 16;// padded size, size for root constant
 
-            //bool IsBindless() const { return count == 0; }
+            bool IsBindless() const { return count == 0; }
+            bool IsRootConstant() const { return type == ReflectParamInfo::Dxil::EShaderVariableType::RootConstant; }
+            bool IsConstantBuffer() const { return type == ReflectParamInfo::Dxil::EShaderVariableType::ConstantBuffer; }
+            bool IsCommonBuffer() const {
+                return type == ReflectParamInfo::Dxil::EShaderVariableType::ByteAddressBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::StructuredBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::TypedBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWByteAddressBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWStructuredBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTypedBuffer;
+            }
+            bool IsTexture() const {
+                return type == ReflectParamInfo::Dxil::EShaderVariableType::Texture1D ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture1DArray ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture2D ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture2DArray ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture3D ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::TextureCube ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::TextureCubeArray ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture1D ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture1DArray ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture2D ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture2DArray ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture3D;
+            }
+            bool IsSampler() const { return type == ReflectParamInfo::Dxil::EShaderVariableType::Sampler; }
+            bool IsRaytracingAccelerationStructure() const {
+                return type == ReflectParamInfo::Dxil::EShaderVariableType::RaytracingAccelerationStructure;
+            }
+            bool IsSrv() const {
+                return type == ReflectParamInfo::Dxil::EShaderVariableType::ByteAddressBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::StructuredBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::TypedBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture1D ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture1DArray ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture2D ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture2DArray ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture3D ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::TextureCube ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::TextureCubeArray ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RaytracingAccelerationStructure;
+            }
+            bool IsUav() const {
+                return type == ReflectParamInfo::Dxil::EShaderVariableType::RWByteAddressBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWStructuredBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTypedBuffer ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture1D ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture1DArray ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture2D ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture2DArray ||
+                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture3D;
+            }
         };
         struct Memory {
             byte data[sizeof(Spirv)];

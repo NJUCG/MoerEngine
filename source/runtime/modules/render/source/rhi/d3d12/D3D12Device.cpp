@@ -146,6 +146,13 @@ namespace Moer::Render {
 
         gpu_global_allocator = MakeUnique<D3D12GpuGlobalAllocator>(this);
         gfx_queue            = MakeUnique<D3D12GraphicsCommandQueue>(this, EQueueType::Graphics);
+
+        feature_supports.Init(device.Get());
+        ASSERT(feature_supports.EnhancedBarriersSupported());
+        ASSERT(feature_supports.ResourceBindingTier() >= D3D12_RESOURCE_BINDING_TIER_3);// ResourceDescriptorHeap[index]
+        ASSERT(feature_supports.HighestShaderModel() >= D3D_SHADER_MODEL_6_6);          // ResourceDescriptorHeap[index]
+        ASSERT(feature_supports.RaytracingTier() >= D3D12_RAYTRACING_TIER_1_1);         // 1.0 for basic dxr, 1.1 for rayquery
+        ASSERT(feature_supports.HighestRootSignatureVersion() >= D3D_ROOT_SIGNATURE_VERSION_1_1);
     }
 
     D3D12Device::~D3D12Device() {
@@ -160,8 +167,131 @@ namespace Moer::Render {
         return PipelineHandle();
     }
 
+    static bool CheckReflectionTypeMatch(const ReflectParamInfo::Dxil& resource_info, const ShaderArgCppInfo& arg_info) {
+        if (arg_info.type == EShaderArgType::SDA_BindlessArray)// !just a specical case.. not mean real bindless.  'StructuredBuffer<uint> g__array_114514_bdls'
+            return resource_info.type == ReflectParamInfo::Dxil::EShaderVariableType::StructuredBuffer;
+        if (arg_info.type == EShaderArgType::SDA_Constant) return resource_info.IsRootConstant();
+        //if (arg_info.type == EShaderArgType::SDA_ConstantBuffer) return resource_info.IsConstantBuffer(); // seems 'SDA_ConstantBuffer' not actually used...
+        if (arg_info.type == EShaderArgType::SDA_Buffer) return resource_info.IsCommonBuffer() || resource_info.IsConstantBuffer();
+        if (arg_info.type == EShaderArgType::SDA_Texture) return resource_info.IsTexture();
+        if (arg_info.type == EShaderArgType::SDA_Sampler) return resource_info.IsSampler();
+        if (arg_info.type == EShaderArgType::SDA_TLAS) return resource_info.IsRaytracingAccelerationStructure();
+        return false;
+    };
+
     PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
-        return PipelineHandle();
+        ASSERT(std::holds_alternative<ShaderCs>(_shaders.shader_group));
+
+        D3D12PipelineState* pso = MoerNew(D3D12PipelineState)(this, D3D12PipelineState::Compute);
+
+        SingleShaderInfo& cs_info         = std::get<ShaderCs>(_shaders.shader_group).cs;
+        const auto&       shader_bytecode = cs_info.shader_data;
+
+        // TODO shader reflection-> pipeline reflection
+
+        // how to group descriptors?
+        // current approach:
+        // - root constant as root constant
+        // - constant buffer as root cbv   (if too many, maybe use a descriptor table
+        // - other resource has its own descriptor table. no more root descriptor
+        // - not use a huge table containing many ranges
+
+        // ref UE D3D12RootSignature.cpp
+        static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kSrvDescriptorRangeFlags     = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+        static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kCbvDescriptorRangeFlags     = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+        static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kUavDescriptorRangeFlags     = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+        static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kSamplerDescriptorRangeFlags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+        static constexpr D3D12_ROOT_DESCRIPTOR_FLAGS  kCbvRootDescriptorFlags      = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC;// We always set the data in an upload heap before calling Set*RootConstantBufferView.
+
+        auto& reflect_map = cs_info.shader_param_map.reflect_map;
+
+        uint                             required_dword = 0;// due to root sig limit, max 64 dword, 256 bytes
+        Array<CD3DX12_ROOT_PARAMETER1>   root_parameters;
+        Array<CD3DX12_DESCRIPTOR_RANGE1> descriptor_ranges;
+        root_parameters.reserve(_shaders.layout_hash.size());
+        descriptor_ranges.reserve(_shaders.layout_hash.size());
+
+        ASSERT(_shaders.layout_hash.size() == _shaders.arg_cpp_info.size());
+        const auto& resource_names = _shaders.layout_hash;// (not hash, but resource names
+        for (size_t i = 0; i < resource_names.size(); ++i) {
+            const ShaderArgCppInfo& arg_info = _shaders.arg_cpp_info[i];
+
+            std::string name_internal(resource_names[i]);
+            if (arg_info.type == EShaderArgType::SDA_BindlessArray) {
+                name_internal = ReflectParamInfo::bdls_name;// !
+            }
+
+            auto reflect_map_iter = reflect_map.find(name_internal.data());
+            if (reflect_map_iter == reflect_map.end()) {
+                LOG_WARNING("provided pipeline arg '{}' not found in shader '{}'", resource_names[i], cs_info.name);
+                continue;
+            }
+
+            auto& resource_info = reflect_map_iter->second.dxil;
+            if (arg_info.type == EShaderArgType::SDA_Constant) {
+                ASSERT(resource_info.IsConstantBuffer());
+                resource_info.type = ReflectParamInfo::Dxil::EShaderVariableType::RootConstant;
+            }
+
+            ASSERT2(CheckReflectionTypeMatch(resource_info, arg_info), std::format("reflection mismatch for resource {} in shader {}", resource_names[i], cs_info.name));
+
+            if (resource_info.IsRootConstant()) {
+                // check size
+                required_dword += resource_info.byte_size / 4;
+                root_parameters.emplace_back().InitAsConstants(resource_info.byte_size / 4, resource_info.slot, resource_info.space, D3D12_SHADER_VISIBILITY_ALL);
+            } else {
+                const uint bind_count = resource_info.IsBindless() ? uint(-1) : resource_info.count;
+                if (!resource_info.IsBindless()) {
+                    ASSERT(resource_info.count == arg_info.array_size);
+                }
+                if (resource_info.IsConstantBuffer()) {
+                    required_dword += 2;
+                    root_parameters.emplace_back().InitAsConstantBufferView(resource_info.slot, resource_info.space, kCbvRootDescriptorFlags, D3D12_SHADER_VISIBILITY_ALL);
+                } else if (resource_info.IsSrv()) {
+                    required_dword++;
+                    descriptor_ranges.emplace_back().Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, bind_count, resource_info.slot, resource_info.space, kSrvDescriptorRangeFlags);
+                    root_parameters.emplace_back().InitAsDescriptorTable(1, &descriptor_ranges.back(), D3D12_SHADER_VISIBILITY_ALL);
+                } else if (resource_info.IsUav()) {
+                    required_dword++;
+                    descriptor_ranges.emplace_back().Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, bind_count, resource_info.slot, resource_info.space, kUavDescriptorRangeFlags);
+                    root_parameters.emplace_back().InitAsDescriptorTable(1, &descriptor_ranges.back(), D3D12_SHADER_VISIBILITY_ALL);
+                } else if (resource_info.IsSampler()) {
+                    required_dword++;
+                    descriptor_ranges.emplace_back().Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, bind_count, resource_info.slot, resource_info.space, kSamplerDescriptorRangeFlags);
+                    root_parameters.emplace_back().InitAsDescriptorTable(1, &descriptor_ranges.back(), D3D12_SHADER_VISIBILITY_ALL);
+                }
+            }
+        }
+
+        ASSERT(required_dword <= 64);
+
+        D3D12_ROOT_SIGNATURE_FLAGS root_sig_flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED;
+
+        CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_sig_desc;
+        root_sig_desc.Init_1_1(root_parameters.size(), root_parameters.data(), 0, nullptr, root_sig_flags);
+
+        D3D12_FEATURE_DATA_ROOT_SIGNATURE feature_data{.HighestVersion = feature_supports.HighestRootSignatureVersion()};
+
+        ComPtr<ID3DBlob> signature_blob;
+        ComPtr<ID3DBlob> error;
+        DX_CHECK_HRESULT(D3DX12SerializeVersionedRootSignature(&root_sig_desc, feature_data.HighestVersion, signature_blob.GetAddressOf(), error.GetAddressOf()));
+        ComPtr<ID3D12RootSignature> root_signature;
+        DX_CHECK_HRESULT(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(root_signature.GetAddressOf())));
+
+        pso->root_signature = root_signature;
+
+        D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc{};
+        pso_desc.pRootSignature                  = pso->root_signature.Get();
+        pso_desc.CS.pShaderBytecode              = shader_bytecode.data();
+        pso_desc.CS.BytecodeLength               = shader_bytecode.size();
+        pso_desc.NodeMask                        = 0;
+        pso_desc.CachedPSO.pCachedBlob           = nullptr;
+        pso_desc.CachedPSO.CachedBlobSizeInBytes = 0;
+        pso_desc.Flags                           = D3D12_PIPELINE_STATE_FLAG_NONE;
+        ComPtr<ID3D12PipelineState> pipelineState;
+        DX_CHECK_HRESULT(device->CreateComputePipelineState(&pso_desc, IID_PPV_ARGS(pso->pipeline_state.ReleaseAndGetAddressOf())));
+
+        return PipelineHandle{.handle = reinterpret_cast<uint64>(pso)};
     }
 
     TextureRef D3D12Device::CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint _array_size) {
@@ -182,8 +312,10 @@ namespace Moer::Render {
 
     BufferRef D3D12Device::CreateBuffer(std::string_view _name, uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) {
         BufferInfo info{_element_cnt, _byte_stride, _usage, _format};
-        // _name, _format unused TODO
-        return BufferRef{MoerNew(D3D12Buffer)(this, info)};
+        // _format unused now
+        auto* buffer = MoerNew(D3D12Buffer)(this, info);
+        buffer->SetName(_name);
+        return BufferRef{buffer};
     }
 
     BindlessArrayRef D3D12Device::CreateBindlessArray(uint _max_size) {
@@ -430,7 +562,7 @@ namespace Moer::Render {
         desc.ExtraHeapFlags = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
         desc.CustomPool     = nullptr;
         D3D12_RESOURCE_ALLOCATION_INFO info;
-        info.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
+        info.Alignment   = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
         info.SizeInBytes = AlignUpToPowerOfTwo(_byte_size, info.Alignment);
 
         Allocation alloc;
@@ -1054,7 +1186,7 @@ namespace Moer::Render {
     void D3D12CommandList::CopyTextureToBuffer(D3D12Texture* _src, D3D12Buffer* _dst, uint3 _src_offset, uint64 _dst_offset, uint3 _src_extent, uint32 _mip_level) {
         CD3DX12_TEXTURE_COPY_LOCATION src(_src->Native(), _src->QuerySubresourceIndex(_mip_level, 0, 0));
         CD3DX12_BOX                   srcBox(
-            _src_offset.x, // what if offset!=0 && miplevel!=0 ??
+            _src_offset.x,// what if offset!=0 && miplevel!=0 ??
             _src_offset.y,
             _src_offset.z,
             _src_offset.x + std::max(1u, _src_extent.x >> _mip_level),
@@ -1345,18 +1477,21 @@ namespace Moer::Render {
         resourceDesc.SamplerFeedbackMipRegion.Height = 0;
         resourceDesc.SamplerFeedbackMipRegion.Depth  = 0;
 
+        bool                             is_rtv_dsv = false;
         std::optional<D3D12_CLEAR_VALUE> clearValue;
         if (resourceDesc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) {
             ASSERT(EnumHasAnyFlag(GetAspectFlags(), ETextureAspectFlags::DEPTH_SLICE | ETextureAspectFlags::STENCIL_SLICE));
             clearValue.emplace(CD3DX12_CLEAR_VALUE(resourceDesc.Format, 1.0f, 0));// maybe consider reverseZ
+            is_rtv_dsv = true;
         } else if (resourceDesc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) {
             ASSERT(EnumHasAnyFlag(GetAspectFlags(), ETextureAspectFlags::COLOR));
             const float color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
             clearValue           = CD3DX12_CLEAR_VALUE(resourceDesc.Format, color);
+            is_rtv_dsv           = true;
         }
 
         const auto allocateInfo = device->Native()->GetResourceAllocationInfo2(0, 1, &resourceDesc, nullptr);
-        allocation              = allocator->AllocateTextureHeap("default-texture-name", allocateInfo.SizeInBytes, allocateInfo.Alignment);
+        allocation              = allocator->AllocateTextureHeap("default-texture-name", allocateInfo.SizeInBytes, allocateInfo.Alignment, is_rtv_dsv);
         DX_CHECK_HRESULT(device->Native()->CreatePlacedResource2(
             allocation.alloc->GetHeap(),
             allocation.alloc->GetOffset(),
@@ -1869,6 +2004,10 @@ namespace Moer::Render {
         buffer_barriers.clear();
         pending_buffers.clear();
         global_barriers.clear();
+    }
+
+    void D3D12PipelineState::Destroy() {
+        MoerDelete(this);
     }
 
 }// namespace Moer::Render
