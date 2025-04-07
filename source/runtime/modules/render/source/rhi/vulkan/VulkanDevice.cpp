@@ -1384,7 +1384,7 @@ namespace Moer::Render {
     SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) { return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)}; }
 
     void VulkanDevice::EnqueueDeferredRelease(RHIResource* _object) {
-        //deferred_release_queue.Push(_object);
+        deferred_release_queue.Push(_object);
     }
 
     void VulkanDevice::FlushDeferredReleases() {
