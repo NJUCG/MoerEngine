@@ -656,7 +656,6 @@ RHIGfxPsoRef VulkanRHIImpl::RHICreateGraphicsPSO(RHIGraphicsPSOCreateInfo&& _ini
 
     // init descriptor set layouts and pipeline resource cache
     vk_pso->InitDescriptorSetLayouts(descriptor_bindings);
-    vk_pso->InitPipelineResourceCache(descriptor_bindings);
 
     const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
     // create pipeline layout
@@ -745,7 +744,6 @@ RHIComputePsoRef VulkanRHIImpl::RHICreateComputePipelineState(RHIShader* _comput
     }
 
     vk_pso->InitDescriptorSetLayouts(descriptor_bindings);
-    vk_pso->InitPipelineResourceCache(descriptor_bindings);
 
     const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
 
@@ -942,7 +940,6 @@ RHIRTPsoRef VulkanRHIImpl::RHICreateRayTracingPipelineState(const RHIRayTracingP
     Moer::Render::VulkanRHIRayTracingPipelineState* vk_pso = MoerNew(Moer::Render::VulkanRHIRayTracingPipelineState)(m_device);
 
     vk_pso->InitDescriptorSetLayouts(descriptor_bindings);
-    vk_pso->InitPipelineResourceCache(descriptor_bindings);
 
     const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
     // create pipeline layout
@@ -1760,70 +1757,6 @@ RHICopyCommandList* VulkanRHIImpl::RHICreateCopyCommandList() {
 RHICommandAllocator* VulkanRHIImpl::RHIGetCurrentCommandAllocator() {
     assert(0 && "not implemented");
     return nullptr;
-}
-
-void VulkanRHIImpl::RHISetBatchedShaderParametersInner(RHIResource* _pso, const RHIBatchedShaderParameters& _batched_params, bool _b_update_constant) {
-    const VulkanPipelineState* vk_pso;
-    VkShaderStageFlags         stage = 0u;
-    switch (_pso->GetResourceType()) {
-        case RRT_GRAPHIC_PIPELINE_STATE:
-            vk_pso = static_cast<Moer::Render::VulkanRHIGraphicsPipelineState*>(_pso);
-            stage  = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-            VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: graphics pipeline state is nullptr!", return);
-            break;
-        case RRT_COMPUTE_PIPELINE_STATE:
-            vk_pso = static_cast<Moer::Render::VulkanRHIComputePipelineState*>(_pso);
-            stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            VK_CHECK_NULLPTR(vk_pso, "SetBatchedShaderParameter: compute pipeline state is nullptr!", return);
-            break;
-        case RRT_RAY_TRACING_PIPELINE_STATE:
-            stage  = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR | VK_SHADER_STAGE_INTERSECTION_BIT_KHR | VK_SHADER_STAGE_CALLABLE_BIT_KHR | VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_ALL_GRAPHICS;
-            vk_pso = static_cast<Moer::Render::VulkanRHIRayTracingPipelineState*>(_pso);
-            break;
-        default:
-            LOG_ERROR("RHISetBatchedShaderParameter: pso is not a pipeline state resource");
-            return;
-    }
-    // resources
-    auto* resource_cache = vk_pso->GetPipelineResourceCache();
-
-    for (const auto& params : _batched_params.GetResourceParameters()) {
-        auto  type     = params.resource->GetResourceType();
-        auto* resource = params.resource.Get();
-        if (type == ERHIResourceType::RRT_SAMPLER) {
-            // sampler
-            auto* vk_sampler = static_cast<Moer::Render::VulkanRHISampler*>(resource);
-            VK_CHECK_NULLPTR(vk_sampler, "SetBatchedShaderParameter: sampler is nullptr!", break);
-            resource_cache->SetSamplerState(params.space, params.slot, vk_sampler);
-        } else {
-            // view
-            auto* view = static_cast<RHIView*>(resource);
-            VK_CHECK_NULLPTR(view, "SetBatchedShaderParameter: resource view is nullptr!", break);
-            if (view->IsCBV()) {
-                auto* vk_buffer = static_cast<RHICBV*>(resource);
-                resource_cache->SetCBV(params.space, params.slot, vk_buffer);
-            } else if (view->IsSRV()) {
-                auto* vk_srv = static_cast<RHISRV*>(resource);
-                resource_cache->SetSRV(params.space, params.slot, vk_srv);
-            } else if (view->IsUAV()) {
-                auto* vk_uav = static_cast<RHIUAV*>(resource);
-                resource_cache->SetUAV(params.space, params.slot, vk_uav);
-            } else {
-                LOG_ERROR("RHISetBatchedShaderParameter: resource view is not a CBV, SRV or UAV!");
-                return;
-            }
-        }
-    }
-
-    // cache push constants
-    const auto& push_constants = _batched_params.GetConstantParameters();
-    // if (!b_update_constant) return;
-    for (const auto& params : push_constants) {
-        vk_pso->GetPipelineResourceCache()->AddConstantToPush({stage,
-                                                               (uint32_t)params.size_in_32bit * 4,
-                                                               params.byte_offset_in_raw_data,
-                                                               std::move(_batched_params.GetRawData())});
-    }
 }
 
 #pragma endregion

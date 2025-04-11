@@ -1138,16 +1138,21 @@ namespace Moer::Render {
         std::string name;
         double      time;
     };
+
+    struct ProfileData {
+        Array<ProfileResultEntry> gpu_entries;
+        Array<ProfileResultEntry> cpu_entries;
+    };
     class RENDER_API CommandQueue {
     public:
         CommandQueue(){};
         CommandQueue(EQueueType _type, RenderDevice& _device);
-        void                              Test();
-        virtual void                      Wait(WaitEvent _event)                                = 0;
-        virtual WaitEvent                 Execute(CmdSubmit&& _submit)                          = 0;
-        virtual void                      Present(SwapchainRef _swapchain, TextureView _target) = 0;
-        virtual void                      Sync()                                                = 0;
-        virtual Array<ProfileResultEntry> GetProfilerEntry()                                    = 0;
+        void                Test();
+        virtual void        Wait(WaitEvent _event)                                = 0;
+        virtual WaitEvent   Execute(CmdSubmit&& _submit)                          = 0;
+        virtual void        Present(SwapchainRef _swapchain, TextureView _target) = 0;
+        virtual void        Sync()                                                = 0;
+        virtual ProfileData GetProfilerEntry()                                    = 0;
     };
 
     class RENDER_API CopyQueue {

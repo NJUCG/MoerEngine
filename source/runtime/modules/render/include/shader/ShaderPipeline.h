@@ -362,13 +362,6 @@ namespace Moer::Render {
             }
         }
 
-        // template<typename... T, std::size_t... Is>
-        // ArrayArguments SetParams(std::index_sequence<Is...>, T&&... _args) {
-        //     ArrayArguments arg_setter(arg_size);
-        //     (..., SetParam<T, std::tuple_element_t<Is, tuple_helper>>((std::forward<T>(_args)), arg_setter));
-        //     return std::move(arg_setter);
-        // }
-
         template<typename... T, std::size_t... Is>
         static ArrayArguments SetParams(std::index_sequence<Is...>, T&&... _args) {
             ArrayArguments arg_setter(arg_size, GetConstantSize(), IsUsingBdls());
@@ -389,18 +382,6 @@ namespace Moer::Render {
 
     private:
     public:
-        void SetTexture(uint _idx, TextureRef _param);
-        void SetBuffer(uint _idx, BufferRef _param);
-        void SetTexture(uint _idx, TextureView _param);
-        void SetBuffer(uint _idx, BufferView _param);
-        void SetSampler(uint _idx, Sampler _param);
-
-        template<typename T>
-        void SetConstant(uint _idx, T&& _args) { SetConstantInner(_idx, std::span<uint>((uint*)&_args, sizeof(T) / sizeof(uint))); }
-
-        void SetConstantInner(uint _idx, std::span<uint> _data);
-        void SetBufferHash(uint64 _hash, BufferView _param);
-        void SetTextureHash(uint64 _hash, TextureView _param);
         uint GetBindingIdx(uint64 _hash) { return handle.hash_2_info_index[_hash]; }
         ShaderPipeline(PipelineHandle _handle) : handle(std::move(_handle)) {}
         PipelineHandle handle;

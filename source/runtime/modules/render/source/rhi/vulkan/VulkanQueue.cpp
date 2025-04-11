@@ -2006,8 +2006,8 @@ namespace Moer::Render {
 
 #pragma region[ VkCommandQueue ]
     WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
-        Timer timer{};
-
+        Timer         timer{};
+        Timer         reorder_timer{};
         FunctionTable function_table{
             .is_resource_write       = &IsBufferTextureWrite,
             .is_resource_read        = &IsBufferTextureRead,
@@ -2018,9 +2018,12 @@ namespace Moer::Render {
 
         CmdReorderer reorderer{function_table, _submit.cached_args};
         //reorder commands base on resource read/write and manual scope
+        reorder_timer.Start();
         for (const auto& cmd : _submit.cmds) {
             reorderer.AcceptCmd(cmd.get());
         }
+        reorder_timer.Stop();
+        double                       reorder_time = reorder_timer.ElapsedMilliseconds();
         std::unique_lock<std::mutex> lock(exec_mtx);//currently only one thread can execute commands at a time
 
         //Get Allocators for buffer, texture and commandlist
@@ -2042,11 +2045,13 @@ namespace Moer::Render {
         uint64      last_time = last_frame;
 
         //Set Descriptor buffer ringbuffer offset and start debug region
+        double preprocess_time = 0.0;
         if (has_cmd) {
             vk_allocator.GetCmdList().Begin();
             if (_submit.b_tick_profiling) {
                 profiler_storage.CollectProfiling(vk_allocator.GetCmdList().GetHandle());
                 cached_profiler_entry = profiler_storage.GetProfilerEntry();
+                profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
                 timer.Start();
             }
 
@@ -2068,11 +2073,14 @@ namespace Moer::Render {
             if (cmd_list.head == nullptr) {
                 continue;
             }
+            reorder_timer.Start();
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 preprocessor.VisitCmd(cmdnode->cmd);
             }
             tracker.ResolveBarriers();
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
+            reorder_timer.Stop();
+            preprocess_time += reorder_timer.ElapsedMilliseconds();
             vk_allocator.GetCmdList().InsertLabel(std::format("Layer {}", layer++), {0.0f, 0.0f, 1.0f, 1.0f});
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 const auto* cmd = cmdnode->cmd;
@@ -2086,6 +2094,9 @@ namespace Moer::Render {
         if (has_cmd) {
             tracker.RestoreState();
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
+            if (_submit.b_tick_profiling) {
+                profiler_storage.EndProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
+            }
             vk_allocator.GetCmdList().EndLabel();
             vk_allocator.GetCmdList().End();
             if (queue.GetType() != EQueueType::Copy) {
@@ -2152,7 +2163,11 @@ namespace Moer::Render {
             executed_queue.Enqueue(current_timeline);
             if (_submit.b_tick_profiling) {
                 timer.Stop();
-                profiler_storage.RegisterCpuTimestamp(timer.ElapsedMilliseconds());
+                profiler_storage.RegisterCpuTimestamp("Queue Execution", timer.ElapsedMilliseconds());
+                profiler_storage.RegisterCpuTimestamp("Command Reorder", reorder_time);
+                profiler_storage.RegisterCpuTimestamp("Command Preprocess", preprocess_time);
+                profiler_storage.RegisterCpuTimestamp("Reorder Percentage", reorder_time / timer.ElapsedMilliseconds());
+                profiler_storage.RegisterCpuTimestamp("Preprocess Percentage", preprocess_time / timer.ElapsedMilliseconds());
                 profiler_storage.AdvanceFrame();
             }
             // LOG_INFO("Submit time {}", timer.ElapsedMilliseconds());
@@ -2226,7 +2241,7 @@ namespace Moer::Render {
         Complete(last_frame);
     }
 
-    Array<ProfileResultEntry> VkCommandQueue::GetProfilerEntry() {
+    ProfileData VkCommandQueue::GetProfilerEntry() {
         return profiler_storage.GetProfilerEntry();
     }
 

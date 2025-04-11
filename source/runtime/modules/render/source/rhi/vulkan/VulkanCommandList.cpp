@@ -847,42 +847,6 @@ namespace Moer::Render {
     }
 
     void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
-        VulkanPipelineState* vk_pso        = nullptr;
-        auto                 binding_point = current_pso.index() == 0 ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE;
-        if (current_pso.index() == 0) {
-            vk_pso = std::get<0>(current_pso);
-        } else {
-            vk_pso = std::get<1>(current_pso);
-        }
-        VK_CHECK_NULLPTR(vk_pso, "PreDrawCommand: graphics pipeline state is nullptr!", return);
-        auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
-        VK_CHECK_NULLPTR(vk_resource_cache, "PreDrawCommand: graphics pipeline resource cache is nullptr!", return);
-
-        auto* pipeline_layout = vk_pso->GetPipelineLayout();
-
-        const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
-        // 1. update and bind descriptor sets
-        if (vk_resource_cache->HasDescriptorSets()) {
-            vk_resource_cache->UpdateDescriptorSets(vk_sets_layout);
-            if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
-                vk_resource_cache->BindDescriptorSets(m_command_buffer, binding_point, pipeline_layout);
-                m_bound_sets = vk_resource_cache->GetDescriptorSets();
-            }
-        }
-
-        // 2. push constants
-        if (vk_resource_cache->HasPushConstants()) {
-            for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
-                vkCmdPushConstants(
-                    m_command_buffer,
-                    pipeline_layout,
-                    constant_info.flags,
-                    constant_info.byte_offset_in_raw_data,
-                    constant_info.size,
-                    constant_info.raw_data.data());
-            }
-            vk_resource_cache->ResetToPush();
-        }
     }
 
     void VulkanRHIGraphicsCommandList::PrepareDispatch() {
@@ -951,36 +915,6 @@ namespace Moer::Render {
         VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
     }
     void VulkanRHIComputeCommandList::PrepareDispatchCommand() {
-        const auto* vk_pso = m_current_pipeline_state;
-        VK_CHECK_NULLPTR(vk_pso, "PrepareDispatchCommand: compute pipeline state is nullptr!", return);
-        auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
-        VK_CHECK_NULLPTR(vk_resource_cache, "PrepareDispatchCommand: compute pipeline resource cache is nullptr!", return);
-
-        auto pipeline_layout = vk_pso->GetPipelineLayout();
-
-        const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
-        // 1. update and bind descriptor sets
-        if (vk_resource_cache->HasDescriptorSets()) {
-            vk_resource_cache->UpdateDescriptorSets(vk_sets_layout);
-            if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
-                vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout);
-                m_bound_sets = vk_resource_cache->GetDescriptorSets();
-            }
-        }
-
-        // 2. push constants
-        if (vk_resource_cache->HasPushConstants()) {
-            for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
-                vkCmdPushConstants(
-                    m_command_buffer,
-                    pipeline_layout,
-                    constant_info.flags,
-                    constant_info.byte_offset_in_raw_data,
-                    constant_info.size,
-                    constant_info.raw_data.data());
-            }
-            vk_resource_cache->ResetToPush();
-        }
     }
 
     VulkanRHIRayTracingCommandList::VulkanRHIRayTracingCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}
@@ -1046,36 +980,6 @@ namespace Moer::Render {
         VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
     }
     void VulkanRHIRayTracingCommandList::PrepareTraceRayCommand() {
-        const auto* vk_pso = m_current_pipeline_state;
-        VK_CHECK_NULLPTR(vk_pso, "PrepareTraceRayCommand: raytracing pipeline state is nullptr!", return);
-        auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
-        VK_CHECK_NULLPTR(vk_resource_cache, "PrepareTraceRayCommand: raytracing pipeline resource cache is nullptr!", return);
-
-        auto pipeline_layout = vk_pso->GetPipelineLayout();
-
-        const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
-        // 1. update and bind descriptor sets
-        if (vk_resource_cache->HasDescriptorSets()) {
-            vk_resource_cache->UpdateDescriptorSets(vk_sets_layout);
-            if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
-                vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline_layout);
-                m_bound_sets = vk_resource_cache->GetDescriptorSets();
-            }
-        }
-
-        // 2. push constants
-        if (vk_resource_cache->HasPushConstants()) {
-            for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
-                vkCmdPushConstants(
-                    m_command_buffer,
-                    pipeline_layout,
-                    constant_info.flags,
-                    constant_info.byte_offset_in_raw_data,
-                    constant_info.size,
-                    constant_info.raw_data.data());
-            }
-            vk_resource_cache->ResetToPush();
-        }
     }
 
     VulkanRHICopyCommandList::VulkanRHICopyCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}
@@ -1423,13 +1327,6 @@ namespace Moer::Render {
     }
 
     void VulkanCmdList::UploadDescriptors(PipelineHandle& _pso_handle) {
-        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
-
-        auto* resource_cache = vk_pso->GetPipelineResourceCache();
-        if (resource_cache->HasDescriptorSets()) {
-            resource_cache->UpdateDescriptorSets(vk_pso->GetDescriptorSetsLayout());
-            resource_cache->BindDescriptorSets(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetPipelineLayout());
-        }
     }
 
     void VulkanCmdList::UploadPushConstants(

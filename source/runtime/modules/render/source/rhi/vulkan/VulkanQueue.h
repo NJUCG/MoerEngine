@@ -54,13 +54,14 @@ namespace Moer::Render {
         bool IsActive() const {
             return active;
         }
-        void RegisterCpuTimestamp(double _timestamp) {
-            cpu_timestamps[cur_frame] = _timestamp;
+        void RegisterCpuTimestamp(std::string_view _name, double _timestamp) {
+            cpu_timestamps[cur_frame][_name] = _timestamp;
         }
         void AdvanceFrame() {
             cur_frame = (cur_frame + 1) % s_queue_max_frame_in_flight;
         }
-        Array<ProfileResultEntry> GetProfilerEntry() {
+        ProfileData GetProfilerEntry() {
+            ProfileData               data{};
             Array<ProfileResultEntry> entries;
             entries.reserve(name2sample.size());
             uint last_frame = (cur_frame + s_queue_max_frame_in_flight - 1) % s_queue_max_frame_in_flight;
@@ -68,19 +69,23 @@ namespace Moer::Render {
                 if (sample.accumulated > 0)
                     entries.push_back({name, double(sample.accumulated) / (Sample::s_range * 1e6) * timestamp_period});
             }
+            data.gpu_entries = std::move(entries);
             //cpu timestamp
-            entries.push_back({"CPU Execution", double(cpu_timestamps[cur_frame])});
-            return entries;
+            data.cpu_entries.reserve(cpu_timestamps[last_frame].size());
+            for (auto& [name, timestamp] : cpu_timestamps[last_frame]) {
+                data.cpu_entries.emplace_back(name.data(), timestamp);
+            }
+            return data;
         }
 
         void BeginProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
         void EndProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
 
-        bool               active = false;
-        VkNativeQueryPool& timestamp_pool;
-        float              timestamp_period = 0.0f;
-        uint64             query_pool_results[s_max_num_profiler_queries_per_frame * 2];
-        double             cpu_timestamps[s_queue_max_frame_in_flight];
+        bool                                                                             active = false;
+        VkNativeQueryPool&                                                               timestamp_pool;
+        float                                                                            timestamp_period = 0.0f;
+        uint64                                                                           query_pool_results[s_max_num_profiler_queries_per_frame * 2];
+        StaticArray<UnorderedMap<std::string_view, double>, s_queue_max_frame_in_flight> cpu_timestamps;
         // each result contain two int(VK_QUERY_RESULT_WITH_AVAILABILITY_BIT)
         // first int contains the queried timestamp
         // next(last) int contains availability of the timestamp, available if nonzero
@@ -174,11 +179,11 @@ namespace Moer::Render {
             // LOG_INFO("Presentor count {}", present_count);
             MoerDelete(timeline);
         }
-        WaitEvent                 Execute(CmdSubmit&& _submit) override;
-        void                      Wait(WaitEvent _event) override;
-        void                      Present(SwapchainRef _viewport, TextureView _view) override;
-        void                      Sync() override;
-        Array<ProfileResultEntry> GetProfilerEntry() override;
+        WaitEvent   Execute(CmdSubmit&& _submit) override;
+        void        Wait(WaitEvent _event) override;
+        void        Present(SwapchainRef _viewport, TextureView _view) override;
+        void        Sync() override;
+        ProfileData GetProfilerEntry() override;
 
         void                                      ExecuteThread();
         VulkanDevice&                             vk_device;
@@ -204,7 +209,7 @@ namespace Moer::Render {
         VkNativeQueue                                      queue;
         VkNativeQueryPool                                  timestamp_pool;
         ProfilerStorage                                    profiler_storage;
-        Array<ProfileResultEntry>                          cached_profiler_entry;
+        ProfileData                                        cached_profiler_entry;
 
         std::mutex   exec_mtx;
         std::jthread thread;

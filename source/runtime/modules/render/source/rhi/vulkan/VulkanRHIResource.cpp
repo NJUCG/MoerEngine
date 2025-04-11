@@ -949,19 +949,12 @@ namespace Moer::Render {
             }
         }
         CHECK_AND_DELETE(m_descriptor_sets_layout);
-        CHECK_AND_DELETE(m_pipeline_state_cache);
     }
 
     void VulkanPipelineState::InitDescriptorSetLayouts(Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) {
         if (_descriptor_bindings.empty()) { return; }
 
         m_descriptor_sets_layout = MoerNew(VulkanDescriptorSetsLayout)(m_device, _descriptor_bindings);
-    }
-
-    void VulkanPipelineState::InitPipelineResourceCache(const Moer::Array<TDescriptorSetLayoutBindingArray>& _descriptor_bindings) {
-        if (_descriptor_bindings.empty()) { return; }
-
-        m_pipeline_state_cache = MoerNew(VulkanPipelineResourceCache)(m_descriptor_sets_layout, _descriptor_bindings, *m_device);
     }
 
     void VulkanPipelineState::CreatePipelineLayout(const VkPipelineLayoutCreateInfo& _pipeline_layout_ci) { VK_CHECK_RESULT(vkCreatePipelineLayout(m_device->GetDevice(), &_pipeline_layout_ci, nullptr, &m_pipeline_layout)); }
@@ -1504,12 +1497,6 @@ namespace Moer::Render {
     }
     VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, VkImage _image)
         : Texture(_info), VulkanDeviceObject(_device) {
-        state = SubResourceStates{
-            .mip_level = 0,
-            .mip_cnt = _info.num_mips,
-            .access = VK_ACCESS_2_NONE,
-            .layout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .stage = VK_PIPELINE_STAGE_2_NONE_KHR};
         b_present = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
         bool b_prefer_sample = (_info.usage & ETextureUsageFlags::SAMPLED) == ETextureUsageFlags::SAMPLED && (_info.usage & ETextureUsageFlags::UNORDERED_ACCESS) == ETextureUsageFlags::UNDEFINED;
         m_preferred_layout = b_prefer_sample ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
@@ -1578,16 +1565,11 @@ namespace Moer::Render {
         return mip_width * mip_height * mip_depth * g_platform_pixel_formats[uint(GetFormat())].stride;
     }
 
-    bool         VulkanTexture::IsGeneralRead(uint _mip_level) const {
-        if (auto iter = mip_usages.find(_mip_level); iter != mip_usages.end()) { return std::get<ETextureStateFlags>(iter->second) == ETextureStateFlags::TS_UNORDERED_READ; }
-        return false;
-    }
-
     VulkanBuffer::~VulkanBuffer() {
         if (m_alloc.buffer != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) { 
             vmaDestroyBuffer(m_device->GetVmaAllocator(), m_alloc.buffer, m_alloc.alloc); 
         }
-        if (m_descriptor_idx >= 0) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(m_descriptor_idx); }
+        // if (m_descriptor_idx >= 0) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(m_descriptor_idx); }
         // for (const auto& idx : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeBufferDescIdx(idx.second); }
 
         for (uint i = 0; i < 4; ++i) {

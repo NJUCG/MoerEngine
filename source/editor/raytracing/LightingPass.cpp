@@ -135,21 +135,6 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         uint2 dispatch_size = _rt_ctx.frame_rt.diffuse_lighting->GetExtent().xy;
         dispatch_size.x     = div_ceil(dispatch_size.x, DI_SCREEN_TILE_SIZE);
         dispatch_size.y     = div_ceil(dispatch_size.y, DI_SCREEN_TILE_SIZE);
-
-        // _cmd_list.Compute(generate_initial_sample_pipeline, DI_BINDING_ARGS(_rt_ctx))
-        //     .Dispatch(uint3(dispatch_size, 1), "GenerateInitialSample");
-
-        // _cmd_list.Compute(temporal_resmaple_pipeline, DI_BINDING_ARGS(_rt_ctx))
-        //     .Dispatch(uint3(dispatch_size, 1), "TemporalResample");
-
-        // _cmd_list.Compute(spatial_resample_pipeline, DI_BINDING_ARGS(_rt_ctx))
-        //     .Dispatch(uint3(dispatch_size, 1), "SpatialResample");
-
-        // _cmd_list.Compute(di_shade_sample_pipeline, DI_BINDING_ARGS(_rt_ctx))
-        //     .Dispatch(uint3(dispatch_size, 1), "ShadeSample");
-
-        //use arg ref
-
         _cmd_list.Compute(generate_initial_sample_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "GenerateInitialSample");
 

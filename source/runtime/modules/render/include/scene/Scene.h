@@ -209,9 +209,10 @@ namespace Moer {
     };
 
     struct MeshInstance {
-        int  instance_id;
-        int  geom_instance_id;
-        uint mesh_info_idx;//for serialization
+        SharedPtr<MeshInfo> mesh_info;
+        int                 instance_id;
+        int                 geom_instance_id;
+        uint                mesh_info_idx;//for serialization
 
         InputStream& operator>>(InputStream& _stream) {
             _stream >> instance_id >> geom_instance_id >> mesh_info_idx;

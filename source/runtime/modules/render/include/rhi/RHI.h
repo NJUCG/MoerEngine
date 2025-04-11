@@ -217,7 +217,6 @@ public:
     virtual RHICopyCommandList*       RHICreateCopyCommandList()                                           = 0;
     template<TPipelineStateRef TPipelineRef>
     void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) {
-        RHISetBatchedShaderParametersInner(_pso, _batched_params, b_update_constant);
     };
 
     virtual RHICommandAllocator* RHIGetCurrentCommandAllocator() = 0;
@@ -243,9 +242,8 @@ public:
     void RHIFlushPendingDeletes();
 #pragma endregion
 protected:
-    virtual void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
-    virtual RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info)                                                                                 = 0;
-    virtual RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                     = 0;
+    virtual RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info)                             = 0;
+    virtual RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
     template<uint32_t _type>
     RHIViewRef RHICreateBufferView(RHIBuffer* _resource, uint64_t _stride, uint64_t _byte_size, uint64_t _byte_offset) {
         auto true_stride = _stride == 0 ? _resource->GetStride() : _stride;

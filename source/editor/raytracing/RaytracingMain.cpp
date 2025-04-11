@@ -403,7 +403,22 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
                         //Pass profiling
                         auto entrys = gfx_queue.GetProfilerEntry();
-                        for (auto& [name, time] : entrys) { ImGui::Text("%s: %.3f ms", name.c_str(), time); }
+                        if (!entrys.cpu_entries.empty()) {
+                            ImGui::Text("CPU Time:");
+                            for (auto& [name, time] : entrys.cpu_entries) {
+                                if (name.ends_with("Percentage")) {
+                                    ImGui::Text("%s: %.3f%%", name.c_str(), time * 100);
+
+                                } else
+                                    ImGui::Text("%s: %.3f ms", name.c_str(), time);
+                            }
+                        }
+                        if (!entrys.gpu_entries.empty()) {
+                            ImGui::Text("GPU Time:");
+                            for (auto& [name, time] : entrys.gpu_entries) {
+                                ImGui::Text("%s: %.3f ms", name.c_str(), time);
+                            }
+                        }
                     }
                 );
 
