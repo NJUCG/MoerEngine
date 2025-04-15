@@ -13,6 +13,8 @@
 #include "window/WindowContext.h"
 
 #include <atomic>
+#include <mutex>
+#include <thread>
 #include <volk.h>
 namespace Moer::Render {
     struct SwapChainBuffer {
@@ -70,17 +72,20 @@ namespace Moer::Render {
 
     class VkSwapchain : public Swapchain {
     public:
+        friend VkCommandQueue;
         VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info);
         ~VkSwapchain();
-        void                                Recreate(const SwapchainCreateInfo& _info);
+        void                                Recreate(const SwapchainCreateInfo& _info) override;
         void                                CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
         std::tuple<VkSemaphore, uint, uint> AquireNextImage();
         TextureView                         GetSwapchainImage(uint _index);
         VkSemaphore                         GetImageReadyFence(uint _index);
         VkSemaphore                         GetRenderFinishedFence();
         void                                Present(VkQueue _queue, uint _image_index);
+        void                                Sync() override;
 
         void               WaitFrameInFlight();
+        void               WaitFrameInFlight(uint64 _image_idx);
         VkFence            GetInFlightFence(uint64 _image_idx);
         VkSurfaceFormatKHR GetSurfaceFormat() const { return fmt; }
         VkSurfaceFormatKHR fmt;
@@ -98,6 +103,14 @@ namespace Moer::Render {
         uint           max_frames_in_flight = 3;
 
         std::atomic_uint64_t present_timeline = 0;
+
+    private:
+        void OnFinishPresent(uint64 _image_idx);
+        void EnqueuePresent(uint64 _present_idx);
+
+    private:
+        Array<std::jthread> present_threads;
+        std::atomic<uint>   cur_present_cnt = 0;
     };
 }// namespace Moer::Render
 

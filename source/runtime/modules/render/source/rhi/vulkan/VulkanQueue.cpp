@@ -19,6 +19,7 @@
 
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <variant>
 namespace Moer::Render {
 
@@ -2342,6 +2343,7 @@ namespace Moer::Render {
                                [&](VulkanFence* _fence) {
                                    assert(false && "Invalid event");
                                }},
+
                            evt->event);
             }
             {

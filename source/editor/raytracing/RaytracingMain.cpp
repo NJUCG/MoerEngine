@@ -232,6 +232,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
             gfx_queue.Sync();
             sc_info.size = {resolution.x, resolution.y};
+            sc->Sync();
             sc->Recreate(sc_info);
 
             create_frame_buffers(resolution);

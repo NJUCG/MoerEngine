@@ -3480,6 +3480,7 @@ namespace Moer::Render {
     public:
         virtual void Recreate(const SwapchainCreateInfo&) = 0;
         virtual ~Swapchain()                              = default;
+        virtual void Sync()                               = 0;
 
     public:
         EPixelFormat format;

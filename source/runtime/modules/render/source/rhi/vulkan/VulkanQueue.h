@@ -124,6 +124,7 @@ namespace Moer::Render {
     class VkCommandQueue : public CommandQueue {
     public:
         struct FencePlaceHoler {};
+
         using EventType = std::variant<
             UniquePtr<VulkanAllocator>,
             UniquePtr<VulkanPresentor>,
