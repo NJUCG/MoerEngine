@@ -367,7 +367,7 @@ void RTContext::CreateBuffersIfNeeded(
             local_light_pdf_tex = device.CreateTexture(
                 "local_light_pdf_tex",
                 Extent2D(texture_width, texture_height),
-                PF_R32_SFLOAT,
+                PF_R16_SFLOAT,
                 ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
                 mips
             );

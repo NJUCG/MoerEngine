@@ -310,12 +310,25 @@ namespace Moer::Render {
         }
 
         void Visit(const UploadBufferCmd* _cmd) {
+            auto data_span  = _cmd->Data();
+            auto tmp_buffer = allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
+            device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
+            _cmd->staging_buffer = tmp_buffer;
+
             auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
             tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+            //Register Inner Buffer Ranges for queue execution sync
+            tracker.RegisterFlushBufferRange(_cmd->staging_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_HOST_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT);
         }
         void Visit(const UploadTextureCmd* _cmd) {
+            auto data_span  = _cmd->Data();
+            auto tmp_buffer = allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
+            device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
+            _cmd->staging_buffer = tmp_buffer;
+
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
             tracker.RecordState(vk_texture, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, _cmd->MipLevel());
+            tracker.RegisterFlushBufferRange(_cmd->staging_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_HOST_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT);
         }
         void Visit(const CopyBufferCmd* _cmd) {
             auto* vk_src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->SrcHandle());
@@ -344,13 +357,21 @@ namespace Moer::Render {
         }
 
         void Visit(const CopyBackBufferCmd* _cmd) {
+            auto tmp_buffer      = allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+            _cmd->staging_buffer = tmp_buffer;
+
             auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
             tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+            tracker.RegisterFlushBufferRange(_cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         }
 
         void Visit(const CopyBackTextureCmd* _cmd) {
+            auto tmp_buffer      = allocator.AllocateReadbackBuffer(_cmd->Data().size_bytes(), 16);
+            _cmd->staging_buffer = tmp_buffer;
+
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
             tracker.RecordState(vk_texture, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, _cmd->MipLevel());
+            tracker.RegisterFlushBufferRange(_cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         }
 
         void Visit(const DispatchCmd* _cmd) {
@@ -866,27 +887,21 @@ namespace Moer::Render {
             }
         };
         void Visit(const UploadBufferCmd& _cmd) {
-            auto data_span  = _cmd.Data();
-            auto tmp_buffer = allocator.AllocateUploadBuffer(_cmd.ByteSize(), 16);
-            cmd_list.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
-            VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
+            auto          tmp_buffer = _cmd.staging_buffer;
+            VulkanBuffer* buffer     = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
             cmd_list.CopyBuffer(reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
                                 buffer,
                                 _cmd.ByteSize(),
                                 tmp_buffer.GetByteOffset(),
                                 _cmd.Offset());
-
-            // LOG_INFO("upload temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
         }
 
         void Visit(const UploadTextureCmd& _cmd) {
-            auto data_span  = _cmd.Data();
-            auto tmp_buffer = allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
-            cmd_list.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
-            VulkanTexture* texture = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
+            auto           tmp_buffer = _cmd.staging_buffer;
+            VulkanTexture* texture    = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
             cmd_list.CopyBufferToTexture(reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
                                          texture,
-                                         data_span.size_bytes(),
+                                         tmp_buffer.GetByteSize(),
                                          tmp_buffer.GetByteOffset(),
                                          _cmd.Offset(),
                                          _cmd.Size(),
@@ -906,10 +921,10 @@ namespace Moer::Render {
 
         void Visit(const CopyBackBufferCmd& _cmd) {
             VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
-            auto          tmp_buffer = allocator.AllocateReadbackBuffer(_cmd.ByteSize(), 16);
+            auto          tmp_buffer = _cmd.staging_buffer;
 
-            tracker.RegisterFlushBuffer(tmp_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-            tracker.DispatchBarriers(cmd_list);
+            // tracker.RegisterFlushBuffer(tmp_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+            // tracker.DispatchBarriers(cmd_list);
             cmd_list.CopyBuffer(src_buffer,
                                 reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
                                 _cmd.ByteSize(),
@@ -926,10 +941,10 @@ namespace Moer::Render {
 
         void Visit(const CopyBackTextureCmd& _cmd) {
             VulkanTexture* src_texture = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
-            auto           tmp_buffer  = allocator.AllocateReadbackBuffer(_cmd.Data().size_bytes(), 16);
+            auto           tmp_buffer  = _cmd.staging_buffer;
 
-            tracker.RegisterFlushBuffer(tmp_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-            tracker.DispatchBarriers(cmd_list);
+            // tracker.RegisterFlushBuffer(tmp_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+            // tracker.DispatchBarriers(cmd_list);
             cmd_list.CopyTextureToBuffer(src_texture,
                                          reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
                                          _cmd.Data().size_bytes(),

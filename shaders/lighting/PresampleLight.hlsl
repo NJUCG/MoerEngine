@@ -1,7 +1,7 @@
 #include <framework/DI/Bindings.hlsli>
 #include <framework/DI/PresampleFunctions.hlsli>
 
-[numthreads(256, 1, 1)] void main(uint3 dtid
+[numthreads(DI_PRESAMPLE_GRID_SIZE, 1, 1)] void main(uint3 dtid
                                   : SV_DispatchThreadID) {
   Moer::RandomState rng = Moer::RandomState::Create(dtid.xy, resample_params.frame_idx);
 

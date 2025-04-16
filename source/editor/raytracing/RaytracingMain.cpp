@@ -536,6 +536,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 auto di_spatial_resampling_config  = is_ctx.GetDISpatialResampleParams();
                 di_initial_sample_config.local_light_sample_mode =
                     ui_cfg.restir_di_cfg.initial_sample_config.local_light_sample_mode;
+                di_initial_sample_config.env_map_is = is_ctx.GetLightBufferParams().env_light.light_cnt;
                 di_temporal_resampling_config.bias_correction_mode =
                     ui_cfg.restir_di_cfg.temporal_resample_config.bias_correction;
                 di_temporal_resampling_config.depth_threshold =
@@ -749,6 +750,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
     cmd_list.UpdateBindlessArray(bindless_array);
     gfx_queue.Execute(cmd_list.Submit().DeleteResources());
     gfx_queue.Sync();
+    sc->Sync();
 
     _editor_ui->UnregisterUIFunc("Display MaterialTexture");
 }

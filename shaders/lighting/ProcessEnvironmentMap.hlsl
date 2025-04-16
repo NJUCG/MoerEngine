@@ -1,5 +1,5 @@
 #include <MathLib/STL.hlsli>
-#include <shared/lighting/ShaderParameters.h>
+#include <shared/ShaderParameters.h>
 #include <shared/utils/MoerMath.hlsli>
 static const float PI = 3.1415926535f;
 
@@ -29,9 +29,9 @@ float GetPixelWeight(uint2 pos) {
 
 groupshared float g_weights[16];
 
-[numthreads(256, 1, 1)] void main(uint2 gid
-                                  : SV_GroupID, uint tid
-                                  : SV_GroupThreadID) {
+[numthreads(DI_PRESAMPLE_GRID_SIZE, 1, 1)] void main(uint2 gid
+                                                     : SV_GroupID, uint tid
+                                                     : SV_GroupThreadID) {
   uint2 local_idx = Math::LinearIndexToZCurve(tid);
   uint2 gtid = (gid << 4) + local_idx;
 

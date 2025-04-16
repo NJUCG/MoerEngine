@@ -122,7 +122,7 @@ namespace Moer::Render {
         void  CopyBufferToTexture(VulkanBuffer* _src, VulkanTexture* _dst, uint64 _size, uint64 _src_offset, uint3 _dst_offset, uint3 _dst_extent, uint32 _mip_level);
         void  CopyTextureToBuffer(VulkanTexture* _src, VulkanBuffer* _dst, uint64 _size, uint3 _src_offset, uint64 _dst_offset, uint3 _src_extent, uint32 _mip_level);
         void  CopyData(const BufferView& _dst, const void* _data, uint64 _size);
-        void  CopyData(const void* _dst, const BufferView& _src, uint64 _size);
+        void  CopyData(void* _dst, const BufferView& _src, uint64 _size);
         void* MapBuffer(const BufferView& _src);
         void  UnmapBuffer(const BufferView& _buffer);
         void  DrawIndexedInstanced(uint32_t _index_count, uint32_t _instance_count, uint32_t _start_index_location, uint32_t _base_vertex_location, uint32_t _start_instance_location);

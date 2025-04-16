@@ -99,7 +99,7 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     if (is_ctx.GetLightBufferParams().local_light_region.light_cnt) {
         uint2 dispatch_size = uint2(
-            div_ceil(is_ctx.GetLocalLightRISBufferParams().tile_size, 256),
+            div_ceil(is_ctx.GetLocalLightRISBufferParams().tile_size, DI_PRESAMPLE_GRID_SIZE),
             is_ctx.GetLocalLightRISBufferParams().tile_cnt
         );
         // _cmd_list.Compute(presample_light_pipeline, DI_BINDING_ARGS(_rt_ctx))
@@ -111,7 +111,7 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     if (is_ctx.GetLightBufferParams().env_light.light_cnt) {
         uint2 dispatch_size = uint2(
-            div_ceil(is_ctx.GetEnvLightRISBufferParams().tile_size, 256),
+            div_ceil(is_ctx.GetEnvLightRISBufferParams().tile_size, DI_PRESAMPLE_GRID_SIZE),
             is_ctx.GetEnvLightRISBufferParams().tile_cnt
         );
         // _cmd_list.Compute(presample_env_map_pipeline, DI_BINDING_ARGS(_rt_ctx))
@@ -122,7 +122,8 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     }
 
     if (is_ctx.GetLightBufferParams().local_light_region.light_cnt) {
-        uint2 dispatch_size = uint2(div_ceil(is_ctx.GetGridRuntimeConfig().num_light_slot, 256), 1);
+        uint2 dispatch_size =
+            uint2(div_ceil(is_ctx.GetGridRuntimeConfig().num_light_slot, DI_PRESAMPLE_GRID_SIZE), 1);
         // _cmd_list.Compute(presample_light_grid_pipeline, DI_BINDING_ARGS(_rt_ctx))
         //     .Dispatch(uint3(dispatch_size, 1), "PresampleLightGrid");
 

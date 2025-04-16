@@ -444,6 +444,26 @@ namespace Moer::Render {
         state.dst_access |= _access;
         state.dst_stage |= _stage;
     }
+    void VkTracker::RegisterFlushBufferRange(const BufferView&        _view,
+                                             VkAccessFlagBits2        _access,
+                                             VkPipelineStageFlagBits2 _stage,
+                                             VkAccessFlagBits2        _src_access,
+                                             VkPipelineStageFlagBits2 _src_stage) {
+        VulkanBuffer* buffer = ResourceCast(_view.buffer);
+
+        if (flush_buffer_ranges.try_emplace(buffer, _view.GetByteOffset(), _view.GetByteSize() + _view.GetByteOffset()).second) {
+            auto& state = flush_buffer_states[buffer];
+            state.dst_access |= _access;
+            state.dst_stage |= _stage;
+            state.src_access = _src_access;
+            state.src_stage  = _src_stage;
+            pending_buffers.insert(buffer);
+        } else {
+            auto& range = flush_buffer_ranges[buffer];
+            range.min   = Min(range.min, _view.GetByteOffset());
+            range.max   = Max(range.max, _view.GetByteSize() + _view.GetByteOffset());
+        }
+    }
 
     void VkTracker::RecordState(VulkanTexture*                                                     _texture,
                                 std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&& _state,
@@ -615,6 +635,7 @@ namespace Moer::Render {
 
         for (VulkanBuffer* buffer : pending_buffers) {
 
+            //normal buffers with certain ranges and states to flush
             if (auto it = buffer_states.find(buffer); it != buffer_states.end()) {
                 auto& state = it->second;
                 if (((state.dst_access & VK_ACCESS_2_SHADER_WRITE_BIT) == 0) && state.src_access == state.dst_access && state.src_stage == state.dst_stage) {
@@ -644,6 +665,24 @@ namespace Moer::Render {
                 state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
                 state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
                 state.dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
+            }
+
+            //internal buffers with certain ranges and states to flush
+            if (auto it = flush_buffer_ranges.find(buffer); it != flush_buffer_ranges.end()) {
+                auto state = flush_buffer_states[buffer];
+                buffer_barriers.emplace_back();
+                VkBufferMemoryBarrier2& barrier = buffer_barriers.back();
+                barrier.sType                   = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                barrier.pNext                   = nullptr;
+                barrier.srcAccessMask           = state.src_access;
+                barrier.dstAccessMask           = state.dst_access;
+                barrier.srcStageMask            = state.src_stage;
+                barrier.dstStageMask            = state.dst_stage;
+                barrier.srcQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
+                barrier.dstQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
+                barrier.buffer                  = buffer->GetHandle();
+                barrier.offset                  = it->second.min;
+                barrier.size                    = it->second.max - it->second.min;
             }
         }
 
@@ -690,6 +729,7 @@ namespace Moer::Render {
         }
         pending_buffers.clear();
         pending_textures.clear();
+        flush_buffer_ranges.clear();
     }
 
     void VkTracker::DispatchBarriers(VulkanCmdList& _cmdlist) {
@@ -722,7 +762,7 @@ namespace Moer::Render {
             barrier.srcAccessMask                   = state.src_access;
             barrier.dstAccessMask                   = VK_ACCESS_2_NONE;
             barrier.srcStageMask                    = state.src_stage;
-            barrier.dstStageMask                    = VK_PIPELINE_STAGE_2_NONE;
+            barrier.dstStageMask                    = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
             barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
             barrier.image                           = texture->GetHandle();

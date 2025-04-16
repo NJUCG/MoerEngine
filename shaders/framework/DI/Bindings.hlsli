@@ -390,7 +390,7 @@ float2 GetEnvironmentMapUVFromDir(float3 _dir) {
 }
 
 float EvalEnvMapPdf(float3 _dir) {
-  if (!resample_params.scene_params.enable_env_map) {
+  if (!resample_params.restir_di_params.initial_sample_params.env_map_is) {
     return 1.f;
   }
   float2 uv = GetEnvironmentMapUVFromDir(_dir);

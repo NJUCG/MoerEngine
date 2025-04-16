@@ -150,6 +150,8 @@ namespace Moer::Render {
             },
                               storage);
         }
+
+        mutable BufferView staging_buffer;
     };
 
     struct CopyBackBufferCmd : public Command {
@@ -174,6 +176,8 @@ namespace Moer::Render {
         auto       Offset() const { return offset; }
         auto       ByteSize() const { return byte_size; }
         auto       Data() const { return data; }
+
+        mutable BufferView staging_buffer;
     };
 
     struct CopyBackTextureCmd : public Command {
@@ -206,6 +210,8 @@ namespace Moer::Render {
         auto Offset() const { return offset; }
         auto Size() const { return size; }
         auto Data() const { return data; }
+
+        mutable BufferView staging_buffer;
     };
 
     struct CopyBufferCmd : public Command {
@@ -439,6 +445,8 @@ namespace Moer::Render {
             },
                               storage);
         }
+
+        mutable BufferView staging_buffer;
     };
 
     using ResourceState = std::variant<EBufferRuntimeUsageFlags, ETextureStateFlags>;
