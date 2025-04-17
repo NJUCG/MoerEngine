@@ -591,10 +591,13 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
             uint num_emissive_meshes, num_emissive_triangles;
             prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
 
+            static constexpr uint s_mesh_alloc_chunk      = 128;
+            static constexpr uint s_triangle_alloc_chunk  = 1024;
+            static constexpr uint s_primitive_alloc_chunk = 128;
             rt_ctx->CreateBuffersIfNeeded(
-                num_emissive_meshes,
-                num_emissive_triangles,
-                scene.GetLights().size(),
+                (num_emissive_meshes + s_mesh_alloc_chunk - 1) & ~(s_mesh_alloc_chunk - 1),
+                (num_emissive_triangles + s_triangle_alloc_chunk - 1) & ~(s_triangle_alloc_chunk - 1),
+                (scene.GetLights().size() + s_primitive_alloc_chunk - 1) & ~(s_primitive_alloc_chunk - 1),
                 scene.GetGeometryInstances().size()
             );
             cmd_list.UpdateBindlessArray(bindless_array);

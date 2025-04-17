@@ -79,7 +79,6 @@ void SampleLocalLights(inout RandomState _rng, Texture2D<float> _pdf_tex,
   if (compact) {
     light_idx |= s_di_light_compact_bit;
   }
-  // printf("s_di_light_compact_bit %d\n", s_di_light_compact_bit);
   rw_ris_buffer[ris_idx] = uint2(light_idx, asuint(inv_pdf));
 }
 
@@ -155,6 +154,7 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
     float rnd = _rng.GetFloat();
 
     ctx.SelectNext(_rng, cur_light_info, rnd_light_idx, inv_pdf);
+
     inv_pdf *= inv_num_samples;
 
     float target_pdf = PolymorphicLight::GetVolumeWeight(
@@ -180,7 +180,6 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
   }
 
   if (compact) {
-    // printf("selected %d ris_weight %f\n", seleted, weight);
     seleted |= s_di_light_compact_bit;
   }
   rw_ris_buffer[ris_idx] = uint2(seleted, asuint(weight));

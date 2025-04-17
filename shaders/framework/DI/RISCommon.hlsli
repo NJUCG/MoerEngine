@@ -10,6 +10,7 @@ struct RISTileInfo {
   uint tile_size; // as const param
 };
 
+// Select Presampled RIS light data from ris buffer
 void RandomlySelectLightDataFromRISTile(inout RandomState _rng,
                                         RISTileInfo _tile_info,
                                         out uint2 _tile_data,
@@ -25,7 +26,8 @@ RISTileInfo RandomlySelectRISTile(inout RandomState _rng,
                                   RISBufferSegmentParams _ris_params) {
   RISTileInfo result;
   float rng = _rng.GetFloat();
-  uint tile_idx = uint(floor(rng * _ris_params.tile_cnt));
+  uint tile_idx =
+      min(uint(floor(rng * _ris_params.tile_cnt)), _ris_params.tile_cnt - 1);
   result.tile_offset =
       tile_idx * _ris_params.tile_size + _ris_params.buffer_offset;
   result.tile_size = _ris_params.tile_size;
