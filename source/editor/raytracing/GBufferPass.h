@@ -40,7 +40,11 @@ public:
         tlas,
         bdls
     );
+
+    MUTATION_BOOL(PRINT_TEST);
 };
+
+MUTATION_SET(RTGBufferMacros, RaytracingGBufferPipeline::PRINT_TEST);
 
 class PostProcessGBufferPipeline : public ComputePipeline {
 public:

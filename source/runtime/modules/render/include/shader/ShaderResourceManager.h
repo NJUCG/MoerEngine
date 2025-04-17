@@ -9,30 +9,9 @@
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderMutation.h"
-#include "shader/ShaderResource.h"
 #include <condition_variable>
 #include <string_view>
-class GlobalShaderCache {
-public:
-    static GlobalShaderCache& GetInstance() {
-        static GlobalShaderCache cache;
-        return cache;
-    }
-    GlobalShaderCache();
-    ~GlobalShaderCache();
-
-    const ShaderCompilerOutput* FindShaderCache(EShaderPlatform platform, const ShaderResourceKey& key) const;
-
-private:
-    friend class ShaderResourceManager;
-    void Load();
-    void Dump();
-    void UpdateOutput(Moer::Array<ShaderCompilerOutput*>& outputs);
-
-private:
-    struct Impl;
-    Impl* impl;
-};
+#include <type_traits>
 
 namespace Moer {
     struct ShaderBlob {
@@ -63,54 +42,6 @@ namespace std {
         }
     };
 }// namespace std
-
-class RENDER_API ShaderResourceManager {
-public:
-    static void                   Init(EShaderPlatform platform);
-    static void                   ShutDown();
-    static ShaderResourceManager& GetInstance();
-
-    template<typename ShaderType>
-        requires std::is_base_of_v<Shader, ShaderType>
-    RHIShaderRef GetShader(const uint32_t _mutation_id) {
-        const ShaderMetaType& meta_type = ShaderType::GetMetaType();
-
-        if constexpr (ShaderType::TMutationSet::mutation_count == 0) {
-            return GetShader(meta_type, 0);
-        } else
-            return GetShader(meta_type, _mutation_id);
-    }
-    template<typename ShaderType>
-        requires std::is_base_of_v<Shader, ShaderType>
-    RHIShaderRef GetShader() {
-        static_assert(ShaderType::TMutationSet::mutation_count == 1, "ShaderType should not have any mutation");
-        const ShaderMetaType& meta_type = ShaderType::GetMetaType();
-
-        return GetShader(meta_type, 0);
-    }
-
-    ShaderTypeResourceMap& GetShaderTypeMap() {
-        return *type_resources;
-    }
-
-    void    PrepareGlobalShaderResources();
-    Shader* GetShader(const ShaderMetaType& _meta_type);
-
-    Moer::ShaderBlob GetShaderBlob(std::string_view _path, EShaderType _type);
-
-private:
-    friend class ShaderCompiler;
-    ShaderResourceMap& GetShaderResourceMap() {
-        return *shader_resources;
-    }
-    RHIShaderRef GetShader(const ShaderMetaType& _meta_type, uint32_t _mutation_id);
-    friend Shader;
-    ShaderResourceManager();
-    ShaderTypeResourceMap* type_resources;
-    ShaderResourceMap*     shader_resources;
-
-    Moer::UnorderedMap<Moer::ShaderEntryKey, Moer::ShaderBlob> shader_cache;
-};
 
 namespace Moer::Render {
 
@@ -198,7 +129,8 @@ namespace Moer::Render {
             PipelineHandle handle = CreatePipeline(std::move(hash_values), std::move(arg_type_values));
             return std::move(TPipeline(handle));
         };
-        RENDER_API ComputeConstructor(RenderDevice&, std::string_view _path, std::string_view _entry_name);
+
+        RENDER_API ComputeConstructor(RenderDevice&, ShaderAsset&& _assert);
 
         template<typename TPipeline>
             requires std::is_base_of_v<ComputePipeline, TPipeline>
@@ -235,7 +167,12 @@ namespace Moer::Render {
         RasterPipelineConstructor Raster();
         template<typename TPipeline>
         TPipeline Compute(std::string_view _path, std::string_view _entry_name = "main") {
-            return std::move(ComputeConstructor(GetDevice(), _path, _entry_name).Build<TPipeline>());
+            return std::move(ComputeConstructor(GetDevice(), ShaderAsset(_path, _entry_name)).Build<TPipeline>());
+        }
+
+        template<typename TPipeline, is_shader_mutation TMacro>
+        TPipeline Compute(std::string_view _path, TMacro _mut, std::string_view _entry_name = "main") {
+            return std::move(ComputeConstructor(GetDevice(), ShaderAsset(_path, _entry_name, _mut)).Build<TPipeline>());
         }
         RTConstructor Raytracing();
 

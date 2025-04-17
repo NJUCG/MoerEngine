@@ -5,12 +5,15 @@
 // #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "shader/ShaderCommon.h"
+#include "shader/ShaderMutation.h"
 #include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <typeindex>
 #include <utility>
 #include <variant>
+#include <cassert>
 
 struct TDummy {};
 
@@ -468,9 +471,32 @@ namespace Moer::Render {
         bool                   b_args_set = false;
     };
 
+    template<typename T>
+    concept is_shader_mutation = requires(T _t) {
+        _t.SetCompileEnvironment(std::declval<ShaderCompilerEnvironment&>());
+    };
+    class ShaderAsset {
+    public:
+        explicit ShaderAsset(std::string_view _path, std::string_view _entry) : path(_path), entry_name(_entry), mutation_id(-1) {
+        }
+        template<is_shader_mutation TMacro>
+        explicit ShaderAsset(std::string_view _path, std::string_view _entry, TMacro _mutation_set) : path(_path), entry_name(_entry), mutation_id(_mutation_set.GetMutationID()) {
+            _mutation_set.SetCompileEnvironment(environment);
+        }
+
+    public:
+        std::string               path;
+        std::string               entry_name;
+        int                       mutation_id;
+        ShaderCompilerEnvironment environment;
+    };
+
     class GBufferLayout : public RasterPipeline {
     public:
+        MUTATION_BOOL(LOCAL_LIGHT_RIS);
+        MUTATION_SET(GBufferSet, LOCAL_LIGHT_RIS);
         struct Constant {};
+        MUTATION_BOOL(USE_TEXT);
 
         DEFINE_RASTER_PIPELINE_CLASS(GBufferLayout)
 
@@ -484,7 +510,9 @@ namespace Moer::Render {
 
         DEFINE_SHADER_ARGS(PositionBuffer, NormalBuffer, DiffuseBuffer, SpecularBuffer, DiffuseTexture, SpecularTexture, constant);
 
-        void Test() { SetArgs(BufferRef(), BufferRef(), BufferRef(), BufferRef(), TextureRef(), TextureRef(), Constant{}); }
+        void Test() {
+            SetArgs(BufferRef(), BufferRef(), BufferRef(), BufferRef(), TextureRef(), TextureRef(), Constant{});
+        }
     };
 };// namespace Moer::Render
 

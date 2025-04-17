@@ -2,7 +2,7 @@
 #define MOERENGINE_SHADER_COMMON_H
 #include "misc/Hash.h"
 #include "misc/STL.h"
-#include "rhi/RHI.h"
+// #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <cstdint>

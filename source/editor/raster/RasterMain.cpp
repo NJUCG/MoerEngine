@@ -177,6 +177,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
         if (editor_ui->IsNeedReload()) { break; }
     }
     gfx_queue.Sync();
+    sc->Sync();
 }
 
 } // namespace Moer::Render::Raster

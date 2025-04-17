@@ -25,7 +25,6 @@
 #include "VulkanPipelineResourceCache.h"
 
 #include "shader/Shader.h"
-#include "shader/ShaderResource.h"
 #include "window/WindowContext.h"
 
 #include <algorithm>

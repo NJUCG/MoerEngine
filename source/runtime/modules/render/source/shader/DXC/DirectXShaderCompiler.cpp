@@ -3,7 +3,6 @@
 #include "misc/Hash.h"
 #include "misc/STL.h"
 #include "rhi/RHIResource.h"
-#include "shader/ShaderResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "spirv.hpp"
 #include "spirv_common.hpp"
@@ -48,8 +47,6 @@ private:
     ComPtr<IDxcLibrary>        library         = nullptr;
     ComPtr<IDxcUtils>          utils           = nullptr;
     ComPtr<IDxcIncludeHandler> include_handler = nullptr;
-
-    Moer::UniquePtr<ShaderReflector> reflector;
 
     void Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output);
 
@@ -206,9 +203,9 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
     auto file_path       = std::filesystem::canonical(root_path / _input.relative_source_file_path);
     auto last_write_time = std::filesystem::last_write_time(file_path);
 
-    if (LoadCache(last_write_time.time_since_epoch().count(), _input, _output)) {
-        return;
-    }
+    // if (LoadCache(last_write_time.time_since_epoch().count(), _input, _output)) {
+    //     return;
+    // }
 
     Moer::Array<std::wstring> arguments = {file_path.generic_wstring().c_str()};
 
@@ -341,22 +338,6 @@ bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {
         default: break;
     }
     return b_support_platform && b_support_shader_type;
-}
-
-bool LoadCache(long long _last_write_time, const ShaderCompilerInput& input, ShaderCompilerOutput& output) {
-    uint32_t          shader_name_hash = GetHash(input.shader_name);
-    ShaderResourceKey key{shader_name_hash, input.mutation_id};
-
-    const ShaderCompilerOutput* temp_output = GlobalShaderCache::GetInstance().FindShaderCache((EShaderPlatform)input.target_info.shader_platform, key);
-
-    bool valid_cache = (temp_output != nullptr && temp_output->source_file_last_write_time == _last_write_time);
-
-    if (valid_cache) {
-        output = *temp_output;
-        return true;
-    }
-
-    return false;
 }
 
 void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParametersMetadata* _meta_param, ShaderParametersInfoMap& _param_map) {

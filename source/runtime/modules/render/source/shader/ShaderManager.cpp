@@ -20,10 +20,6 @@ namespace Moer::Render {
             return RasterPipelineConstructor(device);
         }
 
-        ComputeConstructor Compute(std::string_view _path, std::string_view _entry_name = "main") {
-            return ComputeConstructor(device, _path, _entry_name);
-        }
-
         RTConstructor Raytracing() {
             return RTConstructor(device);
         }
@@ -129,7 +125,7 @@ namespace Moer::Render {
 
 #pragma region[ compute pipeline ]
 
-    ComputeConstructor::ComputeConstructor(RenderDevice& _device, std::string_view _path, std::string_view _entry_name) : device(_device), shader_info(_path, _entry_name) {
+    ComputeConstructor::ComputeConstructor(RenderDevice& _device, ShaderAsset&& _asset) : device(_device), shader_info(_asset.path, _asset.entry_name, _asset.environment) {
     }
 
     PipelineShaderInfo ComputeConstructor::CompileShaderInfo(Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values) {
@@ -171,30 +167,6 @@ namespace Moer::Render {
     }
 
     PipelineHandle ComputeConstructor::CreatePipeline(Array<std::string_view>&& _hash_values, Array<ShaderArgCppInfo>&& _arg_type_values) {
-        // auto target_info       = device.GetShaderPlatform();
-        // auto get_shader_output = [&](ShaderInfo& _info, EShaderType _type) {
-        //     ShaderCompilerInput input{
-        //         .target_info               = ShaderTargetInfo(_type, target_info),
-        //         .entry_point               = _info.entry_name,
-        //         .relative_source_file_path = _info.path,
-        //         .shader_name               = _info.path,
-        //         .environment               = _info.environment};
-
-        //     return ShaderCompiler::Compile(std::move(input));
-        // };
-        // auto get_shader_info = [&](EShaderType _type, ShaderInfo& _info, ShaderCompilerOutput&& _output) {
-        //     return std::move(SingleShaderInfo{
-        //         .name             = _info.path,
-        //         .entry_point      = _info.entry_name,
-        //         .shader_data      = std::move(_output.shader_code),
-        //         .shader_type      = _type,
-        //         .shader_param_map = {std::move(_output.parameter_map.param_map), std::move(_output.parameter_map.reflect_map)}});
-        // };
-
-        // auto               output = get_shader_output(shader_info, ST_COMPUTE);
-        // PipelineShaderInfo sd_info{.layout_hash = std::move(_hash_values), .arg_types = std::move(_arg_type_values)};
-        // sd_info.shader_group = ShaderCs{.cs = get_shader_info(ST_COMPUTE, shader_info, std::move(output))};
-
         return device.CreatePipeline(CompileShaderInfo(std::move(_hash_values), std::move(_arg_type_values)));
     }
 
