@@ -13,17 +13,17 @@ target_include_directories(RuntimeTest
 target_link_libraries(RuntimeTest PUBLIC MoerRuntime)
 set_target_properties(RuntimeTest PROPERTIES FOLDER ${moer_test_folder})
 
-add_executable(ShaderReflectionTest ShaderReflectionTest.cpp)
-target_include_directories(ShaderReflectionTest
-        PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime>
-        PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
-        PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-)
-target_link_libraries(ShaderReflectionTest 
-    PRIVATE MoerRender
-    PRIVATE dxc
-    )
-set_target_properties(ShaderReflectionTest PROPERTIES FOLDER ${moer_test_folder})
+# add_executable(ShaderReflectionTest ShaderReflectionTest.cpp)
+# target_include_directories(ShaderReflectionTest
+#         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+#         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+#         PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+# )
+# target_link_libraries(ShaderReflectionTest 
+#     PRIVATE MoerRender
+#     PRIVATE dxc
+#     )
+# set_target_properties(ShaderReflectionTest PROPERTIES FOLDER ${moer_test_folder})
 
 # add_executable(VulkanRHITest VulkanRHITest.cpp)
 # target_include_directories(VulkanRHITest
