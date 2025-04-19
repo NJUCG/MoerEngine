@@ -9,6 +9,7 @@
 #include "misc/STL.h"
 #include "misc/Timer.h"
 #include "misc/Alignment.h"
+#include "misc/Traits.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -275,6 +276,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::SetDrawState:
                     Visit(static_cast<const SetDrawStateCmd*>(_cmd));
+                    break;
+                case Command::EType::MultiDraw:
+                    Visit(static_cast<const MultiDrawCmd*>(_cmd));
                     break;
                 case Command::EType::SetGeometryPassDrawState:
                     Visit(static_cast<const SetGeometryPassDrawStateCmd*>(_cmd));
@@ -676,6 +680,85 @@ namespace Moer::Render {
             }
         }
 
+        void Visit(const MultiDrawCmd* _cmd) {
+            const auto& vbs = _cmd->VertexBuffers();
+            for (const auto& vb : vbs) {
+                auto* vk_buffer = ResourceCast(vb.first);
+                tracker.RecordState(vk_buffer, VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
+            }
+            const auto& ibs = _cmd->IndexBuffers();
+            for (const auto& ib : ibs) {
+                auto* vk_buffer = ResourceCast(ib.first);
+                tracker.RecordState(vk_buffer, VK_ACCESS_2_INDEX_READ_BIT, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
+            }
+
+            const auto& indirect_buffers = _cmd->IndirectBuffers();
+            for (const auto& ib : indirect_buffers) {
+                auto* vk_buffer = ResourceCast(ib.first);
+                tracker.RecordState(vk_buffer, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT);
+            }
+
+            writed_resources.clear();
+
+            UnorderedSet<const ArrayArguments*> temp_arg_batch;
+            for (const auto& draw_cmd : _cmd->draw_batch.draw_cmds) {
+                const auto& pipeline = draw_cmd.handle;
+                auto        func     = [&](const TArg& _arg, uint _idx) {
+                    if (pipeline.valid_bits & (1 << _idx))
+                        VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags, pipeline.binding_infos[_idx].pipeline_flags);
+                };
+                auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+                    if (pipeline.valid_bits & (1 << _idx))
+                        HandleBindless(std::get<BindlessArrayRef>(_arg), pipeline.binding_infos[_idx].pipeline_flags);
+                };
+                const ArrayArguments* arg = std::holds_alternative<ArrayArguments>(draw_cmd.args) ?
+                                                &std::get<ArrayArguments>(draw_cmd.args) :
+                                                (std::holds_alternative<ArrayArgReference>(draw_cmd.args) ?
+                                                     &cached_args[std::get<ArrayArgReference>(draw_cmd.args)()] :
+                                                     nullptr);
+
+                auto iter = temp_arg_batch.emplace(arg);
+                if (arg && iter.second) {
+                    IterateArgs(*arg, func, bdls_post_func);
+                }
+            }
+
+            // _cmd->IterateArgs(func, bdls_post_func);
+
+            for (const auto& rt : _cmd->RenderPassInfo().color_attachments) {
+                auto* vk_texture = ResourceCast(rt.target);
+                auto  action     = rt.action;
+                bool  b_load     = GetLoadOp(action) == EAttachmentLoadOp::LOAD;
+                bool  b_store    = GetStoreOp(action) == EAttachmentStoreOp::STORE;
+                tracker.RecordState(
+                    vk_texture,
+                    (b_load ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
+                        (b_store ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    0,
+                    1);
+            }
+            if (_cmd->RenderPassInfo().depth_attachment.Valid()) {
+                auto* vk_texture      = ResourceCast(_cmd->RenderPassInfo().depth_attachment.target);
+                auto  action          = _cmd->RenderPassInfo().depth_attachment.action;
+                bool  b_depth_load    = GetLoadOp(GetDepthAction(action)) == EAttachmentLoadOp::LOAD;
+                bool  b_depth_store   = GetStoreOp(GetDepthAction(action)) == EAttachmentStoreOp::STORE;
+                bool  b_stencil_load  = GetLoadOp(GetStencilAction(action)) == EAttachmentLoadOp::LOAD;
+                bool  b_stencil_store = GetStoreOp(GetStencilAction(action)) == EAttachmentStoreOp::STORE;
+                bool  b_read          = b_depth_load || b_stencil_load;
+                bool  b_write         = b_depth_store || b_stencil_store;
+                tracker.RecordState(
+                    vk_texture,
+                    (b_read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
+                        (b_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
+                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                    0,
+                    1);
+            }
+        }
+
         void Visit(const SetGeometryPassDrawStateCmd* _cmd) {
             const auto& vbs = _cmd->VertexBuffers();
             for (const auto& vb : vbs) {
@@ -865,6 +948,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::SetDrawState:
                     Visit(static_cast<const SetDrawStateCmd&>(*_cmd));
+                    break;
+                case Command::EType::MultiDraw:
+                    Visit(static_cast<const MultiDrawCmd&>(*_cmd));
                     break;
                 case Command::EType::SetGeometryPassDrawState:
                     Visit(static_cast<const SetGeometryPassDrawStateCmd&>(*_cmd));
@@ -1208,6 +1294,209 @@ namespace Moer::Render {
                         }},
                     draw_data.idx_view);
             }
+            cmd_list.EndRendering();
+            cmd_list.EndLabel();
+        }
+
+        void Visit(const MultiDrawCmd& _cmd) {
+            static float4 draw_color = {0.0f, 1.0f, 0.0f, 1.0f};
+            cmd_list.BeginLabel(_cmd.name, draw_color);
+            state = EState::Draw;
+
+            const auto&                      pass_info = _cmd.RenderPassInfo();
+            Array<VkRenderingAttachmentInfo> color_attachments(pass_info.color_attachments.size());
+            for (size_t i = 0; i < pass_info.color_attachments.size(); ++i) {
+                color_attachments[i] = FromColorAttachmentInfo(pass_info.color_attachments[i]);
+            }
+            std::optional<VkRenderingAttachmentInfo> depth_stencil_attachment;
+            if (pass_info.depth_attachment.Valid()) {
+                depth_stencil_attachment = FromDepthAttachmentInfo(pass_info.depth_attachment);
+            }
+
+            VkRenderingInfo dynamic_rendering_info{
+                .sType      = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .pNext      = nullptr,
+                .flags      = 0,
+                .renderArea = {
+                    .offset = {pass_info.render_area.offset.x, pass_info.render_area.offset.y},
+                    .extent = {pass_info.render_area.extent.width, pass_info.render_area.extent.height}},
+                .layerCount           = 1,
+                .colorAttachmentCount = uint(pass_info.color_attachments.size()),
+                .pColorAttachments    = color_attachments.data(),
+                .pDepthAttachment     = depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
+                .pStencilAttachment   = depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr};
+
+            cmd_list.BeginRendering(std::move(dynamic_rendering_info));
+            const auto& rect = pass_info.render_area;
+            VkViewport  viewport{
+                 .x        = float(rect.offset.x),
+                 .y        = float(rect.offset.y),
+                 .width    = float(rect.extent.width),
+                 .height   = float(rect.extent.height),
+                 .minDepth = 0.0f,
+                 .maxDepth = 1.0f};
+            viewport.y += viewport.height;
+            viewport.height = -viewport.height;
+            cmd_list.SetViewPort(viewport);
+            cmd_list.SetScissor({rect.offset.x, rect.offset.y, rect.extent.width, rect.extent.height});
+
+            for (const DrawBatchElement& draw_cmd : _cmd.draw_batch.draw_cmds) {
+
+                cmd_list.SetPso(draw_cmd.handle);
+                const ArrayArguments* arg = std::holds_alternative<ArrayArguments>(draw_cmd.args) ?
+                                                &std::get<ArrayArguments>(draw_cmd.args) :
+                                                (std::holds_alternative<ArrayArgReference>(draw_cmd.args) ?
+                                                     &cached_args[std::get<ArrayArgReference>(draw_cmd.args)()] :
+                                                     nullptr);
+
+                PipelineHandle& pipeline = *const_cast<PipelineHandle*>(&draw_cmd.handle);
+                cmd_list.BindDescriptors(pipeline, *arg);
+
+                if (arg && arg->constants.size() > 0) {
+                    cmd_list.UploadPushConstants(
+                        pipeline,
+                        std::span<const uint>(arg->constants.data(), arg->constants.size()));
+                }
+                std::visit(Overload{
+                               [&](const Array<MeshDrawData>& _mesh_draw_cmds) {
+                                   for (const auto& draw_data : _mesh_draw_cmds) {
+                                       auto num_of_vertex_buffers = draw_data.vtx_views.size();
+                                       if (num_of_vertex_buffers > 0) {
+
+                                           Array<VkBuffer>     vertex_buffers;
+                                           Array<VkDeviceSize> vtx_offsets;
+
+                                           vertex_buffers.reserve(num_of_vertex_buffers);
+                                           vtx_offsets.reserve(num_of_vertex_buffers);
+
+                                           for (const auto& vtx_view : draw_data.vtx_views) {
+                                               vertex_buffers.emplace_back(ResourceCast(vtx_view.buffer)->GetHandle());
+                                               vtx_offsets.emplace_back(vtx_view.offset);
+                                           }
+
+                                           cmd_list.SetVertexBuffers(0,
+                                                                     num_of_vertex_buffers,
+                                                                     std::span<VkBuffer>(vertex_buffers.data(),
+                                                                                         num_of_vertex_buffers),
+                                                                     std::span<VkDeviceSize>(vtx_offsets.data(),
+                                                                                             num_of_vertex_buffers));
+                                       }
+
+                                       std::visit(
+                                           Overload{
+                                               [&](const IndexBuffer& _idx_input) {
+                                                   const auto& index_buffer = _idx_input.buffer;
+                                                   uint64      offset       = index_buffer.GetByteOffset();
+
+                                                   cmd_list.SetIndexBuffer(
+                                                       reinterpret_cast<VulkanBuffer*>(index_buffer.GetBuffer()),
+                                                       index_buffer.GetByteOffset(),
+                                                       VulkanEnumTranslator::METoVKIndexType(_idx_input.stride));
+
+                                                   for (const auto& draw_param : draw_data.draw_params) {
+                                                       cmd_list.DrawIndexedInstanced(draw_param.index_cnt,
+                                                                                     draw_param.instance_cnt,
+                                                                                     draw_param.first_index,
+                                                                                     draw_param.vertex_offset,
+                                                                                     draw_param.first_instance);
+                                                   }
+
+                                                   if (draw_data.indirect_draw_param.has_value()) {
+                                                       VulkanBuffer* indirect_buffer = ResourceCast(draw_data.indirect_draw_param->buffer.GetBuffer());
+                                                       if (draw_data.indirect_draw_param->count_buffer.has_value()) {
+                                                           //draw indirect with count buffer
+                                                           auto* count_buffer = ResourceCast(draw_data.indirect_draw_param->count_buffer->GetBuffer());
+                                                           cmd_list.DrawIndexedIndirectCnt(
+                                                               indirect_buffer,
+                                                               draw_data.indirect_draw_param->buffer.GetByteOffset(),
+                                                               count_buffer,
+                                                               draw_data.indirect_draw_param->count_buffer->GetByteOffset(),
+                                                               draw_data.indirect_draw_param->count,
+                                                               draw_data.indirect_draw_param->stride);
+
+                                                       } else {
+                                                           //draw indirect without count buffer
+                                                           cmd_list.DrawIndexedIndirect(
+                                                               indirect_buffer,
+                                                               draw_data.indirect_draw_param->buffer.GetByteOffset(),
+                                                               draw_data.indirect_draw_param->count,
+                                                               draw_data.indirect_draw_param->stride);
+                                                       }
+                                                   }
+                                               },
+                                               [&](uint _idx_input) {
+                                                   for (const auto& draw_param : draw_data.draw_params) {
+                                                       cmd_list.DrawInstanced(draw_param.index_cnt,
+                                                                              draw_param.instance_cnt,
+                                                                              draw_param.vertex_offset,
+                                                                              draw_param.first_instance);
+                                                   }
+
+                                                   //draw indirect
+                                                   if (draw_data.indirect_draw_param.has_value()) {
+                                                       VulkanBuffer* indirect_buffer = ResourceCast(draw_data.indirect_draw_param->buffer.GetBuffer());
+                                                       if (draw_data.indirect_draw_param->count_buffer.has_value()) {
+                                                           //draw indirect with count buffer
+                                                           auto* count_buffer = ResourceCast(draw_data.indirect_draw_param->count_buffer->GetBuffer());
+                                                           cmd_list.DrawIndirectCnt(
+                                                               indirect_buffer,
+                                                               draw_data.indirect_draw_param->buffer.GetByteOffset(),
+                                                               count_buffer,
+                                                               draw_data.indirect_draw_param->count_buffer->GetByteOffset(),
+                                                               draw_data.indirect_draw_param->count,
+                                                               draw_data.indirect_draw_param->stride);
+
+                                                       } else {
+                                                           //draw indirect without count buffer
+                                                           cmd_list.DrawIndirect(
+                                                               indirect_buffer,
+                                                               draw_data.indirect_draw_param->buffer.GetByteOffset(),
+                                                               draw_data.indirect_draw_param->count,
+                                                               draw_data.indirect_draw_param->stride);
+                                                       }
+                                                   }
+                                               }},
+                                           draw_data.idx_view);
+                                   }
+                               },
+
+                               [&](const Array<DispatchMeshData>& _mesh) {
+                                   for (const auto& draw_data : _mesh) {
+                                       std::visit(
+                                           Overload{
+                                               [&](const IndirectDrawParam& _indirect) {
+                                                   VulkanBuffer* indirect_buffer = ResourceCast(_indirect.buffer.GetBuffer());
+                                                   if (_indirect.count_buffer.has_value()) {
+                                                       //draw indirect with count buffer
+                                                       auto* count_buffer = ResourceCast(_indirect.count_buffer->GetBuffer());
+                                                       cmd_list.DispatchMeshIndirectCount(
+                                                           indirect_buffer,
+                                                           _indirect.buffer.GetByteOffset(),
+                                                           count_buffer,
+                                                           _indirect.count_buffer->GetByteOffset(),
+                                                           _indirect.count,
+                                                           _indirect.stride);
+
+                                                   } else {
+                                                       //draw indirect without count buffer
+                                                       cmd_list.DispatchMeshIndirect(
+                                                           indirect_buffer,
+                                                           _indirect.buffer.GetByteOffset(),
+                                                           _indirect.count,
+                                                           _indirect.stride);
+                                                   }
+                                               },
+                                               [&](Vector3ui _dim) {
+                                                   cmd_list.DispatchMesh(_dim.x, _dim.y, _dim.z);
+                                               }
+
+                                           },
+                                           draw_data.draw_param);
+                                   }
+                               }},
+                           draw_cmd.mesh_dispatch_data);
+            }
+
             cmd_list.EndRendering();
             cmd_list.EndLabel();
         }

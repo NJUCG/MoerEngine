@@ -739,7 +739,7 @@ namespace Moer::Render {
             _out_hash_2_idx[GetHash(hash)]   = idx;
             const ShaderArgCppInfo& arg_info = _shader_info.arg_cpp_info[idx];
 
-            const UnorderedMap<std::string, ReflectParamInfo>& reflect_map  = _info.shader_param_map.reflect_map;
+            const UnorderedMap<std::string, ReflectParamInfo>& reflect_map  = _info.shader_param_map->reflect_map;
             const auto                                         binding_iter = reflect_map.find(hash.data());
             bool                                               b_found      = binding_iter != reflect_map.end();
             if (arg_info.type != SDA_BindlessArray && !b_found) { continue; }

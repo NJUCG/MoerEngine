@@ -265,13 +265,14 @@ namespace Moer::Render {
         }
     }
 
+    void CommandList::SetMultiRenderCmds(RenderPassInfo&& _pass_info, DrawBatch&& _batch, std::string_view _name) {
+        commands.push_back(MakeUnique<MultiDrawCmd>(std::move(_batch), std::move(_pass_info), _name));
+    }
+
     // Specialized for Geometry Pass
-    void CommandList::SetRenderGeometryPassCmds(
-        ArrayArguments&&                                             _args,
-        RenderPassInfo&&                                             _info,
-        UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
-        std::string_view                                             _name
-        //
+    void
+    CommandList::SetRenderGeometryPassCmds(ArrayArguments&& _args, RenderPassInfo&& _info, UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map, std::string_view _name
+                                           //
     ) {
         commands.push_back(MakeUnique<SetGeometryPassDrawStateCmd>(std::move(_args), std::move(_info), std::move(_mesh_data_array_map), _name));
     }
