@@ -995,29 +995,29 @@ namespace Moer::Render {
             DrawBatch        draw_batch;
             std::string_view name;
         };
-        struct RENDER_API DrawGeometryPassDispatcher {
-            DrawGeometryPassDispatcher(CommandList& _cmd_list);
-            DrawGeometryPassDispatcher(CommandList& _cmd_list, ArrayArguments&& _args);
+        // struct RENDER_API DrawGeometryPassDispatcher {
+        //     DrawGeometryPassDispatcher(CommandList& _cmd_list);
+        //     DrawGeometryPassDispatcher(CommandList& _cmd_list, ArrayArguments&& _args);
 
-            template<typename... TRenderTarget>
-            void Draw(
-                std::string_view                                             _name,
-                Rect2D                                                       _rect,
-                UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
-                DepthAttachment                                              _depth,
-                TRenderTarget&&... _render_targets
-                //
-            ) {
-                RenderPassInfo pass_info(
-                    {std::forward<TRenderTarget>(_render_targets)...},
-                    _depth,
-                    _rect);
-                cmd_list.SetRenderGeometryPassCmds(std::move(args), std::move(pass_info), std::move(_mesh_data_array_map), _name);
-            };
+        //     template<typename... TRenderTarget>
+        //     void Draw(
+        //         std::string_view                                             _name,
+        //         Rect2D                                                       _rect,
+        //         UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
+        //         DepthAttachment                                              _depth,
+        //         TRenderTarget&&... _render_targets
+        //         //
+        //     ) {
+        //         RenderPassInfo pass_info(
+        //             {std::forward<TRenderTarget>(_render_targets)...},
+        //             _depth,
+        //             _rect);
+        //         cmd_list.SetRenderGeometryPassCmds(std::move(args), std::move(pass_info), std::move(_mesh_data_array_map), _name);
+        //     };
 
-            CommandList&   cmd_list;
-            ArrayArguments args;
-        };
+        //     CommandList&   cmd_list;
+        //     ArrayArguments args;
+        // };
 
         struct RENDER_API RaytracingDispatcher {
             CommandList&   cmd_list;
@@ -1090,14 +1090,14 @@ namespace Moer::Render {
         }
 
         // call this func like this: cmd_list.GfxGeometryPass<PSO_Definition>(args...).Draw(...);
-        template<is_shader_pipeline TGfxPso, typename... TArgs>
-        DrawGeometryPassDispatcher GfxGeometryPass(TArgs&&... _args) {
-            if constexpr (sizeof...(TArgs) > 0) {
-                ArrayArguments&& args = TGfxPso::SetArgs(_args...);
-                return DrawGeometryPassDispatcher(*this, std::move(args));
-            }
-            return DrawGeometryPassDispatcher(*this);
-        }
+        // template<is_shader_pipeline TGfxPso, typename... TArgs>
+        // DrawGeometryPassDispatcher GfxGeometryPass(TArgs&&... _args) {
+        //     if constexpr (sizeof...(TArgs) > 0) {
+        //         ArrayArguments&& args = TGfxPso::SetArgs(_args...);
+        //         return DrawGeometryPassDispatcher(*this, std::move(args));
+        //     }
+        //     return DrawGeometryPassDispatcher(*this);
+        // }
 
         template<typename TComputePso, typename... TArgs>
         ComputeDispatcher Compute(TComputePso& _pso, TArgs&&... _args) {
@@ -1258,11 +1258,11 @@ namespace Moer::Render {
         // void SubmitConstants(ShaderPipeline&, Array<uint>&&);
         RENDER_API void SetMultiRenderCmds(RenderPassInfo&&, DrawBatch&&, std::string_view _name);
         // Specialized for Geometry Pass
-        RENDER_API void SetRenderGeometryPassCmds(
-            ArrayArguments&&                                             _args,
-            RenderPassInfo&&                                             _info,
-            UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
-            std::string_view                                             _name);
+        // RENDER_API void SetRenderGeometryPassCmds(
+        //     ArrayArguments&&                                             _args,
+        //     RenderPassInfo&&                                             _info,
+        //     UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
+        //     std::string_view                                             _name);
 
         RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt, EQueueType _src_queue, EQueueType _dst_queue);
         RENDER_API void InnerBarrier(ReadBuffer _buffer, EPassType _pass) {

@@ -962,62 +962,62 @@ namespace Moer::Render {
             AddCmd(_cmd, m_dispatch_layer);
         }
 
-        void VisitCmd(const SetGeometryPassDrawStateCmd* _cmd) {
-            int64 layer = 0;
-            m_arg_read_resources.clear();
-            m_arg_write_resources.clear();
-            temp_writed_resources.clear();
+        // void VisitCmd(const SetGeometryPassDrawStateCmd* _cmd) {
+        //     int64 layer = 0;
+        //     m_arg_read_resources.clear();
+        //     m_arg_write_resources.clear();
+        //     temp_writed_resources.clear();
 
-            auto func = [&](const TArg& _arg, uint _idx) {
-                for (const auto& [bitmask, pso] : _cmd->PipelineMap()) {
-                    VisitArgs(_arg, pso.binding_infos[_idx].state_flags);
-                }
-            };
+        //     auto func = [&](const TArg& _arg, uint _idx) {
+        //         for (const auto& [bitmask, pso] : _cmd->PipelineMap()) {
+        //             VisitArgs(_arg, pso.binding_infos[_idx].state_flags);
+        //         }
+        //     };
 
-            auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-                VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
-            };
+        //     auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+        //         VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
+        //     };
 
-            _cmd->IterateArgs(func, bdls_post_func);
+        //     _cmd->IterateArgs(func, bdls_post_func);
 
-            const auto& vbs = _cmd->VertexBuffers();
-            for (const auto& vb : vbs) {
-                EmplaceArg((uint64)(vb.first), ResourceType::Texture_Buffer, Range(vb.second.min, vb.second.max - vb.second.min), false);
-            }
-            const auto& ibs = _cmd->IndexBuffers();
-            for (const auto& ib : ibs) {
-                EmplaceArg((uint64)(ib.first), ResourceType::Texture_Buffer, Range(ib.second.min, ib.second.max - ib.second.min), false);
-            }
-            //depth and render targets
-            const auto& pass_info = _cmd->RenderPassInfo();
-            if (pass_info.depth_attachment.Valid()) {
-                const auto& depth          = pass_info.depth_attachment;
-                auto        depth_store_op = GetStoreOp(GetDepthAction(depth.action));
-                if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD) {
-                    EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), false);
-                }
-                if (depth_store_op == EAttachmentStoreOp::STORE) {
-                    EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), true);
-                }
-            }
-            for (const auto& target : pass_info.color_attachments) {
-                auto color_store_op = GetStoreOp(target.action);
-                if (GetLoadOp(target.action) == EAttachmentLoadOp::LOAD) {
-                    EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), false);
-                }
-                if (color_store_op == EAttachmentStoreOp::STORE) {
-                    EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), true);
-                }
-            }
-            for (const auto& write_res : m_arg_write_resources) {
-                RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
-            }
+        //     const auto& vbs = _cmd->VertexBuffers();
+        //     for (const auto& vb : vbs) {
+        //         EmplaceArg((uint64)(vb.first), ResourceType::Texture_Buffer, Range(vb.second.min, vb.second.max - vb.second.min), false);
+        //     }
+        //     const auto& ibs = _cmd->IndexBuffers();
+        //     for (const auto& ib : ibs) {
+        //         EmplaceArg((uint64)(ib.first), ResourceType::Texture_Buffer, Range(ib.second.min, ib.second.max - ib.second.min), false);
+        //     }
+        //     //depth and render targets
+        //     const auto& pass_info = _cmd->RenderPassInfo();
+        //     if (pass_info.depth_attachment.Valid()) {
+        //         const auto& depth          = pass_info.depth_attachment;
+        //         auto        depth_store_op = GetStoreOp(GetDepthAction(depth.action));
+        //         if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD) {
+        //             EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), false);
+        //         }
+        //         if (depth_store_op == EAttachmentStoreOp::STORE) {
+        //             EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), true);
+        //         }
+        //     }
+        //     for (const auto& target : pass_info.color_attachments) {
+        //         auto color_store_op = GetStoreOp(target.action);
+        //         if (GetLoadOp(target.action) == EAttachmentLoadOp::LOAD) {
+        //             EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), false);
+        //         }
+        //         if (color_store_op == EAttachmentStoreOp::STORE) {
+        //             EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), true);
+        //         }
+        //     }
+        //     for (const auto& write_res : m_arg_write_resources) {
+        //         RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
+        //     }
 
-            for (const auto& read_res : m_arg_read_resources) {
-                RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
-            }
-            AddCmd(_cmd, m_dispatch_layer);
-        }
+        //     for (const auto& read_res : m_arg_read_resources) {
+        //         RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
+        //     }
+        //     AddCmd(_cmd, m_dispatch_layer);
+        // }
 
         void VisitCmd(const UpdateBindlessArrayCmd* _cmd) {
             //TODO: important here
@@ -1224,9 +1224,9 @@ namespace Moer::Render {
                 case Command::EType::MultiDraw:
                     VisitCmd(static_cast<const MultiDrawCmd*>(_cmd));
                     break;
-                case Command::EType::SetGeometryPassDrawState:
-                    VisitCmd(static_cast<const SetGeometryPassDrawStateCmd*>(_cmd));
-                    break;
+                // case Command::EType::SetGeometryPassDrawState:
+                //     VisitCmd(static_cast<const SetGeometryPassDrawStateCmd*>(_cmd));
+                //     break;
                 case Command::EType::UpdateBindlessArray:
                     VisitCmd(static_cast<const UpdateBindlessArrayCmd*>(_cmd));
                     break;

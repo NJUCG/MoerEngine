@@ -129,15 +129,14 @@ public:
                 //          geom.local_idx_count,
                 //          geom.local_vtx_count);
 
-                auto          bitmask = geom.mesh_buffers->vertex_factory_buffers.GetAttributesBitmask();
-                VertexFactory factory{bitmask};
-                Array<MeshDrawData>& mesh_draw_array = draw_mesh_datas_map[factory];
+                auto bitmask = geom.mesh_buffers->vertex_factory_buffers.GetAttributesBitmask();
 
                 if (bitmask == 3) {
                     continue;
                     // TODO: bitmask == 3，即只有position和normal，这些Mesh应该是用于动画等功能的。不应该被正常渲染
                 }
-
+                VertexFactory        factory{bitmask};
+                Array<MeshDrawData>& mesh_draw_array = draw_mesh_datas_map[factory];
                 mesh_draw_array.back().EmplaceDrawIndexed(
                     first_index, index_count, first_vertex, first_instance
                 );
