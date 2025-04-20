@@ -937,6 +937,7 @@ namespace Moer::Render {
         }
 
         template<typename TComputePso, typename... TArgs>
+            requires(TComputePso::InnerArgs::arg_size == sizeof...(TArgs))
         ComputeDispatcher Compute(TComputePso& _pso, TArgs&&... _args) {
             if constexpr (sizeof...(TArgs) > 0) {
                 ArrayArguments&& args = _pso.SetArgs(_args...);

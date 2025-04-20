@@ -877,7 +877,34 @@ enum EVulkanDescriptorType : uint8_t {
     VDT_ACCELERATION_STRUCTURE,
     VDT_Num
 };
-
+enum class ED3D12ShaderVariableType : uint32_t {// ref D3D_SHADER_VARIABLE_TYPE
+    RootConstant,                          // can't get from shader reflection. get from cpp pipeline definition.
+    ConstantBuffer,
+    ByteAddressBuffer,
+    StructuredBuffer,
+    TypedBuffer,
+    RWByteAddressBuffer,
+    RWStructuredBuffer,
+    RWTypedBuffer,
+    Texture1D,
+    Texture1DArray,
+    Texture2D,
+    Texture2DArray,
+    Texture2DMS,
+    Texture2DMSArray,
+    Texture3D,
+    TextureCube,
+    TextureCubeArray,
+    RWTexture1D,
+    RWTexture1DArray,
+    RWTexture2D,
+    RWTexture2DArray,
+    RWTexture3D,
+    Sampler,
+    RaytracingAccelerationStructure,
+    // no legacy append/consume buffer, as well as uav counter
+    // TODO ROV?  e.g. RasterizerOrderedTexture2D
+};
 using GlobalBufferStaticBindingPoint = uint8_t;
 
 enum {
@@ -1232,93 +1259,13 @@ namespace Moer {
             };
         };
         struct Dxil {
-            enum EShaderVariableType : uint32_t {// ref D3D_SHADER_VARIABLE_TYPE
-                RootConstant,                    // can't get from shader reflection. get from cpp pipeline definition.
-                ConstantBuffer,
-                ByteAddressBuffer,
-                StructuredBuffer,
-                TypedBuffer,
-                RWByteAddressBuffer,
-                RWStructuredBuffer,
-                RWTypedBuffer,
-                Texture1D,
-                Texture1DArray,
-                Texture2D,
-                Texture2DArray,
-                Texture2DMS,// multisampled
-                Texture2DMSArray,
-                Texture3D,
-                TextureCube,
-                TextureCubeArray,
-                RWTexture1D,
-                RWTexture1DArray,
-                RWTexture2D,
-                RWTexture2DArray,
-                RWTexture3D,
-                Sampler,
-                RaytracingAccelerationStructure,
-                // no legacy append/consume buffer, as well as uav counter
-                // TODO ROV?  e.g. RasterizerOrderedTexture2D
-            };
-
-            uint                slot;
-            uint                space;
-            uint                count;
-            EShaderVariableType type : 16;     // for common resource
-            uint                byte_size : 16;// padded size, size for root constant
+            uint slot;
+            uint space;
+            uint count;
+            uint type : 16;     // for common resource, see EShaderVariableType
+            uint byte_size : 16;// padded size, size for root constant
 
             bool IsBindless() const { return count == 0; }
-            bool IsRootConstant() const { return type == ReflectParamInfo::Dxil::EShaderVariableType::RootConstant; }
-            bool IsConstantBuffer() const { return type == ReflectParamInfo::Dxil::EShaderVariableType::ConstantBuffer; }
-            bool IsCommonBuffer() const {
-                return type == ReflectParamInfo::Dxil::EShaderVariableType::ByteAddressBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::StructuredBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::TypedBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWByteAddressBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWStructuredBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTypedBuffer;
-            }
-            bool IsTexture() const {
-                return type == ReflectParamInfo::Dxil::EShaderVariableType::Texture1D ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture1DArray ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture2D ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture2DArray ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture3D ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::TextureCube ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::TextureCubeArray ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture1D ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture1DArray ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture2D ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture2DArray ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture3D;
-            }
-            bool IsSampler() const { return type == ReflectParamInfo::Dxil::EShaderVariableType::Sampler; }
-            bool IsRaytracingAccelerationStructure() const {
-                return type == ReflectParamInfo::Dxil::EShaderVariableType::RaytracingAccelerationStructure;
-            }
-            bool IsSrv() const {
-                return type == ReflectParamInfo::Dxil::EShaderVariableType::ByteAddressBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::StructuredBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::TypedBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture1D ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture1DArray ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture2D ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture2DArray ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::Texture3D ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::TextureCube ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::TextureCubeArray ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RaytracingAccelerationStructure;
-            }
-            bool IsUav() const {
-                return type == ReflectParamInfo::Dxil::EShaderVariableType::RWByteAddressBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWStructuredBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTypedBuffer ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture1D ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture1DArray ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture2D ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture2DArray ||
-                       type == ReflectParamInfo::Dxil::EShaderVariableType::RWTexture3D;
-            }
         };
         struct Memory {
             byte data[sizeof(Spirv)];

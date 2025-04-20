@@ -126,7 +126,6 @@ namespace Moer::Render {
 
     template<>
     D3D12RHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
-        using std::string;
         assert(_info.rhi == "d3d12");
 
         D3D12RHIConfig config;

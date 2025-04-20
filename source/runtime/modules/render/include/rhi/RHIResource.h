@@ -3003,9 +3003,9 @@ namespace Moer::Render {
     struct PipelineHandle {
         uint64                     handle = 0;
         Array<ParamInfoFlags>      binding_infos;
-        UnorderedMap<uint64, uint> hash_2_info_index;
-        uint64                     valid_bits   = 0;
-        int                        constant_idx = -1;
+        UnorderedMap<uint64, uint> hash_2_info_index; // not use
+        uint64                     valid_bits   = 0;  // the pipeline actually used resource
+        int                        constant_idx = -1; // not use
 
         bool IsValid() const { return handle != 0; }
     };

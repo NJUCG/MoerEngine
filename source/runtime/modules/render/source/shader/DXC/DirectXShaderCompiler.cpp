@@ -33,6 +33,7 @@
 #include "dxc/dxcapi.h"
 #include "shader/ShaderCommon.h"
 #include "spirv_cross.hpp"
+#include <d3d12shader.h>
 
 // std::function<ShaderCompilerOutput*(const ShaderCompilerInput& input)> DXCompiler::s_compiler_func_table[EShaderPlatform::SP_Num]{};
 
@@ -148,6 +149,9 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
 
     auto add_dx_arg = [](Moer::Array<std::wstring>& arguments) {
         arguments.push_back(L"-DDXIL=1");
+
+        arguments.push_back(DXC_ARG_DEBUG);
+        arguments.push_back(L"-Qembed_debug");
     };
 
     auto add_vk_arg = [](Moer::Array<std::wstring>& arguments) {
@@ -190,8 +194,8 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
     };
     auto add_debug_arg = [](Moer::Array<std::wstring>& arguments) {
         arguments.push_back(DXC_ARG_ALL_RESOURCES_BOUND);
-        arguments.push_back(DXC_ARG_OPTIMIZATION_LEVEL0);
-        // arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
+        //arguments.push_back(DXC_ARG_OPTIMIZATION_LEVEL0);
+         arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
     };
 
     auto add_define_arg = [](Moer::Array<std::wstring>& arguments, const Moer::UnorderedMap<std::string, std::string>& _defines) {
@@ -576,8 +580,6 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     _param_map.reflect_map.swap(reflect_map);
 }
 
-#include <d3d12shader.h>
-
 #define DX_CHECK_HRESULT(hr)                                         \
     do {                                                             \
         HRESULT _hr = (hr);                                          \
@@ -588,6 +590,8 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     } while (0)
 
 void DXCompiler::Impl::ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompilerInput& _input, ShaderParametersInfoMap& _param_map) {
+    using Moer::uint;
+
     // Get shader reflection data.
     ComPtr<IDxcBlob> reflectionBlob{};
     DX_CHECK_HRESULT(result->GetOutput(DXC_OUT_REFLECTION, IID_PPV_ARGS(&reflectionBlob), nullptr));
@@ -633,7 +637,7 @@ void DXCompiler::Impl::ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompil
         switch (shaderInputBindDesc.Type) {
             case D3D_SIT_CBUFFER: {
                 // now suppose to be constant buffer, maybe change to root constant later.
-                param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::ConstantBuffer;
+                param_info.type = uint(ED3D12ShaderVariableType::ConstantBuffer);
                 auto* cb        = shaderReflection->GetConstantBufferByName(shaderInputBindDesc.Name);
                 assert(cb);
                 D3D12_SHADER_BUFFER_DESC desc{};
@@ -645,95 +649,95 @@ void DXCompiler::Impl::ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompil
                 const auto dim = shaderInputBindDesc.Dimension;
                 switch (dim) {
                     case D3D_SRV_DIMENSION_BUFFER:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::TypedBuffer;
+                        param_info.type = uint(ED3D12ShaderVariableType::TypedBuffer);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE1D:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::Texture1D;
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture1D);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE1DARRAY:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::Texture1DArray;
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture1DArray);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2D:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::Texture2D;
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture2D);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2DARRAY:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::Texture2DArray;
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture2DArray);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2DMS:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::Texture2DMS;
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture2DMS);
                         //num_sample = shaderInputBindDesc.NumSamples;
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2DMSARRAY:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::Texture2DMSArray;
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture2DMSArray);
                         //num_sample = shaderInputBindDesc.NumSamples;
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE3D:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::Texture3D;
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture3D);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURECUBE:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::TextureCube;
+                        param_info.type = uint(ED3D12ShaderVariableType::TextureCube);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURECUBEARRAY:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::TextureCubeArray;
+                        param_info.type = uint(ED3D12ShaderVariableType::TextureCubeArray);
                         break;
                     default:
-                        LOG_WARNING("unsupported shader varibale '{}' dimension: '{}' in shader '{}'", shaderInputBindDesc.Name, uint32_t(shaderInputBindDesc.Type), _input.shader_name);
+                        LOG_WARNING("unsupported shader varibale '{}' dimension: '{}' in shader '{}'", shaderInputBindDesc.Name, uint(shaderInputBindDesc.Type), _input.shader_name);
                         assert(false && "unsupported type");
                         break;
                 }
             } break;
             case D3D_SIT_SAMPLER:
-                param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::Sampler;
+                param_info.type = uint(ED3D12ShaderVariableType::Sampler);
                 break;
             case D3D_SIT_UAV_RWTYPED: {
                 // todo? Shader Model 6.7 introduces writable multi-sampled texture resource. https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_7_Advanced_Texture_Ops.html#writable-msaa-textures
                 const auto dim = shaderInputBindDesc.Dimension;
                 switch (dim) {
                     case D3D_SRV_DIMENSION_BUFFER:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::RWTypedBuffer;
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTypedBuffer);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE1D:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::RWTexture1D;
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture1D);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE1DARRAY:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::RWTexture1DArray;
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture1DArray);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2D:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::RWTexture2D;
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture2D);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2DARRAY:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::RWTexture2DArray;
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture2DArray);
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE3D:
-                        param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::RWTexture3D;
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture3D);
                         break;
                     default:
-                        LOG_WARNING("unsupported shader varibale '{}' rw dimension: '{}' in shader '{}'", shaderInputBindDesc.Name, uint32_t(shaderInputBindDesc.Type), _input.shader_name);
+                        LOG_WARNING("unsupported shader varibale '{}' rw dimension: '{}' in shader '{}'", shaderInputBindDesc.Name, uint(shaderInputBindDesc.Type), _input.shader_name);
                         assert(false && "unsupported type");
                         break;
                 }
             } break;
             case D3D_SIT_STRUCTURED:
-                param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::StructuredBuffer;// todo struct size/stride?
+                param_info.type = uint(ED3D12ShaderVariableType::StructuredBuffer);// todo 32_tstruct size/stride)?
                 break;
             case D3D_SIT_UAV_RWSTRUCTURED:
-                param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::RWStructuredBuffer;
+                param_info.type = uint(ED3D12ShaderVariableType::RWStructuredBuffer);
                 break;
             case D3D_SIT_BYTEADDRESS:
-                param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::ByteAddressBuffer;
+                param_info.type = uint(ED3D12ShaderVariableType::ByteAddressBuffer);
                 break;
             case D3D_SIT_UAV_RWBYTEADDRESS:
-                param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::RWByteAddressBuffer;
+                param_info.type = uint(ED3D12ShaderVariableType::RWByteAddressBuffer);
                 break;
             case D3D_SIT_RTACCELERATIONSTRUCTURE:
-                param_info.type = Moer::ReflectParamInfo::Dxil::EShaderVariableType::RaytracingAccelerationStructure;
+                param_info.type = uint(ED3D12ShaderVariableType::RaytracingAccelerationStructure);
                 break;
             case D3D_SIT_UAV_APPEND_STRUCTURED:
             case D3D_SIT_UAV_CONSUME_STRUCTURED:
             case D3D_SIT_UAV_RWSTRUCTURED_WITH_COUNTER:
             case D3D_SIT_TBUFFER:
             case D3D_SIT_UAV_FEEDBACKTEXTURE:
-                LOG_WARNING("unsupported shader varibale '{}' type: '{}' in shader '{}'", shaderInputBindDesc.Name, uint32_t(shaderInputBindDesc.Type), _input.shader_name);
+                LOG_WARNING("unsupported shader varibale '{}' type: '{}' in shader '{}'", shaderInputBindDesc.Name, uint(shaderInputBindDesc.Type), _input.shader_name);
                 assert(false && "unsupported type");
                 break;
         }

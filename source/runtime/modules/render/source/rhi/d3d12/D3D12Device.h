@@ -147,20 +147,86 @@ namespace Moer::Render {
         //static VkBuildAccelerationStructureModeKHR  METoVKBuildAccelerationStructureMode(ERaytracingBuildMode _mode);
     }// namespace D3D12EnumTranslation
 
+    inline bool operator==(ED3D12ShaderVariableType x, uint y) { return uint(x) == y; }
+
+    inline bool IsShaderVarRootConstant(ED3D12ShaderVariableType type) { return type == ED3D12ShaderVariableType::RootConstant; }
+    inline bool IsShaderVarConstantBuffer(ED3D12ShaderVariableType type) { return type == ED3D12ShaderVariableType::ConstantBuffer; }
+    inline bool IsShaderVarCommonBuffer(ED3D12ShaderVariableType type) {
+        return type == ED3D12ShaderVariableType::ByteAddressBuffer ||
+               type == ED3D12ShaderVariableType::StructuredBuffer ||
+               type == ED3D12ShaderVariableType::TypedBuffer ||
+               type == ED3D12ShaderVariableType::RWByteAddressBuffer ||
+               type == ED3D12ShaderVariableType::RWStructuredBuffer ||
+               type == ED3D12ShaderVariableType::RWTypedBuffer;
+    }
+    inline bool IsShaderVarTexture(ED3D12ShaderVariableType type) {
+        return type == ED3D12ShaderVariableType::Texture1D ||
+               type == ED3D12ShaderVariableType::Texture1DArray ||
+               type == ED3D12ShaderVariableType::Texture2D ||
+               type == ED3D12ShaderVariableType::Texture2DArray ||
+               type == ED3D12ShaderVariableType::Texture3D ||
+               type == ED3D12ShaderVariableType::TextureCube ||
+               type == ED3D12ShaderVariableType::TextureCubeArray ||
+               type == ED3D12ShaderVariableType::RWTexture1D ||
+               type == ED3D12ShaderVariableType::RWTexture1DArray ||
+               type == ED3D12ShaderVariableType::RWTexture2D ||
+               type == ED3D12ShaderVariableType::RWTexture2DArray ||
+               type == ED3D12ShaderVariableType::RWTexture3D;
+    }
+    inline bool IsShaderVarSampler(ED3D12ShaderVariableType type) { return type == ED3D12ShaderVariableType::Sampler; }
+    inline bool IsShaderVarRaytracingAccelerationStructure(ED3D12ShaderVariableType type) {
+        return type == ED3D12ShaderVariableType::RaytracingAccelerationStructure;
+    }
+    inline bool IsShaderVarSrv(ED3D12ShaderVariableType type) {
+        return type == ED3D12ShaderVariableType::ByteAddressBuffer ||
+               type == ED3D12ShaderVariableType::StructuredBuffer ||
+               type == ED3D12ShaderVariableType::TypedBuffer ||
+               type == ED3D12ShaderVariableType::Texture1D ||
+               type == ED3D12ShaderVariableType::Texture1DArray ||
+               type == ED3D12ShaderVariableType::Texture2D ||
+               type == ED3D12ShaderVariableType::Texture2DArray ||
+               type == ED3D12ShaderVariableType::Texture3D ||
+               type == ED3D12ShaderVariableType::TextureCube ||
+               type == ED3D12ShaderVariableType::TextureCubeArray ||
+               type == ED3D12ShaderVariableType::RaytracingAccelerationStructure;
+    }
+    inline bool IsShaderVarUav(ED3D12ShaderVariableType type) {
+        return type == ED3D12ShaderVariableType::RWByteAddressBuffer ||
+               type == ED3D12ShaderVariableType::RWStructuredBuffer ||
+               type == ED3D12ShaderVariableType::RWTypedBuffer ||
+               type == ED3D12ShaderVariableType::RWTexture1D ||
+               type == ED3D12ShaderVariableType::RWTexture1DArray ||
+               type == ED3D12ShaderVariableType::RWTexture2D ||
+               type == ED3D12ShaderVariableType::RWTexture2DArray ||
+               type == ED3D12ShaderVariableType::RWTexture3D;
+    }
+    inline bool IsShaderVarRootConstant(const ReflectParamInfo::Dxil& param) { return IsShaderVarRootConstant(ED3D12ShaderVariableType(param.type)); }
+    inline bool IsShaderVarConstantBuffer(const ReflectParamInfo::Dxil& param) { return IsShaderVarConstantBuffer(ED3D12ShaderVariableType(param.type)); }
+    inline bool IsShaderVarCommonBuffer(const ReflectParamInfo::Dxil& param) { return IsShaderVarCommonBuffer(ED3D12ShaderVariableType(param.type)); }
+    inline bool IsShaderVarTexture(const ReflectParamInfo::Dxil& param) { return IsShaderVarTexture(ED3D12ShaderVariableType(param.type)); }
+    inline bool IsShaderVarSampler(const ReflectParamInfo::Dxil& param) { return IsShaderVarSampler(ED3D12ShaderVariableType(param.type)); }
+    inline bool IsShaderVarRaytracingAccelerationStructure(const ReflectParamInfo::Dxil& param) { return IsShaderVarRaytracingAccelerationStructure(ED3D12ShaderVariableType(param.type)); }
+    inline bool IsShaderVarSrv(const ReflectParamInfo::Dxil& param) { return IsShaderVarSrv(ED3D12ShaderVariableType(param.type)); }
+    inline bool IsShaderVarUav(const ReflectParamInfo::Dxil& param) { return IsShaderVarUav(ED3D12ShaderVariableType(param.type)); }
+
     class D3D12Device;
     class D3D12GpuGlobalAllocator;
     class D3D12GraphicsCommandQueue;
     class D3D12Fence;
-    class D3D12DescriptorHeap;// ?
+    class D3D12DescriptorHeap;// todo
     class D3D12Texture;
     class D3D12Buffer;
     class D3D12CommandResourceAllocator;
     class D3D12PipelineState;
+    class D3D12BindlessArray;// todo
 
     // only to provide a 'device' as member
     class D3D12DeviceChild {
     public:
         D3D12DeviceChild(D3D12Device* _device) : device(_device) {}
+
+    public:
+        D3D12Device* GetDevice() const { return device; }
 
     protected:
         D3D12Device* device;
@@ -177,22 +243,156 @@ namespace Moer::Render {
             RT
         };
 
+        struct PipelineLayout {
+            // how to group descriptors?
+            // current approach:
+            // - root constant as root constant
+            // - constant buffer as root cbv   (if too many, maybe use a descriptor table
+            // - the bindlessarray as root srv!
+            // - other resource in SRV/UAV/Sampler table. no more root descriptor  TODO
+
+            struct RootConstant {
+                uint8 idx_in_cpp_args = -1;
+                uint8 idx_in_root_sig = -1;
+                uint8 byte_size       = 4;
+                uint8 slot            = 0;
+                uint8 space           = 0;
+            };
+
+            struct RootDescriptor {
+                uint8 idx_in_cpp_args = -1;
+                uint8 idx_in_root_sig = -1;
+                uint8 slot            = 0;
+                uint8 space           = 0;
+            };
+
+            struct RootDescriptorTable {
+                uint8 idx_in_root_sig = -1;
+                struct Entry {
+                    uint8 idx_in_cpp_args = -1;
+                    uint8 idx_in_table    = -1;
+                    uint8 bind_count      = 1;
+                    uint8 slot            = 0;
+                    uint8 space           = 0;
+                };
+                Array<Entry> entries;
+
+                uint GetTotalBindCount() const;
+            };
+
+            std::optional<RootConstant>          root_constant      = std::nullopt;
+            std::optional<RootDescriptor>        the_bindless_array = std::nullopt;
+            std::optional<Array<RootDescriptor>> root_cbvs          = std::nullopt;
+            std::optional<RootDescriptorTable>   srv_table          = std::nullopt;
+            std::optional<RootDescriptorTable>   uav_table          = std::nullopt;
+            std::optional<RootDescriptorTable>   sampler_table      = std::nullopt;
+            // maybe lack some flexiblity?
+
+            void Add(uint8 _idx_in_cpp_args, const ShaderArgCppInfo& _arg_cpp_info, const ReflectParamInfo::Dxil& _resource_info, bool _b_special_bindless);
+        };
+
     private:
         friend class D3D12Device;
         ComPtr<ID3D12PipelineState> pipeline_state;
         ComPtr<ID3D12RootSignature> root_signature;
+        PipelineLayout              layout;
         EType                       type;
 
     public:
         D3D12PipelineState(D3D12Device* _device, EType _type) : PipelineState(), D3D12DeviceChild(_device), pipeline_state(nullptr), root_signature(nullptr), type(_type) {}
 
-        //create root_sig
-        //create pso
+        void                  BuildRootSignature(const PipelineLayout& _layout);
+        const PipelineLayout& GetLayout() const { return layout; }
 
         ID3D12PipelineState* Native() const { return pipeline_state.Get(); }
+        ID3D12RootSignature* NativeRootSignature() const { return root_signature.Get(); }
 
         void Destroy() override;// from PipelineState.RHIResource
     };
+
+    struct DescriptorIndex {
+        //D3D12DescriptorHeapBase* heap;
+        uint index;
+    };
+
+    class D3D12DescriptorHeapBase : public D3D12DeviceChild {
+    protected:
+        ComPtr<ID3D12DescriptorHeap> heap                  = nullptr;
+        D3D12_CPU_DESCRIPTOR_HANDLE  start_handle_cpu      = {0};
+        D3D12_GPU_DESCRIPTOR_HANDLE  start_handle_gpu      = {0};
+        uint                         descriptor_size       = 0;
+        uint                         num_total_descriptors = 0;
+        D3D12_DESCRIPTOR_HEAP_TYPE   type;
+
+    public:
+        D3D12DescriptorHeapBase(D3D12Device* _device, D3D12_DESCRIPTOR_HEAP_TYPE _type, uint32_t _num_descriptors, bool _is_shader_visible);
+
+        bool                        IsShaderVisible() const { return start_handle_gpu.ptr != 0; }
+        D3D12_CPU_DESCRIPTOR_HANDLE GetStartHandleCpu() const { return start_handle_cpu; }
+        D3D12_GPU_DESCRIPTOR_HANDLE GetStartHandleGpu() const { return start_handle_gpu; }
+        ID3D12DescriptorHeap*       Native() const { return heap.Get(); }
+        uint                        GetDescriptorSize() const { return descriptor_size; }
+        uint                        GetNumTotalDescriptors() const { return num_total_descriptors; }
+        D3D12_DESCRIPTOR_HEAP_TYPE  GetType() const { return type; }
+
+        D3D12_CPU_DESCRIPTOR_HANDLE GetOffsetHandleCpu(DescriptorIndex index) const { return {start_handle_cpu.ptr + index.index * descriptor_size}; }
+        D3D12_GPU_DESCRIPTOR_HANDLE GetOffsetHandleGpu(DescriptorIndex index) const { return {start_handle_gpu.ptr + index.index * descriptor_size}; }
+    };
+
+    class D3D12CpuDescriptorHeap : public D3D12DescriptorHeapBase {
+    public:
+        D3D12CpuDescriptorHeap(D3D12Device* _device, D3D12_DESCRIPTOR_HEAP_TYPE _type, uint32_t _num_descriptors)
+            : D3D12DescriptorHeapBase(_device, _type, _num_descriptors, false) {}
+
+        D3D12_GPU_DESCRIPTOR_HANDLE GetStartHandleGpu() const                       = delete;
+        D3D12_GPU_DESCRIPTOR_HANDLE GetOffsetHandleGpu(DescriptorIndex index) const = delete;
+    };
+
+    class D3D12GpuDescriptorHeap : public D3D12DescriptorHeapBase {
+    public:
+        D3D12GpuDescriptorHeap(D3D12Device* _device, D3D12_DESCRIPTOR_HEAP_TYPE _type, uint32_t _num_descriptors)
+            : D3D12DescriptorHeapBase(_device, _type, _num_descriptors, true) {}
+    };
+
+    // manage descriptor one by one
+    class D3D12CpuDescriptorAllocator : public D3D12CpuDescriptorHeap {
+    private:
+        std::queue<DescriptorIndex> free_queue;
+        uint                        num_descriptors_allocated = 0;
+
+    public:
+        using D3D12CpuDescriptorHeap::D3D12CpuDescriptorHeap;
+
+        bool            IsHeapFull() const { return num_descriptors_allocated == GetNumTotalDescriptors(); }
+        DescriptorIndex Allocate();
+        void            Free(DescriptorIndex handle);
+    };
+
+    // in ring buffer fashion. we copy needed descriptors every time, not consider descriptor cache
+    class D3D12GpuDescriptorAllocator : public D3D12GpuDescriptorHeap {
+    private:
+        uint                          max_descriptors_per_execution = 0;// const
+        uint                          num_descriptor_chunk          = 0;// const
+        uint                          num_used_chunks               = 0;
+        uint                          current_chunk_index           = 0;
+        uint                          current_chunk_offset          = 0;
+        LockFreeQueueBase<uint, true> ready_chunk_indices;
+
+    public:
+        D3D12GpuDescriptorAllocator(D3D12Device* _device, D3D12_DESCRIPTOR_HEAP_TYPE _type, uint32_t _num_descriptors_total, uint32_t _max_descriptors_per_execution);
+
+        void BeginPushDescriptors();
+        void EndPushDescriptors();
+
+        DescriptorIndex Allocate(uint count = 1);// now should only be called by device...
+    };
+
+    // todo: bindless array,  want keep those descriptor 'static'  (not need copy every time
+    //       (split half to dynamic gpuallocator, half to static bindlessarray ?
+    //class D3D12BindlessArray : public BindlessArray {
+    //private:
+    //public:
+    //};
 
     struct Allocation {
         D3D12MA::Allocation* alloc    = nullptr;
@@ -236,8 +436,24 @@ namespace Moer::Render {
     };
 
     class D3D12Texture final : public Texture, public D3D12DeviceChild {
+    public:
+        struct ViewDesc {
+            ED3D12ShaderVariableType type              = ED3D12ShaderVariableType::Texture2D;
+            DXGI_FORMAT              format            = DXGI_FORMAT_UNKNOWN;
+            uint8_t                  first_mip_level   = 0;// note we not care array/plane level subresource range
+            uint8_t                  num_mip_levels    = uint8_t(-1);
+            bool                     b_depth_read_only = false;
+
+            auto operator<=>(const ViewDesc& other) const = default;
+        };
+        struct ViewRecord {
+            ViewDesc        desc;
+            DescriptorIndex index;// in cpu side descriptor heap
+        };
+
     private:
-        Allocation allocation;
+        Allocation        allocation;
+        Array<ViewRecord> srv_uav_views;// srv,uav. todo rtv,dsv?
 
     public:
         D3D12Texture(D3D12Device* _device, const TextureInfo& _info);
@@ -255,8 +471,23 @@ namespace Moer::Render {
 
     // not for readback/upload
     class D3D12Buffer final : public Buffer, public D3D12DeviceChild {
+    public:
+        struct ViewDesc {
+            ED3D12ShaderVariableType type        = ED3D12ShaderVariableType::StructuredBuffer;
+            DXGI_FORMAT              format      = DXGI_FORMAT_UNKNOWN;
+            uint64                   byte_offset = 0;
+            // always use full size. stride comes from BufferInfo
+
+            auto operator<=>(const ViewDesc& other) const = default;
+        };
+        struct ViewRecord {
+            ViewDesc        desc;
+            DescriptorIndex index;// in cpu side descriptor heap
+        };
+
     private:
-        Allocation allocation;// ? resource location ?
+        Allocation        allocation;
+        Array<ViewRecord> srv_uav_views;// srv,uav
 
     public:
         D3D12Buffer(D3D12Device* _device, const BufferInfo& _info);
@@ -269,6 +500,9 @@ namespace Moer::Render {
 
         void            Destroy() override;                            // from Buffer.RHIResource, mainly called by CountableRef
         RENDER_API void SetName(const std::string_view _name) override;// from Buffer
+
+        DescriptorIndex CreateSrv(const BufferView& _range, ED3D12ShaderVariableType _type);
+        DescriptorIndex CreateUav(const BufferView& _range, ED3D12ShaderVariableType _type);
     };
 
     class D3D12Fence final : public Fence, public D3D12DeviceChild {
@@ -312,6 +546,11 @@ namespace Moer::Render {
 
         void Begin();
         void End();
+
+        void SetPso(const PipelineHandle& _handle);
+        void BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args);
+
+        void Dispatch(uint _x, uint _y, uint _z);
 
         void CopyBuffer(D3D12Buffer* _src, D3D12Buffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
         void CopyData(D3D12StagingBufferView _dst, const void* _data, uint64 _size);
@@ -378,7 +617,8 @@ namespace Moer::Render {
         void Reset();
     };
 
-    // only for upload/readback buffer now
+
+    // only for upload/readback buffer now. may change in the future
     class D3D12BuddyAllocator : public D3D12DeviceChild {
     public:
         friend struct BuddyBlock;
@@ -753,7 +993,13 @@ namespace Moer::Render {
         ComPtr<IDXGIAdapter3>              adapter;
         UniquePtr<D3D12GpuGlobalAllocator> gpu_global_allocator;// ptr to construct after device
 
-        //D3D12DescriptorHeap                            m_global_descriptor_heap{};
+        UniquePtr<D3D12CpuDescriptorAllocator> csu_heap_cpu;
+        UniquePtr<D3D12CpuDescriptorAllocator> rtv_heap_cpu;
+        UniquePtr<D3D12CpuDescriptorAllocator> dsv_heap_cpu;
+        UniquePtr<D3D12CpuDescriptorAllocator> sampler_heap_cpu;
+        UniquePtr<D3D12GpuDescriptorAllocator> csu_heap_gpu;
+        UniquePtr<D3D12GpuDescriptorAllocator> sampler_heap_gpu;
+
         UniquePtr<D3D12GraphicsCommandQueue> gfx_queue{};
         //UniquePtr<D3D12CommandQueue>              compute_queue{};
         //UniquePtr<D3D12CopyQueue>                          copy_queue{};
@@ -762,10 +1008,47 @@ namespace Moer::Render {
         //StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
 
     public:
-        ID3D12Device10*          Native() const { return device.Get(); }
-        IDXGIFactory6*           NativeFactory() const { return factory.Get(); }
-        IDXGIAdapter3*           NativeAdapter() const { return adapter.Get(); }
-        D3D12GpuGlobalAllocator* GetGpuGlobalAllocator() { return gpu_global_allocator.get(); }
+        ID3D12Device10*              Native() const { return device.Get(); }
+        IDXGIFactory6*               NativeFactory() const { return factory.Get(); }
+        IDXGIAdapter3*               NativeAdapter() const { return adapter.Get(); }
+        CD3DX12FeatureSupport&       GetFeatureSupport() { return feature_supports; }
+        D3D12GpuGlobalAllocator*     GetGpuGlobalAllocator() { return gpu_global_allocator.get(); }
+        D3D12CpuDescriptorAllocator* GetCsuHeap() { return csu_heap_cpu.get(); }
+        D3D12CpuDescriptorAllocator* GetRtvHeap() { return rtv_heap_cpu.get(); }
+        D3D12CpuDescriptorAllocator* GetDsvHeap() { return dsv_heap_cpu.get(); }
+        D3D12CpuDescriptorAllocator* GetSampleHeap() { return sampler_heap_cpu.get(); }
+        D3D12GpuDescriptorAllocator* GetCsuHeapGpuDyn() { return csu_heap_gpu.get(); }
+        D3D12GpuDescriptorAllocator* GetSamplerHeapGpuDyn() { return sampler_heap_gpu.get(); }
+
+    public:
+        D3D12_GPU_DESCRIPTOR_HANDLE PushCsuDescriptor(std::span<const DescriptorIndex> _index_in_cpu_heap);
+        D3D12_GPU_DESCRIPTOR_HANDLE PushSamplerDescriptor(std::span<const DescriptorIndex> _index_in_cpu_heap);
+
+        template<typename... T>
+            requires(std::same_as<T, DescriptorIndex> && ...) && (sizeof...(T) > 0)
+        D3D12_GPU_DESCRIPTOR_HANDLE PushCsuDescriptor(T... _index_in_cpu_heap) {
+            constexpr uint        count = sizeof...(_index_in_cpu_heap);
+            const DescriptorIndex start = csu_heap_gpu->Allocate(count);
+
+            [start = start.index]<size_t... N>(auto&& index_tuple, std::index_sequence<N...>) {
+                (device->CopyDescriptorsSimple(1, csu_heap_gpu->GetOffsetHandleCpu({start + uint(N)}), csu_heap_cpu->GetOffsetHandleCpu(std::get<N>(index_tuple)), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV), ...);
+            }(std::forward_as_tuple(_index_in_cpu_heap...), std::make_index_sequence<count>());
+
+            return csu_heap_gpu->GetOffsetHandleGpu(start);
+        }
+
+        template<typename... T>
+            requires(std::same_as<T, DescriptorIndex> && ...) && (sizeof...(T) > 0)
+        D3D12_GPU_DESCRIPTOR_HANDLE PushSapmlerDescriptor(T... _index_in_cpu_heap) {
+            constexpr uint        count = sizeof...(_index_in_cpu_heap);
+            const DescriptorIndex start = sampler_heap_gpu->Allocate(count);
+
+            [start = start.index]<size_t... N>(auto&& index_tuple, std::index_sequence<N...>) {
+                (device->CopyDescriptorsSimple(1, sampler_heap_gpu->GetOffsetHandleCpu({start + uint(N)}), sampler_heap_cpu->GetOffsetHandleCpu(std::get<N>(index_tuple)), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER), ...);
+            }(std::forward_as_tuple(_index_in_cpu_heap...), std::make_index_sequence<count>());
+
+            return sampler_heap_gpu->GetOffsetHandleGpu(start);
+        }
 
     public:
         static constexpr uint bindless_sampler_cnt = 256;

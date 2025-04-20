@@ -144,15 +144,21 @@ namespace Moer::Render {
         }
 #endif
 
-        gpu_global_allocator = MakeUnique<D3D12GpuGlobalAllocator>(this);
-        gfx_queue            = MakeUnique<D3D12GraphicsCommandQueue>(this, EQueueType::Graphics);
-
         feature_supports.Init(device.Get());
         ASSERT(feature_supports.EnhancedBarriersSupported());
         ASSERT(feature_supports.ResourceBindingTier() >= D3D12_RESOURCE_BINDING_TIER_3);// ResourceDescriptorHeap[index]
         ASSERT(feature_supports.HighestShaderModel() >= D3D_SHADER_MODEL_6_6);          // ResourceDescriptorHeap[index]
         ASSERT(feature_supports.RaytracingTier() >= D3D12_RAYTRACING_TIER_1_1);         // 1.0 for basic dxr, 1.1 for rayquery
         ASSERT(feature_supports.HighestRootSignatureVersion() >= D3D_ROOT_SIGNATURE_VERSION_1_1);
+
+        gpu_global_allocator = MakeUnique<D3D12GpuGlobalAllocator>(this);
+        gfx_queue            = MakeUnique<D3D12GraphicsCommandQueue>(this, EQueueType::Graphics);
+        csu_heap_cpu         = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, feature_supports.MaxViewDescriptorHeapSize());// ~1e6
+        rtv_heap_cpu         = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 256);                                                 // just some small number, should be enough
+        dsv_heap_cpu         = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 256);
+        sampler_heap_cpu     = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, feature_supports.MaxSamplerDescriptorHeapSizeWithStaticSamplers());         // ~2048
+        csu_heap_gpu         = MakeUnique<D3D12GpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, feature_supports.MaxViewDescriptorHeapSize() / 2, 4096);                // ~1e6
+        sampler_heap_gpu     = MakeUnique<D3D12GpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, feature_supports.MaxSamplerDescriptorHeapSizeWithStaticSamplers() / 2, 256);// ~2048
     }
 
     D3D12Device::~D3D12Device() {
@@ -169,47 +175,178 @@ namespace Moer::Render {
 
     static bool CheckReflectionTypeMatch(const ReflectParamInfo::Dxil& resource_info, const ShaderArgCppInfo& arg_info) {
         if (arg_info.type == EShaderArgType::SDA_BindlessArray)// !just a specical case.. not mean real bindless.  'StructuredBuffer<uint> g__array_114514_bdls'
-            return resource_info.type == ReflectParamInfo::Dxil::EShaderVariableType::StructuredBuffer;
-        if (arg_info.type == EShaderArgType::SDA_Constant) return resource_info.IsRootConstant();
+            return resource_info.type == ED3D12ShaderVariableType::StructuredBuffer;
+        if (arg_info.type == EShaderArgType::SDA_Constant) return IsShaderVarRootConstant(resource_info);
         //if (arg_info.type == EShaderArgType::SDA_ConstantBuffer) return resource_info.IsConstantBuffer(); // seems 'SDA_ConstantBuffer' not actually used...
-        if (arg_info.type == EShaderArgType::SDA_Buffer) return resource_info.IsCommonBuffer() || resource_info.IsConstantBuffer();
-        if (arg_info.type == EShaderArgType::SDA_Texture) return resource_info.IsTexture();
-        if (arg_info.type == EShaderArgType::SDA_Sampler) return resource_info.IsSampler();
-        if (arg_info.type == EShaderArgType::SDA_TLAS) return resource_info.IsRaytracingAccelerationStructure();
+        if (arg_info.type == EShaderArgType::SDA_Buffer) return IsShaderVarCommonBuffer(resource_info) || IsShaderVarConstantBuffer(resource_info);
+        if (arg_info.type == EShaderArgType::SDA_Texture) return IsShaderVarTexture(resource_info);
+        if (arg_info.type == EShaderArgType::SDA_Sampler) return IsShaderVarSampler(resource_info);
+        if (arg_info.type == EShaderArgType::SDA_TLAS) return IsShaderVarRaytracingAccelerationStructure(resource_info);
         return false;
     };
 
+    uint D3D12PipelineState::PipelineLayout::RootDescriptorTable::GetTotalBindCount() const {
+        uint cnt = 0;
+        for (const auto& e : entries) {
+            ASSERT(e.bind_count > 0);// not consider bindless now
+            cnt += e.bind_count;
+        }
+        return cnt;
+    }
+
+    void D3D12PipelineState::PipelineLayout::Add(uint8 _idx_in_cpp_args, const ShaderArgCppInfo& _arg_cpp_info, const ReflectParamInfo::Dxil& _resource_info, bool _b_special_bindless) {
+        if (_b_special_bindless) {
+            the_bindless_array.emplace(_idx_in_cpp_args, uint8(-1), uint8(_resource_info.slot), uint8(_resource_info.space));
+        } else if (IsShaderVarRootConstant(_resource_info)) {
+            root_constant.emplace(_idx_in_cpp_args, uint8(-1), _resource_info.byte_size, uint8(_resource_info.slot), uint8(_resource_info.space));
+        } else {
+            ASSERT(!_resource_info.IsBindless());// maybe not consider user defined bindless. just builtin bindless array.
+            const uint bind_count = _resource_info.IsBindless() ? 0 : _resource_info.count;
+            if (!_resource_info.IsBindless()) {
+                ASSERT(_resource_info.count == _arg_cpp_info.array_size);
+            }
+            if (IsShaderVarConstantBuffer(_resource_info)) {
+                if (!root_cbvs) {
+                    root_cbvs.emplace();
+                }
+                root_cbvs->emplace_back(_idx_in_cpp_args, uint8(-1), uint8(_resource_info.slot), uint8(_resource_info.space));
+            } else if (IsShaderVarSrv(_resource_info)) {
+                if (!srv_table) {
+                    srv_table.emplace();
+                }
+                srv_table->entries.emplace_back(_idx_in_cpp_args, uint8(srv_table->entries.size()), uint8(bind_count), uint8(_resource_info.slot), uint8(_resource_info.space));
+            } else if (IsShaderVarUav(_resource_info)) {
+                if (!uav_table) {
+                    uav_table.emplace();
+                }
+                uav_table->entries.emplace_back(_idx_in_cpp_args, uint8(uav_table->entries.size()), uint8(bind_count), uint8(_resource_info.slot), uint8(_resource_info.space));
+            } else if (IsShaderVarSampler(_resource_info)) {
+                if (!sampler_table) {
+                    sampler_table.emplace();
+                }
+                sampler_table->entries.emplace_back(_idx_in_cpp_args, uint8(sampler_table->entries.size()), uint8(bind_count), uint8(_resource_info.slot), uint8(_resource_info.space));
+            }
+        }
+    }
+
+    void D3D12PipelineState::BuildRootSignature(const PipelineLayout& _layout) {
+        layout = _layout;
+
+        uint                             required_dword = 0;// due to root sig limit, max 64 dword, 256 bytes
+        Array<CD3DX12_ROOT_PARAMETER1>   root_parameters;
+        Array<CD3DX12_DESCRIPTOR_RANGE1> descriptor_ranges;
+        uint                             num_root_parameters   = 0;
+        uint                             num_descriptor_ranges = 0;
+
+        {
+            // first pass check size
+            if (layout.root_constant) {
+                required_dword += layout.root_constant->byte_size / 4;
+                layout.root_constant->idx_in_root_sig = num_root_parameters++;
+            }
+            if (layout.the_bindless_array) {
+                required_dword += 2;
+                layout.the_bindless_array->idx_in_root_sig = num_root_parameters++;
+            }
+            if (layout.root_cbvs) {
+                for (auto& cbv : *layout.root_cbvs) {
+                    required_dword += 2;
+                    cbv.idx_in_root_sig = num_root_parameters++;
+                }
+            }
+            if (layout.srv_table) {
+                required_dword++;
+                layout.srv_table->idx_in_root_sig = num_root_parameters++;
+                num_descriptor_ranges += layout.srv_table->entries.size();
+            }
+            if (layout.uav_table) {
+                required_dword++;
+                layout.uav_table->idx_in_root_sig = num_root_parameters++;
+                num_descriptor_ranges += layout.uav_table->entries.size();
+            }
+            if (layout.sampler_table) {
+                required_dword++;
+                layout.sampler_table->idx_in_root_sig = num_root_parameters++;
+                num_descriptor_ranges += layout.sampler_table->entries.size();
+            }
+        }
+
+        root_parameters.resize(num_root_parameters);
+        descriptor_ranges.resize(num_descriptor_ranges);
+        ASSERT(required_dword <= 64);
+
+        {
+            // ref UE D3D12RootSignature.cpp
+            static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kSrvDescriptorRangeFlags     = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+            static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kCbvDescriptorRangeFlags     = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+            static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kUavDescriptorRangeFlags     = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+            static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kSamplerDescriptorRangeFlags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+            static constexpr D3D12_ROOT_DESCRIPTOR_FLAGS  kCbvRootDescriptorFlags      = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
+            // UE: D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC;// We always set the data in an upload heap before calling Set*RootConstantBufferView.
+
+            // todo Visibility?
+
+            // second pass fill data
+            if (layout.root_constant) {
+                root_parameters[layout.root_constant->idx_in_root_sig].InitAsConstants(layout.root_constant->byte_size / 4, layout.root_constant->slot, layout.root_constant->space, D3D12_SHADER_VISIBILITY_ALL);
+            }
+            if (layout.the_bindless_array) {
+                root_parameters[layout.the_bindless_array->idx_in_root_sig].InitAsShaderResourceView(layout.the_bindless_array->slot, layout.the_bindless_array->space, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE, D3D12_SHADER_VISIBILITY_ALL);
+            }
+            if (layout.root_cbvs) {
+                for (const auto& cbv : *layout.root_cbvs) {
+                    root_parameters[cbv.idx_in_root_sig].InitAsConstantBufferView(cbv.slot, cbv.space, kCbvRootDescriptorFlags, D3D12_SHADER_VISIBILITY_ALL);
+                }
+            }
+            uint range_offset = 0;
+            if (layout.srv_table) {
+                for (const auto& e : layout.srv_table->entries) {
+                    descriptor_ranges[range_offset + e.idx_in_table].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, e.bind_count, e.slot, e.space, kSrvDescriptorRangeFlags);// one table can have different type ranges. we now do like this for simplicity
+                }
+                root_parameters[layout.srv_table->idx_in_root_sig].InitAsDescriptorTable(layout.srv_table->entries.size(), descriptor_ranges.data() + range_offset, D3D12_SHADER_VISIBILITY_ALL);
+                range_offset += layout.srv_table->entries.size();
+            }
+            if (layout.uav_table) {
+                for (const auto& e : layout.uav_table->entries) {
+                    descriptor_ranges[range_offset + e.idx_in_table].Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, e.bind_count, e.slot, e.space, kUavDescriptorRangeFlags);
+                }
+                root_parameters[layout.uav_table->idx_in_root_sig].InitAsDescriptorTable(layout.uav_table->entries.size(), descriptor_ranges.data() + range_offset, D3D12_SHADER_VISIBILITY_ALL);
+                range_offset += layout.uav_table->entries.size();
+            }
+            if (layout.sampler_table) {
+                for (const auto& e : layout.sampler_table->entries) {
+                    descriptor_ranges[range_offset + e.idx_in_table].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, e.bind_count, e.slot, e.space, kSamplerDescriptorRangeFlags);
+                }
+                root_parameters[layout.sampler_table->idx_in_root_sig].InitAsDescriptorTable(layout.sampler_table->entries.size(), descriptor_ranges.data() + range_offset, D3D12_SHADER_VISIBILITY_ALL);
+                range_offset += layout.sampler_table->entries.size();
+            }
+        }
+
+        D3D12_ROOT_SIGNATURE_FLAGS root_sig_flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED;
+
+        CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_sig_desc;
+        root_sig_desc.Init_1_1(root_parameters.size(), root_parameters.data(), 0, nullptr, root_sig_flags);//todo static samplers
+
+        D3D12_FEATURE_DATA_ROOT_SIGNATURE feature_data{.HighestVersion = device->GetFeatureSupport().HighestRootSignatureVersion()};
+        ComPtr<ID3DBlob>                  signature_blob;
+        ComPtr<ID3DBlob>                  error;
+        DX_CHECK_HRESULT(D3DX12SerializeVersionedRootSignature(&root_sig_desc, feature_data.HighestVersion, signature_blob.GetAddressOf(), error.GetAddressOf()));
+        DX_CHECK_HRESULT(device->Native()->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(root_signature.GetAddressOf())));
+    }
+
     PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
         ASSERT(std::holds_alternative<ShaderCs>(_shaders.shader_group));
-
-        D3D12PipelineState* pso = MoerNew(D3D12PipelineState)(this, D3D12PipelineState::Compute);
 
         SingleShaderInfo& cs_info         = std::get<ShaderCs>(_shaders.shader_group).cs;
         const auto&       shader_bytecode = cs_info.shader_data;
 
         // TODO shader reflection-> pipeline reflection
 
-        // how to group descriptors?
-        // current approach:
-        // - root constant as root constant
-        // - constant buffer as root cbv   (if too many, maybe use a descriptor table
-        // - other resource has its own descriptor table. no more root descriptor
-        // - not use a huge table containing many ranges
-
-        // ref UE D3D12RootSignature.cpp
-        static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kSrvDescriptorRangeFlags     = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
-        static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kCbvDescriptorRangeFlags     = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
-        static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kUavDescriptorRangeFlags     = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
-        static constexpr D3D12_DESCRIPTOR_RANGE_FLAGS kSamplerDescriptorRangeFlags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
-        static constexpr D3D12_ROOT_DESCRIPTOR_FLAGS  kCbvRootDescriptorFlags      = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC;// We always set the data in an upload heap before calling Set*RootConstantBufferView.
-
         auto& reflect_map = cs_info.shader_param_map.reflect_map;
 
-        uint                             required_dword = 0;// due to root sig limit, max 64 dword, 256 bytes
-        Array<CD3DX12_ROOT_PARAMETER1>   root_parameters;
-        Array<CD3DX12_DESCRIPTOR_RANGE1> descriptor_ranges;
-        root_parameters.reserve(_shaders.layout_hash.size());
-        descriptor_ranges.reserve(_shaders.layout_hash.size());
+        Array<ParamInfoFlags> binding_infos(_shaders.layout_hash.size());
+
+        D3D12PipelineState::PipelineLayout layout;
 
         ASSERT(_shaders.layout_hash.size() == _shaders.arg_cpp_info.size());
         const auto& resource_names = _shaders.layout_hash;// (not hash, but resource names
@@ -217,8 +354,10 @@ namespace Moer::Render {
             const ShaderArgCppInfo& arg_info = _shaders.arg_cpp_info[i];
 
             std::string name_internal(resource_names[i]);
+            bool        b_special_bindless = false;
             if (arg_info.type == EShaderArgType::SDA_BindlessArray) {
-                name_internal = ReflectParamInfo::bdls_name;// !
+                name_internal      = ReflectParamInfo::bdls_name;// !
+                b_special_bindless = true;
             }
 
             auto reflect_map_iter = reflect_map.find(name_internal.data());
@@ -229,56 +368,20 @@ namespace Moer::Render {
 
             auto& resource_info = reflect_map_iter->second.dxil;
             if (arg_info.type == EShaderArgType::SDA_Constant) {
-                ASSERT(resource_info.IsConstantBuffer());
-                resource_info.type = ReflectParamInfo::Dxil::EShaderVariableType::RootConstant;
+                ASSERT(IsShaderVarConstantBuffer(resource_info));
+                resource_info.type = uint(ED3D12ShaderVariableType::RootConstant);
             }
 
             ASSERT2(CheckReflectionTypeMatch(resource_info, arg_info), std::format("reflection mismatch for resource {} in shader {}", resource_names[i], cs_info.name));
 
-            if (resource_info.IsRootConstant()) {
-                // check size
-                required_dword += resource_info.byte_size / 4;
-                root_parameters.emplace_back().InitAsConstants(resource_info.byte_size / 4, resource_info.slot, resource_info.space, D3D12_SHADER_VISIBILITY_ALL);
-            } else {
-                const uint bind_count = resource_info.IsBindless() ? uint(-1) : resource_info.count;
-                if (!resource_info.IsBindless()) {
-                    ASSERT(resource_info.count == arg_info.array_size);
-                }
-                if (resource_info.IsConstantBuffer()) {
-                    required_dword += 2;
-                    root_parameters.emplace_back().InitAsConstantBufferView(resource_info.slot, resource_info.space, kCbvRootDescriptorFlags, D3D12_SHADER_VISIBILITY_ALL);
-                } else if (resource_info.IsSrv()) {
-                    required_dword++;
-                    descriptor_ranges.emplace_back().Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, bind_count, resource_info.slot, resource_info.space, kSrvDescriptorRangeFlags);
-                    root_parameters.emplace_back().InitAsDescriptorTable(1, &descriptor_ranges.back(), D3D12_SHADER_VISIBILITY_ALL);
-                } else if (resource_info.IsUav()) {
-                    required_dword++;
-                    descriptor_ranges.emplace_back().Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, bind_count, resource_info.slot, resource_info.space, kUavDescriptorRangeFlags);
-                    root_parameters.emplace_back().InitAsDescriptorTable(1, &descriptor_ranges.back(), D3D12_SHADER_VISIBILITY_ALL);
-                } else if (resource_info.IsSampler()) {
-                    required_dword++;
-                    descriptor_ranges.emplace_back().Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, bind_count, resource_info.slot, resource_info.space, kSamplerDescriptorRangeFlags);
-                    root_parameters.emplace_back().InitAsDescriptorTable(1, &descriptor_ranges.back(), D3D12_SHADER_VISIBILITY_ALL);
-                }
-            }
+            binding_infos[i].pipeline_flags = uint64(D3D12_BARRIER_SYNC_COMPUTE_SHADING);
+            binding_infos[i].state_flags    = uint64(resource_info.type);
+
+            layout.Add(uint8(i), arg_info, resource_info, b_special_bindless);
         }
 
-        ASSERT(required_dword <= 64);
-
-        D3D12_ROOT_SIGNATURE_FLAGS root_sig_flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED;
-
-        CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_sig_desc;
-        root_sig_desc.Init_1_1(root_parameters.size(), root_parameters.data(), 0, nullptr, root_sig_flags);
-
-        D3D12_FEATURE_DATA_ROOT_SIGNATURE feature_data{.HighestVersion = feature_supports.HighestRootSignatureVersion()};
-
-        ComPtr<ID3DBlob> signature_blob;
-        ComPtr<ID3DBlob> error;
-        DX_CHECK_HRESULT(D3DX12SerializeVersionedRootSignature(&root_sig_desc, feature_data.HighestVersion, signature_blob.GetAddressOf(), error.GetAddressOf()));
-        ComPtr<ID3D12RootSignature> root_signature;
-        DX_CHECK_HRESULT(device->CreateRootSignature(0, signature_blob->GetBufferPointer(), signature_blob->GetBufferSize(), IID_PPV_ARGS(root_signature.GetAddressOf())));
-
-        pso->root_signature = root_signature;
+        D3D12PipelineState* pso = MoerNew(D3D12PipelineState)(this, D3D12PipelineState::Compute);
+        pso->BuildRootSignature(layout);
 
         D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc{};
         pso_desc.pRootSignature                  = pso->root_signature.Get();
@@ -291,7 +394,7 @@ namespace Moer::Render {
         ComPtr<ID3D12PipelineState> pipelineState;
         DX_CHECK_HRESULT(device->CreateComputePipelineState(&pso_desc, IID_PPV_ARGS(pso->pipeline_state.ReleaseAndGetAddressOf())));
 
-        return PipelineHandle{.handle = reinterpret_cast<uint64>(pso)};
+        return PipelineHandle{.handle = reinterpret_cast<uint64>(pso), .binding_infos = std::move(binding_infos)};
     }
 
     TextureRef D3D12Device::CreateTexture(std::string_view _name, ETextureDimension _dimension, Extent3D _size, EPixelFormat _format, ETextureUsageFlags _usage, uint32_t _mip_cnt, uint _array_size) {
@@ -438,6 +541,24 @@ namespace Moer::Render {
         *ppAdapter = adapter.Detach();
     }
 
+    D3D12_GPU_DESCRIPTOR_HANDLE D3D12Device::PushCsuDescriptor(std::span<const DescriptorIndex> _index_in_cpu_heap) {
+        const uint            count = _index_in_cpu_heap.size();
+        const DescriptorIndex start = csu_heap_gpu->Allocate(count);
+        for (uint i = 0; i < count; ++i) {
+            device->CopyDescriptorsSimple(1, csu_heap_gpu->GetOffsetHandleCpu({start.index + i}), csu_heap_cpu->GetOffsetHandleCpu(_index_in_cpu_heap[i]), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
+        return csu_heap_gpu->GetOffsetHandleGpu(start);
+    }
+
+    D3D12_GPU_DESCRIPTOR_HANDLE D3D12Device::PushSamplerDescriptor(std::span<const DescriptorIndex> _index_in_cpu_heap) {
+        const uint            count = _index_in_cpu_heap.size();
+        const DescriptorIndex start = sampler_heap_gpu->Allocate(count);
+        for (uint i = 0; i < count; ++i) {
+            device->CopyDescriptorsSimple(1, sampler_heap_gpu->GetOffsetHandleCpu({start.index + i}), sampler_heap_cpu->GetOffsetHandleCpu(_index_in_cpu_heap[i]), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+        }
+        return sampler_heap_gpu->GetOffsetHandleGpu(start);
+    }
+
     D3D12Swapchain::D3D12Swapchain(D3D12Device& device, const SwapchainCreateInfo& info) : device(device) {
         Recreate(info);
     }
@@ -540,6 +661,73 @@ namespace Moer::Render {
         allocation.resource->SetName(StringWiden(_name).c_str());
     }
 
+    DescriptorIndex D3D12Buffer::CreateSrv(const BufferView& _range, ED3D12ShaderVariableType _type) {
+        ASSERT(IsShaderVarCommonBuffer(_type) && IsShaderVarSrv(_type));
+        if (_type == ED3D12ShaderVariableType::TypedBuffer) {
+            ASSERT2(_range.format != EPixelFormat::PF_UNDEFINED, "Typed buffer must has a format");
+        }
+        ViewDesc viewDesc{};
+        viewDesc.type        = _type;
+        viewDesc.byte_offset = _range.byte_offset;
+        viewDesc.format      = D3D12EnumTranslation::METoDxFormat(_range.format);
+        for (const auto& [desc, index] : srv_uav_views) {
+            if (desc == viewDesc) {
+                return {index};
+            }
+        }
+
+        const uint byte_stride = _type == ED3D12ShaderVariableType::ByteAddressBuffer ? 4 : (_type == ED3D12ShaderVariableType::StructuredBuffer ? GetStride() : D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetBitsPerUnit(viewDesc.format) / 8);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format                  = _type == ED3D12ShaderVariableType::ByteAddressBuffer ? DXGI_FORMAT_R32_TYPELESS : (_type == ED3D12ShaderVariableType::StructuredBuffer ? DXGI_FORMAT_UNKNOWN : viewDesc.format);
+        ASSERT(_range.GetByteOffset() % byte_stride == 0);
+        srvDesc.Buffer.FirstElement        = _range.GetByteOffset() / byte_stride;
+        srvDesc.Buffer.NumElements         = _range.GetNumElements();
+        srvDesc.Buffer.StructureByteStride = _type == ED3D12ShaderVariableType::StructuredBuffer ? byte_stride : 0;
+        srvDesc.Buffer.Flags               = _type == ED3D12ShaderVariableType::ByteAddressBuffer ? D3D12_BUFFER_SRV_FLAG_RAW : D3D12_BUFFER_SRV_FLAG_NONE;
+
+        auto index = device->GetCsuHeap()->Allocate();
+        device->Native()->CreateShaderResourceView(allocation.resource, &srvDesc, device->GetCsuHeap()->GetOffsetHandleCpu(index));
+        srv_uav_views.emplace_back(viewDesc, index);
+        return index;
+    }
+
+    DescriptorIndex D3D12Buffer::CreateUav(const BufferView& _range, ED3D12ShaderVariableType _type) {
+        ASSERT(IsShaderVarCommonBuffer(_type) && IsShaderVarUav(_type));
+        ASSERT(EnumHasAnyFlag(GetUsage(), EBufferUsageFlags::UNORDERED_ACCESS));
+        if (_type == ED3D12ShaderVariableType::RWTypedBuffer) {
+            ASSERT2(_range.format != EPixelFormat::PF_UNDEFINED, "Typed buffer must has a format");
+        }
+        ViewDesc viewDesc{};
+        viewDesc.type        = _type;
+        viewDesc.byte_offset = _range.byte_offset;
+        viewDesc.format      = D3D12EnumTranslation::METoDxFormat(_range.format);
+        for (const auto& [desc, index] : srv_uav_views) {
+            if (desc == viewDesc) {
+                return {index};
+            }
+        }
+
+        const uint byte_stride = _type == ED3D12ShaderVariableType::RWByteAddressBuffer ? 4 : (_type == ED3D12ShaderVariableType::RWStructuredBuffer ? GetStride() : D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetBitsPerUnit(viewDesc.format) / 8);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Format        = _type == ED3D12ShaderVariableType::RWByteAddressBuffer ? DXGI_FORMAT_R32_TYPELESS : (_type == ED3D12ShaderVariableType::RWStructuredBuffer ? DXGI_FORMAT_UNKNOWN : viewDesc.format);
+        ASSERT(_range.GetByteOffset() % byte_stride == 0);
+        uavDesc.Buffer.FirstElement         = _range.GetByteOffset() / byte_stride;
+        uavDesc.Buffer.NumElements          = _range.GetNumElements();
+        uavDesc.Buffer.StructureByteStride  = _type == ED3D12ShaderVariableType::RWStructuredBuffer ? byte_stride : 0;
+        uavDesc.Buffer.Flags                = _type == ED3D12ShaderVariableType::RWByteAddressBuffer ? D3D12_BUFFER_UAV_FLAG_RAW : D3D12_BUFFER_UAV_FLAG_NONE;
+        uavDesc.Buffer.CounterOffsetInBytes = 0;
+
+        auto index = device->GetCsuHeap()->Allocate();
+        device->Native()->CreateUnorderedAccessView(allocation.resource, nullptr, &uavDesc, device->GetCsuHeap()->GetOffsetHandleCpu(index));
+        srv_uav_views.emplace_back(viewDesc, index);
+        return index;
+    }
+
     D3D12GpuGlobalAllocator::D3D12GpuGlobalAllocator(D3D12Device* _device) : device(_device) {
         D3D12MA::ALLOCATOR_DESC allocatorDesc{};
         allocatorDesc.pDevice  = _device->Native();
@@ -620,15 +808,17 @@ namespace Moer::Render {
                         allocator->OnComplete();// callbacks,
                         allocator->Reset();
                         ready_allocators.Push(allocator.release());
-                        LOG_INFO("visit event: allocator, {}", fence_value);
+                        GetDevice()->GetCsuHeapGpuDyn()->EndPushDescriptors();
+                        GetDevice()->GetSamplerHeapGpuDyn()->EndPushDescriptors();
+                        //LOG_INFO("visit event: allocator, {}", fence_value);
                         AtomicMaximum(last_completed_fence_value, fence_value);// break the 'Sync' condition, later
                     },
                     [&fence_value](const Array<std::function<void()>>& funcs) {
-                        LOG_INFO("visit event: callback, {}", fence_value);
+                        //LOG_INFO("visit event: callback, {}", fence_value);
                         for (auto&& f : funcs) f();
                     },
                     [&fence_value](SignalEvent e) {
-                        LOG_INFO("visit event: signal, {}", fence_value);
+                        //LOG_INFO("visit event: signal, {}", fence_value);
                         auto fence = reinterpret_cast<D3D12Fence*>(e.timeline_handle);
                         fence->SignalOnHost(e.value);
                     },
@@ -715,6 +905,65 @@ namespace Moer::Render {
             }
         }
 
+        void VisitArgs(const TArg& _arg, uint64 _state_flag, uint64 _pipeline_flag) {
+            auto sync_flag = D3D12_BARRIER_SYNC(_pipeline_flag);
+            auto var_type  = ED3D12ShaderVariableType(_state_flag);
+
+            Variant(_arg)
+                .Match(
+                    [&](const TInvalidArg&) {},
+                    [&](const BufferView& arg) {
+                        D3D12Buffer* buf     = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
+                        const bool   b_write = IsShaderVarUav(var_type);
+                        tracker.RecordState(buf,
+                                            b_write ? EBufferState::UNORDERED_ACCESS : EBufferState::SHADER_RESOURCE,
+                                            sync_flag == D3D12_BARRIER_SYNC_COMPUTE_SHADING ? EPassType::Compute : EPassType::Graphics,// a bit strange...
+                                            b_write);
+                    },
+                    [&](const TextureView& arg) {
+                        D3D12Texture* tex     = reinterpret_cast<D3D12Texture*>(arg.GetTexture());
+                        const bool    b_write = IsShaderVarUav(var_type);
+                        tracker.RecordState(tex,
+                                            b_write ? ETextureState::UNORDERED_ACCESS : ETextureState::SHADER_RESOURCE,
+                                            sync_flag == D3D12_BARRIER_SYNC_COMPUTE_SHADING ? EPassType::Compute : EPassType::Graphics,
+                                            b_write);
+                    },
+                    [&](const std::span<TextureView>& arg) {
+                        for (auto&& i : arg) {
+                            VisitArgs(i, _state_flag, _pipeline_flag);
+                        }
+                    },
+                    [&](const std::span<BufferView>& arg) {
+                        for (auto&& i : arg) {
+                            VisitArgs(i, _state_flag, _pipeline_flag);
+                        }
+                    },
+                    [&](const Sampler& arg) {},
+                    [&](const BindlessArrayRef& arg) {
+                        // todo
+                        FATAL("not implemented");
+                    },
+                    [&](const RaytracingTlasRef& arg) {
+                        // todo
+                        FATAL("not implemented");
+                    });
+        }
+
+        void Visit(const DispatchCmd& _cmd) {
+            ASSERT(std::holds_alternative<uint3>(_cmd.Param()));// todo indirect buffer
+            const auto& pipeline = _cmd.Pipeline();
+
+            auto func = [&](const TArg& _arg, uint _idx) {
+                VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags, pipeline.binding_infos[_idx].pipeline_flags);
+            };
+            auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+                // todo
+                FATAL("not implemented");
+            };
+
+            IterateArgs(_cmd.Args({}), func, bdls_post_func);
+        }
+
         void VisitCmd(const Command* _cmd) {
             switch (_cmd->Type()) {
                 case Command::EType::UploadBuffer:
@@ -741,6 +990,10 @@ namespace Moer::Render {
                 case Command::EType::Barrier:
                     Visit(static_cast<const BarrierCmd&>(*_cmd));
                     break;
+                case Command::EType::ShaderDispatch:
+                    Visit(static_cast<const DispatchCmd&>(*_cmd));
+                    break;
+
                 default:
                     FATAL("not implemented cmdtype {}", Command::typenames[uint(_cmd->Type())]);
             }
@@ -830,6 +1083,27 @@ namespace Moer::Render {
                                  _cmd.DstMipLevel());
         }
 
+        void Visit(const DispatchCmd& _cmd) {
+            PipelineHandle& pso = _cmd.Pipeline();
+            cmd_list.SetPso(pso);
+
+            const auto& args = _cmd.Args({});// todo cached args
+            ASSERT(args.Size() > 0);
+
+            cmd_list.BindDescriptors(pso, args);
+
+            std::visit(
+                Overload{
+                    [&](uint3 _param) {
+                        cmd_list.Dispatch(_param.x, _param.y, _param.z);
+                    },
+                    [&](const DispatchIndirectParam& _param) {
+                        //todo execute indirect. command signature
+                        ASSERT(false);
+                    }},
+                _cmd.Param());
+        }
+
         void VisitCmd(const Command* _cmd) {
             switch (_cmd->Type()) {
                 case Command::EType::UploadBuffer:
@@ -855,6 +1129,20 @@ namespace Moer::Render {
                     break;
                 case Command::EType::Barrier:
                     break;// no-op
+                case Command::EType::ShaderDispatch:
+                    Visit(static_cast<const DispatchCmd&>(*_cmd));
+                    break;
+                    //CopyBackTexture,
+                    //BuildAccel,
+                    //BuildTLAS,
+                    //TraceRay,
+                    //Barrier,
+                    //QueueTransfer,
+                    //SetDrawState,
+                    //SetGeometryPassDrawState,
+                    //UpdateBindlessArray,
+                    //ClearResource,
+                    //Scope,
                 default:
                     FATAL("not implemented cmdtype {}", Command::typenames[uint(_cmd->Type())]);
             }
@@ -929,6 +1217,12 @@ namespace Moer::Render {
             D3D12CommandPreprocessVisitor preprocess_visitor(*allocator);
             auto&                         tracker = allocator->GetResourceStateTracker();
 
+            // prepare descriptor heaps
+            ID3D12DescriptorHeap* heaps[] = {device->GetCsuHeapGpuDyn()->Native(), device->GetSamplerHeapGpuDyn()->Native()};
+            cmd_list->Native()->SetDescriptorHeaps(2, heaps);
+            device->GetCsuHeapGpuDyn()->BeginPushDescriptors();
+            device->GetSamplerHeapGpuDyn()->BeginPushDescriptors();
+
             for (const auto& cmd : _submit.cmds) {// todo reorder
                 preprocess_visitor.VisitCmd(cmd.get());
 
@@ -947,7 +1241,7 @@ namespace Moer::Render {
 
         const uint64 next_fence_value = ++last_submitted_fence_value;
 
-        allocator->AddOnComplete([next_fence_value] {
+        allocator->AddOnComplete([next_fence_value, this] {
             LOG_INFO("on complete {}", next_fence_value);
         });
 
@@ -1143,6 +1437,139 @@ namespace Moer::Render {
 
     void D3D12CommandList::End() {
         DX_CHECK_HRESULT(list->Close());
+    }
+    void D3D12CommandList::SetPso(const PipelineHandle& _handle) {
+        auto* pso = reinterpret_cast<D3D12PipelineState*>(_handle.handle);
+        list->SetPipelineState(pso->Native());
+        list->SetComputeRootSignature(pso->NativeRootSignature());
+    }
+    void D3D12CommandList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args) {
+
+        D3D12PipelineState* pso    = reinterpret_cast<D3D12PipelineState*>(_pso_handle.handle);
+        const auto&         layout = pso->GetLayout();
+
+        if (layout.root_constant) {
+            ASSERT(layout.root_constant->idx_in_cpp_args < _args.Size() && layout.root_constant->idx_in_cpp_args < _pso_handle.binding_infos.size());
+            const ParamInfoFlags flags    = _pso_handle.binding_infos[layout.root_constant->idx_in_cpp_args];
+            const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+            ASSERT(IsShaderVarRootConstant(var_type));
+            const auto& constants = _args.constants;
+            list->SetComputeRoot32BitConstants(layout.root_constant->idx_in_root_sig, constants.size(), constants.data(), 0);
+        }
+        if (layout.root_cbvs) {
+            for (const auto& cbv : *layout.root_cbvs) {
+                ASSERT(cbv.idx_in_cpp_args < _args.Size() && cbv.idx_in_cpp_args < _pso_handle.binding_infos.size());
+                const ParamInfoFlags flags    = _pso_handle.binding_infos[cbv.idx_in_cpp_args];
+                const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+                ASSERT(IsShaderVarConstantBuffer(var_type));
+                ASSERT(std::holds_alternative<BufferView>(_args[cbv.idx_in_cpp_args]));
+                const auto&  buf_view = std::get<BufferView>(_args[cbv.idx_in_cpp_args]);
+                D3D12Buffer* buf      = reinterpret_cast<D3D12Buffer*>(buf_view.GetBuffer());
+                ASSERT(buf_view.GetByteOffset() % 256 == 0);                                                                        // ?
+                list->SetComputeRootConstantBufferView(cbv.idx_in_root_sig, buf->GetGpuVirtualAddress() + buf_view.GetByteOffset());// device-side buffer
+            }
+        }
+        if (layout.the_bindless_array) {
+            FATAL("not implemented");
+            //ASSERT(layout.the_bindless_array->idx_in_cpp_args < _args.Size() && layout.the_bindless_array->idx_in_cpp_args < _pso_handle.binding_infos.size());
+            //const ParamInfoFlags flags    = _pso_handle.binding_infos[layout.the_bindless_array->idx_in_cpp_args];
+            //const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+            //ASSERT(IsShaderVarCommonBuffer(var_type) && IsShaderVarSrv(var_type));
+            //ASSERT(std::holds_alternative<BindlessArrayRef>(_args[layout.the_bindless_array->idx_in_cpp_args]));
+            //const auto&  buf_view = std::get<BindlessArrayRef>(_args[layout.the_bindless_array->idx_in_cpp_args]);
+            //D3D12Buffer* buf      = reinterpret_cast<D3D12Buffer*>(buf_view.GetBuffer());
+            //ASSERT(buf_view.GetByteOffset() == 0); // ?
+            //list->SetComputeRootShaderResourceView(layout.the_bindless_array->idx_in_root_sig, buf->GetGpuVirtualAddress());
+        }
+        if (layout.srv_table) {
+            Array<DescriptorIndex> indices(layout.srv_table->GetTotalBindCount());
+
+            for (const auto& e : layout.srv_table->entries) {
+                ASSERT(e.idx_in_cpp_args < _args.Size() && e.idx_in_cpp_args < _pso_handle.binding_infos.size());
+                const ParamInfoFlags flags    = _pso_handle.binding_infos[e.idx_in_cpp_args];
+                const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+                ASSERT(IsShaderVarSrv(var_type));
+
+                Variant(_args[e.idx_in_cpp_args])
+                    .Match(
+                        // now assume all input resource valid, not consider null descriptor
+                        [&](const BufferView& arg) {
+                            D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
+                            ASSERT(IsShaderVarCommonBuffer(var_type));
+                            ASSERT(e.idx_in_table < indices.size());
+                            indices[e.idx_in_table] = buf->CreateSrv(arg, var_type);
+                        },
+                        [&](const TextureView& arg) {
+                            FATAL("not implemented");
+                        },
+                        [&](const std::span<TextureView>& arg) {
+                            FATAL("not implemented");
+                        },
+                        [&](const std::span<BufferView>& arg) {
+                            ASSERT(IsShaderVarCommonBuffer(var_type));
+                            for (int j = 0; const BufferView& view : arg) {
+                                D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(view.GetBuffer());
+                                ASSERT(e.idx_in_table + j < indices.size());
+                                indices[e.idx_in_table + j] = buf->CreateSrv(view, var_type);
+                                j++;
+                            }
+                        },
+                        [&](const RaytracingTlasRef& arg) {
+                            FATAL("not implemented");
+                        },
+                        [&](const auto&) {
+                            FATAL("not support arg");
+                        });
+            }
+            list->SetComputeRootDescriptorTable(layout.srv_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
+        }
+        if (layout.uav_table) {// todo unify
+            Array<DescriptorIndex> indices(layout.uav_table->GetTotalBindCount());
+
+            for (const auto& e : layout.uav_table->entries) {
+                ASSERT(e.idx_in_cpp_args < _args.Size() && e.idx_in_cpp_args < _pso_handle.binding_infos.size());
+                const ParamInfoFlags flags    = _pso_handle.binding_infos[e.idx_in_cpp_args];
+                const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+                ASSERT(IsShaderVarUav(var_type));
+
+                Variant(_args[e.idx_in_cpp_args])
+                    .Match(
+                        [&](const BufferView& arg) {
+                            D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
+                            ASSERT(IsShaderVarCommonBuffer(var_type));
+                            ASSERT(e.idx_in_table < indices.size());
+                            indices[e.idx_in_table] = buf->CreateUav(arg, var_type);
+                        },
+                        [&](const TextureView& arg) {
+                            FATAL("not implemented");
+                        },
+                        [&](const std::span<TextureView>& arg) {
+                            FATAL("not implemented");
+                        },
+                        [&](const std::span<BufferView>& arg) {
+                            ASSERT(IsShaderVarCommonBuffer(var_type));
+                            for (int j = 0; const BufferView& view : arg) {
+                                D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(view.GetBuffer());
+                                ASSERT(e.idx_in_table + j < indices.size());
+                                indices[e.idx_in_table + j] = buf->CreateUav(view, var_type);
+                                j++;
+                            }
+                        },
+                        [&](const RaytracingTlasRef& arg) {
+                            FATAL("not implemented");
+                        },
+                        [&](const auto&) {
+                            FATAL("not support arg");
+                        });
+            }
+            list->SetComputeRootDescriptorTable(layout.uav_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
+        }
+        if (layout.sampler_table) {
+            FATAL("not implemented");
+        }
+    }
+    void D3D12CommandList::Dispatch(uint _x, uint _y, uint _z) {
+        list->Dispatch(_x, _y, _z);
     }
     void D3D12CommandList::CopyBuffer(D3D12Buffer* _src, D3D12Buffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset) {
         list->CopyBufferRegion(
@@ -2008,6 +2435,77 @@ namespace Moer::Render {
 
     void D3D12PipelineState::Destroy() {
         MoerDelete(this);
+    }
+
+    D3D12DescriptorHeapBase::D3D12DescriptorHeapBase(D3D12Device* _device, D3D12_DESCRIPTOR_HEAP_TYPE _type, uint32_t _num_descriptors, bool _is_shader_visible)
+        : D3D12DeviceChild(_device) {
+
+        ASSERT(_type != D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES);
+        const bool b_can_visible = _type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV || _type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
+        if (_is_shader_visible) {
+            ASSERT(b_can_visible);
+        }
+
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+        heapDesc.Type           = _type;
+        heapDesc.NumDescriptors = static_cast<UINT>(_num_descriptors);
+        heapDesc.NodeMask       = 0;
+        heapDesc.Flags          = _is_shader_visible ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE : D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        DX_CHECK_HRESULT(device->Native()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(heap.ReleaseAndGetAddressOf())));
+        start_handle_cpu = heap->GetCPUDescriptorHandleForHeapStart();
+
+        if (_is_shader_visible) {
+            start_handle_gpu = heap->GetGPUDescriptorHandleForHeapStart();
+        }
+
+        descriptor_size       = device->Native()->GetDescriptorHandleIncrementSize(_type);
+        num_total_descriptors = _num_descriptors;
+        type                  = _type;
+    }
+
+    DescriptorIndex D3D12CpuDescriptorAllocator::Allocate() {
+        if (!free_queue.empty()) {
+            auto handle = free_queue.front();
+            free_queue.pop();
+            return handle;
+        }
+        ASSERT(!IsHeapFull());
+
+        DescriptorIndex ret{num_descriptors_allocated};
+        num_descriptors_allocated++;
+        return ret;
+    }
+
+    void D3D12CpuDescriptorAllocator::Free(DescriptorIndex handle) {
+        free_queue.push(handle);
+    }
+
+    D3D12GpuDescriptorAllocator::D3D12GpuDescriptorAllocator(D3D12Device* _device, D3D12_DESCRIPTOR_HEAP_TYPE _type, uint32_t _num_descriptors_total, uint32_t _max_descriptors_per_execution)
+        : D3D12GpuDescriptorHeap(_device, _type, std::min(_num_descriptors_total, _device->GetFeatureSupport().MaxViewDescriptorHeapSize() / 2)),
+          max_descriptors_per_execution(std::min(_max_descriptors_per_execution, GetNumTotalDescriptors() / 3)),
+          num_descriptor_chunk(GetNumTotalDescriptors() / max_descriptors_per_execution) {}
+
+    void D3D12GpuDescriptorAllocator::BeginPushDescriptors() {
+        uint idx = ready_chunk_indices.Pop();// return 0, if empty. so our valid indices start from 1.
+        if (idx) {
+            current_chunk_index  = idx;
+            current_chunk_offset = 0;
+        } else {
+            ASSERT(num_used_chunks + 1 <= num_descriptor_chunk);
+            current_chunk_index  = ++num_used_chunks;
+            current_chunk_offset = 0;
+        }
+    }
+
+    void D3D12GpuDescriptorAllocator::EndPushDescriptors() {
+        ready_chunk_indices.Push(current_chunk_index);
+    }
+
+    DescriptorIndex D3D12GpuDescriptorAllocator::Allocate(uint count) {
+        uint start = (current_chunk_index - 1) * max_descriptors_per_execution + current_chunk_offset;
+        current_chunk_offset += count;
+        ASSERT(current_chunk_offset <= max_descriptors_per_execution);
+        return {start};
     }
 
 }// namespace Moer::Render

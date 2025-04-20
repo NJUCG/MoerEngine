@@ -31,36 +31,45 @@ __declspec(dllexport) extern const char8_t* D3D12SDKPath = u8".\\D3D12\\";
 #include "d3dx12_property_format_table.h"
 #include "shader/ShaderPipeline.h"
 
+constexpr uint32_t kNumBuffArr = 7;
+
 namespace Moer::Render {
-// copy from editor/raytracing/LightingPass.h
-#define DI_BINDINGS()                               \
-    DEFINE_SHADER_TLAS(tlas);                       \
-    DEFINE_SHADER_TLAS(prev_tlas);                  \
-    DEFINE_SHADER_BUFFER(resample_params);          \
-    DEFINE_SHADER_BUFFER(light_reservoirs);         \
-    DEFINE_SHADER_TEX(rw_diffuse_lighting);         \
-    DEFINE_SHADER_TEX(rw_specular_lighting);        \
-    DEFINE_SHADER_TEX(rw_temporal_sample_pos);      \
-    DEFINE_SHADER_TEX(rw_gradients);                \
-    DEFINE_SHADER_TEX(rw_restir_luminance);         \
-    DEFINE_SHADER_TEX(rw_diffuse_lighting_prev);    \
-    DEFINE_SHADER_BUFFER(rw_ris_buffer);            \
-    DEFINE_SHADER_BUFFER(rw_ris_light_data_buffer); \
-    DEFINE_SHADER_BUFFER(neighbor_offset_buf);      \
-    DEFINE_SHADER_BINDLESS_ARRAY(bdls)
 
-#define DI_SHADER_ARGS()                                                                                    \
-    tlas, prev_tlas, resample_params, light_reservoirs, rw_diffuse_lighting, rw_specular_lighting,          \
-        rw_temporal_sample_pos, rw_gradients, rw_restir_luminance, rw_diffuse_lighting_prev, rw_ris_buffer, \
-        rw_ris_light_data_buffer, neighbor_offset_buf, bdls
-
-    class TemporalResmaplePipeline : public ComputePipeline {
+    class TestReadPipeline : public ComputePipeline {
     public:
-        DEFINE_COMPUTE_PIPELINE_CLASS(TemporalResmaplePipeline);
+        DEFINE_COMPUTE_PIPELINE_CLASS(TestReadPipeline);
 
-        DI_BINDINGS();
+        DEFINE_SHADER_BUFFER(buf);
 
-        DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
+        DEFINE_SHADER_ARGS(buf);
+    };
+
+    struct S0 {
+        uint   a;
+        uint   b;
+        float2 _pad;
+        float4 x;
+    };
+    struct S1 {
+        uint a;
+    };
+
+    class TestComputePipeline : public ComputePipeline {
+    public:
+        DEFINE_COMPUTE_PIPELINE_CLASS(TestComputePipeline);
+
+        DEFINE_SHADER_CONSTANT_STRUCT(S0, cb0);
+        //DEFINE_SHADER_BUFFER(cb0);
+        DEFINE_SHADER_BUFFER(cb1);
+        DEFINE_SHADER_BUFFER(sb0);
+        DEFINE_SHADER_BUFFER(sb1);
+        DEFINE_SHADER_BUFFER(rb0);
+        DEFINE_SHADER_BUFFER(rb1);
+        DEFINE_SHADER_BUFFER(tb0);
+        DEFINE_SHADER_BUFFER(tb1);
+        DEFINE_SHADER_BUFFER_ARRAY(buf_arr, kNumBuffArr);
+
+        DEFINE_SHADER_ARGS(cb0, cb1, sb0, sb1, rb0, rb1, tb0, tb1, buf_arr);
     };
 
 }// namespace Moer::Render
@@ -73,6 +82,15 @@ template<typename T, int N>
 std::span<Moer::byte> ToSpan(T (&arr)[N]) {
     return std::span<Moer::byte>((Moer::byte*)arr, N * sizeof(T));
 }
+template<typename T>
+std::span<Moer::byte> ToSpan(const std::vector<T>& arr) {
+    return std::span<Moer::byte>{(Moer::byte*)arr.data(), arr.size() * sizeof(T)};
+}
+template<typename T>
+    requires std::is_standard_layout_v<T>
+std::span<Moer::byte> ToSpan(const T& x) {
+    return std::span<Moer::byte>{(Moer::byte*)&x, sizeof(T)};
+}
 
 int main(int argc, char** argv) {
     using namespace Moer;
@@ -82,72 +100,99 @@ int main(int argc, char** argv) {
     path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
     ConfigManager::GetInstance().Init(path);
 
+    TaskSystem::Init();
     DeviceInitInfo info{
         .type = ERHIType::D3D12,
         .name = "DXRHITest",
         .rhi  = "d3d12"};
+    //DeviceInitInfo info{
+    //    .type = ERHIType::Vulkan,
+    //    .name = "DXRHITest",
+    //    .rhi  = "vulkan",
+    //    .rhi_api_version = "1.3"};
+
+    auto capturer = CreatePIXCapturer();
+
     RenderDevice::Init(std::move(info));
 
-    //try {
+    try {
+        capturer->Begin("D:\\codebase\\repos\\MoerEngine\\test.wpix");
 
-    //    auto capturer = CreatePIXCapturer();
+        auto& device = RenderDevice::Get();
 
-    //    //TaskSystem::Init();
-    //    //const auto& rhi_config_as_json = ConfigManager::GetInstance().GetConfig();
+        ShaderCompiler::Init();
 
-    //    DeviceInitInfo info{
-    //        .type           = ERHIType::D3D12,
-    //        .name           = "DXRHITest",
-    //        .rhi  = "d3d12"};
-    //    RenderDevice::Init(std::move(info));
-    //    auto& device = RenderDevice::Get();
+        auto cb0 = device.CreateBuffer<Moer::byte>("cb0", sizeof(S0), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        auto cb1 = device.CreateBuffer<Moer::byte>("cb1", sizeof(S1), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        auto sb0 = device.CreateBuffer<float4>("sb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto sb1 = device.CreateBuffer<S1>("sb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        auto rb0 = device.CreateBuffer<uint>("rb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto rb1 = device.CreateBuffer<float>("rb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        auto tb0 = device.CreateBuffer<float>("tb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto tb1 = device.CreateBuffer<float>("tb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        BufferRef buf_arr[kNumBuffArr];
+        for (int i = 0; i < kNumBuffArr; ++i) {
+            buf_arr[i] = device.CreateBuffer<float>(std::format("buf_array_{}", i), 9, EBufferUsageFlags::TRANSFER_DST);
+        }
 
-    //    //LOG_INFO("{}", D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetPlaneCount(DXGI_FORMAT_D24_UNORM_S8_UINT));
+        S0 pc{
+            .a = 2,
+            .b = 3,
+        };
+        S1 pc1{
+            .a = 1,
+        };
 
-    //    auto tex = device.CreateTexture(Extent2D(10, 30), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS, 1);
+        auto   fence     = device.CreateFence();
+        auto&  gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
+        uint64 timeline  = 0;
 
-    //    auto buf  = device.CreateBuffer<float>("a", 534 + 30 * 256, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
-    //    auto buf2 = device.CreateBuffer<float>("b", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        auto               pipeline = ShaderManager::Get().Compute<TestComputePipeline>("test/var.hlsl");
+        std::vector<float> farr(1024);
+        std::vector<int> iarr(1024);
 
-    //    auto   fence     = device.CreateFence();
-    //    auto&  gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
-    //    uint64 timeline  = 0;
+        for (int iter = 0; iter < 10; ++iter) {
 
-    //    std::array<float, 32 + 30 * 256> a;
-    //    for (int i = 0; i < 5; ++i) a[i] = i + 1;
-    //    for (int i = 0; i < 10; ++i) {
-    //        LOG_INFO("{}", a[i]);
-    //    }
-    //    CommandList list;
-    //    capturer->Begin("D:\\codebase\\repos\\MoerEngine\\target\\bin\\test.wpix");
-    //    //while (timeline < 10) {
-    //    //    if (timeline > 2) fence->Wait(timeline - 2);
-    //    LOG_INFO("dispatch work on {}", ++timeline);
-    //    //list.Barriers(EQueueType::Graphics, EQueueType::Graphics, EPassType::Copy, WriteBuffer{buf->GetView(), EBufferState::TRANSFER});
-    //    list.CopyFrom(ToSpan(a), buf->GetView());
-    //    //list.Barriers(EQueueType::Graphics, EQueueType::Graphics, EPassType::Copy, ReadBuffer{buf->GetView(), EBufferState::TRANSFER});
-    //    //list.Barriers(EQueueType::Graphics, EQueueType::Graphics, EPassType::Copy, WriteBuffer{buf2->GetView(), EBufferState::TRANSFER});
-    //    list.CopyFrom(buf->GetView(0, 5 * sizeof(float)), buf2->GetView(0, 5 * sizeof(float)));
-    //    //list.Barriers(EQueueType::Graphics, EQueueType::Graphics, EPassType::Copy, ReadBuffer{buf2->GetView(), EBufferState::TRANSFER});
+            for (int i = 0; i < 7; ++i) farr[i] = iarr[i] = 1 + i + iter;
 
-    //    list.CopyFrom(buf2->GetView(0, 5 * sizeof(float)), ToSpan(a).subspan(5 * sizeof(float), 5 * sizeof(float)));
+            int res = pc.b * pc1.a;
+            for (int i = 1; i < 7; ++i) res *= iarr[i];
 
-    //    //list.CopyFrom(ToSpan(a), tex->GetView());
-    //    //list.CopyFrom(tex->GetView(0), buf->GetView(4));
-    //    //list.CopyFrom(buf->GetView(), tex->GetView());
-    //    gfx_queue.Execute(list.Submit().Signal(fence, timeline));
-    //    //}
-    //    gfx_queue.Sync();
-    //    capturer->End();
-    //    LOG_INFO("dispatch work done");
+            CommandList list;
+            //list.CopyFrom(ToSpan(pc), cb0->GetView());
+            list.CopyFrom(ToSpan(pc1), cb1->GetView());
+            list.CopyFrom(ToSpan(farr).subspan(0 * sizeof(float), sizeof(float)), sb0->GetView());
+            list.CopyFrom(ToSpan(iarr).subspan(1 * sizeof(float), sizeof(float)), sb1->GetView(1 * sizeof(float)));
+            list.CopyFrom(ToSpan(iarr).subspan(2 * sizeof(float), sizeof(float)), rb0->GetView(2 * sizeof(float)));
+            list.CopyFrom(ToSpan(farr).subspan(3 * sizeof(float), sizeof(float)), rb1->GetView(3 * sizeof(float)));
+            list.CopyFrom(ToSpan(farr).subspan(4 * sizeof(float), sizeof(float)), tb0->GetView(4 * sizeof(float)));
+            list.CopyFrom(ToSpan(farr).subspan(5 * sizeof(float), sizeof(float)), tb1->GetView(5 * sizeof(float)));
+            list.CopyFrom(ToSpan(farr).subspan(6 * sizeof(float), sizeof(float)), buf_arr[6]->GetView(6 * sizeof(float)));
 
-    //    for (int i = 0; i < 10; ++i) {
-    //        LOG_INFO("{}", a[i]);
-    //    }
+            Array<BufferView> buf_arr_view(kNumBuffArr);
+            for (int i = 0; i < kNumBuffArr; ++i) {
+                buf_arr_view[i] = buf_arr[i]->GetView(PF_R32_SFLOAT);
+            }
+            list.Compute(pipeline, pc, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT), std::span{buf_arr_view}).Dispatch({1, 1, 1});
+            //list.Compute(pipeline, cb0, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT)).Dispatch({1, 1, 1});
 
-    //} catch (const std::exception& e) {
-    //    LOG_ERROR("{}", e.what());
-    //}
+            list.CopyFrom(rb1->GetView(0, 10 * sizeof(float)), ToSpan(iarr));
+
+            gfx_queue.Execute(list.Submit().Signal(fence, timeline));
+
+            gfx_queue.Sync();
+            LOG_INFO("dispatch work done");
+
+            LOG_INFO("result={}, expect={}, ok={}", iarr[0], res , iarr[0] == res);
+
+
+        }
+
+        capturer->End();
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("{}", e.what());
+    }
 
     /*
 
@@ -175,27 +220,27 @@ int main(int argc, char** argv) {
     tex.Sample(sampler,...);
 
     */
-    ShaderCompilerEnvironment env{};
+    //ShaderCompilerEnvironment env{};
 
-    //ShaderCompilerInput       input{
-    //          .target_info               = ShaderTargetInfo(ST_COMPUTE, SP_WIN_D3D_SM6),
-    //          .mutation_id               = 0,
-    //          .entry_point               = "CSMain",
-    //          .relative_source_file_path = "test/FillArg.hlsl",
-    //          .shader_name               = "test/FillArg.hlsl",
-    //          .environment               = env};
-    ShaderCompilerInput input{
-        .target_info               = ShaderTargetInfo(ST_COMPUTE, SP_WIN_D3D_SM6),
-        .mutation_id               = 0,
-        .entry_point               = "main",
-        .relative_source_file_path = "test/var.hlsl",
-        .shader_name               = "test/var.hlsl",
-        .environment               = env};
+    ////ShaderCompilerInput       input{
+    ////          .target_info               = ShaderTargetInfo(ST_COMPUTE, SP_WIN_D3D_SM6),
+    ////          .mutation_id               = 0,
+    ////          .entry_point               = "CSMain",
+    ////          .relative_source_file_path = "test/FillArg.hlsl",
+    ////          .shader_name               = "test/FillArg.hlsl",
+    ////          .environment               = env};
+    //ShaderCompilerInput input{
+    //    .target_info               = ShaderTargetInfo(ST_COMPUTE, SP_WIN_D3D_SM6),
+    //    .mutation_id               = 0,
+    //    .entry_point               = "main",
+    //    .relative_source_file_path = "test/var.hlsl",
+    //    .shader_name               = "test/var.hlsl",
+    //    .environment               = env};
 
-    ShaderCompiler::Init();
-    //auto output = ShaderCompiler::Compile(input);
+    //ShaderCompiler::Init();
+    ////auto output = ShaderCompiler::Compile(input);
 
-    auto pipeline = ShaderManager::Get().Compute<TemporalResmaplePipeline>("hwrt/ReSTIRDI/TemporalResampling.hlsl");
+    //auto pipeline = ShaderManager::Get().Compute<TemporalResmaplePipeline>("hwrt/ReSTIRDI/TemporalResampling.hlsl");
 
     return 0;
 }
