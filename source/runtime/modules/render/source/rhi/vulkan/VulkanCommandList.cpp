@@ -148,9 +148,9 @@ namespace Moer::Render {
         src_access_flags = VK_ACCESS_2_NONE;
         transfer_state_any_or(TS_UNORDERED_READ, VK_ACCESS_2_SHADER_READ_BIT, GetPipelineStageFromPassType(_pass), VK_IMAGE_LAYOUT_GENERAL);
         transfer_state_any_or(TS_UNORDERED_WRITE, VK_ACCESS_2_SHADER_WRITE_BIT, GetPipelineStageFromPassType(_pass), VK_IMAGE_LAYOUT_GENERAL);
-        transfer_state_any_or(TS_COLOR_ATTACHMENT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, PS_COLOR_ATTACHMENT_OUTPUT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        transfer_state_any_or(TS_COLOR_ATTACHMENT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, uint32_t(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-        transfer_state_any_or(TS_RESOLVE_ATTACHMENT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, PS_COLOR_ATTACHMENT_OUTPUT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        transfer_state_any_or(TS_RESOLVE_ATTACHMENT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, uint32_t(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         if (src_stage != VK_PIPELINE_STAGE_2_NONE) {
             return;
         }
@@ -1254,6 +1254,31 @@ namespace Moer::Render {
         uint32_t      _draw_cnt,
         uint32_t      _stride) {
         vkCmdDrawIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+    }
+
+    void VulkanCmdList::DispatchMesh(
+        uint32_t _group_count_x,
+        uint32_t _group_count_y,
+        uint32_t _group_count_z) {
+        vkCmdDrawMeshTasksEXT(command_buffer, _group_count_x, _group_count_y, _group_count_z);
+    }
+
+    void VulkanCmdList::DispatchMeshIndirect(
+        VulkanBuffer* _buffer,
+        uint64        _offset,
+        uint32_t      _draw_cnt,
+        uint32_t      _stride) {
+        vkCmdDrawMeshTasksIndirectEXT(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+    }
+
+    void VulkanCmdList::DispatchMeshIndirectCount(
+        VulkanBuffer* _commands,
+        uint64        _commands_offset,
+        VulkanBuffer* _count,
+        uint64        _count_offset,
+        uint32_t      _max_cnt,
+        uint32_t      _stride) {
+        vkCmdDrawMeshTasksIndirectCountEXT(command_buffer, _commands->GetHandle(), _commands_offset, _count->GetHandle(), _count_offset, _max_cnt, _stride);
     }
 
     void VulkanCmdList::CopyTexture(

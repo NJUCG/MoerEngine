@@ -63,7 +63,7 @@ namespace Moer {
     using SharedPtr = std::shared_ptr<T>;
 
     template<typename T, typename... Args>
-        requires std::is_constructible_v<T, Args...>
+        //requires std::is_constructible_v<T, Args...> // note(spc): fail to compile on my vs2022 17.12.0. but can run without this
     constexpr SharedPtr<T> MakeShared(Args&&... _args) {
         return SharedPtr<T>(MoerNew(T)(std::forward<Args>(_args)...), MoerDelete<T>);
     }

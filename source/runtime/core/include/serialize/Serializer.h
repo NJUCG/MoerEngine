@@ -4,6 +4,7 @@
 #include "misc/Traits.h"
 #include "zpp_bits.h"
 #include <cassert>
+#include <cstddef>
 #include <ostream>
 #include <istream>
 
@@ -16,8 +17,9 @@ namespace Moer {
         template<typename T>
         struct HasInputStreamOverloadFunction {
             template<typename U>
-            static auto           Test(U* _p) -> decltype(std::declval<U>().operator>>(std::declval<InputStream&>()), std::true_type{});
-            static auto           Test(...) -> std::false_type;
+            static auto Test(U* _p) -> decltype(std::declval<U>().operator>>(std::declval<InputStream&>()), std::true_type{});
+            static auto Test(...) -> std::false_type;
+
             static constexpr bool value = decltype(Test(static_cast<T*>(nullptr)))::value || is_shared_ptr_v<T> || is_unique_ptr_v<T> || is_countable_v<T>;
         };
 
@@ -95,6 +97,21 @@ namespace Moer {
             return *this;
         }
 
+        template<typename T, size_t N>
+        InputStream& operator>>(Moer::StaticArray<T, N>& _value) {
+            if constexpr (N == 0) {
+                return *this;
+            }
+            if constexpr (HasInputStreamOverloadFunction<T>::value) {
+                for (auto& v : _value) {
+                    v.operator>>(*this);
+                }
+            } else {
+                m_stream.read(reinterpret_cast<char*>(_value.data()), N * sizeof(T));
+            }
+            return *this;
+        }
+
         //optional
         template<typename T>
         InputStream& operator>>(std::optional<T>& _value) {
@@ -106,6 +123,22 @@ namespace Moer {
                 _value = value;
             } else {
                 _value.reset();
+            }
+            return *this;
+        }
+
+        template<typename U, typename V>
+        InputStream& operator>>(UnorderedMap<U, V>& _value) {
+            size_t size;
+            *this >> size;
+            if (size == 0) {
+                return *this;
+            }
+            for (size_t i = 0; i < size; ++i) {
+                U key;
+                V value;
+                *this >> key >> value;
+                _value.insert({key, value});
             }
             return *this;
         }
@@ -176,6 +209,21 @@ namespace Moer {
             }
             return *this;
         }
+
+        template<typename T, size_t N>
+        OutputStream& operator<<(const Moer::StaticArray<T, N>& _value) {
+            if constexpr (N == 0) {
+                return *this;
+            }
+            if constexpr (HasOutputStreamOverloadFunction<T>::value) {
+                for (const auto& v : _value) {
+                    *this << v;
+                }
+            } else {
+                m_stream.write(reinterpret_cast<const char*>(_value.data()), _value.size() * sizeof(T));
+            }
+            return *this;
+        }
         //span
         template<typename T>
         OutputStream& operator<<(const std::span<T>& _value) {
@@ -200,6 +248,18 @@ namespace Moer {
             *this << _value.has_value();
             if (_value.has_value()) {
                 *this << _value.value();
+            }
+            return *this;
+        }
+
+        template<typename T, typename U>
+        OutputStream& operator<<(const UnorderedMap<T, U>& _value) {
+            *this << _value.size();
+            if (_value.empty()) {
+                return *this;
+            }
+            for (const auto& [key, value] : _value) {
+                *this << key << value;
             }
             return *this;
         }

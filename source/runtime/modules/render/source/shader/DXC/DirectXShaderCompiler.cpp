@@ -9,6 +9,7 @@
 #include <cassert>
 #include <optional>
 #include <variant>
+#include <winerror.h>
 #if PLATFORM_WINDOWS
 #ifndef NOMINMAX
 #define NOMINMAX 1
@@ -32,6 +33,7 @@
 #include "dxc/dxcapi.h"
 #include "shader/ShaderCommon.h"
 #include "spirv_cross.hpp"
+#include <d3d12shader.h>
 
 // std::function<ShaderCompilerOutput*(const ShaderCompilerInput& input)> DXCompiler::s_compiler_func_table[EShaderPlatform::SP_Num]{};
 
@@ -50,7 +52,8 @@ private:
 
     void Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output);
 
-    void ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParametersMetadata* _meta_param, ShaderParametersInfoMap& _param_map);
+    void ReflectSPIRV(ComPtr<IDxcResult> result, ShaderParametersInfoMap& _param_map);
+    void ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompilerInput& _input, ShaderParametersInfoMap& _param_map);
 };
 
 DXCompiler::Impl::Impl() {
@@ -143,7 +146,10 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
     };
 
     auto add_dx_arg = [](Moer::Array<std::wstring>& arguments) {
-        //add_no_arg_for_dx
+        arguments.push_back(L"-DDXIL=1");
+
+        arguments.push_back(DXC_ARG_DEBUG);
+        arguments.push_back(L"-Qembed_debug");
     };
 
     auto add_vk_arg = [](Moer::Array<std::wstring>& arguments) {
@@ -155,6 +161,15 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(L"-fspv-preserve-interface");
         arguments.push_back(L"-DVULKAN=1");
         // arguments.push_back(L"-fspv-flatten-resource-arrays");
+
+        // - new dxc(like https://www.nuget.org/packages/Microsoft.Direct3D.DXC/1.8.2502.8) support ResourceDescriptorHeap for spirv
+        //   and require extra extension/capability for RT.
+        //   however now meet bug https://github.com/microsoft/DirectXShaderCompiler/issues/7181. seems fixed, but not release yet.
+        // - for dx, dxc output dxil by default, but not preserve inactive resource binding. while spirv can.
+        //   now still use dxil for dx due to above bug
+        //arguments.push_back(L"-fspv-extension=SPV_EXT_descriptor_indexing");
+        //arguments.push_back(L"-fspv-extension=SPV_KHR_ray_tracing");
+        //arguments.push_back(L"-fspv-extension=SPV_KHR_ray_query");
     };
 
     auto set_default_args = [add_dx_arg, add_vk_arg](Moer::Array<std::wstring>& arguments, EShaderPlatform _platform, EShaderType _type, std::string_view _entry_point) {
@@ -177,8 +192,10 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
     };
     auto add_debug_arg = [](Moer::Array<std::wstring>& arguments) {
         arguments.push_back(DXC_ARG_ALL_RESOURCES_BOUND);
+        //arguments.push_back(DXC_ARG_OPTIMIZATION_LEVEL0);
+        //  arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
         arguments.push_back(DXC_ARG_OPTIMIZATION_LEVEL3);
-        // arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
+        arguments.push_back(DXC_ARG_DEBUG_NAME_FOR_BINARY);
     };
 
     auto add_define_arg = [](Moer::Array<std::wstring>& arguments, const Moer::UnorderedMap<std::string, std::string>& _defines) {
@@ -245,9 +262,28 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
             (uint32_t)arguments_wchar.size(),
             include_handler.Get(),
             IID_PPV_ARGS(&result));
+        uint64_t result_hash[2] = {0, 0};
 
         if (SUCCEEDED(hres)) {
             result->GetStatus(&hres);
+            ComPtr<IDxcBlob>
+                p_hash = nullptr;
+            result->GetOutput(DXC_OUT_SHADER_HASH, IID_PPV_ARGS(&p_hash), nullptr);
+            if (p_hash) {
+                DxcShaderHash* shader_hash = (DxcShaderHash*)p_hash->GetBufferPointer();
+                memcpy(result_hash, shader_hash->HashDigest, sizeof(result_hash));
+            } else {
+                //fallback
+                IDxcBlob* code;
+                result->GetResult(&code);
+                const uint8_t*   data = (uint8_t*)code->GetBufferPointer();
+                uint32_t         size = code->GetBufferSize();
+                std::string_view data_view((const char*)data, size / 2);
+
+                result_hash[0] = GetHash(data_view);
+                std::string_view data_view2((const char*)data + size / 2, size / 2);
+                result_hash[1] = GetHash(data_view2);
+            }
         }
 
         if (FAILED(hres) && (result)) {
@@ -264,13 +300,13 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         }
 
         if (_input.target_info.shader_platform == SP_VULKAN_SM6) {
-            ReflectSPIRV(result, _input.param_meta_data, _output.parameter_map);
+            ReflectSPIRV(result, _output.parameter_map);
         } else {
-            //reflect dx12
-            assert(false && "dx reflect not implemented");
+            //dx12, reflect through dxil
+            ReflectDXIL(result, _input, _output.parameter_map);
         }
 
-        auto fill_succuss_data = [&_output, &last_write_time, &file_path, &result, &file_data, &_input]() {
+        auto fill_succuss_data = [&_output, &last_write_time, &file_path, &result, &file_data, &_input, &result_hash]() {
             IDxcBlob* code;
             result->GetResult(&code);
             const uint8_t* data = (uint8_t*)code->GetBufferPointer();
@@ -280,7 +316,9 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
 
             _output.b_succeeded      = true;
             _output.shader_name_hash = _input.shader_name_hash;
-            _output.compiled_hash.FromData(data, size);
+            // _output.compiled_hash.FromData(data, size);
+            _output.compiled_hash1              = result_hash[0];
+            _output.compiled_hash2              = result_hash[1];
             _output.mutation_id                 = _input.mutation_id;
             _output.target_info                 = _input.target_info;
             _output.cached                      = false;
@@ -340,9 +378,9 @@ bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {
     return b_support_platform && b_support_shader_type;
 }
 
-void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParametersMetadata* _meta_param, ShaderParametersInfoMap& _param_map) {
+void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParametersInfoMap& _param_map) {
     IDxcBlob* code;
-    result->GetResult(&code);
+    _result->GetResult(&code);
     const uint8_t* data = (uint8_t*)code->GetBufferPointer();
     uint32_t       size = code->GetBufferSize();
 
@@ -350,8 +388,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
     auto&             vertex_inputs = reflect_info.vertex_input_info;
 
     Moer::UnorderedMap<std::string, ParameterInfo>
-                                    param_map;
-    const ShaderParametersMetadata* meta_data = _meta_param;
+        param_map;
     using namespace Moer;
 
     constexpr std::string_view bdles_suffix      = "_114514_bdls";
@@ -448,7 +485,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
             target->count         = count;
             target->desc_type     = _desc_type;
             target->resource_type = _srt;
-            target->stage_bits    = ToPipelineStageFlag(comp.get_execution_model());
+            target->stage_bits    = uint(ToPipelineStageFlag(comp.get_execution_model()));
             target->custom_flag.active |= is_active;
             // if (is_active) {
             //     LOG_INFO("active bdls name : {}", name);
@@ -458,7 +495,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
         auto handle_res = [&](spirv_cross::Resource& _res, EVulkanDescriptorType _desc_type, EShaderResourceType _srt) {
             GET_RESOURCE_DEFAULT_INFOS(_res);
             ReflectParamInfo& param = reflect_map[name];
-            param.spirv.resources.stage_bits |= ToPipelineStageFlag(comp.get_execution_model());
+            param.spirv.resources.stage_bits |= uint(ToPipelineStageFlag(comp.get_execution_model()));
             ReflectParamInfo::Resource res{};
             res.set                    = set;
             res.binding                = binding;
@@ -526,7 +563,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
             uint  offset                     = 0;
             uint  constant_size              = comp.get_declared_struct_size(type);
             auto& param                      = reflect_map[name];
-            param.spirv.resources.stage_bits = ToPipelineStageFlag(comp.get_execution_model());
+            param.spirv.resources.stage_bits = uint(ToPipelineStageFlag(comp.get_execution_model()));
             ReflectParamInfo::Constant constant{};
             constant.size               = constant_size;
             constant.padded_size        = constant_size;
@@ -543,6 +580,172 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> result, const ShaderParam
 #undef SetZeroIfEmpty
 
 #undef GET_RESOURCE_DEFAULT_INFOS
+
+    _param_map.reflect_map.swap(reflect_map);
+}
+
+#define DX_CHECK_HRESULT(hr)                                         \
+    do {                                                             \
+        HRESULT _hr = (hr);                                          \
+        if (_hr < 0) {                                               \
+            LOG_CRITICAL("ERROR: hresult={:#x}", (unsigned int)_hr); \
+            std::terminate();                                        \
+        }                                                            \
+    } while (0)
+
+void DXCompiler::Impl::ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompilerInput& _input, ShaderParametersInfoMap& _param_map) {
+    using Moer::uint;
+
+    // Get shader reflection data.
+    ComPtr<IDxcBlob> reflectionBlob{};
+    DX_CHECK_HRESULT(result->GetOutput(DXC_OUT_REFLECTION, IID_PPV_ARGS(&reflectionBlob), nullptr));
+
+    const DxcBuffer reflectionBuffer{
+        .Ptr      = reflectionBlob->GetBufferPointer(),
+        .Size     = reflectionBlob->GetBufferSize(),
+        .Encoding = 0,
+    };
+
+    ComPtr<ID3D12ShaderReflection> shaderReflection{};
+    utils->CreateReflection(&reflectionBuffer, IID_PPV_ARGS(&shaderReflection));
+    D3D12_SHADER_DESC shaderDesc{};
+    shaderReflection->GetDesc(&shaderDesc);
+
+    // todo InputParameters for vs, inputlayout ?
+
+    Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
+
+    constexpr std::string_view bdls_suffix       = "_114514_bdls";
+    constexpr std::string_view bdls_array_suffix = "_array_114514_bdls";
+    auto                       is_bdls_array     = [&](const std::string& _name) { return _name.ends_with(bdls_array_suffix); };
+
+    for (int i = 0; i < shaderDesc.BoundResources; ++i) {
+        D3D12_SHADER_INPUT_BIND_DESC shaderInputBindDesc{};
+        DX_CHECK_HRESULT(shaderReflection->GetResourceBindingDesc(i, &shaderInputBindDesc));
+
+        std::string name = shaderInputBindDesc.Name;
+        if (is_bdls_array(name)) {
+            name = Moer::ReflectParamInfo::bdls_name;// our internal appointment
+        }
+        auto& param_info = reflect_map[name].dxil;
+        param_info.slot  = shaderInputBindDesc.BindPoint;
+        param_info.space = shaderInputBindDesc.Space;
+        param_info.count = shaderInputBindDesc.BindCount;
+
+        //if (param_info.count == 0) {// Texture2D<float4> xxx[]; -> count=0
+        //    if (!std::string(shaderInputBindDesc.Name).ends_with(bdls_suffix)) {
+        //        LOG_ERROR("bindless shader resource '{}' should end with '_114514_bdls' in '{}'", shaderInputBindDesc.Name, _input.shader_name);
+        //    }
+        //}
+
+        switch (shaderInputBindDesc.Type) {
+            case D3D_SIT_CBUFFER: {
+                // now suppose to be constant buffer, maybe change to root constant later.
+                param_info.type = uint(ED3D12ShaderVariableType::ConstantBuffer);
+                auto* cb        = shaderReflection->GetConstantBufferByName(shaderInputBindDesc.Name);
+                assert(cb);
+                D3D12_SHADER_BUFFER_DESC desc{};
+                DX_CHECK_HRESULT(cb->GetDesc(&desc));
+                param_info.byte_size = desc.Size;
+                assert(shaderInputBindDesc.BindCount == 1);// ? array of constant buffer
+            } break;
+            case D3D_SIT_TEXTURE: {
+                const auto dim = shaderInputBindDesc.Dimension;
+                switch (dim) {
+                    case D3D_SRV_DIMENSION_BUFFER:
+                        param_info.type = uint(ED3D12ShaderVariableType::TypedBuffer);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE1D:
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture1D);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE1DARRAY:
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture1DArray);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE2D:
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture2D);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE2DARRAY:
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture2DArray);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE2DMS:
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture2DMS);
+                        //num_sample = shaderInputBindDesc.NumSamples;
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE2DMSARRAY:
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture2DMSArray);
+                        //num_sample = shaderInputBindDesc.NumSamples;
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE3D:
+                        param_info.type = uint(ED3D12ShaderVariableType::Texture3D);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURECUBE:
+                        param_info.type = uint(ED3D12ShaderVariableType::TextureCube);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURECUBEARRAY:
+                        param_info.type = uint(ED3D12ShaderVariableType::TextureCubeArray);
+                        break;
+                    default:
+                        LOG_WARNING("unsupported shader varibale '{}' dimension: '{}' in shader '{}'", shaderInputBindDesc.Name, uint(shaderInputBindDesc.Type), _input.shader_name);
+                        assert(false && "unsupported type");
+                        break;
+                }
+            } break;
+            case D3D_SIT_SAMPLER:
+                param_info.type = uint(ED3D12ShaderVariableType::Sampler);
+                break;
+            case D3D_SIT_UAV_RWTYPED: {
+                // todo? Shader Model 6.7 introduces writable multi-sampled texture resource. https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_7_Advanced_Texture_Ops.html#writable-msaa-textures
+                const auto dim = shaderInputBindDesc.Dimension;
+                switch (dim) {
+                    case D3D_SRV_DIMENSION_BUFFER:
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTypedBuffer);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE1D:
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture1D);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE1DARRAY:
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture1DArray);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE2D:
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture2D);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE2DARRAY:
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture2DArray);
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE3D:
+                        param_info.type = uint(ED3D12ShaderVariableType::RWTexture3D);
+                        break;
+                    default:
+                        LOG_WARNING("unsupported shader varibale '{}' rw dimension: '{}' in shader '{}'", shaderInputBindDesc.Name, uint(shaderInputBindDesc.Type), _input.shader_name);
+                        assert(false && "unsupported type");
+                        break;
+                }
+            } break;
+            case D3D_SIT_STRUCTURED:
+                param_info.type = uint(ED3D12ShaderVariableType::StructuredBuffer);// todo 32_tstruct size/stride)?
+                break;
+            case D3D_SIT_UAV_RWSTRUCTURED:
+                param_info.type = uint(ED3D12ShaderVariableType::RWStructuredBuffer);
+                break;
+            case D3D_SIT_BYTEADDRESS:
+                param_info.type = uint(ED3D12ShaderVariableType::ByteAddressBuffer);
+                break;
+            case D3D_SIT_UAV_RWBYTEADDRESS:
+                param_info.type = uint(ED3D12ShaderVariableType::RWByteAddressBuffer);
+                break;
+            case D3D_SIT_RTACCELERATIONSTRUCTURE:
+                param_info.type = uint(ED3D12ShaderVariableType::RaytracingAccelerationStructure);
+                break;
+            case D3D_SIT_UAV_APPEND_STRUCTURED:
+            case D3D_SIT_UAV_CONSUME_STRUCTURED:
+            case D3D_SIT_UAV_RWSTRUCTURED_WITH_COUNTER:
+            case D3D_SIT_TBUFFER:
+            case D3D_SIT_UAV_FEEDBACKTEXTURE:
+                LOG_WARNING("unsupported shader varibale '{}' type: '{}' in shader '{}'", shaderInputBindDesc.Name, uint(shaderInputBindDesc.Type), _input.shader_name);
+                assert(false && "unsupported type");
+                break;
+        }
+    }
 
     _param_map.reflect_map.swap(reflect_map);
 }

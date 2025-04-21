@@ -18,7 +18,6 @@
 #include "platform/Platform.h"
 
 #include "shader/ShaderCompiler.h"
-#include "shader/Shader.h"
 
 #include <filesystem>
 #include <fstream>

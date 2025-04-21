@@ -141,11 +141,12 @@ namespace Moer::Render {
                                       PF_D32_SFLOAT_S8_UINT);
             // 注：此处 RHIColorAttachmentInfo 的顺序需要和 GeometryPass.h 中的 ColorAttachment 顺序一致
 
-            const auto& record = m_pso_records[m_pso_records_map[bitmask]];
+            const auto&   record = m_pso_records[m_pso_records_map[bitmask]];
+            VertexFactory factory{bitmask};
             return m_shader_manager
                 .Raster()
-                .Vertex(record.vertex_shader_path, record.vertex_shader_entry, record.vertex_shader_environment)
-                .Pixel(record.pixel_shader_path, record.pixel_shader_entry, record.pixel_shader_environment)
+                .Vertex(record.vertex_shader_path, record.vertex_shader_entry, &factory)
+                .Pixel(record.pixel_shader_path, record.pixel_shader_entry, &factory)
                 .Build<GeometryPassPipeline>(std::move(pso_info));
         }
 

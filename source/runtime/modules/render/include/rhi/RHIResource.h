@@ -651,7 +651,7 @@ namespace Moer::Render {
                                                                                                                                  byte_offset(_byte_offset),
                                                                                                                                  num_elements(_num_elements),
                                                                                                                                  stride(_stride),
-                                                                                                                                 format(_fmt){};
+                                                                                                                                 format(_fmt) {};
         uint          GetNumElements() const { return num_elements; }
         uint          GetStride() const { return stride; }
         uint64        GetByteOffset() const { return byte_offset; }
@@ -909,6 +909,33 @@ namespace Moer::Render {
         uint handle;
 
         uint operator()() const { return handle; }
+
+        bool operator==(const ArrayArgReference& _other) const { return handle == _other.handle; }
+        bool operator!=(const ArrayArgReference& _other) const { return handle != _other.handle; }
+        bool operator<(const ArrayArgReference& _other) const { return handle < _other.handle; }
+        bool operator>(const ArrayArgReference& _other) const { return handle > _other.handle; }
+        bool operator<=(const ArrayArgReference& _other) const { return handle <= _other.handle; }
+        bool operator>=(const ArrayArgReference& _other) const { return handle >= _other.handle; }
+
+        ArrayArgReference() = default;
+        ArrayArgReference(uint _handle) : handle(_handle) {}
+        ArrayArgReference(const ArrayArgReference& _other) : handle(_other.handle) {}
+        ArrayArgReference(ArrayArgReference&& _other) : handle(_other.handle) { _other.handle = 0; }
+        ArrayArgReference& operator=(const ArrayArgReference& _other) {
+            handle = _other.handle;
+            return *this;
+        }
+        ArrayArgReference& operator=(ArrayArgReference&& _other) {
+            handle        = _other.handle;
+            _other.handle = 0;
+            return *this;
+        }
+        ArrayArgReference& operator=(uint _handle) {
+            handle = _handle;
+            return *this;
+        }
+        operator uint() const { return handle; }
+        operator bool() const { return handle != 0; }
     };
 
     /// <summary>
@@ -1717,7 +1744,7 @@ class RHIViewport : public RHIResource {
 
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
-    virtual ~RHIViewport(){};
+    virtual ~RHIViewport() {};
     virtual void* GetNativeSwapchain() const { return nullptr; }
     virtual void* GetNativeWindow(void** _params) const { return nullptr; }
 
@@ -2556,7 +2583,7 @@ struct RHIShaderMapRef {
 
 struct RHIShaderBoundStateInput : public RHIResource {
 
-    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE){};
+    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE) {};
 
     RHIShaderBoundStateInput(
         RHIVertexInputState* _vertex_input_state,
@@ -3003,19 +3030,19 @@ namespace Moer::Render {
     struct PipelineHandle {
         uint64                     handle = 0;
         Array<ParamInfoFlags>      binding_infos;
-        UnorderedMap<uint64, uint> hash_2_info_index;
-        uint64                     valid_bits   = 0;
-        int                        constant_idx = -1;
+        UnorderedMap<uint64, uint> hash_2_info_index;// not use
+        uint64                     valid_bits   = 0; // the pipeline actually used resource
+        int                        constant_idx = -1;// not use
 
         bool IsValid() const { return handle != 0; }
     };
 
     struct SingleShaderInfo {
-        std::string_view        name;
-        std::string_view        entry_point;
-        Array<uint8>            shader_data;
-        EShaderType             shader_type;
-        ShaderParametersInfoMap shader_param_map;
+        std::string_view         name;
+        std::string_view         entry_point;
+        std::span<uint8>         shader_data;
+        EShaderType              shader_type;
+        ShaderParametersInfoMap* shader_param_map = nullptr;
     };
 
     struct ShaderVsGsPs {
@@ -3475,7 +3502,7 @@ namespace Moer::Render {
 
     class RENDER_API Swapchain : public RHIResource {
     protected:
-        Swapchain() : RHIResource(RRT_SWAPCHAIN){};
+        Swapchain() : RHIResource(RRT_SWAPCHAIN) {};
 
     public:
         virtual void Recreate(const SwapchainCreateInfo&) = 0;

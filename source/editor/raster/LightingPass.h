@@ -68,7 +68,8 @@ public:
         lighting_data->camera_position = camera->GetPosition();
 
         // Shadow Parameters
-        lighting_data->shadow_map_mode            = ui_config.shadow_map_mode;
+        // lighting_data->shadow_map_mode            = ui_config.shadow_map_mode;
+        lighting_data->shadow_map_mode            = 0;
         lighting_data->shadow_sampling_mode       = ui_config.shadow_sampling_mode;
         lighting_data->shadow_csm_num_of_cascades = ui_config.shadow_csm_num_of_cascades;
         lighting_data->shadow_csm_sm_size         = ui_config.shadow_csm_sm_size;

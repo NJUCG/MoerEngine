@@ -307,6 +307,39 @@ namespace Moer::Render {
         VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT m_pageable_device_local_memory_features;
     };
 
+    class VulkanEXTMeshShaderExtension final : public VulkanDeviceExtension {
+    public:
+        VulkanEXTMeshShaderExtension(bool _is_optional = true)
+            : VulkanDeviceExtension(VK_EXT_MESH_SHADER_EXTENSION_NAME, _is_optional), m_mesh_shader_features() {}
+
+        void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+            m_mesh_shader_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+            AddToPNext(_gpu_features2, m_mesh_shader_features);
+        }
+
+        void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+            m_is_usable = (m_mesh_shader_features.meshShader == VK_TRUE);
+
+            _gpu_extensions.m_has_ext_mesh_shader          = m_is_usable;
+            _gpu_extensions.m_allow_mesh_primitive_shading = (m_mesh_shader_features.primitiveFragmentShadingRateMeshShader == VK_TRUE);
+        }
+
+        void PreGpuProperties(const VulkanDevice* _device, VkPhysicalDeviceProperties2& _gpu_properties2) override {
+            auto& mesh_shader_props = const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties()).mesh_shader_properties;
+            mesh_shader_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT;
+            AddToPNext(_gpu_properties2, mesh_shader_props);
+        }
+
+        void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+            if (m_is_usable && m_is_enabled) {
+                AddToPNext(_device_create_info, m_mesh_shader_features);
+            }
+        }
+
+    private:
+        VkPhysicalDeviceMeshShaderFeaturesEXT m_mesh_shader_features;
+    };
+
     TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMERequiredDeviceExtensions() {
         // LOG_INFO("VulkanDeviceExtension: raytracing support, {}", _rhi_info.ray_tracing);
 
@@ -317,7 +350,7 @@ namespace Moer::Render {
 #define ADD_CUSTOM_EXTENSION(ext_class, optional) extensions.emplace_back(std::make_shared<ext_class>(optional))
         // generic simple extensions
         ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
-       // ADD_EXTENSION(VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
+        // ADD_EXTENSION(VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
 
 #if VULKAN_RHI_RAYTRACING
         // raytracing extensions

@@ -20,7 +20,8 @@ namespace Moer::Render::Raster {
 
 class ShadowDepthPass {
 public:
-    ShadowDepthPass(RasterContext& context) {}
+    ShadowDepthPass(RasterContext& context) :
+        vertex_shader("raster/geometry_pass/GeometryPassCommonVertex.hlsl") {}
 
     void CreateCsmData(RasterContext& context, const RasterConfig& ui_config) {
         // 检查并创建所有ShadowMap
@@ -129,6 +130,34 @@ public:
                             camera->GetUp() * 30.f;
         float3 test_vec_4 = camera->GetPosition() + camera->GetFront() * 100.f;
 
+        /**
+         * ShadowMap折磨了快两天，终于改对了。这里记录一下所有变换方面的坑：
+         * 
+         * - Clip Space vs NDC Space
+         *   - Clip Space通过 xyz / w 变换到NDC
+         *     - VertexShader输出float4顶点的值域为Clip Space，即 xy in [-w, w], z in [0, w]，w in (-inf, inf)
+         *     - PixelShader输入float4顶点的值域为NDC，即 xy in [-1, 1], z in [0, 1]，w = 1
+         *   - NDC的值域 决定了 Clip Space的值域
+         *   - Vulkan中，NDC的值域为：x: [-1, 1], y: [-1, 1], z: [0, 1]
+         *     - x轴正方向，为屏幕向右
+         *     - y轴正方向，为屏幕向下【注意！在MoerEngine中，y轴正方向，为屏幕向上！【貌似】】
+         *     - z轴正方向，为屏幕向内
+         *   - 根据上面的结论，Clip Space的值域为：x: [-w, w], y: [-w, w], z: [0, w]
+         *   - 换句话说，一个WorldSpace的坐标，经过ViewProjection变换后，值域应该为：x: [-w, w], y: [-w, w], z: [0, w]
+         * 
+         * - Inverse Depth
+         *   - MoerEngine使用了Inverse Depth的Trick
+         *   - 含义：正常来说，近平面z值为0，远平面z值为1；而Inverse Depth的做法是：近平面z值为1，远平面z值为0
+         *   - 优势：远处的坐标，z值接近0；而浮点数精度在0附近非常非常高；所以用高精度表示无限远，这是符合直觉的
+         *   - 影响范围：光栅化管线中，所有涉及Depth的地方，都需要考tInverse Depth
+         *   - 需要考虑的内容
+         *     - Depth Texture Clear Value应该为0，表示无限远
+         *     - Z-test时，大的z值应该覆盖小的z值，和正常的Z-test相反
+         *     - Geometry Pass / Shadow Depth Pass中，Projection Matrix应该考虑到反转z轴（即交换near_clip和far_clip的参数）
+         *     - **重要**：如果ProjectionMatrix没有考虑inverse depth，那么就要在vertex shader中手动进行变换（还有lighting pass应用矩阵时）
+         * 
+         * 好文章&好评论区：https://zhuanlan.zhihu.com/p/116731971
+         */
         auto get_world_to_shadow_clip_matrix = [&](uint cascade_index) {
             // Cover ratio of camera frustum
             // Method 1: 每次视锥取 a[i-1] ~ a[i]
@@ -556,55 +585,30 @@ public:
         for (uint i = 0; i < ui_config.shadow_csm_num_of_cascades; i++) {
             // Name
             shadow_depth_pass_names[i] = std::format("Shadow Depth Pass - {}", i);
+
             // World to Shadow Clip Matrix
             context.world_to_shadow_clip[i] = get_world_to_shadow_clip_matrix(i);
-        }
 
-        for (uint i = 0; i < ui_config.shadow_csm_num_of_cascades; i++) {
-            auto mesh_draw_datas_map = GeometryPass::GetMeshDrawDatasMap(context);
-
+            // Param
             param.world2clip = Transpose(context.world_to_shadow_clip[i]);
+            auto arg_idx =
+                context.cmd_list.RegisterArgs(ShadowDepthPassPipeline::SetArgs(context.bdls, param));
 
-            DepthAttachment depth_attachment(context.shadow_map_textures[i].tex->GetView().GetTexture());
+            // Draw Batch
+            auto draw_batch = GeometryPass::GetDrawBatch(pipeline_map, vertex_shader, context, arg_idx);
 
-            context.cmd_list.GfxWithoutPso<ShadowDepthPassPipeline>(context.bdls, param)
-                .DrawShadowDepthPass(
+            // Draw
+            context.cmd_list
+                .Gfx(
                     shadow_depth_pass_names[i],
                     Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
-                    std::move(mesh_draw_datas_map),
-                    depth_attachment
-                );
+                    DepthAttachment(context.shadow_map_textures[i].tex->GetView().GetTexture())
+                )
+                .AcceptDrawBatch(std::move(draw_batch))
+                .Dispatch();
         }
     }
 
-    /**
-     * ShadowMap折磨了快两天，终于改对了。这里记录一下所有变换方面的坑：
-     * 
-     * - Clip Space vs NDC Space
-     *   - Clip Space通过 xyz / w 变换到NDC
-     *     - VertexShader输出float4顶点的值域为Clip Space，即 xy in [-w, w], z in [0, w]，w in (-inf, inf)
-     *     - PixelShader输入float4顶点的值域为NDC，即 xy in [-1, 1], z in [0, 1]，w = 1
-     *   - NDC的值域 决定了 Clip Space的值域
-     *   - Vulkan中，NDC的值域为：x: [-1, 1], y: [-1, 1], z: [0, 1]
-     *     - x轴正方向，为屏幕向右
-     *     - y轴正方向，为屏幕向下【注意！在MoerEngine中，y轴正方向，为屏幕向上！【貌似】】
-     *     - z轴正方向，为屏幕向内
-     *   - 根据上面的结论，Clip Space的值域为：x: [-w, w], y: [-w, w], z: [0, w]
-     *   - 换句话说，一个WorldSpace的坐标，经过ViewProjection变换后，值域应该为：x: [-w, w], y: [-w, w], z: [0, w]
-     * 
-     * - Inverse Depth
-     *   - MoerEngine使用了Inverse Depth的Trick
-     *   - 含义：正常来说，近平面z值为0，远平面z值为1；而Inverse Depth的做法是：近平面z值为1，远平面z值为0
-     *   - 优势：远处的坐标，z值接近0；而浮点数精度在0附近非常非常高；所以用高精度表示无限远，这是符合直觉的
-     *   - 影响范围：光栅化管线中，所有涉及Depth的地方，都需要考tInverse Depth
-     *   - 需要考虑的内容
-     *     - Depth Texture Clear Value应该为0，表示无限远
-     *     - Z-test时，大的z值应该覆盖小的z值，和正常的Z-test相反
-     *     - Geometry Pass / Shadow Depth Pass中，Projection Matrix应该考虑到反转z轴（即交换near_clip和far_clip的参数）
-     *     - **重要**：如果ProjectionMatrix没有考虑inverse depth，那么就要在vertex shader中手动进行变换（还有lighting pass应用矩阵时）
-     * 
-     * 好文章&好评论区：https://zhuanlan.zhihu.com/p/116731971
-     */
     void Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
         if (ui_config.shadow_map_mode == 0) {
             return;
@@ -618,8 +622,11 @@ public:
         }
     }
 
-public:
+private:
     Array<std::string> shadow_depth_pass_names;
+
+    Moer::UnorderedMap<VertexFactory, GeometryPassPipeline> pipeline_map;
+    VertexShader                                            vertex_shader;
 };
 
 } // namespace Moer::Render::Raster

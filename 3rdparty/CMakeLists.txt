@@ -33,10 +33,15 @@ set_target_folder(imgui ${third_party_folder}/imgui)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nativefiledialog-extended-1.2.1)
 set_target_folder(native_file_dialog_extended ${third_party_folder}/nativefiledialog-extended-1.2.1)
 
-# directx-headers
-add_subdirectory(DirectX-Headers)
-set_target_folder(DirectX-Headers ${third_party_folder}/dxheaders)
-set_target_folder(DirectX-Guids ${third_party_folder}/dxheaders)
+add_subdirectory(d3d12_agilitysdk)
+set_target_folder(d3d12_agilitysdk ${third_party_folder}/d3d12_agilitysdk)
+set_target_folder(d3d12_agilitysdk_d3dx12 ${third_party_folder}/d3d12_agilitysdk)
+
+add_subdirectory(D3D12MemoryAllocator)
+set_target_folder(D3D12MemoryAllocator ${third_party_folder}/D3D12MemoryAllocator)
+
+add_subdirectory(winpixeventruntime)
+set_target_folder(winpixeventruntime ${third_party_folder}/winpixeventruntime)
 
 # json
 set(JSON_BuildTests OFF CACHE INTERNAL "")

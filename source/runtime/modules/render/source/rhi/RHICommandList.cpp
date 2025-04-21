@@ -96,6 +96,7 @@ namespace Moer::Render {
         : cmd_list(_cmd_list), pso(_pso), args({}) {
     }
 
+<<<<<<< HEAD
     CommandList::DrawDispatcherWithoutPso::DrawDispatcherWithoutPso(
         CommandList&     _cmd_list,
         ArrayArguments&& _args)
@@ -104,10 +105,20 @@ namespace Moer::Render {
 
     CommandList::DrawDispatcherWithoutPso::DrawDispatcherWithoutPso(
         CommandList& _cmd_list)
-        : cmd_list(_cmd_list), args({}) {
-    }
+        : cmd_list(_cmd_list), args({}){} == == == =
+                                                       // CommandList::DrawGeometryPassDispatcher::DrawGeometryPassDispatcher(
+                               //     CommandList&     _cmd_list,
+                               //     ArrayArguments&& _args)
+                               //     : cmd_list(_cmd_list), args(std::move(_args)) {
+                               // }
 
-    void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count, std::string_view _name, ProfileSection _section) {
+                               // CommandList::DrawGeometryPassDispatcher::DrawGeometryPassDispatcher(
+                               //     CommandList& _cmd_list)
+                               //     : cmd_list(_cmd_list), args({}) {
+                               // }
+>>>>>>> bd54fa6049018c118957f805a80b2425a849fc65
+
+                               void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count, std::string_view _name, ProfileSection _section) {
         cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count));
         cmd_list.commands.back()->name = _name;
     }
@@ -265,26 +276,17 @@ namespace Moer::Render {
         }
     }
 
-    // Specialized for Geometry Pass
-    void CommandList::SetRenderGeometryPassCmds(
-        ArrayArguments&&                                             _args,
-        RenderPassInfo&&                                             _info,
-        UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
-        std::string_view                                             _name
-        //
-    ) {
-        commands.push_back(MakeUnique<SetGeometryPassDrawStateCmd>(std::move(_args), std::move(_info), std::move(_mesh_data_array_map), _name, false));
+    void CommandList::SetMultiRenderCmds(RenderPassInfo&& _pass_info, DrawBatch&& _batch, std::string_view _name) {
+        commands.push_back(MakeUnique<MultiDrawCmd>(std::move(_batch), std::move(_pass_info), _name));
     }
 
-    void CommandList::SetRenderShadowDepthPassCmds(
-        ArrayArguments&&                                             _args,
-        RenderPassInfo&&                                             _info,
-        UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
-        std::string_view                                             _name
-        //
-    ) {
-        commands.push_back(MakeUnique<SetGeometryPassDrawStateCmd>(std::move(_args), std::move(_info), std::move(_mesh_data_array_map), _name, true));
-    }
+    // Specialized for Geometry Pass
+    // void
+    // CommandList::SetRenderGeometryPassCmds(ArrayArguments&& _args, RenderPassInfo&& _info, UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map, std::string_view _name
+    //                                        //
+    // ) {
+    //     commands.push_back(MakeUnique<SetGeometryPassDrawStateCmd>(std::move(_args), std::move(_info), std::move(_mesh_data_array_map), _name));
+    // }
 
     void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
         assert(_array && "Bindless array is null");

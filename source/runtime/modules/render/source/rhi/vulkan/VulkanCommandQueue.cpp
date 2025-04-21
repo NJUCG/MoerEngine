@@ -60,12 +60,12 @@ namespace Moer::Render {
                                              VK_NULL_HANDLE,
                                              target_fence->GetSemaphoreHandle(),
                                              signal_infos[signal_index].signal_value,
-                                             signal_infos[signal_index].signal_stage);
+                                             VkPipelineStageFlags2(signal_infos[signal_index].signal_stage));
                 vk_signal_infos.emplace_back(VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                              VK_NULL_HANDLE,
                                              target_fence->GetBinaryHandle(),
                                              0,
-                                             signal_infos[signal_index].signal_stage);
+                                             VkPipelineStageFlags2(signal_infos[signal_index].signal_stage));
             } else {
                 //for timeline signals
                 if (EnumHasAnyFlag(usage, EFenceUsageFlags::TIMELINE)) {
@@ -73,7 +73,7 @@ namespace Moer::Render {
                                                  VK_NULL_HANDLE,
                                                  target_fence->GetSemaphoreHandle(),
                                                  signal_infos[signal_index].signal_value,
-                                                 signal_infos[signal_index].signal_stage);
+                                                 VkPipelineStageFlags2(signal_infos[signal_index].signal_stage));
                 }
 
                 //for binary signals to present stage wait
@@ -82,7 +82,7 @@ namespace Moer::Render {
                                                  VK_NULL_HANDLE,
                                                  target_fence->GetBinaryHandle(),
                                                  0,
-                                                 signal_infos[signal_index].signal_stage);
+                                                 VkPipelineStageFlags2(signal_infos[signal_index].signal_stage));
                 }
             }
         }
@@ -97,7 +97,7 @@ namespace Moer::Render {
                                            VK_NULL_HANDLE,
                                            target_fence->GetSemaphoreHandle(),
                                            wait_infos[wait_index].wait_value,
-                                           wait_infos[wait_index].wait_stage);
+                                           VkPipelineStageFlags2(wait_infos[wait_index].wait_stage));
             } else {
                 //for binary signals to present stage wait
                 if (EnumHasAnyFlag(usage, EFenceUsageFlags::BINARY)) {
@@ -105,7 +105,7 @@ namespace Moer::Render {
                                                VK_NULL_HANDLE,
                                                target_fence->GetBinaryHandle(),
                                                0,
-                                               wait_infos[wait_index].wait_stage);
+                                               VkPipelineStageFlags2(wait_infos[wait_index].wait_stage));
                 }
 
                 if (EnumHasAnyFlag(usage, EFenceUsageFlags::TIMELINE)) {
@@ -113,7 +113,7 @@ namespace Moer::Render {
                                                VK_NULL_HANDLE,
                                                target_fence->GetSemaphoreHandle(),
                                                wait_infos[wait_index].wait_value,
-                                               wait_infos[wait_index].wait_stage);
+                                               VkPipelineStageFlags2(wait_infos[wait_index].wait_stage));
                 }
             }
         }

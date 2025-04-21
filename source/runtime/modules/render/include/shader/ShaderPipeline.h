@@ -3,10 +3,13 @@
 #include "math/Matrix.h"
 #include "misc/STL.h"
 // #include "rhi/RHI.h"
+#include "resources/vertexfactory/VertexAttributes.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderMutation.h"
+#include "shader/ShaderParameterMacros.h"
+#include <limits>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
@@ -164,6 +167,22 @@ namespace Moer::Render {
             constants = std::move(_other.constants);
         }
 
+        ArrayArguments(const ArrayArguments& _other) {
+            args      = _other.args;
+            constants = _other.constants;
+        }
+        ArrayArguments& operator=(ArrayArguments&& _other) {
+            args      = std::move(_other.args);
+            constants = std::move(_other.constants);
+            return *this;
+        }
+
+        ArrayArguments& operator=(const ArrayArguments& _other) {
+            args      = _other.args;
+            constants = _other.constants;
+            return *this;
+        }
+
         // Array<TArg> args;
         TArg&       operator[](uint _idx) { return args[_idx]; }
         const TArg& operator[](uint _idx) const { return args[_idx]; }
@@ -310,7 +329,7 @@ namespace Moer::Render {
         //     //if TArg is a constant, add the size of TArg to the total size, other wise add 0
         //     return (0 + ... + (std::is_same_v<typename Args::type, TConstsant<typename Args::type::type>> ? sizeof(typename Args::type) : 0)) / sizeof(uint);
         // }
-        using t_texture_array_arg = std::span<TextureView>;
+        using t_texture_array_arg = std::span<TextureView>; // note here assume span with 'dynamic_extent', mostly 'Array<T> => span<T>', not 'T arr[N] => span<T,N>'
         using t_buffer_array_arg  = std::span<BufferView>;
 
         template<typename T>
@@ -475,19 +494,39 @@ namespace Moer::Render {
     concept is_shader_mutation = requires(T _t) {
         _t.SetCompileEnvironment(std::declval<ShaderCompilerEnvironment&>());
     };
+
+    template<typename T>
+    concept is_shader_pipeline = requires(T _t) {
+        // T::SetArgs(std::declval<typename T::tuple_helper>());
+        T::GetHashArray();
+        T::GetHashCodeArray();
+    };
+
     class ShaderAsset {
     public:
-        explicit ShaderAsset(std::string_view _path, std::string_view _entry) : path(_path), entry_name(_entry), mutation_id(-1) {
+        ShaderAsset() : path(""), entry_name(""), mutation_id(std::numeric_limits<uint>::max()) {
+        }
+        explicit ShaderAsset(std::string_view _path, std::string_view _entry = "main") : path(_path), entry_name(_entry), mutation_id(0) {
         }
         template<is_shader_mutation TMacro>
         explicit ShaderAsset(std::string_view _path, std::string_view _entry, TMacro _mutation_set) : path(_path), entry_name(_entry), mutation_id(_mutation_set.GetMutationID()) {
             _mutation_set.SetCompileEnvironment(environment);
         }
 
+        template<is_shader_mutation TMacro>
+        explicit ShaderAsset(std::string_view _path, std::string_view _entry, VertexFactory* _factory, TMacro _mutation_set) : path(_path), entry_name(_entry), mutation_id(_mutation_set.GetMutationID()) {
+            _factory->SetCompileEnvironment(environment);
+            _mutation_set.SetCompileEnvironment(environment);
+        }
+
+        explicit ShaderAsset(std::string_view _path, std::string_view _entry, VertexFactory* _factory) : path(_path), entry_name(_entry) {
+            _factory->SetCompileEnvironment(environment);
+        }
+
     public:
         std::string               path;
         std::string               entry_name;
-        int                       mutation_id;
+        uint                      mutation_id;
         ShaderCompilerEnvironment environment;
     };
 

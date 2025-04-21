@@ -632,7 +632,7 @@ namespace Moer::Render {
         };
 
     public:
-        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : PipelineState(), VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_type(_type){};
+        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : PipelineState(), VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_type(_type) {};
         virtual ~VulkanPipelineState();
 
         inline VkPipeline GetHandle() const {
@@ -1238,7 +1238,7 @@ namespace Moer::Render {
 
     public:
         virtual ~VulkanRHIAccelerationStructureSRV();
-        explicit VulkanRHIAccelerationStructureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewinfo) : RHISRV(_resource, _viewinfo), VulkanDeviceObject(_device){};
+        explicit VulkanRHIAccelerationStructureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewinfo) : RHISRV(_resource, _viewinfo), VulkanDeviceObject(_device) {};
     };
 
     class VulkanImageView final : public RHIView {

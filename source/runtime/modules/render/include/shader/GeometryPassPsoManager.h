@@ -37,7 +37,7 @@ namespace Moer::Render {
     };
 
     // A singleton class to manage PSO for geometry pass
-    class RENDER_API GeometryPassPsoManager {
+    class RENDER_API [[deprecated]] GeometryPassPsoManager {
     public:
         ~GeometryPassPsoManager();
         GeometryPassPsoManager(const GeometryPassPsoManager&)            = delete;
