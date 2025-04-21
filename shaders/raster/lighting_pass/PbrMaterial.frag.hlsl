@@ -229,8 +229,8 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     pbrInfo.normal = GetNormalFromNormalMap(mat.normal_map, uv, normal, tangent);
 
 
-    // FIXME: sponze - normal_map == 64 - bug
-    if (mat.normal_map == 64) { // wtf...
+    // FIXME: sponze - normal_map == 66 => bug
+    if (mat.normal_map == 66) { // wtf...
         pbrInfo.normal = normal;
     }
     // float3 normal_map_test = TextureHandle(mat.normal_map).Sample2D<float3>(uv);
