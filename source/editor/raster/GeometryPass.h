@@ -31,7 +31,6 @@ public:
     MUTATION_SET(MutationSet, SHADOW_DEPTH_PASS);
 };
 
-// "raster/geometry_pass/GeometryPassCommonPixel.hlsl"
 class GeometryPass {
 public:
     GeometryPass(RasterContext& _context) :
@@ -68,8 +67,6 @@ public:
                 );
 
                 Shader& vtx = vertex_shader.GetShader(const_cast<VertexFactory*>(&factory));
-
-                // TODO: cache pixel shader
 
                 GeometryPassPipeline::MutationSet mutation_set{};
                 mutation_set.SetMutation<GeometryPassPipeline::SHADOW_DEPTH_PASS>(false);
