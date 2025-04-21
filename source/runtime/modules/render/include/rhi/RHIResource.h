@@ -651,7 +651,7 @@ namespace Moer::Render {
                                                                                                                                  byte_offset(_byte_offset),
                                                                                                                                  num_elements(_num_elements),
                                                                                                                                  stride(_stride),
-                                                                                                                                 format(_fmt){};
+                                                                                                                                 format(_fmt) {};
         uint          GetNumElements() const { return num_elements; }
         uint          GetStride() const { return stride; }
         uint64        GetByteOffset() const { return byte_offset; }
@@ -1744,7 +1744,7 @@ class RHIViewport : public RHIResource {
 
 public:
     RHIViewport() : RHIResource(RRT_VIEWPORT) {}
-    virtual ~RHIViewport(){};
+    virtual ~RHIViewport() {};
     virtual void* GetNativeSwapchain() const { return nullptr; }
     virtual void* GetNativeWindow(void** _params) const { return nullptr; }
 
@@ -2583,7 +2583,7 @@ struct RHIShaderMapRef {
 
 struct RHIShaderBoundStateInput : public RHIResource {
 
-    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE){};
+    RHIShaderBoundStateInput() : RHIResource(RRT_SHADER_BOUND_STATE) {};
 
     RHIShaderBoundStateInput(
         RHIVertexInputState* _vertex_input_state,
@@ -3030,9 +3030,9 @@ namespace Moer::Render {
     struct PipelineHandle {
         uint64                     handle = 0;
         Array<ParamInfoFlags>      binding_infos;
-        UnorderedMap<uint64, uint> hash_2_info_index;
-        uint64                     valid_bits   = 0;
-        int                        constant_idx = -1;
+        UnorderedMap<uint64, uint> hash_2_info_index;// not use
+        uint64                     valid_bits   = 0; // the pipeline actually used resource
+        int                        constant_idx = -1;// not use
 
         bool IsValid() const { return handle != 0; }
     };
@@ -3502,7 +3502,7 @@ namespace Moer::Render {
 
     class RENDER_API Swapchain : public RHIResource {
     protected:
-        Swapchain() : RHIResource(RRT_SWAPCHAIN){};
+        Swapchain() : RHIResource(RRT_SWAPCHAIN) {};
 
     public:
         virtual void Recreate(const SwapchainCreateInfo&) = 0;
