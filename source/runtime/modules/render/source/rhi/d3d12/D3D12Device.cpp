@@ -652,6 +652,9 @@ namespace Moer::Render {
     }
 
     D3D12Buffer::~D3D12Buffer() {
+        for (const auto& [desc, index] : srv_uav_views) {
+            device->GetCsuHeap()->Free(index);
+        }
     }
     void D3D12Buffer::Destroy() {
         MoerDelete(this);
