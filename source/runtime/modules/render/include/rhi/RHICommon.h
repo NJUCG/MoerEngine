@@ -506,7 +506,7 @@ enum class EAttachmentStoreOp : uint8_t {
 static_assert((int32_t)EAttachmentStoreOp::Num <= 1 << (uint32_t)EAttachmentStoreOp::NumBits, "EAttachmentStoreOp::Num will not fit on EAttachmentStoreOp::NumBits");
 
 //todo: maybe get rid of some of them, cause not every frag is supported
-enum ERHIPipelineStageFlags : uint32_t {
+enum class ERHIPipelineStageFlags : uint32_t {
     PS_TOP_OF_PIPE                      = 0x00000001,
     PS_DRAW_INDIRECT                    = 0x00000002,
     PS_VERTEX_INPUT                     = 0x00000004,
@@ -882,7 +882,34 @@ enum EVulkanDescriptorType : uint8_t {
     VDT_ACCELERATION_STRUCTURE,
     VDT_Num
 };
-
+enum class ED3D12ShaderVariableType : uint32_t {// ref D3D_SHADER_VARIABLE_TYPE
+    RootConstant,                               // can't get from shader reflection. get from cpp pipeline definition.
+    ConstantBuffer,
+    ByteAddressBuffer,
+    StructuredBuffer,
+    TypedBuffer,
+    RWByteAddressBuffer,
+    RWStructuredBuffer,
+    RWTypedBuffer,
+    Texture1D,
+    Texture1DArray,
+    Texture2D,
+    Texture2DArray,
+    Texture2DMS,
+    Texture2DMSArray,
+    Texture3D,
+    TextureCube,
+    TextureCubeArray,
+    RWTexture1D,
+    RWTexture1DArray,
+    RWTexture2D,
+    RWTexture2DArray,
+    RWTexture3D,
+    Sampler,
+    RaytracingAccelerationStructure,
+    // no legacy append/consume buffer, as well as uav counter
+    // TODO ROV?  e.g. RasterizerOrderedTexture2D
+};
 using GlobalBufferStaticBindingPoint = uint8_t;
 
 enum {
@@ -1038,7 +1065,7 @@ struct ShaderTargetInfo {
 };
 /**
  * @brief Binding Parameter Enum
- * 
+ *
  */
 enum class EShaderParameterType : uint8_t {
     UNKNOWN,
@@ -1251,7 +1278,15 @@ namespace Moer {
                 BindlessArray bindless;
             };
         };
-        struct Dxil {};
+        struct Dxil {
+            uint slot;
+            uint space;
+            uint count;
+            uint type : 16;     // for common resource, see EShaderVariableType
+            uint byte_size : 16;// padded size, size for root constant
+
+            bool IsBindless() const { return count == 0; }
+        };
         struct Memory {
             byte data[sizeof(Spirv)];
         };

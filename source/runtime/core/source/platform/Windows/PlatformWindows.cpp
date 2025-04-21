@@ -1,8 +1,7 @@
 #include "PlatformWindows.h"
 #include "math/Function.h"
 #include "misc/STL.h"
-#include <winbase.h>
-#include <windows.h>
+
 #include <processthreadsapi.h>
 #include <winnt.h>
 

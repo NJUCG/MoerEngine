@@ -38,7 +38,7 @@ namespace Moer::Render {
                 _output.mutation_id,
                 (EShaderType)_input.target_info.shader_type,
                 StaticArray<uint64, 2>{_output.compiled_hash1, _output.compiled_hash2},
-                _input.shader_name_hash,
+                uint64(_input.shader_name_hash),
                 _input.entry_point,
                 _input.relative_source_file_path,
                 key);

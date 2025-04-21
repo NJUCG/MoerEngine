@@ -154,7 +154,6 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
     float rnd = _rng.GetFloat();
 
     ctx.SelectNext(_rng, cur_light_info, rnd_light_idx, inv_pdf);
-
     inv_pdf *= inv_num_samples;
 
     float target_pdf = PolymorphicLight::GetVolumeWeight(
