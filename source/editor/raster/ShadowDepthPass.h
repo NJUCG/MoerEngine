@@ -134,13 +134,6 @@ public:
         // clang-format on
         const float3x3 world_to_light_view_rotate_only_inverse = Inverse(world_to_light_view_rotate_only);
 
-        float3 test_vec_1 = camera->GetPosition() + camera->GetFront();
-        float3 test_vec_2 = camera->GetPosition() + camera->GetFront() * 10.f + camera->GetRight() * 230.f +
-                            camera->GetUp() * 230.f;
-        float3 test_vec_3 = camera->GetPosition() + camera->GetFront() * 50.f - camera->GetRight() * 30.f -
-                            camera->GetUp() * 30.f;
-        float3 test_vec_4 = camera->GetPosition() + camera->GetFront() * 100.f;
-
         /**
          * ShadowMap折磨了快两天，终于改对了。这里记录一下所有变换方面的坑：
          * 
@@ -255,7 +248,7 @@ public:
             //   LightView2LightClip矩阵，会剔除摄像机视锥后方的一些Mesh。但是这些Mesh也需要产生阴影！
             // 这个Trick，可以便捷地解决这个问题。如果这个问题还会出现的话，只需要把下面的这个1.0f常数调大就可以了
             // 带来的缺点，就是z轴精度会降低（毕竟值域变大了）；但是我们有Inverse Depth，所以这个并不重要！
-            float z_delta = (max.z - min.z) * 0.5f;
+            float z_delta = (max.z - min.z) * 1.0f;
 
             float4x4 light_view_to_light_clip = MakeOrthoMatrixRH(
                 -0.5f * max_cross_distance,
@@ -286,6 +279,13 @@ public:
 
             /*
             // 下面这段代码，用于测试：light_view_to_light_clip变换之后，越远的点，z值越大；越近的点，z值越小
+
+            float3 test_vec_1 = camera->GetPosition() + camera->GetFront();
+            float3 test_vec_2 = camera->GetPosition() + camera->GetFront() * 10.f + camera->GetRight() * 230.f +
+                                camera->GetUp() * 230.f;
+            float3 test_vec_3 = camera->GetPosition() + camera->GetFront() * 50.f - camera->GetRight() * 30.f -
+                                camera->GetUp() * 30.f;
+            float3 test_vec_4 = camera->GetPosition() + camera->GetFront() * 100.f;
 
             LOG_DEBUG("Light View to Light Clip Matrix: {}", light_view_to_light_clip.ToString());
 
