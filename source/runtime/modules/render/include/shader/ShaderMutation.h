@@ -141,6 +141,14 @@ struct TShaderMutationSet {
         }
     }
 
+    template<typename... TValues>
+    static inline TShaderMutationSet<Types...> GetMutationSetFromValues(TValues&&... _values) {
+        static_assert(sizeof...(TValues) == sizeof...(Types), "mutation value count mismatch");
+        TShaderMutationSet<Types...> mutation_set(0);
+        (..., (std::get<GetTypeIndex<Types, TypeSeries>()>(mutation_set.mutation_values) = std::forward<TValues>(_values)));
+        return mutation_set;
+    }
+
     template<TShaderMutationBasicType TMutationToSet>
     void SetMutation(typename TMutationToSet::Type _value) {
 

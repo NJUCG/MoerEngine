@@ -130,7 +130,7 @@ namespace Moer::Render {
 
         D3D12RHIConfig config;
 
-        config.force_sync = false; //       _config_as_json.value("force_sync", false);
+        config.force_sync = true;//       _config_as_json.value("force_sync", false);
 
         return config;
     }

@@ -604,10 +604,14 @@ namespace std {
     };
 }// namespace std
 namespace Moer::Render {
+    template<typename T>
+    concept is_shader_mutation = requires(T _t) {
+        _t.SetCompileEnvironment(std::declval<ShaderCompilerEnvironment&>());
+    };
     class RENDER_API VertexShader {
     public:
-        template<typename TMacro>
-        VertexShader(std::string_view _path, TMacro _mutation = {}, std::string_view _entry_name = "main")
+        template<is_shader_mutation TMacro>
+        VertexShader(std::string_view _path, TMacro _mutation, std::string_view _entry_name = "main")
             : shader_path(_path), entry_name(_entry_name) {
             _mutation.SetCompileEnvironment(src_environment);
             mutation_id = _mutation.GetMutationID();
