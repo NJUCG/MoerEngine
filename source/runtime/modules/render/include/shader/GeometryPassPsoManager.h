@@ -13,10 +13,17 @@ namespace Moer::Render {
     class GeometryPassPipeline : public RasterPipeline {
     public:
         DEFINE_RASTER_PIPELINE_CLASS(GeometryPassPipeline);
-        DEFINE_SHADER_BUFFER(view_param_buffer);
         DEFINE_SHADER_BINDLESS_ARRAY(bdls);
         DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
-        DEFINE_SHADER_ARGS(view_param_buffer, bdls, param);
+        DEFINE_SHADER_ARGS(bdls, param);
+    };
+
+    class ShadowDepthPassPipeline : public RasterPipeline {
+    public:
+        DEFINE_RASTER_PIPELINE_CLASS(ShadowDepthPassPipeline);
+        DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+        DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
+        DEFINE_SHADER_ARGS(bdls, param);
     };
 
     struct GeometryPassPsoRecord {
@@ -36,12 +43,14 @@ namespace Moer::Render {
         GeometryPassPsoManager(const GeometryPassPsoManager&)            = delete;
         GeometryPassPsoManager& operator=(const GeometryPassPsoManager&) = delete;
 
-        // 获取单例并且自动初始化（非线程安全）
+        // 获取单例并且自动初始化（线程安全）
         static GeometryPassPsoManager& Get();
-        // 显式销毁单例
+        // 显式销毁单例（线程安全）
         static void ShutDown();
 
-        GeometryPassPipeline& GetPso(const VertexAttributesBitmask& bitmask);
+        GeometryPassPipeline& GetGeometryPso(const VertexAttributesBitmask& bitmask);
+
+        ShadowDepthPassPipeline& GetShadowPso(const VertexAttributesBitmask& bitmask);
 
     private:
         GeometryPassPsoManager();

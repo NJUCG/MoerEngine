@@ -62,6 +62,124 @@ float3 WorldPosFromDepth(float depth, float2 screen_uv,float4x4 inv_view_proj) {
     return pos;
 }
 
+float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
+    // Cascade 0
+    {
+        float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip_0, float4(world_pos, 1.0));
+        float3 shadow_ndc_pos = shadow_clip_pos.xyz / shadow_clip_pos.w;
+        float2 shadow_uv = float2(
+            shadow_ndc_pos.x * 0.5 + 0.5,
+            1.0 - (shadow_ndc_pos.y * 0.5 + 0.5)
+        );
+
+        if (
+            shadow_uv.x > 0.0
+            && shadow_uv.x < 1.0
+            && shadow_uv.y > 0.0
+            && shadow_uv.y < 1.0
+            && shadow_ndc_pos.z > 0.0
+            && shadow_ndc_pos.z < 1.0
+        ) {
+            float occluder_depth = TextureHandle(lighting_data.shadow_map_0).Sample2D<float>(shadow_uv).x;
+            float fragment_depth = shadow_ndc_pos.z;
+            // near<->1.0; far<->0.0
+
+            return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
+        }
+    }
+    if (lighting_data.shadow_csm_num_of_cascades <= 1) return 1.0;
+    // Cascade 1
+    {
+        float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip_1, float4(world_pos, 1.0));
+        float3 shadow_ndc_pos = shadow_clip_pos.xyz / shadow_clip_pos.w;
+        float2 shadow_uv = float2(
+            shadow_ndc_pos.x * 0.5 + 0.5,
+            1.0 - (shadow_ndc_pos.y * 0.5 + 0.5)
+        );
+
+        if (
+            shadow_uv.x > 0.0
+            && shadow_uv.x < 1.0
+            && shadow_uv.y > 0.0
+            && shadow_uv.y < 1.0
+            && shadow_ndc_pos.z > 0.0
+            && shadow_ndc_pos.z < 1.0
+        ) {
+            float occluder_depth = TextureHandle(lighting_data.shadow_map_1).Sample2D<float>(shadow_uv).x;
+            // float fragment_depth = 1.0f - shadow_ndc_pos.z; // Inverse Depth
+            float fragment_depth = shadow_ndc_pos.z;
+            // near<->1.0; far<->0.0
+
+            return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
+        }
+    }
+    if (lighting_data.shadow_csm_num_of_cascades <= 2) return 1.0;
+    // Cascade 2
+    {
+        float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip_2, float4(world_pos, 1.0));
+        float3 shadow_ndc_pos = shadow_clip_pos.xyz / shadow_clip_pos.w;
+        float2 shadow_uv = float2(
+            shadow_ndc_pos.x * 0.5 + 0.5,
+            1.0 - (shadow_ndc_pos.y * 0.5 + 0.5)
+        );
+
+        if (
+            shadow_uv.x > 0.0
+            && shadow_uv.x < 1.0
+            && shadow_uv.y > 0.0
+            && shadow_uv.y < 1.0
+            && shadow_ndc_pos.z > 0.0
+            && shadow_ndc_pos.z < 1.0
+        ) {
+            float occluder_depth = TextureHandle(lighting_data.shadow_map_2).Sample2D<float>(shadow_uv).x;
+            // float fragment_depth = 1.0f - shadow_ndc_pos.z; // Inverse Depth
+            float fragment_depth = shadow_ndc_pos.z;
+            // near<->1.0; far<->0.0
+
+            return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
+        }
+    }
+    if (lighting_data.shadow_csm_num_of_cascades <= 3) return 1.0;
+    // Cascade 3
+    {
+        float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip_3, float4(world_pos, 1.0));
+        float3 shadow_ndc_pos = shadow_clip_pos.xyz / shadow_clip_pos.w;
+        float2 shadow_uv = float2(
+            shadow_ndc_pos.x * 0.5 + 0.5,
+            1.0 - (shadow_ndc_pos.y * 0.5 + 0.5)
+        );
+
+        if (
+            shadow_uv.x > 0.0
+            && shadow_uv.x < 1.0
+            && shadow_uv.y > 0.0
+            && shadow_uv.y < 1.0
+            && shadow_ndc_pos.z > 0.0
+            && shadow_ndc_pos.z < 1.0
+        ) {
+            float occluder_depth = TextureHandle(lighting_data.shadow_map_3).Sample2D<float>(shadow_uv).x;
+            // float fragment_depth = 1.0f - shadow_ndc_pos.z; // Inverse Depth
+            float fragment_depth = shadow_ndc_pos.z;
+            // near<->1.0; far<->0.0
+
+            return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
+        }
+    }
+    if (lighting_data.shadow_csm_num_of_cascades <= 4) return 1.0;
+    // Default
+    return 1.0;
+}
+
+float calculate_shadow(Moer::LightingData lighting_data, float3 world_pos) {
+    if (lighting_data.shadow_map_mode == 0) {
+        return 1.0;
+    } else if (lighting_data.shadow_map_mode == 1) {
+        return calculate_csm(lighting_data, world_pos);
+    } else {
+        return 1.0;
+    }
+}
+
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
     uint gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
@@ -130,6 +248,9 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // - Lights
     ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
 
+    // - Shadow
+    float shadow = calculate_shadow(lighting_data, position);
+
     // - Shading
     for (uint i = 0; i < lighting_data.light_count; i++) {
         LightData light = light_buffer.Load<LightData>(i);
@@ -138,8 +259,12 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
         float3 brdf = pbrInfo.Evaluate(light_dir);
 
-        color += apply_light(light, position, normal, brdf);
+        color += apply_light(light, position, normal, brdf, shadow);
     }
+
+    // // 可视化ShadowMap
+    // float3 shadow_map_value = TextureHandle(lighting_data.shadow_map_0).Sample2D<float>(in_uv).xxx;
+    // color = 0.5 * color + 0.5 * shadow_map_value;
 
     return float4(color, 1.0);
 }

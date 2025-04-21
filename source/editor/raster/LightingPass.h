@@ -67,6 +67,23 @@ public:
         lighting_data->light_count     = context.scene.GetLights().size();
         lighting_data->camera_position = camera->GetPosition();
 
+        // Shadow Parameters
+        lighting_data->shadow_map_mode            = ui_config.shadow_map_mode;
+        lighting_data->shadow_sampling_mode       = ui_config.shadow_sampling_mode;
+        lighting_data->shadow_csm_num_of_cascades = ui_config.shadow_csm_num_of_cascades;
+        lighting_data->shadow_csm_sm_size         = ui_config.shadow_csm_sm_size;
+        // Shadow Map
+        lighting_data->shadow_map_0 = context.shadow_map_textures[0].handle;
+        lighting_data->shadow_map_1 = context.shadow_map_textures[1].handle;
+        lighting_data->shadow_map_2 = context.shadow_map_textures[2].handle;
+        lighting_data->shadow_map_3 = context.shadow_map_textures[3].handle;
+        // Shadow Transform
+        lighting_data->world_to_shadow_clip_0 = Transpose(context.world_to_shadow_clip[0]);
+        lighting_data->world_to_shadow_clip_1 = Transpose(context.world_to_shadow_clip[1]);
+        lighting_data->world_to_shadow_clip_2 = Transpose(context.world_to_shadow_clip[2]);
+        lighting_data->world_to_shadow_clip_3 = Transpose(context.world_to_shadow_clip[3]);
+        // 注：此处不一定使用所有4张CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
+
         context.cmd_list.CopyFrom(
             std::span<byte>((byte*)lighting_data, sizeof(LightingData)), lighting_data_buffer.buf->GetView()
         );

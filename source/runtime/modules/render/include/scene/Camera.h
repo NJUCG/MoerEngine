@@ -19,9 +19,6 @@ namespace Moer {
         };
 
     public:
-        const static Vector3f X;
-        const static Vector3f Y;
-        const static Vector3f Z;
         const static Vector3f UP_IN_WORLD;
 
         const static float k_pitch_min;
@@ -74,7 +71,26 @@ namespace Moer {
         Matrix4x4f GetViewProjectionMatrix() noexcept;
         Matrix4x4f GetViewProjectionMatrixInv() noexcept;
 
-        void     GetAABB(Vector3f&, Vector3f&);
+        /**
+         * 获取WorldSpace下，Camera视锥体的AABB
+         * 
+         * near_clip_ratio和far_clip_ratio的范围是[0, 1]，表示希望截取的视锥体的比例。
+         * 比如，如果想获取完整的视锥体对应的AABB，这两个参数可以分别为0和1；
+         * 如果想获取前50%视锥体对应的AABB，这两个参数可以分别为0和0.5；
+         */
+        void GetAABB(float near_clip_ratio, float far_clip_ratio, Vector3f& out_min, Vector3f& out_max);
+
+        /**
+         * 获取WorldSpace下，Camera视锥体的八个顶点
+         * 
+         * 八个顶点的返回顺序，分别为近平面的RightTop、LeftTop、RightBottom、LeftBottom、和远平面的对应四个顶点
+         * 
+         * near_clip_ratio和far_clip_ratio的范围是[0, 1]，表示希望截取的视锥体的比例。
+         * 比如，如果想获取完整的视锥体对应的AABB，这两个参数可以分别为0和1；
+         * 如果想获取前50%视锥体对应的AABB，这两个参数可以分别为0和0.5；
+         */
+        StaticArray<Vector3f, 8> GetFrustumCorners(float near_clip_ratio, float far_clip_ratio);
+
         void     GetPlanes(Vector4f _planes[6]);
         Vector4f GetFrustum() noexcept;
 

@@ -8,10 +8,7 @@
 namespace Moer {
 
     //camera space axis
-    const Vector3f Camera::X           = Vector3f(1.f, 0.f, 0.f);
-    const Vector3f Camera::Y           = Vector3f(0.f, 1.f, 0.f);
-    const Vector3f Camera::Z           = Vector3f(0.f, 0.f, 1.f);
-    const Vector3f Camera::UP_IN_WORLD = Camera::Y;
+    const Vector3f Camera::UP_IN_WORLD = Vector3f(0.f, 1.f, 0.f);
 
     // mouse control parameters
     const float Camera::k_pitch_min      = -89.5f;
@@ -217,24 +214,37 @@ namespace Moer {
         m_is_rotation_modified = true;
     }
 
-    void Camera::GetAABB(Vector3f& _out_min, Vector3f& _out_max) {
-        LOG_WARNING("Camera.GetAABB(..) is not tested yet");
+    void Camera::GetAABB(float near_clip_ratio, float far_clip_ratio, Vector3f& out_min, Vector3f& out_max) {
+        // 函数说明见Camera.h
 
-        Vector3f far_points[4];
-        Vector3f near_points[4];
+        auto corners = GetFrustumCorners(near_clip_ratio, far_clip_ratio);
+
+        out_min = corners[0];
+        out_max = corners[0];
+        for (int i = 0; i < 8; i++) {
+            out_min = Min(out_min, corners[i]);
+            out_max = Max(out_max, corners[i]);
+        }
+    }
+
+    StaticArray<Vector3f, 8> Camera::GetFrustumCorners(float near_clip_ratio, float far_clip_ratio) {
+        // 函数说明见Camera.h
+
+        float near_clip = m_near_clip + (m_far_clip - m_near_clip) * near_clip_ratio;
+        float far_clip  = m_near_clip + (m_far_clip - m_near_clip) * far_clip_ratio;
+
+        StaticArray<Vector3f, 8> corners;
+
         Vector3f cam_pos = this->GetPosition();
-        for (int i = 0; i < 4; i++) {
-            far_points[i]  = cam_pos + Z * m_far_clip + X * (i % 2 == 0 ? 1.f : -1.f) * m_far_clip * m_aspect_ratio + Y * (i / 2 == 0 ? 1.f : -1.f) * m_far_clip;
-            near_points[i] = cam_pos + Z * m_near_clip + X * (i % 2 == 0 ? 1.f : -1.f) * m_near_clip * m_aspect_ratio + Y * (i / 2 == 0 ? 1.f : -1.f) * m_near_clip;
+        for (int i = 0; i < 4; i++) {// 0: right-top, 1: left-top, 2: right-bottom, 3: left-bottom
+            corners[i] =
+                cam_pos + m_front * near_clip + m_right * (i % 2 == 0 ? 1.f : -1.f) * near_clip * m_aspect_ratio + m_up * (i / 2 == 0 ? 1.f : -1.f) * near_clip;
+
+            corners[i + 4] =
+                cam_pos + m_front * far_clip + m_right * (i % 2 == 0 ? 1.f : -1.f) * far_clip * m_aspect_ratio + m_up * (i / 2 == 0 ? 1.f : -1.f) * far_clip;
         }
-        _out_min = far_points[0];
-        _out_max = far_points[0];
-        for (int i = 0; i < 4; i++) {
-            _out_min = Min(_out_min, far_points[i]);
-            _out_min = Min(_out_min, near_points[i]);
-            _out_max = Max(_out_max, far_points[i]);
-            _out_max = Max(_out_max, near_points[i]);
-        }
+
+        return corners;// RVO
     }
 
     Vector4f Camera::GetFrustum() noexcept {
@@ -337,6 +347,7 @@ namespace Moer {
     }
 
     void Camera::UpdatePlanesAndFrustum() {
+        // FIXME: m_planes是怎么算的？没看懂，不知道是否有错
         auto vp     = GetProjectionMatrix();
         m_planes[0] = vp.r3 + vp.r0;//left
         m_planes[1] = vp.r3 - vp.r0;//right

@@ -6,6 +6,7 @@
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
+#include "RasterCompileTimeConstants.h"
 #include "RasterTextures.h"
 
 #include <config/ConfigManager.h>
@@ -34,6 +35,10 @@ struct RasterContext {
     uint gpu_geometry_instance_handle = 0;
     uint gpu_material_info_handle     = 0;
     uint gpu_light_info_handle        = 0;
+
+    // Shadow Data
+    StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
+    StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
 
     RasterContext(
         RenderDevice&    device,

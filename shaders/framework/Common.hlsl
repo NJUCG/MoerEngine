@@ -15,6 +15,9 @@
 #define MIP_LESS_SHARP 1 // for normal
 #define MIP_SHARP 2      // for albedo and roughness
 
+// Shadow
+#define SHADOW_BIAS 0.001
+
 // BRDF
 #define RF0_DIELECTRICS 0.04
 #define GTR_GAMMA 1.5

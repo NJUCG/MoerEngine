@@ -69,7 +69,7 @@ public:
 
 class RHIGraphicsCommandList : public RHICommandListBase {
 public:
-    virtual ~RHIGraphicsCommandList(){};
+    virtual ~RHIGraphicsCommandList() {};
     virtual void SetPipelineState(RHIGfxPso* _graphics_pso)    = 0;
     virtual void SetPipelineState(RHIComputePso* _compute_pso) = 0;
     // virtual void Open()                                                    = 0;
@@ -179,7 +179,7 @@ public:
 
 class RHIComputeCommandList : public RHICommandListBase {
 public:
-    virtual ~RHIComputeCommandList(){};
+    virtual ~RHIComputeCommandList() {};
     virtual void SetPipelineState(RHIComputePso* _compute_pso)                                       = 0;
     virtual void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z) = 0;
     virtual void DispatchIndirect(RHIBuffer* _buffer, uint64_t _offset)                              = 0;
@@ -195,7 +195,7 @@ public:
 
 class RHIRayTracingCommandList : public RHICommandListBase {
 public:
-    virtual ~RHIRayTracingCommandList(){};
+    virtual ~RHIRayTracingCommandList() {};
     virtual void SetPipelineState(RHIRTPso* _raytracing_pso)                  = 0;
     virtual void TraceRay(uint32_t _width, uint32_t _height, uint32_t _depth) = 0;
     virtual void TraceRayIndirect()                                           = 0;
@@ -211,7 +211,7 @@ public:
 
 class RHICopyCommandList : public RHICommandListBase {
 public:
-    virtual ~RHICopyCommandList(){};
+    virtual ~RHICopyCommandList() {};
     virtual void CopyBuffer(const RHICopyBufferInfo& _copy_info, RHIBuffer* _src, RHIBuffer* _dst)                              = 0;
     virtual void CopyTexture(const RHICopyTextureInfo& _copy_info, RHITexture* _src, RHITexture* _dst)                          = 0;
     virtual void CopyBufferToTexture(const RHICopyBufferToTextureInfo& _info, RHIBuffer* _src_buffer, RHITexture* _dst_texture) = 0;
@@ -229,7 +229,7 @@ struct RHISubmitInfo;
 
 class RHICommandQueue {
 public:
-    virtual ~RHICommandQueue(){};
+    virtual ~RHICommandQueue() {};
     virtual void SubmitCommands(
         uint32_t                  _num_command_lists,
         const RHICommandListBase* _command_lists,
@@ -842,12 +842,12 @@ namespace Moer::Render {
             TCachedArgArray args_cache;
         };
 
-        struct RENDER_API DrawGeometryPassDispatcher {
-            DrawGeometryPassDispatcher(CommandList& _cmd_list);
-            DrawGeometryPassDispatcher(CommandList& _cmd_list, ArrayArguments&& _args);
+        struct RENDER_API DrawDispatcherWithoutPso {
+            DrawDispatcherWithoutPso(CommandList& _cmd_list);
+            DrawDispatcherWithoutPso(CommandList& _cmd_list, ArrayArguments&& _args);
 
             template<typename... TRenderTarget>
-            void Draw(
+            void DrawGeometryPass(
                 std::string_view                                             _name,
                 Rect2D                                                       _rect,
                 UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
@@ -860,6 +860,21 @@ namespace Moer::Render {
                     _depth,
                     _rect);
                 cmd_list.SetRenderGeometryPassCmds(std::move(args), std::move(pass_info), std::move(_mesh_data_array_map), _name);
+            };
+
+            template<typename... TRenderTarget>
+            void DrawShadowDepthPass(
+                std::string_view                                             _name,
+                Rect2D                                                       _rect,
+                UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
+                DepthAttachment                                              _depth
+                //
+            ) {
+                RenderPassInfo pass_info(
+                    {},
+                    _depth,
+                    _rect);
+                cmd_list.SetRenderShadowDepthPassCmds(std::move(args), std::move(pass_info), std::move(_mesh_data_array_map), _name);
             };
 
             CommandList&   cmd_list;
@@ -928,12 +943,12 @@ namespace Moer::Render {
 
         // call this func like this: cmd_list.GfxGeometryPass<PSO_Definition>(args...).Draw(...);
         template<typename TGfxPso, typename... TArgs>
-        DrawGeometryPassDispatcher GfxGeometryPass(TArgs&&... _args) {
+        DrawDispatcherWithoutPso GfxWithoutPso(TArgs&&... _args) {
             if constexpr (sizeof...(TArgs) > 0) {
                 ArrayArguments&& args = TGfxPso::SetArgs(_args...);
-                return DrawGeometryPassDispatcher(*this, std::move(args));
+                return DrawDispatcherWithoutPso(*this, std::move(args));
             }
-            return DrawGeometryPassDispatcher(*this);
+            return DrawDispatcherWithoutPso(*this);
         }
 
         template<typename TComputePso, typename... TArgs>
@@ -1101,6 +1116,12 @@ namespace Moer::Render {
             UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
             std::string_view                                             _name);
 
+        RENDER_API void SetRenderShadowDepthPassCmds(
+            ArrayArguments&&                                             _args,
+            RenderPassInfo&&                                             _info,
+            UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
+            std::string_view                                             _name);
+
         RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt, EQueueType _src_queue, EQueueType _dst_queue);
         RENDER_API void InnerBarrier(ReadBuffer _buffer, EPassType _pass) {
             InnerReadBuffer(_buffer.buffer, _buffer.state, _pass);
@@ -1145,7 +1166,7 @@ namespace Moer::Render {
     };
     class RENDER_API CommandQueue {
     public:
-        CommandQueue(){};
+        CommandQueue() {};
         CommandQueue(EQueueType _type, RenderDevice& _device);
         void                Test();
         virtual void        Wait(WaitEvent _event)                                = 0;
@@ -1157,7 +1178,7 @@ namespace Moer::Render {
 
     class RENDER_API CopyQueue {
     public:
-        CopyQueue(){};
+        CopyQueue() {};
         ~CopyQueue()                                      = default;
         virtual IOWaitEvt Execute(IOSubmission&& _submit) = 0;
         virtual IOWaitEvt Execute(CmdSubmit&& _submit)    = 0;

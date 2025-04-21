@@ -776,6 +776,7 @@ namespace Moer::Render {
         ArrayArguments                                             args;
         RenderPassInfo                                             render_pass_info;
         UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>> mesh_data_array_map;
+        bool                                                       is_shadow_depth_pass;
         // Derived parameters
         GraphEventRef                                          evaluate_mesh_task = nullptr;
         UnorderedMap<Buffer*, BufferRange>                     vertex_buffers;
@@ -788,17 +789,23 @@ namespace Moer::Render {
             ArrayArguments&&                                             _args,
             RenderPassInfo&&                                             _info,
             UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
-            std::string_view                                             _name
+            std::string_view                                             _name,
+            bool                                                         _is_shadow_depth_pass
         ) : Command(EType::SetGeometryPassDrawState, _name),
             args(std::move(_args)),
             render_pass_info(std::move(_info)),
-            mesh_data_array_map(std::move(_mesh_data_array_map))
+            mesh_data_array_map(std::move(_mesh_data_array_map)),
+            is_shadow_depth_pass(_is_shadow_depth_pass)
         {
             evaluate_mesh_task = LambdaTask::Create([this]() {
                 // TODO: 检查一下是否所有MeshData可以直接全部塞进一个vertex buffer和一个index buffer里
                 for (const auto& [bitmask, mesh_data_array] : mesh_data_array_map) {
-
-                    pipeline_map.emplace(bitmask, GeometryPassPsoManager::Get().GetPso(bitmask).handle);
+                    
+                    if (is_shadow_depth_pass) {
+                        pipeline_map.emplace(bitmask, GeometryPassPsoManager::Get().GetShadowPso(bitmask).handle);
+                    } else {
+                        pipeline_map.emplace(bitmask, GeometryPassPsoManager::Get().GetGeometryPso(bitmask).handle);
+                    }
 
                     for (const auto& mesh : mesh_data_array) {
                         for (const auto& vtx_view : mesh.vtx_views) {

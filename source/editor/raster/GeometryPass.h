@@ -17,15 +17,10 @@ namespace Moer::Render::Raster {
 
 class GeometryPass {
 public:
-    GeometryPass(RasterContext& context) { CreateViewData(context); }
+    GeometryPass(RasterContext& context) {}
 
-    void CreateViewData(RasterContext& context) {
-        view_param_buffer = context.device.CreateBuffer<byte>(
-            "Raster::ViewParamBuffer", sizeof(ViewParam), EBufferUsageFlags::CONSTANT_BUFFER
-        );
-    }
-
-    void Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
+    static UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>
+    GetMeshDrawDatasMap(RasterContext& context) {
 
         // 将每种不同顶点类型的Mesh分发到不同的MeshDrawDatas中。在Draw时，调用不同的PSO处理对应的MeshDrawDatas！
         // 所以，下面这段scene.ForEach的代码，也可以理解成将 “按Entity分组的Mesh” 转换为 “按顶点类型分组的Mesh的DrawDatas”
@@ -103,32 +98,22 @@ public:
             }
         });
 
-        // 注意生命周期！
-        ViewParam* view_param = MoerNew(ViewParam);
+        return mesh_draw_datas_map;
+    }
 
-        view_param->clip2view  = Transpose(camera->GetProjectionMatrixInv());
-        view_param->view2clip  = Transpose(camera->GetProjectionMatrix());
-        view_param->view2world = Transpose(camera->GetViewMatrixInv());
-        view_param->world2view = Transpose(camera->GetViewMatrix());
-        view_param->world2clip = Transpose(camera->GetViewProjectionMatrix());
-        view_param->clip2world = Transpose(camera->GetViewProjectionMatrixInv());
+    void Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
 
-        context.cmd_list.CopyFrom(
-            std::span<byte>((byte*)view_param, sizeof(ViewParam)), view_param_buffer->GetView()
-        );
-        context.cmd_list.AddCallback([view_param]() { MoerDelete(view_param); });
+        auto mesh_draw_datas_map = GetMeshDrawDatasMap(context);
+        if (mesh_draw_datas_map.empty()) { return; }
 
         GeometryPassBindlessParam param;
-        param.color                  = float4(0., 0., 0., 0.);
-        param.texture                = 0;
-        param.buffer                 = 0;
+        param.world2clip             = Transpose(camera->GetViewProjectionMatrix());
         param.instance_data          = context.gpu_instance_info_handle;
         param.geometry_data          = context.gpu_geometry_info_handle;
         param.geometry_instance_data = context.gpu_geometry_instance_handle;
-        param.camera_view_proj       = Transpose(camera->GetViewProjectionMatrix());
 
-        context.cmd_list.GfxGeometryPass<GeometryPassPipeline>(view_param_buffer, context.bdls, param)
-            .Draw(
+        context.cmd_list.GfxWithoutPso<GeometryPassPipeline>(context.bdls, param)
+            .DrawGeometryPass(
                 "Geometry Pass (MultiPasses)",
                 Rect2D(0, 0, context.resolution.x, context.resolution.y),
                 std::move(mesh_draw_datas_map),
@@ -141,9 +126,6 @@ public:
             );
         // 注：此处ColorAttachment的顺序需要和 GeometryPassPsoManager.cpp 中的 RHIColorAttachmentInfo::Preset 顺序一致
     }
-
-public:
-    BufferRef view_param_buffer; // no bindless
 };
 
 } // namespace Moer::Render::Raster

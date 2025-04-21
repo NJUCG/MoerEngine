@@ -17,6 +17,7 @@
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
+#include "ShadowDepthPass.h"
 #include "SsrPass.h"
 #include "common/UiCombinePass.h"
 #include "ui/raster_ui/RasterUI.h"
@@ -62,11 +63,12 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
     // MARK: Passes
 
-    GeometryPass geometry_pass(raster_context);
-    LightingPass lighting_pass(raster_context);
-    AoPass       ao_pass(raster_context);
-    SsrPass      ssr_pass(raster_context);
-    AaPass       aa_pass(raster_context);
+    ShadowDepthPass shadow_depth_pass(raster_context);
+    GeometryPass    geometry_pass(raster_context);
+    LightingPass    lighting_pass(raster_context);
+    AoPass          ao_pass(raster_context);
+    SsrPass         ssr_pass(raster_context);
+    AaPass          aa_pass(raster_context);
 
     UiCombinePass ui_combine_pass(manager);
 
@@ -139,6 +141,9 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
             // use scene_color resolution instead of window resolution
             camera->Tick(editor_ui->GetSceneColorAspectRatio());
+
+            // Shadow Depth Pass
+            shadow_depth_pass.Process(raster_context, ui_config, camera);
 
             // Geometry Pass
             geometry_pass.Process(raster_context, ui_config, camera);

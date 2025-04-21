@@ -166,6 +166,15 @@ namespace Moer {
             identity[3][3] = (T)1;
             return identity;
         }
+
+        std::string ToString() const noexcept {
+            std::string str = "Matrix4x4f {\n";
+            for (size_t i = 0; i < 4; i++) {
+                str += "  " + re[i].ToString() + "\n";
+            }
+            str += "}";
+            return str;
+        }
     };
 
     // clang-format off

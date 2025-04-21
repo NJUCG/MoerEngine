@@ -361,4 +361,28 @@ namespace Moer {
 
         return perspective;
     }
+
+    // Reference: glm/ext/matrix_clip_space.inl: othroRH_ZO
+    Matrix4x4f MakeOrthoMatrixRH(float left, float right, float bottom, float top, float near_clip, float far_clip) noexcept {
+        Matrix4x4f ortho;
+        ortho[0][0] = 2.0f / (right - left);
+        ortho[1][1] = 2.0f / (top - bottom);
+        ortho[2][2] = -1.0f / (far_clip - near_clip);
+        ortho[0][3] = -(right + left) / (right - left);
+        ortho[1][3] = -(top + bottom) / (top - bottom);
+        ortho[2][3] = -near_clip / (far_clip - near_clip);
+        ortho[3][3] = 1.0f;
+        return ortho;
+    }
+    Matrix4x4d MakeOrthoMatrixRH(double left, double right, double bottom, double top, double near_clip, double far_clip) noexcept {
+        Matrix4x4d ortho;
+        ortho[0][0] = 2.0 / (right - left);
+        ortho[1][1] = 2.0 / (top - bottom);
+        ortho[2][2] = -1.0 / (far_clip - near_clip);
+        ortho[0][3] = -(right + left) / (right - left);
+        ortho[1][3] = -(top + bottom) / (top - bottom);
+        ortho[2][3] = -near_clip / (far_clip - near_clip);
+        ortho[3][3] = 1.0;
+        return ortho;
+    }
 }// namespace Moer
