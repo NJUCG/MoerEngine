@@ -179,14 +179,14 @@ namespace Moer {
     template<NumericType T, size_t ROW, size_t COL> inline Matrix<T, 4, 4> FillDiagonal4x4(const Matrix<T, ROW, COL>& m, T diagonal_element) noexcept;
 
     // make the view matrix in right-handed system
-    Matrix4x4f MakeLookatViewMatrixRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
-    Matrix4x4d MakeLookatViewMatrixRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
+    CORE_API Matrix4x4f MakeLookatViewMatrixRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
+    CORE_API Matrix4x4d MakeLookatViewMatrixRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
     // make the camera to world matrix in right-handed system
-    Matrix4x4f MakeLookatToWorldMatrixRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
-    Matrix4x4d MakeLookatToWorldMatrixRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
+    CORE_API Matrix4x4f MakeLookatToWorldMatrixRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
+    CORE_API Matrix4x4d MakeLookatToWorldMatrixRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
     // return world to camera view matrix and camera to world matrix in right-handed system
-    std::pair<Matrix4x4f, Matrix4x4f> MakeLookatViewMatrixWithInverseRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
-    std::pair<Matrix4x4d, Matrix4x4d> MakeLookatViewMatrixWithInverseRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
+    CORE_API std::pair<Matrix4x4f, Matrix4x4f> MakeLookatViewMatrixWithInverseRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
+    CORE_API std::pair<Matrix4x4d, Matrix4x4d> MakeLookatViewMatrixWithInverseRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
 
     void QDUDecomposition(const Matrix3x3f& m, Matrix3x3f& Q, Vector3f& D, Vector3f& U) noexcept;
     void QDUDecomposition(const Matrix3x3d& m, Matrix3x3d& Q, Vector3d& D, Vector3d& U) noexcept;
@@ -197,6 +197,12 @@ namespace Moer {
      */ 
     CORE_API Matrix4x4f MakePerspectiveMatrixRH(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept;
     CORE_API Matrix4x4d MakePerspectiveMatrixRH(double fov_y, double aspect_ratio, double near_clip, double far_clip) noexcept;
+
+    /**
+     * make the orthographic matrix in right-handed system
+     */ 
+    CORE_API Matrix4x4f MakeOrthoMatrixRH(float left, float right, float bottom, float top, float near_clip, float far_clip) noexcept;
+    CORE_API Matrix4x4d MakeOrthoMatrixRH(double left, double right, double bottom, double top, double near_clip, double far_clip) noexcept;
 
     template<NumericType T>
     inline Matrix<T, 4, 4> MakeTranslation(T x, T y, T z) noexcept {

@@ -19,37 +19,47 @@ struct BufferWithHandle {
     uint      handle;
 };
 
+// 如果texture的名字不是编译期决定的，则需要找一个地方存名字。否则string_view会出现悬垂指针
+struct DepthBufferWithHandleAndName {
+    DepthBufferRef tex;
+    uint           handle;
+    std::string    name;
+};
+
 /**
-     * 下面使用宏来维护Raster中所需要的Textures，避免代码过多导致的维护困难（或许，如果某天发现这么写还是难以使用，可以改回去）
-     * 
-     * 例外：
-     *   - depth手动维护，原因是需要两个不同的Sampler (nearest, linear)
-     */
+ * 下面使用宏来维护Raster中所需要的Textures，避免代码过多导致的维护困难（或许，如果某天发现这么写还是难以使用，可以改回去）
+ * 
+ * 例外：
+ *   - depth手动维护，原因是需要两个不同的Sampler (nearest, linear)
+ */
 
-#define ETUF_SAMPLED      ETextureUsageFlags::SAMPLED
-#define ETUF_COLOR_ATTACH ETextureUsageFlags::COLOR_ATTACHMENT
-#define ETUF_D_S_ATTACH   ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+#define E_SAMPLED      ETextureUsageFlags::SAMPLED
+#define E_COLOR_ATTACH ETextureUsageFlags::COLOR_ATTACHMENT
+#define E_D_S_ATTACH   ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
 
-#define RASTER_TEXTURES_TABLE                                                                    \
-    X(TextureWithHandle, vbuffer, PF_R32_UINT, ETUF_SAMPLED | ETUF_COLOR_ATTACH)                 \
-    X(TextureWithHandle, normal, PF_A2R10G10B10_UNORM_PACK32, ETUF_SAMPLED | ETUF_COLOR_ATTACH)  \
-    X(TextureWithHandle, tangent, PF_A2R10G10B10_UNORM_PACK32, ETUF_SAMPLED | ETUF_COLOR_ATTACH) \
-    X(TextureWithHandle, uv, PF_R32G32_SFLOAT, ETUF_SAMPLED | ETUF_COLOR_ATTACH)                 \
-    X(TextureWithHandle, position, PF_R32G32B32A32_SFLOAT, ETUF_SAMPLED | ETUF_COLOR_ATTACH)     \
-    X(TextureWithHandle, lighting_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)   \
-    X(TextureWithHandle, ao_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)         \
-    X(TextureWithHandle, ssr_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)        \
-    X(TextureWithHandle, aa_texture_1, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)      \
-    X(TextureWithHandle, aa_texture_2, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)      \
-    X(TextureWithHandle, aa_texture_3, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)      \
-    X(TextureWithHandle, aa_texture_4, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)      \
-    X(TextureWithHandle, aa_output, PF_R8G8B8A8_UNORM, ETUF_SAMPLED | ETUF_COLOR_ATTACH)         \
-    X(TextureWithHandle, ui_frame_buffer, PF_R8G8B8A8_SRGB, ETUF_SAMPLED | ETUF_COLOR_ATTACH)    \
-    X(TextureWithHandle, output, PF_R8G8B8A8_SRGB, ETUF_COLOR_ATTACH)
+#define SCREEN_SIZE           Extent2D(size.x, size.y)
+#define CUSTOMIZED_SIZE(x, y) Extent2D(x, y)
+
+#define RASTER_TEXTURES_TABLE                                                                           \
+    X(TextureWithHandle, vbuffer, PF_R32_UINT, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)                 \
+    X(TextureWithHandle, normal, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)  \
+    X(TextureWithHandle, tangent, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE) \
+    X(TextureWithHandle, uv, PF_R32G32_SFLOAT, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)                 \
+    X(TextureWithHandle, position, PF_R32G32B32A32_SFLOAT, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)     \
+    X(TextureWithHandle, lighting_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)   \
+    X(TextureWithHandle, ao_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)         \
+    X(TextureWithHandle, ssr_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)        \
+    X(TextureWithHandle, aa_texture_1, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)      \
+    X(TextureWithHandle, aa_texture_2, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)      \
+    X(TextureWithHandle, aa_texture_3, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)      \
+    X(TextureWithHandle, aa_texture_4, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)      \
+    X(TextureWithHandle, aa_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)         \
+    X(TextureWithHandle, ui_frame_buffer, PF_R8G8B8A8_SRGB, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)    \
+    X(TextureWithHandle, output, PF_R8G8B8A8_SRGB, E_COLOR_ATTACH, SCREEN_SIZE)
 
 struct RasterTextures {
     // 批量生成
-#define X(TYPE, NAME, PF, USAGE) TYPE NAME;
+#define X(TYPE, NAME, PF, USAGE, SIZE) TYPE NAME;
     RASTER_TEXTURES_TABLE
 #undef X
     // 手动维护: depth
@@ -58,7 +68,8 @@ struct RasterTextures {
 
     void CreateFrameBuffers(RenderDevice& device, uint2 size) {
         // 批量生成
-#define X(TYPE, NAME, PF, USAGE) NAME.tex = device.CreateTexture(#NAME, Extent2D(size.x, size.y), PF, USAGE);
+#define X(TYPE, NAME, PF, USAGE, SIZE) \
+    NAME.tex = device.CreateTexture(#NAME, Extent2D(size.x, size.y), PF, USAGE);
         RASTER_TEXTURES_TABLE
 #undef X
         // 手动维护: depth
@@ -77,7 +88,8 @@ struct RasterTextures {
         Sampler linear_sampler(SF_LINEAR, SAM_REPEAT);
 
         // 批量生成
-#define X(TYPE, NAME, PF, USAGE) NAME.handle = bindless_array->AllocateTexture(NAME.tex, linear_sampler);
+#define X(TYPE, NAME, PF, USAGE, SIZE) \
+    NAME.handle = bindless_array->AllocateTexture(NAME.tex, linear_sampler);
         RASTER_TEXTURES_TABLE
 #undef X
         // 手动维护: depth
@@ -94,7 +106,7 @@ struct RasterTextures {
 
     void FreeFrameBuffers(BindlessArrayRef& bindless_array) {
         // 批量生成
-#define X(TYPE, NAME, PF, USAGE) bindless_array->FreeTexture(NAME.handle);
+#define X(TYPE, NAME, PF, USAGE, SIZE) bindless_array->FreeTexture(NAME.handle);
         RASTER_TEXTURES_TABLE
 #undef X
         // 手动维护: depth
@@ -107,7 +119,7 @@ struct RasterTextures {
         // 手动维护: depth (这里把depth push在前面，这样GUI里就会显示在最前面)
         views.emplace_back(depth_linear_sampler.tex->GetView());
         // 批量生成
-#define X(TYPE, NAME, PF, USAGE)                                     \
+#define X(TYPE, NAME, PF, USAGE, SIZE)                               \
     assert(NAME.tex != nullptr && "There is an empty FrameBuffer!"); \
     views.emplace_back(NAME.tex->GetView());
         RASTER_TEXTURES_TABLE
@@ -129,8 +141,11 @@ struct RasterTextures {
 
 #undef RASTER_TEXTURES_TABLE
 
-#undef ETUF_SAMPLED
-#undef ETUF_COLOR_ATTACH
-#undef ETUF_D_S_ATTACH
+#undef SCREEN_SIZE
+#undef CUSTOMIZED_SIZE
+
+#undef E_SAMPLED
+#undef E_COLOR_ATTACH
+#undef E_D_S_ATTACH
 
 } // namespace Moer::Render::Raster

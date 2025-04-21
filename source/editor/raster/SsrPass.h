@@ -20,19 +20,19 @@ public:
 };
 
 /**
-     * MARK: SSR Pass
-     * 
-     * GUI Help:
-     *   You can set `Roughness Threshold` and `Metallic Threshold` to control which material will be reflected.
-     *   If you want all materials to be reflected, set `Roughness Threshold` to 0.0 and `Metallic Threshold` to 1.0.
-     *   `Force Ground Enable SSR` will force the ground to be reflected, which is useful for testing.
-     *   TODO: move the above text to gui
-     * 
-     * TODO: use HiZ buffer to accelerate SSR (now, a simple heuristic and binary search is used for SSR)
-     * TODO: glossy ssr
-     * TODO: performance optimization
-     * TODO: fix some artifacts (jitter)
-     */
+ * MARK: SSR Pass
+ * 
+ * GUI Help:
+ *   You can set `Roughness Threshold` and `Metallic Threshold` to control which material will be reflected.
+ *   If you want all materials to be reflected, set `Roughness Threshold` to 0.0 and `Metallic Threshold` to 1.0.
+ *   `Force Ground Enable SSR` will force the ground to be reflected, which is useful for testing.
+ *   TODO: move the above text to gui
+ * 
+ * TODO: use HiZ buffer to accelerate SSR (now, a simple heuristic and binary search is used for SSR)
+ * TODO: glossy ssr
+ * TODO: performance optimization
+ * TODO: fix some artifacts (jitter)
+ */
 class SsrPass {
 public:
     SsrPass(RasterContext& context) {

@@ -256,6 +256,10 @@ namespace Moer {
         return m_impl->GetCameras();
     }
 
+    Entity Scene::GetMainLight() const noexcept {
+        return GetLights()[0];
+    }
+
     Entity Scene::GetMainCamera() const noexcept {
         return GetCameras()[0];
     }

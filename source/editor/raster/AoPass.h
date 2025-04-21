@@ -18,10 +18,10 @@ public:
 };
 
 /**
-     * MARK: AO Pass
-     * 
-     * TODO: SSDO Support
-     */
+ * MARK: AO Pass
+ * 
+ * TODO: SSDO Support
+ */
 class AoPass {
 public:
     AoPass(RasterContext& context) {

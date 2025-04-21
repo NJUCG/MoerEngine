@@ -334,6 +334,7 @@ namespace Moer {
         std::span<const Entity> GetEntities() const noexcept;
         std::span<const Entity> GetLights() const noexcept;
         std::span<const Entity> GetCameras() const noexcept;
+        Entity                  GetMainLight() const noexcept;
         Entity                  GetMainCamera() const noexcept;
         bool                    IsEntitiesEmpty() const noexcept;
         bool                    IsLightsEmpty() const noexcept;

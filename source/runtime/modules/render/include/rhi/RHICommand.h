@@ -1272,6 +1272,12 @@ namespace Moer::Render {
             UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
             std::string_view                                             _name);
 
+        RENDER_API void SetRenderShadowDepthPassCmds(
+            ArrayArguments&&                                             _args,
+            RenderPassInfo&&                                             _info,
+            UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
+            std::string_view                                             _name);
+
         RENDER_API void BeginBarriers(uint _read_tex_cnt, uint _write_tex_cnt, uint _read_buf_cnt, uint _write_buf_cnt, EQueueType _src_queue, EQueueType _dst_queue);
         RENDER_API void InnerBarrier(ReadBuffer _buffer, EPassType _pass) {
             InnerReadBuffer(_buffer.buffer, _buffer.state, _pass);
