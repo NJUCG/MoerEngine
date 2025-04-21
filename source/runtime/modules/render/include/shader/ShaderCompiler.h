@@ -25,17 +25,6 @@ public:
     virtual bool IsSupportTarget(const ShaderTargetInfo&) { return false; }
 };
 
-class ShaderCompileJob {
-public:
-    ~ShaderCompileJob();
-    void DispatchAndExecute(const std::function<void(ShaderCompilerOutput*&)>& post_process_func);
-    void Finalize(const ShaderCompileJobInput& input);
-    void ExportOutput(Moer::Array<ShaderCompilerOutput*>& _outputs);
-    class Impl;
-
-private:
-    Impl* impl;
-};
 class RENDER_API ShaderCompiler {
 
 public:

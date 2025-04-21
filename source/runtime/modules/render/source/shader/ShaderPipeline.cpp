@@ -1,87 +1,44 @@
-#include "shader/ShaderPipeline.h"
-#include "../rhi/vulkan/VulkanDevice.h"
+#include "resources/GpuScene.h"
 #include "rhi/RHIResource.h"
-#include "../rhi/vulkan/VulkanPipelineResourceCache.h"
+#include "shader/ShaderCommon.h"
+#include "shader/ShaderResourceManager.h"
+#include <shader/ShaderPipeline.h>
 
 namespace Moer::Render {
-    void ShaderPipeline::SetTexture(uint32_t _index, TextureRef _texture) {
-        SetTexture(_index, std::move(_texture->GetView()));
+    void VertexFactory::SetCompileEnvironment(ShaderCompilerEnvironment& _env) {
+        if (VertexAttributesTool::HasAttribute(mask, EVertexAttributes::VA_TANGENT)) {
+            _env.SetDefine("HAS_TANGENT", 1);
+        }
+        if (VertexAttributesTool::HasAttribute(mask, EVertexAttributes::VA_NORMAL)) {
+            _env.SetDefine("HAS_NORMAL", 1);
+        }
+        if (VertexAttributesTool::HasAttribute(mask, EVertexAttributes::VA_TEXCOORD0)) {
+            _env.SetDefine("HAS_TEXCOORD0", 1);
+        }
     }
 
-    void ShaderPipeline::SetBuffer(uint32_t _index, BufferRef _buffer) {
-
-        SetBuffer(_index, std::move(_buffer->GetView()));
+    const VertexStream& VertexFactory::GetVertexStream() const {
+        if (stream.bindings.empty() && mask != 0) {
+            // Initialize the vertex stream
+            const auto& attrs = VertexAttributesTool::GetArrayFromBitmask(mask);
+            for (const auto& attr : attrs) {
+                const auto& pixel_format = VertexAttributesTool::GetPixelFormat(attr);
+                stream.EmplacePerVertex({Moer::Render::VertexElement(pixel_format)});
+            }
+            return stream;
+        }
+        return stream;
     }
 
-    //Important! Below method should never be used due to bad design 
-    //Now we bind param reversely throw pipeline reflection implemented by backends like vulkan dx12
-    void ShaderPipeline::SetBuffer(uint32_t _index, BufferView _view) {
-        // uint64 binding_info = handle.binding_infos[_index];
-        // std::visit([&](auto&& _arg) {
-        //     using T = std::decay_t<decltype(_arg)>;
-        //     if constexpr (std::is_same_v<T, VkPipelineHandle>) {
-        //         VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
-        //         auto*                resource_cache = pso.GetPipelineResourceCache();
-        //         auto [set, binding, stage_flags]    = DecodeReflectInfo(binding_info);
-
-        //         resource_cache->SetBuffer(set, binding, std::move(_view));
-        //     }
-        // },
-        //            handle.handle);
+    VertexFactory::VertexFactory(VertexAttributesBitmask _flags)
+        : mask(_flags) {
     }
 
-    void ShaderPipeline::SetTexture(uint32_t _index, TextureView _texture) {
-        // uint64 binding_info = handle.binding_infos[_index];
-        // std::visit([&](auto&& _arg) {
-        //     using T = std::decay_t<decltype(_arg)>;
-        //     if constexpr (std::is_same_v<T, VkPipelineHandle>) {
-        //         VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
-        //         auto*                resource_cache = pso.GetPipelineResourceCache();
-        //         auto [set, binding, stage_flags]    = DecodeReflectInfo(binding_info);
+    Shader& VertexShader::GetShader(Moer::Render::VertexFactory* _factory) {
 
-        //         resource_cache->SetTexture(set, binding, std::move(_texture));
-        //     }
-        // },
-        //            handle.handle);
+        if (auto iter = shader_map.find(*_factory); iter != shader_map.end()) {
+            return iter->second;
+        }
+        return shader_map.emplace(*_factory, ShaderManager::Get().CompileVertexShader(shader_path, _factory, entry_name, src_environment, mutation_id)).first->second;
     }
-
-    void ShaderPipeline::SetSampler(uint32_t _index, Sampler _sampler) {
-        // uint64 binding_info = handle.binding_infos[_index];
-        // std::visit([&](auto&& _arg) {
-        //     using T = std::decay_t<decltype(_arg)>;
-        //     if constexpr (std::is_same_v<T, VkPipelineHandle>) {
-        //         VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
-        //         auto*                resource_cache = pso.GetPipelineResourceCache();
-        //         auto [set, binding, stage_flags]    = DecodeReflectInfo(binding_info);
-
-        //         resource_cache->SetSampler(set, binding, std::move(_sampler));
-        //     }
-        // },
-        //            handle.handle);
-    }
-
-    void ShaderPipeline::SetConstantInner(uint _index, std::span<uint> _data) {
-        // uint64 binding_info = handle.binding_infos[_index];
-        // std::visit([&](auto&& _arg) {
-        //     using T = std::decay_t<decltype(_arg)>;
-        //     if constexpr (std::is_same_v<T, VkPipelineHandle>) {
-        //         VulkanPipelineState& pso            = *reinterpret_cast<VulkanPipelineState*>(_arg.handle);
-        //         auto*                resource_cache = pso.GetPipelineResourceCache();
-        //         auto [offset, size, stage_flags]    = DecodeReflectPushConstant(binding_info);
-
-        //         resource_cache->PushConstant(stage_flags, _data);
-        //     }
-        // },
-        //            handle.handle);
-    }
-
-    void ShaderPipeline::SetBufferHash(uint64 _hash, BufferView _buffer) {
-        uint idx = handle.hash_2_info_index[_hash];
-        SetBuffer(idx, std::move(_buffer));
-    }
-
-    void ShaderPipeline::SetTextureHash(uint64 _hash, TextureView _texture) {
-        uint idx = handle.hash_2_info_index[_hash];
-        SetTexture(idx, std::move(_texture));
-    }
-};// namespace Moer::Render
+}// namespace Moer::Render

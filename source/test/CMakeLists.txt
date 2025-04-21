@@ -128,22 +128,7 @@ target_link_libraries(VertexFactoryTest
         PRIVATE glfw
         PRIVATE MoerResource
 )
-
-file(GLOB_RECURSE RT_TEST_CPPS Raytracing/*.cpp)
-add_executable(RaytracingTest ${RT_TEST_CPPS})
-target_include_directories(RaytracingTest
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Raytracing>
-)
-target_link_libraries(RaytracingTest
-        PRIVATE MoerRender
-        PRIVATE glfw
-        PRIVATE MoerResource
-
-)
-set_target_properties(RaytracingTest PROPERTIES FOLDER ${moer_test_folder})
+set_target_properties(VertexFactoryTest PROPERTIES FOLDER ${moer_test_folder})
 
 add_executable(dxrhitest RHITest/dxrhitest.cpp)
 target_include_directories(dxrhitest
@@ -158,4 +143,3 @@ target_link_libraries(dxrhitest
         PRIVATE MoerResource
 )
 set_target_properties(dxrhitest PROPERTIES FOLDER ${moer_test_folder})
-set_target_properties(VertexFactoryTest PROPERTIES FOLDER ${moer_test_folder})

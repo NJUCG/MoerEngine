@@ -4,7 +4,7 @@
         "name": "VK_LAYER_KHRONOS_shader_object",
         "type": "GLOBAL",
         "library_path": ".\\VkLayer_khronos_shader_object.dll",
-        "api_version": "1.3.290",
+        "api_version": "1.4.309",
         "implementation_version": "1",
         "description": "Khronos Shader object layer",
         "instance_extensions": [
@@ -81,6 +81,14 @@
                     "env": "VK_SHADER_OBJECT_FORCE_ENABLE",
                     "label": "Force Enable",
                     "description": "Force the layer to be active even if the underlying driver also implements the shader object extension.",
+                    "type": "BOOL",
+                    "default": false
+                },
+                {
+                    "key": "disable_pipeline_pre_caching",
+                    "env": "VK_SHADER_OBJECT_DISABLE_PIPELINE_PRE_CACHING",
+                    "label": "Disable Pipeline Pre-Caching",
+                    "description": "Disable the layer from pre-caching pipelines, reducing the memory overhead.",
                     "type": "BOOL",
                     "default": false
                 }

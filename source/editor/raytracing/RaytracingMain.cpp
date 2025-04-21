@@ -18,6 +18,8 @@
 #include "scene/light/LightComponentManager.h"
 #include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderResourceManager.h"
+#include "taskgraph/TaskGraph.h"
+#include "ui/raytracing_ui/RaytracingConfig.h"
 #include "window/WindowContext.h"
 
 // Editor
@@ -35,6 +37,7 @@
 #include "ui/raytracing_ui/RaytracingUI.h"
 
 // 3rd party
+#include <atomic>
 #include <imgui.h>
 #include <stb/stb_image_write.h>
 
@@ -48,16 +51,23 @@ union FloatBits {
 static Box3D          scene_bounding{};
 static constexpr uint max_frame_in_flight = 3;
 
+void DumpTextureToFile(
+    ExportConfig&          _config,
+    FrameResources&        _frame_rt,
+    RenderDevice&          _device,
+    CommandQueue&          _gfx_queue,
+    std::filesystem::path& _exported_file_path,
+    std::string_view       _suffix
+);
+
 void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets) {
     // Get a lot of things
-    auto&            device              = RenderDevice::Get();
-    auto&            manager             = ShaderManager::Get();
-    Scene            scene               = {};
-    BindlessArrayRef bindless_array      = scene.GetBindlessArray();
-    auto&            gfx_queue           = device.GetCommandQueue(EQueueType::Graphics);
-    auto&            copy_queue          = device.GetCopyQueue();
-    auto             copy_queue_timeline = copy_queue.GetFenceHandle();
-    CommandList      cmd_list            = {};
+    auto&            device         = RenderDevice::Get();
+    auto&            manager        = ShaderManager::Get();
+    Scene            scene          = {};
+    BindlessArrayRef bindless_array = scene.GetBindlessArray();
+    auto&            gfx_queue      = device.GetCommandQueue(EQueueType::Graphics);
+    CommandList      cmd_list       = {};
 
     // Initialize Swapchain
     auto resolution = _editor_ui->GetResolution(); // TODO: 是否要从WindowContext中获取resolution?
@@ -222,6 +232,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
             gfx_queue.Sync();
             sc_info.size = {resolution.x, resolution.y};
+            sc->Sync();
             sc->Recreate(sc_info);
 
             create_frame_buffers(resolution);
@@ -289,19 +300,38 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
                 first_load = false;
 
+                // {
+
+                //     Array<ImportTexture> sampled_textures;
+                //     sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
+
+                //     for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
+                //         sampled_textures.emplace_back(ImportTexture(
+                //             tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE
+                //         ));
+                //     }
+
+                //     Array<ImportBuffer> io_buffers;
+                //     io_buffers.reserve(scene.GetIOPendingBuffers().size());
+
+                //     for (auto& buffer : scene.GetIOPendingBuffers()) {
+                //         io_buffers.emplace_back(ImportBuffer(buffer->GetView()));
+                //     }
+
+                //     cmd_list.ImportResourcesFromQueue(
+                //         EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers)
+                //     );
+                //     gfx_queue.Execute(cmd_list.Submit());
+                //     gfx_queue.Sync();
+                // }
                 cmd_list.UpdateBindlessArray(bindless_array);
-                last_io_change_timeline = copy_queue_timeline->GetValue();
-                // gfx_queue.Wait({uint64(copy_queue_timeline.Get()),
-                // copy_timeline->GetValue()}); gfx_queue.Sync();
 
                 rt_geometries.reserve(scene.GetEntityCount());
                 Array<AccelerationStructureBuildParam> build_params;
                 build_params.reserve(scene.GetEntityCount());
 
                 scene.ForEach([&](Entity _entity) {
-                    auto&                          mesh = RenderableManager::Get().GetMeshInfo(_entity);
-                    std::span<MaterialInstanceRef> materials =
-                        RenderableManager::Get().GetMaterialInstances(_entity);
+                    auto&                  mesh = RenderableManager::Get().GetMeshInfo(_entity);
                     RaytracingGeometryInfo rt_geo_info{};
                     rt_geo_info.build_flags   = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
                     rt_geo_info.vertex_format = PF_R32G32B32_SFLOAT;
@@ -314,10 +344,6 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                         uint idx_count  = mesh->geometries[i]->local_idx_count;
                         auto vtx_buffer = mesh->geometries[i]->mesh_buffers->vertex_buffer;
                         auto idx_buffer = mesh->geometries[i]->mesh_buffers->index_buffer;
-
-                        // evaluate material
-                        MaterialInstanceRef mat_instance = materials[i];
-                        mat_instance->GetMaterial()->GetType();
 
                         rt_geo_info.segments.emplace_back(
                             0,                                         // vertex_offset
@@ -352,33 +378,8 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 });
 
                 cmd_list.BuildAccelerationStructures(std::move(build_params));
-
-                last_io_change_timeline = copy_queue_timeline->GetValue();
-
-                {
-
-                    Array<ImportTexture> sampled_textures;
-                    sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
-
-                    for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
-                        sampled_textures.emplace_back(ImportTexture(
-                            tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE
-                        ));
-                    }
-
-                    Array<ImportBuffer> io_buffers;
-                    io_buffers.reserve(scene.GetIOPendingBuffers().size());
-
-                    for (auto& buffer : scene.GetIOPendingBuffers()) {
-                        io_buffers.emplace_back(ImportBuffer(buffer->GetView()));
-                    }
-
-                    cmd_list.ImportResourcesFromQueue(
-                        EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers)
-                    );
-
-                    cmd_list.UpdateRaytracingScene(rt_scene);
-                }
+                cmd_list.UpdateRaytracingScene(rt_scene);
+                // last_io_change_timeline = copy_queue_timeline->GetValue();
 
                 _editor_ui->RegisterUIFunc(
                     "Display MaterialTexture",
@@ -403,12 +404,28 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
                         //Pass profiling
                         auto entrys = gfx_queue.GetProfilerEntry();
-                        for (auto& [name, time] : entrys) { ImGui::Text("%s: %.3f ms", name.c_str(), time); }
+                        if (!entrys.cpu_entries.empty()) {
+                            ImGui::Text("CPU Time:");
+                            for (auto& [name, time] : entrys.cpu_entries) {
+                                if (name.ends_with("Percentage")) {
+                                    ImGui::Text("%s: %.3f%%", name.c_str(), time * 100);
+
+                                } else
+                                    ImGui::Text("%s: %.3f ms", name.c_str(), time);
+                            }
+                        }
+                        if (!entrys.gpu_entries.empty()) {
+                            ImGui::Text("GPU Time:");
+                            for (auto& [name, time] : entrys.gpu_entries) {
+                                ImGui::Text("%s: %.3f ms", name.c_str(), time);
+                            }
+                        }
                     }
                 );
 
                 // cmd_list.UpdateRaytracingScene(rt_scene);
-                gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, last_io_change_timeline));
+                auto copy_timeline = device.GetCopyQueue().GetFenceHandle();
+                gfx_queue.Execute(cmd_list.Submit());
                 gfx_queue.Sync();
             }
 
@@ -519,6 +536,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 auto di_spatial_resampling_config  = is_ctx.GetDISpatialResampleParams();
                 di_initial_sample_config.local_light_sample_mode =
                     ui_cfg.restir_di_cfg.initial_sample_config.local_light_sample_mode;
+                di_initial_sample_config.env_map_is = is_ctx.GetLightBufferParams().env_light.light_cnt;
                 di_temporal_resampling_config.bias_correction_mode =
                     ui_cfg.restir_di_cfg.temporal_resample_config.bias_correction;
                 di_temporal_resampling_config.depth_threshold =
@@ -573,10 +591,13 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
             uint num_emissive_meshes, num_emissive_triangles;
             prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
 
+            static constexpr uint s_mesh_alloc_chunk      = 128;
+            static constexpr uint s_triangle_alloc_chunk  = 1024;
+            static constexpr uint s_primitive_alloc_chunk = 128;
             rt_ctx->CreateBuffersIfNeeded(
-                num_emissive_meshes,
-                num_emissive_triangles,
-                scene.GetLights().size(),
+                (num_emissive_meshes + s_mesh_alloc_chunk - 1) & ~(s_mesh_alloc_chunk - 1),
+                (num_emissive_triangles + s_triangle_alloc_chunk - 1) & ~(s_triangle_alloc_chunk - 1),
+                (scene.GetLights().size() + s_primitive_alloc_chunk - 1) & ~(s_primitive_alloc_chunk - 1),
                 scene.GetGeometryInstances().size()
             );
             cmd_list.UpdateBindlessArray(bindless_array);
@@ -596,7 +617,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 const auto&   frame_rt        = rt_ctx->frame_rt;
                 nrd::Denoiser denoiser        = nrd::Denoiser::MAX_NUM;
                 switch (ui_config.denoiser_cfg.denoiser_type) {
-                    case s_denoiser_mode_reblur: denoiser = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
+                    case s_denoiser_mode_reblur: denoiser = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR; break;
                     case s_denoiser_mode_relax: denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR; break;
                 }
 
@@ -683,143 +704,19 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
             //////////////////////////////////////////////////////////////////////////
             // handle export
             //////////////////////////////////////////////////////////////////////////
-            {
-                auto dequantentize_half = [](short _h, bool _gamma_correct = true) {
-                    unsigned int s  = unsigned(_h & 0x8000) << 16;
-                    int          em = _h & 0x7fff;
 
-                    // bias exponent and pad mantissa with 0; 112 is relative exponent
-                    // bias (127-15)
-                    int r = (em + (112 << 10)) << 13;
-
-                    // denormal: flush to zero
-                    r = (em < (1 << 10)) ? 0 : r;
-
-                    // infinity/NaN; note that we preserve NaN payload as a byproduct of
-                    // unifying inf/nan cases 112 is an exponent bias fixup; since we
-                    // already applied it once, applying it twice converts 31 to 255
-                    r += (em >= (31 << 10)) ? (112 << 23) : 0;
-
-                    FloatBits u;
-                    u.ui = s | r;
-                    if (_gamma_correct) {
-                        u.f = u.f <= 0.0031308f ? 12.92f * u.f : 1.055f * std::pow(u.f, 1.f / 2.4f) - 0.055f;
-                    }
-                    return u.f;
-                };
-
-                auto dequantentize_byte = [](unsigned char _b) { return _b / 255.f; };
-
-                auto dequantentize_byte_to_srgb = [](unsigned char _b) {
-                    float c = _b / 255.f;
-                    c       = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f;
-
-                    // to byte
-                    return (unsigned char)(c * 255.f);
-                };
-
-                if (b_export) {
-
-                    size_t            size;
-                    Array<Moer::byte> copy_back_data;
-                    std::string       file_name = "exported_";
-                    bool              hdr       = false;
-
-                    switch (ui_config.export_cfg.output_texture) {
-                        case EOT_LDR: {
-                            size = sizeof(uint) * resolution.x * resolution.y;
-                            copy_back_data.resize(size);
-                            cmd_list.CopyFrom(rt_ctx->frame_rt.ldr_color->GetView(), copy_back_data);
-                            file_name += std::to_string(time) + ".png";
-                            break;
-                        }
-                        case EOT_HDR: {
-                            size = sizeof(float2) * resolution.x * resolution.y;
-                            copy_back_data.resize(size);
-                            cmd_list.CopyFrom(rt_ctx->frame_rt.resolved_color->GetView(), copy_back_data);
-                            file_name += std::to_string(time) + ".exr";
-                            hdr = true;
-                            break;
-                        }
-                        default: size = 0;
-                    }
-                    if (size != 0) {
-                        gfx_queue.Sync();
-                        gfx_queue.Execute(cmd_list.Submit()
-                                              .Wait(copy_queue_timeline, copy_queue_timeline->GetValue())
-                                              .TickProfiling());
-                        gfx_queue.Sync();
-
-                        if (hdr) {
-                            // export to exr
-                            // cast r16g16b16a16_sfloat to r32g32b32a32_sfloat
-                            assert(
-                                rt_ctx->frame_rt.resolved_color->GetFormat() == PF_R16G16B16A16_SFLOAT &&
-                                "resolved color format must be r16g16b16a16_sfloat"
-                            );
-                            uint          range_cnt = 8;
-                            uint          range     = copy_back_data.size() / range_cnt;
-                            Array<float4> copy_back_data_f4(copy_back_data.size() / 8);
-                            ParallelFor(range_cnt, [&](uint _idx) {
-                                size_t start = range * _idx;
-                                size_t end   = range * (_idx + 1);
-                                for (size_t i = start; i < copy_back_data.size() && i < end; i += 8) {
-                                    float4* data   = &copy_back_data_f4[i / 8];
-                                    short*  data_s = (short*)&copy_back_data[i];
-                                    data->x        = dequantentize_half(data_s[0]);
-                                    data->y        = dequantentize_half(data_s[1]);
-                                    data->z        = dequantentize_half(data_s[2]);
-                                    data->w        = dequantentize_half(data_s[3]);
-                                }
-                            });
-                            stbi_write_hdr(
-                                (exported_file_path / file_name).generic_string().data(),
-                                resolution.x,
-                                resolution.y,
-                                4,
-                                (float*)copy_back_data_f4.data()
-                            );
-                        } else {
-                            // ldr format must be r8g8b8a8_unorm
-                            assert(
-                                rt_ctx->frame_rt.ldr_color->GetFormat() == PF_R8G8B8A8_UNORM &&
-                                "ldr format must be r8g8b8a8_unorm"
-                            );
-                            // cast r8g8b8a8_unorm to srgb
-                            // parallel to 4 threads
-                            uint range_cnt = 8;
-                            uint range     = copy_back_data.size() / range_cnt;
-                            ParallelFor(range_cnt, [&](uint _idx) {
-                                size_t start = range * _idx;
-                                size_t end   = range * (_idx + 1);
-                                for (size_t i = start; i < copy_back_data.size() && i < end; i += 4) {
-                                    copy_back_data[i] =
-                                        (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i]));
-                                    copy_back_data[i + 1] =
-                                        (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i + 1]));
-                                    copy_back_data[i + 2] =
-                                        (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i + 2]));
-                                    copy_back_data[i + 3] =
-                                        (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i + 3]));
-                                }
-                            });
-                            stbi_write_png(
-                                (exported_file_path / file_name).generic_string().data(),
-                                resolution.x,
-                                resolution.y,
-                                4,
-                                (void*)copy_back_data.data(),
-                                4 * resolution.x
-                            );
-                            // stbi_write_bmp((exported_file_path /
-                            // file_name).generic_string().data(), resolution.x, resolution.y,
-                            // 4, (void*)copy_back_data.data());
-                        }
-                    }
-
-                    b_export                      = false;
-                    ui_config.export_cfg.b_export = false;
-                }
+            if (b_export) {
+                gfx_queue.Execute(cmd_list.Submit().TickProfiling());
+                gfx_queue.Sync();
+                DumpTextureToFile(
+                    ui_config.export_cfg,
+                    rt_ctx->frame_rt,
+                    device,
+                    gfx_queue,
+                    exported_file_path,
+                    std::to_string(time)
+                );
+                b_export = false;
             }
         }
 
@@ -842,6 +739,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
         if (_editor_ui->IsNeedReload()) { break; }
     }
+    timeline->Wait(time);
     gfx_queue.Sync();
 
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
@@ -850,13 +748,161 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
     const auto& allocated_tex = rt_ctx->GetAllocatedBdlsTex();
     for (auto& tex : allocated_tex) { bindless_array->FreeTexture(tex); }
 
-    for (auto& callback : on_free_buffer_callbacks) { callback(copy_queue_timeline->GetValue()); }
+    for (auto& callback : on_free_buffer_callbacks) { callback(0); }
 
     cmd_list.UpdateBindlessArray(bindless_array);
     gfx_queue.Execute(cmd_list.Submit().DeleteResources());
     gfx_queue.Sync();
+    sc->Sync();
 
     _editor_ui->UnregisterUIFunc("Display MaterialTexture");
+}
+
+void DumpTextureToFile(
+    ExportConfig&          _config,
+    FrameResources&        _frame_rt,
+    RenderDevice&          _device,
+    CommandQueue&          _gfx_queue,
+    std::filesystem::path& _exported_file_path,
+    std::string_view       _suffix
+) {
+    CommandList cmd_list{};
+
+    auto dequantentize_half = [](short _h, bool _gamma_correct = true) {
+        unsigned int s  = unsigned(_h & 0x8000) << 16;
+        int          em = _h & 0x7fff;
+
+        // bias exponent and pad mantissa with 0; 112 is relative exponent
+        // bias (127-15)
+        int r = (em + (112 << 10)) << 13;
+
+        // denormal: flush to zero
+        r = (em < (1 << 10)) ? 0 : r;
+
+        // infinity/NaN; note that we preserve NaN payload as a byproduct of
+        // unifying inf/nan cases 112 is an exponent bias fixup; since we
+        // already applied it once, applying it twice converts 31 to 255
+        r += (em >= (31 << 10)) ? (112 << 23) : 0;
+
+        FloatBits u;
+        u.ui = s | r;
+        if (_gamma_correct) {
+            u.f = u.f <= 0.0031308f ? 12.92f * u.f : 1.055f * std::pow(u.f, 1.f / 2.4f) - 0.055f;
+        }
+        return u.f;
+    };
+
+    auto dequantentize_byte_to_srgb = [](unsigned char _b) {
+        float c = _b / 255.f;
+        c       = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f;
+
+        // to byte
+        return (unsigned char)(c * 255.f);
+    };
+
+    size_t            size;
+    Array<Moer::byte> copy_back_data;
+    std::string       file_name = "screenshot_";
+    bool              hdr       = false;
+
+    uint3 resolution = _frame_rt.ldr_color->GetExtent();
+    switch (_config.output_texture) {
+        case EOT_LDR: {
+            size = sizeof(uint) * resolution.x * resolution.y;
+            copy_back_data.resize(size);
+            cmd_list.CopyFrom(_frame_rt.ldr_color->GetView(), copy_back_data);
+            file_name += _suffix;
+            file_name += ".png";
+            break;
+        }
+        case EOT_HDR: {
+            size = sizeof(float2) * resolution.x * resolution.y;
+            copy_back_data.resize(size);
+            cmd_list.CopyFrom(_frame_rt.resolved_color->GetView(), copy_back_data);
+            file_name += _suffix;
+            file_name += ".exr";
+            hdr = true;
+            break;
+        }
+        default: size = 0;
+    }
+    if (size != 0) {
+        _gfx_queue.Execute(cmd_list.Submit().TickProfiling());
+        _gfx_queue.Sync();
+        if (hdr) {
+            // export to exr
+            // cast r16g16b16a16_sfloat to r32g32b32a32_sfloat
+            assert(
+                _frame_rt.resolved_color->GetFormat() == PF_R16G16B16A16_SFLOAT &&
+                "resolved color format must be r16g16b16a16_sfloat"
+            );
+        } else {
+            // ldr format must be r8g8b8a8_unorm
+            assert(
+                _frame_rt.ldr_color->GetFormat() == PF_R8G8B8A8_UNORM && "ldr format must be r8g8b8a8_unorm"
+            );
+        }
+        _config.b_export = false;
+        // cast r8g8b8a8_unorm to srgb
+        LambdaTask::Create([=,
+                            r_copy_back_data(std::move(copy_back_data)),
+                            dequantentize_byte_to_srgb(std::move(dequantentize_byte_to_srgb)),
+                            dequantentize_half(std::move(dequantentize_half)),
+                            &_config]() {
+            // free copy back data
+            auto copy_back_data = std::move(r_copy_back_data);
+            if (hdr) {
+                uint          range_cnt = 8;
+                uint          range     = copy_back_data.size() / range_cnt;
+                Array<float4> copy_back_data_f4(copy_back_data.size() / 8);
+                ParallelFor(range_cnt, [&](uint _idx) {
+                    size_t start = range * _idx;
+                    size_t end   = range * (_idx + 1);
+                    for (size_t i = start; i < copy_back_data.size() && i < end; i += 8) {
+                        float4* data   = &copy_back_data_f4[i / 8];
+                        short*  data_s = (short*)&copy_back_data[i];
+                        data->x        = dequantentize_half(data_s[0]);
+                        data->y        = dequantentize_half(data_s[1]);
+                        data->z        = dequantentize_half(data_s[2]);
+                        data->w        = dequantentize_half(data_s[3]);
+                    }
+                });
+                stbi_write_hdr(
+                    (_exported_file_path / file_name).generic_string().data(),
+                    resolution.x,
+                    resolution.y,
+                    4,
+                    (float*)copy_back_data_f4.data()
+                );
+            } else {
+                // parallel to 4 threads
+                uint range_cnt = 8;
+                uint range     = copy_back_data.size() / range_cnt;
+                ParallelFor(range_cnt, [&](uint _idx) {
+                    size_t start = range * _idx;
+                    size_t end   = range * (_idx + 1);
+                    for (size_t i = start; i < copy_back_data.size() && i < end; i += 4) {
+                        copy_back_data[i] = (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i]));
+                        copy_back_data[i + 1] =
+                            (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i + 1]));
+                        copy_back_data[i + 2] =
+                            (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i + 2]));
+                        copy_back_data[i + 3] =
+                            (Moer::byte)dequantentize_byte_to_srgb(ubyte(copy_back_data[i + 3]));
+                    }
+                });
+                stbi_write_png(
+                    (_exported_file_path / file_name).generic_string().data(),
+                    resolution.x,
+                    resolution.y,
+                    4,
+                    (void*)copy_back_data.data(),
+                    4 * resolution.x
+                );
+            }
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+        }).Dispatch();
+    }
 }
 
 } // namespace Moer::Render::Raytracing

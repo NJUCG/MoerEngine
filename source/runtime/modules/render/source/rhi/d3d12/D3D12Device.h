@@ -617,7 +617,6 @@ namespace Moer::Render {
         void Reset();
     };
 
-
     // only for upload/readback buffer now. may change in the future
     class D3D12BuddyAllocator : public D3D12DeviceChild {
     public:
@@ -876,11 +875,11 @@ namespace Moer::Render {
         ~D3D12GraphicsCommandQueue();
 
         // queue.signal is not exposed, exist in cmdsubmit.signalevent
-        void                      Wait(WaitEvent _event) override;
-        WaitEvent                 Execute(CmdSubmit&& _submit) override;
-        void                      Present(SwapchainRef _swapchain, TextureView _target) override;
-        void                      Sync() override;
-        Array<ProfileResultEntry> GetProfilerEntry() override { return {}; }
+        void        Wait(WaitEvent _event) override;
+        WaitEvent   Execute(CmdSubmit&& _submit) override;
+        void        Present(SwapchainRef _swapchain, TextureView _target) override;
+        void        Sync() override;
+        ProfileData GetProfilerEntry() override { return {}; }
     };
 
     class D3D12Swapchain final : public Swapchain {

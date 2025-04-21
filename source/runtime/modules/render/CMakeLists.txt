@@ -58,20 +58,8 @@ target_link_libraries(${MODULE_NAME}
 target_compile_definitions(${MODULE_NAME} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})
 # agilitysdk need to export symbols from exe, however current render module is dll, so not easy for exe to import this then export again...
 # so here use PUBLIC not PRIVATE
+# maybe ref https://github.com/TheRealMJP/SHforHLSL/blob/main/SHTest/SampleFramework12/v1.04/Graphics/DX12.cpp#L141-L178
 
-
-# function(enable_sanitizer target_name)
-#     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-#         message(FATAL_ERROR "Sanitizer supported only for gcc/clang")
-#     endif()
-#     message(STATUS "Address sanitizer enabled")
-#     target_compile_options(${target_name} PRIVATE -fsanitize=address,undefined)
-#     target_compile_options(${target_name} PRIVATE -fno-sanitize=signed-integer-overflow)
-#     target_compile_options(${target_name} PRIVATE -fno-sanitize-recover=all)
-#     target_compile_options(${target_name} PRIVATE -fno-omit-frame-pointer)
-#     target_link_libraries(${target_name} PRIVATE -fsanitize=address,undefined -fuse-ld=gold)
-# endfunction()
-# enable_sanitizer(${MODULE_NAME})
 
 if(WIN32)
 target_compile_definitions(${MODULE_NAME}

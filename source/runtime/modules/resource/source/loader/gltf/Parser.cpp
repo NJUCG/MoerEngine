@@ -597,7 +597,8 @@ namespace Moer::Resource::Gltf {
         //   - m_instance_infos, m_mesh_instances, m_mesh_infos
         //   - all about materials & textures (m_materials, m_material_instances, m_material_instance_indexes, m_textures)
 
-        data->m_mesh_infos.reserve(gltf_scene->mNumMeshes);
+        // mesh info
+        data->m_mesh_infos.reserve(gltf_scene->mNumMeshes);// MARK: 似乎有问题，与Geometry Array重复了
 
         GeomRecord                        geom_record;
         UnorderedMap<const aiNode*, uint> node2instance;
@@ -685,6 +686,7 @@ namespace Moer::Resource::Gltf {
                     }// if new geo_set
                     geo_iter = geom_record.find(geo_set);
 
+                    // instance data: geo_idx, translation matrix
                     Render::InstanceData& inst   = data->m_instance_infos.emplace_back();
                     inst.geom_count              = _node->mNumMeshes;
                     inst.first_geom_idx          = geo_iter->second->geometries[0]->global_geom_idx;

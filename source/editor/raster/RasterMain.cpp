@@ -101,6 +101,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
             resolution.x = uint32(w_width);
             resolution.y = uint32(w_height);
             gfx_queue.Sync();
+            sc->Sync();
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
 
@@ -176,6 +177,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
         if (editor_ui->IsNeedReload()) { break; }
     }
     gfx_queue.Sync();
+    sc->Sync();
 }
 
 } // namespace Moer::Render::Raster

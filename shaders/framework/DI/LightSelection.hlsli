@@ -28,9 +28,6 @@ void RandomlySelectLightFromRISTile(inout RandomState _rng,
   RandomlySelectLightDataFromRISTile(_rng, _tile_info, tile_data, ris_buf_idx);
   GetLightInfoFromRisData(tile_data, ris_buf_idx, _light_info, _light_idx,
                           _inv_pdf);
-                          // if(ris_buf_idx > 130000)
-                          //   printf("ris_buf_idx %d light_idx %d\n", ris_buf_idx, _light_idx);
-
 }
 
 void RandomlySelectLightDataUniformly(inout RandomState _rng,
@@ -40,7 +37,8 @@ void RandomlySelectLightDataUniformly(inout RandomState _rng,
   float rng = _rng.GetFloat();
   _inv_pdf = float(_region.light_cnt);
   _light_idx =
-      min(uint(floor(rng * _region.light_cnt)), _region.light_cnt - 1) + _region.first_light_idx;
+      min(uint(floor(rng * _region.light_cnt)), _region.light_cnt - 1) +
+      _region.first_light_idx;
   _light_info = LoadLightInfo(_light_idx);
 }
 

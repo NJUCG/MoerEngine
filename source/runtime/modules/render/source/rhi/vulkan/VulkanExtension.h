@@ -73,6 +73,8 @@ namespace Moer::Render {
         bool m_has_khr_acceleration_structure;
         bool m_has_khr_ray_tracing_pipeline;
         bool m_has_khr_ray_query;
+        bool m_has_ext_mesh_shader;
+        bool m_allow_mesh_primitive_shading;
 
         bool m_has_memory_priority;
         bool m_has_pageable_device_local_memory;

@@ -199,12 +199,10 @@ namespace Moer {
             }
         }
 
-        auto&  device     = Render::RenderDevice::Get();
-        auto&  copy_queue = device.GetCopyQueue();
-        uint64 timeline   = 0;
+        auto&               device     = Render::RenderDevice::Get();
+        auto&               copy_queue = device.GetCopyQueue();
+        Render::CommandList cmd_list{};
         for (const auto& indices : batch_indices) {
-            Render::CommandList cmd_list;
-            // Moer::Array<Render::BufferRef> staging_buffers(indices.size());
             int count = 0;
             for (auto& indice : indices) {
                 auto& builder            = builders[indice];
@@ -217,15 +215,11 @@ namespace Moer {
                     cmd_list.CopyFrom(std::span<byte>((byte*)builder.m_data + offset, mip_size), textures[builder.m_name]->GetView(i, 1));
                     offset += mip_size;
                 }
-                // cmd_list.CopyFrom(std::span<byte>((byte*)builder.m_data, builder.m_data_size), textures[builder.m_name]->GetView(0, textures[builder.m_name]->GetNumMips()));
-
-                // cmd_list.Barriers(Render::ReadTexture{textures[builder.m_name]->GetView(),Render::ETextureState::SAMPLE} );
                 count++;
             }
-            auto evt = copy_queue.Execute(cmd_list.Submit());
-            timeline = std::max(timeline, evt.timeline);
         }
-        copy_queue.Sync(timeline);
+        auto evt = copy_queue.Execute(cmd_list.Submit());
+        copy_queue.Sync(evt.timeline);
         return textures;
     }
 

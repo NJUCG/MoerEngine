@@ -94,7 +94,6 @@ public:
 #pragma endregion
 
 protected:
-    void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) final override;
     RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info) final override;
     RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) final override;
 

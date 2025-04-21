@@ -2,15 +2,16 @@
 #define MOERENGINE_SHADER_COMMON_H
 #include "misc/Hash.h"
 #include "misc/STL.h"
-#include "rhi/RHI.h"
+// #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <variant>
-
+#include "resources/vertexfactory/VertexAttributes.h"
 #include "misc/MacroUtils.h"
+#include "serialize/Serializer.h"
 
 // extern const char* g_global_shader_resource_root_dir;
 // extern const char* g_global_shader_resource_output_dir;
@@ -300,6 +301,81 @@ struct ShaderReflectInfo {
     Moer::Array<RHIVertexInputInfo>                vertex_input_info;
 };
 
+namespace Moer {
+    struct ShaderEntry {
+        EShaderType     type;
+        EShaderPlatform platform;
+        Array<uint8_t>  blob_data;
+
+        OutputStream& operator<<(OutputStream& _stream) const {
+            _stream << type << platform << blob_data;
+            return _stream;
+        }
+
+        InputStream& operator>>(InputStream& _stream) {
+            _stream >> type >> platform >> blob_data;
+            return _stream;
+        }
+    };
+    struct ShaderEntryKey {
+        uint64 hash;
+
+        bool operator==(const ShaderEntryKey& _rhs) const noexcept {
+            return hash == _rhs.hash;
+        }
+    };
+};// namespace Moer
+static bool operator==(const Moer::ShaderEntryKey& _lhs, const Moer::ShaderEntryKey& _rhs) noexcept {
+    return _lhs.hash == _rhs.hash;
+}
+namespace std {
+    template<>
+    struct hash<Moer::ShaderEntryKey> {
+        size_t operator()(const Moer::ShaderEntryKey& _key) const {
+            return _key.hash;
+        }
+    };
+}// namespace std
+//Shader Compiled Hash
+struct Shader {
+    ShaderParametersInfoMap            reflection;
+    uint32_t                           mutation_id;
+    EShaderType                        type;
+    Moer::StaticArray<Moer::uint64, 2> compiled_hash;
+    Moer::uint64                       shader_name_hash;
+    std::string                        entry_name;
+    std::string                        shader_path;
+    Moer::ShaderEntryKey               shader_key;
+    //need included files to validate cache
+
+    Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
+        _stream << compiled_hash << type << mutation_id << shader_name_hash << entry_name << shader_path << shader_key;
+        _stream << reflection.reflect_map;
+        return _stream;
+    }
+
+    Moer::InputStream& operator>>(Moer::InputStream& _stream) {
+        _stream >> compiled_hash >> type >> mutation_id >> shader_name_hash >> entry_name >> shader_path >> shader_key;
+        _stream >> reflection.reflect_map;
+        return _stream;
+    }
+};
+
+static inline bool operator==(const Shader& _lhs, const Shader& _rhs) {
+    return _lhs.compiled_hash == _rhs.compiled_hash && _lhs.type == _rhs.type && _lhs.mutation_id == _rhs.mutation_id && _lhs.shader_name_hash == _rhs.shader_name_hash && _lhs.entry_name == _rhs.entry_name && _lhs.shader_path == _rhs.shader_path;
+}
+
+namespace std {
+    template<>
+    struct hash<Shader> {
+        size_t operator()(const Shader& _shader) const {
+            size_t hash = _shader.compiled_hash[0];
+            HashCombine(hash, _shader.compiled_hash[1]);
+            return hash;
+        }
+    };
+}// namespace std
+
 struct ShaderCompilerOutput {
 
     ShaderCompilerOutput()
@@ -316,7 +392,8 @@ struct ShaderCompilerOutput {
     ShaderTargetInfo target_info;
 
     Moer::Array<uint8_t> shader_code;
-    Hash64City           compiled_hash;
+    uint64_t             compiled_hash1;
+    uint64_t             compiled_hash2;
     uint32_t             num_instructions;
     uint32_t             num_samplers;
     uint32_t             mutation_id;
@@ -394,6 +471,15 @@ public:
         defines.insert(_other.defines.begin(), _other.defines.end());
     }
 
+    Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
+        _stream << defines;
+        return _stream;
+    }
+    Moer::InputStream& operator>>(Moer::InputStream& _stream) {
+        _stream >> defines;
+        return _stream;
+    }
+
 private:
     friend class ShaderCompilerEnvironment;
     Moer::UnorderedMap<std::string, std::string> defines;
@@ -455,6 +541,16 @@ public:
         return str;
     }
 
+    Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
+        _stream << compiler_args << macro_defines;
+        return _stream;
+    }
+
+    Moer::InputStream& operator>>(Moer::InputStream& _stream) {
+        _stream >> compiler_args >> macro_defines;
+        return _stream;
+    }
+
 private:
     ShaderCompilerDefines macro_defines;
 
@@ -472,17 +568,102 @@ struct ShaderCompileJobInput {
     const ShaderParametersMetadata* param_meta_data;
 };
 
-struct ShaderCompilerInput {
-    ShaderTargetInfo           target_info;
-    uint32_t                   mutation_id;
-    std::string_view           entry_point;
-    std::string_view           relative_source_file_path;
-    std::string_view           shader_name;
-    uint32_t                   shader_name_hash;
-    ShaderCompilerEnvironment& environment;
+namespace Moer::Render {
+    struct VertexFactory {
 
-    const ShaderParametersMetadata* param_meta_data;
+    public:
+        RENDER_API VertexFactory(VertexAttributesBitmask _mask);
+
+        VertexFactory()                                = default;
+        VertexFactory(const VertexFactory&)            = default;
+        VertexFactory& operator=(const VertexFactory&) = default;
+
+        VertexFactory(VertexFactory&&)            = default;
+        VertexFactory& operator=(VertexFactory&&) = default;
+
+        RENDER_API void                          SetCompileEnvironment(ShaderCompilerEnvironment& _env);
+        RENDER_API const VertexStream&           GetVertexStream() const;
+        RENDER_API const VertexAttributesBitmask GetVertexAttributes() const { return mask; };
+
+    private:
+        mutable VertexStream    stream{};
+        VertexAttributesBitmask mask = 0;
+    };
+
+    static inline bool operator==(const VertexFactory& _lhs, const VertexFactory& _rhs) {
+        return _lhs.GetVertexAttributes() == _rhs.GetVertexAttributes();
+    }
+}// namespace Moer::Render
+
+namespace std {
+    template<>
+    struct hash<Moer::Render::VertexFactory> {
+        size_t operator()(const Moer::Render::VertexFactory& _key) const {
+            return GetHash(_key.GetVertexAttributes());
+        }
+    };
+}// namespace std
+namespace Moer::Render {
+    class RENDER_API VertexShader {
+    public:
+        template<typename TMacro>
+        VertexShader(std::string_view _path, TMacro _mutation = {}, std::string_view _entry_name = "main")
+            : shader_path(_path), entry_name(_entry_name) {
+            _mutation.SetCompileEnvironment(src_environment);
+            mutation_id = _mutation.GetMutationID();
+        }
+
+        VertexShader(std::string_view _path, std::string_view _entry_name = "main")
+            : shader_path(_path), entry_name(_entry_name) {
+        }
+
+        Shader& GetShader(Moer::Render::VertexFactory* _factory);
+        template<typename TMacro>
+        Shader& GetShader(Moer::Render::VertexFactory* _factory, TMacro _mut) {
+            return GetShader(_factory, _mut, entry_name);
+        }
+
+    private:
+        std::string               shader_path;
+        std::string               entry_name;
+        ShaderCompilerEnvironment src_environment;
+        uint                      mutation_id = 0;
+
+        UnorderedMap<VertexFactory, Shader&> shader_map;
+    };
+}// namespace Moer::Render
+
+struct ShaderCompilerInput {
+    ShaderTargetInfo          target_info;
+    uint32_t                  mutation_id;
+    std::string               entry_point;
+    std::string               relative_source_file_path;
+    std::string               shader_name;
+    uint32_t                  shader_name_hash;
+    ShaderCompilerEnvironment environment;
+
+    Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
+        _stream << target_info << mutation_id << entry_point << relative_source_file_path << shader_name_hash << environment;
+        return _stream;
+    }
+
+    Moer::InputStream& operator>>(Moer::InputStream& _stream) {
+        _stream >> target_info >> mutation_id >> entry_point >> relative_source_file_path >> shader_name_hash >> environment;
+        return _stream;
+    }
 };
+
+static inline bool operator==(const ShaderCompilerInput& _lhs, const ShaderCompilerInput& _rhs) {
+    return _lhs.relative_source_file_path == _rhs.relative_source_file_path && _lhs.entry_point == _rhs.entry_point && _lhs.shader_name_hash == _rhs.shader_name_hash && _lhs.mutation_id == _rhs.mutation_id;
+}
+namespace std {
+    template<>
+    struct hash<ShaderCompilerInput> {
+        size_t operator()(const ShaderCompilerInput& _input) const {
+            return std::hash<std::string_view>()(_input.relative_source_file_path) ^ std::hash<std::string_view>()(_input.entry_point) ^ std::hash<uint32_t>()(_input.mutation_id);
+        }
+    };
+}// namespace std
 
 FORCEINLINE EShaderPlatform GetShaderPlatformByRHIType(ERHIType _type) {
     switch (_type) {
@@ -507,4 +688,5 @@ public:
 
     static Moer::Array<ShaderCompileJobInput>& RetrieveShaderCompileWorks();
 };
+
 #endif//MOERENGINE_SHADER_COMMON_H

@@ -106,28 +106,7 @@ struct RasterContext {
 
         static bool first_load = true;
 
-        if (first_load) {
-            first_load = false;
-
-            // Textures
-            Array<ImportTexture> sampled_textures;
-            sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
-            for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
-                sampled_textures.emplace_back(
-                    ImportTexture(tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE)
-                );
-            }
-
-            Array<ImportBuffer> io_buffers;
-            io_buffers.reserve(scene.GetIOPendingBuffers().size());
-            for (auto& buf : scene.GetIOPendingBuffers()) {
-                io_buffers.emplace_back(ImportBuffer(buf->GetView()));
-            }
-
-            cmd_list.ImportResourcesFromQueue(
-                EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers)
-            );
-        }
+        if (first_load) { first_load = false; }
 
         // Bindless
         cmd_list.UpdateBindlessArray(bdls);

@@ -115,45 +115,45 @@ void RHIBatchedShaderParameters::SetParameters(RHIShader* shader, size_t _data_s
 RHIBatchedShaderParameters::~RHIBatchedShaderParameters() {
 }
 void RHIBatchedShaderParameters::SetParameters(const Shader* shader, size_t _data_size, uint8_t* data_source, bool _set_constants) {
-    const auto& param_layout_info = shader->GetRootParametersLayoutInfo();
+    // const auto& param_layout_info = shader->GetRootParametersLayoutInfo();
 
-    //not presices since it may contains const data
-    uint32_t resource_param_max_size = _data_size >> 3;
-    size_t   left_size               = resource_parameters.capacity() - resource_parameters.size();
+    // //not presices since it may contains const data
+    // uint32_t resource_param_max_size = _data_size >> 3;
+    // size_t   left_size               = resource_parameters.capacity() - resource_parameters.size();
 
-    if (left_size < resource_param_max_size) resource_parameters.reserve(left_size + resource_parameters.size());
-    for (const auto& param_info : param_layout_info.GetBindingInfo()) {
-        uint32_t stride = param_info.stride;
-        uint32_t num    = stride / sizeof(RHIResource*);
+    // if (left_size < resource_param_max_size) resource_parameters.reserve(left_size + resource_parameters.size());
+    // for (const auto& param_info : param_layout_info.GetBindingInfo()) {
+    //     uint32_t stride = param_info.stride;
+    //     uint32_t num    = stride / sizeof(RHIResource*);
 
-        bool b_set = false;
-        for (uint32_t i = 0; i < num; ++i) {
-            RHIResource* data = GetResource(data_source, param_info.offset + i * sizeof(RHIResource*));
-            b_set |= param_info.IsValid() && IsParameterResource(param_info.type) && data;
-        }
+    //     bool b_set = false;
+    //     for (uint32_t i = 0; i < num; ++i) {
+    //         RHIResource* data = GetResource(data_source, param_info.offset + i * sizeof(RHIResource*));
+    //         b_set |= param_info.IsValid() && IsParameterResource(param_info.type) && data;
+    //     }
 
-        if (b_set) {
-            for (uint32_t i = 0; i < num; ++i) {
-                RHIResource* data = GetResource(data_source, param_info.offset + i * sizeof(RHIResource*));
-                resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
-            }
-        }
-    }
-    if (!_set_constants) {
-        return;
-    }
-    if (param_layout_info.GetConstantsInfo().size() > 0) {
-        raw_data.clear();
-        constant_parameters.clear();
-    }
-    for (const auto& param_info : param_layout_info.GetConstantsInfo()) {
-        uint8_t* data = data_source + param_info.offset;
-        //const must set
-        uint32_t origin_offset = raw_data.size();
-        raw_data.resize(origin_offset + param_info.stride);
-        memcpy(&raw_data[origin_offset], data, param_info.stride);
-        constant_parameters.emplace_back(shader->GetShaderType(), origin_offset, (param_info.stride + sizeof(uint32_t) - 1) / 4, param_info.slot, param_info.space);
-    }
+    //     if (b_set) {
+    //         for (uint32_t i = 0; i < num; ++i) {
+    //             RHIResource* data = GetResource(data_source, param_info.offset + i * sizeof(RHIResource*));
+    //             resource_parameters.emplace_back(RHIShaderResourceParameter(data, param_info.slot, param_info.space));
+    //         }
+    //     }
+    // }
+    // if (!_set_constants) {
+    //     return;
+    // }
+    // if (param_layout_info.GetConstantsInfo().size() > 0) {
+    //     raw_data.clear();
+    //     constant_parameters.clear();
+    // }
+    // for (const auto& param_info : param_layout_info.GetConstantsInfo()) {
+    //     uint8_t* data = data_source + param_info.offset;
+    //     //const must set
+    //     uint32_t origin_offset = raw_data.size();
+    //     raw_data.resize(origin_offset + param_info.stride);
+    //     memcpy(&raw_data[origin_offset], data, param_info.stride);
+    //     constant_parameters.emplace_back(shader->GetShaderType(), origin_offset, (param_info.stride + sizeof(uint32_t) - 1) / 4, param_info.slot, param_info.space);
+    // }
 }
 
 RHIBufferRef RHIRenderPrimitive::GetVertexBuffer() const {

@@ -10,6 +10,10 @@
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
     class VkTracker {
+        struct BufferRange {
+            uint64 min;
+            uint64 max;
+        };
         struct BufferState {
             VkAccessFlagBits2        src_access;
             VkPipelineStageFlagBits2 src_stage;
@@ -35,7 +39,7 @@ namespace Moer::Render {
 
                 case EQueueType::Graphics: {
                     first_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-                    last_stage  = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+                    last_stage  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
                     break;
                 }
                 case EQueueType::Compute: {
@@ -89,6 +93,7 @@ namespace Moer::Render {
             uint32_t                 _dst_queue_family = VK_QUEUE_FAMILY_IGNORED);
 
         void RegisterFlushBuffer(const BufferView& _view, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage);
+        void RegisterFlushBufferRange(const BufferView& _view, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage, VkAccessFlagBits2 _src_access = VK_ACCESS_2_NONE, VkPipelineStageFlagBits2 _src_stage = VK_PIPELINE_STAGE_2_NONE);
         void RecordState(
             VulkanTexture* _texture,
             std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&&,
@@ -152,6 +157,7 @@ namespace Moer::Render {
         Set<VulkanBuffer*>  writed_state_buffers;
 
         UnorderedMap<VulkanBuffer*, BufferState> flush_buffer_states;
+        UnorderedMap<VulkanBuffer*, BufferRange> flush_buffer_ranges;
     };
 }// namespace Moer::Render
 #endif

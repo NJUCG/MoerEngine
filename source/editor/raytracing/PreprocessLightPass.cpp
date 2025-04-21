@@ -474,18 +474,21 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     _cmd_list.PushScopeWithTimeScope("PrepareLights");
     _cmd_list.CopyFrom(
         std::span<byte>((byte*)geo_instance_to_light.data(), geo_instance_to_light.size() * sizeof(uint)),
-        _rt_ctx.geo_instance_to_light_buf->GetView()
+        _rt_ctx.geo_instance_to_light_buf->GetView(),
+        "Upload geo instance to light"
     );
     _cmd_list.CopyFrom(
         std::span<byte>((byte*)tasks.data(), tasks.size() * sizeof(PrepareLightsTask)),
-        _rt_ctx.task_buf->GetView(0, tasks.size() * sizeof(PrepareLightsTask))
+        _rt_ctx.task_buf->GetView(0, tasks.size() * sizeof(PrepareLightsTask)),
+        "Upload tasks"
     );
     if (!prim_light_infos.empty()) {
         _cmd_list.CopyFrom(
             std::span<byte>(
                 (byte*)prim_light_infos.data(), prim_light_infos.size() * sizeof(PolymorphicLightInfo)
             ),
-            _rt_ctx.prim_light_buf->GetView()
+            _rt_ctx.prim_light_buf->GetView(),
+            "Upload prim light infos"
         );
     }
 

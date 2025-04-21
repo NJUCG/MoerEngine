@@ -13,7 +13,7 @@ namespace Moer {
     using MaterialInstanceRef = CountableRef<MaterialInstance>;
     class BufferInterfaceBlock;
 
-    struct PackedMaterialData {
+    struct [[deprecated("ECS: PackedMaterialData is not used yet")]] PackedMaterialData {
         float4 packed_0;
         float4 packed_1;
         float4 packed_2;
@@ -44,7 +44,6 @@ namespace Moer {
         const BufferInterfaceBlock&  GetBufferInterfaceBlock() const noexcept;
         EMaterialType                GetType() const noexcept;
         void                         SetType(EMaterialType type) noexcept;
-        void                         OrganizeInstancesAndBind(RHIBatchedShaderParameters& parameters, Moer::Array<MaterialInstanceRef> instances);
         Material();
 
     protected:
@@ -52,7 +51,7 @@ namespace Moer {
         Impl* m_impl;
     };
 
-    struct MaterialComponent {
+    struct [[deprecated("ECS: MaterialComponent is not used yet")]] MaterialComponent {
         static constexpr uint32_t MaterialBytesNum = 512;
         enum FLAGS {
             EMPTY                         = 0,
@@ -448,6 +447,17 @@ namespace Moer {
         uint32_t      m_param_count{0};
         std::string   m_material_name;
         EMaterialType m_material_type{EMaterialType::E_PBR_STANDARD};
+    };
+
+    class MaterialFactory {
+    public:
+        RENDER_API MaterialFactory();
+
+        template<typename... TMaterialArgs>
+        RENDER_API MaterialInstanceRef CreateMaterialInstance(const EMaterialType _type, std::string_view _name, TMaterialArgs&&... _material_args) noexcept;
+
+    private:
+        Array<MaterialRef> m_materials;
     };
 
 }// namespace Moer

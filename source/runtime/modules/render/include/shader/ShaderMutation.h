@@ -205,7 +205,7 @@ struct TShaderMutationSet<> {
         //last set, do nothing
     }
 
-    uint32_t GetMutationId() const {
+    uint32_t GetMutationID() const {
         return 0;
     }
 
@@ -233,5 +233,7 @@ using TShaderMutationSetEmpty = TShaderMutationSet<>;
         static constexpr char const* mutation_name = #ClassName;     \
     }
 #define DEFINE_MUTATION_SET(...) using TMutationSet = TShaderMutationSet<__VA_ARGS__>
+#define MUTATION_SET(StructName, ...) \
+    struct StructName : public TShaderMutationSet<__VA_ARGS__> {}
 #pragma endregion
 #endif

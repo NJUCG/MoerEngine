@@ -211,24 +211,15 @@ Reservoir SampleLocalLights(inout RandomState _rng,
     float inv_pdf = 0.f;
 
     ctx.SelectNext(_rng, light_info, light_idx, inv_pdf);
-    // printf("ctx.ris_tile_info %d %d\n", ctx.ris_tile_info.tile_offset,
-    //        ctx.ris_tile_info.tile_size);
     float2 uv = _rng.GetFloat2();
     if (StreamLocalLightAtUV(_rng, _sample_configs, _surface, light_idx, uv,
                              inv_pdf, light_info, res, _light_sample)) {
       continue;
     }
   }
-  // if(res.IsValid() && res.GetLightIndex() != s_invalid_light_idx){
-  //   printf("light idx %d\n", res.GetLightIndex());
-  // }
-  // printf("light sample normal %f %f %f\n", _light_sample.n.x,
-  //        _light_sample.n.y, _light_sample.n.z);
 
   res.FinalizeRIS(1.f, _sample_configs.num_mis);
   res.M = 1.f;
-
-  // printf("local light res weight_sum: %f\n", res.weight_sum);
 
   return res;
 }
@@ -396,7 +387,8 @@ Reservoir SampleBrdf(inout RandomState _rng, SampleConfigs _sample_configs,
         }
 
         if (light_idx != s_invalid_light_idx) {
-          src_pdf = EvalLocalLightSrcPdf(light_idx);//local light selection pdf
+          src_pdf = EvalLocalLightSrcPdf(light_idx); // local light selection
+                                                     // pdf
         }
       } else if (!b_hit && (_light_buffer_params.env_light.light_cnt != 0)) {
         // Sample envmap
@@ -405,7 +397,6 @@ Reservoir SampleBrdf(inout RandomState _rng, SampleConfigs _sample_configs,
         rnd = GetEnvironmentMapUVFromDir(dir);
         candidate = _surface.SamplePolymorphicLight(light_info, rnd);
         src_pdf = EvalEnvMapPdf(dir);
-
       }
     }
 

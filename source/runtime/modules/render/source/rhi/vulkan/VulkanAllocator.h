@@ -1,9 +1,11 @@
 #pragma once
 #include "RHICmdReorderer.h"
+#include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
 #include "VulkanCommand.h"
 #include "rhi/RHICommon.h"
+#include "vulkan/vulkan_core.h"
 
 namespace Moer::Render {
 
@@ -15,7 +17,11 @@ namespace Moer::Render {
     public:
         VulkanCmdAllocator(VulkanDevice* _device, VkQueueFlagBits _queue_type);
         ~VulkanCmdAllocator();
-        VkCommandPool GetHandle() const { return command_pool; }
+        VkCommandPool    GetHandle() const { return command_pool; }
+        VkQueueFlags     GetQueueType() const { return queue_type; }
+        std::string_view GetQueueName() const {
+            return VK_TYPE_TO_STRING(VkQueueFlagBits, (VkQueueFlagBits)queue_type);
+        }
     };
     enum class EVkInternalBufferUsage {
         Upload,

@@ -265,10 +265,10 @@ namespace Moer {
                 geo->mesh_buffers = _scene_data.m_mesh_buffers[geo->mesh_buffers_idx];
             }
         }
-        //fill mesh instances
-        for (auto& mesh_instance : _scene_data.m_mesh_instances) {
-            mesh_instance.mesh_info = _scene_data.m_mesh_infos[mesh_instance.mesh_info_idx];
-        }
+        // //fill mesh instances
+        // for (auto& mesh_instance : _scene_data.m_mesh_instances) {
+        //     mesh_instance.mesh_info = _scene_data.m_mesh_infos[mesh_instance.mesh_info_idx];
+        // }
 
         _stream >> _scene_data.m_instance_infos;
     }
@@ -487,6 +487,7 @@ namespace Moer {
         using namespace Moer;
 
         auto& device = Render::RenderDevice::Get();
+        /******************* create instance entities */
         for (auto& instance : _scene_data.m_mesh_instances) {
             auto entity = EntityManager::Get().Create();
             _scene->AddEntity(entity);
@@ -509,18 +510,21 @@ namespace Moer {
 
         assert(_scene_data.m_mesh_instances.size() != 0 && "Mesh instances should not be empty");
 
+        /******************* create camera entities */
         for (auto& camera : _scene_data.m_cameras) {
             auto entity = EntityManager::Get().Create();
             CameraManager::Get().Put(entity, camera);
             _scene->AddCamera(entity);
         }
 
+        /******************* create light entities */
         for (auto& light : _scene_data.m_lights) {
             auto entity = EntityManager::Get().Create();
             LightComponentManager::Get().Put(entity, light);
             _scene->AddLight(entity);
         }
 
+        /******************* create material textures, build to dx/vulkan images, store (name, tex-handle) to material instance buffer */
         Moer::UnorderedMap<std::string, Render::TextureRef> textures;
         Moer::Array<TextureBuilder>                         texture_builders;
         texture_builders.reserve(_scene_data.m_textures.size());
@@ -556,9 +560,11 @@ namespace Moer {
             memcpy(material_data.data() + index * Material::MaterialBytesNum, material->GetUniformBuffer().GetData(), material->GetUniformBuffer().GetSize());
         }
 
+        /******************* copyqueue, copy mesh buffers, texture images, material buffers, light buffers to GPU */
         Render::CommandList cmd_list{};
 
-        auto bindless_array = _scene->GetBindlessArray();
+        auto  bindless_array = _scene->GetBindlessArray();
+        auto& copy_queue     = device.GetCopyQueue();
 
         for (auto& buf : _scene_data.m_mesh_buffers) {
 
@@ -600,7 +606,6 @@ namespace Moer {
             vertex_size += texcoord1_buffer_size;
 
             buf->vertex_buffer = device.CreateBuffer<byte>("Scene::soa_vertex_buffer", vertex_size, EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::ACCELERATION_STRUCTURE | EBufferUsageFlags::UNORDERED_ACCESS);
-
             if (position_buffer_size > 0) {
                 auto* position_buffer_ptr = buf->vertex_factory_buffers.GetBufferData(EVertexAttributes::VA_POSITION);
                 cmd_list.CopyFrom(
@@ -650,13 +655,15 @@ namespace Moer {
             buf->idx_bdls_handle = bindless_array->AllocateBuffer(buf->index_buffer->GetView());
             buf->vtx_bdls_handle = bindless_array->AllocateBuffer(buf->vertex_buffer->GetView());
 
+            /******************* import mesh buffers from cpu-io to the copy queue */
             _scene->EmplaceIOImportedBuffer(buf->vertex_buffer);
             _scene->EmplaceIOImportedBuffer(buf->index_buffer);
         }
 
         _scene->UpdateGpuData();
 
-        auto& copy_queue = device.GetCopyQueue();
+        // auto evt = copy_queue.Execute(cmd_list.Submit());
+        // copy_queue.Sync(evt.timeline);
 
         auto instance_data_buffer = device.CreateBuffer<byte>("Scene::InstanceDataBuffer", _scene->GetInstanceDatas().size_bytes(), EBufferUsageFlags::UNORDERED_ACCESS);
         auto material_buffer      = device.CreateBuffer<byte>("Scene::MaterialInstanceBuffer", _scene_data.m_material_instances.size() * Material::MaterialBytesNum, EBufferUsageFlags::UNORDERED_ACCESS);
@@ -705,18 +712,14 @@ namespace Moer {
         _scene->SetBuffer(EGpuSceneResource::GeometryInstance, geometry_instance_buffer);
         _scene->SetBuffer(EGpuSceneResource::LightInfo, light_buffer);
 
-        light_buffer->SetName("light_buffer");
-        material_buffer->SetName("material_buffer");
-        geometry_data_buffer->SetName("geometry_data_buffer");
-        instance_data_buffer->SetName("instance_data_buffer");
-        geometry_instance_buffer->SetName("geometry_instance_buffer");
-
+        /******************* import material buffers, light buffers, geometry data buffers, instance data buffers from cpu-io queue to the gpu copy queue */
         _scene->EmplaceIOImportedBuffer(light_buffer);
         _scene->EmplaceIOImportedBuffer(material_buffer);
         _scene->EmplaceIOImportedBuffer(geometry_data_buffer);
         _scene->EmplaceIOImportedBuffer(instance_data_buffer);
         _scene->EmplaceIOImportedBuffer(geometry_instance_buffer);
 
+        /******************* export textures and buffers from the gpu copy queue to the gpu graphics queue */
         Array<Render::ExportTexture>
             export_textures;
         export_textures.reserve(textures.size());
@@ -740,6 +743,28 @@ namespace Moer {
         evt = copy_queue.Execute(cmd_list.Submit().Wait(copy_handle, copy_handle->GetValue()));
 
         copy_queue.Sync(evt.timeline);
+
+        Array<ImportTexture> sampled_textures;
+        sampled_textures.reserve(textures.size());
+
+        for (auto& [name, tex] : textures) {
+            sampled_textures.emplace_back(ImportTexture(
+                tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE));
+        }
+
+        Array<ImportBuffer> io_buffers;
+        io_buffers.reserve(_scene->GetIOPendingBuffers().size());
+
+        for (auto& buffer : _scene->GetIOPendingBuffers()) {
+            io_buffers.emplace_back(ImportBuffer(buffer->GetView()));
+        }
+
+        cmd_list.ImportResourcesFromQueue(
+            EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers));
+
+        auto& gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
+        gfx_queue.Execute(cmd_list.Submit());
+        gfx_queue.Sync();
 
         // BuildSceneRaytracing(scene_data,scene.get());
 

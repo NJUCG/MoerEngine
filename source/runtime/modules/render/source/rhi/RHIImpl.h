@@ -150,6 +150,8 @@ namespace Moer::Render {
             },
                               storage);
         }
+
+        mutable BufferView staging_buffer;
     };
 
     struct CopyBackBufferCmd : public Command {
@@ -174,6 +176,8 @@ namespace Moer::Render {
         auto       Offset() const { return offset; }
         auto       ByteSize() const { return byte_size; }
         auto       Data() const { return data; }
+
+        mutable BufferView staging_buffer;
     };
 
     struct CopyBackTextureCmd : public Command {
@@ -206,6 +210,8 @@ namespace Moer::Render {
         auto Offset() const { return offset; }
         auto Size() const { return size; }
         auto Data() const { return data; }
+
+        mutable BufferView staging_buffer;
     };
 
     struct CopyBufferCmd : public Command {
@@ -439,6 +445,8 @@ namespace Moer::Render {
             },
                               storage);
         }
+
+        mutable BufferView staging_buffer;
     };
 
     using ResourceState = std::variant<EBufferRuntimeUsageFlags, ETextureStateFlags>;
@@ -761,99 +769,208 @@ namespace Moer::Render {
         }
     };
 
-    // Specialized version of SetDrawStateCmd for geometry pass
-    struct SetGeometryPassDrawStateCmd : public Command {
-    private:
-        // Origin parameters
-        ArrayArguments                                             args;
-        RenderPassInfo                                             render_pass_info;
-        UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>> mesh_data_array_map;
-        // Derived parameters
-        GraphEventRef                                          evaluate_mesh_task = nullptr;
-        UnorderedMap<Buffer*, BufferRange>                     vertex_buffers;
-        UnorderedMap<Buffer*, BufferRange>                     index_buffers;
-        UnorderedMap<VertexAttributesBitmask, PipelineHandle&> pipeline_map;
-
+    //Between BeginRendering() And EndRendering()
+    struct MultiDrawCmd : public Command {
     public:
-        // clang-format off
-        SetGeometryPassDrawStateCmd(
-            ArrayArguments&&                                             _args,
-            RenderPassInfo&&                                             _info,
-            UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
-            std::string_view                                             _name
-        ) : Command(EType::SetGeometryPassDrawState, _name),
-            args(std::move(_args)),
-            render_pass_info(std::move(_info)),
-            mesh_data_array_map(std::move(_mesh_data_array_map))
-        {
+        MultiDrawCmd(DrawBatch&& _batch, RenderPassInfo&& _info, std::string_view _name) : Command(EType::MultiDraw, _name),
+                                                                                           draw_batch(std::move(_batch)), render_pass_info(std::move(_info)) {
+
             evaluate_mesh_task = LambdaTask::Create([this]() {
-                // TODO: 检查一下是否所有MeshData可以直接全部塞进一个vertex buffer和一个index buffer里
-                for (const auto& [bitmask, mesh_data_array] : mesh_data_array_map) {
+                                     //collect vertex buffer and index buffer
+                                     for (const auto& mesh : draw_batch.draw_cmds) {
+                                         if (std::holds_alternative<Array<MeshDrawData>>(mesh.mesh_dispatch_data)) {
+                                             const auto& mesh_data_array = std::get<Array<MeshDrawData>>(mesh.mesh_dispatch_data);
+                                             for (const auto& mesh_data : mesh_data_array) {
+                                                 if (mesh_data.indirect_draw_param.has_value()) {
+                                                     if (mesh_data.indirect_draw_param->count_buffer.has_value()) {
+                                                         const BufferView& count_view = mesh_data.indirect_draw_param->count_buffer.value();
+                                                         if (indirect_buffers.find(count_view.GetBuffer()) == indirect_buffers.end()) {
+                                                             indirect_buffers[count_view.GetBuffer()] = BufferRange(count_view.GetByteOffset(), count_view.GetByteSize());
+                                                         } else {
+                                                             auto [offset, size] = indirect_buffers[count_view.GetBuffer()];
+                                                             indirect_buffers[count_view.GetBuffer()].Merge(BufferRange(count_view.GetByteOffset(), count_view.GetByteSize()));
+                                                         }
+                                                     }
 
-                    pipeline_map.emplace(bitmask, GeometryPassPsoManager::Get().GetPso(bitmask).handle);
+                                                     const BufferView& indirect_view = mesh_data.indirect_draw_param->buffer;
+                                                     BufferRange       range(indirect_view.GetByteOffset(), indirect_view.GetByteSize());
+                                                     if (indirect_buffers.find(indirect_view.GetBuffer()) == indirect_buffers.end()) {
+                                                         indirect_buffers[indirect_view.GetBuffer()] = range;
+                                                     } else {
+                                                         auto [offset, size] = indirect_buffers[indirect_view.GetBuffer()];
+                                                         indirect_buffers[indirect_view.GetBuffer()].Merge(range);
+                                                     }
+                                                 }
+                                                 for (const auto& vtx_view : mesh_data.vtx_views) {
+                                                     BufferRange range(vtx_view.offset, vtx_view.buffer->GetByteSize());
+                                                     if (vertex_buffers.find(vtx_view.buffer) == vertex_buffers.end()) {
+                                                         vertex_buffers[vtx_view.buffer] = range;
+                                                     } else {
+                                                         auto [offset, size] = vertex_buffers[vtx_view.buffer];
+                                                         vertex_buffers[vtx_view.buffer].Merge(range);
+                                                     }
+                                                 }
+                                                 if (std::holds_alternative<IndexBuffer>(mesh_data.idx_view)) {
+                                                     const auto&       idx_buffer = std::get<IndexBuffer>(mesh_data.idx_view);
+                                                     const BufferView& idx_view   = idx_buffer.buffer;
+                                                     BufferRange       range(idx_view.GetByteOffset(), idx_view.GetByteSize());
+                                                     if (index_buffers.find(idx_view.GetBuffer()) == index_buffers.end()) {
+                                                         index_buffers[idx_view.GetBuffer()] = range;
+                                                     } else {
+                                                         auto [offset, size] = index_buffers[idx_view.GetBuffer()];
+                                                         index_buffers[idx_view.GetBuffer()].Merge(range);
+                                                     }
+                                                 }
+                                             }
+                                         } else if (std::holds_alternative<Array<DispatchMeshData>>(mesh.mesh_dispatch_data)) {
+                                             const auto& mesh_data_array = std::get<Array<DispatchMeshData>>(mesh.mesh_dispatch_data);
+                                             for (const auto& mesh_data : mesh_data_array) {
+                                                 if (std::holds_alternative<IndirectDrawParam>(mesh_data.draw_param)) {
+                                                     const auto& indirect_view = std::get<IndirectDrawParam>(mesh_data.draw_param);
+                                                     if (indirect_view.count_buffer.has_value()) {
 
-                    for (const auto& mesh : mesh_data_array) {
-                        for (const auto& vtx_view : mesh.vtx_views) {
-                            BufferRange range(vtx_view.offset, vtx_view.buffer->GetByteSize());
-                            if (vertex_buffers.find(vtx_view.buffer) == vertex_buffers.end()) {
-                                vertex_buffers[vtx_view.buffer] = range;
-                            } else {
-                                auto [offset, size] = vertex_buffers[vtx_view.buffer];
-                                vertex_buffers[vtx_view.buffer].Merge(range);
-                            }
-                        }
-                        if (std::holds_alternative<IndexBuffer>(mesh.idx_view)) {
-                            const auto&       idx_buffer = std::get<IndexBuffer>(mesh.idx_view);
-                            const BufferView& idx_view   = idx_buffer.buffer;
-                            BufferRange       range(idx_view.GetByteOffset(), idx_view.GetByteSize());
-                            if (index_buffers.find(idx_view.GetBuffer()) == index_buffers.end()) {
-                                index_buffers[idx_view.GetBuffer()] = range;
-                            } else {
-                                auto [offset, size] = index_buffers[idx_view.GetBuffer()];
-                                index_buffers[idx_view.GetBuffer()].Merge(range);
-                            }
-                        }
-                    }
-                }
-            }).Dispatch();
+                                                         const BufferView& count_view = indirect_view.count_buffer.value();
+                                                         if (indirect_buffers.find(count_view.GetBuffer()) == indirect_buffers.end()) {
+                                                             indirect_buffers[count_view.GetBuffer()] = BufferRange(count_view.GetByteOffset(), count_view.GetByteSize());
+                                                         } else {
+                                                             auto [offset, size] = indirect_buffers[count_view.GetBuffer()];
+                                                             indirect_buffers[count_view.GetBuffer()].Merge(BufferRange(count_view.GetByteOffset(), count_view.GetByteSize()));
+                                                         }
+                                                     }
+
+                                                     const BufferView& indirect_buffer = std::get<IndirectDrawParam>(mesh_data.draw_param).buffer;
+                                                     BufferRange       range(indirect_buffer.GetByteOffset(), indirect_buffer.GetByteSize());
+                                                 }
+                                             }
+                                         }
+                                     }
+                                 }).Dispatch();
         }
-        // clang-format on
-
         EQueueType GetQueueType() const override { return EQueueType::Graphics; }
 
-        const auto& Args() const { return args; }
-        const auto& RenderPassInfo() const { return render_pass_info; }
-        const auto& DrawDataArrayMap() const { return mesh_data_array_map; }
+    public:
+        DrawBatch      draw_batch;
+        RenderPassInfo render_pass_info;
 
+    public:
         const auto& VertexBuffers() const {
             if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
             return vertex_buffers;
         }
+
         const auto& IndexBuffers() const {
             if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
             return index_buffers;
         }
-        const auto& PipelineMap() const {
+
+        const auto& IndirectBuffers() const {
             if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
-            return pipeline_map;
+            return indirect_buffers;
         }
 
-        void IterateArgs(std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) const {
-            int bdls_idx = -1;
-            for (int i = 0; i < args.args.size(); i++) {
-                if (std::holds_alternative<BindlessArrayRef>(args.args[i])) {
-                    bdls_idx = i;
-                    continue;
-                    ;
-                }
-                _func(args.args[i], i);
-            }
+        const auto& RenderPassInfo() const { return render_pass_info; }
 
-            if (bdls_idx != -1) {
-                _bdls_post_func(args.args[bdls_idx], bdls_idx);
-            }
-        }
+    private:
+        UnorderedMap<Buffer*, BufferRange> vertex_buffers;
+        UnorderedMap<Buffer*, BufferRange> index_buffers;
+        UnorderedMap<Buffer*, BufferRange> indirect_buffers;
+
+        GraphEventRef evaluate_mesh_task = nullptr;
     };
+
+    // Specialized version of SetDrawStateCmd for geometry pass
+    // struct SetGeometryPassDrawStateCmd : public Command {
+    // private:
+    //     // Origin parameters
+    //     ArrayArguments                                             args;
+    //     RenderPassInfo                                             render_pass_info;
+    //     UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>> mesh_data_array_map;
+    //     // Derived parameters
+    //     GraphEventRef                                          evaluate_mesh_task = nullptr;
+    //     UnorderedMap<Buffer*, BufferRange>                     vertex_buffers;
+    //     UnorderedMap<Buffer*, BufferRange>                     index_buffers;
+    //     UnorderedMap<VertexAttributesBitmask, PipelineHandle&> pipeline_map;
+
+    // public:
+    //     // clang-format off
+    //     SetGeometryPassDrawStateCmd(
+    //         ArrayArguments&&                                             _args,
+    //         RenderPassInfo&&                                             _info,
+    //         UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
+    //         std::string_view                                             _name
+    //     ) : Command(EType::SetGeometryPassDrawState, _name),
+    //         args(std::move(_args)),
+    //         render_pass_info(std::move(_info)),
+    //         mesh_data_array_map(std::move(_mesh_data_array_map))
+    //     {
+    //         evaluate_mesh_task = LambdaTask::Create([this]() {
+    //             // TODO: 检查一下是否所有MeshData可以直接全部塞进一个vertex buffer和一个index buffer里
+    //             for (const auto& [bitmask, mesh_data_array] : mesh_data_array_map) {
+
+    //                 pipeline_map.emplace(bitmask, GeometryPassPsoManager::Get().GetPso(bitmask).handle);
+
+    //                 for (const auto& mesh : mesh_data_array) {
+    //                     for (const auto& vtx_view : mesh.vtx_views) {
+    //                         BufferRange range(vtx_view.offset, vtx_view.buffer->GetByteSize());
+    //                         if (vertex_buffers.find(vtx_view.buffer) == vertex_buffers.end()) {
+    //                             vertex_buffers[vtx_view.buffer] = range;
+    //                         } else {
+    //                             auto [offset, size] = vertex_buffers[vtx_view.buffer];
+    //                             vertex_buffers[vtx_view.buffer].Merge(range);
+    //                         }
+    //                     }
+    //                     if (std::holds_alternative<IndexBuffer>(mesh.idx_view)) {
+    //                         const auto&       idx_buffer = std::get<IndexBuffer>(mesh.idx_view);
+    //                         const BufferView& idx_view   = idx_buffer.buffer;
+    //                         BufferRange       range(idx_view.GetByteOffset(), idx_view.GetByteSize());
+    //                         if (index_buffers.find(idx_view.GetBuffer()) == index_buffers.end()) {
+    //                             index_buffers[idx_view.GetBuffer()] = range;
+    //                         } else {
+    //                             auto [offset, size] = index_buffers[idx_view.GetBuffer()];
+    //                             index_buffers[idx_view.GetBuffer()].Merge(range);
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //         }).Dispatch();
+    //     }
+    //     // clang-format on
+
+    //     EQueueType GetQueueType() const override { return EQueueType::Graphics; }
+
+    //     const auto& Args() const { return args; }
+    //     const auto& RenderPassInfo() const { return render_pass_info; }
+    //     const auto& DrawDataArrayMap() const { return mesh_data_array_map; }
+
+    //     const auto& VertexBuffers() const {
+    //         if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+    //         return vertex_buffers;
+    //     }
+    //     const auto& IndexBuffers() const {
+    //         if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+    //         return index_buffers;
+    //     }
+    //     const auto& PipelineMap() const {
+    //         if (evaluate_mesh_task && !evaluate_mesh_task->IsComplete()) { evaluate_mesh_task->Wait(); }
+    //         return pipeline_map;
+    //     }
+
+    //     void IterateArgs(std::function<void(const TArg&, uint _idx)> _func, std::function<void(const TArg&, uint _idx)> _bdls_post_func) const {
+    //         int bdls_idx = -1;
+    //         for (int i = 0; i < args.args.size(); i++) {
+    //             if (std::holds_alternative<BindlessArrayRef>(args.args[i])) {
+    //                 bdls_idx = i;
+    //                 continue;
+    //                 ;
+    //             }
+    //             _func(args.args[i], i);
+    //         }
+
+    //         if (bdls_idx != -1) {
+    //             _bdls_post_func(args.args[bdls_idx], bdls_idx);
+    //         }
+    //     }
+    // };
     struct DispatchIndirectParam {
         BufferView indirect;
     };
@@ -934,8 +1051,12 @@ namespace Moer::Render {
         BuildAccelerationStructuresCmd() : Command(EType::BuildAccel) {}
 
     public:
-        BuildAccelerationStructuresCmd(const Array<AccelerationStructureBuildParam>& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(_params) {}
-        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(std::move(_params)) {}
+        BuildAccelerationStructuresCmd(const Array<AccelerationStructureBuildParam>& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(_params) {
+            AsyncPreprocess();
+        }
+        BuildAccelerationStructuresCmd(Array<AccelerationStructureBuildParam>&& _params, std::string_view _name = typenames[uint(EType::BuildAccel)]) : Command(EType::BuildAccel, _name), params(std::move(_params)) {
+            AsyncPreprocess();
+        }
 
         EQueueType GetQueueType() const override { return EQueueType::Compute; }
 
@@ -943,9 +1064,37 @@ namespace Moer::Render {
 
         auto& Scratch() const { return scratch_buffer; }
 
+        auto& VtxBuffers() const {
+            if (evaluate_task && !evaluate_task->IsComplete()) { evaluate_task->Wait(); }
+            return vtx_buffers;
+        }
+
+        auto& IdxBuffers() const {
+            if (evaluate_task && !evaluate_task->IsComplete()) { evaluate_task->Wait(); }
+            return idx_buffers;
+        }
+
     private:
+        void AsyncPreprocess() {
+            evaluate_task = LambdaTask::Create([this]() {
+                                for (const auto& param : params) {
+                                    //vtx buffers and idx buffers
+                                    for (const auto& segment : param.geometry->GetInfo().segments) {
+                                        if (segment.vertex_buffer) {
+                                            vtx_buffers.insert(segment.vertex_buffer);
+                                        }
+                                        if (segment.index_buffer) {
+                                            idx_buffers.insert(segment.index_buffer);
+                                        }
+                                    }
+                                }
+                            }).Dispatch();
+        }
         Array<AccelerationStructureBuildParam> params;
         mutable BufferView                     scratch_buffer{};
+        UnorderedSet<Buffer*>                  vtx_buffers;
+        UnorderedSet<Buffer*>                  idx_buffers;
+        GraphEventRef                          evaluate_task = nullptr;
     };
 
     struct UpdateRaytracingSceneCmd : public Command {

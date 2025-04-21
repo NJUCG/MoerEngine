@@ -847,42 +847,6 @@ namespace Moer::Render {
     }
 
     void VulkanRHIGraphicsCommandList::PrepareDrawCommand() {
-        VulkanPipelineState* vk_pso        = nullptr;
-        auto                 binding_point = current_pso.index() == 0 ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE;
-        if (current_pso.index() == 0) {
-            vk_pso = std::get<0>(current_pso);
-        } else {
-            vk_pso = std::get<1>(current_pso);
-        }
-        VK_CHECK_NULLPTR(vk_pso, "PreDrawCommand: graphics pipeline state is nullptr!", return);
-        auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
-        VK_CHECK_NULLPTR(vk_resource_cache, "PreDrawCommand: graphics pipeline resource cache is nullptr!", return);
-
-        auto* pipeline_layout = vk_pso->GetPipelineLayout();
-
-        const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
-        // 1. update and bind descriptor sets
-        if (vk_resource_cache->HasDescriptorSets()) {
-            vk_resource_cache->UpdateDescriptorSets(vk_sets_layout);
-            if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
-                vk_resource_cache->BindDescriptorSets(m_command_buffer, binding_point, pipeline_layout);
-                m_bound_sets = vk_resource_cache->GetDescriptorSets();
-            }
-        }
-
-        // 2. push constants
-        if (vk_resource_cache->HasPushConstants()) {
-            for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
-                vkCmdPushConstants(
-                    m_command_buffer,
-                    pipeline_layout,
-                    constant_info.flags,
-                    constant_info.byte_offset_in_raw_data,
-                    constant_info.size,
-                    constant_info.raw_data.data());
-            }
-            vk_resource_cache->ResetToPush();
-        }
     }
 
     void VulkanRHIGraphicsCommandList::PrepareDispatch() {
@@ -951,36 +915,6 @@ namespace Moer::Render {
         VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
     }
     void VulkanRHIComputeCommandList::PrepareDispatchCommand() {
-        const auto* vk_pso = m_current_pipeline_state;
-        VK_CHECK_NULLPTR(vk_pso, "PrepareDispatchCommand: compute pipeline state is nullptr!", return);
-        auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
-        VK_CHECK_NULLPTR(vk_resource_cache, "PrepareDispatchCommand: compute pipeline resource cache is nullptr!", return);
-
-        auto pipeline_layout = vk_pso->GetPipelineLayout();
-
-        const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
-        // 1. update and bind descriptor sets
-        if (vk_resource_cache->HasDescriptorSets()) {
-            vk_resource_cache->UpdateDescriptorSets(vk_sets_layout);
-            if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
-                vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout);
-                m_bound_sets = vk_resource_cache->GetDescriptorSets();
-            }
-        }
-
-        // 2. push constants
-        if (vk_resource_cache->HasPushConstants()) {
-            for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
-                vkCmdPushConstants(
-                    m_command_buffer,
-                    pipeline_layout,
-                    constant_info.flags,
-                    constant_info.byte_offset_in_raw_data,
-                    constant_info.size,
-                    constant_info.raw_data.data());
-            }
-            vk_resource_cache->ResetToPush();
-        }
     }
 
     VulkanRHIRayTracingCommandList::VulkanRHIRayTracingCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}
@@ -1046,36 +980,6 @@ namespace Moer::Render {
         VulkanRHICommandListBase::SetPipelineBarrier(_dependency);
     }
     void VulkanRHIRayTracingCommandList::PrepareTraceRayCommand() {
-        const auto* vk_pso = m_current_pipeline_state;
-        VK_CHECK_NULLPTR(vk_pso, "PrepareTraceRayCommand: raytracing pipeline state is nullptr!", return);
-        auto* vk_resource_cache = vk_pso->GetPipelineResourceCache();
-        VK_CHECK_NULLPTR(vk_resource_cache, "PrepareTraceRayCommand: raytracing pipeline resource cache is nullptr!", return);
-
-        auto pipeline_layout = vk_pso->GetPipelineLayout();
-
-        const auto* vk_sets_layout = vk_pso->GetDescriptorSetsLayout();
-        // 1. update and bind descriptor sets
-        if (vk_resource_cache->HasDescriptorSets()) {
-            vk_resource_cache->UpdateDescriptorSets(vk_sets_layout);
-            if (m_bound_sets != vk_resource_cache->GetDescriptorSets()) {
-                vk_resource_cache->BindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline_layout);
-                m_bound_sets = vk_resource_cache->GetDescriptorSets();
-            }
-        }
-
-        // 2. push constants
-        if (vk_resource_cache->HasPushConstants()) {
-            for (const auto& constant_info : vk_resource_cache->GetConstantsToPush()) {
-                vkCmdPushConstants(
-                    m_command_buffer,
-                    pipeline_layout,
-                    constant_info.flags,
-                    constant_info.byte_offset_in_raw_data,
-                    constant_info.size,
-                    constant_info.raw_data.data());
-            }
-            vk_resource_cache->ResetToPush();
-        }
     }
 
     VulkanRHICopyCommandList::VulkanRHICopyCommandList(VulkanDevice* _device, VkCommandPool _pool, VkCommandBufferLevel _level) : VulkanRHICommandListBase(_device, _pool, _level) {}
@@ -1180,6 +1084,7 @@ namespace Moer::Render {
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1};
         VK_CHECK_RESULT(vkAllocateCommandBuffers(device.GetDevice(), &command_buffer_info, &command_buffer));
+        _device.SetResourceName((uint64)command_buffer, VK_OBJECT_TYPE_COMMAND_BUFFER, std::format("CommandBuffer_{}", allocator->GetQueueName()));
     }
 
     VulkanCmdList::~VulkanCmdList() {
@@ -1207,7 +1112,6 @@ namespace Moer::Render {
             .srcOffset = _src_offset,
             .dstOffset = _dst_offset,
             .size      = _size};
-
         vkCmdCopyBuffer(command_buffer, _src->GetHandle(), _dst->GetHandle(), 1, &copy_region);
     }
     void VulkanCmdList::CopyBufferToTexture(
@@ -1262,22 +1166,24 @@ namespace Moer::Render {
         auto*        buffer    = static_cast<VulkanBuffer*>(_dst.buffer);
         VmaAllocator allocator = device.GetVmaAllocator();
 
-        void* p_data;
-        VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
-        std::memcpy((byte*)p_data + _dst.GetByteOffset(), _data, _size);
-        vmaUnmapMemory(allocator, buffer->GetAllocation());
-        vmaFlushAllocation(allocator, buffer->GetAllocation(), _dst.GetByteOffset(), _size);
+        // void* p_data;
+        // VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
+        // std::memcpy((byte*)p_data + _dst.GetByteOffset(), _data, _size);
+        // vmaUnmapMemory(allocator, buffer->GetAllocation());
+        // vmaFlushAllocation(allocator, buffer->GetAllocation(), _dst.GetByteOffset(), _size);
+        VK_CHECK_RESULT(vmaCopyMemoryToAllocation(allocator, _data, buffer->GetAllocation(), _dst.GetByteOffset(), _size));
     }
 
-    void VulkanCmdList::CopyData(const void* _dst, const BufferView& _src, uint64 _size) {
+    void VulkanCmdList::CopyData(void* _dst, const BufferView& _src, uint64 _size) {
         auto*        buffer    = static_cast<VulkanBuffer*>(_src.buffer);
         VmaAllocator allocator = device.GetVmaAllocator();
 
-        void* p_data;
-        VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
-        std::memcpy((byte*)_dst, (byte*)p_data + _src.GetByteOffset(), _size);
-        vmaUnmapMemory(allocator, buffer->GetAllocation());
-        vmaFlushAllocation(allocator, buffer->GetAllocation(), _src.GetByteOffset(), _size);
+        // void* p_data;
+        // VK_CHECK_RESULT(vmaMapMemory(allocator, buffer->GetAllocation(), &p_data));
+        // std::memcpy((byte*)_dst, (byte*)p_data + _src.GetByteOffset(), _size);
+        // vmaUnmapMemory(allocator, buffer->GetAllocation());
+        // vmaFlushAllocation(allocator, buffer->GetAllocation(), _src.GetByteOffset(), _size);
+        VK_CHECK_RESULT(vmaCopyAllocationToMemory(allocator, buffer->GetAllocation(), _src.GetByteOffset(), _dst, _size));
     }
 
     void* VulkanCmdList::MapBuffer(const BufferView& _buffer) {
@@ -1348,6 +1254,31 @@ namespace Moer::Render {
         uint32_t      _draw_cnt,
         uint32_t      _stride) {
         vkCmdDrawIndirect(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+    }
+
+    void VulkanCmdList::DispatchMesh(
+        uint32_t _group_count_x,
+        uint32_t _group_count_y,
+        uint32_t _group_count_z) {
+        vkCmdDrawMeshTasksEXT(command_buffer, _group_count_x, _group_count_y, _group_count_z);
+    }
+
+    void VulkanCmdList::DispatchMeshIndirect(
+        VulkanBuffer* _buffer,
+        uint64        _offset,
+        uint32_t      _draw_cnt,
+        uint32_t      _stride) {
+        vkCmdDrawMeshTasksIndirectEXT(command_buffer, _buffer->GetHandle(), _offset, _draw_cnt, _stride);
+    }
+
+    void VulkanCmdList::DispatchMeshIndirectCount(
+        VulkanBuffer* _commands,
+        uint64        _commands_offset,
+        VulkanBuffer* _count,
+        uint64        _count_offset,
+        uint32_t      _max_cnt,
+        uint32_t      _stride) {
+        vkCmdDrawMeshTasksIndirectCountEXT(command_buffer, _commands->GetHandle(), _commands_offset, _count->GetHandle(), _count_offset, _max_cnt, _stride);
     }
 
     void VulkanCmdList::CopyTexture(
@@ -1423,13 +1354,6 @@ namespace Moer::Render {
     }
 
     void VulkanCmdList::UploadDescriptors(PipelineHandle& _pso_handle) {
-        auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
-
-        auto* resource_cache = vk_pso->GetPipelineResourceCache();
-        if (resource_cache->HasDescriptorSets()) {
-            resource_cache->UpdateDescriptorSets(vk_pso->GetDescriptorSetsLayout());
-            resource_cache->BindDescriptorSets(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetPipelineLayout());
-        }
     }
 
     void VulkanCmdList::UploadPushConstants(

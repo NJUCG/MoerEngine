@@ -14,6 +14,9 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "rhi/vulkan/VulkanRHI.h"
 
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <volk.h>
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
@@ -275,13 +278,26 @@ namespace Moer::Render {
     }
 
     VkSwapchain::VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info) : Swapchain(), device(*static_cast<VulkanDevice*>(&_device)) {
+        present_threads.resize(max_frames_in_flight);
         CreateOrRecreate(_info);
     }
     void VkSwapchain::WaitFrameInFlight() {
-        if (image_idx < max_frames_in_flight) {
-            return;
+        // if (image_idx < max_frames_in_flight) {
+        //     return;
+        // }
+        // auto frame_offset = image_idx % max_frames_in_flight;
+        // vkWaitForFences(device.GetDevice(), 1, &in_flight_fences[frame_offset], VK_TRUE, UINT64_MAX);
+        // vkResetFences(device.GetDevice(), 1, &in_flight_fences[frame_offset]);
+        while (cur_present_cnt.load(std::memory_order_relaxed) >= max_frames_in_flight) {
+            std::this_thread::yield();
         }
-        auto frame_offset = image_idx % max_frames_in_flight;
+    }
+
+    void VkSwapchain::WaitFrameInFlight(uint64 _image_idx) {
+        // if (_image_idx < max_frames_in_flight) {
+        //     return;
+        // }
+        auto frame_offset = _image_idx % max_frames_in_flight;
         vkWaitForFences(device.GetDevice(), 1, &in_flight_fences[frame_offset], VK_TRUE, UINT64_MAX);
         vkResetFences(device.GetDevice(), 1, &in_flight_fences[frame_offset]);
     }
@@ -291,6 +307,9 @@ namespace Moer::Render {
     }
 
     void VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
+        //FIXME: this is not a good way to do it, and it may have issue in multi-threaded env
+        //best do sync in a separate thread, and give sync op to user
+        // vkQueueWaitIdle(device.GetPresentQueue());
         CreateOrRecreate(_info);
     }
     void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
@@ -370,7 +389,9 @@ namespace Moer::Render {
             for (uint i = 0; i < image_cnt; i++) {
                 VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
                 vkCreateSemaphore(device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &image_ready_fences[i]);
+                device.SetResourceName(uint64(image_ready_fences[i]), VK_OBJECT_TYPE_SEMAPHORE, "ImageReadySemaphore");
                 vkCreateSemaphore(device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &render_finished_fences[i]);
+                device.SetResourceName(uint64(render_finished_fences[i]), VK_OBJECT_TYPE_SEMAPHORE, "RenderFinishedSemaphore");
             }
         }
 
@@ -391,7 +412,6 @@ namespace Moer::Render {
         image_idx = 0;
     }
     VkSwapchain::~VkSwapchain() {
-
         if (handle) {
             vkDestroySwapchainKHR(device.GetDevice(), handle, VK_NULL_HANDLE);
         }
@@ -449,6 +469,34 @@ namespace Moer::Render {
         } else if (result != VK_SUCCESS) {
             assert(false && "Error presenting to swapchain.");
         }
+        EnqueuePresent(image_idx);
         image_idx++;
+    }
+
+    void VkSwapchain::OnFinishPresent(uint64 _image_idx) {
+        cur_present_cnt.fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+    void VkSwapchain::EnqueuePresent(uint64 _present_idx) {
+
+        cur_present_cnt.fetch_add(1, std::memory_order_acq_rel);
+        auto& thread = present_threads[_present_idx % max_frames_in_flight];
+        if (thread.joinable()) {
+            thread.join();
+        }
+        thread = std::jthread([this, _present_idx]() {
+            vkWaitForFences(device.GetDevice(), 1, &in_flight_fences[_present_idx % max_frames_in_flight], VK_TRUE, UINT64_MAX);
+            vkResetFences(device.GetDevice(), 1, &in_flight_fences[_present_idx % max_frames_in_flight]);
+            OnFinishPresent(_present_idx);
+        });
+    }
+
+    void VkSwapchain::Sync() {
+        //wait for present copy
+        while (cur_present_cnt.load(std::memory_order_relaxed) > 0) {
+            std::this_thread::yield();
+        }
+        // wait for present queue
+        vkQueueWaitIdle(device.GetPresentQueue());
     }
 }// namespace Moer::Render

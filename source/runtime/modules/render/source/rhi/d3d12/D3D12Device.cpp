@@ -342,7 +342,7 @@ namespace Moer::Render {
 
         // TODO shader reflection-> pipeline reflection
 
-        auto& reflect_map = cs_info.shader_param_map.reflect_map;
+        auto& reflect_map = cs_info.shader_param_map->reflect_map;
 
         Array<ParamInfoFlags> binding_infos(_shaders.layout_hash.size());
 
@@ -441,12 +441,12 @@ namespace Moer::Render {
         if (_type == EQueueType::Graphics) return *gfx_queue;
         // TODO: 在此处插入 return 语句
         struct DummyCommandQueue : CommandQueue {
-            void                              Test();
-            virtual void                      Wait(WaitEvent _event) {};
-            virtual WaitEvent                 Execute(CmdSubmit&& _submit) { return {}; };
-            virtual void                      Present(SwapchainRef _swapchain, TextureView _target) {};
-            virtual void                      Sync() {};
-            virtual Array<ProfileResultEntry> GetProfilerEntry() { return {}; }
+            void                Test();
+            virtual void        Wait(WaitEvent _event) {};
+            virtual WaitEvent   Execute(CmdSubmit&& _submit) { return {}; };
+            virtual void        Present(SwapchainRef _swapchain, TextureView _target) {};
+            virtual void        Sync() {};
+            virtual ProfileData GetProfilerEntry() { return {}; }
         };
         static DummyCommandQueue queue;
         return queue;

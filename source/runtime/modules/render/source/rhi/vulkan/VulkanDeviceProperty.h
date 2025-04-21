@@ -27,6 +27,9 @@ public:
     VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties;
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR    ray_tracing_pipeline_properties;
 
+    // mesh shader
+    VkPhysicalDeviceMeshShaderPropertiesEXT mesh_shader_properties;
+    // memory copy indirect
     VkPhysicalDeviceCopyMemoryIndirectPropertiesNV  copy_memory_indirect_properties;
     VkPhysicalDeviceMemoryDecompressionPropertiesNV memory_decompression_properties;
 };

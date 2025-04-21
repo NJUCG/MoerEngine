@@ -484,11 +484,13 @@ namespace Moer::Render {
                 case ResourceType::Bindless: {
                     auto* bindless_handle             = static_cast<BindlessHandle*>(_handle);
                     bindless_handle->view.write_layer = _layer;
+                    bindless_handle->view.read_layer  = _layer;
                     break;
                 }
                 case ResourceType::Accel: {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(_handle);
                     no_range_handle->view.write_layer = _layer;
+                    no_range_handle->view.read_layer  = _layer;
                     break;
                 }
                 default: {
@@ -506,6 +508,7 @@ namespace Moer::Render {
                     auto* bindless_handle             = static_cast<BindlessHandle*>(_handle);
                     layer                             = GetLastLayerWrite(bindless_handle);
                     bindless_handle->view.write_layer = layer;
+                    bindless_handle->view.read_layer  = layer;
                     break;
                 }
                 case ResourceType::Accel: {
@@ -564,6 +567,7 @@ namespace Moer::Render {
                     auto* no_range_handle             = static_cast<NoRangeHandle*>(write_handle);
                     layer                             = std::max(layer, GetLastLayerWrite(no_range_handle));
                     no_range_handle->view.write_layer = layer;
+                    no_range_handle->view.read_layer  = layer;
                     break;
                 }
                 default: {
@@ -754,12 +758,24 @@ namespace Moer::Render {
 
                 for (const auto& [handle, state] : _cmd->ImportTextures()) {
                     RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
-                    layer                     = GetLastLayerWrite(range_handle, Range(handle.mip_level, handle.num_mips));
+                    layer                     = GetLastLayerRead(range_handle, Range(handle.mip_level, handle.num_mips));
                     assert(layer == 0 && std::format("Import Texture {} should be the first command", handle.GetTexture()->GetName()).c_str());
                 }
+
+                for (const auto& [handle, state] : _cmd->ImportBuffers()) {
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer));
+                    layer                     = GetLastLayerRead(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()));
+                    assert(layer == 0 && std::format("Import Buffer {} should be the first command", handle.GetBuffer()->GetName()).c_str());
+                }
+
                 for (const auto& [handle, state] : _cmd->ImportTextures()) {
                     RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
                     range_handle->EmplaceWriteLayer(Range(handle.mip_level, handle.num_mips), layer);
+                }
+
+                for (const auto& [handle, state] : _cmd->ImportBuffers()) {
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer));
+                    range_handle->EmplaceWriteLayer(Range(handle.GetByteOffset(), handle.GetByteSize()), layer);
                 }
             } else {
                 barrier_resources.reserve(_cmd->ExportTextures().size());
@@ -768,13 +784,22 @@ namespace Moer::Render {
                 for (const auto& [handle, state] : _cmd->ExportTextures()) {
                     RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
                     layer                     = GetLastLayerWrite(range_handle, Range(handle.mip_level, handle.num_mips));
-                    //TODO: store export resources and check later usages
-                    // assert(layer == 0 && std::format("Export Texture {} should be the first command", handle.GetTexture()->GetName()).c_str());
+                }
+
+                for (const auto& [handle, state] : _cmd->ExportBuffers()) {
+
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer));
+                    layer                     = GetLastLayerWrite(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()));
                 }
 
                 for (const auto& [handle, state] : _cmd->ExportTextures()) {
                     RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer));
                     range_handle->EmplaceWriteLayer(Range(handle.mip_level, handle.num_mips), layer);
+                }
+
+                for (const auto& [handle, state] : _cmd->ExportBuffers()) {
+                    RangeHandle* range_handle = static_cast<RangeHandle*>(GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer));
+                    range_handle->EmplaceWriteLayer(Range(handle.GetByteOffset(), handle.GetByteSize()), layer);
                 }
             }
 
@@ -857,31 +882,51 @@ namespace Moer::Render {
             AddCmd(_cmd, m_dispatch_layer);
         }
 
-        void VisitCmd(const SetGeometryPassDrawStateCmd* _cmd) {
-            int64 layer = 0;
-            m_arg_read_resources.clear();
+        void VisitCmd(const MultiDrawCmd* _cmd) {
+            bool b_use_bdls = false;
             m_arg_write_resources.clear();
+            m_arg_read_resources.clear();
             temp_writed_resources.clear();
 
-            auto func = [&](const TArg& _arg, uint _idx) {
-                for (const auto& [bitmask, pso] : _cmd->PipelineMap()) {
-                    VisitArgs(_arg, pso.binding_infos[_idx].state_flags);
+            TArg*                               bdls = nullptr;
+            UnorderedSet<const ArrayArguments*> param_set;
+            for (const auto& draw_cmd : _cmd->draw_batch.draw_cmds) {
+                const auto& pipeline = draw_cmd.handle;
+
+                auto func = [&](const TArg& _arg, uint _idx) {
+                    if (pipeline.valid_bits & (1 << _idx))
+                        VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags);
+                };
+
+                auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+                    if (pipeline.valid_bits & (1 << _idx)) {
+                        VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
+                        b_use_bdls = true;
+                    }
+                };
+                const ArrayArguments* arg = std::holds_alternative<ArrayArguments>(draw_cmd.args) ?
+                                                &std::get<ArrayArguments>(draw_cmd.args) :
+                                                (std::holds_alternative<ArrayArgReference>(draw_cmd.args) ?
+                                                     &m_cached_arg_refs[std::get<ArrayArgReference>(draw_cmd.args)()] :
+                                                     nullptr);
+                if (arg && param_set.emplace(arg).second) {
+                    IterateArgs(*arg, func, bdls_post_func);
                 }
-            };
-
-            auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-                VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
-            };
-
-            _cmd->IterateArgs(func, bdls_post_func);
+            }
 
             const auto& vbs = _cmd->VertexBuffers();
             for (const auto& vb : vbs) {
                 EmplaceArg((uint64)(vb.first), ResourceType::Texture_Buffer, Range(vb.second.min, vb.second.max - vb.second.min), false);
             }
+
             const auto& ibs = _cmd->IndexBuffers();
             for (const auto& ib : ibs) {
                 EmplaceArg((uint64)(ib.first), ResourceType::Texture_Buffer, Range(ib.second.min, ib.second.max - ib.second.min), false);
+            }
+
+            const auto& indirect = _cmd->IndirectBuffers();
+            for (const auto& ind : indirect) {
+                EmplaceArg((uint64)(ind.first), ResourceType::Texture_Buffer, Range(ind.second.min, ind.second.max - ind.second.min), false);
             }
             //depth and render targets
             const auto& pass_info = _cmd->RenderPassInfo();
@@ -904,15 +949,75 @@ namespace Moer::Render {
                     EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), true);
                 }
             }
+
             for (const auto& write_res : m_arg_write_resources) {
                 RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
             }
-
             for (const auto& read_res : m_arg_read_resources) {
                 RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
             }
+            if (b_use_bdls) {
+                m_max_bdls_layer = std::max(m_max_bdls_layer, m_dispatch_layer);
+            }
             AddCmd(_cmd, m_dispatch_layer);
         }
+
+        // void VisitCmd(const SetGeometryPassDrawStateCmd* _cmd) {
+        //     int64 layer = 0;
+        //     m_arg_read_resources.clear();
+        //     m_arg_write_resources.clear();
+        //     temp_writed_resources.clear();
+
+        //     auto func = [&](const TArg& _arg, uint _idx) {
+        //         for (const auto& [bitmask, pso] : _cmd->PipelineMap()) {
+        //             VisitArgs(_arg, pso.binding_infos[_idx].state_flags);
+        //         }
+        //     };
+
+        //     auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+        //         VisitBindlessArg(std::get<BindlessArrayRef>(_arg), temp_writed_resources);
+        //     };
+
+        //     _cmd->IterateArgs(func, bdls_post_func);
+
+        //     const auto& vbs = _cmd->VertexBuffers();
+        //     for (const auto& vb : vbs) {
+        //         EmplaceArg((uint64)(vb.first), ResourceType::Texture_Buffer, Range(vb.second.min, vb.second.max - vb.second.min), false);
+        //     }
+        //     const auto& ibs = _cmd->IndexBuffers();
+        //     for (const auto& ib : ibs) {
+        //         EmplaceArg((uint64)(ib.first), ResourceType::Texture_Buffer, Range(ib.second.min, ib.second.max - ib.second.min), false);
+        //     }
+        //     //depth and render targets
+        //     const auto& pass_info = _cmd->RenderPassInfo();
+        //     if (pass_info.depth_attachment.Valid()) {
+        //         const auto& depth          = pass_info.depth_attachment;
+        //         auto        depth_store_op = GetStoreOp(GetDepthAction(depth.action));
+        //         if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD) {
+        //             EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), false);
+        //         }
+        //         if (depth_store_op == EAttachmentStoreOp::STORE) {
+        //             EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), true);
+        //         }
+        //     }
+        //     for (const auto& target : pass_info.color_attachments) {
+        //         auto color_store_op = GetStoreOp(target.action);
+        //         if (GetLoadOp(target.action) == EAttachmentLoadOp::LOAD) {
+        //             EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), false);
+        //         }
+        //         if (color_store_op == EAttachmentStoreOp::STORE) {
+        //             EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), true);
+        //         }
+        //     }
+        //     for (const auto& write_res : m_arg_write_resources) {
+        //         RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
+        //     }
+
+        //     for (const auto& read_res : m_arg_read_resources) {
+        //         RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
+        //     }
+        //     AddCmd(_cmd, m_dispatch_layer);
+        // }
 
         void VisitCmd(const UpdateBindlessArrayCmd* _cmd) {
             //TODO: important here
@@ -968,20 +1073,42 @@ namespace Moer::Render {
         void VisitCmd(const BuildAccelerationStructuresCmd* _cmd) {
             int64 layer = 0;
             for (const auto& cmd : _cmd->Params()) {
-                // FIXME: 不确定这里的修改是否正确。因为MeshBuffers的信息被分散到了每个MeshGeometry中，所以这里就需要对应遍历所有Segment
-                //        类似场景见 VulkanQueue.cpp:393附近
-                //@@WX: 是对的，但是可能会慢
-                // 可以在Command内部加一个Set，并行/异步收集所有的Buffer，然后在这里遍历
-                for (const auto& segment : cmd.geometry->GetInfo().segments) {
-                    Buffer* vtx = segment.vertex_buffer.Get();
-                    Buffer* idx = segment.index_buffer.Get();
-
-                    layer = std::max(layer, SetRead((uint64)vtx, Range(0, vtx->GetByteSize()), ResourceType::Texture_Buffer));
-                    layer = std::max(layer, SetRead((uint64)idx, Range(0, idx->GetByteSize()), ResourceType::Texture_Buffer));
-                }
-                layer = std::max(layer, SetWrite((uint64)cmd.geometry.Get(), Range(0), ResourceType::Accel));
-
+                layer = std::max(layer, GetLastLayerWrite(static_cast<NoRangeHandle*>(GetHandle((uint64)cmd.geometry.Get(), ResourceType::Accel))));
                 m_writed_geometry.emplace((uint64)cmd.geometry.Get());
+            }
+
+            for (const auto& vtx : _cmd->VtxBuffers()) {
+                auto* vtx_range = static_cast<RangeHandle*>(GetHandle((uint64)vtx, ResourceType::Texture_Buffer));
+                layer           = std::max(layer, GetLastLayerRead(vtx_range, Range(0, vtx->GetByteSize())));
+            }
+
+            for (const auto& idx : _cmd->IdxBuffers()) {
+                auto* idx_range = static_cast<RangeHandle*>(GetHandle((uint64)idx, ResourceType::Texture_Buffer));
+                layer           = std::max(layer, GetLastLayerRead(idx_range, Range(0, idx->GetByteSize())));
+            }
+
+            // Record Reads and Writes
+            for (const auto& cmd : _cmd->Params()) {
+                RecordWrite(GetHandle((uint64)cmd.geometry.Get(), ResourceType::Accel), Range{}, layer);
+            }
+            for (const auto& vtx : _cmd->VtxBuffers()) {
+                auto* vtx_range = static_cast<RangeHandle*>(GetHandle((uint64)vtx, ResourceType::Texture_Buffer));
+                RecordRead(vtx_range, Range(0, vtx->GetByteSize()), layer);
+            }
+            for (const auto& idx : _cmd->IdxBuffers()) {
+                auto* idx_range = static_cast<RangeHandle*>(GetHandle((uint64)idx, ResourceType::Texture_Buffer));
+                RecordRead(idx_range, Range(0, idx->GetByteSize()), layer);
+            }
+
+            for (const auto& vtx_buf : _cmd->VtxBuffers()) {
+                auto* vtx_handle = static_cast<RangeHandle*>(GetHandle((uint64)vtx_buf, ResourceType::Texture_Buffer));
+                //record read
+                RecordRead(vtx_handle, Range(0, vtx_buf->GetByteSize()), layer);
+            }
+            for (const auto& idx_buf : _cmd->IdxBuffers()) {
+                auto* idx_handle = static_cast<RangeHandle*>(GetHandle((uint64)idx_buf, ResourceType::Texture_Buffer));
+                //record read
+                RecordRead(idx_handle, Range(0, idx_buf->GetByteSize()), layer);
             }
 
             AddCmd(_cmd, layer);
@@ -991,12 +1118,11 @@ namespace Moer::Render {
             if (_cmd->InstancesToUpdate().size() == 0 && !_cmd->ForceUpdate()) {
                 return;
             }
-            int64 layer       = SetWrite((uint64)_cmd->TlasHandle(), Range(0), ResourceType::Accel);
+            int64 layer       = 0;
             auto* tlas_handle = static_cast<NoRangeHandle*>(GetHandle((uint64)_cmd->TlasHandle(), ResourceType::Accel));
 
-            {
-                layer = GetLastLayerWrite(tlas_handle);
-            }
+            layer = GetLastLayerWrite(tlas_handle);
+
             for (const uint64& handle : m_writed_geometry) {
                 if (_cmd->HasGeometry(handle)) {
                     auto* geo_handle = GetHandle((uint64)handle, ResourceType::Accel);
@@ -1009,11 +1135,12 @@ namespace Moer::Render {
                 if (_cmd->HasGeometry(handle)) {
                     auto* geo_handle            = (NoRangeHandle*)GetHandle((uint64)handle, ResourceType::Accel);
                     geo_handle->view.read_layer = layer;
+
+                    RecordRead(geo_handle, Range{}, layer);
                 }
             }
 
-            tlas_handle->view.write_layer = layer;
-            tlas_handle->view.read_layer  = layer;
+            RecordWrite(tlas_handle, Range{}, layer);
 
             AddCmd(_cmd, layer);
         }
@@ -1094,9 +1221,12 @@ namespace Moer::Render {
                 case Command::EType::SetDrawState:
                     VisitCmd(static_cast<const SetDrawStateCmd*>(_cmd));
                     break;
-                case Command::EType::SetGeometryPassDrawState:
-                    VisitCmd(static_cast<const SetGeometryPassDrawStateCmd*>(_cmd));
+                case Command::EType::MultiDraw:
+                    VisitCmd(static_cast<const MultiDrawCmd*>(_cmd));
                     break;
+                // case Command::EType::SetGeometryPassDrawState:
+                //     VisitCmd(static_cast<const SetGeometryPassDrawStateCmd*>(_cmd));
+                //     break;
                 case Command::EType::UpdateBindlessArray:
                     VisitCmd(static_cast<const UpdateBindlessArrayCmd*>(_cmd));
                     break;

@@ -3,14 +3,20 @@
 #include "math/Matrix.h"
 #include "misc/STL.h"
 // #include "rhi/RHI.h"
+#include "resources/vertexfactory/VertexAttributes.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "shader/ShaderCommon.h"
+#include "shader/ShaderMutation.h"
+#include "shader/ShaderParameterMacros.h"
+#include <limits>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <typeindex>
 #include <utility>
 #include <variant>
+#include <cassert>
 
 struct TDummy {};
 
@@ -159,6 +165,22 @@ namespace Moer::Render {
         ArrayArguments(ArrayArguments&& _other) {
             args      = std::move(_other.args);
             constants = std::move(_other.constants);
+        }
+
+        ArrayArguments(const ArrayArguments& _other) {
+            args      = _other.args;
+            constants = _other.constants;
+        }
+        ArrayArguments& operator=(ArrayArguments&& _other) {
+            args      = std::move(_other.args);
+            constants = std::move(_other.constants);
+            return *this;
+        }
+
+        ArrayArguments& operator=(const ArrayArguments& _other) {
+            args      = _other.args;
+            constants = _other.constants;
+            return *this;
         }
 
         // Array<TArg> args;
@@ -362,13 +384,6 @@ namespace Moer::Render {
             }
         }
 
-        // template<typename... T, std::size_t... Is>
-        // ArrayArguments SetParams(std::index_sequence<Is...>, T&&... _args) {
-        //     ArrayArguments arg_setter(arg_size);
-        //     (..., SetParam<T, std::tuple_element_t<Is, tuple_helper>>((std::forward<T>(_args)), arg_setter));
-        //     return std::move(arg_setter);
-        // }
-
         template<typename... T, std::size_t... Is>
         static ArrayArguments SetParams(std::index_sequence<Is...>, T&&... _args) {
             ArrayArguments arg_setter(arg_size, GetConstantSize(), IsUsingBdls());
@@ -389,18 +404,6 @@ namespace Moer::Render {
 
     private:
     public:
-        void SetTexture(uint _idx, TextureRef _param);
-        void SetBuffer(uint _idx, BufferRef _param);
-        void SetTexture(uint _idx, TextureView _param);
-        void SetBuffer(uint _idx, BufferView _param);
-        void SetSampler(uint _idx, Sampler _param);
-
-        template<typename T>
-        void SetConstant(uint _idx, T&& _args) { SetConstantInner(_idx, std::span<uint>((uint*)&_args, sizeof(T) / sizeof(uint))); }
-
-        void SetConstantInner(uint _idx, std::span<uint> _data);
-        void SetBufferHash(uint64 _hash, BufferView _param);
-        void SetTextureHash(uint64 _hash, TextureView _param);
         uint GetBindingIdx(uint64 _hash) { return handle.hash_2_info_index[_hash]; }
         ShaderPipeline(PipelineHandle _handle) : handle(std::move(_handle)) {}
         PipelineHandle handle;
@@ -487,9 +490,52 @@ namespace Moer::Render {
         bool                   b_args_set = false;
     };
 
+    template<typename T>
+    concept is_shader_mutation = requires(T _t) {
+        _t.SetCompileEnvironment(std::declval<ShaderCompilerEnvironment&>());
+    };
+
+    template<typename T>
+    concept is_shader_pipeline = requires(T _t) {
+        // T::SetArgs(std::declval<typename T::tuple_helper>());
+        T::GetHashArray();
+        T::GetHashCodeArray();
+    };
+
+    class ShaderAsset {
+    public:
+        ShaderAsset() : path(""), entry_name(""), mutation_id(std::numeric_limits<uint>::max()) {
+        }
+        explicit ShaderAsset(std::string_view _path, std::string_view _entry = "main") : path(_path), entry_name(_entry), mutation_id(0) {
+        }
+        template<is_shader_mutation TMacro>
+        explicit ShaderAsset(std::string_view _path, std::string_view _entry, TMacro _mutation_set) : path(_path), entry_name(_entry), mutation_id(_mutation_set.GetMutationID()) {
+            _mutation_set.SetCompileEnvironment(environment);
+        }
+
+        template<is_shader_mutation TMacro>
+        explicit ShaderAsset(std::string_view _path, std::string_view _entry, VertexFactory* _factory, TMacro _mutation_set) : path(_path), entry_name(_entry), mutation_id(_mutation_set.GetMutationID()) {
+            _factory->SetCompileEnvironment(environment);
+            _mutation_set.SetCompileEnvironment(environment);
+        }
+
+        explicit ShaderAsset(std::string_view _path, std::string_view _entry, VertexFactory* _factory) : path(_path), entry_name(_entry) {
+            _factory->SetCompileEnvironment(environment);
+        }
+
+    public:
+        std::string               path;
+        std::string               entry_name;
+        uint                      mutation_id;
+        ShaderCompilerEnvironment environment;
+    };
+
     class GBufferLayout : public RasterPipeline {
     public:
+        MUTATION_BOOL(LOCAL_LIGHT_RIS);
+        MUTATION_SET(GBufferSet, LOCAL_LIGHT_RIS);
         struct Constant {};
+        MUTATION_BOOL(USE_TEXT);
 
         DEFINE_RASTER_PIPELINE_CLASS(GBufferLayout)
 
@@ -503,7 +549,9 @@ namespace Moer::Render {
 
         DEFINE_SHADER_ARGS(PositionBuffer, NormalBuffer, DiffuseBuffer, SpecularBuffer, DiffuseTexture, SpecularTexture, constant);
 
-        void Test() { SetArgs(BufferRef(), BufferRef(), BufferRef(), BufferRef(), TextureRef(), TextureRef(), Constant{}); }
+        void Test() {
+            SetArgs(BufferRef(), BufferRef(), BufferRef(), BufferRef(), TextureRef(), TextureRef(), Constant{});
+        }
     };
 };// namespace Moer::Render
 

@@ -24,7 +24,7 @@ float3 ViewdepthToWorldPos(Moer::ViewParam _view, int2 _pixel_pos,
   float4 view_pos = mul(_view.clip2view, clip_pos);
   view_pos.xy /= view_pos.z;
   view_pos.zw = float2(1.f, 1.f);
-  view_pos.xyz *= _view_depth;
+  view_pos.xyz *= -_view_depth;
   return mul(_view.view2world, view_pos).xyz;
 }
 

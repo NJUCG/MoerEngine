@@ -632,7 +632,7 @@ namespace Moer::Render {
         };
 
     public:
-        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : PipelineState(), VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_pipeline_state_cache(nullptr), m_type(_type){};
+        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : PipelineState(), VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_type(_type) {};
         virtual ~VulkanPipelineState();
 
         inline VkPipeline GetHandle() const {
@@ -643,16 +643,11 @@ namespace Moer::Render {
             return m_pipeline_layout;
         }
 
-        inline VulkanPipelineResourceCache* GetPipelineResourceCache() const {
-            return m_pipeline_state_cache;
-        }
-
         inline const Moer::Render::VulkanDescriptorSetsLayout* GetDescriptorSetsLayout() const {
             return m_descriptor_sets_layout;
         }
 
         void                InitDescriptorSetLayouts(Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings);
-        void                InitPipelineResourceCache(const Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings);
         void                CreatePipelineLayout(const VkPipelineLayoutCreateInfo& _pipeline_layout_ci);
         VkPipelineBindPoint GetPipelineBindPoint() {
             switch (m_type) {
@@ -678,9 +673,7 @@ namespace Moer::Render {
         Array<VkDescriptorSetLayout> descriptor_set_layouts;
         // descriptor sets
         Moer::Render::VulkanDescriptorSetsLayout* m_descriptor_sets_layout = nullptr;
-        // resource cache
-        VulkanPipelineResourceCache* m_pipeline_state_cache = nullptr;
-        EType                        m_type;
+        EType                                     m_type;
     };
 
     class VulkanRHIGraphicsPipelineState final : public VulkanPipelineState {
@@ -826,9 +819,7 @@ namespace Moer::Render {
             return m_alloc.buffer;
         }
 
-        VkAccessFlags2        m_access_flags   = VK_ACCESS_2_NONE;
-        VkPipelineStageFlags2 m_stage_flags    = VK_PIPELINE_STAGE_2_NONE;
-        int                   m_descriptor_idx = -1;
+        // int                   m_descriptor_idx = -1;
         // UnorderedMap<uint64, uint> m_descriptor_indices;
         UnorderedMap<uint64, uint> m_descriptor_indices[4];
 
@@ -886,21 +877,11 @@ namespace Moer::Render {
 
         uint        GetMipByteSize(uint _mip_idx) const override;
         VkImageView GetView(uint _mip_level = 0, uint _mip_cnt = 1);
-        bool        IsGeneralRead(uint _mip_level = 0) const;
 
-        void SetName(const std::string_view _name) override;
-        struct SubResourceStates {
-            uint8                 mip_level;
-            uint8                 mip_cnt;
-            VkAccessFlags2        access;
-            VkImageLayout         layout;
-            VkPipelineStageFlags2 stage;
-        };
-        Array<SubResourceStates> m_subresource_states;
-        SubResourceStates        state;
-        bool                     b_has_preferred_state : 1 = false;
-        bool                     b_present : 1             = false;
-        VkImageLayout            GetPreferredLayout() { return m_preferred_layout; };
+        void          SetName(const std::string_view _name) override;
+        bool          b_has_preferred_state : 1 = false;
+        bool          b_present : 1             = false;
+        VkImageLayout GetPreferredLayout() { return m_preferred_layout; };
 
         VkImageLayout GetQueuePreferredLayout(EQueueType _queue) {
             switch (_queue) {
@@ -931,9 +912,8 @@ namespace Moer::Render {
             VkImage       image;
             VmaAllocation alloc;
         } m_alloc;
-        UnorderedMap<uint, VkImageView>                                           m_views;
-        Moer::UnorderedMap<Moer::uint, std::tuple<ETextureStateFlags, EPassType>> mip_usages;
-        VkImageLayout                                                             m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
+        UnorderedMap<uint, VkImageView> m_views;
+        VkImageLayout                   m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
     };
 
     class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
@@ -1171,6 +1151,13 @@ namespace Moer::Render {
 
 #pragma endregion
 
+#pragma region[ pipeline cache ]
+    class VulkanPipelineCache : public VulkanDeviceObject {
+    public:
+        VulkanPipelineCache(VulkanDevice* _device);
+        ~VulkanPipelineCache();
+    };
+
 #pragma region[ resource cast ]
     RESOURCE_CAST(Buffer, VulkanBuffer)
     RESOURCE_CAST(Texture, VulkanTexture)
@@ -1251,7 +1238,7 @@ namespace Moer::Render {
 
     public:
         virtual ~VulkanRHIAccelerationStructureSRV();
-        explicit VulkanRHIAccelerationStructureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewinfo) : RHISRV(_resource, _viewinfo), VulkanDeviceObject(_device){};
+        explicit VulkanRHIAccelerationStructureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewinfo) : RHISRV(_resource, _viewinfo), VulkanDeviceObject(_device) {};
     };
 
     class VulkanImageView final : public RHIView {

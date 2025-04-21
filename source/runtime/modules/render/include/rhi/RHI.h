@@ -15,25 +15,6 @@
 #include <optional>
 #include <type_traits>
 
-enum class ERHIType : uint8_t {
-    Vulkan,
-    D3D12
-};
-struct ShaderTargetInfo {
-    uint16_t shader_type;
-    uint16_t shader_platform;
-    ShaderTargetInfo(const ShaderTargetInfo& _other) : shader_type(_other.shader_type), shader_platform(_other.shader_platform) {}
-    operator uint32_t() const { return *(uint32_t*)this; }
-    ShaderTargetInfo(EShaderType _type, EShaderPlatform _platform)
-        : shader_type(_type),
-          shader_platform(_platform) {}
-    ShaderTargetInfo(uint32_t _info) : shader_type(_info & 0xffff), shader_platform(static_cast<EShaderPlatform>(_info >> 16)) {}
-
-    ShaderTargetInfo() = default;
-
-    operator EShaderType() const { return static_cast<EShaderType>(shader_type); }
-    operator EShaderPlatform() const { return static_cast<EShaderPlatform>(shader_platform); }
-};
 class RHIGraphicsCommandList;
 class RHIComputeCommandList;
 class RHIRayTracingCommandList;
@@ -217,7 +198,6 @@ public:
     virtual RHICopyCommandList*       RHICreateCopyCommandList()                                           = 0;
     template<TPipelineStateRef TPipelineRef>
     void RHISetBatchedShaderParameters(TPipelineRef _pso, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant = false) {
-        RHISetBatchedShaderParametersInner(_pso, _batched_params, b_update_constant);
     };
 
     virtual RHICommandAllocator* RHIGetCurrentCommandAllocator() = 0;
@@ -243,9 +223,8 @@ public:
     void RHIFlushPendingDeletes();
 #pragma endregion
 protected:
-    virtual void         RHISetBatchedShaderParametersInner(RHIResource* _resource, const RHIBatchedShaderParameters& _batched_params, bool b_update_constant) = 0;
-    virtual RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info)                                                                                 = 0;
-    virtual RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info)                                                     = 0;
+    virtual RHIBufferRef RHICreateBufferInner(const RHIBufferCreateInfo& info)                             = 0;
+    virtual RHIViewRef   RHICreateViewInner(RHIViewableResource* _resource, const RHIViewInfo& _view_info) = 0;
     template<uint32_t _type>
     RHIViewRef RHICreateBufferView(RHIBuffer* _resource, uint64_t _stride, uint64_t _byte_size, uint64_t _byte_offset) {
         auto true_stride = _stride == 0 ? _resource->GetStride() : _stride;

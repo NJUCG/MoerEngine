@@ -45,10 +45,11 @@ namespace Moer {
     static CONST uint s_denoiser_mode_reblur = 1;
     static CONST uint s_denoiser_mode_relax  = 2;
 
-#define DI_SCREEN_TILE_SIZE   16
-#define DI_GRAD_FACTOR        3
-#define DI_GRAD_STORAGE_SCALE 256.f
-#define DI_GRAD_MAX_VALUE     65504.f
+#define DI_SCREEN_TILE_SIZE    16
+#define DI_GRAD_FACTOR         3
+#define DI_GRAD_STORAGE_SCALE  256.f
+#define DI_GRAD_MAX_VALUE      65504.f
+#define DI_PRESAMPLE_GRID_SIZE 256
 
 #ifdef __cplusplus
     enum RTVisibleMask : uint8 {

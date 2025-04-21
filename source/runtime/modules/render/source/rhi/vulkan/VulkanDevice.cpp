@@ -505,6 +505,7 @@ namespace Moer::Render {
         DestroyInternalShaders();
         FlushDeferredReleases();
         DestroyInternalResources();
+        FlushDeferredReleases();
         vmaDestroyAllocator(m_allocator);
         vkDestroyDevice(m_device, VK_NULL_HANDLE);
 
@@ -738,7 +739,7 @@ namespace Moer::Render {
             _out_hash_2_idx[GetHash(hash)]   = idx;
             const ShaderArgCppInfo& arg_info = _shader_info.arg_cpp_info[idx];
 
-            const UnorderedMap<std::string, ReflectParamInfo>& reflect_map  = _info.shader_param_map.reflect_map;
+            const UnorderedMap<std::string, ReflectParamInfo>& reflect_map  = _info.shader_param_map->reflect_map;
             const auto                                         binding_iter = reflect_map.find(hash.data());
             bool                                               b_found      = binding_iter != reflect_map.end();
             if (arg_info.type != SDA_BindlessArray && !b_found) { continue; }
@@ -1422,6 +1423,15 @@ namespace Moer::Render {
             }
         }
         return v.ext;
+    }
+
+    void VulkanDevice::CopyData(const BufferView& _dst, const void* _data, uint64 _size) {
+        auto* buffer = ResourceCast(_dst.buffer);
+        VK_CHECK_RESULT(vmaCopyMemoryToAllocation(m_allocator, _data, buffer->GetAllocation(), _dst.GetByteOffset(), _size));
+    }
+    void VulkanDevice::CopyData(void* _dst, const BufferView& _src, uint64 _size) {
+        auto* buffer = ResourceCast(_src.buffer);
+        VK_CHECK_RESULT(vmaCopyAllocationToMemory(m_allocator, buffer->GetAllocation(), _src.GetByteOffset(), _dst, _size));
     }
 
     void VulkanDevice::LoadDefaultExtensions() {

@@ -104,6 +104,8 @@ namespace Moer::Render {
         }
 
         void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
+        void CopyData(const BufferView& _dst, const void* _data, uint64 _size);
+        void CopyData(void* _dst, const BufferView& _src, uint64 _size);
 
     public:
         DeviceExtension* LoadExtension(std::string_view _name) override;
