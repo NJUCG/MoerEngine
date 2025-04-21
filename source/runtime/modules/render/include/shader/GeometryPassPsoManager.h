@@ -10,22 +10,6 @@
 
 namespace Moer::Render {
 
-    class GeometryPassPipeline : public RasterPipeline {
-    public:
-        DEFINE_RASTER_PIPELINE_CLASS(GeometryPassPipeline);
-        DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-        DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
-        DEFINE_SHADER_ARGS(bdls, param);
-    };
-
-    class ShadowDepthPassPipeline : public RasterPipeline {
-    public:
-        DEFINE_RASTER_PIPELINE_CLASS(ShadowDepthPassPipeline);
-        DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-        DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
-        DEFINE_SHADER_ARGS(bdls, param);
-    };
-
     struct GeometryPassPsoRecord {
         VertexAttributesBitmask   vertex_attributes_bitmask;
         std::string_view          vertex_shader_path;
@@ -48,9 +32,9 @@ namespace Moer::Render {
         // 显式销毁单例（线程安全）
         static void ShutDown();
 
-        GeometryPassPipeline& GetGeometryPso(const VertexAttributesBitmask& bitmask);
+        // GeometryPassPipeline& GetGeometryPso(const VertexAttributesBitmask& bitmask);
 
-        ShadowDepthPassPipeline& GetShadowPso(const VertexAttributesBitmask& bitmask);
+        // ShadowDepthPassPipeline& GetShadowPso(const VertexAttributesBitmask& bitmask);
 
     private:
         GeometryPassPsoManager();

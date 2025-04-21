@@ -5,7 +5,7 @@
 #include "loader/LoaderInterface.h"
 #include "rhi/RHI.h"
 #include "scene/CameraManager.h"
-#include "shader/GeometryPassPsoManager.h"
+// #include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowContext.h"
 

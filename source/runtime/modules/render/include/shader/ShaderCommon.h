@@ -480,6 +480,10 @@ public:
         return _stream;
     }
 
+    bool operator==(const ShaderCompilerDefines& _other) const {
+        return defines == _other.defines;
+    }
+
 private:
     friend class ShaderCompilerEnvironment;
     Moer::UnorderedMap<std::string, std::string> defines;
@@ -551,6 +555,10 @@ public:
         return _stream;
     }
 
+    bool operator==(const ShaderCompilerEnvironment& _other) const {
+        return GetDefines() == _other.GetDefines() && GetCompilerArgs() == _other.GetCompilerArgs();
+    }
+
 private:
     ShaderCompilerDefines macro_defines;
 
@@ -572,7 +580,7 @@ namespace Moer::Render {
     struct VertexFactory {
 
     public:
-        RENDER_API VertexFactory(VertexAttributesBitmask _mask);
+        RENDER_API VertexFactory(VertexAttributesBitmask _mask, bool _is_shadow_depth_pass);
 
         VertexFactory()                                = default;
         VertexFactory(const VertexFactory&)            = default;
@@ -584,14 +592,16 @@ namespace Moer::Render {
         RENDER_API void                          SetCompileEnvironment(ShaderCompilerEnvironment& _env);
         RENDER_API const VertexStream&           GetVertexStream() const;
         RENDER_API const VertexAttributesBitmask GetVertexAttributes() const { return mask; };
+        RENDER_API bool                          IsShadowDepthPass() const { return is_shadow_depth_pass; };
 
     private:
         mutable VertexStream    stream{};
-        VertexAttributesBitmask mask = 0;
+        VertexAttributesBitmask mask                 = 0;
+        bool                    is_shadow_depth_pass = false;
     };
 
     static inline bool operator==(const VertexFactory& _lhs, const VertexFactory& _rhs) {
-        return _lhs.GetVertexAttributes() == _rhs.GetVertexAttributes();
+        return _lhs.GetVertexAttributes() == _rhs.GetVertexAttributes() && _lhs.IsShadowDepthPass() == _rhs.IsShadowDepthPass();
     }
 }// namespace Moer::Render
 
@@ -599,10 +609,11 @@ namespace std {
     template<>
     struct hash<Moer::Render::VertexFactory> {
         size_t operator()(const Moer::Render::VertexFactory& _key) const {
-            return GetHash(_key.GetVertexAttributes());
+            return GetHash(_key.GetVertexAttributes()) ^ GetHash(_key.IsShadowDepthPass());
         }
     };
 }// namespace std
+
 namespace Moer::Render {
     class RENDER_API VertexShader {
     public:
@@ -618,6 +629,7 @@ namespace Moer::Render {
         }
 
         Shader& GetShader(Moer::Render::VertexFactory* _factory);
+
         template<typename TMacro>
         Shader& GetShader(Moer::Render::VertexFactory* _factory, TMacro _mut) {
             return GetShader(_factory, _mut, entry_name);
@@ -653,9 +665,17 @@ struct ShaderCompilerInput {
     }
 };
 
+// clang-format off
 static inline bool operator==(const ShaderCompilerInput& _lhs, const ShaderCompilerInput& _rhs) {
-    return _lhs.relative_source_file_path == _rhs.relative_source_file_path && _lhs.entry_point == _rhs.entry_point && _lhs.shader_name_hash == _rhs.shader_name_hash && _lhs.mutation_id == _rhs.mutation_id;
+    return
+        _lhs.relative_source_file_path == _rhs.relative_source_file_path
+        && _lhs.entry_point == _rhs.entry_point
+        && _lhs.shader_name_hash == _rhs.shader_name_hash
+        && _lhs.mutation_id == _rhs.mutation_id
+        && _lhs.environment == _rhs.environment;
 }
+// clang-format on
+
 namespace std {
     template<>
     struct hash<ShaderCompilerInput> {

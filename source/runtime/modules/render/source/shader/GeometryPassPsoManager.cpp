@@ -117,86 +117,88 @@ namespace Moer::Render {
             return vertex_stream;
         }
 
-        // MARK: GeometryPass
-        GeometryPassPipeline CreateGeometryPso(const VertexAttributesBitmask& bitmask) {
-            LOG_INFO("GeometryPassPsoManager, creating GeometryPass PSO for vertex attributes bitmask: {}", bitmask);
+        // // MARK: GeometryPass
+        // GeometryPassPipeline CreateGeometryPso(const VertexAttributesBitmask& bitmask) {
+        //     LOG_INFO("GeometryPassPsoManager, creating GeometryPass PSO for vertex attributes bitmask: {}", bitmask);
 
-            if (!m_pso_records_map.contains(bitmask)) {
-                LOG_ERROR("GeometryPassPsoManager, vertex attribute bitmask {} is not supported!", bitmask);
-                return GeometryPassPipeline();
-            }
+        //     if (!m_pso_records_map.contains(bitmask)) {
+        //         LOG_ERROR("GeometryPassPsoManager, vertex attribute bitmask {} is not supported!", bitmask);
+        //         return GeometryPassPipeline();
+        //     }
 
-            VertexStream vertex_stream = GetVertexStream(bitmask);
+        //     VertexStream vertex_stream = GetVertexStream(bitmask);
 
-            GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
-                                      vertex_stream,
-                                      {
-                                          RHIColorAttachmentInfo::Preset(PF_R32_UINT),                // vbuffer
-                                          RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32),// normal
-                                          RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32),// tangent
-                                          RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT),           // uv
-                                          RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)      // position
-                                      },
-                                      RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),// depth buf
-                                      PF_D32_SFLOAT_S8_UINT);
-            // 注：此处 RHIColorAttachmentInfo 的顺序需要和 GeometryPass.h 中的 ColorAttachment 顺序一致
+        //     GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
+        //                               vertex_stream,
+        //                               {
+        //                                   RHIColorAttachmentInfo::Preset(PF_R32_UINT),                // vbuffer
+        //                                   RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32),// normal
+        //                                   RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32),// tangent
+        //                                   RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT),           // uv
+        //                                   RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)      // position
+        //                               },
+        //                               RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),// depth buf
+        //                               PF_D32_SFLOAT_S8_UINT);
+        //     // 注：此处 RHIColorAttachmentInfo 的顺序需要和 GeometryPass.h 中的 ColorAttachment 顺序一致
 
-            const auto&   record = m_pso_records[m_pso_records_map[bitmask]];
-            VertexFactory factory{bitmask};
-            return m_shader_manager
-                .Raster()
-                .Vertex(record.vertex_shader_path, record.vertex_shader_entry, &factory)
-                .Pixel(record.pixel_shader_path, record.pixel_shader_entry, &factory)
-                .Build<GeometryPassPipeline>(std::move(pso_info));
-        }
+        //     const auto&   record = m_pso_records[m_pso_records_map[bitmask]];
+        //     VertexFactory factory{bitmask};
+        //     return m_shader_manager
+        //         .Raster()
+        //         .Vertex(record.vertex_shader_path, record.vertex_shader_entry, &factory)
+        //         .Pixel(record.pixel_shader_path, record.pixel_shader_entry, &factory)
+        //         .Build<GeometryPassPipeline>(std::move(pso_info));
+        // }
 
-        ShadowDepthPassPipeline CreateShadowPso(const VertexAttributesBitmask& bitmask) {
-            LOG_INFO("GeometryPassPsoManager, creating ShadowDepthPass PSO for vertex attributes bitmask: {}", bitmask);
+        // ShadowDepthPassPipeline CreateShadowPso(const VertexAttributesBitmask& bitmask) {
+        //     LOG_INFO("GeometryPassPsoManager, creating ShadowDepthPass PSO for vertex attributes bitmask: {}", bitmask);
 
-            if (!m_pso_records_map.contains(bitmask)) {
-                LOG_ERROR("GeometryPassPsoManager, vertex attribute bitmask {} is not supported!", bitmask);
-                return ShadowDepthPassPipeline();
-            }
+        //     if (!m_pso_records_map.contains(bitmask)) {
+        //         LOG_ERROR("GeometryPassPsoManager, vertex attribute bitmask {} is not supported!", bitmask);
+        //         return ShadowDepthPassPipeline();
+        //     }
 
-            VertexStream vertex_stream = GetVertexStream(bitmask);
+        //     VertexStream vertex_stream = GetVertexStream(bitmask);
 
-            GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
-                                      vertex_stream,
-                                      {},
-                                      RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),// depth buf
-                                      PF_D32_SFLOAT_S8_UINT);
+        //     GfxPsoCreateInfo pso_info(RHIRasterizeInfo::Preset(),
+        //                               vertex_stream,
+        //                               {},
+        //                               RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),// depth buf
+        //                               PF_D32_SFLOAT_S8_UINT);
 
-            auto record = m_pso_records[m_pso_records_map[bitmask]];
+        //     auto record = m_pso_records[m_pso_records_map[bitmask]];
 
-            record.vertex_shader_environment.SetDefine("SHADOW_DEPTH_PASS", 1);
-            record.pixel_shader_environment.SetDefine("SHADOW_DEPTH_PASS", 1);
+        //     record.vertex_shader_environment.SetDefine("SHADOW_DEPTH_PASS", 1);
+        //     record.pixel_shader_environment.SetDefine("SHADOW_DEPTH_PASS", 1);
 
-            return m_shader_manager
-                .Raster()
-                .Vertex(record.vertex_shader_path, record.vertex_shader_entry, record.vertex_shader_environment)
-                .Pixel(record.pixel_shader_path, record.pixel_shader_entry, record.pixel_shader_environment)
-                .Build<ShadowDepthPassPipeline>(std::move(pso_info));
-        }
+        //     // return m_shader_manager
+        //     //     .Raster()
+        //     //     .Vertex(record.vertex_shader_path, record.vertex_shader_entry, record.vertex_shader_environment)
+        //     //     .Pixel(record.pixel_shader_path, record.pixel_shader_entry, record.pixel_shader_environment)
+        //     //     .Build<ShadowDepthPassPipeline>(std::move(pso_info));
+        //     assert(false);
+        //     return ShadowDepthPassPipeline{};
+        // }
 
-        GeometryPassPipeline& GetGeometryPso(const VertexAttributesBitmask& bitmask) {
-            // whether pso exists
-            if (!m_geometry_pso_map.contains(bitmask)) {
-                m_geometry_pso_map[bitmask] = CreateGeometryPso(bitmask);
-            }
+        // GeometryPassPipeline& GetGeometryPso(const VertexAttributesBitmask& bitmask) {
+        //     // whether pso exists
+        //     if (!m_geometry_pso_map.contains(bitmask)) {
+        //         m_geometry_pso_map[bitmask] = CreateGeometryPso(bitmask);
+        //     }
 
-            // return pso
-            return m_geometry_pso_map[bitmask];
-        }
+        //     // return pso
+        //     return m_geometry_pso_map[bitmask];
+        // }
 
-        ShadowDepthPassPipeline& GetShadowPso(const VertexAttributesBitmask& bitmask) {
-            // whether pso exists
-            if (!m_shadow_pso_map.contains(bitmask)) {
-                m_shadow_pso_map[bitmask] = CreateShadowPso(bitmask);
-            }
+        // ShadowDepthPassPipeline& GetShadowPso(const VertexAttributesBitmask& bitmask) {
+        //     // whether pso exists
+        //     if (!m_shadow_pso_map.contains(bitmask)) {
+        //         m_shadow_pso_map[bitmask] = CreateShadowPso(bitmask);
+        //     }
 
-            // return pso
-            return m_shadow_pso_map[bitmask];
-        }
+        //     // return pso
+        //     return m_shadow_pso_map[bitmask];
+        // }
 
     private:
         // 你问我为什么PImpl也要private？优雅，戊戌多盐（误）
@@ -206,9 +208,9 @@ namespace Moer::Render {
         Array<GeometryPassPsoRecord> m_pso_records;
 
         // Derived Data
-        UnorderedMap<VertexAttributesBitmask, uint>                    m_pso_records_map;
-        UnorderedMap<VertexAttributesBitmask, GeometryPassPipeline>    m_geometry_pso_map;
-        UnorderedMap<VertexAttributesBitmask, ShadowDepthPassPipeline> m_shadow_pso_map;
+        UnorderedMap<VertexAttributesBitmask, uint> m_pso_records_map;
+        // UnorderedMap<VertexAttributesBitmask, GeometryPassPipeline>    m_geometry_pso_map;
+        // UnorderedMap<VertexAttributesBitmask, ShadowDepthPassPipeline> m_shadow_pso_map;
     };
 
     // MARK: Origin Funcs
@@ -244,13 +246,13 @@ namespace Moer::Render {
         }
     }
 
-    GeometryPassPipeline& GeometryPassPsoManager::GetGeometryPso(const VertexAttributesBitmask& bitmask) {
-        return m_impl->GetGeometryPso(bitmask);
-    }
+    // GeometryPassPipeline& GeometryPassPsoManager::GetGeometryPso(const VertexAttributesBitmask& bitmask) {
+    //     return m_impl->GetGeometryPso(bitmask);
+    // }
 
-    ShadowDepthPassPipeline& GeometryPassPsoManager::GetShadowPso(const VertexAttributesBitmask& bitmask) {
-        return m_impl->GetShadowPso(bitmask);
-    }
+    // ShadowDepthPassPipeline& GeometryPassPsoManager::GetShadowPso(const VertexAttributesBitmask& bitmask) {
+    //     return m_impl->GetShadowPso(bitmask);
+    // }
 
     GeometryPassPsoManager::GeometryPassPsoManager() {
         assert(m_impl == nullptr);

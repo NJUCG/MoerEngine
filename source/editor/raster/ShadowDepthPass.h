@@ -18,6 +18,17 @@
 
 namespace Moer::Render::Raster {
 
+class ShadowDepthPassPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(ShadowDepthPassPipeline);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
+    DEFINE_SHADER_ARGS(bdls, param);
+
+    MUTATION_BOOL(SHADOW_DEPTH_PASS);
+    MUTATION_SET(MutationSet, SHADOW_DEPTH_PASS);
+};
+
 class ShadowDepthPass {
 public:
     ShadowDepthPass(RasterContext& context) :
@@ -594,8 +605,48 @@ public:
             auto arg_idx =
                 context.cmd_list.RegisterArgs(ShadowDepthPassPipeline::SetArgs(context.bdls, param));
 
-            // Draw Batch
-            auto draw_batch = GeometryPass::GetDrawBatch(pipeline_map, vertex_shader, context, arg_idx);
+            // MeshDrawDatas
+            UnorderedMap<VertexFactory, Array<MeshDrawData>> mesh_draw_datas_map =
+                RasterTool::GetDrawMeshDatasMap(context, true);
+
+            // PipelineMap
+            for (auto& [factory, _] : mesh_draw_datas_map) {
+
+                if (!pipeline_map.contains(factory)) {
+                    VertexStream     stream = factory.GetVertexStream();
+                    GfxPsoCreateInfo pso_info(
+                        RHIRasterizeInfo::Preset(),
+                        std::move(stream),
+                        {},
+                        RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(), // depth buf
+                        PF_D32_SFLOAT_S8_UINT
+                    );
+
+                    Shader& vtx = vertex_shader.GetShader(const_cast<VertexFactory*>(&factory));
+
+                    // TODO: cache pixel shader
+
+                    ShadowDepthPassPipeline::MutationSet mutation_set{};
+                    mutation_set.SetMutation<ShadowDepthPassPipeline::SHADOW_DEPTH_PASS>(true);
+                    Shader& frag = ShaderManager::Get().CompileShader(
+                        ST_FRAGMENT, "raster/geometry_pass/GeometryPassCommonPixel.hlsl", mutation_set
+                    );
+
+                    pipeline_map.emplace(
+                        factory,
+                        ShaderManager::Get().Raster().Vertex(vtx).Pixel(frag).Build<ShadowDepthPassPipeline>(
+                            std::move(pso_info)
+                        )
+                    );
+                }
+            }
+
+            // DrawBatch
+            auto draw_batch = DrawBatch{};
+            for (auto& [factory, draw_array] : mesh_draw_datas_map) {
+                draw_batch.Emplace(pipeline_map[factory].handle, arg_idx)
+                    .RegisterDrawDatas(std::move(draw_array));
+            }
 
             // Draw
             context.cmd_list
@@ -625,8 +676,8 @@ public:
 private:
     Array<std::string> shadow_depth_pass_names;
 
-    Moer::UnorderedMap<VertexFactory, GeometryPassPipeline> pipeline_map;
-    VertexShader                                            vertex_shader;
+    Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline> pipeline_map;
+    VertexShader                                               vertex_shader;
 };
 
 } // namespace Moer::Render::Raster

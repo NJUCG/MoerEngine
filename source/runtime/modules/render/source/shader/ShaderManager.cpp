@@ -131,6 +131,14 @@ namespace Moer::Render {
             .environment               = std::move(_asset.environment)};
 
         auto it = shader_resources_cache.TryGetShader(input);
+
+        // LOG_DEBUG("ShaderManager::CompileShader, FileName: {}, EntryName: {}, MutationID: {}, Environment: {} <=> {}",
+        //           input.relative_source_file_path,
+        //           input.entry_point,
+        //           input.mutation_id,
+        //           input.environment.ToString(),
+        //           (it.first != nullptr ? "Cached" : "Compile"));
+
         if (it.first != nullptr) {
             return *it.first;
         }
