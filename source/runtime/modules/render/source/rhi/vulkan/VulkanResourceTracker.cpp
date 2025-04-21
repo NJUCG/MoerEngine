@@ -782,53 +782,54 @@ namespace Moer::Render {
         VkPipelineStageFlags2 src_buffer_stages = VK_PIPELINE_STAGE_2_NONE;
         for (auto& [buffer, state] : buffer_states) {
             if (exported_buffers.find(buffer) != exported_buffers.end()) continue;
-            // src_buffer_access |= state.src_access;
-            // src_buffer_stages |= state.src_stage;
-            state.dst_access = VK_ACCESS_2_NONE;
-            state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
+            src_buffer_access |= state.src_access;
+            src_buffer_stages |= state.src_stage;
+            // state.dst_access = VK_ACCESS_2_NONE;
+            // state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
 
-            VkBufferMemoryBarrier2& barrier = buffer_barriers.emplace_back();
-            barrier.sType                   = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-            barrier.pNext                   = nullptr;
-            barrier.srcAccessMask           = state.src_access;
-            barrier.dstAccessMask           = VK_ACCESS_2_NONE;
-            barrier.srcStageMask            = state.src_stage;
-            barrier.dstStageMask            = last_stage;
-            barrier.srcQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
-            barrier.buffer                  = buffer->GetHandle();
-            barrier.offset                  = 0;
-            barrier.size                    = VK_WHOLE_SIZE;
+            // VkBufferMemoryBarrier2& barrier = buffer_barriers.emplace_back();
+            // barrier.sType                   = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            // barrier.pNext                   = nullptr;
+            // barrier.srcAccessMask           = state.src_access;
+            // barrier.dstAccessMask           = VK_ACCESS_2_NONE;
+            // barrier.srcStageMask            = state.src_stage;
+            // barrier.dstStageMask            = last_stage;
+            // barrier.srcQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
+            // barrier.dstQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
+            // barrier.buffer                  = buffer->GetHandle();
+            // barrier.offset                  = 0;
+            // barrier.size                    = VK_WHOLE_SIZE;
         }
 
         for (auto& [buffer, state] : flush_buffer_states) {
-            // src_buffer_access |= state.dst_access;
-            // src_buffer_stages |= state.dst_stage;
+            src_buffer_access |= state.dst_access;
+            src_buffer_stages |= state.dst_stage;
 
-            VkBufferMemoryBarrier2& barrier = buffer_barriers.emplace_back();
-            barrier.sType                   = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-            barrier.pNext                   = nullptr;
-            barrier.srcAccessMask           = state.dst_access;
-            barrier.dstAccessMask           = VK_ACCESS_2_NONE;
-            barrier.srcStageMask            = state.dst_stage;
-            barrier.dstStageMask            = last_stage;
-            barrier.srcQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
-            barrier.buffer                  = buffer->GetHandle();
-            barrier.offset                  = 0;
-            barrier.size                    = VK_WHOLE_SIZE;
+            // VkBufferMemoryBarrier2& barrier = buffer_barriers.emplace_back();
+            // barrier.sType                   = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            // barrier.pNext                   = nullptr;
+            // barrier.srcAccessMask           = state.dst_access;
+            // barrier.dstAccessMask           = VK_ACCESS_2_NONE;
+            // barrier.srcStageMask            = state.dst_stage;
+            // barrier.dstStageMask            = last_stage;
+            // barrier.srcQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
+            // barrier.dstQueueFamilyIndex     = VK_QUEUE_FAMILY_IGNORED;
+            // barrier.buffer                  = buffer->GetHandle();
+            // barrier.offset                  = 0;
+            // barrier.size                    = VK_WHOLE_SIZE;
         }
-        // if (!buffer_states.empty() || !flush_buffer_states.empty()) {
-        //     //memory barrier
-        //     memory_barriers.emplace_back();
-        //     VkMemoryBarrier2& barrier = memory_barriers.back();
-        //     barrier.sType             = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-        //     barrier.pNext             = nullptr;
-        //     barrier.srcAccessMask     = src_buffer_access;
-        //     barrier.dstAccessMask     = VK_ACCESS_2_NONE;
-        //     barrier.srcStageMask      = src_buffer_stages;
-        //     barrier.dstStageMask      = last_stage;
-        // }
+        if (!buffer_states.empty() || !flush_buffer_states.empty()) {
+            //memory barrier
+            memory_barriers.emplace_back();
+            VkMemoryBarrier2& barrier = memory_barriers.back();
+            barrier.sType             = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            barrier.pNext             = nullptr;
+            barrier.srcAccessMask     = src_buffer_access;
+            barrier.dstAccessMask     = VK_ACCESS_2_MEMORY_READ_BIT |
+                                    VK_ACCESS_2_MEMORY_WRITE_BIT;
+            barrier.srcStageMask = src_buffer_stages;
+            barrier.dstStageMask = last_stage;
+        }
 
         // flush_buffer_states.clear();
 
