@@ -31,7 +31,8 @@ __declspec(dllexport) extern const char8_t* D3D12SDKPath = u8".\\D3D12\\";
 #include "d3dx12_property_format_table.h"
 #include "shader/ShaderPipeline.h"
 
-constexpr uint32_t kNumBuffArr = 7;
+constexpr uint32_t kNumBufArr = 7;
+constexpr uint32_t kNumTexArr = 9;
 
 namespace Moer::Render {
 
@@ -67,9 +68,23 @@ namespace Moer::Render {
         DEFINE_SHADER_BUFFER(rb1);
         DEFINE_SHADER_BUFFER(tb0);
         DEFINE_SHADER_BUFFER(tb1);
-        DEFINE_SHADER_BUFFER_ARRAY(buf_arr, kNumBuffArr);
+        DEFINE_SHADER_BUFFER_ARRAY(buf_arr, kNumBufArr);
+        //DEFINE_SHADER_TEX(t0);
+        //DEFINE_SHADER_TEX(t1);
+        DEFINE_SHADER_TEX(t2);
+        DEFINE_SHADER_TEX(t3);
+        DEFINE_SHADER_TEX(t4);
+        DEFINE_SHADER_TEX(t5);
+        DEFINE_SHADER_TEX(t6);
+        DEFINE_SHADER_TEX_ARRAY(tex_arr, kNumTexArr);
+        //DEFINE_SHADER_TEX(rwt0);
+        //DEFINE_SHADER_TEX(rwt1);
+        DEFINE_SHADER_TEX(rwt2);
+        DEFINE_SHADER_TEX(rwt3);
+        DEFINE_SHADER_TEX(rwt4);
+        DEFINE_SHADER_SAMPLER(s0);
 
-        DEFINE_SHADER_ARGS(cb0, cb1, sb0, sb1, rb0, rb1, tb0, tb1, buf_arr);
+        DEFINE_SHADER_ARGS(cb0, cb1, sb0, sb1, rb0, rb1, tb0, tb1, buf_arr, t2, t3, t4, t5, t6, tex_arr, rwt2, rwt3, rwt4, s0);
     };
 
 }// namespace Moer::Render
@@ -122,18 +137,41 @@ int main(int argc, char** argv) {
 
         ShaderCompiler::Init();
 
-        auto cb0 = device.CreateBuffer<Moer::byte>("cb0", sizeof(S0), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-        auto cb1 = device.CreateBuffer<Moer::byte>("cb1", sizeof(S1), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-        auto sb0 = device.CreateBuffer<float4>("sb0", 1024, EBufferUsageFlags::TRANSFER_DST);
-        auto sb1 = device.CreateBuffer<S1>("sb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
-        auto rb0 = device.CreateBuffer<uint>("rb0", 1024, EBufferUsageFlags::TRANSFER_DST);
-        auto rb1 = device.CreateBuffer<float>("rb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
-        auto tb0 = device.CreateBuffer<float>("tb0", 1024, EBufferUsageFlags::TRANSFER_DST);
-        auto tb1 = device.CreateBuffer<float>("tb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
-        BufferRef buf_arr[kNumBuffArr];
-        for (int i = 0; i < kNumBuffArr; ++i) {
+        auto      cb0 = device.CreateBuffer<Moer::byte>("cb0", sizeof(S0), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        auto      cb1 = device.CreateBuffer<Moer::byte>("cb1", sizeof(S1), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        auto      sb0 = device.CreateBuffer<float4>("sb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto      sb1 = device.CreateBuffer<S1>("sb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        auto      rb0 = device.CreateBuffer<uint>("rb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto      rb1 = device.CreateBuffer<float>("rb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        auto      tb0 = device.CreateBuffer<float>("tb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto      tb1 = device.CreateBuffer<float>("tb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        BufferRef buf_arr[kNumBufArr];
+        for (int i = 0; i < kNumBufArr; ++i) {
             buf_arr[i] = device.CreateBuffer<float>(std::format("buf_array_{}", i), 9, EBufferUsageFlags::TRANSFER_DST);
         }
+
+        // we not really support texture1d... see 'ETextureDimension' (start from 2D
+        //auto t0 = device.CreateTexture("t0", Extent2D(2, 1), EPixelFormat::PF_R16G16B16A16_UNORM, ETextureUsageFlags::TRANSFER_DST);
+        //auto t1 = device.CreateTexture("t1", Extent2D(2, 1), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST, 1, 2);
+        auto t2 = device.CreateTexture("t2", Extent2D(3, 3), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST);
+        auto t3 = device.CreateTexture("t3", Extent2D(3, 3), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST, 1, 2);
+        auto t4 = device.CreateTexture("t4", Extent3D(4, 4, 4), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST);
+        auto t5 = device.CreateTexture("t5", Extent2D(4, 4), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST, 1, 6);
+        auto t6 = device.CreateTexture("t6", Extent2D(4, 4), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST, 1, 6 * 2);
+        // not consider texture2dms
+        TextureRef tex_arr[kNumTexArr];
+        for (int i = 0; i < kNumTexArr; ++i) {
+            tex_arr[i] = device.CreateTexture(std::format("tex_array_{}", i), Extent2D(5, 5), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST);
+        }
+        //auto rwt0 = device.CreateTexture("rwt0", Extent2D(2, 1), EPixelFormat::PF_R16G16B16A16_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST);
+        //auto rwt1 = device.CreateTexture("rwt1", Extent2D(2, 1), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST, 1, 2);
+        auto rwt2 = device.CreateTexture("rwt2", Extent2D(3, 3), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST);
+        auto rwt3 = device.CreateTexture("rwt3", Extent2D(3, 3), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST, 1, 2);
+        auto rwt4 = device.CreateTexture("rwt4", Extent3D(4, 4, 4), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST);
+
+        // todo test copy buffer to texture
+
+        auto s0 = Sampler{SF_NEAREST, SAM_CLAMP_TO_EDGE};
 
         S0 pc{
             .a = 2,
@@ -149,7 +187,7 @@ int main(int argc, char** argv) {
 
         auto               pipeline = ShaderManager::Get().Compute<TestComputePipeline>("test/var.hlsl");
         std::vector<float> farr(1024);
-        std::vector<int> iarr(1024);
+        std::vector<int>   iarr(1024);
 
         for (int iter = 0; iter < 10; ++iter) {
 
@@ -169,11 +207,16 @@ int main(int argc, char** argv) {
             list.CopyFrom(ToSpan(farr).subspan(5 * sizeof(float), sizeof(float)), tb1->GetView(5 * sizeof(float)));
             list.CopyFrom(ToSpan(farr).subspan(6 * sizeof(float), sizeof(float)), buf_arr[6]->GetView(6 * sizeof(float)));
 
-            Array<BufferView> buf_arr_view(kNumBuffArr);
-            for (int i = 0; i < kNumBuffArr; ++i) {
+            Array<BufferView> buf_arr_view(kNumBufArr);
+            for (int i = 0; i < kNumBufArr; ++i) {
                 buf_arr_view[i] = buf_arr[i]->GetView(PF_R32_SFLOAT);
             }
-            list.Compute(pipeline, pc, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT), std::span{buf_arr_view}).Dispatch({1, 1, 1});
+            Array<TextureView> tex_arr_view(kNumTexArr);
+            for (int i = 0; i < kNumTexArr; ++i) {
+                tex_arr_view[i] = tex_arr[i]->GetView();
+            }
+            list.Compute(pipeline, pc, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT), std::span{buf_arr_view},
+                t2, t3, t4, t5, t6, std::span{tex_arr_view}, rwt2, rwt3, rwt4, s0).Dispatch({1, 1, 1});
             //list.Compute(pipeline, cb0, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT)).Dispatch({1, 1, 1});
 
             list.CopyFrom(rb1->GetView(0, 10 * sizeof(float)), ToSpan(iarr));
@@ -183,9 +226,7 @@ int main(int argc, char** argv) {
             gfx_queue.Sync();
             LOG_INFO("dispatch work done");
 
-            LOG_INFO("result={}, expect={}, ok={}", iarr[0], res , iarr[0] == res);
-
-
+            LOG_INFO("result={}, expect={}, ok={}", iarr[0], res, iarr[0] == res);
         }
 
         capturer->End();

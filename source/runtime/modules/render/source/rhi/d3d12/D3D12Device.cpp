@@ -159,6 +159,8 @@ namespace Moer::Render {
         sampler_heap_cpu     = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, feature_supports.MaxSamplerDescriptorHeapSizeWithStaticSamplers());         // ~2048
         csu_heap_gpu         = MakeUnique<D3D12GpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, feature_supports.MaxViewDescriptorHeapSize() / 2, 4096);                // ~1e6
         sampler_heap_gpu     = MakeUnique<D3D12GpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, feature_supports.MaxSamplerDescriptorHeapSizeWithStaticSamplers() / 2, 256);// ~2048
+
+        D3D12DefaultSamplers::InitSamplerDescriptorHeap(this);
     }
 
     D3D12Device::~D3D12Device() {
@@ -214,17 +216,17 @@ namespace Moer::Render {
                 if (!srv_table) {
                     srv_table.emplace();
                 }
-                srv_table->entries.emplace_back(_idx_in_cpp_args, uint8(srv_table->entries.size()), uint8(bind_count), uint8(_resource_info.slot), uint8(_resource_info.space));
+                srv_table->entries.emplace_back(_idx_in_cpp_args, uint8(srv_table->entries.size()), uint8(-1), uint8(bind_count), uint8(_resource_info.slot), uint8(_resource_info.space));
             } else if (IsShaderVarUav(_resource_info)) {
                 if (!uav_table) {
                     uav_table.emplace();
                 }
-                uav_table->entries.emplace_back(_idx_in_cpp_args, uint8(uav_table->entries.size()), uint8(bind_count), uint8(_resource_info.slot), uint8(_resource_info.space));
+                uav_table->entries.emplace_back(_idx_in_cpp_args, uint8(uav_table->entries.size()), uint8(-1), uint8(bind_count), uint8(_resource_info.slot), uint8(_resource_info.space));
             } else if (IsShaderVarSampler(_resource_info)) {
                 if (!sampler_table) {
                     sampler_table.emplace();
                 }
-                sampler_table->entries.emplace_back(_idx_in_cpp_args, uint8(sampler_table->entries.size()), uint8(bind_count), uint8(_resource_info.slot), uint8(_resource_info.space));
+                sampler_table->entries.emplace_back(_idx_in_cpp_args, uint8(sampler_table->entries.size()), uint8(-1), uint8(bind_count), uint8(_resource_info.slot), uint8(_resource_info.space));
             }
         }
     }
@@ -300,22 +302,31 @@ namespace Moer::Render {
             }
             uint range_offset = 0;
             if (layout.srv_table) {
-                for (const auto& e : layout.srv_table->entries) {
+                uint flatten_idx = 0;
+                for (auto& e : layout.srv_table->entries) {
                     descriptor_ranges[range_offset + e.idx_in_table].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, e.bind_count, e.slot, e.space, kSrvDescriptorRangeFlags);// one table can have different type ranges. we now do like this for simplicity
+                    e.idx_in_flatten_table = flatten_idx;
+                    flatten_idx += e.bind_count;
                 }
                 root_parameters[layout.srv_table->idx_in_root_sig].InitAsDescriptorTable(layout.srv_table->entries.size(), descriptor_ranges.data() + range_offset, D3D12_SHADER_VISIBILITY_ALL);
                 range_offset += layout.srv_table->entries.size();
             }
             if (layout.uav_table) {
-                for (const auto& e : layout.uav_table->entries) {
+                uint flatten_idx = 0;
+                for (auto& e : layout.uav_table->entries) {
                     descriptor_ranges[range_offset + e.idx_in_table].Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, e.bind_count, e.slot, e.space, kUavDescriptorRangeFlags);
+                    e.idx_in_flatten_table = flatten_idx;
+                    flatten_idx += e.bind_count;
                 }
                 root_parameters[layout.uav_table->idx_in_root_sig].InitAsDescriptorTable(layout.uav_table->entries.size(), descriptor_ranges.data() + range_offset, D3D12_SHADER_VISIBILITY_ALL);
                 range_offset += layout.uav_table->entries.size();
             }
             if (layout.sampler_table) {
-                for (const auto& e : layout.sampler_table->entries) {
+                uint flatten_idx = 0;
+                for (auto& e : layout.sampler_table->entries) {
                     descriptor_ranges[range_offset + e.idx_in_table].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, e.bind_count, e.slot, e.space, kSamplerDescriptorRangeFlags);
+                    e.idx_in_flatten_table = flatten_idx;
+                    flatten_idx += e.bind_count;
                 }
                 root_parameters[layout.sampler_table->idx_in_root_sig].InitAsDescriptorTable(layout.sampler_table->entries.size(), descriptor_ranges.data() + range_offset, D3D12_SHADER_VISIBILITY_ALL);
                 range_offset += layout.sampler_table->entries.size();
@@ -410,7 +421,9 @@ namespace Moer::Render {
             1};// TODO ? msaa tex
         info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
         info.debug_name   = _name;
-        return TextureRef{MoerNew(D3D12Texture)(this, info)};
+        auto* tex         = MoerNew(D3D12Texture)(this, info);
+        tex->SetName(_name);
+        return TextureRef{tex};
     }
 
     BufferRef D3D12Device::CreateBuffer(std::string_view _name, uint _element_cnt, uint _byte_stride, EBufferUsageFlags _usage, EPixelFormat _format) {
@@ -652,9 +665,7 @@ namespace Moer::Render {
     }
 
     D3D12Buffer::~D3D12Buffer() {
-        for (const auto& [desc, index] : srv_uav_views) {
-            device->GetCsuHeap()->Free(index);
-        }
+        for (const auto& [desc, index] : srv_uav_views) device->GetCsuHeap()->Free(index);
     }
     void D3D12Buffer::Destroy() {
         MoerDelete(this);
@@ -665,6 +676,7 @@ namespace Moer::Render {
     }
 
     DescriptorIndex D3D12Buffer::CreateSrv(const BufferView& _range, ED3D12ShaderVariableType _type) {
+        ASSERT(this == _range.GetBuffer());
         ASSERT(IsShaderVarCommonBuffer(_type) && IsShaderVarSrv(_type));
         if (_type == ED3D12ShaderVariableType::TypedBuffer) {
             ASSERT2(_range.format != EPixelFormat::PF_UNDEFINED, "Typed buffer must has a format");
@@ -698,6 +710,7 @@ namespace Moer::Render {
     }
 
     DescriptorIndex D3D12Buffer::CreateUav(const BufferView& _range, ED3D12ShaderVariableType _type) {
+        ASSERT(this == _range.GetBuffer());
         ASSERT(IsShaderVarCommonBuffer(_type) && IsShaderVarUav(_type));
         ASSERT(EnumHasAnyFlag(GetUsage(), EBufferUsageFlags::UNORDERED_ACCESS));
         if (_type == ED3D12ShaderVariableType::RWTypedBuffer) {
@@ -1499,21 +1512,30 @@ namespace Moer::Render {
                         [&](const BufferView& arg) {
                             D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
                             ASSERT(IsShaderVarCommonBuffer(var_type));
-                            ASSERT(e.idx_in_table < indices.size());
-                            indices[e.idx_in_table] = buf->CreateSrv(arg, var_type);
+                            ASSERT(e.idx_in_flatten_table < indices.size());
+                            indices[e.idx_in_flatten_table] = buf->CreateSrv(arg, var_type);
                         },
                         [&](const TextureView& arg) {
-                            FATAL("not implemented");
-                        },
-                        [&](const std::span<TextureView>& arg) {
-                            FATAL("not implemented");
+                            D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(arg.GetTexture());
+                            ASSERT(IsShaderVarTexture(var_type));
+                            ASSERT(e.idx_in_flatten_table < indices.size());
+                            indices[e.idx_in_flatten_table] = tex->CreateSrv(arg, var_type);
                         },
                         [&](const std::span<BufferView>& arg) {
                             ASSERT(IsShaderVarCommonBuffer(var_type));
                             for (int j = 0; const BufferView& view : arg) {
                                 D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(view.GetBuffer());
-                                ASSERT(e.idx_in_table + j < indices.size());
-                                indices[e.idx_in_table + j] = buf->CreateSrv(view, var_type);
+                                ASSERT(e.idx_in_flatten_table + j < indices.size());
+                                indices[e.idx_in_flatten_table + j] = buf->CreateSrv(view, var_type);
+                                j++;
+                            }
+                        },
+                        [&](const std::span<TextureView>& arg) {
+                            ASSERT(IsShaderVarTexture(var_type));
+                            for (int j = 0; const TextureView& view : arg) {
+                                D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(view.GetTexture());
+                                ASSERT(e.idx_in_flatten_table + j < indices.size());
+                                indices[e.idx_in_flatten_table + j] = tex->CreateSrv(view, var_type);
                                 j++;
                             }
                         },
@@ -1540,24 +1562,32 @@ namespace Moer::Render {
                         [&](const BufferView& arg) {
                             D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
                             ASSERT(IsShaderVarCommonBuffer(var_type));
-                            ASSERT(e.idx_in_table < indices.size());
-                            indices[e.idx_in_table] = buf->CreateUav(arg, var_type);
+                            ASSERT(e.idx_in_flatten_table < indices.size());
+                            indices[e.idx_in_flatten_table] = buf->CreateUav(arg, var_type);
                         },
                         [&](const TextureView& arg) {
-                            FATAL("not implemented");
-                        },
-                        [&](const std::span<TextureView>& arg) {
-                            FATAL("not implemented");
+                            D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(arg.GetTexture());
+                            ASSERT(IsShaderVarTexture(var_type));
+                            ASSERT(e.idx_in_flatten_table < indices.size());
+                            indices[e.idx_in_flatten_table] = tex->CreateUav(arg, var_type);
                         },
                         [&](const std::span<BufferView>& arg) {
                             ASSERT(IsShaderVarCommonBuffer(var_type));
                             for (int j = 0; const BufferView& view : arg) {
                                 D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(view.GetBuffer());
-                                ASSERT(e.idx_in_table + j < indices.size());
-                                indices[e.idx_in_table + j] = buf->CreateUav(view, var_type);
+                                ASSERT(e.idx_in_flatten_table + j < indices.size());
+                                indices[e.idx_in_flatten_table + j] = buf->CreateUav(view, var_type);
                                 j++;
                             }
                         },
+                        [&](const std::span<TextureView>& arg) {
+                            ASSERT(IsShaderVarTexture(var_type));
+                            for (int j = 0; const TextureView& view : arg) {
+                                D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(view.GetTexture());
+                                ASSERT(e.idx_in_flatten_table + j < indices.size());
+                                indices[e.idx_in_flatten_table + j] = tex->CreateUav(view, var_type);
+                                j++;
+                            } },
                         [&](const RaytracingTlasRef& arg) {
                             FATAL("not implemented");
                         },
@@ -1568,7 +1598,24 @@ namespace Moer::Render {
             list->SetComputeRootDescriptorTable(layout.uav_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
         }
         if (layout.sampler_table) {
-            FATAL("not implemented");
+            Array<DescriptorIndex> indices(layout.sampler_table->GetTotalBindCount());
+            for (const auto& e : layout.sampler_table->entries) {
+                ASSERT(e.idx_in_cpp_args < _args.Size() && e.idx_in_cpp_args < _pso_handle.binding_infos.size());
+                const ParamInfoFlags flags    = _pso_handle.binding_infos[e.idx_in_cpp_args];
+                const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+                ASSERT(IsShaderVarSampler(var_type));
+
+                Variant(_args[e.idx_in_cpp_args])
+                    .Match(
+                        [&](const Sampler& arg) {
+                            ASSERT(e.idx_in_table < indices.size());
+                            indices[e.idx_in_table] = DescriptorIndex{uint(D3D12DefaultSamplers::GetIndex(arg))};// what if other custom sampler?
+                        },
+                        [&](const auto&) {
+                            FATAL("not support arg");
+                        });
+            }
+            list->SetComputeRootDescriptorTable(layout.sampler_table->idx_in_root_sig, allocator.GetDevice()->PushSamplerDescriptor(indices));
         }
     }
     void D3D12CommandList::Dispatch(uint _x, uint _y, uint _z) {
@@ -1935,6 +1982,9 @@ namespace Moer::Render {
     D3D12Texture::D3D12Texture(D3D12Device* _device, const TextureInfo& _info, Allocation&& _allocation) : D3D12DeviceChild(_device), Texture(_info), allocation(std::move(_allocation)) {
     }
     D3D12Texture::~D3D12Texture() {
+        for (const auto& [desc, index] : srv_uav_views) device->GetCsuHeap()->Free(index);
+        //for (const auto& [desc, index] : rtv_views) device->GetRtvHeap()->Free(index);
+        //for (const auto& [desc, index] : dsv_views) device->GetDsvHeap()->Free(index);
     }
     uint D3D12Texture::QuerySubresourceIndex(uint _mip_level, uint _array_slice, uint _plane_slice) const {
         return D3D12CalcSubresource(_mip_level, _array_slice, _plane_slice, GetNumMips(), GetNumArray());
@@ -1951,6 +2001,172 @@ namespace Moer::Render {
     void D3D12Texture::SetName(const std::string_view _name) {
         debug_name.emplace(_name);
         allocation.resource->SetName(StringWiden(_name).c_str());
+    }
+
+    DescriptorIndex D3D12Texture::CreateSrv(const TextureView& _range, ED3D12ShaderVariableType _type) {
+        ASSERT(this == _range.GetTexture());
+        ASSERT(IsShaderVarTexture(_type) && IsShaderVarSrv(_type));
+        ASSERT2(_range.format != EPixelFormat::PF_UNDEFINED, "texture view must has a format");
+        ASSERT2(_range.array_index == 0 && _range.num_array == GetNumArray(), "now not support subrange in array");
+        ViewDesc viewDesc{};
+        viewDesc.type              = _type;
+        viewDesc.format            = D3D12EnumTranslation::METoDxFormat(_range.format);
+        viewDesc.first_mip_level   = _range.mip_level;
+        viewDesc.num_mip_levels    = _range.num_mips;
+        viewDesc.b_depth_read_only = false;
+        for (const auto& [desc, index] : srv_uav_views) {
+            if (desc == viewDesc) {
+                return {index};
+            }
+        }
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format                  = viewDesc.format;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+        switch (_type) {
+            case ED3D12ShaderVariableType::Texture1D:
+                FATAL("we don't support 1D texture yet! if support remove this msg!");
+                srvDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE1D;
+                srvDesc.Texture1D.MostDetailedMip     = viewDesc.first_mip_level;
+                srvDesc.Texture1D.MipLevels           = viewDesc.num_mip_levels;
+                srvDesc.Texture1D.ResourceMinLODClamp = 0.0f;
+                break;
+            case ED3D12ShaderVariableType::Texture1DArray:
+                FATAL("we don't support 1D texture yet! if support remove this msg!");
+                srvDesc.ViewDimension                      = D3D12_SRV_DIMENSION_TEXTURE1DARRAY;
+                srvDesc.Texture1DArray.MostDetailedMip     = viewDesc.first_mip_level;
+                srvDesc.Texture1DArray.MipLevels           = viewDesc.num_mip_levels;
+                srvDesc.Texture1DArray.FirstArraySlice     = _range.array_index;
+                srvDesc.Texture1DArray.ArraySize           = _range.num_array;
+                srvDesc.Texture1DArray.ResourceMinLODClamp = 0.0f;
+                break;
+            case ED3D12ShaderVariableType::Texture2D:
+                srvDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
+                srvDesc.Texture2D.MostDetailedMip     = viewDesc.first_mip_level;
+                srvDesc.Texture2D.MipLevels           = viewDesc.num_mip_levels;
+                srvDesc.Texture2D.PlaneSlice          = 0;
+                srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+                break;
+            case ED3D12ShaderVariableType::Texture2DArray:
+                srvDesc.ViewDimension                      = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+                srvDesc.Texture2DArray.MostDetailedMip     = viewDesc.first_mip_level;
+                srvDesc.Texture2DArray.MipLevels           = viewDesc.num_mip_levels;
+                srvDesc.Texture2DArray.FirstArraySlice     = _range.array_index;
+                srvDesc.Texture2DArray.ArraySize           = _range.num_array;
+                srvDesc.Texture2DArray.PlaneSlice          = 0;
+                srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+                break;
+            case ED3D12ShaderVariableType::Texture2DMS:
+                FATAL("we don't support MS texture yet! if support remove this msg!");
+                srvDesc.ViewDimension                           = D3D12_SRV_DIMENSION_TEXTURE2DMS;
+                srvDesc.Texture2DMS.UnusedField_NothingToDefine = 0;// a multi sampled 2D texture contains a single subresource
+                break;
+            case ED3D12ShaderVariableType::Texture2DMSArray:
+                FATAL("we don't support MS texture yet! if support remove this msg!");
+                srvDesc.ViewDimension                    = D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY;
+                srvDesc.Texture2DMSArray.FirstArraySlice = _range.array_index;
+                srvDesc.Texture2DMSArray.ArraySize       = _range.num_array;
+                break;
+            case ED3D12ShaderVariableType::Texture3D:
+                srvDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE3D;
+                srvDesc.Texture3D.MostDetailedMip     = viewDesc.first_mip_level;
+                srvDesc.Texture3D.MipLevels           = viewDesc.num_mip_levels;
+                srvDesc.Texture3D.ResourceMinLODClamp = 0.0f;
+                break;
+            case ED3D12ShaderVariableType::TextureCube:
+                srvDesc.ViewDimension                   = D3D12_SRV_DIMENSION_TEXTURECUBE;
+                srvDesc.TextureCube.MostDetailedMip     = viewDesc.first_mip_level;
+                srvDesc.TextureCube.MipLevels           = viewDesc.num_mip_levels;
+                srvDesc.TextureCube.ResourceMinLODClamp = 0.0f;
+                break;
+            case ED3D12ShaderVariableType::TextureCubeArray:
+                srvDesc.ViewDimension                        = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
+                srvDesc.TextureCubeArray.MostDetailedMip     = viewDesc.first_mip_level;
+                srvDesc.TextureCubeArray.MipLevels           = viewDesc.num_mip_levels;
+                srvDesc.TextureCubeArray.First2DArrayFace    = _range.array_index;
+                srvDesc.TextureCubeArray.NumCubes            = _range.num_array / 6;
+                srvDesc.TextureCubeArray.ResourceMinLODClamp = 0.0f;
+                break;
+            default:
+                FATAL("Unexpected shader variable type {}", uint(_type));
+        }
+
+        auto index = device->GetCsuHeap()->Allocate();
+        device->Native()->CreateShaderResourceView(allocation.resource, &srvDesc, device->GetCsuHeap()->GetOffsetHandleCpu(index));
+        srv_uav_views.emplace_back(viewDesc, index);
+        return index;
+    }
+
+    DescriptorIndex D3D12Texture::CreateUav(const TextureView& _range, ED3D12ShaderVariableType _type) {
+        ASSERT(this == _range.GetTexture());
+        ASSERT(IsShaderVarTexture(_type) && IsShaderVarUav(_type));
+        ASSERT(EnumHasAnyFlag(GetUsage(), ETextureUsageFlags::UNORDERED_ACCESS));
+        ASSERT2(_range.format != EPixelFormat::PF_UNDEFINED, "texture view must has a format");
+        ASSERT2(_range.array_index == 0 && _range.num_array == GetNumArray(), "now not support subrange in array");
+        ASSERT2(_range.num_mips == 1, "one uav only support one mip");
+        ViewDesc viewDesc{};
+        viewDesc.type              = _type;
+        viewDesc.format            = D3D12EnumTranslation::METoDxFormat(_range.format);
+        viewDesc.first_mip_level   = _range.mip_level;
+        viewDesc.num_mip_levels    = _range.num_mips;
+        viewDesc.b_depth_read_only = false;
+        for (const auto& [desc, index] : srv_uav_views) {
+            if (desc == viewDesc) {
+                return {index};
+            }
+        }
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = viewDesc.format;
+        switch (_type) {
+            case ED3D12ShaderVariableType::RWTexture1D:
+                FATAL("we don't support 1D texture yet! if support remove this msg!");
+                uavDesc.ViewDimension      = D3D12_UAV_DIMENSION_TEXTURE1D;
+                uavDesc.Texture1D.MipSlice = viewDesc.first_mip_level;
+                break;
+            case ED3D12ShaderVariableType::RWTexture1DArray:
+                FATAL("we don't support 1D texture yet! if support remove this msg!");
+                uavDesc.ViewDimension                  = D3D12_UAV_DIMENSION_TEXTURE1DARRAY;
+                uavDesc.Texture1DArray.MipSlice        = viewDesc.first_mip_level;
+                uavDesc.Texture1DArray.FirstArraySlice = _range.array_index;
+                uavDesc.Texture1DArray.ArraySize       = _range.num_array;
+                break;
+            case ED3D12ShaderVariableType::RWTexture2D:
+                uavDesc.ViewDimension        = D3D12_UAV_DIMENSION_TEXTURE2D;
+                uavDesc.Texture2D.MipSlice   = viewDesc.first_mip_level;
+                uavDesc.Texture2D.PlaneSlice = 0;
+                break;
+            case ED3D12ShaderVariableType::RWTexture2DArray:
+                uavDesc.ViewDimension                  = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+                uavDesc.Texture2DArray.MipSlice        = viewDesc.first_mip_level;
+                uavDesc.Texture2DArray.FirstArraySlice = _range.array_index;
+                uavDesc.Texture2DArray.ArraySize       = _range.num_array;
+                uavDesc.Texture2DArray.PlaneSlice      = 0;
+                break;
+            //case ED3D12ShaderVariableType::RWTexture2DMS: // not consider yet
+            //    uavDesc.ViewDimension                           = D3D12_UAV_DIMENSION_TEXTURE2DMS;
+            //    uavDesc.Texture2DMS.UnusedField_NothingToDefine = 0;// a multi sampled 2D texture contains a single subresource
+            //    break;
+            //case ED3D12ShaderVariableType::RWTexture2DMSArray:
+            //    uavDesc.ViewDimension                    = D3D12_UAV_DIMENSION_TEXTURE2DMSARRAY;
+            //    uavDesc.Texture2DMSArray.FirstArraySlice = _range.array_index;
+            //    uavDesc.Texture2DMSArray.ArraySize       = _range.num_array;
+            //    break;
+            case ED3D12ShaderVariableType::RWTexture3D:
+                uavDesc.ViewDimension         = D3D12_UAV_DIMENSION_TEXTURE3D;
+                uavDesc.Texture3D.MipSlice    = viewDesc.first_mip_level;
+                uavDesc.Texture3D.FirstWSlice = _range.array_index;
+                uavDesc.Texture3D.WSize       = _range.num_array;
+                break;
+            default:
+                FATAL("Unexpected shader variable type {}", uint(_type));
+        }
+
+        auto index = device->GetCsuHeap()->Allocate();
+        device->Native()->CreateUnorderedAccessView(allocation.resource, nullptr, &uavDesc, device->GetCsuHeap()->GetOffsetHandleCpu(index));
+        srv_uav_views.emplace_back(viewDesc, index);
+        return index;
     }
 
     namespace D3D12EnumTranslation {
@@ -2174,6 +2390,63 @@ namespace Moer::Render {
                 LOG_WARNING("Unsupported texture usage flags: {}", static_cast<uint32_t>(_me_flags));
             }
             return ret;
+        }
+
+        D3D12_FILTER METoDxSamplerFilter(ESamplerFilter _filter) {
+            switch (_filter) {
+                case SF_NEAREST:
+                    return D3D12_FILTER_MIN_MAG_MIP_POINT;
+                case SF_LINEAR:
+                    return D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+                case SF_CUBIC:
+                    return D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+                case SF_ANISOTROPIC_NEAREST:
+                    return D3D12_FILTER_ANISOTROPIC;
+                    //D3D12_FILTER_MIN_MAG_ANISOTROPIC_MIP_POINT;
+                    // D3D12 ERROR: ID3D12Device::CreateSampler2: Filters with MIN_MAG_ANISOTROPIC_MIP_POINT are only valid if D3D12_FEATURE_DATA_D3D12_OPTIONS19::AnisoFilterWithPointMipSupported is TRUE. Filter is D3D12_FILTER_MIN_MAG_ANISOTROPIC_MIP_POINT. [ STATE_CREATION ERROR #742: CREATE_SAMPLER_INVALID]
+                case SF_ANISOTROPIC_LINEAR:
+                    return D3D12_FILTER_ANISOTROPIC;
+            }
+            FATAL("Unsupported sampler filter: {}", static_cast<uint32_t>(_filter));
+            return D3D12_FILTER_MIN_MAG_MIP_POINT;
+        }
+
+        D3D12_TEXTURE_ADDRESS_MODE METoDxTextureAddressMode(ESamplerAddressMode _address_mode) {
+            switch (_address_mode) {
+                case SAM_REPEAT:
+                    return D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+                case SAM_MIRRORED_REPEAT:
+                    return D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
+                case SAM_CLAMP_TO_EDGE:
+                    return D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+                case SAM_CLAMP_TO_BORDER:
+                    return D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+            }
+            FATAL("Unsupported texture address mode: {}", static_cast<uint32_t>(_address_mode));
+            return D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        }
+
+        D3D12_COMPARISON_FUNC METoDxSamplerCompareOp(ESamplerCompareFunction _compare_op) {
+            switch (_compare_op) {
+                case SCF_NEVER:
+                    return D3D12_COMPARISON_FUNC_NEVER;
+                case SCF_LESS:
+                    return D3D12_COMPARISON_FUNC_LESS;
+                case SCF_EQUAL:
+                    return D3D12_COMPARISON_FUNC_EQUAL;
+                case SCF_LESS_OR_EQUAL:
+                    return D3D12_COMPARISON_FUNC_LESS_EQUAL;
+                case SCF_GREATER:
+                    return D3D12_COMPARISON_FUNC_GREATER;
+                case SCF_NOT_EQUAL:
+                    return D3D12_COMPARISON_FUNC_NOT_EQUAL;
+                case SCF_GREATER_OR_EQUAL:
+                    return D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+                case SCF_ALWAYS:
+                    return D3D12_COMPARISON_FUNC_ALWAYS;
+            }
+            FATAL("Unsupported sampler compare op: {}", static_cast<uint32_t>(_compare_op));
+            return D3D12_COMPARISON_FUNC_NONE;
         }
 
     }// namespace D3D12EnumTranslation
@@ -2509,6 +2782,67 @@ namespace Moer::Render {
         current_chunk_offset += count;
         ASSERT(current_chunk_offset <= max_descriptors_per_execution);
         return {start};
+    }
+
+
+    namespace DefaultSamplerDetail {
+        struct DefaultSamplerDescStorage {
+            Array<D3D12_SAMPLER_DESC> sampler_descs;
+
+            DefaultSamplerDescStorage() {
+                sampler_descs.resize(size_t(ESamplerFilter::SF_Num) * size_t(ESamplerAddressMode::SAM_Num) * size_t(ESamplerCompareFunction::SCF_Num));
+
+                int idx = 0;
+                for (int i = 0; i < ESamplerFilter::SF_Num; i++) {
+                    for (int j = 0; j < ESamplerAddressMode::SAM_Num; j++) {
+                        for (int k = 0; k < ESamplerCompareFunction::SCF_Num; k++) {
+                            auto& desc = sampler_descs[idx];
+
+                            desc.Filter         = D3D12EnumTranslation::METoDxSamplerFilter(ESamplerFilter(i));
+                            desc.AddressU       = D3D12EnumTranslation::METoDxTextureAddressMode(ESamplerAddressMode(j));
+                            desc.AddressV       = desc.AddressU;
+                            desc.AddressW       = desc.AddressU;
+                            desc.MipLODBias     = 0;
+                            desc.MaxAnisotropy  = (i == ESamplerFilter::SF_ANISOTROPIC_NEAREST || i == ESamplerFilter::SF_ANISOTROPIC_LINEAR) ? 16 : 0;
+                            desc.ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
+                            // note we not support SamplerComparisonState.
+                            //  since we can't distinguish between SamplerState and SamplerComparisonState in dxil reflection
+                            //  and we can't get this info from cpp pipeline reflection
+                            // note if support later, if use compare function, we need to set filter to D3D12_FILTER_COMPARISON_*
+                            //                            D3D12EnumTranslation::METoDxSamplerCompareOp(ESamplerCompareFunction(k));
+                            desc.BorderColor[0] = 0;// only black border color here.
+                            desc.BorderColor[1] = 0;
+                            desc.BorderColor[2] = 0;
+                            desc.BorderColor[3] = 0;
+                            desc.MinLOD         = 0;
+                            desc.MaxLOD         = D3D12_FLOAT32_MAX;
+
+                            idx++;
+                        }
+                    }
+                }
+            }
+        };
+    }// namespace DefaultSamplerDetail
+
+    void D3D12DefaultSamplers::InitSamplerDescriptorHeap(D3D12Device* _device) {
+        auto* heap = _device->GetSampleHeap();
+        for (const auto& desc : GetSamplers()) {
+            _device->Native()->CreateSampler(&desc, heap->GetOffsetHandleCpu(heap->Allocate()));
+        }
+    }
+
+    std::span<const D3D12_SAMPLER_DESC> D3D12DefaultSamplers::GetSamplers() {
+        static DefaultSamplerDetail::DefaultSamplerDescStorage storage;
+        return storage.sampler_descs;
+    }
+
+    size_t D3D12DefaultSamplers::GetIndex(const Sampler& sampler) {
+        // clang-format off
+        return size_t(sampler.filter) * size_t(ESamplerAddressMode::SAM_Num) * size_t(ESamplerCompareFunction::SCF_Num)
+                + size_t(sampler.address_mode) * size_t(ESamplerCompareFunction::SCF_Num)
+                + size_t(sampler.compare_function);
+        // clang-format on
     }
 
 }// namespace Moer::Render

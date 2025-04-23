@@ -129,6 +129,9 @@ namespace Moer::Render {
         //static VkSamplerMipmapMode  METoVKMipmapMode(ESamplerFilter _filter);
         //static VkSamplerAddressMode METoVKWrapMode(ESamplerAddressMode _address_mode);
         //static VkCompareOp          METoVKCompareOpSampler(ESamplerCompareFunction _compare_op);
+        D3D12_FILTER               METoDxSamplerFilter(ESamplerFilter _filter);
+        D3D12_TEXTURE_ADDRESS_MODE METoDxTextureAddressMode(ESamplerAddressMode _address_mode);
+        D3D12_COMPARISON_FUNC      METoDxSamplerCompareOp(ESamplerCompareFunction _compare_op);
 
         //static VkCompareOp METoVKCompareOp(ECompareOption _compare_op);
         //static VkStencilOp METoVKStencilOp(EStencilOp _stencil_op);
@@ -269,11 +272,12 @@ namespace Moer::Render {
             struct RootDescriptorTable {
                 uint8 idx_in_root_sig = -1;
                 struct Entry {
-                    uint8 idx_in_cpp_args = -1;
-                    uint8 idx_in_table    = -1;
-                    uint8 bind_count      = 1;
-                    uint8 slot            = 0;
-                    uint8 space           = 0;
+                    uint8 idx_in_cpp_args      = -1;
+                    uint8 idx_in_table         = -1;
+                    uint8 idx_in_flatten_table = -1;// make bind_count=1
+                    uint8 bind_count           = 1;
+                    uint8 slot                 = 0;
+                    uint8 space                = 0;
                 };
                 Array<Entry> entries;
 
@@ -435,6 +439,13 @@ namespace Moer::Render {
                                        bool             _is_rtv_dsv = false);
     };
 
+    class D3D12DefaultSamplers {
+    public:
+        static void                                InitSamplerDescriptorHeap(D3D12Device* _device);
+        static std::span<const D3D12_SAMPLER_DESC> GetSamplers();
+        static size_t                              GetIndex(const Sampler& sampler);
+    };
+
     class D3D12Texture final : public Texture, public D3D12DeviceChild {
     public:
         struct ViewDesc {
@@ -453,7 +464,9 @@ namespace Moer::Render {
 
     private:
         Allocation        allocation;
-        Array<ViewRecord> srv_uav_views;// srv,uav. todo rtv,dsv?
+        Array<ViewRecord> srv_uav_views;
+        //Array<ViewRecord> rtv_views; // todo, graphics pipeline
+        //Array<ViewRecord> dsv_views;
 
     public:
         D3D12Texture(D3D12Device* _device, const TextureInfo& _info);
@@ -467,6 +480,9 @@ namespace Moer::Render {
         void            Destroy() override;                            // from Texxture.RHIResource
         uint            GetMipByteSize(uint _mip_idx) const override;  // from Texture
         RENDER_API void SetName(const std::string_view _name) override;// from Texture
+
+        DescriptorIndex CreateSrv(const TextureView& _range, ED3D12ShaderVariableType _type);
+        DescriptorIndex CreateUav(const TextureView& _range, ED3D12ShaderVariableType _type);
     };
 
     // not for readback/upload
@@ -912,10 +928,6 @@ namespace Moer::Render {
         /*     DescriptorIndex             m_backbufferRTVs[FrameLatency];
         std::unique_ptr<GpuTexture> m_backbufferTextures[FrameLatency];*/
     };
-
-    //class D3D12DescriptorSetsLayout;
-    //class D3D12DescriptorSetAllocator;
-    //class D3D12DescriptorSetWriter;
 
     struct D3D12RHIConfig {
         bool force_sync = true;// true if want to wait for ExecuteThread() in CommandQueue::Sync()
