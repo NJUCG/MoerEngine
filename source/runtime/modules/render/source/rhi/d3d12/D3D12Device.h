@@ -1029,7 +1029,7 @@ namespace Moer::Render {
             constexpr uint        count = sizeof...(_index_in_cpu_heap);
             const DescriptorIndex start = csu_heap_gpu->Allocate(count);
 
-            [start = start.index]<size_t... N>(auto&& index_tuple, std::index_sequence<N...>) {
+            [start = start.index, this]<size_t... N>(auto&& index_tuple, std::index_sequence<N...>) {
                 (device->CopyDescriptorsSimple(1, csu_heap_gpu->GetOffsetHandleCpu({start + uint(N)}), csu_heap_cpu->GetOffsetHandleCpu(std::get<N>(index_tuple)), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV), ...);
             }(std::forward_as_tuple(_index_in_cpu_heap...), std::make_index_sequence<count>());
 
@@ -1042,7 +1042,7 @@ namespace Moer::Render {
             constexpr uint        count = sizeof...(_index_in_cpu_heap);
             const DescriptorIndex start = sampler_heap_gpu->Allocate(count);
 
-            [start = start.index]<size_t... N>(auto&& index_tuple, std::index_sequence<N...>) {
+            [start = start.index, this]<size_t... N>(auto&& index_tuple, std::index_sequence<N...>) {
                 (device->CopyDescriptorsSimple(1, sampler_heap_gpu->GetOffsetHandleCpu({start + uint(N)}), sampler_heap_cpu->GetOffsetHandleCpu(std::get<N>(index_tuple)), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER), ...);
             }(std::forward_as_tuple(_index_in_cpu_heap...), std::make_index_sequence<count>());
 

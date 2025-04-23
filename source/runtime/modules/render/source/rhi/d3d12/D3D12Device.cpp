@@ -1189,8 +1189,8 @@ namespace Moer::Render {
     }
 
     D3D12GraphicsCommandQueue::~D3D12GraphicsCommandQueue() {
-        //is_thread_enable = false;
         cv.notify_all();
+        thd.request_stop();
         thd.join();
     }
 
