@@ -174,15 +174,12 @@ namespace Moer::Resource::Gltf {
         if (data->m_textures.contains(texture_path.C_Str())) {
             auto texture = data->m_textures[texture_path.C_Str()];
             data->m_mat_instance_textures[mat->GetName()].textures.push_back({param_name, texture_path.C_Str()});
-            SamplerParams params{};
-            params.max_mip_level = texture.mips;
             LOG_DEBUG("\tLoad Texture, texture is already loaded {} for {}", texture_path.C_Str(), param_name);
             return;
         }
 
-        int32_t         embedded_id = GetEmbeddedTextureId(texture_path);
-        TextureBuilder* builder     = MoerNew(TextureBuilder);
-        ImageReadDesc   image_desc;
+        int32_t       embedded_id = GetEmbeddedTextureId(texture_path);
+        ImageReadDesc image_desc;
 
         if (embedded_id >= 0) {
             const aiTexture* texture = scene->mTextures[embedded_id];

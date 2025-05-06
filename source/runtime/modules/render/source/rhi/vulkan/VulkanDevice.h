@@ -193,11 +193,6 @@ namespace Moer::Render {
             return m_raytracing_queue;
         }
 
-        VulkanCommandAllocator& GetCurrentCommandAllocator();
-
-    private:
-        Array<VulkanCommandAllocator> m_command_allocators;
-
     private:
         VkInstance            m_instance                  = VK_NULL_HANDLE;
         VkPhysicalDevice      m_gpu                       = VK_NULL_HANDLE;

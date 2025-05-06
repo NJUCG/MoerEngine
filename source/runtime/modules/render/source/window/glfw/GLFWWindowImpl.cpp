@@ -1,7 +1,6 @@
 #include "GLFWWindowImpl.h"
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
-#include "rhi/vulkan/VulkanRHI.h"
 #include "window/WindowContext.h"
 #include "platform/Platform.h"
 //define vulkan ahead of glfw

@@ -16,34 +16,7 @@
 #include <mutex>
 
 namespace Moer::Render {
-    struct DescriptorSetInfo;
-    struct DescriptorSetBindingInfo;
-
     class VulkanDevice;
-    class VulkanDescriptorSetWriter;
-
-    struct VulkanDescriptorASInfo {
-        VkAccelerationStructureKHR as;
-        uint64_t                   update_bit;
-        uint64_t                   padding;
-    };
-
-    union DescriptorResource {
-        VkDescriptorImageInfo  image;
-        VkDescriptorBufferInfo buffer;
-        VulkanDescriptorASInfo as;
-    };
-
-    union VulkanHashableDescriptorInfo {
-        struct {
-            uint64_t              max_0;
-            uint64_t              max_1;
-            VkDescriptorSetLayout layout_handle;
-        } layout;
-
-        DescriptorResource resource;
-    };
-
     struct VulkanShaderResourceState {
         uint         desc_type;
         uint8        resource_type;//SpvReflectResourceType
@@ -84,102 +57,6 @@ namespace Moer::Render {
     private:
         Moer::Array<VkDescriptorSetLayout> m_layouts;
         TDescriptorCountMap                m_descriptor_type_count;
-    };
-
-    class VulkanDescriptorSetAllocator final : public VulkanDeviceObject {
-    public:
-        VulkanDescriptorSetAllocator() = default;
-        VulkanDescriptorSetAllocator(VulkanDevice* _device);
-        ~VulkanDescriptorSetAllocator();
-
-        bool GetDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
-
-        void ResetAll();
-
-        void CleanUp();
-
-        class VulkanDescriptorSetCachePool final : public VulkanDeviceObject {
-        public:
-            VulkanDescriptorSetCachePool(VulkanDevice* _device, const float _default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE], uint32_t _set_count);
-            VulkanDescriptorSetCachePool(VulkanDevice* _device, const VulkanDescriptorSetsLayout& _layout);
-            ~VulkanDescriptorSetCachePool();
-
-            bool FindDescriptorSets(uint32_t _hash_key, Moer::Array<VkDescriptorSet>& _sets);
-            bool CreateDescriptorSets(uint32_t _hash_key, const VulkanDescriptorSetsLayout& _layout, Moer::Array<VulkanDescriptorSetWriter>& _writers, Moer::Array<VkDescriptorSet>& _sets);
-            bool AllocateDescriptorSet(VkDescriptorSetLayout _layout, VkDescriptorSet& _set);
-            void Reset();
-            void CleanUp();
-
-        private:
-            void InitBindlessPool();
-
-        private:
-            VkDescriptorPool m_pool          = VK_NULL_HANDLE;
-            VkDescriptorPool m_bindless_pool = VK_NULL_HANDLE;
-
-            Moer::UnorderedMap<uint32_t, Moer::Array<VkDescriptorSet>> m_allocated_sets;
-            Moer::UnorderedMap<uint32_t, VkDescriptorSet>              m_allocated_set;
-
-        private:
-            static uint32_t GetMaxSets(uint32_t _set_count);
-        };
-
-    private:
-        std::list<std::unique_ptr<VulkanDescriptorSetCachePool>> m_cache_pools;
-
-    private:
-        void CreatePool(const VulkanDescriptorSetsLayout& _layout);
-    };
-
-    struct VulkanDescriptorSetWriteContainer {
-        Moer::Array<VulkanHashableDescriptorInfo> hashable_descriptor_info;
-        Moer::Array<VkDescriptorImageInfo>        descriptor_image_info;
-        Moer::Array<VkDescriptorBufferInfo>       descriptor_buffer_info;
-        Moer::Array<VulkanDescriptorASInfo>       descriptor_as_info;
-
-        Moer::Array<VkWriteDescriptorSet>                         descriptor_writes;
-        Moer::Array<VkWriteDescriptorSetAccelerationStructureKHR> as_writes;
-    };
-
-    class VulkanDescriptorSetWriter final {
-        friend VulkanPipelineResourceCache;
-
-    public:
-        VulkanDescriptorSetWriter(VulkanPipelineResourceCache* _cache) : m_cache(_cache) {}
-
-        void Init(const Moer::Array<DescriptorSetBindingInfo>& _types, VulkanHashableDescriptorInfo* _hash_info_head, VkWriteDescriptorSet* _descriptor_write_head, VkDescriptorImageInfo* _image_info_head, VkDescriptorBufferInfo* _buffer_info_head, VkWriteDescriptorSetAccelerationStructureKHR* _as_write_head, VulkanDescriptorASInfo* _as_info_head);
-
-        void SetDescriptorSet(VkDescriptorSet _set);
-
-        void WriteSampler(uint32_t _binding, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout);
-        void WriteSampledImage(uint32_t _binding, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout);
-        void WriteStorageImage(uint32_t _binding, VkImageView _image_view, VkImageLayout _image_layout);
-        void WriteUniformBuffer(uint32_t _binding, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range);
-        void WriteStorageBuffer(uint32_t _binding, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range);
-        void WriteAccelerationStructure(uint32_t _binding, VkAccelerationStructureKHR _as, uint64_t _update_bit);
-
-        uint32_t GetSetKey() const;
-
-        inline uint32_t                    GetNumWrites() const { return m_write_count; }
-        inline const VkWriteDescriptorSet* GetWrites() const { return m_descriptor_write_head; }
-
-    protected:
-        template<VkDescriptorType DescriptorType>
-        void WriteImageInner(uint32_t _write_index, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout);
-        void WriteImage(uint32_t _binding, VkSampler _sampler, VkImageView _image_view, VkImageLayout _image_layout);
-        void WriteBuffer(uint32_t _binding, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range);
-        template<VkDescriptorType DescriptorType>
-        void WriteBufferInner(uint32_t _write_index, VkBuffer _buffer, VkDeviceSize _offset, VkDeviceSize _range);
-
-    private:
-        VulkanHashableDescriptorInfo* m_hash_info_head;
-        VkWriteDescriptorSet*         m_descriptor_write_head;
-        uint32_t                      m_write_count;
-
-        // mapping: binding --> write index
-        Moer::UnorderedMap<uint32_t, uint32_t> m_write_index_map;
-
-        VulkanPipelineResourceCache* m_cache;
     };
 
 #pragma region[ descriptor buffer ext ]
@@ -266,9 +143,6 @@ namespace Moer::Render {
         uint8*        map_ptr;
     };
 
-    struct DescriptorBufferManager {
-        uint desc_buffer_offset_alignment;
-    };
 #pragma endregion
 }// namespace Moer::Render
 

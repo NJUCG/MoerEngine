@@ -161,8 +161,6 @@ namespace Moer {
         EnqueueRenderTask([temp_complete_event = complete_event]() {
             if (IsCurrentlyRenderThread()) {
                 temp_complete_event->TryUnlockSubsequents();
-
-                g_rhi->RHIFlushPendingDeletes();
             }
         });
     }

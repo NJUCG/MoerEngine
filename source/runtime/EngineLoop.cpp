@@ -2,7 +2,6 @@
 
 #include "EngineLoop.h"
 #include "PixelFormat.h"
-#include "RendererManager.h"
 #include "renderer/UIRenderer.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -56,14 +55,10 @@ namespace Moer {
         //record and present gui render command on main thread
         UIRenderer::GetRenderer()->EndRenderFrame();
 
-        RendererManager::GetInstance().DrawFrame();
-        RendererManager::GetInstance().Present();
-
         frame_end_sync.Sync(true);
     }
     void EngineLoop::Init() {
         UIRenderer::GetRenderer()->Init();
-        RendererManager::GetInstance().Init();
     }
 
     void EngineLoop::ProcessInputEvents() {

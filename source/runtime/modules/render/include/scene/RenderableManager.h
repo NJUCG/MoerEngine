@@ -12,7 +12,6 @@
 namespace Moer {
     class RENDER_API RenderableManager {
         struct Proxy {
-            RHIRenderPrimitiveRef                            primitive{nullptr};
             std::unique_ptr<Moer::Array<float>>              vertex_data{};
             std::unique_ptr<Moer::Array<uint32_t>>           index_data{};
             bool                                             culling{false};
@@ -67,7 +66,6 @@ namespace Moer {
         void Destroy(Entity entity);
         bool Contains(Entity entity);
 
-        void SetRHIRenderPrimitiveRef(Entity entity, RHIRenderPrimitiveRef primitive);
         void SetCulling(Entity entity, bool culling);
         void SetCastShadows(Entity entity, bool castShadows);
         void SetMaterialInstances(Entity _entity, Array<MaterialInstanceRef>&& _material_instances);
@@ -75,7 +73,6 @@ namespace Moer {
         void SetInstanceID(Entity entity, int instance_id);
         void SetGeomInstanceID(Entity entity, int geom_instance_id);
 
-        RHIRenderPrimitiveRef                                      GetRenderPrimitive(Entity entity);
         bool                                                       GetCulling(Entity entity);
         const Moer::Array<float>&                                  GetVertexData(Entity entity);
         const Moer::Array<uint32_t>&                               GetIndexData(Entity entity);

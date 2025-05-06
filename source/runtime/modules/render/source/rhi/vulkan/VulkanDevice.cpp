@@ -501,7 +501,6 @@ namespace Moer::Render {
         compute_queue.reset();
         gfx_queue.reset();
         copy_queue.reset();
-        m_command_allocators.clear();
         DestroyInternalShaders();
         FlushDeferredReleases();
         DestroyInternalResources();
@@ -538,14 +537,6 @@ namespace Moer::Render {
         return queue_family_props;
     }
 
-    VulkanCommandAllocator& VulkanDevice::GetCurrentCommandAllocator() {
-        auto thread_id = ThreadManager::Instance().GetCurrentThreadIndex();
-        return m_command_allocators[thread_id];
-    }
-
-    //uint32_t VulkanDevice::GetMemoryType(uint32_t type_bits, VkMemoryPropertyFlags properties, VkBool32* mem_type_found) const {
-    //    return 0;
-    //}
     static uint32_t GetQueueFamilyIndice(std::span<const VkQueueFamilyProperties> _queue_family_props, VkQueueFlags _target_queue_flags, VkQueueFlags _exclude_queue_flags) {
         for (uint32_t i = 0; i < _queue_family_props.size(); ++i) {
             if (_queue_family_props[i].queueFlags & _target_queue_flags && !(_queue_family_props[i].queueFlags & _exclude_queue_flags)) { return i; }

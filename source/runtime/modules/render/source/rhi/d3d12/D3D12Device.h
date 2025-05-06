@@ -1023,31 +1023,31 @@ namespace Moer::Render {
         D3D12_GPU_DESCRIPTOR_HANDLE PushCsuDescriptor(std::span<const DescriptorIndex> _index_in_cpu_heap);
         D3D12_GPU_DESCRIPTOR_HANDLE PushSamplerDescriptor(std::span<const DescriptorIndex> _index_in_cpu_heap);
 
-        template<typename... T>
-            requires(std::same_as<T, DescriptorIndex> && ...) && (sizeof...(T) > 0)
-        D3D12_GPU_DESCRIPTOR_HANDLE PushCsuDescriptor(T... _index_in_cpu_heap) {
-            constexpr uint        count = sizeof...(_index_in_cpu_heap);
-            const DescriptorIndex start = csu_heap_gpu->Allocate(count);
+        // template<typename... T>
+        //     requires(std::same_as<T, DescriptorIndex> && ...) && (sizeof...(T) > 0)
+        // D3D12_GPU_DESCRIPTOR_HANDLE PushCsuDescriptor(T... _index_in_cpu_heap) {
+        //     constexpr uint        count = sizeof...(_index_in_cpu_heap);
+        //     const DescriptorIndex start = csu_heap_gpu->Allocate(count);
 
-            [start = start.index]<size_t... N>(auto&& index_tuple, std::index_sequence<N...>) {
-                (device->CopyDescriptorsSimple(1, csu_heap_gpu->GetOffsetHandleCpu({start + uint(N)}), csu_heap_cpu->GetOffsetHandleCpu(std::get<N>(index_tuple)), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV), ...);
-            }(std::forward_as_tuple(_index_in_cpu_heap...), std::make_index_sequence<count>());
+        //     [start = start.index]<size_t... N>(auto&& index_tuple, std::index_sequence<N...>) {
+        //         (device->CopyDescriptorsSimple(1, csu_heap_gpu->GetOffsetHandleCpu({start + uint(N)}), csu_heap_cpu->GetOffsetHandleCpu(std::get<N>(index_tuple)), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV), ...);
+        //     }(std::forward_as_tuple(_index_in_cpu_heap...), std::make_index_sequence<count>());
 
-            return csu_heap_gpu->GetOffsetHandleGpu(start);
-        }
+        //     return csu_heap_gpu->GetOffsetHandleGpu(start);
+        // }
 
-        template<typename... T>
-            requires(std::same_as<T, DescriptorIndex> && ...) && (sizeof...(T) > 0)
-        D3D12_GPU_DESCRIPTOR_HANDLE PushSapmlerDescriptor(T... _index_in_cpu_heap) {
-            constexpr uint        count = sizeof...(_index_in_cpu_heap);
-            const DescriptorIndex start = sampler_heap_gpu->Allocate(count);
+        // template<typename... T>
+        //     requires(std::same_as<T, DescriptorIndex> && ...) && (sizeof...(T) > 0)
+        // D3D12_GPU_DESCRIPTOR_HANDLE PushSapmlerDescriptor(T... _index_in_cpu_heap) {
+        //     constexpr uint        count = sizeof...(_index_in_cpu_heap);
+        //     const DescriptorIndex start = sampler_heap_gpu->Allocate(count);
 
-            [start = start.index]<size_t... N>(auto&& index_tuple, std::index_sequence<N...>) {
-                (device->CopyDescriptorsSimple(1, sampler_heap_gpu->GetOffsetHandleCpu({start + uint(N)}), sampler_heap_cpu->GetOffsetHandleCpu(std::get<N>(index_tuple)), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER), ...);
-            }(std::forward_as_tuple(_index_in_cpu_heap...), std::make_index_sequence<count>());
+        //     [start = start.index]<size_t... N>(auto&& index_tuple, std::index_sequence<N...>) {
+        //         (device->CopyDescriptorsSimple(1, sampler_heap_gpu->GetOffsetHandleCpu({start + uint(N)}), sampler_heap_cpu->GetOffsetHandleCpu(std::get<N>(index_tuple)), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER), ...);
+        //     }(std::forward_as_tuple(_index_in_cpu_heap...), std::make_index_sequence<count>());
 
-            return sampler_heap_gpu->GetOffsetHandleGpu(start);
-        }
+        //     return sampler_heap_gpu->GetOffsetHandleGpu(start);
+        // }
 
     public:
         static constexpr uint bindless_sampler_cnt = 256;

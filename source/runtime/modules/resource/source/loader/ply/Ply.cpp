@@ -138,11 +138,11 @@ namespace Moer::Resource {
             assert(vertexStorage.normal.z == 0.0f);
         }
         Scene* scene = m_scene.get();
-        EnqueueRenderTask([scene, verteces = std::move(verteces)]() {
-            auto gs_vertex_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, verteces.data(), verteces.size() * sizeof(Vertex));
-            assert(false && "Not implemented");
-            // scene->SetBuffer("gs_scene_buffer", gs_vertex_buffer);
-        });
+        // EnqueueRenderTask([scene, verteces = std::move(verteces)]() {
+        //     auto gs_vertex_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, verteces.data(), verteces.size() * sizeof(Vertex));
+        //     assert(false && "Not implemented");
+        //     // scene->SetBuffer("gs_scene_buffer", gs_vertex_buffer);
+        // });
         auto      camera_entity = EntityManager::Get().Create();
         auto      camera        = CameraManager::Get().Create(camera_entity);
         Transform world_transform(Vector3f(0, 0, 5), Vector3f(1), Quaternion(1, 0, 0, 0));
