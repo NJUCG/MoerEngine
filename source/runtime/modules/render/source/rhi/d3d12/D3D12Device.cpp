@@ -2497,7 +2497,7 @@ namespace Moer::Render {
     void D3D12ResourceStateTracker::RecordState(D3D12Texture* texture, TextureStateDescription _required_state) {
         if (auto it = texture_states.find(texture); it != texture_states.end()) {
             auto& state = it->second.after;
-            if (_required_state.layout != D3D12_BARRIER_LAYOUT_UNDEFINED && state.layout != _required_state.layout) {
+            if (state.layout != D3D12_BARRIER_LAYOUT_UNDEFINED && state.layout != _required_state.layout) {
                 FATAL("texture in one layer should not have different layouts");
             }
             state.layout = _required_state.layout;
