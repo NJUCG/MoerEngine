@@ -1050,7 +1050,7 @@ namespace Moer::Render {
         void Visit(const CopyBufferToTextureCmd& _cmd) {
             D3D12Texture* dst_texture = reinterpret_cast<D3D12Texture*>(_cmd.DstHandle());
             D3D12Buffer*  src_buffer  = reinterpret_cast<D3D12Buffer*>(_cmd.SrcHandle());
-
+            // assume the buffer data layout match the texture row pitch..
             cmd_list.CopyBufferToTexture(src_buffer,
                                          dst_texture,
                                          _cmd.SrcOffset(),
@@ -1072,14 +1072,44 @@ namespace Moer::Render {
         }
 
         void Visit(const UploadTextureCmd& _cmd) {
-            // consider padding TODO
-            auto data_span  = _cmd.Data();
-            auto tmp_buffer = allocator.AllocateUploadBuffer(data_span.size_bytes(), 256);// ? not sure alignment
-            cmd_list.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
+            D3D12Texture* dst_texture = reinterpret_cast<D3D12Texture*>(_cmd.Handle());
 
-            D3D12Texture* texture = reinterpret_cast<D3D12Texture*>(_cmd.Handle());
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout;
+            const auto                         desc          = dst_texture->Native()->GetDesc();
+            uint64                             required_size = 0;
+            allocator.GetDevice()->Native()->GetCopyableFootprints(&desc, dst_texture->QuerySubresourceIndex(_cmd.MipLevel(), 0, 0), 1, 0, &layout, nullptr, nullptr, &required_size);
+
+            auto data_span  = _cmd.Data();// assume input data store linearly
+            auto tmp_buffer = allocator.AllocateUploadBuffer(required_size, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+            // make it match the texture row pitch
+            D3D12_SUBRESOURCE_DATA src_data;
+            src_data.pData      = data_span.data();
+            src_data.RowPitch   = desc.Width * D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetBitsPerUnit(D3D12EnumTranslation::METoDxFormat(dst_texture->GetFormat())) / 8;
+            src_data.SlicePitch = src_data.RowPitch * desc.Height;
+
+            D3D12_MEMCPY_DEST dest_data;
+            dest_data.pData      = tmp_buffer.cpu_base_address_remapped + layout.Offset;
+            dest_data.RowPitch   = layout.Footprint.RowPitch;
+            dest_data.SlicePitch = dest_data.RowPitch * desc.Height;
+
+            for (UINT z = 0; z < layout.Footprint.Depth; ++z) {
+                uint64 src_offset = src_data.SlicePitch * z;
+
+                uint8_t const* src_slice  = reinterpret_cast<uint8_t const*>(src_data.pData) + src_offset;
+                uint8_t*       dest_slice = reinterpret_cast<uint8_t*>(dest_data.pData) + dest_data.SlicePitch * z;
+
+                for (UINT y = 0; y < layout.Footprint.Height; ++y) {
+                    if (src_offset >= data_span.size_bytes()) {
+                        LOG_WARNING("upload texture data size smaller than texture full size, rest will be undefined");
+                        break;
+                    }
+                    std::memcpy(dest_slice + dest_data.RowPitch * y, src_slice + src_offset, std::min(uint64(src_data.RowPitch), data_span.size_bytes() - src_offset));
+                    src_offset += src_data.RowPitch;
+                }
+            }
+
             cmd_list.CopyBufferToTexture(tmp_buffer.buffer,
-                                         texture,
+                                         dst_texture,
                                          tmp_buffer.byte_offset,
                                          _cmd.Offset(),
                                          _cmd.Size(),
@@ -1641,13 +1671,11 @@ namespace Moer::Render {
     // note here we assume the buffer data match the texture row pitch
     // f**k silly api https://gamedev.net/forums/topic/677932-getcopyablefootprints-question/
     void D3D12CommandList::CopyBufferToTexture(D3D12Buffer* _src, D3D12Texture* _dst, uint64 _src_offset, uint3 _dst_offset, uint3 _dst_extent, uint32 _mip_level) {
-        CD3DX12_TEXTURE_COPY_LOCATION dst(_dst->Native(), _dst->QuerySubresourceIndex(_mip_level, 0, 0));
-
+        CD3DX12_TEXTURE_COPY_LOCATION      dst(_dst->Native(), _dst->QuerySubresourceIndex(_mip_level, 0, 0));
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout;
         {
             const auto desc          = _dst->Native()->GetDesc();
-            uint64     required_size = 0, y;
-            uint32     x;
+            uint64     required_size = 0;
             allocator.GetDevice()->Native()->GetCopyableFootprints(&desc, dst.SubresourceIndex, 1, _src_offset, &layout, nullptr, nullptr, &required_size);
             DASSERT(required_size < uint64(-1) && required_size + _src_offset <= _src->GetByteSize());
         }

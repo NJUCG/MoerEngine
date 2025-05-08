@@ -56,15 +56,15 @@ void main(uint3 tid : SV_DispatchThreadID)
 
     float4 v0 = 1.f;// t0.Sample(s0, 0.5);
     float4 v1 = 1.f;// t1.Sample(s0, float2(0.5, 0.5));
-    float4 v2 = t2.Sample(s0, float2(0.5, 0.5));
-    float4 v3 = t3.Sample(s0, float3(0.5, 0.5, 0.5));
-    float4 v4 = t4.Sample(s0, float3(0.5, 0.5, 0.5));
-    float4 v5 = t5.Sample(s0, float3(0.5, 0.5, 0.5));
-    float4 v6 = t6.Sample(s0, float4(0.5, 0.5, 0.5, 0.5));
+    float4 v2 = t2.Sample(s0, float2(0, 0));
+    float4 v3 = t3.Sample(s0, float3(0, 0, 0));
+    float4 v4 = t4.Sample(s0, float3(0, 0, 0));
+    float4 v5 = t5.Sample(s0, normalize(float3(1, 0.99, 0.99)));  // first face, topleft?? still zero..
+    float4 v6 = t6.Sample(s0, float4(normalize(float3(1, 0.99, 0.99)), 0));
     // float4 v7 = t7.Load(tid.xy, 0);
     // float4 v8 = t8.Load(tid.xyz, 0);
-    float4 v9 = t2.Sample(s0, float2(0.5, 0.5), 0.5);
-    float4 v10 = tex_arr[0].Sample(s0, float2(0.5, 0.5));
+    float4 v9 = t2.Sample(s0, float2(0, 0), 0);
+    float4 v10 = tex_arr[0].Sample(s0, float2(0, 0));
 
     float4 w0 = 1.f;// rwt0[tid.x];
     float4 w1 = 1.f;// rwt1[tid.xy];
@@ -73,7 +73,8 @@ void main(uint3 tid : SV_DispatchThreadID)
     float4 w4 = rwt4[tid.xyz];
 
     float res = a * b * c * d * e * f * g * h * i;
-    res *= (v0 * v1 * v2 * v3 * v4 * v5 * v6 * v9 * v10 * w0 * w1 * w2 * w3 * w4).x;
+    // res *= (v0 * v1 * v2 * v3 * v4 * v5 * v6 * v9 * v10 * w0 * w1 * w2 * w3 * w4).x;
+    res *= (v0 * v1 * v2 * v3 * v4 * v5 * v6).x;
     rb1.Store(0, uint(res));
     
 }

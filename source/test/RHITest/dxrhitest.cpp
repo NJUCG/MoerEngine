@@ -154,20 +154,20 @@ int main(int argc, char** argv) {
         //auto t0 = device.CreateTexture("t0", Extent2D(2, 1), EPixelFormat::PF_R16G16B16A16_UNORM, ETextureUsageFlags::TRANSFER_DST);
         //auto t1 = device.CreateTexture("t1", Extent2D(2, 1), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST, 1, 2);
         auto t2 = device.CreateTexture("t2", Extent2D(3, 3), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST);
-        auto t3 = device.CreateTexture("t3", Extent2D(3, 3), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST, 1, 2);
-        auto t4 = device.CreateTexture("t4", Extent3D(4, 4, 4), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST);
-        auto t5 = device.CreateTexture("t5", Extent2D(4, 4), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST, 1, 6);
-        auto t6 = device.CreateTexture("t6", Extent2D(4, 4), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST, 1, 6 * 2);
+        auto t3 = device.CreateTexture("t3", Extent2D(3, 3), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST, 1, 2);// if use rgba8, need raw data also in u8 format when upload. todo
+        auto t4 = device.CreateTexture("t4", Extent3D(4, 4, 4), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST);
+        auto t5 = device.CreateTexture("t5", Extent2D(4, 4), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST, 1, 6);
+        auto t6 = device.CreateTexture("t6", Extent2D(4, 4), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST, 1, 6 * 2);
         // not consider texture2dms
         TextureRef tex_arr[kNumTexArr];
         for (int i = 0; i < kNumTexArr; ++i) {
-            tex_arr[i] = device.CreateTexture(std::format("tex_array_{}", i), Extent2D(5, 5), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST);
+            tex_arr[i] = device.CreateTexture(std::format("tex_array_{}", i), Extent2D(5, 5), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST);
         }
         //auto rwt0 = device.CreateTexture("rwt0", Extent2D(2, 1), EPixelFormat::PF_R16G16B16A16_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST);
-        //auto rwt1 = device.CreateTexture("rwt1", Extent2D(2, 1), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST, 1, 2);
+        //auto rwt1 = device.CreateTexture("rwt1", Extent2D(2, 1), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST, 1, 2);
         auto rwt2 = device.CreateTexture("rwt2", Extent2D(3, 3), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST);
-        auto rwt3 = device.CreateTexture("rwt3", Extent2D(3, 3), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST, 1, 2);
-        auto rwt4 = device.CreateTexture("rwt4", Extent3D(4, 4, 4), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST);
+        auto rwt3 = device.CreateTexture("rwt3", Extent2D(3, 3), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST, 1, 2);
+        auto rwt4 = device.CreateTexture("rwt4", Extent3D(4, 4, 4), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST);
 
         // todo test copy buffer to texture
 
@@ -186,15 +186,17 @@ int main(int argc, char** argv) {
         uint64 timeline  = 0;
 
         auto               pipeline = ShaderManager::Get().Compute<TestComputePipeline>("test/var.hlsl");
-        std::vector<float> farr(1024);
+        std::vector<float> farr(1024), farr2(1024);
         std::vector<int>   iarr(1024);
 
         for (int iter = 0; iter < 10; ++iter) {
 
             for (int i = 0; i < 7; ++i) farr[i] = iarr[i] = 1 + i + iter;
+            for (int i = 0; i < 7; ++i) farr2[i] = (i + 1) / 10.f;
 
-            int res = pc.b * pc1.a;
+            float res = pc.b * pc1.a;
             for (int i = 1; i < 7; ++i) res *= iarr[i];
+            for (int i = 0; i < 5; ++i) res *= farr2[i];
 
             CommandList list;
             //list.CopyFrom(ToSpan(pc), cb0->GetView());
@@ -206,6 +208,12 @@ int main(int argc, char** argv) {
             list.CopyFrom(ToSpan(farr).subspan(4 * sizeof(float), sizeof(float)), tb0->GetView(4 * sizeof(float)));
             list.CopyFrom(ToSpan(farr).subspan(5 * sizeof(float), sizeof(float)), tb1->GetView(5 * sizeof(float)));
             list.CopyFrom(ToSpan(farr).subspan(6 * sizeof(float), sizeof(float)), buf_arr[6]->GetView(6 * sizeof(float)));
+
+            list.CopyFrom(ToSpan(farr2).subspan(0 * sizeof(float), sizeof(float)), t2->GetView());
+            list.CopyFrom(ToSpan(farr2).subspan(1 * sizeof(float), sizeof(float)), t3->GetView());
+            list.CopyFrom(ToSpan(farr2).subspan(2 * sizeof(float), sizeof(float)), t4->GetView());
+            list.CopyFrom(ToSpan(farr2).subspan(3 * sizeof(float), sizeof(float)), t5->GetView());
+            list.CopyFrom(ToSpan(farr2).subspan(4 * sizeof(float), sizeof(float)), t6->GetView());
 
             Array<BufferView> buf_arr_view(kNumBufArr);
             for (int i = 0; i < kNumBufArr; ++i) {
@@ -226,7 +234,7 @@ int main(int argc, char** argv) {
             gfx_queue.Sync();
             LOG_INFO("dispatch work done");
 
-            LOG_INFO("result={}, expect={}, ok={}", iarr[0], res, iarr[0] == res);
+            LOG_INFO("result={}, expect={}, ok={}", iarr[0], int(res), iarr[0] == int(res));
         }
 
         capturer->End();

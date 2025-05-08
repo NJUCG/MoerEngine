@@ -77,7 +77,7 @@ namespace Moer::Render {
         return AlignUpToPowerOfTwo(value, alignment);
     }
     //#define D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT (512) // useful when copy
-    //#define D3D12_TEXTURE_DATA_PITCH_ALIGNMENT (512) // useful when copy
+    //#define D3D12_TEXTURE_DATA_PITCH_ALIGNMENT (256) // useful when copy
     //#define D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT (4096)  // not want to use uavcounter...
 
     //#define D3D12_RAYTRACING_AABB_BYTE_ALIGNMENT (8)
