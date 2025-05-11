@@ -197,6 +197,10 @@ int main(int argc, char** argv) {
             float res = pc.b * pc1.a;
             for (int i = 1; i < 7; ++i) res *= iarr[i];
             for (int i = 0; i < 5; ++i) res *= farr2[i];
+            res *= farr2[1] * 10;
+            res *= farr2[1] * 10;
+            res *= farr2[2] * 10;
+            res *= farr2[3] * 10;
 
             CommandList list;
             //list.CopyFrom(ToSpan(pc), cb0->GetView());
@@ -218,6 +222,10 @@ int main(int argc, char** argv) {
             list.CopyFrom(ToSpan(farr2).subspan(2 * sizeof(float), sizeof(float)), t4->GetView());
             list.CopyFrom(ToSpan(farr2).subspan(3 * sizeof(float), sizeof(float)), t5->GetView());
             list.CopyFrom(ToSpan(farr2).subspan(4 * sizeof(float), sizeof(float)), t6->GetView());
+            list.CopyFrom(ToSpan(farr2).subspan(1 * sizeof(float), sizeof(float)), tex_arr[6]->GetView());
+            list.CopyFrom(ToSpan(farr2).subspan(1 * sizeof(float), sizeof(float)), rwt2->GetView());
+            list.CopyFrom(ToSpan(farr2).subspan(2 * sizeof(float), sizeof(float)), rwt3->GetView());
+            list.CopyFrom(ToSpan(farr2).subspan(3 * sizeof(float), sizeof(float)), rwt4->GetView());
 
             Array<BufferView> buf_arr_view(kNumBufArr);
             for (int i = 0; i < kNumBufArr; ++i) {
