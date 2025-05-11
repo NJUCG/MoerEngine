@@ -153,7 +153,7 @@ int main(int argc, char** argv) {
         // we not really support texture1d... see 'ETextureDimension' (start from 2D
         //auto t0 = device.CreateTexture("t0", Extent2D(2, 1), EPixelFormat::PF_R16G16B16A16_UNORM, ETextureUsageFlags::TRANSFER_DST);
         //auto t1 = device.CreateTexture("t1", Extent2D(2, 1), EPixelFormat::PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST, 1, 2);
-        auto t2 = device.CreateTexture("t2", Extent2D(3, 3), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST);
+        auto t2 = device.CreateTexture("t2", Extent2D(8, 8), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST, 3);
         auto t3 = device.CreateTexture("t3", Extent2D(3, 3), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST, 1, 2);// if use rgba8, need raw data also in u8 format when upload. todo
         auto t4 = device.CreateTexture("t4", Extent3D(4, 4, 4), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST);
         auto t5 = device.CreateTexture("t5", Extent2D(4, 4), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::TRANSFER_DST, 1, 6);
@@ -209,7 +209,11 @@ int main(int argc, char** argv) {
             list.CopyFrom(ToSpan(farr).subspan(5 * sizeof(float), sizeof(float)), tb1->GetView(5 * sizeof(float)));
             list.CopyFrom(ToSpan(farr).subspan(6 * sizeof(float), sizeof(float)), buf_arr[6]->GetView(6 * sizeof(float)));
 
-            list.CopyFrom(ToSpan(farr2).subspan(0 * sizeof(float), sizeof(float)), t2->GetView());
+            auto view     = t2->GetView(1);
+            view.extent.x = 1 << 1;// target extent 1, consider 1 mip
+            view.offset.y = 1;
+            view.extent.y = ((t2->GetHeight() >> 1) - 1) << 1;// -1 to compensate offset
+            list.CopyFrom(ToSpan(farr2).subspan(0 * sizeof(float), sizeof(float)), view);
             list.CopyFrom(ToSpan(farr2).subspan(1 * sizeof(float), sizeof(float)), t3->GetView());
             list.CopyFrom(ToSpan(farr2).subspan(2 * sizeof(float), sizeof(float)), t4->GetView());
             list.CopyFrom(ToSpan(farr2).subspan(3 * sizeof(float), sizeof(float)), t5->GetView());
@@ -223,11 +227,14 @@ int main(int argc, char** argv) {
             for (int i = 0; i < kNumTexArr; ++i) {
                 tex_arr_view[i] = tex_arr[i]->GetView();
             }
-            list.Compute(pipeline, pc, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT), std::span{buf_arr_view},
-                t2, t3, t4, t5, t6, std::span{tex_arr_view}, rwt2, rwt3, rwt4, s0).Dispatch({1, 1, 1});
+            list.Compute(pipeline, pc, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT), std::span{buf_arr_view}, t2->GetView(0, 3), t3, t4, t5, t6, std::span{tex_arr_view}, rwt2, rwt3, rwt4, s0).Dispatch({1, 1, 1});
             //list.Compute(pipeline, cb0, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT)).Dispatch({1, 1, 1});
 
             list.CopyFrom(rb1->GetView(0, 10 * sizeof(float)), ToSpan(iarr));
+
+            list.CopyFrom(t2->GetView(1), tb0->GetView());
+            list.CopyFrom(tb0->GetView(), ToSpan(farr2).subspan(1 * sizeof(float)));
+            //list.CopyFrom(t2->GetView(1), ToSpan(farr2).subspan(1 * sizeof(float)));
 
             gfx_queue.Execute(list.Submit().Signal(fence, timeline));
 
@@ -235,6 +242,8 @@ int main(int argc, char** argv) {
             LOG_INFO("dispatch work done");
 
             LOG_INFO("result={}, expect={}, ok={}", iarr[0], int(res), iarr[0] == int(res));
+            for (int i = 0; i < 8; ++i) LOG_INFO("farr2[{}]: {}", i, farr2[i + 64]);// +64 to skip first row, see 't2' offset.y.  this skip one row(pitch), which is 256 bytes
+            // expect [0, 0.1, 0.2, 0.3, 0.4, 0, 0, 0]
         }
 
         capturer->End();
