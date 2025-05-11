@@ -1886,7 +1886,7 @@ namespace Moer::Render {
         const uint32 block_count                = SizeToBlockCount(size_to_allocate);
         const uint32 block_order                = BlockCountToOrder(block_count);
         const uint32 offset                     = AllocateBlock(block_order);
-        const uint32 allocated_size             = min_block_byte_size * block_count;
+        const uint32 allocated_size             = min_block_byte_size * OrderToBlockCount(block_order);
         const uint32 allocation_offset          = min_block_byte_size * offset;
         uint32       aligned_alloctation_offset = allocation_offset;
         if (_alignment != 0 && allocation_offset % _alignment != 0) {
@@ -1895,6 +1895,7 @@ namespace Moer::Render {
             DASSERT(padding + _size <= allocated_size);
         }
         total_used_byte_size += allocated_size;
+        //LOG_INFO("[{}] allocate block size{} req{}, total{}", heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback", allocated_size, _size, total_used_byte_size);
         DASSERT(total_used_byte_size <= total_byte_size);
 
         //LOG_INFO("[{}] allocate block {} {}", heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback", offset, block_order);
@@ -1932,6 +1933,8 @@ namespace Moer::Render {
     void D3D12BuddyAllocator::DeallocateInternal(RetiredBlock _block) {
         DeallocateBlock(_block.offset, _block.order);
         total_used_byte_size -= min_block_byte_size * OrderToBlockCount(_block.order);
+        //LOG_INFO("[{}] deallocate block size{}, total{}", heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback", min_block_byte_size * OrderToBlockCount(_block.order), total_used_byte_size);
+
     }
     void D3D12BuddyAllocator::DeallocateBlock(uint32 _offset, uint32 _order) {
         const uint32 count    = OrderToBlockCount(_order);
