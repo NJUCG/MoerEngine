@@ -5,7 +5,7 @@
 #include "loader/LoaderInterface.h"
 #include "rhi/RHI.h"
 #include "scene/CameraManager.h"
-#include "shader/GeometryPassPsoManager.h"
+// #include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowContext.h"
 
@@ -17,12 +17,32 @@
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
+#include "ShadowDepthPass.h"
 #include "SsrPass.h"
 #include "common/UiCombinePass.h"
 #include "ui/raster_ui/RasterUI.h"
 
 namespace Moer::Render::Raster {
 
+/**
+ * Raster渲染方法TODO Lists
+ * 
+ * TODO: 着色，LightingPass，目前还比较初步
+ * TODO: 阴影，ShadowDepthPass和LightingPass
+ *       1. CSM中，ShadowMap的mipmap好像有问题，貌似目前并没有构建，导致效果不好，需要构建一下mipmap
+ *       2. CSM层间混合
+ *       3. 多种采样方法支持（目前是NoFiltering，可以考虑添加不同精度的PCF）
+ *       4. 剔除。目前把场景绘制CSM层数遍，性能开销巨大
+ *       5. VSM支持
+ * TODO: SSR，SsrPass
+ *       1. SSR的效果还不够好，会出现断层（用jitter修复后仍有一些问题），可以考虑换一个新的SSR算法
+ *       2. 考虑使用HiZ来加速ssr
+ *       3. 对Glossy材质的支持
+ *       4. 性能优化
+ * TODO: 抗锯齿，AaPass，目前SMAA T2x还有一些问题，效果不明显，可能是velocity buffer寄了
+ * TODO: 环境光遮蔽，AoPass，可以在SSAO之外多加一些环境光遮蔽算法，比如SSDO、GTAO
+ * TODO: 其他后处理Pass，或许可以考虑从RT搬过来用233
+ */
 void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
     // Get a lot of things
@@ -62,11 +82,12 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
     // MARK: Passes
 
-    GeometryPass geometry_pass(raster_context);
-    LightingPass lighting_pass(raster_context);
-    AoPass       ao_pass(raster_context);
-    SsrPass      ssr_pass(raster_context);
-    AaPass       aa_pass(raster_context);
+    ShadowDepthPass shadow_depth_pass(raster_context);
+    GeometryPass    geometry_pass(raster_context);
+    LightingPass    lighting_pass(raster_context);
+    AoPass          ao_pass(raster_context);
+    SsrPass         ssr_pass(raster_context);
+    AaPass          aa_pass(raster_context);
 
     UiCombinePass ui_combine_pass(manager);
 
@@ -139,6 +160,9 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
             // use scene_color resolution instead of window resolution
             camera->Tick(editor_ui->GetSceneColorAspectRatio());
+
+            // Shadow Depth Pass
+            shadow_depth_pass.Process(raster_context, ui_config, camera);
 
             // Geometry Pass
             geometry_pass.Process(raster_context, ui_config, camera);

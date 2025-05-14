@@ -212,16 +212,11 @@ namespace Moer {
     void Scene::AddEntity(Entity entity) noexcept {
         m_impl->AddEntity(entity);
     }
-    void Scene::SetBlasList(Moer::Array<RHIRayTracingBLASRef> _blas_list) noexcept {
-        // m_impl->gpu_scene.blases =  std::move(_blas_list);
-    }
+
     void Scene::SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept {
         m_impl->gpu_scene.rt_scene = _scene;
     }
 
-    void Scene::SetTlas(RHIRayTracingTLASRef _tlas) noexcept {
-        // m_impl->gpu_scene.tlas = _tlas;
-    }
     void Scene::RemoveEntity(Entity entity) noexcept {
         m_impl->RemoveEntity(entity);
     }
@@ -254,6 +249,10 @@ namespace Moer {
 
     std::span<const Entity> Scene::GetCameras() const noexcept {
         return m_impl->GetCameras();
+    }
+
+    Entity Scene::GetMainLight() const noexcept {
+        return GetLights()[0];
     }
 
     Entity Scene::GetMainCamera() const noexcept {

@@ -325,8 +325,6 @@ namespace Moer {
         void                    AddCamera(Entity _entity) noexcept;
         void                    AddLight(Entity _entity) noexcept;
         void                    RemoveLight(Entity _entity) noexcept;
-        void                    SetTlas(RHIRayTracingTLASRef _tlas) noexcept;
-        void                    SetBlasList(Moer::Array<RHIRayTracingBLASRef> _blas_list) noexcept;
         void                    SetRaytracingScene(Render::RaytracingSceneRef _scene) noexcept;
         void                    RemoveEntity(Entity _entity) noexcept;
         void                    SetBuffer(EGpuSceneResource _type, Render::BufferRef _buffer) noexcept;
@@ -334,6 +332,7 @@ namespace Moer {
         std::span<const Entity> GetEntities() const noexcept;
         std::span<const Entity> GetLights() const noexcept;
         std::span<const Entity> GetCameras() const noexcept;
+        Entity                  GetMainLight() const noexcept;
         Entity                  GetMainCamera() const noexcept;
         bool                    IsEntitiesEmpty() const noexcept;
         bool                    IsLightsEmpty() const noexcept;

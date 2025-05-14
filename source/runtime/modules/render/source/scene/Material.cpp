@@ -4,7 +4,6 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "scene/MaterialInstance.h"
 #include "misc/MMemory.h"
-#include "resources/GlobalRenderResources.h"
 #include "resources/GpuScene.h"
 #include "rhi/RHIResource.h"
 #include "scene/BufferInterfaceBlock.h"

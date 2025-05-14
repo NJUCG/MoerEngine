@@ -66,6 +66,27 @@ struct VsInput {
   }
 };
 
+#if SHADOW_DEPTH_PASS
+
+struct VsOutput {
+  float4 position : SV_POSITION;
+};
+
+VsOutput GetConvertedAttributes(VsInput input, float3x4 model2world,
+                                float4x4 world2clip, int instance_id) {
+  float3x3 model = (float3x3)model2world;
+
+  float3 world_position = mul(model2world, float4(input.GetPosition(), 1.0));
+  float4 pos = mul(world2clip, float4(world_position, 1.0));
+
+  VsOutput output;
+  output.position = pos;
+
+  return output;
+}
+
+#else
+
 struct VsOutput {
   float4 position : SV_POSITION;
   float3 world_position : POSITION;
@@ -101,5 +122,7 @@ VsOutput GetConvertedAttributes(VsInput input, float3x4 model2world,
 
   return output;
 }
+
+#endif
 
 } // namespace VertexFactory

@@ -21,6 +21,17 @@ static const Array<std::string> s_ao_mode_name_array = {
     "SSDO AO Only (TODO)",
     "Linearized Depth / 10.0",
 };
+static const Array<std::string> s_shadow_map_mode_name_array = {
+    "Disabled",
+    "Cascaded SM",
+    "Virtual SM",
+};
+static const Array<std::string> s_shadow_sampling_mode_name_array = {
+    "No Filtering",
+    "PCF 1x1",
+    "PCF 3x3",
+    "PCF 5x5",
+};
 
 RasterUI::RasterUI() {}
 
@@ -49,6 +60,43 @@ void RasterUI::ShowConfig() {
             }
             draw_border();
         }
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode(
+            "Whole Scene Shadow",
+            "Whole Scene Shadow: [%s]",
+            s_shadow_map_mode_name_array[m_config.shadow_map_mode].c_str()
+        )) {
+
+        ImGui::Text("The FIRST Directional Light will be used as the shadow light source.\n");
+
+        for (uint i = 0; i < s_shadow_map_mode_name_array.size(); i++) {
+            if (ImGui::Selectable(s_shadow_map_mode_name_array[i].c_str(), m_config.shadow_map_mode == i)) {
+                m_config.shadow_map_mode = i;
+            }
+            draw_border();
+        }
+
+        if (m_config.shadow_map_mode == 1) { // CSM
+            ImGui::SliderInt("Num of Cascades", &m_config.shadow_csm_num_of_cascades, 1, CSM_MAX_CASCADES);
+            ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
+            float mx = 0.0f;
+            for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {
+                ImGui::SliderFloat(
+                    std::format("{}-th CSM Cover Ratio of Camera Frustum", i).c_str(),
+                    &m_config.shadow_csm_cover_ratio_of_camera[i],
+                    0.0f,
+                    1.0f
+                );
+                m_config.shadow_csm_cover_ratio_of_camera[i] =
+                    Max(m_config.shadow_csm_cover_ratio_of_camera[i], mx);
+                mx = m_config.shadow_csm_cover_ratio_of_camera[i];
+            }
+        } else if (m_config.shadow_map_mode == 2) { // VSM
+            // TODO
+        }
+
         ImGui::TreePop();
     }
 

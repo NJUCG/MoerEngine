@@ -632,7 +632,7 @@ namespace Moer::Render {
         };
 
     public:
-        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : PipelineState(), VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_type(_type) {};
+        VulkanPipelineState(VulkanDevice* _device, EType _type = EType::GFX) : PipelineState(), VulkanDeviceObject(_device), m_pipeline(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE), m_type(_type){};
         virtual ~VulkanPipelineState();
 
         inline VkPipeline GetHandle() const {
@@ -676,124 +676,12 @@ namespace Moer::Render {
         EType                                     m_type;
     };
 
-    class VulkanRHIGraphicsPipelineState final : public VulkanPipelineState {
-    public:
-        VulkanRHIGraphicsPipelineState(VulkanDevice* _device)
-            : VulkanPipelineState(_device) {}
-
-        virtual ~VulkanRHIGraphicsPipelineState();
-
-        static Moer::Array<VkPipelineShaderStageCreateInfo> METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state);
-        static VkPipelineVertexInputStateCreateInfo         METoVKVertexInputStateCreateInfo(const RHIVertexInputInfo& _vertex_input_state);
-        static Moer::Array<const Shader*>                   GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state);
-
-        void CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& _info);
-    };
-
-    class VulkanRHIComputePipelineState final : public VulkanPipelineState {
-    public:
-        VulkanRHIComputePipelineState(VulkanDevice* _device)
-            : VulkanPipelineState(_device) {}
-
-        void CreateComputePipeline(const VkComputePipelineCreateInfo& _info);
-    };
-
-    class VulkanRHIRayTracingPipelineState final : public VulkanPipelineState {
-        friend VulkanRHIImpl;
-
-    public:
-        VulkanRHIRayTracingPipelineState(VulkanDevice* _device)
-            : VulkanPipelineState(_device) {}
-
-        const VkStridedDeviceAddressRegionKHR* GetRayGenSBT() { return &m_raygen_sbt; }
-        const VkStridedDeviceAddressRegionKHR* GetRayMissSBT() { return &m_miss_sbt; }
-        const VkStridedDeviceAddressRegionKHR* GetRayHitSBT() { return &m_hit_sbt; }
-        const VkStridedDeviceAddressRegionKHR* GetRayCallableSBT() { return &m_callable_sbt; }
-
-        void CreateRayTracingPipeline(const VkRayTracingPipelineCreateInfoKHR& _info);
-
-    private:
-        //SBT
-        RHIBufferRef                    m_sbt_buffer;// MARK: should use RHIBufferRef instead of VkBuffer?
-        VkStridedDeviceAddressRegionKHR m_raygen_sbt;
-        VkStridedDeviceAddressRegionKHR m_miss_sbt;
-        VkStridedDeviceAddressRegionKHR m_hit_sbt;
-        VkStridedDeviceAddressRegionKHR m_callable_sbt;
-    };
 #pragma endregion
 
 #pragma region global buffer definitions
 #pragma endregion
 
 #pragma region viewable resources definitions
-
-    class VulkanRHIBuffer : public RHIBuffer {
-        friend VulkanRHIImpl;
-
-    public:
-        VulkanRHIBuffer() = delete;
-        VulkanRHIBuffer(const RHIBufferInfo& _info) : RHIBuffer(_info) {}
-
-        inline const VmaAllocation GetAllocation() const {
-            return m_alloc.alloc;
-        }
-
-        inline VkBuffer GetHandle() const {
-            return m_alloc.buffer;
-        }
-
-        static VkIndexType        METoVKIndexType(EIndexElementType _type);
-        static VkBufferUsageFlags METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags);
-
-    private:
-        struct BufferAlloc {
-            VkBuffer      buffer;
-            VmaAllocation alloc;
-        } m_alloc;
-    };
-
-    class VulkanStagingBuffer : public RHIBuffer {
-        friend VulkanRHIImpl;
-        ~VulkanStagingBuffer();
-
-    public:
-        VulkanStagingBuffer() = delete;
-        VulkanStagingBuffer(VulkanRHIBuffer* _buffer);
-    };
-
-    class VulkanRHITexture final : public RHITexture, public VulkanDeviceObject {
-        friend VulkanRHIImpl;
-
-    public:
-        VulkanRHITexture() = delete;
-        ~VulkanRHITexture();
-
-        explicit VulkanRHITexture(const RHITextureCreateInfo& _info, VulkanDevice* _device);
-
-        //for inner usage only
-        explicit VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image, VulkanDevice* _device);
-
-        inline const VmaAllocation GetAllocation() const {
-            return m_alloc.alloc;
-        }
-
-        inline VkImage GetHandle() const {
-            return m_alloc.image;
-        }
-        //for inner usage only
-        inline void SetAttachedImageInner(VkImage _image) {
-            m_alloc.image = _image;
-        }
-
-        static VkImageType       METoVKImageType(ETextureDimension _dim);
-        static VkImageUsageFlags METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
-
-    private:
-        struct TextureAlloc {
-            VkImage       image;
-            VmaAllocation alloc;
-        } m_alloc;
-    };
 
     class VulkanBuffer : public Buffer, VulkanDeviceObject {
         friend VulkanRHIImpl;
@@ -1100,25 +988,6 @@ namespace Moer::Render {
 
 #pragma region synchronization
 
-    class VulkanRHIFence final : public RHIFence {
-    public:
-        VulkanRHIFence(VulkanDevice* _device, EFenceUsageFlags _usage);
-        virtual ~VulkanRHIFence();
-
-        uint64_t GetValue() const override;
-
-        void                    Wait(uint64_t value) override;
-        inline VkSemaphore      GetSemaphoreHandle() { return m_timeline; }
-        inline VkSemaphore      GetBinaryHandle() { return m_binary; }
-        inline EFenceUsageFlags GetUsage() { return usage; }
-
-    private:
-        VulkanDevice*    m_device;
-        VkSemaphore      m_timeline;
-        VkSemaphore      m_binary;
-        EFenceUsageFlags usage;
-    };
-
 #define RESOURCE_CAST(RHIType, VkType) \
     inline VkType* ResourceCast(RHIType* _val) { return static_cast<VkType*>(_val); }
 
@@ -1169,160 +1038,6 @@ namespace Moer::Render {
     RESOURCE_CAST(RaytracingTlas, VulkanAccelerationStructure)
 #pragma endregion
 
-#pragma region viewable resources view definitions
-    class VulkanRHIViewport;
-    class VulkanRHITextureUAV final : public RHIUAV, public VulkanDeviceObject {
-        friend VulkanRHIImpl;
-        friend Moer::Render::VulkanRHIViewport;
-
-    public:
-        virtual ~VulkanRHITextureUAV();
-        explicit VulkanRHITextureUAV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUAV(_resource, _viewInfo), VulkanDeviceObject(_device) {}
-
-        inline VkImageView GetView() const { return m_view; }
-
-    private:
-        VkImageView m_view;
-    };
-
-    class VulkanRHICBV final : public RHICBV, public VulkanDeviceObject {
-        friend VulkanRHIImpl;
-
-    public:
-        virtual ~VulkanRHICBV();
-        explicit VulkanRHICBV(
-            VulkanDevice*      _device,
-            RHIBuffer*         _resource,
-            const RHIViewInfo& _viewInfo) : RHICBV(_resource, _viewInfo), VulkanDeviceObject(_device) {}
-    };
-    class VulkanRHIBufferUAV final : public RHIUAV, public VulkanDeviceObject {
-        friend VulkanRHIImpl;
-
-    public:
-        virtual ~VulkanRHIBufferUAV();
-        explicit VulkanRHIBufferUAV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIUAV(_resource, _viewInfo), VulkanDeviceObject(_device) {}
-
-        inline VkBufferView GetView() const { return m_view; }
-
-    private:
-        VkBufferView m_view;
-    };
-
-    class VulkanRHITextureSRV final : public RHISRV, public VulkanDeviceObject {
-        friend VulkanRHIImpl;
-
-    public:
-        virtual ~VulkanRHITextureSRV();
-        explicit VulkanRHITextureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHISRV(_resource, _viewInfo), VulkanDeviceObject(_device) {}
-        inline VkImageView GetView() const { return m_view; }
-
-    private:
-        VkImageView m_view = VK_NULL_HANDLE;
-    };
-
-    class VulkanRHIBufferSRV final : public RHISRV, public VulkanDeviceObject {
-        friend VulkanRHIImpl;
-
-    public:
-        virtual ~VulkanRHIBufferSRV();
-        explicit VulkanRHIBufferSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHISRV(_resource, _viewInfo), VulkanDeviceObject(_device) {}
-
-        inline VkBufferView GetView() const { return m_view; }
-
-    private:
-        VkBufferView m_view = VK_NULL_HANDLE;
-    };
-
-    class VulkanRHIAccelerationStructureSRV final : public RHISRV, public VulkanDeviceObject {
-        friend VulkanRHIImpl;
-
-    public:
-        virtual ~VulkanRHIAccelerationStructureSRV();
-        explicit VulkanRHIAccelerationStructureSRV(VulkanDevice* _device, RHIViewableResource* _resource, const RHIViewInfo& _viewinfo) : RHISRV(_resource, _viewinfo), VulkanDeviceObject(_device) {};
-    };
-
-    class VulkanImageView final : public RHIView {
-        friend VulkanRHIImpl;
-
-    public:
-        explicit VulkanImageView(RHIViewableResource* _resource, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, _resource, _viewInfo) {}
-
-        explicit VulkanImageView(RHIViewableResource* _resource, VkImageView _view, const RHIViewInfo& _viewInfo) : RHIView(RRT_ATTACHMENT_VIEW, _resource, _viewInfo), m_view(_view) {
-        }
-        inline VkImageView GetView() const { return m_view; }
-
-    private:
-        VkImageView m_view = VK_NULL_HANDLE;
-    };
-
-#pragma endregion
-
-#pragma region viewport
-
-    class VulkanRHIViewport final : public RHIViewport {
-        friend class VkCommandQueue;
-
-    public:
-        VulkanRHIViewport(class VulkanSwapChain* _swapchain, uint32_t _max_frame_in_flight);
-        ~VulkanRHIViewport();
-        virtual void OnResize(Extent2D _size) override;
-
-        virtual void    Present(RHIFence* _render_finished) override;
-        VulkanRHIFence* GetAcquireNextImageFence();
-
-        RHIViewportNextBackBufferInfo GetNextFrameBackBufferInfo() override;
-
-        VulkanRHITextureUAV* GetCurrentBackBuffer(uint32_t index);
-
-        virtual void WaitForQueueComplete(class RHICommandQueue* _command_queue, RHIFence* _optional_fence) override;
-
-        virtual ViewPort GetViewportExtent() const override;
-
-    private:
-        void                 InnerCreateResources();
-        void                 InnerDestroyResources();
-        void                 ResetResources();
-        VulkanTexture*       GetSwapchainImage(uint32_t _index);
-        VulkanFence*         GetBinaryFence(uint32_t _index);
-        void                 Present(VkSemaphore _fence);
-        VulkanRHITextureUAV* InnerCreateVulkanUAV(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info);
-
-        class VulkanSwapChain* swapchain;
-
-        Moer::Array<VulkanRHIFence*> image_aquire_fences;
-
-        Moer::Array<VulkanRHITextureUAV*> swapchain_image_uavs;
-
-        Moer::Array<VulkanRHITexture*> swapchain_images;
-        //new resources
-        Moer::Array<VulkanTexture*> swapchain_textures;
-        Moer::Array<VulkanFence*>   frame_fences;
-
-        uint32_t frame_offset = 0;
-
-        // uint32_t max_frame_in_flight = 3;
-    };
-
-    class VulkanViewport final : public Viewport, VulkanDeviceObject {
-    public:
-        VulkanViewport(RHIViewportInitializer _init_info, VulkanDevice& _device);
-        // ~VulkanViewport();
-        void Resize(Extent2D _size) override;
-        void Present(FenceRef _render_finished) override {};
-        void Present(VkSemaphore _sem);
-        // BackBufferInfo GetBackBuffer() override;
-        void* GetNativeWindow() override;
-
-    private:
-        VulkanSwapChain m_swap_chain;
-        void            CreateResources();
-
-        Array<VulkanTexture*> m_back_buffers;
-        uint32_t              frame_offset = 0;
-        Array<VulkanFence*>   m_frame_fences;
-    };
-#pragma endregion
-
 #pragma region acceleration structure definitions
     class VulkanRHIRayTracingAccelerationStructure {
     public:
@@ -1330,30 +1045,6 @@ namespace Moer::Render {
         static VkGeometryFlagsKHR                   METoGeometryFlagsKHR(ERayTracingGeometryFlags _flag);
         static VkBuildAccelerationStructureFlagsKHR METoVKBuildAccelerationStructureFlagsKHR(ERayTracingAccelerationStructureBuildFlags _me_flags);
         static VkGeometryInstanceFlagsKHR           METoVKGeometryInstanceFlagsKHR(ERayTracingInstanceFlags _me_flags);
-    };
-
-    class VulkanRHIRayTracingBLAS final : public RHIRayTracingBLAS, public VulkanRHIRayTracingAccelerationStructure {
-        friend VulkanRHIImpl;
-
-    public:
-        VulkanRHIRayTracingBLAS(const RHIRayTracingBLASInitializer& _init) : RHIRayTracingBLAS(_init) {
-        }
-
-    protected:
-        VkAccelerationStructureKHR m_blas;
-        RHIBufferRef               m_buffer;
-    };
-    class VulkanRHIRayTracingTLAS final : public RHIRayTracingTLAS, public VulkanRHIRayTracingAccelerationStructure {
-        friend VulkanRHIImpl;
-        friend VulkanPipelineResourceCache;
-
-    public:
-        VulkanRHIRayTracingTLAS(const RHIRayTracingTLASInitializer& _init) : RHIRayTracingTLAS(_init) {
-        }
-
-    protected:
-        VkAccelerationStructureKHR m_tlas;
-        RHIBufferRef               m_buffer;
     };
 }// namespace Moer::Render
 #pragma endregion

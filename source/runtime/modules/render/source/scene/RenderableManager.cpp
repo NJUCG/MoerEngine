@@ -93,9 +93,6 @@ namespace Moer {
         m_manager.AddComponent(_entity);
     }
 
-    void RenderableManager::SetRHIRenderPrimitiveRef(Entity entity, RHIRenderPrimitiveRef _primitive) {
-        m_manager[entity].primitive = _primitive;
-    }
     void RenderableManager::SetCulling(Entity entity, bool culling) {
         m_manager[entity].culling = culling;
     }
@@ -146,9 +143,6 @@ namespace Moer {
         return m_manager.HasComponent(entity);
     }
 
-    RHIRenderPrimitiveRef RenderableManager::GetRenderPrimitive(Entity entity) {
-        return m_manager[entity].primitive;
-    }
     bool RenderableManager::GetCulling(Entity entity) {
         return m_manager[entity].culling;
     }

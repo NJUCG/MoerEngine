@@ -278,8 +278,8 @@ Reservoir SpatialResampleWithPairwiseMIS(
 
   for (i = 0; i < num_samples; i++) {
     uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
-    int2 spatial_offset = int2(neighbor_offset_buf[sample_idx] *
-                               _s_params.sampling_radius);
+    int2 spatial_offset =
+        int2(neighbor_offset_buf[sample_idx] * _s_params.sampling_radius);
     int2 idx = int2(_pixel_pos) + spatial_offset;
     idx = ClampScreenPosition(idx);
 
@@ -368,8 +368,8 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
   // two iteration over the samples
   for (i = 0; i < num_samples; i++) {
     uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
-    int2 spatial_offset = int2(neighbor_offset_buf[sample_idx] *
-                               _s_params.sampling_radius);
+    int2 spatial_offset =
+        int2(neighbor_offset_buf[sample_idx] * _s_params.sampling_radius);
     int2 idx = int2(_pixel_pos) + spatial_offset;
     idx = ClampScreenPosition(idx);
     Surface neighbor_surface = GetGBufferSurface(idx);
@@ -432,16 +432,15 @@ Reservoir SpatialResampling(uint2 _pixel_pos, Surface _surface,
         }
         uint sample_idx = (start_idx + i) & _params.neighbor_offset_mask;
         int2 spatial_offset =
-            int2(neighbor_offset_buf[sample_idx] *
-                 _s_params.sampling_radius);
+            int2(neighbor_offset_buf[sample_idx] * _s_params.sampling_radius);
 
         int2 idx = int2(_pixel_pos) + spatial_offset;
         idx = ClampScreenPosition(idx);
 
         Surface neighbor_surface = GetGBufferSurface(idx);
 
-        LightSample neighbor_sample =
-            neighbor_surface.SamplePolymorphicLight(selected_light_info, res.GetUV());
+        LightSample neighbor_sample = neighbor_surface.SamplePolymorphicLight(
+            selected_light_info, res.GetUV());
         float ps = neighbor_surface.GetLightSampleTargetPdf(neighbor_sample);
 
         if (_s_params.bias_correction_mode >= s_di_bias_correction_traced &&

@@ -53,11 +53,11 @@ float3 apply_ambient_light(LightData light)
     return light.color.rgb;
 }
 
-float3 apply_light(LightData light, float3 pos, float3 normal, float3 brdf)
+float3 apply_light(LightData light, float3 pos, float3 normal, float3 brdf, float shadow)
 {
     if (light.type == Directional_LIGHT_TYPE)
     {
-        return apply_directional_light(light, normal) * brdf;
+        return apply_directional_light(light, normal) * brdf * shadow; // TODO: 把shadow绑定在某个特定light上，而不是所有light
     }
     else if (light.type == Point_LIGHT_TYPE)
     {

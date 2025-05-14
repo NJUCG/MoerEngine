@@ -3,7 +3,6 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "rhi/vulkan/IVulkanRHI.h"
 #include "shader/ShaderParameterMacros.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"

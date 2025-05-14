@@ -3,7 +3,6 @@
 #include "platform/Platform.h"
 
 #include "rhi/RHIResource.h"
-#include "rhi/vulkan/VulkanRHI.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
@@ -14,7 +13,6 @@
 
 #include "rhi/RHI.h"
 #include "platform/RenderPlatform.h"
-#include "rhi/vulkan/IVulkanRHI.h"
 // #include "config/ConfigManager.h"
 
 #include <algorithm>
@@ -70,12 +68,7 @@ namespace Moer {
 
         LOG_INFO("Render System Shut down.");
     }
-    class FakeRHI : public IVulkanRHI {
-    public:
-        FakeRHI() {
-            m_rhi_info.rhi_type = ERHIType::Vulkan;
-        }
-    };
+
     void RenderSystem::InitRHI() {
         //todo: init by config
 
@@ -102,13 +95,9 @@ namespace Moer {
     void RenderSystem::InitShaderResources() {
         //init shader compiler
         ShaderCompiler::Init();
-
-        EShaderPlatform platform = GetShaderPlatformByRHIType(g_rhi->GetType());
     }
 
     void RenderSystem::ShutDownRHI() {
-        g_rhi->ShutDown();
-        g_rhi = nullptr;
     }
 
     void RenderSystem::FreeShaderResources() {

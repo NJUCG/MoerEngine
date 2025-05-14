@@ -65,47 +65,47 @@ public:
 };
 
 /**
-     * MARK: AA Passes
-     * 
-     * Use gui to switch antialiasing mode:
-     * 0: FXAA Off                : 620+-fps
-     * 1: FXAA Quality(Simplified): 612+-fps
-     * 2: FXAA Quality            : 584+-fps
-     * 3: SMAA 1x  (Preset High)  : 578+-fps [Default]
-     * 4: SMAA T2x (Preset High)  : 
-     * 
-     * For FXAA (2 passes)
-     *   Pass 1: precompute luma -> antialiasing_temporal_texture_1
-     *   Pass 2: FXAA main pass  -> antiailiasing_output
-     * 
-     * For SMAA 1x (3 passes, details in shaders/test/post_process/SMAA.hlsl)
-     *   Pass 1: Edge Detection              -> antialiasing_temporal_texture_1 (edgesTex)
-     *   Pass 2: Blending Weight Calculation -> antialiasing_temporal_texture_2 (blendTex)
-     *   Pass 3: Neighborhood Blending       -> antialiasing_output
-     * 
-     * For SMAA T2x (4 passes)
-     *   Pass 1: Edge Detection              -> antialiasing_temporal_texture_1  (rg: edgesTex & ba: velocityTex)
-     *   Pass 2: Blending Weight Calculation -> antialiasing_temporal_texture_2  (blendTex)
-     *   Pass 3: Neighborhood Blending       -> antialiasing_temporal_texture_34 (double buffer) (currentColorTex & previousColorTex)
-     *   Pass 4: Resolve                     -> antialiasing_output
-     *   注：SMAA T2x需要启用Reprojection才可以防止ghosting。Reprojection需要一个velocityTex，在这里我直接将velocityTex写入edgesTex的后两个通道
-     *   注2：实际上，因为目前帧数为500+fps，所以看不到ghosting；可以在主循环中sleep 0.1s并且设置shader中的SMAAReprojection为0来得到一个ghosting的结果
-     * 
-     * 关于不同抗锯齿模式的说明
-     *   切换抗锯齿时，多余的Pass不会被执行，应该不会有额外的性能开销
-     * 
-     * 关于SMAA实现的一些说明
-     *   SMAA是通过直接集成论文仓库中的代码实现的（https://github.com/iryoku/smaa）
-     *   原始代码不兼容bindless rhi，所以我将仓库中原始的代码封装了一下，并从bindless rhi中提取出了texture和sampler
-     *   这部分可能破坏rhi的一些封装，具体见下面的GetSamplerIdx函数，除了这一点外，c++部分没有其他不优雅的代码
-     *   shader部分和bindless rhi的耦合性特别高，如果修改bindless框架的话，大概率shader也要一起修改
-     * Imporant: 所以如果修改了bindless框架，然后画面黑屏的话，请先将抗锯齿设置为FXAA(aa_mode = 2)，可以快速解决问题
-     * 
-     * 关于SMAA T2x的说明
-     *   1. T2x使用了Temporal Supersampling，需要让相机抖动。可以通过camera->SetJitteredMatrix()来设置JitteredMatrix，这个矩阵会作用在ViewMatrix上
-     *   2. 目前SMAA T2x效果和SMAA 1x类似，没有明显优势；不确定是场景问题还是实现问题
-     *   FIXME: fix jitter in SMAA T2x when SMAA_REPROJECTION is enabled
-     */
+ * MARK: AA Passes
+ * 
+ * Use gui to switch antialiasing mode:
+ * 0: FXAA Off                : 620+-fps
+ * 1: FXAA Quality(Simplified): 612+-fps
+ * 2: FXAA Quality            : 584+-fps
+ * 3: SMAA 1x  (Preset High)  : 578+-fps [Default]
+ * 4: SMAA T2x (Preset High)  : 
+ * 
+ * For FXAA (2 passes)
+ *   Pass 1: precompute luma -> antialiasing_temporal_texture_1
+ *   Pass 2: FXAA main pass  -> antiailiasing_output
+ * 
+ * For SMAA 1x (3 passes, details in shaders/test/post_process/SMAA.hlsl)
+ *   Pass 1: Edge Detection              -> antialiasing_temporal_texture_1 (edgesTex)
+ *   Pass 2: Blending Weight Calculation -> antialiasing_temporal_texture_2 (blendTex)
+ *   Pass 3: Neighborhood Blending       -> antialiasing_output
+ * 
+ * For SMAA T2x (4 passes)
+ *   Pass 1: Edge Detection              -> antialiasing_temporal_texture_1  (rg: edgesTex & ba: velocityTex)
+ *   Pass 2: Blending Weight Calculation -> antialiasing_temporal_texture_2  (blendTex)
+ *   Pass 3: Neighborhood Blending       -> antialiasing_temporal_texture_34 (double buffer) (currentColorTex & previousColorTex)
+ *   Pass 4: Resolve                     -> antialiasing_output
+ *   注：SMAA T2x需要启用Reprojection才可以防止ghosting。Reprojection需要一个velocityTex，在这里我直接将velocityTex写入edgesTex的后两个通道
+ *   注2：实际上，因为目前帧数为500+fps，所以看不到ghosting；可以在主循环中sleep 0.1s并且设置shader中的SMAAReprojection为0来得到一个ghosting的结果
+ * 
+ * 关于不同抗锯齿模式的说明
+ *   切换抗锯齿时，多余的Pass不会被执行，应该不会有额外的性能开销
+ * 
+ * 关于SMAA实现的一些说明
+ *   SMAA是通过直接集成论文仓库中的代码实现的（https://github.com/iryoku/smaa）
+ *   原始代码不兼容bindless rhi，所以我将仓库中原始的代码封装了一下，并从bindless rhi中提取出了texture和sampler
+ *   这部分可能破坏rhi的一些封装，具体见下面的GetSamplerIdx函数，除了这一点外，c++部分没有其他不优雅的代码
+ *   shader部分和bindless rhi的耦合性特别高，如果修改bindless框架的话，大概率shader也要一起修改
+ * Imporant: 所以如果修改了bindless框架，然后画面黑屏的话，请先将抗锯齿设置为FXAA(aa_mode = 2)，可以快速解决问题
+ * 
+ * 关于SMAA T2x的说明
+ *   1. T2x使用了Temporal Supersampling，需要让相机抖动。可以通过camera->SetJitteredMatrix()来设置JitteredMatrix，这个矩阵会作用在ViewMatrix上
+ *   2. 目前SMAA T2x效果和SMAA 1x类似，没有明显优势；不确定是场景问题还是实现问题
+ *   FIXME: fix jitter in SMAA T2x when SMAA_REPROJECTION is enabled
+ */
 class AaPass {
 public:
     AaPass(RasterContext& context) {

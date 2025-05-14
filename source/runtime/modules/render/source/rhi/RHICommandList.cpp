@@ -10,10 +10,6 @@
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "RHIImpl.h"
-RHICommandListBase::RHICommandListBase() {
-}
-RHICommandListBase::~RHICommandListBase() {
-}
 namespace Moer::Render {
 
     void CommandQueue::Test() {
@@ -95,17 +91,6 @@ namespace Moer::Render {
         CommandList&    _cmd_list)
         : cmd_list(_cmd_list), pso(_pso), args({}) {
     }
-
-    // CommandList::DrawGeometryPassDispatcher::DrawGeometryPassDispatcher(
-    //     CommandList&     _cmd_list,
-    //     ArrayArguments&& _args)
-    //     : cmd_list(_cmd_list), args(std::move(_args)) {
-    // }
-
-    // CommandList::DrawGeometryPassDispatcher::DrawGeometryPassDispatcher(
-    //     CommandList& _cmd_list)
-    //     : cmd_list(_cmd_list), args({}) {
-    // }
 
     void CommandList::ComputeDispatcher::Dispatch(uint3 _group_count, std::string_view _name, ProfileSection _section) {
         cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count));
