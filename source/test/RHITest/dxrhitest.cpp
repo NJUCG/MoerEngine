@@ -48,7 +48,8 @@ namespace Moer::Render {
     struct S0 {
         uint   a;
         uint   b;
-        float2 _pad;
+        uint   tex_handle;
+        uint   buf_handle;
         float4 x;
     };
     struct S1 {
@@ -84,7 +85,9 @@ namespace Moer::Render {
         DEFINE_SHADER_TEX(rwt4);
         DEFINE_SHADER_SAMPLER(s0);
 
-        DEFINE_SHADER_ARGS(cb0, cb1, sb0, sb1, rb0, rb1, tb0, tb1, buf_arr, t2, t3, t4, t5, t6, tex_arr, rwt2, rwt3, rwt4, s0);
+        DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+
+        DEFINE_SHADER_ARGS(cb0, cb1, sb0, sb1, rb0, rb1, tb0, tb1, buf_arr, t2, t3, t4, t5, t6, tex_arr, rwt2, rwt3, rwt4, s0, bdls);
     };
 
 }// namespace Moer::Render
@@ -169,13 +172,17 @@ int main(int argc, char** argv) {
         auto rwt3 = device.CreateTexture("rwt3", Extent2D(3, 3), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST, 1, 2);
         auto rwt4 = device.CreateTexture("rwt4", Extent3D(4, 4, 4), EPixelFormat::PF_R32G32B32A32_SFLOAT, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_DST);
 
-        // todo test copy buffer to texture
-
         auto s0 = Sampler{SF_NEAREST, SAM_CLAMP_TO_EDGE};
 
+        auto bindless_array = device.CreateBindlessArray(1024);
+        uint tex_handle     = bindless_array->AllocateTexture(t2->GetView(0, 3), s0);
+        uint buf_handle     = bindless_array->AllocateBuffer(sb1->GetView());
+
         S0 pc{
-            .a = 2,
-            .b = 3,
+            .a          = 2,
+            .b          = 3,
+            .tex_handle = tex_handle,
+            .buf_handle = buf_handle,
         };
         S1 pc1{
             .a = 1,
@@ -189,7 +196,7 @@ int main(int argc, char** argv) {
         std::vector<float> farr(1024), farr2(1024);
         std::vector<int>   iarr(1024);
 
-        for (int iter = 0; iter < 10; ++iter) {
+        for (int iter = 0; iter < 9; ++iter) {
 
             for (int i = 0; i < 7; ++i) farr[i] = iarr[i] = 1 + i + iter;
             for (int i = 0; i < 7; ++i) farr2[i] = (i + 1) / 10.f;
@@ -201,6 +208,8 @@ int main(int argc, char** argv) {
             res *= farr2[1] * 10;
             res *= farr2[2] * 10;
             res *= farr2[3] * 10;
+            res *= farr2[0];
+            res *= iarr[1];
 
             CommandList list;
             //list.CopyFrom(ToSpan(pc), cb0->GetView());
@@ -235,7 +244,9 @@ int main(int argc, char** argv) {
             for (int i = 0; i < kNumTexArr; ++i) {
                 tex_arr_view[i] = tex_arr[i]->GetView();
             }
-            list.Compute(pipeline, pc, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT), std::span{buf_arr_view}, t2->GetView(0, 3), t3, t4, t5, t6, std::span{tex_arr_view}, rwt2, rwt3, rwt4, s0).Dispatch({1, 1, 1});
+            list.UpdateBindlessArray(bindless_array);
+            list.Compute(pipeline, pc, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT), std::span{buf_arr_view},
+                t2->GetView(0, 3), t3, t4, t5, t6, std::span{tex_arr_view}, rwt2, rwt3, rwt4, s0, bindless_array).Dispatch({1, 1, 1});
             //list.Compute(pipeline, cb0, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT)).Dispatch({1, 1, 1});
 
             list.CopyFrom(rb1->GetView(0, 10 * sizeof(float)), ToSpan(iarr));

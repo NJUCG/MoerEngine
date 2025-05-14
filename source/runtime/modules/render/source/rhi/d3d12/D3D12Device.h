@@ -391,13 +391,6 @@ namespace Moer::Render {
         DescriptorIndex Allocate(uint count = 1);// now should only be called by device...
     };
 
-    // todo: bindless array,  want keep those descriptor 'static'  (not need copy every time
-    //       (split half to dynamic gpuallocator, half to static bindlessarray ?
-    //class D3D12BindlessArray : public BindlessArray {
-    //private:
-    //public:
-    //};
-
     struct Allocation {
         D3D12MA::Allocation* alloc    = nullptr;
         ID3D12Resource*      resource = nullptr;
@@ -521,6 +514,64 @@ namespace Moer::Render {
         DescriptorIndex CreateUav(const BufferView& _range, ED3D12ShaderVariableType _type);
     };
 
+    // bindless array, want keep those descriptor 'static'  (not need copy every time
+    // split half gpuheap to dynamic gpuallocator, half to static bindlessarray
+    class D3D12BindlessArray : public BindlessArray, public D3D12DeviceChild {
+    private:
+        UniquePtr<D3D12Buffer>        underlying_array;
+        LockFreeQueueBase<uint, true> free_slots;// responsible for idx in this array, as well as in gpu heap(without offset)
+        std::atomic_uint              slot_offset;
+        const uint                    offset_in_global_csu_heap_gpu;
+        const uint                    max_num;
+
+        std::mutex mtx;
+
+    private:
+        // cache allocated resource info
+        enum EDescriptorType : uint {
+            None,
+            Texture,
+            Buffer,
+        };
+        struct Handle {
+            EDescriptorType type;
+            uint64          handle;
+            uint            array_idx;
+        };
+        Array<Handle>              handles;
+        UnorderedMap<uint64, uint> allocated_resource;// ptr --> refcount
+
+    private:
+        // some temporary data for update
+        Array<UpdateCmd>             update_cmds;
+        Array<std::pair<uint, uint>> array_indices_dat;
+        Array<byte>                  array_dat;
+        UnorderedMap<uint, uint>     temp_slot_to_cmd;
+
+    public:
+        D3D12BindlessArray(D3D12Device* _device, uint _start_offset, uint _max_num);
+
+        uint                     AllocateTexture(const TextureView& _texture, Sampler _sampler) override;
+        uint                     AllocateBuffer(BufferView _buffer) override;
+        void                     FreeTexture(uint _array_idx) override;
+        void                     FreeBuffer(uint _array_idx) override;
+        UniquePtr<class Command> CreateUpdateCommand() override;
+        uint64                   ArrayHandle() const override;
+        D3D12Buffer*             GetUnderlyingBuffer() const;
+
+        void Lock() { mtx.lock(); }
+        void Unlock() { mtx.unlock(); }
+
+    public:
+        bool IsResourceAllocated(D3D12Buffer* _buffer);
+        bool IsResourceAllocated(D3D12Texture* _texture);
+
+    private:
+        void IncResourceRef(uint64 _ptr);
+        void DecResourceRef(uint64 _ptr);
+        void FreeBindlessHandle(uint _array_idx, EDescriptorType _type);
+    };
+
     class D3D12Fence final : public Fence, public D3D12DeviceChild {
     private:
         ComPtr<ID3D12Fence> fence;
@@ -615,6 +666,9 @@ namespace Moer::Render {
         Set<D3D12Texture*>                        pending_textures;// textures need to be transitioned in this layer
         Set<D3D12Buffer*>                         pending_buffers; // buffers need to be transitioned in this layer
 
+        Set<D3D12Texture*> writed_textures;
+        Set<D3D12Buffer*>  writed_buffers;
+
     public:
         D3D12_COMMAND_LIST_TYPE queue_type = D3D12_COMMAND_LIST_TYPE_DIRECT;// !not used yet
 
@@ -631,6 +685,13 @@ namespace Moer::Render {
         void RestoreState();
 
         void Reset();
+
+        const Set<D3D12Texture*>& GetWritedStateTextures() const { return writed_textures; }
+        const Set<D3D12Buffer*>&  GetWritedStateBuffers() const { return writed_buffers; }
+
+    private:
+        void UpdateWritable(D3D12Texture* _tex, bool _is_read);
+        void UpdateWritable(D3D12Buffer* _buf, bool _is_read);
     };
 
     // only for upload/readback buffer now. may change in the future
@@ -1008,6 +1069,7 @@ namespace Moer::Render {
         UniquePtr<D3D12CpuDescriptorAllocator> rtv_heap_cpu;
         UniquePtr<D3D12CpuDescriptorAllocator> dsv_heap_cpu;
         UniquePtr<D3D12CpuDescriptorAllocator> sampler_heap_cpu;
+        uint                                   max_num_common_descriptor = 0;//(const) max num of csu descriptors maintained by 'csu_heap_gpu', other gpu descriptors are implicitly managed by bindless array
         UniquePtr<D3D12GpuDescriptorAllocator> csu_heap_gpu;
         UniquePtr<D3D12GpuDescriptorAllocator> sampler_heap_gpu;
 
@@ -1027,7 +1089,7 @@ namespace Moer::Render {
         D3D12CpuDescriptorAllocator* GetCsuHeap() { return csu_heap_cpu.get(); }
         D3D12CpuDescriptorAllocator* GetRtvHeap() { return rtv_heap_cpu.get(); }
         D3D12CpuDescriptorAllocator* GetDsvHeap() { return dsv_heap_cpu.get(); }
-        D3D12CpuDescriptorAllocator* GetSampleHeap() { return sampler_heap_cpu.get(); }
+        D3D12CpuDescriptorAllocator* GetSamplerHeap() { return sampler_heap_cpu.get(); }
         D3D12GpuDescriptorAllocator* GetCsuHeapGpuDyn() { return csu_heap_gpu.get(); }
         D3D12GpuDescriptorAllocator* GetSamplerHeapGpuDyn() { return sampler_heap_gpu.get(); }
 
@@ -1050,7 +1112,7 @@ namespace Moer::Render {
 
         template<typename... T>
             requires(std::same_as<T, DescriptorIndex> && ...) && (sizeof...(T) > 0)
-        D3D12_GPU_DESCRIPTOR_HANDLE PushSapmlerDescriptor(T... _index_in_cpu_heap) {
+        D3D12_GPU_DESCRIPTOR_HANDLE PushSamplerDescriptor(T... _index_in_cpu_heap) {
             constexpr uint        count = sizeof...(_index_in_cpu_heap);
             const DescriptorIndex start = sampler_heap_gpu->Allocate(count);
 
@@ -1062,9 +1124,9 @@ namespace Moer::Render {
         }
 
     public:
-        static constexpr uint bindless_sampler_cnt = 256;
-        static constexpr uint cmd_alloc_limits     = 3;
-        //UniquePtr<DeviceInternalShaders> internal_shaders;
+        static constexpr uint            bindless_sampler_cnt = 256;
+        static constexpr uint            cmd_alloc_limits     = 3;
+        UniquePtr<DeviceInternalShaders> internal_shaders;
 
     private:
         //friend VkCommandQueue;

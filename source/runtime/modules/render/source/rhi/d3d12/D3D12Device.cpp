@@ -151,14 +151,15 @@ namespace Moer::Render {
         ASSERT(feature_supports.RaytracingTier() >= D3D12_RAYTRACING_TIER_1_1);         // 1.0 for basic dxr, 1.1 for rayquery
         ASSERT(feature_supports.HighestRootSignatureVersion() >= D3D_ROOT_SIGNATURE_VERSION_1_1);
 
-        gpu_global_allocator = MakeUnique<D3D12GpuGlobalAllocator>(this);
-        gfx_queue            = MakeUnique<D3D12GraphicsCommandQueue>(this, EQueueType::Graphics);
-        csu_heap_cpu         = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, feature_supports.MaxViewDescriptorHeapSize());// ~1e6
-        rtv_heap_cpu         = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 256);                                                 // just some small number, should be enough
-        dsv_heap_cpu         = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 256);
-        sampler_heap_cpu     = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, feature_supports.MaxSamplerDescriptorHeapSizeWithStaticSamplers());         // ~2048
-        csu_heap_gpu         = MakeUnique<D3D12GpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, feature_supports.MaxViewDescriptorHeapSize() / 2, 4096);                // ~1e6
-        sampler_heap_gpu     = MakeUnique<D3D12GpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, feature_supports.MaxSamplerDescriptorHeapSizeWithStaticSamplers() / 2, 256);// ~2048
+        gpu_global_allocator      = MakeUnique<D3D12GpuGlobalAllocator>(this);
+        gfx_queue                 = MakeUnique<D3D12GraphicsCommandQueue>(this, EQueueType::Graphics);
+        csu_heap_cpu              = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, feature_supports.MaxViewDescriptorHeapSize());// ~1e6
+        rtv_heap_cpu              = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 256);                                                 // just some small number, should be enough
+        dsv_heap_cpu              = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 256);
+        sampler_heap_cpu          = MakeUnique<D3D12CpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, feature_supports.MaxSamplerDescriptorHeapSizeWithStaticSamplers());// ~2048
+        csu_heap_gpu              = MakeUnique<D3D12GpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, feature_supports.MaxViewDescriptorHeapSize(), 4096);           // ~1e6
+        max_num_common_descriptor = csu_heap_gpu->GetNumTotalDescriptors() / 2;
+        sampler_heap_gpu          = MakeUnique<D3D12GpuDescriptorAllocator>(this, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, feature_supports.MaxSamplerDescriptorHeapSizeWithStaticSamplers() / 2, 256);// ~2048
 
         D3D12DefaultSamplers::InitSamplerDescriptorHeap(this);
     }
@@ -435,7 +436,11 @@ namespace Moer::Render {
     }
 
     BindlessArrayRef D3D12Device::CreateBindlessArray(uint _max_size) {
-        return nullptr;
+        static uint s_offset_in_csu_heap_gpu_bindless = 0;// !NOTE, just a simple management, hope won't exceed.
+
+        const uint offset = s_offset_in_csu_heap_gpu_bindless;
+        s_offset_in_csu_heap_gpu_bindless += _max_size;
+        return BindlessArrayRef{MoerNew(D3D12BindlessArray)(this, offset + max_num_common_descriptor, _max_size)};
     }
 
     FenceRef D3D12Device::CreateFence() {
@@ -489,7 +494,10 @@ namespace Moer::Render {
         return SwapchainRef();
     }
 
-    void Moer::Render::D3D12Device::PostInit() {
+    void D3D12Device::PostInit() {
+        // CreateInternalShaders
+        internal_shaders                       = MakeUnique<DeviceInternalShaders>();
+        internal_shaders->sd_component_shuffle = ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl");
     }
 
     void D3D12Device::GetHardwareAdapter(
@@ -691,7 +699,7 @@ namespace Moer::Render {
             }
         }
 
-        const uint byte_stride = _type == ED3D12ShaderVariableType::ByteAddressBuffer ? 4 : (_type == ED3D12ShaderVariableType::StructuredBuffer ? GetStride() : D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetBitsPerUnit(viewDesc.format) / 8);
+        const uint byte_stride = _type == ED3D12ShaderVariableType::ByteAddressBuffer ? 4 : (_type == ED3D12ShaderVariableType::StructuredBuffer ? _range.stride : D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetBitsPerUnit(viewDesc.format) / 8);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
         srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
@@ -854,7 +862,42 @@ namespace Moer::Render {
         D3D12CommandResourceAllocator& allocator;
         D3D12ResourceStateTracker&     tracker;
 
+        UnorderedSet<uint64> writed_resources;// record during dispatch/draw cmd
+
         D3D12CommandPreprocessVisitor(D3D12CommandResourceAllocator& allocator) : allocator(allocator), tracker(allocator.GetResourceStateTracker()) {}
+
+        // make sure bindless resource ready for later read
+        void HandleBindless(BindlessArrayRef _bindless, D3D12_BARRIER_SYNC _sync_flag) {
+            if (!_bindless) {
+                return;
+            }
+            const EPassType pass_type      = _sync_flag == D3D12_BARRIER_SYNC_COMPUTE_SHADING ? EPassType::Compute : EPassType::Graphics;
+            auto*           bindless_array = reinterpret_cast<D3D12BindlessArray*>(_bindless.Get());
+
+            Array<D3D12Texture*> to_read_textures;
+            for (const auto& i : tracker.GetWritedStateTextures()) {
+                if (bindless_array->IsResourceAllocated(i) && !writed_resources.contains(uint64(i))) {
+                    to_read_textures.push_back(i);
+                }
+            }
+            if (!to_read_textures.empty()) {
+                for (const auto& i : to_read_textures) {
+                    tracker.RecordState(i, ETextureState::SHADER_RESOURCE, pass_type, false);
+                }
+            }
+            Array<D3D12Buffer*> to_read_buffers;
+            for (const auto& i : tracker.GetWritedStateBuffers()) {
+                if (bindless_array->IsResourceAllocated(i) && !writed_resources.contains(uint64(i))) {
+                    to_read_buffers.push_back(i);
+                }
+            }
+            if (!to_read_buffers.empty()) {
+                for (const auto& i : to_read_buffers) {
+                    tracker.RecordState(i, EBufferState::SHADER_RESOURCE, pass_type, false);
+                }
+            }
+            tracker.RecordState(bindless_array->GetUnderlyingBuffer(), EBufferState::SHADER_RESOURCE, pass_type, false);
+        }
 
         void Visit(const UploadBufferCmd& _cmd) {
             D3D12Buffer* dst_buffer = reinterpret_cast<D3D12Buffer*>(_cmd.Handle());
@@ -929,59 +972,68 @@ namespace Moer::Render {
             auto sync_flag = D3D12_BARRIER_SYNC(_pipeline_flag);
             auto var_type  = ED3D12ShaderVariableType(_state_flag);
 
-            Variant(_arg)
-                .Match(
-                    [&](const TInvalidArg&) {},
-                    [&](const BufferView& arg) {
-                        D3D12Buffer* buf     = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
-                        const bool   b_write = IsShaderVarUav(var_type);
-                        tracker.RecordState(buf,
-                                            b_write ? EBufferState::UNORDERED_ACCESS : EBufferState::SHADER_RESOURCE,
-                                            sync_flag == D3D12_BARRIER_SYNC_COMPUTE_SHADING ? EPassType::Compute : EPassType::Graphics,// a bit strange...
-                                            b_write);
-                    },
-                    [&](const TextureView& arg) {
-                        D3D12Texture* tex     = reinterpret_cast<D3D12Texture*>(arg.GetTexture());
-                        const bool    b_write = IsShaderVarUav(var_type);
-                        tracker.RecordState(tex,
-                                            b_write ? ETextureState::UNORDERED_ACCESS : ETextureState::SHADER_RESOURCE,
-                                            sync_flag == D3D12_BARRIER_SYNC_COMPUTE_SHADING ? EPassType::Compute : EPassType::Graphics,
-                                            b_write);
-                    },
-                    [&](const std::span<TextureView>& arg) {
-                        for (auto&& i : arg) {
-                            VisitArgs(i, _state_flag, _pipeline_flag);
-                        }
-                    },
-                    [&](const std::span<BufferView>& arg) {
-                        for (auto&& i : arg) {
-                            VisitArgs(i, _state_flag, _pipeline_flag);
-                        }
-                    },
-                    [&](const Sampler& arg) {},
-                    [&](const BindlessArrayRef& arg) {
-                        // todo
-                        FATAL("not implemented");
-                    },
-                    [&](const RaytracingTlasRef& arg) {
-                        // todo
-                        FATAL("not implemented");
-                    });
+            MatchVariant(
+                _arg,
+                [&](const TInvalidArg&) {},
+                [&](const BufferView& arg) {
+                    D3D12Buffer* buf     = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
+                    const bool   b_write = IsShaderVarUav(var_type);
+                    tracker.RecordState(buf,
+                                        b_write ? EBufferState::UNORDERED_ACCESS : EBufferState::SHADER_RESOURCE,
+                                        sync_flag == D3D12_BARRIER_SYNC_COMPUTE_SHADING ? EPassType::Compute : EPassType::Graphics,// a bit strange...
+                                        b_write);
+                },
+                [&](const TextureView& arg) {
+                    D3D12Texture* tex     = reinterpret_cast<D3D12Texture*>(arg.GetTexture());
+                    const bool    b_write = IsShaderVarUav(var_type);
+                    tracker.RecordState(tex,
+                                        b_write ? ETextureState::UNORDERED_ACCESS : ETextureState::SHADER_RESOURCE,
+                                        sync_flag == D3D12_BARRIER_SYNC_COMPUTE_SHADING ? EPassType::Compute : EPassType::Graphics,
+                                        b_write);
+                },
+                [&](const std::span<TextureView>& arg) {
+                    for (auto&& i : arg) {
+                        VisitArgs(i, _state_flag, _pipeline_flag);
+                    }
+                },
+                [&](const std::span<BufferView>& arg) {
+                    for (auto&& i : arg) {
+                        VisitArgs(i, _state_flag, _pipeline_flag);
+                    }
+                },
+                [&](const Sampler& arg) {},
+                [&](const BindlessArrayRef& arg) {
+                    FATAL("should not visit bindless array here");
+                },
+                [&](const RaytracingTlasRef& arg) {
+                    // todo
+                    FATAL("not implemented");
+                });
         }
 
         void Visit(const DispatchCmd& _cmd) {
             ASSERT(std::holds_alternative<uint3>(_cmd.Param()));// todo indirect buffer
             const auto& pipeline = _cmd.Pipeline();
 
+            writed_resources.clear();
+
             auto func = [&](const TArg& _arg, uint _idx) {
                 VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags, pipeline.binding_infos[_idx].pipeline_flags);
             };
             auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
-                // todo
-                FATAL("not implemented");
+                HandleBindless(std::get<BindlessArrayRef>(_arg), D3D12_BARRIER_SYNC(pipeline.binding_infos[_idx].pipeline_flags));
             };
 
             IterateArgs(_cmd.Args({}), func, bdls_post_func);
+        }
+
+        void Visit(const UpdateBindlessArrayCmd& _cmd) {
+            if (!_cmd.HasUpdates()) {
+                return;
+            }
+
+            D3D12BindlessArray* array = reinterpret_cast<D3D12BindlessArray*>(_cmd.Handle());
+            tracker.RecordState(array->GetUnderlyingBuffer(), EBufferState::UNORDERED_ACCESS, EPassType::Compute, true);
         }
 
         void VisitCmd(const Command* _cmd) {
@@ -1015,6 +1067,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::ShaderDispatch:
                     Visit(static_cast<const DispatchCmd&>(*_cmd));
+                    break;
+                case Command::EType::UpdateBindlessArray:
+                    Visit(static_cast<const UpdateBindlessArrayCmd&>(*_cmd));
                     break;
 
                 default:
@@ -1065,7 +1120,6 @@ namespace Moer::Render {
             allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), dst(_cmd.Data().data()), size(required_size)] {
                 cmd_list.CopyData(dst, tmp_buffer, size);
             });
-
         }
 
         void Visit(const CopyBufferCmd& _cmd) {
@@ -1184,6 +1238,54 @@ namespace Moer::Render {
                 _cmd.Param());
         }
 
+        void Visit(const UpdateBindlessArrayCmd& _cmd) {
+            D3D12BindlessArray* bindless_array = reinterpret_cast<D3D12BindlessArray*>(_cmd.Handle());
+
+            auto array_data         = _cmd.StealArrayData();
+            auto array_indices_data = _cmd.StealArrayIndicesData();
+
+            if (array_data.empty() || array_indices_data.empty()) {
+                return;
+            }
+
+            const uint array_data_offset         = 0;
+            const uint array_data_size           = array_data.size() * sizeof(Moer::byte);
+            const uint array_indices_data_offset = array_data_offset + AlignUpToPowerOfTwo(array_data_size, 256);
+            const uint array_indices_data_size   = array_indices_data.size() * sizeof(uint) * 2;
+            const uint tmp_buffer_size           = array_indices_data_offset + array_indices_data_size;
+
+            //D3D12Buffer* tmp_buffer = allocator.AllocateDefaultBuffer(tmp_buffer_size); // extra barrier?
+            //BufferView array_data_gpu         = tmp_buffer->GetView(array_data_offset, array_data_size);
+            //BufferView array_indices_data_gpu = tmp_buffer->GetView(array_indices_data_offset, array_indices_data_size);
+
+            auto tmp_buffer = allocator.AllocateUploadBuffer(tmp_buffer_size, 256);
+            BufferView array_data_gpu(tmp_buffer.buffer, tmp_buffer.byte_offset + array_data_offset, array_data.size() / 4, 4);
+            BufferView array_indices_data_gpu(tmp_buffer.buffer, tmp_buffer.byte_offset + array_indices_data_offset, array_indices_data.size() * 2, 4);
+
+            //copy cpu data to tmp_buffer
+            {
+                //auto staging = allocator.AllocateUploadBuffer(tmp_buffer_size, 256);
+                auto& staging = tmp_buffer;
+                cmd_list.CopyData(staging, array_data.data(), array_data_size);
+                //cmd_list.CopyBuffer(staging.buffer, tmp_buffer, array_data_size, staging.byte_offset, array_data_offset);
+
+                staging.byte_offset += array_indices_data_offset;// kind of hack
+                staging.gpu_base_address_remapped += array_indices_data_offset;
+                staging.cpu_base_address_remapped += array_indices_data_offset;
+                cmd_list.CopyData(staging, array_indices_data.data(), array_indices_data_size);
+                //cmd_list.CopyBuffer(staging.buffer, tmp_buffer, array_indices_data_size, staging.byte_offset, array_indices_data_offset);
+            }
+
+            auto& shuffle_sd = allocator.GetDevice()->internal_shaders->sd_component_shuffle;
+            cmd_list.SetPso(shuffle_sd.handle);
+            ComponentShuffleShader::Arg arg;
+            arg.component_cnt = array_indices_data.size();
+            arg.stride        = sizeof(uint) / 4;
+
+            cmd_list.BindDescriptors(shuffle_sd.handle, shuffle_sd.SetArgs(arg, array_indices_data_gpu, array_data_gpu, bindless_array->GetUnderlyingBuffer()->GetView()));
+            cmd_list.Dispatch((arg.component_cnt + 63) / 64, 1, 1);
+        }
+
         void VisitCmd(const Command* _cmd) {
             switch (_cmd->Type()) {
                 case Command::EType::UploadBuffer:
@@ -1215,6 +1317,9 @@ namespace Moer::Render {
                 case Command::EType::ShaderDispatch:
                     Visit(static_cast<const DispatchCmd&>(*_cmd));
                     break;
+                case Command::EType::UpdateBindlessArray:
+                    Visit(static_cast<const UpdateBindlessArrayCmd&>(*_cmd));
+                    break;
                     //BuildAccel,
                     //BuildTLAS,
                     //TraceRay,
@@ -1222,7 +1327,6 @@ namespace Moer::Render {
                     //QueueTransfer,
                     //SetDrawState,
                     //SetGeometryPassDrawState,
-                    //UpdateBindlessArray,
                     //ClearResource,
                     //Scope,
                 default:
@@ -1552,16 +1656,13 @@ namespace Moer::Render {
             }
         }
         if (layout.the_bindless_array) {
-            FATAL("not implemented");
-            //ASSERT(layout.the_bindless_array->idx_in_cpp_args < _args.Size() && layout.the_bindless_array->idx_in_cpp_args < _pso_handle.binding_infos.size());
-            //const ParamInfoFlags flags    = _pso_handle.binding_infos[layout.the_bindless_array->idx_in_cpp_args];
-            //const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
-            //ASSERT(IsShaderVarCommonBuffer(var_type) && IsShaderVarSrv(var_type));
-            //ASSERT(std::holds_alternative<BindlessArrayRef>(_args[layout.the_bindless_array->idx_in_cpp_args]));
-            //const auto&  buf_view = std::get<BindlessArrayRef>(_args[layout.the_bindless_array->idx_in_cpp_args]);
-            //D3D12Buffer* buf      = reinterpret_cast<D3D12Buffer*>(buf_view.GetBuffer());
-            //ASSERT(buf_view.GetByteOffset() == 0); // ?
-            //list->SetComputeRootShaderResourceView(layout.the_bindless_array->idx_in_root_sig, buf->GetGpuVirtualAddress());
+            ASSERT(layout.the_bindless_array->idx_in_cpp_args < _args.Size() && layout.the_bindless_array->idx_in_cpp_args < _pso_handle.binding_infos.size());
+            const ParamInfoFlags flags    = _pso_handle.binding_infos[layout.the_bindless_array->idx_in_cpp_args];
+            const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
+            ASSERT(IsShaderVarCommonBuffer(var_type) && IsShaderVarSrv(var_type));
+            ASSERT(std::holds_alternative<BindlessArrayRef>(_args[layout.the_bindless_array->idx_in_cpp_args]));
+            const auto* bindless = reinterpret_cast<D3D12BindlessArray*>(std::get<BindlessArrayRef>(_args[layout.the_bindless_array->idx_in_cpp_args]).Get());
+            list->SetComputeRootShaderResourceView(layout.the_bindless_array->idx_in_root_sig, bindless->GetUnderlyingBuffer()->GetGpuVirtualAddress());
         }
         if (layout.srv_table) {
             Array<DescriptorIndex> indices(layout.srv_table->GetTotalBindCount());
@@ -1572,45 +1673,45 @@ namespace Moer::Render {
                 const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
                 ASSERT(IsShaderVarSrv(var_type));
 
-                Variant(_args[e.idx_in_cpp_args])
-                    .Match(
-                        // now assume all input resource valid, not consider null descriptor
-                        [&](const BufferView& arg) {
-                            D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
-                            ASSERT(IsShaderVarCommonBuffer(var_type));
-                            ASSERT(e.idx_in_flatten_table < indices.size());
-                            indices[e.idx_in_flatten_table] = buf->CreateSrv(arg, var_type);
-                        },
-                        [&](const TextureView& arg) {
-                            D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(arg.GetTexture());
-                            ASSERT(IsShaderVarTexture(var_type));
-                            ASSERT(e.idx_in_flatten_table < indices.size());
-                            indices[e.idx_in_flatten_table] = tex->CreateSrv(arg, var_type);
-                        },
-                        [&](const std::span<BufferView>& arg) {
-                            ASSERT(IsShaderVarCommonBuffer(var_type));
-                            for (int j = 0; const BufferView& view : arg) {
-                                D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(view.GetBuffer());
-                                ASSERT(e.idx_in_flatten_table + j < indices.size());
-                                indices[e.idx_in_flatten_table + j] = buf->CreateSrv(view, var_type);
-                                j++;
-                            }
-                        },
-                        [&](const std::span<TextureView>& arg) {
-                            ASSERT(IsShaderVarTexture(var_type));
-                            for (int j = 0; const TextureView& view : arg) {
-                                D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(view.GetTexture());
-                                ASSERT(e.idx_in_flatten_table + j < indices.size());
-                                indices[e.idx_in_flatten_table + j] = tex->CreateSrv(view, var_type);
-                                j++;
-                            }
-                        },
-                        [&](const RaytracingTlasRef& arg) {
-                            FATAL("not implemented");
-                        },
-                        [&](const auto&) {
-                            FATAL("not support arg");
-                        });
+                MatchVariant(
+                    _args[e.idx_in_cpp_args],
+                    // now assume all input resource valid, not consider null descriptor
+                    [&](const BufferView& arg) {
+                        D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
+                        ASSERT(IsShaderVarCommonBuffer(var_type));
+                        ASSERT(e.idx_in_flatten_table < indices.size());
+                        indices[e.idx_in_flatten_table] = buf->CreateSrv(arg, var_type);
+                    },
+                    [&](const TextureView& arg) {
+                        D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(arg.GetTexture());
+                        ASSERT(IsShaderVarTexture(var_type));
+                        ASSERT(e.idx_in_flatten_table < indices.size());
+                        indices[e.idx_in_flatten_table] = tex->CreateSrv(arg, var_type);
+                    },
+                    [&](const std::span<BufferView>& arg) {
+                        ASSERT(IsShaderVarCommonBuffer(var_type));
+                        for (int j = 0; const BufferView& view : arg) {
+                            D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(view.GetBuffer());
+                            ASSERT(e.idx_in_flatten_table + j < indices.size());
+                            indices[e.idx_in_flatten_table + j] = buf->CreateSrv(view, var_type);
+                            j++;
+                        }
+                    },
+                    [&](const std::span<TextureView>& arg) {
+                        ASSERT(IsShaderVarTexture(var_type));
+                        for (int j = 0; const TextureView& view : arg) {
+                            D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(view.GetTexture());
+                            ASSERT(e.idx_in_flatten_table + j < indices.size());
+                            indices[e.idx_in_flatten_table + j] = tex->CreateSrv(view, var_type);
+                            j++;
+                        }
+                    },
+                    [&](const RaytracingTlasRef& arg) {
+                        FATAL("not implemented");
+                    },
+                    [&](const auto&) {
+                        FATAL("not support arg");
+                    });
             }
             list->SetComputeRootDescriptorTable(layout.srv_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
         }
@@ -1623,30 +1724,30 @@ namespace Moer::Render {
                 const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
                 ASSERT(IsShaderVarUav(var_type));
 
-                Variant(_args[e.idx_in_cpp_args])
-                    .Match(
-                        [&](const BufferView& arg) {
-                            D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
-                            ASSERT(IsShaderVarCommonBuffer(var_type));
-                            ASSERT(e.idx_in_flatten_table < indices.size());
-                            indices[e.idx_in_flatten_table] = buf->CreateUav(arg, var_type);
-                        },
-                        [&](const TextureView& arg) {
-                            D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(arg.GetTexture());
-                            ASSERT(IsShaderVarTexture(var_type));
-                            ASSERT(e.idx_in_flatten_table < indices.size());
-                            indices[e.idx_in_flatten_table] = tex->CreateUav(arg, var_type);
-                        },
-                        [&](const std::span<BufferView>& arg) {
-                            ASSERT(IsShaderVarCommonBuffer(var_type));
-                            for (int j = 0; const BufferView& view : arg) {
-                                D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(view.GetBuffer());
-                                ASSERT(e.idx_in_flatten_table + j < indices.size());
-                                indices[e.idx_in_flatten_table + j] = buf->CreateUav(view, var_type);
-                                j++;
-                            }
-                        },
-                        [&](const std::span<TextureView>& arg) {
+                MatchVariant(
+                    _args[e.idx_in_cpp_args],
+                    [&](const BufferView& arg) {
+                        D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(arg.GetBuffer());
+                        ASSERT(IsShaderVarCommonBuffer(var_type));
+                        ASSERT(e.idx_in_flatten_table < indices.size());
+                        indices[e.idx_in_flatten_table] = buf->CreateUav(arg, var_type);
+                    },
+                    [&](const TextureView& arg) {
+                        D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(arg.GetTexture());
+                        ASSERT(IsShaderVarTexture(var_type));
+                        ASSERT(e.idx_in_flatten_table < indices.size());
+                        indices[e.idx_in_flatten_table] = tex->CreateUav(arg, var_type);
+                    },
+                    [&](const std::span<BufferView>& arg) {
+                        ASSERT(IsShaderVarCommonBuffer(var_type));
+                        for (int j = 0; const BufferView& view : arg) {
+                            D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(view.GetBuffer());
+                            ASSERT(e.idx_in_flatten_table + j < indices.size());
+                            indices[e.idx_in_flatten_table + j] = buf->CreateUav(view, var_type);
+                            j++;
+                        }
+                    },
+                    [&](const std::span<TextureView>& arg) {
                             ASSERT(IsShaderVarTexture(var_type));
                             for (int j = 0; const TextureView& view : arg) {
                                 D3D12Texture* tex = reinterpret_cast<D3D12Texture*>(view.GetTexture());
@@ -1654,12 +1755,12 @@ namespace Moer::Render {
                                 indices[e.idx_in_flatten_table + j] = tex->CreateUav(view, var_type);
                                 j++;
                             } },
-                        [&](const RaytracingTlasRef& arg) {
-                            FATAL("not implemented");
-                        },
-                        [&](const auto&) {
-                            FATAL("not support arg");
-                        });
+                    [&](const RaytracingTlasRef& arg) {
+                        FATAL("not implemented");
+                    },
+                    [&](const auto&) {
+                        FATAL("not support arg");
+                    });
             }
             list->SetComputeRootDescriptorTable(layout.uav_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
         }
@@ -1671,15 +1772,15 @@ namespace Moer::Render {
                 const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
                 ASSERT(IsShaderVarSampler(var_type));
 
-                Variant(_args[e.idx_in_cpp_args])
-                    .Match(
-                        [&](const Sampler& arg) {
-                            ASSERT(e.idx_in_table < indices.size());
-                            indices[e.idx_in_table] = DescriptorIndex{uint(D3D12DefaultSamplers::GetIndex(arg))};// what if other custom sampler?
-                        },
-                        [&](const auto&) {
-                            FATAL("not support arg");
-                        });
+                MatchVariant(
+                    _args[e.idx_in_cpp_args],
+                    [&](const Sampler& arg) {
+                        ASSERT(e.idx_in_table < indices.size());
+                        indices[e.idx_in_table] = DescriptorIndex{uint(D3D12DefaultSamplers::GetIndex(arg))};// what if other custom sampler?
+                    },
+                    [&](const auto&) {
+                        FATAL("not support arg");
+                    });
             }
             list->SetComputeRootDescriptorTable(layout.sampler_table->idx_in_root_sig, allocator.GetDevice()->PushSamplerDescriptor(indices));
         }
@@ -1934,7 +2035,6 @@ namespace Moer::Render {
         DeallocateBlock(_block.offset, _block.order);
         total_used_byte_size -= min_block_byte_size * OrderToBlockCount(_block.order);
         //LOG_INFO("[{}] deallocate block size{}, total{}", heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback", min_block_byte_size * OrderToBlockCount(_block.order), total_used_byte_size);
-
     }
     void D3D12BuddyAllocator::DeallocateBlock(uint32 _offset, uint32 _order) {
         const uint32 count    = OrderToBlockCount(_order);
@@ -2545,6 +2645,21 @@ namespace Moer::Render {
 
     }// namespace D3D12EnumTranslation
 
+    static bool IsReadOnlyAccess(D3D12_BARRIER_ACCESS access) {
+        // clang-format off
+        constexpr D3D12_BARRIER_ACCESS kReadOnlySet = D3D12_BARRIER_ACCESS_VERTEX_BUFFER
+                                                    | D3D12_BARRIER_ACCESS_INDEX_BUFFER
+                                                    | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER
+                                                    | D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ
+                                                    | D3D12_BARRIER_ACCESS_SHADER_RESOURCE
+                                                    | D3D12_BARRIER_ACCESS_INDIRECT_ARGUMENT
+                                                    | D3D12_BARRIER_ACCESS_COPY_SOURCE
+                                                    | D3D12_BARRIER_ACCESS_RESOLVE_SOURCE
+                                                    | D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ;
+        return (access & ~kReadOnlySet) == 0;
+        // clang-format on
+    }
+
     void D3D12ResourceStateTracker::RecordState(D3D12Texture* texture, ETextureState _state, EPassType _pass_type, bool _is_write) {
         TextureStateDescription desc;
         switch (_state) {
@@ -2613,6 +2728,7 @@ namespace Moer::Render {
                 .initial = init};
         }
         pending_textures.insert(texture);
+        UpdateWritable(texture, IsReadOnlyAccess(_required_state.access));
     }
 
     void D3D12ResourceStateTracker::RecordState(D3D12Buffer* buffer, EBufferState _state, EPassType _pass_type, bool _is_write) {
@@ -2673,21 +2789,7 @@ namespace Moer::Render {
                 .after = _required_state};
         }
         pending_buffers.insert(buffer);
-    }
-
-    static bool IsReadOnlyAccess(D3D12_BARRIER_ACCESS access) {
-        // clang-format off
-        constexpr D3D12_BARRIER_ACCESS kReadOnlySet = D3D12_BARRIER_ACCESS_VERTEX_BUFFER
-                                                    | D3D12_BARRIER_ACCESS_INDEX_BUFFER
-                                                    | D3D12_BARRIER_ACCESS_CONSTANT_BUFFER
-                                                    | D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ
-                                                    | D3D12_BARRIER_ACCESS_SHADER_RESOURCE
-                                                    | D3D12_BARRIER_ACCESS_INDIRECT_ARGUMENT
-                                                    | D3D12_BARRIER_ACCESS_COPY_SOURCE
-                                                    | D3D12_BARRIER_ACCESS_RESOLVE_SOURCE
-                                                    | D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ;
-        return (access & ~kReadOnlySet) == 0;
-        // clang-format on
+        UpdateWritable(buffer, IsReadOnlyAccess(_required_state.access));
     }
 
     void D3D12ResourceStateTracker::ResolveBarriers() {
@@ -2803,6 +2905,22 @@ namespace Moer::Render {
         global_barriers.clear();
     }
 
+    void D3D12ResourceStateTracker::UpdateWritable(D3D12Texture* _tex, bool _is_read) {
+        if (_is_read) {
+            writed_textures.erase(_tex);
+        } else {
+            writed_textures.insert(_tex);
+        }
+    }
+
+    void D3D12ResourceStateTracker::UpdateWritable(D3D12Buffer* _buf, bool _is_read) {
+        if (_is_read) {
+            writed_buffers.erase(_buf);
+        } else {
+            writed_buffers.insert(_buf);
+        }
+    }
+
     void D3D12PipelineState::Destroy() {
         MoerDelete(this);
     }
@@ -2851,8 +2969,8 @@ namespace Moer::Render {
     }
 
     D3D12GpuDescriptorAllocator::D3D12GpuDescriptorAllocator(D3D12Device* _device, D3D12_DESCRIPTOR_HEAP_TYPE _type, uint32_t _num_descriptors_total, uint32_t _max_descriptors_per_execution)
-        : D3D12GpuDescriptorHeap(_device, _type, std::min(_num_descriptors_total, _device->GetFeatureSupport().MaxViewDescriptorHeapSize() / 2)),
-          max_descriptors_per_execution(std::min(_max_descriptors_per_execution, GetNumTotalDescriptors() / 3)),
+        : D3D12GpuDescriptorHeap(_device, _type, _num_descriptors_total),
+          max_descriptors_per_execution(std::min(_max_descriptors_per_execution, GetNumTotalDescriptors() / 2 / _device->cmd_alloc_limits)),// here '/2' is to create one huge heap but this allocator only handle half. other half used by bindless
           num_descriptor_chunk(GetNumTotalDescriptors() / max_descriptors_per_execution) {}
 
     void D3D12GpuDescriptorAllocator::BeginPushDescriptors() {
@@ -2878,6 +2996,227 @@ namespace Moer::Render {
         return {start};
     }
 
+    D3D12BindlessArray::D3D12BindlessArray(D3D12Device* _device, uint _start_offset, uint _max_num)
+        : BindlessArray(), D3D12DeviceChild(_device), slot_offset(0), offset_in_global_csu_heap_gpu(_start_offset), max_num(_max_num), handles(_max_num){
+        underlying_array = MakeUnique<D3D12Buffer>(_device, BufferInfo(_max_num, sizeof(uint), EBufferUsageFlags::UNORDERED_ACCESS));
+    }
+
+    uint64 D3D12BindlessArray::ArrayHandle() const {
+        return uint64(underlying_array.get());
+    }
+
+    D3D12Buffer* D3D12BindlessArray::GetUnderlyingBuffer() const {
+        return underlying_array.get();
+    }
+
+    uint D3D12BindlessArray::AllocateTexture(const TextureView& _texture, Sampler _sampler) {
+        if (!_texture.GetTexture()) return -1;
+
+        uint slot_idx;
+        uint array_idx = free_slots.Pop();
+        if (array_idx == 0) {
+            slot_idx = ++slot_offset;
+        } else {
+            slot_idx = array_idx;
+        }
+
+        std::unique_lock<std::mutex> lk(mtx);
+        update_cmds.emplace_back(TextureUpdateInfo{_texture.texture, _sampler, _texture.format, slot_idx, 0, _texture.mip_level, _texture.num_mips, false});
+        temp_slot_to_cmd[slot_idx] = update_cmds.size() - 1;
+        IncResourceRef(uint64(_texture.texture));
+        return slot_idx;
+    }
+
+    uint D3D12BindlessArray::AllocateBuffer(BufferView _buffer) {
+        if (!_buffer.GetBuffer()) return -1;
+
+        uint slot_idx;
+        uint array_idx = free_slots.Pop();
+        if (array_idx == 0) {
+            slot_idx = ++slot_offset;
+        } else {
+            slot_idx = array_idx;
+        }
+
+        std::unique_lock<std::mutex> lk(mtx);
+        update_cmds.emplace_back(BufferUpdateInfo{_buffer.buffer, slot_idx, 0, _buffer.format, false});
+        temp_slot_to_cmd[slot_idx] = update_cmds.size() - 1;
+        IncResourceRef(uint64(_buffer.buffer));
+        return slot_idx;
+    }
+
+    void D3D12BindlessArray::FreeTexture(uint _array_idx) {
+        FreeBindlessHandle(_array_idx, EDescriptorType::Texture);
+    }
+
+    void D3D12BindlessArray::FreeBuffer(uint _array_idx) {
+        FreeBindlessHandle(_array_idx, EDescriptorType::Buffer);
+    }
+
+    bool D3D12BindlessArray::IsResourceAllocated(D3D12Buffer* _buffer) {
+        return allocated_resource.contains(uint64(_buffer));
+    }
+
+    bool D3D12BindlessArray::IsResourceAllocated(D3D12Texture* _texture) {
+        return allocated_resource.contains(uint64(_texture));
+    }
+
+    void D3D12BindlessArray::IncResourceRef(uint64 _ptr) {
+        auto [it, flag] = allocated_resource.emplace(_ptr, 0);
+        it->second++;
+    }
+
+    void D3D12BindlessArray::DecResourceRef(uint64 _ptr) {
+        if (auto it = allocated_resource.find(_ptr); it != allocated_resource.end()) {
+            if (--it->second == 0) {
+                allocated_resource.erase(it);
+            }
+        }
+    }
+
+    void D3D12BindlessArray::FreeBindlessHandle(uint _array_idx, EDescriptorType _type) {
+        static const Sampler s_spl = {ESamplerFilter::SF_LINEAR, SAM_CLAMP_TO_BORDER};
+
+        std::unique_lock<std::mutex> lk(mtx);
+
+        if (auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()) {
+            const UpdateCmd& src_cmd = update_cmds[iter->second];
+
+            MatchVariant(
+                src_cmd,
+                [&](const TextureUpdateInfo& _cmd) {
+                    if (_type == EDescriptorType::Texture) {
+                        LOG_WARNING("You are releasing a bindless buffer that's pending {}, array index: {}", _cmd.free ? "releasing" : "updating", _array_idx);
+                        if (!_cmd.free) {// origin cmd is not free, free it now
+                            update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                        }
+                    } else {
+                        LOG_ERROR("You are releasing a bindless texture that's pending {} by FreeBuffer(), pls use FreeTexture()! array index: {}", _cmd.free ? "releasing" : "updating", _array_idx);
+                    }
+                },
+                [&](const BufferUpdateInfo& _cmd) {
+                    if (_type == EDescriptorType::Buffer) {
+                        LOG_WARNING("You are releasing a bindless buffer that's pending {}, array index: {}", _cmd.free ? "releasing" : "updating", _array_idx);
+                        if (!_cmd.free) {
+                            update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                        }
+                    } else {
+                        LOG_ERROR("You are releasing a bindless buffer that's pending {} by FreeTexture(), pls use FreeBuffer()! array index: {}", _cmd.free ? "releasing" : "updating", _array_idx);
+                    }
+                },
+                [&](const InvalidUpdateInfo& _cmd) {
+                    LOG_ERROR("the target bindless resource is already freed! array idx {}", _array_idx);
+                });
+            return;
+        }
+
+        const auto& handle = handles[_array_idx];
+        DASSERT(handle.array_idx == _array_idx);
+        if (_type == EDescriptorType::Texture) {
+            DASSERT(handle.type == EDescriptorType::Texture);
+            update_cmds.emplace_back(TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, 0, 0, 0, true});
+        } else {
+            DASSERT(handle.type == EDescriptorType::Buffer);
+            update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, 0, PF_UNDEFINED, true});
+        }
+        temp_slot_to_cmd[_array_idx] = update_cmds.size() - 1;
+    }
+    UniquePtr<class Command> D3D12BindlessArray::CreateUpdateCommand() {
+        std::unique_lock<std::mutex> lk(mtx);
+        //lock for resource_allocated_set
+
+        uint num_valid_update = 0;
+        for (const UpdateCmd& cmd : update_cmds) {
+            MatchVariant(
+                cmd,
+                [&](const TextureUpdateInfo& _cmd) {
+                    if (!_cmd.free) {
+                        ++num_valid_update;
+                    } else {
+                        auto& handle = handles[_cmd.array_idx];
+                        DASSERT(handle.array_idx == _cmd.array_idx);
+                        DASSERT(handle.type == EDescriptorType::Texture);
+                        free_slots.Push(_cmd.array_idx);
+                        DecResourceRef(handle.handle);
+                        handle = Handle();
+                    }
+                },
+                [&](const BufferUpdateInfo& _cmd) {
+                    if (!_cmd.free) {
+                        ++num_valid_update;
+                    } else {
+                        auto& handle = handles[_cmd.array_idx];
+                        DASSERT(handle.array_idx == _cmd.array_idx);
+                        DASSERT(handle.type == EDescriptorType::Buffer);
+                        free_slots.Push(_cmd.array_idx);
+                        DecResourceRef(handle.handle);
+                        handle = Handle();
+                    }
+                },
+                [&](const InvalidUpdateInfo& _cmd) {
+                    // do nothing
+                });
+        }
+
+        array_indices_dat.resize(num_valid_update);
+        constexpr uint array_handle_stride = sizeof(uint);
+        array_dat.resize(num_valid_update * array_handle_stride);
+
+        auto PushCsuDescriptorBindless = [&](uint _idx_in_array, DescriptorIndex _index_in_cpu_heap) {
+            const uint idx_in_gpu_heap = offset_in_global_csu_heap_gpu + _idx_in_array;
+            device->Native()->CopyDescriptorsSimple(1,
+                                                    device->GetCsuHeapGpuDyn()->GetOffsetHandleCpu({idx_in_gpu_heap}),
+                                                    device->GetCsuHeap()->GetOffsetHandleCpu(_index_in_cpu_heap),
+                                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            return idx_in_gpu_heap;
+        };
+
+        for (uint i = 0; const UpdateCmd& cmd : update_cmds) {
+            MatchVariant(
+                cmd,
+                [&](const TextureUpdateInfo& _cmd) {
+                    if (!_cmd.free) {
+                        D3D12Texture*         tex                  = reinterpret_cast<D3D12Texture*>(_cmd.texture.Get());
+                        const auto            type                 = tex->GetDimension() == ETextureDimension::TEX_3D ? ED3D12ShaderVariableType::Texture3D : ED3D12ShaderVariableType::Texture2D;// maybe more type in the future
+                        const DescriptorIndex cpu_descriptor_index = tex->CreateSrv(tex->GetView(_cmd.format, _cmd.mip_level, _cmd.num_mips), type);
+                        const uint            tex_idx_in_gpu_heap  = PushCsuDescriptorBindless(_cmd.array_idx, cpu_descriptor_index);
+                        const uint            sam_idx_in_gpu_heap  = D3D12DefaultSamplers::GetIndex(_cmd.sampler);
+                        const uint            indirect_handle      = (sam_idx_in_gpu_heap & 0xff) | (tex_idx_in_gpu_heap & 0xffffff) << 8;
+                        std::memcpy(array_dat.data() + i * array_handle_stride, &indirect_handle, array_handle_stride);
+                        array_indices_dat[i]    = {i, _cmd.array_idx};
+                        handles[_cmd.array_idx] = Handle{EDescriptorType::Texture, uint64(tex), _cmd.array_idx};
+                        i++;
+                    }
+                },
+                [&](const BufferUpdateInfo& _cmd) {
+                    if (!_cmd.free) {
+                        D3D12Buffer*          buf                  = reinterpret_cast<D3D12Buffer*>(_cmd.buffer.Get());
+                        const DescriptorIndex cpu_descriptor_index = buf->CreateSrv(buf->GetView(), ED3D12ShaderVariableType::ByteAddressBuffer);
+                        const uint            idx_in_gpu_heap      = PushCsuDescriptorBindless(_cmd.array_idx, cpu_descriptor_index);
+                        std::memcpy(array_dat.data() + i * array_handle_stride, &idx_in_gpu_heap, array_handle_stride);
+                        array_indices_dat[i]    = {i, _cmd.array_idx};
+                        handles[_cmd.array_idx] = Handle{EDescriptorType::Buffer, uint64(buf), _cmd.array_idx};
+                        i++;
+                    }
+                },
+                [&](const InvalidUpdateInfo& _cmd) {
+                    // do nothing
+                });
+        }
+
+        temp_slot_to_cmd.clear();
+        UniquePtr<Command> cmd = MakeUnique<UpdateBindlessArrayCmd>(this,
+                                                                    Array<BindlessArray::UpdateCmd>{},
+                                                                    std::move(array_dat),
+                                                                    std::move(array_indices_dat),
+                                                                    Array<byte>{},
+                                                                    Array<std::pair<uint, uint>>{},
+                                                                    Array<byte>{},
+                                                                    Array<std::pair<uint, uint>>{});
+
+        update_cmds.clear();
+        return cmd;
+    }
 
     namespace DefaultSamplerDetail {
         struct DefaultSamplerDescStorage {
@@ -2920,10 +3259,17 @@ namespace Moer::Render {
     }// namespace DefaultSamplerDetail
 
     void D3D12DefaultSamplers::InitSamplerDescriptorHeap(D3D12Device* _device) {
-        auto* heap = _device->GetSampleHeap();
+        auto*                  heap = _device->GetSamplerHeap();
+        Array<DescriptorIndex> cpu_handles;
         for (const auto& desc : GetSamplers()) {
-            _device->Native()->CreateSampler(&desc, heap->GetOffsetHandleCpu(heap->Allocate()));
+            cpu_handles.emplace_back(heap->Allocate());
+            _device->Native()->CreateSampler(&desc, heap->GetOffsetHandleCpu(cpu_handles.back()));
         }
+        _device->GetSamplerHeapGpuDyn()->BeginPushDescriptors();
+        auto start = _device->PushSamplerDescriptor(cpu_handles);
+        _device->GetSamplerHeapGpuDyn()->EndPushDescriptors();
+        // must be first push, so GetIndex(sampler) return is valid in gpu heap
+        DASSERT(start.ptr == _device->GetSamplerHeapGpuDyn()->GetStartHandleGpu().ptr);
     }
 
     std::span<const D3D12_SAMPLER_DESC> D3D12DefaultSamplers::GetSamplers() {
@@ -2933,10 +3279,12 @@ namespace Moer::Render {
 
     size_t D3D12DefaultSamplers::GetIndex(const Sampler& sampler) {
         // clang-format off
-        return size_t(sampler.filter) * size_t(ESamplerAddressMode::SAM_Num) * size_t(ESamplerCompareFunction::SCF_Num)
+        const size_t idx = size_t(sampler.filter) * size_t(ESamplerAddressMode::SAM_Num) * size_t(ESamplerCompareFunction::SCF_Num)
                 + size_t(sampler.address_mode) * size_t(ESamplerCompareFunction::SCF_Num)
                 + size_t(sampler.compare_function);
         // clang-format on
+        DASSERT(idx < size_t(ESamplerAddressMode::SAM_Num) * size_t(ESamplerCompareFunction::SCF_Num) * size_t(ESamplerFilter::SF_Num));
+        return idx;
     }
 
 }// namespace Moer::Render

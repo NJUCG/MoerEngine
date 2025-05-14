@@ -1,8 +1,15 @@
+#include <framework/Bindless.hlsl>
+#include <framework/Common.hlsl>
+
+BINDLESS_BINDINGS(10, 11, 12, 13) // only first 'BufferSpace' matter
+
+
 struct S0
 {
     uint a;
     uint b;
-    float2 _pad;
+    uint texture_handle;
+    uint buf_handle;
     float4 x;
 };
 struct S1
@@ -65,6 +72,12 @@ void main(uint3 tid : SV_DispatchThreadID)
     // float4 v7 = t7.Load(tid.xy, 0);
     // float4 v8 = t8.Load(tid.xyz, 0);
     float4 v10 = tex_arr[6].Sample(s0, float2(0, 0)) * 10;
+    
+    TextureHandle tt2 = TextureHandle(cb0.texture_handle); // same as t2
+    float4 vv2 = tt2.SampleLevel(float2(0, 0.25), 1);
+
+    ArrayBuffer sbb1 = ArrayBuffer(cb0.buf_handle);  // same as sb1
+    float dd = sbb1.Load<S1>(1).a;
 
     float4 w0 = 1.f;// rwt0[tid.x];
     float4 w1 = 1.f;// rwt1[tid.xy];
@@ -74,6 +87,8 @@ void main(uint3 tid : SV_DispatchThreadID)
 
     float res = a * b * c * d * e * f * g * h * i;
     res *= (v0 * v1 * v2 * v3 * v4 * v5 * v6 * v10 * w2 * w3 * w4).x;
+    res *= vv2.x;
+    res *= dd;
     rb1.Store(0, uint(res));
     
 }

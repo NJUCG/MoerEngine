@@ -417,7 +417,7 @@ struct SamplerHeapHandle {
   dxResourceDescriptorHeapAccessor.SampleGrad(HandleType(handle), uv, offset, grad_x, grad_y)
 
 #define BINDLESS_BINDINGS(BufferSpace, TextureSpace, SamplerSpace, AccelSpace)       \
-  [[vk::binding(0, BufferSpace)]] StructuredBuffer<uint> g__array_114514_bdls;       \
+  [[vk::binding(0, BufferSpace)]] StructuredBuffer<uint> g__array_114514_bdls: register(t0, space##BufferSpace); \
   DX_DESCRIPTOR_HEAP(INNER_GENERATE_TEXTURE_TYPE_FETCH, INNER_GENERATE_BUFFER_FETCH) \
   HANDLES(DESCRIPTOR_HEAP, DESCRIPTOR_HEAP_SAMPLE, DESCRIPTOR_HEAP_SAMPLE_LEVEL, DESCRIPTOR_HEAP_SAMPLE_GRAD)
 
