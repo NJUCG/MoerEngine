@@ -216,12 +216,12 @@ namespace Moer::Render {
     class D3D12GpuGlobalAllocator;
     class D3D12GraphicsCommandQueue;
     class D3D12Fence;
-    class D3D12DescriptorHeap;// todo
+    class D3D12DescriptorHeap;
     class D3D12Texture;
     class D3D12Buffer;
     class D3D12CommandResourceAllocator;
     class D3D12PipelineState;
-    class D3D12BindlessArray;// todo
+    class D3D12BindlessArray;
 
     // only to provide a 'device' as member
     class D3D12DeviceChild {
@@ -677,6 +677,7 @@ namespace Moer::Render {
         void RecordState(D3D12Texture* texture, TextureStateDescription _state);
         void RecordState(D3D12Buffer* buffer, EBufferState _state, EPassType _pass_type, bool _is_write);
         void RecordState(D3D12Buffer* buffer, BufferStateDescription _state);
+        void StartState(D3D12Texture* texture, TextureStateDescription _state); // set the initial state
 
         void ResolveBarriers();
         void DispatchBarriers(ID3D12GraphicsCommandList7* list);
@@ -911,8 +912,11 @@ namespace Moer::Render {
         // ptr size not satisfy the 'inline version' requirement,
         // this internally only hold D3D12CommandResourceAllocator* (not push uniqueptr into
 
+        //struct SwapchainPresentEvent {};
+
         using EventType = Variant<
             UniquePtr<D3D12CommandResourceAllocator>,
+            //SwapchainPresentEvent,
             Array<std::function<void()>>,
             SignalEvent,
             WaitEvent>;
@@ -957,37 +961,41 @@ namespace Moer::Render {
         void        Present(SwapchainRef _swapchain, TextureView _target) override;
         void        Sync() override;
         ProfileData GetProfilerEntry() override { return {}; }
+
+        void WaitForIdle();
     };
 
-    class D3D12Swapchain final : public Swapchain {
+    class D3D12Swapchain final : public Swapchain, public D3D12DeviceChild {
+    private:
+        uintptr_t               window_handle;
+        ComPtr<IDXGISwapChain3> swapchain;
+
+        uint                           frame_index;
+        Array<ComPtr<ID3D12Resource>>  backbuffers;
+        Array<DescriptorIndex>         backbuffer_rtvs;
+        Array<UniquePtr<D3D12Texture>> backbuffer_textures;
+
     public:
-        D3D12Swapchain(D3D12Device& device, const SwapchainCreateInfo& info);
-        ~D3D12Swapchain() = default;
+        D3D12Swapchain(D3D12Device* device, const SwapchainCreateInfo& info);
+        ~D3D12Swapchain();
 
-        void Recreate(const SwapchainCreateInfo&) override;
+        void Recreate(const SwapchainCreateInfo&) override;// also used for resize. assume call Sync() before call this
+        void Sync() override;
 
-        uint GetBackbufferIndex() const { return frame_index; }
-        //DescriptorIndex GetBackbufferRTV() const { return m_backbufferRTVs[m_frameIndex]; }
-        //GpuTexture*     GetBackbuffer() const { return m_backbufferTextures[m_frameIndex].get(); }
+        void Destroy() override;// from Swapchain.RHIResource
 
-        uint32_t GetWidth() const { return width; }
-        uint32_t GetHeight() const { return height; }
+        uint            GetBackbufferIndex() const { return frame_index; }
+        DescriptorIndex GetBackbufferRTV() const { return backbuffer_rtvs[frame_index]; }
+        D3D12Texture*   GetBackbuffer() const { return backbuffer_textures[frame_index].get(); }
+
+        uint GetWidth() const { return size.width; }
+        uint GetHeight() const { return size.height; }
+        uint GetBackbufferCount() const { return backbuffers.size(); }
 
         void Present();
 
     private:
         void CreateSizeDependentResources();
-
-    private:
-        D3D12Device&                  device;
-        uintptr_t                     window_handle;
-        ComPtr<IDXGISwapChain3>       swapchain;
-        Array<ComPtr<ID3D12Resource>> backbuffers;
-        uint                          width;
-        uint                          height;
-        uint                          frame_index;
-        /*     DescriptorIndex             m_backbufferRTVs[FrameLatency];
-        std::unique_ptr<GpuTexture> m_backbufferTextures[FrameLatency];*/
     };
 
     struct D3D12RHIConfig {
@@ -1084,6 +1092,7 @@ namespace Moer::Render {
         ID3D12Device10*              Native() const { return device.Get(); }
         IDXGIFactory6*               NativeFactory() const { return factory.Get(); }
         IDXGIAdapter3*               NativeAdapter() const { return adapter.Get(); }
+        D3D12GraphicsCommandQueue*   GetGraphicsCommandQueue() { return gfx_queue.get(); }
         CD3DX12FeatureSupport&       GetFeatureSupport() { return feature_supports; }
         D3D12GpuGlobalAllocator*     GetGpuGlobalAllocator() { return gpu_global_allocator.get(); }
         D3D12CpuDescriptorAllocator* GetCsuHeap() { return csu_heap_cpu.get(); }

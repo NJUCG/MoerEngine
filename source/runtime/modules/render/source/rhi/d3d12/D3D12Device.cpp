@@ -18,6 +18,8 @@
 #include <platform/Platform.h>
 #include "../vulkan/RHICmdReorderer.h"
 
+#include "window/WindowContext.h"
+
 namespace Moer::Render {
 
     // todo? logging, add a d3d12 sink? , with specialize output prefix e.g. [D3D12]
@@ -491,7 +493,7 @@ namespace Moer::Render {
     }
 
     SwapchainRef D3D12Device::CreateSwapchain(const SwapchainCreateInfo& _info) {
-        return SwapchainRef();
+        return SwapchainRef{MoerNew(D3D12Swapchain)(this, _info)};
     }
 
     void D3D12Device::PostInit() {
@@ -580,67 +582,131 @@ namespace Moer::Render {
         return sampler_heap_gpu->GetOffsetHandleGpu(start);
     }
 
-    D3D12Swapchain::D3D12Swapchain(D3D12Device& device, const SwapchainCreateInfo& info) : device(device) {
+    D3D12Swapchain::D3D12Swapchain(D3D12Device* device, const SwapchainCreateInfo& info) : D3D12DeviceChild(device), window_handle(0) {
         Recreate(info);
     }
 
+    D3D12Swapchain::~D3D12Swapchain() {
+        Sync();
+    }
+
     void D3D12Swapchain::Recreate(const SwapchainCreateInfo& _info) {
-        FATAL("not implemented");
-        //if (width == _info.size.width && height == _info.size.height && window_handle == _info.window_handle && backbuffers.size() == _info.back_buffer_sz) {
-        //    return;
-        //}
-        //bool b_recreate = false;// false when create for first time
-        //if (window_handle != 0) {
-        //    ASSERT(window_handle == _info.window_handle);
-        //    b_recreate = true;
-        //}
-        //window_handle = _info.window_handle;
-        //width         = _info.size.width;
-        //height        = _info.size.height;
-        //backbuffers.resize(_info.back_buffer_sz);
+        if (GetWidth() == _info.size.width && GetHeight() == _info.size.height && window_handle == _info.window_handle && backbuffers.size() == _info.back_buffer_sz) {
+            return;
+        }
+        ASSERT(_info.window_handle != 0);
+        ASSERT(_info.back_buffer_sz >= 2 && _info.back_buffer_sz <= DXGI_MAX_SWAP_CHAIN_BUFFERS);
+        const bool b_first_create = swapchain == nullptr;
+        const bool b_recreate     = !b_first_create && window_handle != _info.window_handle;
+        const bool b_resize       = !b_first_create && !b_recreate;
+        window_handle             = _info.window_handle;
+        size                      = _info.size;
+        format                    = _info.preferred_format;// todo what if not support?
 
-        //// note to sync before recreate
-        //DXGI_SWAP_CHAIN_DESC1 swapChainDesc;
-        //ZeroMemory(&swapChainDesc, sizeof(swapChainDesc));
-        //swapChainDesc.BufferCount        = backbuffers.size();
-        //swapChainDesc.Width              = width;
-        //swapChainDesc.Height             = height;
-        //swapChainDesc.Format             = desc.format;// TODO info.format
-        //swapChainDesc.BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        //swapChainDesc.SwapEffect         = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        //swapChainDesc.SampleDesc.Count   = 1;
-        //swapChainDesc.SampleDesc.Quality = 0;
-        //swapChainDesc.Flags              = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;  // consider vsync?
+        {
+            //DXGI ERROR : IDXGIFactory::CreateSwapChain : Flip model swapchains(DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL and DXGI_SWAP_EFFECT_FLIP_DISCARD)
+            //    only support the following Formats : (DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM),
+            //                                      --> PF_R16G16B16A16_SFLOAT,         PF_B8G8R8A8_UNORM,          PF_R8G8B8A8_UNORM,          PF_A2B10G10R10_UNORM_PACK32
+            static const std::array<DXGI_FORMAT, 4> support_format_list{
+                DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM};
+            bool b_support = false;
+            for (auto f : support_format_list) {
+                if (D3D12EnumTranslation::METoDxFormat(format) == f) {
+                    b_support = true;
+                    break;
+                }
+            }
+            ASSERT2(b_support, "preferred swapchain format pls use one of following:\n    PF_R16G16B16A16_SFLOAT,\n    PF_B8G8R8A8_UNORM,\n    PF_R8G8B8A8_UNORM,\n    PF_A2B10G10R10_UNORM_PACK32.");
+            // ?or allow user to create arbitrary format swapchain, but implicitly convert to one of above formats.
+        }
 
-        //ComPtr<IDXGISwapChain1> swapchain1;
-        ////DX_CHECK_HRESULT(device->GetFactory()->CreateSwapChainForHwnd(
-        ////    m_device->GetGraphicsCommandContext().GetQueue(),// Swap chain needs the queue so that it can force a flush on it.
-        ////    windowHandle,
-        ////    &swapChainDesc,
-        ////    nullptr,
-        ////    nullptr,
-        ////    swapChain.put()));
-        //DX_CHECK_HRESULT(swapchain1.As(&swapchain));
-        //swapchain1 = nullptr;
-        //frame_index = swapchain->GetCurrentBackBufferIndex();
+        if (b_recreate) {
+            swapchain->Release();
+        }
+        if (b_recreate || b_resize) {
+            backbuffers.clear();
+            for (auto i : backbuffer_rtvs) device->GetRtvHeap()->Free(i);
+            backbuffer_textures.clear();
+        }
 
-        //DX_CHECK_HRESULT(device.GetFactory()->MakeWindowAssociation(reinterpret_cast<HWND>(window_handle), DXGI_MWA_NO_ALT_ENTER)); // maybe allow alt+enter to switch to full screen
+        if (b_first_create || b_recreate) {
+            // create for first time
+            DXGI_SWAP_CHAIN_DESC1 desc;
+            ZeroMemory(&desc, sizeof(desc));
+            desc.BufferCount        = _info.back_buffer_sz;
+            desc.Width              = GetWidth();
+            desc.Height             = GetHeight();
+            desc.Format             = D3D12EnumTranslation::METoDxFormat(format);
+            desc.BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+            desc.SwapEffect         = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+            desc.SampleDesc.Count   = 1;
+            desc.SampleDesc.Quality = 0;
+            desc.Flags              = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;// consider vsync?
 
-        //CreateSizeDependentResources();
+            HWND                    hwnd = (HWND)WindowContext::GetNativeWindow((WindowHandle*)_info.window_handle);
+            ComPtr<IDXGISwapChain1> swapchain1;
+            DX_CHECK_HRESULT(device->NativeFactory()->CreateSwapChainForHwnd(
+                device->GetGraphicsCommandQueue()->Native(),// Swap chain needs the queue so that it can force a flush on it.
+                hwnd,
+                &desc,
+                nullptr,
+                nullptr,
+                swapchain1.ReleaseAndGetAddressOf()));
+            DX_CHECK_HRESULT(swapchain1.As(&swapchain));
+            swapchain1  = nullptr;
+            frame_index = swapchain->GetCurrentBackBufferIndex();
+
+            DX_CHECK_HRESULT(device->NativeFactory()->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER));// disallow alt+enter to switch to full screen
+        } else {
+            DASSERT(b_resize);
+            DXGI_SWAP_CHAIN_DESC desc{};
+            swapchain->GetDesc(&desc);
+            DX_CHECK_HRESULT(swapchain->ResizeBuffers(GetBackbufferCount(), GetWidth(), GetHeight(), D3D12EnumTranslation::METoDxFormat(format), desc.Flags));
+            frame_index = swapchain->GetCurrentBackBufferIndex();
+        }
+
+        backbuffers.resize(_info.back_buffer_sz);// for GetBackbufferCount()...
+        CreateSizeDependentResources();
+    }
+
+    void D3D12Swapchain::Sync() {
+        device->GetGraphicsCommandQueue()->WaitForIdle();
+    }
+
+    void D3D12Swapchain::Destroy() {
+        MoerDelete(this);
     }
 
     void D3D12Swapchain::Present() {
+        DX_CHECK_HRESULT(swapchain->Present(0, DXGI_PRESENT_ALLOW_TEARING));
+        frame_index = swapchain->GetCurrentBackBufferIndex();
     }
 
     void D3D12Swapchain::CreateSizeDependentResources() {
-        // Create a RTV for each frame.
-        //for (UINT n = 0; n < FrameLatency; n++) {
-        //    //m_backbufferRTVs[n] = m_device->GetRtvHeap().Allocate();
-        //    //ThrowIfFailed(m_swapChain->GetBuffer(n, IID_PPV_ARGS(m_backbuffers[n].put())));
-        //    //m_device->GetDevice()->CreateRenderTargetView(m_backbuffers[n].get(), nullptr, m_device->GetRtvHeap().GetCpuHandleCpuHeap(m_backbufferRTVs[n]));
-        //    //SetObjectDebugName(m_backbuffers[n].get(), "backbuffer", n);
+        backbuffer_rtvs.resize(GetBackbufferCount());
+        backbuffer_textures.resize(GetBackbufferCount());
+        for (int i = 0; i < GetBackbufferCount(); i++) {
+            backbuffer_rtvs[i] = device->GetRtvHeap()->Allocate();
+            DX_CHECK_HRESULT(swapchain->GetBuffer(i, IID_PPV_ARGS(backbuffers[i].ReleaseAndGetAddressOf())));
+            backbuffers[i]->SetName(StringWiden(std::format("backbuffer-{}", i)).c_str());
+            device->Native()->CreateRenderTargetView(backbuffers[i].Get(), nullptr, device->GetRtvHeap()->GetOffsetHandleCpu(backbuffer_rtvs[i]));
 
-        //}
+            TextureInfo info(
+                ETextureDimension::TEX_2D,
+                ETextureUsageFlags::PRESENT | ETextureUsageFlags::COLOR_ATTACHMENT,// ?
+                format,
+                EClearAttachment::COLOR,
+                Extent3D(size, 1),
+                1,
+                1,
+                1);
+            Allocation alloc;
+            alloc.alloc    = nullptr;
+            alloc.resource = backbuffers[i].Get();
+            backbuffers[i]->AddRef();// because we have two ID3D12Resource* pointing to the same resource, and they both Release() in the end
+            backbuffer_textures[i] = MakeUnique<D3D12Texture>(device, info, std::move(alloc));
+            backbuffer_textures[i]->SetName(std::format("backbuffer-texture-{}", i));
+        }
     }
 
     D3D12Buffer::D3D12Buffer(D3D12Device* _device, const BufferInfo& _info) : Buffer(_info), D3D12DeviceChild(_device) {
@@ -837,6 +903,10 @@ namespace Moer::Render {
                         //LOG_INFO("visit event: allocator, {}", fence_value);
                         AtomicMaximum(last_completed_fence_value, fence_value);// break the 'Sync' condition, later
                     },
+                    //[&fence_value, this](SwapchainPresentEvent& allocator) {
+                    //    queue_fence.WaitOnHost(fence_value);
+                    //    AtomicMaximum(last_completed_fence_value, fence_value);
+                    //},
                     [&fence_value](const Array<std::function<void()>>& funcs) {
                         //LOG_INFO("visit event: callback, {}", fence_value);
                         for (auto&& f : funcs) f();
@@ -1258,7 +1328,7 @@ namespace Moer::Render {
             //BufferView array_data_gpu         = tmp_buffer->GetView(array_data_offset, array_data_size);
             //BufferView array_indices_data_gpu = tmp_buffer->GetView(array_indices_data_offset, array_indices_data_size);
 
-            auto tmp_buffer = allocator.AllocateUploadBuffer(tmp_buffer_size, 256);
+            auto       tmp_buffer = allocator.AllocateUploadBuffer(tmp_buffer_size, 256);
             BufferView array_data_gpu(tmp_buffer.buffer, tmp_buffer.byte_offset + array_data_offset, array_data.size() / 4, 4);
             BufferView array_indices_data_gpu(tmp_buffer.buffer, tmp_buffer.byte_offset + array_indices_data_offset, array_indices_data.size() * 2, 4);
 
@@ -1470,7 +1540,47 @@ namespace Moer::Render {
     }
 
     void D3D12GraphicsCommandQueue::Present(SwapchainRef _swapchain, TextureView _target) {
-        FATAL("not implemented");
+        //LOG_INFO("present");
+
+        D3D12Swapchain* swapchain = static_cast<D3D12Swapchain*>(_swapchain.Get());
+
+        auto  allocator = RequestCommandResourceAllocator();
+        auto& tracker   = allocator->GetResourceStateTracker();
+        auto  cmd_list  = allocator->GetCommandList();
+        cmd_list->Begin();
+
+        tracker.StartState(swapchain->GetBackbuffer(), {.layout = D3D12_BARRIER_LAYOUT_PRESENT, .sync = D3D12_BARRIER_SYNC_ALL, .access = D3D12_BARRIER_ACCESS_COMMON});
+        tracker.RecordState(swapchain->GetBackbuffer(), ETextureState::RENDER_TARGET, EPassType::Graphics, true);
+        tracker.ResolveBarriers();
+        tracker.DispatchBarriers(cmd_list->Native());
+
+        // blit _target to backbuffer . todo
+        float clear_color[] = {0.2f, 0.3f, 0.8f, 0.0f};
+        cmd_list->Native()->ClearRenderTargetView(device->GetRtvHeap()->GetOffsetHandleCpu(swapchain->GetBackbufferRTV()), clear_color, 0, nullptr);
+
+        tracker.RestoreState();
+        tracker.DispatchBarriers(cmd_list->Native());
+        tracker.Reset();
+        cmd_list->End();
+
+
+        {
+            ID3D12CommandList* ppCommandLists[]{cmd_list->Native()};
+            queue->ExecuteCommandLists(1, ppCommandLists);
+        }
+        const uint64 next_fence_value = ++last_submitted_fence_value;
+        queue->Signal(queue_fence.Native(), next_fence_value);
+        swapchain->Present();
+
+        {
+            std::unique_lock lck(mtx);
+            device->GetCsuHeapGpuDyn()->BeginPushDescriptors();// only to match EndPush in later event callback
+            device->GetSamplerHeapGpuDyn()->BeginPushDescriptors();
+            event_queue.emplace_back(std::move(allocator), next_fence_value, true);
+            //event_queue.emplace_back(SwapchainPresentEvent{}, next_fence_value, true);
+            cv.notify_one();
+            pending_fence_values.Enqueue(next_fence_value);
+        }
     }
 
     void D3D12GraphicsCommandQueue::Sync() {
@@ -1482,7 +1592,12 @@ namespace Moer::Render {
         } else {
             Complete(target);
         }
-        //queue_fence.WaitOnHost(last_submitted_fence_value);  // here can't just use gpu to signal fence, need to wait more for cpu work
+    }
+
+    void D3D12GraphicsCommandQueue::WaitForIdle() {
+        const uint64 next_fence_value = ++last_submitted_fence_value;
+        queue->Signal(queue_fence.Native(), next_fence_value);
+        queue_fence.WaitOnHost(next_fence_value);
     }
 
     D3D12Fence::D3D12Fence(D3D12Device* _device) : D3D12DeviceChild(_device) {
@@ -2792,6 +2907,14 @@ namespace Moer::Render {
         UpdateWritable(buffer, IsReadOnlyAccess(_required_state.access));
     }
 
+    void D3D12ResourceStateTracker::StartState(D3D12Texture* texture, TextureStateDescription _state) {
+        DASSERT(!texture_states.contains(texture));
+
+        auto& state   = texture_states[texture];
+        state.initial = _state;
+        state.before  = _state;
+    }
+
     void D3D12ResourceStateTracker::ResolveBarriers() {
         for (auto& tex : pending_textures) {
             ASSERT(texture_states.contains(tex));
@@ -2997,7 +3120,7 @@ namespace Moer::Render {
     }
 
     D3D12BindlessArray::D3D12BindlessArray(D3D12Device* _device, uint _start_offset, uint _max_num)
-        : BindlessArray(), D3D12DeviceChild(_device), slot_offset(0), offset_in_global_csu_heap_gpu(_start_offset), max_num(_max_num), handles(_max_num){
+        : BindlessArray(), D3D12DeviceChild(_device), slot_offset(0), offset_in_global_csu_heap_gpu(_start_offset), max_num(_max_num), handles(_max_num) {
         underlying_array = MakeUnique<D3D12Buffer>(_device, BufferInfo(_max_num, sizeof(uint), EBufferUsageFlags::UNORDERED_ACCESS));
     }
 
