@@ -174,10 +174,6 @@ namespace Moer::Render {
 #endif
     }
 
-    PipelineHandle D3D12Device::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
-        return PipelineHandle();
-    }
-
     static bool CheckReflectionTypeMatch(const ReflectParamInfo::Dxil& resource_info, const ShaderArgCppInfo& arg_info) {
         if (arg_info.type == EShaderArgType::SDA_BindlessArray)// !just a specical case.. not mean real bindless.  'StructuredBuffer<uint> g__array_114514_bdls'
             return resource_info.type == ED3D12ShaderVariableType::StructuredBuffer;
@@ -405,8 +401,224 @@ namespace Moer::Render {
         pso_desc.CachedPSO.pCachedBlob           = nullptr;
         pso_desc.CachedPSO.CachedBlobSizeInBytes = 0;
         pso_desc.Flags                           = D3D12_PIPELINE_STATE_FLAG_NONE;
-        ComPtr<ID3D12PipelineState> pipelineState;
+
         DX_CHECK_HRESULT(device->CreateComputePipelineState(&pso_desc, IID_PPV_ARGS(pso->pipeline_state.ReleaseAndGetAddressOf())));
+
+        return PipelineHandle{.handle = reinterpret_cast<uint64>(pso), .binding_infos = std::move(binding_infos)};
+    }
+
+    // gfx pipeline
+    PipelineHandle D3D12Device::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
+        //FATAL("not implemented");
+
+        auto shader_group = Variant(_shaders.shader_group);
+        ASSERT(shader_group.Is<ShaderVsPs>());
+        ASSERT(_shaders.layout_hash.size() == _shaders.arg_cpp_info.size());
+
+        // init to some default value
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC pso_desc{};
+        pso_desc.pRootSignature        = nullptr;
+        pso_desc.VS                    = {};// Required
+        pso_desc.PS                    = {};// ps can be null if depth only pass
+        pso_desc.DS                    = {};
+        pso_desc.HS                    = {};
+        pso_desc.GS                    = {};
+        pso_desc.StreamOutput          = {};
+        pso_desc.BlendState            = CD3DX12_BLEND_DESC(D3D12_DEFAULT);// Required
+        pso_desc.SampleMask            = UINT_MAX;
+        pso_desc.RasterizerState       = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);   // Required
+        pso_desc.DepthStencilState     = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);// Required
+        pso_desc.InputLayout           = {};                                       // Required if use input assembler. not need if fetch vertex from srv in vs
+        pso_desc.IBStripCutValue       = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
+        pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;    // Required
+        pso_desc.NumRenderTargets      = 0;                                         // Required
+        pso_desc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;                // Required
+        pso_desc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;                     // Required
+        pso_desc.SampleDesc            = DXGI_SAMPLE_DESC{.Count = 1, .Quality = 0};// Required
+        pso_desc.NodeMask              = 0;
+        pso_desc.CachedPSO             = D3D12_CACHED_PIPELINE_STATE{nullptr, 0};// maybe
+        pso_desc.Flags                 = D3D12_PIPELINE_STATE_FLAG_NONE;
+
+        // process shaders
+
+        Array<ParamInfoFlags>              binding_infos(_shaders.layout_hash.size());
+        D3D12PipelineState::PipelineLayout layout;
+
+        {
+            shader_group.Match(
+                [&](const ShaderVsPs& _vs_ps) {
+                    pso_desc.VS = {_vs_ps.vs.shader_data.data(), _vs_ps.vs.shader_data.size()};
+                    pso_desc.PS = {_vs_ps.ps.shader_data.data(), _vs_ps.ps.shader_data.size()};
+                    //todo reflection
+
+                    for (const auto& shader_info : {_vs_ps.vs, _vs_ps.ps}) {
+                        // TODO shader reflection-> pipeline reflection
+
+                        auto& reflect_map = shader_info.shader_param_map->reflect_map;
+
+                        const auto& resource_names = _shaders.layout_hash;// (not hash, but resource names
+                        for (size_t i = 0; i < resource_names.size(); ++i) {
+                            const ShaderArgCppInfo& arg_info = _shaders.arg_cpp_info[i];
+
+                            std::string name_internal(resource_names[i]);
+                            bool        b_special_bindless = false;
+                            if (arg_info.type == EShaderArgType::SDA_BindlessArray) {
+                                name_internal      = ReflectParamInfo::bdls_name;// !
+                                b_special_bindless = true;
+                            }
+
+                            auto reflect_map_iter = reflect_map.find(name_internal.data());
+                            if (reflect_map_iter == reflect_map.end()) {
+                                LOG_WARNING("provided pipeline arg '{}' not found in shader '{}'", resource_names[i], shader_info.name);
+                                continue;
+                            }
+
+                            // todo what if same resource set multiple times?
+
+                            auto& resource_info = reflect_map_iter->second.dxil;
+                            if (arg_info.type == EShaderArgType::SDA_Constant) {
+                                ASSERT(IsShaderVarConstantBuffer(resource_info));
+                                resource_info.type = uint(ED3D12ShaderVariableType::RootConstant);
+                            }
+
+                            ASSERT2(CheckReflectionTypeMatch(resource_info, arg_info), std::format("reflection mismatch for resource {} in shader {}", resource_names[i], shader_info.name));
+
+                            binding_infos[i].pipeline_flags = uint64(D3D12_BARRIER_SYNC_DRAW);// todo vsps, granularity
+                            binding_infos[i].state_flags    = uint64(resource_info.type);
+
+                            layout.Add(uint8(i), arg_info, resource_info, b_special_bindless);
+                        }
+                    }
+                },
+                [&](const auto&) {
+                    FATAL("not support shader");
+                });
+        }
+        // blend
+        {
+            pso_desc.BlendState.AlphaToCoverageEnable  = false;// todo
+            pso_desc.BlendState.IndependentBlendEnable = true; // each rt use own blend state http://gamedev.net/forums/topic/676781-d3d12-blend-state-for-mrt/5279820/
+            for (int i = 0; i < _pso_info.color_attachment_count; ++i) {
+                auto&       rt   = pso_desc.BlendState.RenderTarget[i];
+                const auto& info = _pso_info.color_attachments_info[i].blend_state_info;
+
+                rt.BlendEnable = (info.color_blend_op != BO_ADD || info.color_dst_blend_factor != BF_ZERO || info.color_src_blend_factor != BF_ONE ||
+                                  info.alpha_blend_op != BO_ADD || info.alpha_dst_blend_factor != BF_ZERO || info.alpha_src_blend_factor != BF_ONE);
+
+                rt.LogicOpEnable         = false;// todo
+                rt.SrcBlend              = D3D12EnumTranslation::METoDxBlend(info.color_src_blend_factor);
+                rt.DestBlend             = D3D12EnumTranslation::METoDxBlend(info.color_dst_blend_factor);
+                rt.BlendOp               = D3D12EnumTranslation::METoDxBlendOp(info.color_blend_op);
+                rt.SrcBlendAlpha         = D3D12EnumTranslation::METoDxBlend(info.alpha_src_blend_factor);
+                rt.DestBlendAlpha        = D3D12EnumTranslation::METoDxBlend(info.alpha_dst_blend_factor);
+                rt.BlendOpAlpha          = D3D12EnumTranslation::METoDxBlendOp(info.alpha_blend_op);
+                rt.LogicOp               = D3D12_LOGIC_OP_NOOP;// todo
+                rt.RenderTargetWriteMask = (info.color_write_mask & CW_RED) ? D3D12_COLOR_WRITE_ENABLE_RED : 0;
+                rt.RenderTargetWriteMask |= (info.color_write_mask & CW_GREEN) ? D3D12_COLOR_WRITE_ENABLE_GREEN : 0;
+                rt.RenderTargetWriteMask |= (info.color_write_mask & CW_BLUE) ? D3D12_COLOR_WRITE_ENABLE_BLUE : 0;
+                rt.RenderTargetWriteMask |= (info.color_write_mask & CW_ALPHA) ? D3D12_COLOR_WRITE_ENABLE_ALPHA : 0;
+            }
+        }
+        // rasterizer
+        {
+            auto&       rs   = pso_desc.RasterizerState;
+            const auto& info = _pso_info.rasterizer_info;
+
+            rs.FillMode              = D3D12EnumTranslation::METoDxFillMode(info.fill_mode);
+            rs.CullMode              = D3D12EnumTranslation::METoDxCullMode(info.cull_mode);
+            rs.FrontCounterClockwise = info.b_front_counter_clockwise;
+            rs.DepthBias             = info.b_depth_bias ? info.depth_bias : D3D12_DEFAULT_DEPTH_BIAS;
+            rs.DepthBiasClamp        = info.b_depth_clamp_enable ? info.depth_bias_clamp : D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+            rs.SlopeScaledDepthBias  = info.b_depth_bias ? info.depth_bias_slop_factor : D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+            rs.DepthClipEnable       = true;
+            rs.MultisampleEnable     = info.b_enable_msaa;
+            ASSERT(info.b_enable_msaa == _pso_info.multisample_info.sample_count > 1);
+            rs.AntialiasedLineEnable = false;
+            rs.ForcedSampleCount     = 0;
+            rs.ConservativeRaster    = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;// todo
+        }
+        // depth stencil
+        {
+            auto&       dss  = pso_desc.DepthStencilState;
+            const auto& info = _pso_info.depth_stencil_info;
+
+            dss.DepthEnable    = info.b_enable_depth_write || info.depth_test_op == ECompareOption::CO_ALWAYS;// match vk impl...
+            dss.DepthFunc      = D3D12EnumTranslation::METoDxCompareFunc(info.depth_test_op);
+            dss.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+
+            dss.StencilEnable    = info.b_enable_front_face_stencil || info.b_enable_back_face_stencil;
+            dss.StencilReadMask  = info.stencil_readmask;
+            dss.StencilWriteMask = info.stencil_writemask;
+
+            dss.FrontFace.StencilFailOp      = D3D12EnumTranslation::METoDxStencilOp(info.front_face_stencil_fail_stencil_op);
+            dss.FrontFace.StencilDepthFailOp = D3D12EnumTranslation::METoDxStencilOp(info.front_face_depth_fail_stencil_op);
+            dss.FrontFace.StencilPassOp      = D3D12EnumTranslation::METoDxStencilOp(info.front_face_pass_stencil_op);
+            dss.FrontFace.StencilFunc        = D3D12EnumTranslation::METoDxCompareFunc(info.front_face_stencil_test);
+
+            if (info.b_enable_back_face_stencil) {
+                dss.BackFace.StencilFailOp      = D3D12EnumTranslation::METoDxStencilOp(info.back_face_stencil_fail_stencil_op);
+                dss.BackFace.StencilDepthFailOp = D3D12EnumTranslation::METoDxStencilOp(info.back_face_depth_fail_stencil_op);
+                dss.BackFace.StencilPassOp      = D3D12EnumTranslation::METoDxStencilOp(info.back_face_pass_stencil_op);
+                dss.BackFace.StencilFunc        = D3D12EnumTranslation::METoDxCompareFunc(info.back_face_stencil_test);
+            } else {
+                dss.BackFace = dss.FrontFace;
+            }
+        }
+        // input layout
+        {
+            D3D12_INPUT_ELEMENT_DESC desc;
+            //D3D12_INPUT_ELEMENT_DESC  SemanticName?
+        }
+        // topo
+        {
+            pso_desc.PrimitiveTopologyType = D3D12EnumTranslation::METoDxPrimitiveTopologyType(_pso_info.primitive_topology);
+        }
+        // rtv/dsv format
+        {
+            pso_desc.NumRenderTargets = _pso_info.color_attachment_count;
+            for (int i = 0; i < _pso_info.color_attachment_count; ++i) {
+                pso_desc.RTVFormats[i] = D3D12EnumTranslation::METoDxFormat(_pso_info.color_attachments_info[i].pixel_format);
+            }
+            for (int i = _pso_info.color_attachment_count; i < D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i) {
+                pso_desc.RTVFormats[i] = DXGI_FORMAT_UNKNOWN;// D3D12 ERROR: ID3D12Device::CreateGraphicsPipelineState: RTVFormats[] must be DXGI_FORMAT_UNKNOWN for all indices >= NumRenderTargets.
+            }
+            pso_desc.DSVFormat = D3D12EnumTranslation::METoDxFormat(_pso_info.depth_stencil_format);
+            if (pso_desc.DepthStencilState.DepthEnable || pso_desc.DepthStencilState.StencilEnable) {
+                ASSERT(pso_desc.DSVFormat == DXGI_FORMAT_D32_FLOAT_S8X24_UINT || pso_desc.DSVFormat == DXGI_FORMAT_D24_UNORM_S8_UINT || pso_desc.DSVFormat == DXGI_FORMAT_D32_FLOAT || pso_desc.DSVFormat == DXGI_FORMAT_D16_UNORM);
+                if (pso_desc.DepthStencilState.StencilEnable) {
+                    ASSERT(false == D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::DepthOnlyFormat(pso_desc.DSVFormat));
+                }
+            }
+        }
+        // multi sample
+        {
+            const auto& info            = _pso_info.multisample_info;
+            pso_desc.SampleDesc.Count   = info.sample_count;
+            pso_desc.SampleDesc.Quality = 0;
+
+            if (info.sample_count > 1) {
+                // https://github.com/gpuweb/gpuweb/issues/108
+                uint num_level = 0xffffffff;
+                for (int i = 0; i < _pso_info.color_attachment_count; ++i) {
+                    uint cur = 0;
+                    DX_CHECK_HRESULT(feature_supports.MultisampleQualityLevels(pso_desc.RTVFormats[i], pso_desc.SampleDesc.Count, D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE, cur));
+                    num_level = std::min(num_level, cur);
+                }
+                DASSERT(num_level >= 1);
+                pso_desc.SampleDesc.Quality = num_level - 1;
+            }
+        }
+
+        D3D12PipelineState* pso = MoerNew(D3D12PipelineState)(this, D3D12PipelineState::Graphics);
+        pso->BuildRootSignature(layout);
+        pso_desc.pRootSignature = pso->NativeRootSignature();
+        // cache some info for later use
+        pso->primitive_topology = D3D12EnumTranslation::METoDxPrimitiveTopology(_pso_info.primitive_topology);
+        pso->num_render_targets = pso_desc.NumRenderTargets;
+        for (int i = 0; i < pso_desc.NumRenderTargets; ++i) pso->rtv_formats[i] = pso_desc.RTVFormats[i];
+        pso->dsv_format = pso_desc.DSVFormat;
+
+        DX_CHECK_HRESULT(device->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(pso->pipeline_state.ReleaseAndGetAddressOf())));
 
         return PipelineHandle{.handle = reinterpret_cast<uint64>(pso), .binding_infos = std::move(binding_infos)};
     }
@@ -500,6 +712,11 @@ namespace Moer::Render {
         // CreateInternalShaders
         internal_shaders                       = MakeUnique<DeviceInternalShaders>();
         internal_shaders->sd_component_shuffle = ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl");
+
+        for (auto format : {PF_R16G16B16A16_SFLOAT, PF_B8G8R8A8_UNORM, PF_R8G8B8A8_UNORM, PF_A2B10G10R10_UNORM_PACK32}) {
+            GfxPsoCreateInfo info(RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)});
+            blit_texture_pipelines[format] = ShaderManager::Get().Raster().Vertex("framework/FullScreen.vert.hlsl").Pixel("utils/CopyTexture.frag.hlsl").Build<BlitTexturePipeline>(std::move(info));
+        }
     }
 
     void D3D12Device::GetHardwareAdapter(
@@ -1106,6 +1323,53 @@ namespace Moer::Render {
             tracker.RecordState(array->GetUnderlyingBuffer(), EBufferState::UNORDERED_ACCESS, EPassType::Compute, true);
         }
 
+        void Visit(const SetDrawStateCmd& _cmd) {
+            FATAL("not implemented");
+
+            const auto& pipeline = _cmd.Pipeline();
+
+            writed_resources.clear();
+
+            // args
+            auto func = [&](const TArg& _arg, uint _idx) {
+                VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags, pipeline.binding_infos[_idx].pipeline_flags);
+            };
+            auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+                HandleBindless(std::get<BindlessArrayRef>(_arg), D3D12_BARRIER_SYNC(pipeline.binding_infos[_idx].pipeline_flags));
+            };
+
+            IterateArgs(_cmd.Args(), func, bdls_post_func);
+
+            const auto& pass_info = _cmd.RenderPassInfo();
+
+            // rtv, dsv
+            {
+                for (int i = 0; i < pass_info.color_attachments.size(); ++i) {
+                    D3D12Texture* tex = static_cast<D3D12Texture*>(pass_info.color_attachments[i].target);
+                    tracker.RecordState(tex, ETextureState::RENDER_TARGET, EPassType::Graphics, true);
+                }
+                const bool b_has_depth = pass_info.depth_attachment.target != nullptr;
+                if (b_has_depth) {
+                    D3D12Texture* tex = static_cast<D3D12Texture*>(pass_info.depth_attachment.target);
+                    tracker.RecordState(tex, ETextureState::DEPTH_STENCIL, EPassType::Graphics, true);
+                }
+            }
+
+            // vb,ib
+            const auto& vbs = _cmd.VertexBuffers();
+            for (const auto& [b, r] : vbs) {
+                D3D12Buffer* buf = static_cast<D3D12Buffer*>(b);
+                tracker.RecordState(buf, EBufferState::VERTEX, EPassType::Graphics, false);
+            }
+            const auto& ibs = _cmd.IndexBuffers();
+            for (const auto& [b, r] : ibs) {
+                D3D12Buffer* buf = static_cast<D3D12Buffer*>(b);
+                tracker.RecordState(buf, EBufferState::INDEX, EPassType::Graphics, false);
+            }
+
+            // todo indirect
+        }
+
         void VisitCmd(const Command* _cmd) {
             switch (_cmd->Type()) {
                 case Command::EType::UploadBuffer:
@@ -1140,6 +1404,9 @@ namespace Moer::Render {
                     break;
                 case Command::EType::UpdateBindlessArray:
                     Visit(static_cast<const UpdateBindlessArrayCmd&>(*_cmd));
+                    break;
+                case Command::EType::SetDrawState:
+                    Visit(static_cast<const SetDrawStateCmd&>(*_cmd));
                     break;
 
                 default:
@@ -1356,6 +1623,120 @@ namespace Moer::Render {
             cmd_list.Dispatch((arg.component_cnt + 63) / 64, 1, 1);
         }
 
+        void Visit(const SetDrawStateCmd& _cmd) {
+            FATAL("not implemented");
+
+            const auto&     args    = _cmd.Args();
+            PipelineHandle& pso     = _cmd.Pipeline();
+            auto*           pso_d3d = reinterpret_cast<D3D12PipelineState*>(pso.handle);
+
+            const auto& pass_info = _cmd.RenderPassInfo();
+            cmd_list.SetPso(pso);
+            cmd_list.BindDescriptors(pso, args);
+
+            //OMSetRenderTargets
+            {
+                auto*      device      = allocator.GetDevice();
+                const bool b_has_depth = pass_info.depth_attachment.target != nullptr;
+                // create rtv, dsv todo
+                D3D12_CPU_DESCRIPTOR_HANDLE rtvHandles[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
+                for (int i = 0; i < pass_info.color_attachments.size(); ++i) {
+                    D3D12Texture* tex = static_cast<D3D12Texture*>(pass_info.color_attachments[i].target);
+                    rtvHandles[i]     = device->GetRtvHeap()->GetOffsetHandleCpu(tex->CreateRtv(tex->GetView()));// default mip0
+                }
+                D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle{};
+                if (b_has_depth) {
+                    D3D12Texture* tex = static_cast<D3D12Texture*>(pass_info.depth_attachment.target);
+                    dsvHandle         = device->GetRtvHeap()->GetOffsetHandleCpu(tex->CreateDsv(tex->GetView(), false));// default mip0
+
+                    cmd_list.Native()->OMSetRenderTargets(pass_info.color_attachments.size(), rtvHandles, false, &dsvHandle);
+                } else {
+                    cmd_list.Native()->OMSetRenderTargets(pass_info.color_attachments.size(), rtvHandles, false, nullptr);
+                }
+
+                // handle clear
+                for (int i = 0; i < pass_info.color_attachments.size(); ++i) {
+                    const auto&   att = pass_info.color_attachments[i];
+                    D3D12Texture* tex = static_cast<D3D12Texture*>(att.target);
+                    if (GetLoadOp(att.action) == EAttachmentLoadOp::CLEAR) {
+                        cmd_list.Native()->ClearRenderTargetView(rtvHandles[i], &att.clear_color.x, 0, nullptr);
+                    }
+                }
+                if (b_has_depth && GetLoadOp(pass_info.depth_attachment.action) == EAttachmentLoadOp::CLEAR) {
+                    cmd_list.Native()->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, pass_info.depth_attachment.clear_depth, uint8(pass_info.depth_attachment.clear_stencil), 0, nullptr);
+                }
+            }
+
+            // ?maybe OMSetStencilRef
+
+            const auto& rect = pass_info.render_area;
+            {
+                D3D12_VIEWPORT viewport{
+                    .TopLeftX = float(rect.offset.x),
+                    .TopLeftY = float(rect.offset.y),
+                    .Width    = float(rect.extent.width),
+                    .Height   = float(rect.extent.height),
+                    .MinDepth = 0.0f,
+                    .MaxDepth = 1.0f};
+                cmd_list.Native()->RSSetViewports(1, &viewport);
+            }
+            {
+                D3D12_RECT scissor_rect{
+                    .left   = LONG(rect.offset.x),
+                    .top    = LONG(rect.offset.y),
+                    .right  = LONG(rect.offset.x + rect.extent.width),
+                    .bottom = LONG(rect.offset.y + rect.extent.height)};
+                cmd_list.Native()->RSSetScissorRects(1, &scissor_rect);
+            }
+
+            cmd_list.Native()->IASetPrimitiveTopology(pso_d3d->primitive_topology);
+
+            // set vb,ib then draw call
+            for (const MeshDrawData& draw_data : _cmd.DrawData()) {
+                const auto num_of_vertex_buffers = draw_data.vtx_views.size();
+                if (num_of_vertex_buffers > 0) {
+
+                    Array<D3D12_VERTEX_BUFFER_VIEW> vbvs(num_of_vertex_buffers);
+                    for (uint i = 0; i < num_of_vertex_buffers; ++i) {
+                        D3D12Buffer* buf       = static_cast<D3D12Buffer*>(draw_data.vtx_views[i].buffer);
+                        vbvs[i].BufferLocation = buf->GetGpuVirtualAddress() + draw_data.vtx_views[i].offset;
+                        vbvs[i].SizeInBytes    = 0;// todo! need info from input layout ?
+                        vbvs[i].StrideInBytes  = 0;
+                    }
+
+                    cmd_list.Native()->IASetVertexBuffers(0, num_of_vertex_buffers, vbvs.data());
+                }
+
+                ASSERT(!draw_data.indirect_draw_param);// todo draw indirect
+
+                MatchVariant(
+                    draw_data.idx_view,
+                    [&](const IndexBuffer& ib) {
+                        D3D12_INDEX_BUFFER_VIEW ibv;
+                        ibv.BufferLocation = static_cast<D3D12Buffer*>(ib.buffer.GetBuffer())->GetGpuVirtualAddress() + ib.buffer.GetByteOffset();
+                        ibv.SizeInBytes    = ib.buffer.GetByteSize();
+                        ibv.Format         = D3D12EnumTranslation::METoDxIndexFormat(ib.stride);
+                        cmd_list.Native()->IASetIndexBuffer(&ibv);
+
+                        for (const auto& draw_param : draw_data.draw_params) {
+                            cmd_list.Native()->DrawIndexedInstanced(draw_param.index_cnt,
+                                                                    draw_param.instance_cnt,
+                                                                    draw_param.first_index,
+                                                                    draw_param.vertex_offset,
+                                                                    draw_param.first_instance);
+                        }
+                    },
+                    [&](uint ib) {
+                        for (const auto& draw_param : draw_data.draw_params) {
+                            cmd_list.Native()->DrawInstanced(draw_param.index_cnt,
+                                                             draw_param.instance_cnt,
+                                                             draw_param.vertex_offset,
+                                                             draw_param.first_instance);
+                        }
+                    });
+            }
+        }
+
         void VisitCmd(const Command* _cmd) {
             switch (_cmd->Type()) {
                 case Command::EType::UploadBuffer:
@@ -1395,8 +1776,9 @@ namespace Moer::Render {
                     //TraceRay,
                     //Barrier,
                     //QueueTransfer,
-                    //SetDrawState,
-                    //SetGeometryPassDrawState,
+                case Command::EType::SetDrawState:
+                    Visit(static_cast<const SetDrawStateCmd&>(*_cmd));
+                    break;
                     //ClearResource,
                     //Scope,
                 default:
@@ -1549,20 +1931,57 @@ namespace Moer::Render {
         auto  cmd_list  = allocator->GetCommandList();
         cmd_list->Begin();
 
+                    // prepare descriptor heaps
+        ID3D12DescriptorHeap* heaps[] = {device->GetCsuHeapGpuDyn()->Native(), device->GetSamplerHeapGpuDyn()->Native()};
+        cmd_list->Native()->SetDescriptorHeaps(2, heaps);
+        device->GetCsuHeapGpuDyn()->BeginPushDescriptors();
+        device->GetSamplerHeapGpuDyn()->BeginPushDescriptors();
+
         tracker.StartState(swapchain->GetBackbuffer(), {.layout = D3D12_BARRIER_LAYOUT_PRESENT, .sync = D3D12_BARRIER_SYNC_ALL, .access = D3D12_BARRIER_ACCESS_COMMON});
         tracker.RecordState(swapchain->GetBackbuffer(), ETextureState::RENDER_TARGET, EPassType::Graphics, true);
+        tracker.RecordState(static_cast<D3D12Texture*>(_target.GetTexture()), ETextureState::SHADER_RESOURCE, EPassType::Graphics, false);
         tracker.ResolveBarriers();
         tracker.DispatchBarriers(cmd_list->Native());
 
+        /*     float clear_color[] = {0.2f, 0.3f, 0.8f, 0.0f};
+        cmd_list->Native()->ClearRenderTargetView(device->GetRtvHeap()->GetOffsetHandleCpu(swapchain->GetBackbufferRTV()), clear_color, 0, nullptr);*/
+
         // blit _target to backbuffer . todo
-        float clear_color[] = {0.2f, 0.3f, 0.8f, 0.0f};
-        cmd_list->Native()->ClearRenderTargetView(device->GetRtvHeap()->GetOffsetHandleCpu(swapchain->GetBackbufferRTV()), clear_color, 0, nullptr);
+        auto& pipeline = device->blit_texture_pipelines[swapchain->format];
+        cmd_list->SetPso(pipeline.handle);
+        cmd_list->BindDescriptors(pipeline.handle, pipeline.SetArgs(_target, Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)));
+        {
+            const auto rtvHandle = device->GetRtvHeap()->GetOffsetHandleCpu(swapchain->GetBackbufferRTV());
+            cmd_list->Native()->OMSetRenderTargets(1, &rtvHandle, false, nullptr);
+            const float clear_color[4]{0.0f, 0.0f, 0.0f, 1.0f};
+            cmd_list->Native()->ClearRenderTargetView(rtvHandle, clear_color, 0, nullptr);
+        }
+        {
+            D3D12_VIEWPORT viewport{
+                .TopLeftX = float(0),
+                .TopLeftY = float(0),
+                .Width    = float(swapchain->GetWidth()),
+                .Height   = float(swapchain->GetHeight()),
+                .MinDepth = 0.0f,
+                .MaxDepth = 1.0f};
+            cmd_list->Native()->RSSetViewports(1, &viewport);
+        }
+        {
+            D3D12_RECT scissor_rect{
+                .left   = LONG(0),
+                .top    = LONG(0),
+                .right  = LONG(0 + swapchain->GetWidth()),
+                .bottom = LONG(0 + swapchain->GetHeight())};
+            cmd_list->Native()->RSSetScissorRects(1, &scissor_rect);
+        }
+
+        cmd_list->Native()->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        cmd_list->Native()->DrawInstanced(3, 1, 0, 0);
 
         tracker.RestoreState();
         tracker.DispatchBarriers(cmd_list->Native());
         tracker.Reset();
         cmd_list->End();
-
 
         {
             ID3D12CommandList* ppCommandLists[]{cmd_list->Native()};
@@ -1574,8 +1993,6 @@ namespace Moer::Render {
 
         {
             std::unique_lock lck(mtx);
-            device->GetCsuHeapGpuDyn()->BeginPushDescriptors();// only to match EndPush in later event callback
-            device->GetSamplerHeapGpuDyn()->BeginPushDescriptors();
             event_queue.emplace_back(std::move(allocator), next_fence_value, true);
             //event_queue.emplace_back(SwapchainPresentEvent{}, next_fence_value, true);
             cv.notify_one();
@@ -1742,12 +2159,26 @@ namespace Moer::Render {
     void D3D12CommandList::SetPso(const PipelineHandle& _handle) {
         auto* pso = reinterpret_cast<D3D12PipelineState*>(_handle.handle);
         list->SetPipelineState(pso->Native());
-        list->SetComputeRootSignature(pso->NativeRootSignature());
+        if (pso->GetType() == D3D12PipelineState::EType::Graphics) {
+            list->SetGraphicsRootSignature(pso->NativeRootSignature());
+        } else if (pso->GetType() == D3D12PipelineState::EType::Compute) {
+            list->SetComputeRootSignature(pso->NativeRootSignature());
+        }
     }
     void D3D12CommandList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args) {
-
         D3D12PipelineState* pso    = reinterpret_cast<D3D12PipelineState*>(_pso_handle.handle);
         const auto&         layout = pso->GetLayout();
+
+        const bool b_graphics = pso->GetType() == D3D12PipelineState::EType::Graphics;
+
+        auto pfSetRoot32BitConstants     = b_graphics ? &ID3D12GraphicsCommandList::SetGraphicsRoot32BitConstants : &ID3D12GraphicsCommandList::SetComputeRoot32BitConstants;
+        auto pfSetRootConstantBufferView = b_graphics ? &ID3D12GraphicsCommandList::SetGraphicsRootConstantBufferView : &ID3D12GraphicsCommandList::SetComputeRootConstantBufferView;
+        auto pfSetRootShaderResourceView = b_graphics ? &ID3D12GraphicsCommandList::SetGraphicsRootShaderResourceView : &ID3D12GraphicsCommandList::SetComputeRootShaderResourceView;
+        auto pfSetRootDescriptorTable    = b_graphics ? &ID3D12GraphicsCommandList::SetGraphicsRootDescriptorTable : &ID3D12GraphicsCommandList::SetComputeRootDescriptorTable;
+
+        auto MakeCall = [list = list.Get()](auto pfunc, auto&&... args) {
+            (list->*pfunc)(std::forward<decltype(args)>(args)...);
+        };
 
         if (layout.root_constant) {
             ASSERT(layout.root_constant->idx_in_cpp_args < _args.Size() && layout.root_constant->idx_in_cpp_args < _pso_handle.binding_infos.size());
@@ -1755,7 +2186,8 @@ namespace Moer::Render {
             const auto           var_type = ED3D12ShaderVariableType(flags.state_flags);
             ASSERT(IsShaderVarRootConstant(var_type));
             const auto& constants = _args.constants;
-            list->SetComputeRoot32BitConstants(layout.root_constant->idx_in_root_sig, constants.size(), constants.data(), 0);
+            //list->SetComputeRoot32BitConstants(layout.root_constant->idx_in_root_sig, constants.size(), constants.data(), 0);
+            MakeCall(pfSetRoot32BitConstants, layout.root_constant->idx_in_root_sig, constants.size(), constants.data(), 0);
         }
         if (layout.root_cbvs) {
             for (const auto& cbv : *layout.root_cbvs) {
@@ -1766,8 +2198,9 @@ namespace Moer::Render {
                 ASSERT(std::holds_alternative<BufferView>(_args[cbv.idx_in_cpp_args]));
                 const auto&  buf_view = std::get<BufferView>(_args[cbv.idx_in_cpp_args]);
                 D3D12Buffer* buf      = reinterpret_cast<D3D12Buffer*>(buf_view.GetBuffer());
-                ASSERT(buf_view.GetByteOffset() % 256 == 0);                                                                        // ?
-                list->SetComputeRootConstantBufferView(cbv.idx_in_root_sig, buf->GetGpuVirtualAddress() + buf_view.GetByteOffset());// device-side buffer
+                ASSERT(buf_view.GetByteOffset() % 256 == 0);// ?
+                //list->SetComputeRootConstantBufferView(cbv.idx_in_root_sig, buf->GetGpuVirtualAddress() + buf_view.GetByteOffset());// device-side buffer
+                MakeCall(pfSetRootConstantBufferView, cbv.idx_in_root_sig, buf->GetGpuVirtualAddress() + buf_view.GetByteOffset());
             }
         }
         if (layout.the_bindless_array) {
@@ -1777,7 +2210,8 @@ namespace Moer::Render {
             ASSERT(IsShaderVarCommonBuffer(var_type) && IsShaderVarSrv(var_type));
             ASSERT(std::holds_alternative<BindlessArrayRef>(_args[layout.the_bindless_array->idx_in_cpp_args]));
             const auto* bindless = reinterpret_cast<D3D12BindlessArray*>(std::get<BindlessArrayRef>(_args[layout.the_bindless_array->idx_in_cpp_args]).Get());
-            list->SetComputeRootShaderResourceView(layout.the_bindless_array->idx_in_root_sig, bindless->GetUnderlyingBuffer()->GetGpuVirtualAddress());
+            //list->SetComputeRootShaderResourceView(layout.the_bindless_array->idx_in_root_sig, bindless->GetUnderlyingBuffer()->GetGpuVirtualAddress());
+            MakeCall(pfSetRootShaderResourceView, layout.the_bindless_array->idx_in_root_sig, bindless->GetUnderlyingBuffer()->GetGpuVirtualAddress());
         }
         if (layout.srv_table) {
             Array<DescriptorIndex> indices(layout.srv_table->GetTotalBindCount());
@@ -1828,7 +2262,8 @@ namespace Moer::Render {
                         FATAL("not support arg");
                     });
             }
-            list->SetComputeRootDescriptorTable(layout.srv_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
+            //list->SetComputeRootDescriptorTable(layout.srv_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
+            MakeCall(pfSetRootDescriptorTable, layout.srv_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
         }
         if (layout.uav_table) {// todo unify
             Array<DescriptorIndex> indices(layout.uav_table->GetTotalBindCount());
@@ -1877,7 +2312,8 @@ namespace Moer::Render {
                         FATAL("not support arg");
                     });
             }
-            list->SetComputeRootDescriptorTable(layout.uav_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
+            //list->SetComputeRootDescriptorTable(layout.uav_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
+            MakeCall(pfSetRootDescriptorTable, layout.uav_table->idx_in_root_sig, allocator.GetDevice()->PushCsuDescriptor(indices));
         }
         if (layout.sampler_table) {
             Array<DescriptorIndex> indices(layout.sampler_table->GetTotalBindCount());
@@ -1897,7 +2333,8 @@ namespace Moer::Render {
                         FATAL("not support arg");
                     });
             }
-            list->SetComputeRootDescriptorTable(layout.sampler_table->idx_in_root_sig, allocator.GetDevice()->PushSamplerDescriptor(indices));
+            //list->SetComputeRootDescriptorTable(layout.sampler_table->idx_in_root_sig, allocator.GetDevice()->PushSamplerDescriptor(indices));
+            MakeCall(pfSetRootDescriptorTable, layout.sampler_table->idx_in_root_sig, allocator.GetDevice()->PushSamplerDescriptor(indices));
         }
     }
     void D3D12CommandList::Dispatch(uint _x, uint _y, uint _z) {
@@ -2292,8 +2729,8 @@ namespace Moer::Render {
     }
     D3D12Texture::~D3D12Texture() {
         for (const auto& [desc, index] : srv_uav_views) device->GetCsuHeap()->Free(index);
-        //for (const auto& [desc, index] : rtv_views) device->GetRtvHeap()->Free(index);
-        //for (const auto& [desc, index] : dsv_views) device->GetDsvHeap()->Free(index);
+        for (const auto& [desc, index] : rtv_views) device->GetRtvHeap()->Free(index);
+        for (const auto& [desc, index] : dsv_views) device->GetDsvHeap()->Free(index);
     }
     uint D3D12Texture::QuerySubresourceIndex(uint _mip_level, uint _array_slice, uint _plane_slice) const {
         return D3D12CalcSubresource(_mip_level, _array_slice, _plane_slice, GetNumMips(), GetNumArray());
@@ -2478,8 +2915,86 @@ namespace Moer::Render {
         return index;
     }
 
-    namespace D3D12EnumTranslation {
+    DescriptorIndex D3D12Texture::CreateRtv(const TextureView& _range) {
+        ASSERT(this == _range.GetTexture());
 
+        ASSERT(EnumHasAnyFlag(GetUsage(), ETextureUsageFlags::COLOR_ATTACHMENT));
+        ASSERT2(_range.format != EPixelFormat::PF_UNDEFINED, "texture view must has a format");
+        ASSERT2(_range.array_index == 0 && _range.num_array == GetNumArray(), "now not support subrange in array");
+        ASSERT2(_range.num_mips == 1, "one rtv only support one mip");
+        ViewDesc viewDesc{};
+        viewDesc.type              = ED3D12ShaderVariableType::Texture2D;// dummy
+        viewDesc.format            = D3D12EnumTranslation::METoDxFormat(_range.format);
+        viewDesc.first_mip_level   = _range.mip_level;
+        viewDesc.num_mip_levels    = _range.num_mips;
+        viewDesc.b_depth_read_only = false;
+        for (const auto& [desc, index] : rtv_views) {
+            if (desc == viewDesc) {
+                return {index};
+            }
+        }
+        // now only consider  D3D12_RTV_DIMENSION_TEXTURE2D
+
+        D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
+        rtvDesc.Format             = viewDesc.format;
+        rtvDesc.ViewDimension      = D3D12_RTV_DIMENSION_TEXTURE2D;
+        rtvDesc.Texture2D.MipSlice = viewDesc.first_mip_level;
+
+        auto index = device->GetRtvHeap()->Allocate();
+        device->Native()->CreateRenderTargetView(allocation.resource, &rtvDesc, device->GetRtvHeap()->GetOffsetHandleCpu(index));
+        rtv_views.emplace_back(viewDesc, index);
+        return index;
+    }
+
+    DescriptorIndex D3D12Texture::CreateDsv(const TextureView& _range, bool _b_depth_read_only) {
+        ASSERT(this == _range.GetTexture());
+
+        ASSERT(EnumHasAnyFlag(GetUsage(), ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT));
+        ASSERT2(_range.format != EPixelFormat::PF_UNDEFINED, "texture view must has a format");
+        ASSERT2(_range.array_index == 0 && _range.num_array == GetNumArray(), "now not support subrange in array");
+        ASSERT2(_range.num_mips == 1, "one dsv only support one mip");
+        ViewDesc viewDesc{};
+        viewDesc.type              = ED3D12ShaderVariableType::Texture2D;// dummy
+        viewDesc.format            = D3D12EnumTranslation::METoDxFormat(_range.format);
+        viewDesc.first_mip_level   = _range.mip_level;
+        viewDesc.num_mip_levels    = _range.num_mips;
+        viewDesc.b_depth_read_only = _b_depth_read_only;
+        for (const auto& [desc, index] : dsv_views) {
+            if (desc == viewDesc) {
+                return {index};
+            }
+        }
+        // now only consider  D3D12_DSV_DIMENSION_TEXTURE2D
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format             = viewDesc.format;
+        dsvDesc.ViewDimension      = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dsvDesc.Texture2D.MipSlice = viewDesc.first_mip_level;
+        dsvDesc.Flags              = D3D12_DSV_FLAG_NONE;
+        if (_b_depth_read_only) {
+            dsvDesc.Flags |= D3D12_DSV_FLAG_READ_ONLY_DEPTH;
+            if (dsvDesc.Format == DXGI_FORMAT_D24_UNORM_S8_UINT || dsvDesc.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT) {
+                dsvDesc.Flags |= D3D12_DSV_FLAG_READ_ONLY_STENCIL;
+            }
+        }
+
+        auto index = device->GetDsvHeap()->Allocate();
+        device->Native()->CreateDepthStencilView(allocation.resource, &dsvDesc, device->GetDsvHeap()->GetOffsetHandleCpu(index));
+        dsv_views.emplace_back(viewDesc, index);
+        return index;
+    }
+
+    namespace D3D12EnumTranslation {
+        DXGI_FORMAT METoDxIndexFormat(EIndexElementType _type) {
+            switch (_type) {
+                case EIndexElementType::IET_UINT16: return DXGI_FORMAT_R16_UINT;
+                case EIndexElementType::IET_UINT32: return DXGI_FORMAT_R32_UINT;
+            }
+            //EIndexElementType::IET_NONE:
+            //EIndexElementType::IET_UINT8:
+            FATAL("unsupport index type {}", uint(_type));
+            return DXGI_FORMAT_UNKNOWN;
+        }
         DXGI_FORMAT Moer::Render::D3D12EnumTranslation::METoDxFormat(EPixelFormat _format) {
             // ref https://github.com/doitsujin/dxvk/blob/master/src/dxgi/dxgi_format.cpp
             //     https://github.com/HansKristian-Work/vkd3d-proton/blob/master/libs/vkd3d/utils.c#L48
@@ -2701,20 +3216,70 @@ namespace Moer::Render {
             return ret;
         }
 
+        D3D12_CULL_MODE METoDxCullMode(ERasterizerCullMode _cull_mode) {
+            switch (_cull_mode) {
+                case ERasterizerCullMode::RCM_NONE: return D3D12_CULL_MODE_NONE;
+                case ERasterizerCullMode::RCM_FRONT: return D3D12_CULL_MODE_FRONT;
+                case ERasterizerCullMode::RCM_BACK: return D3D12_CULL_MODE_BACK;
+            }
+            FATAL("Unsupported ERasterizerCullMode: {}", static_cast<uint32_t>(_cull_mode));
+            return D3D12_CULL_MODE_NONE;
+        }
+
+        D3D12_PRIMITIVE_TOPOLOGY_TYPE METoDxPrimitiveTopologyType(EPrimitiveTopology _primitive_type) {
+            switch (_primitive_type) {
+                case EPrimitiveTopology::POINT_LIST:
+                    return D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
+                case EPrimitiveTopology::LINE_LIST:
+                case EPrimitiveTopology::LINE_STRIP:
+                    return D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+                case EPrimitiveTopology::TRIANGLE_LIST:
+                case EPrimitiveTopology::TRIANGLE_STRIP:
+                case EPrimitiveTopology::TRIANGLE_LIST_WITH_ADJACENCY:
+                case EPrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY:
+                    return D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+                case EPrimitiveTopology::PATCH_LIST:
+                    return D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+            }
+            FATAL("Unsupported EPrimitiveTopology: {}", static_cast<uint32_t>(_primitive_type));
+            return D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED;
+        }
+
+        D3D_PRIMITIVE_TOPOLOGY METoDxPrimitiveTopology(EPrimitiveTopology _primitive_type) {
+            switch (_primitive_type) {
+                case EPrimitiveTopology::POINT_LIST: return D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+                case EPrimitiveTopology::LINE_LIST: return D3D_PRIMITIVE_TOPOLOGY_LINELIST;
+                case EPrimitiveTopology::LINE_STRIP: return D3D_PRIMITIVE_TOPOLOGY_LINESTRIP;
+                case EPrimitiveTopology::TRIANGLE_LIST: return D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+                case EPrimitiveTopology::TRIANGLE_STRIP: return D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
+                case EPrimitiveTopology::TRIANGLE_LIST_WITH_ADJACENCY: return D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ;
+                case EPrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY: return D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ;
+            }
+            //case EPrimitiveTopology::PATCH_LIST: // need extra num control points
+            //return D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST;
+            FATAL("Unsupported EPrimitiveTopology: {}", static_cast<uint32_t>(_primitive_type));
+            return D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
+        }
+
+        D3D12_FILL_MODE METoDxFillMode(ERasterizerFillMode _fill_mode) {
+            switch (_fill_mode) {
+                case ERasterizerFillMode::FM_FILL: return D3D12_FILL_MODE_SOLID;
+                case ERasterizerFillMode::FM_LINE: return D3D12_FILL_MODE_WIREFRAME;
+            }
+            FATAL("Unsupported ERasterizerFillMode: {}", static_cast<uint32_t>(_fill_mode));
+            return D3D12_FILL_MODE_SOLID;
+        }
+
         D3D12_FILTER METoDxSamplerFilter(ESamplerFilter _filter) {
             switch (_filter) {
-                case SF_NEAREST:
-                    return D3D12_FILTER_MIN_MAG_MIP_POINT;
-                case SF_LINEAR:
-                    return D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT;
-                case SF_CUBIC:
-                    return D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+                case SF_NEAREST: return D3D12_FILTER_MIN_MAG_MIP_POINT;
+                case SF_LINEAR: return D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+                case SF_CUBIC: return D3D12_FILTER_MIN_MAG_MIP_LINEAR;
                 case SF_ANISOTROPIC_NEAREST:
                     return D3D12_FILTER_ANISOTROPIC;
                     //D3D12_FILTER_MIN_MAG_ANISOTROPIC_MIP_POINT;
                     // D3D12 ERROR: ID3D12Device::CreateSampler2: Filters with MIN_MAG_ANISOTROPIC_MIP_POINT are only valid if D3D12_FEATURE_DATA_D3D12_OPTIONS19::AnisoFilterWithPointMipSupported is TRUE. Filter is D3D12_FILTER_MIN_MAG_ANISOTROPIC_MIP_POINT. [ STATE_CREATION ERROR #742: CREATE_SAMPLER_INVALID]
-                case SF_ANISOTROPIC_LINEAR:
-                    return D3D12_FILTER_ANISOTROPIC;
+                case SF_ANISOTROPIC_LINEAR: return D3D12_FILTER_ANISOTROPIC;
             }
             FATAL("Unsupported sampler filter: {}", static_cast<uint32_t>(_filter));
             return D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -2722,14 +3287,10 @@ namespace Moer::Render {
 
         D3D12_TEXTURE_ADDRESS_MODE METoDxTextureAddressMode(ESamplerAddressMode _address_mode) {
             switch (_address_mode) {
-                case SAM_REPEAT:
-                    return D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-                case SAM_MIRRORED_REPEAT:
-                    return D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
-                case SAM_CLAMP_TO_EDGE:
-                    return D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-                case SAM_CLAMP_TO_BORDER:
-                    return D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+                case SAM_REPEAT: return D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+                case SAM_MIRRORED_REPEAT: return D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
+                case SAM_CLAMP_TO_EDGE: return D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+                case SAM_CLAMP_TO_BORDER: return D3D12_TEXTURE_ADDRESS_MODE_BORDER;
             }
             FATAL("Unsupported texture address mode: {}", static_cast<uint32_t>(_address_mode));
             return D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -2737,25 +3298,82 @@ namespace Moer::Render {
 
         D3D12_COMPARISON_FUNC METoDxSamplerCompareOp(ESamplerCompareFunction _compare_op) {
             switch (_compare_op) {
-                case SCF_NEVER:
-                    return D3D12_COMPARISON_FUNC_NEVER;
-                case SCF_LESS:
-                    return D3D12_COMPARISON_FUNC_LESS;
-                case SCF_EQUAL:
-                    return D3D12_COMPARISON_FUNC_EQUAL;
-                case SCF_LESS_OR_EQUAL:
-                    return D3D12_COMPARISON_FUNC_LESS_EQUAL;
-                case SCF_GREATER:
-                    return D3D12_COMPARISON_FUNC_GREATER;
-                case SCF_NOT_EQUAL:
-                    return D3D12_COMPARISON_FUNC_NOT_EQUAL;
-                case SCF_GREATER_OR_EQUAL:
-                    return D3D12_COMPARISON_FUNC_GREATER_EQUAL;
-                case SCF_ALWAYS:
-                    return D3D12_COMPARISON_FUNC_ALWAYS;
+                case SCF_NEVER: return D3D12_COMPARISON_FUNC_NEVER;
+                case SCF_LESS: return D3D12_COMPARISON_FUNC_LESS;
+                case SCF_EQUAL: return D3D12_COMPARISON_FUNC_EQUAL;
+                case SCF_LESS_OR_EQUAL: return D3D12_COMPARISON_FUNC_LESS_EQUAL;
+                case SCF_GREATER: return D3D12_COMPARISON_FUNC_GREATER;
+                case SCF_NOT_EQUAL: return D3D12_COMPARISON_FUNC_NOT_EQUAL;
+                case SCF_GREATER_OR_EQUAL: return D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+                case SCF_ALWAYS: return D3D12_COMPARISON_FUNC_ALWAYS;
             }
             FATAL("Unsupported sampler compare op: {}", static_cast<uint32_t>(_compare_op));
             return D3D12_COMPARISON_FUNC_NONE;
+        }
+
+        D3D12_COMPARISON_FUNC METoDxCompareFunc(ECompareOption _compare_op) {
+            switch (_compare_op) {
+                case ECompareOption::CO_NEVER: return D3D12_COMPARISON_FUNC_NEVER;
+                case ECompareOption::CO_LESS: return D3D12_COMPARISON_FUNC_LESS;
+                case ECompareOption::CO_EQUAL: return D3D12_COMPARISON_FUNC_EQUAL;
+                case ECompareOption::CO_LESS_OR_EQUAL: return D3D12_COMPARISON_FUNC_LESS_EQUAL;
+                case ECompareOption::CO_GREATER: return D3D12_COMPARISON_FUNC_GREATER;
+                case ECompareOption::CO_NOT_EQUAL: return D3D12_COMPARISON_FUNC_NOT_EQUAL;
+                case ECompareOption::CO_GREATER_OR_EQUAL: return D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+                case ECompareOption::CO_ALWAYS: return D3D12_COMPARISON_FUNC_ALWAYS;
+            }
+            FATAL("Unsupported compare op: {}", static_cast<uint32_t>(_compare_op));
+            return D3D12_COMPARISON_FUNC_NONE;
+        }
+
+        D3D12_STENCIL_OP METoDxStencilOp(EStencilOp _stencil_op) {
+            switch (_stencil_op) {
+                case EStencilOp::SO_KEEP: return D3D12_STENCIL_OP_KEEP;
+                case EStencilOp::SO_ZERO: return D3D12_STENCIL_OP_ZERO;
+                case EStencilOp::SO_REPLACE: return D3D12_STENCIL_OP_REPLACE;
+                case EStencilOp::SO_INCREMENT_AND_CLAMP: return D3D12_STENCIL_OP_INCR_SAT;
+                case EStencilOp::SO_DECREMENT_AND_CLAMP: return D3D12_STENCIL_OP_DECR_SAT;
+                case EStencilOp::SO_INVERT: return D3D12_STENCIL_OP_INVERT;
+                case EStencilOp::SO_INCREMENT_AND_WRAP: return D3D12_STENCIL_OP_INCR;
+                case EStencilOp::SO_DECREMENT_AND_WRAP: return D3D12_STENCIL_OP_DECR;
+            }
+            FATAL("Unsupported stencil op: {}", static_cast<uint32_t>(_stencil_op));
+            return D3D12_STENCIL_OP_KEEP;
+        }
+
+        D3D12_BLEND METoDxBlend(EBlendFactor _blend_factor) {
+            switch (_blend_factor) {
+                case EBlendFactor::BF_ZERO: return D3D12_BLEND_ZERO;
+                case EBlendFactor::BF_ONE: return D3D12_BLEND_ONE;
+                case EBlendFactor::BF_SRC_COLOR: return D3D12_BLEND_SRC_COLOR;
+                case EBlendFactor::BF_ONE_MINUS_SRC_COLOR: return D3D12_BLEND_INV_SRC_COLOR;
+                case EBlendFactor::BF_DST_COLOR: return D3D12_BLEND_DEST_COLOR;
+                case EBlendFactor::BF_ONE_MINUS_DST_COLOR: return D3D12_BLEND_INV_DEST_COLOR;
+                case EBlendFactor::BF_SRC_ALPHA: return D3D12_BLEND_SRC_ALPHA;
+                case EBlendFactor::BF_ONE_MINUS_SRC_ALPHA: return D3D12_BLEND_INV_SRC_ALPHA;
+                case EBlendFactor::BF_DST_ALPHA: return D3D12_BLEND_DEST_ALPHA;
+                case EBlendFactor::BF_ONE_MINUS_DST_ALPHA: return D3D12_BLEND_INV_DEST_ALPHA;
+                case EBlendFactor::BF_CONSTANT_ALPHA: return D3D12_BLEND_BLEND_FACTOR;
+                case EBlendFactor::BF_ONE_MINUS_CONSTANT_ALPHA: return D3D12_BLEND_INV_BLEND_FACTOR;
+                case EBlendFactor::BF_SRC1_COLOR: return D3D12_BLEND_SRC1_COLOR;
+                case EBlendFactor::BF_ONE_MINUS_SRC1_COLOR: return D3D12_BLEND_INV_SRC1_COLOR;
+                case EBlendFactor::BF_SRC1_ALPHA: return D3D12_BLEND_SRC1_ALPHA;
+                case EBlendFactor::BF_ONE_MINUS_SRC1_ALPHA: return D3D12_BLEND_INV_SRC1_ALPHA;
+            }
+            FATAL("Unsupported blend factor: {}", static_cast<uint32_t>(_blend_factor));
+            return D3D12_BLEND_ZERO;
+        }
+
+        D3D12_BLEND_OP METoDxBlendOp(EBlendOperation _blend_op) {
+            switch (_blend_op) {
+                case EBlendOperation::BO_ADD: return D3D12_BLEND_OP_ADD;
+                case EBlendOperation::BO_SUBTRACT: return D3D12_BLEND_OP_SUBTRACT;
+                case EBlendOperation::BO_REVERSE_SUBTRACT: return D3D12_BLEND_OP_REV_SUBTRACT;
+                case EBlendOperation::BO_MIN: return D3D12_BLEND_OP_MIN;
+                case EBlendOperation::BO_MAX: return D3D12_BLEND_OP_MAX;
+            }
+            FATAL("Unsupported blend op: {}", static_cast<uint32_t>(_blend_op));
+            return D3D12_BLEND_OP_ADD;
         }
 
     }// namespace D3D12EnumTranslation

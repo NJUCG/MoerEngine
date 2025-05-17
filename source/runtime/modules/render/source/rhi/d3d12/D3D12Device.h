@@ -89,6 +89,7 @@ namespace Moer::Render {
 
     namespace D3D12EnumTranslation {
         //static VkIndexType           METoVKIndexType(EIndexElementType _type);
+        DXGI_FORMAT METoDxIndexFormat(EIndexElementType _type);
 
         //static VkFormat              METoVKFormat(EPixelFormat _format);
         DXGI_FORMAT METoDxFormat(EPixelFormat _format);
@@ -116,8 +117,12 @@ namespace Moer::Render {
         //static VkAccessFlags2        METoVkAccessFlags2(ERHIAccessFlags _flags);
 
         //static VkCullModeFlags     METoVKCullModeFlags(ERasterizerCullMode _cull_mode);
+        D3D12_CULL_MODE METoDxCullMode(ERasterizerCullMode _cull_mode);
         //static VkPrimitiveTopology METoVKPrimitiveTopology(EPrimitiveTopology _primitive_type);
+        D3D12_PRIMITIVE_TOPOLOGY_TYPE METoDxPrimitiveTopologyType(EPrimitiveTopology _primitive_type);
+        D3D_PRIMITIVE_TOPOLOGY        METoDxPrimitiveTopology(EPrimitiveTopology _primitive_type);
         //static VkPolygonMode       METoVKPolygonMode(ERasterizerFillMode _fill_mode);
+        D3D12_FILL_MODE METoDxFillMode(ERasterizerFillMode _fill_mode);
 
         //static VkDescriptorType   METoVKDescriptorType(EShaderParameterType _type, EShaderCodeResourceBindingType _binding_type);
         //static VkShaderStageFlags METoVKShaderStageFlags(EShaderType _type);
@@ -135,9 +140,13 @@ namespace Moer::Render {
 
         //static VkCompareOp METoVKCompareOp(ECompareOption _compare_op);
         //static VkStencilOp METoVKStencilOp(EStencilOp _stencil_op);
+        D3D12_COMPARISON_FUNC METoDxCompareFunc(ECompareOption _compare_op);
+        D3D12_STENCIL_OP      METoDxStencilOp(EStencilOp _stencil_op);
 
         //static VkBlendOp     METoVKBlendOp(EBlendOperation _blend_op);
         //static VkBlendFactor METoVKBlendFactor(EBlendFactor _blend_factor);
+        D3D12_BLEND    METoDxBlend(EBlendFactor _blend_factor);
+        D3D12_BLEND_OP METoDxBlendOp(EBlendOperation _blend_op);
 
         //static VkVertexInputRate METoVKVertexInputRate(EVertexInputRate _me_rate);
 
@@ -241,9 +250,9 @@ namespace Moer::Render {
     class D3D12PipelineState final : public PipelineState, public D3D12DeviceChild {
     public:
         enum EType {
-            GFX,
+            Graphics,
             Compute,
-            RT
+            RayTracing,
         };
 
         struct PipelineLayout {
@@ -303,6 +312,12 @@ namespace Moer::Render {
         EType                       type;
 
     public:
+        D3D_PRIMITIVE_TOPOLOGY                                          primitive_topology;// only for graphics
+        uint                                                            num_render_targets = 0;
+        DXGI_FORMAT                                                     dsv_format         = DXGI_FORMAT_UNKNOWN;
+        std::array<DXGI_FORMAT, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT> rtv_formats        = {DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN};
+
+    public:
         D3D12PipelineState(D3D12Device* _device, EType _type) : PipelineState(), D3D12DeviceChild(_device), pipeline_state(nullptr), root_signature(nullptr), type(_type) {}
 
         void                  BuildRootSignature(const PipelineLayout& _layout);
@@ -310,6 +325,7 @@ namespace Moer::Render {
 
         ID3D12PipelineState* Native() const { return pipeline_state.Get(); }
         ID3D12RootSignature* NativeRootSignature() const { return root_signature.Get(); }
+        EType                GetType() const { return type; }
 
         void Destroy() override;// from PipelineState.RHIResource
     };
@@ -458,8 +474,8 @@ namespace Moer::Render {
     private:
         Allocation        allocation;
         Array<ViewRecord> srv_uav_views;
-        //Array<ViewRecord> rtv_views; // todo, graphics pipeline
-        //Array<ViewRecord> dsv_views;
+        Array<ViewRecord> rtv_views;
+        Array<ViewRecord> dsv_views;
 
     public:
         D3D12Texture(D3D12Device* _device, const TextureInfo& _info);
@@ -476,6 +492,8 @@ namespace Moer::Render {
 
         DescriptorIndex CreateSrv(const TextureView& _range, ED3D12ShaderVariableType _type);
         DescriptorIndex CreateUav(const TextureView& _range, ED3D12ShaderVariableType _type);
+        DescriptorIndex CreateRtv(const TextureView& _range);
+        DescriptorIndex CreateDsv(const TextureView& _range, bool _b_depth_read_only); // todo when set this to true?
     };
 
     // not for readback/upload
@@ -677,7 +695,7 @@ namespace Moer::Render {
         void RecordState(D3D12Texture* texture, TextureStateDescription _state);
         void RecordState(D3D12Buffer* buffer, EBufferState _state, EPassType _pass_type, bool _is_write);
         void RecordState(D3D12Buffer* buffer, BufferStateDescription _state);
-        void StartState(D3D12Texture* texture, TextureStateDescription _state); // set the initial state
+        void StartState(D3D12Texture* texture, TextureStateDescription _state);// set the initial state
 
         void ResolveBarriers();
         void DispatchBarriers(ID3D12GraphicsCommandList7* list);
@@ -1137,6 +1155,15 @@ namespace Moer::Render {
         static constexpr uint            cmd_alloc_limits     = 3;
         UniquePtr<DeviceInternalShaders> internal_shaders;
 
+        class BlitTexturePipeline : public RasterPipeline {
+        public:
+            DEFINE_RASTER_PIPELINE_CLASS(BlitTexturePipeline);
+            DEFINE_SHADER_TEX(src_color);
+            DEFINE_SHADER_SAMPLER(spl);
+
+            DEFINE_SHADER_ARGS(src_color, spl);
+        };
+        UnorderedMap<EPixelFormat, BlitTexturePipeline> blit_texture_pipelines;
     private:
         //friend VkCommandQueue;
     };

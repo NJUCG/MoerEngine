@@ -92,6 +92,29 @@ namespace Moer::Render {
         DEFINE_SHADER_ARGS(cb0, cb1, sb0, sb1, rb0, rb1, tb0, tb1, buf_arr, t2, t3, t4, t5, t6, tex_arr, rwt2, rwt3, rwt4, s0, bdls);
     };
 
+    class CopyTexturePipeline : public RasterPipeline {
+    public:
+        DEFINE_RASTER_PIPELINE_CLASS(CopyTexturePipeline);
+        DEFINE_SHADER_TEX(src_color);
+        DEFINE_SHADER_SAMPLER(spl);
+
+        DEFINE_SHADER_ARGS(src_color, spl);
+    };
+
+    class FillTexturePipeline : public ComputePipeline {
+    public:
+        struct Arg {
+            uint  frame_cnt;
+            float time;
+            uint2 _pad;
+        };
+        DEFINE_COMPUTE_PIPELINE_CLASS(FillTexturePipeline);
+        DEFINE_SHADER_CONSTANT_STRUCT(Arg, args);
+        DEFINE_SHADER_TEX(tex);
+
+        DEFINE_SHADER_ARGS(args, tex);
+    };
+
 }// namespace Moer::Render
 
 template<typename T, int N>
@@ -247,25 +270,31 @@ void TestWindow() {
     using namespace Moer;
     using namespace Moer::Render;
 
+    Timer timer;
+    timer.Start();
+
     auto& device = RenderDevice::Get();
 
     uint2 resolution{1280, 720};
     WindowContext::Init(SurfaceInitInfo("D3D12", resolution.x, resolution.y, "MoerEditor", false));
 
-    auto sc_info = SwapchainCreateInfo{
-        .window_handle    = (uintptr_t)WindowContext::GetMainWindow(),
-        .size             = resolution,
-        .back_buffer_sz   = 3,
-        .preferred_format = PF_R8G8B8A8_UNORM};
+    EPixelFormat format  = EPixelFormat::PF_B8G8R8A8_UNORM;
+    auto         sc_info = SwapchainCreateInfo{
+                .window_handle    = (uintptr_t)WindowContext::GetMainWindow(),
+                .size             = resolution,
+                .back_buffer_sz   = 3,
+                .preferred_format = format};
 
     auto sc = device.CreateSwapchain(sc_info);
 
     auto& gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
 
+    auto output    = device.CreateTexture("output", Extent2D(resolution.x, resolution.y), PF_R8G8B8A8_UNORM, ETextureUsageFlags::UNORDERED_ACCESS);// note rgba vs bgra
+    auto fill_pso  = ShaderManager::Get().Compute<FillTexturePipeline>("test/FillTexture.hlsl");
+    uint frame_idx = 0;
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         WindowContext::Tick();
-
         int w_width, w_height;
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
@@ -281,7 +310,14 @@ void TestWindow() {
         }
         //std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
-        gfx_queue.Present(sc, {});// now only test clearrendertarget with color
+        CommandList list;
+        list.Compute(fill_pso, FillTexturePipeline::Arg{.frame_cnt = frame_idx, .time = float(timer.ElapsedMilliseconds())}, output)
+            .Dispatch({(output->GetWidth() + 7) / 8, (output->GetHeight() + 7) / 8, 1});
+        gfx_queue.Execute(list.Submit());
+        gfx_queue.Present(sc, output);
+        frame_idx++;
+
+        //if (frame_idx == 10) break;// for capture
     }
     gfx_queue.Sync();
 }
