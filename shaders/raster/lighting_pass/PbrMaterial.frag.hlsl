@@ -180,7 +180,7 @@ float calculate_shadow(Moer::LightingData lighting_data, float3 world_pos) {
     }
 }
 
-float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
+float4 main(float4 _pos: SV_POSITION, float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
     uint gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
     uint mat_type = gbuffer_mat & 0x000000FF;

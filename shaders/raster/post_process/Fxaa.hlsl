@@ -135,7 +135,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
     return get_color(uv + pixel_step * final_blend);
 }
 
-float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
+float4 main(float4 _pos: SV_POSITION, float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     float4 input_image = TextureHandle(param.input_image).Sample2D<float4>(in_uv);
     float3 color = input_image.rgb;

@@ -13,7 +13,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 [[vk::push_constant]] ConstantBuffer<Moer::FxaaPrecomputePipelineBindlessParam> param;
 
-float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
+float4 main(float4 _pos: SV_POSITION, float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 color = TextureHandle(param.input_image).Sample2D<float3>(in_uv);
 
     float luminance = color.r * 0.213 + color.g * 0.715 + color.b * 0.072;

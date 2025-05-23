@@ -138,7 +138,7 @@ float3 ssr(float3 color, float2 uv) {
     return ssr_ray_tracing(color, position + normal * 0.1, reflect_dir * param.ssr_step_base, fresnel, jitter);
 }
 
-float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
+float4 main(float4 _pos: SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
     float3 color = TextureHandle(param.color_tex).Sample2D<float4>(uv).rgb;
 

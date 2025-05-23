@@ -51,7 +51,7 @@ float ssao_games202(float2 uv) {
     return ao;
 }
 
-float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
+float4 main(float4 _pos: SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 
     float3 color = TextureHandle(param.input_image).Sample2D<float4>(uv).rgb;
 
