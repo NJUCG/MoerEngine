@@ -1278,6 +1278,7 @@ namespace Moer {
                 BindlessArray bindless;
             };
         };
+
         struct Dxil {
             uint slot;
             uint space;
@@ -1337,6 +1338,13 @@ public:
     // private:
     // Moer::UnorderedMap<std::string, ParameterInfo>          param_map;
     Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
+
+    // only for d3d vertexshader
+    struct VertexInput {
+        std::string semantic_name;  // put string in ReflectParamInfo always work weired.. c++ sucks
+        Moer::uint  semantic_index;
+    };
+    Moer::Array<VertexInput> vertex_inputs;
 };
 
 #pragma endregion

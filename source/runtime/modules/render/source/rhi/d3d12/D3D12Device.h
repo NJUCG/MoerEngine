@@ -316,6 +316,7 @@ namespace Moer::Render {
         uint                                                            num_render_targets = 0;
         DXGI_FORMAT                                                     dsv_format         = DXGI_FORMAT_UNKNOWN;
         std::array<DXGI_FORMAT, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT> rtv_formats        = {DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN};
+        Array<uint>                                                     input_strides;
 
     public:
         D3D12PipelineState(D3D12Device* _device, EType _type) : PipelineState(), D3D12DeviceChild(_device), pipeline_state(nullptr), root_signature(nullptr), type(_type) {}

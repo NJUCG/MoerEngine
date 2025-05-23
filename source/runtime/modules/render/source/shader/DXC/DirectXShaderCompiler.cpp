@@ -747,5 +747,19 @@ void DXCompiler::Impl::ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompil
         }
     }
 
+    Moer::Array<ShaderParametersInfoMap::VertexInput> vertex_inputs;
+
+    if (_input.target_info.shader_type == ST_VERTEX) {
+        // reflect input layout
+        for (uint i = 0; i < shaderDesc.InputParameters; ++i) {
+            D3D12_SIGNATURE_PARAMETER_DESC param_desc{};
+            DX_CHECK_HRESULT(shaderReflection->GetInputParameterDesc(i, &param_desc));
+
+            if (std::string_view(param_desc.SemanticName).starts_with("SV_")) continue;
+            vertex_inputs.emplace_back(param_desc.SemanticName, param_desc.SemanticIndex);
+        }
+    }
+
     _param_map.reflect_map.swap(reflect_map);
+    _param_map.vertex_inputs.swap(vertex_inputs);
 }

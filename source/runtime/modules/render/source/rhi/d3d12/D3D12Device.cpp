@@ -333,6 +333,9 @@ namespace Moer::Render {
         }
 
         D3D12_ROOT_SIGNATURE_FLAGS root_sig_flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED;
+        if (_b_use_input_assembler) {
+            root_sig_flags |= D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        }
 
         CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC root_sig_desc;
         root_sig_desc.Init_1_1(root_parameters.size(), root_parameters.data(), 0, nullptr, root_sig_flags);//todo static samplers
@@ -565,9 +568,33 @@ namespace Moer::Render {
             }
         }
         // input layout
+        Array<D3D12_INPUT_ELEMENT_DESC> input_layout;
+        Array<uint>                     input_strides;
         {
-            D3D12_INPUT_ELEMENT_DESC desc;
-            //D3D12_INPUT_ELEMENT_DESC  SemanticName?
+            ASSERT(vs != nullptr);
+            uint attr_cnt     = 0;
+            uint binding_slot = 0;
+            for (const auto& binding : _pso_info.vertex_stream.bindings) {
+                uint byte_offset = 0;
+                for (const auto& attr : binding.vertex_elements) {
+
+                    D3D12_INPUT_ELEMENT_DESC desc;
+                    desc.SemanticName         = vs->shader_param_map->vertex_inputs[attr_cnt].semantic_name.c_str();
+                    desc.SemanticIndex        = vs->shader_param_map->vertex_inputs[attr_cnt++].semantic_index;
+                    desc.Format               = D3D12EnumTranslation::METoDxFormat(attr.format);
+                    desc.InputSlot            = binding_slot;
+                    desc.AlignedByteOffset    = byte_offset;
+                    desc.InputSlotClass       = binding.input_rate == EVertexInputRate::VIR_VERTEX ? D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA : D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA;
+                    desc.InstanceDataStepRate = desc.InputSlotClass == D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA ? 1 : 0;
+
+                    byte_offset += D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetBitsPerUnit(desc.Format) / 8;
+                    input_layout.emplace_back(desc);
+                }
+                input_strides.emplace_back(byte_offset);
+                binding_slot++;
+            }
+            ASSERT(binding_slot <= D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT);
+            pso_desc.InputLayout = {input_layout.data(), uint(input_layout.size())};
         }
         // topo
         {
@@ -610,14 +637,14 @@ namespace Moer::Render {
         }
 
         D3D12PipelineState* pso = MoerNew(D3D12PipelineState)(this, D3D12PipelineState::Graphics);
-        pso->BuildRootSignature(layout);
+        pso->BuildRootSignature(layout, true);
         pso_desc.pRootSignature = pso->NativeRootSignature();
         // cache some info for later use
         pso->primitive_topology = D3D12EnumTranslation::METoDxPrimitiveTopology(_pso_info.primitive_topology);
         pso->num_render_targets = pso_desc.NumRenderTargets;
         for (int i = 0; i < pso_desc.NumRenderTargets; ++i) pso->rtv_formats[i] = pso_desc.RTVFormats[i];
-        pso->dsv_format = pso_desc.DSVFormat;
-
+        pso->dsv_format    = pso_desc.DSVFormat;
+        pso->input_strides = std::move(input_strides);
         DX_CHECK_HRESULT(device->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(pso->pipeline_state.ReleaseAndGetAddressOf())));
 
         return PipelineHandle{.handle = reinterpret_cast<uint64>(pso), .binding_infos = std::move(binding_infos)};
