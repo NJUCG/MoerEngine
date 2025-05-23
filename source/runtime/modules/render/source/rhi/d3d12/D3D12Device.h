@@ -321,7 +321,7 @@ namespace Moer::Render {
     public:
         D3D12PipelineState(D3D12Device* _device, EType _type) : PipelineState(), D3D12DeviceChild(_device), pipeline_state(nullptr), root_signature(nullptr), type(_type) {}
 
-        void                  BuildRootSignature(const PipelineLayout& _layout);
+        void                  BuildRootSignature(const PipelineLayout& _layout, bool _b_use_input_assembler);
         const PipelineLayout& GetLayout() const { return layout; }
 
         ID3D12PipelineState* Native() const { return pipeline_state.Get(); }
@@ -494,7 +494,7 @@ namespace Moer::Render {
         DescriptorIndex CreateSrv(const TextureView& _range, ED3D12ShaderVariableType _type);
         DescriptorIndex CreateUav(const TextureView& _range, ED3D12ShaderVariableType _type);
         DescriptorIndex CreateRtv(const TextureView& _range);
-        DescriptorIndex CreateDsv(const TextureView& _range, bool _b_depth_read_only); // todo when set this to true?
+        DescriptorIndex CreateDsv(const TextureView& _range, bool _b_depth_read_only);// todo when set this to true?
     };
 
     // not for readback/upload
@@ -634,7 +634,7 @@ namespace Moer::Render {
         void End();
 
         void SetPso(const PipelineHandle& _handle);
-        void BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args);
+        void BindDescriptors(const PipelineHandle& _pso_handle, const ArrayArguments& _args);
 
         void Dispatch(uint _x, uint _y, uint _z);
 
@@ -931,7 +931,7 @@ namespace Moer::Render {
         // ptr size not satisfy the 'inline version' requirement,
         // this internally only hold D3D12CommandResourceAllocator* (not push uniqueptr into
 
-        //struct SwapchainPresentEvent {};
+        struct SwapchainPresentEvent {};
 
         using EventType = Variant<
             UniquePtr<D3D12CommandResourceAllocator>,
@@ -993,8 +993,8 @@ namespace Moer::Render {
         Array<ComPtr<ID3D12Resource>>  backbuffers;
         Array<DescriptorIndex>         backbuffer_rtvs;
         Array<UniquePtr<D3D12Texture>> backbuffer_textures;
-
     public:
+        //UniquePtr<D3D12Texture>        proxy;
         D3D12Swapchain(D3D12Device* device, const SwapchainCreateInfo& info);
         ~D3D12Swapchain();
 
@@ -1165,6 +1165,7 @@ namespace Moer::Render {
             DEFINE_SHADER_ARGS(src_color, spl);
         };
         UnorderedMap<EPixelFormat, BlitTexturePipeline> blit_texture_pipelines;
+
     private:
         //friend VkCommandQueue;
     };

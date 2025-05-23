@@ -76,8 +76,8 @@ namespace Moer::Render {
         };
         DEFINE_RASTER_PIPELINE_CLASS(GUIPipelineBdls)
 
-        DEFINE_SHADER_BINDLESS_ARRAY(bdls);
         DEFINE_SHADER_BUFFER(arg_buffer);
+        DEFINE_SHADER_BINDLESS_ARRAY(bdls);
         DEFINE_SHADER_CONSTANT_STRUCT(Constant, param);
 
         DEFINE_SHADER_ARGS(arg_buffer, bdls, param);
@@ -116,7 +116,7 @@ namespace Moer::Render {
     struct ImGUIData {
         static constexpr EPixelFormat               s_supported_formats[] = {PF_R8G8B8A8_SRGB,
                                                                              PF_R8G8B8A8_UNORM,
-                                                                             PF_B8G8R8A8_SRGB,
+                                                                             //  PF_B8G8R8A8_SRGB,
                                                                              PF_B8G8R8A8_UNORM};
         UnorderedMap<EPixelFormat, GUIPipelineBdls> rast_psos;
 
@@ -364,7 +364,6 @@ namespace Moer::Render {
         auto&            io          = ImGui::GetIO();
 
         if (io.BackendFlags & ImGuiBackendFlags_RendererHasViewports) {
-
             for (int i = 1; i < platform_io.Viewports.Size; i++)
                 if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
                     GuiSwapbuffer(platform_io.Viewports[i], nullptr);
@@ -596,7 +595,7 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
         .window_handle    = (uint64)&handle,
         .size             = {(uint)_viewport->Size.x, (uint)_viewport->Size.y},
         .back_buffer_sz   = backend_data.num_frames_in_flight,
-        .preferred_format = PF_R8G8B8A8_SRGB};
+        .preferred_format = PF_R8G8B8A8_UNORM};
 
     if (width == 0 || height == 0) {
         return;

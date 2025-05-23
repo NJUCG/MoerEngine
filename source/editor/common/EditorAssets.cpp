@@ -131,7 +131,7 @@ void EditorAssets::CompleteAndImportResources() {
 
     CommandList cmd_list{};
     cmd_list.ImportResourcesFromQueue(EQueueType::Copy, std::move(import_textures), {});
-
+    // todo d3d: copy queue, queuetransfercmd
     CopyQueue& copy_queue = device.GetCopyQueue();
 
     auto copy_queue_timeline = copy_queue.GetFenceHandle();

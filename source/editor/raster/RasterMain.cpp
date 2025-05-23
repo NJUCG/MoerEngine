@@ -20,13 +20,37 @@
 #include "ShadowDepthPass.h"
 #include "SsrPass.h"
 #include "common/UiCombinePass.h"
+//#include "imgui.h"
+#include "misc/Timer.h"
 #include "ui/raster_ui/RasterUI.h"
+#include <stb/stb_image_write.h>
 
 namespace Moer::Render::Raster {
+//class FillTexturePipeline : public ComputePipeline {
+//public:
+//    struct Arg {
+//        uint  frame_cnt;
+//        float time;
+//        uint2 _pad;
+//    };
+//    DEFINE_COMPUTE_PIPELINE_CLASS(FillTexturePipeline);
+//    DEFINE_SHADER_CONSTANT_STRUCT(Arg, args);
+//    DEFINE_SHADER_TEX(tex);
+//
+//    DEFINE_SHADER_ARGS(args, tex);
+//};
+
+auto dequantentize_byte_to_srgb(unsigned char _b) {
+    float c = _b / 255.f;
+    c       = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f;
+
+    // to byte
+    return (unsigned char)(c * 255.f);
+};
 
 /**
  * Raster渲染方法TODO Lists
- * 
+ *
  * TODO: 着色，LightingPass，目前还比较初步
  * TODO: 阴影，ShadowDepthPass和LightingPass
  *       1. CSM中，ShadowMap的mipmap好像有问题，貌似目前并没有构建，导致效果不好，需要构建一下mipmap
@@ -61,26 +85,40 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
     auto sc_info = SwapchainCreateInfo{
         .window_handle    = (uintptr_t)WindowContext::GetMainWindow(),
         .size             = {resolution.x, resolution.y},
-        .back_buffer_sz   = 2,
-        .preferred_format = PF_R8G8B8A8_SRGB
+        .back_buffer_sz   = 3,
+        .preferred_format = PF_R8G8B8A8_UNORM
     };
     auto sc = device.CreateSwapchain(sc_info);
 
     // MARK: Scene
-    Resource::LoaderInterface::LoadSceneFromFileAsync(editor_ui->GetConfig().scene_path, &scene);
-    auto&& scope_exit_reset_async_load_info = OnScopeExit([&] { Scene::ResetAsyncLoadInfo(); });
+    //Resource::LoaderInterface::LoadSceneFromFileAsync(editor_ui->GetConfig().scene_path, &scene);
+    //auto&& scope_exit_reset_async_load_info = OnScopeExit([&] { Scene::ResetAsyncLoadInfo(); });
 
-    // TODO: combine RasterMain and RaytracingMain common part (above code)
+     //TODO: combine RasterMain and RaytracingMain common part (above code)
     RasterContext raster_context(device, manager, bindless_array, cmd_list, scene, resolution);
 
     raster_context.CreateFrameBuffers();
     raster_context.AllocateFrameBuffers();
+
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
+    // pix capture(by gui) crash on bindlessarray related buffer. TODO
+
     editor_ui->m_raster_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());
 
-    // MARK: Passes
+
+
+    //auto  fill_pso = ShaderManager::Get().Compute<FillTexturePipeline>("test/FillTexture.hlsl");
+    Timer timer;
+    timer.Start();
+    //size_t            size = sizeof(uint) * resolution.x * resolution.y;
+    //Array<Moer::byte> copy_back_data[5];
+    //for (int i = 0; i < 5; ++i) copy_back_data[i].resize(size);
+    //bool b_save_screenshot = false;
+    //uint starttime         = 999999999;
+
+    //// MARK: Passes
 
     ShadowDepthPass shadow_depth_pass(raster_context);
     GeometryPass    geometry_pass(raster_context);
@@ -105,9 +143,10 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
     // MARK: Main Loop
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+        //LOG_INFO("RasterMain Loop---------------------------------");
         WindowContext::Tick();
         editor_ui->TickUI();
-        if (time > 2) { timeline->Wait(time - 2); }
+        //if (time > 2) { timeline->Wait(time - 2); }
         const RasterConfig& ui_config = editor_ui->m_raster_ui.GetConfig();
 
         // MARK: Window Resizing
@@ -115,24 +154,32 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
         WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
         if (w_width == 0 || w_height == 0) {
             std::this_thread::yield();
+            //ImGui::UpdatePlatformWindows();
+
             editor_ui->RenderGUI(cmd_list, raster_context.textures.output.tex);
             continue;
         }
         if (w_width != resolution.x || w_height != resolution.y) {
             resolution.x = uint32(w_width);
             resolution.y = uint32(w_height);
-            gfx_queue.Sync();
+            //gfx_queue.Sync();
             sc->Sync();
             sc_info.size = {resolution.x, resolution.y};
             sc->Recreate(sc_info);
 
+            // !not recommend, due to texture row alignment
+            //size = sizeof(uint) * resolution.x * resolution.y;
+            //for (int i = 0; i < 5; ++i) copy_back_data[i].resize(size);
+
             raster_context.FreeFrameBuffers();
+            raster_context.resolution = resolution;
             raster_context.CreateFrameBuffers();
             raster_context.AllocateFrameBuffers();
-
             editor_ui->m_raster_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());
         }
         TextureRef final_output = raster_context.textures.output.tex;
+
+        /*
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
             // MARK: First Load
             if (first_load) {
@@ -185,8 +232,44 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
                 editor_ui
             );
         }
-
+            */
         editor_ui->RenderGUI(cmd_list, final_output);
+        //editor_ui->RegisterUIFunc("Save Screenshot start ", [&b_save_screenshot, &starttime, time] {
+        //    if (ImGui::IsKeyPressed(ImGuiKey::ImGuiKey_S)) {
+        //        b_save_screenshot = true;
+        //        starttime         = time;
+        //    }
+        //});
+        //if (time > starttime + 10) { b_save_screenshot = false; }
+        //if (b_save_screenshot) {
+        //    //LOG_INFO("Save Screenshot, start {}, time {}", starttime, time);
+        //    cmd_list.CopyFrom(final_output->GetView(), copy_back_data[time % 5]);
+        //    cmd_list.AddCallback(
+        //        [&data0(copy_back_data[(time - 3 + 5) % 5]), resolution, time(time - 3)](
+        //        ) { // retrieve a 'before' copybackdata because of AddCallback order. this happens before current frame readback callback
+        //            LambdaTask::Create([data_in(data0), resolution, time]() {
+        //                auto data = data_in; // copy
+
+        //                /*             for (size_t i = 0; i < data.size(); i += 4) {
+        //            data[i]     = (Moer::byte)dequantentize_byte_to_srgb(ubyte(data[i]));
+        //            data[i + 1] = (Moer::byte)dequantentize_byte_to_srgb(ubyte(data[i + 1]));
+        //            data[i + 2] = (Moer::byte)dequantentize_byte_to_srgb(ubyte(data[i + 2]));
+        //            data[i + 3] = (Moer::byte)dequantentize_byte_to_srgb(ubyte(data[i + 3]));
+        //        }*/
+
+        //                stbi_write_png(
+        //                    std::format("screenshot_{}.png", time).c_str(),
+        //                    resolution.x,
+        //                    resolution.y,
+        //                    4,
+        //                    (void*)data.data(),
+        //                    4 * resolution.x
+        //                );
+        //                LOG_INFO("Screenshot saved, {}", time);
+        //            }).Dispatch();
+        //        }
+        //    );
+        //}
 
         time++;
         /***

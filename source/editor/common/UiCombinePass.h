@@ -38,7 +38,7 @@ public:
 
 class UiCombinePass {
     static constexpr EPixelFormat s_supported_formats[] =
-        {PF_R8G8B8A8_UNORM, PF_R8G8B8A8_SRGB, PF_B8G8R8A8_UNORM, PF_B8G8R8A8_SRGB};
+        {PF_R8G8B8A8_UNORM, PF_R8G8B8A8_SRGB, PF_B8G8R8A8_UNORM}; //, PF_B8G8R8A8_SRGB};
 
 public:
     UiCombinePass(ShaderManager& _manager) {

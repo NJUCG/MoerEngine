@@ -28,7 +28,7 @@ struct DepthBufferWithHandleAndName {
 
 /**
  * 下面使用宏来维护Raster中所需要的Textures，避免代码过多导致的维护困难（或许，如果某天发现这么写还是难以使用，可以改回去）
- * 
+ *
  * 例外：
  *   - depth手动维护，原因是需要两个不同的Sampler (nearest, linear)
  */
@@ -42,8 +42,8 @@ struct DepthBufferWithHandleAndName {
 
 #define RASTER_TEXTURES_TABLE                                                                           \
     X(TextureWithHandle, vbuffer, PF_R32_UINT, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)                 \
-    X(TextureWithHandle, normal, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)  \
-    X(TextureWithHandle, tangent, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE) \
+    X(TextureWithHandle, normal, PF_A2B10G10R10_UNORM_PACK32, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)  \
+    X(TextureWithHandle, tangent, PF_A2B10G10R10_UNORM_PACK32, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE) \
     X(TextureWithHandle, uv, PF_R32G32_SFLOAT, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)                 \
     X(TextureWithHandle, position, PF_R32G32B32A32_SFLOAT, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)     \
     X(TextureWithHandle, lighting_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)   \
@@ -54,8 +54,8 @@ struct DepthBufferWithHandleAndName {
     X(TextureWithHandle, aa_texture_3, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)      \
     X(TextureWithHandle, aa_texture_4, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)      \
     X(TextureWithHandle, aa_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)         \
-    X(TextureWithHandle, ui_frame_buffer, PF_R8G8B8A8_SRGB, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)    \
-    X(TextureWithHandle, output, PF_R8G8B8A8_SRGB, E_COLOR_ATTACH, SCREEN_SIZE)
+    X(TextureWithHandle, ui_frame_buffer, PF_R8G8B8A8_UNORM, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)    \
+    X(TextureWithHandle, output, PF_R8G8B8A8_UNORM, E_COLOR_ATTACH | ETextureUsageFlags::UNORDERED_ACCESS , SCREEN_SIZE)
 
 struct RasterTextures {
     // 批量生成

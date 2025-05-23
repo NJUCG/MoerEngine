@@ -174,6 +174,10 @@ namespace Moer::Render {
 #endif
     }
 
+    static bool IsDepthStencilFormat(DXGI_FORMAT format) {
+        return format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT || format == DXGI_FORMAT_D24_UNORM_S8_UINT || format == DXGI_FORMAT_D32_FLOAT || format == DXGI_FORMAT_D16_UNORM;
+    }
+
     static bool CheckReflectionTypeMatch(const ReflectParamInfo::Dxil& resource_info, const ShaderArgCppInfo& arg_info) {
         if (arg_info.type == EShaderArgType::SDA_BindlessArray)// !just a specical case.. not mean real bindless.  'StructuredBuffer<uint> g__array_114514_bdls'
             return resource_info.type == ED3D12ShaderVariableType::StructuredBuffer;
@@ -230,7 +234,7 @@ namespace Moer::Render {
         }
     }
 
-    void D3D12PipelineState::BuildRootSignature(const PipelineLayout& _layout) {
+    void D3D12PipelineState::BuildRootSignature(const PipelineLayout& _layout, bool _b_use_input_assembler) {
         layout = _layout;
 
         uint                             required_dword = 0;// due to root sig limit, max 64 dword, 256 bytes
@@ -394,7 +398,7 @@ namespace Moer::Render {
         }
 
         D3D12PipelineState* pso = MoerNew(D3D12PipelineState)(this, D3D12PipelineState::Compute);
-        pso->BuildRootSignature(layout);
+        pso->BuildRootSignature(layout, false);
 
         D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc{};
         pso_desc.pRootSignature                  = pso->root_signature.Get();
@@ -446,12 +450,13 @@ namespace Moer::Render {
 
         Array<ParamInfoFlags>              binding_infos(_shaders.layout_hash.size());
         D3D12PipelineState::PipelineLayout layout;
-
+        const SingleShaderInfo*            vs = nullptr;
         {
             shader_group.Match(
                 [&](const ShaderVsPs& _vs_ps) {
                     pso_desc.VS = {_vs_ps.vs.shader_data.data(), _vs_ps.vs.shader_data.size()};
                     pso_desc.PS = {_vs_ps.ps.shader_data.data(), _vs_ps.ps.shader_data.size()};
+                    vs          = &_vs_ps.vs;
                     //todo reflection
 
                     for (const auto& shader_info : {_vs_ps.vs, _vs_ps.ps}) {
@@ -480,7 +485,7 @@ namespace Moer::Render {
 
                             auto& resource_info = reflect_map_iter->second.dxil;
                             if (arg_info.type == EShaderArgType::SDA_Constant) {
-                                ASSERT(IsShaderVarConstantBuffer(resource_info));
+                                //ASSERT(IsShaderVarConstantBuffer(resource_info)); // shader has unique reflect_map, if this shader used multiple times, then this assert only true for the first
                                 resource_info.type = uint(ED3D12ShaderVariableType::RootConstant);
                             }
 
@@ -611,7 +616,7 @@ namespace Moer::Render {
             }
             pso_desc.DSVFormat = D3D12EnumTranslation::METoDxFormat(_pso_info.depth_stencil_format);
             if (pso_desc.DepthStencilState.DepthEnable || pso_desc.DepthStencilState.StencilEnable) {
-                ASSERT(pso_desc.DSVFormat == DXGI_FORMAT_D32_FLOAT_S8X24_UINT || pso_desc.DSVFormat == DXGI_FORMAT_D24_UNORM_S8_UINT || pso_desc.DSVFormat == DXGI_FORMAT_D32_FLOAT || pso_desc.DSVFormat == DXGI_FORMAT_D16_UNORM);
+                ASSERT(IsDepthStencilFormat(pso_desc.DSVFormat));
                 if (pso_desc.DepthStencilState.StencilEnable) {
                     ASSERT(false == D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::DepthOnlyFormat(pso_desc.DSVFormat));
                 }
@@ -860,8 +865,10 @@ namespace Moer::Render {
                     break;
                 }
             }
-            ASSERT2(b_support, "preferred swapchain format pls use one of following:\n    PF_R16G16B16A16_SFLOAT,\n    PF_B8G8R8A8_UNORM,\n    PF_R8G8B8A8_UNORM,\n    PF_A2B10G10R10_UNORM_PACK32.");
+            ASSERT2(b_support,
+                    std::format("preferred swapchain format pls use one of following:\n    PF_R16G16B16A16_SFLOAT,\n    PF_B8G8R8A8_UNORM,\n    PF_R8G8B8A8_UNORM,\n    PF_A2B10G10R10_UNORM_PACK32.\n currently:{}", uint(format)));
             // ?or allow user to create arbitrary format swapchain, but implicitly convert to one of above formats.
+            // ref http://gamedev.net/forums/topic/670546-d3d12srgb-buffer-format-for-swap-chain/5285349/
         }
 
         if (b_recreate) {
@@ -918,11 +925,13 @@ namespace Moer::Render {
     }
 
     void D3D12Swapchain::Destroy() {
+        for (auto i : backbuffer_rtvs) device->GetRtvHeap()->Free(i);
         MoerDelete(this);
     }
 
     void D3D12Swapchain::Present() {
         DX_CHECK_HRESULT(swapchain->Present(0, DXGI_PRESENT_ALLOW_TEARING));
+        //DX_CHECK_HRESULT(swapchain->Present(1, 0));
         frame_index = swapchain->GetCurrentBackBufferIndex();
     }
 
@@ -933,6 +942,10 @@ namespace Moer::Render {
             backbuffer_rtvs[i] = device->GetRtvHeap()->Allocate();
             DX_CHECK_HRESULT(swapchain->GetBuffer(i, IID_PPV_ARGS(backbuffers[i].ReleaseAndGetAddressOf())));
             backbuffers[i]->SetName(StringWiden(std::format("backbuffer-{}", i)).c_str());
+            //D3D12_RENDER_TARGET_VIEW_DESC desc{};
+            //desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; // can use srgb format here, todo
+            //desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+            //desc.Texture2D.MipSlice = 0;
             device->Native()->CreateRenderTargetView(backbuffers[i].Get(), nullptr, device->GetRtvHeap()->GetOffsetHandleCpu(backbuffer_rtvs[i]));
 
             TextureInfo info(
@@ -951,6 +964,8 @@ namespace Moer::Render {
             backbuffer_textures[i] = MakeUnique<D3D12Texture>(device, info, std::move(alloc));
             backbuffer_textures[i]->SetName(std::format("backbuffer-texture-{}", i));
         }
+        //proxy.reset(MoerNew(D3D12Texture)(device, TextureInfo(ETextureDimension::TEX_2D, ETextureUsageFlags::COLOR_ATTACHMENT, format, EClearAttachment::COLOR, Extent3D(size, 1))));
+        //proxy->SetName("backbuffer-proxy");
     }
 
     D3D12Buffer::D3D12Buffer(D3D12Device* _device, const BufferInfo& _info) : Buffer(_info), D3D12DeviceChild(_device) {
@@ -1017,7 +1032,7 @@ namespace Moer::Render {
         srvDesc.Format                  = _type == ED3D12ShaderVariableType::ByteAddressBuffer ? DXGI_FORMAT_R32_TYPELESS : (_type == ED3D12ShaderVariableType::StructuredBuffer ? DXGI_FORMAT_UNKNOWN : viewDesc.format);
         ASSERT(_range.GetByteOffset() % byte_stride == 0);
         srvDesc.Buffer.FirstElement        = _range.GetByteOffset() / byte_stride;
-        srvDesc.Buffer.NumElements         = _range.GetNumElements();
+        srvDesc.Buffer.NumElements         = _range.GetByteSize() / byte_stride;// not use GetNumElements() directly, because stride may change
         srvDesc.Buffer.StructureByteStride = _type == ED3D12ShaderVariableType::StructuredBuffer ? byte_stride : 0;
         srvDesc.Buffer.Flags               = _type == ED3D12ShaderVariableType::ByteAddressBuffer ? D3D12_BUFFER_SRV_FLAG_RAW : D3D12_BUFFER_SRV_FLAG_NONE;
 
@@ -1051,7 +1066,7 @@ namespace Moer::Render {
         uavDesc.Format        = _type == ED3D12ShaderVariableType::RWByteAddressBuffer ? DXGI_FORMAT_R32_TYPELESS : (_type == ED3D12ShaderVariableType::RWStructuredBuffer ? DXGI_FORMAT_UNKNOWN : viewDesc.format);
         ASSERT(_range.GetByteOffset() % byte_stride == 0);
         uavDesc.Buffer.FirstElement         = _range.GetByteOffset() / byte_stride;
-        uavDesc.Buffer.NumElements          = _range.GetNumElements();
+        uavDesc.Buffer.NumElements          = _range.GetByteSize() / byte_stride;
         uavDesc.Buffer.StructureByteStride  = _type == ED3D12ShaderVariableType::RWStructuredBuffer ? byte_stride : 0;
         uavDesc.Buffer.Flags                = _type == ED3D12ShaderVariableType::RWByteAddressBuffer ? D3D12_BUFFER_UAV_FLAG_RAW : D3D12_BUFFER_UAV_FLAG_NONE;
         uavDesc.Buffer.CounterOffsetInBytes = 0;
@@ -1149,6 +1164,7 @@ namespace Moer::Render {
                     },
                     //[&fence_value, this](SwapchainPresentEvent& allocator) {
                     //    queue_fence.WaitOnHost(fence_value);
+                    //    //LOG_INFO("visit event: present, {}", fence_value);
                     //    AtomicMaximum(last_completed_fence_value, fence_value);
                     //},
                     [&fence_value](const Array<std::function<void()>>& funcs) {
@@ -1176,9 +1192,11 @@ namespace Moer::Render {
         D3D12CommandResourceAllocator& allocator;
         D3D12ResourceStateTracker&     tracker;
 
-        UnorderedSet<uint64> writed_resources;// record during dispatch/draw cmd
+        UnorderedSet<uint64>   writed_resources;// record during dispatch/draw cmd
+        const TCachedArgArray& cached_args;
 
-        D3D12CommandPreprocessVisitor(D3D12CommandResourceAllocator& allocator) : allocator(allocator), tracker(allocator.GetResourceStateTracker()) {}
+        D3D12CommandPreprocessVisitor(D3D12CommandResourceAllocator& allocator, const TCachedArgArray& cached_args)
+            : allocator(allocator), tracker(allocator.GetResourceStateTracker()), cached_args(cached_args) {}
 
         // make sure bindless resource ready for later read
         void HandleBindless(BindlessArrayRef _bindless, D3D12_BARRIER_SYNC _sync_flag) {
@@ -1338,7 +1356,7 @@ namespace Moer::Render {
                 HandleBindless(std::get<BindlessArrayRef>(_arg), D3D12_BARRIER_SYNC(pipeline.binding_infos[_idx].pipeline_flags));
             };
 
-            IterateArgs(_cmd.Args({}), func, bdls_post_func);
+            IterateArgs(_cmd.Args(cached_args), func, bdls_post_func);
         }
 
         void Visit(const UpdateBindlessArrayCmd& _cmd) {
@@ -1351,7 +1369,6 @@ namespace Moer::Render {
         }
 
         void Visit(const SetDrawStateCmd& _cmd) {
-            FATAL("not implemented");
 
             const auto& pipeline = _cmd.Pipeline();
 
@@ -1366,6 +1383,66 @@ namespace Moer::Render {
             };
 
             IterateArgs(_cmd.Args(), func, bdls_post_func);
+
+            const auto& pass_info = _cmd.RenderPassInfo();
+
+            // rtv, dsv
+            {
+                for (int i = 0; i < pass_info.color_attachments.size(); ++i) {
+                    D3D12Texture* tex = static_cast<D3D12Texture*>(pass_info.color_attachments[i].target);
+                    tracker.RecordState(tex, ETextureState::RENDER_TARGET, EPassType::Graphics, true);
+                }
+                const bool b_has_depth = pass_info.depth_attachment.target != nullptr;
+                if (b_has_depth) {
+                    D3D12Texture* tex = static_cast<D3D12Texture*>(pass_info.depth_attachment.target);
+                    tracker.RecordState(tex, ETextureState::DEPTH_STENCIL, EPassType::Graphics, true);
+                }
+            }
+
+            // vb,ib
+            const auto& vbs = _cmd.VertexBuffers();
+            for (const auto& [b, r] : vbs) {
+                D3D12Buffer* buf = static_cast<D3D12Buffer*>(b);
+                tracker.RecordState(buf, EBufferState::VERTEX, EPassType::Graphics, false);
+            }
+            const auto& ibs = _cmd.IndexBuffers();
+            for (const auto& [b, r] : ibs) {
+                D3D12Buffer* buf = static_cast<D3D12Buffer*>(b);
+                tracker.RecordState(buf, EBufferState::INDEX, EPassType::Graphics, false);
+            }
+
+            // todo indirect
+        }
+
+        void Visit(const MultiDrawCmd& _cmd) {
+
+            writed_resources.clear();
+
+            // args
+
+            UnorderedSet<const ArrayArguments*> temp_arg_batch;
+            for (const auto& draw_cmd : _cmd.draw_batch.draw_cmds) {
+                const auto& pipeline = draw_cmd.handle;
+                auto        func     = [&](const TArg& _arg, uint _idx) {
+                    if (pipeline.valid_bits & (1 << _idx))
+                        VisitArgs(_arg, pipeline.binding_infos[_idx].state_flags, pipeline.binding_infos[_idx].pipeline_flags);
+                };
+                auto bdls_post_func = [&](const TArg& _arg, uint _idx) {
+                    if (pipeline.valid_bits & (1 << _idx))
+                        HandleBindless(std::get<BindlessArrayRef>(_arg), D3D12_BARRIER_SYNC(pipeline.binding_infos[_idx].pipeline_flags));
+                };
+
+                const ArrayArguments* arg = std::holds_alternative<ArrayArguments>(draw_cmd.args) ?
+                                                &std::get<ArrayArguments>(draw_cmd.args) :
+                                                (std::holds_alternative<ArrayArgReference>(draw_cmd.args) ?
+                                                     &cached_args[std::get<ArrayArgReference>(draw_cmd.args)()] :
+                                                     nullptr);
+
+                auto iter = temp_arg_batch.emplace(arg);
+                if (arg && iter.second) {
+                    IterateArgs(*arg, func, bdls_post_func);
+                }
+            }
 
             const auto& pass_info = _cmd.RenderPassInfo();
 
@@ -1435,7 +1512,9 @@ namespace Moer::Render {
                 case Command::EType::SetDrawState:
                     Visit(static_cast<const SetDrawStateCmd&>(*_cmd));
                     break;
-
+                case Command::EType::MultiDraw:
+                    Visit(static_cast<const MultiDrawCmd&>(*_cmd));
+                    break;
                 default:
                     FATAL("not implemented cmdtype {}", Command::typenames[uint(_cmd->Type())]);
             }
@@ -1446,8 +1525,10 @@ namespace Moer::Render {
         D3D12CommandResourceAllocator& allocator;
         D3D12ResourceStateTracker&     tracker;
         D3D12CommandList&              cmd_list;
+        const TCachedArgArray&         cached_args;
 
-        D3D12CommandVisitor(D3D12CommandResourceAllocator& allocator) : allocator(allocator), tracker(allocator.GetResourceStateTracker()), cmd_list(*allocator.GetCommandList()) {}
+        D3D12CommandVisitor(D3D12CommandResourceAllocator& allocator, const TCachedArgArray& cached_args)
+            : allocator(allocator), tracker(allocator.GetResourceStateTracker()), cmd_list(*allocator.GetCommandList()), cached_args(cached_args) {}
 
         void Visit(const UploadBufferCmd& _cmd) {
             auto data_span  = _cmd.Data();
@@ -1585,7 +1666,7 @@ namespace Moer::Render {
             PipelineHandle& pso = _cmd.Pipeline();
             cmd_list.SetPso(pso);
 
-            const auto& args = _cmd.Args({});// todo cached args
+            const auto& args = _cmd.Args(cached_args);
             ASSERT(args.Size() > 0);
 
             cmd_list.BindDescriptors(pso, args);
@@ -1624,7 +1705,7 @@ namespace Moer::Render {
 
             auto       tmp_buffer = allocator.AllocateUploadBuffer(tmp_buffer_size, 256);
             BufferView array_data_gpu(tmp_buffer.buffer, tmp_buffer.byte_offset + array_data_offset, array_data.size() / 4, 4);
-            BufferView array_indices_data_gpu(tmp_buffer.buffer, tmp_buffer.byte_offset + array_indices_data_offset, array_indices_data.size() * 2, 4);
+            BufferView array_indices_data_gpu(tmp_buffer.buffer, tmp_buffer.byte_offset + array_indices_data_offset, array_indices_data.size(), 4);
 
             //copy cpu data to tmp_buffer
             {
@@ -1651,7 +1732,6 @@ namespace Moer::Render {
         }
 
         void Visit(const SetDrawStateCmd& _cmd) {
-            FATAL("not implemented");
 
             const auto&     args    = _cmd.Args();
             PipelineHandle& pso     = _cmd.Pipeline();
@@ -1722,15 +1802,15 @@ namespace Moer::Render {
             for (const MeshDrawData& draw_data : _cmd.DrawData()) {
                 const auto num_of_vertex_buffers = draw_data.vtx_views.size();
                 if (num_of_vertex_buffers > 0) {
+                    ASSERT(pso_d3d->input_strides.size() == num_of_vertex_buffers);
 
                     Array<D3D12_VERTEX_BUFFER_VIEW> vbvs(num_of_vertex_buffers);
                     for (uint i = 0; i < num_of_vertex_buffers; ++i) {
                         D3D12Buffer* buf       = static_cast<D3D12Buffer*>(draw_data.vtx_views[i].buffer);
                         vbvs[i].BufferLocation = buf->GetGpuVirtualAddress() + draw_data.vtx_views[i].offset;
-                        vbvs[i].SizeInBytes    = 0;// todo! need info from input layout ?
-                        vbvs[i].StrideInBytes  = 0;
+                        vbvs[i].SizeInBytes    = std::max(0ull, buf->GetByteSize() - draw_data.vtx_views[i].offset);// lack of accurate data, just set to max size..
+                        vbvs[i].StrideInBytes  = pso_d3d->input_strides[i];
                     }
-
                     cmd_list.Native()->IASetVertexBuffers(0, num_of_vertex_buffers, vbvs.data());
                 }
 
@@ -1760,6 +1840,133 @@ namespace Moer::Render {
                                                              draw_param.vertex_offset,
                                                              draw_param.first_instance);
                         }
+                    });
+            }
+        }
+
+        void Visit(const MultiDrawCmd& _cmd) {
+
+            const auto& pass_info = _cmd.RenderPassInfo();
+
+            //OMSetRenderTargets
+            {
+                auto*      device      = allocator.GetDevice();
+                const bool b_has_depth = pass_info.depth_attachment.target != nullptr;
+                // create rtv, dsv todo
+                D3D12_CPU_DESCRIPTOR_HANDLE rtvHandles[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
+                for (int i = 0; i < pass_info.color_attachments.size(); ++i) {
+                    D3D12Texture* tex = static_cast<D3D12Texture*>(pass_info.color_attachments[i].target);
+                    rtvHandles[i]     = device->GetRtvHeap()->GetOffsetHandleCpu(tex->CreateRtv(tex->GetView()));// default mip0
+                }
+                D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle{};
+                if (b_has_depth) {
+                    D3D12Texture* tex = static_cast<D3D12Texture*>(pass_info.depth_attachment.target);
+                    dsvHandle         = device->GetRtvHeap()->GetOffsetHandleCpu(tex->CreateDsv(tex->GetView(), false));// default mip0
+
+                    cmd_list.Native()->OMSetRenderTargets(pass_info.color_attachments.size(), rtvHandles, false, &dsvHandle);
+                } else {
+                    cmd_list.Native()->OMSetRenderTargets(pass_info.color_attachments.size(), rtvHandles, false, nullptr);
+                }
+
+                // handle clear
+                for (int i = 0; i < pass_info.color_attachments.size(); ++i) {
+                    const auto&   att = pass_info.color_attachments[i];
+                    D3D12Texture* tex = static_cast<D3D12Texture*>(att.target);
+                    if (GetLoadOp(att.action) == EAttachmentLoadOp::CLEAR) {
+                        cmd_list.Native()->ClearRenderTargetView(rtvHandles[i], &att.clear_color.x, 0, nullptr);
+                    }
+                }
+                if (b_has_depth && GetLoadOp(pass_info.depth_attachment.action) == EAttachmentLoadOp::CLEAR) {
+                    cmd_list.Native()->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, pass_info.depth_attachment.clear_depth, uint8(pass_info.depth_attachment.clear_stencil), 0, nullptr);
+                }
+            }
+
+            // ?maybe OMSetStencilRef
+
+            const auto& rect = pass_info.render_area;
+            {
+                D3D12_VIEWPORT viewport{
+                    .TopLeftX = float(rect.offset.x),
+                    .TopLeftY = float(rect.offset.y),
+                    .Width    = float(rect.extent.width),
+                    .Height   = float(rect.extent.height),
+                    .MinDepth = 0.0f,
+                    .MaxDepth = 1.0f};
+                cmd_list.Native()->RSSetViewports(1, &viewport);
+            }
+            {
+                D3D12_RECT scissor_rect{
+                    .left   = LONG(rect.offset.x),
+                    .top    = LONG(rect.offset.y),
+                    .right  = LONG(rect.offset.x + rect.extent.width),
+                    .bottom = LONG(rect.offset.y + rect.extent.height)};
+                cmd_list.Native()->RSSetScissorRects(1, &scissor_rect);
+            }
+
+            // set vb,ib then draw call
+            for (const DrawBatchElement& draw_cmd : _cmd.draw_batch.draw_cmds) {
+                const PipelineHandle& pso = draw_cmd.handle;
+                cmd_list.SetPso(pso);
+                const ArrayArguments* args = std::holds_alternative<ArrayArguments>(draw_cmd.args) ?
+                                                 &std::get<ArrayArguments>(draw_cmd.args) :
+                                                 (std::holds_alternative<ArrayArgReference>(draw_cmd.args) ?
+                                                      &cached_args[std::get<ArrayArgReference>(draw_cmd.args)()] :
+                                                      nullptr);
+                cmd_list.BindDescriptors(pso, *args);
+                auto* pso_d3d = reinterpret_cast<D3D12PipelineState*>(pso.handle);
+                cmd_list.Native()->IASetPrimitiveTopology(pso_d3d->primitive_topology);
+
+                MatchVariant(
+                    draw_cmd.mesh_dispatch_data,
+                    [&](const Array<MeshDrawData>& mesh_draw_data) {
+                        for (const auto& draw_data : mesh_draw_data) {
+
+                            const auto num_of_vertex_buffers = draw_data.vtx_views.size();
+                            if (num_of_vertex_buffers > 0) {
+                                ASSERT(pso_d3d->input_strides.size() == num_of_vertex_buffers);
+
+                                Array<D3D12_VERTEX_BUFFER_VIEW> vbvs(num_of_vertex_buffers);
+                                for (uint i = 0; i < num_of_vertex_buffers; ++i) {
+                                    D3D12Buffer* buf       = static_cast<D3D12Buffer*>(draw_data.vtx_views[i].buffer);
+                                    vbvs[i].BufferLocation = buf->GetGpuVirtualAddress() + draw_data.vtx_views[i].offset;
+                                    vbvs[i].SizeInBytes    = std::max(0ull, buf->GetByteSize() - draw_data.vtx_views[i].offset);// lack of accurate data, just set to max size..
+                                    vbvs[i].StrideInBytes  = pso_d3d->input_strides[i];
+                                }
+
+                                cmd_list.Native()->IASetVertexBuffers(0, num_of_vertex_buffers, vbvs.data());
+                            }
+
+                            ASSERT(!draw_data.indirect_draw_param);// todo draw indirect
+
+                            MatchVariant(
+                                draw_data.idx_view,
+                                [&](const IndexBuffer& ib) {
+                                    D3D12_INDEX_BUFFER_VIEW ibv;
+                                    ibv.BufferLocation = static_cast<D3D12Buffer*>(ib.buffer.GetBuffer())->GetGpuVirtualAddress() + ib.buffer.GetByteOffset();
+                                    ibv.SizeInBytes    = ib.buffer.GetByteSize();
+                                    ibv.Format         = D3D12EnumTranslation::METoDxIndexFormat(ib.stride);
+                                    cmd_list.Native()->IASetIndexBuffer(&ibv);
+
+                                    for (const auto& draw_param : draw_data.draw_params) {
+                                        cmd_list.Native()->DrawIndexedInstanced(draw_param.index_cnt,
+                                                                                draw_param.instance_cnt,
+                                                                                draw_param.first_index,
+                                                                                draw_param.vertex_offset,
+                                                                                draw_param.first_instance);
+                                    }
+                                },
+                                [&](uint ib) {
+                                    for (const auto& draw_param : draw_data.draw_params) {
+                                        cmd_list.Native()->DrawInstanced(draw_param.index_cnt,
+                                                                         draw_param.instance_cnt,
+                                                                         draw_param.vertex_offset,
+                                                                         draw_param.first_instance);
+                                    }
+                                });
+                        }
+                    },
+                    [&](const Array<DispatchMeshData>& mesh_dispatch_data) {
+                        FATAL("not implemented");
                     });
             }
         }
@@ -1805,6 +2012,9 @@ namespace Moer::Render {
                     //QueueTransfer,
                 case Command::EType::SetDrawState:
                     Visit(static_cast<const SetDrawStateCmd&>(*_cmd));
+                    break;
+                case Command::EType::MultiDraw:
+                    Visit(static_cast<const MultiDrawCmd&>(*_cmd));
                     break;
                     //ClearResource,
                     //Scope,
@@ -1854,6 +2064,9 @@ namespace Moer::Render {
         cv.notify_all();
         thd.request_stop();
         thd.join();
+        while (auto it = ready_allocators.Pop()) {
+            MoerDelete(it);
+        }
     }
 
     void D3D12GraphicsCommandQueue::Wait(WaitEvent _event) {
@@ -1876,18 +2089,18 @@ namespace Moer::Render {
         //}
         //const auto& cmd_lists = reorderer.m_cmd_lists;
 
+        device->GetCsuHeapGpuDyn()->BeginPushDescriptors();
+        device->GetSamplerHeapGpuDyn()->BeginPushDescriptors();
+
         cmd_list->Begin();
         if (!_submit.cmds.empty()) {
-            D3D12CommandVisitor           cmd_visitor(*allocator);
-            D3D12CommandPreprocessVisitor preprocess_visitor(*allocator);
+            D3D12CommandVisitor           cmd_visitor(*allocator, _submit.cached_args);
+            D3D12CommandPreprocessVisitor preprocess_visitor(*allocator, _submit.cached_args);
             auto&                         tracker = allocator->GetResourceStateTracker();
 
             // prepare descriptor heaps
             ID3D12DescriptorHeap* heaps[] = {device->GetCsuHeapGpuDyn()->Native(), device->GetSamplerHeapGpuDyn()->Native()};
             cmd_list->Native()->SetDescriptorHeaps(2, heaps);
-            device->GetCsuHeapGpuDyn()->BeginPushDescriptors();
-            device->GetSamplerHeapGpuDyn()->BeginPushDescriptors();
-
             for (const auto& cmd : _submit.cmds) {// todo reorder
                 preprocess_visitor.VisitCmd(cmd.get());
 
@@ -1906,9 +2119,9 @@ namespace Moer::Render {
 
         const uint64 next_fence_value = ++last_submitted_fence_value;
 
-        allocator->AddOnComplete([next_fence_value, this] {
-            LOG_INFO("on complete {}", next_fence_value);
-        });
+        //allocator->AddOnComplete([next_fence_value, this] {
+        //    LOG_INFO("on execute complete {}", next_fence_value);
+        //});
 
         for (auto&& e : _submit.wait_events) {
             queue->Wait(reinterpret_cast<D3D12Fence*>(e.timeline_handle)->Native(), e.value);
@@ -1949,61 +2162,74 @@ namespace Moer::Render {
     }
 
     void D3D12GraphicsCommandQueue::Present(SwapchainRef _swapchain, TextureView _target) {
-        //LOG_INFO("present");
-
         D3D12Swapchain* swapchain = static_cast<D3D12Swapchain*>(_swapchain.Get());
+        static uint64   _frame_fence[3]{0, 0, 0};
+        DASSERT(3 >= swapchain->GetBackbufferCount());
 
         auto  allocator = RequestCommandResourceAllocator();
         auto& tracker   = allocator->GetResourceStateTracker();
         auto  cmd_list  = allocator->GetCommandList();
         cmd_list->Begin();
 
-                    // prepare descriptor heaps
+        // prepare descriptor heaps
         ID3D12DescriptorHeap* heaps[] = {device->GetCsuHeapGpuDyn()->Native(), device->GetSamplerHeapGpuDyn()->Native()};
         cmd_list->Native()->SetDescriptorHeaps(2, heaps);
         device->GetCsuHeapGpuDyn()->BeginPushDescriptors();
         device->GetSamplerHeapGpuDyn()->BeginPushDescriptors();
 
+        D3D12Texture* target_tex = static_cast<D3D12Texture*>(_target.GetTexture());
+
         tracker.StartState(swapchain->GetBackbuffer(), {.layout = D3D12_BARRIER_LAYOUT_PRESENT, .sync = D3D12_BARRIER_SYNC_ALL, .access = D3D12_BARRIER_ACCESS_COMMON});
-        tracker.RecordState(swapchain->GetBackbuffer(), ETextureState::RENDER_TARGET, EPassType::Graphics, true);
-        tracker.RecordState(static_cast<D3D12Texture*>(_target.GetTexture()), ETextureState::SHADER_RESOURCE, EPassType::Graphics, false);
+        tracker.RecordState(swapchain->GetBackbuffer(), ETextureState::TRANSFER, EPassType::Graphics, true);
+        tracker.RecordState(target_tex, ETextureState::TRANSFER, EPassType::Graphics, false);
+        //tracker.RecordState(swapchain->GetBackbuffer(), ETextureState::RENDER_TARGET, EPassType::Graphics, true);
+        //tracker.RecordState(target_tex, ETextureState::SHADER_RESOURCE, EPassType::Graphics, false);
+        //tracker.RecordState(swapchain->proxy.get(), ETextureState::RENDER_TARGET, EPassType::Graphics, true);
         tracker.ResolveBarriers();
         tracker.DispatchBarriers(cmd_list->Native());
 
-        /*     float clear_color[] = {0.2f, 0.3f, 0.8f, 0.0f};
-        cmd_list->Native()->ClearRenderTargetView(device->GetRtvHeap()->GetOffsetHandleCpu(swapchain->GetBackbufferRTV()), clear_color, 0, nullptr);*/
+        // now just do copy, note format constraint
+        // ?blit fail due to sync problem:
+        //     blit _target to backbuffer.
+        //     blit _target to backbuffer's proxy texture, then copy to backbuffer.
+        //auto& pipeline = device->blit_texture_pipelines[swapchain->format];
+        //cmd_list->SetPso(pipeline.handle);
+        //cmd_list->BindDescriptors(pipeline.handle, pipeline.SetArgs(_target, Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)));
+        //{
+        //    //const auto rtvHandle = device->GetRtvHeap()->GetOffsetHandleCpu(swapchain->GetBackbufferRTV());
+        //    const auto rtvHandle = device->GetRtvHeap()->GetOffsetHandleCpu(swapchain->proxy->CreateRtv(swapchain->proxy->GetView()));
+        //    cmd_list->Native()->OMSetRenderTargets(1, &rtvHandle, false, nullptr);
+        //    const float clear_color[4]{0.0f, 0.0f, 0.0f, 1.0f};
+        //    cmd_list->Native()->ClearRenderTargetView(rtvHandle, clear_color, 0, nullptr);
+        //}
+        //{
+        //    D3D12_VIEWPORT viewport{
+        //        .TopLeftX = float(0),
+        //        .TopLeftY = float(0),
+        //        .Width    = float(swapchain->GetWidth()),
+        //        .Height   = float(swapchain->GetHeight()),
+        //        .MinDepth = 0.0f,
+        //        .MaxDepth = 1.0f};
+        //    cmd_list->Native()->RSSetViewports(1, &viewport);
+        //}
+        //{
+        //    D3D12_RECT scissor_rect{
+        //        .left   = LONG(0),
+        //        .top    = LONG(0),
+        //        .right  = LONG(0 + swapchain->GetWidth()),
+        //        .bottom = LONG(0 + swapchain->GetHeight())};
+        //    cmd_list->Native()->RSSetScissorRects(1, &scissor_rect);
+        //}
 
-        // blit _target to backbuffer . todo
-        auto& pipeline = device->blit_texture_pipelines[swapchain->format];
-        cmd_list->SetPso(pipeline.handle);
-        cmd_list->BindDescriptors(pipeline.handle, pipeline.SetArgs(_target, Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)));
-        {
-            const auto rtvHandle = device->GetRtvHeap()->GetOffsetHandleCpu(swapchain->GetBackbufferRTV());
-            cmd_list->Native()->OMSetRenderTargets(1, &rtvHandle, false, nullptr);
-            const float clear_color[4]{0.0f, 0.0f, 0.0f, 1.0f};
-            cmd_list->Native()->ClearRenderTargetView(rtvHandle, clear_color, 0, nullptr);
-        }
-        {
-            D3D12_VIEWPORT viewport{
-                .TopLeftX = float(0),
-                .TopLeftY = float(0),
-                .Width    = float(swapchain->GetWidth()),
-                .Height   = float(swapchain->GetHeight()),
-                .MinDepth = 0.0f,
-                .MaxDepth = 1.0f};
-            cmd_list->Native()->RSSetViewports(1, &viewport);
-        }
-        {
-            D3D12_RECT scissor_rect{
-                .left   = LONG(0),
-                .top    = LONG(0),
-                .right  = LONG(0 + swapchain->GetWidth()),
-                .bottom = LONG(0 + swapchain->GetHeight())};
-            cmd_list->Native()->RSSetScissorRects(1, &scissor_rect);
-        }
+        //cmd_list->Native()->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        //cmd_list->Native()->DrawInstanced(3, 1, 0, 0);
 
-        cmd_list->Native()->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        cmd_list->Native()->DrawInstanced(3, 1, 0, 0);
+        //tracker.RecordState(swapchain->proxy.get(), ETextureState::TRANSFER, EPassType::Graphics, false);
+        //tracker.ResolveBarriers();
+        //tracker.DispatchBarriers(cmd_list->Native());
+        //cmd_list->CopyTexture(swapchain->proxy.get(), swapchain->GetBackbuffer(), target_tex->GetExtent(), uint3(0), uint3(0), 0, 0);
+
+        cmd_list->CopyTexture(target_tex, swapchain->GetBackbuffer(), target_tex->GetExtent(), uint3(0), uint3(0), 0, 0);
 
         tracker.RestoreState();
         tracker.DispatchBarriers(cmd_list->Native());
@@ -2015,16 +2241,20 @@ namespace Moer::Render {
             queue->ExecuteCommandLists(1, ppCommandLists);
         }
         const uint64 next_fence_value = ++last_submitted_fence_value;
+
         queue->Signal(queue_fence.Native(), next_fence_value);
+
+        _frame_fence[swapchain->GetBackbufferIndex()] = next_fence_value;
         swapchain->Present();
 
         {
             std::unique_lock lck(mtx);
             event_queue.emplace_back(std::move(allocator), next_fence_value, true);
-            //event_queue.emplace_back(SwapchainPresentEvent{}, next_fence_value, true);
+            //event_queue.emplace_back(SwapchainPresentEvent{}, _frame_fence[swapchain->GetBackbufferIndex()], true);
             cv.notify_one();
             pending_fence_values.Enqueue(next_fence_value);
         }
+        queue_fence.WaitOnHost(_frame_fence[swapchain->GetBackbufferIndex()]);//
     }
 
     void D3D12GraphicsCommandQueue::Sync() {
@@ -2192,7 +2422,7 @@ namespace Moer::Render {
             list->SetComputeRootSignature(pso->NativeRootSignature());
         }
     }
-    void D3D12CommandList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args) {
+    void D3D12CommandList::BindDescriptors(const PipelineHandle& _pso_handle, const ArrayArguments& _args) {
         D3D12PipelineState* pso    = reinterpret_cast<D3D12PipelineState*>(_pso_handle.handle);
         const auto&         layout = pso->GetLayout();
 
@@ -2790,6 +3020,23 @@ namespace Moer::Render {
         for (const auto& [desc, index] : srv_uav_views) {
             if (desc == viewDesc) {
                 return {index};
+            }
+        }
+
+        if (IsDepthStencilFormat(viewDesc.format)) {
+            switch (viewDesc.format) {
+                case DXGI_FORMAT_D16_UNORM:
+                    viewDesc.format = DXGI_FORMAT_R16_UNORM;
+                    break;
+                case DXGI_FORMAT_D24_UNORM_S8_UINT:
+                    viewDesc.format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+                    break;
+                case DXGI_FORMAT_D32_FLOAT:
+                    viewDesc.format = DXGI_FORMAT_R32_FLOAT;
+                    break;
+                case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+                    viewDesc.format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+                    break;
             }
         }
 
@@ -3447,7 +3694,7 @@ namespace Moer::Render {
             case ETextureState::DEPTH_STENCIL:
                 DASSERT(_pass_type == EPassType::Graphics);
                 desc = {.layout = _is_write ? D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE : D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_READ,
-                        .sync   = D3D12_BARRIER_SYNC_COPY,
+                        .sync   = D3D12_BARRIER_SYNC_DEPTH_STENCIL,
                         .access = _is_write ? D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE : D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ};
                 break;
             case ETextureState::UNORDERED_ACCESS:
@@ -3458,7 +3705,7 @@ namespace Moer::Render {
                         .access = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS};
                 break;
             default:
-                FATAL("Unsupported texture state: {} {}", static_cast<uint32_t>(_state), static_cast<uint32_t>(_pass_type), _is_write);
+                FATAL("Unsupported texture state: {} {} {}", static_cast<uint32_t>(_state), static_cast<uint32_t>(_pass_type), _is_write);
         }
         RecordState(texture, desc);
     }
@@ -3508,7 +3755,7 @@ namespace Moer::Render {
             case EBufferState::INDEX:
                 DASSERT(!_is_write);
                 DASSERT(_pass_type == EPassType::Graphics);
-                desc = {.sync = D3D12_BARRIER_SYNC_VERTEX_SHADING, .access = D3D12_BARRIER_ACCESS_INDEX_BUFFER};
+                desc = {.sync = D3D12_BARRIER_SYNC_INDEX_INPUT, .access = D3D12_BARRIER_ACCESS_INDEX_BUFFER};
                 break;
             case EBufferState::INDIRECT:
                 DASSERT(!_is_write);// if want to update indirect args, use uav state
@@ -3529,7 +3776,7 @@ namespace Moer::Render {
                         .access = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS};
                 break;
             default:
-                FATAL("Unsupported buffer state: {} {}", static_cast<uint32_t>(_state), static_cast<uint32_t>(_pass_type), _is_write);
+                FATAL("Unsupported buffer state: {} {} {}", static_cast<uint32_t>(_state), static_cast<uint32_t>(_pass_type), _is_write);
         }
         RecordState(buffer, desc);
     }
@@ -3627,8 +3874,10 @@ namespace Moer::Render {
 
     void D3D12ResourceStateTracker::RestoreState() {
         for (auto& [tex, state] : texture_states) {
-            if (state.initial == state.before)
+            if (state.initial == state.before) {
+                state.after = {};
                 continue;
+            }
             //if (pending_textures.contains(tex))
             //    continue;// has next/export state, not reset to init // TODO
 
@@ -3649,8 +3898,10 @@ namespace Moer::Render {
         // maybe not need
         const auto buffer_init_state = BufferStateDescription{.sync = D3D12_BARRIER_SYNC_NONE, .access = D3D12_BARRIER_ACCESS_NO_ACCESS};
         for (auto& [buf, state] : buffer_states) {
-            if (buffer_init_state == state.before)
+            if (buffer_init_state == state.before) {
+                state.after = {};
                 continue;
+            }
 
             buffer_barriers.emplace_back(CD3DX12_BUFFER_BARRIER(
                 state.before.sync,
@@ -3717,6 +3968,12 @@ namespace Moer::Render {
         descriptor_size       = device->Native()->GetDescriptorHandleIncrementSize(_type);
         num_total_descriptors = _num_descriptors;
         type                  = _type;
+
+#if DX_DEBUG
+        const char* type_str[]{"CBV_SRV_UAV", "SAMPLER", "RTV", "DSV"};
+        const char* vis_str[]{"NotShaderVisible", "ShaderVisible"};
+        heap->SetName(StringWiden(std::format("DescriptorHeap_{}_{}", type_str[uint(_type)], vis_str[uint(_is_shader_visible)])).c_str());
+#endif
     }
 
     DescriptorIndex D3D12CpuDescriptorAllocator::Allocate() {
@@ -3767,6 +4024,7 @@ namespace Moer::Render {
     D3D12BindlessArray::D3D12BindlessArray(D3D12Device* _device, uint _start_offset, uint _max_num)
         : BindlessArray(), D3D12DeviceChild(_device), slot_offset(0), offset_in_global_csu_heap_gpu(_start_offset), max_num(_max_num), handles(_max_num) {
         underlying_array = MakeUnique<D3D12Buffer>(_device, BufferInfo(_max_num, sizeof(uint), EBufferUsageFlags::UNORDERED_ACCESS));
+        underlying_array->SetName(std::format("bindlessarray_buf_start{}_count{}", _start_offset, _max_num));
     }
 
     uint64 D3D12BindlessArray::ArrayHandle() const {
@@ -3891,7 +4149,6 @@ namespace Moer::Render {
     }
     UniquePtr<class Command> D3D12BindlessArray::CreateUpdateCommand() {
         std::unique_lock<std::mutex> lk(mtx);
-        //lock for resource_allocated_set
 
         uint num_valid_update = 0;
         for (const UpdateCmd& cmd : update_cmds) {
