@@ -100,7 +100,7 @@ namespace Moer {
             std::copy(copy_src, copy_src + stride_float, regenerated_vertices.data() + i * stride_float);
         }
 
-        Moer::Array<MeshletBound>& meshlet_bounds = output.meshlet_bounds;
+        Moer::Array<Render::MeshletBound>& meshlet_bounds = output.meshlet_bounds;
         meshlet_bounds.resize(meshlet_count);
 
         std::for_each(meshlets.begin(), meshlets.end(), [&](const meshopt_Meshlet& m) {
@@ -130,8 +130,8 @@ namespace Moer {
     MeshProcessOutput MeshProcessor::GenerateMeshlets(const MeshProcessInput& input) {
         MeshProcessOutput output{};
         GenerateMeshlets(input, output);
-        output.meshlet_vertex_data = Moer::Array<float>(static_cast<float *>(input.vertex_data), static_cast<float *>(input.vertex_data) + input.vertex_count * input.vertex_stride / 4);
-        output.primitive_indices = Moer::Array<uint32_t>(input.index_data, input.index_data + input.index_count);
+        output.meshlet_vertex_data = Moer::Array<float>(static_cast<float*>(input.vertex_data), static_cast<float*>(input.vertex_data) + input.vertex_count * input.vertex_stride / 4);
+        output.primitive_indices   = Moer::Array<uint32_t>(input.index_data, input.index_data + input.index_count);
         return std::move(output);
     }
 

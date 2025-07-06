@@ -77,4 +77,129 @@ namespace Moer::Render {
     CopyQueue& RenderDevice::GetCopyQueue() {
         return Get().impl->GetCopyQueue();
     }
+    bool IsPixelFormatBC(EPixelFormat _format) {
+        switch (_format) {
+            case PF_BC1_RGB_UNORM_BLOCK: return true;
+            case PF_BC1_RGB_SRGB_BLOCK: return true;
+            case PF_BC1_RGBA_UNORM_BLOCK: return true;
+            case PF_BC1_RGBA_SRGB_BLOCK: return true;
+            case PF_BC2_UNORM_BLOCK: return true;
+            case PF_BC2_SRGB_BLOCK: return true;
+            case PF_BC3_UNORM_BLOCK: return true;
+            case PF_BC3_SRGB_BLOCK: return true;
+            case PF_BC4_UNORM_BLOCK: return true;
+            case PF_BC4_SNORM_BLOCK: return true;
+            case PF_BC5_UNORM_BLOCK: return true;
+            case PF_BC5_SNORM_BLOCK: return true;
+            case PF_BC6H_UFLOAT_BLOCK: return true;
+            case PF_BC6H_SFLOAT_BLOCK: return true;
+            case PF_BC7_UNORM_BLOCK: return true;
+            case PF_BC7_SRGB_BLOCK: return true;
+        }
+        return false;
+    }
+    uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
+        if (IsPixelFormatBC(_format)) {
+            uint64 block_width  = (_size.x + 3) / 4;
+            uint64 block_height = (_size.y + 3) / 4;
+            uint64 block_cnt    = block_width * block_height * std::max(1u, _size.z);
+
+            switch (_format) {
+                case PF_BC1_RGB_UNORM_BLOCK:
+                case PF_BC1_RGBA_UNORM_BLOCK:
+                case PF_BC1_RGB_SRGB_BLOCK:
+                case PF_BC1_RGBA_SRGB_BLOCK:
+                    return block_cnt * 8;
+                    break;
+                case PF_BC2_UNORM_BLOCK:
+                case PF_BC2_SRGB_BLOCK:
+                case PF_BC3_UNORM_BLOCK:
+                case PF_BC3_SRGB_BLOCK:
+                    return block_cnt * 16;
+                    break;
+                case PF_BC4_UNORM_BLOCK:
+                case PF_BC4_SNORM_BLOCK:
+                    return block_cnt * 8;
+                    break;
+                case PF_BC5_UNORM_BLOCK:
+                case PF_BC5_SNORM_BLOCK:
+                case PF_BC6H_UFLOAT_BLOCK:
+                case PF_BC6H_SFLOAT_BLOCK:
+                case PF_BC7_UNORM_BLOCK:
+                case PF_BC7_SRGB_BLOCK:
+                    return block_cnt * 16;
+                    break;
+                default: assert(false && "not support format");
+            }
+        }
+        switch (_format) {
+            case PF_R8G8B8A8_SRGB:
+            case PF_R8G8B8A8_UNORM:
+            case PF_R8G8B8A8_UINT:
+            case PF_R8G8B8A8_SNORM:
+            case PF_R8G8B8A8_SINT:
+                return _size.x * _size.y * _size.z * 4;
+                break;
+            case PF_R32G32B32A32_SFLOAT:
+            case PF_R32G32B32A32_UINT:
+            case PF_R32G32B32A32_SINT:
+                return _size.x * _size.y * _size.z * 16;
+                break;
+            case PF_R32G32_SFLOAT:
+            case PF_R32G32_UINT:
+            case PF_R32G32_SINT:
+                return _size.x * _size.y * _size.z * 8;
+                break;
+            case PF_R32_SFLOAT:
+            case PF_R32_UINT:
+            case PF_R32_SINT:
+                return _size.x * _size.y * _size.z * 4;
+                break;
+            case PF_R16G16B16A16_SFLOAT:
+            case PF_R16G16B16A16_UNORM:
+            case PF_R16G16B16A16_UINT:
+            case PF_R16G16B16A16_SNORM:
+            case PF_R16G16B16A16_SINT:
+                return _size.x * _size.y * _size.z * 8;
+                break;
+            case PF_R16G16_SFLOAT:
+            case PF_R16G16_UNORM:
+            case PF_R16G16_UINT:
+            case PF_R16G16_SNORM:
+            case PF_R16G16_SINT:
+                return _size.x * _size.y * _size.z * 4;
+                break;
+            case PF_R16_SFLOAT:
+            case PF_R16_UNORM:
+            case PF_R16_UINT:
+            case PF_R16_SNORM:
+            case PF_R16_SINT:
+                return _size.x * _size.y * _size.z * 2;
+                break;
+            case PF_R8G8B8_SRGB:
+            case PF_R8G8B8_UNORM:
+            case PF_R8G8B8_UINT:
+            case PF_R8G8B8_SNORM:
+            case PF_R8G8B8_SINT:
+                return _size.x * _size.y * _size.z * 3;
+                break;
+            case PF_R8G8_SRGB:
+            case PF_R8G8_UNORM:
+            case PF_R8G8_UINT:
+            case PF_R8G8_SNORM:
+            case PF_R8G8_SINT:
+                return _size.x * _size.y * _size.z * 2;
+                break;
+            case PF_R8_SRGB:
+            case PF_R8_UNORM:
+            case PF_R8_UINT:
+            case PF_R8_SNORM:
+            case PF_R8_SINT:
+                return _size.x * _size.y * _size.z;
+                break;
+            default:
+                assert(false && "not support format");
+        }
+        return 0;
+    }
 };// namespace Moer::Render

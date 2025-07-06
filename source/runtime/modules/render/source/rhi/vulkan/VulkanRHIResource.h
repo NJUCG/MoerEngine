@@ -7,16 +7,12 @@
 
 #include "PixelFormat.h"
 #include "misc/CountableRef.h"
-#include "misc/Crc32.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "rhi/RHIResourceInitilizer.h"
-
-#include "shader/ShaderCommon.h"
 
 #include <atomic>
 #include <cstddef>
@@ -30,62 +26,12 @@
 #include <vk_mem_alloc.h>
 
 #include <condition_variable>
-// #include "VulkanDescriptor.h"
 #include <variant>
-
-class VulkanRHIImpl;
-
 namespace Moer::Render {
     class VulkanDevice;
     class VulkanPipelineResourceCache;
 
     class VulkanDescriptorSetsLayout;
-}// namespace Moer::Render
-#pragma region forward definitions
-class VulkanRHICommandList;
-class VulkanRHITexture;
-class VulkanRHIAmplificationShader;
-class VulkanRHIBlendState;
-class VulkanRHIShaderBoundStateInput;
-class VulkanRHIBuffer;
-class VulkanRHIComputePipelineState;
-class VulkanRHIComputeShader;
-class VulkanRHIDepthStencilState;
-class VulkanRHIGeometryShader;
-class VulkanRHIFence;
-class VulkanRHIGraphicsPipelineState;
-class VulkanRHIMeshShader;
-class VulkanRHIPipelineBinaryDataLibrary;
-class VulkanRHIFragmentShader;
-class VulkanRHIRasterizationState;
-class VulkanRHIRayTracingPipelineState;
-class VulkanRHIRayTracingScene;
-class VulkanRHIRayTracingAccelerationStructure;
-class VulkanRHIRayTracingBLAS;
-class VulkanRHIRayTracingTLAS;
-class VulkanRHIRayTracingShader;
-class VulkanRHIRenderQuery;
-class VulkanRHIRenderQueryPool;
-class VulkanRHISampler;
-class VulkanRHIMultisampleState;
-class VulkanRHIShader;
-class VulkanRHIShaderLibrary;
-class VulkanRHITextureSRV;
-class VulkanRHIStagingBuffer;
-class VulkanRHITextureReference;
-class VulkanRHIGlobalBufferLayout;
-class VulkanRHIGlobalBuffer;
-class VulkanRHITextureUAV;
-class VulkanRHIVertexInputState;
-class VulkanRHIVertexShader;
-class VulkanRHIViewableResource;
-class VulkanViewport;
-#pragma endregion
-
-#pragma region utils definition
-
-namespace Moer::Render {
-
     //forward declaration
     class VulkanBuffer;
     class VulkanTexture;
@@ -511,109 +457,6 @@ namespace Moer::Render {
 
 #pragma endregion
 
-    class VulkanRHISampler final : public RHISampler {
-    public:
-        explicit VulkanRHISampler() : RHISampler() {}
-
-        void GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerCreateInfo& _initializer);
-
-        inline VkSampler GetHandle() const {
-            return m_sampler;
-        }
-
-        inline VkImageLayout GetImageLayout() const {
-            return m_image_layout;
-        }
-
-    private:
-        VkFilter             METoVKMinMagFilterMode(ESamplerFilter _filter);
-        VkSamplerMipmapMode  METoVKMipmapMode(ESamplerFilter _filter);
-        VkSamplerAddressMode METoVKWrapMode(ESamplerAddressMode _address_mode);
-        VkCompareOp          METoVKCompareOp(ESamplerCompareFunction _compare_op);
-
-    private:
-        VkSampler     m_sampler;
-        VkImageLayout m_image_layout;
-    };
-
-#pragma region shader definitions
-
-    class VulkanRHIGraphicsShader {
-        friend VulkanRHIImpl;
-
-    public:
-        explicit VulkanRHIGraphicsShader() : m_shader_module(VK_NULL_HANDLE) {}
-
-        inline VkShaderModule GetHandle() const {
-            return m_shader_module;
-        }
-
-    protected:
-        VkShaderModule m_shader_module;
-    };
-
-    class VulkanRHIVertexShader : public RHIVertexShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIVertexShader(const Shader* _meta_shader) : RHIVertexShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIFragmentShader : public RHIFragmentShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIFragmentShader(const Shader* _meta_shader) : RHIFragmentShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIGeometryShader : public RHIGeometryShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIGeometryShader(const Shader* _meta_shader) : RHIGeometryShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIComputeShader : public RHIComputeShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIComputeShader(const Shader* _meta_shader) : RHIComputeShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIMeshShader : public RHIMeshShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIMeshShader(const Shader* _meta_shader) : RHIMeshShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIAmplificationShader : public RHIAmplificationShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIAmplificationShader(const Shader* _meta_shader) : RHIAmplificationShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIRayGenShader : public RHIRayGenShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIRayGenShader(const Shader* _meta_shader) : RHIRayGenShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIRayMissShader : public RHIRayMissShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIRayMissShader(const Shader* _meta_shader) : RHIRayMissShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIRayClosestHitShader : public RHIRayClosestHitShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIRayClosestHitShader(const Shader* _meta_shader) : RHIRayClosestHitShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIRayCallableShader : public RHIRayCallableShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIRayCallableShader(const Shader* _meta_shader) : RHIRayCallableShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIRayIntersectionShader : public RHIRayIntersectionShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIRayIntersectionShader(const Shader* _meta_shader) : RHIRayIntersectionShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-    class VulkanRHIRayAnyhitShader : public RHIRayAnyhitShader, public VulkanRHIGraphicsShader {
-    public:
-        explicit VulkanRHIRayAnyhitShader(const Shader* _meta_shader) : RHIRayAnyhitShader(_meta_shader), VulkanRHIGraphicsShader() {}
-    };
-
-#pragma endregion
-
 #pragma region pipeline states definitions
 
     class VulkanDeviceObject {
@@ -684,8 +527,6 @@ namespace Moer::Render {
 #pragma region viewable resources definitions
 
     class VulkanBuffer : public Buffer, VulkanDeviceObject {
-        friend VulkanRHIImpl;
-
     public:
         struct BufferAlloc {
             VkBuffer      buffer;
@@ -740,8 +581,6 @@ namespace Moer::Render {
         };
     };
     class VulkanTexture final : public Texture, public VulkanDeviceObject {
-        friend VulkanRHIImpl;
-
     public:
         VulkanTexture() = delete;
         ~VulkanTexture();
@@ -998,6 +837,8 @@ namespace Moer::Render {
 
         uint64_t GetValue() const override;
 
+        uint64 GetDeviceValue() const;
+
         void Wait(uint64_t _value) override;
         // can be called on any thread to block current thread
         void Sync(uint64);
@@ -1047,18 +888,5 @@ namespace Moer::Render {
         static VkGeometryInstanceFlagsKHR           METoVKGeometryInstanceFlagsKHR(ERayTracingInstanceFlags _me_flags);
     };
 }// namespace Moer::Render
-#pragma endregion
-
-#pragma region graphic pipeline definitions
-#pragma endregion
-
-#pragma region raytracing
-#pragma endregion
-
-#pragma region render query
-#pragma endregion
-
-#pragma region RDG resource creater
-#pragma endregion
 
 #endif//VULKAN_RHI_RESOURCE_H

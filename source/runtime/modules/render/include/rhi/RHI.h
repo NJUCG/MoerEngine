@@ -2,7 +2,6 @@
 #define RHI_H
 #include "PixelFormat.h"
 #include "RHICommand.h"
-#include "RHIResource.h"
 #include "log/LogSystem.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -148,6 +147,8 @@ namespace Moer::Render {
         RENDER_API Ext* LoadExtension() const;
 
     protected:
+        RENDER_API IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue);
+
     private:
         RENDER_API BufferRef CreateBuffer(std::string_view _name, uint _element_cnt, uint _stride, EBufferUsageFlags _usage, EPixelFormat _format);
 

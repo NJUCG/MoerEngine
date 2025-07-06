@@ -84,7 +84,7 @@ Engine for Realtime Rendering
 ### CMakeLists
 
 * 所有library（通过add_library添加的东西）
-  * MoerRuntime、MoerCore、MoerIO、MoerRender、MoerResource
+  * MoerRuntime、MoerCore、MoerRender、MoerResource
   * 其中，MoerRuntime被其他四个库public链接了，同时，每个库都public include了很多头文件目录
     * 所以，MoerEditor只链接了MoerRuntime，并且不需要添加runtime相关的头文件目录
 * 所有executable（通过add_executable添加的东西）

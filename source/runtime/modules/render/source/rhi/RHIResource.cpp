@@ -1,29 +1,13 @@
 #include "rhi/RHIResource.h"
 #include "PixelFormat.h"
-#include "misc/Crc32.h"
 #include "misc/STL.h"
-#include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
-#include "rhi/RHIResourceInitilizer.h"
-#include "shader/Shader.h"
-#include "shader/ShaderCommon.h"
-#include "shader/ShaderParameterMacros.h"
+
 #include <algorithm>
 #include <misc/Traits.h>
-#include <tuple>
-
-//need a mpmc linked list to delete resource
-LockFreeQueueBase<RHIResource, false> pending_deletings;
 
 void RHIResource::Destroy() {
-    //mark resource to be deleted
-    //deferred delete
-    // if (!flags.MarkToDelete(std::memory_order_release)) {
-    //     //TODO: pending_deletings actual delete on render thread
-    //     pending_deletings.Push(this);
-    // }
     MoerDelete(this);
-    // delete this;
 }
 namespace Moer::Render {
     TextureView::TextureView(Texture* _texture) : texture(_texture),
@@ -66,20 +50,6 @@ namespace Moer::Render {
         _byte_size = std::min(_byte_size, GetByteSize() - _byte_offset);
         return BufferView(this, _byte_offset, _byte_size / GetStride(), GetStride(), _fmt);
     }
-
-    // void BindlessArray::FreeBufferFrameEnd() {
-    //     for (uint slot : buffers_freed) {
-    //         free_buffer_slots.push_back(slot);
-    //     }
-    //     buffers_freed.clear();
-    // }
-
-    // void BindlessArray::FreeTextureFrameEnd() {
-    //     for (uint slot : textures_freed) {
-    //         free_texture_slots.push_back(slot);
-    //     }
-    //     textures_freed.clear();
-    // }
 
     BindlessArray::BindlessArray() : RHIResource(RRT_BINDLESS_ARRAY){};
 

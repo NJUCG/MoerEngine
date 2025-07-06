@@ -2,11 +2,12 @@
 #define MOER_SERIALIZER_H
 #include "misc/STL.h"
 #include "misc/Traits.h"
-#include "zpp_bits.h"
 #include <cassert>
 #include <cstddef>
+#include <optional>
 #include <ostream>
 #include <istream>
+#include <span>
 
 namespace Moer {
     template<typename T>

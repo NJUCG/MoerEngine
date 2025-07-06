@@ -25,7 +25,7 @@
 // Editor
 #include "AntiAliasPass.h"
 #include "CompositionPass.h"
-#include "Config.h" // TODO: merge it with raster
+#include "Configs.h" // TODO: merge it with raster
 #include "GBufferPass.h"
 #include "LightingPass.h"
 #include "PreprocessLightPass.h"

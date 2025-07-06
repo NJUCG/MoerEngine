@@ -36,6 +36,7 @@
 #include <variant>
 #include <config.h>
 #include <platform/Platform.h>
+#include "VulkanIOService.h"
 
 #ifndef MOER_STR
 #define MOER_STR(x)  #x
@@ -1375,6 +1376,10 @@ namespace Moer::Render {
 
     SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) { return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)}; }
 
+    IOInterfaceRef VulkanDevice::CreateIOInterface(CopyQueue& _copy_queue) {
+        VkCopyQueue* copy_queue_vk = static_cast<VkCopyQueue*>(&_copy_queue);
+        return MakeShared<VulkanIOInterface>(*this, *copy_queue_vk);
+    }
     void VulkanDevice::EnqueueDeferredRelease(RHIResource* _object) {
         deferred_release_queue.Push(_object);
     }

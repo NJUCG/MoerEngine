@@ -42,16 +42,11 @@ enum class EShaderParameterUseCase : uint8_t {
 
 //compiled shader platform and type information
 
-typedef uint32_t ShaderTypeIndex;
-struct ShaderMutationParameters;
-struct ShaderCompilerEnvironment;
-
 struct ShaderReflectInfo {
     Moer::UnorderedMap<std::string, ParameterInfo> param_map;
-    Moer::Array<RHIVertexInputInfo>                vertex_input_info;
 };
 
-namespace Moer {
+namespace Moer::Render {
     struct ShaderEntry {
         EShaderType     type;
         EShaderPlatform platform;
@@ -74,243 +69,232 @@ namespace Moer {
             return hash == _rhs.hash;
         }
     };
-};// namespace Moer
-static bool operator==(const Moer::ShaderEntryKey& _lhs, const Moer::ShaderEntryKey& _rhs) noexcept {
+};// namespace Moer::Render
+static bool operator==(const Moer::Render::ShaderEntryKey& _lhs, const Moer::Render::ShaderEntryKey& _rhs) noexcept {
     return _lhs.hash == _rhs.hash;
 }
 namespace std {
     template<>
-    struct hash<Moer::ShaderEntryKey> {
-        size_t operator()(const Moer::ShaderEntryKey& _key) const {
+    struct hash<Moer::Render::ShaderEntryKey> {
+        size_t operator()(const Moer::Render::ShaderEntryKey& _key) const {
             return _key.hash;
         }
     };
 }// namespace std
 //Shader Compiled Hash
-struct Shader {
-    ShaderParametersInfoMap            reflection;
-    uint32_t                           mutation_id;
-    EShaderType                        type;
-    Moer::StaticArray<Moer::uint64, 2> compiled_hash;
-    Moer::uint64                       shader_name_hash;
-    std::string                        entry_name;
-    std::string                        shader_path;
-    Moer::ShaderEntryKey               shader_key;
-    //need included files to validate cache
+namespace Moer::Render {
+    struct Shader {
+        ShaderParametersInfoMap            reflection;
+        uint32_t                           mutation_id;
+        EShaderType                        type;
+        Moer::StaticArray<Moer::uint64, 2> compiled_hash;
+        Moer::uint64                       shader_name_hash;
+        std::string                        entry_name;
+        std::string                        shader_path;
+        ShaderEntryKey                     shader_key;
+        //need included files to validate cache
 
-    Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
-        _stream << compiled_hash << type << mutation_id << shader_name_hash << entry_name << shader_path << shader_key;
-        _stream << reflection.reflect_map;
-        return _stream;
-    }
+        Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
+            _stream << compiled_hash << type << mutation_id << shader_name_hash << entry_name << shader_path << shader_key;
+            _stream << reflection.reflect_map;
+            return _stream;
+        }
 
-    Moer::InputStream& operator>>(Moer::InputStream& _stream) {
-        _stream >> compiled_hash >> type >> mutation_id >> shader_name_hash >> entry_name >> shader_path >> shader_key;
-        _stream >> reflection.reflect_map;
-        return _stream;
-    }
-};
-
-static inline bool operator==(const Shader& _lhs, const Shader& _rhs) {
-    return _lhs.compiled_hash == _rhs.compiled_hash && _lhs.type == _rhs.type && _lhs.mutation_id == _rhs.mutation_id && _lhs.shader_name_hash == _rhs.shader_name_hash && _lhs.entry_name == _rhs.entry_name && _lhs.shader_path == _rhs.shader_path;
-}
-
-namespace std {
-    template<>
-    struct hash<Shader> {
-        size_t operator()(const Shader& _shader) const {
-            size_t hash = _shader.compiled_hash[0];
-            HashCombine(hash, _shader.compiled_hash[1]);
-            return hash;
+        Moer::InputStream& operator>>(Moer::InputStream& _stream) {
+            _stream >> compiled_hash >> type >> mutation_id >> shader_name_hash >> entry_name >> shader_path >> shader_key;
+            _stream >> reflection.reflect_map;
+            return _stream;
         }
     };
-}// namespace std
 
-struct ShaderCompilerOutput {
+    static inline bool operator==(const Shader& _lhs, const Shader& _rhs) {
+        return _lhs.compiled_hash == _rhs.compiled_hash && _lhs.type == _rhs.type && _lhs.mutation_id == _rhs.mutation_id && _lhs.shader_name_hash == _rhs.shader_name_hash && _lhs.entry_name == _rhs.entry_name && _lhs.shader_path == _rhs.shader_path;
+    }
 
-    ShaderCompilerOutput()
-        : num_instructions(0),
-          num_samplers(0),
-          compiled_time(0.0),
-          preprocessing_time(0.0),
-          b_succeeded(false) {}
+    struct ShaderCompilerOutput {
 
-    ShaderParametersInfoMap  parameter_map;
-    Moer::Array<std::string> errors;
-    Moer::Array<std::string> pragma;
+        ShaderCompilerOutput()
+            : num_instructions(0),
+              num_samplers(0),
+              compiled_time(0.0),
+              preprocessing_time(0.0),
+              b_succeeded(false) {}
 
-    ShaderTargetInfo target_info;
+        ShaderParametersInfoMap  parameter_map;
+        Moer::Array<std::string> errors;
+        Moer::Array<std::string> pragma;
 
-    Moer::Array<uint8_t> shader_code;
-    uint64_t             compiled_hash1;
-    uint64_t             compiled_hash2;
-    uint32_t             num_instructions;
-    uint32_t             num_samplers;
-    uint32_t             mutation_id;
-    double               compiled_time;
-    double               preprocessing_time;
-    bool                 b_succeeded;
-    uint32_t             shader_name_hash;
+        ShaderTargetInfo target_info;
 
-    bool      cached                      = false;
-    long long source_file_last_write_time = 0;
+        Moer::Array<uint8_t> shader_code;
+        uint64_t             compiled_hash1;
+        uint64_t             compiled_hash2;
+        uint32_t             num_instructions;
+        uint32_t             num_samplers;
+        uint32_t             mutation_id;
+        double               compiled_time;
+        double               preprocessing_time;
+        bool                 b_succeeded;
+        uint32_t             shader_name_hash;
 
-    // ShaderCompilerOutput(ShaderCompilerOutput&&)                 = default;
-    // ShaderCompilerOutput(const ShaderCompilerOutput&)            = default;
-    // ShaderCompilerOutput& operator=(ShaderCompilerOutput&&)      = default;
-    // ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
-};
+        bool      cached                      = false;
+        long long source_file_last_write_time = 0;
 
-/**
+        // ShaderCompilerOutput(ShaderCompilerOutput&&)                 = default;
+        // ShaderCompilerOutput(const ShaderCompilerOutput&)            = default;
+        // ShaderCompilerOutput& operator=(ShaderCompilerOutput&&)      = default;
+        // ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
+    };
+
+    /**
  * @brief ALL Compiled information needed for Shader Type Creation
  * 
  */
 
-class ShaderCompilerDefines {
-public:
-    ShaderCompilerDefines() {
-        defines.reserve(32);
-    }
-
-    void SetDefine(std::string_view _key, const std::string& _value) {
-        auto& value = defines[_key.data()];
-        value       = _value;
-    }
-
-    void SetDefine(std::string_view _key, const char* _value) {
-        auto& value = defines[_key.data()];
-        value       = _value;
-    }
-
-    void SetDefine(std::string_view _key, const int32_t _value) {
-        auto& value = defines[_key.data()];
-        value       = std::to_string(_value);
-    }
-
-    void SetDefine(std::string_view _key, const uint32_t _value) {
-        auto& value = defines[_key.data()];
-        value       = std::to_string(_value);
-    }
-
-    void SetDefine(std::string_view _key, const float _value) {
-        auto& value = defines[_key.data()];
-        value       = std::to_string(_value);
-    }
-
-    void SetDefine(std::string_view _key, const bool _value) {
-        auto& value = defines[_key.data()];
-        value       = std::to_string(_value);
-    }
-
-    void Merge(const ShaderCompilerDefines& _other) {
-
-        defines.insert(_other.defines.begin(), _other.defines.end());
-    }
-
-    Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
-        _stream << defines;
-        return _stream;
-    }
-    Moer::InputStream& operator>>(Moer::InputStream& _stream) {
-        _stream >> defines;
-        return _stream;
-    }
-
-    bool operator==(const ShaderCompilerDefines& _other) const {
-        return defines == _other.defines;
-    }
-
-private:
-    friend class ShaderCompilerEnvironment;
-    Moer::UnorderedMap<std::string, std::string> defines;
-};
-
-template<typename TMaroType>
-concept MacroType = requires(TMaroType _type) {
-    std::is_same_v<TMaroType, uint32_t> ||
-        std::is_same_v<TMaroType, int32_t> ||
-        std::is_same_v<TMaroType, bool> ||
-        std::is_same_v<TMaroType, float> ||
-        std::is_same_v<TMaroType, std::string>;
-};
-struct ShaderCompilerEnvironment {
-public:
-    ShaderCompilerEnvironment() {
-        compiler_args.reserve(32);
-    }
-    template<MacroType TValue>
-    void SetDefine(std::string_view _key, const TValue& _value) {
-        macro_defines.SetDefine(_key, _value);
-    }
-    void Merge(const ShaderCompilerEnvironment& _other) {
-        compiler_args.insert(_other.compiler_args.begin(), _other.compiler_args.end());
-        macro_defines.Merge(_other.macro_defines);
-    }
-    template<MacroType TValue>
-    void SetCompileArg(std::string_view _key, const TValue& _value) {
-        compiler_args[_key.data()] = _value;
-    }
-
-    bool HasCompileArg(std::string_view _key) const {
-        return compiler_args.count(_key.data()) > 0;
-    }
-    const Moer::UnorderedMap<std::string, std::string>& GetDefines() const {
-        return macro_defines.defines;
-    }
-
-    const Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>>& GetCompilerArgs() const {
-        return compiler_args;
-    }
-
-    static std::wstring GetVariantWStr(const std::variant<uint32_t, int32_t, bool, float, std::string>& _value) {
-        return std::visit([]<typename T>(const T& e) {
-            if constexpr (std::is_same_v<T, std::string>) {
-                return std::wstring(e.begin(), e.end());
-            } else {// float/int
-                return std::to_wstring(e);
-            }
-        },
-                          _value);
-    }
-
-    std::string ToString() const {
-        std::string str = "Defines: ";
-        for (auto& [key, value] : macro_defines.defines) {
-            str += "[" + key + " " + value + "] ";
+    class ShaderCompilerDefines {
+    public:
+        ShaderCompilerDefines() {
+            defines.reserve(32);
         }
-        return str;
-    }
 
-    Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
-        _stream << compiler_args << macro_defines;
-        return _stream;
-    }
+        void SetDefine(std::string_view _key, const std::string& _value) {
+            auto& value = defines[_key.data()];
+            value       = _value;
+        }
 
-    Moer::InputStream& operator>>(Moer::InputStream& _stream) {
-        _stream >> compiler_args >> macro_defines;
-        return _stream;
-    }
+        void SetDefine(std::string_view _key, const char* _value) {
+            auto& value = defines[_key.data()];
+            value       = _value;
+        }
 
-    bool operator==(const ShaderCompilerEnvironment& _other) const {
-        return GetDefines() == _other.GetDefines() && GetCompilerArgs() == _other.GetCompilerArgs();
-    }
+        void SetDefine(std::string_view _key, const int32_t _value) {
+            auto& value = defines[_key.data()];
+            value       = std::to_string(_value);
+        }
 
-private:
-    ShaderCompilerDefines macro_defines;
+        void SetDefine(std::string_view _key, const uint32_t _value) {
+            auto& value = defines[_key.data()];
+            value       = std::to_string(_value);
+        }
 
-    Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>> compiler_args;
-};
+        void SetDefine(std::string_view _key, const float _value) {
+            auto& value = defines[_key.data()];
+            value       = std::to_string(_value);
+        }
 
-struct ShaderCompileJobInput {
-    ShaderTargetInfo target_info;
-    std::string_view entry_point;
-    std::string_view relative_source_file_path;
-    std::string_view shader_name;
-    uint32_t         shader_name_hash;
-    uint32_t         mutation_count;
-};
+        void SetDefine(std::string_view _key, const bool _value) {
+            auto& value = defines[_key.data()];
+            value       = std::to_string(_value);
+        }
 
-namespace Moer::Render {
+        void Merge(const ShaderCompilerDefines& _other) {
+
+            defines.insert(_other.defines.begin(), _other.defines.end());
+        }
+
+        Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
+            _stream << defines;
+            return _stream;
+        }
+        Moer::InputStream& operator>>(Moer::InputStream& _stream) {
+            _stream >> defines;
+            return _stream;
+        }
+
+        bool operator==(const ShaderCompilerDefines& _other) const {
+            return defines == _other.defines;
+        }
+
+    private:
+        friend struct ShaderCompilerEnvironment;
+        Moer::UnorderedMap<std::string, std::string> defines;
+    };
+
+    template<typename TMaroType>
+    concept MacroType = requires(TMaroType _type) {
+        std::is_same_v<TMaroType, uint32_t> ||
+            std::is_same_v<TMaroType, int32_t> ||
+            std::is_same_v<TMaroType, bool> ||
+            std::is_same_v<TMaroType, float> ||
+            std::is_same_v<TMaroType, std::string>;
+    };
+    struct ShaderCompilerEnvironment {
+    public:
+        ShaderCompilerEnvironment() {
+            compiler_args.reserve(32);
+        }
+        template<MacroType TValue>
+        void SetDefine(std::string_view _key, const TValue& _value) {
+            macro_defines.SetDefine(_key, _value);
+        }
+        void Merge(const ShaderCompilerEnvironment& _other) {
+            compiler_args.insert(_other.compiler_args.begin(), _other.compiler_args.end());
+            macro_defines.Merge(_other.macro_defines);
+        }
+        template<MacroType TValue>
+        void SetCompileArg(std::string_view _key, const TValue& _value) {
+            compiler_args[_key.data()] = _value;
+        }
+
+        bool HasCompileArg(std::string_view _key) const {
+            return compiler_args.count(_key.data()) > 0;
+        }
+        const Moer::UnorderedMap<std::string, std::string>& GetDefines() const {
+            return macro_defines.defines;
+        }
+
+        const Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>>& GetCompilerArgs() const {
+            return compiler_args;
+        }
+
+        static std::wstring GetVariantWStr(const std::variant<uint32_t, int32_t, bool, float, std::string>& _value) {
+            return std::visit([]<typename T>(const T& e) {
+                if constexpr (std::is_same_v<T, std::string>) {
+                    return std::wstring(e.begin(), e.end());
+                } else {// float/int
+                    return std::to_wstring(e);
+                }
+            },
+                              _value);
+        }
+
+        std::string ToString() const {
+            std::string str = "Defines: ";
+            for (auto& [key, value] : macro_defines.defines) {
+                str += "[" + key + " " + value + "] ";
+            }
+            return str;
+        }
+
+        Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
+            _stream << compiler_args << macro_defines;
+            return _stream;
+        }
+
+        Moer::InputStream& operator>>(Moer::InputStream& _stream) {
+            _stream >> compiler_args >> macro_defines;
+            return _stream;
+        }
+
+        bool operator==(const ShaderCompilerEnvironment& _other) const {
+            return GetDefines() == _other.GetDefines() && GetCompilerArgs() == _other.GetCompilerArgs();
+        }
+
+    private:
+        ShaderCompilerDefines macro_defines;
+
+        Moer::UnorderedMap<std::string, std::variant<uint32_t, int32_t, bool, float, std::string>> compiler_args;
+    };
+
+    struct ShaderCompileJobInput {
+        ShaderTargetInfo target_info;
+        std::string_view entry_point;
+        std::string_view relative_source_file_path;
+        std::string_view shader_name;
+        uint32_t         shader_name_hash;
+        uint32_t         mutation_count;
+    };
+
     struct VertexFactory {
 
     public:
@@ -344,6 +328,16 @@ namespace std {
     struct hash<Moer::Render::VertexFactory> {
         size_t operator()(const Moer::Render::VertexFactory& _key) const {
             return GetHash(_key.GetVertexAttributes()) ^ GetHash(_key.IsShadowDepthPass());
+        }
+    };
+}// namespace std
+namespace std {
+    template<>
+    struct hash<Shader> {
+        size_t operator()(const Moer::Render::Shader& _shader) const {
+            size_t hash = _shader.compiled_hash[0];
+            HashCombine(hash, _shader.compiled_hash[1]);
+            return hash;
         }
     };
 }// namespace std
@@ -381,29 +375,28 @@ namespace Moer::Render {
 
         UnorderedMap<VertexFactory, Shader&> shader_map;
     };
-}// namespace Moer::Render
 
-struct ShaderCompilerInput {
-    ShaderTargetInfo          target_info;
-    uint32_t                  mutation_id;
-    std::string               entry_point;
-    std::string               relative_source_file_path;
-    std::string               shader_name;
-    uint32_t                  shader_name_hash;
-    ShaderCompilerEnvironment environment;
+    struct ShaderCompilerInput {
+        ShaderTargetInfo          target_info;
+        uint32_t                  mutation_id;
+        std::string               entry_point;
+        std::string               relative_source_file_path;
+        std::string               shader_name;
+        uint32_t                  shader_name_hash;
+        ShaderCompilerEnvironment environment;
 
-    Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
-        _stream << target_info << mutation_id << entry_point << relative_source_file_path << shader_name_hash << environment;
-        return _stream;
-    }
+        Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
+            _stream << target_info << mutation_id << entry_point << relative_source_file_path << shader_name_hash << environment;
+            return _stream;
+        }
 
-    Moer::InputStream& operator>>(Moer::InputStream& _stream) {
-        _stream >> target_info >> mutation_id >> entry_point >> relative_source_file_path >> shader_name_hash >> environment;
-        return _stream;
-    }
-};
+        Moer::InputStream& operator>>(Moer::InputStream& _stream) {
+            _stream >> target_info >> mutation_id >> entry_point >> relative_source_file_path >> shader_name_hash >> environment;
+            return _stream;
+        }
+    };
 
-// clang-format off
+    // clang-format off
 static inline bool operator==(const ShaderCompilerInput& _lhs, const ShaderCompilerInput& _rhs) {
     return
         _lhs.relative_source_file_path == _rhs.relative_source_file_path
@@ -412,12 +405,13 @@ static inline bool operator==(const ShaderCompilerInput& _lhs, const ShaderCompi
         && _lhs.mutation_id == _rhs.mutation_id
         && _lhs.environment == _rhs.environment;
 }
-// clang-format on
+    // clang-format on
+}// namespace Moer::Render
 
 namespace std {
     template<>
-    struct hash<ShaderCompilerInput> {
-        size_t operator()(const ShaderCompilerInput& _input) const {
+    struct hash<Moer::Render::ShaderCompilerInput> {
+        size_t operator()(const Moer::Render::ShaderCompilerInput& _input) const {
             return std::hash<std::string_view>()(_input.relative_source_file_path) ^ std::hash<std::string_view>()(_input.entry_point) ^ std::hash<uint32_t>()(_input.mutation_id);
         }
     };

@@ -8,6 +8,7 @@
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include "shader/ShaderCompiler.h"// Added to ensure ShaderCompiler is fully defined
 #include <ostream>
 #include <string_view>
 #include <fstream>

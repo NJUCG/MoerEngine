@@ -34,77 +34,6 @@ namespace Moer::Render {
         ComponentShuffleShader sd_component_shuffle{};
     };
 
-    static uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
-        switch (_format) {
-            case PF_R8G8B8A8_SRGB:
-            case PF_R8G8B8A8_UNORM:
-            case PF_R8G8B8A8_UINT:
-            case PF_R8G8B8A8_SNORM:
-            case PF_R8G8B8A8_SINT:
-                return _size.x * _size.y * _size.z * 4;
-                break;
-            case PF_R32G32B32A32_SFLOAT:
-            case PF_R32G32B32A32_UINT:
-            case PF_R32G32B32A32_SINT:
-                return _size.x * _size.y * _size.z * 16;
-                break;
-            case PF_R32G32_SFLOAT:
-            case PF_R32G32_UINT:
-            case PF_R32G32_SINT:
-                return _size.x * _size.y * _size.z * 8;
-                break;
-            case PF_R32_SFLOAT:
-            case PF_R32_UINT:
-            case PF_R32_SINT:
-                return _size.x * _size.y * _size.z * 4;
-                break;
-            case PF_R16G16B16A16_SFLOAT:
-            case PF_R16G16B16A16_UNORM:
-            case PF_R16G16B16A16_UINT:
-            case PF_R16G16B16A16_SNORM:
-            case PF_R16G16B16A16_SINT:
-                return _size.x * _size.y * _size.z * 8;
-                break;
-            case PF_R16G16_SFLOAT:
-            case PF_R16G16_UNORM:
-            case PF_R16G16_UINT:
-            case PF_R16G16_SNORM:
-            case PF_R16G16_SINT:
-                return _size.x * _size.y * _size.z * 4;
-                break;
-            case PF_R16_SFLOAT:
-            case PF_R16_UNORM:
-            case PF_R16_UINT:
-            case PF_R16_SNORM:
-            case PF_R16_SINT:
-                return _size.x * _size.y * _size.z * 2;
-                break;
-            case PF_R8G8B8_SRGB:
-            case PF_R8G8B8_UNORM:
-            case PF_R8G8B8_UINT:
-            case PF_R8G8B8_SNORM:
-            case PF_R8G8B8_SINT:
-                return _size.x * _size.y * _size.z * 3;
-                break;
-            case PF_R8G8_SRGB:
-            case PF_R8G8_UNORM:
-            case PF_R8G8_UINT:
-            case PF_R8G8_SNORM:
-            case PF_R8G8_SINT:
-                return _size.x * _size.y * _size.z * 2;
-                break;
-            case PF_R8_SRGB:
-            case PF_R8_UNORM:
-            case PF_R8_UINT:
-            case PF_R8_SNORM:
-            case PF_R8_SINT:
-                return _size.x * _size.y * _size.z;
-                break;
-            default:
-                assert(false && "not support format");
-        }
-        return 0;
-    }
     struct UploadBufferCmd : public Command {
     private:
         uint64                                           handle{};
@@ -1277,6 +1206,8 @@ namespace Moer::Render {
         virtual PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders)                               = 0;//compute
 
         virtual DeviceExtension* LoadExtension(std::string_view _name) { return nullptr; }
+
+        virtual IOInterfaceRef CreateIOInterface(CopyQueue&) { return nullptr; };
     };
 
 }// namespace Moer::Render

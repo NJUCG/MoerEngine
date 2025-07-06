@@ -1,11 +1,12 @@
 #pragma once
+#include "PixelFormat.h"
 #include "VulkanCommand.h"
 #include "VulkanAllocator.h"
 // #include "VulkanDevice.h"
-#include "io/IOCommon.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIIO.h"
 #include "vulkan/vulkan_core.h"
 #include <functional>
 #include <mutex>
@@ -215,9 +216,9 @@ namespace Moer::Render {
         std::mutex   exec_mtx;
         std::jthread thread;
     };
-
     class VkCopyQueue : public CopyQueue {
     public:
+        friend VulkanDevice;
         VkCopyQueue(VulkanDevice& _device);
         ~VkCopyQueue();
         struct Placeholder {};
@@ -241,7 +242,7 @@ namespace Moer::Render {
             }
         };
 
-        IOWaitEvt Execute(IOSubmission&& _submit) override;
+        IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
         IOWaitEvt Execute(CmdSubmit&& _submit) override;
         FenceRef  GetFenceHandle() override;
         void      Sync(uint64 _timeline) override;
@@ -254,8 +255,24 @@ namespace Moer::Render {
         virtual void CopyFrom(std::span<byte> _data, TextureView _dst) override {};
 
         ///
+        void Enqueue(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len);
+        void Enqueue(FileHandle _handle, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
+        void Enqueue(FileHandle _handle, size_t _file_offset, void* _tex_ptr, EPixelFormat _format, uint3 _offset, uint3 _size, uint _mip_offset);
+        void Enqueue(void const* _mem, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
+        void Enqueue(void const* _mem, size_t _file_offset, void* _tex_ptr, EPixelFormat _format, uint3 _offset, uint3 _size, uint _mip_offset);
+        void EnqueueSignal(FenceRef _fence, uint64_t _timeline);
+        void Execute();
 
         void ExecuteThread();
+        void Submit(IOQueueCommandList&& _cmd_list);
+        void SubmitSignal(FenceRef _fence, uint64_t _timeline);
+        void SubmitWait(FenceRef _fence, uint64_t _timeline);
+
+    private:
+        void ExecuteIOThread(IOQueueCommandList&& _cmd_list, uint64_t _timeline);
+
+        void IOThreadLoop();
+        void RHIThreadLoop();
 
     private:
         UniquePtr<VulkanAllocator>                GetAllocator();
@@ -276,8 +293,13 @@ namespace Moer::Render {
         std::jthread            thread;
 
         //tmp
-        LockFreeQueueBase<Command> commands;
+        LockFreeQueueBase<IOCmd> commands;
 
-        std::mutex exec_mutex;
+        std::mutex                                     exec_mutex;
+        Array<VkSemaphore>                             pending_semaphores;
+        Queue<std::pair<IOQueueCommandList&&, uint64>> io_thread_cmds;
+        std::mutex                                     io_mutex;
+        Queue<std::pair<CommandList&&, uint64>>        io_rhi_cmdlists;
+        std::mutex                                     rhi_mutex;
     };
 }// namespace Moer::Render

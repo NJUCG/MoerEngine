@@ -1,15 +1,11 @@
 #ifndef RHI_RESOURCE_H
 #define RHI_RESOURCE_H
-#include "API_Macro.h"
 #include "PixelFormat.h"
 #include "RHICommon.h"
-#include "RenderCommon.h"
 #include "math/Base.h"
 
 #include "math/Matrix.h"
-#include "misc/EnumBitOperation.h"
 #include "misc/Hash.h"
-#include "misc/Ptr.h"
 #include "misc/CountableRef.h"
 
 #include "misc/STL.h"
@@ -19,19 +15,14 @@
 
 #include <cassert>
 #include <atomic>
-#include <cstddef>
 #include <initializer_list>
 #include <span>
 #include <stdint.h>
 #include <string>
 #include <optional>
-#include <bitset>
 #include <string_view>
-#include <tuple>
 #include <type_traits>
 #include <variant>
-
-#include "misc/LockFree.h"
 
 static constexpr std::string_view default_name = "NoName";
 template<typename TStructuredParam>
@@ -211,27 +202,6 @@ struct VertexElement {
 
 static_assert(sizeof(VertexElement) == 8, "VertexElement doesn't match cache line size");
 
-typedef Moer::StaticArray<VertexElement, MAX_VERTEX_ELEMENT_COUNT> VertexInputStateInitializerList;
-
-struct RHIVertexInputInfo {
-    Moer::Array<VertexElement> vertex_elements;
-
-    // RHIVertexInputInfo(Moer::Array<VertexElement> _vertex_elements) : vertex_elements(std::move(_vertex_elements)) {}
-    RHIVertexInputInfo(std::initializer_list<VertexElement> _vertex_elements) : vertex_elements(_vertex_elements) {}
-
-    template<class... _Valty>
-        requires(std::is_same_v<std::remove_cvref_t<_Valty>, VertexElement> && ...)
-    RHIVertexInputInfo(_Valty&&... _Val) : vertex_elements({std::forward<_Valty>(_Val)...}) {}
-
-    RHIVertexInputInfo() = default;
-
-    bool operator==(const RHIVertexInputInfo& other) const { return vertex_elements == other.vertex_elements; }
-};
-
-struct RHIVertexInputFactory {
-    static RHIVertexInputInfo Build();
-};
-
 #pragma endregion
 
 class RENDER_API RHIResource {
@@ -332,136 +302,6 @@ private:
     //for const resource state change
     mutable ResourceAtomicFlags flags;
 };
-
-class RHISampler : public RHIResource {
-public:
-    explicit RHISampler() : RHIResource(RRT_SAMPLER) {}
-};
-
-#pragma region shader definitions
-class RHIShader : public RHIResource {
-public:
-    RHIShader() = delete;
-    RHIShader(ERHIResourceType _type, EShaderType _shader_type, const Shader* _meta_shader) : RHIResource(_type), shader_type(_shader_type), meta_shader(_meta_shader) {}
-    FORCEINLINE EShaderType GetShaderType() const { return shader_type; }
-
-    void          SetHash(const Hash64City& _hash) { hash = _hash; }
-    Hash64City    GetHash() const { return hash; }
-    const Shader* GetMetaShader() const { return meta_shader; }
-
-    EShaderType shader_type;
-    Hash64City  hash;
-
-protected:
-    const Shader* meta_shader;
-};
-
-class RHIGraphicsShader : public RHIShader {
-public:
-    RHIGraphicsShader(ERHIResourceType _type, EShaderType _shader_type, const Shader* _meta_shader) : RHIShader(_type, _shader_type, _meta_shader) {}
-};
-
-class RHIVertexShader : public RHIGraphicsShader {
-public:
-    RHIVertexShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_VERTEX_SHADER, ST_VERTEX, _meta_shader) {}
-};
-
-class RHIFragmentShader : public RHIGraphicsShader {
-public:
-    RHIFragmentShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_FRAGMENT_SHADER, ST_FRAGMENT, _meta_shader) {}
-};
-
-class RHIGeometryShader : public RHIGraphicsShader {
-public:
-    RHIGeometryShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_GEOMETRY_SHADER, ST_GEOMETRY, _meta_shader) {}
-};
-
-class RHIComputeShader : public RHIShader {
-public:
-    RHIComputeShader(const Shader* _meta_shader) : RHIShader(RRT_COMPUTE_SHADER, ST_COMPUTE, _meta_shader) {}
-};
-
-class RHIMeshShader : public RHIGraphicsShader {
-public:
-    RHIMeshShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_MESH_SHADER, ST_MESH, _meta_shader) {}
-};
-
-class RHIAmplificationShader : public RHIGraphicsShader {
-public:
-    RHIAmplificationShader(const Shader* _meta_shader) : RHIGraphicsShader(RRT_AMPLIFICATION_SHADER, ST_AMPLIFICATION, _meta_shader) {}
-};
-
-class RHIRayTracingShader : public RHIShader {
-public:
-    RHIRayTracingShader(EShaderType _shader_type, const Shader* _meta_shader) : RHIShader(RRT_RAY_TRACING_SHADER, _shader_type, _meta_shader) {}
-};
-
-class RHIRayGenShader : public RHIRayTracingShader {
-public:
-    RHIRayGenShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_GEN, _meta_shader) {}
-};
-
-class RHIRayClosestHitShader : public RHIRayTracingShader {
-public:
-    RHIRayClosestHitShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_CLOSESTHIT, _meta_shader) {}
-};
-
-class RHIRayMissShader : public RHIRayTracingShader {
-public:
-    RHIRayMissShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_MISS, _meta_shader) {}
-};
-
-class RHIRayCallableShader : public RHIRayTracingShader {
-public:
-    RHIRayCallableShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_CALLABLE, _meta_shader) {}
-};
-
-class RHIRayIntersectionShader : public RHIRayTracingShader {
-public:
-    RHIRayIntersectionShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_INTERSECTION, _meta_shader) {}
-};
-
-class RHIRayAnyhitShader : public RHIRayTracingShader {
-public:
-    RHIRayAnyhitShader(const Shader* _meta_shader) : RHIRayTracingShader(ST_RAY_ANYHIT, _meta_shader) {}
-};
-#pragma endregion
-
-#pragma region pipeline states definitions
-
-class RHIGfxPso : public RHIResource {
-public:
-    RHIGfxPso() : RHIResource(RRT_GRAPHIC_PIPELINE_STATE) {}
-
-    bool IsValid() const { return b_valid; }
-    void SetValid(bool _b_valid) { b_valid = _b_valid; }
-
-private:
-    bool b_valid = true;
-};
-
-class RHIComputePso : public RHIResource {
-public:
-    RHIComputePso() : RHIResource(RRT_COMPUTE_PIPELINE_STATE) {}
-    bool IsValid() const { return b_valid; }
-    void SetValid(bool _b_valid) { b_valid = _b_valid; }
-
-private:
-    bool b_valid = true;
-};
-
-class RHIRTPso : public RHIResource {
-public:
-    RHIRTPso() : RHIResource(RRT_RAY_TRACING_PIPELINE_STATE) {}
-
-    bool IsValid() const { return b_valid; }
-    void SetValid(bool _b_valid) { b_valid = _b_valid; }
-
-private:
-    bool b_valid = true;
-};
-
-#pragma endregion
 
 #pragma region new api
 namespace Moer::Render {
@@ -709,6 +549,26 @@ namespace Moer::Render {
     struct IndexBuffer {
         BufferView        buffer;
         EIndexElementType stride;
+    };
+
+    struct ImportTexture {
+        TextureView   texture;
+        ETextureState state;
+    };
+
+    struct ExportTexture {
+        TextureView   texture;
+        ETextureState state;
+    };
+
+    struct ImportBuffer {
+        BufferView   buffer;
+        EBufferState state;
+    };
+
+    struct ExportBuffer {
+        BufferView   buffer;
+        EBufferState state;
     };
 
     class RENDER_API BindlessArray : public RHIResource {
@@ -1101,45 +961,6 @@ namespace Moer::Render {
         uint64_t hash_key;
     };
 };// namespace Moer::Render
-class RHIRTPsoInfo {
-protected:
-    uint64_t hash_ray_gen;
-    uint64_t hash_ray_miss;
-    uint64_t hash_ray_hit;
-    uint64_t hash_ray_callable;
-
-public:
-    //should be set in shaders
-    uint32_t max_attribute_byte_size = 8;
-    //should be set in shaders
-    uint32_t max_payload_byte_size      = 24;
-    bool     b_allow_hit_group_indexing = true;
-
-    bool operator==(const RHIRTPsoInfo& value) const { return max_attribute_byte_size == value.max_attribute_byte_size && max_payload_byte_size == value.max_payload_byte_size && b_allow_hit_group_indexing == value.b_allow_hit_group_indexing && hash_ray_gen == value.hash_ray_gen && hash_ray_miss == value.hash_ray_miss && hash_ray_hit == value.hash_ray_hit && hash_ray_callable == value.hash_ray_callable; }
-};
-
-class RHIRayTracingPipelineStateInitializer : RHIRTPsoInfo {
-public:
-    RHIRayTracingPipelineStateInitializer() = default;
-
-    void SetRayGenShader(RHIRayGenShader* rgen_shader) { ray_gen_shader = rgen_shader; }
-    void AddMissShader(RHIRayMissShader* rmiss_shader) { ray_miss_table.push_back(rmiss_shader); }
-    void AddCallableShader(RHIRayCallableShader* rcall_shader) { ray_callable_table.push_back(rcall_shader); }
-    void AddHitShaderGroup(RHIRayClosestHitShader* rchit_shader, RHIRayAnyhitShader* rahit_shader = nullptr, RHIRayIntersectionShader* rint_shader = nullptr) { ray_hit_table.push_back(RHIRayHitGroup{rchit_shader, rahit_shader, rint_shader}); }
-
-    struct RHIRayHitGroup {
-        RHIRayClosestHitShader*   closesthit_shader;
-        RHIRayAnyhitShader*       anyhit_shader;
-        RHIRayIntersectionShader* intersection_shader;
-    };
-
-    RHIRayGenShader*                   ray_gen_shader;
-    Moer::Array<RHIRayMissShader*>     ray_miss_table;
-    Moer::Array<RHIRayHitGroup>        ray_hit_table;
-    Moer::Array<RHIRayCallableShader*> ray_callable_table;
-
-    uint32_t max_ray_recursion_depth = 2;
-};
 
 enum EAttachmentAction : uint8_t {
     /* for inner definition use, do not use directly */

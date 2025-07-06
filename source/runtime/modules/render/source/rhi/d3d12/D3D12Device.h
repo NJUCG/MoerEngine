@@ -888,6 +888,7 @@ namespace Moer::Render {
         ~D3D12Swapchain() = default;
 
         void Recreate(const SwapchainCreateInfo&) override;
+        void Sync() override;
 
         uint GetBackbufferIndex() const { return frame_index; }
         //DescriptorIndex GetBackbufferRTV() const { return m_backbufferRTVs[m_frameIndex]; }

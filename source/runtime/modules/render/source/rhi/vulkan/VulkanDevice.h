@@ -90,6 +90,8 @@ namespace Moer::Render {
 
         SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
+        IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;
+
     public:
         void             EnqueueDeferredRelease(RHIResource* _object);
         void             FlushDeferredReleases();

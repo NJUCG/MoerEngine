@@ -11,6 +11,8 @@ struct ShaderCompiledFile {
     std::string path;
     std::string content;
 };
+using ShaderCompilerOutput = Moer::Render::ShaderCompilerOutput;
+using ShaderCompilerInput  = Moer::Render::ShaderCompilerInput;
 class IShaderCompiler {
 public:
     virtual ShaderCompilerOutput* Compile(const ShaderCompilerInput& input) = 0;

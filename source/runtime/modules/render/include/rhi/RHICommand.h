@@ -14,7 +14,13 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include <io/IOCommon.h>
+#include "misc/Traits.h"
+#include <span>
+#include <variant>
+#include <functional>
+#include <misc/STL.h>
+#include <filesystem>
+#include "RHIIO.h"
 
 //a unified commandlist for all usage?
 class RHICmdList {
@@ -23,13 +29,6 @@ public:
 };
 
 namespace Moer::Render {
-    enum class EQueueType : uint8 {
-        Graphics,
-        Compute,
-        Copy,
-        Num,
-        Ignore
-    };
 
     struct ProfileSection {
         std::string_view name;
@@ -352,26 +351,6 @@ namespace Moer::Render {
     };
 
     struct WriteBuffer {
-        BufferView   buffer;
-        EBufferState state;
-    };
-
-    struct ImportTexture {
-        TextureView   texture;
-        ETextureState state;
-    };
-
-    struct ExportTexture {
-        TextureView   texture;
-        ETextureState state;
-    };
-
-    struct ImportBuffer {
-        BufferView   buffer;
-        EBufferState state;
-    };
-
-    struct ExportBuffer {
         BufferView   buffer;
         EBufferState state;
     };
@@ -1084,9 +1063,9 @@ namespace Moer::Render {
     class RENDER_API CopyQueue {
     public:
         CopyQueue(){};
-        ~CopyQueue()                                      = default;
-        virtual IOWaitEvt Execute(IOSubmission&& _submit) = 0;
-        virtual IOWaitEvt Execute(CmdSubmit&& _submit)    = 0;
+        ~CopyQueue()                                           = default;
+        virtual IOWaitEvt Execute(IOQueueSubmission&& _submit) = 0;
+        virtual IOWaitEvt Execute(CmdSubmit&& _submit)         = 0;
 
         virtual void CopyFrom(BufferView _src, BufferView _dst)        = 0;
         virtual void CopyFrom(TextureView _src, TextureView _dst)      = 0;
@@ -1097,6 +1076,28 @@ namespace Moer::Render {
 
         virtual FenceRef GetFenceHandle()       = 0;
         virtual void     Sync(uint64 _timeline) = 0;
+    };
+
+    class IOInterface;
+    using IOInterfaceRef = std::shared_ptr<IOInterface>;
+    struct IOService {
+        static void Init();
+        static void Dispose();
+
+        static uint64_t     Execute(class IOCommandList& _cmd_list);
+        static void         Sync(uint64_t _time_stamp);
+        static IOInterface* CreateGPUService(CopyQueue* _copy_queue);
+        static IOInterface* CreateCPUService();
+
+        static void Destroy(IOInterface* _service);
+        struct Impl;
+    };
+
+    class IOInterface {
+    public:
+        virtual WaitEvent GetWaitEvent(uint64 _time_stamp)   = 0;
+        virtual uint64    Execute(IOCommandList&& _cmd_list) = 0;
+        virtual void      Sync(uint64_t _time_stamp)         = 0;
     };
 }// namespace Moer::Render
 #endif
