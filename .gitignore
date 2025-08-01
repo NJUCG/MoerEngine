@@ -15,11 +15,11 @@
 # Ignore all imgui.ini in project (prevent conflicts)
 imgui.ini
 
-# I don't know what these files are. Add some comments if you know.
 build_vs2022
 cmake-build-*/
 /.cache/
 logs/
+.VSCodeCounter/
 
 # MARK: something should not be ignored
 
