@@ -22,7 +22,6 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "rhi/vulkan/VulkanRHI.h"
 #include "log/LogSystem.h"
 #include "vulkan/vk_enum_string_helper.h"
 #include "vulkan/vulkan_core.h"
@@ -756,76 +755,6 @@ namespace Moer::Render {
 
 #pragma endregion
 
-    void VulkanRHISampler::GenerateSamplerFromInitializer(const VulkanDevice* _device, const RHISamplerCreateInfo& _initializer) {
-        VkSamplerCreateInfo sampler_create_info{};
-
-        sampler_create_info.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        sampler_create_info.flags        = 0;
-        sampler_create_info.magFilter    = METoVKMinMagFilterMode(_initializer.filter);
-        sampler_create_info.minFilter    = METoVKMinMagFilterMode(_initializer.filter);
-        sampler_create_info.mipmapMode   = METoVKMipmapMode(_initializer.filter);
-        sampler_create_info.addressModeU = METoVKWrapMode(_initializer.address_mode_u);
-        sampler_create_info.addressModeV = METoVKWrapMode(_initializer.address_mode_v);
-        sampler_create_info.addressModeW = METoVKWrapMode(_initializer.address_mode_w);
-        sampler_create_info.mipLodBias   = _initializer.mip_lod_bias;
-
-        sampler_create_info.maxAnisotropy = 1.0f;
-        if (_initializer.filter == SF_ANISOTROPIC_NEAREST || _initializer.filter == SF_ANISOTROPIC_LINEAR) { sampler_create_info.maxAnisotropy = std::clamp(static_cast<float>(_initializer.max_anisotropy), 1.0f, _device->GetCoreProperties().core_1_0.limits.maxSamplerAnisotropy); }
-        sampler_create_info.anisotropyEnable = sampler_create_info.maxAnisotropy > 1.0f ? VK_TRUE : VK_FALSE;
-
-        sampler_create_info.compareEnable = _initializer.compare_op != SCF_NEVER ? VK_TRUE : VK_FALSE;
-        sampler_create_info.compareOp     = METoVKCompareOp(_initializer.compare_op);
-        sampler_create_info.minLod        = _initializer.min_mip_level;
-        sampler_create_info.maxLod        = _initializer.max_mip_level;
-        sampler_create_info.borderColor   = _initializer.border_color == 0 ? VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK : VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-
-        VK_CHECK_RESULT(vkCreateSampler(_device->GetDevice(), &sampler_create_info, nullptr, &m_sampler));
-        m_image_layout = VulkanEnumTranslator::METoVKImageLayout(_initializer.texture_layout);
-    }
-
-    VkFilter VulkanRHISampler::METoVKMinMagFilterMode(ESamplerFilter _filter) { return VulkanEnumTranslator::METoVKImageFilter(_filter); }
-
-    VkSamplerMipmapMode VulkanRHISampler::METoVKMipmapMode(ESamplerFilter _filter) {
-        switch (_filter) {
-            case SF_NEAREST:
-            case SF_LINEAR: return VK_SAMPLER_MIPMAP_MODE_NEAREST;
-            case SF_CUBIC: return VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            case SF_ANISOTROPIC_NEAREST: return VK_SAMPLER_MIPMAP_MODE_NEAREST;
-            case SF_ANISOTROPIC_LINEAR: return VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            default:
-                LOG_CRITICAL("Unknown Mipmap ESamplerFilter {:d}", static_cast<uint8_t>(_filter));
-                return VK_SAMPLER_MIPMAP_MODE_MAX_ENUM;
-        }
-    }
-
-    VkSamplerAddressMode VulkanRHISampler::METoVKWrapMode(ESamplerAddressMode _address_mode) {
-        switch (_address_mode) {
-            case SAM_REPEAT: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            case SAM_MIRRORED_REPEAT: return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
-            case SAM_CLAMP_TO_EDGE: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            case SAM_CLAMP_TO_BORDER: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-            default:
-                LOG_CRITICAL("Unknown ESamplerAddressMode {:d}", static_cast<uint8_t>(_address_mode));
-                return VK_SAMPLER_ADDRESS_MODE_MAX_ENUM;
-        }
-    }
-
-    VkCompareOp VulkanRHISampler::METoVKCompareOp(ESamplerCompareFunction _compare_op) {
-        switch (_compare_op) {
-            case SCF_NEVER: return VK_COMPARE_OP_NEVER;
-            case SCF_LESS: return VK_COMPARE_OP_LESS;
-            case SCF_EQUAL: return VK_COMPARE_OP_EQUAL;
-            case SCF_LESS_OR_EQUAL: return VK_COMPARE_OP_LESS_OR_EQUAL;
-            case SCF_GREATER: return VK_COMPARE_OP_GREATER;
-            case SCF_NOT_EQUAL: return VK_COMPARE_OP_NOT_EQUAL;
-            case SCF_GREATER_OR_EQUAL: return VK_COMPARE_OP_GREATER_OR_EQUAL;
-            case SCF_ALWAYS: return VK_COMPARE_OP_ALWAYS;
-            default:
-                LOG_CRITICAL("Unknown ESamplerCompareFunction {:d}", static_cast<uint8_t>(_compare_op));
-                return VK_COMPARE_OP_MAX_ENUM;
-        }
-    }
-
     VkVertexInputRate VulkanEnumTranslator::METoVKVertexInputRate(EVertexInputRate _me_rate) {
         switch (_me_rate) {
             case EVertexInputRate::VIR_VERTEX: return VK_VERTEX_INPUT_RATE_VERTEX;
@@ -1279,90 +1208,6 @@ namespace Moer::Render {
 
     }
 
-    VulkanRHIGraphicsPipelineState::~VulkanRHIGraphicsPipelineState() {
-        // if (m_pipeline_state_cache) {
-        //     delete m_pipeline_state_cache;
-        //     m_pipeline_state_cache = nullptr;
-        // }
-        // if (m_descriptor_sets_layout) {
-        //     delete m_descriptor_sets_layout;
-        //     m_descriptor_sets_layout = nullptr;
-        // }
-    }
-
-    Moer::Array<VkPipelineShaderStageCreateInfo> VulkanRHIGraphicsPipelineState::METoVKShaderStageCreateInfo(const RHIShaderBoundStateInput& _shader_bound_state) {
-        Moer::Array<VkPipelineShaderStageCreateInfo> shader_stage_create_infos;
-        // vert-frag pipeline
-        VkPipelineShaderStageCreateInfo shader_stage_create_info{};
-        shader_stage_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        shader_stage_create_info.pNext = nullptr;
-        shader_stage_create_info.flags = 0;
-        if (_shader_bound_state.p_vertex_shader) {
-            auto* vk_vert_shader                         = static_cast<VulkanRHIVertexShader*>(_shader_bound_state.p_vertex_shader);
-            shader_stage_create_info.stage               = VK_SHADER_STAGE_VERTEX_BIT;
-            shader_stage_create_info.module              = vk_vert_shader->GetHandle();
-            shader_stage_create_info.pName               = "main";
-            shader_stage_create_info.pSpecializationInfo = nullptr;
-            shader_stage_create_infos.push_back(shader_stage_create_info);
-        }
-        if (_shader_bound_state.p_geometry_shader) {
-            auto* vk_geom_shader                         = static_cast<VulkanRHIGeometryShader*>(_shader_bound_state.p_geometry_shader);
-            shader_stage_create_info.stage               = VK_SHADER_STAGE_GEOMETRY_BIT;
-            shader_stage_create_info.module              = vk_geom_shader->GetHandle();
-            shader_stage_create_info.pName               = "main";
-            shader_stage_create_info.pSpecializationInfo = nullptr;
-            shader_stage_create_infos.push_back(shader_stage_create_info);
-        }
-        // mesh-frag pipeline
-        if (_shader_bound_state.p_mesh_shader) {
-            auto* vk_mesh_shader                         = static_cast<VulkanRHIMeshShader*>(_shader_bound_state.p_mesh_shader);
-            shader_stage_create_info.stage               = VK_SHADER_STAGE_MESH_BIT_NV;
-            shader_stage_create_info.module              = vk_mesh_shader->GetHandle();
-            shader_stage_create_info.pName               = "main";
-            shader_stage_create_info.pSpecializationInfo = nullptr;
-            shader_stage_create_infos.push_back(shader_stage_create_info);
-        }
-        if (_shader_bound_state.p_amplification_shader) {
-            auto* vk_amp_shader                          = static_cast<VulkanRHIAmplificationShader*>(_shader_bound_state.p_amplification_shader);
-            shader_stage_create_info.stage               = VK_SHADER_STAGE_TASK_BIT_NV;
-            shader_stage_create_info.module              = vk_amp_shader->GetHandle();
-            shader_stage_create_info.pName               = "main";
-            shader_stage_create_info.pSpecializationInfo = nullptr;
-            shader_stage_create_infos.push_back(shader_stage_create_info);
-        }
-        if (_shader_bound_state.p_fragment_shader) {
-            auto* vk_frag_shader                         = static_cast<VulkanRHIFragmentShader*>(_shader_bound_state.p_fragment_shader);
-            shader_stage_create_info.stage               = VK_SHADER_STAGE_FRAGMENT_BIT;
-            shader_stage_create_info.module              = vk_frag_shader->GetHandle();
-            shader_stage_create_info.pName               = "main";
-            shader_stage_create_info.pSpecializationInfo = nullptr;
-            shader_stage_create_infos.push_back(shader_stage_create_info);
-        }
-
-        return shader_stage_create_infos;
-    }
-
-    Moer::Array<const Shader*> VulkanRHIGraphicsPipelineState::GetShaderInfoList(const RHIShaderBoundStateInput& _shader_bound_state) {
-        Moer::Array<const Shader*> shader_list;
-        if (_shader_bound_state.p_vertex_shader->shader_type == EShaderType::ST_VERTEX) { shader_list.push_back(_shader_bound_state.p_vertex_shader->GetMetaShader()); }
-        if (_shader_bound_state.p_geometry_shader != nullptr) { shader_list.push_back(_shader_bound_state.p_geometry_shader->GetMetaShader()); }
-        // mesh-frag pipeline
-        if (_shader_bound_state.p_mesh_shader != nullptr) { shader_list.push_back(_shader_bound_state.p_mesh_shader->GetMetaShader()); }
-        if (_shader_bound_state.p_amplification_shader != nullptr) { shader_list.push_back(_shader_bound_state.p_amplification_shader->GetMetaShader()); }
-        if (_shader_bound_state.p_fragment_shader != nullptr) { shader_list.push_back(_shader_bound_state.p_fragment_shader->GetMetaShader()); }
-        return shader_list;
-    }
-
-    void VulkanRHIGraphicsPipelineState::CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& _info) { VK_CHECK_RESULT(vkCreateGraphicsPipelines(m_device->GetDevice(), VK_NULL_HANDLE, 1, &_info, nullptr, &m_pipeline)); }
-
-    void VulkanRHIComputePipelineState::CreateComputePipeline(const VkComputePipelineCreateInfo& _info) { VK_CHECK_RESULT(vkCreateComputePipelines(m_device->GetDevice(), VK_NULL_HANDLE, 1, &_info, nullptr, &m_pipeline)); }
-
-    void VulkanRHIRayTracingPipelineState::CreateRayTracingPipeline(const VkRayTracingPipelineCreateInfoKHR& _info) {
-        // NOLINTNEXTLINE
-        static auto vkCreateRayTracingPipelinesKHR = reinterpret_cast<PFN_vkCreateRayTracingPipelinesKHR>(vkGetDeviceProcAddr(m_device->GetDevice(), "vkCreateRayTracingPipelinesKHR"));
-
-        VK_CHECK_RESULT(vkCreateRayTracingPipelinesKHR(m_device->GetDevice(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &_info, nullptr, &m_pipeline));
-    }
 
 #pragma endregion
 
@@ -1372,107 +1217,6 @@ namespace Moer::Render {
 #pragma endregion
 
 #pragma region viewable resources definitions
-
-    VkIndexType VulkanRHIBuffer::METoVKIndexType(EIndexElementType _type) {
-        switch (_type) {
-            case EIndexElementType::IET_NONE: return VK_INDEX_TYPE_NONE_KHR;
-            case EIndexElementType::IET_UINT8: return VK_INDEX_TYPE_UINT8_EXT;
-            case EIndexElementType::IET_UINT16: return VK_INDEX_TYPE_UINT16;
-            case EIndexElementType::IET_UINT32: return VK_INDEX_TYPE_UINT32;
-            default:
-                LOG_CRITICAL("Unsupported index element type: {}", static_cast<uint32_t>(_type));
-                return VK_INDEX_TYPE_MAX_ENUM;
-        }
-    }
-
-    VkBufferUsageFlags VulkanRHIBuffer::METoVKBufferUsageFlags(VulkanDevice* _device, EBufferUsageFlags _me_flags) {
-        // Always include TRANSFER_SRC since hardware vendors confirmed it wouldn't have any performance cost and we need it for some debug functionalities.
-        VkBufferUsageFlags vk_flags = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-
-        // NOLINTNEXTLINE
-        auto TranslateFlag = [&vk_flags, &_me_flags](EBufferUsageFlags _search_me_flags, VkBufferUsageFlags _added_if_found, VkBufferUsageFlags _added_if_not_found = 0) {
-            const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
-            vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
-        };
-
-        TranslateFlag(EBufferUsageFlags::VERTEX_BUFFER, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-        TranslateFlag(EBufferUsageFlags::INDEX_BUFFER, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-        TranslateFlag(EBufferUsageFlags::CONSTANT_BUFFER, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
-
-        TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR);
-        TranslateFlag(EBufferUsageFlags::SHADER_BINDING_TABLE, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR);
-
-        TranslateFlag(EBufferUsageFlags::UNORDERED_ACCESS, VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        TranslateFlag(EBufferUsageFlags::INDIRECT_BUFFER, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
-        TranslateFlag(EBufferUsageFlags::CPU_VISIBLE, (VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT));
-        TranslateFlag(EBufferUsageFlags::TRANSFER_DST, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-        TranslateFlag(EBufferUsageFlags::TEXTURE_BUFFER, VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT);
-
-        TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE_SCRATCH, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-
-        TranslateFlag(EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-
-        return vk_flags;
-    }
-
-    VkImageType VulkanRHITexture::METoVKImageType(ETextureDimension _dim) {
-        switch (_dim) {
-            case ETextureDimension::TEX_2D:
-            case ETextureDimension::TEX_2D_ARRAY:
-            case ETextureDimension::TEX_CUBE:
-            case ETextureDimension::TEX_CUBE_ARRAY: return VK_IMAGE_TYPE_2D;
-            case ETextureDimension::TEX_3D: return VK_IMAGE_TYPE_3D;
-            default:
-                LOG_CRITICAL("Unsupported texture dimension: {}", static_cast<uint32_t>(_dim));
-                return VK_IMAGE_TYPE_MAX_ENUM;
-        }
-    }
-
-    VulkanRHITexture::VulkanRHITexture(const RHITextureCreateInfo& _info, VulkanDevice* _device)
-        : RHITexture(_info), VulkanDeviceObject(_device) {}
-
-    VulkanRHITexture::VulkanRHITexture(const RHITextureCreateInfo& _info, VkImage _image, VulkanDevice* _device)
-        : RHITexture(_info),
-          VulkanDeviceObject(_device),
-          m_alloc{_image, VK_NULL_HANDLE} {}
-
-    VulkanRHITexture::~VulkanRHITexture() {
-        if (m_alloc.alloc && m_alloc.image != VK_NULL_HANDLE) {
-            //todo:
-            // vmaDestroyImage(device->Get, m_alloc.image, m_alloc.alloc);
-        }
-    }
-
-    VkImageUsageFlags VulkanRHITexture::METoVKImageUsageFlags(ETextureUsageFlags _me_flags) {
-        // Always include TRANSFER_SRC since hardware vendors confirmed it wouldn't have any performance cost and we need it for some debug functionalities.
-        VkImageUsageFlags vk_flags = 0;
-
-        // NOLINTNEXTLINE
-        auto TranslateFlag = [&vk_flags, &_me_flags](ETextureUsageFlags _search_me_flags, VkImageUsageFlags _added_if_found, VkImageUsageFlags _added_if_not_found = 0) {
-            const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
-            vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
-        };
-
-        TranslateFlag(ETextureUsageFlags::TRANSFER_SRC, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-        TranslateFlag(ETextureUsageFlags::TRANSFER_DST, VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-        TranslateFlag(ETextureUsageFlags::SAMPLED, VK_IMAGE_USAGE_SAMPLED_BIT);
-        TranslateFlag(ETextureUsageFlags::UNORDERED_ACCESS, VK_IMAGE_USAGE_STORAGE_BIT);
-        TranslateFlag(ETextureUsageFlags::COLOR_ATTACHMENT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
-        TranslateFlag(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
-        TranslateFlag(ETextureUsageFlags::TRANSIENT_ATTACHMENT, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT);
-        TranslateFlag(ETextureUsageFlags::INPUT_ATTACHMENT, VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
-#ifdef VK_ENABLE_BETA_EXTENSIONS
-    TranslateFlag(ETextureUsageFlags::VIDEO_DECODE, VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_VIDEO_DECODE_SRC_BIT_KHR | VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR);
-#endif
-        TranslateFlag(ETextureUsageFlags::FRAGMENT_DENSITY_MAP, VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT);
-        TranslateFlag(ETextureUsageFlags::FRAGMENT_SHADING_RATE_ATTACHMENT, VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR);
-#ifdef VK_ENABLE_BETA_EXTENSIONS
-    TranslateFlag(ETextureUsageFlags::VIDEO_ENCODE, VK_IMAGE_USAGE_VIDEO_ENCODE_DST_BIT_KHR | VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR | VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR);
-#endif
-        // TranslateFlag(ETextureUsageFlags::ATTACHMENT_FEEDBACK_LOOP, VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT);
-
-        return vk_flags;
-    }
 
     uint EncodeViewKey(uint _mip_level, uint _mip_cnt) { return _mip_level | (_mip_cnt << 8); }
 
@@ -2545,7 +2289,7 @@ namespace Moer::Render {
                 VkAccelerationStructureCreateInfoKHR create_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
                 create_info.deviceAddress = 0;//for capture replay
                 create_info.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-                create_info.createFlags = 0;
+                create_info.createFlags = VK_ACCELERATION_STRUCTURE_CREATE_DESCRIPTOR_BUFFER_CAPTURE_REPLAY_BIT_EXT;
                 create_info.buffer = tlas->underlying_buffer->GetHandle();
                 create_info.offset = 0;
                 create_info.size = tlas->underlying_buffer->GetByteSize();
@@ -2576,54 +2320,6 @@ namespace Moer::Render {
 
 #pragma region synchronization
 
-    VulkanRHIFence::VulkanRHIFence(VulkanDevice* _device, EFenceUsageFlags _usage) : m_device(_device), m_binary(VK_NULL_HANDLE), m_timeline(VK_NULL_HANDLE), usage(_usage) {
-        VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-        if (EnumHasAnyFlag(usage, EFenceUsageFlags::PRESENT)) {
-            VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_binary));
-
-            VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-            timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-            timeline_semaphore_info.initialValue  = 0;
-
-            create_info.pNext = &timeline_semaphore_info;
-            VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_timeline));
-            return;
-        }
-        if (EnumHasAnyFlag(usage, EFenceUsageFlags::BINARY)) { VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_binary)); }
-        if (EnumHasAnyFlag(usage, EFenceUsageFlags::TIMELINE)) {
-            VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-            timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-            timeline_semaphore_info.initialValue  = 0;
-
-            create_info.pNext = &timeline_semaphore_info;
-            VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &m_timeline));
-        }
-    }
-
-    VulkanRHIFence::~VulkanRHIFence() {
-
-        VkSemaphoreWaitInfo wait_delete_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-        wait_delete_info.pNext          = nullptr;
-        wait_delete_info.flags          = 0;
-        wait_delete_info.semaphoreCount = 1;
-        if (m_binary != VK_NULL_HANDLE) { vkDestroySemaphore(m_device->GetDevice(), m_binary, VK_NULL_HANDLE); }
-        if (m_timeline != VK_NULL_HANDLE) { vkDestroySemaphore(m_device->GetDevice(), m_timeline, VK_NULL_HANDLE); }
-    }
-
-    uint64_t VulkanRHIFence::GetValue() const {
-        uint64_t value;
-        vkGetSemaphoreCounterValue(m_device->GetDevice(), m_timeline, &value);
-        return value;
-    }
-
-    void VulkanRHIFence::Wait(uint64_t value) {
-        VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-        info.pSemaphores    = &m_timeline;
-        info.semaphoreCount = 1;
-        info.pValues        = &value;
-        vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
-    }
-
     VulkanFence::VulkanFence(VulkanDevice& _device) : VulkanDeviceObject(&_device) {
         VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
@@ -2636,6 +2332,14 @@ namespace Moer::Render {
     }
 
     uint64 VulkanFence::GetValue() const {
+        // uint64_t value;
+        // vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
+        // // vkGetSemaphoreCounterValue(m_device->GetDevice(), m_fence.timeline, &value);
+        // return value;
+        return current_value;
+    }
+
+    uint64 VulkanFence::GetDeviceValue() const{
         uint64_t value;
         vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
         // vkGetSemaphoreCounterValue(m_device->GetDevice(), m_fence.timeline, &value);
@@ -2689,264 +2393,6 @@ namespace Moer::Render {
         //free descriptors
         for (auto& [key, desc] : m_descriptor_indices) { m_device->GetGlobalDescriptorHeap().FreeImageDescIdx(desc); }
     }
-
-#pragma endregion
-
-#pragma region viewable resources view definitions
-    VulkanRHICBV::~VulkanRHICBV() {}
-
-
-    VulkanRHITextureUAV::~VulkanRHITextureUAV() { if (m_view != VK_NULL_HANDLE) { vkDestroyImageView(m_device->GetDevice(), m_view, VK_NULL_HANDLE); } }
-
-    VulkanRHITextureSRV::~VulkanRHITextureSRV() { if (m_view != VK_NULL_HANDLE) { vkDestroyImageView(m_device->GetDevice(), m_view, VK_NULL_HANDLE); } }
-
-    VulkanRHIBufferSRV::~VulkanRHIBufferSRV() { if (m_view != VK_NULL_HANDLE) { vkDestroyBufferView(m_device->GetDevice(), m_view, VK_NULL_HANDLE); } }
-
-    VulkanRHIBufferUAV::~VulkanRHIBufferUAV() { if (m_view != VK_NULL_HANDLE) { vkDestroyBufferView(m_device->GetDevice(), m_view, VK_NULL_HANDLE); } }
-    VulkanRHIAccelerationStructureSRV::~VulkanRHIAccelerationStructureSRV() {}
-
-#pragma endregion
-
-#pragma region viewport
-    VulkanRHIViewport::VulkanRHIViewport(VulkanSwapChain* _swapchain, uint32_t _max_frame_in_flight) : RHIViewport() {
-        swapchain                = _swapchain;
-        info.max_frame_in_flight = _max_frame_in_flight;
-        InnerCreateResources();
-    }
-
-    VulkanRHIViewport::~VulkanRHIViewport() {
-        InnerDestroyResources();
-
-        MoerDelete(swapchain);
-        swapchain = nullptr;
-    }
-
-    VulkanRHITextureUAV* VulkanRHIViewport::InnerCreateVulkanUAV(VulkanDevice* _device, VulkanRHITexture* texture, const RHIViewInfo& _view_info) {
-        auto* view = MoerNew(VulkanRHITextureUAV)(_device, texture, _view_info);
-
-        VkImageViewCreateInfo image_view_create_info{};
-        image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        image_view_create_info.pNext = nullptr;
-        image_view_create_info.flags = 0;
-
-        auto& uav_info = std::get<v_type_texture_uav>(_view_info.info);
-
-        image_view_create_info.image                           = texture->GetHandle();
-        image_view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(uav_info.dimension);
-        image_view_create_info.format                          = VulkanEnumTranslator::METoVKFormat(texture->GetFormat());
-        image_view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-        image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;// MARK...
-        image_view_create_info.subresourceRange.baseMipLevel   = uav_info.mip;
-        image_view_create_info.subresourceRange.levelCount     = 1;
-        image_view_create_info.subresourceRange.baseArrayLayer = uav_info.array_min;
-        image_view_create_info.subresourceRange.layerCount     = uav_info.array_num;
-
-        VK_CHECK_RESULT(vkCreateImageView(_device->GetDevice(), &image_view_create_info, nullptr, &view->m_view));
-
-        return view;
-    }
-
-    void VulkanRHIViewport::InnerCreateResources() {
-        uint32_t back_buffer_size = swapchain->m_swap_chain_images.size();
-
-        info.max_frame_in_flight = 3;
-        swapchain_image_uavs.resize(back_buffer_size);
-        image_aquire_fences.resize(info.max_frame_in_flight);
-        swapchain_images.resize(back_buffer_size);
-
-        EPixelFormat swapchain_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
-        for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
-            swapchain_images[index] = MoerNew(VulkanRHITexture)(RHITextureCreateInfo::Create2D("swapchain")
-                                                                .SetExtent(swapchain->extent.width, swapchain->extent.height)
-                                                                .SetFormat(swapchain_format)
-                                                                .SetUAVFormat(swapchain_format),
-                                                                swapchain->m_swap_chain_images[index],
-                                                                swapchain->m_device);
-            swapchain_images[index]->AddRef();
-            RHITextureUAVInfo uav_info;
-            uav_info.dimension = ETextureDimension::TEX_2D;
-            uav_info.format    = swapchain_format;
-            uav_info.array_min = 0;
-            uav_info.array_num = 1;
-            uav_info.mip       = 0;
-
-            RHIViewInfo view_info(std::move(uav_info));
-            swapchain_image_uavs[index] = InnerCreateVulkanUAV(
-                swapchain->m_device,
-                swapchain_images[index],
-                std::move(view_info));
-        }
-        for (uint32_t index = 0; index < image_aquire_fences.size(); index++) { image_aquire_fences[index] = MoerNew(VulkanRHIFence)(swapchain->m_device, EFenceUsageFlags::BINARY); }
-        frame_offset = 0;
-
-        //init information
-
-        info.backbuffer_format = swapchain_format;
-    }
-
-    void VulkanRHIViewport::InnerDestroyResources() {
-
-        for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) { MoerDelete(swapchain_image_uavs[index]); }
-        for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
-            VkSemaphoreWaitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-            VkSemaphore         temp[1] = {image_aquire_fences[index]->GetBinaryHandle()};
-            wait_info.semaphoreCount    = 1;
-            wait_info.pSemaphores       = temp;
-            wait_info.pValues           = 0;
-            // vkWaitSemaphores(swapchain->m_device->GetDevice(), &wait_info, UINT64_MAX);
-            MoerDelete(image_aquire_fences[index]);
-        }
-    }
-
-    void VulkanRHIViewport::ResetResources() {
-        assert(swapchain != nullptr);
-
-        uint32_t back_buffer_size = swapchain->m_swap_chain_images.size();
-
-        swapchain_image_uavs.resize(back_buffer_size);
-        image_aquire_fences.resize(info.max_frame_in_flight);
-        swapchain_images.resize(back_buffer_size);
-
-        for (uint32_t index = 0; index < swapchain_image_uavs.size(); index++) {
-            swapchain_images[index]->SetAttachedImageInner(swapchain->m_swap_chain_images[index]);
-            swapchain_images[index]->SetTrackInfo(
-                {},
-                TS_UNDEFINED,
-                EPassType::Graphics
-                );
-            EPixelFormat swapchain_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
-
-            MoerDelete(swapchain_image_uavs[index]);
-
-            RHITextureUAVInfo uav_info;
-            uav_info.dimension = ETextureDimension::TEX_2D;
-            uav_info.format    = swapchain_format;
-            uav_info.array_min = 0;
-            uav_info.array_num = 1;
-            uav_info.mip       = 0;
-
-            RHIViewInfo view_info(std::move(uav_info));
-            swapchain_image_uavs[index] = InnerCreateVulkanUAV(
-                swapchain->m_device,
-                swapchain_images[index],
-                std::move(view_info));
-        }
-        for (uint32_t index = 0; index < image_aquire_fences.size(); index++) {
-            MoerDelete(image_aquire_fences[index]);
-            image_aquire_fences[index] = MoerNew(VulkanRHIFence)(swapchain->m_device, EFenceUsageFlags::BINARY);
-        }
-        info.backbuffer_format = VulkanEnumTranslator::VKToMEFormat(swapchain->image_format);
-        frame_offset           = 0;
-    }
-
-    void VulkanRHIViewport::OnResize(Extent2D _size) {
-
-        swapchain->Recreate();
-        ResetResources();
-    }
-
-    VulkanTexture* VulkanRHIViewport::GetSwapchainImage(uint32_t _index) { return swapchain_textures[_index]; }
-    VulkanFence*   VulkanRHIViewport::GetBinaryFence(uint _index) { return frame_fences[_index]; }
-
-    VulkanRHIFence* VulkanRHIViewport::GetAcquireNextImageFence() { return image_aquire_fences[frame_offset = (frame_offset - 1) % info.max_frame_in_flight]; }
-
-    RHIViewportNextBackBufferInfo VulkanRHIViewport::GetNextFrameBackBufferInfo() {
-        uint32_t index = swapchain->AcquireNextImage(image_aquire_fences[frame_offset]->GetBinaryHandle());
-        if (index != UINT32_MAX) {
-            auto current_frame = frame_offset;
-            frame_offset       = (frame_offset + 1) % info.max_frame_in_flight;
-            return {.backbuffer_index = index, .backbuffer_ready_fence = image_aquire_fences[current_frame]};
-        }
-        //recreate
-        swapchain->Recreate();
-        ResetResources();
-        return {.backbuffer_index = UINT32_MAX, .backbuffer_ready_fence = nullptr};
-    }
-
-    VulkanRHITextureUAV* VulkanRHIViewport::GetCurrentBackBuffer(uint32_t index) {
-        if (index != UINT32_MAX) { return swapchain_image_uavs[index]; }
-        return nullptr;
-    }
-
-    void VulkanRHIViewport::Present(RHIFence* _render_finished) {
-
-        assert(_render_finished && "Fence Empty");
-        VulkanRHIFence* vk_fence = (VulkanRHIFence*)_render_finished;
-        VulkanDevice*   device   = swapchain->m_device;
-        assert(device != nullptr && "Swapchain not valid");
-
-        VkResult result = swapchain->Present(device->GetPresentQueue(), vk_fence->GetBinaryHandle());
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-            swapchain->Recreate();
-            ResetResources();
-        }
-        // swapchain->Present();
-    }
-
-    void VulkanRHIViewport::Present(VkSemaphore _semaphore) {
-        VulkanDevice* device = swapchain->m_device;
-        assert(device != nullptr && "Swapchain not valid");
-
-        VkResult result = swapchain->Present(device->GetPresentQueue(), _semaphore);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-            swapchain->Recreate();
-            ResetResources();
-        }
-    }
-
-    void VulkanRHIViewport::WaitForQueueComplete(RHICommandQueue* _command_queue, RHIFence* _optional_fence) {
-        if (!_command_queue) return;
-        VulkanRHICommandQueue* vk_queue = dynamic_cast<VulkanRHICommandQueue*>(_command_queue);
-        vkQueueWaitIdle(vk_queue->GetHandle());
-    }
-
-    ViewPort VulkanRHIViewport::GetViewportExtent() const { return ViewPort{0, 0, (float)swapchain->extent.width, (float)swapchain->extent.height, 0.f, 1.f}; }
-
-    VulkanViewport::VulkanViewport(RHIViewportInitializer _init, VulkanDevice& _device): VulkanDeviceObject(&_device), Viewport(), m_swap_chain(_device.GetInstance(), _init.window_handle, &_device) {
-        uint width, height;
-        m_swap_chain.Init(&width, &height, _init.b_vsync);
-        CreateResources();
-    }
-
-    void  VulkanViewport::Resize(Extent2D _extent) { m_swap_chain.Recreate(); }
-    void* VulkanViewport::GetNativeWindow() { return nullptr; }
-
-    void VulkanViewport::Present(VkSemaphore _sem) {
-        assert(_sem && "Present semaphore is Empty");
-        auto result = m_swap_chain.Present(m_device->GetPresentQueue(), _sem);
-
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-            m_swap_chain.Recreate();
-            CreateResources();
-        }
-    }
-
-    void VulkanViewport::CreateResources() {
-        uint back_buffer_size = m_swap_chain.m_swap_chain_images.size();
-        if (m_back_buffers.size() > 0) {
-            for (auto& texture : m_back_buffers) { MoerDelete(texture); }
-            m_back_buffers.clear();
-        }
-        auto format = VulkanEnumTranslator::VKToMEFormat(m_swap_chain.image_format);
-
-        TextureInfo info(
-            ETextureDimension::TEX_2D,
-            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::PRESENT,
-            format,
-            EClearAttachment::COLOR,
-            {m_swap_chain.extent.width, m_swap_chain.extent.height, 1}
-            );
-        for (uint i = 0; i < back_buffer_size; i++) {
-            auto* texture = MoerNew(VulkanTexture)(info,
-                                                   m_device,
-                                                   m_swap_chain.m_swap_chain_images[i]);
-            m_back_buffers.emplace_back(texture);
-        }
-
-    }
-#pragma endregion
-
-#pragma region graphic pipeline definitions
 
 #pragma endregion
 

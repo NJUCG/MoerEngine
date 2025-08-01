@@ -5,6 +5,8 @@
 #ifndef PIXELFORMAT_H
 #define PIXELFORMAT_H
 #include <cstdint>
+#include <cassert>
+#include "misc/Traits.h"
 /* from VkImageFormat vk_core=1.3 */
 enum EPixelFormat : uint8_t {
     PF_UNDEFINED                  = 0,
@@ -258,4 +260,8 @@ enum EPixelFormat : uint8_t {
     PF_Num
 };
 
+namespace Moer::Render {
+    bool   IsPixelFormatBC(EPixelFormat _format);
+    uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size);
+}// namespace Moer::Render
 #endif//MOERENGINE_PIXELFORMAT_H

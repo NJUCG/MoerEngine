@@ -11,91 +11,6 @@
 #include "d3d12/D3D12Device.h"
 #include "shader/ShaderResourceManager.h"
 
-RHI* g_rhi = nullptr;
-
-extern LockFreeQueueBase<RHIResource, false> pending_deletings;
-// global shader
-void MTest() {
-
-    EnqueueRenderTask([] {
-        // do something
-        LOG_INFO("Render System Tick");
-    });
-}
-
-void RHI::RHIFlushPendingDeletes() {
-    Moer::Array<RHIResource*> resources_to_delete;
-
-    pending_deletings.PopAll(resources_to_delete);
-
-    uint32_t num_deletes = resources_to_delete.size();
-
-    //test if its ok
-    for (uint32_t i = 0; i < num_deletes; ++i) {
-        // LOG_INFO("deleted resource type:{}", uint32_t(resources_to_delete[i]->GetResourceType()));
-        //resources_to_delete[i]->GetResourceType() == RRT_VIEWPORT ||
-        // if (resources_to_delete[i]->GetResourceType() == RRT_GPU_FENCE) {
-        //     continue;
-        // }
-        MoerDelete(resources_to_delete[i]);
-    }
-#if _DEBUG
-    if (num_deletes > 0) {
-
-        LOG_INFO("{} resources to delete", num_deletes);
-    }
-#endif
-}
-RHISRVRef RHI::RHICreateBufferSRV(
-    RHIBuffer* _resource,
-    uint32_t   _stride,
-    uint64_t   _byte_size,
-    uint64_t   _byte_offset) {
-    assert(_resource != nullptr);
-    RHIViewRef view = RHICreateBufferView<v_type_buffer_srv>(_resource, _stride, _byte_size, _byte_offset);
-    return RHISRVRef(static_cast<RHISRV*>(view.Get()));
-};
-RHIUAVRef RHI::RHICreateBufferUAV(
-    RHIBuffer* _resource,
-    uint32_t   stride,
-    uint64_t   _byte_size,
-    uint64_t   _byte_offset) {
-
-    assert(_resource != nullptr);
-    RHIViewRef view = RHICreateBufferView<v_type_buffer_uav>(_resource, stride, _byte_size, _byte_offset);
-    return RHIUAVRef(static_cast<RHIUAV*>(view.Get()));
-};
-
-RHISRVRef RHI::RHICreateTextureSRV(RHITexture*  _texture,
-                                   EPixelFormat _format,
-                                   uint32_t     _mip_level,
-                                   uint32_t     _mip_levels,
-                                   uint32_t     _array_index,
-                                   uint32_t     _array_size) {
-
-    assert(_texture != nullptr);
-    RHIViewRef view = RHICreateViewInner(
-        _texture, GetTextureSRVInfo(_texture, _format, _mip_level, _mip_levels, _array_index, _array_size));
-    return RHISRVRef(static_cast<RHISRV*>(view.Get()));
-}
-
-RHIUAVRef RHI::RHICreateTextureUAV(RHITexture*  _texture,
-                                   EPixelFormat _format,
-                                   uint32_t     _mip_level,
-                                   uint32_t     _array_index,
-                                   uint32_t     _array_size) {
-    assert(_texture != nullptr);
-    RHIViewRef view = RHICreateViewInner(
-        _texture, GetTextureUAVInfo(_texture, _format, _mip_level, _array_index, _array_size));
-    return RHIUAVRef(static_cast<RHIUAV*>(view.Get()));
-}
-
-RHISRVRef RHI::RHICreateAccelerationStructureSRV(RHIRayTracingTLAS* _tlas) {
-    assert(_tlas != nullptr);
-    RHIViewRef view = RHICreateViewInner(_tlas, GetAccelerationStructureSRVInfo(_tlas));
-    return RHISRVRef(static_cast<RHISRV*>(view.Get()));
-}
-
 namespace Moer::Render {
 
     template<>
@@ -130,7 +45,7 @@ namespace Moer::Render {
 
         D3D12RHIConfig config;
 
-        config.force_sync = false; //       _config_as_json.value("force_sync", false);
+        config.force_sync = true;//       _config_as_json.value("force_sync", false);
 
         return config;
     }
@@ -161,5 +76,130 @@ namespace Moer::Render {
 
     CopyQueue& RenderDevice::GetCopyQueue() {
         return Get().impl->GetCopyQueue();
+    }
+    bool IsPixelFormatBC(EPixelFormat _format) {
+        switch (_format) {
+            case PF_BC1_RGB_UNORM_BLOCK: return true;
+            case PF_BC1_RGB_SRGB_BLOCK: return true;
+            case PF_BC1_RGBA_UNORM_BLOCK: return true;
+            case PF_BC1_RGBA_SRGB_BLOCK: return true;
+            case PF_BC2_UNORM_BLOCK: return true;
+            case PF_BC2_SRGB_BLOCK: return true;
+            case PF_BC3_UNORM_BLOCK: return true;
+            case PF_BC3_SRGB_BLOCK: return true;
+            case PF_BC4_UNORM_BLOCK: return true;
+            case PF_BC4_SNORM_BLOCK: return true;
+            case PF_BC5_UNORM_BLOCK: return true;
+            case PF_BC5_SNORM_BLOCK: return true;
+            case PF_BC6H_UFLOAT_BLOCK: return true;
+            case PF_BC6H_SFLOAT_BLOCK: return true;
+            case PF_BC7_UNORM_BLOCK: return true;
+            case PF_BC7_SRGB_BLOCK: return true;
+        }
+        return false;
+    }
+    uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
+        if (IsPixelFormatBC(_format)) {
+            uint64 block_width  = (_size.x + 3) / 4;
+            uint64 block_height = (_size.y + 3) / 4;
+            uint64 block_cnt    = block_width * block_height * std::max(1u, _size.z);
+
+            switch (_format) {
+                case PF_BC1_RGB_UNORM_BLOCK:
+                case PF_BC1_RGBA_UNORM_BLOCK:
+                case PF_BC1_RGB_SRGB_BLOCK:
+                case PF_BC1_RGBA_SRGB_BLOCK:
+                    return block_cnt * 8;
+                    break;
+                case PF_BC2_UNORM_BLOCK:
+                case PF_BC2_SRGB_BLOCK:
+                case PF_BC3_UNORM_BLOCK:
+                case PF_BC3_SRGB_BLOCK:
+                    return block_cnt * 16;
+                    break;
+                case PF_BC4_UNORM_BLOCK:
+                case PF_BC4_SNORM_BLOCK:
+                    return block_cnt * 8;
+                    break;
+                case PF_BC5_UNORM_BLOCK:
+                case PF_BC5_SNORM_BLOCK:
+                case PF_BC6H_UFLOAT_BLOCK:
+                case PF_BC6H_SFLOAT_BLOCK:
+                case PF_BC7_UNORM_BLOCK:
+                case PF_BC7_SRGB_BLOCK:
+                    return block_cnt * 16;
+                    break;
+                default: assert(false && "not support format");
+            }
+        }
+        switch (_format) {
+            case PF_R8G8B8A8_SRGB:
+            case PF_R8G8B8A8_UNORM:
+            case PF_R8G8B8A8_UINT:
+            case PF_R8G8B8A8_SNORM:
+            case PF_R8G8B8A8_SINT:
+                return _size.x * _size.y * _size.z * 4;
+                break;
+            case PF_R32G32B32A32_SFLOAT:
+            case PF_R32G32B32A32_UINT:
+            case PF_R32G32B32A32_SINT:
+                return _size.x * _size.y * _size.z * 16;
+                break;
+            case PF_R32G32_SFLOAT:
+            case PF_R32G32_UINT:
+            case PF_R32G32_SINT:
+                return _size.x * _size.y * _size.z * 8;
+                break;
+            case PF_R32_SFLOAT:
+            case PF_R32_UINT:
+            case PF_R32_SINT:
+                return _size.x * _size.y * _size.z * 4;
+                break;
+            case PF_R16G16B16A16_SFLOAT:
+            case PF_R16G16B16A16_UNORM:
+            case PF_R16G16B16A16_UINT:
+            case PF_R16G16B16A16_SNORM:
+            case PF_R16G16B16A16_SINT:
+                return _size.x * _size.y * _size.z * 8;
+                break;
+            case PF_R16G16_SFLOAT:
+            case PF_R16G16_UNORM:
+            case PF_R16G16_UINT:
+            case PF_R16G16_SNORM:
+            case PF_R16G16_SINT:
+                return _size.x * _size.y * _size.z * 4;
+                break;
+            case PF_R16_SFLOAT:
+            case PF_R16_UNORM:
+            case PF_R16_UINT:
+            case PF_R16_SNORM:
+            case PF_R16_SINT:
+                return _size.x * _size.y * _size.z * 2;
+                break;
+            case PF_R8G8B8_SRGB:
+            case PF_R8G8B8_UNORM:
+            case PF_R8G8B8_UINT:
+            case PF_R8G8B8_SNORM:
+            case PF_R8G8B8_SINT:
+                return _size.x * _size.y * _size.z * 3;
+                break;
+            case PF_R8G8_SRGB:
+            case PF_R8G8_UNORM:
+            case PF_R8G8_UINT:
+            case PF_R8G8_SNORM:
+            case PF_R8G8_SINT:
+                return _size.x * _size.y * _size.z * 2;
+                break;
+            case PF_R8_SRGB:
+            case PF_R8_UNORM:
+            case PF_R8_UINT:
+            case PF_R8_SNORM:
+            case PF_R8_SINT:
+                return _size.x * _size.y * _size.z;
+                break;
+            default:
+                assert(false && "not support format");
+        }
+        return 0;
     }
 };// namespace Moer::Render

@@ -261,24 +261,24 @@ public:
     void Reset() {
         m_head.SetAll(0, 0);
     }
-    void Push(TNodeIndex index) {
+    void Push(TNodeIndex _index) {
         ABADoublePtr local_head;
         ABADoublePtr new_head;
         do {
             local_head = m_head;
             new_head   = local_head;
             new_head.AdvanceCounter(1);
-            new_head.SetValue(index);
-            LockFreeNodeStrategy::GetNode(index)->next_single = local_head.GetValue();
+            new_head.SetValue(_index);
+            LockFreeNodeStrategy::GetNode(_index)->next_single = local_head.GetValue();
         } while (!m_head.AtomicCompareExchangeWeak(local_head, new_head, std::memory_order_acq_rel));
     }
 
-    bool PushIf(std::function<TNodeIndex(uint64_t)> allocate_if_true) {
+    bool PushIf(std::function<TNodeIndex(uint64_t)> _allocate_if_true) {
         ABADoublePtr local_head;
         ABADoublePtr new_head;
         do {
             local_head       = m_head;
-            TNodeIndex index = allocate_if_true(ABADoublePtr::AdvanceStateCounter(local_head.GetState(), 1ull));
+            TNodeIndex index = _allocate_if_true(ABADoublePtr::AdvanceStateCounter(local_head.GetState(), 1ull));
             if (index == 0) return false;
 
             new_head = local_head;
@@ -308,6 +308,14 @@ public:
         // }
 
         return result;
+    }
+
+    // Consumer only(single consumer)
+    TNodeIndex Top() const {
+        ABADoublePtr local_head = m_head;
+        TNodeIndex   index      = local_head.GetValue();
+        if (index == 0) return 0;
+        return index;
     }
 
     // TNodeIndex PopAll() {
@@ -425,6 +433,17 @@ public:
             index = node->next_single;
             LockFreeNodeStrategy::FreeNodeIndex(current_node_index);
         }
+    }
+
+    // Consumer only(single consumer)
+    TValue Top() {
+        TNodeIndex index = node_list.Top();
+        if (index == 0) return nullptr;
+
+        LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
+        TValue        data = (TValue)node->data;
+
+        return data;
     }
 
     uint64_t GetState() const {
@@ -563,6 +582,16 @@ public:
         while (TValue item = Pop()) {
             _target.push_back(item);
         }
+    }
+
+    // Consumer only(single consumer)
+    TValue Top() {
+        ABADoublePtr local_head = m_head;
+        ABADoublePtr local_next = LockFreeNodeStrategy::GetNode(local_head.GetValue())->next_double;
+
+        if (local_next.GetValue() == 0) return zero_value;
+
+        return (TValue)LockFreeNodeStrategy::GetNode(local_next.GetValue())->data;
     }
 
 private:

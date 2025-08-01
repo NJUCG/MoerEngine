@@ -38,7 +38,9 @@
 // std::function<ShaderCompilerOutput*(const ShaderCompilerInput& input)> DXCompiler::s_compiler_func_table[EShaderPlatform::SP_Num]{};
 
 using Microsoft::WRL::ComPtr;
-
+using ShaderParametersInfoMap   = Moer::Render::ShaderParametersInfoMap;
+using ShaderCompilerEnvironment = Moer::Render::ShaderCompilerEnvironment;
+using ReflectParamInfo          = Moer::Render::ReflectParamInfo;
 struct DXCompiler::Impl {
     Impl();
     ~Impl();
@@ -385,7 +387,6 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
     uint32_t       size = code->GetBufferSize();
 
     ShaderReflectInfo reflect_info;
-    auto&             vertex_inputs = reflect_info.vertex_input_info;
 
     Moer::UnorderedMap<std::string, ParameterInfo>
         param_map;
@@ -405,7 +406,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
 #define SetZeroIfEmpty(_param) \
     if (!_param.has_value()) _param = ReflectParamInfo::Bindless();
 
-    Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
+    Moer::UnorderedMap<std::string, ReflectParamInfo> reflect_map;
 
     {
         std::span<Moer::uint> spirv_code_span((Moer::uint*)data, size / sizeof(Moer::uint));
@@ -613,7 +614,7 @@ void DXCompiler::Impl::ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompil
 
     // todo InputParameters for vs, inputlayout ?
 
-    Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
+    Moer::UnorderedMap<std::string, ReflectParamInfo> reflect_map;
 
     constexpr std::string_view bdls_suffix       = "_114514_bdls";
     constexpr std::string_view bdls_array_suffix = "_array_114514_bdls";
@@ -625,7 +626,7 @@ void DXCompiler::Impl::ReflectDXIL(ComPtr<IDxcResult> result, const ShaderCompil
 
         std::string name = shaderInputBindDesc.Name;
         if (is_bdls_array(name)) {
-            name = Moer::ReflectParamInfo::bdls_name;// our internal appointment
+            name = ReflectParamInfo::bdls_name;// our internal appointment
         }
         auto& param_info = reflect_map[name].dxil;
         param_info.slot  = shaderInputBindDesc.BindPoint;

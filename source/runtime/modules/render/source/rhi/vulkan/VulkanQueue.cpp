@@ -5,13 +5,13 @@
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanRHIResource.h"
-#include "io/IOCommon.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
 #include "misc/Alignment.h"
 #include "misc/Traits.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIIO.h"
 #include "rhi/RHIResource.h"
 
 #include "VulkanCustomCommand.h"
@@ -2611,8 +2611,7 @@ namespace Moer::Render {
             };
 
             auto visit_signal_event = [&](SignalEvent& _evt) {
-                auto*  fence    = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
-                uint64 test_val = fence->GetValue();
+                auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
                 fence->Notify(_evt.value);
             };
             auto visit_wait_event = [&](WaitEvent& _evt) {
@@ -2701,9 +2700,58 @@ namespace Moer::Render {
         }
         timeline = nullptr;
     }
+    static constexpr uint64 fread_segment_size = 1024 * 64;// 64KB
+    IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
+        IOQueueCommandList&& cmd_list = std::move(_submission.cmds);
 
-    IOWaitEvt VkCopyQueue::Execute(IOSubmission&& _submission) {
-        assert(_submission.cmds.size() > 0 && "Empty submission");
+        //prepare sizes
+        uint64 temp_size = 0;
+        for (auto& cmd : cmd_list.file_to_buffer) {
+            const auto& src = std::get<FileDesc>(cmd.src);
+            temp_size += cmd.SizeByte();
+        }
+
+        for (auto& cmd : cmd_list.file_to_texture) {
+            const auto& src = std::get<FileDesc>(cmd.src);
+            temp_size += cmd.SizeByte();
+        }
+
+        Array<ubyte> temp_buffer(temp_size);
+        temp_size = 0;
+
+        auto copy_file_to_mem = [&](const FileDesc& _src, size_t _file_offset, std::span<ubyte> _dst) {
+            FILE* result_handle = nullptr;
+            fopen_s(&result_handle, (const char*)_src.handle.file, "r");
+            if (!result_handle) {
+                SPDLOG_ERROR("Failed to open file {}", (const char*)_src.handle.file);
+                assert(false && "Failed to open file");
+            }
+            std::fseek(result_handle, _file_offset, SEEK_SET);
+            std::fread(_dst.data(), sizeof(ubyte), _dst.size_bytes(), result_handle);
+            std::fclose(result_handle);
+        };
+
+        //direct copy to mem
+        for (auto& cmd : cmd_list.file_to_mem) {
+            const auto& src = std::get<FileDesc>(cmd.src);
+            auto        dst = std::get<RawDataDesc>(cmd.dst);
+            copy_file_to_mem(src, cmd.file_offset, dst.data);
+        }
+
+        //copy file to buffer
+        for (auto& cmd : cmd_list.file_to_buffer) {
+            const auto& src = std::get<FileDesc>(cmd.src);
+            copy_file_to_mem(src, cmd.file_offset, std::span<ubyte>(temp_buffer.data() + temp_size, cmd.SizeByte()));
+            temp_size += cmd.SizeByte();
+        }
+
+        //copy file to texture
+        for (auto& cmd : cmd_list.file_to_texture) {
+            const auto& src = std::get<FileDesc>(cmd.src);
+            copy_file_to_mem(src, cmd.file_offset, std::span<ubyte>(temp_buffer.data() + temp_size, cmd.SizeByte()));
+            temp_size += cmd.SizeByte();
+        }
+
         return {};
     }
 
@@ -2887,6 +2935,151 @@ namespace Moer::Render {
                 while (enabled && event_queue.empty()) {
                     queue_cv.wait(lock);
                 }
+            }
+        }
+    }
+
+    void VkCopyQueue::ExecuteIOThread(IOQueueCommandList&& _cmd_list, uint64_t _timeline) {
+
+        IOQueueCommandList&& cmd_list = std::move(_cmd_list);
+
+        CommandList rhi_cmd_list{};
+        //prepare sizes
+        uint64 temp_size = 0;
+        for (auto& cmd : cmd_list.file_to_buffer) {
+            const auto& src = std::get<FileDesc>(cmd.src);
+            temp_size += cmd.SizeByte();
+        }
+
+        for (auto& cmd : cmd_list.file_to_texture) {
+            const auto& src = std::get<FileDesc>(cmd.src);
+            temp_size += cmd.SizeByte();
+        }
+
+        Array<ubyte> temp_buffer(temp_size);
+        temp_size = 0;
+
+        auto copy_file_to_mem = [&](const FileDesc& _src, size_t _file_offset, std::span<ubyte> _dst) {
+            FILE* result_handle = nullptr;
+            fopen_s(&result_handle, (const char*)_src.handle.file, "r");
+            if (!result_handle) {
+                SPDLOG_ERROR("Failed to open file {}", (const char*)_src.handle.file);
+                assert(false && "Failed to open file");
+            }
+            std::fseek(result_handle, _file_offset, SEEK_SET);
+            std::fread(_dst.data(), sizeof(ubyte), _dst.size_bytes(), result_handle);
+            std::fclose(result_handle);
+        };
+
+        //direct copy to mem
+        for (auto& cmd : cmd_list.file_to_mem) {
+            const auto& src = std::get<FileDesc>(cmd.src);
+            auto        dst = std::get<RawDataDesc>(cmd.dst);
+            copy_file_to_mem(src, cmd.file_offset, dst.data);
+        }
+
+        //copy file to buffer
+        for (auto& cmd : cmd_list.file_to_buffer) {
+            const auto& src = std::get<FileDesc>(cmd.src);
+            copy_file_to_mem(src, cmd.file_offset, std::span<ubyte>(temp_buffer.data() + temp_size, cmd.SizeByte()));
+            const auto&   dst    = std::get<BufferViewDesc>(cmd.dst);
+            VulkanBuffer* vk_dst = reinterpret_cast<VulkanBuffer*>(dst.handle);
+            rhi_cmd_list.CopyFrom(std::span<byte>((byte*)temp_buffer.data() + temp_size, cmd.SizeByte()), vk_dst->GetView(dst.offset, dst.size));
+            temp_size += cmd.SizeByte();
+        }
+
+        //copy file to texture
+        for (auto& cmd : cmd_list.file_to_texture) {
+            const auto& src = std::get<FileDesc>(cmd.src);
+            copy_file_to_mem(src, cmd.file_offset, std::span<ubyte>(temp_buffer.data() + temp_size, cmd.SizeByte()));
+            const auto&    dst    = std::get<TextureViewDesc>(cmd.dst);
+            VulkanTexture* vk_dst = reinterpret_cast<VulkanTexture*>(dst.handle);
+            TextureView    view(vk_dst, dst.pixel_fmt, dst.mip_offset, dst.mip_cnt);
+            view.offset = dst.offset;
+            view.extent = dst.size;
+            rhi_cmd_list.CopyFrom(std::span<byte>((byte*)temp_buffer.data() + temp_size, cmd.SizeByte()), view);
+            temp_size += cmd.SizeByte();
+        }
+        rhi_cmd_list.AddCallback([temp_data(std::move(temp_buffer))]() {
+        });
+
+        std::unique_lock<std::mutex> rhi_lock(rhi_mutex);
+        io_rhi_cmdlists.emplace(std::move(rhi_cmd_list), _timeline);
+    }
+
+    void VkCopyQueue::IOThreadLoop() {
+        while (enabled) {
+            IOQueueCommandList cmdlist;
+            uint64             timeline;
+            {
+                std::unique_lock<std::mutex> io_lock(io_mutex);
+                if (io_thread_cmds.empty()) {
+                    std::this_thread::yield();
+                    continue;
+                }
+                auto pair = std::move(io_thread_cmds.front());
+                io_thread_cmds.pop();
+                cmdlist  = std::move(pair.first);
+                timeline = pair.second;
+            }
+
+            ExecuteIOThread(std::move(cmdlist), timeline);
+        }
+    }
+
+    void VkCopyQueue::RHIThreadLoop() {
+        while (enabled) {
+            CommandList cmdlist;
+            uint64      timeline;
+            {
+                std::unique_lock<std::mutex> io_lock(rhi_mutex);
+                if (io_rhi_cmdlists.empty()) {
+                    std::this_thread::yield();
+                    continue;
+                }
+                auto pair = std::move(io_rhi_cmdlists.front());
+
+                cmdlist  = std::move(pair.first);
+                timeline = pair.second;
+            }
+
+            auto  allocator    = std::move(GetAllocator());
+            auto& vk_allocator = *allocator;
+            auto& vk_cmd_list  = vk_allocator.GetCmdList();
+            auto& vk_tracker   = vk_allocator.GetTracker();
+            vk_cmd_list.Begin();
+            vk_cmd_list.BeginLabel("IO Copy", {0.0f, 1.0f, 1.0f, 1.0f});
+
+            VkCmdPreprocessor preprocessor(device, vk_tracker, vk_allocator, {}, {}, EQueueType::Copy);
+            VkCmdVisitor      visitor(device, vk_allocator, vk_tracker, vk_cmd_list, {});
+
+            auto&& submission = cmdlist.Submit();
+            for (const auto& cmd : submission.cmds) {
+                preprocessor.VisitCmd(cmd.get());
+            }
+            vk_tracker.ResolveBarriers();
+            vk_tracker.DispatchBarriers(vk_cmd_list);
+            for (const auto& cmd : submission.cmds) {
+                visitor.VisitCmd(cmd.get());
+            }
+            vk_tracker.RestoreState();
+            vk_tracker.DispatchBarriers(vk_cmd_list);
+            vk_cmd_list.EndLabel();
+            vk_cmd_list.End();
+            vk_tracker.Reset();
+            //event queue
+            auto current_timeline = ++last_frame;
+            queue.Signal(this->timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            queue.Wait(this->timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            queue.Submit(vk_allocator.GetCmdList());
+            {
+                std::unique_lock<std::mutex> lock(event_mutex);
+                event_queue.emplace_back(std::move(allocator), current_timeline, true);
+                queue_cv.notify_one();
+            }
+            {
+                std::unique_lock<std::mutex> io_lock(rhi_mutex);
+                io_rhi_cmdlists.pop();
             }
         }
     }

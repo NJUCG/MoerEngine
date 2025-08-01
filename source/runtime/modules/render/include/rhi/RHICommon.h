@@ -1226,7 +1226,16 @@ struct MeshBoundInfo {
     float          padding2;
 };
 
-namespace Moer {
+class ShaderCompiler;
+namespace Moer::Render {
+
+    enum class EQueueType : uint8 {
+        Graphics,
+        Compute,
+        Copy,
+        Num,
+        Ignore
+    };
     struct ReflectParamInfo {
         ReflectParamInfo() {
             memset(this, 0, sizeof(ReflectParamInfo));
@@ -1323,21 +1332,20 @@ namespace Moer {
         uint32_t first_instance;
         uint32_t padding[3];
     };
-}// namespace Moer
+    struct ShaderParametersInfoMap {
+        friend class ShaderCompiler;
+        friend class DXCompiler;
 
-struct ShaderParametersInfoMap {
-    friend class ShaderCompiler;
-    friend class DXCompiler;
+    public:
+        // const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
+        //     return param_map;
+        // }
 
-public:
-    // const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
-    //     return param_map;
-    // }
-
-    // private:
-    // Moer::UnorderedMap<std::string, ParameterInfo>          param_map;
-    Moer::UnorderedMap<std::string, Moer::ReflectParamInfo> reflect_map;
-};
+        // private:
+        // Moer::UnorderedMap<std::string, ParameterInfo>          param_map;
+        Moer::UnorderedMap<std::string, ReflectParamInfo> reflect_map;
+    };
+}// namespace Moer::Render
 
 #pragma endregion
 

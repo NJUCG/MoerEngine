@@ -29,10 +29,7 @@ namespace Moer {
         RENDER_API GpuPrimitiveBuilder& Vertex(const Moer::Array<float>* data);
         RENDER_API GpuPrimitiveBuilder& Index(const Moer::Array<uint32_t>* data);
         RENDER_API GpuPrimitiveBuilder& Attribute(VertexAttributeFlags attribute);
-
-        RENDER_API RHIRenderPrimitiveRef Build();
-
-        RENDER_API GpuPrimitiveBuilder();
+        RENDER_API                      GpuPrimitiveBuilder();
         RENDER_API ~GpuPrimitiveBuilder();
         bool Validate() const;
 
@@ -58,7 +55,6 @@ namespace Moer {
         TextureBuilder& CallBack(Callback callback) noexcept;
         TextureBuilder& Data(void* data, uint32_t data_size) noexcept;
         TextureBuilder& Name(const std::string& name) noexcept;
-        RHITextureRef   Build() noexcept;
         ~TextureBuilder() noexcept;
         static Moer::UnorderedMap<std::string, Render::TextureRef> BuildTexturesInBatch(Moer::Array<TextureBuilder>& builders) noexcept;
         // static void InitBuild() noexcept;
@@ -80,14 +76,6 @@ namespace Moer {
         GpuSceneBufferBuilder& Index(const Moer::Array<uint32_t>* data);
         GpuSceneBufferBuilder();
         ~GpuSceneBufferBuilder();
-        std::pair<RHIBufferRef, RHIBufferRef> Build();
-        static RHIBufferRef                   CopyFrom(EBufferUsageFlags usages, const void* data, uint32_t size, uint32_t _stride = sizeof(std::byte));
-        template<typename T>
-            requires std::is_trivially_copyable_v<T>
-        static RHIBufferRef CopyFrom(EBufferUsageFlags _usages, const std::span<T> _data) {
-            return CopyFrom(_usages, _data->data(), _data->size() * sizeof(T), sizeof(T));
-        }
-        static RHIBufferRef CreateBufferWithData(EBufferUsageFlags usages, const void* data, uint32_t size);
 
     protected:
         class Impl;

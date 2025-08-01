@@ -36,6 +36,7 @@
 #include <variant>
 #include <config.h>
 #include <platform/Platform.h>
+#include "VulkanIOService.h"
 
 #ifndef MOER_STR
 #define MOER_STR(x)  #x
@@ -501,7 +502,6 @@ namespace Moer::Render {
         compute_queue.reset();
         gfx_queue.reset();
         copy_queue.reset();
-        m_command_allocators.clear();
         DestroyInternalShaders();
         FlushDeferredReleases();
         DestroyInternalResources();
@@ -538,14 +538,6 @@ namespace Moer::Render {
         return queue_family_props;
     }
 
-    VulkanCommandAllocator& VulkanDevice::GetCurrentCommandAllocator() {
-        auto thread_id = ThreadManager::Instance().GetCurrentThreadIndex();
-        return m_command_allocators[thread_id];
-    }
-
-    //uint32_t VulkanDevice::GetMemoryType(uint32_t type_bits, VkMemoryPropertyFlags properties, VkBool32* mem_type_found) const {
-    //    return 0;
-    //}
     static uint32_t GetQueueFamilyIndice(std::span<const VkQueueFamilyProperties> _queue_family_props, VkQueueFlags _target_queue_flags, VkQueueFlags _exclude_queue_flags) {
         for (uint32_t i = 0; i < _queue_family_props.size(); ++i) {
             if (_queue_family_props[i].queueFlags & _target_queue_flags && !(_queue_family_props[i].queueFlags & _exclude_queue_flags)) { return i; }
@@ -1384,6 +1376,10 @@ namespace Moer::Render {
 
     SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) { return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)}; }
 
+    IOInterfaceRef VulkanDevice::CreateIOInterface(CopyQueue& _copy_queue) {
+        VkCopyQueue* copy_queue_vk = static_cast<VkCopyQueue*>(&_copy_queue);
+        return MakeShared<VulkanIOInterface>(*this, *copy_queue_vk);
+    }
     void VulkanDevice::EnqueueDeferredRelease(RHIResource* _object) {
         deferred_release_queue.Push(_object);
     }

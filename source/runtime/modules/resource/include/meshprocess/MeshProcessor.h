@@ -21,10 +21,10 @@ namespace Moer {
 
     public:
         friend class MeshProcessor;
-        Array<MeshletDesc>  meshlets;
-        Array<MeshletBound> meshlet_bounds;
-        Array<float>        meshlet_vertex_data;
-        Array<uint32_t>     primitive_indices;
+        Array<Render::MeshletDesc>  meshlets;
+        Array<Render::MeshletBound> meshlet_bounds;
+        Array<float>                meshlet_vertex_data;
+        Array<uint32_t>             primitive_indices;
     };
 
     class RESOURCE_API MeshProcessor {

@@ -329,7 +329,7 @@ namespace Moer::Render {
         //     //if TArg is a constant, add the size of TArg to the total size, other wise add 0
         //     return (0 + ... + (std::is_same_v<typename Args::type, TConstsant<typename Args::type::type>> ? sizeof(typename Args::type) : 0)) / sizeof(uint);
         // }
-        using t_texture_array_arg = std::span<TextureView>; // note here assume span with 'dynamic_extent', mostly 'Array<T> => span<T>', not 'T arr[N] => span<T,N>'
+        using t_texture_array_arg = std::span<TextureView>;// note here assume span with 'dynamic_extent', mostly 'Array<T> => span<T>', not 'T arr[N] => span<T,N>'
         using t_buffer_array_arg  = std::span<BufferView>;
 
         template<typename T>
@@ -488,11 +488,6 @@ namespace Moer::Render {
         ParamBlockAllcateInfo* alloc_info = nullptr;
         ArrayArguments         args;
         bool                   b_args_set = false;
-    };
-
-    template<typename T>
-    concept is_shader_mutation = requires(T _t) {
-        _t.SetCompileEnvironment(std::declval<ShaderCompilerEnvironment&>());
     };
 
     template<typename T>

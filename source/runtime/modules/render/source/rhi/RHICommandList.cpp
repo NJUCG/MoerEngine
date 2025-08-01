@@ -10,10 +10,6 @@
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "RHIImpl.h"
-RHICommandListBase::RHICommandListBase() {
-}
-RHICommandListBase::~RHICommandListBase() {
-}
 namespace Moer::Render {
 
     void CommandQueue::Test() {

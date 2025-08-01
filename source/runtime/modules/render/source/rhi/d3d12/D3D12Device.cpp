@@ -455,15 +455,15 @@ namespace Moer::Render {
     CopyQueue& D3D12Device::GetCopyQueue() {
         // TODO: 在此处插入 return 语句
         struct DummyCopyQueue : CopyQueue {
-            virtual IOWaitEvt Execute(IOSubmission&& _submit) { return {}; };
-            virtual IOWaitEvt Execute(CmdSubmit&& _submit) { return {}; };
-
-            virtual void CopyFrom(BufferView _src, BufferView _dst) {};
-            virtual void CopyFrom(TextureView _src, TextureView _dst) {};
-            virtual void CopyFrom(TextureView _src, BufferView _dst) {};
-            virtual void CopyFrom(BufferView _src, TextureView _dst) {};
-            virtual void CopyFrom(std::span<byte> _data, BufferView _dst) {};
-            virtual void CopyFrom(std::span<byte> _data, TextureView _dst) {};
+            IOWaitEvt         Execute(IOSubmission&& _submit) { return {}; }
+            virtual IOWaitEvt Execute(CmdSubmit&& _submit) { return {}; }
+            virtual IOWaitEvt Execute(IOQueueSubmission&& _submit) { return {}; }
+            virtual void      CopyFrom(BufferView _src, BufferView _dst) {};
+            virtual void      CopyFrom(TextureView _src, TextureView _dst) {};
+            virtual void      CopyFrom(TextureView _src, BufferView _dst) {};
+            virtual void      CopyFrom(BufferView _src, TextureView _dst) {};
+            virtual void      CopyFrom(std::span<byte> _data, BufferView _dst) {};
+            virtual void      CopyFrom(std::span<byte> _data, TextureView _dst) {};
 
             virtual FenceRef GetFenceHandle() { return nullptr; };
             virtual void     Sync(uint64 _timeline) {};
@@ -606,6 +606,10 @@ namespace Moer::Render {
         //DX_CHECK_HRESULT(device.GetFactory()->MakeWindowAssociation(reinterpret_cast<HWND>(window_handle), DXGI_MWA_NO_ALT_ENTER)); // maybe allow alt+enter to switch to full screen
 
         //CreateSizeDependentResources();
+    }
+
+    void D3D12Swapchain::Sync() {
+        FATAL("not implemented");
     }
 
     void D3D12Swapchain::Present() {
@@ -1952,7 +1956,7 @@ namespace Moer::Render {
 
     namespace D3D12EnumTranslation {
 
-        DXGI_FORMAT Moer::Render::D3D12EnumTranslation::METoDxFormat(EPixelFormat _format) {
+        DXGI_FORMAT METoDxFormat(EPixelFormat _format) {
             // ref https://github.com/doitsujin/dxvk/blob/master/src/dxgi/dxgi_format.cpp
             //     https://github.com/HansKristian-Work/vkd3d-proton/blob/master/libs/vkd3d/utils.c#L48
             //     https://registry.khronos.org/vulkan/specs/latest/man/html/VkFormat.html

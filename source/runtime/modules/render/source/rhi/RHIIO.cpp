@@ -1,15 +1,12 @@
-#include "IOService.h"
+#include "rhi/RHIIO.h"
 #include "rhi/RHI.h"
-#include <mutex>
-#include <spdlog/spdlog.h>
-#include "rhi/RHICommand.h"
-namespace Moer {
+namespace Moer::Render {
     class DeviceIOService : public IOInterface {
     public:
         DeviceIOService(Render::RenderDevice& _device) : m_copy_queue(_device.GetCopyQueue()) {
         }
 
-        uint64 Execute(IOCommandList& _cmd_list) override {
+        uint64 Execute(IOCommandList&& _cmdlist) override {
         }
         Render::WaitEvent GetWaitEvent(uint64 _time_stamp) override {
             return Render::WaitEvent{uint64(m_copy_queue.GetFenceHandle().Get()), _time_stamp};
@@ -20,6 +17,10 @@ namespace Moer {
     private:
         Render::CopyQueue& m_copy_queue;
     };
+
+    uint64 TextureViewDesc::GetByteSize() const {
+        return GetSizeFromImageFormat(pixel_fmt, size);
+    }
     class IOLooper {
         std::jthread                     thread;
         std::mutex                       mutex;
@@ -236,7 +237,7 @@ namespace Moer {
                                                          FileDesc>) {
                                 IOLooper::EnqueueRequest(_src.handle, _src.offset, _src.size, _dst.handle, _dst.offset, _dst.size);
                             } else {
-                                IOLooper::EnqueueRequest(_src.handle, _src.offset, _dst.data.data(), _dst.data.size());
+                                // IOLooper::EnqueueRequest(_src.handle, _src.offset, _dst.data.data(), _dst.data.size());
                             }
                         } else {
                             if constexpr (std::is_same_v<std::decay_t<decltype(_dst)>,
@@ -279,7 +280,10 @@ namespace Moer {
             MoerDelete(thread);
             IOLooper::Dispose();
         }
-        void Sync(uint64_t _time_stamp) { handler.event.Wait(_time_stamp); }
+        void       Sync(uint64_t _time_stamp) { handler.event.Wait(_time_stamp); }
+        IOService* CreateGPUService(Render::CopyQueue* _copy_queue) {
+            return nullptr;
+        }
     };
 
     void IOService::Init() { IOService::Impl::Get(); }
@@ -290,4 +294,8 @@ namespace Moer {
     uint64_t IOService::Execute(IOCommandList& _cmd_list) {
         return IOService::Impl::Get().handler.EnqueueCmds(_cmd_list);
     }
-}// namespace Moer
+
+    IOInterface* IOService::CreateGPUService(Render::CopyQueue* _copy_queue) {
+        return MoerNew(DeviceIOService)(Render::RenderDevice::Get());
+    }
+}// namespace Moer::Render

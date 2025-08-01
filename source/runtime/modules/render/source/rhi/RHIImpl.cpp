@@ -53,6 +53,10 @@ namespace Moer::Render {
         return impl->CreateBuffer(_name, _element_cnt, _stride, _usage, _format);
     }
 
+    IOInterfaceRef RenderDevice::CreateIOInterface(CopyQueue& _copy_queue) {
+        return impl->CreateIOInterface(_copy_queue);
+    }
+
     const EShaderPlatform RenderDevice::GetShaderPlatform() const {
         switch (rhi_type) {
             case ERHIType::Vulkan:

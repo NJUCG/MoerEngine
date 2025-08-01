@@ -9,6 +9,7 @@
 #include "scene/Material.h"
 #include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderCommon.h"
+#include "shader/ShaderMutation.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
@@ -34,7 +35,11 @@ public:
 class GeometryPass {
 public:
     GeometryPass(RasterContext& _context) :
-        vertex_shader("raster/geometry_pass/GeometryPassCommonVertex.hlsl") {}
+        vertex_shader("raster/geometry_pass/GeometryPassCommonVertex.hlsl"),
+        shadow_vertex_shader(
+            "raster/geometry_pass/GeometryPassCommonVertex.hlsl",
+            GeometryPassPipeline::MutationSet::GetMutationSetFromValues(true)
+        ) {}
 
     void Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
 
@@ -111,6 +116,7 @@ public:
 private:
     Moer::UnorderedMap<VertexFactory, GeometryPassPipeline> pipeline_map;
     VertexShader                                            vertex_shader;
+    VertexShader                                            shadow_vertex_shader;
 };
 
 } // namespace Moer::Render::Raster

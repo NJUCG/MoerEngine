@@ -7,7 +7,6 @@ set(moer_runtime_module_root_dir ${moer_runtime_dir}/modules)
 add_subdirectory(core)
 add_subdirectory(modules/render)
 add_subdirectory(modules/resource)
-add_subdirectory(modules/io)
 
 file(GLOB  ENGINE_HEADERS   "*.h")
 file(GLOB  ENGINE_SOURCES   "*.cpp")
@@ -24,5 +23,4 @@ target_link_libraries(${target_name}
     PUBLIC MoerCore
     PUBLIC MoerRender
     PUBLIC MoerResource
-    PUBLIC MoerIO
 )

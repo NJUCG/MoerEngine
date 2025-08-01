@@ -264,7 +264,6 @@ private:
     SimpleSegmentAllocator segment_allocator;
 
     uint grid_cell_offset = 0;
-    uint light_slot_cnt   = 0;
 
     uint frame_idx = 0;
 
