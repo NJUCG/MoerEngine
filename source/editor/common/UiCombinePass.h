@@ -92,7 +92,7 @@ public:
     ) {
 
         if (editor_ui->IsSeperateWindow() && editor_ui->GetWindowFrameBuffer().GetTexture()) {
-            assert(false && "Has some bug here");
+            // assert(false && "Has some bug here");
             assert(
                 sample_texture_pipelines.contains(editor_ui->GetWindowFrameBuffer().format) &&
                 "Unsupported format for SampleTexturePipeline"

@@ -25,3 +25,4 @@ logs/
 
 # VS Code debugger config
 !/.vscode/launch.json
+!/.vscode/c_cpp_properties.json
