@@ -46,13 +46,12 @@ namespace Moer {
             assert(0 && "Window init fail.");
         }
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        ERHIType rhi_type = ERHIType::Vulkan;
-        if (info.rhi_name == "D3D12") {
+        if (info.rhi_type == ERHIType::D3D12) {
             InitD3D12();
-            rhi_type = ERHIType::D3D12;
-        } else {
+        } else if (info.rhi_type == ERHIType::Vulkan) {
             InitVulkan();
-            rhi_type = ERHIType::Vulkan;
+        } else {
+            assert(0 && "Unknown RHI type, code error.");
         }
 
         int          width   = info.width;
@@ -74,7 +73,7 @@ namespace Moer {
 
         GuiWindowInitInfo window_info{.window              = window,
                                       .b_install_callbacks = true,
-                                      .rhi_type            = rhi_type};
+                                      .rhi_type            = info.rhi_type};
 
         //register engine io callbacks MARK.. remains problems
         InstallInterface(&main_window_handle);

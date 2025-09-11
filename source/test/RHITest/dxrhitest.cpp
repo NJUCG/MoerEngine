@@ -102,9 +102,8 @@ int main(int argc, char** argv) {
 
     TaskSystem::Init();
     DeviceInitInfo info{
-        .type = ERHIType::D3D12,
-        .name = "DXRHITest",
-        .rhi  = "d3d12"};
+        .rhi_type = ERHIType::D3D12,
+        .name = "DXRHITest"};
     //DeviceInitInfo info{
     //    .type = ERHIType::Vulkan,
     //    .name = "DXRHITest",

@@ -25,9 +25,8 @@ struct RHIInfo {
     bool     ray_tracing;
 };
 struct DeviceInitInfo {
-    ERHIType         type;
+    ERHIType         rhi_type;
     std::string_view name;
-    std::string_view rhi;
     std::string_view rhi_api_version;
 };
 namespace Moer::Render {

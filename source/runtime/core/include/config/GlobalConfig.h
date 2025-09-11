@@ -38,13 +38,9 @@ namespace Moer::Config {
 
         struct Engine {
             struct RHI {
-                std::string rhi;
+                std::string type;
+                std::string api_version;
                 uint        max_frame_in_flight;
-
-                struct Vulkan {
-                    std::string api_version;
-                } vulkan;
-
             } rhi;
 
             struct Render {
@@ -62,6 +58,8 @@ namespace Moer::Config {
 
             auto config = toml::parse_file(toml_path.data());
 
+            // TODO: auto generate the following code
+
             // Editor
 
             c.editor.width      = config.at_path("editor.width").value_or(1920);
@@ -76,9 +74,9 @@ namespace Moer::Config {
 
             // Engine
 
-            c.engine.rhi.rhi                 = config.at_path("engine.rhi.rhi").value_or("vulkan");
+            c.engine.rhi.type                = config.at_path("engine.rhi.type").value_or("Not Specified");// Use this to warn user to set it
             c.engine.rhi.max_frame_in_flight = config.at_path("engine.rhi.max_frame_in_flight").value_or(3);
-            c.engine.rhi.vulkan.api_version  = config.at_path("engine.rhi.vulkan.api_version").value_or("1.3");
+            c.engine.rhi.api_version         = config.at_path("engine.rhi.api_version").value_or("1.3");
 
             c.engine.render.default_render_method = config.at_path("engine.render.default_render_method").value_or("Raster");
 

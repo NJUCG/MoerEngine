@@ -16,7 +16,7 @@ namespace Moer::Render {
     template<>
     VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
         using std::string;
-        assert(_info.rhi == "vulkan");
+        assert(_info.rhi_type == ERHIType::Vulkan);
 
         VulkanRHIConfig config;
 
@@ -41,7 +41,7 @@ namespace Moer::Render {
 
     template<>
     D3D12RHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
-        assert(_info.rhi == "d3d12");
+        assert(_info.rhi_type == ERHIType::D3D12);
 
         D3D12RHIConfig config;
 
@@ -55,7 +55,7 @@ namespace Moer::Render {
         return device;
     }
     void RenderDevice::Init(DeviceInitInfo&& _info) {
-        switch (_info.type) {
+        switch (_info.rhi_type) {
             case ERHIType::Vulkan:
                 Get().impl = std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info))));
                 break;
@@ -64,7 +64,7 @@ namespace Moer::Render {
                 //LOG_ERROR("D3D12 is not supported yet");
                 break;
         }
-        Get().rhi_type = _info.type;
+        Get().rhi_type = _info.rhi_type;
         Get().impl->PostInit();
     }
     void RenderDevice::Dispose() {

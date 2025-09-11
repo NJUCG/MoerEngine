@@ -45,12 +45,34 @@ void Editor::Init(int argc, const char** argv) {
     TaskSystem::Init();
 
     // Init RenderDevice
-    RenderDevice::Init(std::move(DeviceInitInfo{
-        .type            = ERHIType::Vulkan,
-        .name            = "MoerEngine",
-        .rhi             = ConfigManager::GetInstance().GetConfig().engine.rhi.rhi,
-        .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.vulkan.api_version,
-    }));
+    std::string rhi_type_str = ConfigManager::GetInstance().GetConfig().engine.rhi.type;
+    std::transform(rhi_type_str.begin(), rhi_type_str.end(), rhi_type_str.begin(), ::tolower);
+
+    ERHIType rhi_type = [&]() {
+        if (rhi_type_str == "vulkan") {
+            LOG_INFO("Using Vulkan as RHI backend");
+            return ERHIType::Vulkan;
+        } else if (rhi_type_str == "d3d12") {
+            LOG_INFO("Using D3D12 as RHI backend");
+            return ERHIType::D3D12;
+        } else {
+            LOG_WARNING(
+                "Unknown RHI type '{}', fallback to Vulkan",
+                ConfigManager::GetInstance().GetConfig().engine.rhi.type
+            );
+            return ERHIType::Vulkan;
+        }
+    }();
+
+    RenderDevice::Init(
+        std::move(
+            DeviceInitInfo{
+                .rhi_type        = rhi_type,
+                .name            = "MoerEngine",
+                .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.api_version,
+            }
+        )
+    );
 
     ShaderManager::Get(); // Explicit Init ShaderManager
 
@@ -61,8 +83,10 @@ void Editor::Init(int argc, const char** argv) {
     };
     bool b_fullscreen = ConfigManager::GetInstance().GetConfig().editor.fullscreen;
     LOG_INFO("Editor Window Resolution : {}x{}; Fullscreen : {}", resolution.x, resolution.y, b_fullscreen);
-    WindowContext::Init(SurfaceInitInfo("Vulkan", resolution.x, resolution.y, "MoerEditor", b_fullscreen));
 
+    WindowContext::Init(SurfaceInitInfo(
+        RenderDevice::Get().GetRHIType(), resolution.x, resolution.y, "MoerEditor", b_fullscreen
+    ));
     // Init EditorUI
     auto ui_renderer = MakeUnique<Render::UIRenderer>(RenderDevice::Get());
 
