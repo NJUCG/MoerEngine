@@ -27,6 +27,8 @@ default: generate build run
 
 clean-exe:
     if (Test-Path {{editor_debug_dir}}) { Remove-Item -Force {{editor_debug_dir}} }
+
+clean-exe-release:
     if (Test-Path {{editor_release_dir}}) { Remove-Item -Force {{editor_release_dir}} }
 
 clean:
@@ -57,4 +59,4 @@ run-release:
     {{editor_release_dir}}
 
 
-compile-run-release: clean-exe build-release run-release
+compile-run-release: clean-exe-release build-release run-release
