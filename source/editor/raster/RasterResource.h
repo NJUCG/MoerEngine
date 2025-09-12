@@ -40,6 +40,10 @@ struct RasterContext {
     StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
     StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
 
+    // RayTracing
+    RaytracingSceneRef rt_scene;
+
+    // Constructor
     RasterContext(
         RenderDevice&    device,
         ShaderManager&   manager,
@@ -54,6 +58,9 @@ struct RasterContext {
         cmd_list(cmd_list),
         scene(scene),
         resolution(resolution) {
+
+        // rt scene
+        rt_scene = device.CreateRaytracingScene();
 
         // textures
         textures = RasterTextures{};
@@ -108,10 +115,6 @@ struct RasterContext {
             bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
         gpu_light_info_handle =
             bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
-
-        static bool first_load = true;
-
-        if (first_load) { first_load = false; }
 
         // Bindless
         cmd_list.UpdateBindlessArray(bdls);

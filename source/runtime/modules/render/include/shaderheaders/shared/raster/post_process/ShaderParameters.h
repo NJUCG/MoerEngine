@@ -29,6 +29,24 @@ namespace Moer {
         uint   noise_tex;// linear & repeat sampler
     };
 
+    struct RtaoPipelineBindlessParam {
+        float4x4 clip2world;
+
+        float3 camera_pos;
+        uint   frame_idx;
+
+        float2 resolution;
+        float2 inv_resolution;
+
+        uint input_image;
+        uint normal_tex;
+        uint position_tex;
+        uint sample_mode;
+
+        float ray_trace_distance;
+        float padding[3];
+    };
+
     struct SsrPipelineBindlessParam {
         float4x4 view_projection_matrix;
         float3   camera_position;

@@ -17,6 +17,7 @@
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
+#include "RtaoPass.h"
 #include "ShadowDepthPass.h"
 #include "SsrPass.h"
 #include "common/UiCombinePass.h"
@@ -28,6 +29,7 @@ namespace Moer::Render::Raster {
  * Raster渲染方法TODO Lists
  * 
  * TODO: 着色，LightingPass，目前还比较初步
+ * TODO: IBL
  * TODO: 阴影，ShadowDepthPass和LightingPass
  *       1. CSM中，ShadowMap的mipmap好像有问题，貌似目前并没有构建，导致效果不好，需要构建一下mipmap
  *       2. CSM层间混合
@@ -46,14 +48,12 @@ namespace Moer::Render::Raster {
 void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
     // Get a lot of things
-    auto&            device              = RenderDevice::Get();
-    auto&            manager             = ShaderManager::Get();
-    Scene            scene               = {};
-    BindlessArrayRef bindless_array      = scene.GetBindlessArray();
-    auto&            gfx_queue           = device.GetCommandQueue(EQueueType::Graphics);
-    auto&            copy_queue          = device.GetCopyQueue();
-    auto             copy_queue_timeline = copy_queue.GetFenceHandle();
-    CommandList      cmd_list            = {};
+    auto&            device         = RenderDevice::Get();
+    auto&            manager        = ShaderManager::Get();
+    Scene            scene          = {};
+    BindlessArrayRef bindless_array = scene.GetBindlessArray();
+    auto&            gfx_queue      = device.GetCommandQueue(EQueueType::Graphics);
+    CommandList      cmd_list       = {};
 
     // Initialize Swapchain
     auto resolution = editor_ui->GetResolution(); // TODO: 是否要从WindowContext中获取resolution?
@@ -86,6 +86,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
     GeometryPass    geometry_pass(raster_context);
     LightingPass    lighting_pass(raster_context);
     AoPass          ao_pass(raster_context);
+    RtaoPass        rtao_pass(raster_context);
     SsrPass         ssr_pass(raster_context);
     AaPass          aa_pass(raster_context);
 
@@ -97,9 +98,13 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
     // MARK: UI
 
-    FenceRef timeline   = device.CreateFence();
-    uint64   time       = 0;
-    bool     first_load = true;
+    FenceRef timeline            = device.CreateFence();
+    uint64   time                = 0;
+    uint     max_frame_in_flight = ConfigManager::GetInstance().GetConfig().engine.rhi.max_frame_in_flight;
+    bool     first_load          = true;
+
+    // FIXME: move it to another place
+    Array<RaytracingGeometryRef> rt_geometries;
 
     editor_ui->SetShowSubUI(true);
 
@@ -107,7 +112,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         WindowContext::Tick();
         editor_ui->TickUI();
-        if (time > 2) { timeline->Wait(time - 2); }
+        if (time >= max_frame_in_flight) { timeline->Wait(time - max_frame_in_flight); }
         const RasterConfig& ui_config = editor_ui->m_raster_ui.GetConfig();
 
         // MARK: Window Resizing
@@ -121,9 +126,10 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
         if (w_width != resolution.x || w_height != resolution.y) {
             resolution.x = uint32(w_width);
             resolution.y = uint32(w_height);
+
             gfx_queue.Sync();
-            sc->Sync();
             sc_info.size = {resolution.x, resolution.y};
+            sc->Sync();
             sc->Recreate(sc_info);
 
             raster_context.FreeFrameBuffers();
@@ -140,10 +146,13 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
                 raster_context.LoadSceneData();
 
-                uint last_io_change_timeline = copy_queue_timeline->GetValue();
-                gfx_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, last_io_change_timeline));
+                RasterTool::InitRaytracingScene(raster_context, rt_geometries);
+
+                gfx_queue.Execute(cmd_list.Submit());
                 gfx_queue.Sync();
             }
+
+            RasterTool::UpdateRaytracingScene(raster_context);
 
             // MARK: Camera
 
@@ -152,7 +161,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
             // Jitter Camera for SMAA T2x
             static uint8_t smaa_current_frame_index = 0;
-            if (ui_config.aa_mode == 4) {
+            if (ui_config.aa_mode == EAaMode::SMAA_T2X) {
                 smaa_current_frame_index ^= 1;
                 static StaticArray<float2, 2> smaa_jitter = {float2(0.25f, -0.25f), float2(-0.25f, 0.25f)};
                 camera->SetJitterMatrix(smaa_jitter[smaa_current_frame_index]);
@@ -171,8 +180,20 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
             uint lighting_output = lighting_pass.Process(raster_context, ui_config, camera);
 
             // Post Process Passes
-            uint ao_output  = ao_pass.Process(raster_context, ui_config, lighting_output);
+            // - Ambient Occlusion
+            uint ao_output_ambient_only = 0;
+            uint ao_output              = [&]() -> uint {
+                if (ui_config.ao_mode == EAoMode::RTAO) {
+                    auto output = rtao_pass.Process(raster_context, ui_config, camera, time, lighting_output);
+                    ao_output_ambient_only = output.ambient_only_output; // ambient only texture的handle
+                    return output.ao_output;                             // 实际输出的handle
+                } else {
+                    return ao_pass.Process(raster_context, ui_config, lighting_output);
+                }
+            }();
+            // - Screen Space Reflection
             uint ssr_output = ssr_pass.Process(raster_context, ui_config, camera, ao_output);
+            // - Anti-aliasing
             uint _aa_output = aa_pass.Process(raster_context, ui_config, camera, ssr_output);
 
             // Ui Combine Pass
@@ -188,18 +209,27 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
         editor_ui->RenderGUI(cmd_list, final_output);
 
+        raster_context.rt_scene->AdvanceFrame();
+
         time++;
         /***
         currently using a phony timeline (any timeline signaled by copy queue) to remove error message from validation layer caused by host synced copy operations
         we're not waiting for the copy queue to finish, because operations we wanted are synced on host side, we use this timeline just to notifiy the validation layer
         that we've done flushing copy queue resources
          */
-        gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time));
+        gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources());
         gfx_queue.Present(sc, final_output);
         editor_ui->PresentWindows();
 
         if (editor_ui->IsNeedReload()) { break; }
     }
+    timeline->Wait(time);
+    gfx_queue.Sync();
+
+    raster_context.FreeFrameBuffers();
+
+    cmd_list.UpdateBindlessArray(bindless_array);
+    gfx_queue.Execute(cmd_list.Submit().DeleteResources());
     gfx_queue.Sync();
     sc->Sync();
 }

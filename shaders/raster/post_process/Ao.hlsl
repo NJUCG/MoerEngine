@@ -10,11 +10,10 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 [[vk::push_constant]] ConstantBuffer<Moer::AoPipelineBindlessParam> param;
 
+// TODO: replace these with shared files
 #define AO_MODE_NONE 0
 #define AO_MODE_SSAO 1
 #define AO_MODE_SSAO_AO_ONLY 2
-#define AO_MODE_SSDO 3
-#define AO_MODE_SSDO_AO_ONLY 4
 
 static const float Epsilon = 0.0001; // same with PBRMaterialFrag.hlsl
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);

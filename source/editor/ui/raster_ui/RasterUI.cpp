@@ -6,33 +6,6 @@
 
 namespace Moer {
 
-static const Array<std::string> s_aa_mode_name_array = {
-    "None",
-    "FXAA Simplified",
-    "FXAA Quality",
-    "SMAA 1x",
-    "SMAA T2x",
-};
-static const Array<std::string> s_ao_mode_name_array = {
-    "None",
-    "SSAO",
-    "SSAO AO Only",
-    "SSDO (TODO)",
-    "SSDO AO Only (TODO)",
-    "Linearized Depth / 10.0",
-};
-static const Array<std::string> s_shadow_map_mode_name_array = {
-    "Disabled",
-    "Cascaded SM",
-    "Virtual SM",
-};
-static const Array<std::string> s_shadow_sampling_mode_name_array = {
-    "No Filtering",
-    "PCF 1x1",
-    "PCF 3x3",
-    "PCF 5x5",
-};
-
 RasterUI::RasterUI() {}
 
 void RasterUI::ShowConfig() {
@@ -100,12 +73,16 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
-    if (ImGui::TreeNode("AO Mode", "AO Mode: [%s]", s_ao_mode_name_array[m_config.ao_mode].c_str())) {
+    if (ImGui::TreeNode(
+            "AO Mode", "AO Mode: [%s]", s_ao_mode_name_array[static_cast<uint32>(m_config.ao_mode)].c_str()
+        )) {
+
+        assert(s_ao_mode_name_array.size() == static_cast<uint32>(EAoMode::NUM));
         for (uint i = 0; i < s_ao_mode_name_array.size(); i++) {
-            if (ImGui::Selectable(s_ao_mode_name_array[i].c_str(), m_config.ao_mode == i) && i != 3 &&
-                i != 4 // SSDO is not implemented yet
-            ) {
-                m_config.ao_mode = i;
+            if (ImGui::Selectable(
+                    s_ao_mode_name_array[i].c_str(), m_config.ao_mode == static_cast<EAoMode>(i)
+                )) {
+                m_config.ao_mode = static_cast<EAoMode>(i);
             }
             draw_border();
         }
@@ -114,6 +91,19 @@ void RasterUI::ShowConfig() {
         ImGui::SliderInt("Sample Count", &m_config.ssao_sample_count, 1, 16);
         ImGui::SliderInt("Sample Radius", &m_config.ssao_radius, 1, 8);
         ImGui::SliderFloat("Max Distance", &m_config.ssao_max_distance, 0.0f, 2.0f);
+
+        ImGui::Text("RTAO Sample Mode:");
+        assert(s_rtao_sample_mode.size() == static_cast<uint32>(ERtaoSampleMode::NUM));
+        for (uint i = 0; i < s_rtao_sample_mode.size(); i++) {
+            if (ImGui::Selectable(
+                    s_rtao_sample_mode[i].c_str(),
+                    m_config.rtao_sample_mode == static_cast<ERtaoSampleMode>(i)
+                )) {
+                m_config.rtao_sample_mode = static_cast<ERtaoSampleMode>(i);
+            }
+            draw_border();
+        }
+        ImGui::SliderFloat("Ray Trace Distance", &m_config.rtao_ray_trace_distance, 0.0f, 20.0f);
 
         ImGui::TreePop();
     }
@@ -137,11 +127,17 @@ void RasterUI::ShowConfig() {
     }
 
     if (ImGui::TreeNode(
-            "AA Mode", "Anti-Aliasing Mode: [%s]", s_aa_mode_name_array[m_config.aa_mode].c_str()
+            "AA Mode",
+            "Anti-Aliasing Mode: [%s]",
+            s_aa_mode_name_array[static_cast<uint32>(m_config.aa_mode)].c_str()
         )) {
+
+        assert(s_aa_mode_name_array.size() == static_cast<uint32>(EAaMode::NUM));
         for (uint i = 0; i < s_aa_mode_name_array.size(); i++) {
-            if (ImGui::Selectable(s_aa_mode_name_array[i].c_str(), m_config.aa_mode == i)) {
-                m_config.aa_mode = i;
+            if (ImGui::Selectable(
+                    s_aa_mode_name_array[i].c_str(), m_config.aa_mode == static_cast<EAaMode>(i)
+                )) {
+                m_config.aa_mode = static_cast<EAaMode>(i);
             }
             draw_border();
         }

@@ -206,7 +206,8 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Skybox
     if (depth == 0.0) {
         // TODO: Image Based Lighting or Skybox
-        discard;
+        // 临时返回一个天蓝色
+        return float4(135.f/256.f, 206.f/256.f, 235.f/256.f, 1.0f);
     }
 
     // MARK: PBR

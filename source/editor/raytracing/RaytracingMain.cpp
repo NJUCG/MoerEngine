@@ -101,13 +101,12 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
     is_params.render_size = resolution;
     ImportanceSamplingContext is_ctx(is_params);
 
-    bool   first_load = true;
-    uint   instance_buffer_handle;
-    uint   geometry_buffer_handle;
-    uint   geometry_instance_buffer_handle;
-    uint   material_buffer_idx;
-    uint64 last_io_change_timeline = 0;
-    uint   view_buffer_handle      = 0;
+    bool first_load = true;
+    uint instance_buffer_handle;
+    uint geometry_buffer_handle;
+    uint geometry_instance_buffer_handle;
+    uint material_buffer_idx;
+    uint view_buffer_handle = 0;
 
     // gbuffer bdls handle
     uint bdls_tex_handle_uv      = 0;
@@ -274,18 +273,18 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 float cell_size                 = max_extent * 2 / is_ctx.GetGridConfig().grid_size.x;
                 ui_config.grid_config.cell_size = cell_size;
 
-                instance_buffer_handle =
-                    bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView()
-                    );
-                geometry_buffer_handle =
-                    bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView()
-                    );
+                instance_buffer_handle = bindless_array->AllocateBuffer(
+                    scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView()
+                );
+                geometry_buffer_handle = bindless_array->AllocateBuffer(
+                    scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView()
+                );
                 geometry_instance_buffer_handle = bindless_array->AllocateBuffer(
                     scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView()
                 );
-                material_buffer_idx =
-                    bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView()
-                    );
+                material_buffer_idx = bindless_array->AllocateBuffer(
+                    scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView()
+                );
 
                 add_on_free_buffer(instance_buffer_handle);
                 add_on_free_buffer(geometry_buffer_handle);
@@ -379,7 +378,6 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
                 cmd_list.BuildAccelerationStructures(std::move(build_params));
                 cmd_list.UpdateRaytracingScene(rt_scene);
-                // last_io_change_timeline = copy_queue_timeline->GetValue();
 
                 _editor_ui->RegisterUIFunc(
                     "Display MaterialTexture",

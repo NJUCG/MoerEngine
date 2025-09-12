@@ -9,19 +9,57 @@
 
 namespace Moer {
 
+enum class EAaMode { NONE = 0, FXAA_SIMPLIFIED, FXAA_QUALITY, SMAA_1X, SMAA_T2X, NUM };
+static const Array<std::string> s_aa_mode_name_array = {
+    "None",
+    "FXAA Simplified",
+    "FXAA Quality",
+    "SMAA 1x",
+    "SMAA T2x",
+};
+
+enum class EAoMode { NONE = 0, SSAO, SSAO_AO_ONLY, RTAO, LINEARIZED_DEPTH_DIV_10, NUM };
+static const Array<std::string> s_ao_mode_name_array = {
+    "None",
+    "SSAO",
+    "SSAO AO Only",
+    "RTAO",
+    "Linearized Depth / 10.0",
+};
+
+enum class ERtaoSampleMode { UNIFORM = 0, COSINE_WEIGHTED, NUM };
+static const Array<std::string> s_rtao_sample_mode = {
+    "Uniform in Semisphere",
+    "Cosine-weighted in Semisphere"
+};
+
+static const Array<std::string> s_shadow_map_mode_name_array = {
+    "Disabled",
+    "Cascaded SM",
+    "Virtual SM",
+};
+static const Array<std::string> s_shadow_sampling_mode_name_array = {
+    "No Filtering",
+    "PCF 1x1",
+    "PCF 3x3",
+    "PCF 5x5",
+};
+
 struct RasterConfig {
     // MARK: AA
-    uint aa_mode = 3; // default ssma 1x
+    EAaMode aa_mode = EAaMode::SMAA_1X;
 
     // MARK: AO
-    uint  ao_mode           = 1; // default ssao
-    float ssao_intensity    = 1.0f;
-    int   ssao_sample_count = 8;
-    int   ssao_radius       = 2;
-    float ssao_max_distance = 0.1f;
+    EAoMode         ao_mode                 = EAoMode::SSAO;
+    float           ssao_intensity          = 1.0f;
+    int             ssao_sample_count       = 8;
+    int             ssao_radius             = 2;
+    float           ssao_max_distance       = 0.5f;
+    ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
+    float           rtao_ray_trace_distance = 1.0f;
 
     // MARK: SSR
-    bool  ssr_is_enable_ssr              = true;
+    bool  ssr_is_enable_ssr              = false;
     int   ssr_sample_count               = 32;
     bool  ssr_is_enable_jitter           = true;
     bool  ssr_is_force_ground_enable_ssr = true;

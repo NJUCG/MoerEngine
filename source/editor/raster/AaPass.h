@@ -238,11 +238,12 @@ public:
         const CameraRef&    camera,
         uint                input_image
     ) {
-        if (0 <= ui_config.aa_mode && ui_config.aa_mode <= 2) {
+        if (ui_config.aa_mode == EAaMode::NONE || ui_config.aa_mode == EAaMode::FXAA_SIMPLIFIED ||
+            ui_config.aa_mode == EAaMode::FXAA_QUALITY) {
             return ProcessFxaa(context, ui_config, camera, input_image);
         }
 
-        if (3 <= ui_config.aa_mode && ui_config.aa_mode <= 4) {
+        if (ui_config.aa_mode == EAaMode::SMAA_1X || ui_config.aa_mode == EAaMode::SMAA_T2X) {
             return ProcessSmaa(context, ui_config, camera, input_image);
         }
 
@@ -269,7 +270,7 @@ public:
 
         FxaaPipelineBindlessParam param_fxaa;
         param_fxaa.input_image    = context.textures.aa_texture_1.handle;
-        param_fxaa.fxaa_mode      = ui_config.aa_mode;
+        param_fxaa.fxaa_mode      = static_cast<uint32>(ui_config.aa_mode);
         param_fxaa.resolution     = float2(context.resolution);
         param_fxaa.inv_resolution = float2(1.0) / float2(context.resolution);
 
@@ -325,7 +326,7 @@ public:
 
         auto smaa_shared_param = [&]() {
             SmaaSharedPipelineBindlessParam param;
-            param.aa_mode            = ui_config.aa_mode;
+            param.aa_mode            = static_cast<uint32>(ui_config.aa_mode);
             param.color_tex          = input_image;
             param.position_tex       = context.textures.position.handle;
             param.depth_tex          = context.textures.depth_linear_sampler.handle;
@@ -364,7 +365,7 @@ public:
                 ColorAttachment(context.textures.aa_texture_2.tex)
             );
 
-        if (ui_config.aa_mode == 3) {
+        if (ui_config.aa_mode == EAaMode::SMAA_1X) {
             context.cmd_list.Gfx(smaa_neighborhood_blending_pipeline, context.bdls, smaa_shared_param)
                 .Draw(
                     "SMAA Neighborhood Blending Pass",
@@ -372,7 +373,7 @@ public:
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(context.textures.aa_output.tex)
                 );
-        } else if (ui_config.aa_mode == 4) {
+        } else if (ui_config.aa_mode == EAaMode::SMAA_T2X) {
             context.cmd_list.Gfx(smaa_t2x_neighborhood_blending_pipeline, context.bdls, smaa_shared_param)
                 .Draw(
                     "SMAA T2x Neighborhood Blending Pass",

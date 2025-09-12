@@ -7,9 +7,9 @@ alias gen := generate
 alias g := generate
 alias b := build
 alias r := run
-alias cr := compile-run
+alias br := build-run
 alias rr := run-release
-alias crr := compile-run-release
+alias brr := build-run-release
 
 # MARK: Assignments
 editor_debug_dir := "./target/bin/Debug/MoerEditor.exe"
@@ -18,6 +18,11 @@ build_dir := "./build"
 target_dir := "./target"
 
 threads := "30"
+
+# MARK: debug printf
+
+export VK_LAYER_PRINTF_ENABLE := "1" # 如果想关闭shader的debug printf，可以将此项设置为0
+export VK_LAYER_PRINTF_TO_STDOUT := "1"
 
 # MARK: default
 
@@ -51,7 +56,7 @@ build-release:
 run:
     {{editor_debug_dir}}
 
-compile-run: clean-exe build run
+build-run: clean-exe build run
 
 # MARK: release
 
@@ -59,4 +64,4 @@ run-release:
     {{editor_release_dir}}
 
 
-compile-run-release: clean-exe-release build-release run-release
+build-run-release: clean-exe-release build-release run-release

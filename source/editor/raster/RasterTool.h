@@ -86,6 +86,82 @@ public:
 
         return mesh_draw_datas_map;
     }
+
+    // TODO: 和Raytracing中对应部分合并
+    static void InitRaytracingScene(RasterContext& context, Array<RaytracingGeometryRef>& rt_geometries) {
+        auto& scene    = context.scene;
+        auto& device   = context.device;
+        auto& rt_scene = context.rt_scene;
+        auto& cmd_list = context.cmd_list;
+
+        Array<AccelerationStructureBuildParam> build_params;
+
+        rt_geometries.reserve(scene.GetEntityCount());
+        build_params.reserve(scene.GetEntityCount());
+
+        scene.ForEach([&](Entity _entity) {
+            auto&                  mesh = RenderableManager::Get().GetMeshInfo(_entity);
+            RaytracingGeometryInfo rt_geo_info{};
+            rt_geo_info.build_flags   = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
+            rt_geo_info.vertex_format = PF_R32G32B32_SFLOAT;
+            rt_geo_info.index_type    = IET_UINT32;
+
+            for (uint i = 0; i < mesh->geometries.size(); i++) {
+                uint vtx_offset = mesh->geometries[i]->local_vtx_offset;
+                uint vtx_count  = mesh->geometries[i]->local_vtx_count;
+                uint idx_offset = mesh->geometries[i]->local_idx_offset;
+                uint idx_count  = mesh->geometries[i]->local_idx_count;
+                auto vtx_buffer = mesh->geometries[i]->mesh_buffers->vertex_buffer;
+                auto idx_buffer = mesh->geometries[i]->mesh_buffers->index_buffer;
+
+                rt_geo_info.segments.emplace_back(
+                    0,                                         // vertex_offset
+                    0,                                         // index_offset
+                    vtx_offset,                                // first_vertex
+                    vtx_count,                                 // vertex_count
+                    sizeof(float3),                            // vertex_stride
+                    idx_offset / 3,                            // first_primitive
+                    idx_count / 3,                             // primitive_count
+                    vtx_buffer,                                // vertex_buffer
+                    idx_buffer,                                // index_buffer
+                    RTGT_TRIANGLES,                            // type
+                    ERayTracingGeometryFlags::GEOMETRY_OPAQUE, // flags
+                    false,                                     // b_force_opaque
+                    false,                                     // b_cull_back_face
+                    false                                      // b_flip_face
+                );
+            }
+
+            RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
+            rt_geometries.push_back(blas);
+
+            auto& instance     = rt_scene->AddInstance();
+            instance.geom      = blas;
+            instance.transform = TransformManager::Get().Get(_entity).GetMatrix3x4();
+
+            instance.flag.need_create = true;
+            instance.custom_index     = instance.instance_id;
+            instance.visible_mask     = RTVM_ALL;
+            rt_scene->MarkModified(instance.instance_id);
+            build_params.push_back({blas, ERaytracingBuildMode::BUILD});
+        });
+
+        cmd_list.BuildAccelerationStructures(std::move(build_params));
+        cmd_list.UpdateRaytracingScene(rt_scene);
+    }
+
+    static void UpdateRaytracingScene(RasterContext& context) {
+
+        auto& scene    = context.scene;
+        auto& rt_scene = context.rt_scene;
+        auto& cmd_list = context.cmd_list;
+
+        for (size_t i = 0; i < scene.GetEntityCount(); i++) {
+            auto& instance = rt_scene->GetInstance(i);
+            rt_scene->MarkModified(instance.instance_id);
+        }
+        cmd_list.UpdateRaytracingScene(rt_scene);
+    }
 };
 
 } // namespace Moer::Render::Raster
