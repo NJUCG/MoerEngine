@@ -216,7 +216,9 @@ void EditorUI::ShowConfig() {
     if (!m_b_show_config) { return; }
     if (!ImGui::Begin("Configs", &m_b_show_config, window_flags)) { return; }
 
-    EditorUIStyle::ShowStyleSelector("Colors##Default");
+    ImGui::PushItemWidth(120); // 设置所有组件width为120
+
+    EditorUIStyle::ShowStyleSelector("Style##Default");
 
     auto last_selected_render_method = m_config.selected_render_method;
     if (ImGui::BeginCombo(
@@ -263,7 +265,7 @@ void EditorUI::ShowConfig() {
             }
         }
         ImGui::SameLine();
-        ImGui::Text("Current Scene: [%s]", scene_name.c_str());
+        ImGui::Text("Current: [%s]", scene_name.c_str());
     }
 
     if (m_b_show_sub_ui) {
@@ -286,6 +288,8 @@ void EditorUI::ShowConfig() {
         ImGui::Separator();
         func();
     }
+
+    ImGui::PopItemWidth(); // 和PushItemWidt相对应
 
     ImGui::End();
 }

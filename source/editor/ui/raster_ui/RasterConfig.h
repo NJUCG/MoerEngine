@@ -18,19 +18,20 @@ static const Array<std::string> s_aa_mode_name_array = {
     "SMAA T2x",
 };
 
-enum class EAoMode { NONE = 0, SSAO, SSAO_AO_ONLY, RTAO, LINEARIZED_DEPTH_DIV_10, NUM };
+enum class EAoMode { NONE = 0, SSAO, SSAO_AO_ONLY, RTAO, RTAO_AO_ONLY, LINEARIZED_DEPTH_DIV_10, NUM };
 static const Array<std::string> s_ao_mode_name_array = {
     "None",
     "SSAO",
     "SSAO AO Only",
     "RTAO",
-    "Linearized Depth / 10.0",
+    "RTAO AO Only",
+    "Linear. Depth / 10.0",
 };
 
 enum class ERtaoSampleMode { UNIFORM = 0, COSINE_WEIGHTED, NUM };
 static const Array<std::string> s_rtao_sample_mode = {
     "Uniform in Semisphere",
-    "Cosine-weighted in Semisphere"
+    "Cosine-Weighted in Semisphere"
 };
 
 static const Array<std::string> s_shadow_map_mode_name_array = {
@@ -52,11 +53,13 @@ struct RasterConfig {
     // MARK: AO
     EAoMode         ao_mode                 = EAoMode::SSAO;
     float           ssao_intensity          = 1.0f;
-    int             ssao_sample_count       = 8;
-    int             ssao_radius             = 2;
+    int             ssao_spp                = 8;
+    int             ssao_sample_radius      = 2;
     float           ssao_max_distance       = 0.5f;
     ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
+    float           rtao_intensity          = 1.0f;
     float           rtao_ray_trace_distance = 1.0f;
+    int             rtao_spp                = 1;
 
     // MARK: SSR
     bool  ssr_is_enable_ssr              = false;

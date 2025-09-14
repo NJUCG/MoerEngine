@@ -3,6 +3,7 @@
 #include <MathLib/STL.hlsli>
 
 #define PI 3.1415926535897932384626433832795
+#define PI2 (2.0 * PI)
 
 template <typename T> T square(T x) { return x * x; }
 namespace Math {

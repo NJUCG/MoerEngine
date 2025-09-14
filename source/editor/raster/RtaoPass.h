@@ -55,20 +55,19 @@ public:
     ) {
         RtaoPipelineBindlessParam param;
 
-        param.clip2world = Transpose(camera->GetViewProjectionMatrixInv());
-
-        param.camera_pos = camera->GetPosition();
-        param.frame_idx  = frame_idx;
-
-        param.resolution     = float2(context.resolution);
-        param.inv_resolution = float2(1.0) / float2(context.resolution);
-
-        param.input_image  = input_image;
-        param.normal_tex   = context.textures.normal.handle;
-        param.position_tex = context.textures.position.handle;
-        param.sample_mode  = static_cast<uint>(ui_config.rtao_sample_mode);
-
+        param.clip2world         = Transpose(camera->GetViewProjectionMatrixInv());
+        param.camera_pos         = camera->GetPosition();
+        param.frame_idx          = frame_idx;
+        param.resolution         = float2(context.resolution);
+        param.inv_resolution     = float2(1.0) / float2(context.resolution);
+        param.input_image        = input_image;
+        param.normal_tex         = context.textures.normal.handle;
+        param.position_tex       = context.textures.position.handle;
+        param.ao_mode            = static_cast<uint>(ui_config.ao_mode);
+        param.sample_mode        = static_cast<uint>(ui_config.rtao_sample_mode);
+        param.spp                = ui_config.rtao_spp;
         param.ray_trace_distance = ui_config.rtao_ray_trace_distance;
+        param.intensity          = ui_config.rtao_intensity;
 
         context.cmd_list.Gfx(rtao_pipeline, context.rt_scene->GetTlas(), context.bdls, param)
             .Draw(

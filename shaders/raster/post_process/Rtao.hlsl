@@ -28,22 +28,20 @@ typedef Math::Rng::Hash RandomState;
 }
 
 // y>=0半球上均匀采样
-float3 SampleHemisphere(float2 u) { // uv in [0, 1)^2
+float4 SampleHemisphere(float2 u) { // uv in [0, 1)^2
     float y = u.x; // cos theta
     float r = sqrt(max(0.f, 1.f - y * y));
-    float phi = 2.0 * 3.14159265 * u.y;
-    return float3(r * cos(phi), y, r * sin(phi));
+    float phi = PI2 * u.y;
+    return float4(r * cos(phi), y, r * sin(phi), /* pdf */ 1.0 / PI2);
 }
 
 // y>=0半球上cosine-weighted采样（即 半球正面采样概率大，适合漫反射材质）
-float3 SampleCosineHemisphere(float2 u) {
+float4 SampleCosineHemisphere(float2 u) {
     float r = sqrt(u.x);
-    float theta = 2.0 * 3.14159265 * u.y;
-
-    float x = r * cos(theta);
+    float theta = 2.0 * PI * u.y;
     float y = sqrt(max(0.0, 1.0 - u.x));
-    float z = r * sin(theta);
-    return float3(x, y, z);
+
+    return float4(r * cos(theta), y, r * sin(theta), /* pdf */ y / PI);
 }
 
 // 将一个半球坐标系中的vector转换到以某个特定normal为+z的半球上 (Written by AI)
@@ -105,23 +103,32 @@ PSOutput main(float2 uv : TEXCOORD0) {
     float3 frag_position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
 
     // Raytraced AO
-    float2 rand_value = rng.GetFloat2();
-    float3 rand_vec;
-    if (param.sample_mode == 0) {
-        rand_vec = SampleHemisphere(rand_value);
-    } else {
-        rand_vec = SampleCosineHemisphere(rand_value);
+    float total_ray_contrib = 0.0;
+    float visible_ray_contrib = 0.0;
+    for (uint i = 0; i < param.spp; i++) {
+        float2 rand_value = rng.GetFloat2();
+        float4 rand_vec;
+        if (param.sample_mode == 0) {
+            rand_vec = SampleHemisphere(rand_value);
+        } else {
+            rand_vec = SampleCosineHemisphere(rand_value);
+        }
+        float3 direction = LocalVectorToWorld(rand_vec.xyz, frag_normal);
+        bool is_miss = CastVisibilityRay(
+            frag_position + frag_normal * 0.01,
+            direction,
+            0.f,
+            param.ray_trace_distance,
+            tlas,
+            Moer::RTVM_ALL, // instance_mask
+            RAY_FLAG_NONE   // ray_flags
+        );
+
+        float ray_weight = max(dot(frag_normal, direction), 0.05f) / max(/* pdf */ rand_vec.w, 0.05f);
+
+        total_ray_contrib += ray_weight;
+        visible_ray_contrib += ray_weight * (is_miss ? 1.0 : (1.0 - param.intensity));
     }
-    float3 direction = LocalVectorToWorld(rand_vec, frag_normal);
-    bool is_sky = CastVisibilityRay(
-        frag_position + frag_normal * 0.01,
-        direction,
-        0.f,
-        param.ray_trace_distance,
-        tlas,
-        Moer::RTVM_ALL, // instance_mask
-        RAY_FLAG_NONE   // ray_flags
-    );
 
     // if (uv.x <= param.inv_resolution.x && uv.y <= param.inv_resolution.y) {
     //     printf(
@@ -144,10 +151,14 @@ PSOutput main(float2 uv : TEXCOORD0) {
     //     );
     // }
     
-    float ao = is_sky ? 1.f : 0.0f;
+    float ao = visible_ray_contrib / total_ray_contrib;
 
     PSOutput output;
-    output.color_with_ao = float4(color * ao, 1.0);
+    if (param.ao_mode == 4) { // ao only
+        output.color_with_ao = float4(ao, ao, ao, 1.0);
+    } else {
+        output.color_with_ao = float4(color * ao, 1.0);
+    }
     output.ambient_only = float4(ao, ao, ao, 1.0);
     return output;
 }

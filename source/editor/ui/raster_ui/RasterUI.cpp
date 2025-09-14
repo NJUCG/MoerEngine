@@ -37,12 +37,10 @@ void RasterUI::ShowConfig() {
     }
 
     if (ImGui::TreeNode(
-            "Whole Scene Shadow",
-            "Whole Scene Shadow: [%s]",
-            s_shadow_map_mode_name_array[m_config.shadow_map_mode].c_str()
+            "Shadow", "Shadow: [%s]", s_shadow_map_mode_name_array[m_config.shadow_map_mode].c_str()
         )) {
 
-        ImGui::Text("The FIRST Directional Light will be used as the shadow light source.\n");
+        ImGui::Text("Only project 1st Dir.Light");
 
         for (uint i = 0; i < s_shadow_map_mode_name_array.size(); i++) {
             if (ImGui::Selectable(s_shadow_map_mode_name_array[i].c_str(), m_config.shadow_map_mode == i)) {
@@ -57,7 +55,7 @@ void RasterUI::ShowConfig() {
             float mx = 0.0f;
             for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {
                 ImGui::SliderFloat(
-                    std::format("{}-th CSM Cover Ratio of Camera Frustum", i).c_str(),
+                    std::format("{}-th CSM Cover Ratio", i).c_str(),
                     &m_config.shadow_csm_cover_ratio_of_camera[i],
                     0.0f,
                     1.0f
@@ -74,7 +72,9 @@ void RasterUI::ShowConfig() {
     }
 
     if (ImGui::TreeNode(
-            "AO Mode", "AO Mode: [%s]", s_ao_mode_name_array[static_cast<uint32>(m_config.ao_mode)].c_str()
+            "Ambient Occlusion",
+            "Ambient Occlusion: [%s]",
+            s_ao_mode_name_array[static_cast<uint32>(m_config.ao_mode)].c_str()
         )) {
 
         assert(s_ao_mode_name_array.size() == static_cast<uint32>(EAoMode::NUM));
@@ -87,28 +87,32 @@ void RasterUI::ShowConfig() {
             draw_border();
         }
 
-        ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
-        ImGui::SliderInt("Sample Count", &m_config.ssao_sample_count, 1, 16);
-        ImGui::SliderInt("Sample Radius", &m_config.ssao_radius, 1, 8);
-        ImGui::SliderFloat("Max Distance", &m_config.ssao_max_distance, 0.0f, 2.0f);
-
-        ImGui::Text("RTAO Sample Mode:");
-        assert(s_rtao_sample_mode.size() == static_cast<uint32>(ERtaoSampleMode::NUM));
-        for (uint i = 0; i < s_rtao_sample_mode.size(); i++) {
-            if (ImGui::Selectable(
-                    s_rtao_sample_mode[i].c_str(),
-                    m_config.rtao_sample_mode == static_cast<ERtaoSampleMode>(i)
-                )) {
-                m_config.rtao_sample_mode = static_cast<ERtaoSampleMode>(i);
+        if (m_config.ao_mode == EAoMode::SSAO || m_config.ao_mode == EAoMode::SSAO_AO_ONLY) {
+            ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
+            ImGui::SliderFloat("Ray Trace Radius", &m_config.ssao_max_distance, 0.0f, 2.0f);
+            ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 16);
+            ImGui::SliderInt("Sample Radius", &m_config.ssao_sample_radius, 1, 8);
+        } else if (m_config.ao_mode == EAoMode::RTAO || m_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
+            ImGui::SliderFloat("Intensity", &m_config.rtao_intensity, 0.0f, 1.0f);
+            ImGui::SliderFloat("Ray Trace Radius", &m_config.rtao_ray_trace_distance, 0.0f, 20.0f);
+            ImGui::SliderInt("Samples Per Pixel", &m_config.rtao_spp, 1, 32);
+            ImGui::Text("RTAO Sample Mode:");
+            assert(s_rtao_sample_mode.size() == static_cast<uint32>(ERtaoSampleMode::NUM));
+            for (uint i = 0; i < s_rtao_sample_mode.size(); i++) {
+                if (ImGui::Selectable(
+                        s_rtao_sample_mode[i].c_str(),
+                        m_config.rtao_sample_mode == static_cast<ERtaoSampleMode>(i)
+                    )) {
+                    m_config.rtao_sample_mode = static_cast<ERtaoSampleMode>(i);
+                }
+                draw_border();
             }
-            draw_border();
         }
-        ImGui::SliderFloat("Ray Trace Distance", &m_config.rtao_ray_trace_distance, 0.0f, 20.0f);
 
         ImGui::TreePop();
     }
 
-    if (ImGui::TreeNode("SSR Mode", "SSR: [%s]", (m_config.ssr_is_enable_ssr == 1 ? "Enable" : "Disable"))) {
+    if (ImGui::TreeNode("SSR", "SSR: [%s]", (m_config.ssr_is_enable_ssr == 1 ? "Enable" : "Disable"))) {
         if (ImGui::Selectable("Enable", m_config.ssr_is_enable_ssr == 1)) { m_config.ssr_is_enable_ssr = 1; }
         draw_border();
         if (ImGui::Selectable("Disable", m_config.ssr_is_enable_ssr == 0)) { m_config.ssr_is_enable_ssr = 0; }
@@ -127,8 +131,8 @@ void RasterUI::ShowConfig() {
     }
 
     if (ImGui::TreeNode(
-            "AA Mode",
-            "Anti-Aliasing Mode: [%s]",
+            "Anti-Aliasing",
+            "Anti-Aliasing: [%s]",
             s_aa_mode_name_array[static_cast<uint32>(m_config.aa_mode)].c_str()
         )) {
 

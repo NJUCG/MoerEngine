@@ -183,7 +183,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
             // - Ambient Occlusion
             uint ao_output_ambient_only = 0;
             uint ao_output              = [&]() -> uint {
-                if (ui_config.ao_mode == EAoMode::RTAO) {
+                if (ui_config.ao_mode == EAoMode::RTAO || ui_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
                     auto output = rtao_pass.Process(raster_context, ui_config, camera, time, lighting_output);
                     ao_output_ambient_only = output.ambient_only_output; // ambient only texture的handle
                     return output.ao_output;                             // 实际输出的handle

@@ -41,10 +41,12 @@ namespace Moer {
         uint input_image;
         uint normal_tex;
         uint position_tex;
-        uint sample_mode;
+        uint ao_mode;
 
+        uint  sample_mode;
+        uint  spp;
         float ray_trace_distance;
-        float padding[3];
+        float intensity;
     };
 
     struct SsrPipelineBindlessParam {

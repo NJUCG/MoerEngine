@@ -42,8 +42,8 @@ public:
         param.inv_resolution    = float2(1.0f) / float2(context.resolution);
         param.ssao_intensity    = ui_config.ssao_intensity;
         param.ssao_max_distance = ui_config.ssao_max_distance;
-        param.ssao_sample_count = ui_config.ssao_sample_count;
-        param.ssao_radius       = ui_config.ssao_radius;
+        param.ssao_sample_count = ui_config.ssao_spp;
+        param.ssao_radius       = ui_config.ssao_sample_radius;
         param.ao_mode           = static_cast<uint32>(ui_config.ao_mode);
         param.input_image       = input_image;
         param.normal_tex        = context.textures.normal.handle;
