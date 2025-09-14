@@ -153,19 +153,6 @@ void EditorUI::ShowSceneColor() {
         return;
     }
 
-    // inject. Needs to be refactored (camera control)
-    // 只有在Cursor位于SceneColor窗口上时，才可以控制摄像机
-    if (WindowInput::Get().is_cursor_hiding == false) {
-        ImVec2      window_pos  = ImGui::GetWindowPos();
-        ImVec2      window_size = ImGui::GetWindowSize();
-        ImVec2      mouse_pos   = ImGui::GetMousePos();
-        static uint border      = 4;
-
-        WindowInput::Get().is_active =
-            mouse_pos.x > window_pos.x + border && mouse_pos.x < window_pos.x + window_size.x - border &&
-            mouse_pos.y > window_pos.y + border && mouse_pos.y < window_pos.y + window_size.y - border;
-    }
-
     float2 scene_size = {0, 0};
 
     static float2 xy_ratio = {16, 9};
@@ -205,6 +192,18 @@ void EditorUI::ShowSceneColor() {
         m_scene_color_resolution = {scene_size.x, scene_size.y};
         m_scene_color_pos        = {local_pos.x, local_pos.y};
     }
+
+    // inject. Needs to be refactored (camera control)
+    // 只有在Cursor位于SceneColor窗口上时，才可以控制摄像机
+    uint2 mouse_pos = uint2(
+        ImGui::GetMousePos().x - ImGui::GetWindowPos().x, ImGui::GetMousePos().y - ImGui::GetWindowPos().y
+    );
+    static uint border = 4;
+
+    WindowInput::Get().is_active = mouse_pos.x > m_scene_color_pos.x + border &&
+                                   mouse_pos.x < m_scene_color_pos.x + m_scene_color_resolution.x - border &&
+                                   mouse_pos.y > m_scene_color_pos.x + border &&
+                                   mouse_pos.y < m_scene_color_pos.y + m_scene_color_resolution.y - border;
 
     ImGui::End();
 }

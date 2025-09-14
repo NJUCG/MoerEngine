@@ -1,5 +1,8 @@
 #ifndef MOERENGINE_WINDOW_INPUT_H
 #define MOERENGINE_WINDOW_INPUT_H
+
+#include "RenderAPI.h"
+#include "misc/Traits.h"
 #include "misc/STL.h"
 
 namespace Moer {
@@ -54,7 +57,9 @@ namespace Moer {
 
     struct RENDER_API WindowInput {
         // inject
-        bool is_active = true;
+        bool  is_active = true;
+        uint2 m_scene_color_resolution;
+        uint2 m_scene_color_pos;
 
         // cursor
         float cursor_last_x  = 0.0f;
@@ -94,10 +99,14 @@ namespace Moer {
         StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_switch_state = {false};// Press once to switch state
 
         // singleton
-        static WindowInput& Get() {
-            static WindowInput wndInput;
-            return wndInput;
-        }
+        static WindowInput& Get();
+
+        WindowInput(const WindowInput&)            = delete;
+        WindowInput& operator=(const WindowInput&) = delete;
+
+    private:
+        WindowInput() {}
+        ~WindowInput() {}
     };
 }// namespace Moer
 
