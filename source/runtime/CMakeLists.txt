@@ -8,8 +8,9 @@ add_subdirectory(core)
 add_subdirectory(modules/render)
 add_subdirectory(modules/resource)
 
-file(GLOB  ENGINE_HEADERS   "*.h")
-file(GLOB  ENGINE_SOURCES   "*.cpp")
+# CONFIGURE_DEPENDS，指如果文件变化了，则自动重新GLOB
+file(GLOB ENGINE_HEADERS CONFIGURE_DEPENDS "*.h")
+file(GLOB ENGINE_SOURCES CONFIGURE_DEPENDS "*.cpp")
 add_library(${target_name} STATIC ${ENGINE_HEADERS} ${ENGINE_SOURCES})
 
 set_target_properties(${target_name} PROPERTIES 

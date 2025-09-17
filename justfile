@@ -3,11 +3,13 @@
 set windows-shell := ["powershell", "-c"]
 set shell := ["bash", "-c"]
 
+alias c := clean
 alias gen := generate
 alias g := generate
 alias b := build
 alias r := run
 alias br := build-run
+alias gbr := default
 alias rr := run-release
 alias brr := build-run-release
 

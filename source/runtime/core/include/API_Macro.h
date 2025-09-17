@@ -5,7 +5,10 @@
 #if defined(_WIN32) || defined(_WIN64)
 #define DLLEXPORT __declspec(dllexport)
 #define DLLIMPORT __declspec(dllimport)
-#elif defined(linux) || defined(__linux) || defined(__linux__)
+#elif defined(linux) || defined(__linux) || defined(__linux__) || defined(__GNUC__)
+#define DLLEXPORT __attribute__((visibility("default")))
+#define DLLIMPORT
+#else
 #define DLLEXPORT
 #define DLLIMPORT
 #endif

@@ -3,6 +3,7 @@
 set(moer_asset_dir "asset")
 set(moer_config_dir "configs")
 
+add_subdirectory(cuda)
 add_subdirectory(runtime)
 add_subdirectory(editor)
 

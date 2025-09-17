@@ -15,6 +15,10 @@
 # Ignore all imgui.ini in project (prevent conflicts)
 imgui.ini
 
+# Ignore Logs
+logs/
+log*.txt
+
 build_vs2022
 cmake-build-*/
 /.cache/

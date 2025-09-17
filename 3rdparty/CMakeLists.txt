@@ -118,6 +118,7 @@ set(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION ${MOER_WINDOWS_SDK_VERSION})
 include(${CMAKE_CURRENT_SOURCE_DIR}/tomlplusplus.cmake)
 set_target_folder(tomlplusplus ${third_party_folder}/tomlplusplus-3.4.0)
 
+# NRI, NRD, SPIRV-Cross
 include(NRI.cmake)
 include(NRD.cmake)
 include(SPIRV-Cross.cmake)

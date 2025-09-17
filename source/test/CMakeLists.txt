@@ -130,6 +130,7 @@ target_link_libraries(VertexFactoryTest
 )
 set_target_properties(VertexFactoryTest PROPERTIES FOLDER ${moer_test_folder})
 
+# DX RHI Test
 add_executable(dxrhitest RHITest/dxrhitest.cpp)
 target_include_directories(dxrhitest
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
@@ -143,3 +144,20 @@ target_link_libraries(dxrhitest
         PRIVATE MoerResource
 )
 set_target_properties(dxrhitest PROPERTIES FOLDER ${moer_test_folder})
+
+# CUDA Test
+add_executable(cuda_test CudaTest.cpp)
+target_include_directories(cuda_test
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/dxrhitest>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/cuda>
+)
+target_link_libraries(cuda_test
+        PRIVATE MoerRender
+        PRIVATE glfw
+        PRIVATE MoerResource
+        PRIVATE moer_cuda # Link CUDA and add includes
+)
+set_target_properties(cuda_test PROPERTIES FOLDER ${moer_test_folder})
