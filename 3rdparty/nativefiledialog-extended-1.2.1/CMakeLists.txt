@@ -20,7 +20,7 @@ elseif(UNIX AND NOT APPLE)
   set(nfd_PLATFORM PLATFORM_LINUX)
 endif()
 
-message("nfd Platform: ${nfd_PLATFORM}")
+message(STATUS "nfd Platform: ${nfd_PLATFORM}")
 
 set(nfd_COMPILER Undefined)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
@@ -32,7 +32,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "C
   set(nfd_COMPILER COMPILER_GNU)
 endif()
 
-message("nfd Compiler: ${nfd_COMPILER}")
+message(STATUS "nfd Compiler: ${nfd_COMPILER}")
 
 # Use latest C++ by default (should be the best one), but let user override it
 if(NOT DEFINED CMAKE_CXX_STANDARD)

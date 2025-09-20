@@ -5,7 +5,7 @@ set(MOER_WINPIX_VERSION_ID "1.0.240308001" CACHE INTERNAL "")
 
 
 set(MOER_WINPIX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/winpixeventruntime.${MOER_WINPIX_VERSION_ID}" CACHE INTERNAL "")
-message("use winpixeventruntime sdk from ${MOER_WINPIX_DIR}") 
+message(STATUS "use winpixeventruntime sdk from ${MOER_WINPIX_DIR}") 
 set(MOER_WINPIX_DLL_DIR "${MOER_WINPIX_DIR}/bin/x64" CACHE INTERNAL "")
 
 function(deploy_winpix target_name )

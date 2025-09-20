@@ -69,13 +69,13 @@ if(VOLK_PULL_IN_VULKAN)
   # discovered by FindVulkan.cmake, then the $VULKAN_SDK environment
   # variable if nothing else works.
   if(VULKAN_HEADERS_INSTALL_DIR)
-    message("volk: using VULKAN_HEADERS_INSTALL_DIR option")
+    message(STATUS "volk: using VULKAN_HEADERS_INSTALL_DIR option")
     set(VOLK_INCLUDES "${VULKAN_HEADERS_INSTALL_DIR}/include")
   elseif(Vulkan_INCLUDE_DIRS)
-    message("volk: using Vulkan_INCLUDE_DIRS from FindVulkan module")
+    message(STATUS "volk: using Vulkan_INCLUDE_DIRS from FindVulkan module")
     set(VOLK_INCLUDES "${Vulkan_INCLUDE_DIRS}")
   elseif(DEFINED ENV{VULKAN_SDK})
-    message("volk: using VULKAN_SDK environment variable")
+    message(STATUS "volk: using VULKAN_SDK environment variable")
     set(VOLK_INCLUDES "$ENV{VULKAN_SDK}/include")
   endif()
 
