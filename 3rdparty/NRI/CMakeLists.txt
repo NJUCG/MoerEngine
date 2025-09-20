@@ -48,7 +48,7 @@ set (VERSION_MAJOR ${CMAKE_MATCH_1})
 string (REGEX MATCH "NRI_VERSION_MINOR ([0-9]*)" _ ${ver_h})
 set (VERSION_MINOR ${CMAKE_MATCH_1})
 
-message ("NRI v${VERSION_MAJOR}.${VERSION_MINOR}")
+message (STATUS "NRI v${VERSION_MAJOR}.${VERSION_MINOR}")
 project (NRI LANGUAGES C CXX)
 
 if (IS_SUBMODULE)
@@ -73,7 +73,7 @@ if (WIN32)
 
         if ("${WINDOWS_SDK_VERSION}" STREQUAL "")
             set (WINDOWS_SDK_VERSION ${CMAKE_SYSTEM_VERSION})
-            message ("Using CMAKE_SYSTEM_VERSION as WindowsSDK version.(${CMAKE_SYSTEM_VERSION})")
+            message (STATUS "Using CMAKE_SYSTEM_VERSION as WindowsSDK version.(${CMAKE_SYSTEM_VERSION})")
         endif ()
     else ()
         set (WINDOWS_SDK_PATH $ENV{WIN10_SDK_PATH})
@@ -144,7 +144,7 @@ endif ()
 
 # NONE
 if (NRI_ENABLE_NONE_SUPPORT)
-    message ("NRI adding backend: NONE")
+    message (STATUS "NRI adding backend: NONE")
     set (COMPILE_DEFINITIONS ${COMPILE_DEFINITIONS} NRI_USE_NONE=1)
 
     file (GLOB NONE_SOURCE "Source/NONE/*")
@@ -158,7 +158,7 @@ endif ()
 
 # D3D11
 if (WIN32 AND NRI_ENABLE_D3D11_SUPPORT)
-    message ("NRI adding backend: D3D11")
+    message (STATUS "NRI adding backend: D3D11")
 
     set (COMPILE_DEFINITIONS ${COMPILE_DEFINITIONS} NRI_USE_D3D11=1)
     set (INPUT_LIBS_D3D11 ${INPUT_LIB_D3D11} ${INPUT_LIB_DXGI})
@@ -182,7 +182,7 @@ endif ()
 
 # D3D12
 if (WIN32 AND NRI_ENABLE_D3D12_SUPPORT)
-    message ("NRI adding backend: D3D12")
+    message (STATUS "NRI adding backend: D3D12")
 
     set (COMPILE_DEFINITIONS ${COMPILE_DEFINITIONS} NRI_USE_D3D12=1)
     set (INPUT_LIBS_D3D12 ${INPUT_LIB_D3D12} ${INPUT_LIB_DXGI})
@@ -228,7 +228,7 @@ endif ()
 
 # VK
 if (NRI_ENABLE_VK_SUPPORT)
-    message ("NRI adding backend: VK")
+    message (STATUS "NRI adding backend: VK")
     set (COMPILE_DEFINITIONS ${COMPILE_DEFINITIONS} NRI_USE_VK=1)
 
     file (GLOB VK_SOURCE "Source/VK/*" "External/memalloc/vk_mem_alloc.h")
@@ -339,7 +339,7 @@ endif ()
 set_property (TARGET ${PROJECT_NAME} PROPERTY FOLDER ${PROJECT_FOLDER})
 
 set_target_properties (${PROJECT_NAME} PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-message ("NRI output path: '${CMAKE_RUNTIME_OUTPUT_DIRECTORY}'")
+message (STATUS "NRI output path: '${CMAKE_RUNTIME_OUTPUT_DIRECTORY}'")
 
 if (WIN32)
     if (NRI_ENABLE_D3D11_SUPPORT OR NRI_ENABLE_D3D12_SUPPORT)

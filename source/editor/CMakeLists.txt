@@ -18,7 +18,6 @@ target_link_libraries(${target_name}
     PRIVATE MoerRuntime
     PRIVATE nfd
 )
-message("[Engine] runtime dir: ${moer_source_dir}/runtime")
 
 # Include directories
 target_include_directories(

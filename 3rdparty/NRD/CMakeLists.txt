@@ -45,10 +45,10 @@ string (REGEX MATCH "VERSION_MINOR ([0-9]*)" _ ${ver_h})
 set (VERSION_MINOR ${CMAKE_MATCH_1})
 string (REGEX MATCH "VERSION_BUILD ([0-9]*)" _ ${ver_h})
 set (VERSION_BUILD ${CMAKE_MATCH_1})
-message ("NRD v${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BUILD}")
+message (STATUS "NRD v${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BUILD}")
 
 project (NRD LANGUAGES C CXX)
-message ("NRD encoding: NRD_NORMAL_ENCODING = ${NRD_NORMAL_ENCODING}; NRD_ROUGHNESS_ENCODING = ${NRD_ROUGHNESS_ENCODING}")
+message (STATUS "NRD encoding: NRD_NORMAL_ENCODING = ${NRD_NORMAL_ENCODING}; NRD_ROUGHNESS_ENCODING = ${NRD_ROUGHNESS_ENCODING}")
 
 if (IS_SUBMODULE)
     file (RELATIVE_PATH PROJECT_FOLDER ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
@@ -109,7 +109,7 @@ string (REGEX MATCH "ML_VERSION_MAJOR ([0-9]*)" _ ${ver_h})
 set (ML_VERSION_MAJOR ${CMAKE_MATCH_1})
 string (REGEX MATCH "ML_VERSION_MINOR ([0-9]*)" _ ${ver_h})
 set (ML_VERSION_MINOR ${CMAKE_MATCH_1})
-message ("MathLib v${ML_VERSION_MAJOR}.${ML_VERSION_MINOR}")
+message (STATUS "MathLib v${ML_VERSION_MAJOR}.${ML_VERSION_MINOR}")
 
 file (GLOB ML_FILES "External/MathLib/*.h" "External/MathLib/Guts/*.h")
 source_group ("MathLib" FILES ${ML_FILES})
@@ -143,7 +143,7 @@ else ()
     set (NRD_SHADER_BINARIES "--binary")
 endif ()
 
-message ("NRD shaders output path: '${NRD_SHADERS_PATH}'")
+message (STATUS "NRD shaders output path: '${NRD_SHADERS_PATH}'")
 
 target_include_directories (${PROJECT_NAME} PUBLIC "Include")
 target_include_directories (${PROJECT_NAME} PRIVATE "External")
@@ -153,7 +153,7 @@ target_compile_options (${PROJECT_NAME} PRIVATE ${COMPILE_OPTIONS})
 set_property (TARGET ${PROJECT_NAME} PROPERTY FOLDER ${PROJECT_FOLDER})
 
 set_target_properties (${PROJECT_NAME} PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-message ("NRD output path: '${CMAKE_RUNTIME_OUTPUT_DIRECTORY}'")
+message (STATUS "NRD output path: '${CMAKE_RUNTIME_OUTPUT_DIRECTORY}'")
 
 # Shaders
 if (NOT NRD_DISABLE_SHADER_COMPILATION)
