@@ -70,14 +70,17 @@ Engine for Realtime Rendering
 * LibTorch and TensorRT
 
   * If you want to enable them, you need to install them manually, and tell Moer Engine where they are.
-* First, install LibTorch and TensorRT.
+  * First, install LibTorch and TensorRT.
   
-  * [PyTorch Downloads](https://pytorch.org/get-started/locally/)
+    * [PyTorch Downloads](https://pytorch.org/get-started/locally/)
     * [TensorRT 10.x Downloads](https://developer.nvidia.com/tensorrt/download/10x)
     * **Please download the version that matches your CUDA Toolkit!**
     * Recommended: `CUDA Toolkit 12.8`, `libtorch-2.8.0-cu128`, `TensorRT-10.12.0.36`
-  * Then, run `cp source/cuda/template.LibTorch_TensorRT.cmake source/cuda/LibTorch_TensorRT.cmake`, and modify `LibTorch_TensorRT.cmake`.
-* Finally, recompile, and it should work.
+  * Then, run `cp source/cuda/template.LibTorch_TensorRT.cmake source/cuda/LibTorch_TensorRT.cmake`
+  * Modify `LibTorch_TensorRT.cmake`
+  * Add `/path/to/torch/lib` and `/path/to/tensorRT/lib` to your PATH
+    * ![image-20250920204538099](README/image-20250920204538099.png)
+  * Finally, recompile, and it should work.
 * IntelliSense
   * You can set Environment Variables `CUDA_PATH`, `LIBTORCH_PATH`, `TENSORRT_PATH`. Then, vscode will load corresponding include path to IntelliSense.
   * Detailed in `.vscode/c_cpp_properties.json`

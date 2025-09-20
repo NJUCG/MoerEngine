@@ -5,14 +5,68 @@
 
 find_package(CUDAToolkit QUIET)
 
-if (CUDAToolkit_FOUND)
-    message(STATUS "CUDA found: ${CUDAToolkit_VERSION}")
+# 检查是否存在 LibTorch_TensorRT.cmake 文件
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
+    message(STATUS "LibTorch_TensorRT.cmake found")
 
     if (NOT WIN32)
         message(WARNING "CUDA/LibTorch/TensorRT have not been tested on non-Windows platforms!")
     endif()
 
-    # MARK: Import CUDA
+    include("${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
+
+    message(STATUS "LibTorch_Dir = ${LIBTORCH_DIR}")
+    message(STATUS "TensorRT_Dir = ${TENSORRT_DIR}")
+
+    # import libtorch
+    find_package(Torch REQUIRED PATHS "${LIBTORCH_DIR}/share/cmake/Torch" QUIET)
+
+    # import tensorRT
+    find_path(TensorRT_include_dir NvInfer.h HINTS "${TENSORRT_DIR}/include" QUIET)
+    find_library(TensorRT_library nvinfer_10 HINTS "${TENSORRT_DIR}/lib" QUIET)
+    find_library(TensorRT_plugin_library nvinfer_plugin_10 HINTS "${TENSORRT_DIR}/lib" QUIET)
+
+    if (TensorRT_include_dir AND TensorRT_library AND TensorRT_plugin_library)
+        add_library(TensorRT INTERFACE) # TODO: 整理cmake命名规范
+        target_include_directories(TensorRT INTERFACE "${TensorRT_include_dir}")
+        target_link_libraries(TensorRT INTERFACE
+            "${TensorRT_library}"
+            "${TensorRT_plugin_library}"
+        )
+    else()
+        message(WARNING "TensorRT not found at ${TENSORRT_DIR}. TensorRT_include_dir=${TensorRT_include_dir}; TensorRT_library=${TensorRT_library}")
+    endif()
+
+    if (DEFINED TORCH_LIBRARIES) # linux下可能不是这么判断，可能是Torch::Torch
+        # Use LibTorch to instead of ${TORCH_LIBRARIES}
+        add_library(LibTorch INTERFACE)
+        target_link_libraries(LibTorch INTERFACE ${TORCH_LIBRARIES})
+
+        message(STATUS "LibTorch has imported successfully. Use `LibTorch` to link. TORCH_LIBRARIES = ${TORCH_LIBRARIES}")
+    else()
+        message(STATUS "LibTorch has not been imported.")
+    endif()
+
+    if (TARGET TensorRT)
+        message(STATUS "TensorRT has imported successfully. Use `TensorRT` to link.")
+    else()
+        message(STATUS "TensorRT has not been imported.")
+    endif()
+
+else()
+    message(STATUS "LibTorch_TensorRT.cmake not found.")
+endif()
+
+# 是否找到CUDA
+if (CUDAToolkit_FOUND)
+    message(STATUS "CUDA found: ${CUDAToolkit_VERSION}. Use `CUDA::cudart` to link.")
+else()
+    message(STATUS "CUDA not found.")
+endif()
+
+# 是否找到全部三个依赖
+if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
+    # MARK: Compile Moer CUDA
 
     # 获取所有cu文件
     # CONFIGURE_DEPENDS，指如果文件变化了，则自动重新GLOB
@@ -36,7 +90,7 @@ if (CUDAToolkit_FOUND)
     # 直接把当前文件夹作为include，这样开发的时候就不用把header和cu分开写了
     target_include_directories(moer_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_include_directories(moer_cuda PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
-    target_link_libraries(moer_cuda PUBLIC CUDA::cudart)
+    target_link_libraries(moer_cuda PUBLIC CUDA::cudart LibTorch TensorRT)
 
     # Reference: https://github.com/microsoft/vcpkg/issues/30272#issuecomment-1817929528
     # Hack for the extra \EHsc that gets added on Windows to the nvcc compile line, which causes the error:
@@ -49,69 +103,39 @@ if (CUDAToolkit_FOUND)
     # 其他编译选项
     # $<CONFIG:Debug>:..          # 如果是Debug模式，才添加下面的options
     # $<COMPILE_LANGUAGE:CUDA>:.. # 如果语言是CUDA，才添加下面的options
-    target_compile_options(moer_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler "/utf-8">) # 支持utf-8
+    target_compile_options(moer_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler;"/utf-8">) # 支持utf-8
     target_compile_options(moer_cuda PRIVATE $<$<CONFIG:Debug>:$<$<COMPILE_LANGUAGE:CUDA>:-G;-lineinfo>>) # -G和-lineinfo，分别启动device端的调试信息和行号，便于debug
 
     # 【重要】其他library编译时，使用下面这个语句进行link
     # target_link_libraries(another_library PRIVATE moer_cuda)
 
-    # 检查是否存在 LibTorch_TensorRT.cmake 文件
+    message(STATUS "MoerCuda has been configured successfully.")
 
-    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
-        message(STATUS "LibTorch_TensorRT.cmake found")
-        include("${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
+    # 检查PATH中是否包含了LibTorch和TensorRT的lib路径，避免程序直接闪退
+    if (WIN32)
+        set(LIBTORCH_LIB_DIR "${LIBTORCH_DIR}\\lib")
+        set(TENSORRT_LIB_DIR "${TENSORRT_DIR}\\lib")
 
-        message(STATUS "LibTorch_Dir = ${LIBTORCH_DIR}")
-        message(STATUS "TensorRT_Dir = ${TENSORRT_DIR}")
+        file(TO_NATIVE_PATH "${LIBTORCH_LIB_DIR}" LIBTORCH_LIB_DIR)
+        file(TO_NATIVE_PATH "${TENSORRT_LIB_DIR}" TENSORRT_LIB_DIR)
+        file(TO_NATIVE_PATH "$ENV{PATH}" ENV_PATH)
 
-        # import libtorch
-        find_package(Torch REQUIRED PATHS "${LIBTORCH_DIR}/share/cmake/Torch")
+        # 在 PATH 中查找
+        string(FIND "${ENV_PATH}" "${LIBTORCH_LIB_DIR}" FOUND_LIBTORCH_LIB_DIR)
+        string(FIND "${ENV_PATH}" "${TENSORRT_LIB_DIR}" FOUND_TENSORRT_LIB_DIR)
 
-        # import tensorRT
-        find_path(TensorRT_include_dir NvInfer.h HINTS "${TENSORRT_DIR}/include")
-        find_library(TensorRT_library nvinfer_10 HINTS "${TENSORRT_DIR}/lib")
-        find_library(TensorRT_plugin_library nvinfer_plugin_10 HINTS "${TENSORRT_DIR}/lib")
-
-        if (TensorRT_include_dir AND TensorRT_library AND TensorRT_plugin_library)
-            add_library(TensorRT INTERFACE) # TODO: 整理cmake命名规范
-            target_include_directories(TensorRT INTERFACE "${TensorRT_include_dir}")
-            target_link_libraries(TensorRT INTERFACE
-                "${TensorRT_library}"
-                "${TensorRT_plugin_library}"
-            )
-        else()
-            message(WARNING "TensorRT not found at ${TENSORRT_DIR}. TensorRT_include_dir=${TensorRT_include_dir}; TensorRT_library=${TensorRT_library}")
+        if (FOUND_LIBTORCH_LIB_DIR EQUAL -1)
+            message(WARNING
+                "LibTorch DLL path not found in PATH: ${LIBTORCH_LIB_DIR}\n"
+                "Your program may crash at runtime unless you add this to PATH.")
         endif()
-
-        if (DEFINED TORCH_LIBRARIES) # linux下可能不是这么判断，可能是Torch::Torch
-            message(STATUS "LibTorch has imported successfully. TORCH_LIBRARIES = ${TORCH_LIBRARIES}")
-
-            # Use Torch to instead of ${TORCH_LIBRARIES}
-            add_library(LibTorch INTERFACE)
-            target_link_libraries(LibTorch INTERFACE ${TORCH_LIBRARIES})
-        else()
-            message(STATUS "LibTorch has not been imported.")
+        if (FOUND_TENSORRT_LIB_DIR EQUAL -1)
+            message(WARNING
+                "TensorRT DLL path not found in PATH: ${TENSORRT_LIB_DIR}\n"
+                "Your program may crash at runtime unless you add this to PATH.")
         endif()
-
-        if (TARGET TensorRT)
-            message(STATUS "TensorRT has imported successfully.")
-        else()
-            message(STATUS "TensorRT has not been imported.")
-        endif()
-
-        if ((TARGET LibTorch) AND (TARGET TensorRT))
-            add_library(LibTorch_TensorRT INTERFACE)
-            target_link_libraries(LibTorch_TensorRT INTERFACE
-                ${TORCH_LIBRARIES}
-                TensorRT
-            )
-            message(STATUS "CUDA, LibTorch, TensorRT all imported successfully.")
-        endif()
-
-    else()
-        message(STATUS "LibTorch_TensorRT.cmake not found, building without LibTorch & TensorRT support.")
     endif()
 
 else()
-    message(STATUS "CUDA not found - building without CUDA & LibTorch & TensorRT support.")
+    message(STATUS "MoerCuda has been skipped because lacking of dependencies.")
 endif()

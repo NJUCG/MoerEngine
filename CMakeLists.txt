@@ -45,6 +45,17 @@ if(${MSVC})
     add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 endif()
 
-add_subdirectory("3rdparty")
+function(add_subdirectory_silent dir)
+    # 先全局静音
+    set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 1 CACHE INTERNAL "")
+    set(CMAKE_WARN_DEPRECATED OFF CACHE INTERNAL "")
+    # 添加第三方库
+    add_subdirectory(${dir})
+    # 恢复默认设置，只对你自己源码目录有效
+    set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 0 CACHE INTERNAL "")
+    set(CMAKE_WARN_DEPRECATED ON CACHE INTERNAL "")
+endfunction()
+
+add_subdirectory_silent("3rdparty")
 add_subdirectory("source")
 
