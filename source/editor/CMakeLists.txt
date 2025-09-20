@@ -53,6 +53,8 @@ add_custom_target(
 add_dependencies(${target_name} CopyResources)
 
 # Link CUDA
-target_link_libraries(${target_name}
-    PRIVATE moer_cuda
-)
+if (TARGET moer_cuda)
+    target_link_libraries(${target_name}
+        PRIVATE moer_cuda
+    )
+endif()
