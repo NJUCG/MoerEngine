@@ -5,7 +5,9 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/source/cuda",
-                "${env:CUDA_PATH}/include" // 给IntelliSence添加include目录（不影响CMake与实际编译）
+                "${env:CUDA_PATH}/include", // 给IntelliSence添加include目录（不影响CMake与实际编译）
+                "${env:LIBTORCH_PATH}/include",
+                "${env:TENSORRT_PATH}/include"
             ],
             "defines": [
                 "_DEBUG",

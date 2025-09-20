@@ -147,19 +147,58 @@ set_target_properties(dxrhitest PROPERTIES FOLDER ${moer_test_folder})
 
 # CUDA Test
 if (TARGET moer_cuda)
-    add_executable(cuda_test CudaTest.cpp)
-    target_include_directories(cuda_test
+    set(TEST_TARGET cuda_test)
+    add_executable(${TEST_TARGET} CudaTest.cpp)
+    target_include_directories(${TEST_TARGET}
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
     )
-    target_link_libraries(cuda_test
+    target_link_libraries(${TEST_TARGET}
         PRIVATE MoerRender
         PRIVATE glfw
         PRIVATE MoerResource
     )
-    target_link_libraries(cuda_test
+    target_link_libraries(${TEST_TARGET}
         PRIVATE moer_cuda # Link CUDA and add includes
     )
-    set_target_properties(cuda_test PROPERTIES FOLDER ${moer_test_folder})
+    set_target_properties(${TEST_TARGET} PROPERTIES FOLDER ${moer_test_folder})
+endif()
+
+if (TARGET LibTorch)
+    set(TEST_TARGET torch_test)
+    add_executable(${TEST_TARGET} TorchTest.cpp)
+    target_include_directories(${TEST_TARGET}
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+    )
+    target_link_libraries(${TEST_TARGET}
+        PRIVATE MoerRender
+        PRIVATE glfw
+        PRIVATE MoerResource
+    )
+    target_link_libraries(${TEST_TARGET}
+        PRIVATE LibTorch
+    )
+    set_target_properties(${TEST_TARGET} PROPERTIES FOLDER ${moer_test_folder})
+endif()
+
+if (TARGET TensorRT)
+    set(TEST_TARGET tensorRT_test)
+    add_executable(${TEST_TARGET} TensorRTTest.cpp)
+    target_include_directories(${TEST_TARGET}
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+    )
+    target_link_libraries(${TEST_TARGET}
+        PRIVATE MoerRender
+        PRIVATE glfw
+        PRIVATE MoerResource
+    )
+    target_link_libraries(${TEST_TARGET}
+        PRIVATE TensorRT
+    )
+    set_target_properties(${TEST_TARGET} PROPERTIES FOLDER ${moer_test_folder})
 endif()
