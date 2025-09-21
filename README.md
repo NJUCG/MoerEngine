@@ -2,32 +2,6 @@
 
 Engine for Realtime Rendering
 
-## Current Capability
-
-- Render Hardware Interface(vulkan implemented)
-- Multi-Thread TaskSystem
-- Math
-- RHI implemented ui backend
-- Deferred gui rendering
-- Shader pipeline(compiling, reflection and binding)
-
-## TODO
-
-### Critical
-
-- GPUScene management
-- Camera Manager
-- Material System design and implementation
-- Bindless support
-  
-### Pending
-
-- Scene Management
-- Offline mesh clusterize
-- Default pipeline
-- DX12 support
-- dxc and metis on linux
-
 ## How to Build & Run
 
 - Command Line
@@ -113,6 +87,36 @@ Engine for Realtime Rendering
 ## VSCode配置相关
 
 - 设置中的 `C_Cpp.default.compilerPath` 字段不能使用msvc编译器，否则IntelliSense会出现假错。推荐使用clang
+
+***
+
+# Deprecated ↓
+
+## Current Capability
+
+- Render Hardware Interface(vulkan implemented)
+- Multi-Thread TaskSystem
+- Math
+- RHI implemented ui backend
+- Deferred gui rendering
+- Shader pipeline(compiling, reflection and binding)
+
+## TODO
+
+### Critical
+
+- GPUScene management
+- Camera Manager
+- Material System design and implementation
+- Bindless support
+  
+### Pending
+
+- Scene Management
+- Offline mesh clusterize
+- Default pipeline
+- DX12 support
+- dxc and metis on linux
 
 ## Project Structure Notes
 
