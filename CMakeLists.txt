@@ -38,6 +38,7 @@ if(${MSVC})
     add_compile_options("/Zc:preprocessor")
     add_compile_options("/wd5105")
     add_compile_options("/wd5104")
+    add_compile_options("/wd4267") # 禁用MSVC C4267警告 (size_t -> int)
     add_compile_options("/FS")
     add_compile_options("/MP")
     # Support Chinese Comments

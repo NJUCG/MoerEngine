@@ -8,6 +8,7 @@ alias gen := generate
 alias g := generate
 alias b := build
 alias r := run
+alias gb := generate-build
 alias br := build-run
 alias gbr := default
 alias rr := run-release
@@ -57,6 +58,8 @@ build-release:
 
 run:
     {{editor_debug_dir}}
+
+generate-build: generate build
 
 build-run: clean-exe build run
 

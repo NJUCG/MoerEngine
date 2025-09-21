@@ -90,7 +90,7 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
     # 直接把当前文件夹作为include，这样开发的时候就不用把header和cu分开写了
     target_include_directories(moer_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_include_directories(moer_cuda PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
-    target_link_libraries(moer_cuda PUBLIC CUDA::cudart LibTorch TensorRT)
+    target_link_libraries(moer_cuda PUBLIC CUDA::cudart CUDA::cublas LibTorch TensorRT)
 
     # Reference: https://github.com/microsoft/vcpkg/issues/30272#issuecomment-1817929528
     # Hack for the extra \EHsc that gets added on Windows to the nvcc compile line, which causes the error:
@@ -103,8 +103,11 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
     # 其他编译选项
     # $<CONFIG:Debug>:..          # 如果是Debug模式，才添加下面的options
     # $<COMPILE_LANGUAGE:CUDA>:.. # 如果语言是CUDA，才添加下面的options
-    target_compile_options(moer_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler;"/utf-8">) # 支持utf-8
-    target_compile_options(moer_cuda PRIVATE $<$<CONFIG:Debug>:$<$<COMPILE_LANGUAGE:CUDA>:-G;-lineinfo>>) # -G和-lineinfo，分别启动device端的调试信息和行号，便于debug
+    target_compile_options(moer_cuda PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler;"/utf-8"> # 支持utf-8
+        $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=221> # 禁用float溢出警告，例如：((float)(1e+300))
+        $<$<CONFIG:Debug>:$<$<COMPILE_LANGUAGE:CUDA>:-G>> # -G启动device端的调试信息
+    )
 
     # 【重要】其他library编译时，使用下面这个语句进行link
     # target_link_libraries(another_library PRIVATE moer_cuda)
