@@ -25,6 +25,7 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
     find_path(TensorRT_include_dir NvInfer.h HINTS "${TENSORRT_DIR}/include" QUIET)
     find_library(TensorRT_library nvinfer_10 HINTS "${TENSORRT_DIR}/lib" QUIET)
     find_library(TensorRT_plugin_library nvinfer_plugin_10 HINTS "${TENSORRT_DIR}/lib" QUIET)
+    find_library(TensorRT_onnx_parser nvonnxparser_10 HINTS "${TENSORRT_DIR}/lib" QUIET)
 
     if (TensorRT_include_dir AND TensorRT_library AND TensorRT_plugin_library)
         add_library(TensorRT INTERFACE) # TODO: 整理cmake命名规范
@@ -32,6 +33,7 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
         target_link_libraries(TensorRT INTERFACE
             "${TensorRT_library}"
             "${TensorRT_plugin_library}"
+            "${TensorRT_onnx_parser}"
         )
     else()
         message(WARNING "TensorRT not found at ${TENSORRT_DIR}. TensorRT_include_dir=${TensorRT_include_dir}; TensorRT_library=${TensorRT_library}")
