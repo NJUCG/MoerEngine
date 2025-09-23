@@ -310,27 +310,18 @@ namespace Moer {
 
     ImageReadDesc ImageIO::ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal, EPixelFormat _fmt) {
         ImageReadDesc desc;
-        const auto&   path_str = path.string();
-        if (path_str.ends_with(".png") || path_str.ends_with("jpg") || path_str.ends_with("jpeg")) {
+        auto          path_str = path.string();
+        // to lowercase
+        for (int i = 0; i < path_str.size(); i++) {
+            if ('A' <= path_str[i] && path_str[i] <= 'Z') {
+                path_str[i] = path_str[i] - 'A' + 'a';
+            }
+        }
+        if (path_str.ends_with("png") || path_str.ends_with("jpg") || path_str.ends_with("jpeg")) {
             desc.data = stbi_load(path_str.c_str(), reinterpret_cast<int*>(&desc.width), reinterpret_cast<int*>(&desc.height), reinterpret_cast<int*>(&desc.channal), desired_channal);
             if (!desc.data) {
                 return desc;
             }
-            // uint packed = (((uint*)desc.data)[1747170]);
-            // //unpack r8g8b8a8 uint32 to float4
-            // auto unpack8bit = [](uint packed) -> float4 {
-            //     float4 unpacked;
-            //     unpacked.r = (packed & 0x000000FF) / 255.0f;
-            //     unpacked.g = ((packed & 0x0000FF00) >> 8) / 255.0f;
-            //     unpacked.b = ((packed & 0x00FF0000) >> 16) / 255.0f;
-            //     unpacked.a = ((packed & 0xFF000000) >> 24) / 255.0f;
-            //     return unpacked;
-            // };
-            // auto unpacked = unpack8bit(packed);
-            // unpacked.x    = std::powf(unpacked.x, 2.2f);
-            // unpacked.y    = std::powf(unpacked.y, 2.2f);
-            // unpacked.z    = std::powf(unpacked.z, 2.2f);
-            // unpacked.w    = std::powf(unpacked.w, 2.2f);
 
             desc.data_callback = stbi_image_free;
             desc.format        = _fmt;
