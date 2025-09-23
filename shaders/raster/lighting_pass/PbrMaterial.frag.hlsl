@@ -264,7 +264,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     }
 
     if (param.enable_extra_ambient) {
-        color += param.extra_ambient_intensity * param.extra_ambient_color;
+        color += param.extra_ambient_intensity * param.extra_ambient_color * pbrInfo.albedo;
     }
 
     // // 可视化ShadowMap

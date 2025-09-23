@@ -53,9 +53,9 @@ struct RasterConfig {
 
     // MARK: Shading
     EShadingMode shading_mode                    = EShadingMode::DEFAULT;
-    bool         shading_enable_extra_ambient    = false;
+    bool         shading_enable_extra_ambient    = true;
     float3       shading_extra_ambient_color     = float3(1.f, 1.f, 1.f);
-    float        shading_extra_ambient_intensity = 0.05f;
+    float        shading_extra_ambient_intensity = 0.1f;
 
     // MARK: AA
     EAaMode aa_mode = EAaMode::SMAA_1X;
