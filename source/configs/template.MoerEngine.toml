@@ -26,7 +26,11 @@ max_frame_in_flight = 3
 # default_render_method = "Raster"
 default_render_method = "Raytracing"
 
+[engine.render.raster]
+enable_shadow = true
+
 [engine.scene]
 # 注：Toml中使用单引号包裹路径，可以避免反斜杠被识别为转义符
 # 注：scene_path支持绝对路径
 scene_path = './asset/scenes/sponza/Sponza.gltf'
+enable_cache = true

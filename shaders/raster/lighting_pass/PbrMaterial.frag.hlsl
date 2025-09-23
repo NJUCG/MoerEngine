@@ -263,6 +263,10 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
         color += apply_light(light, position, normal, brdf, shadow);
     }
 
+    if (param.enable_extra_ambient) {
+        color += param.extra_ambient_intensity * param.extra_ambient_color;
+    }
+
     // // 可视化ShadowMap
     // float3 shadow_map_value = TextureHandle(lighting_data.shadow_map_0).Sample2D<float>(in_uv).xxx;
     // color = 0.5 * color + 0.5 * shadow_map_value;

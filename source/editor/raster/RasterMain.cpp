@@ -168,7 +168,11 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
             }
 
             // use scene_color resolution instead of window resolution
-            camera->Tick(editor_ui->GetSceneColorAspectRatio());
+            camera->Tick(
+                editor_ui->GetSceneColorAspectRatio(),
+                editor_ui->GetConfig().camera_speed,
+                editor_ui->GetConfig().camera_fovy
+            );
 
             // Shadow Depth Pass
             shadow_depth_pass.Process(raster_context, ui_config, camera);

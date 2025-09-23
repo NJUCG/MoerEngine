@@ -245,6 +245,7 @@ void EditorUI::ShowConfig() {
         if (ImGui::Button("Open Scene")) {
             NFD::UniquePath        selected_path = nullptr;
             Array<nfdfilteritem_t> filters       = {
+                {"All Support Formats", "glb,gltf,fbx,obj,dae"},
                 {"glTF 2.0", "glb,gltf"},
                 {"FBX", "fbx"},
                 {"Wavefront", "obj"},
@@ -265,6 +266,14 @@ void EditorUI::ShowConfig() {
         }
         ImGui::SameLine();
         ImGui::Text("Current: [%s]", scene_name.c_str());
+    }
+
+    if (ImGui::TreeNode("Camera")) {
+
+        ImGui::SliderFloat("Speed", &m_config.camera_speed, 0.1f, 400.f);
+        ImGui::SliderFloat("Fov Y", &m_config.camera_fovy, 1.f, 160.f);
+
+        ImGui::TreePop();
     }
 
     if (m_b_show_sub_ui) {

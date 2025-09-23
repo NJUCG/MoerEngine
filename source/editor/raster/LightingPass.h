@@ -50,6 +50,11 @@ public:
     uint Process(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera) {
 
         MaterialPassBindlessParam material_param;
+        material_param.extra_ambient_color     = ui_config.shading_extra_ambient_color;
+        material_param.extra_ambient_intensity = ui_config.shading_extra_ambient_intensity;
+        material_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
+        material_param.shading_mode            = static_cast<uint>(ui_config.shading_mode);
+
         material_param.material_buffer     = context.gpu_material_info_handle;
         material_param.vbuffer             = context.textures.vbuffer.handle;
         material_param.gbuffer_normal      = context.textures.normal.handle;

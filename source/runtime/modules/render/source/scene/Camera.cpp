@@ -26,7 +26,7 @@ namespace Moer {
     // e.g. camera_speed = 25.0 & k_camera_speed_multiplier = 0.1 => 2.5 units per second
     const float Camera::k_camera_speed_multiplier = 0.1f;
     const float Camera::k_camera_speed_default    = 25.0f;
-    const float Camera::k_camera_speed_max        = 100.0f;
+    const float Camera::k_camera_speed_max        = 400.0f;
     const float Camera::k_camera_speed_min        = 0.1f;
     const float Camera::k_camera_speed_up_delta   = 50.0f;// use 2 sec to reach max speed
     const float Camera::k_camera_speed_down_delta = 25.0f;// use 4 sec to reach min speed
@@ -383,7 +383,7 @@ namespace Moer {
      * - Drag `left mouse button` to rotate the camera and move forward/backward
      * - Drag `both mouse buttons` or `middle button` to move the camera
      */
-    void Camera::Tick(float aspect_ratio) {
+    void Camera::Tick(float aspect_ratio, float config_camera_speed, float config_camera_fov) {
 
         if (aspect_ratio <= EPS) {
             this->SetAspectRatio(WindowInput::Get().aspect_ratio);
@@ -394,7 +394,9 @@ namespace Moer {
         if (!WindowInput::Get().is_cursor_hiding) {
 
             // fov & aspect_ratio
-            if (!IsZero(WindowInput::Get().scroll_offset)) {
+            if (config_camera_fov >= k_fov_min && config_camera_fov <= k_fov_max) {
+                this->SetFov(config_camera_fov);
+            } else if (!IsZero(WindowInput::Get().scroll_offset)) {
                 float coef;
                 if (Compare(m_fov_y, k_fov_default) <= 0) {
                     coef = (Min(k_fov_default, m_fov_y) - k_fov_min) / (k_fov_default - k_fov_min);
@@ -410,18 +412,22 @@ namespace Moer {
 
             // camera speed
 
-            if (WindowInput::Get().speed_up) {
-                camera_speed += k_camera_speed_up_delta * WindowInput::Get().delta_time;
-                if (camera_speed > k_camera_speed_max)
-                    camera_speed = k_camera_speed_max;
-            }
-            if (WindowInput::Get().speed_down) {
-                camera_speed -= k_camera_speed_down_delta * WindowInput::Get().delta_time;
-                if (camera_speed < k_camera_speed_min)
-                    camera_speed = k_camera_speed_min;
-            }
-            if (WindowInput::Get().reset_speed) {
-                camera_speed = k_camera_speed_default;
+            if (config_camera_speed >= k_camera_speed_min && config_camera_speed <= k_camera_speed_max) {
+                camera_speed = config_camera_speed;
+            } else {
+                if (WindowInput::Get().speed_up) {
+                    camera_speed += k_camera_speed_up_delta * WindowInput::Get().delta_time;
+                    if (camera_speed > k_camera_speed_max)
+                        camera_speed = k_camera_speed_max;
+                }
+                if (WindowInput::Get().speed_down) {
+                    camera_speed -= k_camera_speed_down_delta * WindowInput::Get().delta_time;
+                    if (camera_speed < k_camera_speed_min)
+                        camera_speed = k_camera_speed_min;
+                }
+                if (WindowInput::Get().reset_speed) {
+                    camera_speed = k_camera_speed_default;
+                }
             }
 
             float speed = 1.0 * camera_speed * k_camera_speed_multiplier * WindowInput::Get().delta_time;

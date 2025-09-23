@@ -23,6 +23,9 @@ public:
     struct Config {
         ERenderMethod selected_render_method = ERenderMethod::Raster;
         std::string   scene_path             = "";
+
+        float camera_speed = 25.f;
+        float camera_fovy  = 60.f;
     };
 
     EditorUI(UniquePtr<Render::UIRenderer> renderer, uint2 resolution);

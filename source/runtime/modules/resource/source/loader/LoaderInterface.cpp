@@ -1,4 +1,6 @@
 #include "loader/LoaderInterface.h"
+
+#include "config/ConfigManager.h"
 #include "scene/MaterialInstance.h"
 #include "ResourceAPI.h"
 #include "loader/gltf/Parser.h"
@@ -18,6 +20,7 @@ namespace Resource {
                                                                             {"glb", Gltf::Parser::LoadSceneFromFile},
                                                                             {"fbx", Gltf::Parser::LoadSceneFromFile},
                                                                             {"obj", Gltf::Parser::LoadSceneFromFile},
+                                                                            {"dae", Gltf::Parser::LoadSceneFromFile},
                                                                             {"json", JsonScene::JsonSceneParser::LoadSceneFromFile}};
 
     void LoadFromFile(const std::filesystem::path& _file_path, Scene* _scene) {
@@ -48,7 +51,7 @@ namespace Resource {
             // auto gs_scene = PlyLoader::LoadSceneFromFile(_file_path);
             // scene->SetBuffer(EGpuSceneResource::GaussianSplattingVertex, gs_scene->GetBuffer(EGpuSceneResource::GaussianSplattingVertex));
         } else {
-            if (SceneCache::HasValidCache(_file_path)) {
+            if (ConfigManager::GetInstance().GetConfig().engine.scene.enable_cache && SceneCache::HasValidCache(_file_path)) {
                 LambdaTask::Dispatch([_file_path, scene]() {
                     try {
                         SceneCache::LoadSceneFromCache(_file_path, scene);
