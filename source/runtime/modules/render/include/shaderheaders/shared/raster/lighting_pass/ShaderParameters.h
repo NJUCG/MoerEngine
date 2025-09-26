@@ -31,6 +31,12 @@ namespace Moer {
         uint   gbuffer_position;
         uint   global_param_handle;
         uint   shading_mode;
+        uint skybox_handle_posz;
+        uint skybox_handle_negz;
+        uint skybox_handle_posx;
+        uint skybox_handle_negx;
+        uint skybox_handle_posy;
+        uint skybox_handle_negy;
     };
 
     // TODO: 下面的重复变量是否可以使用数组的方式合并？
