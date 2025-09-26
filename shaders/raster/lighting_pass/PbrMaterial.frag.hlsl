@@ -7,6 +7,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "shared/raster/lighting_pass/ShaderParameters.h"
 
+
 [[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
 
 float ndfGGX(float cosLh, float roughness) {
@@ -180,6 +181,49 @@ float calculate_shadow(Moer::LightingData lighting_data, float3 world_pos) {
     }
 }
 
+float4 calculate_ibl(Moer::LightingData lighting_data, float3 world_pos) {
+    float3 view_dir = world_pos - lighting_data.camera_position;
+    
+    float3 abs_dir = abs(view_dir);
+    uint axis = 0;
+    float2 uv;
+    uint handle_index;
+
+    if (abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z) {
+        axis = 0; // X轴
+    } else if (abs_dir.y >= abs_dir.z) {
+        axis = 1; // Y轴
+    } else {
+        axis = 2; // Z轴
+    }
+    
+    if (axis == 0) {
+        if (view_dir.x > 0) {
+            uv = float2(-view_dir.z, -view_dir.y) / view_dir.x * 0.5 + 0.5;
+            return float4(TextureHandle(param.skybox_handle_posx).Sample2D<float3>(uv), 1.0);
+        } else {
+            uv = float2(view_dir.z, -view_dir.y) / (-view_dir.x) * 0.5 + 0.5;
+            return float4(TextureHandle(param.skybox_handle_negx).Sample2D<float3>(uv), 1.0);
+        }
+    } else if (axis == 1) {
+        if (view_dir.y > 0) {
+            uv = float2(view_dir.x, view_dir.z) / view_dir.y * 0.5 + 0.5;
+            return float4(TextureHandle(param.skybox_handle_posy).Sample2D<float3>(uv), 1.0);
+        } else {
+            uv = float2(view_dir.x, -view_dir.z) / (-view_dir.y) * 0.5 + 0.5;
+            return float4(TextureHandle(param.skybox_handle_negy).Sample2D<float3>(uv), 1.0);
+        }
+    } else {
+        if (view_dir.z > 0) {
+            uv = float2(view_dir.x, -view_dir.y) / view_dir.z * 0.5 + 0.5;
+            return float4(TextureHandle(param.skybox_handle_posz).Sample2D<float3>(uv), 1.0);
+        } else {
+            uv = float2(-view_dir.x, -view_dir.y) / (-view_dir.z) * 0.5 + 0.5;
+            return float4(TextureHandle(param.skybox_handle_negz).Sample2D<float3>(uv), 1.0);
+        }
+    }
+}
+
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
     uint gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
@@ -205,9 +249,10 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     // MARK: Skybox
     if (depth == 0.0) {
-        // TODO: Image Based Lighting or Skybox
-        // 临时返回一个天蓝色
-        return float4(135.f/256.f, 206.f/256.f, 235.f/256.f, 1.0f);
+        float3 pos_inf=WorldPosFromDepth(0.99, in_uv, lighting_data.inv_view_proj);
+        printf("pos_inf: %f, %f, %f\n", pos_inf.x, pos_inf.y, pos_inf.z);
+        return calculate_ibl(lighting_data,pos_inf);
+        //return float4(0.0, 0.0, 0.0, 1.0); // Black Skybox
     }
 
     // MARK: PBR
