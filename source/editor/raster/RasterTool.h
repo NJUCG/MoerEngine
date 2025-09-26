@@ -44,6 +44,10 @@ public:
             for (const auto& [bitmask, vertex_buffer] :
                  vertex_buffer_map) { // for each vertex buffer (index buffer is the same)
 
+                if (bitmask == 1) {
+                    continue;
+                    // TODO: 神人，为什么一些场景会有bitmask==1的情况？只有position？
+                }
                 if (bitmask == 3) {
                     continue;
                     // TODO: bitmask == 3，即只有position和normal，这些Mesh应该是用于动画等功能的。不应该被正常渲染
@@ -70,6 +74,10 @@ public:
 
                 auto bitmask = geom.mesh_buffers->vertex_factory_buffers.GetAttributesBitmask();
 
+                if (bitmask == 1) {
+                    continue;
+                    // TODO: 神人，为什么一些场景会有bitmask==1的情况？只有position？
+                }
                 if (bitmask == 3) {
                     continue;
                     // TODO: bitmask == 3，即只有position和normal，这些Mesh应该是用于动画等功能的。不应该被正常渲染

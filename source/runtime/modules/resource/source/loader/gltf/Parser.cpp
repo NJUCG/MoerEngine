@@ -68,7 +68,9 @@ namespace Moer::Resource::Gltf {
         UniquePtr<SceneData> data = UniquePtr<SceneData>(MoerNew(SceneData));
     };
 
-    Transform GetTransform(const aiNode* node);
+    Transform   GetTransform(const aiNode* node);
+    aiMatrix4x4 GetTransformAssimp(const aiNode* node);
+    float3      GetDirectionalLightDirection(const aiScene* scene, const aiLight& light);
 
     // uint32_t GetVertexData(const aiMesh* mesh, float* data) {
     //     //  Moer::Array<float> data;
@@ -256,7 +258,7 @@ namespace Moer::Resource::Gltf {
                     transform,
                     full_yfov_deg,
                     camera->mAspect,
-                    camera->mClipPlaneNear,
+                    std::min(0.02f, camera->mClipPlaneNear),
                     camera->mClipPlaneFar);
                 data->m_cameras.push_back(camera_ref);
 
@@ -283,10 +285,10 @@ namespace Moer::Resource::Gltf {
                 float3x4    model = GetTransform(node).GetMatrix3x4();
                 if (light->mType == aiLightSourceType::aiLightSource_DIRECTIONAL) {
                     LightComponentRef light_component = MoerNew(DirectionalLightComponent)(
-                        ToVector3f(light->mColorDiffuse),// color
-                        1.0f,                            // intensity
-                        ToVector3f(light->mDirection),   // direction
-                        0.f                              // angular_size
+                        ToVector3f(light->mColorDiffuse),            // color
+                        1.0f,                                        // intensity
+                        GetDirectionalLightDirection(_scene, *light),// direction
+                        0.f                                          // angular_size
                     );
                     data->m_lights.push_back(light_component);
 
@@ -967,6 +969,32 @@ namespace Moer::Resource::Gltf {
             matrix             = parent_matrix.GetMatrix4x4() * matrix;
         }
         return {matrix};
+    }
+    aiMatrix4x4 GetTransformAssimp(const aiNode* node) {
+        aiMatrix4x4   transform = node->mTransformation;
+        const aiNode* parent    = node->mParent;
+        while (parent) {
+            transform = parent->mTransformation * transform;
+            parent    = parent->mParent;
+        }
+        return transform;
+    }
+
+    float3 GetDirectionalLightDirection(const aiScene* scene, const aiLight& light) {
+        assert(light.mType == aiLightSourceType::aiLightSource_DIRECTIONAL);
+        // 找到对应的 aiNode
+        const aiNode* node  = scene->mRootNode->FindNode(light.mName);
+        aiMatrix4x4   world = GetTransformAssimp(node);
+
+        // 默认局部方向 (0,0,-1)
+        aiVector3D localDir(0, 0, -1);
+
+        // 提取旋转部分 (去掉平移)
+        aiMatrix3x3 rotMat(world);
+        aiVector3D  worldDir = rotMat * localDir;
+        worldDir.Normalize();
+
+        return float3(worldDir.x, worldDir.y, worldDir.z);
     }
 
     void Parser::Impl::LoadNodes(const aiScene* _scene, const aiNode* _node, std::function<void(const aiNode*)>& _on_load_node) {

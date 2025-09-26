@@ -492,7 +492,11 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
             // prepare frame
             {
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
-                camera->Tick();
+                camera->Tick(
+                    _editor_ui->GetSceneColorAspectRatio(),
+                    _editor_ui->GetConfig().camera_speed,
+                    _editor_ui->GetConfig().camera_fovy
+                );
             }
 
             // update light direction from ui data

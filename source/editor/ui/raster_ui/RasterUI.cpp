@@ -1,12 +1,19 @@
 #include "RasterUI.h"
 
+#include "config/ConfigManager.h"
+
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <string_view>
 
 namespace Moer {
 
-RasterUI::RasterUI() {}
+RasterUI::RasterUI() {
+    m_config.shadow_map_mode =
+        (ConfigManager::GetInstance().GetConfig().engine.render.raster.enable_shadow ?
+             m_config.shadow_map_mode :
+             0);
+}
 
 void RasterUI::ShowConfig() {
     if (!ImGui::TreeNode("Raster Settings")) { return; }
@@ -33,6 +40,31 @@ void RasterUI::ShowConfig() {
             }
             draw_border();
         }
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode(
+            "Shading",
+            "Shading: [%s]",
+            s_shading_mode_name_array[static_cast<size_t>(m_config.shading_mode)].c_str()
+        )) {
+        assert(s_shading_mode_name_array.size() == static_cast<size_t>(EShadingMode::NUM));
+        for (uint i = 0; i < s_shading_mode_name_array.size(); i++) {
+            if (ImGui::Selectable(
+                    s_shading_mode_name_array[i].c_str(),
+                    m_config.shading_mode == static_cast<EShadingMode>(i)
+                )) {
+                m_config.shading_mode = static_cast<EShadingMode>(i);
+            }
+            draw_border();
+        }
+
+        ImGui::Separator();
+
+        ImGui::Checkbox("Enable Extra Ambient", &m_config.shading_enable_extra_ambient);
+        ImGui::SliderFloat("Ambient Intensity", &m_config.shading_extra_ambient_intensity, 0.0f, 1.0f);
+        ImGui::SliderFloat3("Ambient Color", (float*)&m_config.shading_extra_ambient_color, 0.0f, 1.0f);
+
         ImGui::TreePop();
     }
 

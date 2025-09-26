@@ -85,29 +85,31 @@ public:
         }
     }
 
-    std::optional<float3> GetMainLightDirection(RasterContext& context) {
-        auto light_entity    = context.scene.GetMainLight();
-        auto light_component = LightComponentManager::Get().Get(light_entity);
-        if (light_component->GetType() != ELightComponentType::DIRECTIONAL) {
-            context.scene.ForEach([&](Entity _entity) {
-                auto light_component_tmp = LightComponentManager::Get().Get(light_entity);
-                if (light_component_tmp->GetType() == ELightComponentType::DIRECTIONAL) {
-                    light_component = light_component_tmp;
-                    return;
-                }
-            });
-        }
-        if (light_component->GetType() != ELightComponentType::DIRECTIONAL) {
-            LOG_WARNING("No Directional Light found in the scene, shadow depth pass will be skipped.");
-            return std::nullopt;
-        }
-        auto* directional_light = dynamic_cast<const DirectionalLightComponent*>(light_component.Get());
-        if (directional_light == nullptr) {
-            LOG_ERROR("LightComponent is not DirectionalLightComponent! This should not happen, code error.");
-            return std::nullopt;
+    static DirectionalLightComponent* GetMainLightDirection(RasterContext& context) {
+
+        auto lights          = context.scene.GetLights();
+        auto light_component = LightComponentManager::Get().Get(lights[0]);
+
+        for (int i = 1; i < lights.size(); i++) {
+            auto light_entity            = lights[i];
+            auto light_component_current = LightComponentManager::Get().Get(light_entity);
+            if (light_component_current->GetType() == ELightComponentType::DIRECTIONAL) {
+                light_component = light_component_current;
+                break;
+            }
         }
 
-        return directional_light->GetDirection();
+        if (light_component->GetType() != ELightComponentType::DIRECTIONAL) {
+            LOG_WARNING("No Directional Light found in the scene, shadow depth pass will be skipped.");
+            return nullptr;
+        }
+        auto* directional_light = dynamic_cast<DirectionalLightComponent*>(light_component.Get());
+        if (directional_light == nullptr) {
+            LOG_ERROR("LightComponent is not DirectionalLightComponent! This should not happen, code error.");
+            return nullptr;
+        }
+
+        return directional_light;
     }
 
     void ProcessCsm(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
@@ -117,9 +119,9 @@ public:
 
         // Light
         auto light_direction_optional = GetMainLightDirection(context);
-        if (light_direction_optional.has_value() == false) { return; }
+        if (light_direction_optional == nullptr) { return; }
 
-        const float3 light_direction = Normalizef(light_direction_optional.value());
+        const float3 light_direction = Normalizef(light_direction_optional->GetDirection());
         const float3 light_right     = Normalizef(Cross(light_direction, float3(0.f, 1.f, 0.f)));
         const float3 light_up        = Normalizef(Cross(light_right, light_direction));
 
@@ -181,10 +183,10 @@ public:
                 frustum_corners_pre[i] = world_to_light_view_rotate_only * frustum_corners[i];
             }
             // - Get 最长对角线
-            float max_cross_distance =
-                Max(Lengthf(frustum_corners_pre[4] - frustum_corners_pre[6]), // 远平面对角线
-                    Lengthf(frustum_corners_pre[0] - frustum_corners_pre[6])  // 近平面和远平面的最长对角线
-                );
+            float max_cross_distance = Max(
+                Lengthf(frustum_corners_pre[4] - frustum_corners_pre[6]), // 远平面对角线
+                Lengthf(frustum_corners_pre[0] - frustum_corners_pre[6])  // 近平面和远平面的最长对角线
+            );
             // - Get AABB
             float3 min = frustum_corners_pre[0];
             float3 max = frustum_corners_pre[0];

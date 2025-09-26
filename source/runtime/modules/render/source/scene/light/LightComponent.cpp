@@ -133,68 +133,68 @@ namespace Moer {
                 Vector3f(ambient_intensity, ambient_intensity, ambient_intensity)));
         }
 
-        // Point light
-        {
-            // The following lights should be placed in the Sponza scene.
+        // // Point light
+        // {
+        //     // The following lights should be placed in the Sponza scene.
 
-            static auto randf = []() -> float {
-                return static_cast<float>(rand()) / (RAND_MAX);
-            };
+        //     static auto randf = []() -> float {
+        //         return static_cast<float>(rand()) / (RAND_MAX);
+        //     };
 
-            // center
-            auto  light_pos_center = float3(-0.5f, 0.2f, -0.25f);
-            auto  light_color      = float3(1.0f, 1.0f, 1.0f);
-            float dz[2]            = {-1.0f, 1.0f};
-            for (int i = -6; i < 6; ++i) {
-                for (int j = 0; j < 2; ++j) {
-                    auto pos = float3(
-                        light_pos_center.x + i * 1.5f,
-                        light_pos_center.y,
-                        light_pos_center.z + dz[j]);
+        //     // center
+        //     auto  light_pos_center = float3(-0.5f, 0.2f, -0.25f);
+        //     auto  light_color      = float3(1.0f, 1.0f, 1.0f);
+        //     float dz[2]            = {-1.0f, 1.0f};
+        //     for (int i = -6; i < 6; ++i) {
+        //         for (int j = 0; j < 2; ++j) {
+        //             auto pos = float3(
+        //                 light_pos_center.x + i * 1.5f,
+        //                 light_pos_center.y,
+        //                 light_pos_center.z + dz[j]);
 
-                    auto t = randf();
-                    if (t < 0.15) {
-                        light_color.x = 1.0f;
-                        light_color.y = 0.0f;
-                        light_color.z = 0.0f;
+        //             auto t = randf();
+        //             if (t < 0.15) {
+        //                 light_color.x = 1.0f;
+        //                 light_color.y = 0.0f;
+        //                 light_color.z = 0.0f;
 
-                    } else if (t < 0.3) {
-                        light_color.x = 0.0f;
-                        light_color.y = 1.0f;
-                        light_color.z = 0.0f;
+        //             } else if (t < 0.3) {
+        //                 light_color.x = 0.0f;
+        //                 light_color.y = 1.0f;
+        //                 light_color.z = 0.0f;
 
-                    } else if (t < 0.45) {
-                        light_color.x = 0.0f;
-                        light_color.y = 0.0f;
-                        light_color.z = 1.0f;
+        //             } else if (t < 0.45) {
+        //                 light_color.x = 0.0f;
+        //                 light_color.y = 0.0f;
+        //                 light_color.z = 1.0f;
 
-                    } else if (t < 0.6) {
-                        light_color.x = 0.0f;
-                        light_color.y = 1.0f;
-                        light_color.z = 1.0f;
+        //             } else if (t < 0.6) {
+        //                 light_color.x = 0.0f;
+        //                 light_color.y = 1.0f;
+        //                 light_color.z = 1.0f;
 
-                    } else if (t < 0.75) {
-                        light_color.x = 1.0f;
-                        light_color.y = 0.0f;
-                        light_color.z = 1.0f;
+        //             } else if (t < 0.75) {
+        //                 light_color.x = 1.0f;
+        //                 light_color.y = 0.0f;
+        //                 light_color.z = 1.0f;
 
-                    } else if (t < 0.9) {
-                        light_color.x = 1.0f;
-                        light_color.y = 1.0f;
-                        light_color.z = 0.0f;
+        //             } else if (t < 0.9) {
+        //                 light_color.x = 1.0f;
+        //                 light_color.y = 1.0f;
+        //                 light_color.z = 0.0f;
 
-                    } else {
-                        light_color.x = 1.0f;
-                        light_color.y = 1.0f;
-                        light_color.z = 1.0f;
-                    }
+        //             } else {
+        //                 light_color.x = 1.0f;
+        //                 light_color.y = 1.0f;
+        //                 light_color.z = 1.0f;
+        //             }
 
-                    LightComponentRef point_light = MoerNew(PointLightComponent)(light_color, 1.0f, pos);
+        //             LightComponentRef point_light = MoerNew(PointLightComponent)(light_color, 1.0f, pos);
 
-                    lights.push_back(point_light);
-                }
-            }
-        }
+        //             lights.push_back(point_light);
+        //         }
+        //     }
+        // }
 
         return lights;
     }

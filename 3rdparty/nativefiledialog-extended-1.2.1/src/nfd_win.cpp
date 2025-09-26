@@ -406,8 +406,11 @@ nfdresult_t NFD_OpenDialogN_With_Impl(nfdversion_t version,
         nfdnchar_t* filePath;
         result = psiResult->GetDisplayName(::SIGDN_FILESYSPATH, &filePath);
         if (!SUCCEEDED(result)) {
-            NFDi_SetError("Could not get file path from shell item returned by dialog.");
-            return NFD_ERROR;
+            result = psiResult->GetDisplayName(::SIGDN_DESKTOPABSOLUTEPARSING, &filePath);
+            if (!SUCCEEDED(result)) {
+                NFDi_SetError("Could not get file path from shell item returned by dialog.");
+                return NFD_ERROR;
+            }
         }
 
         *outPath = filePath;

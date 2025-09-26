@@ -9,6 +9,9 @@
 
 namespace Moer {
 
+enum class EShadingMode { DEFAULT = 0, DEBUG, NUM };
+static const Array<std::string> s_shading_mode_name_array = {"Default", "Debug"};
+
 enum class EAaMode { NONE = 0, FXAA_SIMPLIFIED, FXAA_QUALITY, SMAA_1X, SMAA_T2X, NUM };
 static const Array<std::string> s_aa_mode_name_array = {
     "None",
@@ -47,6 +50,13 @@ static const Array<std::string> s_shadow_sampling_mode_name_array = {
 };
 
 struct RasterConfig {
+
+    // MARK: Shading
+    EShadingMode shading_mode                    = EShadingMode::DEFAULT;
+    bool         shading_enable_extra_ambient    = true;
+    float3       shading_extra_ambient_color     = float3(1.f, 1.f, 1.f);
+    float        shading_extra_ambient_intensity = 0.1f;
+
     // MARK: AA
     EAaMode aa_mode = EAaMode::SMAA_1X;
 

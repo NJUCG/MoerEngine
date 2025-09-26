@@ -45,10 +45,16 @@ namespace Moer::Config {
 
             struct Render {
                 std::string default_render_method;
+
+                struct Raster {
+                    bool enable_shadow;
+                } raster;
+
             } render;
 
             struct Scene {
                 std::string scene_path;
+                bool        enable_cache;
             } scene;
 
         } engine;
@@ -79,8 +85,10 @@ namespace Moer::Config {
             c.engine.rhi.api_version         = config.at_path("engine.rhi.api_version").value_or("1.3");
 
             c.engine.render.default_render_method = config.at_path("engine.render.default_render_method").value_or("Raster");
+            c.engine.render.raster.enable_shadow  = config.at_path("engine.render.raster.enable_shadow").value_or(true);
 
-            c.engine.scene.scene_path = config.at_path("engine.scene.scene_path").value_or("./asset/scenes/sponza/Sponza.gltf");
+            c.engine.scene.scene_path   = config.at_path("engine.scene.scene_path").value_or("./asset/scenes/sponza/Sponza.gltf");
+            c.engine.scene.enable_cache = config.at_path("engine.scene.enable_cache").value_or(true);// 默认启用cache
 
             return c;
         }

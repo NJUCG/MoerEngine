@@ -370,12 +370,12 @@ namespace Moer {
         std::span<const UnorderedMap<VertexAttributesBitmask, Render::IndexBuffer>>         GetIndexBufferViews();
         std::span<const Render::GeometryInstance>                                           GetGeometryInstances() const noexcept;
 
+        void                               EmplaceIOImportedBuffer(Render::BufferRef _buffer);
         std::span<const Render::BufferRef> GetIOPendingBuffers() const noexcept;
         void                               ClearIOPendingBuffers() noexcept;
 
     protected:
         friend class SceneCache;
-        void EmplaceIOImportedBuffer(Render::BufferRef _buffer);
 
     private:
         class Impl;

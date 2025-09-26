@@ -17,16 +17,20 @@ namespace Moer {
     // MARK: Main Content Begin
 
     struct MaterialPassBindlessParam {
-        uint material_type;
-        uint light_buffer;
-        uint material_buffer;
-        uint vbuffer;
-        uint gbuffer_normal;
-        uint gbuffer_tangent;
-        uint gbuffer_uv;
-        uint gbuffer_depth;
-        uint gbuffer_position;
-        uint global_param_handle;
+        float3 extra_ambient_color;
+        float  extra_ambient_intensity;
+        uint   enable_extra_ambient;
+        uint   material_type;
+        uint   light_buffer;
+        uint   material_buffer;
+        uint   vbuffer;
+        uint   gbuffer_normal;
+        uint   gbuffer_tangent;
+        uint   gbuffer_uv;
+        uint   gbuffer_depth;
+        uint   gbuffer_position;
+        uint   global_param_handle;
+        uint   shading_mode;
         uint skybox_handle_posz;
         uint skybox_handle_negz;
         uint skybox_handle_posx;
