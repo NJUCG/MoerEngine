@@ -580,7 +580,7 @@ namespace Moer::Resource::Gltf {
         }
         const auto* gltf_scene = importer.ReadFile(_file_path.string(), aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_GenNormals | aiProcess_CalcTangentSpace);
         if (!gltf_scene) {
-            LOG_WARNING("Failed to load gltf file: {} ", _file_path.string());
+            LOG_WARNING("Failed to load gltf file: {}. Assimp error: {}", _file_path.string(), importer.GetErrorString());
             return nullptr;
         }
 
