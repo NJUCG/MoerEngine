@@ -72,13 +72,16 @@ struct RasterConfig {
     int             rtao_spp                = 1;
 
     // MARK: SSR
-    bool  ssr_is_enable_ssr              = false;
+    bool  ssr_is_ssr_enabled             = false;
     int   ssr_sample_count               = 32;
     bool  ssr_is_enable_jitter           = true;
     bool  ssr_is_force_ground_enable_ssr = true;
     float ssr_roughness_threshold        = 0.5;
     float ssr_metallic_threshold         = 0.5;
     float ssr_step_base                  = 0.025;
+
+    // MARK: AI (CUDA, TensorRT)
+    bool ai_is_cuda_enabled = false;
 
     // MARK: Shadow
     int shadow_map_mode            = 1; // 0: disabled, 1: CSM, 2: VSM

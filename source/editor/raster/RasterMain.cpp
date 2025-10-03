@@ -12,6 +12,7 @@
 // Editor
 #include "AaPass.h"
 #include "AoPass.h"
+#include "CudaPass.h"
 #include "GeometryPass.h"
 #include "LightingPass.h"
 #include "RasterResource.h"
@@ -88,6 +89,7 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
     AoPass          ao_pass(raster_context);
     RtaoPass        rtao_pass(raster_context);
     SsrPass         ssr_pass(raster_context);
+    CudaPass        cuda_pass(raster_context);
     AaPass          aa_pass(raster_context);
 
     UiCombinePass ui_combine_pass(manager);
@@ -197,8 +199,12 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
             }();
             // - Screen Space Reflection
             uint ssr_output = ssr_pass.Process(raster_context, ui_config, camera, ao_output);
+
+            // - CUDA Pass
+            uint cuda_output = cuda_pass.Process(raster_context, ui_config, ssr_output);
+
             // - Anti-aliasing
-            uint _aa_output = aa_pass.Process(raster_context, ui_config, camera, ssr_output);
+            uint _aa_output = aa_pass.Process(raster_context, ui_config, camera, cuda_output);
 
             // Ui Combine Pass
             final_output = ui_combine_pass.Process(

@@ -54,7 +54,7 @@ public:
         const CameraRef&    camera,
         uint                input_image
     ) {
-        if (ui_config.ssr_is_enable_ssr == 0) { return input_image; }
+        if (ui_config.ssr_is_ssr_enabled == 0) { return input_image; }
 
         SsrPipelineBindlessParam param;
         param.view_projection_matrix         = Transpose(camera->GetViewProjectionMatrix());

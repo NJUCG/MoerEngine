@@ -144,19 +144,45 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
-    if (ImGui::TreeNode("SSR", "SSR: [%s]", (m_config.ssr_is_enable_ssr == 1 ? "Enable" : "Disable"))) {
-        if (ImGui::Selectable("Enable", m_config.ssr_is_enable_ssr == 1)) { m_config.ssr_is_enable_ssr = 1; }
+    if (ImGui::TreeNode("SSR", "SSR: [%s]", (m_config.ssr_is_ssr_enabled == 1 ? "Enable" : "Disable"))) {
+        if (ImGui::Selectable("Enable", m_config.ssr_is_ssr_enabled == 1)) {
+            m_config.ssr_is_ssr_enabled = 1;
+        }
         draw_border();
-        if (ImGui::Selectable("Disable", m_config.ssr_is_enable_ssr == 0)) { m_config.ssr_is_enable_ssr = 0; }
+        if (ImGui::Selectable("Disable", m_config.ssr_is_ssr_enabled == 0)) {
+            m_config.ssr_is_ssr_enabled = 0;
+        }
         draw_border();
 
-        if (m_config.ssr_is_enable_ssr == 1) {
+        if (m_config.ssr_is_ssr_enabled == 1) {
             ImGui::Checkbox("Enable Jitter", &m_config.ssr_is_enable_jitter);
             ImGui::Checkbox("Force Ground Enable SSR", &m_config.ssr_is_force_ground_enable_ssr);
             ImGui::SliderInt("Sample Count", &m_config.ssr_sample_count, 1, 64);
             ImGui::SliderFloat("Step Base", &m_config.ssr_step_base, 0.0f, 0.1f);
             ImGui::SliderFloat("Roughness Threshold", &m_config.ssr_roughness_threshold, 0.0f, 1.0f);
             ImGui::SliderFloat("Metallic Threshold", &m_config.ssr_metallic_threshold, 0.0f, 1.0f);
+        }
+
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode("CUDA", "CUDA: [%s]", (m_config.ai_is_cuda_enabled == 1 ? "Enable" : "Disable"))) {
+        if (ImGui::Selectable("Enable", m_config.ai_is_cuda_enabled == 1)) {
+            m_config.ai_is_cuda_enabled = 1;
+        }
+        draw_border();
+        if (ImGui::Selectable("Disable", m_config.ai_is_cuda_enabled == 0)) {
+            m_config.ai_is_cuda_enabled = 0;
+        }
+        draw_border();
+
+        if (m_config.ai_is_cuda_enabled == 1) {
+            // ImGui::Checkbox("Enable Jitter", &m_config.ssr_is_enable_jitter);
+            // ImGui::Checkbox("Force Ground Enable SSR", &m_config.ssr_is_force_ground_enable_ssr);
+            // ImGui::SliderInt("Sample Count", &m_config.ssr_sample_count, 1, 64);
+            // ImGui::SliderFloat("Step Base", &m_config.ssr_step_base, 0.0f, 0.1f);
+            // ImGui::SliderFloat("Roughness Threshold", &m_config.ssr_roughness_threshold, 0.0f, 1.0f);
+            // ImGui::SliderFloat("Metallic Threshold", &m_config.ssr_metallic_threshold, 0.0f, 1.0f);
         }
 
         ImGui::TreePop();
