@@ -13,6 +13,8 @@ namespace Moer::Render::Raster {
 
 /**
  * MARK: CUDA Pass
+ * 
+ * Reference: https://github.com/NVIDIA/cuda-samples/tree/master/Samples/5_Domain_Specific/vulkanImageCUDA
  */
 class CudaPass {
 public:

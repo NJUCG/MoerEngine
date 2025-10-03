@@ -5,13 +5,14 @@
 #include "scene/Scene.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
-
-#include "RasterCompileTimeConstants.h"
-#include "RasterTextures.h"
-
 #include <config/ConfigManager.h>
+#include <cuda_runtime.h>
 #include <shader/ShaderResourceManager.h>
 #include <stb_image.h>
+
+#include "CudaResource.h"
+#include "RasterCompileTimeConstants.h"
+#include "RasterTextures.h"
 
 namespace Moer::Render::Raster {
 
@@ -43,6 +44,8 @@ struct RasterContext {
 
     // RayTracing
     RaytracingSceneRef rt_scene;
+
+    // CUDA
 
     // Constructor
     RasterContext(
