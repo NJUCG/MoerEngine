@@ -12,6 +12,9 @@ Engine for Realtime Rendering
   # Clone the repo
   git clone --branch dev-rhi-remake git@github.com:NJUCG/MoerEngine.git
   cd MoerEngine
+
+  # Ignore some specific commits (formatting changes)
+  git config --local blame.ignoreRevsFile .git-blame-ignore-revs
   
   # Download Sponza scene to `./asset/scenes/`
   git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza

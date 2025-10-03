@@ -1,0 +1,7 @@
+# 该文件可以指定git辅助工具，在显示某行修改记录时，忽略特定commit
+# 使用 git config --local blame.ignoreRevsFile .git-blame-ignore-revs 让本文件生效
+#
+# 如果不激活此文件的话，可能在代码中看到大量的restyle/formatting的commit
+
+# feat(yxh): refactor MoerEditor!
+47606de8b8e1628f38855b2f0fbbc5ed2d63076c
