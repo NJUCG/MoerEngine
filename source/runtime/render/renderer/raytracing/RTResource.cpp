@@ -268,7 +268,9 @@ void RTContext::SetResolution(uint2 _resolution) {
 }
 
 void RTContext::FillLowDiscrepancySequence(CommandList& _cmd_list) {
-    if (b_has_neighbor_offset) { return; }
+    if (b_has_neighbor_offset) {
+        return;
+    }
     GenLowDiscrepancySequenceParam param;
     param.num_dimensions = 2;
     param.num_samples    = is_ctx.GetNeighborOffsetCnt();
@@ -291,7 +293,9 @@ void RTContext::CreateEnvMapResources(EnvMapResource _env_tex, CommandList& _cmd
         _env_tex.texture->GetNumMips()
     );
 
-    for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) { env_pdf_mips.push_back(env_pdf_tex->GetView(i)); }
+    for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) {
+        env_pdf_mips.push_back(env_pdf_tex->GetView(i));
+    }
     sd_utils.GenerateMipPdf(_cmd_list, _env_tex.texture, env_pdf_mips);
 
     AllocateAndFreeBdlsIfNeeded(
@@ -388,7 +392,9 @@ void RTContext::CreateBuffersIfNeeded(
 void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _view, Sampler _sampler) {
     if (_target) {
         bdls->FreeTexture(_target);
-        if (allocated_bdls_tex.contains(_target)) { allocated_bdls_tex.erase(_target); }
+        if (allocated_bdls_tex.contains(_target)) {
+            allocated_bdls_tex.erase(_target);
+        }
     }
     _target = bdls->AllocateTexture(_view, _sampler);
     allocated_bdls_tex.insert(_target);
@@ -397,7 +403,9 @@ void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _v
 void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const BufferView& _view) {
     if (_target) {
         bdls->FreeBuffer(_target);
-        if (allocated_bdls_buf.contains(_target)) { allocated_bdls_buf.erase(_target); }
+        if (allocated_bdls_buf.contains(_target)) {
+            allocated_bdls_buf.erase(_target);
+        }
     }
     _target = bdls->AllocateBuffer(_view);
     allocated_bdls_buf.insert(_target);

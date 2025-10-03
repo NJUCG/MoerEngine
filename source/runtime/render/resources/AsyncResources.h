@@ -7,56 +7,56 @@
 #include "rhi/RHIResource.h"
 
 namespace Moer {
-    struct VirtualViewportInfo {
-        std::string    name;
-        Moer::Vector2i extent;
-        EPixelFormat   format;
-        uint32_t       back_buffer_count = 2;
-    };
+struct VirtualViewportInfo {
+    std::string    name;
+    Moer::Vector2i extent;
+    EPixelFormat   format;
+    uint32_t       back_buffer_count = 2;
+};
 
-    struct VirtualViewportCreateInfo {
-        std::string    name;
-        Moer::Vector2i extent;
-        EPixelFormat   format;
-        uint32_t       back_buffer_count = 2;
-    };
+struct VirtualViewportCreateInfo {
+    std::string    name;
+    Moer::Vector2i extent;
+    EPixelFormat   format;
+    uint32_t       back_buffer_count = 2;
+};
 
-    struct VirtualViewportBackBufferInfo {
-        uint32_t  back_buffer_index;
-        RHIFence* backbuffer_ready_fence;
-        RHIUAVRef backbuffer_uav;
-    };
-    //In Editor mode, UI runs and renders on main thread, but in application mode,
-    //everything runs on render thread, so we need to create a virtual swap chain
-    class VirtualViewport {
-    public:
-        VirtualViewport(const VirtualViewportCreateInfo& _create_info);
-        ~VirtualViewport();
-        //call on main thread
-        void OnResize(Moer::Vector2i extent);
+struct VirtualViewportBackBufferInfo {
+    uint32_t  back_buffer_index;
+    RHIFence* backbuffer_ready_fence;
+    RHIUAVRef backbuffer_uav;
+};
+//In Editor mode, UI runs and renders on main thread, but in application mode,
+//everything runs on render thread, so we need to create a virtual swap chain
+class VirtualViewport {
+public:
+    VirtualViewport(const VirtualViewportCreateInfo& _create_info);
+    ~VirtualViewport();
+    //call on main thread
+    void OnResize(Moer::Vector2i extent);
 
-        //call from render thread
-        Extent3D GetBackBufferExtent();
+    //call from render thread
+    Extent3D GetBackBufferExtent();
 
-        VirtualViewportBackBufferInfo GetBackBufferInfo() const;
+    VirtualViewportBackBufferInfo GetBackBufferInfo() const;
 
-        void Present(RHIFenceRef _render_fence);
+    void Present(RHIFenceRef _render_fence);
 
-        const VirtualViewportInfo& GetInfo() const;
+    const VirtualViewportInfo& GetInfo() const;
 
-        RHISRV* GetPresentTextureSRV();
+    RHISRV* GetPresentTextureSRV();
 
-        RHISRVRef GetDepthSRV();
-        RHIUAVRef GetDepthUAV();
+    RHISRVRef GetDepthSRV();
+    RHIUAVRef GetDepthUAV();
 
-    private:
+private:
 // in Application mode, Present operations happens on render thread
 #if !defined(EDITOR_MODE_ON)
-        RHIViewportRef viewport;
+    RHIViewportRef viewport;
 #endif
-        class Impl;
-        Impl* impl;
-    };
-}// namespace Moer
+    class Impl;
+    Impl* impl;
+};
+} // namespace Moer
 
-#endif//MOER_ENGINE_ASYNC_RESOURCES_H
+#endif //MOER_ENGINE_ASYNC_RESOURCES_H

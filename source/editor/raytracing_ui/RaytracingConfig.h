@@ -7,8 +7,15 @@
 
 namespace Moer {
 
-enum EAnitiAliasMode { EAA_TAA = 0, EAA_Num };
-enum EOutputTexture { EOT_LDR = 0, EOT_HDR, EOT_Num };
+enum EAnitiAliasMode {
+    EAA_TAA = 0,
+    EAA_Num
+};
+enum EOutputTexture {
+    EOT_LDR = 0,
+    EOT_HDR,
+    EOT_Num
+};
 
 struct GridConfig {
     int   grid_mode      = 1;

@@ -1,6 +1,7 @@
 #include "VulkanDeviceProperty.h"
 
-VulkanCoreDeviceProperties VulkanCoreDeviceProperties::GetGpuCoreProperties(VkPhysicalDevice _gpu, uint32_t _api_version) {
+VulkanCoreDeviceProperties
+VulkanCoreDeviceProperties::GetGpuCoreProperties(VkPhysicalDevice _gpu, uint32_t _api_version) {
     VulkanCoreDeviceProperties props;
 
     VkPhysicalDeviceProperties2 properties2{};

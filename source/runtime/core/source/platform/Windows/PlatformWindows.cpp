@@ -26,22 +26,34 @@ void WindowsPlatform::SetCurrentThreadAffinity(Affinity&& _affinity) {
             assert(core.windows.group == group_affinity.Group && "Group must be the same");
             group_affinity.Mask |= 1ull << core.windows.idx;
         }
-        ::UpdateProcThreadAttribute(attr_list, 0, PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY, &group_affinity, sizeof(group_affinity), nullptr, nullptr);
+        ::UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY,
+            &group_affinity,
+            sizeof(group_affinity),
+            nullptr,
+            nullptr
+        );
     }
 
     ::DeleteProcThreadAttributeList(attr_list);
 }
 void WindowsPlatform::SetCurrentThreadName(std::string_view _name) {
-    static auto set_thread_description =
-        reinterpret_cast<HRESULT(WINAPI*)(HANDLE, PCWSTR)>(GetProcAddress(
-            GetModuleHandleA("kernelbase.dll"), "SetThreadDescription"));
+    static auto set_thread_description = reinterpret_cast<HRESULT(WINAPI*)(HANDLE, PCWSTR)>(
+        GetProcAddress(GetModuleHandleA("kernelbase.dll"), "SetThreadDescription")
+    );
     if (set_thread_description == nullptr) {
         return;
     }
     std::wstring wname(_name.begin(), _name.end());
     set_thread_description(GetCurrentThread(), wname.data());
 }
-void WindowsPlatform::SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask) {
+void WindowsPlatform::SetThreadGroupAffinity(
+    void*    current_thread_handle,
+    uint16_t group_mask,
+    uint64_t affinity_mask
+) {
     GROUP_AFFINITY group_affinity{affinity_mask, group_mask, {0, 0, 0}};
     ::SetThreadGroupAffinity(current_thread_handle, &group_affinity, nullptr);
 }
@@ -85,7 +97,8 @@ const PlatformMemoryInfo& WindowsPlatform::GetMemoryInfo() {
         memory_info.page_size              = sys_info.dwPageSize;
         memory_info.allocation_granularity = sys_info.dwAllocationGranularity;
 
-        memory_info.total_physical_memory_mb = static_cast<uint32_t>((memory_info.total_physical_memory + 1024 * 1024 - 1) / 1024 / 1024);
+        memory_info.total_physical_memory_mb =
+            static_cast<uint32_t>((memory_info.total_physical_memory + 1024 * 1024 - 1) / 1024 / 1024);
         //caclulate address limit by physical memory
         memory_info.addrress_limit = Moer::RoundUpToPowerOf2(memory_info.total_physical_memory);
     }

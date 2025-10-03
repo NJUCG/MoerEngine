@@ -12,10 +12,14 @@
 
 #ifdef _WIN32
 #include <Windows.h>
-static void msleep(unsigned long msecs) { Sleep(msecs); }
+static void msleep(unsigned long msecs) {
+    Sleep(msecs);
+}
 #else
 #include <unistd.h>
-static void msleep(unsigned long msecs) { usleep(msecs * 1000UL); }
+static void msleep(unsigned long msecs) {
+    usleep(msecs * 1000UL);
+}
 #endif
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -113,7 +117,8 @@ void ClosableMpScStackTest() {
     auto push_operation = [&]() {
         for (int i = 0; i < 1; ++i) {
             bool b_pushed = stack.TryPush(&a);
-            if (b_pushed) push_count++;
+            if (b_pushed)
+                push_count++;
             if (!b_pushed) {
                 assert(stack.IsClosed());
             }

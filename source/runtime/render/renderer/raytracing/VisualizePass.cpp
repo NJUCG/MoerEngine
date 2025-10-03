@@ -37,7 +37,9 @@ void VisualizePass::Process(
         visualize_params_buffer->GetView()
     );
 
-    auto div_ceil = [](uint _a, uint _b) -> uint { return (_a + _b - 1) / _b; };
+    auto div_ceil = [](uint _a, uint _b) -> uint {
+        return (_a + _b - 1) / _b;
+    };
     _cmdlist
         .Compute(
             visualize_pipeline,

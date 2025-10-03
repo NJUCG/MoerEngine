@@ -1,9 +1,9 @@
+#include "log/LogSystem.h"
+#include "misc/Hash.h"
 #include "shader/Shader.h"
+#include "shader/ShaderCommon.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderParameterMacros.h"
-#include "shader/ShaderCommon.h"
-#include "misc/Hash.h"
-#include "log/LogSystem.h"
 BEGIN_SHADER_CONSTANT_STRUCT_DEFINITION(TestParameters)
 
 DEFINE_SHADER_PARAM(Moer::Vector2i, rect)
@@ -24,9 +24,9 @@ public:
 
 void ShaderCppReflectTest() {
     TestGlobalShader::Parameters* pass;
-    const auto&                   members          = TestGlobalShader::Parameters::GetMembers();
-    const auto* const             struct_mata_data = TestGlobalShader::Parameters::TypeInfo::GetStructMetadata();
-    int                           i                = 1;
+    const auto&                   members = TestGlobalShader::Parameters::GetMembers();
+    const auto* const struct_mata_data    = TestGlobalShader::Parameters::TypeInfo::GetStructMetadata();
+    int               i                   = 1;
 }
 int main() {
     ShaderCppReflectTest();

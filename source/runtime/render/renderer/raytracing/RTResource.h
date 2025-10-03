@@ -76,7 +76,9 @@ public:
 
     void SetResolution(uint2 _resolution);
 
-    void SetRaytracingScene(RaytracingSceneRef _rt_scene) { rt_scene = _rt_scene; }
+    void SetRaytracingScene(RaytracingSceneRef _rt_scene) {
+        rt_scene = _rt_scene;
+    }
 
     void FillLowDiscrepancySequence(CommandList& _cmd_list);
 
@@ -95,12 +97,18 @@ public:
 
     void SetEnvMapInfos(float _scale, float _rotation);
 
-    const RaytracingBindlessHandles& GetBindlessHandles() const { return bindless_handles; }
+    const RaytracingBindlessHandles& GetBindlessHandles() const {
+        return bindless_handles;
+    }
 
     void LoadDefaultResources(EditorAssets& _rt_res);
 
-    const UnorderedSet<uint>& GetAllocatedBdlsBuf() { return allocated_bdls_buf; }
-    const UnorderedSet<uint>& GetAllocatedBdlsTex() { return allocated_bdls_tex; }
+    const UnorderedSet<uint>& GetAllocatedBdlsBuf() {
+        return allocated_bdls_buf;
+    }
+    const UnorderedSet<uint>& GetAllocatedBdlsTex() {
+        return allocated_bdls_tex;
+    }
 
 private:
     void AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _view, Sampler _sampler);

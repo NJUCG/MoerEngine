@@ -2,8 +2,8 @@
 #define EVENT_H
 #include "API_Macro.h"
 #include "misc/LockFree.h"
-#include <mutex>
 #include <condition_variable>
+#include <mutex>
 class Event {
     friend class EventPool;
     friend class EventRef;
@@ -45,10 +45,12 @@ public:
         EventPool::Get()->ReleaseEvent(m_event);
     }
     void Trigger() {
-        if (m_event) m_event->Trigger();
+        if (m_event)
+            m_event->Trigger();
     }
     void Wait() {
-        if (m_event) m_event->Wait();
+        if (m_event)
+            m_event->Wait();
     }
     operator Event*() {
         return m_event;
@@ -70,13 +72,15 @@ public:
         EventPool::Get()->ReleaseEvent(m_event);
     }
     void Trigger() {
-        if (m_event) m_event->Trigger();
+        if (m_event)
+            m_event->Trigger();
     }
     void Wait() {
-        if (m_event) m_event->Wait();
+        if (m_event)
+            m_event->Wait();
     }
 
 private:
     Event* m_event;
 };
-#endif// !EVENT_H
+#endif // !EVENT_H

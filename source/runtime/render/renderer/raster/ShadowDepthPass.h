@@ -119,7 +119,9 @@ public:
 
         // Light
         auto light_direction_optional = GetMainLightDirection(context);
-        if (light_direction_optional == nullptr) { return; }
+        if (light_direction_optional == nullptr) {
+            return;
+        }
 
         const float3 light_direction = Normalizef(light_direction_optional->GetDirection());
         const float3 light_right     = Normalizef(Cross(light_direction, float3(0.f, 1.f, 0.f)));
@@ -183,10 +185,10 @@ public:
                 frustum_corners_pre[i] = world_to_light_view_rotate_only * frustum_corners[i];
             }
             // - Get 最长对角线
-            float max_cross_distance = Max(
-                Lengthf(frustum_corners_pre[4] - frustum_corners_pre[6]), // 远平面对角线
-                Lengthf(frustum_corners_pre[0] - frustum_corners_pre[6])  // 近平面和远平面的最长对角线
-            );
+            float max_cross_distance =
+                Max(Lengthf(frustum_corners_pre[4] - frustum_corners_pre[6]), // 远平面对角线
+                    Lengthf(frustum_corners_pre[0] - frustum_corners_pre[6]) // 近平面和远平面的最长对角线
+                );
             // - Get AABB
             float3 min = frustum_corners_pre[0];
             float3 max = frustum_corners_pre[0];

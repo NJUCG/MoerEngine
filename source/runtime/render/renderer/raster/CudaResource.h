@@ -62,7 +62,9 @@ struct CudaResource {
     CudaResource(const CudaResource&)            = delete;
     CudaResource& operator=(const CudaResource&) = delete;
 
-    bool IsValid() { return mipLevels != 0; }
+    bool IsValid() {
+        return mipLevels != 0;
+    }
 
     // #if defined(PLATFORM_WINDOWS)
     void CreateAllocate(RasterContext& context, TextureRef _previousPassOutputTexture) {
@@ -99,7 +101,8 @@ struct CudaResource {
 
     void Free() {
 
-        if (mipLevels == 0) return;
+        if (mipLevels == 0)
+            return;
 
         for (int i = 0; i < mipLevels; i++) {
             checkCudaErrors(cudaDestroySurfaceObject(surfaceObjectList[i]));

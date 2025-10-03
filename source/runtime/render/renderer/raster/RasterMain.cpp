@@ -69,7 +69,9 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
 
     // MARK: Scene
     Resource::LoaderInterface::LoadSceneFromFileAsync(editor_ui->GetConfig().scene_path, &scene);
-    auto&& scope_exit_reset_async_load_info = OnScopeExit([&] { Scene::ResetAsyncLoadInfo(); });
+    auto&& scope_exit_reset_async_load_info = OnScopeExit([&] {
+        Scene::ResetAsyncLoadInfo();
+    });
 
     // TODO: combine RasterMain and RaytracingMain common part (above code)
     RasterContext raster_context(device, manager, bindless_array, cmd_list, scene, resolution);
@@ -114,7 +116,9 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         WindowContext::Tick();
         editor_ui->TickUI();
-        if (time >= max_frame_in_flight) { timeline->Wait(time - max_frame_in_flight); }
+        if (time >= max_frame_in_flight) {
+            timeline->Wait(time - max_frame_in_flight);
+        }
         const RasterConfig& ui_config = editor_ui->m_raster_ui.GetConfig();
 
         // MARK: Window Resizing
@@ -231,7 +235,9 @@ void RasterMain(SharedPtr<EditorUI> editor_ui) {
         gfx_queue.Present(sc, final_output);
         editor_ui->PresentWindows();
 
-        if (editor_ui->IsNeedReload()) { break; }
+        if (editor_ui->IsNeedReload()) {
+            break;
+        }
     }
     timeline->Wait(time);
     gfx_queue.Sync();

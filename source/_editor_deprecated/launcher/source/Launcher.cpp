@@ -1,40 +1,40 @@
 #include "Launcher.h"
-#include <filesystem>
+#include "Core.h"
 #include "Editor.h"
 #include "Engine.h"
-#include "Core.h"
+#include <filesystem>
 //compile set
 
 namespace Moer {
-    Launcher& Launcher::GetInstance() {
-        static Launcher launcher;
-        return launcher;
-    }
+Launcher& Launcher::GetInstance() {
+    static Launcher launcher;
+    return launcher;
+}
 
-    Launcher::Launcher() {}
+Launcher::Launcher() {}
 
-    void Launcher::Init(const std::filesystem::path& _work_space_path) {
+void Launcher::Init(const std::filesystem::path& _work_space_path) {
 
-        EngineInitInfo info{_work_space_path};
+    EngineInitInfo info{_work_space_path};
 
-        Engine* engine = MoerNew(Engine)();
-        engine->Init(info);
-        editor = MoerNew(Editor);
+    Engine* engine = MoerNew(Engine)();
+    engine->Init(info);
+    editor = MoerNew(Editor);
 
-        editor->Init(engine);
+    editor->Init(engine);
 
-        engine->PostInit();
-    }
+    engine->PostInit();
+}
 
-    void Launcher::Run() {
+void Launcher::Run() {
 
-        editor->Run();
+    editor->Run();
 
-        editor->ShutDown();
-    }
+    editor->ShutDown();
+}
 
-    void Launcher::Quit() {
-        MoerDelete(editor);
-        editor = nullptr;
-    }
-}// namespace Moer
+void Launcher::Quit() {
+    MoerDelete(editor);
+    editor = nullptr;
+}
+} // namespace Moer

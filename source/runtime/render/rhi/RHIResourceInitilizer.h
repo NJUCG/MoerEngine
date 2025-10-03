@@ -1,60 +1,59 @@
 #ifndef RHI_RESOURCE_INITIALIZER_H
 #define RHI_RESOURCE_INITIALIZER_H
+#include "API_Macro.h"
 #include "PixelFormat.h"
 #include "RHICommon.h"
-#include "API_Macro.h"
-#include "misc/Hash.h"
-#include "misc/STL.h"
 #include "math/Math.h"
+#include "misc/Hash.h"
 #include "misc/STL.h"
 #include "rhi/RHICommon.h"
 
-#include <numeric>
 #include <cassert>
+#include <numeric>
 #include <variant>
 
 namespace Moer::Render {
 
-    enum class MultiSample {
-        NONE,
-        MSAA_2X,
-        MSAA_4X,
-        MSAA_8X,
-        MSAA_16X
-    };
-    enum class Blend {
-        NONE,
-        ALPHA_BLEND,
-        ADDITIVE_BLEND,
-        PRE_MULTIPLIED_ALPHA_BLEND
-    };
+enum class MultiSample {
+    NONE,
+    MSAA_2X,
+    MSAA_4X,
+    MSAA_8X,
+    MSAA_16X
+};
+enum class Blend {
+    NONE,
+    ALPHA_BLEND,
+    ADDITIVE_BLEND,
+    PRE_MULTIPLIED_ALPHA_BLEND
+};
 
-    enum class Rast {
-        NONE,
-        CULL_BACK,
-        CULL_FRONT,
-        CULL_NONE
-    };
+enum class Rast {
+    NONE,
+    CULL_BACK,
+    CULL_FRONT,
+    CULL_NONE
+};
 
-    enum class FrontFace {
-        CCW,
-        CW
-    };
+enum class FrontFace {
+    CCW,
+    CW
+};
 
-    enum class DepthStencil {
-        NONE,
-        DEPTH_WRITE,
-        DEPTH_WRITE_LESS,
-        DEPTH_WRITE_LESS_EQUAL,
-        DEPTH_WRITE_GREATER,
-        DEPTH_WRITE_GREATER_EQUAL
-    };
+enum class DepthStencil {
+    NONE,
+    DEPTH_WRITE,
+    DEPTH_WRITE_LESS,
+    DEPTH_WRITE_LESS_EQUAL,
+    DEPTH_WRITE_GREATER,
+    DEPTH_WRITE_GREATER_EQUAL
+};
 
-    enum class ClearMode {
-        COLOR,
-        DEPTH_STENCIL
-    };
-}// namespace Moer::Render
+enum class ClearMode {
+    COLOR,
+    DEPTH_STENCIL
+};
+} // namespace Moer::Render
 struct RHISamplerCreateInfo {
     RHISamplerCreateInfo() = default;
     explicit RHISamplerCreateInfo(
@@ -68,18 +67,19 @@ struct RHISamplerCreateInfo {
         float                               _max_mip_level  = std::numeric_limits<float>::max(),
         float                               _max_anisotropy = 0,
         uint32_t                            _border_color   = 0,
-        EnumInByte<ESamplerCompareFunction> _compare_op     = SCF_NEVER)
-        : filter(_filter),
-          texture_layout(_texture_layout),
-          address_mode_u(_address_mode_u),
-          address_mode_v(_address_mode_v),
-          address_mode_w(_address_mode_w),
-          mip_lod_bias(_mip_lod_bias),
-          min_mip_level(_min_mip_level),
-          max_mip_level(_max_mip_level),
-          max_anisotropy(_max_anisotropy),
-          border_color(_border_color),
-          compare_op(_compare_op) {}
+        EnumInByte<ESamplerCompareFunction> _compare_op     = SCF_NEVER
+    ) :
+        filter(_filter),
+        texture_layout(_texture_layout),
+        address_mode_u(_address_mode_u),
+        address_mode_v(_address_mode_v),
+        address_mode_w(_address_mode_w),
+        mip_lod_bias(_mip_lod_bias),
+        min_mip_level(_min_mip_level),
+        max_mip_level(_max_mip_level),
+        max_anisotropy(_max_anisotropy),
+        border_color(_border_color),
+        compare_op(_compare_op) {}
 
     EnumInByte<ESamplerFilter>          filter         = SF_NEAREST;
     ETextureLayout                      texture_layout = ETextureLayout::TEXTURE_LAYOUT_UNDEFINED;
@@ -108,7 +108,11 @@ struct RHISamplerCreateInfo {
         return *this;
     }
 
-    RHISamplerCreateInfo& SetAddressMode(ESamplerAddressMode _address_mode_u, ESamplerAddressMode _address_mode_v, ESamplerAddressMode _address_mode_w) {
+    RHISamplerCreateInfo& SetAddressMode(
+        ESamplerAddressMode _address_mode_u,
+        ESamplerAddressMode _address_mode_v,
+        ESamplerAddressMode _address_mode_w
+    ) {
         address_mode_u = _address_mode_u;
         address_mode_v = _address_mode_v;
         address_mode_w = _address_mode_w;
@@ -122,9 +126,8 @@ struct RHISamplerCreateInfo {
         return *this;
     }
 
-    RENDER_API friend uint32_t
-                           GetHash(const RHISamplerCreateInfo& target);
-    RENDER_API friend bool operator==(const RHISamplerCreateInfo& lhs, const RHISamplerCreateInfo& rhs);
+    RENDER_API friend uint32_t GetHash(const RHISamplerCreateInfo& target);
+    RENDER_API friend bool     operator==(const RHISamplerCreateInfo& lhs, const RHISamplerCreateInfo& rhs);
 };
 
 struct RHIDepthStencilStateInfo {
@@ -160,24 +163,24 @@ struct RHIDepthStencilStateInfo {
         EStencilOp     _back_face_depth_fail_stencil_op   = SO_KEEP,
         EStencilOp     _back_face_pass_stencil_op         = SO_KEEP,
         uint8_t        _stencil_readmask                  = 0xFF,
-        uint8_t        _stencil_writemask                 = 0xFF)
-        : b_enable_depth_write(_b_enable_depth_write),
-          depth_test_op(_depth_test_op),
-          b_enable_front_face_stencil(_b_enable_front_face_stencil),
-          front_face_stencil_test(_front_face_stencil_test),
-          front_face_stencil_fail_stencil_op(_front_face_stencil_fail_stencilOp),
-          front_face_depth_fail_stencil_op(_front_face_depth_fail_stencilOp),
-          front_face_pass_stencil_op(_front_face_pass_stencil_op),
-          b_enable_back_face_stencil(_b_enable_back_face_stencil),
-          back_face_stencil_test(_back_face_stencil_test),
-          back_face_stencil_fail_stencil_op(_back_face_stencil_fail_stencil_op),
-          back_face_depth_fail_stencil_op(_back_face_depth_fail_stencil_op),
-          back_face_pass_stencil_op(_back_face_pass_stencil_op),
-          stencil_readmask(_stencil_readmask),
-          stencil_writemask(_stencil_writemask) {}
+        uint8_t        _stencil_writemask                 = 0xFF
+    ) :
+        b_enable_depth_write(_b_enable_depth_write),
+        depth_test_op(_depth_test_op),
+        b_enable_front_face_stencil(_b_enable_front_face_stencil),
+        front_face_stencil_test(_front_face_stencil_test),
+        front_face_stencil_fail_stencil_op(_front_face_stencil_fail_stencilOp),
+        front_face_depth_fail_stencil_op(_front_face_depth_fail_stencilOp),
+        front_face_pass_stencil_op(_front_face_pass_stencil_op),
+        b_enable_back_face_stencil(_b_enable_back_face_stencil),
+        back_face_stencil_test(_back_face_stencil_test),
+        back_face_stencil_fail_stencil_op(_back_face_stencil_fail_stencil_op),
+        back_face_depth_fail_stencil_op(_back_face_depth_fail_stencil_op),
+        back_face_pass_stencil_op(_back_face_pass_stencil_op),
+        stencil_readmask(_stencil_readmask),
+        stencil_writemask(_stencil_writemask) {}
 
-    template<Moer::Render::DepthStencil preset = Moer::Render::
-                 DepthStencil::NONE>
+    template<Moer::Render::DepthStencil preset = Moer::Render::DepthStencil::NONE>
     static RHIDepthStencilStateInfo Preset() {
         if constexpr (preset == Moer::Render::DepthStencil::NONE) {
             return RHIDepthStencilStateInfo();
@@ -196,7 +199,8 @@ struct RHIDepthStencilStateInfo {
         }
     }
     RENDER_API friend uint32_t GetHash(const RHIDepthStencilStateInfo& target);
-    RENDER_API friend bool     operator==(const RHIDepthStencilStateInfo& lhs, const RHIDepthStencilStateInfo& rhs);
+    RENDER_API friend bool
+    operator==(const RHIDepthStencilStateInfo& lhs, const RHIDepthStencilStateInfo& rhs);
 };
 
 struct RHIRasterizeInfo {
@@ -209,7 +213,9 @@ struct RHIRasterizeInfo {
     float                           depth_bias                = 0;
     float                           depth_bias_clamp          = 0;
     float                           depth_bias_slop_factor    = 0;
-    template<Moer::Render::Rast preset = Moer::Render::Rast::NONE, Moer::Render::FrontFace front = Moer::Render::FrontFace::CCW>
+    template<
+        Moer::Render::Rast      preset = Moer::Render::Rast::NONE,
+        Moer::Render::FrontFace front  = Moer::Render::FrontFace::CCW>
     static RHIRasterizeInfo Preset() {
         RHIRasterizeInfo info{};
         if constexpr (preset == Moer::Render::Rast::NONE) {
@@ -320,7 +326,7 @@ struct RHIMultisampleStateInfo {
     }
 
     RENDER_API friend uint32_t GetHash(const RHIMultisampleStateInfo& target);
-    RENDER_API friend bool     operator==(const RHIMultisampleStateInfo& lhs, const RHIMultisampleStateInfo& rhs);
+    RENDER_API friend bool operator==(const RHIMultisampleStateInfo& lhs, const RHIMultisampleStateInfo& rhs);
 };
 
 struct RHIBlendAttachmentInfo {
@@ -339,14 +345,15 @@ struct RHIBlendAttachmentInfo {
         EBlendOperation _alpha_blend_op         = BO_ADD,
         EBlendFactor    _alpha_src_blend_factor = BF_ONE,
         EBlendFactor    _alpha_dst_blend_factor = BF_ZERO,
-        EColorWriteMask _color_write_mask       = CW_RGBA)
-        : color_blend_op(_color_blend_op),
-          color_src_blend_factor(_color_src_blend_factor),
-          color_dst_blend_factor(_color_dst_blend_factor),
-          alpha_blend_op(_alpha_blend_op),
-          alpha_src_blend_factor(_alpha_src_blend_factor),
-          alpha_dst_blend_factor(_alpha_dst_blend_factor),
-          color_write_mask(_color_write_mask) {}
+        EColorWriteMask _color_write_mask       = CW_RGBA
+    ) :
+        color_blend_op(_color_blend_op),
+        color_src_blend_factor(_color_src_blend_factor),
+        color_dst_blend_factor(_color_dst_blend_factor),
+        alpha_blend_op(_alpha_blend_op),
+        alpha_src_blend_factor(_alpha_src_blend_factor),
+        alpha_dst_blend_factor(_alpha_dst_blend_factor),
+        color_write_mask(_color_write_mask) {}
 
     template<Moer::Render::Blend preset = Moer::Render::Blend::NONE>
     static RHIBlendAttachmentInfo Preset() {
@@ -354,31 +361,14 @@ struct RHIBlendAttachmentInfo {
             return RHIBlendAttachmentInfo();
         } else if constexpr (preset == Moer::Render::Blend::ALPHA_BLEND) {
             return RHIBlendAttachmentInfo(
-                BO_ADD,
-                BF_SRC_ALPHA,
-                BF_ONE_MINUS_SRC_ALPHA,
-                BO_ADD,
-                BF_ONE,
-                BF_ONE_MINUS_SRC_ALPHA,
-                CW_RGBA);
+                BO_ADD, BF_SRC_ALPHA, BF_ONE_MINUS_SRC_ALPHA, BO_ADD, BF_ONE, BF_ONE_MINUS_SRC_ALPHA, CW_RGBA
+            );
         } else if constexpr (preset == Moer::Render::Blend::ADDITIVE_BLEND) {
-            return RHIBlendAttachmentInfo(
-                BO_ADD,
-                BF_ONE,
-                BF_ONE,
-                BO_ADD,
-                BF_ONE,
-                BF_ONE,
-                CW_RGBA);
+            return RHIBlendAttachmentInfo(BO_ADD, BF_ONE, BF_ONE, BO_ADD, BF_ONE, BF_ONE, CW_RGBA);
         } else if constexpr (preset == Moer::Render::Blend::PRE_MULTIPLIED_ALPHA_BLEND) {
             return RHIBlendAttachmentInfo(
-                BO_ADD,
-                BF_ONE,
-                BF_ONE_MINUS_SRC_ALPHA,
-                BO_ADD,
-                BF_ONE,
-                BF_ONE_MINUS_SRC_ALPHA,
-                CW_RGBA);
+                BO_ADD, BF_ONE, BF_ONE_MINUS_SRC_ALPHA, BO_ADD, BF_ONE, BF_ONE_MINUS_SRC_ALPHA, CW_RGBA
+            );
         } else {
             static_assert(preset == Moer::Render::Blend::NONE, "Invalid preset");
         }
@@ -418,7 +408,7 @@ struct RHIBlendAttachmentInfo {
     }
 
     RENDER_API friend uint32_t GetHash(const RHIBlendAttachmentInfo& _attachment_desc);
-    RENDER_API friend bool     operator==(const RHIBlendAttachmentInfo& lhs, const RHIBlendAttachmentInfo& rhs);
+    RENDER_API friend bool operator==(const RHIBlendAttachmentInfo& lhs, const RHIBlendAttachmentInfo& rhs);
 };
 struct RHIBlendStateInfo {
 
@@ -428,7 +418,9 @@ struct RHIBlendStateInfo {
     }
 
     template<uint32_t attachment_num>
-    explicit RHIBlendStateInfo(const Moer::StaticArray<RHIBlendAttachmentInfo, attachment_num>& _attachment_descs) {
+    explicit RHIBlendStateInfo(
+        const Moer::StaticArray<RHIBlendAttachmentInfo, attachment_num>& _attachment_descs
+    ) {
         static_assert(attachment_num < MAX_PASS_ATTACHMENT_COUNT);
         for (uint32_t i = 0; i < attachment_num; i++) {
             attachments[i] = _attachment_descs[i];
@@ -455,13 +447,24 @@ struct ViewportBounds {
 
     ViewportBounds() = default;
 
-    ViewportBounds(float _top_left_x, float _top_left_y, float _width, float _height, float _min_depth = 0.0f, float _max_depth = 1.0f)
-        : top_left_x(_top_left_x), top_left_y(_top_left_y), width(_width), height(_height), min_depth(_min_depth), max_depth(_max_depth) {
-    }
+    ViewportBounds(
+        float _top_left_x,
+        float _top_left_y,
+        float _width,
+        float _height,
+        float _min_depth = 0.0f,
+        float _max_depth = 1.0f
+    ) :
+        top_left_x(_top_left_x),
+        top_left_y(_top_left_y),
+        width(_width),
+        height(_height),
+        min_depth(_min_depth),
+        max_depth(_max_depth) {}
 };
 
 namespace Moer {
-    class WindowHandle;
+class WindowHandle;
 }
 struct RHIViewportInitializer {
     Moer::WindowHandle* window_handle;
@@ -491,8 +494,7 @@ struct RHIClearAttachment {
         float    depth;
         uint32_t stencil;
         bool     operator==(const ClearDepthStencilValue& other) const {
-            return depth == other.depth &&
-                   stencil == other.stencil;
+            return depth == other.depth && stencil == other.stencil;
         }
     };
     struct ClearColorValue {
@@ -502,7 +504,8 @@ struct RHIClearAttachment {
             uint32_t uint32[4];
         };
         bool operator==(const ClearColorValue& other) const {
-            return uint32[0] == other.uint32[0] && uint32[1] == other.uint32[1] && uint32[2] == other.uint32[2] && uint32[3] == other.uint32[3];
+            return uint32[0] == other.uint32[0] && uint32[1] == other.uint32[1] &&
+                   uint32[2] == other.uint32[2] && uint32[3] == other.uint32[3];
         }
     };
     // union ClearValue {
@@ -512,8 +515,7 @@ struct RHIClearAttachment {
 
     std::variant<ClearColorValue, ClearDepthStencilValue> value;
     EClearAttachment                                      attachment;
-    RHIClearAttachment() : RHIClearAttachment(EClearAttachment::COLOR) {
-    }
+    RHIClearAttachment() : RHIClearAttachment(EClearAttachment::COLOR) {}
     explicit RHIClearAttachment(EClearAttachment none) : attachment(none) {
         switch (none) {
 
@@ -527,7 +529,8 @@ struct RHIClearAttachment {
                 break;
         }
     }
-    explicit RHIClearAttachment(float _depth, uint32_t _stencil = 0) : attachment(EClearAttachment::DEPTH_STENCIL) {
+    explicit RHIClearAttachment(float _depth, uint32_t _stencil = 0) :
+        attachment(EClearAttachment::DEPTH_STENCIL) {
         value = ClearDepthStencilValue{_depth, _stencil};
     }
     bool operator==(const RHIClearAttachment& other) const {
@@ -538,18 +541,20 @@ struct RHIClearAttachment {
     }
     friend uint32_t GetHash(const RHIClearAttachment& _value) {
         uint32_t hash = GetHash(_value.attachment);
-        std::visit([&hash](auto&& _arg) -> void {
-            if constexpr (std::is_same_v<std::decay_t<decltype(_arg)>, ClearColorValue>) {
-                HashCombine(hash, GetHash(_arg.uint32[0]));
-                HashCombine(hash, GetHash(_arg.uint32[1]));
-                HashCombine(hash, GetHash(_arg.uint32[2]));
-                HashCombine(hash, GetHash(_arg.uint32[3]));
-            } else {
-                HashCombine(hash, GetHash(_arg.depth));
-                HashCombine(hash, GetHash(_arg.stencil));
-            }
-        },
-                   _value.value);
+        std::visit(
+            [&hash](auto&& _arg) -> void {
+                if constexpr (std::is_same_v<std::decay_t<decltype(_arg)>, ClearColorValue>) {
+                    HashCombine(hash, GetHash(_arg.uint32[0]));
+                    HashCombine(hash, GetHash(_arg.uint32[1]));
+                    HashCombine(hash, GetHash(_arg.uint32[2]));
+                    HashCombine(hash, GetHash(_arg.uint32[3]));
+                } else {
+                    HashCombine(hash, GetHash(_arg.depth));
+                    HashCombine(hash, GetHash(_arg.stencil));
+                }
+            },
+            _value.value
+        );
         return hash;
     }
 };
@@ -570,33 +575,29 @@ struct RHISubresourceSlice {
         uint8_t             _array_index,
         uint8_t             _array_count,
         uint8_t             _plane_index = 0,
-        uint8_t             _plane_count = s_all)
-        : aspect(_aspect),
-          mip_index(_mip_index),
-          array_index(_array_index),
-          array_count(_array_count),
-          plane_index(_plane_index),
-          plane_count(_plane_count) {}
+        uint8_t             _plane_count = s_all
+    ) :
+        aspect(_aspect),
+        mip_index(_mip_index),
+        array_index(_array_index),
+        array_count(_array_count),
+        plane_index(_plane_index),
+        plane_count(_plane_count) {}
 
     RHISubresourceSlice(
         ETextureAspectFlags _aspect,
         uint32_t            _mip_index,
         uint32_t            _array_index,
-        uint32_t            _plane_index = 0)
-        : aspect(_aspect),
-          mip_index(_mip_index),
-          array_index(_array_index),
-          array_count(1),
-          plane_index(_plane_index),
-          plane_count(s_all) {}
+        uint32_t            _plane_index = 0
+    ) :
+        aspect(_aspect),
+        mip_index(_mip_index),
+        array_index(_array_index),
+        array_count(1),
+        plane_index(_plane_index),
+        plane_count(s_all) {}
 
-    RHISubresourceSlice() : RHISubresourceSlice(
-                                ETextureAspectFlags::COLOR,
-                                0,
-                                0,
-                                1,
-                                0,
-                                s_all) {}
+    RHISubresourceSlice() : RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, s_all) {}
     inline bool IsAllArraySlices() const {
         return array_count == s_all;
     }
@@ -614,7 +615,9 @@ struct RHISubresourceSlice {
     }
 
     inline bool operator==(RHISubresourceSlice const& rhs) const {
-        return mip_index == rhs.mip_index && array_index == rhs.array_index && array_count == rhs.array_count && plane_index == rhs.plane_index && plane_count == rhs.plane_count;
+        return mip_index == rhs.mip_index && array_index == rhs.array_index &&
+               array_count == rhs.array_count && plane_index == rhs.plane_index &&
+               plane_count == rhs.plane_count;
     }
 
     inline bool operator!=(RHISubresourceSlice const& rhs) const {
@@ -625,10 +628,7 @@ struct RHISubresourceRange : public RHISubresourceSlice {
 
     uint8_t num_mips = MAX_TEXTURE_MIP_COUNT;
 
-    RHISubresourceRange(ETextureAspectFlags _aspect) : RHISubresourceSlice(
-                                                           _aspect,
-                                                           0,
-                                                           0){};
+    RHISubresourceRange(ETextureAspectFlags _aspect) : RHISubresourceSlice(_aspect, 0, 0) {};
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
         uint32_t            _mip_index,
@@ -636,19 +636,18 @@ struct RHISubresourceRange : public RHISubresourceSlice {
         uint32_t            _array_index,
         uint32_t            _array_count,
         uint32_t            _plane_index,
-        uint32_t            _plane_count)
-        : RHISubresourceSlice(_aspect, _mip_index, _array_index, _array_count, _plane_index, _plane_count),
-          num_mips(_num_mips) {}
+        uint32_t            _plane_count
+    ) :
+        RHISubresourceSlice(_aspect, _mip_index, _array_index, _array_count, _plane_index, _plane_count),
+        num_mips(_num_mips) {}
 
     RHISubresourceRange(
         ETextureAspectFlags _aspect,
         uint32_t            _mip_index,
         uint32_t            _array_index,
-        uint32_t            _plane_index)
-        : RHISubresourceSlice(_aspect,
-                              _mip_index,
-                              _array_index,
-                              _plane_index) {}
+        uint32_t            _plane_index
+    ) :
+        RHISubresourceSlice(_aspect, _mip_index, _array_index, _plane_index) {}
 
     RHISubresourceRange() : RHISubresourceRange(ETextureAspectFlags::COLOR, 0, 1, 0, 1, 0, (uint32_t)s_all) {}
     inline bool IsAllMips() const {
@@ -676,7 +675,9 @@ struct RHISubresourceRange : public RHISubresourceSlice {
     }
 
     inline bool operator==(RHISubresourceRange const& rhs) const {
-        return mip_index == rhs.mip_index && num_mips == rhs.num_mips && array_index == rhs.array_index && array_count == rhs.array_count && plane_index == rhs.plane_index && plane_count == rhs.plane_count;
+        return mip_index == rhs.mip_index && num_mips == rhs.num_mips && array_index == rhs.array_index &&
+               array_count == rhs.array_count && plane_index == rhs.plane_index &&
+               plane_count == rhs.plane_count;
     }
 
     inline bool operator!=(RHISubresourceRange const& rhs) const {
@@ -706,21 +707,22 @@ struct RHICopyTextureInfo {
 
     RHICopyTextureInfo() = default;
 
-    RHICopyTextureInfo(ETextureLayout      _src_layout,
-                       RHISubresourceSlice _src_slice,
-                       ETextureLayout      _dst_layout,
-                       RHISubresourceSlice _dst_slice,
-                       Offset3D            _src_offset,
-                       Offset3D            _dst_offset,
-                       Extent3D            _extent)
-        : src_layout(_src_layout),
-          dst_layout(_dst_layout),
-          src_slice(_src_slice),
-          dst_slice(_dst_slice),
-          src_offset(_src_offset),
-          dst_offset(_dst_offset),
-          extent(_extent) {
-    }
+    RHICopyTextureInfo(
+        ETextureLayout      _src_layout,
+        RHISubresourceSlice _src_slice,
+        ETextureLayout      _dst_layout,
+        RHISubresourceSlice _dst_slice,
+        Offset3D            _src_offset,
+        Offset3D            _dst_offset,
+        Extent3D            _extent
+    ) :
+        src_layout(_src_layout),
+        dst_layout(_dst_layout),
+        src_slice(_src_slice),
+        dst_slice(_dst_slice),
+        src_offset(_src_offset),
+        dst_offset(_dst_offset),
+        extent(_extent) {}
 };
 
 struct RHICopyTextureToBufferInfo {
@@ -737,18 +739,14 @@ struct RHICopyTextureToBufferInfo {
 
     ETextureLayout src_layout;
 
-    RHICopyTextureToBufferInfo(
-        ETextureLayout      _src_layout,
-        Extent3D            _extent,
-        RHISubresourceSlice _slice)
-        : src_layout(_src_layout),
-          texture_extent(_extent),
-          buffer_offset(0),
-          buffer_row_length(0),
-          buffer_texture_height(0),
-          texture_offset(0),
-          texture_slice(_slice) {
-    }
+    RHICopyTextureToBufferInfo(ETextureLayout _src_layout, Extent3D _extent, RHISubresourceSlice _slice) :
+        src_layout(_src_layout),
+        texture_extent(_extent),
+        buffer_offset(0),
+        buffer_row_length(0),
+        buffer_texture_height(0),
+        texture_offset(0),
+        texture_slice(_slice) {}
 
     RHICopyTextureToBufferInfo(
         ETextureLayout      _src_layout,
@@ -757,15 +755,15 @@ struct RHICopyTextureToBufferInfo {
         RHISubresourceSlice _slice,
         uint64_t            _buffer_offset,
         uint32_t            _buffer_row_length     = 0,
-        uint32_t            _buffer_texture_height = 0)
-        : src_layout(_src_layout),
-          texture_extent(_extent),
-          buffer_offset(_buffer_offset),
-          buffer_row_length(_buffer_row_length),
-          buffer_texture_height(_buffer_texture_height),
-          texture_offset(_texture_offset),
-          texture_slice(_slice) {
-    }
+        uint32_t            _buffer_texture_height = 0
+    ) :
+        src_layout(_src_layout),
+        texture_extent(_extent),
+        buffer_offset(_buffer_offset),
+        buffer_row_length(_buffer_row_length),
+        buffer_texture_height(_buffer_texture_height),
+        texture_offset(_texture_offset),
+        texture_slice(_slice) {}
 };
 struct RHICopyBufferToTextureInfo {
 
@@ -781,18 +779,14 @@ struct RHICopyBufferToTextureInfo {
 
     ETextureLayout dst_layout;
 
-    RHICopyBufferToTextureInfo(
-        ETextureLayout      _dst_layout,
-        Extent3D            _extent,
-        RHISubresourceSlice _slice)
-        : dst_layout(_dst_layout),
-          texture_extent(_extent),
-          buffer_offset(0),
-          buffer_row_length(0),
-          buffer_texture_height(0),
-          texture_offset(0),
-          texture_slice(_slice) {
-    }
+    RHICopyBufferToTextureInfo(ETextureLayout _dst_layout, Extent3D _extent, RHISubresourceSlice _slice) :
+        dst_layout(_dst_layout),
+        texture_extent(_extent),
+        buffer_offset(0),
+        buffer_row_length(0),
+        buffer_texture_height(0),
+        texture_offset(0),
+        texture_slice(_slice) {}
 
     RHICopyBufferToTextureInfo(
         ETextureLayout      _dst_layout,
@@ -801,15 +795,15 @@ struct RHICopyBufferToTextureInfo {
         RHISubresourceSlice _slice,
         uint64_t            _buffer_offset,
         uint32_t            _buffer_row_length     = 0,
-        uint32_t            _buffer_texture_height = 0)
-        : dst_layout(_dst_layout),
-          texture_extent(_extent),
-          buffer_offset(_buffer_offset),
-          buffer_row_length(_buffer_row_length),
-          buffer_texture_height(_buffer_texture_height),
-          texture_offset(_texture_offset),
-          texture_slice(_slice) {
-    }
+        uint32_t            _buffer_texture_height = 0
+    ) :
+        dst_layout(_dst_layout),
+        texture_extent(_extent),
+        buffer_offset(_buffer_offset),
+        buffer_row_length(_buffer_row_length),
+        buffer_texture_height(_buffer_texture_height),
+        texture_offset(_texture_offset),
+        texture_slice(_slice) {}
 };
 struct RHIBufferRegion {
     uint32_t src_offset;
@@ -818,8 +812,7 @@ struct RHIBufferRegion {
 };
 struct RHICopyBufferInfo {
     RHICopyBufferInfo() = default;
-    RHICopyBufferInfo(RHIBufferRegion&& region) : regions({std::move(region)}) {
-    }
+    RHICopyBufferInfo(RHIBufferRegion&& region) : regions({std::move(region)}) {}
 
     Moer::Array<RHIBufferRegion> regions;
 
@@ -834,8 +827,7 @@ private:
 };
 
 /* todo: transition information definition */
-struct RHIResourceTransitionInfo {
-};
+struct RHIResourceTransitionInfo {};
 
 struct RHIDispatchIndirectParameters {
     uint32_t group_count_x;
@@ -862,4 +854,4 @@ struct RHIDrawIndexedIndirectParameters {
 
 /* todo: ray-tracing constructor definitions */
 
-#endif// !RHI_RESOURCE_INITIALIZER_H
+#endif // !RHI_RESOURCE_INITIALIZER_H

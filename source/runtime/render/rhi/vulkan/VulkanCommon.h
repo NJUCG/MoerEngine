@@ -3,11 +3,7 @@
 
 class VulkanDevice;
 
-namespace Moer {
-namespace RHI {
-namespace Vulkan {
+namespace Moer { namespace RHI { namespace Vulkan {
 
-}
-}
-}// namespace Moer::RHI::Vulkan
-#endif// !VULKAN_COMMON_H
+}}} // namespace Moer::RHI::Vulkan
+#endif // !VULKAN_COMMON_H

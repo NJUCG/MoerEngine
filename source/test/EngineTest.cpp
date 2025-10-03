@@ -1,14 +1,14 @@
 #include "Engine.h"
-#include <filesystem>
-#include <vcruntime_string.h>
 #include "Core.h"
+#include "RenderThread.h"
+#include "log/LogSystem.h"
 #include "math/Matrix.h"
 #include "rhi/RHIResource.h"
 #include "shader/Shader.h"
 #include "shader/ShaderResourceManager.h"
-#include "log/LogSystem.h"
-#include "RenderThread.h"
 #include "taskgraph/GraphTask.h"
+#include <filesystem>
+#include <vcruntime_string.h>
 #define BEGIN_TEST(TestName)                          \
     LOG_INFO("===================================="); \
     LOG_INFO("Begin Test: {}", #TestName);            \
@@ -34,11 +34,13 @@ void RenderThreadSuspendTest(const Moer::Engine& engine) {
                 //     nullptr,
                 //     EThread::ERenderThread);
 
-                LambdaTask::Dispatch([]() {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    LOG_WARNING("Render Thread Ticking");
-                },
-                                     EThread::ERenderThread);
+                LambdaTask::Dispatch(
+                    []() {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                        LOG_WARNING("Render Thread Ticking");
+                    },
+                    EThread::ERenderThread
+                );
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
         });

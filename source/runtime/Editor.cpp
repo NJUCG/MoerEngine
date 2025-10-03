@@ -64,15 +64,11 @@ void Editor::Init(int argc, const char** argv) {
         }
     }();
 
-    RenderDevice::Init(
-        std::move(
-            DeviceInitInfo{
-                .rhi_type        = rhi_type,
-                .name            = "MoerEngine",
-                .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.api_version,
-            }
-        )
-    );
+    RenderDevice::Init(std::move(DeviceInitInfo{
+        .rhi_type        = rhi_type,
+        .name            = "MoerEngine",
+        .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.api_version,
+    }));
 
     ShaderManager::Get(); // Explicit Init ShaderManager
 
@@ -128,8 +124,12 @@ void Editor::ShutDown() {
     TaskSystem::ShutDown();
 }
 
-void Editor::Init3rdParty() { nfd_guard = MakeUnique<NFD::Guard>(); }
+void Editor::Init3rdParty() {
+    nfd_guard = MakeUnique<NFD::Guard>();
+}
 
-void Editor::ShutDown3rdParty() { nfd_guard.release(); }
+void Editor::ShutDown3rdParty() {
+    nfd_guard.release();
+}
 
 } // namespace Moer

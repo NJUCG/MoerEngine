@@ -30,15 +30,23 @@ public:
         return result;
     }
 
-    bool ok() const { return m_value.has_value(); }
+    bool ok() const {
+        return m_value.has_value();
+    }
 
     // 调用前，务必执行 result.ok() 进行检查
-    const T& value() const { return *m_value; }
+    const T& value() const {
+        return *m_value;
+    }
 
     // 调用前，务必执行 result.ok() 进行检查
-    T& value() { return *m_value; }
+    T& value() {
+        return *m_value;
+    }
 
-    const std::string& err() const { return m_err; }
+    const std::string& err() const {
+        return m_err;
+    }
 
 private:
     Result() = default;

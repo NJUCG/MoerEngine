@@ -1,7 +1,7 @@
 #include "MainWindow.h"
+#include "Core.h"
 #include "RendererManager.h"
 #include "math/Math.h"
-#include "Core.h"
 
 #include "imgui.h"
 #include "misc/Timer.h"
@@ -78,9 +78,15 @@ bool ShowStyleSelector(const char* label) {
     static int style_idx = 0;
     if (ImGui::Combo(label, &style_idx, "Default\0Light\0Classic\0")) {
         switch (style_idx) {
-            case 0: StyleColorsDark(); break;
-            case 1: ImGui::StyleColorsLight(); break;
-            case 2: ImGui::StyleColorsClassic(); break;
+            case 0:
+                StyleColorsDark();
+                break;
+            case 1:
+                ImGui::StyleColorsLight();
+                break;
+            case 2:
+                ImGui::StyleColorsClassic();
+                break;
         }
         return true;
     }
@@ -91,9 +97,15 @@ bool ShowResolutionSelector(const char* label, Extent2D& values) {
     static int style_idx = 0;
     if (ImGui::Combo(label, &style_idx, "res_1080p\0res_2k\0res_4k\0")) {
         switch (style_idx) {
-            case 0: values = {1920, 1080}; break;
-            case 1: values = {2560, 1440}; break;
-            case 2: values = {3840, 2160}; break;
+            case 0:
+                values = {1920, 1080};
+                break;
+            case 1:
+                values = {2560, 1440};
+                break;
+            case 2:
+                values = {3840, 2160};
+                break;
         }
         return true;
     }
@@ -142,7 +154,6 @@ void MainWindow::Show() {
     }
     frame_timer_update_interval = std::max(1u, uint32_t(frame_rate / 2.f));
     if (timer.IsRunning()) {
-
         timer.Stop();
     }
 
@@ -157,7 +168,9 @@ void MainWindow::Show() {
     }
 
     auto& render_manager = Moer::RendererManager::GetInstance();
-    auto  renderer_id    = render_manager.GetRendererID(Moer::ConfigManager::GetInstance().GetConfig().engine.render.default_render_method);
+    auto  renderer_id    = render_manager.GetRendererID(
+        Moer::ConfigManager::GetInstance().GetConfig().engine.render.default_render_method
+    );
 
     render_manager.UpdateGUI(renderer_id);
 
@@ -165,8 +178,7 @@ void MainWindow::Show() {
     render_manager.SetRendererPresentResolution(renderer_id, values.x, values.y);
     float display_width  = ImGui::GetWindowWidth();
     float display_height = display_width * 9.f / 16.f;
-    ImGui::Image(output,
-                 {display_width, display_height});
+    ImGui::Image(output, {display_width, display_height});
     ImGui::End();
 
     ShowInspectorWindow(&b_show);

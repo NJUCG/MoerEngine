@@ -12,4 +12,4 @@
 #include "platform/windows/WindowsVulkanPlatformDefines.h"
 #elif PLATFORM_LINUX
 #endif
-#endif//VULKAN_PLATFORM_H
+#endif //VULKAN_PLATFORM_H

@@ -23,8 +23,8 @@
 #include <iostream>
 
 #include "log/LogSystem.h"
-#include "shader/ShaderCommon.h"
 #include "rhi/RHI.h"
+#include "shader/ShaderCommon.h"
 
 #include "DXC/DirectXShaderCompiler.h"
 

@@ -82,7 +82,9 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
     // MARK: Scene
     Resource::LoaderInterface::LoadSceneFromFileAsync(_editor_ui->GetConfig().scene_path, &scene);
-    auto&& scope_exit_reset_async_load_info = OnScopeExit([&] { Scene::ResetAsyncLoadInfo(); });
+    auto&& scope_exit_reset_async_load_info = OnScopeExit([&] {
+        Scene::ResetAsyncLoadInfo();
+    });
 
     // TODO: combine RasterMain and RaytracingMain common part (above code)
 
@@ -212,7 +214,9 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
         WindowContext::Tick();
         _editor_ui->TickUI();
         int w_width, w_height;
-        if (time >= max_frame_in_flight) { timeline->Wait(time - max_frame_in_flight); }
+        if (time >= max_frame_in_flight) {
+            timeline->Wait(time - max_frame_in_flight);
+        }
         RaytracingConfig& ui_config = _editor_ui->m_raytracing_ui.GetEditableConfig();
 
         timer.Stop();
@@ -273,18 +277,18 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 float cell_size                 = max_extent * 2 / is_ctx.GetGridConfig().grid_size.x;
                 ui_config.grid_config.cell_size = cell_size;
 
-                instance_buffer_handle = bindless_array->AllocateBuffer(
-                    scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView()
-                );
-                geometry_buffer_handle = bindless_array->AllocateBuffer(
-                    scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView()
-                );
+                instance_buffer_handle =
+                    bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView()
+                    );
+                geometry_buffer_handle =
+                    bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView()
+                    );
                 geometry_instance_buffer_handle = bindless_array->AllocateBuffer(
                     scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView()
                 );
-                material_buffer_idx = bindless_array->AllocateBuffer(
-                    scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView()
-                );
+                material_buffer_idx =
+                    bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView()
+                    );
 
                 add_on_free_buffer(instance_buffer_handle);
                 add_on_free_buffer(geometry_buffer_handle);
@@ -467,7 +471,9 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
 
                 env_map = scene.GetCurrentEnvMap().texture;
 
-                for (int i = 0; i < env_map->GetNumMips(); ++i) { env_mips.push_back(env_map->GetView(i)); }
+                for (int i = 0; i < env_map->GetNumMips(); ++i) {
+                    env_mips.push_back(env_map->GetView(i));
+                }
                 sd_utils.GenerateMips(cmd_list, env_mips);
                 b_new_env_map = false;
 
@@ -619,8 +625,12 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 const auto&   frame_rt        = rt_ctx->frame_rt;
                 nrd::Denoiser denoiser        = nrd::Denoiser::MAX_NUM;
                 switch (ui_config.denoiser_cfg.denoiser_type) {
-                    case s_denoiser_mode_reblur: denoiser = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR; break;
-                    case s_denoiser_mode_relax: denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR; break;
+                    case s_denoiser_mode_reblur:
+                        denoiser = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
+                        break;
+                    case s_denoiser_mode_relax:
+                        denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
+                        break;
                 }
 
                 if (denoiser != nrd::Denoiser::MAX_NUM) {
@@ -739,18 +749,26 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
         gfx_queue.Present(sc, output);
         _editor_ui->PresentWindows();
 
-        if (_editor_ui->IsNeedReload()) { break; }
+        if (_editor_ui->IsNeedReload()) {
+            break;
+        }
     }
     timeline->Wait(time);
     gfx_queue.Sync();
 
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
-    for (auto& buf : allocated_buf) { bindless_array->FreeBuffer(buf); }
+    for (auto& buf : allocated_buf) {
+        bindless_array->FreeBuffer(buf);
+    }
 
     const auto& allocated_tex = rt_ctx->GetAllocatedBdlsTex();
-    for (auto& tex : allocated_tex) { bindless_array->FreeTexture(tex); }
+    for (auto& tex : allocated_tex) {
+        bindless_array->FreeTexture(tex);
+    }
 
-    for (auto& callback : on_free_buffer_callbacks) { callback(0); }
+    for (auto& callback : on_free_buffer_callbacks) {
+        callback(0);
+    }
 
     cmd_list.UpdateBindlessArray(bindless_array);
     gfx_queue.Execute(cmd_list.Submit().DeleteResources());
@@ -826,7 +844,8 @@ void DumpTextureToFile(
             hdr = true;
             break;
         }
-        default: size = 0;
+        default:
+            size = 0;
     }
     if (size != 0) {
         _gfx_queue.Execute(cmd_list.Submit().TickProfiling());

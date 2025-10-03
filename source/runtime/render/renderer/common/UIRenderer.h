@@ -30,28 +30,28 @@ public:
 };
 
 namespace Moer::Render {
-    class UIRenderer {
-    public:
-        struct Impl;
-        RENDER_API UIRenderer(RenderDevice& _device);
+class UIRenderer {
+public:
+    struct Impl;
+    RENDER_API UIRenderer(RenderDevice& _device);
 
-        RENDER_API virtual ~UIRenderer();
+    RENDER_API virtual ~UIRenderer();
 
-        RENDER_API void BeginGUIFrame();
+    RENDER_API void BeginGUIFrame();
 
-        RENDER_API void EndGUIFrame();
+    RENDER_API void EndGUIFrame();
 
-        RENDER_API void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer);
-        RENDER_API void RegisterImage(Texture* _texture, Sampler _sampler);
-        RENDER_API void UnRegisterImage(Texture* _texture);
+    RENDER_API void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer);
+    RENDER_API void RegisterImage(Texture* _texture, Sampler _sampler);
+    RENDER_API void UnRegisterImage(Texture* _texture);
 
-        RENDER_API TextureView GetWindowFrameBuffer(void* _window);
-        RENDER_API void        PresentWindows();
+    RENDER_API TextureView GetWindowFrameBuffer(void* _window);
+    RENDER_API void        PresentWindows();
 
-    private:
-        UniquePtr<Impl> impl;
-        // RENDER_API virtual void UploadFonts(FontDesc _font_desc) = 0;
-    };
-};// namespace Moer::Render
+private:
+    UniquePtr<Impl> impl;
+    // RENDER_API virtual void UploadFonts(FontDesc _font_desc) = 0;
+};
+}; // namespace Moer::Render
 
-#endif//MOER_ENGINE_UI_RENDERER_H
+#endif //MOER_ENGINE_UI_RENDERER_H

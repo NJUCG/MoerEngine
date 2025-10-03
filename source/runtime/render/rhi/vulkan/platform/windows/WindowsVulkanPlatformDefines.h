@@ -7,4 +7,4 @@
 
 #include "VulkanWindowsPlatform.h"
 
-#endif//WINDOWS_VULKAN_PLATFORM_DEFINES_H
+#endif //WINDOWS_VULKAN_PLATFORM_DEFINES_H

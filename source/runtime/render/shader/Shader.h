@@ -27,20 +27,22 @@ struct ShaderParameterLayoutInfo {
     bool IsValid() const {
         return !(slot == -1 || space == -1 || type == EShaderParameterType::UNKNOWN);
     }
-    ShaderParameterLayoutInfo(uint16_t                       _offset,
-                              uint16_t                       _stride,
-                              int8_t                         _slot          = -1,
-                              int8_t                         _space         = -1,
-                              int8_t                         _num           = -1,
-                              EShaderParameterType           _type          = EShaderParameterType::UNKNOWN,
-                              EShaderCodeResourceBindingType _resource_type = EShaderCodeResourceBindingType::INVALID)
-        : offset(_offset),
-          stride(_stride),
-          slot(_slot),
-          space(_space),
-          num(_num),
-          type(_type),
-          resource_type(_resource_type) {}
+    ShaderParameterLayoutInfo(
+        uint16_t                       _offset,
+        uint16_t                       _stride,
+        int8_t                         _slot          = -1,
+        int8_t                         _space         = -1,
+        int8_t                         _num           = -1,
+        EShaderParameterType           _type          = EShaderParameterType::UNKNOWN,
+        EShaderCodeResourceBindingType _resource_type = EShaderCodeResourceBindingType::INVALID
+    ) :
+        offset(_offset),
+        stride(_stride),
+        slot(_slot),
+        space(_space),
+        num(_num),
+        type(_type),
+        resource_type(_resource_type) {}
     uint16_t offset;
     uint16_t stride;
 
@@ -62,8 +64,12 @@ struct ShaderParameterLayoutInfo {
 struct ShaderRootParametersLayoutInfo {
 
 public:
-    const Moer::Array<ShaderParameterLayoutInfo>& GetBindingInfo() const { return binding_infos; }
-    const Moer::Array<ShaderParameterLayoutInfo>& GetConstantsInfo() const { return constant_infos; }
+    const Moer::Array<ShaderParameterLayoutInfo>& GetBindingInfo() const {
+        return binding_infos;
+    }
+    const Moer::Array<ShaderParameterLayoutInfo>& GetConstantsInfo() const {
+        return constant_infos;
+    }
 
 private:
     friend class Shader;
@@ -79,16 +85,19 @@ private:
  *
  */
 
-#define DEFINE_SHADER_FUNCION_PROC(ShaderClassName)                                                                                     \
-    static Shader* ConstructShaderInstance(const ShaderCompiledInitializer& _initializer) { return new ShaderClassName(_initializer); } \
-    static void    SetCompileEnvironment(const ShaderMutationParameters& _mutation_params, ShaderCompilerEnvironment& _environment) {   \
-        const typename ShaderClassName::TMutationSet set(_mutation_params.mutation_id);                                              \
-        set.SetCompileEnvironment(_environment);                                                                                     \
+#define DEFINE_SHADER_FUNCION_PROC(ShaderClassName)                                               \
+    static Shader* ConstructShaderInstance(const ShaderCompiledInitializer& _initializer) {       \
+        return new ShaderClassName(_initializer);                                                 \
+    }                                                                                             \
+    static void SetCompileEnvironment(                                                            \
+        const ShaderMutationParameters& _mutation_params, ShaderCompilerEnvironment& _environment \
+    ) {                                                                                           \
+        const typename ShaderClassName::TMutationSet set(_mutation_params.mutation_id);           \
+        set.SetCompileEnvironment(_environment);                                                  \
     }
 //vtable for ShaderMetaType
-#define ShaderFunctionProc(ShaderClassName)     \
-    ShaderClassName::ConstructShaderInstance,   \
-        ShaderClassName::ShouldCompileMutation, \
+#define ShaderFunctionProc(ShaderClassName)                                           \
+    ShaderClassName::ConstructShaderInstance, ShaderClassName::ShouldCompileMutation, \
         ShaderClassName::SetCompileEnvironment
 
 #define DEFINE_SHADER_TYPE(ShaderClassName, ShaderMapScope, API, ...) \
@@ -112,7 +121,8 @@ public:                                                                   \
             sizeof(ShaderClassName),                                             \
             ShaderClassName::GetParametersMetaData(),                            \
             TMutationSet::mutation_count,                                        \
-            ShaderFunctionProc(ShaderClassName));                                \
+            ShaderFunctionProc(ShaderClassName)                                  \
+        );                                                                       \
         return s_meta_type;                                                      \
     }                                                                            \
     ShaderTypeRegistration ShaderClassName::s_registration(ShaderClassName::GetMetaType);
@@ -128,9 +138,10 @@ public:                                                                   \
             sizeof(ShaderClassName),                                                      \
             ShaderClassName::GetParametersMetaData(),                                     \
             TMutationSet::mutation_count,                                                 \
-            ShaderFunctionProc(ShaderClassName));                                         \
+            ShaderFunctionProc(ShaderClassName)                                           \
+        );                                                                                \
         return s_meta_type;                                                               \
     }                                                                                     \
     template<>                                                                            \
     ShaderTypeRegistration ShaderClassName::s_registration(ShaderClassName::GetMetaType);
-#endif//MOERENGINE_SHADER_H
+#endif //MOERENGINE_SHADER_H

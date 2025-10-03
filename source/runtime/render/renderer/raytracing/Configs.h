@@ -139,44 +139,64 @@ struct ImportanceSamplingContext {
 
     ImportanceSamplingContext(const ImportantSamplingParams& _param);
 
-    DI::ReSTIRDIInitialSampleParams& GetDIInitialSampleParams() { return di_initial_sample_params; }
+    DI::ReSTIRDIInitialSampleParams& GetDIInitialSampleParams() {
+        return di_initial_sample_params;
+    }
 
     const DI::ReSTIRDIInitialSampleParams& GetDIInitialSampleParams() const {
         return di_initial_sample_params;
     }
 
-    DI::ReSTIRDITemporalResampleParams& GetDITemporalResampleParams() { return di_temporal_resample_params; }
+    DI::ReSTIRDITemporalResampleParams& GetDITemporalResampleParams() {
+        return di_temporal_resample_params;
+    }
 
     const DI::ReSTIRDITemporalResampleParams& GetDITemporalResampleParams() const {
         return di_temporal_resample_params;
     }
 
-    DI::ReSTIRDISpatialResampleParams& GetDISpatialResampleParams() { return di_spatial_resample_settings; }
+    DI::ReSTIRDISpatialResampleParams& GetDISpatialResampleParams() {
+        return di_spatial_resample_settings;
+    }
 
     const DI::ReSTIRDISpatialResampleParams& GetDISpatialResampleParams() const {
         return di_spatial_resample_settings;
     }
 
-    DI::ReSTIRDIShadingParams& GetDIShadingParams() { return di_shading_params; }
+    DI::ReSTIRDIShadingParams& GetDIShadingParams() {
+        return di_shading_params;
+    }
 
-    const DI::ReSTIRDIShadingParams& GetDIShadingParams() const { return di_shading_params; }
+    const DI::ReSTIRDIShadingParams& GetDIShadingParams() const {
+        return di_shading_params;
+    }
 
-    const DI::ReSTIRDIBufferIndices& GetReSTIRDIBufferIndices() const { return di_buffer_indices; }
+    const DI::ReSTIRDIBufferIndices& GetReSTIRDIBufferIndices() const {
+        return di_buffer_indices;
+    }
 
-    uint                        GetNeighborOffsetCnt() const { return restir_di_config.neighbor_offset_cnt; }
-    DI::RISBufferSegmentParams& GetLocalLightRISBufferParams() { return local_light_ris_buffer_params; }
+    uint GetNeighborOffsetCnt() const {
+        return restir_di_config.neighbor_offset_cnt;
+    }
+    DI::RISBufferSegmentParams& GetLocalLightRISBufferParams() {
+        return local_light_ris_buffer_params;
+    }
 
     const DI::RISBufferSegmentParams& GetLocalLightRISBufferParams() const {
         return local_light_ris_buffer_params;
     }
 
-    DI::RISBufferSegmentParams& GetEnvLightRISBufferParams() { return env_light_ris_buffer_params; }
+    DI::RISBufferSegmentParams& GetEnvLightRISBufferParams() {
+        return env_light_ris_buffer_params;
+    }
 
     const DI::RISBufferSegmentParams& GetEnvLightRISBufferParams() const {
         return env_light_ris_buffer_params;
     }
 
-    const DI::LightBufferParams& GetLightBufferParams() const { return light_buffer_params; }
+    const DI::LightBufferParams& GetLightBufferParams() const {
+        return light_buffer_params;
+    }
 
     void SetChangeableGridConfig(const GridChangableConfig& _config) {
         grid_changable_config                       = _config;
@@ -217,22 +237,40 @@ struct ImportanceSamplingContext {
         uint _num_env_lights
     );
 
-    GridConfig GetGridConfig() const { return grid_config; }
+    GridConfig GetGridConfig() const {
+        return grid_config;
+    }
 
-    GridRuntimeConfig GetGridRuntimeConfig() const { return grid_runtime_config; }
+    GridRuntimeConfig GetGridRuntimeConfig() const {
+        return grid_runtime_config;
+    }
 
-    GridChangableConfig GetGridChangableConfig() const { return grid_changable_config; }
+    GridChangableConfig GetGridChangableConfig() const {
+        return grid_changable_config;
+    }
 
-    const Grid::Params& GetGridParams() const { return grid_params; }
+    const Grid::Params& GetGridParams() const {
+        return grid_params;
+    }
 
-    uint GetGridCeillOffset() const { return grid_runtime_config.num_light_slot; }
+    uint GetGridCeillOffset() const {
+        return grid_runtime_config.num_light_slot;
+    }
 
-    const DI::ReSTIRDIRuntimeConfig& GetReSTIRDIRuntimeConfig() const { return restir_di_runtime_config; }
+    const DI::ReSTIRDIRuntimeConfig& GetReSTIRDIRuntimeConfig() const {
+        return restir_di_runtime_config;
+    }
 
-    const DI::ReSTIRDIConfig&     GetReSTIRDIConfig() const { return restir_di_config; }
-    const SimpleSegmentAllocator& GetSegmentAllocator() const { return segment_allocator; }
+    const DI::ReSTIRDIConfig& GetReSTIRDIConfig() const {
+        return restir_di_config;
+    }
+    const SimpleSegmentAllocator& GetSegmentAllocator() const {
+        return segment_allocator;
+    }
 
-    uint GetFrameIdx() const { return frame_idx; }
+    uint GetFrameIdx() const {
+        return frame_idx;
+    }
 
     void TickFrame(uint _frame_idx);
 

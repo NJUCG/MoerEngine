@@ -1,7 +1,7 @@
 #include "taskgraph/GraphTask.h"
 #include "misc/STL.h"
-#include "taskgraph/TaskGraph.h"
 #include "taskgraph/Event.h"
+#include "taskgraph/TaskGraph.h"
 //class GraphEventPool {
 //public:
 //	GraphEvent* getEvent();
@@ -39,7 +39,7 @@ void BaseGraphTask::PrerequestsComplete(EThread::Type currentThread, int32_t fin
 void GraphEvent::TryUnlockSubsequents(EThread::Type currentThread) {
     if (m_events_to_wait.size() > 0) {
         GraphEventArray temp_events;
-        std::swap(m_events_to_wait, temp_events);// m_events removed
+        std::swap(m_events_to_wait, temp_events); // m_events removed
 
         //test events to wait has complete
         bool generate_empty_task = false;
@@ -52,7 +52,8 @@ void GraphEvent::TryUnlockSubsequents(EThread::Type currentThread) {
         }
 
         if (generate_empty_task) {
-            EThread::Type collection_thread = EThread::SetPriority(EThread::UNKNOWN_THREAD, EThread::HIGH_PRI);
+            EThread::Type collection_thread =
+                EThread::SetPriority(EThread::UNKNOWN_THREAD, EThread::HIGH_PRI);
             // GraphTask<EmptyGraphTask>::CreateTask(GraphEventRef(this), &temp_events, currentThread).ConstructAndDispatchWhenReady(collection_thread);
             GraphTask<EmptyGraphTask>::Create(collection_thread)
                 .Wait(std::move(temp_events))
@@ -65,7 +66,7 @@ void GraphEvent::TryUnlockSubsequents(EThread::Type currentThread) {
     Moer::Array<BaseGraphTask*> poped;
     m_subsequents.ComsumeAllAndClose(poped);
     std::reverse(poped.begin(), poped.end());
-    bool should_wake_up_worker = false;// todo: useless in this version
+    bool should_wake_up_worker = false; // todo: useless in this version
     for (BaseGraphTask* task : poped) {
         assert(task != nullptr);
         should_wake_up_worker = task->ConditionalQueueTask(currentThread, should_wake_up_worker);

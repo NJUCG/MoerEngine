@@ -9,31 +9,31 @@
 #include "rhi/RHICommon.h"
 
 namespace Moer {
-    struct MeshProcessInput {
-        void*     vertex_data;
-        uint32_t  vertex_count;
-        uint32_t  vertex_stride;
-        uint32_t* index_data;
-        uint32_t  index_count;
-    };
+struct MeshProcessInput {
+    void*     vertex_data;
+    uint32_t  vertex_count;
+    uint32_t  vertex_stride;
+    uint32_t* index_data;
+    uint32_t  index_count;
+};
 
-    class RESOURCE_API MeshProcessOutput {
+class RESOURCE_API MeshProcessOutput {
 
-    public:
-        friend class MeshProcessor;
-        Array<Render::MeshletDesc>  meshlets;
-        Array<Render::MeshletBound> meshlet_bounds;
-        Array<float>                meshlet_vertex_data;
-        Array<uint32_t>             primitive_indices;
-    };
+public:
+    friend class MeshProcessor;
+    Array<Render::MeshletDesc>  meshlets;
+    Array<Render::MeshletBound> meshlet_bounds;
+    Array<float>                meshlet_vertex_data;
+    Array<uint32_t>             primitive_indices;
+};
 
-    class RESOURCE_API MeshProcessor {
-    public:
-        MeshProcessor();
-        static MeshProcessOutput GenerateMeshlets(const MeshProcessInput& input);
+class RESOURCE_API MeshProcessor {
+public:
+    MeshProcessor();
+    static MeshProcessOutput GenerateMeshlets(const MeshProcessInput& input);
 
-    private:
-        static void GenerateMeshlets(const MeshProcessInput& input, MeshProcessOutput& output);
-    };
-};// namespace Moer
+private:
+    static void GenerateMeshlets(const MeshProcessInput& input, MeshProcessOutput& output);
+};
+}; // namespace Moer
 #endif

@@ -5,11 +5,11 @@
 
 #if defined(_WIN32)
 #define RESOURCE_API DLLEXPORT
-#else// !defined(_WIN32)
+#else // !defined(_WIN32)
 #define RESOURCE_API __attribute__((visibility("default")))
 #endif
 
-#else// !defined(RESOURCE_MODULE_SHARED_LIB)
+#else // !defined(RESOURCE_MODULE_SHARED_LIB)
 #define RESOURCE_API DLLIMPORT
 #endif
 #endif

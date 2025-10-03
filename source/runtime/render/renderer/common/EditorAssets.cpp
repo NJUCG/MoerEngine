@@ -21,7 +21,9 @@ EditorAssets::EditorAssets(std::filesystem::path _assets_path, Render::RenderDev
     device(_device) {
     assert(std::filesystem::exists(assets_path) && "EditorAssets path not exists");
 
-    GraphEventRef evt = LambdaTask::Create([this]() { LoadTextures(); }).Dispatch();
+    GraphEventRef evt = LambdaTask::Create([this]() {
+                            LoadTextures();
+                        }).Dispatch();
     load_event        = LambdaTask::Create([this, evt]() {
                      TaskGraph::GetInterface().WaitUntilTaskComplete(evt, EThread::UNKNOWN_THREAD);
                      CompleteAndImportResources();
@@ -30,13 +32,19 @@ EditorAssets::EditorAssets(std::filesystem::path _assets_path, Render::RenderDev
 
 Render::TextureRef EditorAssets::GetTexture(std::string_view _name) const {
     auto it = textures.find(std::string(_name));
-    if (it != textures.end()) { return it->second; }
+    if (it != textures.end()) {
+        return it->second;
+    }
     return nullptr;
 }
 
-Render::BufferRef EditorAssets::GetBuffer(std::string_view _name) const { return nullptr; }
+Render::BufferRef EditorAssets::GetBuffer(std::string_view _name) const {
+    return nullptr;
+}
 
-Render::TextureRef EditorAssets::GetDefaultEnvMap() const { return GetTexture(default_env_map_name); }
+Render::TextureRef EditorAssets::GetDefaultEnvMap() const {
+    return GetTexture(default_env_map_name);
+}
 
 void EditorAssets::LoadTextures() {
     // Load textures
@@ -72,7 +80,9 @@ void EditorAssets::LoadTextures() {
                         cmd_list.CopyFrom(
                             std::span<Moer::byte>((Moer::byte*)data, width * height * 4), texture
                         );
-                        cmd_list.AddCallback([data]() { stbi_image_free(data); });
+                        cmd_list.AddCallback([data]() {
+                            stbi_image_free(data);
+                        });
                         register_image(texture, entry.path().filename().string());
                     }
                 }
@@ -101,7 +111,9 @@ void EditorAssets::LoadTextures() {
                     cmd_list.CopyFrom(
                         std::span<Moer::byte>((Moer::byte*)data, width * height * 4 * sizeof(float)), texture
                     );
-                    cmd_list.AddCallback([data]() { free(data); });
+                    cmd_list.AddCallback([data]() {
+                        free(data);
+                    });
                     register_image(texture, entry.path().filename().string());
                     default_env_map_name = textures.find(entry.path().filename().string())->first;
                 }
@@ -140,8 +152,12 @@ void EditorAssets::CompleteAndImportResources() {
     b_loaded.store(true, std::memory_order_seq_cst);
 }
 
-bool EditorAssets::IsReady() const { return b_loaded.load(std::memory_order_relaxed); }
+bool EditorAssets::IsReady() const {
+    return b_loaded.load(std::memory_order_relaxed);
+}
 void EditorAssets::WaitUntilReady() const {
-    if (!IsReady()) { load_event->Wait(); }
+    if (!IsReady()) {
+        load_event->Wait();
+    }
 }
 } // namespace Moer

@@ -1,6 +1,6 @@
 #include "misc/Hash.h"
-#include "PicoSHA2.h"
 #include "CityHash.h"
+#include "PicoSHA2.h"
 #include <string>
 
 static_assert(picosha2::k_digest_size == 32);

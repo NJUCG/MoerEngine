@@ -7,20 +7,17 @@
 
 #include "log/LogSystem.h"
 
-#define VK_CHECK_RESULT(f)                 \
-    {                                      \
-        VkResult res = (f);                \
-                                           \
-        if (res != VK_SUCCESS) {           \
-            std::stringstream ss;          \
-            ss << "Fatal : VkResult is \"" \
-               << res                      \
-               << "\" in " << __FILE__     \
-               << " at line " << __LINE__  \
-               << "\n";                    \
-            LOG_CRITICAL(ss.str());        \
-            assert(false);                 \
-        }                                  \
+#define VK_CHECK_RESULT(f)                                                                           \
+    {                                                                                                \
+        VkResult res = (f);                                                                          \
+                                                                                                     \
+        if (res != VK_SUCCESS) {                                                                     \
+            std::stringstream ss;                                                                    \
+            ss << "Fatal : VkResult is \"" << res << "\" in " << __FILE__ << " at line " << __LINE__ \
+               << "\n";                                                                              \
+            LOG_CRITICAL(ss.str());                                                                  \
+            assert(false);                                                                           \
+        }                                                                                            \
     }
 
 #define VK_CHECK_NULLPTR(ptr, msg, ...) \
@@ -41,4 +38,4 @@
 #define VK_FLAGS_TO_STRING(type, value) std::to_string(static_cast<uint32_t>(value)).c_str()
 #endif
 
-#endif// VULKAN_MACRO_UTILS_H
+#endif // VULKAN_MACRO_UTILS_H

@@ -1,9 +1,9 @@
-#include <iostream>
-#include <type_traits>
+#include "log/LogSystem.h"
+#include "misc/STL.h"
 #include "resources/vertexfactory/VertexAttributes.h"
 #include "resources/vertexfactory/VertexFactoryBuffers.h"
-#include "misc/STL.h"
-#include "log/LogSystem.h"
+#include <iostream>
+#include <type_traits>
 
 using namespace Moer;
 
@@ -26,7 +26,7 @@ int main(int argc, const char** argv) {
 
     TestVertexAttributes();
 
-    TestVertexFactoryBuffers();// in VertexFactory.h
+    TestVertexFactoryBuffers(); // in VertexFactory.h
 
     LOG_INFO("VertexFactoryTest Passed!");
 

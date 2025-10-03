@@ -130,11 +130,14 @@ float2 AntialiasPass::GetPixelOffset() {
             std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
             return float2(dist(rng), dist(rng));
         }
-        case EJitter::Num: break;
+        case EJitter::Num:
+            break;
     }
     return float2(0.f);
 }
 
-void AntialiasPass::SetJitter(EJitter _jitter_mode) { jitter_mode = _jitter_mode; }
+void AntialiasPass::SetJitter(EJitter _jitter_mode) {
+    jitter_mode = _jitter_mode;
+}
 
 } // namespace Moer::Render::Raytracing

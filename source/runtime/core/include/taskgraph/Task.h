@@ -1,7 +1,7 @@
 #ifndef TASK_H
 #define TASK_H
-#include <atomic>
 #include "TaskGraph.h"
+#include <atomic>
 class TaskHandle {
 public:
     TaskHandle() = default;
@@ -12,4 +12,4 @@ public:
     TTask() = default;
     virtual ~TTask() {}
 };
-#endif// !TASK_H
+#endif // !TASK_H

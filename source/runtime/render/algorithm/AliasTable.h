@@ -4,12 +4,12 @@
 #include "misc/STL.h"
 #include <span>
 namespace Moer::Render::Algo {
-    struct AliasTable {
-        Array<float> prob;
-        Array<int>   alias;
+struct AliasTable {
+    Array<float> prob;
+    Array<int>   alias;
 
-        AliasTable(std::span<const float> _src_value);
-    };
-}// namespace Moer::Render::Algo
+    AliasTable(std::span<const float> _src_value);
+};
+} // namespace Moer::Render::Algo
 
 #endif

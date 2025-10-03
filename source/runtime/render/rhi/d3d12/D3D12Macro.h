@@ -7,8 +7,8 @@
 
 namespace Moer::Render {
 
-    // maybe throw...
-    // seems likely to incur some macro redefinitions
+// maybe throw...
+// seems likely to incur some macro redefinitions
 
 #define DX_CHECK_HRESULT(hr)                                         \
     do {                                                             \
@@ -57,6 +57,6 @@ namespace Moer::Render {
         std::terminate();          \
     } while (0)
 
-}// namespace Moer::Render
+} // namespace Moer::Render
 
-#endif// D3D12_MACRO_H
+#endif // D3D12_MACRO_H

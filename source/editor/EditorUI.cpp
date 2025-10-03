@@ -83,11 +83,14 @@ void EditorUI::TickUI() {
     // all active windows docked into it will lose their parent and become undocked.
     // We cannot preserve the docking relationship between an active window and an inactive docking, otherwise
     // any change of dockspace/settings would lead to windows being stuck in limbo and never being visible.
-    if (!opt_padding) ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    if (!opt_padding)
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::Begin("Editor Menu", &m_b_show, window_flags);
-    if (!opt_padding) ImGui::PopStyleVar();
+    if (!opt_padding)
+        ImGui::PopStyleVar();
 
-    if (opt_fullscreen) ImGui::PopStyleVar(2);
+    if (opt_fullscreen)
+        ImGui::PopStyleVar(2);
 
     // Submit the DockSpace
     ImGuiIO& io = ImGui::GetIO();
@@ -101,7 +104,9 @@ void EditorUI::TickUI() {
             // }
             // if (ImGui::MenuItem("Save Current Level")) {
             // }
-            if (ImGui::MenuItem("Exit")) { exit(0); }
+            if (ImGui::MenuItem("Exit")) {
+                exit(0);
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Window")) {
@@ -127,7 +132,9 @@ void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureVie
     m_ui_renderer->RenderGUI(cmd_list, final_output);
 }
 
-void EditorUI::PresentWindows() { m_ui_renderer->PresentWindows(); }
+void EditorUI::PresentWindows() {
+    m_ui_renderer->PresentWindows();
+}
 
 bool EditorUI::IsSeperateWindow() const {
     auto* current_window = ImGui::FindWindowByName("Scene Color");
@@ -147,7 +154,9 @@ void EditorUI::ShowSceneColor() {
     ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
 
     const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
-    if (!m_b_show_scene_color) { return; }
+    if (!m_b_show_scene_color) {
+        return;
+    }
     if (!ImGui::Begin("Scene Color", &m_b_show_scene_color, window_flags)) {
         // Should not call ImGui::End() here
         return;
@@ -212,8 +221,12 @@ void EditorUI::ShowConfig() {
     ImGuiIO&         io           = ImGui::GetIO();
     ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
 
-    if (!m_b_show_config) { return; }
-    if (!ImGui::Begin("Configs", &m_b_show_config, window_flags)) { return; }
+    if (!m_b_show_config) {
+        return;
+    }
+    if (!ImGui::Begin("Configs", &m_b_show_config, window_flags)) {
+        return;
+    }
 
     ImGui::PushItemWidth(120); // 设置所有组件width为120
 
@@ -228,7 +241,9 @@ void EditorUI::ShowConfig() {
             if (ImGui::Selectable(k_render_method_names[i].data(), is_selected)) {
                 m_config.selected_render_method = static_cast<ERenderMethod>(i);
             }
-            if (is_selected) { ImGui::SetItemDefaultFocus(); }
+            if (is_selected) {
+                ImGui::SetItemDefaultFocus();
+            }
         }
         ImGui::EndCombo();
     }
@@ -279,9 +294,14 @@ void EditorUI::ShowConfig() {
     if (m_b_show_sub_ui) {
         ImGui::Separator();
         switch (m_config.selected_render_method) {
-            case ERenderMethod::Raster: m_raster_ui.ShowConfig(); break;
-            case ERenderMethod::Raytracing: m_raytracing_ui.ShowConfig(); break;
-            default: break;
+            case ERenderMethod::Raster:
+                m_raster_ui.ShowConfig();
+                break;
+            case ERenderMethod::Raytracing:
+                m_raytracing_ui.ShowConfig();
+                break;
+            default:
+                break;
         }
     }
 
@@ -302,12 +322,16 @@ void EditorUI::ShowConfig() {
     ImGui::End();
 }
 
-void EditorUI::ResetState() { m_b_need_reload = false; }
+void EditorUI::ResetState() {
+    m_b_need_reload = false;
+}
 
 void EditorUI::RegisterUIFunc(std::string_view _name, std::function<void()>&& _func) {
     m_show_func_map[_name] = std::move(_func);
 }
 
-void EditorUI::UnregisterUIFunc(std::string_view _name) { m_show_func_map.erase(_name); }
+void EditorUI::UnregisterUIFunc(std::string_view _name) {
+    m_show_func_map.erase(_name);
+}
 
 } // namespace Moer

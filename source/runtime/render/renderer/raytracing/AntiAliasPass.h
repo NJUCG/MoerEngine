@@ -24,7 +24,13 @@ public:
 };
 class AntialiasPass {
 public:
-    enum class EJitter { MSAA, Halton, R2, WhiteNoise, Num };
+    enum class EJitter {
+        MSAA,
+        Halton,
+        R2,
+        WhiteNoise,
+        Num
+    };
 
     struct Params {
         float new_frame_weight     = 0.04f;

@@ -12,11 +12,17 @@ public:
 
     void ShowConfig();
 
-    const RaytracingConfig& GetConfig() const { return config; }
+    const RaytracingConfig& GetConfig() const {
+        return config;
+    }
 
-    RaytracingConfig& GetEditableConfig() { return config; }
+    RaytracingConfig& GetEditableConfig() {
+        return config;
+    }
 
-    void ResetConfig() { config = RaytracingConfig(); }
+    void ResetConfig() {
+        config = RaytracingConfig();
+    }
 
 private:
     RaytracingConfig config;

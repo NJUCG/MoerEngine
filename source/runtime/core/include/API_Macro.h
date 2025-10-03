@@ -16,10 +16,10 @@
 #if defined(MOER_CORE_SHARED_LIB)
 #if defined(_WIN32) || defined(_WIN64)
 #define CORE_API DLLEXPORT
-#else// !defined(_WIN32)
+#else // !defined(_WIN32)
 #define CORE_API __attribute__((visibility("default")))
 #endif
-#else// !defined(MOER_CORE_SHARED_LIB)
+#else // !defined(MOER_CORE_SHARED_LIB)
 
 #define CORE_API DLLIMPORT
 
@@ -27,7 +27,7 @@
 
 #if defined(__cplusplus) && (__cplusplus >= 201703)
 #define MOER_NODISCARD [[nodiscard]]
-#elif (defined(__GNUC__) && (__GNUC__ >= 4)) || defined(__clang__)// includes clang, icc, and clang-cl
+#elif (defined(__GNUC__) && (__GNUC__ >= 4)) || defined(__clang__) // includes clang, icc, and clang-cl
 #define MOER_NODISCARD __attribute__((warn_unused_result))
 #elif defined(_HAS_NODISCARD)
 #define MOER_NODISCARD _NODISCARD
@@ -38,4 +38,4 @@
 #endif
 
 #pragma endregion
-#endif// !API_MACRO_H
+#endif // !API_MACRO_H

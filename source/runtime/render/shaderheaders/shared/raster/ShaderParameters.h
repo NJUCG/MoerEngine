@@ -14,11 +14,11 @@ namespace Moer::Render {
 namespace Moer {
 #endif
 
-    // MARK: Main Content Begin
+// MARK: Main Content Begin
 
-    // todo: add your code here
+// todo: add your code here
 
-    // MARK: Main Content End
+// MARK: Main Content End
 
 #ifdef __cplusplus
 }

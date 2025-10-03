@@ -12,8 +12,7 @@ public:
 
     using std::variant<Types...>::variant;
 
-    Variant(const StdVariant& other) : StdVariant(other) {
-    }
+    Variant(const StdVariant& other) : StdVariant(other) {}
 
     template<typename T>
     bool Is() const noexcept {
@@ -59,31 +58,32 @@ public:
 
 namespace VariantImpl {
 
-    template<typename T>
-    decltype(auto) ToStdVariant(T&& var) { return std::forward<T>(var); }
+template<typename T>
+decltype(auto) ToStdVariant(T&& var) {
+    return std::forward<T>(var);
+}
 
-    template<typename... Ts>
-    std::variant<Ts...>& ToStdVariant(Variant<Ts...>& var) {
-        return static_cast<std::variant<Ts...>&>(var);
-    }
+template<typename... Ts>
+std::variant<Ts...>& ToStdVariant(Variant<Ts...>& var) {
+    return static_cast<std::variant<Ts...>&>(var);
+}
 
-    template<typename... Ts>
-    const std::variant<Ts...>& ToStdVariant(const Variant<Ts...>& var) {
-        return static_cast<const std::variant<Ts...>&>(var);
-    }
+template<typename... Ts>
+const std::variant<Ts...>& ToStdVariant(const Variant<Ts...>& var) {
+    return static_cast<const std::variant<Ts...>&>(var);
+}
 
-    template<typename... Ts>
-    std::variant<Ts...> ToStdVariant(Variant<Ts...>&& var) {
-        return static_cast<std::variant<Ts...>>(var);
-    }
+template<typename... Ts>
+std::variant<Ts...> ToStdVariant(Variant<Ts...>&& var) {
+    return static_cast<std::variant<Ts...>>(var);
+}
 
-}// namespace VariantImpl
+} // namespace VariantImpl
 
 template<typename E, typename... Vs>
 auto MatchVariant(E&& e, Vs... vs) {
     struct Overloaded : Vs... {
-        explicit Overloaded(Vs... vss) : Vs(vss)... {
-        }
+        explicit Overloaded(Vs... vss) : Vs(vss)... {}
         using Vs::operator()...;
     };
     return std::visit(Overloaded(vs...), VariantImpl::ToStdVariant(std::forward<E>(e)));
@@ -111,4 +111,4 @@ bool Variant<Types...>::operator==(const Variant& rhs) const {
     return VariantImpl::ToStdVariant(*this) == VariantImpl::ToStdVariant(rhs);
 }
 
-#endif// VARIANT_H
+#endif // VARIANT_H

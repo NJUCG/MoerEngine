@@ -98,7 +98,9 @@ public:
         context.cmd_list.CopyFrom(
             std::span<byte>((byte*)lighting_data, sizeof(LightingData)), lighting_data_buffer.buf->GetView()
         );
-        context.cmd_list.AddCallback([lighting_data]() { MoerDelete(lighting_data); });
+        context.cmd_list.AddCallback([lighting_data]() {
+            MoerDelete(lighting_data);
+        });
 
         Moer::UnorderedSet<EMaterialType> material_types = {EMaterialType::E_PBR_STANDARD};
         for (auto type : material_types) {

@@ -28,7 +28,9 @@ struct CachelineStruct {
         byte padding[PLATFORM_CACHELINE_SIZE];
         T    data;
     };
-    CachelineStruct() noexcept { memset(padding, 0, sizeof(padding)); }
+    CachelineStruct() noexcept {
+        memset(padding, 0, sizeof(padding));
+    }
     CachelineStruct(const T& _data) : data(_data) {}
     CachelineStruct(const CachelineStruct& _rhs) : data(_rhs.data) {}
     CachelineStruct& operator=(const CachelineStruct& _rhs) {
@@ -36,8 +38,12 @@ struct CachelineStruct {
         return *this;
     }
 
-    operator T&() { return data; }
-    operator const T&() const { return data; }
+    operator T&() {
+        return data;
+    }
+    operator const T&() const {
+        return data;
+    }
 };
 
 PrepareLightPass::PrepareLightPass(RenderDevice& _device, ShaderManager& _manager, Scene& _scene) :
@@ -67,15 +73,22 @@ void PrepareLightPass::CountEmissiveInstances(uint& _num_emissive_meshes, uint& 
 
 static uint LightPriority(LightComponentRef _light) {
     switch (_light->GetType()) {
-        case ELightComponentType::DIRECTIONAL: return 1;
-        case ELightComponentType::ENVIRONMENT: return 2;
-        default: return 0;
+        case ELightComponentType::DIRECTIONAL:
+            return 1;
+        case ELightComponentType::ENVIRONMENT:
+            return 2;
+        default:
+            return 0;
     }
 }
 
-static inline uint FloatToUInt(float _v, float _scale) { return (uint)floor(_v * _scale + 0.5f); }
+static inline uint FloatToUInt(float _v, float _scale) {
+    return (uint)floor(_v * _scale + 0.5f);
+}
 
-static inline float Saturate(float _v) { return std::clamp(_v, 0.f, 1.f); }
+static inline float Saturate(float _v) {
+    return std::clamp(_v, 0.f, 1.f);
+}
 
 static inline uint
 FloaT3ToR8G8B8Unorm(float _unpacked_input_x, float _unpacked_input_y, float _unpacked_input_z) {
@@ -103,7 +116,8 @@ static uint16_t Fp32ToFp16(float _v) {
 
 static void PackPolyLightColor(float3 _color, PolymorphicLightInfo& _info) {
     float max_radiance = Max(Max(_color.x, _color.y), _color.z);
-    if (max_radiance < 0.f) return;
+    if (max_radiance < 0.f)
+        return;
 
     float log_radiance = (std::log2f(max_radiance) - g_poly_morphic_light_min_log2_radiance) /
                          (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance);
@@ -153,13 +167,16 @@ static bool CanConvert(LightComponent& _light) {
         case Moer::ELightComponentType::DIRECTIONAL:
         case Moer::ELightComponentType::SPOT:
         case Moer::ELightComponentType::POINT:
-        case Moer::ELightComponentType::ENVIRONMENT: return true;
-        default: return false;
+        case Moer::ELightComponentType::ENVIRONMENT:
+            return true;
+        default:
+            return false;
     }
 }
 
 static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
-    if (!CanConvert(_light)) return false;
+    if (!CanConvert(_light))
+        return false;
     switch (_light.GetType()) {
         case Moer::ELightComponentType::DIRECTIONAL: {
             DirectionalLightComponent* dir_light = static_cast<DirectionalLightComponent*>(&_light);
@@ -200,7 +217,8 @@ static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
         }
         case Moer::ELightComponentType::ENVIRONMENT: {
             EnvironmentLightComponent* env_light = static_cast<EnvironmentLightComponent*>(&_light);
-            if (!env_light->bdls_handle) return false;
+            if (!env_light->bdls_handle)
+                return false;
             _info.color_type_flags = (uint)EPolyLightType::ELEnv << g_poly_morphic_light_type_shift;
             PackPolyLightColor(env_light->GetColorScale(), _info);
             _info.direction1 = env_light->bdls_handle;
@@ -308,7 +326,9 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
                 PolymorphicLightInfo light_info{};
 
-                if (!ConvertLight(*light_data, light_info)) { continue; }
+                if (!ConvertLight(*light_data, light_info)) {
+                    continue;
+                }
 
                 if (light_data->GetType() == ELightComponentType::DIRECTIONAL) {
                     inf_light_cnt++;
@@ -342,11 +362,15 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         });
 
         // calculate offsets
-        for (uint i = 1; i < parrallel_cnt; i++) { light_cnt[i].data.x += light_cnt[i - 1].data.x; }
+        for (uint i = 1; i < parrallel_cnt; i++) {
+            light_cnt[i].data.x += light_cnt[i - 1].data.x;
+        }
         num_finite_prim_lights = light_cnt[parrallel_cnt - 1].data.x;
 
         light_cnt[0].data.y += light_cnt[parrallel_cnt - 1].data.x;
-        for (uint i = 1; i < parrallel_cnt; i++) { light_cnt[i].data.y += light_cnt[i - 1].data.y; }
+        for (uint i = 1; i < parrallel_cnt; i++) {
+            light_cnt[i].data.y += light_cnt[i - 1].data.y;
+        }
         num_infinite_prim_lights = light_cnt[parrallel_cnt - 1].data.y - num_finite_prim_lights;
 
         uint total_task_cnt = light_cnt[parrallel_cnt - 1].data.y;
@@ -443,7 +467,9 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
             PolymorphicLightInfo light_info{};
 
-            if (!ConvertLight(*light_data, light_info)) { continue; }
+            if (!ConvertLight(*light_data, light_info)) {
+                continue;
+            }
 
             auto pre_iter = primitive_light_buffer_offsets.find(uint64(light_data.Get()));
 

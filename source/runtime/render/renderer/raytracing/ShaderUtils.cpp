@@ -7,7 +7,9 @@
 
 namespace Moer::Render::Raytracing {
 
-inline static uint DivCeil(uint _a, uint _b) { return (_a + _b - 1) / _b; }
+inline static uint DivCeil(uint _a, uint _b) {
+    return (_a + _b - 1) / _b;
+}
 
 static constexpr EPixelFormat s_supported_formats[] = {
     PF_R32G32B32_SFLOAT,
@@ -71,11 +73,14 @@ void ShaderUtils::GenerateLowDiscrepancySequence(
     while (num < _param.num_samples * 2) {
         u += phi2;
         v += phi2 * phi2;
-        if (u >= 1.0f) u -= 1.0f;
-        if (v >= 1.0f) v -= 1.0f;
+        if (u >= 1.0f)
+            u -= 1.0f;
+        if (v >= 1.0f)
+            v -= 1.0f;
 
         float rSq = (u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f);
-        if (rSq > 0.25f) continue;
+        if (rSq > 0.25f)
+            continue;
 
         data[num++] = int8((u - 0.5f) * R);
         data[num++] = (v - 0.5f) * R;
@@ -151,7 +156,9 @@ void ShaderUtils::SampleTextureRaster(
     assert(0 && "SampleTextureRaster not implemented");
     Sampler linear_clamp_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
     //find dst pso
-    if (!sample_texture_pipeline_map.contains(_format)) { assert(false && "Unsupported format"); }
+    if (!sample_texture_pipeline_map.contains(_format)) {
+        assert(false && "Unsupported format");
+    }
 
     auto& sample_texture_pipeline = sample_texture_pipeline_map[_format];
 

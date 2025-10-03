@@ -10,69 +10,69 @@ __declspec(dllexport) extern const char8_t* D3D12SDKPath = u8".\\D3D12\\";
 // #include <vcruntime_string.h>
 #include "Core.h"
 #include "PixelFormat.h"
+#include "RenderThread.h"
 #include "config/ConfigManager.h"
+#include "d3dx12_property_format_table.h"
+#include "log/LogSystem.h"
 #include "math/Constant.h"
 #include "math/Matrix.h"
 #include "misc/MMemory.h"
 #include "misc/Traits.h"
-#include "rhi/RHI.h"
 #include "render/rhi/RHIImpl.h"
+#include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "log/LogSystem.h"
-#include "RenderThread.h"
+#include "shader/ShaderCompiler.h"
+#include "shader/ShaderPipeline.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
-#include "shader/ShaderCompiler.h"
 #include <iostream>
-#include "d3dx12_property_format_table.h"
-#include "shader/ShaderPipeline.h"
 
 constexpr uint32_t kNumBuffArr = 7;
 
 namespace Moer::Render {
 
-    class TestReadPipeline : public ComputePipeline {
-    public:
-        DEFINE_COMPUTE_PIPELINE_CLASS(TestReadPipeline);
+class TestReadPipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(TestReadPipeline);
 
-        DEFINE_SHADER_BUFFER(buf);
+    DEFINE_SHADER_BUFFER(buf);
 
-        DEFINE_SHADER_ARGS(buf);
-    };
+    DEFINE_SHADER_ARGS(buf);
+};
 
-    struct S0 {
-        uint   a;
-        uint   b;
-        float2 _pad;
-        float4 x;
-    };
-    struct S1 {
-        uint a;
-    };
+struct S0 {
+    uint   a;
+    uint   b;
+    float2 _pad;
+    float4 x;
+};
+struct S1 {
+    uint a;
+};
 
-    class TestComputePipeline : public ComputePipeline {
-    public:
-        DEFINE_COMPUTE_PIPELINE_CLASS(TestComputePipeline);
+class TestComputePipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(TestComputePipeline);
 
-        DEFINE_SHADER_CONSTANT_STRUCT(S0, cb0);
-        //DEFINE_SHADER_BUFFER(cb0);
-        DEFINE_SHADER_BUFFER(cb1);
-        DEFINE_SHADER_BUFFER(sb0);
-        DEFINE_SHADER_BUFFER(sb1);
-        DEFINE_SHADER_BUFFER(rb0);
-        DEFINE_SHADER_BUFFER(rb1);
-        DEFINE_SHADER_BUFFER(tb0);
-        DEFINE_SHADER_BUFFER(tb1);
-        DEFINE_SHADER_BUFFER_ARRAY(buf_arr, kNumBuffArr);
+    DEFINE_SHADER_CONSTANT_STRUCT(S0, cb0);
+    //DEFINE_SHADER_BUFFER(cb0);
+    DEFINE_SHADER_BUFFER(cb1);
+    DEFINE_SHADER_BUFFER(sb0);
+    DEFINE_SHADER_BUFFER(sb1);
+    DEFINE_SHADER_BUFFER(rb0);
+    DEFINE_SHADER_BUFFER(rb1);
+    DEFINE_SHADER_BUFFER(tb0);
+    DEFINE_SHADER_BUFFER(tb1);
+    DEFINE_SHADER_BUFFER_ARRAY(buf_arr, kNumBuffArr);
 
-        DEFINE_SHADER_ARGS(cb0, cb1, sb0, sb1, rb0, rb1, tb0, tb1, buf_arr);
-    };
+    DEFINE_SHADER_ARGS(cb0, cb1, sb0, sb1, rb0, rb1, tb0, tb1, buf_arr);
+};
 
-}// namespace Moer::Render
+} // namespace Moer::Render
 
 template<typename T, int N>
 std::span<Moer::byte> ToSpan(const std::array<T, N>& arr) {
@@ -101,9 +101,7 @@ int main(int argc, char** argv) {
     ConfigManager::GetInstance().Init(path);
 
     TaskSystem::Init();
-    DeviceInitInfo info{
-        .rhi_type = ERHIType::D3D12,
-        .name     = "DXRHITest"};
+    DeviceInitInfo info{.rhi_type = ERHIType::D3D12, .name = "DXRHITest"};
     //DeviceInitInfo info{
     //    .type = ERHIType::Vulkan,
     //    .name = "DXRHITest",
@@ -121,17 +119,29 @@ int main(int argc, char** argv) {
 
         ShaderCompiler::Init();
 
-        auto      cb0 = device.CreateBuffer<Moer::byte>("cb0", sizeof(S0), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-        auto      cb1 = device.CreateBuffer<Moer::byte>("cb1", sizeof(S1), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-        auto      sb0 = device.CreateBuffer<float4>("sb0", 1024, EBufferUsageFlags::TRANSFER_DST);
-        auto      sb1 = device.CreateBuffer<S1>("sb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
-        auto      rb0 = device.CreateBuffer<uint>("rb0", 1024, EBufferUsageFlags::TRANSFER_DST);
-        auto      rb1 = device.CreateBuffer<float>("rb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
-        auto      tb0 = device.CreateBuffer<float>("tb0", 1024, EBufferUsageFlags::TRANSFER_DST);
-        auto      tb1 = device.CreateBuffer<float>("tb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        auto cb0 = device.CreateBuffer<Moer::byte>(
+            "cb0", sizeof(S0), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST
+        );
+        auto cb1 = device.CreateBuffer<Moer::byte>(
+            "cb1", sizeof(S1), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST
+        );
+        auto sb0 = device.CreateBuffer<float4>("sb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto sb1 = device.CreateBuffer<S1>(
+            "sb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
+        );
+        auto rb0 = device.CreateBuffer<uint>("rb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto rb1 = device.CreateBuffer<float>(
+            "rb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
+        );
+        auto tb0 = device.CreateBuffer<float>("tb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto tb1 = device.CreateBuffer<float>(
+            "tb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
+        );
         BufferRef buf_arr[kNumBuffArr];
         for (int i = 0; i < kNumBuffArr; ++i) {
-            buf_arr[i] = device.CreateBuffer<float>(std::format("buf_array_{}", i), 9, EBufferUsageFlags::TRANSFER_DST);
+            buf_arr[i] = device.CreateBuffer<float>(
+                std::format("buf_array_{}", i), 9, EBufferUsageFlags::TRANSFER_DST
+            );
         }
 
         S0 pc{
@@ -152,27 +162,53 @@ int main(int argc, char** argv) {
 
         for (int iter = 0; iter < 10; ++iter) {
 
-            for (int i = 0; i < 7; ++i) farr[i] = iarr[i] = 1 + i + iter;
+            for (int i = 0; i < 7; ++i)
+                farr[i] = iarr[i] = 1 + i + iter;
 
             int res = pc.b * pc1.a;
-            for (int i = 1; i < 7; ++i) res *= iarr[i];
+            for (int i = 1; i < 7; ++i)
+                res *= iarr[i];
 
             CommandList list;
             //list.CopyFrom(ToSpan(pc), cb0->GetView());
             list.CopyFrom(ToSpan(pc1), cb1->GetView());
             list.CopyFrom(ToSpan(farr).subspan(0 * sizeof(float), sizeof(float)), sb0->GetView());
-            list.CopyFrom(ToSpan(iarr).subspan(1 * sizeof(float), sizeof(float)), sb1->GetView(1 * sizeof(float)));
-            list.CopyFrom(ToSpan(iarr).subspan(2 * sizeof(float), sizeof(float)), rb0->GetView(2 * sizeof(float)));
-            list.CopyFrom(ToSpan(farr).subspan(3 * sizeof(float), sizeof(float)), rb1->GetView(3 * sizeof(float)));
-            list.CopyFrom(ToSpan(farr).subspan(4 * sizeof(float), sizeof(float)), tb0->GetView(4 * sizeof(float)));
-            list.CopyFrom(ToSpan(farr).subspan(5 * sizeof(float), sizeof(float)), tb1->GetView(5 * sizeof(float)));
-            list.CopyFrom(ToSpan(farr).subspan(6 * sizeof(float), sizeof(float)), buf_arr[6]->GetView(6 * sizeof(float)));
+            list.CopyFrom(
+                ToSpan(iarr).subspan(1 * sizeof(float), sizeof(float)), sb1->GetView(1 * sizeof(float))
+            );
+            list.CopyFrom(
+                ToSpan(iarr).subspan(2 * sizeof(float), sizeof(float)), rb0->GetView(2 * sizeof(float))
+            );
+            list.CopyFrom(
+                ToSpan(farr).subspan(3 * sizeof(float), sizeof(float)), rb1->GetView(3 * sizeof(float))
+            );
+            list.CopyFrom(
+                ToSpan(farr).subspan(4 * sizeof(float), sizeof(float)), tb0->GetView(4 * sizeof(float))
+            );
+            list.CopyFrom(
+                ToSpan(farr).subspan(5 * sizeof(float), sizeof(float)), tb1->GetView(5 * sizeof(float))
+            );
+            list.CopyFrom(
+                ToSpan(farr).subspan(6 * sizeof(float), sizeof(float)), buf_arr[6]->GetView(6 * sizeof(float))
+            );
 
             Array<BufferView> buf_arr_view(kNumBuffArr);
             for (int i = 0; i < kNumBuffArr; ++i) {
                 buf_arr_view[i] = buf_arr[i]->GetView(PF_R32_SFLOAT);
             }
-            list.Compute(pipeline, pc, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT), std::span{buf_arr_view}).Dispatch({1, 1, 1});
+            list.Compute(
+                    pipeline,
+                    pc,
+                    cb1,
+                    sb0,
+                    sb1,
+                    rb0,
+                    rb1,
+                    tb0->GetView(PF_R32_SFLOAT),
+                    tb1->GetView(PF_R32_SFLOAT),
+                    std::span{buf_arr_view}
+            )
+                .Dispatch({1, 1, 1});
             //list.Compute(pipeline, cb0, cb1, sb0, sb1, rb0, rb1, tb0->GetView(PF_R32_SFLOAT), tb1->GetView(PF_R32_SFLOAT)).Dispatch({1, 1, 1});
 
             list.CopyFrom(rb1->GetView(0, 10 * sizeof(float)), ToSpan(iarr));

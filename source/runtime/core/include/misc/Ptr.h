@@ -6,11 +6,9 @@ class alignas(Alignment) AlignedPtr {
 public:
     AlignedPtr() {}
 
-    AlignedPtr(const TPtr& Other)
-        : ref(Other) {}
+    AlignedPtr(const TPtr& Other) : ref(Other) {}
 
-    AlignedPtr(const AlignedPtr<TPtr, Alignment>& Other)
-        : ref(Other.ref) {}
+    AlignedPtr(const AlignedPtr<TPtr, Alignment>& Other) : ref(Other.ref) {}
 
     inline void operator=(const TPtr& Other) {
         ref = Other;

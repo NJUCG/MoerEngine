@@ -26,21 +26,21 @@
 #define VK_API_VERSION VK_API_VERSION_1_3
 #else
 #define VK_API_VERSION VK_API_VERSION_1_1
-#endif// VULKAN_RHI_RAYTRACING
+#endif // VULKAN_RHI_RAYTRACING
 
 namespace Moer::Render {
-    class VulkanWindowsPlatform : public VulkanGenericPlatform {
-    public:
-        // Array of required extensions for the platform (Required!)
-        static void GetInstanceExtensions(TExtensionArray& _extensions);
-        static void GetInstanceLayers(TLayerArray& _layers);
-        static void GetDeviceExtensions(TVulkanDeviceExtensionArray& _extensions);
-        static void GetDeviceLayers(TLayerArray& _layers) {}
-        // create the platform-specific surface object - required
-        static void CreateSurface(void* _window_handle, VkInstance _instance, VkSurfaceKHR& _surface);
-    };
+class VulkanWindowsPlatform : public VulkanGenericPlatform {
+public:
+    // Array of required extensions for the platform (Required!)
+    static void GetInstanceExtensions(TExtensionArray& _extensions);
+    static void GetInstanceLayers(TLayerArray& _layers);
+    static void GetDeviceExtensions(TVulkanDeviceExtensionArray& _extensions);
+    static void GetDeviceLayers(TLayerArray& _layers) {}
+    // create the platform-specific surface object - required
+    static void CreateSurface(void* _window_handle, VkInstance _instance, VkSurfaceKHR& _surface);
+};
 
-}// namespace Moer::Render
+} // namespace Moer::Render
 
 using VulkanPlatform = Moer::Render::VulkanWindowsPlatform;
-#endif// VULKAN_WINDOWS_PLATFORM_H
+#endif // VULKAN_WINDOWS_PLATFORM_H

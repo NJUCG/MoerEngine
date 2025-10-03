@@ -11,12 +11,9 @@
 
 #include "spdlog/spdlog.h"
 
-namespace Moer {
-namespace LogSystem {
-    CORE_API void Init();
-}
-
-}// namespace Moer::LogSystem
+namespace Moer { namespace LogSystem {
+CORE_API void Init();
+}} // namespace Moer::LogSystem
 
 // Active when in debug mode
 #define LOG_TRACE(...) SPDLOG_TRACE(__VA_ARGS__)

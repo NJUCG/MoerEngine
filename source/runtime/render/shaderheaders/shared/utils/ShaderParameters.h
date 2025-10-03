@@ -8,23 +8,23 @@ namespace Moer::Render {
 namespace Moer {
 #endif
 
-    struct BuildMipsParam {
-        uint2 src_size;
-        uint  src_mip_level;
-        uint  num_mip_levels;
-    };
+struct BuildMipsParam {
+    uint2 src_size;
+    uint  src_mip_level;
+    uint  num_mip_levels;
+};
 
-    struct GenLowDiscrepancySequenceParam {
-        uint num_samples;
-        uint num_dimensions;
-    };
+struct GenLowDiscrepancySequenceParam {
+    uint num_samples;
+    uint num_dimensions;
+};
 
-    struct ShowTextureParams {
-        uint2 dst_dim;
-        uint  bdls_handle;
-        uint  mip_level;
-        bool  use_bindless;
-    };
+struct ShowTextureParams {
+    uint2 dst_dim;
+    uint  bdls_handle;
+    uint  mip_level;
+    bool  use_bindless;
+};
 
 #ifdef __cplusplus
 }
@@ -32,4 +32,4 @@ namespace Moer {
 }
 #endif
 
-#endif//MOER_SHARED_LIGHTING_SHADER_PARAMETERS_H
+#endif //MOER_SHARED_LIGHTING_SHADER_PARAMETERS_H

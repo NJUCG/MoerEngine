@@ -24,7 +24,9 @@ public:
      * @return true 
      * @return false 
      */
-    virtual bool IsSupportTarget(const ShaderTargetInfo&) { return false; }
+    virtual bool IsSupportTarget(const ShaderTargetInfo&) {
+        return false;
+    }
 };
 
 class RENDER_API ShaderCompiler {

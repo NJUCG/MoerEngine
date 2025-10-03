@@ -21,7 +21,8 @@ public:
     CudaPass(RasterContext& context) {}
 
     uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image) {
-        if (ui_config.ai_is_cuda_enabled == false) return input_image;
+        if (ui_config.ai_is_cuda_enabled == false)
+            return input_image;
 
         return input_image;
     }

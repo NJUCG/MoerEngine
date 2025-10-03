@@ -87,7 +87,9 @@ RaytracingUI::RaytracingUI() {
 }
 
 void RaytracingUI::ShowConfig() {
-    if (!ImGui::TreeNode("Raytracing Config")) { return; }
+    if (!ImGui::TreeNode("Raytracing Config")) {
+        return;
+    }
 
     if (ImGui::TreeNode("Final Color")) {
         for (auto& [name, index] : final_color_map) {
@@ -274,7 +276,9 @@ void RaytracingUI::ShowConfig() {
             config.export_cfg.output_texture = (EOutputTexture)i;
         }
     }
-    if (ImGui::Button("Capture Screen")) { config.export_cfg.b_export = true; }
+    if (ImGui::Button("Capture Screen")) {
+        config.export_cfg.b_export = true;
+    }
 
     ImGui::TreePop();
 }

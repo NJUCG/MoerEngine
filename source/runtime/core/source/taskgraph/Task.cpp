@@ -59,7 +59,7 @@
 //	{
 //		// try to unlock the task. even if (some or all) prerequisites retraction fails we still proceed to try helping with other prerequisites or this task execution
 //
-//		// prerequisites are "consumed" here even if their retraction fails. this means that once prerequisite retraction failed, it won't be performed again. 
+//		// prerequisites are "consumed" here even if their retraction fails. this means that once prerequisite retraction failed, it won't be performed again.
 //		// this can be potentially improved by using a different container for prerequisites
 //		while (TaskBase* Prerequisite = Prerequisites.Pop())
 //		{
@@ -90,7 +90,7 @@
 //		if (!TryExecuteTask())
 //		{
 //			return false; // still locked by prerequisites, or another thread managed to set execution flag first, or we're inside this task execution
-//			// we could try to help with nested tasks execution (the task execution could already spawned a couple of nested tasks sitting in the queue). 
+//			// we could try to help with nested tasks execution (the task execution could already spawned a couple of nested tasks sitting in the queue).
 //			// it's unclear how important this is, but this would definitely lead to more complicated impl. we can revisit this once we see such instances in profiler captures
 //		}
 //	}
@@ -105,7 +105,7 @@
 //	{
 //		// keep trying retracting all nested tasks even if some of them fail, so the current worker can contribute instead of being blocked
 //		bool bSucceeded = true;
-//		// prerequisites are "consumed" here even if their retraction fails. this means that once prerequisite retraction failed, it won't be performed again. 
+//		// prerequisites are "consumed" here even if their retraction fails. this means that once prerequisite retraction failed, it won't be performed again.
 //		// this can be potentially improved by using a different container for prerequisites
 //		while (TaskBase* Prerequisite = Prerequisites.Pop())
 //		{
@@ -122,7 +122,7 @@
 //		}
 //	}
 //
-//	// it happens that all nested tasks are completed and are in the process of completing the parent (this task) concurrently, 
+//	// it happens that all nested tasks are completed and are in the process of completing the parent (this task) concurrently,
 //	// but the flag is not set yet. wait for it to maintain postconditions
 //	while (!IsCompleted())
 //	{
@@ -198,7 +198,7 @@
 //		return true;
 //	}
 //
-//	// the event must be alive for the task and this function lifetime, we don't know which one will be finished first as waiting can 
+//	// the event must be alive for the task and this function lifetime, we don't know which one will be finished first as waiting can
 //	// time out before the waiting task is completed
 //	FSharedEventRef CompletionEvent;
 //	auto WaitingTaskBody = [CompletionEvent] { CompletionEvent->Trigger(); };

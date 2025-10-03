@@ -16,7 +16,9 @@ RasterUI::RasterUI() {
 }
 
 void RasterUI::ShowConfig() {
-    if (!ImGui::TreeNode("Raster Settings")) { return; }
+    if (!ImGui::TreeNode("Raster Settings")) {
+        return;
+    }
 
     auto draw_border = [&]() {
         // 获取选项的矩形区域

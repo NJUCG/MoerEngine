@@ -18,7 +18,9 @@ public:
 
     void ShowConfig();
 
-    const RasterConfig& GetConfig() const { return m_config; }
+    const RasterConfig& GetConfig() const {
+        return m_config;
+    }
 
     Render::TextureView GetSelectedFrameBuffer() const;
 

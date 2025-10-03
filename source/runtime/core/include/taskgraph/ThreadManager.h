@@ -4,9 +4,9 @@
 #include "misc/MMemory.h"
 #include "misc/STL.h"
 #include "platform/Platform.h"
+#include <assert.h>
 #include <string>
 #include <thread>
-#include <assert.h>
 #include <variant>
 typedef int32_t ThreadIndex;
 typedef int32_t QueueIndex;
@@ -29,7 +29,7 @@ public:
         NORMAL_PRI          = 0x200,
         LOW_PRI             = 0x400,
         PRIORITY_SHEFT      = 9,
-        PRIORITY_MASK       = 0x600,//8-10 for priority
+        PRIORITY_MASK       = 0x600, //8-10 for priority
         EGameThread_local   = EMainThread | LOCAL_QUEUE,
         ERenderThread_local = ERenderThread | LOCAL_QUEUE,
         PriorityCount       = 3,
@@ -80,9 +80,11 @@ private:
     void Initialize();
 
 public:
-    void                  AddThread(uint32_t id, RunnableThread*);
-    void                  RemoveThread(RunnableThread*);
-    inline int32_t        GetNum() { return m_threads.size(); }
+    void           AddThread(uint32_t id, RunnableThread*);
+    void           RemoveThread(RunnableThread*);
+    inline int32_t GetNum() {
+        return m_threads.size();
+    }
     void                  Tick();
     static ThreadManager& Instance();
     static const char*    GetThreadName(uint32_t id);
@@ -111,36 +113,40 @@ class RunnableThread {
     friend class TaskGraph;
 
 public:
-    CORE_API static RunnableThread* Create(Runnable*        _runnable,
-                                           ThreadAttributes _attributes);
+    CORE_API static RunnableThread* Create(Runnable* _runnable, ThreadAttributes _attributes);
     virtual ~RunnableThread();
     void Tick();
     void Join() {
-        if (m_thread && m_thread->joinable()){
+        if (m_thread && m_thread->joinable()) {
             m_thread->join();
             MoerDelete(m_thread);
         }
     }
-    void Detach() { m_thread->detach(); }
-    bool Joinable() { return m_thread->joinable(); }
+    void Detach() {
+        m_thread->detach();
+    }
+    bool Joinable() {
+        return m_thread->joinable();
+    }
     void WaitUntilFinished();
 
-    inline const std::string& GetName() { return name; }
+    inline const std::string& GetName() {
+        return name;
+    }
 
 protected:
     void Setup(uint64_t affinity);
     void SetAffinity(Affinity&& _affinity);
     void SetName(std::string_view _name);
-    RunnableThread(Runnable*,
-                   ThreadAttributes _attributes);
+    RunnableThread(Runnable*, ThreadAttributes _attributes);
     uint32_t Run();
 
 private:
-    Runnable*     m_runnable;
-    Event*        m_create_event;
-    Event*        m_end_event;
-    uint32_t      id;
-    std::string   name;
+    Runnable*    m_runnable;
+    Event*       m_create_event;
+    Event*       m_end_event;
+    uint32_t     id;
+    std::string  name;
     std::thread* m_thread;
 };
 
@@ -162,6 +168,8 @@ public:
     virtual void        Init() override;
     virtual void        Stop() override;
     virtual void        Exit() override;
-    virtual ThreadIndex GetIndex() override { return 0; }
+    virtual ThreadIndex GetIndex() override {
+        return 0;
+    }
 };
-#endif// !THREAD_MANAGER_H
+#endif // !THREAD_MANAGER_H

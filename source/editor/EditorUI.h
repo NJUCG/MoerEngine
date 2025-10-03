@@ -35,14 +35,28 @@ public:
     void RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output);
     void PresentWindows();
 
-    float2        GetSceneColorResolution() const { return m_scene_color_resolution; }
-    float2        GetSceneColorPos() const { return m_scene_color_pos; }
-    uint2         GetResolution() const { return m_resolution; }
-    const Config& GetConfig() const { return m_config; }
-    bool          IsNeedReload() const { return m_b_need_reload; }
-    float GetSceneColorAspectRatio() const { return m_scene_color_resolution.x / m_scene_color_resolution.y; }
+    float2 GetSceneColorResolution() const {
+        return m_scene_color_resolution;
+    }
+    float2 GetSceneColorPos() const {
+        return m_scene_color_pos;
+    }
+    uint2 GetResolution() const {
+        return m_resolution;
+    }
+    const Config& GetConfig() const {
+        return m_config;
+    }
+    bool IsNeedReload() const {
+        return m_b_need_reload;
+    }
+    float GetSceneColorAspectRatio() const {
+        return m_scene_color_resolution.x / m_scene_color_resolution.y;
+    }
 
-    void SetShowSubUI(bool show) { m_b_show_sub_ui = show; }
+    void SetShowSubUI(bool show) {
+        m_b_show_sub_ui = show;
+    }
 
     bool                IsSeperateWindow() const;
     Render::TextureView GetWindowFrameBuffer();

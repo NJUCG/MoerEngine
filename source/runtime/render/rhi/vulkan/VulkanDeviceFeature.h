@@ -33,4 +33,4 @@ bool operator>=(const VkPhysicalDeviceVulkan11Features& _lhs, const VkPhysicalDe
 bool operator>=(const VkPhysicalDeviceVulkan12Features& _lhs, const VkPhysicalDeviceVulkan12Features& _rhs);
 bool operator>=(const VkPhysicalDeviceVulkan13Features& _lhs, const VkPhysicalDeviceVulkan13Features& _rhs);
 
-#endif//VULKAN_DEVICE_FEATURE_H
+#endif //VULKAN_DEVICE_FEATURE_H

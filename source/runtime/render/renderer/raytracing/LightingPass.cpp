@@ -91,8 +91,10 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         ctx.frame_rt.prev_diffuse_lighting, ctx.ris_buf, ctx.ris_light_data_buf, ctx.neighbor_offset_buf, \
         scene.GetBindlessArray()
 
-    auto div_ceil = [](uint _a, uint _b) -> uint { return (_a + _b - 1) / _b; };
-    int  i        = s_di_light_compact_bit;
+    auto div_ceil = [](uint _a, uint _b) -> uint {
+        return (_a + _b - 1) / _b;
+    };
+    int i = s_di_light_compact_bit;
 
     ArrayArgReference arg_ref =
         _cmd_list.RegisterArgs(presample_light_pipeline.SetArgs(DI_BINDING_ARGS(_rt_ctx)));

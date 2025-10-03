@@ -3,62 +3,59 @@
 #include "rhi/RHI.h"
 
 namespace Moer::Render {
-    struct UIRenderer::Impl {
-        Impl(RenderDevice& _device) : backend(_device){};
-        ~Impl() {
-        }
-        void RegisterImage(Texture* _texture, Sampler _sampler) {
-            backend.RegisterImage(_texture, _sampler);
-        }
-        void UnRegisterImage(Texture* _texture) {
-            backend.UnRegisterImage(_texture);
-        }
-
-        void BeginGUIFrame() {
-            backend.BeginGUIFrame();
-        }
-        void EndGUIFrame() {
-            backend.EndGUIFrame();
-        }
-
-        void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
-            backend.RenderGUI(_cmd_list, _framebuffer);
-        }
-        ImGUIRenderBackend backend;
-    };
-
-    UIRenderer::UIRenderer(RenderDevice& _device) : impl(MakeUnique<Impl>(_device)) {
+struct UIRenderer::Impl {
+    Impl(RenderDevice& _device) : backend(_device) {};
+    ~Impl() {}
+    void RegisterImage(Texture* _texture, Sampler _sampler) {
+        backend.RegisterImage(_texture, _sampler);
+    }
+    void UnRegisterImage(Texture* _texture) {
+        backend.UnRegisterImage(_texture);
     }
 
-    UIRenderer::~UIRenderer() {
+    void BeginGUIFrame() {
+        backend.BeginGUIFrame();
+    }
+    void EndGUIFrame() {
+        backend.EndGUIFrame();
     }
 
-    void UIRenderer::RegisterImage(Texture* _texture, Sampler _sampler) {
-        impl->RegisterImage(_texture, _sampler);
+    void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
+        backend.RenderGUI(_cmd_list, _framebuffer);
     }
+    ImGUIRenderBackend backend;
+};
 
-    void UIRenderer::UnRegisterImage(Texture* _texture) {
-        impl->UnRegisterImage(_texture);
-    }
+UIRenderer::UIRenderer(RenderDevice& _device) : impl(MakeUnique<Impl>(_device)) {}
 
-    void UIRenderer::BeginGUIFrame() {
-        impl->BeginGUIFrame();
-    }
+UIRenderer::~UIRenderer() {}
 
-    void UIRenderer::EndGUIFrame() {
-        impl->EndGUIFrame();
-    }
+void UIRenderer::RegisterImage(Texture* _texture, Sampler _sampler) {
+    impl->RegisterImage(_texture, _sampler);
+}
 
-    void UIRenderer::RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
-        impl->RenderGUI(_cmd_list, _framebuffer);
-    }
+void UIRenderer::UnRegisterImage(Texture* _texture) {
+    impl->UnRegisterImage(_texture);
+}
 
-    TextureView UIRenderer::GetWindowFrameBuffer(void* _window) {
-        return impl->backend.GetWindowFrameBuffer(_window);
-    }
+void UIRenderer::BeginGUIFrame() {
+    impl->BeginGUIFrame();
+}
 
-    void UIRenderer::PresentWindows() {
-        impl->backend.PresentWindows();
-    }
+void UIRenderer::EndGUIFrame() {
+    impl->EndGUIFrame();
+}
 
-}// namespace Moer::Render
+void UIRenderer::RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
+    impl->RenderGUI(_cmd_list, _framebuffer);
+}
+
+TextureView UIRenderer::GetWindowFrameBuffer(void* _window) {
+    return impl->backend.GetWindowFrameBuffer(_window);
+}
+
+void UIRenderer::PresentWindows() {
+    impl->backend.PresentWindows();
+}
+
+} // namespace Moer::Render

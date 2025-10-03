@@ -125,7 +125,9 @@ void ImportanceSamplingContext::AdvanceFrameIdx(uint _frame_idx) {
     }
 }
 
-void ImportanceSamplingContext::TickFrame(uint _frame_idx) { AdvanceFrameIdx(_frame_idx); }
+void ImportanceSamplingContext::TickFrame(uint _frame_idx) {
+    AdvanceFrameIdx(_frame_idx);
+}
 
 SimpleSegmentAllocator::SimpleSegmentAllocator() : total_element_cnt(0) {}
 
@@ -135,6 +137,8 @@ uint SimpleSegmentAllocator::Allocate(uint _size_elements) {
     return ret;
 }
 
-uint SimpleSegmentAllocator::GetTotalSize() const { return total_element_cnt; }
+uint SimpleSegmentAllocator::GetTotalSize() const {
+    return total_element_cnt;
+}
 
 } // namespace Moer::Render

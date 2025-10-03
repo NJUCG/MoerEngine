@@ -98,7 +98,9 @@ struct RasterContext {
         );
 
         cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * channels), noise_tex.tex);
-        cmd_list.AddCallback([data]() { stbi_image_free(data); });
+        cmd_list.AddCallback([data]() {
+            stbi_image_free(data);
+        });
 
         noise_tex.handle = bdls->AllocateTexture(noise_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
     }
@@ -138,7 +140,9 @@ struct RasterContext {
             cmd_list.CopyFrom(
                 std::span<Moer::byte>((Moer::byte*)data, width * height * channels), skybox_tex[i].tex
             );
-            cmd_list.AddCallback([data]() { stbi_image_free(data); });
+            cmd_list.AddCallback([data]() {
+                stbi_image_free(data);
+            });
 
             skybox_tex[i].handle = bdls->AllocateTexture(skybox_tex[i].tex, Sampler(SF_LINEAR, SAM_REPEAT));
         }
@@ -168,13 +172,21 @@ struct RasterContext {
 
     // MARK: Frame Buffers
 
-    void CreateFrameBuffers() { textures.CreateFrameBuffers(device, resolution); }
+    void CreateFrameBuffers() {
+        textures.CreateFrameBuffers(device, resolution);
+    }
 
-    void AllocateFrameBuffers() { textures.AllocateFrameBuffers(cmd_list, bdls); }
+    void AllocateFrameBuffers() {
+        textures.AllocateFrameBuffers(cmd_list, bdls);
+    }
 
-    void FreeFrameBuffers() { textures.FreeFrameBuffers(bdls); }
+    void FreeFrameBuffers() {
+        textures.FreeFrameBuffers(bdls);
+    }
 
-    Array<TextureView> GetDisplayableFrameBuffersView() { return textures.GetDisplayableFrameBuffersView(); }
+    Array<TextureView> GetDisplayableFrameBuffersView() {
+        return textures.GetDisplayableFrameBuffersView();
+    }
 };
 
 } // namespace Moer::Render::Raster

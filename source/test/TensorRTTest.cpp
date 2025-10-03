@@ -27,24 +27,20 @@ class Logger : public ILogger {
 int main() {
     // 1. Builder
     auto       builder       = std::unique_ptr<IBuilder>(createInferBuilder(gLogger));
-    const auto explicitBatch = 1U << static_cast<uint32_t>(
-                                   NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+    const auto explicitBatch = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
 
-    auto network = std::unique_ptr<INetworkDefinition>(
-        builder->createNetworkV2(explicitBatch));
+    auto network = std::unique_ptr<INetworkDefinition>(builder->createNetworkV2(explicitBatch));
 
-    auto parser = std::unique_ptr<nvonnxparser::IParser>(
-        nvonnxparser::createParser(*network, gLogger));
+    auto parser = std::unique_ptr<nvonnxparser::IParser>(nvonnxparser::createParser(*network, gLogger));
 
-    if (!parser->parseFromFile(ONNX_PATH,
-                               static_cast<int>(ILogger::Severity::kWARNING))) {
+    if (!parser->parseFromFile(ONNX_PATH, static_cast<int>(ILogger::Severity::kWARNING))) {
         std::cerr << "ONNX parse failed. Please check the ONNX file path!\n";
         return -1;
     }
 
     // 2. Config
     auto config = std::unique_ptr<IBuilderConfig>(builder->createBuilderConfig());
-    config->setMemoryPoolLimit(MemoryPoolType::kWORKSPACE, 1ULL << 30);// 1GB
+    config->setMemoryPoolLimit(MemoryPoolType::kWORKSPACE, 1ULL << 30); // 1GB
 
     auto profile = builder->createOptimizationProfile();
 
@@ -56,16 +52,14 @@ int main() {
     config->addOptimizationProfile(profile);
 
     // 2.1 Engine
-    auto engine = std::unique_ptr<ICudaEngine>(
-        builder->buildEngineWithConfig(*network, *config));
+    auto engine = std::unique_ptr<ICudaEngine>(builder->buildEngineWithConfig(*network, *config));
     if (!engine) {
         std::cerr << "Engine build failed\n";
         return -1;
     }
 
     // 3. Context
-    auto context = std::unique_ptr<IExecutionContext>(
-        engine->createExecutionContext());
+    auto context = std::unique_ptr<IExecutionContext>(engine->createExecutionContext());
     if (!context) {
         std::cerr << "Context creation failed\n";
         return -1;
@@ -78,17 +72,19 @@ int main() {
         std::cout << "Tensor[" << i << "] name = " << engine->getIOTensorName(i) << "\n";
     }
 
-    const char* inputName  = engine->getIOTensorName(0);// 假设第0个是输入
-    const char* outputName = engine->getIOTensorName(1);// 假设第1个是输出
+    const char* inputName  = engine->getIOTensorName(0); // 假设第0个是输入
+    const char* outputName = engine->getIOTensorName(1); // 假设第1个是输出
     auto        inputDims  = engine->getTensorShape(inputName);
     auto        outputDims = engine->getTensorShape(outputName);
 
     std::cout << "Input dims: ";
-    for (int i = 0; i < inputDims.nbDims; i++) std::cout << inputDims.d[i] << " ";
+    for (int i = 0; i < inputDims.nbDims; i++)
+        std::cout << inputDims.d[i] << " ";
     std::cout << "\n";
 
     std::cout << "Output dims: ";
-    for (int i = 0; i < outputDims.nbDims; i++) std::cout << outputDims.d[i] << " ";
+    for (int i = 0; i < outputDims.nbDims; i++)
+        std::cout << outputDims.d[i] << " ";
     std::cout << "\n";
 
     return 0;

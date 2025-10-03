@@ -2,7 +2,7 @@
 #define MACRO_H
 #ifndef FORCEINLINE
 #define FORCEINLINE __forceinline
-#endif// !FORCE_INLINE
+#endif // !FORCE_INLINE
 
 // clang-format off
 #if defined(_WIN32)
@@ -59,4 +59,4 @@
         }                                     \
     }
 
-#endif// !MACRO_H
+#endif // !MACRO_H

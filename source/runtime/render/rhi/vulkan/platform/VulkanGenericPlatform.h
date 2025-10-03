@@ -25,4 +25,4 @@ public:
     static void RestrictEnabledPhysicalDeviceFeatures(VulkanDeviceFeatures* _gpu_features);
 };
 
-#endif// VULKAN_GENERIC_PLATFORM_H
+#endif // VULKAN_GENERIC_PLATFORM_H

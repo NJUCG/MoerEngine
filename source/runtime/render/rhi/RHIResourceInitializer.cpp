@@ -1,5 +1,5 @@
-#include "rhi/RHIResourceInitilizer.h"
 #include "misc/Hash.h"
+#include "rhi/RHIResourceInitilizer.h"
 uint32_t GetHash(const RHISamplerCreateInfo& target) {
     uint32_t hash;
     HashCombine(hash, GetHash(target.filter));
@@ -15,16 +15,11 @@ uint32_t GetHash(const RHISamplerCreateInfo& target) {
     return hash;
 }
 bool operator==(const RHISamplerCreateInfo& lhs, const RHISamplerCreateInfo& rhs) {
-    return lhs.filter == rhs.filter &&
-           lhs.address_mode_u == rhs.address_mode_u &&
-           lhs.address_mode_v == rhs.address_mode_v &&
-           lhs.address_mode_w == rhs.address_mode_w &&
-           lhs.mip_lod_bias == rhs.mip_lod_bias &&
-           lhs.min_mip_level == rhs.min_mip_level &&
-           lhs.max_mip_level == rhs.max_mip_level &&
-           lhs.max_anisotropy == rhs.max_anisotropy &&
-           lhs.border_color == rhs.border_color &&
-           lhs.compare_op == rhs.compare_op;
+    return lhs.filter == rhs.filter && lhs.address_mode_u == rhs.address_mode_u &&
+           lhs.address_mode_v == rhs.address_mode_v && lhs.address_mode_w == rhs.address_mode_w &&
+           lhs.mip_lod_bias == rhs.mip_lod_bias && lhs.min_mip_level == rhs.min_mip_level &&
+           lhs.max_mip_level == rhs.max_mip_level && lhs.max_anisotropy == rhs.max_anisotropy &&
+           lhs.border_color == rhs.border_color && lhs.compare_op == rhs.compare_op;
 }
 
 uint32_t GetHash(const RHIDepthStencilStateInfo& target) {
@@ -47,8 +42,7 @@ uint32_t GetHash(const RHIDepthStencilStateInfo& target) {
 }
 
 bool operator==(const RHIDepthStencilStateInfo& lhs, const RHIDepthStencilStateInfo& rhs) {
-    return lhs.b_enable_depth_write == rhs.b_enable_depth_write &&
-           lhs.depth_test_op == rhs.depth_test_op &&
+    return lhs.b_enable_depth_write == rhs.b_enable_depth_write && lhs.depth_test_op == rhs.depth_test_op &&
            lhs.b_enable_front_face_stencil == rhs.b_enable_front_face_stencil &&
            lhs.front_face_stencil_test == rhs.front_face_stencil_test &&
            lhs.front_face_stencil_fail_stencil_op == rhs.front_face_stencil_fail_stencil_op &&
@@ -59,8 +53,7 @@ bool operator==(const RHIDepthStencilStateInfo& lhs, const RHIDepthStencilStateI
            lhs.back_face_stencil_fail_stencil_op == rhs.back_face_stencil_fail_stencil_op &&
            lhs.back_face_depth_fail_stencil_op == rhs.back_face_depth_fail_stencil_op &&
            lhs.back_face_pass_stencil_op == rhs.back_face_pass_stencil_op &&
-           lhs.stencil_readmask == rhs.stencil_readmask &&
-           lhs.stencil_writemask == rhs.stencil_writemask;
+           lhs.stencil_readmask == rhs.stencil_readmask && lhs.stencil_writemask == rhs.stencil_writemask;
 }
 
 uint32_t GetHash(const RHIRasterizeInfo& target) {
@@ -76,12 +69,9 @@ uint32_t GetHash(const RHIRasterizeInfo& target) {
     return hash;
 }
 bool operator==(const RHIRasterizeInfo& lhs, const RHIRasterizeInfo& rhs) {
-    return lhs.fill_mode == rhs.fill_mode &&
-           lhs.cull_mode == rhs.cull_mode &&
-           lhs.b_depth_bias == rhs.b_depth_bias &&
-           lhs.b_depth_clamp_enable == rhs.b_depth_clamp_enable &&
-           lhs.b_enable_msaa == rhs.b_enable_msaa &&
-           lhs.depth_bias == rhs.depth_bias &&
+    return lhs.fill_mode == rhs.fill_mode && lhs.cull_mode == rhs.cull_mode &&
+           lhs.b_depth_bias == rhs.b_depth_bias && lhs.b_depth_clamp_enable == rhs.b_depth_clamp_enable &&
+           lhs.b_enable_msaa == rhs.b_enable_msaa && lhs.depth_bias == rhs.depth_bias &&
            lhs.depth_bias_clamp == rhs.depth_bias_clamp &&
            lhs.depth_bias_slop_factor == rhs.depth_bias_slop_factor;
 }
@@ -95,10 +85,8 @@ uint32_t GetHash(const RHIMultisampleStateInfo& target) {
     return hash;
 }
 bool operator==(const RHIMultisampleStateInfo& lhs, const RHIMultisampleStateInfo& rhs) {
-    return lhs.sample_count == rhs.sample_count &&
-           lhs.b_sample_shading == rhs.b_sample_shading &&
-           lhs.b_alpha_to_converge == rhs.b_alpha_to_converge &&
-           lhs.b_alpha_to_one == rhs.b_alpha_to_one &&
+    return lhs.sample_count == rhs.sample_count && lhs.b_sample_shading == rhs.b_sample_shading &&
+           lhs.b_alpha_to_converge == rhs.b_alpha_to_converge && lhs.b_alpha_to_one == rhs.b_alpha_to_one &&
            lhs.min_sample_shading == rhs.min_sample_shading;
 }
 uint32_t GetHash(const RHIBlendAttachmentInfo& target) {

@@ -1,25 +1,25 @@
 #include <filesystem>
 namespace Moer {
-    class Editor;
-    class Launcher {
-    public:
-        Launcher(const Launcher&)            = delete;
-        Launcher(Launcher&&)                 = delete;
-        Launcher& operator=(const Launcher&) = delete;
-        Launcher& operator=(Launcher&&)      = delete;
+class Editor;
+class Launcher {
+public:
+    Launcher(const Launcher&)            = delete;
+    Launcher(Launcher&&)                 = delete;
+    Launcher& operator=(const Launcher&) = delete;
+    Launcher& operator=(Launcher&&)      = delete;
 
-    public:
-        void Init(const std::filesystem::path&);
+public:
+    void Init(const std::filesystem::path&);
 
-        void Run();
+    void Run();
 
-        void Quit();
+    void Quit();
 
-        static Launcher& GetInstance();
+    static Launcher& GetInstance();
 
-    private:
-        Launcher();
+private:
+    Launcher();
 
-        Editor* editor;
-    };
-}// namespace Moer
+    Editor* editor;
+};
+} // namespace Moer

@@ -16,18 +16,17 @@ public:
     ~GlobalShader();
     virtual void Delete() {}
 
-    static ShaderParametersMetadata* GetParametersMetaData() { return nullptr; }
+    static ShaderParametersMetadata* GetParametersMetaData() {
+        return nullptr;
+    }
 
-
-    static bool ShouldCompileMutation(const ShaderMutationParameters&) { return true; }
+    static bool ShouldCompileMutation(const ShaderMutationParameters&) {
+        return true;
+    }
 
     static void SetCompileEnvironment(const ShaderMutationParameters&, ShaderCompilerEnvironment&) {}
 
 protected:
-
-
 private:
-
-
 };
 #endif

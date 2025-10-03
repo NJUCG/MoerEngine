@@ -14,23 +14,23 @@ namespace Moer::Render {
 namespace Moer {
 #endif
 
-    // MARK: Main Content Begin
+// MARK: Main Content Begin
 
-    struct GeometryPassBindlessParam {
-        float4x4 world2clip;
-        uint     instance_data;
-        uint     geometry_data;
-        uint     geometry_instance_data;
-    };
+struct GeometryPassBindlessParam {
+    float4x4 world2clip;
+    uint     instance_data;
+    uint     geometry_data;
+    uint     geometry_instance_data;
+};
 
-    struct ShadowDepthPassBindlessParam {
-        float4x4 world2clip;
-        uint     instance_data;
-        uint     geometry_data;
-        uint     geometry_instance_data;
-    };
+struct ShadowDepthPassBindlessParam {
+    float4x4 world2clip;
+    uint     instance_data;
+    uint     geometry_data;
+    uint     geometry_instance_data;
+};
 
-    // MARK: Main Content End
+// MARK: Main Content End
 
 #ifdef __cplusplus
 }

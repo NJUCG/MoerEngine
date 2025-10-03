@@ -2,15 +2,15 @@
 #define GRAPH_TASK_H
 #include "API_Macro.h"
 #include "ThreadManager.h"
-#include <atomic>
-#include <functional>
-#include <type_traits>
-#include <utility>
-#include <memory>
 #include "misc/CountableRef.h"
+#include "misc/LockFree.h"
 #include "misc/MMemory.h"
 #include "misc/MacroUtils.h"
-#include "misc/LockFree.h"
+#include <atomic>
+#include <functional>
+#include <memory>
+#include <type_traits>
+#include <utility>
 
 class GraphEvent;
 typedef CountableRef<GraphEvent>   GraphEventRef;
@@ -41,8 +41,12 @@ public:
         }
         return shouldWakeWorker;
     }
-    ThreadPriority GetPriority() { return EThread::GetThreadPriority(m_preferd_thread); }
-    EThread::Type  GetPreferredThread() { return m_preferd_thread; }
+    ThreadPriority GetPriority() {
+        return EThread::GetThreadPriority(m_preferd_thread);
+    }
+    EThread::Type GetPreferredThread() {
+        return m_preferd_thread;
+    }
 
 protected:
     EThread::Type        m_preferd_thread{EThread::Invalid};
@@ -91,7 +95,14 @@ class GraphTask final : public BaseGraphTask {
     class Constructor {
     public:
         friend class GraphTask;
-        Constructor(GraphTask* _owner, const GraphEventArray* _prerequests = nullptr, EThread::Type _currentThread = EThread::AnyThread_NormalPri) : owner{_owner}, prerequests{_prerequests}, current_thread{_currentThread} {}
+        Constructor(
+            GraphTask*             _owner,
+            const GraphEventArray* _prerequests   = nullptr,
+            EThread::Type          _currentThread = EThread::AnyThread_NormalPri
+        ) :
+            owner{_owner},
+            prerequests{_prerequests},
+            current_thread{_currentThread} {}
 
     public:
         template<typename... Ts>
@@ -210,15 +221,26 @@ public:
     virtual void DestroyTask() override {
         MoerDelete(this);
     }
-    static Constructor CreateTask(GraphEventRef subsequents, const GraphEventArray* preRequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD) {
+    static Constructor CreateTask(
+        GraphEventRef          subsequents,
+        const GraphEventArray* preRequests   = nullptr,
+        EThread::Type          currentThread = EThread::UNKNOWN_THREAD
+    ) {
         int event_count = preRequests == nullptr ? 0 : preRequests->size();
         return Constructor(MoerNew(GraphTask)(subsequents, event_count), preRequests, currentThread);
     }
-    static Constructor CreateTask(const GraphEventArray* preRequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD) {
+    static Constructor CreateTask(
+        const GraphEventArray* preRequests   = nullptr,
+        EThread::Type          currentThread = EThread::UNKNOWN_THREAD
+    ) {
         int event_count = preRequests == nullptr ? 0 : preRequests->size();
-        return Constructor(MoerNew(GraphTask)(GraphEvent::CreateGraphEvent(), event_count), preRequests, currentThread);
+        return Constructor(
+            MoerNew(GraphTask)(GraphEvent::CreateGraphEvent(), event_count), preRequests, currentThread
+        );
     }
-    GraphEventRef GetCompletionEvent() { return m_subsequents; };
+    GraphEventRef GetCompletionEvent() {
+        return m_subsequents;
+    };
 
 private:
     GraphTask(GraphEventRef _subsequents, int32_t initialCount) : BaseGraphTask(initialCount + 1) {
@@ -226,8 +248,11 @@ private:
     }
     GraphTask() : BaseGraphTask(1) {}
 
-    GraphEventRef
-    Setup(const GraphEventArray* prerequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD, bool unlock = true) {
+    GraphEventRef Setup(
+        const GraphEventArray* prerequests   = nullptr,
+        EThread::Type          currentThread = EThread::UNKNOWN_THREAD,
+        bool                   unlock        = true
+    ) {
         GraphEventRef prevent_deconstruct = m_subsequents;
         TaskType&     task                = *(TaskType*)&task_slot;
         int32_t       completed_prerequest_count{0};
@@ -263,7 +288,10 @@ private:
         return prevent_deconstruct;
     }
 
-    GraphTask* Hold(const GraphEventArray* prerequests = nullptr, EThread::Type currentThread = EThread::UNKNOWN_THREAD) {
+    GraphTask* Hold(
+        const GraphEventArray* prerequests   = nullptr,
+        EThread::Type          currentThread = EThread::UNKNOWN_THREAD
+    ) {
         Setup(prerequests, currentThread, false);
         return this;
     }
@@ -272,4 +300,4 @@ private:
     GraphEventRef               m_subsequents;
 };
 
-#endif// !GRAPH_TASK_H
+#endif // !GRAPH_TASK_H

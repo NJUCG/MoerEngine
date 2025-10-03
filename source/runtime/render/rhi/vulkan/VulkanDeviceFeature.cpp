@@ -1,6 +1,6 @@
-#include <volk.h>
 #include "VulkanDeviceFeature.h"
 #include "VulkanPlatform.h"
+#include <volk.h>
 
 VulkanDeviceFeatures VulkanDeviceFeatures::GetMERequiredFeatures(uint32_t _api_version) {
     VulkanDeviceFeatures enabled_features;
@@ -80,7 +80,8 @@ VulkanDeviceFeatures VulkanDeviceFeatures::GetGpuFeatures(VkPhysicalDevice _gpu,
 }
 
 bool VulkanDeviceFeatures::Contains(const VulkanDeviceFeatures& _other) const {
-    return core_1_0 >= _other.core_1_0 && core_1_1 >= _other.core_1_1 && core_1_2 >= _other.core_1_2 && core_1_3 >= _other.core_1_3;
+    return core_1_0 >= _other.core_1_0 && core_1_1 >= _other.core_1_1 && core_1_2 >= _other.core_1_2 &&
+           core_1_3 >= _other.core_1_3;
 }
 
 void VulkanDeviceFeatures::PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version) {

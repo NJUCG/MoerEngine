@@ -2,16 +2,15 @@
 #include "PixelFormat.h"
 #include "config/ConfigManager.h"
 #include "platform/Platform.h"
-#include <format>
 #include "shader/ShaderCommon.h"
 #include "spirv.hpp"
+#include <format>
 
 ERHIPipelineStageFlags ToPipelineStageFlag(spv::ExecutionModel _stage) {
     switch (_stage) {
         case spv::ExecutionModelVertex:
             return ERHIPipelineStageFlags::PS_VERTEX_SHADER;
         case spv::ExecutionModelFragment:
-
             return ERHIPipelineStageFlags::PS_FRAGMENT_SHADER;
         case spv::ExecutionModelGLCompute:
             return ERHIPipelineStageFlags::PS_COMPUTE_SHADER;
@@ -44,7 +43,6 @@ EShaderParameterType BindingTypeToParameterType(EShaderBindingBaseType _type) {
         case SBT_FLOAT32:
             return EShaderParameterType::Num;
         case SBT_CBV:
-
             return EShaderParameterType::CBV;
         case SBT_CONST_STRUCT:
             return EShaderParameterType::CONSTANT_STRUCT;
@@ -86,8 +84,10 @@ const auto* GetShaderTypeWChar(EShaderType _type) {
             return L"lib";
         case ST_RAY_ANYHIT:
             return L"lib";
-        case ST_Num: break;
-        default: break;
+        case ST_Num:
+            break;
+        default:
+            break;
     }
     return L"";
 }
@@ -158,7 +158,6 @@ EPixelFormat ToPixelFormat(spv::ImageFormat _format) {
         case spv::ImageFormat::ImageFormatRgba16ui:
             return EPixelFormat::PF_R16G16B16A16_UINT;
         case spv::ImageFormat::ImageFormatRgba8ui:
-
             return EPixelFormat::PF_R8G8B8A8_UINT;
         case spv::ImageFormat::ImageFormatR32ui:
             return EPixelFormat::PF_R32_UINT;
@@ -191,7 +190,8 @@ const auto* GetShaderModel(EShaderPlatform _type) {
         case SP_VULKAN_SM6:
             return L"6_7";
         case SP_Num:
-        case SP_NumBits: break;
+        case SP_NumBits:
+            break;
     }
     return L"";
 }

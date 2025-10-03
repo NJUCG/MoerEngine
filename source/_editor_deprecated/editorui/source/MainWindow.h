@@ -6,9 +6,11 @@ public:
     // virtual void Init(const UICreateInfo& info);
     void Show();
 
-    virtual ~MainWindow(){};
+    virtual ~MainWindow() {};
 
-    bool* ShowWindow() { return &b_show; };
+    bool* ShowWindow() {
+        return &b_show;
+    };
 
 private:
     bool b_show{true};

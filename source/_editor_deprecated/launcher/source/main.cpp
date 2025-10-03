@@ -1,10 +1,10 @@
+#include "Core.h"
 #include "Launcher.h"
 #include "core/include/log/LogSystem.h"
 #include <exception>
 #include <filesystem>
 #include <stdexcept>
 #include <stdint.h>
-#include "Core.h"
 int main(int argc, char** argv) {
 
     Moer::Launcher& launcher = Moer::Launcher::GetInstance();

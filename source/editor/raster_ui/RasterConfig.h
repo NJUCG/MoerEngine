@@ -9,10 +9,21 @@
 
 namespace Moer {
 
-enum class EShadingMode { DEFAULT = 0, DEBUG, NUM };
+enum class EShadingMode {
+    DEFAULT = 0,
+    DEBUG,
+    NUM
+};
 static const Array<std::string> s_shading_mode_name_array = {"Default", "Debug"};
 
-enum class EAaMode { NONE = 0, FXAA_SIMPLIFIED, FXAA_QUALITY, SMAA_1X, SMAA_T2X, NUM };
+enum class EAaMode {
+    NONE = 0,
+    FXAA_SIMPLIFIED,
+    FXAA_QUALITY,
+    SMAA_1X,
+    SMAA_T2X,
+    NUM
+};
 static const Array<std::string> s_aa_mode_name_array = {
     "None",
     "FXAA Simplified",
@@ -21,7 +32,15 @@ static const Array<std::string> s_aa_mode_name_array = {
     "SMAA T2x",
 };
 
-enum class EAoMode { NONE = 0, SSAO, SSAO_AO_ONLY, RTAO, RTAO_AO_ONLY, LINEARIZED_DEPTH_DIV_10, NUM };
+enum class EAoMode {
+    NONE = 0,
+    SSAO,
+    SSAO_AO_ONLY,
+    RTAO,
+    RTAO_AO_ONLY,
+    LINEARIZED_DEPTH_DIV_10,
+    NUM
+};
 static const Array<std::string> s_ao_mode_name_array = {
     "None",
     "SSAO",
@@ -31,7 +50,11 @@ static const Array<std::string> s_ao_mode_name_array = {
     "Linear. Depth / 10.0",
 };
 
-enum class ERtaoSampleMode { UNIFORM = 0, COSINE_WEIGHTED, NUM };
+enum class ERtaoSampleMode {
+    UNIFORM = 0,
+    COSINE_WEIGHTED,
+    NUM
+};
 static const Array<std::string> s_rtao_sample_mode = {
     "Uniform in Semisphere",
     "Cosine-Weighted in Semisphere"

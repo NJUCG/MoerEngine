@@ -6,21 +6,21 @@
 
 namespace Moer {
 
-    class RENDER_API CameraManager {
-        struct Proxy {
-            CameraRef camera;
-        };
-        EntityComponentManger<Proxy> m_manager;
-
-    public:
-        CameraRef Get(Entity entity) noexcept;
-        CameraRef Create(Entity entity) noexcept;
-        void      Put(Entity entity, CameraRef camera) noexcept;
-        bool      HasComponent(Entity entity) const noexcept;
-        void      Destroy(Entity entity) noexcept;
-
-        static CameraManager& Get() noexcept;
-
-    protected:
+class RENDER_API CameraManager {
+    struct Proxy {
+        CameraRef camera;
     };
-}// namespace Moer
+    EntityComponentManger<Proxy> m_manager;
+
+public:
+    CameraRef Get(Entity entity) noexcept;
+    CameraRef Create(Entity entity) noexcept;
+    void      Put(Entity entity, CameraRef camera) noexcept;
+    bool      HasComponent(Entity entity) const noexcept;
+    void      Destroy(Entity entity) noexcept;
+
+    static CameraManager& Get() noexcept;
+
+protected:
+};
+} // namespace Moer

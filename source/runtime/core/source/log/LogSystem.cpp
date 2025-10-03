@@ -1,10 +1,10 @@
 #include "log/LogSystem.h"
+#include "platform/Platform.h"
 #include "spdlog/common.h"
 #include "spdlog/logger.h"
 #include "spdlog/sinks/basic_file_sink.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/sinks/stdout_sinks.h"
-#include "platform/Platform.h"
 
 #include <format>
 #include <memory>
@@ -133,12 +133,10 @@
 // #endif
 //     bool should_color_ = false;
 // };
-namespace Moer {
-namespace LogSystem {
-    void Init() {
+namespace Moer { namespace LogSystem {
+void Init() {
 #if !defined(NDEBUG)
-        spdlog::set_level(spdlog::level::trace);
+    spdlog::set_level(spdlog::level::trace);
 #endif
-    }
 }
-}// namespace Moer::LogSystem
+}} // namespace Moer::LogSystem

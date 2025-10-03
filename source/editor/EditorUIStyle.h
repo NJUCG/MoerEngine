@@ -12,9 +12,15 @@ public:
         static int style_idx = 0;
         if (ImGui::Combo(_label, &style_idx, "Default\0Light\0Classic\0")) {
             switch (style_idx) {
-                case 0: StyleColorsDark(); break;
-                case 1: ImGui::StyleColorsLight(); break;
-                case 2: ImGui::StyleColorsClassic(); break;
+                case 0:
+                    StyleColorsDark();
+                    break;
+                case 1:
+                    ImGui::StyleColorsLight();
+                    break;
+                case 2:
+                    ImGui::StyleColorsClassic();
+                    break;
             }
             return true;
         }
@@ -22,7 +28,9 @@ public:
     }
 
     // use this func first
-    static void ApplyDefaultStyle() { StyleColorsDark(); }
+    static void ApplyDefaultStyle() {
+        StyleColorsDark();
+    }
 
     static void StyleColorsDark(ImGuiStyle* _dst = nullptr) {
         auto& colors = ImGui::GetStyle().Colors;

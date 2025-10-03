@@ -30,10 +30,10 @@ int main(const int argc, const char** argv) {
 }
 
 struct MeshletDesc {
-    uint32_t vertex_count;// number of vertices used
-    uint32_t prim_count;  // number of primitives (triangles) used
-    uint32_t vertex_begin;// offset into vertexIndices
-    uint32_t prim_begin;  // offset into primitiveIndices
+    uint32_t vertex_count; // number of vertices used
+    uint32_t prim_count;   // number of primitives (triangles) used
+    uint32_t vertex_begin; // offset into vertexIndices
+    uint32_t prim_begin;   // offset into primitiveIndices
 };
 
 //information for culling
@@ -45,9 +45,9 @@ struct MeshletInfo {
 struct MoerMesh {
     Moer::Array<MeshletDesc> meshlets;
 
-    Moer::Array<uint8_t> primitive_indices;//local triangle indices
+    Moer::Array<uint8_t> primitive_indices; //local triangle indices
 
-    Moer::Array<uint32_t>    vertex_indices;//unique original vertex indices
+    Moer::Array<uint32_t>    vertex_indices; //unique original vertex indices
     Moer::Array<MeshletInfo> meshlet_info;
 };
 
@@ -80,10 +80,15 @@ void MetisTest() {
 
     auto& config_manager = Moer::ConfigManager::GetInstance();
 
-    auto           default_test_obj_path = config_manager.GetEditorResourcePath() / "default/scenes/sponza/models/walls-lib_2.obj";
-    const aiScene* scene                 = importer.ReadFile(default_test_obj_path.string(), aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
-    auto*          meshes                = scene->mMeshes;
-    auto           flag                  = scene->mFlags;
+    auto default_test_obj_path =
+        config_manager.GetEditorResourcePath() / "default/scenes/sponza/models/walls-lib_2.obj";
+    const aiScene* scene = importer.ReadFile(
+        default_test_obj_path.string(),
+        aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_FlipUVs |
+            aiProcess_CalcTangentSpace
+    );
+    auto* meshes = scene->mMeshes;
+    auto  flag   = scene->mFlags;
     if (flag & AI_SCENE_FLAGS_INCOMPLETE || !scene || !scene->mRootNode) {
         LOG_ERROR("Assimp load scene failed");
         return;
@@ -111,11 +116,13 @@ void MetisTest() {
             auto& bitangent     = bitangents[j];
             auto& texture_coord = texture_coords[j];
 
-            original_mesh.vertexs.push_back({Moer::Vector3f(vertex.x, vertex.y, vertex.z),
-                                             Moer::Vector3f(normal.x, normal.y, normal.z),
-                                             Moer::Vector3f(tangent.x, tangent.y, tangent.z),
-                                             Moer::Vector3f(bitangent.x, bitangent.y, bitangent.z),
-                                             Moer::Vector2f(texture_coord.x, texture_coord.y)});
+            original_mesh.vertexs.push_back(
+                {Moer::Vector3f(vertex.x, vertex.y, vertex.z),
+                 Moer::Vector3f(normal.x, normal.y, normal.z),
+                 Moer::Vector3f(tangent.x, tangent.y, tangent.z),
+                 Moer::Vector3f(bitangent.x, bitangent.y, bitangent.z),
+                 Moer::Vector2f(texture_coord.x, texture_coord.y)}
+            );
         }
 
         for (int j = 0; j < num_faces; j++) {
@@ -131,38 +138,42 @@ void MetisTest() {
 
         Moer::Array<uint32_t> remap(original_mesh.vertexs.size());
 
-        size_t target_vertex_size = meshopt_generateVertexRemap(&remap[0],
-                                                                original_mesh.indices.data(),
-                                                                original_mesh.indices.size(),
-                                                                original_mesh.vertexs.data(),
-                                                                original_mesh.vertexs.size(),
-                                                                sizeof(Vertex));
+        size_t target_vertex_size = meshopt_generateVertexRemap(
+            &remap[0],
+            original_mesh.indices.data(),
+            original_mesh.indices.size(),
+            original_mesh.vertexs.data(),
+            original_mesh.vertexs.size(),
+            sizeof(Vertex)
+        );
 
         Moer::Array<uint32_t> target_indices(original_mesh.indices.size());
         Moer::Array<Vertex>   target_vertices(target_vertex_size);
 
-        meshopt_remapIndexBuffer(&target_indices[0],
-                                 original_mesh.indices.data(),
-                                 original_mesh.indices.size(),
-                                 &remap[0]);
+        meshopt_remapIndexBuffer(
+            &target_indices[0], original_mesh.indices.data(), original_mesh.indices.size(), &remap[0]
+        );
 
-        meshopt_remapVertexBuffer(&target_vertices[0],
-                                  original_mesh.vertexs.data(),
-                                  original_mesh.vertexs.size(),
-                                  sizeof(Vertex),
-                                  &remap[0]);
+        meshopt_remapVertexBuffer(
+            &target_vertices[0],
+            original_mesh.vertexs.data(),
+            original_mesh.vertexs.size(),
+            sizeof(Vertex),
+            &remap[0]
+        );
 
-        meshopt_optimizeVertexCache(&target_indices[0],
-                                    &target_indices[0],
-                                    target_indices.size(),
-                                    original_mesh.vertexs.size());
+        meshopt_optimizeVertexCache(
+            &target_indices[0], &target_indices[0], target_indices.size(), original_mesh.vertexs.size()
+        );
 
-        meshopt_optimizeVertexFetch(&target_vertices[0],
-                                    &target_indices[0],
-                                    target_indices.size(),
-                                    target_vertices.data(),
-                                    target_vertices.size(),
-                                    sizeof(Vertex));
+        meshopt_optimizeVertexFetch(
+            &target_vertices[0],
+            &target_indices[0],
+            target_indices.size(),
+            target_vertices.data(),
+            target_vertices.size(),
+            sizeof(Vertex)
+        );
 
         const size_t max_vertices  = 64;
         const size_t max_triangles = 124;
@@ -173,19 +184,23 @@ void MetisTest() {
         Moer::Array<meshopt_Meshlet> meshlets(max_meshlets);
 
         Moer::Array<unsigned int>  meshlet_vertices(max_meshlets * max_vertices);
-        Moer::Array<unsigned char> meshlet_triangles(max_meshlets * max_triangles * 3);// meshopt_buildMeshlets(meshlets, )
+        Moer::Array<unsigned char> meshlet_triangles(
+            max_meshlets * max_triangles * 3
+        ); // meshopt_buildMeshlets(meshlets, )
 
-        size_t meshlet_count = meshopt_buildMeshlets(meshlets.data(),
-                                                     meshlet_vertices.data(),
-                                                     meshlet_triangles.data(),
-                                                     target_indices.data(),
-                                                     target_indices.size(),
-                                                     &target_vertices[0].position.x,
-                                                     target_vertices.size(),
-                                                     sizeof(Vertex),
-                                                     max_vertices,
-                                                     max_triangles,
-                                                     cone_weight);
+        size_t meshlet_count = meshopt_buildMeshlets(
+            meshlets.data(),
+            meshlet_vertices.data(),
+            meshlet_triangles.data(),
+            target_indices.data(),
+            target_indices.size(),
+            &target_vertices[0].position.x,
+            target_vertices.size(),
+            sizeof(Vertex),
+            max_vertices,
+            max_triangles,
+            cone_weight
+        );
 
         const meshopt_Meshlet& last = meshlets[meshlet_count - 1];
 
@@ -203,12 +218,14 @@ void MetisTest() {
         std::for_each(meshlets.begin(), meshlets.end(), [&](const meshopt_Meshlet& m) {
             uint32_t index = &m - &meshlets[0];
 
-            meshlet_bounds[index] = meshopt_computeMeshletBounds(&meshlet_vertices[m.vertex_offset],
-                                                                 &meshlet_triangles[m.triangle_offset],
-                                                                 m.triangle_count,
-                                                                 &target_vertices[0].position.x,
-                                                                 target_vertices.size(),
-                                                                 sizeof(Vertex));
+            meshlet_bounds[index] = meshopt_computeMeshletBounds(
+                &meshlet_vertices[m.vertex_offset],
+                &meshlet_triangles[m.triangle_offset],
+                m.triangle_count,
+                &target_vertices[0].position.x,
+                target_vertices.size(),
+                sizeof(Vertex)
+            );
         });
 
         MoerMeshletInputs inputs{original_mesh};
@@ -217,7 +234,12 @@ void MetisTest() {
 
         int meshlet_index = 0;
         for (const auto& meshlet : output.mesh.meshlets) {
-            LOG_INFO("Meshlet id: {}, Meshlet vertex count: {}, Meshlet prim count: {}", meshlet_index, meshlet.vertex_count, meshlet.prim_count);
+            LOG_INFO(
+                "Meshlet id: {}, Meshlet vertex count: {}, Meshlet prim count: {}",
+                meshlet_index,
+                meshlet.vertex_count,
+                meshlet.prim_count
+            );
             meshlet_index++;
             assert(meshlet.prim_count == 64);
         }
@@ -261,9 +283,9 @@ void GenerateMoerMeshletMesh(const MoerMeshletInputs& input, MoerMeshletOutputs&
     int num_nodes   = num_faces * 3;
 
     Moer::Array<int32_t> eptr(num_element + 1);
-    Moer::Array<int32_t> eind(num_nodes);//num indices
+    Moer::Array<int32_t> eind(num_nodes); //num indices
 
-    constexpr int32_t num_node_per_element = 3;//triangle mesh
+    constexpr int32_t num_node_per_element = 3; //triangle mesh
     int32_t           current_offset       = 0;
     for (int i = 0; i < num_element + 1; i++) {
         eptr[i] = current_offset;
@@ -278,16 +300,10 @@ void GenerateMoerMeshletMesh(const MoerMeshletInputs& input, MoerMeshletOutputs&
     int num_common_node = 2;
     int num_flag        = 0;
 
-    idx_t *xadj, *adjncy;//range and edges
+    idx_t *xadj, *adjncy; //range and edges
     auto   r = metis_mesh_to_dual_func(
-        &num_element,
-        &num_nodes,
-        eptr.data(),
-        eind.data(),
-        &num_common_node,
-        &num_flag,
-        &xadj,
-        &adjncy);
+        &num_element, &num_nodes, eptr.data(), eind.data(), &num_common_node, &num_flag, &xadj, &adjncy
+    );
 
     rstatus_et res          = (rstatus_et)r;
     int        n_conditions = 1;
@@ -313,7 +329,8 @@ void GenerateMoerMeshletMesh(const MoerMeshletInputs& input, MoerMeshletOutputs&
         nullptr,
         nullptr,
         &obj_val,
-        &part[0]);
+        &part[0]
+    );
 
     moer_mesh.meshlets.resize(num_parts);
 
@@ -328,7 +345,11 @@ void GenerateMoerMeshletMesh(const MoerMeshletInputs& input, MoerMeshletOutputs&
         Moer::Array<uint8_t>  primitive_indices;
 
         uint32_t meshlet_index = &meshlet - &moer_mesh.meshlets[0];
-        for (const int& partition_id : part | std::views::filter([&](const int& p) { return p == meshlet_index; }) | std::views::transform([&](const int& p) { return &p - &part[0]; })) {
+        for (const int& partition_id : part | std::views::filter([&](const int& p) {
+                                           return p == meshlet_index;
+                                       }) | std::views::transform([&](const int& p) {
+                                           return &p - &part[0];
+                                       })) {
 
             int face_index    = partition_id;
             int indice_offset = face_index * 3;
@@ -338,7 +359,8 @@ void GenerateMoerMeshletMesh(const MoerMeshletInputs& input, MoerMeshletOutputs&
             int local_indice_index = 0;
             for (int i = 0; i < 3; i++) {
                 int indice = GetOriginalIndice(indice_offset + i);
-                if (auto target = std::find(vertex_indices.begin(), vertex_indices.end(), indice); target == vertex_indices.end()) {
+                if (auto target = std::find(vertex_indices.begin(), vertex_indices.end(), indice);
+                    target == vertex_indices.end()) {
                     vertex_indices.push_back(indice);
                     local_indice_index = vertex_indices.size() - 1;
                     meshlet.vertex_count += 1;
@@ -350,8 +372,12 @@ void GenerateMoerMeshletMesh(const MoerMeshletInputs& input, MoerMeshletOutputs&
             }
         }
 
-        moer_mesh.vertex_indices.insert(moer_mesh.vertex_indices.end(), vertex_indices.begin(), vertex_indices.end());
-        moer_mesh.primitive_indices.insert(moer_mesh.primitive_indices.end(), primitive_indices.begin(), primitive_indices.end());
+        moer_mesh.vertex_indices.insert(
+            moer_mesh.vertex_indices.end(), vertex_indices.begin(), vertex_indices.end()
+        );
+        moer_mesh.primitive_indices.insert(
+            moer_mesh.primitive_indices.end(), primitive_indices.begin(), primitive_indices.end()
+        );
     });
 
     std::for_each(moer_mesh.meshlets.begin(), moer_mesh.meshlets.end(), [&](MeshletDesc& meshlet) {

@@ -79,10 +79,18 @@ class ShaderUtils {
 public:
     ShaderUtils(RenderDevice& _device, ShaderManager& _manager);
 
-    GenLowDiscrepancyPipeline& GetGenLowDiscrepancyPipeline() { return gen_low_discrepancy_pipeline; }
-    GenerateMipPdfPipeline&    GetGenerateMipPdfPipeline() { return generate_mip_pdf_pipeline; }
-    GenerateMipsPipeline&      GetGenerateMipsPipeline() { return generate_mips_pipeline; }
-    ShowTexturePipeline&       GetShowTexturePipeline() { return show_texture_pipeline; }
+    GenLowDiscrepancyPipeline& GetGenLowDiscrepancyPipeline() {
+        return gen_low_discrepancy_pipeline;
+    }
+    GenerateMipPdfPipeline& GetGenerateMipPdfPipeline() {
+        return generate_mip_pdf_pipeline;
+    }
+    GenerateMipsPipeline& GetGenerateMipsPipeline() {
+        return generate_mips_pipeline;
+    }
+    ShowTexturePipeline& GetShowTexturePipeline() {
+        return show_texture_pipeline;
+    }
 
     void GenerateLowDiscrepancySequence(
         CommandList&                   _cmd_list,

@@ -1,6 +1,6 @@
-#include <iostream>
 #include <cstdio>
 #include <cuda_runtime.h>
+#include <iostream>
 
 #include "misc/Traits.h"
 

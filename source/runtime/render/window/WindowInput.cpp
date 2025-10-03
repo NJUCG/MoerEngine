@@ -4,9 +4,9 @@
 
 namespace Moer {
 
-    WindowInput& WindowInput::Get() {
-        static WindowInput wndInput;
-        return wndInput;
-    }
+WindowInput& WindowInput::Get() {
+    static WindowInput wndInput;
+    return wndInput;
+}
 
-}// namespace Moer
+} // namespace Moer

@@ -3,14 +3,14 @@
 
 #include "TaskGraph.h"
 namespace Moer {
-    CORE_API bool  TaskGraphTest();
-    class CORE_API TaskSystem {
-    public:
-        TaskSystem() = default;
-        ~TaskSystem() {}
-        static void Init();
-        static void ShutDown();
-    };
-}// namespace Moer
+CORE_API bool  TaskGraphTest();
+class CORE_API TaskSystem {
+public:
+    TaskSystem() = default;
+    ~TaskSystem() {}
+    static void Init();
+    static void ShutDown();
+};
+} // namespace Moer
 
-#endif// !TASK_SYSTEM_H
+#endif // !TASK_SYSTEM_H

@@ -1,12 +1,12 @@
 #include "taskgraph/ThreadManager.h"
-#include <assert.h>
-#include <string>
-#include <thread>
-#include <functional>
-#include <algorithm>
-#include <iostream>
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
+#include <algorithm>
+#include <assert.h>
+#include <functional>
+#include <iostream>
+#include <string>
+#include <thread>
 
 #if defined(PLATFORM_WINDOWS)
 #include <windows.h>
@@ -68,8 +68,7 @@ uint32_t ThreadManager::GetRenderThreadID() {
 uint32_t ThreadManager::GetGameThreadID() {
     return g_game_thread_id;
 }
-void ThreadManager::Tick() {
-}
+void ThreadManager::Tick() {}
 
 void ThreadManager::Initialize() {
     g_game_thread_id = Platform::GetCurrentThreadID();
@@ -86,8 +85,10 @@ uint32_t ThreadManager::GetCurrentThreadIndex() {
 
 const char* ThreadManager::GetThreadName(uint32_t id) {
 
-    if (id == g_game_thread_id) return MAIN_THREAD_NAME;
-    if (id == g_render_thread_id) return RENDER_THREAD_NAME;
+    if (id == g_game_thread_id)
+        return MAIN_THREAD_NAME;
+    if (id == g_render_thread_id)
+        return RENDER_THREAD_NAME;
     return Instance().GetRunnableThreadName(id);
 }
 
@@ -106,12 +107,14 @@ void ThreadManager::ShutDown() {
 
 const char* ThreadManager::GetRunnableThreadName(uint32_t id) {
     auto target = m_threads.find(id);
-    if (target != m_threads.end()) return target->second->name.c_str();
+    if (target != m_threads.end())
+        return target->second->name.c_str();
     return UNKNOWN_THREAD_NAME;
 }
 
 RunnableThread* ThreadManager::GetRunnableThread(uint32_t id) {
-    if (id == g_game_thread_id) return nullptr;
+    if (id == g_game_thread_id)
+        return nullptr;
     auto* thread = m_threads.at(id);
     return thread;
 }
@@ -141,8 +144,7 @@ RunnableThread* RunnableThread::Create(Runnable* _runnable, ThreadAttributes _at
     return created_thread;
 }
 
-void RunnableThread::Tick() {
-}
+void RunnableThread::Tick() {}
 
 RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attributes) {
     assert(_in_runnable != nullptr);
@@ -150,12 +152,14 @@ RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attribu
     m_create_event = EventPool::Get()->GetEvent(false);
     m_end_event    = EventPool::Get()->GetEvent(false);
     EventRef create_event(m_create_event);
-    m_thread = MoerNew(std::thread)([_in_runnable, name(_attributes.name), affinity(std::move(_attributes.affinity)), this]() {
-        SetName(name);
-        auto tmp_affinity = affinity;
-        SetAffinity(std::move(tmp_affinity));
-        Run();
-    });
+    m_thread = MoerNew(std::thread)(
+        [_in_runnable, name(_attributes.name), affinity(std::move(_attributes.affinity)), this]() {
+            SetName(name);
+            auto tmp_affinity = affinity;
+            SetAffinity(std::move(tmp_affinity));
+            Run();
+        }
+    );
     create_event.Wait();
     this->name = _attributes.name;
 
@@ -187,13 +191,14 @@ uint32_t TestRunnanble::Run() {
     return 0;
 }
 
-void TestRunnanble::Init() {
-}
+void TestRunnanble::Init() {}
 
 void TestRunnanble::Stop() {
     m_stop = true;
 }
 
 void TestRunnanble::Exit() {
-    SPDLOG_INFO("thread {} exit", static_cast<size_t>(std::hash<std::thread::id>()(std::this_thread::get_id())));
+    SPDLOG_INFO(
+        "thread {} exit", static_cast<size_t>(std::hash<std::thread::id>()(std::this_thread::get_id()))
+    );
 }
