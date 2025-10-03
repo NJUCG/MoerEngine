@@ -16,7 +16,7 @@ __declspec(dllexport) extern const char8_t* D3D12SDKPath = u8".\\D3D12\\";
 #include "misc/MMemory.h"
 #include "misc/Traits.h"
 #include "rhi/RHI.h"
-#include "modules/render/source/rhi/RHIImpl.h"
+#include "render/rhi/RHIImpl.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
     TaskSystem::Init();
     DeviceInitInfo info{
         .rhi_type = ERHIType::D3D12,
-        .name = "DXRHITest"};
+        .name     = "DXRHITest"};
     //DeviceInitInfo info{
     //    .type = ERHIType::Vulkan,
     //    .name = "DXRHITest",
@@ -121,14 +121,14 @@ int main(int argc, char** argv) {
 
         ShaderCompiler::Init();
 
-        auto cb0 = device.CreateBuffer<Moer::byte>("cb0", sizeof(S0), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-        auto cb1 = device.CreateBuffer<Moer::byte>("cb1", sizeof(S1), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
-        auto sb0 = device.CreateBuffer<float4>("sb0", 1024, EBufferUsageFlags::TRANSFER_DST);
-        auto sb1 = device.CreateBuffer<S1>("sb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
-        auto rb0 = device.CreateBuffer<uint>("rb0", 1024, EBufferUsageFlags::TRANSFER_DST);
-        auto rb1 = device.CreateBuffer<float>("rb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
-        auto tb0 = device.CreateBuffer<float>("tb0", 1024, EBufferUsageFlags::TRANSFER_DST);
-        auto tb1 = device.CreateBuffer<float>("tb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        auto      cb0 = device.CreateBuffer<Moer::byte>("cb0", sizeof(S0), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        auto      cb1 = device.CreateBuffer<Moer::byte>("cb1", sizeof(S1), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        auto      sb0 = device.CreateBuffer<float4>("sb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto      sb1 = device.CreateBuffer<S1>("sb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        auto      rb0 = device.CreateBuffer<uint>("rb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto      rb1 = device.CreateBuffer<float>("rb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
+        auto      tb0 = device.CreateBuffer<float>("tb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto      tb1 = device.CreateBuffer<float>("tb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST);
         BufferRef buf_arr[kNumBuffArr];
         for (int i = 0; i < kNumBuffArr; ++i) {
             buf_arr[i] = device.CreateBuffer<float>(std::format("buf_array_{}", i), 9, EBufferUsageFlags::TRANSFER_DST);
@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
 
         auto               pipeline = ShaderManager::Get().Compute<TestComputePipeline>("test/var.hlsl");
         std::vector<float> farr(1024);
-        std::vector<int> iarr(1024);
+        std::vector<int>   iarr(1024);
 
         for (int iter = 0; iter < 10; ++iter) {
 
@@ -182,9 +182,7 @@ int main(int argc, char** argv) {
             gfx_queue.Sync();
             LOG_INFO("dispatch work done");
 
-            LOG_INFO("result={}, expect={}, ok={}", iarr[0], res , iarr[0] == res);
-
-
+            LOG_INFO("result={}, expect={}, ok={}", iarr[0], res, iarr[0] == res);
         }
 
         capturer->End();

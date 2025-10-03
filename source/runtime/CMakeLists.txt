@@ -2,11 +2,10 @@ set(target_name MoerRuntime)
 set(moer_runtime_dir ${moer_source_dir}/runtime)
 
 set(moer_runtime_core_dir ${moer_runtime_dir}/core)
-set(moer_runtime_module_root_dir ${moer_runtime_dir}/modules)
 
 add_subdirectory(core)
-add_subdirectory(modules/render)
-add_subdirectory(modules/resource)
+add_subdirectory(render)
+add_subdirectory(resource)
 
 # CONFIGURE_DEPENDS，指如果文件变化了，则自动重新GLOB
 file(GLOB ENGINE_HEADERS CONFIGURE_DEPENDS "*.h")
