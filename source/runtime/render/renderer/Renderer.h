@@ -19,16 +19,19 @@ struct EngineHooks {
     std::function<void(CommandList&, TextureRef)> on_render_gui;
     std::function<void(void)>                     on_present_windows;
     std::function<bool(void)>                     on_is_need_reload;
+
     std::function<TextureRef(UiCombinePass*, CommandList&, TextureView, TextureView, TextureView)>
         on_ui_combine_pass;
 
+    std::function<void(std::string, std::function<void(void)>)> on_register_ui_func;
+
+    std::function<void(std::string)> on_unregister_ui_func;
+
     // Raster
     std::function<void(const Array<TextureView>&)> on_raster_register_frame_buffers;
-
-    // Raytracing
 };
 
-class Renderer {
+class RENDER_API Renderer {
 
 public:
     enum class EWindowState {
@@ -47,7 +50,11 @@ public:
     };
 
 public:
-    Renderer(SharedPtr<uint2> _resolution, const SharedPtr<EditorConfig> _config) :
+    Renderer(
+        SharedPtr<uint2>                                          _resolution,
+        const SharedPtr<EditorConfig>                             _config,
+        std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
+    ) :
         resolution(_resolution),
         device(RenderDevice::Get()),
         manager(ShaderManager::Get()),
@@ -66,12 +73,12 @@ public:
         }
         bindless_array = scene.GetBindlessArray();
         {
-            Resource::LoaderInterface::LoadSceneFromFileAsync(_config->scene_path, &scene);
+            _load_scene_async(_config->scene_path, &scene);
         }
         // Other vars
         {
             timeline            = device.CreateFence();
-            time                = 0;
+            time                = 0ull;
             first_load          = true;
             max_frame_in_flight = ConfigManager::GetInstance().GetConfig().engine.rhi.max_frame_in_flight;
         }
@@ -122,7 +129,7 @@ public:
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    virtual bool Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) = 0;
+    virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) = 0;
 
     CommandList& GetCommandList() {
         return cmd_list;

@@ -51,8 +51,8 @@ public:
     bool                IsSeperateWindow() const;
     Render::TextureView GetWindowFrameBuffer();
 
-    void RegisterUIFunc(std::string_view _name, std::function<void()>&& _func);
-    void UnregisterUIFunc(std::string_view _name);
+    void RegisterUIFunc(std::string _name, std::function<void()>&& _func);
+    void UnregisterUIFunc(std::string _name);
 
 public: // Sub UI
     RasterUI     m_raster_ui;
@@ -79,7 +79,7 @@ private:
     SharedPtr<uint2>              m_resolution; // TODO: update resolution in EditorUI
 
     // Custom Func
-    UnorderedMap<std::string_view, std::function<void()>> m_show_func_map;
+    UnorderedMap<std::string, std::function<void()>> m_show_func_map;
 };
 
 } // namespace Moer

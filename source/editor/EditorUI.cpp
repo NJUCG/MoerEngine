@@ -336,11 +336,11 @@ void EditorUI::ResetState() {
     m_b_need_reload = false;
 }
 
-void EditorUI::RegisterUIFunc(std::string_view _name, std::function<void()>&& _func) {
+void EditorUI::RegisterUIFunc(std::string _name, std::function<void()>&& _func) {
     m_show_func_map[_name] = std::move(_func);
 }
 
-void EditorUI::UnregisterUIFunc(std::string_view _name) {
+void EditorUI::UnregisterUIFunc(std::string _name) {
     m_show_func_map.erase(_name);
 }
 

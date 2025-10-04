@@ -9,7 +9,7 @@
 
 namespace Moer::Render::Raytracing {
 
-class ToneMappingPassPipeline : public RasterPipeline {
+class RENDER_API ToneMappingPassPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(ToneMappingPassPipeline);
 

@@ -69,6 +69,14 @@ void Editor::Run() {
                         default_output_texture
                     );
                 },
+            .on_register_ui_func =
+                [&editor_ui](std::string name, std::function<void(void)> lambda) {
+                    editor_ui->RegisterUIFunc(name, std::move(lambda));
+                },
+            .on_unregister_ui_func =
+                [&editor_ui](std::string name) {
+                    editor_ui->UnregisterUIFunc(name);
+                },
             // Raster
             .on_raster_register_frame_buffers =
                 [&editor_ui](const Array<TextureView>& textures) {

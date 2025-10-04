@@ -1,4 +1,6 @@
-#include "RaytracingMain.h"
+#pragma once
+
+#include "RaytracingRenderer.h"
 
 // Runtime
 #include "PixelFormat.h"
@@ -47,46 +49,18 @@ union FloatBits {
     unsigned int ui;
 };
 
-static Box3D          scene_bounding{};
-static constexpr uint max_frame_in_flight = 3;
+static Box3D scene_bounding{};
 
-void DumpTextureToFile(
-    ExportConfig&          _config,
-    FrameResources&        _frame_rt,
-    RenderDevice&          _device,
-    CommandQueue&          _gfx_queue,
-    std::filesystem::path& _exported_file_path,
-    std::string_view       _suffix
-);
+RaytracingRenderer::RaytracingRenderer(
+    SharedPtr<uint2>                                          _resolution,
+    const SharedPtr<EditorConfig>                             _config,
+    std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async,
+    RuntimeAssets&                                            _runtime_assets
+) :
+    Renderer(_resolution, _config, _load_scene_async),
+    runtime_assets(_runtime_assets) {}
 
-void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_assets) {
-    // Get a lot of things
-    auto&            device         = RenderDevice::Get();
-    auto&            manager        = ShaderManager::Get();
-    Scene            scene          = {};
-    BindlessArrayRef bindless_array = scene.GetBindlessArray();
-    auto&            gfx_queue      = device.GetCommandQueue(EQueueType::Graphics);
-    CommandList      cmd_list       = {};
-
-    // Initialize Swapchain
-    auto resolution = _editor_ui->GetResolution(); // TODO: 是否要从WindowContext中获取resolution?
-
-    auto sc_info = SwapchainCreateInfo{
-        .window_handle    = (uintptr_t)WindowContext::GetMainWindow(),
-        .size             = {resolution.x, resolution.y},
-        .back_buffer_sz   = 2,
-        .preferred_format = PF_B8G8R8A8_SRGB
-    };
-    auto sc = device.CreateSwapchain(sc_info);
-
-    // MARK: Scene
-    Resource::LoaderInterface::LoadSceneFromFileAsync(_editor_ui->GetConfig().scene_path, &scene);
-    auto&& scope_exit_reset_async_load_info = OnScopeExit([&] {
-        Scene::ResetAsyncLoadInfo();
-    });
-
-    // TODO: combine RasterMain and RaytracingMain common part (above code)
-
+void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     bool b_new_env_map = false;
 
     TextureRef         env_map{};
@@ -99,7 +73,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
     ShaderUtils sd_utils(device, manager);
 
     ImportantSamplingParams is_params{};
-    is_params.render_size = resolution;
+    is_params.render_size = *resolution;
     ImportanceSamplingContext is_ctx(is_params);
 
     bool first_load = true;
@@ -117,25 +91,26 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
 
     Array<RaytracingGeometryRef> rt_geometries;
 
-    auto   timeline     = device.CreateFence();
-    uint64 time         = 0ull;
     uint64 nrd_time     = 0ull;
     float  elapsed_time = 0.0f;
 
     TextureRef output = device.CreateTexture(
-        Extent2D(resolution.x, resolution.y), sc->format, ETextureUsageFlags::COLOR_ATTACHMENT
+        Extent2D(resolution->x, resolution->y), swapchain->format, ETextureUsageFlags::COLOR_ATTACHMENT
     );
 
     TextureRef ui_frame_buffer = device.CreateTexture(
         "ui_frame_buffer",
-        Extent2D(resolution.x, resolution.y),
+        Extent2D(resolution->x, resolution->y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
     );
 
     auto create_frame_buffers = [&](uint2 _new_extent) {
         output = device.CreateTexture(
-            "output", Extent2D(_new_extent.x, _new_extent.y), sc->format, ETextureUsageFlags::COLOR_ATTACHMENT
+            "output",
+            Extent2D(_new_extent.x, _new_extent.y),
+            swapchain->format,
+            ETextureUsageFlags::COLOR_ATTACHMENT
         );
 
         ui_frame_buffer = device.CreateTexture(
@@ -172,7 +147,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
     UniquePtr<ToneMappingPass>  tone_mapping_pass;
     UniquePtr<UiCombinePass>    ui_combine_pass = MakeUnique<UiCombinePass>(manager);
 
-    rt_ctx->SetResolution(resolution);
+    rt_ctx->SetResolution(*resolution);
     AntialiasPass::CreateInfo antialias_pass_info{
         .motion              = rt_ctx->frame_rt.motion,
         .feedback_color_ping = rt_ctx->frame_rt.feedback_color_ping,
@@ -186,7 +161,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
     // NRD
     //////////////////////////////////////////////////////////////////////////
     auto* nrd_ext       = device.LoadExtension<Ext::NRDExtension>();
-    auto  nrd_interface = nrd_ext->CreateInterface(max_frame_in_flight, resolution.x, resolution.y);
+    auto  nrd_interface = nrd_ext->CreateInterface(max_frame_in_flight, resolution->x, resolution->y);
 
     VisualizeConfig visualize_config{};
     visualize_config.b_split        = false;
@@ -207,44 +182,36 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
         });
     };
 
-    _editor_ui->SetShowSubUI(true);
-
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
-        WindowContext::Tick();
-        _editor_ui->TickUI();
-        int w_width, w_height;
-        if (time >= max_frame_in_flight) {
-            timeline->Wait(time - max_frame_in_flight);
+
+        if (hooks.on_tick_ui) {
+            hooks.on_tick_ui();
         }
-        RaytracingConfig& ui_config = _editor_ui->m_raytracing_ui.GetEditableConfig();
 
-        timer.Stop();
-        auto frame_time = timer.ElapsedMilliseconds();
-        timer.Start();
+        RaytracingConfig& ui_config = editor_config->raytracing_config;
 
-        WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
-        if (w_width == 0 || w_height == 0) {
+        auto window_state = TickWindowContext(hooks);
+
+        if (window_state == EWindowState::Hiding) {
             std::this_thread::yield();
-            _editor_ui->RenderGUI(cmd_list, output);
+
+            // hook: RenderGUI
+            if (hooks.on_render_gui) {
+                hooks.on_render_gui(cmd_list, output);
+            }
+
             continue;
-        }
-        if (w_width != resolution.x || w_height != resolution.y) {
 
-            resolution = {uint32(w_width), uint32(w_height)};
+        } else if (window_state == EWindowState::SizeChanged) {
+            create_frame_buffers(*resolution);
 
-            gfx_queue.Sync();
-            sc_info.size = {resolution.x, resolution.y};
-            sc->Sync();
-            sc->Recreate(sc_info);
-
-            create_frame_buffers(resolution);
-
-            rt_ctx->SetResolution(resolution);
+            rt_ctx->SetResolution(*resolution);
 
             is_ctx.~ImportanceSamplingContext();
-            is_params.render_size = resolution;
+            is_params.render_size = *resolution;
             new (&is_ctx) ImportanceSamplingContext(is_params);
-            nrd_interface = nrd_ext->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
+            nrd_interface =
+                nrd_ext->RecreateInterface(std::move(nrd_interface), resolution->x, resolution->y);
 
             antialias_pass_info.motion              = rt_ctx->frame_rt.motion;
             antialias_pass_info.feedback_color_ping = rt_ctx->frame_rt.feedback_color_ping;
@@ -253,10 +220,20 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
             antialias_pass_info.hdr_color           = rt_ctx->frame_rt.hdr_color;
             antialias_pass   = MakeUnique<AntialiasPass>(device, manager, scene, antialias_pass_info);
             b_feedback_valid = false;
+
+        } else if (window_state == EWindowState::Default) {
+            // do nothing
+
+        } else {
+            assert(false);
         }
 
+        timer.Stop();
+        auto frame_time = timer.ElapsedMilliseconds();
+        timer.Start();
+
         if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady() &&
-            _editor_assets.IsReady()) {
+            runtime_assets.IsReady()) {
             // load scene
             if (first_load) {
                 b_new_env_map = true;
@@ -382,47 +359,55 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
                 cmd_list.BuildAccelerationStructures(std::move(build_params));
                 cmd_list.UpdateRaytracingScene(rt_scene);
 
-                _editor_ui->RegisterUIFunc(
-                    "Display MaterialTexture",
-                    [&scene,
-                     &selected_material_texture_name,
-                     &b_use_bindless,
-                     &b_final_show_texture,
-                     &mip_level,
-                     &gfx_queue]() {
-                        ImGui::Checkbox("Show Final Texture", &b_final_show_texture);
-                        ImGui::SliderInt("Mip Level", (int*)&mip_level, 0, 12);
-                        ImGui::Checkbox("Use Bindless", &b_use_bindless);
-                        if (ImGui::TreeNode("MaterialTexture")) {
-                            for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
-                                // selectable
-                                if (ImGui::Selectable(name.data(), selected_material_texture_name == name)) {
-                                    selected_material_texture_name = name;
+                if (hooks.on_register_ui_func) {
+
+                    auto& _scene     = scene;
+                    auto& _gfx_queue = gfx_queue;
+
+                    hooks.on_register_ui_func(
+                        "Display MaterialTexture",
+                        [&_scene,
+                         &selected_material_texture_name,
+                         &b_use_bindless,
+                         &b_final_show_texture,
+                         &mip_level,
+                         &_gfx_queue]() {
+                            ImGui::Checkbox("Show Final Texture", &b_final_show_texture);
+                            ImGui::SliderInt("Mip Level", (int*)&mip_level, 0, 12);
+                            ImGui::Checkbox("Use Bindless", &b_use_bindless);
+                            if (ImGui::TreeNode("MaterialTexture")) {
+                                for (auto& [name, tex] : _scene.GetGpuScene().material_textures) {
+                                    // selectable
+                                    if (ImGui::Selectable(
+                                            name.data(), selected_material_texture_name == name
+                                        )) {
+                                        selected_material_texture_name = name;
+                                    }
+                                }
+                                ImGui::TreePop();
+                            }
+
+                            //Pass profiling
+                            auto entrys = _gfx_queue.GetProfilerEntry();
+                            if (!entrys.cpu_entries.empty()) {
+                                ImGui::Text("CPU Time:");
+                                for (auto& [name, time] : entrys.cpu_entries) {
+                                    if (name.ends_with("Percentage")) {
+                                        ImGui::Text("%s: %.3f%%", name.c_str(), time * 100);
+
+                                    } else
+                                        ImGui::Text("%s: %.3f ms", name.c_str(), time);
                                 }
                             }
-                            ImGui::TreePop();
-                        }
-
-                        //Pass profiling
-                        auto entrys = gfx_queue.GetProfilerEntry();
-                        if (!entrys.cpu_entries.empty()) {
-                            ImGui::Text("CPU Time:");
-                            for (auto& [name, time] : entrys.cpu_entries) {
-                                if (name.ends_with("Percentage")) {
-                                    ImGui::Text("%s: %.3f%%", name.c_str(), time * 100);
-
-                                } else
+                            if (!entrys.gpu_entries.empty()) {
+                                ImGui::Text("GPU Time:");
+                                for (auto& [name, time] : entrys.gpu_entries) {
                                     ImGui::Text("%s: %.3f ms", name.c_str(), time);
+                                }
                             }
                         }
-                        if (!entrys.gpu_entries.empty()) {
-                            ImGui::Text("GPU Time:");
-                            for (auto& [name, time] : entrys.gpu_entries) {
-                                ImGui::Text("%s: %.3f ms", name.c_str(), time);
-                            }
-                        }
-                    }
-                );
+                    );
+                }
 
                 // cmd_list.UpdateRaytracingScene(rt_scene);
                 auto copy_timeline = device.GetCopyQueue().GetFenceHandle();
@@ -431,7 +416,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
             }
 
             if (b_new_env_map) {
-                auto src_env_map = _editor_assets.GetDefaultEnvMap();
+                auto src_env_map = runtime_assets.GetDefaultEnvMap();
                 env_map          = device.CreateTexture(
                     src_env_map->GetName(),
                     Extent3D(src_env_map->GetExtent()),
@@ -476,7 +461,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
                 sd_utils.GenerateMips(cmd_list, env_mips);
                 b_new_env_map = false;
 
-                rt_ctx->LoadDefaultResources(_editor_assets);
+                rt_ctx->LoadDefaultResources(runtime_assets);
                 rt_ctx->CreateEnvMapResources(scene.GetCurrentEnvMap(), cmd_list);
             }
 
@@ -498,9 +483,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
             {
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
                 camera->Tick(
-                    _editor_ui->GetSceneColorAspectRatio(),
-                    _editor_ui->GetConfig().camera_speed,
-                    _editor_ui->GetConfig().camera_fovy
+                    editor_config->aspect_ratio, editor_config->camera_speed, editor_config->camera_fovy
                 );
             }
 
@@ -637,7 +620,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
                     nrd_interface->Begin();
                     nrd_interface->UpdateCommonSettings(
                         nrd_time++,
-                        Vector2ui(resolution.x, resolution.y),
+                        Vector2ui(resolution->x, resolution->y),
                         antialias_pass->GetPixelOffset(),
                         Transpose(camera->GetViewMatrix()),
                         Transpose(camera->GetProjectionMatrix())
@@ -695,7 +678,7 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
                 TextureRef texture =
                     scene.GetGpuScene().material_textures[selected_material_texture_name].texture;
                 ShowTextureParams show_texture_params{};
-                show_texture_params.dst_dim = resolution;
+                show_texture_params.dst_dim = *resolution;
                 show_texture_params.bdls_handle =
                     scene.GetGpuScene().material_textures[selected_material_texture_name].bindless_handle;
                 show_texture_params.mip_level    = mip_level;
@@ -737,18 +720,24 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
         TextureRef final_color =
             b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color;
 
-        ui_combine_pass->Process(cmd_list, resolution, final_color, ui_frame_buffer, output, _editor_ui);
+        if (hooks.on_ui_combine_pass) {
+            hooks.on_ui_combine_pass(ui_combine_pass.get(), cmd_list, final_color, ui_frame_buffer, output);
+        }
 
-        _editor_ui->RenderGUI(cmd_list, output);
+        if (hooks.on_render_gui) {
+            hooks.on_render_gui(cmd_list, output);
+        }
 
         rt_scene->AdvanceFrame();
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
-        gfx_queue.Present(sc, output);
-        _editor_ui->PresentWindows();
+        gfx_queue.Present(swapchain, output);
 
-        if (_editor_ui->IsNeedReload()) {
+        if (hooks.on_present_windows) {
+            hooks.on_present_windows();
+        }
+        if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {
             break;
         }
     }
@@ -772,12 +761,14 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_asset
     cmd_list.UpdateBindlessArray(bindless_array);
     gfx_queue.Execute(cmd_list.Submit().DeleteResources());
     gfx_queue.Sync();
-    sc->Sync();
+    swapchain->Sync();
 
-    _editor_ui->UnregisterUIFunc("Display MaterialTexture");
+    if (hooks.on_unregister_ui_func) {
+        hooks.on_unregister_ui_func("Display MaterialTexture");
+    }
 }
 
-void DumpTextureToFile(
+void RaytracingRenderer::DumpTextureToFile(
     ExportConfig&          _config,
     FrameResources&        _frame_rt,
     RenderDevice&          _device,
@@ -785,6 +776,7 @@ void DumpTextureToFile(
     std::filesystem::path& _exported_file_path,
     std::string_view       _suffix
 ) {
+
     CommandList cmd_list{};
 
     auto dequantentize_half = [](short _h, bool _gamma_correct = true) {

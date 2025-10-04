@@ -21,9 +21,13 @@ namespace Moer::Render::Raster {
 class RasterRenderer : public Renderer {
 
 public:
-    RasterRenderer(SharedPtr<uint2> _resolution, const SharedPtr<EditorConfig> _config) :
+    RasterRenderer(
+        SharedPtr<uint2>                                          _resolution,
+        const SharedPtr<EditorConfig>                             _config,
+        std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
+    ) :
         // Super
-        Renderer(_resolution, _config),
+        Renderer(_resolution, _config, _load_scene_async),
         // Context
         raster_context(device, manager, bindless_array, cmd_list, scene, resolution) {
 
@@ -50,14 +54,18 @@ public:
     }
 
     virtual ~RasterRenderer() override {
-        // Free Buffers
         raster_context.FreeFrameBuffers();
-
-        // This line fixed: vkDestroyPipeline(): can't be called on VkPipeline 0xd3301c00000001f9 that is currently in use by VkCommandBuffer 0x20908202b60
-        gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources());
     }
 
-    virtual bool Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) override {
+    virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) override {
+        while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+            if (!RunSingle(editor_config, hooks)) {
+                break;
+            }
+        }
+    }
+
+    bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
 
         if (hooks.on_tick_ui) {
             hooks.on_tick_ui();
@@ -196,6 +204,8 @@ public:
         if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {
             return false; // break
         }
+
+        return true;
     }
 
 private:

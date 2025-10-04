@@ -7,7 +7,7 @@ namespace Moer {
 class EditorUI;
 class RuntimeAssets;
 
-class Engine {
+class RENDER_API Engine {
 public:
     Engine();
     virtual ~Engine();
