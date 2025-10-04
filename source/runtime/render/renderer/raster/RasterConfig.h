@@ -3,7 +3,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 
-#include "raster/RasterCompileTimeConstants.h"
+#include "RasterCompileTimeConstants.h"
 
 #include <string>
 

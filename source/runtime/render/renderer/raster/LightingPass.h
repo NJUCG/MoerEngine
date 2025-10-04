@@ -7,9 +7,9 @@
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
+#include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
-#include "ui/raster_ui/RasterConfig.h"
 
 namespace Moer::Render::Raster {
 
@@ -108,7 +108,7 @@ public:
             context.cmd_list.Gfx(pbr_pipeline, context.bdls, material_param)
                 .Draw(
                     "Lighting Pass",
-                    Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                    Rect2D(0, 0, context.resolution->x, context.resolution->y),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(context.textures.lighting_output.tex)
                 );

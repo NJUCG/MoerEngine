@@ -1,9 +1,9 @@
-#include "Editor.h"
+#include "Engine.h"
 
 // Runtime
 #include "config/ConfigManager.h"
 #include "misc/MMemory.h"
-#include "renderer/UIRenderer.h"
+#include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderResourceManager.h"
@@ -11,10 +11,8 @@
 #include "window/WindowContext.h"
 
 // Editor
-#include "common/EditorAssets.h"
-#include "raster/RasterMain.h"
-#include "raytracing/RaytracingMain.h"
-#include "ui/EditorUI.h"
+#include "renderer/common/RuntimeAssets.h"
+#include "renderer/raster/RasterRenderer.h"
 
 // 3rd party (std)
 #include <cassert>
@@ -27,11 +25,11 @@ namespace Moer {
 
 static UniquePtr<NFD::Guard> nfd_guard = nullptr;
 
-Editor::Editor() {}
+Engine::Engine() {}
 
-Editor::~Editor() {}
+Engine::~Engine() {}
 
-void Editor::Init(int argc, const char** argv) {
+void Engine::Init(int argc, const char** argv) {
     // Init LogSystem
     LogSystem::Init(); // for LOG_DEBUG & LOG_TRACE when debug mode
 
@@ -64,59 +62,80 @@ void Editor::Init(int argc, const char** argv) {
         }
     }();
 
-    RenderDevice::Init(std::move(DeviceInitInfo{
-        .rhi_type        = rhi_type,
-        .name            = "MoerEngine",
-        .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.api_version,
-    }));
+    RenderDevice::Init(
+        std::move(
+            DeviceInitInfo{
+                .rhi_type        = rhi_type,
+                .name            = "MoerEngine",
+                .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.api_version,
+            }
+        )
+    );
 
     ShaderManager::Get(); // Explicit Init ShaderManager
 
+    m_editor_config = MakeShared<EditorConfig>();
+
     // Init WindowContext
-    uint2 resolution = {
+    m_editor_config->resolution = MakeShared<uint2>(
         ConfigManager::GetInstance().GetConfig().editor.width,
         ConfigManager::GetInstance().GetConfig().editor.height
-    };
+    );
     bool b_fullscreen = ConfigManager::GetInstance().GetConfig().editor.fullscreen;
-    LOG_INFO("Editor Window Resolution : {}x{}; Fullscreen : {}", resolution.x, resolution.y, b_fullscreen);
+    LOG_INFO(
+        "Editor Window Resolution : {}x{}; Fullscreen : {}",
+        m_editor_config->resolution->x,
+        m_editor_config->resolution->y,
+        b_fullscreen
+    );
 
     WindowContext::Init(SurfaceInitInfo(
-        RenderDevice::Get().GetRHIType(), resolution.x, resolution.y, "MoerEditor", b_fullscreen
+        RenderDevice::Get().GetRHIType(),
+        m_editor_config->resolution->x,
+        m_editor_config->resolution->y,
+        "MoerEditor",
+        b_fullscreen
     ));
-    // Init EditorUI
-    auto ui_renderer = MakeUnique<Render::UIRenderer>(RenderDevice::Get());
 
-    m_editor_ui = MakeShared<EditorUI>(std::move(ui_renderer), resolution);
-    m_editor_assets =
-        MakeUnique<EditorAssets>(ConfigManager::GetInstance().GetEditorResourcePath(), RenderDevice::Get());
+    m_runtime_assets =
+        MakeUnique<RuntimeAssets>(ConfigManager::GetInstance().GetEditorResourcePath(), RenderDevice::Get());
 }
 
-void Editor::Run() {
-    while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
-        const auto& config = m_editor_ui->GetConfig();
+void Engine::Run(const EngineHooks& hooks) {
 
+    while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         LOG_INFO(
             "Selecting Render Method : {}",
-            k_render_method_names[static_cast<uint>(config.selected_render_method)]
+            k_render_method_names[static_cast<uint>(m_editor_config->selected_render_method)]
         );
 
-        if (config.selected_render_method == ERenderMethod::Raster) {
-            Render::Raster::RasterMain(m_editor_ui);
+        if (m_editor_config->selected_render_method == ERenderMethod::Raster) {
+            m_renderer = MakeUnique<Raster::RasterRenderer>(m_editor_config->resolution, m_editor_config);
 
-        } else if (config.selected_render_method == ERenderMethod::Raytracing) {
-            Render::Raytracing::RaytracingMain(m_editor_ui, *m_editor_assets);
+        } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
+            // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);
 
         } else {
             assert(false && "Unknown render method");
         }
+
+        // MARK: Main Loop
+
+        while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+            if (!m_renderer->Run(m_editor_config, hooks)) {
+                break;
+            }
+        }
+
+        // Switch Renderer
+        m_renderer.reset();
     }
 }
 
-void Editor::ShutDown() {
+void Engine::ShutDown() {
     GeometryPassPsoManager::ShutDown(); // 如果这个单例没有Get过，则ShutDown时不会消耗额外资源
 
-    m_editor_ui.reset();     // 释放EditorUI资源
-    m_editor_assets.reset(); // 释放EditorAssets资源
+    m_runtime_assets.reset(); // 释放RuntimeAssets资源
 
     WindowContext::ShutDown();
     ShaderManager::ShutDown();
@@ -124,11 +143,11 @@ void Editor::ShutDown() {
     TaskSystem::ShutDown();
 }
 
-void Editor::Init3rdParty() {
+void Engine::Init3rdParty() {
     nfd_guard = MakeUnique<NFD::Guard>();
 }
 
-void Editor::ShutDown3rdParty() {
+void Engine::ShutDown3rdParty() {
     nfd_guard.release();
 }
 

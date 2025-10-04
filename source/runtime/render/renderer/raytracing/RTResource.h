@@ -3,8 +3,8 @@
 
 #include "Configs.h"
 #include "ShaderUtils.h"
-#include "common/EditorAssets.h"
 #include "misc/STL.h"
+#include "renderer/common/RuntimeAssets.h"
 #include "rhi/RHIResource.h"
 #include "scene/Camera.h"
 #include "shader/ShaderPipeline.h"
@@ -101,7 +101,7 @@ public:
         return bindless_handles;
     }
 
-    void LoadDefaultResources(EditorAssets& _rt_res);
+    void LoadDefaultResources(RuntimeAssets& _rt_res);
 
     const UnorderedSet<uint>& GetAllocatedBdlsBuf() {
         return allocated_bdls_buf;

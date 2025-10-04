@@ -8,7 +8,7 @@
 
 namespace Moer {
 
-RasterUI::RasterUI() {
+RasterUI::RasterUI(RasterConfig& config) : m_config(config) {
     m_config.shadow_map_mode =
         (ConfigManager::GetInstance().GetConfig().engine.render.raster.enable_shadow ?
              m_config.shadow_map_mode :

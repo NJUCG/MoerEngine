@@ -5,6 +5,10 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/source/cuda",
+                "${workspaceFolder}/source/editor",
+                "${workspaceFolder}/source/runtime/core",
+                "${workspaceFolder}/source/runtime/render",
+                "${workspaceFolder}/source/runtime/resource",
                 "${env:CUDA_PATH}/include", // 给IntelliSence添加include目录（不影响CMake与实际编译）
                 "${env:LIBTORCH_PATH}/include",
                 "${env:LIBTORCH_PATH}/include/torch/csrc/api/include",

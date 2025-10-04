@@ -351,6 +351,10 @@ class RENDER_API Scene {
 public:
     Scene() noexcept;
     ~Scene() noexcept;
+
+    Scene(const Scene&)            = delete;
+    Scene& operator=(const Scene&) = delete;
+
     void                    AddEntity(Entity _entity) noexcept;
     void                    AddCamera(Entity _entity) noexcept;
     void                    AddLight(Entity _entity) noexcept;

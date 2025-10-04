@@ -1,4 +1,4 @@
-#include "renderer/UIRenderer.h"
+#include "renderer/common/UIRenderer.h"
 #include "ui/ImGUIRenderer.h"
 
 UIRenderer* ui_renderer = nullptr;

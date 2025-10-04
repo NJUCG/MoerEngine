@@ -5,9 +5,9 @@
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
+#include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
-#include "ui/raster_ui/RasterConfig.h"
 
 namespace Moer::Render::Raster {
 

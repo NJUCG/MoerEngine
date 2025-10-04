@@ -2,10 +2,11 @@
 
 // Runtime
 #include "PixelFormat.h"
-#include "common/EditorAssets.h"
+#include "RaytracingConfig.h"
 #include "config/ConfigManager.h"
 #include "loader/LoaderInterface.h"
 #include "misc/Timer.h"
+#include "renderer/common/RuntimeAssets.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/extension//NrdExtension.h"
@@ -19,7 +20,6 @@
 #include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskGraph.h"
-#include "ui/raytracing_ui/RaytracingConfig.h"
 #include "window/WindowContext.h"
 
 // Editor
@@ -33,8 +33,7 @@
 #include "ShaderUtils.h"
 #include "ToneMappingPass.h"
 #include "VisualizePass.h"
-#include "common/UiCombinePass.h"
-#include "ui/raytracing_ui/RaytracingUI.h"
+#include "renderer/common/UiCombinePass.h"
 
 // 3rd party
 #include <atomic>
@@ -60,7 +59,7 @@ void DumpTextureToFile(
     std::string_view       _suffix
 );
 
-void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets) {
+void RaytracingMain(SharedPtr<EditorUI> _editor_ui, RuntimeAssets& _editor_assets) {
     // Get a lot of things
     auto&            device         = RenderDevice::Get();
     auto&            manager        = ShaderManager::Get();
@@ -277,18 +276,18 @@ void RaytracingMain(SharedPtr<EditorUI> _editor_ui, EditorAssets& _editor_assets
                 float cell_size                 = max_extent * 2 / is_ctx.GetGridConfig().grid_size.x;
                 ui_config.grid_config.cell_size = cell_size;
 
-                instance_buffer_handle =
-                    bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView()
-                    );
-                geometry_buffer_handle =
-                    bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView()
-                    );
+                instance_buffer_handle = bindless_array->AllocateBuffer(
+                    scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView()
+                );
+                geometry_buffer_handle = bindless_array->AllocateBuffer(
+                    scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView()
+                );
                 geometry_instance_buffer_handle = bindless_array->AllocateBuffer(
                     scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView()
                 );
-                material_buffer_idx =
-                    bindless_array->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView()
-                    );
+                material_buffer_idx = bindless_array->AllocateBuffer(
+                    scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView()
+                );
 
                 add_on_free_buffer(instance_buffer_handle);
                 add_on_free_buffer(geometry_buffer_handle);

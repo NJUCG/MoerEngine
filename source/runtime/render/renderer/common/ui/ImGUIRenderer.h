@@ -1,7 +1,7 @@
 #ifndef MOER_ENGINE_IMGUI_RENDERER_H
 #define MOER_ENGINE_IMGUI_RENDERER_H
 #include "misc/STL.h"
-#include "renderer/UIRenderer.h"
+#include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"

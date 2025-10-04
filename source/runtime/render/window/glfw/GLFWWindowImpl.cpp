@@ -1,13 +1,17 @@
 #include "GLFWWindowImpl.h"
+
 #include "misc/MMemory.h"
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
 #include "window/WindowContext.h"
-//define vulkan ahead of glfw
+
+// 1： define vulkan ahead of glfw
+#include <volk.h>
+// 2
 #include "GLFW/glfw3.h"
+
 #include "IconsFontAwesome6.h"
 #include <fstream>
-#include <volk.h>
 #if PLATFORM_WINDOWS
 //for dx12
 //https://docs.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgifactory2-createswapchainforhwnd

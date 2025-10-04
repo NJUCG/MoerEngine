@@ -1,4 +1,4 @@
-#include "renderer/UIRenderer.h"
+#include "renderer/common/UIRenderer.h"
 #include "ImGUIRenderer.h"
 #include "rhi/RHI.h"
 

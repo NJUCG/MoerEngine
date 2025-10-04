@@ -4,9 +4,9 @@
 #include "PixelFormat.h"
 #include "PreprocessLightPass.h"
 #include "ShaderUtils.h"
-#include "common/EditorAssets.h"
 #include "config/ConfigManager.h"
 #include "math/Function.h"
+#include "renderer/common/RuntimeAssets.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include <cstdio>
@@ -492,7 +492,7 @@ void RTContext::Tick(CameraRef _camera, float2 _jitter) {
     }
 }
 
-void RTContext::LoadDefaultResources(EditorAssets& _rt_res) {
+void RTContext::LoadDefaultResources(RuntimeAssets& _rt_res) {
     TextureRef white = _rt_res.GetTexture("white.png");
     TextureRef black = _rt_res.GetTexture("black.png");
 

@@ -14,10 +14,9 @@
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 
+#include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
-#include "ui/EditorUI.h"
-#include "ui/raster_ui/RasterConfig.h"
 
 namespace Moer::Render::Raster {
 
@@ -100,7 +99,7 @@ public:
         context.cmd_list
             .Gfx(
                 "Geometry Pass (MultiPass)",
-                Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                Rect2D(0, 0, context.resolution->x, context.resolution->y),
                 DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture()),
                 ColorAttachment(context.textures.vbuffer.tex),
                 ColorAttachment(context.textures.normal.tex),

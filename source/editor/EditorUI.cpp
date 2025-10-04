@@ -1,4 +1,4 @@
-#include "ui/EditorUI.h"
+#include "EditorUI.h"
 
 // Runtime
 #include "config/ConfigManager.h"
@@ -17,9 +17,16 @@ using namespace Moer::Render;
 
 namespace Moer {
 
-EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, uint2 resolution) :
+EditorUI::EditorUI(
+    UniquePtr<Render::UIRenderer> renderer,
+    SharedPtr<uint2>              resolution,
+    SharedPtr<EditorConfig>       editor_config
+) :
     m_ui_renderer(std::move(renderer)),
-    m_resolution(resolution) {
+    m_resolution(resolution),
+    m_config(editor_config),
+    m_raster_ui(editor_config->raster_config),
+    m_raytracing_ui(editor_config->raytracing_config) {
 
     // Load Config
     InitFromConfigManager();
@@ -33,22 +40,25 @@ void EditorUI::InitFromConfigManager() {
 
     // render method
     if (config.engine.render.default_render_method == "Raster") {
-        m_config.selected_render_method = ERenderMethod::Raster;
+        m_config->selected_render_method = ERenderMethod::Raster;
     } else if (config.engine.render.default_render_method == "Raytracing") {
-        m_config.selected_render_method = ERenderMethod::Raytracing;
+        m_config->selected_render_method = ERenderMethod::Raytracing;
     } else {
         LOG_WARNING(
             "Invalid default render method: {}. Use Raster instead.",
             config.engine.render.default_render_method
         );
-        m_config.selected_render_method = ERenderMethod::Raster;
+        m_config->selected_render_method = ERenderMethod::Raster;
     }
 
     // scene path
-    m_config.scene_path = config.engine.scene.scene_path;
+    m_config->scene_path = config.engine.scene.scene_path;
 }
 
 void EditorUI::TickUI() {
+
+    m_config->aspect_ratio = m_scene_color_resolution.x / m_scene_color_resolution.y;
+
     m_ui_renderer->BeginGUIFrame();
 
     static bool               opt_fullscreen  = true;
@@ -232,14 +242,14 @@ void EditorUI::ShowConfig() {
 
     EditorUIStyle::ShowStyleSelector("Style##Default");
 
-    auto last_selected_render_method = m_config.selected_render_method;
+    auto last_selected_render_method = m_config->selected_render_method;
     if (ImGui::BeginCombo(
-            "Render Method", k_render_method_names[static_cast<uint>(m_config.selected_render_method)].data()
+            "Render Method", k_render_method_names[static_cast<uint>(m_config->selected_render_method)].data()
         )) {
         for (int i = 0; i < IM_ARRAYSIZE(k_render_method_names); i++) {
-            const bool is_selected = (m_config.selected_render_method == static_cast<ERenderMethod>(i));
+            const bool is_selected = (m_config->selected_render_method == static_cast<ERenderMethod>(i));
             if (ImGui::Selectable(k_render_method_names[i].data(), is_selected)) {
-                m_config.selected_render_method = static_cast<ERenderMethod>(i);
+                m_config->selected_render_method = static_cast<ERenderMethod>(i);
             }
             if (is_selected) {
                 ImGui::SetItemDefaultFocus();
@@ -247,16 +257,16 @@ void EditorUI::ShowConfig() {
         }
         ImGui::EndCombo();
     }
-    if (last_selected_render_method != m_config.selected_render_method) {
+    if (last_selected_render_method != m_config->selected_render_method) {
         m_b_need_reload = true;
         SetShowSubUI(false);
     }
 
     { // Scene Path
-        size_t      last_slash = m_config.scene_path.find_last_of("/\\");
+        size_t      last_slash = m_config->scene_path.find_last_of("/\\");
         std::string scene_name = (last_slash == std::string::npos) ?
-                                     m_config.scene_path :
-                                     m_config.scene_path.substr(last_slash + 1);
+                                     m_config->scene_path :
+                                     m_config->scene_path.substr(last_slash + 1);
         if (ImGui::Button("Open Scene")) {
             NFD::UniquePath        selected_path = nullptr;
             Array<nfdfilteritem_t> filters       = {
@@ -271,8 +281,8 @@ void EditorUI::ShowConfig() {
                 LOG_INFO("User selected file: {}", selected_path.get());
 
                 // Prepare for reload
-                m_b_need_reload     = true;
-                m_config.scene_path = selected_path.get();
+                m_b_need_reload      = true;
+                m_config->scene_path = selected_path.get();
             } else if (result == NFD_CANCEL) {
                 LOG_INFO("User pressed cancel.");
             } else {
@@ -285,15 +295,15 @@ void EditorUI::ShowConfig() {
 
     if (ImGui::TreeNode("Camera")) {
 
-        ImGui::SliderFloat("Speed", &m_config.camera_speed, 0.1f, 400.f);
-        ImGui::SliderFloat("Fov Y", &m_config.camera_fovy, 1.f, 160.f);
+        ImGui::SliderFloat("Speed", &m_config->camera_speed, 0.1f, 400.f);
+        ImGui::SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
 
         ImGui::TreePop();
     }
 
     if (m_b_show_sub_ui) {
         ImGui::Separator();
-        switch (m_config.selected_render_method) {
+        switch (m_config->selected_render_method) {
             case ERenderMethod::Raster:
                 m_raster_ui.ShowConfig();
                 break;

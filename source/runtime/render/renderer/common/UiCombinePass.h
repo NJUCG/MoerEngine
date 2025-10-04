@@ -6,8 +6,6 @@
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
-#include "ui/EditorUI.h"
-
 namespace Moer::Render {
 
 class CombineUIPipeline : public RasterPipeline {
@@ -83,23 +81,25 @@ public:
     }
 
     TextureRef Process(
-        CommandList&        cmd_list,
-        uint2               resolution,
-        TextureView         input_color_texture,
-        TextureView         input_ui_texture, // TODO: is this necessary?
-        TextureView         default_output_texture,
-        SharedPtr<EditorUI> editor_ui
+        CommandList&           cmd_list,
+        bool                   is_seperate_window,
+        const SharedPtr<uint2> resolution,
+        float2                 scene_color_pos,
+        float2                 scene_color_resolution,
+        TextureView            input_window_frame_buffer,
+        TextureView            input_color_texture,
+        TextureView            input_ui_texture, // TODO: is this necessary?
+        TextureView            default_output_texture
     ) {
+        // TODO: add seperated back
 
-        if (editor_ui->IsSeperateWindow() && editor_ui->GetWindowFrameBuffer().GetTexture()) {
+        if (is_seperate_window && input_window_frame_buffer.GetTexture()) {
             // assert(false && "Has some bug here");
             assert(
-                sample_texture_pipelines.contains(editor_ui->GetWindowFrameBuffer().format) &&
+                sample_texture_pipelines.contains(input_window_frame_buffer.format) &&
                 "Unsupported format for SampleTexturePipeline"
             );
-            auto frame_buffer = editor_ui->GetWindowFrameBuffer();
-            auto scene_res    = editor_ui->GetSceneColorResolution();
-            auto scene_pos    = editor_ui->GetSceneColorPos();
+            auto frame_buffer = input_window_frame_buffer;
             cmd_list
                 .Gfx(
                     sample_texture_pipelines[frame_buffer.format],
@@ -108,7 +108,12 @@ public:
                 )
                 .Draw(
                     "SampleTexture",
-                    Rect2D(scene_pos.x, scene_pos.y, scene_res.x, scene_res.y),
+                    Rect2D(
+                        scene_color_pos.x,
+                        scene_color_pos.y,
+                        scene_color_resolution.x,
+                        scene_color_resolution.y
+                    ),
                     {},
                     3,
                     {SingleDrawParam(3, 1, 0, 0, 0)},
@@ -120,9 +125,9 @@ public:
                 combine_ui_pipelines.contains(default_output_texture.format) &&
                 "Unsupported format for CombineUIPipeline"
             );
-            float2 f_res  = float2(resolution.x, resolution.y);
-            float2 min_xy = editor_ui->GetSceneColorPos() / f_res;
-            float2 max_xy = (editor_ui->GetSceneColorPos() + editor_ui->GetSceneColorResolution()) / f_res;
+            float2 f_res  = float2(resolution->x, resolution->y);
+            float2 min_xy = scene_color_pos / f_res;
+            float2 max_xy = (scene_color_pos + scene_color_resolution) / f_res;
             cmd_list
                 .Gfx(
                     combine_ui_pipelines[default_output_texture.format],
@@ -133,7 +138,7 @@ public:
                 )
                 .Draw(
                     "Combine UI Pass",
-                    Rect2D(0, 0, resolution.x, resolution.y),
+                    Rect2D(0, 0, resolution->x, resolution->y),
                     {},
                     3,
                     {SingleDrawParam(3, 1, 0, 0, 0)},

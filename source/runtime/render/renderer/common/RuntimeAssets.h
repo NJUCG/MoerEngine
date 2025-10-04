@@ -5,13 +5,14 @@
 #include <filesystem>
 #include <rhi/RHI.h>
 namespace Moer {
-class EditorAssets {
+
+class RENDER_API RuntimeAssets {
 public:
     struct DefaultResource {
         Render::TextureRef white;
         Render::TextureRef black;
     };
-    EditorAssets(std::filesystem::path _assets_path, Render::RenderDevice& _device);
+    RuntimeAssets(std::filesystem::path _assets_path, Render::RenderDevice& _device);
     bool               IsReady() const;
     Render::TextureRef GetTexture(std::string_view _name) const;
     Render::BufferRef  GetBuffer(std::string_view _name) const;
@@ -32,6 +33,7 @@ private:
     std::atomic_bool b_loaded = false;
     GraphEventRef    load_event;
 };
+
 } // namespace Moer
 
 #endif

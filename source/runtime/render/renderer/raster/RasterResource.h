@@ -24,7 +24,7 @@ struct RasterContext {
     BindlessArrayRef bdls;
     CommandList&     cmd_list;
     Scene&           scene;
-    uint2&           resolution; // Be careful, resolution is also a reference
+    SharedPtr<uint2> resolution; // Be careful, resolution is also a reference
 
     // MARK: Hold ownership
     RasterTextures    textures;
@@ -54,7 +54,7 @@ struct RasterContext {
         BindlessArrayRef bdls,
         CommandList&     cmd_list,
         Scene&           scene,
-        uint2&           resolution
+        SharedPtr<uint2> resolution
     ) :
         device(device),
         manager(manager),
@@ -186,6 +186,10 @@ struct RasterContext {
 
     Array<TextureView> GetDisplayableFrameBuffersView() {
         return textures.GetDisplayableFrameBuffersView();
+    }
+
+    TextureView GetSelectedFrameBufferView(uint selected_frame_buffer_index) {
+        return textures.GetDisplayableFrameBuffersView()[selected_frame_buffer_index];
     }
 };
 

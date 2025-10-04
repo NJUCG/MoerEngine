@@ -1,5 +1,5 @@
-#include "Engine.h"
 #include "Core.h"
+#include "Engine.h"
 #include "RenderThread.h"
 #include "log/LogSystem.h"
 #include "math/Matrix.h"

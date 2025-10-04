@@ -1,4 +1,4 @@
-#include "EditorAssets.h"
+#include "RuntimeAssets.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
@@ -16,10 +16,10 @@ static uint CalcMaxMipCount(uint2 _extent) {
     uint max_dim = std::max(_extent.x, _extent.y);
     return 1 + static_cast<uint>(std::floor(std::log2(max_dim)));
 }
-EditorAssets::EditorAssets(std::filesystem::path _assets_path, Render::RenderDevice& _device) :
+RuntimeAssets::RuntimeAssets(std::filesystem::path _assets_path, Render::RenderDevice& _device) :
     assets_path(_assets_path),
     device(_device) {
-    assert(std::filesystem::exists(assets_path) && "EditorAssets path not exists");
+    assert(std::filesystem::exists(assets_path) && "RuntimeAssets path not exists");
 
     GraphEventRef evt = LambdaTask::Create([this]() {
                             LoadTextures();
@@ -30,7 +30,7 @@ EditorAssets::EditorAssets(std::filesystem::path _assets_path, Render::RenderDev
                  }).Dispatch();
 }
 
-Render::TextureRef EditorAssets::GetTexture(std::string_view _name) const {
+Render::TextureRef RuntimeAssets::GetTexture(std::string_view _name) const {
     auto it = textures.find(std::string(_name));
     if (it != textures.end()) {
         return it->second;
@@ -38,15 +38,15 @@ Render::TextureRef EditorAssets::GetTexture(std::string_view _name) const {
     return nullptr;
 }
 
-Render::BufferRef EditorAssets::GetBuffer(std::string_view _name) const {
+Render::BufferRef RuntimeAssets::GetBuffer(std::string_view _name) const {
     return nullptr;
 }
 
-Render::TextureRef EditorAssets::GetDefaultEnvMap() const {
+Render::TextureRef RuntimeAssets::GetDefaultEnvMap() const {
     return GetTexture(default_env_map_name);
 }
 
-void EditorAssets::LoadTextures() {
+void RuntimeAssets::LoadTextures() {
     // Load textures
     using namespace Render;
     Array<ExportTexture> exp_textures;
@@ -130,14 +130,15 @@ void EditorAssets::LoadTextures() {
     }
 }
 
-void EditorAssets::CompleteAndImportResources() {
+void RuntimeAssets::CompleteAndImportResources() {
     using namespace Render;
     auto& gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
 
     Array<ImportTexture> import_textures;
     import_textures.reserve(textures.size());
     for (auto& [name, tex] : textures) {
-        import_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE)
+        import_textures.emplace_back(
+            ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE)
         );
     }
 
@@ -152,10 +153,10 @@ void EditorAssets::CompleteAndImportResources() {
     b_loaded.store(true, std::memory_order_seq_cst);
 }
 
-bool EditorAssets::IsReady() const {
+bool RuntimeAssets::IsReady() const {
     return b_loaded.load(std::memory_order_relaxed);
 }
-void EditorAssets::WaitUntilReady() const {
+void RuntimeAssets::WaitUntilReady() const {
     if (!IsReady()) {
         load_event->Wait();
     }

@@ -410,6 +410,14 @@ concept is_arg = std::is_same_v<std::remove_reference_t<TInArg>(), BufferView> |
                  std::is_same_v<std::remove_reference_t<TInArg>(), Buffer*> ||
                  std::is_same_v<std::remove_reference_t<TInArg>(), Texture*>;
 class CommandList {
+
+public:
+    CommandList(const CommandList&)            = delete;
+    CommandList& operator=(const CommandList&) = delete;
+
+    CommandList(CommandList&&)            = default;
+    CommandList& operator=(CommandList&&) = default;
+
 public:
     struct RENDER_API DrawDispatcher {
         DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list);

@@ -1,17 +1,15 @@
 #include "RaytracingUI.h"
 
-// Runtime
 #include "Core.h"
 #include "math/Function.h"
 #include "misc/STL.h"
-#include "renderer/UIRenderer.h"
+#include "renderer/common/UIRenderer.h"
 #include "rhi/RHIResource.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 
-// Editor
-#include "raytracing/AntiAliasPass.h"
-#include "raytracing/Configs.h"
+#include "renderer/raytracing/AntiAliasPass.h"
+#include "renderer/raytracing/RaytracingConfig.h"
 
 // 3rd party
 #include <imgui.h>
@@ -70,7 +68,7 @@ static constexpr std::string_view s_final_color_names[] = {
 
 static constexpr std::string_view s_exported_texture_names[] = {"LDR", "HDR"};
 
-RaytracingUI::RaytracingUI() {
+RaytracingUI::RaytracingUI(RaytracingConfig& config) : config(config) {
     final_color_map["SceneColor"] = EFinalColor::EFC_SceneColor;
     final_color_map["DI"]         = EFinalColor::EFC_DI;
     final_color_map["Emissive"]   = EFinalColor::EFC_EMISSIVE;

@@ -2,33 +2,23 @@
 
 #include "Core.h"
 #include "misc/Traits.h"
-#include "renderer/UIRenderer.h"
+#include "renderer/EditorConfig.h"
+#include "renderer/common/UIRenderer.h"
 #include "rhi/RHIResource.h"
 
-#include "ui/raster_ui/RasterUI.h"
-#include "ui/raytracing_ui/RaytracingUI.h"
+#include "raster_ui/RasterUI.h"
+#include "raytracing_ui/RaytracingUI.h"
 
 namespace Moer {
-
-enum class ERenderMethod {
-    Raster,
-    Raytracing,
-};
-
-constexpr std::string_view k_render_method_names[] = {"Raster", "Raytracing"};
 
 class EditorUI {
 
 public:
-    struct Config {
-        ERenderMethod selected_render_method = ERenderMethod::Raster;
-        std::string   scene_path             = "";
-
-        float camera_speed = 25.f;
-        float camera_fovy  = 60.f;
-    };
-
-    EditorUI(UniquePtr<Render::UIRenderer> renderer, uint2 resolution);
+    EditorUI(
+        UniquePtr<Render::UIRenderer> renderer,
+        SharedPtr<uint2>              resolution,
+        SharedPtr<EditorConfig>       editor_config
+    );
     ~EditorUI() = default;
     void InitFromConfigManager(); // will be called by Constructor
     void TickUI();
@@ -41,10 +31,10 @@ public:
     float2 GetSceneColorPos() const {
         return m_scene_color_pos;
     }
-    uint2 GetResolution() const {
+    SharedPtr<uint2> GetResolution() const {
         return m_resolution;
     }
-    const Config& GetConfig() const {
+    const SharedPtr<EditorConfig> GetConfig() const {
         return m_config;
     }
     bool IsNeedReload() const {
@@ -81,12 +71,12 @@ private:
     bool   m_b_show = true;
 
     bool m_b_need_reload = false;
-    bool m_b_show_sub_ui = false;
+    bool m_b_show_sub_ui = true; // TODO: 【10.3 Refactor】这玩意是干什么的？
 
-    Config m_config;
+    SharedPtr<EditorConfig> m_config;
 
     UniquePtr<Render::UIRenderer> m_ui_renderer;
-    uint2                         m_resolution; // TODO: update resolution in EditorUI
+    SharedPtr<uint2>              m_resolution; // TODO: update resolution in EditorUI
 
     // Custom Func
     UnorderedMap<std::string_view, std::function<void()>> m_show_func_map;

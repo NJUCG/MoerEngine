@@ -2,12 +2,14 @@
 
 #include <chrono>
 
+#include "math/Function.h"
+#include "scene/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
+#include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
-#include "ui/raster_ui/RasterConfig.h"
 
 namespace Moer::Render::Raster {
 
@@ -58,8 +60,8 @@ public:
         param.clip2world         = Transpose(camera->GetViewProjectionMatrixInv());
         param.camera_pos         = camera->GetPosition();
         param.frame_idx          = frame_idx;
-        param.resolution         = float2(context.resolution);
-        param.inv_resolution     = float2(1.0) / float2(context.resolution);
+        param.resolution         = float2(*context.resolution);
+        param.inv_resolution     = float2(1.0) / float2(*context.resolution);
         param.input_image        = input_image;
         param.normal_tex         = context.textures.normal.handle;
         param.position_tex       = context.textures.position.handle;
@@ -72,7 +74,7 @@ public:
         context.cmd_list.Gfx(rtao_pipeline, context.rt_scene->GetTlas(), context.bdls, param)
             .Draw(
                 "RTAO Pass",
-                Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                Rect2D(0, 0, context.resolution->x, context.resolution->y),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.ao_output.tex),
                 ColorAttachment(context.textures.ao_output_ambient_only.tex)

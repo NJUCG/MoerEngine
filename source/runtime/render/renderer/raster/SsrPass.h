@@ -5,9 +5,9 @@
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
+#include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
-#include "ui/raster_ui/RasterConfig.h"
 
 namespace Moer::Render::Raster {
 
@@ -62,7 +62,7 @@ public:
         param.view_projection_matrix         = Transpose(camera->GetViewProjectionMatrix());
         param.camera_position                = camera->GetPosition();
         param.near_clip                      = camera->GetNearClip();
-        param.resolution                     = float2(context.resolution);
+        param.resolution                     = float2(*context.resolution);
         param.far_clip                       = camera->GetFarClip();
         param.ssr_roughness_threshold        = ui_config.ssr_roughness_threshold;
         param.ssr_metallic_threshold         = ui_config.ssr_metallic_threshold;
@@ -81,7 +81,7 @@ public:
         context.cmd_list.Gfx(ssr_pipeline, context.bdls, param)
             .Draw(
                 "SSR Pass",
-                Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                Rect2D(0, 0, context.resolution->x, context.resolution->y),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.ssr_output.tex)
             );

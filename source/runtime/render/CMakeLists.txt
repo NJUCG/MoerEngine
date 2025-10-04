@@ -4,12 +4,12 @@ set(MODULE_DIR ${moer_runtime_dir}/render)
 configure_file(${MODULE_DIR}/config.h.in ${MODULE_DIR}/config.h)
 
 file(GLOB_RECURSE RENDER_MODULE_HEADERS "*.h" "*.hlsli")
-file(GLOB_RECURSE RENDER_MODULE_SOURCES "*.cpp" "*.h")
+file(GLOB_RECURSE RENDER_MODULE_SOURCES "*.cpp" "*.hpp")
 
 
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES} )
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDER_MODULE_SOURCES} )
 
-add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURCES})
+add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_SOURCES})
 
 target_compile_definitions(${MODULE_NAME} PRIVATE RENDER_MODULE_SHARED_LIB)
 
@@ -23,6 +23,7 @@ set_target_properties(${MODULE_NAME} PROPERTIES FOLDER "runtime")
 target_include_directories(${MODULE_NAME}
 	PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}>
     PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}>
+    PUBLIC $<BUILD_INTERFACE:${moer_runtime_resource_dir}>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/volk>
@@ -54,7 +55,17 @@ target_link_libraries(${MODULE_NAME}
     PUBLIC dxguid
     PUBLIC D3D12MemoryAllocator
     PUBLIC winpixeventruntime
+    PUBLIC nfd
+    PUBLIC AssetLoad
 )
+
+# Link CUDA
+if (TARGET moer_cuda)
+    target_link_libraries(${MODULE_NAME}
+        PRIVATE moer_cuda
+    )
+endif()
+
 target_compile_definitions(${MODULE_NAME} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})
 # agilitysdk need to export symbols from exe, however current render module is dll, so not easy for exe to import this then export again...
 # so here use PUBLIC not PRIVATE

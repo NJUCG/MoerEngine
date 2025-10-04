@@ -1,19 +1,16 @@
 #pragma once
 
-// Runtime
 #include "Core.h"
 #include "misc/Traits.h"
+#include "renderer/raster/RasterConfig.h"
 #include "rhi/RHIResource.h"
-
-// Editor
-#include "RasterConfig.h"
 
 namespace Moer {
 
 class RasterUI {
 
 public:
-    RasterUI();
+    RasterUI(RasterConfig& config);
     ~RasterUI() = default;
 
     void ShowConfig();
@@ -32,7 +29,7 @@ private:
 private:
     Array<Render::TextureView> m_frame_buffer_and_name_array;
 
-    RasterConfig m_config;
+    RasterConfig& m_config;
 };
 
 } // namespace Moer

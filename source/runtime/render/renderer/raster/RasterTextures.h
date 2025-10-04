@@ -37,7 +37,7 @@ struct DepthBufferWithHandleAndName {
 #define E_COLOR_ATTACH ETextureUsageFlags::COLOR_ATTACHMENT
 #define E_D_S_ATTACH   ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
 
-#define SCREEN_SIZE           Extent2D(size.x, size.y)
+#define SCREEN_SIZE           Extent2D(size->x, size->y)
 #define CUSTOMIZED_SIZE(x, y) Extent2D(x, y)
 
 #define RASTER_TEXTURES_TABLE                                                                                \
@@ -67,16 +67,16 @@ struct RasterTextures {
     DepthBufferWithHandle depth_linear_sampler;
     DepthBufferWithHandle depth_nearest_sampler;
 
-    void CreateFrameBuffers(RenderDevice& device, uint2 size) {
+    void CreateFrameBuffers(RenderDevice& device, SharedPtr<uint2> size) {
         // 批量生成
 #define X(TYPE, NAME, PF, USAGE, SIZE) \
-    NAME.tex = device.CreateTexture(#NAME, Extent2D(size.x, size.y), PF, USAGE);
+    NAME.tex = device.CreateTexture(#NAME, Extent2D(size->x, size->y), PF, USAGE);
         RASTER_TEXTURES_TABLE
 #undef X
         // 手动维护: depth
         depth_linear_sampler.tex = device.CreateDepthBuffer(
             "depth",
-            Extent2D(size.x, size.y),
+            Extent2D(size->x, size->y),
             PF_D32_SFLOAT_S8_UINT,
             1,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT

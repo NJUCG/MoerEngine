@@ -2,6 +2,8 @@ set(target_name MoerRuntime)
 set(moer_runtime_dir ${moer_source_dir}/runtime)
 
 set(moer_runtime_core_dir ${moer_runtime_dir}/core)
+set(moer_runtime_render_dir ${moer_runtime_dir}/render)
+set(moer_runtime_resource_dir ${moer_runtime_dir}/resource)
 
 add_subdirectory(core)
 add_subdirectory(render)
@@ -16,7 +18,7 @@ set_target_properties(${target_name} PROPERTIES
     FOLDER "runtime"  )
 
 target_include_directories(${target_name} 
-    PUBLIC $<BUILD_INTERFACE:${moer_runtime_dir}/include>
+    PUBLIC $<BUILD_INTERFACE:${moer_runtime_dir}>
 )
 
 target_link_libraries(${target_name}

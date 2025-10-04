@@ -10,11 +10,10 @@
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 
 #include "GeometryPass.h"
+#include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
-#include "ui/EditorUI.h"
-#include "ui/raster_ui/RasterConfig.h"
 
 namespace Moer::Render::Raster {
 
@@ -185,10 +184,10 @@ public:
                 frustum_corners_pre[i] = world_to_light_view_rotate_only * frustum_corners[i];
             }
             // - Get 最长对角线
-            float max_cross_distance =
-                Max(Lengthf(frustum_corners_pre[4] - frustum_corners_pre[6]), // 远平面对角线
-                    Lengthf(frustum_corners_pre[0] - frustum_corners_pre[6]) // 近平面和远平面的最长对角线
-                );
+            float max_cross_distance = Max(
+                Lengthf(frustum_corners_pre[4] - frustum_corners_pre[6]), // 远平面对角线
+                Lengthf(frustum_corners_pre[0] - frustum_corners_pre[6])  // 近平面和远平面的最长对角线
+            );
             // - Get AABB
             float3 min = frustum_corners_pre[0];
             float3 max = frustum_corners_pre[0];

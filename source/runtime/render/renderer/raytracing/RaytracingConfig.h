@@ -3,7 +3,7 @@
 #include "misc/Traits.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
-#include "raytracing/AntiAliasPass.h"
+#include "AntiAliasPass.h"
 
 namespace Moer {
 

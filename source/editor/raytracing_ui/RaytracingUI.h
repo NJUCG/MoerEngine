@@ -1,13 +1,13 @@
 #ifndef MOER_TEST_RaytracingUI_H
 #define MOER_TEST_RaytracingUI_H
 
-#include "RaytracingConfig.h"
+#include "renderer/raytracing/RaytracingConfig.h"
 
 namespace Moer {
 
 class RaytracingUI {
 public:
-    RaytracingUI();
+    RaytracingUI(RaytracingConfig& config);
     ~RaytracingUI() = default;
 
     void ShowConfig();
@@ -25,7 +25,7 @@ public:
     }
 
 private:
-    RaytracingConfig config;
+    RaytracingConfig& config;
 
     UnorderedMap<std::string, uint> final_color_map;
 };

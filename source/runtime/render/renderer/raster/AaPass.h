@@ -6,9 +6,9 @@
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 #include "utils/smaa/SmaaPrecomputedTextures.h"
 
+#include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
-#include "ui/raster_ui/RasterConfig.h"
 
 namespace Moer::Render::Raster {
 
@@ -263,7 +263,7 @@ public:
         context.cmd_list.Gfx(fxaa_precompute_pipeline, context.bdls, param_fxaa_precomputed)
             .Draw(
                 "FXAA Precompute Pass",
-                Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                Rect2D(0, 0, context.resolution->x, context.resolution->y),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.aa_texture_1.tex)
             );
@@ -271,13 +271,13 @@ public:
         FxaaPipelineBindlessParam param_fxaa;
         param_fxaa.input_image    = context.textures.aa_texture_1.handle;
         param_fxaa.fxaa_mode      = static_cast<uint32>(ui_config.aa_mode);
-        param_fxaa.resolution     = float2(context.resolution);
-        param_fxaa.inv_resolution = float2(1.0) / float2(context.resolution);
+        param_fxaa.resolution     = float2(*context.resolution);
+        param_fxaa.inv_resolution = float2(1.0) / float2(*context.resolution);
 
         context.cmd_list.Gfx(fxaa_pipeline, context.bdls, param_fxaa)
             .Draw(
                 "FXAA Pass",
-                Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                Rect2D(0, 0, context.resolution->x, context.resolution->y),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.aa_output.tex)
             );
@@ -340,10 +340,10 @@ public:
             param.point_sampler      = GetSamplerIdx(Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
             param.linear_sampler     = GetSamplerIdx(Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
             param.rt_metrics         = float4(
-                1.0f / context.resolution.x,
-                1.0f / context.resolution.y,
-                context.resolution.x,
-                context.resolution.y
+                1.0f / context.resolution->x,
+                1.0f / context.resolution->y,
+                context.resolution->x,
+                context.resolution->y
             );
             param.curr_inv_vp_and_prev_vp = Transpose(previous_view_proj * current_inv_view_proj);
             return param;
@@ -352,7 +352,7 @@ public:
         context.cmd_list.Gfx(smaa_edge_detection_pipeline, context.bdls, smaa_shared_param)
             .Draw(
                 "SMAA Edge Detection Pass",
-                Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                Rect2D(0, 0, context.resolution->x, context.resolution->y),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.aa_texture_1.tex)
             );
@@ -360,7 +360,7 @@ public:
         context.cmd_list.Gfx(smaa_blending_weight_pipeline, context.bdls, smaa_shared_param)
             .Draw(
                 "SMAA Blending Weight Calculation Pass",
-                Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                Rect2D(0, 0, context.resolution->x, context.resolution->y),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.aa_texture_2.tex)
             );
@@ -369,7 +369,7 @@ public:
             context.cmd_list.Gfx(smaa_neighborhood_blending_pipeline, context.bdls, smaa_shared_param)
                 .Draw(
                     "SMAA Neighborhood Blending Pass",
-                    Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                    Rect2D(0, 0, context.resolution->x, context.resolution->y),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(context.textures.aa_output.tex)
                 );
@@ -377,7 +377,7 @@ public:
             context.cmd_list.Gfx(smaa_t2x_neighborhood_blending_pipeline, context.bdls, smaa_shared_param)
                 .Draw(
                     "SMAA T2x Neighborhood Blending Pass",
-                    Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                    Rect2D(0, 0, context.resolution->x, context.resolution->y),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(aa_texture_34[frame_parity]->tex)
                 );
@@ -385,7 +385,7 @@ public:
             context.cmd_list.Gfx(smaa_t2x_resolve_pipeline, context.bdls, smaa_shared_param)
                 .Draw(
                     "SMAA T2x Resolve Pass",
-                    Rect2D(0, 0, context.resolution.x, context.resolution.y),
+                    Rect2D(0, 0, context.resolution->x, context.resolution->y),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(context.textures.aa_output.tex)
                 );
