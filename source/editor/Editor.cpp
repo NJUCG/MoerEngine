@@ -77,6 +77,11 @@ void Editor::Run() {
                 [&editor_ui](std::string name) {
                     editor_ui->UnregisterUIFunc(name);
                 },
+            .on_show_config_sub_ui =
+                [&editor_ui]() {
+                    editor_ui->SetShowSubUI(true);
+                },
+
             // Raster
             .on_raster_register_frame_buffers =
                 [&editor_ui](const Array<TextureView>& textures) {

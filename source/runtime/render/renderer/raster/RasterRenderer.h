@@ -24,10 +24,11 @@ public:
     RasterRenderer(
         SharedPtr<uint2>                                          _resolution,
         const SharedPtr<EditorConfig>                             _config,
+        const EngineHooks&                                        _hooks,
         std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
     ) :
         // Super
-        Renderer(_resolution, _config, _load_scene_async),
+        Renderer(_resolution, _config, _hooks, _load_scene_async),
         // Context
         raster_context(device, manager, bindless_array, cmd_list, scene, resolution) {
 

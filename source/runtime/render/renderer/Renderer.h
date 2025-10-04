@@ -27,6 +27,8 @@ struct EngineHooks {
 
     std::function<void(std::string)> on_unregister_ui_func;
 
+    std::function<void(void)> on_show_config_sub_ui;
+
     // Raster
     std::function<void(const Array<TextureView>&)> on_raster_register_frame_buffers;
 };
@@ -53,6 +55,7 @@ public:
     Renderer(
         SharedPtr<uint2>                                          _resolution,
         const SharedPtr<EditorConfig>                             _config,
+        const EngineHooks&                                        hooks,
         std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
     ) :
         resolution(_resolution),
@@ -84,6 +87,10 @@ public:
         }
         {
             ui_combine_pass = MakeUnique<UiCombinePass>(manager);
+        }
+        // Show sub ui
+        if (hooks.on_show_config_sub_ui) {
+            hooks.on_show_config_sub_ui();
         }
     }
 

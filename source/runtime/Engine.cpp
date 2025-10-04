@@ -117,13 +117,13 @@ void Engine::Run(const EngineHooks& hooks) {
 
         if (m_editor_config->selected_render_method == ERenderMethod::Raster) {
             m_renderer = MakeUnique<Raster::RasterRenderer>(
-                m_editor_config->resolution, m_editor_config, wtf_load_scene
+                m_editor_config->resolution, m_editor_config, hooks, wtf_load_scene
             );
 
         } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
             // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);
             m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
-                m_editor_config->resolution, m_editor_config, wtf_load_scene, *m_runtime_assets
+                m_editor_config->resolution, m_editor_config, hooks, wtf_load_scene, *m_runtime_assets
             );
 
         } else {
