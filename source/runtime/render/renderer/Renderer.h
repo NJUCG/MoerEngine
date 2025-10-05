@@ -95,6 +95,10 @@ public:
     }
 
     virtual ~Renderer() {
+        // ReleaseResources(); // 应该在子类中调用，否则子类中的Pass资源无法被正常释放
+    }
+
+    void ReleaseResources() {
         timeline->Wait(time);
         gfx_queue.Sync();
 

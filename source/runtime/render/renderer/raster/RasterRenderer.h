@@ -56,6 +56,9 @@ public:
 
     virtual ~RasterRenderer() override {
         raster_context.FreeFrameBuffers();
+
+        // 下面这段需要在Renderer子类中执行。否则各种Pass对象被Release的时候，对应的资源还没有被释放
+        ReleaseResources();
     }
 
     virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) override {
