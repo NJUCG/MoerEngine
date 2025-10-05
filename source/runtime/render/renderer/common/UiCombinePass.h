@@ -91,8 +91,6 @@ public:
         TextureView            input_ui_texture, // TODO: is this necessary?
         TextureView            default_output_texture
     ) {
-        // TODO: add seperated back
-
         if (is_seperate_window && input_window_frame_buffer.GetTexture()) {
             // assert(false && "Has some bug here");
             assert(

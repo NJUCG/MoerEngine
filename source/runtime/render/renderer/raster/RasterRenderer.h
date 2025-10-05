@@ -1,24 +1,41 @@
 #pragma once
 
-// Runtime
 #include "renderer/Renderer.h"
-
-// Editor
-#include "AaPass.h"
-#include "AoPass.h"
-#include "CudaPass.h"
-#include "GeometryPass.h"
-#include "LightingPass.h"
-#include "RasterResource.h"
-#include "RasterTextures.h"
-#include "RasterTool.h"
-#include "RtaoPass.h"
-#include "ShadowDepthPass.h"
-#include "SsrPass.h"
+#include "rhi/RHIResource.h"
 
 namespace Moer::Render::Raster {
 
-class RasterRenderer : public Renderer {
+class RasterContext;
+class ShadowDepthPass;
+class GeometryPass;
+class LightingPass;
+class AoPass;
+class RtaoPass;
+class SsrPass;
+class CudaPass;
+class AaPass;
+
+/**
+ * Raster渲染方法TODO Lists
+ * 
+ * TODO: 着色，LightingPass，目前还比较初步
+ * TODO: IBL [Done by wk]
+ * TODO: 阴影，ShadowDepthPass和LightingPass
+ *       1. CSM中，ShadowMap的mipmap好像有问题，貌似目前并没有构建，导致效果不好，需要构建一下mipmap
+ *       2. CSM层间混合
+ *       3. 多种采样方法支持（目前是NoFiltering，可以考虑添加不同精度的PCF）
+ *       4. 剔除。目前把场景绘制CSM层数遍，性能开销巨大
+ *       5. VSM支持
+ * TODO: SSR，SsrPass
+ *       1. SSR的效果还不够好，会出现断层（用jitter修复后仍有一些问题），可以考虑换一个新的SSR算法
+ *       2. 考虑使用HiZ来加速ssr
+ *       3. 对Glossy材质的支持
+ *       4. 性能优化
+ * TODO: 抗锯齿，AaPass，目前SMAA T2x还有一些问题，效果不明显，可能是velocity buffer寄了
+ * TODO: 环境光遮蔽，AoPass，可以在SSAO之外多加一些环境光遮蔽算法，比如SSDO、GTAO
+ * TODO: 其他后处理Pass，或许可以考虑从RT搬过来用233
+ */
+class RENDER_API RasterRenderer : public Renderer {
 
 public:
     RasterRenderer(
@@ -26,195 +43,17 @@ public:
         const SharedPtr<EditorConfig>                             _config,
         const EngineHooks&                                        _hooks,
         std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
-    ) :
-        // Super
-        Renderer(_resolution, _config, _hooks, _load_scene_async),
-        // Context
-        raster_context(device, manager, bindless_array, cmd_list, scene, resolution) {
+    );
 
-        raster_context.CreateFrameBuffers();
-        raster_context.AllocateFrameBuffers();
+    virtual ~RasterRenderer() override;
 
-        gfx_queue.Execute(cmd_list.Submit());
-        gfx_queue.Sync();
+    virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) override;
 
-        shadow_depth_pass = MakeUnique<ShadowDepthPass>(raster_context);
-        geometry_pass     = MakeUnique<GeometryPass>(raster_context);
-        lighting_pass     = MakeUnique<LightingPass>(raster_context);
-        ao_pass           = MakeUnique<AoPass>(raster_context);
-        rtao_pass         = MakeUnique<RtaoPass>(raster_context);
-        ssr_pass          = MakeUnique<SsrPass>(raster_context);
-        cuda_pass         = MakeUnique<CudaPass>(raster_context);
-        aa_pass           = MakeUnique<AaPass>(raster_context);
-
-        cmd_list.UpdateBindlessArray(bindless_array);
-        gfx_queue.Execute(cmd_list.Submit());
-        gfx_queue.Sync();
-
-        // Other vars
-    }
-
-    virtual ~RasterRenderer() override {
-        raster_context.FreeFrameBuffers();
-
-        // 下面这段需要在Renderer子类中执行。否则各种Pass对象被Release的时候，对应的资源还没有被释放
-        ReleaseResources();
-    }
-
-    virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) override {
-        while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
-            if (!RunSingle(editor_config, hooks)) {
-                break;
-            }
-        }
-    }
-
-    bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
-
-        if (hooks.on_tick_ui) {
-            hooks.on_tick_ui();
-        }
-
-        if (hooks.on_raster_register_frame_buffers) {
-            hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
-        }
-
-        auto window_state = TickWindowContext(hooks);
-
-        if (window_state == EWindowState::Hiding) {
-            std::this_thread::yield(); // FIXME: 这个东西有用吗？
-
-            // hook: RenderGUI
-            if (hooks.on_render_gui) {
-                hooks.on_render_gui(cmd_list, raster_context.textures.output.tex);
-            }
-
-            return true; // continue to next main loop body
-
-        } else if (window_state == EWindowState::SizeChanged) {
-            raster_context.FreeFrameBuffers();
-            raster_context.CreateFrameBuffers();
-            raster_context.AllocateFrameBuffers();
-
-            if (hooks.on_raster_register_frame_buffers) {
-                hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
-            }
-
-        } else if (window_state == EWindowState::Default) {
-            // do nothing
-
-        } else {
-            assert(false);
-        }
-
-        TextureRef default_output_texture = raster_context.textures.output.tex;
-
-        if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
-            if (first_load) {
-                first_load = false;
-
-                raster_context.LoadSceneData();
-                RasterTool::InitRaytracingScene(raster_context, rt_geometries);
-
-                gfx_queue.Execute(cmd_list.Submit());
-                gfx_queue.Sync();
-            }
-
-            const auto& raster_config = editor_config->raster_config;
-            auto        camera        = CameraManager::Get().Get(scene.GetCameras()[0]);
-
-            {
-                // Jitter Camera for SMAA T2x
-                static uint8_t smaa_current_frame_index = 0;
-                if (raster_config.aa_mode == EAaMode::SMAA_T2X) {
-
-                    smaa_current_frame_index ^= 1;
-                    static StaticArray<float2, 2> smaa_jitter = {
-                        float2(0.25f, -0.25f), float2(-0.25f, 0.25f)
-                    };
-                    camera->SetJitterMatrix(smaa_jitter[smaa_current_frame_index]);
-                }
-            }
-
-            camera->Tick(
-                editor_config->aspect_ratio, editor_config->camera_speed, editor_config->camera_fovy
-            );
-
-            // others
-            RasterTool::UpdateRaytracingScene(raster_context);
-
-            // Shadow Depth Pass
-            shadow_depth_pass->Process(raster_context, raster_config, camera);
-
-            // Geometry Pass
-            geometry_pass->Process(raster_context, raster_config, camera);
-
-            // Lighting Pass
-            uint lighting_output = lighting_pass->Process(raster_context, raster_config, camera);
-
-            // Post Process Passes
-            // - Ambient Occlusion
-            uint ao_output_ambient_only = 0;
-            uint ao_output              = [&]() -> uint {
-                if (raster_config.ao_mode == EAoMode::RTAO ||
-                    raster_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
-                    auto output =
-                        rtao_pass->Process(raster_context, raster_config, camera, time, lighting_output);
-                    ao_output_ambient_only = output.ambient_only_output; // ambient only texture的handle
-                    return output.ao_output;                             // 实际输出的handle
-                } else {
-                    return ao_pass->Process(raster_context, raster_config, lighting_output);
-                }
-            }();
-            // - Screen Space Reflection
-            uint ssr_output = ssr_pass->Process(raster_context, raster_config, camera, ao_output);
-
-            // - CUDA Pass
-            uint cuda_output = cuda_pass->Process(raster_context, raster_config, ssr_output);
-
-            // - Anti-aliasing
-            uint _aa_output = aa_pass->Process(raster_context, raster_config, camera, cuda_output);
-
-            if (hooks.on_ui_combine_pass) {
-                default_output_texture = hooks.on_ui_combine_pass(
-                    ui_combine_pass.get(),
-                    cmd_list,
-                    raster_context.GetSelectedFrameBufferView(raster_config.selected_frame_buffer_index),
-                    raster_context.textures.ui_frame_buffer.tex,
-                    raster_context.textures.output.tex
-                );
-            }
-
-            // without test
-            raster_context.rt_scene->AdvanceFrame();
-        }
-
-        if (hooks.on_render_gui) {
-            hooks.on_render_gui(cmd_list, default_output_texture);
-        }
-
-        time++;
-        /***
-        currently using a phony timeline (any timeline signaled by copy queue) to remove error message from validation layer caused by host synced copy operations
-        we're not waiting for the copy queue to finish, because operations we wanted are synced on host side, we use this timeline just to notifiy the validation layer
-        that we've done flushing copy queue resources
-        */
-        gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources());
-        gfx_queue.Present(swapchain, default_output_texture);
-
-        if (hooks.on_present_windows) {
-            hooks.on_present_windows();
-        }
-        if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {
-            return false; // break
-        }
-
-        return true;
-    }
+    bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
 
 private:
     // Context
-    RasterContext raster_context;
+    UniquePtr<RasterContext> raster_context_ptr; // For forward declaration
 
     // Pass
     UniquePtr<ShadowDepthPass> shadow_depth_pass;

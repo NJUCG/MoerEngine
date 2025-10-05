@@ -742,8 +742,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             break;
         }
     }
-    timeline->Wait(time);
-    gfx_queue.Sync();
 
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
     for (auto& buf : allocated_buf) {
@@ -759,10 +757,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         callback(0);
     }
 
-    cmd_list.UpdateBindlessArray(bindless_array);
-    gfx_queue.Execute(cmd_list.Submit().DeleteResources());
-    gfx_queue.Sync();
-    swapchain->Sync();
+    ReleaseResources();
 
     if (hooks.on_unregister_ui_func) {
         hooks.on_unregister_ui_func("Display MaterialTexture");
