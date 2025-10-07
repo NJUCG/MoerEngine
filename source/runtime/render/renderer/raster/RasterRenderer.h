@@ -12,8 +12,11 @@ class LightingPass;
 class AoPass;
 class RtaoPass;
 class SsrPass;
-class CudaPass;
 class AaPass;
+
+#if CUDA_PASS_IN_RASTER
+class CudaPass;
+#endif
 
 /**
  * Raster渲染方法TODO Lists
@@ -62,8 +65,11 @@ private:
     UniquePtr<AoPass>          ao_pass;
     UniquePtr<RtaoPass>        rtao_pass;
     UniquePtr<SsrPass>         ssr_pass;
-    UniquePtr<CudaPass>        cuda_pass;
     UniquePtr<AaPass>          aa_pass;
+
+#if CUDA_PASS_IN_RASTER
+    UniquePtr<CudaPass> cuda_pass;
+#endif
 
     // Other vars
     Array<RaytracingGeometryRef> rt_geometries;

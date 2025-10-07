@@ -144,3 +144,13 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
 else()
     message(STATUS "MoerCuda has been skipped because lacking of dependencies.")
 endif()
+
+if(NOT DEFINED CUDA_PASS_IN_RASTER) # 手动设置是否在RasterPipeline中加入CUDA PASS
+    # FORCE覆盖之前的值
+    set(CUDA_PASS_IN_RASTER false CACHE STRING "CUDA_PASS_IN_RASTER" FORCE)
+endif()
+
+if (CUDA_PASS_IN_RASTER AND NOT (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT))
+    message(FATAL_ERROR "Enabled CUDA pass in raster, but doesn't have dependencies!")
+    # FATAL_ERROR: Stop cmake generation process
+endif()

@@ -2,6 +2,12 @@
 
 Engine for Realtime Rendering
 
+## Dependencies
+
+* OS
+  * Windows 10, 11
+* TODO
+
 ## How to Build & Run
 
 - Command Line

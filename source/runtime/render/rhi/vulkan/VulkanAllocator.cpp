@@ -179,6 +179,10 @@ uint64 VkTmpBufferAllocator::Allocate(uint64 _size, std::string_view _name) {
         .pQueueFamilyIndices   = nullptr
     };
 
+#if CUDA_PASS_IN_RASTER
+    buffer_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
+
     VmaAllocationCreateInfo alloc_info{
         .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, .usage = VMA_MEMORY_USAGE_AUTO
     };
@@ -247,6 +251,10 @@ uint64 VkTmpBufferAllocator::Allocate(uint64 _size, EVkInternalBufferUsage _usag
         .queueFamilyIndexCount = 0,
         .pQueueFamilyIndices   = nullptr
     };
+
+#if CUDA_PASS_IN_RASTER
+    buffer_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
 
     VmaAllocationCreateInfo   alloc_info{.flags = flags, .usage = mem_usage};
     VulkanBuffer::BufferAlloc buffer_alloc;

@@ -408,6 +408,9 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMERequiredDeviceExtensions
     // debug extensions
 
     // platform specific extensions
+
+    VulkanPlatform::GetDeviceExtensions(extensions);
+
     // VulkanPlatform::GetDeviceExtensions(extensions);//MARK...
     ADD_CUSTOM_EXTENSION(VulkanEXTMemoryPriorityAllocateInfoExtension, VULKAN_EXTENSION_OPTIONAL);
     ADD_CUSTOM_EXTENSION(VulkanEXTPageableDeviceLocalMemoryExtension, VULKAN_EXTENSION_OPTIONAL);

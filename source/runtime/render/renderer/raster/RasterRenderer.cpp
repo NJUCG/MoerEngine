@@ -6,7 +6,6 @@
 // Editor
 #include "AaPass.h"
 #include "AoPass.h"
-#include "CudaPass.h"
 #include "GeometryPass.h"
 #include "LightingPass.h"
 #include "RasterResource.h"
@@ -15,6 +14,10 @@
 #include "RtaoPass.h"
 #include "ShadowDepthPass.h"
 #include "SsrPass.h"
+
+#if CUDA_PASS_IN_RASTER
+#include "CudaPass.h"
+#endif
 
 namespace Moer::Render::Raster {
 
@@ -43,8 +46,12 @@ RasterRenderer::RasterRenderer(
     ao_pass           = MakeUnique<AoPass>(raster_context);
     rtao_pass         = MakeUnique<RtaoPass>(raster_context);
     ssr_pass          = MakeUnique<SsrPass>(raster_context);
-    cuda_pass         = MakeUnique<CudaPass>(raster_context);
     aa_pass           = MakeUnique<AaPass>(raster_context);
+
+#if CUDA_PASS_IN_RASTER
+    // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
+    cuda_pass = MakeUnique<CudaPass>(raster_context, raster_context.textures.ao_output.tex);
+#endif
 
     cmd_list.UpdateBindlessArray(bindless_array);
     gfx_queue.Execute(cmd_list.Submit());
@@ -147,29 +154,29 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         geometry_pass->Process(raster_context, raster_config, camera);
 
         // Lighting Pass
-        uint lighting_output = lighting_pass->Process(raster_context, raster_config, camera);
+        uint processing_image = lighting_pass->Process(raster_context, raster_config, camera);
 
         // Post Process Passes
         // - Ambient Occlusion
-        uint ao_output_ambient_only = 0;
-        uint ao_output              = [&]() -> uint {
+        processing_image = [&]() -> uint {
             if (raster_config.ao_mode == EAoMode::RTAO || raster_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
-                auto output =
-                    rtao_pass->Process(raster_context, raster_config, camera, time, lighting_output);
-                ao_output_ambient_only = output.ambient_only_output; // ambient only texture的handle
-                return output.ao_output;                             // 实际输出的handle
+                return rtao_pass->Process(raster_context, raster_config, camera, time, processing_image)
+                    .ao_output;
             } else {
-                return ao_pass->Process(raster_context, raster_config, lighting_output);
+                return ao_pass->Process(raster_context, raster_config, processing_image);
             }
         }();
-        // - Screen Space Reflection
-        uint ssr_output = ssr_pass->Process(raster_context, raster_config, camera, ao_output);
 
         // - CUDA Pass
-        uint cuda_output = cuda_pass->Process(raster_context, raster_config, ssr_output);
+#if CUDA_PASS_IN_RASTER
+        processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
+#endif
+
+        // - Screen Space Reflection
+        processing_image = ssr_pass->Process(raster_context, raster_config, camera, processing_image);
 
         // - Anti-aliasing
-        uint _aa_output = aa_pass->Process(raster_context, raster_config, camera, cuda_output);
+        processing_image = aa_pass->Process(raster_context, raster_config, camera, processing_image);
 
         if (hooks.on_ui_combine_pass) {
             default_output_texture = hooks.on_ui_combine_pass(

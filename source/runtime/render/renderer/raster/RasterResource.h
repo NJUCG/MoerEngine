@@ -10,7 +10,6 @@
 #include <shader/ShaderResourceManager.h>
 #include <stb_image.h>
 
-#include "CudaResource.h"
 #include "RasterCompileTimeConstants.h"
 #include "RasterTextures.h"
 
@@ -44,8 +43,6 @@ struct RasterContext {
 
     // RayTracing
     RaytracingSceneRef rt_scene;
-
-    // CUDA
 
     // Constructor
     RasterContext(

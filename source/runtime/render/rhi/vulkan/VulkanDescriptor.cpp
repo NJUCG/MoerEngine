@@ -96,11 +96,14 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     uniform_texel_desc_stride(
         _device.GetOptionalProperties().descriptor_buffer_properties.uniformTexelBufferDescriptorSize
     ),
-    buffer_desc_stride(std::max(
-        _device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize,
-        _device.GetOptionalProperties().descriptor_buffer_properties.uniformBufferDescriptorSize
-    )),
-    image_desc_stride(_device.GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize
+    buffer_desc_stride(
+        std::max(
+            _device.GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize,
+            _device.GetOptionalProperties().descriptor_buffer_properties.uniformBufferDescriptorSize
+        )
+    ),
+    image_desc_stride(
+        _device.GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize
     ),
     texture_desc_offset(
         _device.GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize *
@@ -123,6 +126,11 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
                       VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+#if CUDA_PASS_IN_RASTER
+    buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
+
     VmaAllocationCreateInfo alloc_ci{};
     alloc_ci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
     alloc_ci.usage = VMA_MEMORY_USAGE_AUTO;

@@ -26,6 +26,11 @@
 #include "vulkan/vk_enum_string_helper.h"
 #include "vulkan/vulkan_core.h"
 
+#if CUDA_PASS_IN_RASTER
+#include "platform/windows/WindowsSecurityAttributes.h"
+#include <vulkan/vulkan_win32.h>
+#endif
+
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -1599,6 +1604,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         image_create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
+#if CUDA_PASS_IN_RASTER
+        image_create_info.pNext = GetExternalMemoryImageCreateInfoPtr(nullptr);
+#endif
+
         auto tilling = GetVkImageTilling(image_create_info, *_device);
         image_create_info.tiling = tilling;
         VmaAllocationCreateInfo alloc_create_info{};
@@ -1663,7 +1672,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         buffer_create_info.flags       = 0;
-        buffer_create_info.pNext       = nullptr;
+
+#if CUDA_PASS_IN_RASTER
+        buffer_create_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
 
         VmaAllocationCreateInfo alloc_create_info{};
         alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT ;
@@ -1730,6 +1742,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         );
         VkBuffer           current_handle = VK_NULL_HANDLE;
         VkBufferCreateInfo buffer_ci      = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+
         VmaAllocation      alloc          = VK_NULL_HANDLE;
         buffer_ci.size                    = _max_size * sizeof(uint32);
         buffer_ci.usage                   = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -1737,6 +1750,11 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         buffer_ci.queueFamilyIndexCount   = 0;
         buffer_ci.pQueueFamilyIndices     = nullptr;
         buffer_ci.flags                   = 0;
+
+#if CUDA_PASS_IN_RASTER
+        buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
+
         VmaAllocationCreateInfo alloc_ci  = {};
         alloc_ci.usage                    = VMA_MEMORY_USAGE_AUTO;
         alloc_ci.flags                    = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
@@ -2251,6 +2269,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             buffer_ci.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
             buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
+#if CUDA_PASS_IN_RASTER
+            buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
+
             VmaAllocationCreateInfo alloc_ci{};
             alloc_ci.flags = 0;
             alloc_ci.usage = VMA_MEMORY_USAGE_GPU_ONLY;
@@ -2324,6 +2346,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         buffer_ci.usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
         buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         buffer_ci.flags = 0;
+
+#if CUDA_PASS_IN_RASTER
+        buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
 
         VmaAllocationCreateInfo alloc_ci{};
         alloc_ci.flags = 0;
@@ -2534,6 +2560,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         buffer_ci.flags = 0;
 
+#if CUDA_PASS_IN_RASTER
+        buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
+
         VmaAllocationCreateInfo alloc_ci{};
         alloc_ci.flags = 0;
         alloc_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -2595,6 +2625,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
             buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             buffer_ci.flags = 0;
+                    
+#if CUDA_PASS_IN_RASTER
+            buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
+#endif
 
             VmaAllocationCreateInfo alloc_ci{};
             alloc_ci.flags = 0;
@@ -2660,6 +2694,24 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         VkSemaphoreTypeCreateInfo timeline_semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
         timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
         timeline_semaphore_info.initialValue  = 0;
+
+#if CUDA_PASS_IN_RASTER
+        WindowsSecurityAttributes winSecurityAttributes;
+
+        VkExportSemaphoreWin32HandleInfoKHR vulkanExportSemaphoreWin32HandleInfoKHR = {};
+        vulkanExportSemaphoreWin32HandleInfoKHR.sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR;
+        vulkanExportSemaphoreWin32HandleInfoKHR.pNext       = NULL;
+        vulkanExportSemaphoreWin32HandleInfoKHR.pAttributes = &winSecurityAttributes;
+        vulkanExportSemaphoreWin32HandleInfoKHR.dwAccess    = DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE;
+        vulkanExportSemaphoreWin32HandleInfoKHR.name        = (LPCWSTR)NULL;
+
+        VkExportSemaphoreCreateInfoKHR vulkanExportSemaphoreCreateInfo = {};
+        vulkanExportSemaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO_KHR;
+        vulkanExportSemaphoreCreateInfo.pNext = &vulkanExportSemaphoreWin32HandleInfoKHR;
+        vulkanExportSemaphoreCreateInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+
+        timeline_semaphore_info.pNext = &vulkanExportSemaphoreCreateInfo;
+#endif
 
         create_info.pNext = &timeline_semaphore_info;
         VK_CHECK_RESULT(vkCreateSemaphore(m_device->GetDevice(), &create_info, nullptr, &timeline));

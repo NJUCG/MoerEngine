@@ -27,7 +27,12 @@
 #include "taskgraph/ThreadManager.h"
 #include "vulkan/vulkan_core.h"
 
-#include <vk_mem_alloc.h>
+// #include <vk_mem_alloc.h>
+#include "VulkanMemoryAllocator.h"
+
+#if PLATFORM_WINDOWS
+#include <vulkan/vulkan_win32.h>
+#endif
 
 #include "VulkanIOService.h"
 #include <algorithm>
@@ -462,6 +467,26 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
     if (m_device_info.optional_extensions.m_has_memory_priority) {
         alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
     }
+
+#if CUDA_PASS_IN_RASTER
+    // 因为上文 vma_functions 传的是指针，所以这里可以直接修改
+    vma_functions.vkGetMemoryWin32HandleKHR = vkGetMemoryWin32HandleKHR;
+
+    // 这里的代码是应vma要求写的，需要手动设置handleTypes，以便跨graphics api使用
+    std::vector<VkExternalMemoryHandleTypeFlagsKHR> handleTypes(
+        m_device_info.memery_properties.memoryTypeCount
+    );
+    for (uint i = 0; i < handleTypes.size(); i++) {
+        if ((m_device_info.memery_properties.memoryTypes[i].propertyFlags &
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) > 0) {
+            // 只针对gpu内存，设置winn32标记位
+            handleTypes[i] = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+            // handleTypes[i] = 0;
+        }
+    }
+
+    alloc_create_info.pTypeExternalMemoryHandleTypes = handleTypes.data();
+#endif
 
     VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
 

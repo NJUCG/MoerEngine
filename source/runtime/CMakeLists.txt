@@ -10,6 +10,7 @@ add_subdirectory(render)
 add_subdirectory(resource)
 
 # CONFIGURE_DEPENDS，指如果文件变化了，则自动重新GLOB
+# 这里不能递归GLOB，因为子文件夹内是其他模块
 file(GLOB ENGINE_HEADERS CONFIGURE_DEPENDS "*.h")
 file(GLOB ENGINE_SOURCES CONFIGURE_DEPENDS "*.cpp")
 add_library(${target_name} STATIC ${ENGINE_HEADERS} ${ENGINE_SOURCES})

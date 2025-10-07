@@ -58,7 +58,7 @@ Renderer::Renderer(
 }
 
 Renderer::~Renderer() {
-    ReleaseResources();
+    ReleaseResources(); // 这里也需要释放，否则退出Engine时会崩溃 (Why?)
 }
 
 void Renderer::ReleaseResources() {

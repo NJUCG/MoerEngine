@@ -5,6 +5,13 @@
 #include "../../VulkanMacroUtils.h"
 
 #include "../../VulkanExtension.h"
+
+#include <vulkan/vulkan_core.h>
+
+#if defined(_WIN32) || defined(_WIN64)
+#include <vulkan/vulkan_win32.h>
+#endif
+
 namespace Moer::Render {
 void VulkanWindowsPlatform::GetInstanceExtensions(TExtensionArray& _extensions) {
     _extensions.emplace_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
@@ -19,7 +26,27 @@ void VulkanWindowsPlatform::GetInstanceLayers(TLayerArray& _layers) {
 
 void VulkanWindowsPlatform::GetDeviceExtensions(TVulkanDeviceExtensionArray& _extensions) {
     // _extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME));
-    // _extensions.emplace_back(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
+
+#if CUDA_PASS_IN_RASTER
+    // VK_KHR_external_memory
+    _extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME));
+    // VK_KHR_external_memory_win32
+    _extensions.emplace_back(
+        std::make_unique<VulkanDeviceExtension>(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME)
+    );
+    // // VK_KHR_external_semaphore_capabilities
+    // _extensions.emplace_back(
+    //     std::make_unique<VulkanDeviceExtension>(VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME)
+    // );
+    // VK_KHR_external_semaphore
+    _extensions.emplace_back(
+        std::make_unique<VulkanDeviceExtension>(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME)
+    );
+    // VK_KHR_external_semaphore_win32
+    _extensions.emplace_back(
+        std::make_unique<VulkanDeviceExtension>(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME)
+    );
+#endif
 }
 
 void VulkanWindowsPlatform::CreateSurface(

@@ -13,6 +13,14 @@ add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURC
 
 target_compile_definitions(${MODULE_NAME} PRIVATE RENDER_MODULE_SHARED_LIB)
 
+if (CUDA_PASS_IN_RASTER)
+    target_compile_definitions(${MODULE_NAME} PUBLIC CUDA_PASS_IN_RASTER=1)
+    message(STATUS "CUDA_PASS_IN_RASTER=1 in Moer::Render")
+else()
+    target_compile_definitions(${MODULE_NAME} PUBLIC CUDA_PASS_IN_RASTER=0)
+    message(STATUS "CUDA_PASS_IN_RASTER=0 in Moer::Render")
+endif()
+
 if (MSVC)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(${MODULE_NAME} PRIVATE "-Wno-nullability-completeness" "-Wno-unknown-attributes")

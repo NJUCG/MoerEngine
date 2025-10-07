@@ -22,7 +22,8 @@
 #include <mutex>
 #include <volk.h>
 
-#include <vk_mem_alloc.h>
+// #include <vk_mem_alloc.h>
+#include "VulkanMemoryAllocator.h"
 
 #include <condition_variable>
 #include <variant>
@@ -475,8 +476,8 @@ public:
     static VkGeometryFlagsKHR METoVKGeometryFlags(ERayTracingGeometryFlags _flags);
     static VkBuildAccelerationStructureFlagsKHR
     METoVKAccelerationStructureBuildType(ERayTracingAccelerationStructureBuildFlags _type);
-    static VkBuildAccelerationStructureModeKHR METoVKBuildAccelerationStructureMode(ERaytracingBuildMode _mode
-    );
+    static VkBuildAccelerationStructureModeKHR
+    METoVKBuildAccelerationStructureMode(ERaytracingBuildMode _mode);
 };
 
 #pragma endregion
@@ -519,8 +520,8 @@ public:
         return m_descriptor_sets_layout;
     }
 
-    void
-    InitDescriptorSetLayouts(Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings
+    void InitDescriptorSetLayouts(
+        Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings
     );
     void                CreatePipelineLayout(const VkPipelineLayoutCreateInfo& _pipeline_layout_ci);
     VkPipelineBindPoint GetPipelineBindPoint() {
