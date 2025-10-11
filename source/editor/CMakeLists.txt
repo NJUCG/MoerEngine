@@ -9,15 +9,6 @@ add_executable(${target_name} ${EDITOR_SOURCES})
 
 add_compile_definitions("moer_root_dir=${BINARY_ROOT_DIR}")
 
-# 在raster ui中，可以隐藏cuda pass相关的设置
-if (CUDA_PASS_IN_RASTER)
-    target_compile_definitions(${target_name} PRIVATE CUDA_PASS_IN_RASTER=1)
-    message(STATUS "CUDA_PASS_IN_RASTER=1 in Moer::Render")
-else()
-    target_compile_definitions(${target_name} PRIVATE CUDA_PASS_IN_RASTER=0)
-    message(STATUS "CUDA_PASS_IN_RASTER=0 in Moer::Render")
-endif()
-
 # Target properties
 set_target_properties(${target_name} PROPERTIES CXX_STANDARD 20 OUTPUT_NAME "MoerEditor")
 set_target_properties(${target_name} PROPERTIES FOLDER "editor")
