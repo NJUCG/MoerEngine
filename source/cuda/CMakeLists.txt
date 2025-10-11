@@ -3,10 +3,16 @@
 # 只有CUDA成功导入时，才考虑LibTorch和TensorRT（版本需要自己手动校验）
 # - 如果LibTorch和TensorRT成功导入，则.......
 
-find_package(CUDAToolkit QUIET)
+
+# 如果没有定义cmake文件，那么关闭所有AI相关的特性
+if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
+    set(CUDA_PASS_IN_RASTER false CACHE STRING "CUDA_PASS_IN_RASTER" FORCE)
+endif()
 
 # 检查是否存在 LibTorch_TensorRT.cmake 文件
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
+    find_package(CUDAToolkit QUIET) # 有cmake文件存在时，才考虑引入CUDAToolkit
+
     message(STATUS "LibTorch_TensorRT.cmake found")
 
     if (NOT WIN32)

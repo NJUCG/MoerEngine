@@ -168,6 +168,7 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+#if CUDA_PASS_IN_RASTER
     if (ImGui::TreeNode("CUDA", "CUDA: [%s]", (m_config.ai_is_cuda_enabled == 1 ? "Enable" : "Disable"))) {
         if (ImGui::Selectable("Enable", m_config.ai_is_cuda_enabled == 1)) {
             m_config.ai_is_cuda_enabled = 1;
@@ -190,6 +191,7 @@ void RasterUI::ShowConfig() {
 
         ImGui::TreePop();
     }
+#endif
 
     if (ImGui::TreeNode(
             "Anti-Aliasing",

@@ -1,0 +1,8 @@
+# 请修改下面两个变量
+# 请务必对齐 LibTorch和TensorRT 与 CUDAToolkit 的版本
+set(LIBTORCH_DIR "D:\\Programs\\libtorch-2.8.0-cu128-debug")
+set(TENSORRT_DIR "D:\\Programs\\TensorRT-10.12.0.36")
+
+# CUDA_PASS_IN_RASTER 只支持 Windows11 + Vulkan
+# FORCE覆盖之前的值
+set(CUDA_PASS_IN_RASTER true CACHE STRING "CUDA_PASS_IN_RASTER" FORCE)

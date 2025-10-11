@@ -14,10 +14,10 @@ add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURC
 target_compile_definitions(${MODULE_NAME} PRIVATE RENDER_MODULE_SHARED_LIB)
 
 if (CUDA_PASS_IN_RASTER)
-    target_compile_definitions(${MODULE_NAME} PUBLIC CUDA_PASS_IN_RASTER=1)
+    target_compile_definitions(${MODULE_NAME} PRIVATE CUDA_PASS_IN_RASTER=1)
     message(STATUS "CUDA_PASS_IN_RASTER=1 in Moer::Render")
 else()
-    target_compile_definitions(${MODULE_NAME} PUBLIC CUDA_PASS_IN_RASTER=0)
+    target_compile_definitions(${MODULE_NAME} PRIVATE CUDA_PASS_IN_RASTER=0)
     message(STATUS "CUDA_PASS_IN_RASTER=0 in Moer::Render")
 endif()
 
