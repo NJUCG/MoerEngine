@@ -179,10 +179,11 @@ void RasterUI::ShowConfig() {
         draw_border();
 
         if (m_config.ai_is_cuda_enabled == 1) {
+            ImGui::SliderFloat("Debug Param", &m_config.ai_cuda_pass_debug_param, 0.0f, 1.0f);
+
             // ImGui::Checkbox("Enable Jitter", &m_config.ssr_is_enable_jitter);
             // ImGui::Checkbox("Force Ground Enable SSR", &m_config.ssr_is_force_ground_enable_ssr);
             // ImGui::SliderInt("Sample Count", &m_config.ssr_sample_count, 1, 64);
-            // ImGui::SliderFloat("Step Base", &m_config.ssr_step_base, 0.0f, 0.1f);
             // ImGui::SliderFloat("Roughness Threshold", &m_config.ssr_roughness_threshold, 0.0f, 1.0f);
             // ImGui::SliderFloat("Metallic Threshold", &m_config.ssr_metallic_threshold, 0.0f, 1.0f);
         }

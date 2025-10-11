@@ -70,8 +70,9 @@ target_link_libraries(${MODULE_NAME}
 # Link CUDA
 if (TARGET moer_cuda)
     target_link_libraries(${MODULE_NAME}
-        PRIVATE moer_cuda
+        PUBLIC moer_cuda # Link CUDA and add includes
     )
+    message(STATUS "Moer::Render linked Moer::Cuda")
 endif()
 
 target_compile_definitions(${MODULE_NAME} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})

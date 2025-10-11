@@ -74,10 +74,10 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
     # CONFIGURE_DEPENDS，指如果文件变化了，则自动重新GLOB
     file(GLOB_RECURSE moer_cuda_cu CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cu")
     # file(GLOB_RECURSE moer_cuda_cuh CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cuh")
-    # file(GLOB_RECURSE moer_cuda_h CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
+    file(GLOB_RECURSE moer_cuda_h CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
 
-    # 编译一个CUDA的静态库，把上面这些cu文件都编译了
-    add_library(moer_cuda SHARED ${moer_cuda_cu})
+    # 编译一个CUDA的静态库，把上面这些cu文件都编译了（.h文件会被自动忽略）
+    add_library(moer_cuda SHARED ${moer_cuda_h} ${moer_cuda_cu})
 
     # 设置目标属性
     set_target_properties(moer_cuda PROPERTIES

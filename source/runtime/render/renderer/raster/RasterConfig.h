@@ -104,7 +104,8 @@ struct RasterConfig {
     float ssr_step_base                  = 0.025;
 
     // MARK: AI (CUDA, TensorRT)
-    bool ai_is_cuda_enabled = false;
+    bool  ai_is_cuda_enabled       = false;
+    float ai_cuda_pass_debug_param = 0.05f;
 
     // MARK: Shadow
     int shadow_map_mode            = 1; // 0: disabled, 1: CSM, 2: VSM

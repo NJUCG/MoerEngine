@@ -7,7 +7,7 @@
 #include <optional>
 #include <string>
 
-#include "compile_tool.h"
+#include "MoerCudaAPI.h"
 
 namespace Moer { namespace Cuda {
 

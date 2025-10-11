@@ -12,6 +12,9 @@
 #include "log/LogSystem.h"
 #include "misc/Traits.h"
 #include "platform/Platform.h"
+#include "rhi/vulkan/VulkanDevice.h"
+#include "rhi/vulkan/VulkanQueue.h"
+#include "rhi/vulkan/platform/windows/WindowsSecurityAttributes.h" // For creating semaphore
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 #include <cuda_runtime.h>
@@ -21,15 +24,13 @@
 #include "RasterResource.h"
 #include "RasterTool.h"
 
-#include "rhi/vulkan/VulkanDevice.h"
 #include <windows.h>
 // 1
 #include <vulkan/vulkan_core.h>
 // 2
 #include <vulkan/vulkan_win32.h>
 
-// For creating semaphore
-#include "rhi/vulkan/platform/windows/WindowsSecurityAttributes.h"
+#include "boxfilter/boxfilter.h"
 
 namespace Moer::Render::Raster {
 
@@ -64,6 +65,10 @@ VulkanTexture& getVulkanTexture(TextureRef texture) {
 
 VulkanFence& getVulkanFence(FenceRef fence) {
     return *dynamic_cast<VulkanFence*>(fence.Get());
+}
+
+VkCommandQueue& getVulkanQueue(CommandQueue& queue) {
+    return *dynamic_cast<VkCommandQueue*>(&queue);
 }
 
 VkDeviceMemory getVkDeviceMemory(VulkanDevice& vulkan_device, VulkanTexture& vulkan_texture) {
@@ -107,18 +112,19 @@ struct CudaResource {
     // MARK: non-cuda objects
     TextureRef previousPassOutputTexture;
     uint       mipLevels;
-    // FenceRef   moerCudaUpdateVkSemaphore;
-    // FenceRef   moerVkUpdateCudaSemaphore;
-    VkSemaphore moerCudaUpdateVkSemaphore;
-    VkSemaphore moerVkUpdateCudaSemaphore;
+    uint       imageWidth;
+    uint       imageHeight;
+
+    VkSemaphore cudaUpdateVkSemaphore;
+    VkSemaphore vkUpdateCudaSemaphore;
 
     // MARK: cuda objects
 
     // image
-    cudaExternalMemory_t cudaExtMemImageBuffer;
-    cudaMipmappedArray_t cudaMipmappedImageArray, cudaMipmappedImageArrayTemp, cudaMipmappedImageArrayOrig;
-    std::vector<cudaSurfaceObject_t> surfaceObjectList, surfaceObjectListTemp;
-    cudaSurfaceObject_t *            d_surfaceObjectList, *d_surfaceObjectListTemp;
+    cudaExternalMemory_t             cudaExtMemImageBuffer;
+    cudaMipmappedArray_t             cudaMipmappedImageArray;
+    std::vector<cudaSurfaceObject_t> surfaceObjectList;
+    cudaSurfaceObject_t*             d_surfaceObjectList;
     cudaTextureObject_t              textureObjMipMapInput;
 
     // semaphore
@@ -141,31 +147,33 @@ struct CudaResource {
     CudaResource(const CudaResource&)            = delete;
     CudaResource& operator=(const CudaResource&) = delete;
 
+    bool IsValid() const {
+        return mipLevels != 0;
+    }
+
     void CreateAllocate(RasterContext& context, TextureRef _previousPassOutputTexture) {
 
         // MARK: non-cuda
 
         previousPassOutputTexture = _previousPassOutputTexture;
         mipLevels                 = previousPassOutputTexture.Get()->GetNumMips();
+        imageWidth                = _previousPassOutputTexture->GetWidth();
+        imageHeight               = _previousPassOutputTexture->GetHeight();
 
-        if (mipLevels == 0) {
+        if (!IsValid()) {
             LOG_WARNING("Raster Pipeline, The number of mipmaps of textures are ZERO!");
             return;
         }
 
         VulkanDevice& vulkan_device = getVulkanDevice(context.device);
 
-        // moerCudaUpdateVkSemaphore = context.device.CreateFence();
-        // moerVkUpdateCudaSemaphore = context.device.CreateFence();
-        moerCudaUpdateVkSemaphore = createSemaphoreWithoutRHI(vulkan_device);
-        moerVkUpdateCudaSemaphore = createSemaphoreWithoutRHI(vulkan_device);
+        cudaUpdateVkSemaphore = createSemaphoreWithoutRHI(vulkan_device);
+        vkUpdateCudaSemaphore = createSemaphoreWithoutRHI(vulkan_device);
 
         // MARK: image
 
         VulkanTexture& vulkan_texture   = getVulkanTexture(_previousPassOutputTexture);
         VkDeviceMemory vk_device_memory = getVkDeviceMemory(vulkan_device, vulkan_texture);
-        uint64         imageWidth       = _previousPassOutputTexture->GetWidth();
-        uint64         imageHeight      = _previousPassOutputTexture->GetHeight();
 
         {
             {
@@ -224,42 +232,15 @@ struct CudaResource {
             checkCudaErrors(cudaExternalMemoryGetMappedMipmappedArray(
                 &cudaMipmappedImageArray, cudaExtMemImageBuffer, &desc
             ));
-
-            checkCudaErrors(
-                cudaMallocMipmappedArray(&cudaMipmappedImageArrayTemp, &formatDesc, extent, mipLevels)
-            );
-            checkCudaErrors(
-                cudaMallocMipmappedArray(&cudaMipmappedImageArrayOrig, &formatDesc, extent, mipLevels)
-            );
         }
         {
             for (uint mipLevelIdx = 0; mipLevelIdx < mipLevels; mipLevelIdx++) {
-                cudaArray_t      cudaMipLevelArray, cudaMipLevelArrayTemp, cudaMipLevelArrayOrig;
+                cudaArray_t      cudaMipLevelArray;
                 cudaResourceDesc resourceDesc;
 
                 checkCudaErrors(
                     cudaGetMipmappedArrayLevel(&cudaMipLevelArray, cudaMipmappedImageArray, mipLevelIdx)
                 );
-                checkCudaErrors(cudaGetMipmappedArrayLevel(
-                    &cudaMipLevelArrayTemp, cudaMipmappedImageArrayTemp, mipLevelIdx
-                ));
-                checkCudaErrors(cudaGetMipmappedArrayLevel(
-                    &cudaMipLevelArrayOrig, cudaMipmappedImageArrayOrig, mipLevelIdx
-                ));
-
-                uint32_t width  = (imageWidth >> mipLevelIdx) ? (imageWidth >> mipLevelIdx) : 1;
-                uint32_t height = (imageHeight >> mipLevelIdx) ? (imageHeight >> mipLevelIdx) : 1;
-                checkCudaErrors(cudaMemcpy2DArrayToArray(
-                    cudaMipLevelArrayOrig,
-                    0,
-                    0,
-                    cudaMipLevelArray,
-                    0,
-                    0,
-                    width * sizeof(uchar4),
-                    height,
-                    cudaMemcpyDeviceToDevice
-                ));
 
                 memset(&resourceDesc, 0, sizeof(resourceDesc));
                 resourceDesc.resType         = cudaResourceTypeArray;
@@ -269,23 +250,14 @@ struct CudaResource {
                 checkCudaErrors(cudaCreateSurfaceObject(&surfaceObject, &resourceDesc));
 
                 surfaceObjectList.push_back(surfaceObject);
-
-                memset(&resourceDesc, 0, sizeof(resourceDesc));
-                resourceDesc.resType         = cudaResourceTypeArray;
-                resourceDesc.res.array.array = cudaMipLevelArrayTemp;
-
-                cudaSurfaceObject_t surfaceObjectTemp;
-                checkCudaErrors(cudaCreateSurfaceObject(&surfaceObjectTemp, &resourceDesc));
-                surfaceObjectListTemp.push_back(surfaceObjectTemp);
             }
         }
         {
-
             cudaResourceDesc resDescr;
             memset(&resDescr, 0, sizeof(cudaResourceDesc));
 
             resDescr.resType           = cudaResourceTypeMipmappedArray;
-            resDescr.res.mipmap.mipmap = cudaMipmappedImageArrayOrig;
+            resDescr.res.mipmap.mipmap = cudaMipmappedImageArray;
 
             cudaTextureDesc texDescr;
             memset(&texDescr, 0, sizeof(cudaTextureDesc));
@@ -306,9 +278,6 @@ struct CudaResource {
             checkCudaErrors(
                 cudaMalloc((void**)&d_surfaceObjectList, sizeof(cudaSurfaceObject_t) * mipLevels)
             );
-            checkCudaErrors(
-                cudaMalloc((void**)&d_surfaceObjectListTemp, sizeof(cudaSurfaceObject_t) * mipLevels)
-            );
 
             checkCudaErrors(cudaMemcpy(
                 d_surfaceObjectList,
@@ -316,19 +285,10 @@ struct CudaResource {
                 sizeof(cudaSurfaceObject_t) * mipLevels,
                 cudaMemcpyHostToDevice
             ));
-            checkCudaErrors(cudaMemcpy(
-                d_surfaceObjectListTemp,
-                surfaceObjectListTemp.data(),
-                sizeof(cudaSurfaceObject_t) * mipLevels,
-                cudaMemcpyHostToDevice
-            ));
         }
         LOG_INFO("CudaPass: Created CUDA Kernel Vulkan image buffer");
 
         // MARK: semaphore
-
-        VkSemaphore& cudaUpdateVkSemaphore = moerCudaUpdateVkSemaphore;
-        VkSemaphore& vkUpdateCudaSemaphore = moerVkUpdateCudaSemaphore;
 
         {
             VkSemaphoreGetWin32HandleInfoKHR info = {};
@@ -380,25 +340,25 @@ struct CudaResource {
 
             checkCudaErrors(cudaImportExternalSemaphore(&cudaExtVkUpdateCudaSemaphore, &desc));
         }
+        {
+            checkCudaErrors(cudaStreamCreate(&streamToRun));
+        }
         LOG_INFO("CudaPass: Created CUDA Imported Vulkan semaphore");
     }
 
-    void Free() {
-
-        if (mipLevels == 0)
+    void Free(RasterContext& context) {
+        if (!IsValid())
             return;
+
+        VulkanDevice& vulkan_device = getVulkanDevice(context.device);
 
         // destroy cuda objects
 
         for (int i = 0; i < mipLevels; i++) {
             checkCudaErrors(cudaDestroySurfaceObject(surfaceObjectList[i]));
-            checkCudaErrors(cudaDestroySurfaceObject(surfaceObjectListTemp[i]));
         }
 
         checkCudaErrors(cudaFree(d_surfaceObjectList));
-        checkCudaErrors(cudaFree(d_surfaceObjectListTemp));
-        checkCudaErrors(cudaFreeMipmappedArray(cudaMipmappedImageArrayTemp));
-        checkCudaErrors(cudaFreeMipmappedArray(cudaMipmappedImageArrayOrig));
         checkCudaErrors(cudaFreeMipmappedArray(cudaMipmappedImageArray));
         checkCudaErrors(cudaDestroyTextureObject(textureObjMipMapInput));
 
@@ -407,13 +367,14 @@ struct CudaResource {
 
         // destroy non-cuda objects
 
-        // TODO: semaphores
+        vkDestroySemaphore(vulkan_device.GetDevice(), cudaUpdateVkSemaphore, nullptr);
+        vkDestroySemaphore(vulkan_device.GetDevice(), vkUpdateCudaSemaphore, nullptr);
 
         // destroy win32 handles
 
-        CloseHandle(texture_handle);
-        CloseHandle(semaphore_cuda2vk_handle);
-        CloseHandle(semaphore_vk2cuda_handle);
+        CloseWin32Handle(texture_handle);
+        CloseWin32Handle(semaphore_cuda2vk_handle);
+        CloseWin32Handle(semaphore_vk2cuda_handle);
     }
 
     void LoadVulkanWin32PFN(RasterContext& context) {
@@ -427,6 +388,14 @@ struct CudaResource {
             LOG_WARNING("CudaPass: Failed to load vkGetSemaphoreWin32HandleKHR");
         }
     }
+
+private:
+    void CloseWin32Handle(HANDLE& handle) {
+        if (handle != INVALID_HANDLE_VALUE && handle != nullptr) {
+            CloseHandle(handle);
+            handle = nullptr;
+        }
+    }
 };
 
 /**
@@ -436,26 +405,120 @@ struct CudaResource {
  */
 class CudaPass {
 public:
-    CudaPass(RasterContext& context, TextureRef previousPassOutputTexture) {
-        cuda_resource.LoadVulkanWin32PFN(context);
-        cuda_resource.CreateAllocate(context, previousPassOutputTexture);
+    CudaPass(RasterContext& _context, TextureRef previousPassOutputTexture) : context(_context) {
+        cuda_res.LoadVulkanWin32PFN(context);
+        cuda_res.CreateAllocate(context, previousPassOutputTexture);
     }
     ~CudaPass() {
-        cuda_resource.Free();
+        cuda_res.Free(context);
     }
 
     CudaPass(const CudaPass&)            = delete;
     CudaPass& operator=(const CudaPass&) = delete;
 
+    void RecreateResource(TextureRef previousPassOutputTexture) {
+        cuda_res.Free(context);
+        cuda_res.CreateAllocate(context, previousPassOutputTexture);
+    }
+
     uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image) {
-        if (ui_config.ai_is_cuda_enabled == false)
+        if (ui_config.ai_is_cuda_enabled == false || !cuda_res.IsValid())
             return input_image;
+
+        VkNativeQueue& vk_native_queue = getVulkanQueue(context.gfx_queue).GetVkNativeQueue();
+
+        // vulkan
+
+        // TODO: 这里默认为 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT，有优化空间
+        vk_native_queue.Signal(cuda_res.vkUpdateCudaSemaphore);
+
+        context.gfx_queue.Execute(context.cmd_list.Submit());
+        context.gfx_queue.Sync();
+
+        // cuda
+
+        cudaVkSemaphoreWait(cuda_res.cudaExtVkUpdateCudaSemaphore);
+
+        const static uint64 TILE = 16;
+
+        dim3 threadsPerBlock(TILE, TILE);
+        dim3 blocksPerGrid(
+            (cuda_res.imageWidth - 1) / threadsPerBlock.x + 1,
+            (cuda_res.imageHeight - 1) / threadsPerBlock.y + 1
+        );
+
+        Moer::Cuda::d_test(
+            blocksPerGrid,
+            threadsPerBlock,
+            cuda_res.streamToRun,
+            cuda_res.textureObjMipMapInput,
+            cuda_res.d_surfaceObjectList,
+            cuda_res.imageWidth,
+            cuda_res.imageHeight,
+            cuda_res.mipLevels,
+            ui_config.ai_cuda_pass_debug_param
+        );
+
+        cudaVkSemaphoreSignal(cuda_res.cudaExtCudaUpdateVkSemaphore);
+
+        {
+            auto result = cudaGetLastError();
+            if (result != cudaSuccess) {
+                printf("CUDA kernel error: %s\n", cudaGetErrorString(result));
+            }
+
+            cudaStreamSynchronize(cuda_res.streamToRun);
+
+            result = cudaGetLastError();
+            if (result != cudaSuccess) {
+                printf("CUDA kernel error: %s\n", cudaGetErrorString(result));
+            }
+        }
+
+        // vulkan
+
+        // TODO: 这里默认为 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT，有优化空间
+        vk_native_queue.Wait(cuda_res.cudaUpdateVkSemaphore);
+
+        context.gfx_queue.Execute(context.cmd_list.Submit());
+        context.gfx_queue.Sync();
 
         return input_image;
     }
 
 private:
-    CudaResource cuda_resource;
+    void cudaVkSemaphoreSignal(cudaExternalSemaphore_t& extSemaphore) {
+        cudaExternalSemaphoreSignalParams extSemaphoreSignalParams;
+        memset(&extSemaphoreSignalParams, 0, sizeof(extSemaphoreSignalParams));
+
+        extSemaphoreSignalParams.params.fence.value = 0;
+        extSemaphoreSignalParams.flags              = 0;
+        checkCudaErrors(cudaSignalExternalSemaphoresAsync(
+            &extSemaphore, &extSemaphoreSignalParams, 1, cuda_res.streamToRun
+        ));
+    }
+
+    void cudaVkSemaphoreWait(cudaExternalSemaphore_t& extSemaphore) {
+        cudaExternalSemaphoreWaitParams extSemaphoreWaitParams;
+
+        memset(&extSemaphoreWaitParams, 0, sizeof(extSemaphoreWaitParams));
+
+        extSemaphoreWaitParams.params.fence.value = 0;
+        extSemaphoreWaitParams.flags              = 0;
+
+        assert(extSemaphore != nullptr);
+
+        checkCudaErrors(
+            cudaWaitExternalSemaphoresAsync(&extSemaphore, &extSemaphoreWaitParams, 1, cuda_res.streamToRun)
+        );
+    }
+
+private:
+    RasterContext& context;
+    CudaResource   cuda_res;
+
+    int filter_radius = 14;
+    int g_nFilterSign = 1;
 };
 
 #undef checkCudaErrors

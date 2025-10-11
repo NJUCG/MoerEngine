@@ -31,7 +31,7 @@ RasterRenderer::RasterRenderer(
     Renderer(_resolution, _config, _hooks, _load_scene_async) {
 
     raster_context_ptr =
-        MakeUnique<RasterContext>(device, manager, bindless_array, cmd_list, scene, resolution);
+        MakeUnique<RasterContext>(device, manager, gfx_queue, bindless_array, cmd_list, scene, resolution);
     auto& raster_context = *raster_context_ptr;
 
     raster_context.CreateFrameBuffers();
@@ -99,10 +99,14 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         return true; // continue to next main loop body
 
-    } else if (window_state == EWindowState::SizeChanged) {
+    } else if (window_state == EWindowState::SizeChanged) { // FIXME: Runtime Error
         raster_context.FreeFrameBuffers();
         raster_context.CreateFrameBuffers();
         raster_context.AllocateFrameBuffers();
+
+#if CUDA_PASS_IN_RASTER
+        cuda_pass->RecreateResource(raster_context.textures.ao_output.tex);
+#endif
 
         if (hooks.on_raster_register_frame_buffers) {
             hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());

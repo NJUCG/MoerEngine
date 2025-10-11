@@ -218,6 +218,13 @@ public:
     LockFreeQueueBase<VulkanPresentor, false> presentors;
     DEQueue<QueueEvent>                       event_queue;
 
+#if CUDA_PASS_IN_RASTER
+public:
+    VkNativeQueue& GetVkNativeQueue() {
+        return queue;
+    }
+#endif
+
 private:
     UniquePtr<VulkanAllocator> GetAllocator();
     UniquePtr<VulkanPresentor> GetPresentor();

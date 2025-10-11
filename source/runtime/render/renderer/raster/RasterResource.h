@@ -20,6 +20,7 @@ struct RasterContext {
     // 需要确保这些引用在整个生命周期内都是有效的
     RenderDevice&    device;
     ShaderManager&   manager;
+    CommandQueue&    gfx_queue;
     BindlessArrayRef bdls;
     CommandList&     cmd_list;
     Scene&           scene;
@@ -48,6 +49,7 @@ struct RasterContext {
     RasterContext(
         RenderDevice&    device,
         ShaderManager&   manager,
+        CommandQueue&    gfx_queue,
         BindlessArrayRef bdls,
         CommandList&     cmd_list,
         Scene&           scene,
@@ -55,6 +57,7 @@ struct RasterContext {
     ) :
         device(device),
         manager(manager),
+        gfx_queue(gfx_queue),
         bdls(bdls),
         cmd_list(cmd_list),
         scene(scene),
