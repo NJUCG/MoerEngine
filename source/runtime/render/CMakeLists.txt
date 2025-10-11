@@ -41,7 +41,7 @@ target_include_directories(${MODULE_NAME}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/smaa>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRI/Include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRD/Include>
-    PUBLUC $<BUILD_INTERFACE:${moer_third_party_dir}/NRD/Integration>
+    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRD/Integration>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Cross>
 )
 target_link_libraries(${MODULE_NAME}
