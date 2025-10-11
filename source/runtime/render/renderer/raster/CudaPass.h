@@ -466,13 +466,7 @@ public:
             if (result != cudaSuccess) {
                 printf("CUDA kernel error: %s\n", cudaGetErrorString(result));
             }
-
-            cudaStreamSynchronize(cuda_res.streamToRun);
-
-            result = cudaGetLastError();
-            if (result != cudaSuccess) {
-                printf("CUDA kernel error: %s\n", cudaGetErrorString(result));
-            }
+            // cudaStreamSynchronize(cuda_res.streamToRun); // +50fps
         }
 
         // vulkan
