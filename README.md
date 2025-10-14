@@ -12,9 +12,8 @@
   * MSVC == 19.44.*
   * clang（待测试）
 
-* 其他
-  * CMake >= 3.26.0 且 < 4.0.0 ([download link](https://github.com/Kitware/CMake/releases/tag/v3.31.9))
-  * Git ([download link](https://git-scm.com/downloads))
+* CMake >= 3.26.0 且 < 4.0.0 ([download link](https://github.com/Kitware/CMake/releases/tag/v3.31.9))
+* Git ([download link](https://git-scm.com/downloads))
 
 
 ## 如何构建&运行？

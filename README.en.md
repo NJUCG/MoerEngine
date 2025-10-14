@@ -7,17 +7,22 @@ Engine for Realtime Rendering
 ## Dependencies
 
 * OS
-  * Windows 10, 11
-* TODO
+  * Windows 10 or 11
+* Compiler
+  * MSVC == 19.44.*
+  * or clang（待测试）
+* CMake >= 3.26.0 且 < 4.0.0 ([download link](https://github.com/Kitware/CMake/releases/tag/v3.31.9))
+* Git ([download link](https://git-scm.com/downloads))
 
 ## How to Build & Run
 
-- Command Line
+### MoerEngine
 
-  - Tip: If you don't have configured SSH, replace `git@xxx` with `https://github.com/NJUCG/MoerEngine.git`
+- Method 1: Command Line
 
   ```bash
   # Clone the repo
+  # Tip: If you don't have configured SSH, replace `git@xxx` with `https://github.com/NJUCG/MoerEngine.git`
   git clone --branch dev-rhi-remake git@github.com:NJUCG/MoerEngine.git
   cd MoerEngine
 
@@ -35,28 +40,30 @@ Engine for Realtime Rendering
   cmake --build build -j16 # change 16 to your cpu core count
   
   # Run
-  # - MoerEditor.exe needs to be modified according to your platform
-  # - You can switch from Raster to RayTracing by GUI or Config.
   ./target/bin/Debug/MoerEditor.exe
   ```
 
-  - If you have installed `just`, you can run `just` to build and run the engine directly.
-    - [just](https://github.com/casey/just)
+  - If you have installed [just](https://github.com/casey/just), you can run the following commands to build and run the engine.
+    ```bash
+    just setup
+    just gbr # generate build run
+    ```
 
-- Rider
+- Method 2: Rider
   - TODO
 
 ### CUDA, LibTorch, and TensorRT
 
-* CUDA
+> Needs to be updated from Chinese Version
 
+* CUDA
   * If you installed CUDA Toolkit in your system, Moer Engine will build with cuda **automatically.**
   * [CUDA Toolkit 12.8 Downloads](https://developer.nvidia.com/cuda-12-8-0-download-archive)
 * LibTorch and TensorRT
 
   * If you want to enable them, you need to install them manually, and tell Moer Engine where they are.
   * First, install LibTorch and TensorRT.
-  
+
     * [PyTorch Downloads](https://pytorch.org/get-started/locally/)
     * [TensorRT 10.x Downloads](https://developer.nvidia.com/tensorrt/download/10x)
     * **Please download the version that matches your CUDA Toolkit!**
@@ -73,18 +80,21 @@ Engine for Realtime Rendering
     * ![image-20250920201137320](README/image-20250920201137320.png)
     * ![image-20250920201248463](README/image-20250920201248463.png)
 
+## How to use
 
-## How to render other scenes
+### How to render other scenes
 
-- How to render other scenes
+- Method 1: GUI
+  - Select `Open Scene` in GUI
+
+- Method 2: Config
   - If you succeed to run Moer Engine, open the configuration file `./target/bin/Debug/config/MoerEngine.toml`.
   - Then, change `scene_path` to any other scene files in your machine.
     - Such as `scene_path = E:\Data\Models\BlueArchive\aris\CH0200.fbx.`
   - Run `./target/bin/Debug/MoerEditor.exe` again, you will see the new scene.
-- Tip
-  - `./target/bin/Debug/config/*` will be replaced with `./source/configs/*`, every time you compile.
+  - Tip: `./target/bin/Debug/config/*` will be replaced with `./source/configs/*`, every time you compile.
 
-## Camera Controlling
+### Camera Controlling
 
 - The camera control method of **Moer Engine** is very similar to Unreal Engine's.
   - When dragging the mouse, press `W/A/S/D/Q/E` to **move the camera**.
