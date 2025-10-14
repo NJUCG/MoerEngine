@@ -19,6 +19,10 @@ imgui.ini
 logs/
 log*.txt
 
+# Ignore user configs
+EnableCuda.cmake
+MoerEngine.toml
+
 build_vs2022
 cmake-build-*/
 /.cache/

@@ -3,23 +3,15 @@
 # 只有CUDA成功导入时，才考虑LibTorch和TensorRT（版本需要自己手动校验）
 # - 如果LibTorch和TensorRT成功导入，则.......
 
+if (WITH_CUDA)
+    message(STATUS "CMake WITH_CUDA == ON")
 
-# 如果没有定义cmake文件，那么关闭所有AI相关的特性
-if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
-    set(CUDA_PASS_IN_RASTER false CACHE STRING "CUDA_PASS_IN_RASTER" FORCE)
-endif()
-
-# 检查是否存在 LibTorch_TensorRT.cmake 文件
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
-    find_package(CUDAToolkit QUIET) # 有cmake文件存在时，才考虑引入CUDAToolkit
-
-    message(STATUS "LibTorch_TensorRT.cmake found")
+    find_package(CUDAToolkit QUIET)
+    message(STATUS "CUDA found: ${CUDAToolkit_VERSION}. Use `CUDA::cudart` to link.")
 
     if (NOT WIN32)
         message(WARNING "CUDA/LibTorch/TensorRT have not been tested on non-Windows platforms!")
     endif()
-
-    include("${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
 
     message(STATUS "LibTorch_Dir = ${LIBTORCH_DIR}")
     message(STATUS "TensorRT_Dir = ${TENSORRT_DIR}")
@@ -62,14 +54,7 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LibTorch_TensorRT.cmake")
     endif()
 
 else()
-    message(STATUS "LibTorch_TensorRT.cmake not found.")
-endif()
-
-# 是否找到CUDA
-if (CUDAToolkit_FOUND)
-    message(STATUS "CUDA found: ${CUDAToolkit_VERSION}. Use `CUDA::cudart` to link.")
-else()
-    message(STATUS "CUDA not found.")
+    message(STATUS "CMake WITH_CUDA == OFF")
 endif()
 
 # 是否找到全部三个依赖
@@ -151,12 +136,7 @@ else()
     message(STATUS "MoerCuda has been skipped because lacking of dependencies.")
 endif()
 
-if(NOT DEFINED CUDA_PASS_IN_RASTER) # 手动设置是否在RasterPipeline中加入CUDA PASS
-    # FORCE覆盖之前的值
-    set(CUDA_PASS_IN_RASTER false CACHE STRING "CUDA_PASS_IN_RASTER" FORCE)
-endif()
-
-if (CUDA_PASS_IN_RASTER AND NOT (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT))
+if (WITH_CUDA AND NOT (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT))
     message(FATAL_ERROR "Enabled CUDA pass in raster, but doesn't have dependencies!")
     # FATAL_ERROR: Stop cmake generation process
 endif()

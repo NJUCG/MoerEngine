@@ -127,7 +127,7 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
                       VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
     buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
 #endif
 

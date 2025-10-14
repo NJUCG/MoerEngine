@@ -26,7 +26,7 @@
 #include "vulkan/vk_enum_string_helper.h"
 #include "vulkan/vulkan_core.h"
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
 #include "platform/windows/WindowsSecurityAttributes.h"
 #include <vulkan/vulkan_win32.h>
 #endif
@@ -1604,7 +1604,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         image_create_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
         image_create_info.pNext = GetExternalMemoryImageCreateInfoPtr(nullptr);
 #endif
 
@@ -1673,7 +1673,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         buffer_create_info.flags       = 0;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
         buffer_create_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
 #endif
 
@@ -1751,7 +1751,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         buffer_ci.pQueueFamilyIndices     = nullptr;
         buffer_ci.flags                   = 0;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
         buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
 #endif
 
@@ -2269,7 +2269,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             buffer_ci.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
             buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
             buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
 #endif
 
@@ -2347,7 +2347,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         buffer_ci.flags = 0;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
         buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
 #endif
 
@@ -2560,7 +2560,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         buffer_ci.flags = 0;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
         buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
 #endif
 
@@ -2626,7 +2626,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             buffer_ci.flags = 0;
                     
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
             buffer_ci.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
 #endif
 
@@ -2695,7 +2695,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         timeline_semaphore_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
         timeline_semaphore_info.initialValue  = 0;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
         WindowsSecurityAttributes winSecurityAttributes;
 
         VkExportSemaphoreWin32HandleInfoKHR vulkanExportSemaphoreWin32HandleInfoKHR = {};

@@ -14,7 +14,7 @@ class RtaoPass;
 class SsrPass;
 class AaPass;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
 class CudaPass;
 #endif
 
@@ -67,7 +67,7 @@ private:
     UniquePtr<SsrPass>         ssr_pass;
     UniquePtr<AaPass>          aa_pass;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
     UniquePtr<CudaPass> cuda_pass;
 #endif
 

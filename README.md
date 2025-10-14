@@ -7,8 +7,15 @@
 ## 依赖
 
 * 操作系统
-  * Windows 10, 11
-* TODO
+  * Windows 10 or 11
+* 编译器（二选一）
+  * MSVC == 19.44.*
+  * clang（待测试）
+
+* 其他
+  * CMake >= 3.26.0 且 < 4.0.0 ([download link](https://github.com/Kitware/CMake/releases/tag/v3.31.9))
+  * Git ([download link](https://git-scm.com/downloads))
+
 
 ## 如何构建&运行？
 
@@ -40,9 +47,10 @@
   ./target/bin/Debug/MoerEditor.exe
   ```
 
-  - 如果安装了 [just](https://github.com/casey/just)，你可以通过如下这一条命令 直接构建整个引擎
+  - 如果安装了 [just](https://github.com/casey/just)，你可以通过如下这两条命令部署、构建、启动引擎
     ```bash
-    just
+    just setup
+    just gbr # generate build run
     ```
 
 - 方法二：Rider
@@ -50,30 +58,43 @@
 
 ### CUDA等AI组件支持
 
-* CUDA
+* 如果你希望在MoerEngine中启用CUDA、LibTorch、TensorRT，那么你需要手动在系统中安装这三个依赖，再在MoerEngine中配置他们。接下来为启用AI组件的具体操作手册：
+1. 下载依赖
+   * [CUDA Toolkit 12.8 Downloads](https://developer.nvidia.com/cuda-12-8-0-download-archive)
+   * [PyTorch Downloads](https://pytorch.org/get-started/locally/)
+   * [TensorRT 10.x Downloads](https://developer.nvidia.com/tensorrt/download/10x)
+   * 推荐版本
+     * CUDA Toolkit 12.8
+     * libtorch-2.8.0-cu128
+     * TensorRT-10.12.0.36
+     * **请注意，LibTorch和TensorRT版本需要与CUDAToolkit版本相对应**
 
-  * If you installed CUDA Toolkit in your system, Moer Engine will build with cuda **automatically.**
-  * [CUDA Toolkit 12.8 Downloads](https://developer.nvidia.com/cuda-12-8-0-download-archive)
-* LibTorch and TensorRT
+2. 根据模板创建配置文件（启用AI组件）
+   * 根据 `template.EnableCuda.cmake` 创建 `EnableCuda.cmake`
+   * 修改 `EnableCuda.cmake` 的内容
+   * 注：MoerEngine的构建系统会自动检测 `EnableCuda.cmake` 文件。**如果该文件存在，则会启用AI组件**
 
-  * If you want to enable them, you need to install them manually, and tell Moer Engine where they are.
-  * First, install LibTorch and TensorRT.
-  
-    * [PyTorch Downloads](https://pytorch.org/get-started/locally/)
-    * [TensorRT 10.x Downloads](https://developer.nvidia.com/tensorrt/download/10x)
-    * **Please download the version that matches your CUDA Toolkit!**
-    * Recommended: `CUDA Toolkit 12.8`, `libtorch-2.8.0-cu128`, `TensorRT-10.12.0.36`
-  * Then, run `cp source/cuda/template.LibTorch_TensorRT.cmake source/cuda/LibTorch_TensorRT.cmake`
-  * Modify `LibTorch_TensorRT.cmake`
-  * Add `/path/to/torch/lib` and `/path/to/tensorRT/lib` to your PATH
-    * ![image-20250920204538099](README/image-20250920204538099.png)
-  * Finally, recompile, and it should work.
-* IntelliSense
-  * You can set Environment Variables `CUDA_PATH`, `LIBTORCH_PATH`, `TENSORRT_PATH`. Then, vscode will load corresponding include path to IntelliSense.
-  * Detailed in `.vscode/c_cpp_properties.json`
-  * Example
-    * ![image-20250920201137320](README/image-20250920201137320.png)
-    * ![image-20250920201248463](README/image-20250920201248463.png)
+3. 将动态库添加进PATH
+
+   * 将你安装的LibTorch和TensorRT的 `lib` 目录添加进 `PATH` 环境变量。例子如下图：
+   * ![image-20250920204538099](README/image-20250920204538099.png)
+   * 注：如果动态库缺失，则引擎会在没有任何错误提示的情况下崩溃
+
+4. 重新编译MoerEngine
+
+   ```bash
+   cmake -B build
+   cmake --build build -j16
+   # 或者使用just
+   just gb # generate build
+   ```
+
+   * 观察日志，若generate的日志出现了 `WITH_CUDA=1`，则成功启用AI相关组件；若日志中为 `WITH_CUDA=0`，则没有启用AI相关组件
+
+5. 配置VSCode的IntelliSense**（可选）**
+   * 设置环境变量 `CUDA_PATH`、`LIBTORCH_PATH`、`TENSORRT_PATH`。例子如下图：
+   * ![image-20250920201137320](README/image-20250920201137320.png)
+   * ![image-20250920201248463](README/image-20250920201248463.png)
 
 ## 使用方法
 

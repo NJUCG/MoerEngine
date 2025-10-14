@@ -179,7 +179,7 @@ uint64 VkTmpBufferAllocator::Allocate(uint64 _size, std::string_view _name) {
         .pQueueFamilyIndices   = nullptr
     };
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
     buffer_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
 #endif
 
@@ -252,7 +252,7 @@ uint64 VkTmpBufferAllocator::Allocate(uint64 _size, EVkInternalBufferUsage _usag
         .pQueueFamilyIndices   = nullptr
     };
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
     buffer_info.pNext = GetExternalMemoryBufferCreateInfoPtr(nullptr);
 #endif
 

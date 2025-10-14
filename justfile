@@ -31,6 +31,15 @@ export VK_LAYER_PRINTF_TO_STDOUT := "1"
 
 default: generate build run
 
+# MARK: setup
+
+default_sponza_dir := "./asset/scenes/sponza"
+default_config_dir := "./source/configs/MoerEngine.toml"
+setup:
+    git config --local blame.ignoreRevsFile .git-blame-ignore-revs
+    if (!(Test-Path {{default_sponza_dir}})) { git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git {{default_sponza_dir}} }
+    if (!(Test-Path {{default_config_dir}})) { cp source/configs/template.MoerEngine.toml {{default_config_dir}} }
+
 # MARK: clean
 
 clean-exe:

@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.26.0)
 
-project(MoerEngine LANGUAGES CXX C CUDA)
+include("${CMAKE_SOURCE_DIR}/cmake/load_config.cmake")
+
+if (WITH_CUDA)
+    project(MoerEngine LANGUAGES CXX C CUDA)
+else()
+    project(MoerEngine LANGUAGES CXX C)
+endif()
+
 set(PROJECT_VERSION_MAJOR 0)
 set(PROJECT_VERSION_MINOR 1)
 set(PROJECT_VERSION_PATCH 0)

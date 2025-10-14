@@ -468,7 +468,7 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
         alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
     }
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
     // 因为上文 vma_functions 传的是指针，所以这里可以直接修改
     vma_functions.vkGetMemoryWin32HandleKHR = vkGetMemoryWin32HandleKHR;
 

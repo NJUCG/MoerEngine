@@ -15,7 +15,7 @@
 #include "ShadowDepthPass.h"
 #include "SsrPass.h"
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
 #include "CudaPass.h"
 #endif
 
@@ -48,7 +48,7 @@ RasterRenderer::RasterRenderer(
     ssr_pass          = MakeUnique<SsrPass>(raster_context);
     aa_pass           = MakeUnique<AaPass>(raster_context);
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
     // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
     cuda_pass = MakeUnique<CudaPass>(raster_context, raster_context.textures.ao_output.tex);
 #endif
@@ -104,7 +104,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         raster_context.CreateFrameBuffers();
         raster_context.AllocateFrameBuffers();
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
         cuda_pass->RecreateResource(raster_context.textures.ao_output.tex);
 #endif
 
@@ -172,7 +172,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }();
 
         // - CUDA Pass
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
         processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
 #endif
 

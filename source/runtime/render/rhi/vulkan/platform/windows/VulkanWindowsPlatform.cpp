@@ -27,7 +27,7 @@ void VulkanWindowsPlatform::GetInstanceLayers(TLayerArray& _layers) {
 void VulkanWindowsPlatform::GetDeviceExtensions(TVulkanDeviceExtensionArray& _extensions) {
     // _extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME));
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
     // VK_KHR_external_memory
     _extensions.emplace_back(std::make_unique<VulkanDeviceExtension>(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME));
     // VK_KHR_external_memory_win32

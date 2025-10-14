@@ -14,12 +14,12 @@ add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURC
 target_compile_definitions(${MODULE_NAME} PRIVATE RENDER_MODULE_SHARED_LIB)
 
 # 注意，这里必须为PUBLIC，否则会发生奇妙的溢出错误。并且editor模块中也需要使用这个宏
-if (CUDA_PASS_IN_RASTER)
-    target_compile_definitions(${MODULE_NAME} PUBLIC CUDA_PASS_IN_RASTER=1)
-    message(STATUS "CUDA_PASS_IN_RASTER=1 in Moer::Render")
+if (WITH_CUDA)
+    target_compile_definitions(${MODULE_NAME} PUBLIC WITH_CUDA=1)
+    message(STATUS "WITH_CUDA=1 in Moer::Render")
 else()
-    target_compile_definitions(${MODULE_NAME} PUBLIC CUDA_PASS_IN_RASTER=0)
-    message(STATUS "CUDA_PASS_IN_RASTER=0 in Moer::Render")
+    target_compile_definitions(${MODULE_NAME} PUBLIC WITH_CUDA=0)
+    message(STATUS "WITH_CUDA=0 in Moer::Render")
 endif()
 
 if (MSVC)

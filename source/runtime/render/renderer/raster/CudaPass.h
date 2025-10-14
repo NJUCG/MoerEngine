@@ -1,12 +1,12 @@
 /**
- * 此文件应该只有在宏 CUDA_PASS_IN_RASTER 被设置的情况下使用
+ * 此文件应该只有在宏 WITH_CUDA 被设置的情况下使用
  * 
  * 这个宏启用时，默认环境为Windows11+Vulkan；所以其他地方不再判断
  */
 #pragma once
 
-#if !defined(CUDA_PASS_IN_RASTER)
-#error "This header requires CUDA_PASS_IN_RASTER=1"
+#if !defined(WITH_CUDA)
+#error "This header requires WITH_CUDA=1"
 #endif
 
 #include "log/LogSystem.h"

@@ -218,7 +218,7 @@ public:
     LockFreeQueueBase<VulkanPresentor, false> presentors;
     DEQueue<QueueEvent>                       event_queue;
 
-#if CUDA_PASS_IN_RASTER
+#if WITH_CUDA
 public:
     VkNativeQueue& GetVkNativeQueue() {
         return queue;
