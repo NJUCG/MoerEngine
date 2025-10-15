@@ -16,6 +16,7 @@ class AaPass;
 
 #if WITH_CUDA
 class CudaPass;
+class TensorRTPass;
 #endif
 
 /**
@@ -69,6 +70,7 @@ private:
 
 #if WITH_CUDA
     UniquePtr<CudaPass> cuda_pass;
+    // UniquePtr<TensorRTPass> tensor_rt_pass;
 #endif
 
     // Other vars
