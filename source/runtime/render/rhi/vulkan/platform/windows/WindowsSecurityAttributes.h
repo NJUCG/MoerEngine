@@ -4,6 +4,9 @@
  * 用于Vulkan Cuda Interop
  * 
  * Ref: https://github.com/NVIDIA/cuda-samples/blob/master/Samples/5_Domain_Specific/vulkanImageCUDA/vulkanImageCUDA.cu
+ * 
+ * 25.10.15 Update: CudaPass中创建信号量时，是否添加 VkExportSemaphoreWin32HandleInfoKHR 貌似不影响结果。
+ *                  我先删去CudaPass中引用这个类的代码；如果之后hw项目结束后（大概26年），这个片段仍未被使用，则可以删去这个类
  */
 
 #ifdef _WIN64

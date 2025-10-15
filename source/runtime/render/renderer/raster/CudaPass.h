@@ -14,7 +14,6 @@
 #include "platform/Platform.h"
 #include "rhi/vulkan/VulkanDevice.h"
 #include "rhi/vulkan/VulkanQueue.h"
-#include "rhi/vulkan/platform/windows/WindowsSecurityAttributes.h" // For creating semaphore
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 #include <cuda_runtime.h>
@@ -82,18 +81,9 @@ VkSemaphore createSemaphoreWithoutRHI(VulkanDevice& vulkan_device) {
 
     VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
-    WindowsSecurityAttributes winSecurityAttributes;
-
-    VkExportSemaphoreWin32HandleInfoKHR vulkanExportSemaphoreWin32HandleInfoKHR = {};
-    vulkanExportSemaphoreWin32HandleInfoKHR.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR;
-    vulkanExportSemaphoreWin32HandleInfoKHR.pNext = NULL;
-    vulkanExportSemaphoreWin32HandleInfoKHR.pAttributes = &winSecurityAttributes;
-    vulkanExportSemaphoreWin32HandleInfoKHR.dwAccess = DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE;
-    vulkanExportSemaphoreWin32HandleInfoKHR.name     = (LPCWSTR)NULL;
-
     VkExportSemaphoreCreateInfoKHR vulkanExportSemaphoreCreateInfo = {};
     vulkanExportSemaphoreCreateInfo.sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO_KHR;
-    vulkanExportSemaphoreCreateInfo.pNext       = &vulkanExportSemaphoreWin32HandleInfoKHR;
+    vulkanExportSemaphoreCreateInfo.pNext       = nullptr;
     vulkanExportSemaphoreCreateInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
 
     create_info.pNext = &vulkanExportSemaphoreCreateInfo;
