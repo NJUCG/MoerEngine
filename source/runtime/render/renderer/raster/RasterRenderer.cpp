@@ -17,7 +17,7 @@
 
 #if WITH_CUDA
 #include "CudaPass.h"
-// #include "TensorRTPass.h"
+#include "TensorRTPass.h"
 #endif
 
 namespace Moer::Render::Raster {
@@ -51,8 +51,12 @@ RasterRenderer::RasterRenderer(
 
 #if WITH_CUDA
     // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
-    cuda_pass = MakeUnique<CudaPass>(raster_context, raster_context.textures.ao_output.tex);
-    // tensor_rt_pass = MakeUnique<TensorRTPass>(raster_context, raster_context.textures.ao_output.tex);
+    cuda_pass      = MakeUnique<CudaPass>(raster_context, raster_context.textures.ao_output.tex);
+    tensor_rt_pass = MakeUnique<TensorRTPass>(
+        raster_context
+        // ,
+        // raster_context.textures.ao_output.tex,
+    );
 #endif
 
     cmd_list.UpdateBindlessArray(bindless_array);

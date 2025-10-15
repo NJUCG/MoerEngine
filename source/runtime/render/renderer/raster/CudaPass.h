@@ -10,25 +10,13 @@
 #endif
 
 #include "log/LogSystem.h"
-#include "misc/Traits.h"
-#include "platform/Platform.h"
-#include "rhi/vulkan/VulkanDevice.h"
-#include "rhi/vulkan/VulkanQueue.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
-#include <cuda_runtime.h>
-#include <vector>
 
 #include "CudaVulkanTools.h"
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
-
-#include <windows.h>
-// 1
-#include <vulkan/vulkan_core.h>
-// 2
-#include <vulkan/vulkan_win32.h>
 
 #include "boxfilter/boxfilter.h"
 

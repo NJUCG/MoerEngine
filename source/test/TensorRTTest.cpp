@@ -6,7 +6,7 @@
 
 using namespace nvinfer1;
 
-const char* ONNX_PATH = "D:\\Data\\NJU3a\\1-MoerEngine\\Assets\\resnet152-v1-7\\resnet152-v1-7.onnx";
+const char* ONNX_PATH = "D:\\Data\\NJU3a\\1-MoerEngine\\Assets\\model4_t.onnx";
 
 // Logger
 class Logger : public ILogger {
