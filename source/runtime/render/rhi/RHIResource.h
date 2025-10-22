@@ -657,6 +657,10 @@ public:
         tex_handle->SetName(_name);
     }
 
+    TextureRef CastToTextureRef() {
+        return tex_handle;
+    }
+
 private:
     TextureRef tex_handle;
 };

@@ -60,7 +60,7 @@ public:
                 shadow_map_texture.tex = context.device.CreateDepthBuffer(
                     shadow_map_texture.name.c_str(),
                     Extent2D(ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
-                    PF_D32_SFLOAT_S8_UINT,
+                    context.textures.depth_linear_sampler.tex->GetFormat(), // 使用普通DepthBuffer的格式
                     1,
                     ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
                 );
@@ -300,7 +300,7 @@ public:
                         std::move(stream),
                         {},
                         RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(), // depth buf
-                        PF_D32_SFLOAT_S8_UINT
+                        context.textures.depth_linear_sampler.tex->GetFormat() // 使用普通DepthBuffer的格式
                     );
 
                     Shader& vtx = vertex_shader.GetShader(const_cast<VertexFactory*>(&factory));

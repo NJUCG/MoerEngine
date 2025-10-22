@@ -67,7 +67,7 @@ public:
                         RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)       // position
                     },
                     RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(), // depth buf
-                    PF_D32_SFLOAT_S8_UINT
+                    context.textures.depth_linear_sampler.tex->GetFormat()
                 );
 
                 Shader& vtx = vertex_shader.GetShader(const_cast<VertexFactory*>(&factory));

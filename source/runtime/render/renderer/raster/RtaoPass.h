@@ -53,7 +53,8 @@ public:
         const RasterConfig& ui_config,
         const CameraRef&    camera,
         uint64              frame_idx,
-        uint                input_image
+        uint                input_image,
+        TextureWithHandle   ao_only
     ) {
         RtaoPipelineBindlessParam param;
 
@@ -77,12 +78,12 @@ public:
                 Rect2D(0, 0, context.resolution->x, context.resolution->y),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.ao_output.tex),
-                ColorAttachment(context.textures.ao_output_ambient_only.tex)
+                ColorAttachment(ao_only.tex)
             );
 
         return RtaoPassOutput{
-            .ao_output           = context.textures.ao_output.handle,
-            .ambient_only_output = context.textures.ao_output_ambient_only.handle
+            .ao_output           = context.textures.ao_output.handle, //
+            .ambient_only_output = ao_only.handle
         };
     }
 

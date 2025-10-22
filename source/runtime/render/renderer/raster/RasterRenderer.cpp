@@ -53,9 +53,12 @@ RasterRenderer::RasterRenderer(
     // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
     cuda_pass      = MakeUnique<CudaPass>(raster_context, raster_context.textures.ao_output.tex);
     tensor_rt_pass = MakeUnique<TensorRTPass>(
-        raster_context
-        // ,
-        // raster_context.textures.ao_output.tex,
+        raster_context,
+        raster_context.textures.ao_output_ambient_only.tex,
+        raster_context.textures.depth_linear_sampler.tex->CastToTextureRef(),
+        raster_context.textures.ao_output.tex,
+        raster_context.textures.motion_vector.tex,
+        raster_context.textures.ao_output_ambient_only_1.tex
     );
 #endif
 
@@ -106,6 +109,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         return true; // continue to next main loop body
 
     } else if (window_state == EWindowState::SizeChanged) { // FIXME: Runtime Error
+        LOG_INFO("Size Changed.");
+
         raster_context.FreeFrameBuffers();
         raster_context.CreateFrameBuffers();
         raster_context.AllocateFrameBuffers();
@@ -168,9 +173,18 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // Post Process Passes
         // - Ambient Occlusion
-        processing_image = [&]() -> uint {
+        TextureWithHandle ao_only = raster_context.textures.ao_output_ambient_only;
+#if WITH_CUDA
+        static uint ao_only_idx = 0;
+        ao_only_idx ^= 1;
+        if (ao_only_idx) {
+            ao_only = raster_context.textures.ao_output_ambient_only_1;
+        }
+#endif
+        processing_image = [&]() {
             if (raster_config.ao_mode == EAoMode::RTAO || raster_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
-                return rtao_pass->Process(raster_context, raster_config, camera, time, processing_image)
+                return rtao_pass
+                    ->Process(raster_context, raster_config, camera, time, processing_image, ao_only)
                     .ao_output;
             } else {
                 return ao_pass->Process(raster_context, raster_config, processing_image);
@@ -179,9 +193,10 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // - CUDA Pass
 #if WITH_CUDA
-        processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
-
         // processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
+
+        processing_image =
+            tensor_rt_pass->Process(raster_context, raster_config, processing_image, ao_only_idx);
 #endif
 
         // - Screen Space Reflection

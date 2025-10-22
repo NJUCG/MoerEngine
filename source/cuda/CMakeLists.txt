@@ -83,7 +83,7 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
     # 直接把当前文件夹作为include，这样开发的时候就不用把header和cu分开写了
     target_include_directories(moer_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_include_directories(moer_cuda PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
-    target_link_libraries(moer_cuda PUBLIC CUDA::cudart CUDA::cublas LibTorch TensorRT)
+    target_link_libraries(moer_cuda PUBLIC CUDA::cudart CUDA::cublas CUDA::cusolver LibTorch TensorRT)
 
     # Reference: https://github.com/microsoft/vcpkg/issues/30272#issuecomment-1817929528
     # Hack for the extra \EHsc that gets added on Windows to the nvcc compile line, which causes the error:

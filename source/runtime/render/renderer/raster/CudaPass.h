@@ -18,7 +18,7 @@
 #include "RasterResource.h"
 #include "RasterTool.h"
 
-#include "boxfilter/boxfilter.h"
+#include "cuda_in_raster/cuda_in_raster.h"
 
 namespace Moer::Render::Raster {
 
@@ -83,19 +83,17 @@ public:
         // cuda
 
         const static uint64 TILE = 16;
-
-        dim3 threadsPerBlock(TILE, TILE);
-        dim3 blocksPerGrid(
+        dim3                threadsPerBlock(TILE, TILE);
+        dim3                blocksPerGrid(
             (cuda_res.cuda_texture->width - 1) / threadsPerBlock.x + 1,
             (cuda_res.cuda_texture->height - 1) / threadsPerBlock.y + 1
         );
 
-        Moer::Cuda::d_test(
+        Moer::Cuda::d_test_2(
             blocksPerGrid,
             threadsPerBlock,
             cuda_res.cuda_semaphore->stream_to_run,
-            cuda_res.cuda_texture->GetCudaInput(),
-            cuda_res.cuda_texture->GetCudaOutput(),
+            cuda_res.cuda_texture->GetSurfaceObjectList(),
             cuda_res.cuda_texture->width,
             cuda_res.cuda_texture->height,
             cuda_res.cuda_texture->mip_levels,

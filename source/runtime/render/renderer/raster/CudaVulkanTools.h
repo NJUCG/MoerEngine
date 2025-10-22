@@ -16,6 +16,7 @@
 #include "rhi/vulkan/VulkanDevice.h"
 #include "rhi/vulkan/VulkanQueue.h"
 #include <cuda_runtime.h>
+#include <cusolverDn.h>
 #include <vector>
 
 #include "RasterResource.h"
@@ -41,6 +42,19 @@ public:
                 cudaGetErrorName(result),
                 cudaGetErrorString(result),
                 func
+            );
+        }
+    }
+
+    static void checkCusolverErrorsInner(
+        cusolverStatus_t  result,
+        char const* const func,
+        const char* const file,
+        int const         line
+    ) {
+        if (result) {
+            LOG_ERROR(
+                "CUDA error at {}:{}. Error code={}. \"{}\"", file, line, static_cast<int32>(result), func
             );
         }
     }
@@ -98,11 +112,44 @@ public:
 #define checkCudaErrors(val) CudaVulkanTools::checkCudaErrorsInner((val), #val, __FILE__, __LINE__)
 
 struct CudaTexture {
+
+    enum class EFormatElementType {
+        UCHAR = 0,
+        HALF,
+        FLOAT,
+        NUM
+    };
+
+    struct FormatDescriptor {
+        cudaChannelFormatDesc desc;
+        cudaTextureReadMode   read_mode;
+        EFormatElementType    element_type;
+        size_t                element_type_count;
+
+        size_t element_type_bits() {
+            switch (element_type) {
+                case EFormatElementType::UCHAR:
+                    return 8;
+                case EFormatElementType::HALF:
+                    return 16;
+                case EFormatElementType::FLOAT:
+                    return 32;
+                default:
+                    assert(false);
+            }
+        }
+    };
+
     // non-cuda objects
     TextureRef moer_texture;
     uint       mip_levels;
     uint       width;
     uint       height;
+
+    // 如果是cudaChannelFormatKindFloat，则必须使用float读取
+    // 如果是cudaChannelFormatKindUnsigned，则必须使用uchar读取
+    EFormatElementType element_type;       // float4 的 float
+    size_t             element_type_count; // float4 的 4
 
     // cuda objects
     cudaExternalMemory_t             cudaExtMemImageBuffer;
@@ -114,12 +161,20 @@ struct CudaTexture {
     // win32 objects
     HANDLE win32_handle;
 
-    cudaTextureObject_t GetCudaInput() {
+    cudaTextureObject_t GetTextureObject() {
         return textureObjMipMapInput;
     }
 
-    cudaSurfaceObject_t* GetCudaOutput() {
+    cudaSurfaceObject_t* GetSurfaceObjectList() {
         return d_surfaceObjectList;
+    }
+
+    EFormatElementType GetElementType() const {
+        return element_type;
+    }
+
+    size_t GetElementTypeCount() const {
+        return element_type_count;
     }
 
     CudaTexture(RasterContext& context, TextureRef texture) :
@@ -137,6 +192,10 @@ struct CudaTexture {
         VulkanTexture& vulkan_texture = CudaVulkanTools::getVulkanTexture(texture);
 
         win32_handle = getMemoryWin32Handle(vulkan_device, vulkan_texture);
+
+        auto format_desc   = getCudaFormatDescriptor(moer_texture->GetFormat());
+        element_type       = format_desc.element_type;
+        element_type_count = format_desc.element_type_count;
 
         {
             uint64 total_size = [&]() {
@@ -160,16 +219,10 @@ struct CudaTexture {
             cudaExternalMemoryMipmappedArrayDesc desc;
             memset(&desc, 0, sizeof(desc));
 
-            cudaExtent            extent = make_cudaExtent(width, height, 0);
-            cudaChannelFormatDesc formatDesc; // PF_R8G8B8A8_UNORM
-            formatDesc.x = 8;
-            formatDesc.y = 8;
-            formatDesc.z = 8;
-            formatDesc.w = 8;
-            formatDesc.f = cudaChannelFormatKindUnsigned;
+            cudaExtent extent = make_cudaExtent(width, height, 0);
 
             desc.offset     = 0;
-            desc.formatDesc = formatDesc;
+            desc.formatDesc = format_desc.desc;
             desc.extent     = extent;
             desc.flags      = 0;
             desc.numLevels  = mip_levels;
@@ -178,7 +231,7 @@ struct CudaTexture {
                 &cudaMipmappedImageArray, cudaExtMemImageBuffer, &desc
             ));
         }
-        {
+        { // surface
             for (uint mipLevelIdx = 0; mipLevelIdx < mip_levels; mipLevelIdx++) {
                 cudaArray_t      cudaMipLevelArray;
                 cudaResourceDesc resourceDesc;
@@ -197,7 +250,7 @@ struct CudaTexture {
                 surfaceObjectList.push_back(surfaceObject);
             }
         }
-        {
+        { // texture
             cudaResourceDesc resDescr;
             memset(&resDescr, 0, sizeof(cudaResourceDesc));
 
@@ -216,18 +269,22 @@ struct CudaTexture {
 
             texDescr.maxMipmapLevelClamp = float(mip_levels - 1);
 
-            texDescr.readMode = cudaReadModeNormalizedFloat;
+            texDescr.readMode = format_desc.read_mode;
 
             checkCudaErrors(cudaCreateTextureObject(&textureObjMipMapInput, &resDescr, &texDescr, NULL));
+        }
+        { // surface
 
-            checkCudaErrors(
-                cudaMalloc((void**)&d_surfaceObjectList, sizeof(cudaSurfaceObject_t) * mip_levels)
-            );
+            assert(surfaceObjectList.size() == mip_levels);
+
+            checkCudaErrors(cudaMalloc(
+                (void**)&d_surfaceObjectList, surfaceObjectList.size() * sizeof(cudaSurfaceObject_t)
+            ));
 
             checkCudaErrors(cudaMemcpy(
                 d_surfaceObjectList,
                 surfaceObjectList.data(),
-                sizeof(cudaSurfaceObject_t) * mip_levels,
+                surfaceObjectList.size() * sizeof(cudaSurfaceObject_t),
                 cudaMemcpyHostToDevice
             ));
         }
@@ -275,7 +332,79 @@ private:
 
         return handle;
     }
-};
+
+    static FormatDescriptor getCudaFormatDescriptor(const EPixelFormat& pf) {
+        FormatDescriptor result{};
+
+        switch (pf) {
+            case PF_R8G8B8A8_UNORM: { // color
+                result.desc.x             = 8;
+                result.desc.y             = 8;
+                result.desc.z             = 8;
+                result.desc.w             = 8;
+                result.desc.f             = cudaChannelFormatKindUnsigned;
+                result.read_mode          = cudaReadModeNormalizedFloat; // 只影响texture：归一化读取
+                result.element_type       = EFormatElementType::UCHAR;
+                result.element_type_count = 4;
+                break;
+            }
+            case PF_D32_SFLOAT_S8_UINT: {
+                assert(false);
+                // cuda不支持这种格式！
+                break;
+            }
+            case PF_D32_SFLOAT: { // depth
+                result.desc.x             = 32;
+                result.desc.y             = 0;
+                result.desc.z             = 0;
+                result.desc.w             = 0;
+                result.desc.f             = cudaChannelFormatKindFloat;
+                result.read_mode          = cudaReadModeElementType; // 只影响texture：原数值读取
+                result.element_type       = EFormatElementType::FLOAT;
+                result.element_type_count = 1;
+                break;
+            }
+            case PF_R8_UNORM: { // ao
+                result.desc.x             = 8;
+                result.desc.y             = 0;
+                result.desc.z             = 0;
+                result.desc.w             = 0;
+                result.desc.f             = cudaChannelFormatKindUnsigned;
+                result.read_mode          = cudaReadModeNormalizedFloat; // 只影响texture：归一化读取
+                result.element_type       = EFormatElementType::UCHAR;
+                result.element_type_count = 1;
+                break;
+            }
+            case PF_R32_SFLOAT: { // ao
+                result.desc.x             = 32;
+                result.desc.y             = 0;
+                result.desc.z             = 0;
+                result.desc.w             = 0;
+                result.desc.f             = cudaChannelFormatKindFloat;
+                result.read_mode          = cudaReadModeElementType; // 只影响texture：原数值读取
+                result.element_type       = EFormatElementType::FLOAT;
+                result.element_type_count = 1;
+                break;
+            }
+            case PF_R16G16_SFLOAT: { // uv, motion vector
+                result.desc.x             = 16;
+                result.desc.y             = 16;
+                result.desc.z             = 0;
+                result.desc.w             = 0;
+                result.desc.f             = cudaChannelFormatKindFloat;
+                result.read_mode          = cudaReadModeElementType; // 只影响texture：原数值读取
+                result.element_type       = EFormatElementType::HALF;
+                result.element_type_count = 2;
+                break;
+            }
+            default: {
+                LOG_ERROR("EPixelFormat doesn't support: {}", static_cast<int>(pf));
+            }
+        }
+
+        return result;
+    }
+}; // namespace Moer::Render::Raster
 
 struct CudaSemaphore {
 

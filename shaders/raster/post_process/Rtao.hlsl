@@ -17,7 +17,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 // 返回两个Texture(ColorAttachment)
 struct PSOutput {
     float4 color_with_ao : SV_Target0;
-    float4 ambient_only : SV_Target1;
+    float ambient_only : SV_Target1;
 };
 
 static const float Epsilon = 0.0001; // TODO: same with PBRMaterialFrag.hlsl
@@ -93,7 +93,7 @@ PSOutput main(float2 uv : TEXCOORD0) {
         // direct light is sky
         PSOutput output;
         output.color_with_ao = float4(color, 1.f);
-        output.ambient_only = float4(1.f, 1.f, 1.f, 1.f);
+        output.ambient_only = 1.f;
         return output;
     }
     frag_normal = Raster::UnpackNormal(frag_normal);
@@ -159,6 +159,6 @@ PSOutput main(float2 uv : TEXCOORD0) {
     } else {
         output.color_with_ao = float4(color * ao, 1.0);
     }
-    output.ambient_only = float4(ao, ao, ao, 1.0);
+    output.ambient_only = ao;
     return output;
 }
