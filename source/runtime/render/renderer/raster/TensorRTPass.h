@@ -155,19 +155,19 @@ public:
             Dims        shape = engine->getTensorShape(name);
             DataType    dtype = engine->getTensorDataType(name);
 
-            // 5.1 calculate array size
-
-            // 假设 shape 格式为 [N, C, H, W]
-            int batch      = shape.d[0];
-            int channels   = shape.d[1];
-            int dst_height = shape.d[2]; // tensor 的目标高度
-            int dst_width  = shape.d[3]; // tensor 的目标宽度
-
-            size_t N = 1ULL * channels * dst_height * dst_width;
-            dim3   blockSize(256);
-            dim3   gridSize((N - 1) / blockSize.x / Moer::Cuda::RANDOMS_PER_THREAD);
-
             if (strncmp(name, "in_", 3) == 0) {
+
+                assert(shape.nbDims == 4);
+
+                // 假设 shape 格式为 [N, C, H, W]
+                int batch      = shape.d[0];
+                int channels   = shape.d[1];
+                int dst_height = shape.d[2]; // tensor 的目标高度
+                int dst_width  = shape.d[3]; // tensor 的目标宽度
+
+                size_t N = 1ULL * channels * dst_height * dst_width;
+                dim3   blockSize(256);
+                dim3   gridSize((N - 1) / blockSize.x / Moer::Cuda::RANDOMS_PER_THREAD);
 
                 static uint64_t seed = 114514;
 
@@ -421,30 +421,6 @@ public:
         if (!is_success) {
             LOG_ERROR("TRT Pass: enqueueV3 failed.");
         }
-    }
-
-    // MARK: Visualize
-    void VisualizeFeature(CudaTexture& color, const cudaStream_t& stream_to_run, float debug_param) {
-
-        const static uint64 TILE = 16;
-
-        dim3 threadsPerBlock(TILE, TILE);
-        dim3 blocksPerGrid(
-            (color.width - 1) / threadsPerBlock.x + 1, (color.height - 1) / threadsPerBlock.y + 1
-        );
-
-        Moer::Cuda::VisualizeFeatureBuf(
-            blocksPerGrid,
-            threadsPerBlock,
-            stream_to_run,
-            color.GetSurfaceObjectList(),
-            (__half*)device_mem_addr_map["out_final_output"],
-            engine->getTensorShape("out_final_output").d[3], // width
-            engine->getTensorShape("out_final_output").d[2], // height
-            color.width,
-            color.height,
-            debug_param
-        );
     }
 
 private:
@@ -816,8 +792,7 @@ public:
     */
 
     uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image, uint ao_only_idx) {
-        if (ui_config.ai_is_cuda_enabled == false)
-            return input_image;
+        assert(ui_config.ai_is_cuda_enabled);
 
         // signal
 
@@ -846,9 +821,14 @@ public:
 
         // CheckBuf();
 
-        engine2->VisualizeFeature(
-            res->color, res->semaphore.stream_to_run, ui_config.ai_cuda_pass_debug_param
+        VisualizeFeature(
+            (ui_config.ai_trt_visualize_buffer.starts_with("Engine1") ? *engine1 : *engine2),
+            res->color,
+            ui_config.ai_trt_visualize_buffer.substr(8).c_str(),
+            res->semaphore.stream_to_run,
+            ui_config.ai_cuda_pass_debug_param
         );
+
         sync();
 
         // wait
@@ -861,6 +841,46 @@ public:
     }
 
 private:
+    // MARK: Visualize
+    void VisualizeFeature(
+        TensorRTEngine&     engine,
+        CudaTexture&        color,
+        const char*         name,
+        const cudaStream_t& stream_to_run,
+        float               debug_param
+    ) {
+
+        const static uint64 TILE = 16;
+
+        dim3 threadsPerBlock(TILE, TILE);
+        dim3 blocksPerGrid(
+            (color.width - 1) / threadsPerBlock.x + 1, (color.height - 1) / threadsPerBlock.y + 1
+        );
+
+        if (engine.engine->getTensorShape(name).nbDims != 4) {
+            LOG_WARNING("{}.shape != 4", name);
+            return;
+        }
+        if (engine.device_mem_addr_map.contains(name) == false) {
+            LOG_WARNING("Cannot find this buffer: {}", name);
+            return;
+        }
+
+        Moer::Cuda::VisualizeFeatureBuf(
+            blocksPerGrid,
+            threadsPerBlock,
+            stream_to_run,
+            color.GetSurfaceObjectList(),
+            (__half*)engine.device_mem_addr_map[name],
+            engine.engine->getTensorShape(name).d[3], // width
+            engine.engine->getTensorShape(name).d[2], // height
+            engine.engine->getTensorShape(name).d[1], // channels
+            color.width,
+            color.height,
+            debug_param
+        );
+    }
+
     void CheckBuf() {
         // 检查 final_output buffer 的值：拷回 host 并统计 min/max/是否全部为 0
         auto check_buf = [&](TensorRTEngine& engine, const char* name) {
@@ -897,7 +917,7 @@ private:
             }
 
             LOG_DEBUG(
-                "check {}: all values same = {}, first value = {}, min = {}, max = {}",
+                "\tcheck {}: all values same = {}, first value = {}, min = {}, max = {}",
                 name,
                 all_same,
                 static_cast<float>(first_val),
@@ -906,12 +926,17 @@ private:
             );
         };
 
+        LOG_DEBUG("");
+        LOG_DEBUG("Engine 1 Input:");
         check_buf(*engine1, "in_ao");
         check_buf(*engine1, "in_depth");
         check_buf(*engine1, "in_color");
         check_buf(*engine1, "in_motion");
         check_buf(*engine1, "in_prev_ao");
         check_buf(*engine1, "in_prev_embed");
+
+        LOG_DEBUG("");
+        LOG_DEBUG("Engine 1 Output:");
         check_buf(*engine1, "out_XTX_batch");
         check_buf(*engine1, "out_XTY_batch");
         check_buf(*engine1, "out_X_model");
@@ -921,18 +946,19 @@ private:
         check_buf(*engine1, "out_prev_ao");
         check_buf(*engine1, "out_embed");
 
+        LOG_DEBUG("");
+        LOG_DEBUG("Engine 2 Input:");
         check_buf(*engine2, "in_X_model");
         check_buf(*engine2, "in_coeffs_batch");
         check_buf(*engine2, "in_upscale_kernel");
         check_buf(*engine2, "in_color");
         check_buf(*engine2, "in_prev_ao");
+
+        LOG_DEBUG("");
+        LOG_DEBUG("Engine 2 Output:");
         check_buf(*engine2, "out_final_output");
         check_buf(*engine2, "out_denoised_ao");
 
-        LOG_DEBUG("");
-        LOG_DEBUG("");
-        LOG_DEBUG("");
-        LOG_DEBUG("");
         LOG_DEBUG("");
         LOG_DEBUG("");
     }

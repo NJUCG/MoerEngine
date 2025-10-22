@@ -56,7 +56,8 @@ RasterRenderer::RasterRenderer(
         raster_context,
         raster_context.textures.ao_output_ambient_only.tex,
         raster_context.textures.depth_linear_sampler.tex->CastToTextureRef(),
-        raster_context.textures.ao_output.tex,
+        // 下面这个color，需要传入lighting_output，而非ao_output，因为模型的输入需要不带ao的color
+        raster_context.textures.lighting_output.tex,
         raster_context.textures.motion_vector.tex,
         raster_context.textures.ao_output_ambient_only_1.tex
     );
@@ -169,7 +170,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         geometry_pass->Process(raster_context, raster_config, camera);
 
         // Lighting Pass
-        uint processing_image = lighting_pass->Process(raster_context, raster_config, camera);
+        uint lighting_pass_output = lighting_pass->Process(raster_context, raster_config, camera);
 
         // Post Process Passes
         // - Ambient Occlusion
@@ -181,13 +182,13 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             ao_only = raster_context.textures.ao_output_ambient_only_1;
         }
 #endif
-        processing_image = [&]() {
+        uint processing_image = [&]() {
             if (raster_config.ao_mode == EAoMode::RTAO || raster_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
                 return rtao_pass
-                    ->Process(raster_context, raster_config, camera, time, processing_image, ao_only)
+                    ->Process(raster_context, raster_config, camera, time, lighting_pass_output, ao_only)
                     .ao_output;
             } else {
-                return ao_pass->Process(raster_context, raster_config, processing_image);
+                return ao_pass->Process(raster_context, raster_config, lighting_pass_output);
             }
         }();
 
@@ -195,8 +196,10 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 #if WITH_CUDA
         // processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
 
-        processing_image =
-            tensor_rt_pass->Process(raster_context, raster_config, processing_image, ao_only_idx);
+        if (raster_config.ai_is_cuda_enabled) {
+            processing_image =
+                tensor_rt_pass->Process(raster_context, raster_config, lighting_pass_output, ao_only_idx);
+        }
 #endif
 
         // - Screen Space Reflection

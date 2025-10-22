@@ -71,6 +71,15 @@ static const Array<std::string> s_shadow_sampling_mode_name_array = {
     "PCF 3x3",
     "PCF 5x5",
 };
+static const Array<std::string> s_ai_trt_visualize_buffer_array = {
+    "Engine1 in_depth",           "Engine1 in_color",        "Engine1 in_motion",
+    "Engine1 in_prev_ao",         "Engine1 in_prev_embed",   "Engine1 out_XTX_batch",
+    "Engine1 out_XTY_batch",      "Engine1 out_X_model",     "Engine1 out_ao",
+    "Engine1 out_upscale_kernel", "Engine1 out_color",       "Engine1 out_prev_ao",
+    "Engine1 out_embed",          "Engine2 in_X_model",      "Engine2 in_coeffs_batch",
+    "Engine2 in_upscale_kernel",  "Engine2 in_color",        "Engine2 in_prev_ao",
+    "Engine2 out_final_output",   "Engine2 out_denoised_ao",
+}; // namespace Moer
 
 struct RasterConfig {
 
@@ -104,8 +113,11 @@ struct RasterConfig {
     float ssr_step_base                  = 0.025;
 
     // MARK: AI (CUDA, TensorRT)
-    bool  ai_is_cuda_enabled       = false;
-    float ai_cuda_pass_debug_param = 0.05f;
+    bool        ai_is_cuda_enabled          = false;
+    float       ai_cuda_pass_debug_param    = 0.05f;
+    int         ai_trt_visualize_buffer_idx = s_ai_trt_visualize_buffer_array.size() - 2; // output
+    std::string ai_trt_visualize_buffer =
+        s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2];
 
     // MARK: Shadow
     int shadow_map_mode            = 1; // 0: disabled, 1: CSM, 2: VSM

@@ -161,6 +161,7 @@ MOER_CUDA_API void VisualizeFeatureBuf(
     __half*              feature_buffer,
     int                  src_width,
     int                  src_height,
+    int                  src_channels,
     int                  dst_width,
     int                  dst_height,
     float                debug_param

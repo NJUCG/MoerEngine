@@ -636,6 +636,7 @@ __global__ void VisualizeFeatureBuf_Kernel(
     __half*              feature_buffer, // [must 1, must 19, src_width, src_height]
     int                  src_width,
     int                  src_height,
+    int                  src_channels,
     int                  dst_width,
     int                  dst_height,
     float                debug_param
@@ -655,14 +656,20 @@ __global__ void VisualizeFeatureBuf_Kernel(
         src_x = max(0, min(src_x, src_width - 1));
         src_y = max(0, min(src_y, src_height - 1));
 
-        // 从feature_buffer读取19个通道的数据 [1, 19, src_height, src_width] - NCHW格式
         int base_idx = src_y * src_width + src_x; // batch=0固定
 
-        // 可视化：将19个通道转换为RGB
-        // 简单策略：取后3个通道作为RGB，剩余通道可以做平均或其他处理
-        float r = __half2float(feature_buffer[0 * src_height * src_width + base_idx]); // 第0通道
-        float g = __half2float(feature_buffer[1 * src_height * src_width + base_idx]); // 第1通道
-        float b = __half2float(feature_buffer[2 * src_height * src_width + base_idx]); // 第2通道
+        float r, g, b;
+        if (src_channels >= 3) {
+            r = __half2float(feature_buffer[0 * src_height * src_width + base_idx]); // 第0通道
+            g = __half2float(feature_buffer[1 * src_height * src_width + base_idx]); // 第1通道
+            b = __half2float(feature_buffer[2 * src_height * src_width + base_idx]); // 第2通道
+        } else if (src_channels == 2) {
+            r = __half2float(feature_buffer[0 * src_height * src_width + base_idx]);
+            g = __half2float(feature_buffer[1 * src_height * src_width + base_idx]);
+            b = 0.0f;
+        } else if (src_channels == 1) {
+            r = g = b = __half2float(feature_buffer[0 * src_height * src_width + base_idx]);
+        }
 
         // 可选：对剩余通道做处理（这里简单设置alpha为1）
         float a = 1.0f;
@@ -703,12 +710,13 @@ void VisualizeFeatureBuf(
     __half*              feature_buffer,
     int                  src_width,
     int                  src_height,
+    int                  src_channels,
     int                  dst_width,
     int                  dst_height,
     float                debug_param
 ) {
     VisualizeFeatureBuf_Kernel<<<gridSize, blockSize, 0, stream>>>(
-        surface, feature_buffer, src_width, src_height, dst_width, dst_height, debug_param
+        surface, feature_buffer, src_width, src_height, src_channels, dst_width, dst_height, debug_param
     );
 }
 

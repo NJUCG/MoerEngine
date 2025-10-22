@@ -187,6 +187,16 @@ void RasterUI::ShowConfig() {
             // ImGui::SliderInt("Sample Count", &m_config.ssr_sample_count, 1, 64);
             // ImGui::SliderFloat("Roughness Threshold", &m_config.ssr_roughness_threshold, 0.0f, 1.0f);
             // ImGui::SliderFloat("Metallic Threshold", &m_config.ssr_metallic_threshold, 0.0f, 1.0f);
+
+            for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
+                if (ImGui::Selectable(
+                        s_ai_trt_visualize_buffer_array[i].c_str(), m_config.ai_trt_visualize_buffer_idx == i
+                    )) {
+                    m_config.ai_trt_visualize_buffer_idx = i;
+                    m_config.ai_trt_visualize_buffer     = s_ai_trt_visualize_buffer_array[i];
+                }
+                draw_border();
+            }
         }
 
         ImGui::TreePop();
