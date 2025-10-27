@@ -1005,7 +1005,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
     rendering_create_info.depthAttachmentFormat =
         VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format);
-#if HAS_CUDA
+#if WITH_CUDA
     rendering_create_info.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
 #else
     rendering_create_info.stencilAttachmentFormat =

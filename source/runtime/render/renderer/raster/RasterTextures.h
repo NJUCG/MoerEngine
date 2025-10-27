@@ -40,7 +40,7 @@ struct DepthBufferWithHandleAndName {
 #define SCREEN_SIZE           Extent2D(size->x, size->y)
 #define CUSTOMIZED_SIZE(x, y) Extent2D(x, y)
 
-#if HAS_CUDA
+#if WITH_CUDA
 #define DEFINE_MOTION_VECTOR_TEXTURE \
     X(TextureWithHandle, motion_vector, PF_R16G16_SFLOAT, E_SAMPLED | E_COLOR_ATTACH, SCREEN_SIZE)
 #else
@@ -86,7 +86,7 @@ struct RasterTextures {
         depth_linear_sampler.tex = device.CreateDepthBuffer(
             "depth",
             Extent2D(size->x, size->y),
-#if HAS_CUDA
+#if WITH_CUDA
             PF_D32_SFLOAT,
 #else
             PF_D32_SFLOAT_S8_UINT, // cuda不支持

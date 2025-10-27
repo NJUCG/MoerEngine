@@ -1,4 +1,4 @@
-# 如果CUDA成功导入，则cmake表达式 (TARGET moer_cuda) 为真；同时，链接moer_cuda后，cpp端会被设置宏 HAS_CUDA=1
+# 如果CUDA成功导入，则cmake表达式 (TARGET moer_cuda) 为真；同时，链接moer_cuda后，cpp端会被设置宏 WITH_CUDA=1
 # 
 # 只有CUDA成功导入时，才考虑LibTorch和TensorRT（版本需要自己手动校验）
 # - 如果LibTorch和TensorRT成功导入，则.......
@@ -78,7 +78,6 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
     )
 
     # 宏, link include, link sources
-    target_compile_definitions(moer_cuda PUBLIC HAS_CUDA=1)
     target_compile_definitions(moer_cuda PRIVATE MOER_CUDA_EXPORTS) # 只在编译moer_cuda时，启用这个宏，保证导出符号正确性
     # 直接把当前文件夹作为include，这样开发的时候就不用把header和cu分开写了
     target_include_directories(moer_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -136,7 +135,22 @@ else()
     message(STATUS "MoerCuda has been skipped because lacking of dependencies.")
 endif()
 
-if (WITH_CUDA AND NOT (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT))
-    message(FATAL_ERROR "Enabled CUDA pass in raster, but doesn't have dependencies!")
-    # FATAL_ERROR: Stop cmake generation process
+# 设置WITH_CUDA宏
+# 注意，这里必须为PUBLIC，需要扩散到Render等模块
+if (WITH_CUDA)
+    # 启用 & 配置完成
+    if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
+        target_compile_definitions(moer_cuda PUBLIC WITH_CUDA=1)
+        message(STATUS "WITH_CUDA=1 in Moer::Cuda")
+    
+    # 启用 & 配置不完整
+    else()
+        message(FATAL_ERROR "Enabled CUDA pass in raster, but doesn't have dependencies!")
+        # FATAL_ERROR: Stop cmake generation process
+    endif()
+
+# 不启用
+else()
+    target_compile_definitions(moer_cuda PUBLIC WITH_CUDA=0)
+    message(STATUS "WITH_CUDA=0 in Moer::Cuda")
 endif()

@@ -1405,7 +1405,7 @@ public:
             .pColorAttachments    = color_attachments.data(),
             .pDepthAttachment =
                 depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
-#if HAS_CUDA
+#if WITH_CUDA
             .pStencilAttachment = nullptr
 #else
             .pStencilAttachment =
@@ -1586,7 +1586,7 @@ public:
             .pColorAttachments    = color_attachments.data(),
             .pDepthAttachment =
                 depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
-#if HAS_CUDA
+#if WITH_CUDA
             .pStencilAttachment = nullptr
 #else
             .pStencilAttachment =

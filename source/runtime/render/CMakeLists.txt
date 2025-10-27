@@ -13,15 +13,6 @@ add_library(${MODULE_NAME} SHARED ${RENDER_MODULE_HEADERS} ${RENDER_MODULE_SOURC
 
 target_compile_definitions(${MODULE_NAME} PRIVATE RENDER_MODULE_SHARED_LIB)
 
-# 注意，这里必须为PUBLIC，否则会发生奇妙的溢出错误。并且editor模块中也需要使用这个宏
-if (WITH_CUDA)
-    target_compile_definitions(${MODULE_NAME} PUBLIC WITH_CUDA=1)
-    message(STATUS "WITH_CUDA=1 in Moer::Render")
-else()
-    target_compile_definitions(${MODULE_NAME} PUBLIC WITH_CUDA=0)
-    message(STATUS "WITH_CUDA=0 in Moer::Render")
-endif()
-
 if (MSVC)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(${MODULE_NAME} PRIVATE "-Wno-nullability-completeness" "-Wno-unknown-attributes")

@@ -19,8 +19,7 @@
                 "_DEBUG",
                 "UNICODE",
                 "_UNICODE",
-                "HAS_CUDA=1", // See: source/cuda/CMakeLists.txt
-                "WITH_CUDA=1" // See: source/runtime/render/CMakeLists.txt
+                "WITH_CUDA=1" // See: source/cuda/CMakeLists.txt
             ],
             "windowsSdkVersion": "10.0.22621.0",
             "cStandard": "c17",
