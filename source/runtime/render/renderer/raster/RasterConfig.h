@@ -19,38 +19,25 @@ enum class EShadingMode {
 };
 static const Array<std::string> s_shading_mode_name_array = {"Default", "Debug"};
 
-// enum class EAaMode {
-//     NONE = 0,
-//     FXAA_SIMPLIFIED,
-//     FXAA_QUALITY,
-//     SMAA_1X,
-//     SMAA_T2X,
-//     NUM
-// };
-static const Array<std::string> s_aa_mode_name_array = {
-    "None",
-    "FXAA Simplified",
-    "FXAA Quality",
-    "SMAA 1x",
-    "SMAA T2x",
+// Enum 在 ..../ShaderParameters.h中定义，让shader和cpp可以共用枚举值
+// EnumParam(EAaMode, NONE, FXAA_SIMPLIFIED, FXAA_QUALITY, SMAA_1X, SMAA_T2X);
+static const UnorderedMap<EAaMode, std::string> s_aa_mode_name_map = {
+    {EAaMode::NONE, "None"},
+    {EAaMode::FXAA_SIMPLIFIED, "FXAA Simplified"},
+    {EAaMode::FXAA_QUALITY, "FXAA Quality"},
+    {EAaMode::SMAA_1X, "SMAA 1x"},
+    {EAaMode::SMAA_T2X, "SMAA T2x"},
 };
 
-// enum class EAoMode {
-//     NONE = 0,
-//     SSAO,
-//     SSAO_AO_ONLY,
-//     RTAO,
-//     RTAO_AO_ONLY,
-//     LINEARIZED_DEPTH_DIV_10,
-//     NUM
-// };
-static const Array<std::string> s_ao_mode_name_array = {
-    "None",
-    "SSAO",
-    "SSAO AO Only",
-    "RTAO",
-    "RTAO AO Only",
-    "Linear. Depth / 10.0",
+// Enum 在 ..../ShaderParameters.h中定义，让shader和cpp可以共用枚举值
+// EnumParam(EAoMode, NONE, SSAO, SSAO_AO_ONLY, RTAO, RTAO_AO_ONLY, LINEARIZED_DEPTH_DIV_10);
+static const UnorderedMap<EAoMode, std::string> s_ao_mode_name_map = {
+    {EAoMode::NONE, "None"},
+    {EAoMode::SSAO, "SSAO"},
+    {EAoMode::SSAO_AO_ONLY, "SSAO AO Only"},
+    {EAoMode::RTAO, "RTAO"},
+    {EAoMode::RTAO_AO_ONLY, "RTAO AO Only"},
+    {EAoMode::LINEARIZED_DEPTH_DIV_10, "Linear. Depth / 10.0"},
 };
 
 enum class ERtaoSampleMode {

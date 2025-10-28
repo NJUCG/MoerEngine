@@ -143,7 +143,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 color       = input_image.rgb;
     float  M           = input_image.a; // luminance
 
-    if (param.fxaa_mode != Moer::EAaMode::NONE) {
+    if (param.fxaa_mode == Moer::EAaMode::FXAA_SIMPLIFIED || param.fxaa_mode == Moer::EAaMode::FXAA_QUALITY) {
         color = fxaa(in_uv, color, M);
     }
 
