@@ -10,7 +10,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/raster/post_process/ShaderParameters.h"
 
 static const float fxaa_contrast_threshold = 0.025;
-static const uint fxaa_search_limit = 8;
+static const uint  fxaa_search_limit       = 8;
 
 static const float Epsilon = 0.0001; // same with PBRMaterialFrag.hlsl
 
@@ -34,9 +34,10 @@ float3 fxaa(float2 uv, float3 color, float M) {
 
     float max_luminance = max(M, max(S, max(N, max(W, E))));
     float min_luminance = min(M, min(S, min(N, min(W, E))));
-    float contrast = max_luminance - min_luminance;
+    float contrast      = max_luminance - min_luminance;
 
-    if (contrast <= fxaa_contrast_threshold) return color;
+    if (contrast <= fxaa_contrast_threshold)
+        return color;
 
     // 2. get luminance
     float NE = get_luminance(uv + param.inv_resolution);
@@ -45,12 +46,12 @@ float3 fxaa(float2 uv, float3 color, float M) {
     float SE = get_luminance(uv + float2(param.inv_resolution.x, -param.inv_resolution.y));
 
     float blend = abs((2.0 * (N + E + S + W) + NE + NW + SE + SW) / 12.0 - M) / contrast;
-    blend = smoothstep(0.0, 1.0, blend);
-    blend = blend * blend;
+    blend       = smoothstep(0.0, 1.0, blend);
+    blend       = blend * blend;
 
     // 3. edge direction
-    float vertical = 2.0 * abs(N+S-2.0*M) + abs(NE+SE-2.0*E) + abs(NW+SW-2.0*W);
-    float horizontal = 2.0 * abs(E+W-2.0*M) + abs(NE+NW-2.0*W) + abs(SE+SW-2.0*S);
+    float vertical   = 2.0 * abs(N + S - 2.0 * M) + abs(NE + SE - 2.0 * E) + abs(NW + SW - 2.0 * W);
+    float horizontal = 2.0 * abs(E + W - 2.0 * M) + abs(NE + NW - 2.0 * W) + abs(SE + SW - 2.0 * S);
 
     bool is_edge_horizontal = vertical > horizontal;
 
@@ -70,7 +71,7 @@ float3 fxaa(float2 uv, float3 color, float M) {
     }
 
     // 4. blend
-    if (param.fxaa_mode == 1) {
+    if (param.fxaa_mode == Moer::EAaMode::FXAA_SIMPLIFIED) {
         return get_color(uv + pixel_step * blend);
     }
     // assert param.fxaa_mode == 2
@@ -80,24 +81,25 @@ float3 fxaa(float2 uv, float3 color, float M) {
     float negative = abs((is_edge_horizontal ? S : W) - M);
     float gradient, opposite_luminance;
     if (positive > negative) {
-        gradient = positive;
+        gradient           = positive;
         opposite_luminance = is_edge_horizontal ? N : E;
     } else {
-        gradient = negative;
+        gradient           = negative;
         opposite_luminance = is_edge_horizontal ? S : W;
     }
 
     float2 uv_in_edge = uv + pixel_step * 0.5;
-    float2 edge_step = is_edge_horizontal ? float2(param.inv_resolution.x, 0.0) : float2(0.0, param.inv_resolution.y);
+    float2 edge_step =
+        is_edge_horizontal ? float2(param.inv_resolution.x, 0.0) : float2(0.0, param.inv_resolution.y);
 
-    float edge_luminance = (M + opposite_luminance) * 0.5;
+    float edge_luminance     = (M + opposite_luminance) * 0.5;
     float gradient_threshold = edge_luminance * 0.25;
     float p_luminance_delta;
     float n_luminance_delta;
     float p_distance = fxaa_search_limit;
     float n_distance = fxaa_search_limit;
     float i;
-    
+
     // positive
     for (i = 1.0; i <= fxaa_search_limit; i += 1.0) {
         p_luminance_delta = get_luminance(uv_in_edge + i * edge_step) - edge_luminance;
@@ -138,10 +140,10 @@ float3 fxaa(float2 uv, float3 color, float M) {
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     float4 input_image = TextureHandle(param.input_image).Sample2D<float4>(in_uv);
-    float3 color = input_image.rgb;
-    float M = input_image.a; // luminance
-    
-    if (param.fxaa_mode >= 1) {
+    float3 color       = input_image.rgb;
+    float  M           = input_image.a; // luminance
+
+    if (param.fxaa_mode == Moer::EAaMode::FXAA_SIMPLIFIED || param.fxaa_mode == Moer::EAaMode::FXAA_QUALITY) {
         color = fxaa(in_uv, color, M);
     }
 
