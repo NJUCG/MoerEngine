@@ -7,9 +7,10 @@
 #ifdef __cplusplus
 #define CONST constexpr
 #include "misc/Traits.h"
-
+#include "shaderheaders/shared/raster/ShaderParametersUtils.h"
 namespace Moer::Render {
 #else
+#include "shared/raster/ShaderParametersUtils.h"
 #define CONST const
 namespace Moer {
 #endif
@@ -63,6 +64,11 @@ struct LightingData {
 };
 
 // MARK: Main Content End
+
+//MARK:Enum Definitions Begin
+//deferred
+//shadowpass
+//ssrpass
 
 #ifdef __cplusplus
 }

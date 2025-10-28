@@ -4,6 +4,9 @@
 #include "misc/Traits.h"
 
 #include "RasterCompileTimeConstants.h"
+#include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
+#include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
+#include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
 #include <string>
 
@@ -16,14 +19,14 @@ enum class EShadingMode {
 };
 static const Array<std::string> s_shading_mode_name_array = {"Default", "Debug"};
 
-enum class EAaMode {
-    NONE = 0,
-    FXAA_SIMPLIFIED,
-    FXAA_QUALITY,
-    SMAA_1X,
-    SMAA_T2X,
-    NUM
-};
+// enum class EAaMode {
+//     NONE = 0,
+//     FXAA_SIMPLIFIED,
+//     FXAA_QUALITY,
+//     SMAA_1X,
+//     SMAA_T2X,
+//     NUM
+// };
 static const Array<std::string> s_aa_mode_name_array = {
     "None",
     "FXAA Simplified",
@@ -32,15 +35,15 @@ static const Array<std::string> s_aa_mode_name_array = {
     "SMAA T2x",
 };
 
-enum class EAoMode {
-    NONE = 0,
-    SSAO,
-    SSAO_AO_ONLY,
-    RTAO,
-    RTAO_AO_ONLY,
-    LINEARIZED_DEPTH_DIV_10,
-    NUM
-};
+// enum class EAoMode {
+//     NONE = 0,
+//     SSAO,
+//     SSAO_AO_ONLY,
+//     RTAO,
+//     RTAO_AO_ONLY,
+//     LINEARIZED_DEPTH_DIV_10,
+//     NUM
+// };
 static const Array<std::string> s_ao_mode_name_array = {
     "None",
     "SSAO",
