@@ -13,6 +13,7 @@ class AoPass;
 class RtaoPass;
 class SsrPass;
 class AaPass;
+class UpsamplePass;
 
 #if WITH_CUDA
 class CudaPass;
@@ -67,6 +68,7 @@ private:
     UniquePtr<RtaoPass>        rtao_pass;
     UniquePtr<SsrPass>         ssr_pass;
     UniquePtr<AaPass>          aa_pass;
+    UniquePtr<UpsamplePass>    upsample_pass;
 
 #if WITH_CUDA
     UniquePtr<CudaPass>     cuda_pass;

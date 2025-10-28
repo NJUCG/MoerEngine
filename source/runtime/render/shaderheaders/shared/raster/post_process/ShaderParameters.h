@@ -100,6 +100,13 @@ struct FxaaPipelineBindlessParam {
     float2 inv_resolution;
 };
 
+struct UpsamplePipelineBindlessParam {
+    uint    input_image;
+    uint    outSize;
+    uint    inSize;
+    uint    upsample_mode;
+};
+
 // MARK: Main Content End
 
 #ifdef __cplusplus

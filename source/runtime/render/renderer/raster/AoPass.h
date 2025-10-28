@@ -53,7 +53,11 @@ public:
         context.cmd_list.Gfx(ao_pipeline, context.bdls, param)
             .Draw(
                 "AO Pass",
+#if SUPER_RESOLUTION_ENABLED
+                Rect2D(0, 0, context.resolution->x / 2, context.resolution->y /2),
+#else
                 Rect2D(0, 0, context.resolution->x, context.resolution->y),
+#endif
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.ao_output.tex)
             );

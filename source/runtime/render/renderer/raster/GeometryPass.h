@@ -99,7 +99,11 @@ public:
         context.cmd_list
             .Gfx(
                 "Geometry Pass (MultiPass)",
+#if SUPER_RESOLUTION_ENABLED
+                Rect2D(0, 0, context.resolution->x / 2, context.resolution->y / 2),
+#else
                 Rect2D(0, 0, context.resolution->x, context.resolution->y),
+#endif
                 DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture()),
                 ColorAttachment(context.textures.vbuffer.tex),
                 ColorAttachment(context.textures.normal.tex),

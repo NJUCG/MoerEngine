@@ -41,6 +41,7 @@ enum class EAoMode {
     LINEARIZED_DEPTH_DIV_10,
     NUM
 };
+
 static const Array<std::string> s_ao_mode_name_array = {
     "None",
     "SSAO",
@@ -48,6 +49,18 @@ static const Array<std::string> s_ao_mode_name_array = {
     "RTAO",
     "RTAO AO Only",
     "Linear. Depth / 10.0",
+};
+
+enum class EUpsampleMode {
+    None = 0,
+    BILINEAR,
+    DEPTH
+};
+
+static const Array<std::string> s_upsample_mode_name_array = {
+    "None",
+    "BILINEAR",
+    "DEPTH",
 };
 
 enum class ERtaoSampleMode {
@@ -130,6 +143,12 @@ struct RasterConfig {
     // MARK: Others
     std::string default_selected_frame_buffer_name = "aa_output";
     uint        selected_frame_buffer_index        = 0;
+
+    // MARK: Upsample Process
+    EUpsampleMode   upsample_mode         = EUpsampleMode::None;
+    int             outSize_x             = 1080;
+    int             outSize_y             = 1920;
+    int             inSize_x              = 540;
 };
 
-} // namespace Moer
+} // namespace Moer 

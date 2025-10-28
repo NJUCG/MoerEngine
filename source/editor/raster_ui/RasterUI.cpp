@@ -168,6 +168,27 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    if(ImGui::TreeNode("Upsample", 
+            "Upsample: [%s]", 
+             s_upsample_mode_name_array[static_cast<uint32>(m_config.upsample_mode)].c_str())){
+        for(uint i = 0; i < s_upsample_mode_name_array.size(); i++){
+            if(ImGui::Selectable(
+                s_upsample_mode_name_array[i].c_str(), m_config.upsample_mode == static_cast<EUpsampleMode>(i)
+            )){
+                m_config.upsample_mode = static_cast<EUpsampleMode>(i);
+            }
+            draw_border();
+        }
+
+        if(m_config.upsample_mode == EUpsampleMode::BILINEAR) {
+            ImGui::SliderInt("Input Size", &m_config.inSize_x, 0, 1500);
+            ImGui::SliderInt("Output Size X", &m_config.outSize_x, 0, 3000);
+            ImGui::SliderInt("Output Size Y", &m_config.outSize_y, 0, 3000);
+        }
+
+        ImGui::TreePop();
+    }
+
 #if WITH_CUDA
     if (ImGui::TreeNode("CUDA", "CUDA: [%s]", (m_config.ai_is_cuda_enabled == 1 ? "Enable" : "Disable"))) {
         if (ImGui::Selectable("Enable", m_config.ai_is_cuda_enabled == 1)) {
