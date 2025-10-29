@@ -135,22 +135,8 @@ else()
     message(STATUS "MoerCuda has been skipped because lacking of dependencies.")
 endif()
 
-# 设置WITH_CUDA宏
-# 注意，这里必须为PUBLIC，需要扩散到Render等模块
-if (WITH_CUDA)
-    # 启用 & 配置完成
-    if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
-        target_compile_definitions(moer_cuda PUBLIC WITH_CUDA=1)
-        message(STATUS "WITH_CUDA=1 in Moer::Cuda")
-    
-    # 启用 & 配置不完整
-    else()
-        message(FATAL_ERROR "Enabled CUDA pass in raster, but doesn't have dependencies!")
-        # FATAL_ERROR: Stop cmake generation process
-    endif()
-
-# 不启用
-else()
-    target_compile_definitions(moer_cuda PUBLIC WITH_CUDA=0)
-    message(STATUS "WITH_CUDA=0 in Moer::Cuda")
+if (WITH_CUDA AND NOT (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT))
+    message(FATAL_ERROR "Enabled CUDA pass in raster, but doesn't have dependencies!")
+    # FATAL_ERROR: Stop cmake generation process
 endif()
+# 从此以后，只要WITH_CUDA开启，那么依赖就一定准备完毕

@@ -67,6 +67,17 @@ if (TARGET moer_cuda)
     message(STATUS "Moer::Render linked Moer::Cuda")
 endif()
 
+# 设置WITH_CUDA宏
+# 注意，这里必须为PUBLIC，需要扩散到其他模块
+if (WITH_CUDA)
+    target_compile_definitions(${MODULE_NAME} PUBLIC WITH_CUDA=1)
+    message(STATUS "WITH_CUDA=1 in Moer::Render")
+else()
+# 不启用
+    target_compile_definitions(${MODULE_NAME} PUBLIC WITH_CUDA=0)
+    message(STATUS "WITH_CUDA=0 in Moer::Render")
+endif()
+
 target_compile_definitions(${MODULE_NAME} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})
 # agilitysdk need to export symbols from exe, however current render module is dll, so not easy for exe to import this then export again...
 # so here use PUBLIC not PRIVATE
