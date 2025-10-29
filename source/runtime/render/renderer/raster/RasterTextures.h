@@ -46,22 +46,13 @@ struct DepthBufferWithHandleAndName {
  *   - depth手动维护，原因是需要两个不同的Sampler (nearest, linear)
  */
 
-#define TexHandle    TextureWithHandle
-#define E_SAMPLED    ETextureUsageFlags::SAMPLED
-#define E_C_ATTACH   ETextureUsageFlags::COLOR_ATTACHMENT
-#define E_D_S_ATTACH ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+#define TexHandle       TextureWithHandle
+#define E_SAMPLED_COLOR ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT
+#define E_C_ATTACH      ETextureUsageFlags::COLOR_ATTACHMENT
+#define E_D_S_ATTACH    ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
 
 #define SCREEN_SIZE           Extent2D(size->x, size->y)
 #define CUSTOMIZED_SIZE(x, y) Extent2D(x, y)
-
-// Motion Vector Texture
-#if WITH_CUDA
-#define DEFINE_MOTION_VECTOR_TEXTURE \
-    X(TexHandle, motion_vector, PF_R16G16_SFLOAT, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_true)
-#else
-// Motion Vector Texture
-#define DEFINE_MOTION_VECTOR_TEXTURE
-#endif
 
 // 启用超分
 // #define SUPER_RESOLUTION_ENABLED WITH_CUDA
@@ -78,26 +69,26 @@ struct DepthBufferWithHandleAndName {
 #define SR_TAG_false false
 #endif
 
-#define RASTER_TEXTURES_TABLE                                                                             \
-    X(TexHandle, vbuffer, PF_R32_UINT, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_true)                  \
-    X(TexHandle, normal, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_true)   \
-    X(TexHandle, tangent, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_true)  \
-    X(TexHandle, uv, PF_R32G32_SFLOAT, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_true)                  \
-    X(TexHandle, position, PF_R32G32B32A32_SFLOAT, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_true)      \
-    X(TexHandle, lighting_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_true)    \
-    X(TexHandle, ao_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_true)          \
-    X(TexHandle, ao_output_ambient_only, PF_R8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_true)   \
-    X(TexHandle, ao_output_ambient_only_1, PF_R8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_true) \
-    X(TexHandle, upsample_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)   \
-    X(TexHandle, ssr_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)        \
-    X(TexHandle, aa_texture_1, PF_R8G8B8A8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)      \
-    X(TexHandle, aa_texture_2, PF_R8G8B8A8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)      \
-    X(TexHandle, aa_texture_3, PF_R8G8B8A8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)      \
-    X(TexHandle, aa_texture_4, PF_R8G8B8A8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)      \
-    X(TexHandle, aa_output, PF_R8G8B8A8_UNORM, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)         \
-    X(TexHandle, ui_frame_buffer, PF_R8G8B8A8_SRGB, E_SAMPLED | E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)    \
-    X(TexHandle, output, PF_R8G8B8A8_SRGB, E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)                         \
-    DEFINE_MOTION_VECTOR_TEXTURE
+#define RASTER_TEXTURES_TABLE                                                                       \
+    X(TexHandle, vbuffer, PF_R32_UINT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)                   \
+    X(TexHandle, normal, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)    \
+    X(TexHandle, tangent, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)   \
+    X(TexHandle, uv, PF_R32G32_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)                   \
+    X(TexHandle, position, PF_R32G32B32A32_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)       \
+    X(TexHandle, lighting_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)     \
+    X(TexHandle, ao_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)           \
+    X(TexHandle, ao_output_ambient_only, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)    \
+    X(TexHandle, ao_output_ambient_only_1, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)  \
+    X(TexHandle, camera_motion_vector, PF_R16G16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true) \
+    X(TexHandle, upsample_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)    \
+    X(TexHandle, ssr_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)         \
+    X(TexHandle, aa_texture_1, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)       \
+    X(TexHandle, aa_texture_2, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)       \
+    X(TexHandle, aa_texture_3, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)       \
+    X(TexHandle, aa_texture_4, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)       \
+    X(TexHandle, aa_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)          \
+    X(TexHandle, ui_frame_buffer, PF_R8G8B8A8_SRGB, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)     \
+    X(TexHandle, output, PF_R8G8B8A8_SRGB, E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)
 
 struct RasterTextures {
     // 批量生成
@@ -208,7 +199,7 @@ struct RasterTextures {
 #undef CUSTOMIZED_SIZE
 
 #undef TexHandle
-#undef E_SAMPLED
+#undef E_SAMPLED_COLOR
 #undef E_C_ATTACH
 #undef E_D_S_ATTACH
 

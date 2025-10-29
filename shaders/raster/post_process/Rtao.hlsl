@@ -14,11 +14,8 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 [[vk::binding(0, DI_BINDING_SLOT)]] RaytracingAccelerationStructure tlas;
 
-// 返回两个Texture(ColorAttachment)
-struct PSOutput {
-    float4 color_with_ao : SV_Target0;
-    float ambient_only : SV_Target1;
-};
+// 定义了AoOutput、CameraMotionVector等函数
+#include "AoCommon.hlsl"
 
 static const float Epsilon = 0.0001; // TODO: same with PBRMaterialFrag.hlsl
 
@@ -82,7 +79,7 @@ bool CastVisibilityRay(float3 origin, float3 direction, float tmin, float tmax,
   return ray_query.CommittedStatus() == COMMITTED_NOTHING;
 }
 
-PSOutput main(float2 uv : TEXCOORD0) {
+AoOutput get_rtao(float2 uv) {
 
     // Reference: shaders/hwrt/GBufferUtils.hlsli: SetupPrimaryRay()
 
@@ -91,7 +88,7 @@ PSOutput main(float2 uv : TEXCOORD0) {
 
     if (abs(frag_normal.x) < Epsilon && abs(frag_normal.y) < Epsilon && abs(frag_normal.z) < Epsilon) {
         // direct light is sky
-        PSOutput output;
+        AoOutput output;
         output.color_with_ao = float4(color, 1.f);
         output.ambient_only = 1.f;
         return output;
@@ -153,12 +150,22 @@ PSOutput main(float2 uv : TEXCOORD0) {
     
     float ao = visible_ray_contrib / total_ray_contrib;
 
-    PSOutput output;
-    if (param.ao_mode == 4) { // ao only
+    AoOutput output;
+    if (param.ao_mode == Moer::EAoMode::RTAO_AO_ONLY) {
         output.color_with_ao = float4(ao, ao, ao, 1.0);
     } else {
         output.color_with_ao = float4(color * ao, 1.0);
     }
     output.ambient_only = ao;
+    
+    return output;
+}
+
+
+AoOutput main(float2 uv : TEXCOORD0) {
+    AoOutput output = get_rtao(uv);
+
+    output.camera_motion_vector = GetCameraMotionVector();
+
     return output;
 }

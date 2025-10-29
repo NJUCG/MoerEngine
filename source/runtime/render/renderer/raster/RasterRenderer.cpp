@@ -11,7 +11,6 @@
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
-#include "RtaoPass.h"
 #include "ShadowDepthPass.h"
 #include "SsrPass.h"
 #include "UpsamplePass.h"
@@ -46,7 +45,6 @@ RasterRenderer::RasterRenderer(
     geometry_pass     = MakeUnique<GeometryPass>(raster_context);
     lighting_pass     = MakeUnique<LightingPass>(raster_context);
     ao_pass           = MakeUnique<AoPass>(raster_context);
-    rtao_pass         = MakeUnique<RtaoPass>(raster_context);
     ssr_pass          = MakeUnique<SsrPass>(raster_context);
     aa_pass           = MakeUnique<AaPass>(raster_context);
     upsample_pass     = MakeUnique<UpsamplePass>(raster_context);
@@ -60,7 +58,7 @@ RasterRenderer::RasterRenderer(
         raster_context.textures.depth_linear_sampler.tex->CastToTextureRef(),
         // 下面这个color，需要传入lighting_output，而非ao_output，因为模型的输入需要不带ao的color
         raster_context.textures.lighting_output.tex,
-        raster_context.textures.motion_vector.tex,
+        raster_context.textures.camera_motion_vector.tex,
         raster_context.textures.ao_output_ambient_only_1.tex
     );
 #endif
@@ -176,26 +174,12 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // Post Process Passes
         // - Ambient Occlusion
-        TextureWithHandle ao_only = raster_context.textures.ao_output_ambient_only;
-#if WITH_CUDA
-        static uint ao_only_idx = 0;
-        ao_only_idx ^= 1;
-        if (ao_only_idx) {
-            ao_only = raster_context.textures.ao_output_ambient_only_1;
-        }
-#endif
-        uint processing_image = [&]() {
-            if (raster_config.ao_mode == EAoMode::RTAO || raster_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
-                return rtao_pass
-                    ->Process(raster_context, raster_config, camera, time, lighting_pass_output, ao_only)
-                    .ao_output;
-            } else {
-                return ao_pass->Process(raster_context, raster_config, lighting_pass_output);
-            }
-        }();
+        auto ao_result = ao_pass->Process(raster_context, raster_config, camera, time, lighting_pass_output);
+        uint processing_image = ao_result.ao_with_color;
+        uint ao_only_idx      = ao_result.ao_only_idx;
 
-#if SUPER_RESOLUTION_ENABLED
         // - Upsample Pass
+#if SUPER_RESOLUTION_ENABLED
         processing_image = upsample_pass->Process(raster_context, raster_config, processing_image);
         /*
         processing_image = [&]() -> uint {

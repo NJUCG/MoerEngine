@@ -10,6 +10,9 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 [[vk::push_constant]] ConstantBuffer<Moer::AoPipelineBindlessParam> param;
 
+// 定义了AoOutput、CameraMotionVector等函数
+#include "AoCommon.hlsl"
+
 static const float  Epsilon        = 0.0001; // same with PBRMaterialFrag.hlsl
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
 
@@ -38,30 +41,45 @@ float ssao_games202(float2 uv) {
         float3 len      = length(vec);
         float3 norm_vec = vec / len;
 
-        ao += max(0.0, dot(normal, norm_vec) - 0.05) *
-              smoothstep(param.ssao_max_distance, param.ssao_max_distance * 0.5, len);
+        ao += max(0.0, dot(normal, norm_vec) - 0.05) * smoothstep(param.ssao_max_distance, param.ssao_max_distance * 0.5, len);
     }
     ao = clamp(1.0 - ao / param.ssao_sample_count * param.ssao_intensity, 0.0, 1.0);
 
     return ao;
 }
 
-float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
+float get_ao(float2 uv) {
+    return ssao_games202(uv);
+}
 
+AoOutput main(float2 uv : TEXCOORD0) {
+    AoOutput output;
+    
     float3 color = TextureHandle(param.input_image).Sample2D<float4>(uv).rgb;
 
+
     if (param.ao_mode == Moer::EAoMode::NONE) {
-        return float4(color, 1.0);
+        output.color_with_ao = float4(color, 1.0);
+        output.ambient_only  = 1.0;
 
     } else if (param.ao_mode == Moer::EAoMode::SSAO) {
-        float3 ssao_result = ssao_games202(uv);
-        return float4(ssao_result * color, 1.0);
+        float ao = get_ao(uv);
+
+        output.color_with_ao = float4(color * ao, 1.0);
+        output.ambient_only  = ao;
 
     } else if (param.ao_mode == Moer::EAoMode::SSAO_AO_ONLY) {
-        float3 ssao_result = ssao_games202(uv);
-        return float4(ssao_result, 1.0);
+        float ao = get_ao(uv);
+
+        output.color_with_ao = float4(ao, ao, ao, 1.0);
+        output.ambient_only  = ao;
 
     } else {
-        return float4(ABNORMAL_COLOR, 1.0);
+        output.color_with_ao = float4(ABNORMAL_COLOR, 1.0);
+        output.ambient_only  = 1.0;
     }
+
+    output.camera_motion_vector = GetCameraMotionVector();
+
+    return output;
 }

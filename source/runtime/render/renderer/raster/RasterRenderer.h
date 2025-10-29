@@ -10,7 +10,6 @@ class ShadowDepthPass;
 class GeometryPass;
 class LightingPass;
 class AoPass;
-class RtaoPass;
 class SsrPass;
 class AaPass;
 class UpsamplePass;
@@ -65,7 +64,6 @@ private:
     UniquePtr<GeometryPass>    geometry_pass;
     UniquePtr<LightingPass>    lighting_pass;
     UniquePtr<AoPass>          ao_pass;
-    UniquePtr<RtaoPass>        rtao_pass;
     UniquePtr<SsrPass>         ssr_pass;
     UniquePtr<AaPass>          aa_pass;
     UniquePtr<UpsamplePass>    upsample_pass;
