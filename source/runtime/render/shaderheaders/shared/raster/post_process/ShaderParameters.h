@@ -7,9 +7,10 @@
 #ifdef __cplusplus
 #define CONST constexpr
 #include "misc/Traits.h"
-
+#include "shaderheaders/shared/raster/ShaderParametersUtils.h"
 namespace Moer::Render {
 #else
+#include "shared/raster/ShaderParametersUtils.h"
 #define CONST const
 namespace Moer {
 #endif
@@ -108,3 +109,9 @@ struct FxaaPipelineBindlessParam {
 }
 #endif
 #undef CONST
+
+//Enum Definitions Begin
+namespace Moer {
+EnumParam(EAaMode, NONE, FXAA_SIMPLIFIED, FXAA_QUALITY, SMAA_1X, SMAA_T2X);
+EnumParam(EAoMode, NONE, SSAO, SSAO_AO_ONLY, RTAO, RTAO_AO_ONLY, LINEARIZED_DEPTH_DIV_10);
+} // namespace Moer

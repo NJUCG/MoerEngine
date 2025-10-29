@@ -106,17 +106,14 @@ void RasterUI::ShowConfig() {
     }
 
     if (ImGui::TreeNode(
-            "Ambient Occlusion",
-            "Ambient Occlusion: [%s]",
-            s_ao_mode_name_array[static_cast<uint32>(m_config.ao_mode)].c_str()
+            "Ambient Occlusion", "Ambient Occlusion: [%s]", s_ao_mode_name_map.at(m_config.ao_mode).c_str()
         )) {
 
-        assert(s_ao_mode_name_array.size() == static_cast<uint32>(EAoMode::NUM));
-        for (uint i = 0; i < s_ao_mode_name_array.size(); i++) {
-            if (ImGui::Selectable(
-                    s_ao_mode_name_array[i].c_str(), m_config.ao_mode == static_cast<EAoMode>(i)
-                )) {
-                m_config.ao_mode = static_cast<EAoMode>(i);
+        assert(s_ao_mode_name_map.size() == static_cast<uint32>(EAoMode::NUM));
+        for (uint i = 0; i < s_ao_mode_name_map.size(); i++) {
+            EAoMode cur_enum = static_cast<EAoMode>(i);
+            if (ImGui::Selectable(s_ao_mode_name_map.at(cur_enum).c_str(), m_config.ao_mode == cur_enum)) {
+                m_config.ao_mode = cur_enum;
             }
             draw_border();
         }
@@ -204,17 +201,14 @@ void RasterUI::ShowConfig() {
 #endif
 
     if (ImGui::TreeNode(
-            "Anti-Aliasing",
-            "Anti-Aliasing: [%s]",
-            s_aa_mode_name_array[static_cast<uint32>(m_config.aa_mode)].c_str()
+            "Anti-Aliasing", "Anti-Aliasing: [%s]", s_aa_mode_name_map.at(m_config.aa_mode).c_str()
         )) {
 
-        assert(s_aa_mode_name_array.size() == static_cast<uint32>(EAaMode::NUM));
-        for (uint i = 0; i < s_aa_mode_name_array.size(); i++) {
-            if (ImGui::Selectable(
-                    s_aa_mode_name_array[i].c_str(), m_config.aa_mode == static_cast<EAaMode>(i)
-                )) {
-                m_config.aa_mode = static_cast<EAaMode>(i);
+        assert(s_aa_mode_name_map.size() == static_cast<uint32>(EAaMode::NUM));
+        for (uint i = 0; i < s_aa_mode_name_map.size(); i++) {
+            EAaMode cur_enum = static_cast<EAaMode>(i);
+            if (ImGui::Selectable(s_aa_mode_name_map.at(cur_enum).c_str(), m_config.aa_mode == cur_enum)) {
+                m_config.aa_mode = cur_enum;
             }
             draw_border();
         }
