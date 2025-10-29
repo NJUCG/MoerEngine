@@ -17,24 +17,33 @@ namespace Moer {
 
 // MARK: Main Content Begin
 
+struct CameraMotionVectorData {
+    float4x4 world2clip;
+    float4x4 world2clip_prev;
+};
+
 struct AoPipelineBindlessParam {
     float2 inv_resolution;
     float  ssao_intensity;
     float  ssao_max_distance;
-    uint   ssao_sample_count;
-    uint   ssao_radius;
-    uint   ao_mode;
-    uint   input_image;
-    uint   normal_tex;
-    uint   position_tex;
-    uint   noise_tex; // linear & repeat sampler
+
+    uint ssao_sample_count;
+    uint ssao_radius;
+    uint ao_mode;
+    uint input_image;
+
+    uint normal_tex;
+    uint position_tex;
+    uint depth_tex;
+    uint noise_tex; // linear & repeat sampler
+
+    uint camera_mv_data_handle; // for camera motion vector
 };
 
 struct RtaoPipelineBindlessParam {
     float4x4 clip2world;
-
-    float3 camera_pos;
-    uint   frame_idx;
+    float3   camera_pos;
+    uint     frame_idx;
 
     float2 resolution;
     float2 inv_resolution;
@@ -42,12 +51,15 @@ struct RtaoPipelineBindlessParam {
     uint input_image;
     uint normal_tex;
     uint position_tex;
-    uint ao_mode;
+    uint depth_tex;
 
+    uint  ao_mode;
     uint  sample_mode;
     uint  spp;
     float ray_trace_distance;
     float intensity;
+
+    uint camera_mv_data_handle; // for camera motion vector
 };
 
 struct SsrPipelineBindlessParam {
@@ -102,10 +114,10 @@ struct FxaaPipelineBindlessParam {
 };
 
 struct UpsamplePipelineBindlessParam {
-    uint    input_image;
-    uint    outSize;
-    uint    inSize;
-    uint    upsample_mode;
+    uint input_image;
+    uint outSize;
+    uint inSize;
+    uint upsample_mode;
 };
 
 // MARK: Main Content End

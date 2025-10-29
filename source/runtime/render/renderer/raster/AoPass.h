@@ -33,6 +33,8 @@ public:
 /**
  * MARK: AO Pass
  * 
+ * AO Pass will calculate CameraMotionVector simultaneously.
+ * 
  * TODO: SSDO Support
  */
 class AoPass {
@@ -65,6 +67,30 @@ public:
                             .Vertex("utils/FullScreenQuad.hlsl")
                             .Pixel("raster/post_process/Rtao.hlsl")
                             .Build<RtaoPipeline>(std::move(create_pso_func()));
+
+        CreateMotionVectorData(context);
+    }
+
+    // 创建CMV数据
+    void CreateMotionVectorData(RasterContext& context) {
+        camera_mv_data_in_gpu.buf = context.device.CreateBuffer<byte>(
+            "Raster::CameraMotionVectorData",
+            sizeof(CameraMotionVectorData),
+            EBufferUsageFlags::UNORDERED_ACCESS
+        );
+
+        camera_mv_data_in_gpu.handle = context.bdls->AllocateBuffer(camera_mv_data_in_gpu.buf->GetView());
+    }
+
+    // 更新CMV数据
+    void UpdateMotionVectorData(RasterContext& context, const CameraRef& camera) {
+        camera_mv_data_in_cpu.world2clip_prev = camera_mv_data_in_cpu.world2clip;
+        camera_mv_data_in_cpu.world2clip      = Transpose(camera->GetViewProjectionMatrix());
+
+        context.cmd_list.CopyFrom(
+            std::span<byte>((byte*)&camera_mv_data_in_cpu, sizeof(CameraMotionVectorData)),
+            camera_mv_data_in_gpu.buf->GetView()
+        );
     }
 
     AoPassOutput Process(
@@ -114,7 +140,11 @@ public:
         param.input_image       = input_image;
         param.normal_tex        = context.textures.normal.handle;
         param.position_tex      = context.textures.position.handle;
+        param.depth_tex         = context.textures.depth_nearest_sampler.handle;
         param.noise_tex         = context.noise_tex.handle;
+
+        UpdateMotionVectorData(context, camera);
+        param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;
 
         context.cmd_list.Gfx(ao_pipeline, context.bdls, param)
             .Draw(
@@ -135,6 +165,7 @@ public:
         uint                input_image,
         TextureWithHandle   ao_only
     ) {
+
         RtaoPipelineBindlessParam param;
 
         param.clip2world         = Transpose(camera->GetViewProjectionMatrixInv());
@@ -145,11 +176,15 @@ public:
         param.input_image        = input_image;
         param.normal_tex         = context.textures.normal.handle;
         param.position_tex       = context.textures.position.handle;
+        param.depth_tex          = context.textures.depth_nearest_sampler.handle;
         param.ao_mode            = static_cast<uint>(ui_config.ao_mode);
         param.sample_mode        = static_cast<uint>(ui_config.rtao_sample_mode);
         param.spp                = ui_config.rtao_spp;
         param.ray_trace_distance = ui_config.rtao_ray_trace_distance;
         param.intensity          = ui_config.rtao_intensity;
+
+        UpdateMotionVectorData(context, camera);
+        param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;
 
         context.cmd_list.Gfx(rtao_pipeline, context.rt_scene->GetTlas(), context.bdls, param)
             .Draw(
@@ -165,6 +200,10 @@ public:
 private:
     AoPipeline   ao_pipeline;
     RtaoPipeline rtao_pipeline;
+
+    CameraMotionVectorData camera_mv_data_in_cpu; // mv: motion vector
+    BufferWithHandle       camera_mv_data_in_gpu; // mv: motion vector
+    Matrix4x4f             world2clip_prev{};
 };
 
 } // namespace Moer::Render::Raster

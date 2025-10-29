@@ -13,7 +13,6 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 // 定义了AoOutput、CameraMotionVector等函数
 #include "AoCommon.hlsl"
 
-static const float  Epsilon        = 0.0001; // same with PBRMaterialFrag.hlsl
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
 
 // uv in [0, 1]; output in [0, 1]
@@ -79,7 +78,9 @@ AoOutput main(float2 uv : TEXCOORD0) {
         output.ambient_only  = 1.0;
     }
 
-    output.camera_motion_vector = GetCameraMotionVector();
+    output.camera_motion_vector = GetCameraMotionVector(uv);
+
+    output.camera_motion_vector = output.camera_motion_vector * 0.5f + output.color_with_ao.xy * 0.5f;
 
     return output;
 }

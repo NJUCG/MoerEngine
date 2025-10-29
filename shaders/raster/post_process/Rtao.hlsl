@@ -17,8 +17,6 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 // 定义了AoOutput、CameraMotionVector等函数
 #include "AoCommon.hlsl"
 
-static const float Epsilon = 0.0001; // TODO: same with PBRMaterialFrag.hlsl
-
 // TODO: 代码整理
 namespace Moer {
 typedef Math::Rng::Hash RandomState;
@@ -165,7 +163,7 @@ AoOutput get_rtao(float2 uv) {
 AoOutput main(float2 uv : TEXCOORD0) {
     AoOutput output = get_rtao(uv);
 
-    output.camera_motion_vector = GetCameraMotionVector();
+    output.camera_motion_vector = GetCameraMotionVector(uv);
 
     return output;
 }
