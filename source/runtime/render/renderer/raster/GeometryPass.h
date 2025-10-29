@@ -96,14 +96,15 @@ public:
         }
 
         // Draw
+        auto rect2d = context.textures.position.GetRect2D();
+        assert(
+            rect2d == context.textures.vbuffer.GetRect2D() && rect2d == context.textures.normal.GetRect2D() &&
+            rect2d == context.textures.tangent.GetRect2D() && rect2d == context.textures.uv.GetRect2D()
+        );
         context.cmd_list
             .Gfx(
                 "Geometry Pass (MultiPass)",
-#if SUPER_RESOLUTION_ENABLED
-                Rect2D(0, 0, context.resolution->x / 2, context.resolution->y / 2),
-#else
-                Rect2D(0, 0, context.resolution->x, context.resolution->y),
-#endif
+                rect2d,
                 DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture()),
                 ColorAttachment(context.textures.vbuffer.tex),
                 ColorAttachment(context.textures.normal.tex),

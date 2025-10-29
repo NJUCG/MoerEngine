@@ -16,7 +16,7 @@
 
 namespace Moer::Render::Raster {
 
-class UpsamplePipeline : public RasterPipeline{
+class UpsamplePipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(UpsamplePipeline);
     DEFINE_SHADER_CONSTANT_STRUCT(UpsamplePipelineBindlessParam, param);
@@ -24,50 +24,50 @@ public:
     DEFINE_SHADER_ARGS(bdls, param);
 };
 
-class UpsamplePass{
+class UpsamplePass {
 public:
     UpsamplePass(RasterContext& context) {
         GfxPsoCreateInfo pso_info(
             RHIRasterizeInfo::Preset(),
             {},
-            { RHIColorAttachmentInfo::Preset(context.textures.upsample_output.tex->GetFormat()) }
+            {RHIColorAttachmentInfo::Preset(context.textures.upsample_output.tex->GetFormat())}
         );
 
         upsample_pipeline = context.manager.Raster()
-            .Vertex("utils/FullScreenQuad.hlsl")
-            .Pixel("raster/post_process/Upsample.hlsl")
-            .Build<UpsamplePipeline>(std::move(pso_info));
+                                .Vertex("utils/FullScreenQuad.hlsl")
+                                .Pixel("raster/post_process/Upsample.hlsl")
+                                .Build<UpsamplePipeline>(std::move(pso_info));
     }
 
-     uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image)
-    {
+    uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image) {
         UpsamplePipelineBindlessParam param;
 
         //param.low_res_tex = low_res_tex;
-        param.upsample_mode          = static_cast<uint32>(ui_config.upsample_mode);
-        param.outSize                = ui_config.outSize_x;
-        param.inSize                 = ui_config.inSize_x;
-        param.input_image            = input_image;
+        param.upsample_mode = static_cast<uint32>(ui_config.upsample_mode);
+        param.outSize       = ui_config.outSize_x;
+        param.inSize        = ui_config.inSize_x;
+        param.input_image   = input_image;
         //param.high_res_depth = context.textures.position.handle; // 可用 position/深度图作为引导
         //param.inv_low_res = float2(1.0f / ui_config.render_res.x, 1.0f / ui_config.render_res.y);
         //param.inv_high_res = float2(1.0f / ui_config.display_res.x, 1.0f / ui_config.display_res.y);
         //param.scale_ratio = float2(
-            //ui_config.display_res.x / ui_config.render_res.x,
-            //ui_config.display_res.y / ui_config.render_res.y
+        //ui_config.display_res.x / ui_config.render_res.x,
+        //ui_config.display_res.y / ui_config.render_res.y
         //);
         //param.sharpness = ui_config.upsample_sharpness;
 
         context.cmd_list.Gfx(upsample_pipeline, context.bdls, param)
             .Draw(
                 "Upsample Pass",
-                Rect2D(0, 0, context.resolution->x, context.resolution->y),
+                context.textures.upsample_output.GetRect2D(),
                 RasterTool::GetFullScreenDrawDatas(),
                 ColorAttachment(context.textures.upsample_output.tex)
             );
 
         return context.textures.upsample_output.handle;
     }
+
 private:
     UpsamplePipeline upsample_pipeline;
 };
-}
+} // namespace Moer::Render::Raster

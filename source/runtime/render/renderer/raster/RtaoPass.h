@@ -61,8 +61,8 @@ public:
         param.clip2world         = Transpose(camera->GetViewProjectionMatrixInv());
         param.camera_pos         = camera->GetPosition();
         param.frame_idx          = frame_idx;
-        param.resolution         = float2(*context.resolution);
-        param.inv_resolution     = float2(1.0) / float2(*context.resolution);
+        param.resolution         = float2(context.textures.ao_output.GetSize());
+        param.inv_resolution     = float2(1.0) / float2(context.textures.ao_output.GetSize());
         param.input_image        = input_image;
         param.normal_tex         = context.textures.normal.handle;
         param.position_tex       = context.textures.position.handle;
@@ -75,11 +75,7 @@ public:
         context.cmd_list.Gfx(rtao_pipeline, context.rt_scene->GetTlas(), context.bdls, param)
             .Draw(
                 "RTAO Pass",
-#if SUPER_RESOLUTION_ENABLED
-                Rect2D(0, 0, context.resolution->x / 2 , context.resolution->y / 2),
-#else
-                Rect2D(0, 0, context.resolution->x, context.resolution->y),
-#endif          
+                context.textures.ao_output.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.ao_output.tex),
                 ColorAttachment(ao_only.tex)

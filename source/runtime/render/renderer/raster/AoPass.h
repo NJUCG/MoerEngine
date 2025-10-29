@@ -39,7 +39,7 @@ public:
 
     uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image) {
         AoPipelineBindlessParam param;
-        param.inv_resolution    = float2(1.0f) / float2(*context.resolution);
+        param.inv_resolution    = float2(1.0f) / float2(context.textures.ao_output.GetSize());
         param.ssao_intensity    = ui_config.ssao_intensity;
         param.ssao_max_distance = ui_config.ssao_max_distance;
         param.ssao_sample_count = ui_config.ssao_spp;
@@ -53,11 +53,7 @@ public:
         context.cmd_list.Gfx(ao_pipeline, context.bdls, param)
             .Draw(
                 "AO Pass",
-#if SUPER_RESOLUTION_ENABLED
-                Rect2D(0, 0, context.resolution->x / 2, context.resolution->y /2),
-#else
-                Rect2D(0, 0, context.resolution->x, context.resolution->y),
-#endif
+                context.textures.ao_output.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.ao_output.tex)
             );

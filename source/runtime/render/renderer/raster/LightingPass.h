@@ -108,11 +108,7 @@ public:
             context.cmd_list.Gfx(pbr_pipeline, context.bdls, material_param)
                 .Draw(
                     "Lighting Pass",
-#if SUPER_RESOLUTION_ENABLED
-                    Rect2D(0, 0, context.resolution->x / 2, context.resolution->y /2),
-#else
-                    Rect2D(0, 0, context.resolution->x, context.resolution->y),
-#endif
+                    context.textures.lighting_output.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(context.textures.lighting_output.tex)
                 );

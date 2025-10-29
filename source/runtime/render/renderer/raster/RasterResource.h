@@ -15,6 +15,7 @@
 namespace Moer::Render::Raster {
 
 struct RasterContext {
+public:
     // MARK: Only hold reference
     // 需要确保这些引用在整个生命周期内都是有效的
     RenderDevice&    device;
@@ -23,7 +24,19 @@ struct RasterContext {
     BindlessArrayRef bdls;
     CommandList&     cmd_list;
     Scene&           scene;
-    SharedPtr<uint2> resolution; // Be careful, resolution is also a reference
+
+    // 超分Pass前的分辨率
+    uint2 GetResolutionBeforeSR() {
+#if SUPER_RESOLUTION_ENABLED
+        return uint2(resolution->x / 2.0f, resolution->y / 2.0f);
+#else
+        return uint2(resolution->x, resolution->y);
+#endif
+    }
+    // 超分Pass后的分辨率（原始分辨率）
+    uint2 GetResolutionOriginal() {
+        return uint2(resolution->x, resolution->y);
+    }
 
     // MARK: Hold ownership
     RasterTextures    textures;
@@ -44,6 +57,10 @@ struct RasterContext {
     // RayTracing
     RaytracingSceneRef rt_scene;
 
+private:
+    SharedPtr<uint2> resolution; // Be careful, resolution is also a reference
+
+public:
     // Constructor
     RasterContext(
         RenderDevice&    device,
