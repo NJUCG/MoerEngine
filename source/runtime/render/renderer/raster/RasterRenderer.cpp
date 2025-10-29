@@ -14,6 +14,7 @@
 #include "RtaoPass.h"
 #include "ShadowDepthPass.h"
 #include "SsrPass.h"
+#include "UpsamplePass.h"
 
 #if WITH_CUDA
 #include "CudaPass.h"
@@ -48,6 +49,7 @@ RasterRenderer::RasterRenderer(
     rtao_pass         = MakeUnique<RtaoPass>(raster_context);
     ssr_pass          = MakeUnique<SsrPass>(raster_context);
     aa_pass           = MakeUnique<AaPass>(raster_context);
+    upsample_pass     = MakeUnique<UpsamplePass>(raster_context);
 
 #if WITH_CUDA
     // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
@@ -191,6 +193,22 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
                 return ao_pass->Process(raster_context, raster_config, lighting_pass_output);
             }
         }();
+
+#if SUPER_RESOLUTION_ENABLED
+        // - Upsample Pass
+        processing_image = upsample_pass->Process(raster_context, raster_config, processing_image);
+        /*
+        processing_image = [&]() -> uint {
+            if (raster_config.upsample_mode == EUpsampleMode::BILINEAR) {
+                //return processing_image;
+                return upsample_pass->Process(raster_context, raster_config, processing_image);
+            }
+            else return processing_image;
+            
+            //return processing_image;
+        }();
+        */
+#endif
 
         // - CUDA Pass
 #if WITH_CUDA

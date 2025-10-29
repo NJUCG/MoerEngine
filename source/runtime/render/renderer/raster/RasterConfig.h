@@ -40,6 +40,18 @@ static const UnorderedMap<EAoMode, std::string> s_ao_mode_name_map = {
     {EAoMode::LINEARIZED_DEPTH_DIV_10, "Linear. Depth / 10.0"},
 };
 
+enum class EUpsampleMode {
+    None = 0,
+    BILINEAR,
+    DEPTH
+};
+
+static const Array<std::string> s_upsample_mode_name_array = {
+    "None",
+    "BILINEAR",
+    "DEPTH",
+};
+
 enum class ERtaoSampleMode {
     UNIFORM = 0,
     COSINE_WEIGHTED,
@@ -120,6 +132,12 @@ struct RasterConfig {
     // MARK: Others
     std::string default_selected_frame_buffer_name = "aa_output";
     uint        selected_frame_buffer_index        = 0;
+
+    // MARK: Upsample Process
+    EUpsampleMode upsample_mode = EUpsampleMode::None;
+    int           outSize_x     = 1080;
+    int           outSize_y     = 1920;
+    int           inSize_x      = 540;
 };
 
 } // namespace Moer

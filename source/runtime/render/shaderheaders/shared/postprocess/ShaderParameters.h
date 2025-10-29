@@ -57,6 +57,7 @@ struct TAAParams {
     float inv_pqc;
 };
 
+
 #ifdef __cplusplus
 }
 #else

@@ -75,7 +75,11 @@ public:
         context.cmd_list.Gfx(rtao_pipeline, context.rt_scene->GetTlas(), context.bdls, param)
             .Draw(
                 "RTAO Pass",
+#if SUPER_RESOLUTION_ENABLED
+                Rect2D(0, 0, context.resolution->x / 2 , context.resolution->y / 2),
+#else
                 Rect2D(0, 0, context.resolution->x, context.resolution->y),
+#endif          
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.ao_output.tex),
                 ColorAttachment(ao_only.tex)
