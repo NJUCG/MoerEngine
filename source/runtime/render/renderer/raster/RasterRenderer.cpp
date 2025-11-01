@@ -178,6 +178,23 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         uint processing_image = ao_result.ao_with_color;
         uint ao_only_idx      = ao_result.ao_only_idx;
 
+        
+        // - CUDA Pass
+#if WITH_CUDA
+        // processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
+
+        if (raster_config.ai_is_cuda_enabled) {
+            processing_image =
+                tensor_rt_pass->Process(raster_context, raster_config, lighting_pass_output, ao_only_idx);
+        }
+#endif
+
+        // - Screen Space Reflection
+        processing_image = ssr_pass->Process(raster_context, raster_config, camera, processing_image);
+
+        // - Anti-aliasing
+        processing_image = aa_pass->Process(raster_context, raster_config, camera, processing_image);
+
         // - Upsample Pass
 #if SUPER_RESOLUTION_ENABLED
         processing_image = upsample_pass->Process(raster_context, raster_config, processing_image);
@@ -194,21 +211,6 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         */
 #endif
 
-        // - CUDA Pass
-#if WITH_CUDA
-        // processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
-
-        if (raster_config.ai_is_cuda_enabled) {
-            processing_image =
-                tensor_rt_pass->Process(raster_context, raster_config, lighting_pass_output, ao_only_idx);
-        }
-#endif
-
-        // - Screen Space Reflection
-        processing_image = ssr_pass->Process(raster_context, raster_config, camera, processing_image);
-
-        // - Anti-aliasing
-        processing_image = aa_pass->Process(raster_context, raster_config, camera, processing_image);
 
         if (hooks.on_ui_combine_pass) {
             default_output_texture = hooks.on_ui_combine_pass(
