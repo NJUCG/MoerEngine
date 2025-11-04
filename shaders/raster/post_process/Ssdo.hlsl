@@ -1,0 +1,297 @@
+#include "framework/Bindless.hlsl"
+#include "framework/Common.hlsl"
+BINDLESS_BINDINGS(3, 2, 4, 5)
+
+#include "shared/raster/post_process/ShaderParameters.h"
+
+[[vk::push_constant]] ConstantBuffer<Moer::SsdoPipelineBindlessParam> param;
+
+#include "AoCommon.hlsl"
+
+static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
+
+// uv in [0, 1]; output in [0, 1]
+// float2 random_2to2(float2 uv) {
+//     return TextureHandle(param.noise_tex).Sample2D<float4>(uv).rg;
+// }
+
+// 一个简单的 hash 函数，将一个 2D 向量转换为一个 [0, 1] 范围的伪随机浮点数
+float random_1to1(float2 seed) {
+    // 使用 sin 和一个大数的小数部分来产生伪随机性
+    return frac(sin(dot(seed, float2(12.9898, 78.233))) * 43758.5453123);
+}
+
+float2 random_2to2(float2 seed) {
+    return float2(
+        // 第一个随机数 (x分量)
+        frac(sin(dot(seed, float2(12.9898, 78.233))) * 43758.5453123),
+        // 第二个随机数 (y分量)
+        frac(sin(dot(seed, float2(45.123, 98.456))) * 43758.5453123)
+    );
+}
+
+//返回一个随机的半球方向，符合余弦加权分布，但向量长度永远为1
+float3 SampleHemisphere_Cosine(float3 N, float2 randomValues) {
+    // randomValues 是两个 [0, 1] 的随机数
+    float phi      = 2.0 * PI * randomValues.x;
+    float cosTheta = sqrt(1.0 - randomValues.y);
+    float sinTheta = sqrt(randomValues.y);
+
+    float3 H = float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+
+    float3   up        = abs(N.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3   tangent   = normalize(cross(up, N));
+    float3   bitangent = cross(N, tangent);
+    float3x3 TBN       = float3x3(tangent, bitangent, N);
+
+    // 将在切线空间生成的样本转换到世界/观察空间
+    return mul(TBN, H);
+}
+
+float3 apply_view_projection(float3 position) {
+    float4 p = mul(param.view_projection_matrix, float4(position, 1.0));
+    p /= p.w;
+    return float3(p.x * 0.5 + 0.5, -p.y * 0.5 + 0.5, p.z);
+}
+
+bool uv_valid(float2 uv) {
+    return uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
+}
+
+float GetDepthFromWorldPos(float3 worldPos) {
+    float4 clipPos = mul(param.view_projection_matrix, float4(worldPos, 1.0));
+    return clipPos.z / clipPos.w;
+}
+
+float3 GetVplIndirectLight(
+    float3 vpl_pos,
+    float3 vpl_normal,
+    float3 shading_pos,
+    float3 shading_normal,
+    float3 pixel_color
+) {
+    float3 light_dir    = normalize(vpl_pos - shading_pos);
+    float  NdotL        = max(dot(shading_normal, light_dir), 0.0);
+    float  VPL_distance = length(vpl_pos - shading_pos);
+    float  attenuation  = 1.0 / (VPL_distance * VPL_distance + 0.001); // 避免除零
+
+    // 简单的漫反射间接光
+    float3 indirect_light = NdotL * attenuation * pixel_color;
+
+    return indirect_light;
+}
+
+float3 GetVplContribution(float2 vpl_uv, float2 shading_uv) {
+    float3 vpl_pos = TextureHandle(param.position_tex).Sample2D<float3>(vpl_uv);
+    float3 vpl_normal =
+        normalize(Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(vpl_uv)));
+    float3 shading_pos = TextureHandle(param.position_tex).Sample2D<float3>(shading_uv);
+    float3 shading_normal =
+        normalize(Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(shading_uv)));
+    float3 pixel_color = TextureHandle(param.input_image).Sample2D<float3>(vpl_uv);
+    return GetVplIndirectLight(vpl_pos, vpl_normal, shading_pos, shading_normal, pixel_color);
+}
+
+// float3 ssdo_indirect(float2 uv) {
+//     float3 normal      = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
+//     float3 position    = TextureHandle(param.position_tex).Sample2D<float3>(uv);
+//     float  originDepth = TextureHandle(param.depth_tex).Sample2D<float>(uv).x;
+
+//     float2 sampleNoiseUVOffset = param.ssdo_radius * param.inv_resolution;
+
+//     float3 ssdo_indirect_color = float3(0.0, 0.0, 0.0);
+
+//     for (uint i = 0; i < param.ssdo_sample_count; i++) {
+//         float2 offset               = random_2to2(uv + 0.093 * float2(i, i)) * 2.0 - 1.0;
+//         float3 hemisphereSampleVec3 = SampleHemisphere_Cosine(normal, uv + offset * sampleNoiseUVOffset);
+//         float  sampleScale          = ((float)i + 0.5) / ((float)param.ssdo_sample_count);
+//         sampleScale                 = sampleScale * sampleScale; //平方分布，更集中在近处
+
+//         float3 sampleWorldPos     = position + hemisphereSampleVec3 * sampleScale * param.ssdo_radius;
+//         float3 sampleUVD          = apply_view_projection(sampleWorldPos);
+//         float  sample_pixel_depth = TextureHandle(param.depth_tex).Sample2D<float>(sampleUVD.xy).x;
+
+//         if (!uv_valid(sampleUVD.xy)) {
+//             continue;
+//         }
+
+//         if (sampleUVD.z > sample_pixel_depth + 0.01) { // 有遮挡
+//             //创建VPL
+//             float3 vpl_pos    = TextureHandle(param.position_tex).Sample2D<float3>(sampleUVD.xy);
+//             float3 vpl_normal = normalize(
+//                 Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(sampleUVD.xy))
+//             );
+//             float3 vpl_contribution = GetVplIndirectLight(
+//                 vpl_pos,
+//                 vpl_normal,
+//                 position,
+//                 normal,
+//                 TextureHandle(param.input_image).Sample2D<float3>(sampleUVD.xy)
+//             );
+//             ssdo_indirect_color += vpl_contribution;
+//         }
+//     }
+//     ssdo_indirect_color /= (float)param.ssdo_sample_count;
+
+//     return ssdo_indirect_color;
+// }
+
+// float ssdo_ao_only(float2 uv) {
+//     float3 normal   = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
+//     float3 position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
+
+//     // [FIX 1] 使用平铺的噪声UV来解决“脏屏幕”问题
+//     //float2 noiseUV = (uv * param.resolution) / param.noise_tex_size;
+//     // 从噪声纹理采样一个随机向量，用于旋转采样核心
+//     float3 randomVec = TextureHandle(param.noise_tex).Sample2D<float3>(uv);
+
+//     float occlusion = 0.0;
+
+//     for (uint i = 0; i < param.ssdo_sample_count; i++) {
+//         // [FIX 2.1] 生成半球内的采样向量
+//         // 这里我们使用一个固定的采样核心（例如Hammersley），然后用噪声进行随机旋转
+//         // 为了简化，我们继续用随机函数，但确保每次循环都不同
+//         float2 xi                   = random_2to2(uv + float(i) * 0.1);
+//         float3 hemisphereSampleVec3 = SampleHemisphere_Cosine(normal, xi, randomVec);
+
+//         // 使用抖动的分层采样来计算采样距离
+//         float sampleScale = ((float)i + random_1to1(uv - float(i))) / (float)param.ssdo_sample_count;
+//         sampleScale       = lerp(0.1, 1.0, sampleScale * sampleScale); // 从一个最小距离开始插值
+
+//         float3 sampleWorldPos = position + hemisphereSampleVec3 * sampleScale * param.ssdo_radius;
+//         float3 sampleUVD      = apply_view_projection(sampleWorldPos);
+
+//         if (!uv_valid(sampleUVD.xy)) {
+//             continue;
+//         }
+
+//         float sceneDepth = TextureHandle(param.depth_tex).Sample2D<float>(sampleUVD.xy).x;
+
+//         if (sampleUVD.z > sceneDepth + param.ssdo_depth_bias) {
+//             float dist    = length(sampleWorldPos - position);
+//             float falloff = smoothstep(param.ssdo_max_distance, param.ssdo_max_distance * 0.5, dist);
+//             occlusion += falloff;
+//         }
+//     }
+
+//     if (param.ssdo_sample_count > 0) {
+//         occlusion /= (float)param.ssdo_sample_count;
+//     }
+
+//     // 最终的AO因子 = 1.0 - 总遮挡 * 强度
+//     return clamp(1.0 - occlusion * param.ssdo_intensity, 0.0, 1.0);
+// }
+
+// float3 ssdo_indirect(float2 uv) {
+//     float3 normal      = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
+//     float3 position    = TextureHandle(param.position_tex).Sample2D<float3>(uv);
+//     float  originDepth = TextureHandle(param.depth_tex).Sample2D<float>(uv).x;
+
+//     float2 sampleNoiseUVOffset = param.ssdo_radius * param.inv_resolution;
+
+//     float3 ssdo_indirect_color = float3(0.0, 0.0, 0.0);
+
+//     for (uint i = 0; i < param.ssdo_sample_count; i++) {
+//         float2 offset               = random_2to2(uv + 0.093 * float2(i, i)) * 2.0 - 1.0;
+//         float3 hemisphereSampleVec3 = SampleHemisphere_Cosine(normal, uv + offset * sampleNoiseUVOffset);
+//         float  sampleScale          = ((float)i + 0.5) / ((float)param.ssdo_sample_count);
+//         sampleScale                 = sampleScale * sampleScale; //平方分布，更集中在近处
+
+//         float3 sampleWorldPos     = position + hemisphereSampleVec3 * sampleScale * param.ssdo_radius;
+//         float3 sampleUVD          = apply_view_projection(sampleWorldPos);
+//         float  sample_pixel_depth = TextureHandle(param.depth_tex).Sample2D<float>(sampleUVD.xy).x;
+
+//         if (!uv_valid(sampleUVD.xy)) {
+//             continue;
+//         }
+
+//         if (sampleUVD.z > sample_pixel_depth + 0.01) { // 有遮挡
+//             //创建VPL
+//             float3 vpl_pos    = TextureHandle(param.position_tex).Sample2D<float3>(sampleUVD.xy);
+//             float3 vpl_normal = normalize(
+//                 Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(sampleUVD.xy))
+//             );
+//             float3 vpl_contribution = GetVplIndirectLight(
+//                 vpl_pos,
+//                 vpl_normal,
+//                 position,
+//                 normal,
+//                 TextureHandle(param.input_image).Sample2D<float3>(sampleUVD.xy)
+//             );
+//             ssdo_indirect_color += vpl_contribution;
+//         }
+//     }
+//     ssdo_indirect_color /= (float)param.ssdo_sample_count;
+
+//     return ssdo_indirect_color;
+// }
+
+float3 get_ssdo_ao_test(float2 uv) {
+    float3 normal   = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
+    float3 position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
+
+    float  ao   = 0.0;
+    float2 tmp1 = param.ssdo_radius * param.inv_resolution;
+
+    for (uint i = 0; i < param.ssdo_sample_count; i++) {
+        float2 offset          = random_2to2(uv + 0.093 * float2(i, i)) * 2.0 - 1.0;
+        float3 sample_position = TextureHandle(param.position_tex).Sample2D<float4>(uv + offset * tmp1).rgb;
+
+        float3 vec      = sample_position - position;
+        float3 len      = length(vec);
+        float3 norm_vec = vec / len;
+
+        ao += max(0.0, dot(normal, norm_vec) - 0.05) *
+              smoothstep(param.ssdo_max_distance, param.ssdo_max_distance * 0.5, len);
+    }
+    ao = clamp(1.0 - ao / param.ssdo_sample_count * param.ssdo_intensity, 0.0, 1.0);
+
+    return ao;
+}
+
+float3 get_ssdo_indirect_test(float2 uv) {
+    float3 normal   = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
+    float3 position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
+
+    float3 indirect_light = float3(0.0, 0.0, 0.0);
+    float2 tmp1           = param.ssdo_radius * param.inv_resolution;
+
+    for (uint i = 0; i < param.ssdo_sample_count; i++) {
+        float2 offset          = random_2to2(uv + 0.093 * float2(i, i)) * 2.0 - 1.0;
+        float3 sample_position = TextureHandle(param.position_tex).Sample2D<float4>(uv + offset * tmp1).rgb;
+
+        float3 vec      = sample_position - position;
+        float3 len      = length(vec);
+        float3 norm_vec = vec / len;
+
+        float ao_to_add = max(0.0, dot(normal, norm_vec) - 0.05) *
+                          smoothstep(param.ssdo_max_distance, param.ssdo_max_distance * 0.5, len);
+        indirect_light += ao_to_add * GetVplContribution(uv + offset * tmp1, uv);
+    }
+
+    return indirect_light / (float)param.ssdo_sample_count * 0.01;
+}
+
+AoOutput main(float2 uv : TEXCOORD0) {
+    AoOutput output;
+    float3   color = TextureHandle(param.input_image).Sample2D<float3>(uv);
+
+    output.camera_motion_vector = GetCameraMotionVector(uv);
+
+    output.camera_motion_vector = output.camera_motion_vector * 0.5f + output.color_with_ao.xy * 0.5f;
+
+    float ao = get_ssdo_ao_test(uv);
+
+    if (param.ao_mode == Moer::EAoMode::NONE) {
+        output.color_with_ao = float4(color, 1.0);
+        output.ambient_only  = 1.0;
+    } else if (param.ao_mode == Moer::EAoMode::SSDO) {
+        output.ambient_only  = ao;
+        output.color_with_ao = float4(get_ssdo_indirect_test(uv) * ao, 1.0) + float4(ao * color, 1.0);
+    } else if (param.ao_mode == Moer::EAoMode::SSDO_AO_ONLY) {
+        output.ambient_only  = ao;
+        output.color_with_ao = float4(ao, ao, ao, 1.0);
+    }
+
+    return output;
+}

@@ -37,6 +37,8 @@ static const UnorderedMap<EAoMode, std::string> s_ao_mode_name_map = {
     {EAoMode::SSAO_AO_ONLY, "SSAO AO Only"},
     {EAoMode::RTAO, "RTAO"},
     {EAoMode::RTAO_AO_ONLY, "RTAO AO Only"},
+    {EAoMode::SSDO, "SSDO"},
+    {EAoMode::SSDO_AO_ONLY, "SSDO AO Only"},
     {EAoMode::LINEARIZED_DEPTH_DIV_10, "Linear. Depth / 10.0"},
 };
 
@@ -104,6 +106,7 @@ struct RasterConfig {
     float           rtao_intensity          = 1.0f;
     float           rtao_ray_trace_distance = 1.0f;
     int             rtao_spp                = 1;
+    float           ssdo_depth_bias         = 0.01f;
 
     // MARK: SSR
     bool  ssr_is_ssr_enabled             = false;
