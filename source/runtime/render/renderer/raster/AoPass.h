@@ -222,20 +222,21 @@ public:
     ) {
         SsdoPipelineBindlessParam param;
 
-        param.inv_resolution         = float2(1.0f) / float2(context.textures.ao_output.GetSize());
-        param.ssdo_sample_count      = ui_config.ssao_spp;
-        param.ssdo_radius            = ui_config.ssao_sample_radius;
-        param.ssdo_max_distance      = ui_config.ssao_max_distance;
-        param.ssdo_intensity         = ui_config.ssao_intensity;
-        param.normal_tex             = context.textures.normal.handle;
-        param.depth_tex              = context.textures.depth_nearest_sampler.handle;
-        param.position_tex           = context.textures.position.handle;
-        param.noise_tex              = context.noise_tex.handle;
-        param.ao_mode                = static_cast<uint32>(ui_config.ao_mode);
-        param.ssdo_depth_bias        = ui_config.ssdo_depth_bias;
-        param.input_image            = input_image;
-        param.view_projection_matrix = camera->GetViewProjectionMatrix();
-        param.camera_position        = camera->GetPosition();
+        param.inv_resolution          = float2(1.0f) / float2(context.textures.ao_output.GetSize());
+        param.ssdo_sample_count       = ui_config.ssao_spp;
+        param.ssdo_radius             = ui_config.ssdo_sample_radius;
+        param.ssdo_max_distance       = ui_config.ssao_max_distance;
+        param.ssdo_intensity          = ui_config.ssao_intensity;
+        param.ssdo_indirect_intensity = ui_config.ssdo_indirect_intensity;
+        param.normal_tex              = context.textures.normal.handle;
+        param.depth_tex               = context.textures.depth_nearest_sampler.handle;
+        param.position_tex            = context.textures.position.handle;
+        param.noise_tex               = context.noise_tex.handle;
+        param.ao_mode                 = static_cast<uint32>(ui_config.ao_mode);
+        param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
+        param.input_image             = input_image;
+        param.view_projection_matrix  = Transpose(camera->GetViewProjectionMatrix());
+        param.camera_position         = camera->GetPosition();
 
         UpdateMotionVectorData(context, camera);
         param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;

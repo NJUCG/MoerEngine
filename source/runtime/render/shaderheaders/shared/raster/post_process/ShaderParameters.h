@@ -41,11 +41,12 @@ struct AoPipelineBindlessParam {
 };
 
 struct SsdoPipelineBindlessParam {
-    float2 inv_resolution;    // 1.0 / (屏幕宽度，高度)
-    uint   ssdo_sample_count; // 采样次数 (e.g. 16,32,…)
-    float  ssdo_radius;       // 半径（世界空间单位）
-    float  ssdo_max_distance; // 最大距离（世界空间单位）
-    float  ssdo_intensity;    // 强度调节参数
+    float2 inv_resolution;          // 1.0 / (屏幕宽度，高度)
+    uint   ssdo_sample_count;       // 采样次数 (e.g. 16,32,…)
+    float  ssdo_radius;             // 半径（世界空间单位）
+    float  ssdo_max_distance;       // 最大距离（世界空间单位）
+    float  ssdo_intensity;          // 强度调节参数
+    float  ssdo_indirect_intensity; // 间接光强度调节参数
 
     uint normal_tex;
     uint depth_tex;
