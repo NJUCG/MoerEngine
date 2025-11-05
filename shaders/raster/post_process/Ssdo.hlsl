@@ -65,13 +65,14 @@ float3 GetVplIndirectLight(
     float3 shading_normal,
     float3 pixel_color
 ) {
-    float3 light_dir    = normalize(vpl_pos - shading_pos);
-    float  NdotL        = max(dot(shading_normal, light_dir), 0.0);
-    float  VPL_distance = length(vpl_pos - shading_pos);
-    float  attenuation  = 1.0 / (VPL_distance * VPL_distance + 0.001); // 避免除零
+    float3 light_dir     = normalize(vpl_pos - shading_pos);
+    float  shadingCosine = max(dot(shading_normal, light_dir), 0.0);
+    float  vplCosine     = max(dot(vpl_normal, -light_dir), 0.0);
+    float  VPL_distance  = length(vpl_pos - shading_pos);
+    float  attenuation   = 1.0 / (VPL_distance * VPL_distance + 0.001); // 避免除零
 
     // 简单的漫反射间接光
-    float3 indirect_light = NdotL * attenuation * pixel_color;
+    float3 indirect_light = shadingCosine * vplCosine * attenuation * pixel_color;
 
     return indirect_light;
 }
@@ -111,12 +112,13 @@ float4 GetSsdo(float2 uv) {
             continue;
         }
 
-        float sceneDepth = TextureHandle(param.depth_tex).Sample2D<float>(sampleUVD.xy);
-        sceneDepth       = 1 - sceneDepth;
+        float  sceneDepthOfUV = TextureHandle(param.depth_tex).Sample2D<float>(sampleUVD.xy);
+        float3 scenePosOfUV   = TextureHandle(param.position_tex).Sample2D<float4>(sampleUVD.xy).rgb;
+        float  distFromVplToShadingPoint = length(scenePosOfUV - position);
 
-        if ((1 - sampleUVD.z) > sceneDepth + param.ssdo_depth_bias) {
-            float dist    = length(sampleWorldPos - position);
-            float falloff = smoothstep(param.ssdo_max_distance, param.ssdo_max_distance * 0.5, dist);
+        if ((sampleUVD.z + param.ssdo_depth_bias) < sceneDepthOfUV) {
+            float falloff =
+                smoothstep(param.ssdo_max_distance, param.ssdo_max_distance * 0.5, distFromVplToShadingPoint);
             occlusion += falloff;
             indirect_light += GetVplContribution(sampleUVD.xy, uv);
         }

@@ -225,7 +225,7 @@ public:
         param.inv_resolution          = float2(1.0f) / float2(context.textures.ao_output.GetSize());
         param.ssdo_sample_count       = ui_config.ssao_spp;
         param.ssdo_radius             = ui_config.ssdo_sample_radius;
-        param.ssdo_max_distance       = ui_config.ssao_max_distance;
+        param.ssdo_max_distance       = ui_config.ssdo_max_distance;
         param.ssdo_intensity          = ui_config.ssao_intensity;
         param.ssdo_indirect_intensity = ui_config.ssdo_indirect_intensity;
         param.normal_tex              = context.textures.normal.handle;

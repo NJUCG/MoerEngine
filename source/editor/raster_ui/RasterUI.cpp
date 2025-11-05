@@ -141,7 +141,7 @@ void RasterUI::ShowConfig() {
         } else if (m_config.ao_mode == EAoMode::SSDO || m_config.ao_mode == EAoMode::SSDO_AO_ONLY) {
             ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
             ImGui::SliderFloat("Indirect Intensity", &m_config.ssdo_indirect_intensity, 0.0f, 2.0f);
-            ImGui::SliderFloat("Ray Trace Radius", &m_config.ssao_max_distance, 0.0f, 2.0f);
+            ImGui::SliderFloat("Ray Trace Radius", &m_config.ssdo_max_distance, 0.0f, 20.0f);
             ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 16);
             ImGui::SliderFloat("Sample Radius", &m_config.ssdo_sample_radius, 0.0f, 5.0f);
             ImGui::SliderFloat("Depth Bias", &m_config.ssdo_depth_bias, 0.0f, 0.1f);

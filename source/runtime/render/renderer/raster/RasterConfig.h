@@ -109,6 +109,7 @@ struct RasterConfig {
     float           ssdo_depth_bias         = 0.01f;
     float           ssdo_sample_radius      = 0.5f;
     float           ssdo_indirect_intensity = 1.0f;
+    float           ssdo_max_distance       = 0.5f;
 
     // MARK: SSR
     bool  ssr_is_ssr_enabled             = false;
