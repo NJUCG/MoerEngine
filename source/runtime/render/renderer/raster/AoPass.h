@@ -236,6 +236,7 @@ public:
         param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
         param.input_image             = input_image;
         param.view_projection_matrix  = Transpose(camera->GetViewProjectionMatrix());
+        param.view_matrix             = Transpose(camera->GetViewMatrix());
         param.camera_position         = camera->GetPosition();
 
         UpdateMotionVectorData(context, camera);

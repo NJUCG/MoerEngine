@@ -65,9 +65,14 @@ float3 GetVplIndirectLight(float3 vpl_pos, float3 vpl_normal, float3 shading_pos
     float  VPL_distance = length(vpl_pos - shading_pos);
     float  attenuation  = 1.0 / (VPL_distance * VPL_distance + 1.0); // 稳定衰减
 
+    // 面积项
+    float vpl_linear_depth = abs(mul(param.view_matrix, float4(vpl_pos, 1.0)).z);
+    float area_weight      = vpl_linear_depth * vpl_linear_depth + 0.0001;
+    area_weight            = min(2, area_weight); //防止过大
+
     // 简单的漫反射间接光
     //由于采用了余弦加权采样，这里不用再乘以 shadingCosine 了
-    float3 indirect_light = vplCosine * pixel_color * attenuation;
+    float3 indirect_light = vplCosine * pixel_color * attenuation * area_weight;
 
     return indirect_light;
 }

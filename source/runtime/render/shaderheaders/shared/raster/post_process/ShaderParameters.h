@@ -57,6 +57,7 @@ struct SsdoPipelineBindlessParam {
 
     uint     input_image;
     float4x4 view_projection_matrix;
+    float4x4 view_matrix;
     float3   camera_position;
     float    ssdo_depth_bias;
 
