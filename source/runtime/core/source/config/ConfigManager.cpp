@@ -10,13 +10,16 @@
 #include <string>
 #include <toml++/toml.hpp>
 
-#ifndef DEVELOP_SHADER_PATH
-#define DEVELOP_SHADER_PATH resource / shaders
+// 在编译期，构建系统会对资源进行拷贝
+// 这两个宏是为了接收构建系统拷贝的目标路径
+#ifndef SHADER_PATH_RELATIVE_TO_RESOURCE
+#define SHADER_PATH_RELATIVE_TO_RESOURCE shaders
 #endif
 
-#ifndef DEVELOP_SHADER_SHARED_PATH
-#define DEVELOP_SHADER_SHARED_PATH resource / shaders
+#ifndef SHADER_SHARED_PATH_RELATIVE_TO_RESOURCE
+#define SHADER_SHARED_PATH_RELATIVE_TO_RESOURCE shaderheaders
 #endif
+
 namespace Moer {
 ConfigManager& ConfigManager::GetInstance() {
     static ConfigManager instance;
@@ -27,9 +30,10 @@ void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
     // pathes
     workspace_path            = _workspace_path;
     editor_resource_path      = _workspace_path / "resource";
-    engine_shader_path        = MACRO_STR(DEVELOP_SHADER_PATH);
+    engine_shader_path        = _workspace_path / "resource" / MACRO_STR(SHADER_PATH_RELATIVE_TO_RESOURCE);
     engine_shader_cached_path = _workspace_path / "resource" / "shader_cache";
-    engine_shader_shared_path = MACRO_STR(DEVELOP_SHADER_SHARED_PATH);
+    engine_shader_shared_path =
+        _workspace_path / "resource" / MACRO_STR(SHADER_SHARED_PATH_RELATIVE_TO_RESOURCE);
 
     // check config exists
     std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.toml";

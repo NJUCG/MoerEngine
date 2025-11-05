@@ -102,16 +102,35 @@ if(MSVC)
 
 endif() 
 
+add_dependencies(${MODULE_NAME} CopyNRDEncodingFile)
+
+# MARK: Copy Resources
+
+# 定义拷贝资源的输出目录
 if(WIN32)
-target_compile_definitions(MoerCore
-    PUBLIC "DEVELOP_SHADER_SHARED_PATH=${CMAKE_CURRENT_SOURCE_DIR}/shaderheaders"
+    target_compile_definitions(MoerCore # 注意，这里是MoerCore，因为ConfigManager在Core模块中
+        PUBLIC "SHADER_PATH_RELATIVE_TO_RESOURCE=shaders"
+        PUBLIC "SHADER_SHARED_PATH_RELATIVE_TO_RESOURCE=shaderheaders"
     )
 endif()
 
-add_dependencies(${MODULE_NAME} CopyNRDEncodingFile)
+if(CMAKE_GENERATOR MATCHES "Ninja" OR UNIX AND NOT APPLE) 
+    set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}") 
+else()
+    set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") # 这是什么？
+endif()
 
+# 设置输出目录
+add_custom_target(
+	CopyResources
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}/resource"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/asset"                    "${output_dir}/resource"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_source_dir}/configs"                 "${output_dir}/config"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/shaders"                  "${output_dir}/resource/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/shaderheaders" "${output_dir}/resource/shaderheaders"
+    COMMENT "Copying resources to ${output_dir}/resource"
+)
 
-
-
+add_dependencies(${MODULE_NAME} CopyResources)
 
 
