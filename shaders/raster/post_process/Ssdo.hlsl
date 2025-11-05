@@ -9,6 +9,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "AoCommon.hlsl"
 
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
+static const float3 DIFFUSE_ALBEDO = float3(0.5, 0.5, 0.5);
 
 // uv in [0, 1]; output in [0, 1]
 // float2 random_2to2(float2 uv) {
@@ -58,21 +59,15 @@ float GetDepthFromWorldPos(float3 worldPos) {
     return clipPos.z / clipPos.w;
 }
 
-float3 GetVplIndirectLight(
-    float3 vpl_pos,
-    float3 vpl_normal,
-    float3 shading_pos,
-    float3 shading_normal,
-    float3 pixel_color
-) {
-    float3 light_dir     = normalize(vpl_pos - shading_pos);
-    float  shadingCosine = max(dot(shading_normal, light_dir), 0.0);
-    float  vplCosine     = max(dot(vpl_normal, -light_dir), 0.0);
-    float  VPL_distance  = length(vpl_pos - shading_pos);
-    float  attenuation   = 1.0 / (VPL_distance * VPL_distance + 0.001); // 避免除零
+float3 GetVplIndirectLight(float3 vpl_pos, float3 vpl_normal, float3 shading_pos, float3 pixel_color) {
+    float3 light_dir    = normalize(vpl_pos - shading_pos);
+    float  vplCosine    = max(dot(vpl_normal, -light_dir), 0.0);
+    float  VPL_distance = length(vpl_pos - shading_pos);
+    float  attenuation  = 1.0 / (VPL_distance * VPL_distance + 1.0); // 稳定衰减
 
     // 简单的漫反射间接光
-    float3 indirect_light = shadingCosine * vplCosine * attenuation * pixel_color;
+    //由于采用了余弦加权采样，这里不用再乘以 shadingCosine 了
+    float3 indirect_light = vplCosine * pixel_color * attenuation;
 
     return indirect_light;
 }
@@ -82,10 +77,8 @@ float3 GetVplContribution(float2 vpl_uv, float2 shading_uv) {
     float3 vpl_normal =
         normalize(Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(vpl_uv)));
     float3 shading_pos = TextureHandle(param.position_tex).Sample2D<float3>(shading_uv);
-    float3 shading_normal =
-        normalize(Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(shading_uv)));
     float3 pixel_color = TextureHandle(param.input_image).Sample2D<float3>(vpl_uv);
-    return GetVplIndirectLight(vpl_pos, vpl_normal, shading_pos, shading_normal, pixel_color);
+    return GetVplIndirectLight(vpl_pos, vpl_normal, shading_pos, pixel_color);
 }
 
 float4 GetSsdo(float2 uv) {
@@ -102,9 +95,9 @@ float4 GetSsdo(float2 uv) {
 
         // 使用抖动的分层采样来计算采样距离
         float sampleScale = ((float)i + random_1to1(uv - float(i))) / ssdo_sample_count_f;
-        sampleScale       = lerp(0.1, 1.0, sampleScale * sampleScale);
+        sampleScale       = lerp(0.01, 1.0, sampleScale * sampleScale);
 
-        float3 sampleWorldPos = position + hemisphereSampleVec3 * param.ssdo_radius * xi.x;
+        float3 sampleWorldPos = position + hemisphereSampleVec3 * param.ssdo_radius * sampleScale;
 
         float3 sampleUVD = apply_view_projection(sampleWorldPos);
 
@@ -116,10 +109,12 @@ float4 GetSsdo(float2 uv) {
         float3 scenePosOfUV   = TextureHandle(param.position_tex).Sample2D<float4>(sampleUVD.xy).rgb;
         float  distFromVplToShadingPoint = length(scenePosOfUV - position);
 
-        if ((sampleUVD.z + param.ssdo_depth_bias) < sceneDepthOfUV) {
+        if ((sampleUVD.z + param.ssdo_depth_bias) < sceneDepthOfUV) { //reversed z!
             float falloff =
                 smoothstep(param.ssdo_max_distance, param.ssdo_max_distance * 0.5, distFromVplToShadingPoint);
             occlusion += falloff;
+            //indirect_light += GetVplContribution(sampleUVD.xy, uv);
+        } else {
             indirect_light += GetVplContribution(sampleUVD.xy, uv);
         }
     }
@@ -127,6 +122,7 @@ float4 GetSsdo(float2 uv) {
     if (param.ssdo_sample_count > 0) {
         occlusion /= ssdo_sample_count_f;
         indirect_light /= ssdo_sample_count_f;
+        indirect_light *= DIFFUSE_ALBEDO;
     }
 
     return float4(
