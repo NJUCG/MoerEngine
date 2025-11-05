@@ -17,6 +17,7 @@ class UpsamplePass;
 #if WITH_CUDA
 class CudaPass;
 class TensorRTPass;
+class BilateralFilterDenoiserPass;
 #endif
 
 /**
@@ -69,8 +70,9 @@ private:
     UniquePtr<UpsamplePass>    upsample_pass;
 
 #if WITH_CUDA
-    UniquePtr<CudaPass>     cuda_pass;
-    UniquePtr<TensorRTPass> tensor_rt_pass;
+    UniquePtr<CudaPass>                    cuda_pass;
+    UniquePtr<TensorRTPass>                tensor_rt_pass;
+    UniquePtr<BilateralFilterDenoiserPass> bfd_pass;
 #endif
 
     // Other vars

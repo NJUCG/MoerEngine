@@ -6,6 +6,7 @@
 // Editor
 #include "AaPass.h"
 #include "AoPass.h"
+#include "BilateralFilterDenoiserPass.h"
 #include "GeometryPass.h"
 #include "LightingPass.h"
 #include "RasterResource.h"
@@ -61,6 +62,7 @@ RasterRenderer::RasterRenderer(
         raster_context.textures.camera_motion_vector.tex,
         raster_context.textures.ao_output_ambient_only_1.tex
     );
+    bfd_pass = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
 #endif
 
     cmd_list.UpdateBindlessArray(bindless_array);
@@ -178,7 +180,6 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         uint processing_image = ao_result.ao_with_color;
         uint ao_only_idx      = ao_result.ao_only_idx;
 
-        
         // - CUDA Pass
 #if WITH_CUDA
         // processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
@@ -186,6 +187,11 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         if (raster_config.ai_is_cuda_enabled) {
             processing_image =
                 tensor_rt_pass->Process(raster_context, raster_config, lighting_pass_output, ao_only_idx);
+
+            if (strcmp(raster_config.ai_trt_visualize_buffer.c_str(), "Engine2 out_final_output") == 0 ||
+                strcmp(raster_config.ai_trt_visualize_buffer.c_str(), "Engine2 out_denoised_ao") == 0) {
+                processing_image = bfd_pass->Process(raster_context, raster_config, processing_image);
+            }
         }
 #endif
 
@@ -210,7 +216,6 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }();
         */
 #endif
-
 
         if (hooks.on_ui_combine_pass) {
             default_output_texture = hooks.on_ui_combine_pass(

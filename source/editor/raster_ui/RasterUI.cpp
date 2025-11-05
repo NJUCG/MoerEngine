@@ -165,19 +165,22 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
-    if(ImGui::TreeNode("Upsample", 
-            "Upsample: [%s]", 
-             s_upsample_mode_name_array[static_cast<uint32>(m_config.upsample_mode)].c_str())){
-        for(uint i = 0; i < s_upsample_mode_name_array.size(); i++){
-            if(ImGui::Selectable(
-                s_upsample_mode_name_array[i].c_str(), m_config.upsample_mode == static_cast<EUpsampleMode>(i)
-            )){
+    if (ImGui::TreeNode(
+            "Upsample",
+            "Upsample: [%s]",
+            s_upsample_mode_name_array[static_cast<uint32>(m_config.upsample_mode)].c_str()
+        )) {
+        for (uint i = 0; i < s_upsample_mode_name_array.size(); i++) {
+            if (ImGui::Selectable(
+                    s_upsample_mode_name_array[i].c_str(),
+                    m_config.upsample_mode == static_cast<EUpsampleMode>(i)
+                )) {
                 m_config.upsample_mode = static_cast<EUpsampleMode>(i);
             }
             draw_border();
         }
 
-        if(m_config.upsample_mode == EUpsampleMode::BILINEAR) {
+        if (m_config.upsample_mode == EUpsampleMode::BILINEAR) {
             ImGui::SliderInt("Input Size", &m_config.inSize_x, 0, 1500);
             ImGui::SliderInt("Output Size X", &m_config.outSize_x, 0, 3000);
             ImGui::SliderInt("Output Size Y", &m_config.outSize_y, 0, 3000);
@@ -198,13 +201,14 @@ void RasterUI::ShowConfig() {
         draw_border();
 
         if (m_config.ai_is_cuda_enabled == 1) {
-            ImGui::SliderFloat("Debug Param", &m_config.ai_cuda_pass_debug_param, 0.0f, 1.0f);
+            ImGui::Separator();
+            // ImGui::SliderFloat("Debug Param", &m_config.ai_cuda_pass_debug_param, 0.0f, 1.0f);
 
-            // ImGui::Checkbox("Enable Jitter", &m_config.ssr_is_enable_jitter);
-            // ImGui::Checkbox("Force Ground Enable SSR", &m_config.ssr_is_force_ground_enable_ssr);
-            // ImGui::SliderInt("Sample Count", &m_config.ssr_sample_count, 1, 64);
-            // ImGui::SliderFloat("Roughness Threshold", &m_config.ssr_roughness_threshold, 0.0f, 1.0f);
-            // ImGui::SliderFloat("Metallic Threshold", &m_config.ssr_metallic_threshold, 0.0f, 1.0f);
+            // ImGui::SliderInt("双边滤波 Radius", &m_config.ai_bfd_kernel_radius, 1, 10);
+            // ImGui::SliderFloat(
+            //     "双边滤波 SpatialSigma^2", &m_config.ai_bfd_spatial_sigma_square, 1.0f, 150.0f
+            // );
+            // ImGui::SliderFloat("双边滤波 RangeSigma^2", &m_config.ai_bfd_range_sigma_square, 0.001f, 0.05f);
 
             for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
                 if (ImGui::Selectable(

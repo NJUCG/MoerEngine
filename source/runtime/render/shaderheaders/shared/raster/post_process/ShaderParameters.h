@@ -62,6 +62,17 @@ struct RtaoPipelineBindlessParam {
     uint camera_mv_data_handle; // for camera motion vector
 };
 
+struct BilateralFilterDenoiserPipelineBindlessParam {
+    float2 inv_resolution;
+    float  spatial_sigma_square;
+    float  range_sigma_square;
+
+    uint kernel_radius;
+    uint input_image;
+    uint padding0;
+    uint padding1;
+};
+
 struct SsrPipelineBindlessParam {
     float4x4 view_projection_matrix;
     float3   camera_position;

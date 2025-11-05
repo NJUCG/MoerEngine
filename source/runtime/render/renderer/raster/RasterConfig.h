@@ -116,7 +116,10 @@ struct RasterConfig {
 
     // MARK: AI (CUDA, TensorRT)
     bool        ai_is_cuda_enabled          = false;
-    float       ai_cuda_pass_debug_param    = 0.5f;
+    float       ai_cuda_pass_debug_param    = 1.0f;
+    int         ai_bfd_kernel_radius        = 9;                                          // [1, 10]
+    float       ai_bfd_spatial_sigma_square = 100;                                        // [1, 200]
+    float       ai_bfd_range_sigma_square   = 0.001;                                      // [0.01, 0.1]
     int         ai_trt_visualize_buffer_idx = s_ai_trt_visualize_buffer_array.size() - 2; // output
     std::string ai_trt_visualize_buffer =
         s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2];
