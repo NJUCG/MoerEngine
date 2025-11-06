@@ -46,9 +46,9 @@ RasterRenderer::RasterRenderer(
     geometry_pass     = MakeUnique<GeometryPass>(raster_context);
     lighting_pass     = MakeUnique<LightingPass>(raster_context);
     ao_pass           = MakeUnique<AoPass>(raster_context);
+    bfd_pass          = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
     ssr_pass          = MakeUnique<SsrPass>(raster_context);
     aa_pass           = MakeUnique<AaPass>(raster_context);
-    upsample_pass     = MakeUnique<UpsamplePass>(raster_context);
 
 #if WITH_CUDA
     // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
@@ -62,7 +62,7 @@ RasterRenderer::RasterRenderer(
         raster_context.textures.camera_motion_vector.tex,
         raster_context.textures.ao_output_ambient_only_1.tex
     );
-    bfd_pass = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
+    upsample_pass = MakeUnique<UpsamplePass>(raster_context);
 #endif
 
     cmd_list.UpdateBindlessArray(bindless_array);
@@ -187,10 +187,11 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         if (raster_config.ai_is_cuda_enabled) {
             processing_image =
                 tensor_rt_pass->Process(raster_context, raster_config, lighting_pass_output, ao_only_idx);
-
-            processing_image = bfd_pass->Process(raster_context, raster_config, processing_image);
         }
 #endif
+
+        // - Denoiser Pass (Bilateral Filter)
+        processing_image = bfd_pass->Process(raster_context, raster_config, processing_image);
 
         // - Screen Space Reflection
         processing_image = ssr_pass->Process(raster_context, raster_config, camera, processing_image);

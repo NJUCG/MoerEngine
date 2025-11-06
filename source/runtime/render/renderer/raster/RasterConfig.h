@@ -29,7 +29,6 @@ static const UnorderedMap<EAaMode, std::string> s_aa_mode_name_map = {
     {EAaMode::SMAA_T2X, "SMAA T2x"},
 };
 
-// Enum 在 ..../ShaderParameters.h中定义，让shader和cpp可以共用枚举值
 // EnumParam(EAoMode, NONE, SSAO, SSAO_AO_ONLY, RTAO, RTAO_AO_ONLY, LINEARIZED_DEPTH_DIV_10);
 static const UnorderedMap<EAoMode, std::string> s_ao_mode_name_map = {
     {EAoMode::NONE, "None"},
@@ -42,26 +41,27 @@ static const UnorderedMap<EAoMode, std::string> s_ao_mode_name_map = {
     {EAoMode::LINEARIZED_DEPTH_DIV_10, "Linear. Depth / 10.0"},
 };
 
+// EnumParam(EDenoiserMode, NONE, BILATERAL_FILTER);
+static const UnorderedMap<EDenoiserMode, std::string> s_denoiser_mode_name_map = {
+    {EDenoiserMode::NONE, "None"},
+    {EDenoiserMode::BILATERAL_FILTER, "双边滤波 Bilateral Filter"},
+};
+
+// EnumParam(ERtaoSampleMode, UNIFORM, COSINE_WEIGHTED);
+static const UnorderedMap<ERtaoSampleMode, std::string> s_rtao_sample_mode_name_map = {
+    {ERtaoSampleMode::UNIFORM, "Uniform in Semisphere"},
+    {ERtaoSampleMode::COSINE_WEIGHTED, "Cosine-Weighted in Semisphere"},
+};
+
 enum class EUpsampleMode {
     None = 0,
     BILINEAR,
     DEPTH
 };
-
 static const Array<std::string> s_upsample_mode_name_array = {
     "None",
     "BILINEAR",
     "DEPTH",
-};
-
-enum class ERtaoSampleMode {
-    UNIFORM = 0,
-    COSINE_WEIGHTED,
-    NUM
-};
-static const Array<std::string> s_rtao_sample_mode = {
-    "Uniform in Semisphere",
-    "Cosine-Weighted in Semisphere"
 };
 
 static const Array<std::string> s_shadow_map_mode_name_array = {
@@ -120,12 +120,15 @@ struct RasterConfig {
     float ssr_metallic_threshold         = 0.5;
     float ssr_step_base                  = 0.025;
 
+    // MARK: Denoiser
+    EDenoiserMode denoiser_mode                     = EDenoiserMode::NONE;
+    float         denoiser_bfd_spatial_sigma_square = 20.0f;  // [1, 200]
+    float         denoiser_bfd_range_sigma_square   = 0.001f; // [0.01, 0.1]
+    int           denoiser_bfd_kernel_radius        = 5;      // [1, 10]
+
     // MARK: AI (CUDA, TensorRT)
     bool        ai_is_cuda_enabled          = false;
     float       ai_cuda_pass_debug_param    = 1.0f;
-    int         ai_bfd_kernel_radius        = 5;                                          // [1, 10]
-    float       ai_bfd_spatial_sigma_square = 20;                                         // [1, 200]
-    float       ai_bfd_range_sigma_square   = 0.001;                                      // [0.01, 0.1]
     int         ai_trt_visualize_buffer_idx = s_ai_trt_visualize_buffer_array.size() - 2; // output
     std::string ai_trt_visualize_buffer =
         s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2];

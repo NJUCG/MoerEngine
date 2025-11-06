@@ -27,11 +27,9 @@ public:
  */
 class BilateralFilterDenoiserPass {
 public:
-    BilateralFilterDenoiserPass(RasterContext& context) {
+    BilateralFilterDenoiserPass(RasterContext& context) : output_image(context.textures.denoiser_output) {
         GfxPsoCreateInfo pso_full_screen_info(
-            RHIRasterizeInfo::Preset(),
-            {},
-            {RHIColorAttachmentInfo::Preset(context.textures.ao_output.tex->GetFormat())} // 输出给ao_output
+            RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(output_image.tex->GetFormat())}
         );
 
         bfd_pipeline = context.manager.Raster()
@@ -41,28 +39,32 @@ public:
     }
 
     uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image) {
+        if (ui_config.denoiser_mode == EDenoiserMode::NONE) {
+            return input_image; // 直接返回输入
+        }
 
         BilateralFilterDenoiserPipelineBindlessParam param;
 
         param.inv_resolution       = 1.0f / float2(context.textures.ao_output.GetSize());
-        param.kernel_radius        = ui_config.ai_bfd_kernel_radius;
-        param.spatial_sigma_square = ui_config.ai_bfd_spatial_sigma_square;
-        param.range_sigma_square   = ui_config.ai_bfd_range_sigma_square;
+        param.kernel_radius        = ui_config.denoiser_bfd_kernel_radius;
+        param.spatial_sigma_square = ui_config.denoiser_bfd_spatial_sigma_square;
+        param.range_sigma_square   = ui_config.denoiser_bfd_range_sigma_square;
         param.input_image          = input_image;
 
         context.cmd_list.Gfx(bfd_pipeline, context.bdls, param)
             .Draw(
-                "BiteralFilterDenoiser Pass",
-                context.textures.ao_output.GetRect2D(),
+                "BilateralFilterDenoiser Pass",
+                output_image.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(context.textures.ao_output.tex)
+                ColorAttachment(output_image.tex)
             );
 
-        return context.textures.ao_output.handle;
+        return output_image.handle;
     }
 
 private:
     BilateralFilterDenoiserPipeline bfd_pipeline;
+    TextureWithHandle&              output_image;
 };
 
 } // namespace Moer::Render::Raster

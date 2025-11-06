@@ -127,14 +127,16 @@ void RasterUI::ShowConfig() {
             ImGui::SliderFloat("Intensity", &m_config.rtao_intensity, 0.0f, 1.0f);
             ImGui::SliderFloat("Ray Trace Radius", &m_config.rtao_ray_trace_distance, 0.0f, 20.0f);
             ImGui::SliderInt("Samples Per Pixel", &m_config.rtao_spp, 1, 32);
+
             ImGui::Text("RTAO Sample Mode:");
-            assert(s_rtao_sample_mode.size() == static_cast<uint32>(ERtaoSampleMode::NUM));
-            for (uint i = 0; i < s_rtao_sample_mode.size(); i++) {
+            assert(s_rtao_sample_mode_name_map.size() == static_cast<uint32>(ERtaoSampleMode::NUM));
+            for (uint i = 0; i < s_rtao_sample_mode_name_map.size(); i++) {
+                ERtaoSampleMode cur_enum = static_cast<ERtaoSampleMode>(i);
                 if (ImGui::Selectable(
-                        s_rtao_sample_mode[i].c_str(),
-                        m_config.rtao_sample_mode == static_cast<ERtaoSampleMode>(i)
+                        s_rtao_sample_mode_name_map.at(cur_enum).c_str(),
+                        m_config.rtao_sample_mode == cur_enum
                     )) {
-                    m_config.rtao_sample_mode = static_cast<ERtaoSampleMode>(i);
+                    m_config.rtao_sample_mode = cur_enum;
                 }
                 draw_border();
             }
@@ -168,6 +170,34 @@ void RasterUI::ShowConfig() {
             ImGui::SliderFloat("Roughness Threshold", &m_config.ssr_roughness_threshold, 0.0f, 1.0f);
             ImGui::SliderFloat("Metallic Threshold", &m_config.ssr_metallic_threshold, 0.0f, 1.0f);
         }
+
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode(
+            "Denoiser",
+            "Denoiser: [%s]",
+            s_denoiser_mode_name_map.at(static_cast<EDenoiserMode>(m_config.denoiser_mode)).c_str()
+        )) {
+
+        assert(s_denoiser_mode_name_map.size() == static_cast<uint32>(EDenoiserMode::NUM));
+        for (uint i = 0; i < s_denoiser_mode_name_map.size(); i++) {
+            EDenoiserMode cur_enum = static_cast<EDenoiserMode>(i);
+            if (ImGui::Selectable(
+                    s_denoiser_mode_name_map.at(cur_enum).c_str(), m_config.denoiser_mode == cur_enum
+                )) {
+                m_config.denoiser_mode = cur_enum;
+            }
+            draw_border();
+        }
+
+        ImGui::Separator();
+
+        ImGui::SliderInt("双边滤波 Radius", &m_config.denoiser_bfd_kernel_radius, 1, 10);
+        ImGui::SliderFloat(
+            "双边滤波 SpatialSigma^2", &m_config.denoiser_bfd_spatial_sigma_square, 1.0f, 150.0f
+        );
+        ImGui::SliderFloat("双边滤波 RangeSigma^2", &m_config.denoiser_bfd_range_sigma_square, 0.001f, 0.05f);
 
         ImGui::TreePop();
     }
@@ -213,13 +243,6 @@ void RasterUI::ShowConfig() {
         if (m_config.ai_is_cuda_enabled == 1) {
             ImGui::Separator();
             ImGui::SliderFloat("Debug Param", &m_config.ai_cuda_pass_debug_param, 0.0f, 1.0f);
-
-            ImGui::Separator();
-            ImGui::SliderInt("双边滤波 Radius", &m_config.ai_bfd_kernel_radius, 1, 10);
-            ImGui::SliderFloat(
-                "双边滤波 SpatialSigma^2", &m_config.ai_bfd_spatial_sigma_square, 1.0f, 150.0f
-            );
-            ImGui::SliderFloat("双边滤波 RangeSigma^2", &m_config.ai_bfd_range_sigma_square, 0.001f, 0.05f);
 
             ImGui::Separator();
             for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
