@@ -4,6 +4,8 @@
 #undef CONST
 #endif
 
+#define MAX_CSM_CASCADES 4
+
 #ifdef __cplusplus
 #define CONST constexpr
 #include "misc/Traits.h"
@@ -39,13 +41,8 @@ struct MaterialPassBindlessParam {
     uint   skybox_handle_posy;
     uint   skybox_handle_negy;
 };
-
-// TODO: 下面的重复变量是否可以使用数组的方式合并？
 struct LightingData {
-    float4x4 world_to_shadow_clip_0;
-    float4x4 world_to_shadow_clip_1;
-    float4x4 world_to_shadow_clip_2;
-    float4x4 world_to_shadow_clip_3;
+    float4x4 world_to_shadow_clip[MAX_CSM_CASCADES];
 
     float4x4 inv_view_proj;
     float3   camera_position;
@@ -57,10 +54,7 @@ struct LightingData {
     uint shadow_csm_num_of_cascades;
     uint shadow_csm_sm_size;
 
-    uint shadow_map_0;
-    uint shadow_map_1;
-    uint shadow_map_2;
-    uint shadow_map_3;
+    uint shadow_map[MAX_CSM_CASCADES];
 };
 
 // MARK: Main Content End
