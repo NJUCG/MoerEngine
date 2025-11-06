@@ -138,6 +138,13 @@ void RasterUI::ShowConfig() {
                 }
                 draw_border();
             }
+        } else if (m_config.ao_mode == EAoMode::SSDO || m_config.ao_mode == EAoMode::SSDO_AO_ONLY) {
+            ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
+            ImGui::SliderFloat("Indirect Intensity", &m_config.ssdo_indirect_intensity, 0.0f, 2.0f);
+            ImGui::SliderFloat("Ray Trace Radius", &m_config.ssdo_max_distance, 0.0f, 20.0f);
+            ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 16);
+            ImGui::SliderFloat("Sample Radius", &m_config.ssdo_sample_radius, 0.0f, 5.0f);
+            ImGui::SliderFloat("Depth Bias", &m_config.ssdo_depth_bias, 0.0f, 0.1f);
         }
 
         ImGui::TreePop();
@@ -165,19 +172,22 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
-    if(ImGui::TreeNode("Upsample", 
-            "Upsample: [%s]", 
-             s_upsample_mode_name_array[static_cast<uint32>(m_config.upsample_mode)].c_str())){
-        for(uint i = 0; i < s_upsample_mode_name_array.size(); i++){
-            if(ImGui::Selectable(
-                s_upsample_mode_name_array[i].c_str(), m_config.upsample_mode == static_cast<EUpsampleMode>(i)
-            )){
+    if (ImGui::TreeNode(
+            "Upsample",
+            "Upsample: [%s]",
+            s_upsample_mode_name_array[static_cast<uint32>(m_config.upsample_mode)].c_str()
+        )) {
+        for (uint i = 0; i < s_upsample_mode_name_array.size(); i++) {
+            if (ImGui::Selectable(
+                    s_upsample_mode_name_array[i].c_str(),
+                    m_config.upsample_mode == static_cast<EUpsampleMode>(i)
+                )) {
                 m_config.upsample_mode = static_cast<EUpsampleMode>(i);
             }
             draw_border();
         }
 
-        if(m_config.upsample_mode == EUpsampleMode::BILINEAR) {
+        if (m_config.upsample_mode == EUpsampleMode::BILINEAR) {
             ImGui::SliderInt("Input Size", &m_config.inSize_x, 0, 1500);
             ImGui::SliderInt("Output Size X", &m_config.outSize_x, 0, 3000);
             ImGui::SliderInt("Output Size Y", &m_config.outSize_y, 0, 3000);

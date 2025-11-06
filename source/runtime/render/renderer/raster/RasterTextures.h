@@ -148,10 +148,10 @@ struct RasterTextures {
 #undef X
         // 手动维护: depth
         depth_linear_sampler.handle = bindless_array->AllocateTexture(
-            depth_linear_sampler.tex->GetView(), Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE)
+            depth_linear_sampler.tex->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
         );
         depth_nearest_sampler.handle = bindless_array->AllocateTexture(
-            depth_nearest_sampler.tex->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
+            depth_nearest_sampler.tex->GetView(), Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE)
         );
 
         // 提交
