@@ -10,13 +10,14 @@ class ShadowDepthPass;
 class GeometryPass;
 class LightingPass;
 class AoPass;
+class BilateralFilterDenoiserPass;
 class SsrPass;
 class AaPass;
-class UpsamplePass;
 
 #if WITH_CUDA
 class CudaPass;
 class TensorRTPass;
+class UpsamplePass;
 #endif
 
 /**
@@ -60,17 +61,18 @@ private:
     UniquePtr<RasterContext> raster_context_ptr; // For forward declaration
 
     // Pass
-    UniquePtr<ShadowDepthPass> shadow_depth_pass;
-    UniquePtr<GeometryPass>    geometry_pass;
-    UniquePtr<LightingPass>    lighting_pass;
-    UniquePtr<AoPass>          ao_pass;
-    UniquePtr<SsrPass>         ssr_pass;
-    UniquePtr<AaPass>          aa_pass;
-    UniquePtr<UpsamplePass>    upsample_pass;
+    UniquePtr<ShadowDepthPass>             shadow_depth_pass;
+    UniquePtr<GeometryPass>                geometry_pass;
+    UniquePtr<LightingPass>                lighting_pass;
+    UniquePtr<AoPass>                      ao_pass;
+    UniquePtr<BilateralFilterDenoiserPass> bfd_pass;
+    UniquePtr<SsrPass>                     ssr_pass;
+    UniquePtr<AaPass>                      aa_pass;
 
 #if WITH_CUDA
     UniquePtr<CudaPass>     cuda_pass;
     UniquePtr<TensorRTPass> tensor_rt_pass;
+    UniquePtr<UpsamplePass> upsample_pass;
 #endif
 
     // Other vars

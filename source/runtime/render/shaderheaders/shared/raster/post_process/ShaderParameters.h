@@ -86,6 +86,17 @@ struct RtaoPipelineBindlessParam {
     uint camera_mv_data_handle; // for camera motion vector
 };
 
+struct BilateralFilterDenoiserPipelineBindlessParam {
+    float2 inv_resolution;
+    float  spatial_sigma_square;
+    float  range_sigma_square;
+
+    uint kernel_radius;
+    uint input_image;
+    uint padding0;
+    uint padding1;
+};
+
 struct SsrPipelineBindlessParam {
     float4x4 view_projection_matrix;
     float3   camera_position;
@@ -157,4 +168,6 @@ struct UpsamplePipelineBindlessParam {
 namespace Moer {
 EnumParam(EAaMode, NONE, FXAA_SIMPLIFIED, FXAA_QUALITY, SMAA_1X, SMAA_T2X);
 EnumParam(EAoMode, NONE, SSAO, SSAO_AO_ONLY, RTAO, RTAO_AO_ONLY, SSDO, SSDO_AO_ONLY, LINEARIZED_DEPTH_DIV_10);
+EnumParam(EDenoiserMode, NONE, BILATERAL_FILTER);
+EnumParam(ERtaoSampleMode, UNIFORM, COSINE_WEIGHTED);
 } // namespace Moer

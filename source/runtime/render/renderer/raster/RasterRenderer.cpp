@@ -6,6 +6,7 @@
 // Editor
 #include "AaPass.h"
 #include "AoPass.h"
+#include "BilateralFilterDenoiserPass.h"
 #include "GeometryPass.h"
 #include "LightingPass.h"
 #include "RasterResource.h"
@@ -45,9 +46,9 @@ RasterRenderer::RasterRenderer(
     geometry_pass     = MakeUnique<GeometryPass>(raster_context);
     lighting_pass     = MakeUnique<LightingPass>(raster_context);
     ao_pass           = MakeUnique<AoPass>(raster_context);
+    bfd_pass          = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
     ssr_pass          = MakeUnique<SsrPass>(raster_context);
     aa_pass           = MakeUnique<AaPass>(raster_context);
-    upsample_pass     = MakeUnique<UpsamplePass>(raster_context);
 
 #if WITH_CUDA
     // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
@@ -61,6 +62,7 @@ RasterRenderer::RasterRenderer(
         raster_context.textures.camera_motion_vector.tex,
         raster_context.textures.ao_output_ambient_only_1.tex
     );
+    upsample_pass = MakeUnique<UpsamplePass>(raster_context);
 #endif
 
     cmd_list.UpdateBindlessArray(bindless_array);
@@ -178,22 +180,6 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         uint processing_image = ao_result.ao_with_color;
         uint ao_only_idx      = ao_result.ao_only_idx;
 
-        // - Upsample Pass
-#if SUPER_RESOLUTION_ENABLED
-        processing_image = upsample_pass->Process(raster_context, raster_config, processing_image);
-        /*
-        processing_image = [&]() -> uint {
-            if (raster_config.upsample_mode == EUpsampleMode::BILINEAR) {
-                //return processing_image;
-                return upsample_pass->Process(raster_context, raster_config, processing_image);
-            }
-            else return processing_image;
-            
-            //return processing_image;
-        }();
-        */
-#endif
-
         // - CUDA Pass
 #if WITH_CUDA
         // processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
@@ -204,11 +190,19 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }
 #endif
 
+        // - Denoiser Pass (Bilateral Filter)
+        processing_image = bfd_pass->Process(raster_context, raster_config, processing_image);
+
         // - Screen Space Reflection
         processing_image = ssr_pass->Process(raster_context, raster_config, camera, processing_image);
 
         // - Anti-aliasing
         processing_image = aa_pass->Process(raster_context, raster_config, camera, processing_image);
+
+#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
+        // - Upsample Pass
+        processing_image = upsample_pass->Process(raster_context, raster_config, processing_image);
+#endif
 
         if (hooks.on_ui_combine_pass) {
             default_output_texture = hooks.on_ui_combine_pass(

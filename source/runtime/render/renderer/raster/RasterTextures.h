@@ -59,7 +59,7 @@ struct DepthBufferWithHandleAndName {
 // 关闭超分
 #define SUPER_RESOLUTION_ENABLED 0
 
-#if SUPER_RESOLUTION_ENABLED
+#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
 // 超分标记
 #define SR_TAG_true  true
 #define SR_TAG_false false
@@ -80,6 +80,7 @@ struct DepthBufferWithHandleAndName {
     X(TexHandle, ao_output_ambient_only, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)    \
     X(TexHandle, ao_output_ambient_only_1, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)  \
     X(TexHandle, camera_motion_vector, PF_R16G16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true) \
+    X(TexHandle, denoiser_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)     \
     X(TexHandle, upsample_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)    \
     X(TexHandle, ssr_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)         \
     X(TexHandle, aa_texture_1, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)       \
@@ -114,7 +115,7 @@ struct RasterTextures {
         depth_linear_sampler.tex = device.CreateDepthBuffer(
             "depth",
 
-#if SUPER_RESOLUTION_ENABLED
+#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
             Extent2D(size->x / 2.0f, size->y / 2.0f),
 #else
             Extent2D(size->x, size->y),
