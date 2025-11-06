@@ -59,7 +59,7 @@ struct DepthBufferWithHandleAndName {
 // 关闭超分
 #define SUPER_RESOLUTION_ENABLED 0
 
-#if SUPER_RESOLUTION_ENABLED
+#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
 // 超分标记
 #define SR_TAG_true  true
 #define SR_TAG_false false
@@ -114,7 +114,7 @@ struct RasterTextures {
         depth_linear_sampler.tex = device.CreateDepthBuffer(
             "depth",
 
-#if SUPER_RESOLUTION_ENABLED
+#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
             Extent2D(size->x / 2.0f, size->y / 2.0f),
 #else
             Extent2D(size->x, size->y),

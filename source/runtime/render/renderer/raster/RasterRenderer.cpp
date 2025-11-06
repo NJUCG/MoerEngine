@@ -188,10 +188,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             processing_image =
                 tensor_rt_pass->Process(raster_context, raster_config, lighting_pass_output, ao_only_idx);
 
-            if (strcmp(raster_config.ai_trt_visualize_buffer.c_str(), "Engine2 out_final_output") == 0 ||
-                strcmp(raster_config.ai_trt_visualize_buffer.c_str(), "Engine2 out_denoised_ao") == 0) {
-                processing_image = bfd_pass->Process(raster_context, raster_config, processing_image);
-            }
+            processing_image = bfd_pass->Process(raster_context, raster_config, processing_image);
         }
 #endif
 
@@ -201,20 +198,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // - Anti-aliasing
         processing_image = aa_pass->Process(raster_context, raster_config, camera, processing_image);
 
+#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
         // - Upsample Pass
-#if SUPER_RESOLUTION_ENABLED
         processing_image = upsample_pass->Process(raster_context, raster_config, processing_image);
-        /*
-        processing_image = [&]() -> uint {
-            if (raster_config.upsample_mode == EUpsampleMode::BILINEAR) {
-                //return processing_image;
-                return upsample_pass->Process(raster_context, raster_config, processing_image);
-            }
-            else return processing_image;
-            
-            //return processing_image;
-        }();
-        */
 #endif
 
         if (hooks.on_ui_combine_pass) {

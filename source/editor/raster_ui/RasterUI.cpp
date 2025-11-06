@@ -172,11 +172,15 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+#if WITH_CUDA
     if (ImGui::TreeNode(
             "Upsample",
             "Upsample: [%s]",
             s_upsample_mode_name_array[static_cast<uint32>(m_config.upsample_mode)].c_str()
         )) {
+
+        ImGui::Text("目前需要在RasterTextures.h中编译期启用");
+
         for (uint i = 0; i < s_upsample_mode_name_array.size(); i++) {
             if (ImGui::Selectable(
                     s_upsample_mode_name_array[i].c_str(),
@@ -196,7 +200,6 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
-#if WITH_CUDA
     if (ImGui::TreeNode("CUDA", "CUDA: [%s]", (m_config.ai_is_cuda_enabled == 1 ? "Enable" : "Disable"))) {
         if (ImGui::Selectable("Enable", m_config.ai_is_cuda_enabled == 1)) {
             m_config.ai_is_cuda_enabled = 1;
@@ -209,14 +212,16 @@ void RasterUI::ShowConfig() {
 
         if (m_config.ai_is_cuda_enabled == 1) {
             ImGui::Separator();
-            // ImGui::SliderFloat("Debug Param", &m_config.ai_cuda_pass_debug_param, 0.0f, 1.0f);
+            ImGui::SliderFloat("Debug Param", &m_config.ai_cuda_pass_debug_param, 0.0f, 1.0f);
 
-            // ImGui::SliderInt("双边滤波 Radius", &m_config.ai_bfd_kernel_radius, 1, 10);
-            // ImGui::SliderFloat(
-            //     "双边滤波 SpatialSigma^2", &m_config.ai_bfd_spatial_sigma_square, 1.0f, 150.0f
-            // );
-            // ImGui::SliderFloat("双边滤波 RangeSigma^2", &m_config.ai_bfd_range_sigma_square, 0.001f, 0.05f);
+            ImGui::Separator();
+            ImGui::SliderInt("双边滤波 Radius", &m_config.ai_bfd_kernel_radius, 1, 10);
+            ImGui::SliderFloat(
+                "双边滤波 SpatialSigma^2", &m_config.ai_bfd_spatial_sigma_square, 1.0f, 150.0f
+            );
+            ImGui::SliderFloat("双边滤波 RangeSigma^2", &m_config.ai_bfd_range_sigma_square, 0.001f, 0.05f);
 
+            ImGui::Separator();
             for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
                 if (ImGui::Selectable(
                         s_ai_trt_visualize_buffer_array[i].c_str(), m_config.ai_trt_visualize_buffer_idx == i
