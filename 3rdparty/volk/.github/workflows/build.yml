@@ -22,6 +22,9 @@ jobs:
       shell: bash
       run: |
         mv Vulkan-Headers ~/Vulkan-Headers
+    - name: install deps for tests
+      run: sudo apt update && sudo apt install -y xorg-dev
+      if: matrix.os == 'ubuntu'
     - name: build main
       shell: bash
       run: |
@@ -63,4 +66,10 @@ jobs:
       run: |
         export VULKAN_SDK=~/Vulkan-Headers
         git -C ~/Vulkan-Headers checkout vulkan-sdk-1.3.268
+        test/run_tests.sh
+    - name: build 1.3.296
+      shell: bash
+      run: |
+        export VULKAN_SDK=~/Vulkan-Headers
+        git -C ~/Vulkan-Headers checkout vulkan-sdk-1.3.296
         test/run_tests.sh

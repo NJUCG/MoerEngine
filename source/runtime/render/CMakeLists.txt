@@ -86,7 +86,6 @@ target_compile_definitions(${MODULE_NAME} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MO
 
 if(WIN32)
 target_compile_definitions(${MODULE_NAME}
-    PUBLIC "MOER_VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Windows"
     PUBLIC "NOMINMAX"
     )
 elseif(LINUX)

@@ -1,10 +1,8 @@
-cmake_minimum_required(VERSION 3.5)
-cmake_policy(PUSH)
-cmake_policy(SET CMP0048 NEW) # project(... VERSION ...) support
+cmake_minimum_required(VERSION 3.5...3.30)
 
-project(volk VERSION 
+project(volk VERSION
 # VOLK_GENERATE_VERSION
-290
+328
 # VOLK_GENERATE_VERSION
   LANGUAGES C
 )
@@ -19,6 +17,9 @@ if(NOT DEFINED VOLK_PULL_IN_VULKAN)
 endif()
 if(NOT DEFINED VOLK_INSTALL)
   option(VOLK_INSTALL "Create installation targets" OFF)
+endif()
+if(NOT DEFINED VOLK_NAMESPACE)
+  option(VOLK_NAMESPACE "Use C++ namespace for vk* functions" OFF)
 endif()
 if(NOT DEFINED VOLK_HEADERS_ONLY)
   option(VOLK_HEADERS_ONLY "Add interface library only" OFF)
@@ -37,6 +38,10 @@ if(NOT VOLK_HEADERS_ONLY OR VOLK_INSTALL)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}>
     $<INSTALL_INTERFACE:include>
   )
+  if(VOLK_NAMESPACE)
+    target_compile_definitions(volk PUBLIC VOLK_NAMESPACE)
+    set_source_files_properties(volk.c PROPERTIES LANGUAGE CXX)
+  endif()
   if(VOLK_STATIC_DEFINES)
     target_compile_definitions(volk PUBLIC ${VOLK_STATIC_DEFINES})
   endif()
@@ -62,21 +67,22 @@ endif()
 # Vulkan transitive dependency
 
 if(VOLK_PULL_IN_VULKAN)
-  # If CMake has the FindVulkan module and it works, use it.
-  find_package(Vulkan QUIET)
-
   # Try an explicit CMake variable first, then any Vulkan paths
   # discovered by FindVulkan.cmake, then the $VULKAN_SDK environment
   # variable if nothing else works.
   if(VULKAN_HEADERS_INSTALL_DIR)
-    message(STATUS "volk: using VULKAN_HEADERS_INSTALL_DIR option")
+    message("volk: using VULKAN_HEADERS_INSTALL_DIR option")
     set(VOLK_INCLUDES "${VULKAN_HEADERS_INSTALL_DIR}/include")
-  elseif(Vulkan_INCLUDE_DIRS)
-    message(STATUS "volk: using Vulkan_INCLUDE_DIRS from FindVulkan module")
-    set(VOLK_INCLUDES "${Vulkan_INCLUDE_DIRS}")
-  elseif(DEFINED ENV{VULKAN_SDK})
-    message(STATUS "volk: using VULKAN_SDK environment variable")
-    set(VOLK_INCLUDES "$ENV{VULKAN_SDK}/include")
+  else()
+    # If CMake has the FindVulkan module and it works, use it.
+    find_package(Vulkan QUIET)
+    if(Vulkan_INCLUDE_DIRS)
+      message("volk: using Vulkan_INCLUDE_DIRS from FindVulkan module")
+      set(VOLK_INCLUDES "${Vulkan_INCLUDE_DIRS}")
+    elseif(DEFINED ENV{VULKAN_SDK})
+      message("volk: using VULKAN_SDK environment variable")
+      set(VOLK_INCLUDES "$ENV{VULKAN_SDK}/include")
+    endif()
   endif()
 
   if(VOLK_INCLUDES)
@@ -134,4 +140,3 @@ if(VOLK_INSTALL)
   )
 
 endif()
-cmake_policy(POP)

@@ -30,6 +30,14 @@ public:
     DEFINE_SHADER_ARGS(tlas, bdls, param);
 };
 
+class SsdoPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(SsdoPipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(SsdoPipelineBindlessParam, param);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+
 /**
  * MARK: AO Pass
  * 
@@ -67,6 +75,11 @@ public:
                             .Vertex("utils/FullScreenQuad.hlsl")
                             .Pixel("raster/post_process/Rtao.hlsl")
                             .Build<RtaoPipeline>(std::move(create_pso_func()));
+
+        ssdo_pipeline = context.manager.Raster()
+                            .Vertex("utils/FullScreenQuad.hlsl")
+                            .Pixel("raster/post_process/Ssdo.hlsl")
+                            .Build<SsdoPipeline>(std::move(create_pso_func()));
 
         CreateMotionVectorData(context);
     }
@@ -109,6 +122,8 @@ public:
 
         if (ui_config.ao_mode == EAoMode::RTAO || ui_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
             ProcessRtao(context, ui_config, camera, frame_idx, input_image, ao_only);
+        } else if (ui_config.ao_mode == EAoMode::SSDO || ui_config.ao_mode == EAoMode::SSDO_AO_ONLY) {
+            ProcessSsdo(context, ui_config, camera, frame_idx, input_image, ao_only);
         } else {
             ProcessAo(context, ui_config, camera, frame_idx, input_image, ao_only);
         }
@@ -197,9 +212,51 @@ public:
             );
     }
 
+    void ProcessSsdo(
+        RasterContext&      context,
+        const RasterConfig& ui_config,
+        const CameraRef&    camera,
+        uint64              frame_idx,
+        uint                input_image,
+        TextureWithHandle   ao_only
+    ) {
+        SsdoPipelineBindlessParam param;
+
+        param.inv_resolution          = float2(1.0f) / float2(context.textures.ao_output.GetSize());
+        param.ssdo_sample_count       = ui_config.ssao_spp;
+        param.ssdo_radius             = ui_config.ssdo_sample_radius;
+        param.ssdo_max_distance       = ui_config.ssdo_max_distance;
+        param.ssdo_intensity          = ui_config.ssao_intensity;
+        param.ssdo_indirect_intensity = ui_config.ssdo_indirect_intensity;
+        param.normal_tex              = context.textures.normal.handle;
+        param.depth_tex               = context.textures.depth_nearest_sampler.handle;
+        param.position_tex            = context.textures.position.handle;
+        param.noise_tex               = context.noise_tex.handle;
+        param.ao_mode                 = static_cast<uint32>(ui_config.ao_mode);
+        param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
+        param.input_image             = input_image;
+        param.view_projection_matrix  = Transpose(camera->GetViewProjectionMatrix());
+        param.view_matrix             = Transpose(camera->GetViewMatrix());
+        param.camera_position         = camera->GetPosition();
+
+        UpdateMotionVectorData(context, camera);
+        param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;
+
+        context.cmd_list.Gfx(ssdo_pipeline, context.bdls, param)
+            .Draw(
+                "SSDO Pass",
+                context.textures.ao_output.GetRect2D(),
+                std::move(RasterTool::GetFullScreenDrawDatas()),
+                ColorAttachment(context.textures.ao_output.tex),
+                ColorAttachment(ao_only.tex),
+                ColorAttachment(context.textures.camera_motion_vector.tex)
+            );
+    }
+
 private:
     AoPipeline   ao_pipeline;
     RtaoPipeline rtao_pipeline;
+    SsdoPipeline ssdo_pipeline;
 
     CameraMotionVectorData camera_mv_data_in_cpu; // mv: motion vector
     BufferWithHandle       camera_mv_data_in_gpu; // mv: motion vector
