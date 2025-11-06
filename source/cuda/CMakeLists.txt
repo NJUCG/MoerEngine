@@ -75,7 +75,7 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
         CUDA_SEPARABLE_COMPILATION OFF # 需要分离编译时打开；如果打开的话，编译无法通过，貌似是因为兼容性bug
         POSITION_INDEPENDENT_CODE ON   # 编译动态库的时候需要打开
         LINKER_LANGUAGE CUDA           # 不然cmake会提示：CMake can not determine linker language for target: moer_cuda
-        CUDA_ARCHITECTURES 86          # 支持非本机的计算架构（例如3060和3080的Compute Capability都是8.6）
+        CUDA_ARCHITECTURES "61;86;120" # 支持非本机的计算架构（例如3060和3080的Compute Capability都是8.6）
     )
 
     # 宏, link include, link sources
