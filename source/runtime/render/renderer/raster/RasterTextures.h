@@ -79,6 +79,8 @@ struct DepthBufferWithHandleAndName {
     X(TexHandle, ao_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)           \
     X(TexHandle, ao_output_ambient_only, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)    \
     X(TexHandle, ao_output_ambient_only_1, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)  \
+    X(TexHandle, ao_denoiser_accumulate, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)    \
+    X(TexHandle, ao_denoiser_accumulate_1, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)  \
     X(TexHandle, camera_motion_vector, PF_R16G16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true) \
     X(TexHandle, denoiser_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)     \
     X(TexHandle, upsample_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)    \

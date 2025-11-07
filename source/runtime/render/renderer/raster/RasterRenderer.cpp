@@ -12,6 +12,7 @@
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
+#include "RtaoDenoiserPass.h"
 #include "ShadowDepthPass.h"
 #include "SsrPass.h"
 #include "UpsamplePass.h"
@@ -42,13 +43,14 @@ RasterRenderer::RasterRenderer(
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
-    shadow_depth_pass = MakeUnique<ShadowDepthPass>(raster_context);
-    geometry_pass     = MakeUnique<GeometryPass>(raster_context);
-    lighting_pass     = MakeUnique<LightingPass>(raster_context);
-    ao_pass           = MakeUnique<AoPass>(raster_context);
-    bfd_pass          = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
-    ssr_pass          = MakeUnique<SsrPass>(raster_context);
-    aa_pass           = MakeUnique<AaPass>(raster_context);
+    shadow_depth_pass  = MakeUnique<ShadowDepthPass>(raster_context);
+    geometry_pass      = MakeUnique<GeometryPass>(raster_context);
+    lighting_pass      = MakeUnique<LightingPass>(raster_context);
+    ao_pass            = MakeUnique<AoPass>(raster_context);
+    rtao_denoiser_pass = MakeUnique<RtaoDenoiserPass>(raster_context);
+    bfd_pass           = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
+    ssr_pass           = MakeUnique<SsrPass>(raster_context);
+    aa_pass            = MakeUnique<AaPass>(raster_context);
 
 #if WITH_CUDA
     // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
@@ -180,6 +182,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         uint processing_image = ao_result.ao_with_color;
         uint ao_only_idx      = ao_result.ao_only_idx;
 
+        rtao_denoiser_pass->ProcessInPlace(raster_context, raster_config, ao_only_idx);
+
         // - CUDA Pass
 #if WITH_CUDA
         // processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
@@ -216,6 +220,14 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // without test
         raster_context.rt_scene->AdvanceFrame();
+
+        // debug
+        if (raster_config.debug_fps_limit_enable) {
+            // sleep 1.0 / fps seconds
+            // 虽然不精确，但简单
+            std::this_thread::sleep_for(std::chrono::duration<float>(1.0f / raster_config.debug_fps_limit));
+            LOG_DEBUG("FPS Limit Enabled: {}", raster_config.debug_fps_limit);
+        }
     }
 
     if (hooks.on_render_gui) {

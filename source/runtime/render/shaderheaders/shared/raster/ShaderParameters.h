@@ -16,7 +16,12 @@ namespace Moer {
 
 // MARK: Main Content Begin
 
-// todo: add your code here
+struct CopyPassBindlessParam {
+    uint input_image;
+    uint padding0;
+    uint padding1;
+    uint padding2;
+};
 
 // MARK: Main Content End
 
