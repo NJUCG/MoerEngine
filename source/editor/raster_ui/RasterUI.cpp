@@ -145,6 +145,18 @@ void RasterUI::ShowConfig() {
             ImGui::Separator();
 
             ImGui::Checkbox("Enable RTAO TAA Denoiser", &m_config.rtao_denoiser_enable);
+            ImGui::Checkbox("Enable RTAO Reprojection", &m_config.rtao_denoiser_reprojection_enable);
+
+            // 启用 Reprojection 后才能启用 Validation
+            if (m_config.rtao_denoiser_reprojection_enable) {
+                ImGui::Checkbox("Enable RTAO Validation", &m_config.rtao_denoiser_validation_enable);
+            } else {
+                m_config.rtao_denoiser_validation_enable = false;
+            }
+
+            // 启用 Validation 后的额外选项
+            if (m_config.rtao_denoiser_validation_enable) {
+            }
 
             if (m_config.rtao_denoiser_enable) {
                 ImGui::SliderFloat(
@@ -253,10 +265,6 @@ void RasterUI::ShowConfig() {
         draw_border();
 
         if (m_config.ai_is_cuda_enabled == 1) {
-            ImGui::Separator();
-            ImGui::SliderFloat("Debug Param", &m_config.ai_cuda_pass_debug_param, 0.0f, 1.0f);
-
-            ImGui::Separator();
             for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
                 if (ImGui::Selectable(
                         s_ai_trt_visualize_buffer_array[i].c_str(), m_config.ai_trt_visualize_buffer_idx == i
@@ -288,6 +296,8 @@ void RasterUI::ShowConfig() {
     }
 
     if (ImGui::TreeNode("Debug")) {
+        ImGui::SliderFloat("Debug Param", &m_config.debug_param, 0.0f, 1.0f);
+        ImGui::Separator();
         ImGui::Checkbox("Enable FPS Limit", &m_config.debug_fps_limit_enable);
         if (m_config.debug_fps_limit_enable) {
             ImGui::SliderFloat("FPS Limit", &m_config.debug_fps_limit, 0.5f, 240.0f);

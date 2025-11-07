@@ -146,19 +146,19 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
     //           input.environment.ToString(),
     //           (it.first != nullptr ? "Cached" : "Compile"));
 
-    static auto get_remove_target_str = [](const std::string& input_string) -> std::string {
+    static auto get_remove_target_str = [](std::string input_string) -> std::string {
         const std::string target_substring = "target/bin/Debug/resource/";
         size_t            pos              = input_string.find(target_substring);
 
-        if (pos != std::string::npos) {
+        while (pos != std::string::npos) {
             // 如果找到了子串，就创建一个新的字符串，跳过这个子串
             std::string new_string = input_string.substr(0, pos);               // 子串之前的部分
             new_string += input_string.substr(pos + target_substring.length()); // 子串之后的部分
-            return new_string;
-        } else {
-            // 如果没找到子串，就返回原始字符串的拷贝
-            return input_string;
+            input_string = new_string;                                          // 更新输入字符串
+            pos          = input_string.find(target_substring);                 // 继续查找下一个位置
         }
+        // 如果没找到子串，就返回原始字符串的拷贝
+        return input_string;
     };
 
     if (it.first != nullptr) {

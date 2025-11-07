@@ -97,21 +97,23 @@ struct RasterConfig {
     EAaMode aa_mode = EAaMode::SMAA_1X;
 
     // MARK: AO
-    EAoMode         ao_mode                     = EAoMode::SSAO;
-    float           ssao_intensity              = 1.0f;
-    int             ssao_spp                    = 16;
-    int             ssao_sample_radius          = 2;
-    float           ssao_max_distance           = 0.5f;
-    ERtaoSampleMode rtao_sample_mode            = ERtaoSampleMode::COSINE_WEIGHTED;
-    float           rtao_intensity              = 1.0f;
-    float           rtao_ray_trace_distance     = 1.0f;
-    int             rtao_spp                    = 1;
-    bool            rtao_denoiser_enable        = true;
-    float           rtao_denoiser_history_ratio = 0.5f;
-    float           ssdo_depth_bias             = 0.001f;
-    float           ssdo_sample_radius          = 0.16f;
-    float           ssdo_indirect_intensity     = 1.0f;
-    float           ssdo_max_distance           = 0.5f;
+    EAoMode         ao_mode                           = EAoMode::SSAO;
+    float           ssao_intensity                    = 1.0f;
+    int             ssao_spp                          = 16;
+    int             ssao_sample_radius                = 2;
+    float           ssao_max_distance                 = 0.5f;
+    ERtaoSampleMode rtao_sample_mode                  = ERtaoSampleMode::COSINE_WEIGHTED;
+    float           rtao_intensity                    = 1.0f;
+    float           rtao_ray_trace_distance           = 1.0f;
+    int             rtao_spp                          = 1;
+    bool            rtao_denoiser_enable              = true;
+    bool            rtao_denoiser_reprojection_enable = true;
+    bool            rtao_denoiser_validation_enable   = true;
+    float           rtao_denoiser_history_ratio       = 0.9f;
+    float           ssdo_depth_bias                   = 0.001f;
+    float           ssdo_sample_radius                = 0.16f;
+    float           ssdo_indirect_intensity           = 1.0f;
+    float           ssdo_max_distance                 = 0.5f;
 
     // MARK: SSR
     bool  ssr_is_ssr_enabled             = false;
@@ -130,7 +132,6 @@ struct RasterConfig {
 
     // MARK: AI (CUDA, TensorRT)
     bool        ai_is_cuda_enabled          = false;
-    float       ai_cuda_pass_debug_param    = 1.0f;
     int         ai_trt_visualize_buffer_idx = s_ai_trt_visualize_buffer_array.size() - 2; // output
     std::string ai_trt_visualize_buffer =
         s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2];
@@ -150,6 +151,7 @@ struct RasterConfig {
     int           inSize_x      = 540;
 
     // MARK: Debug
+    float debug_param            = 1.0f;
     bool  debug_fps_limit_enable = false;
     float debug_fps_limit        = 60;
 

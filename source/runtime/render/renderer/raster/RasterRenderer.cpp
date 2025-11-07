@@ -225,7 +225,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         if (raster_config.debug_fps_limit_enable) {
             // sleep 1.0 / fps seconds
             // 虽然不精确，但简单
-            std::this_thread::sleep_for(std::chrono::duration<float>(1.0f / raster_config.debug_fps_limit));
+            std::this_thread::sleep_for(std::chrono::duration<double>(1.0 / raster_config.debug_fps_limit));
             LOG_DEBUG("FPS Limit Enabled: {}", raster_config.debug_fps_limit);
         }
     }

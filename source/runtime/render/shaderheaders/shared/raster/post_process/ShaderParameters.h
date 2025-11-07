@@ -92,10 +92,13 @@ struct RtaoDenoiserPassBindlessParam {
     uint color_tex;
     uint motion_vector_tex;
 
-    uint  depth_tex;
+    uint depth_tex;
+    uint normal_tex;
+    uint is_rtao_ao_only;
+    uint is_reprojection_enable;
+
+    uint  is_validation_enable;
     float history_ratio;
-    uint  is_rtao_ao_only;
-    uint  padding0;
 };
 
 struct BilateralFilterDenoiserPipelineBindlessParam {
