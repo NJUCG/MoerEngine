@@ -145,22 +145,32 @@ void RasterUI::ShowConfig() {
             ImGui::Separator();
 
             ImGui::Checkbox("Enable RTAO TAA Denoiser", &m_config.rtao_denoiser_enable);
-            ImGui::Checkbox("Enable RTAO Reprojection", &m_config.rtao_denoiser_reprojection_enable);
+
+            // Denoiser 启用后才能启用 Reprojection
+            if (m_config.rtao_denoiser_enable) {
+                ImGui::SliderFloat(
+                    "Denoiser History Ratio", &m_config.rtao_denoiser_history_ratio, 0.0f, 1.0f
+                );
+
+                ImGui::Checkbox("Enable RTAO Reprojection", &m_config.rtao_denoiser_reprojection_enable);
+            } else {
+                // m_config.rtao_denoiser_reprojection_enable = false;
+            }
 
             // 启用 Reprojection 后才能启用 Validation
             if (m_config.rtao_denoiser_reprojection_enable) {
                 ImGui::Checkbox("Enable RTAO Validation", &m_config.rtao_denoiser_validation_enable);
             } else {
-                m_config.rtao_denoiser_validation_enable = false;
+                // m_config.rtao_denoiser_validation_enable = false;
             }
 
             // 启用 Validation 后的额外选项
             if (m_config.rtao_denoiser_validation_enable) {
-            }
-
-            if (m_config.rtao_denoiser_enable) {
                 ImGui::SliderFloat(
-                    "Denoiser History Ratio", &m_config.rtao_denoiser_history_ratio, 0.0f, 1.0f
+                    "Validation Depth Threshold", &m_config.rtao_denoiser_valid_depth_threshold, 0.0f, 0.1f
+                );
+                ImGui::SliderFloat(
+                    "Validation Normal Threshold", &m_config.rtao_denoiser_valid_normal_threshold, 0.0f, 1.0f
                 );
             }
 

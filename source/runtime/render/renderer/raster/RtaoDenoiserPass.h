@@ -86,13 +86,17 @@ public:
 
         // Pass 1
         RtaoDenoiserPassBindlessParam param;
-        param.history_ao_tex         = img_denoiser_history_read.handle;
-        param.curr_ao_tex            = img_ao_only.handle;
-        param.color_tex              = context.textures.lighting_output.handle;
-        param.motion_vector_tex      = context.textures.camera_motion_vector.handle;
-        param.depth_tex              = context.textures.depth_nearest_sampler.handle;
-        param.normal_tex             = context.textures.normal.handle;
+        param.history_ao_tex    = img_denoiser_history_read.handle;
+        param.curr_ao_tex       = img_ao_only.handle;
+        param.color_tex         = context.textures.lighting_output.handle;
+        param.motion_vector_tex = context.textures.camera_motion_vector.handle;
+        param.depth_tex         = context.textures.depth_nearest_sampler.handle;
+        param.normal_tex        = context.textures.normal.handle;
+
         param.history_ratio          = ui_config.rtao_denoiser_history_ratio;
+        param.valid_depth_threshold  = ui_config.rtao_denoiser_valid_depth_threshold;
+        param.valid_normal_threshold = ui_config.rtao_denoiser_valid_normal_threshold;
+
         param.is_rtao_ao_only        = (ui_config.ao_mode == EAoMode::RTAO_AO_ONLY) ? 1 : 0;
         param.is_reprojection_enable = ui_config.rtao_denoiser_reprojection_enable;
         param.is_validation_enable   = ui_config.rtao_denoiser_validation_enable;

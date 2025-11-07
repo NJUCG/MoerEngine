@@ -31,11 +31,10 @@ void get_reprojected_ao(float2 uv, float curr_ao, out float out_history_ao, out 
         float3 curr_normal = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
         float3 prev_normal = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(prev_uv));
         
-        // TODO: 这里参数没细调
-        if (abs(curr_depth - prev_depth) > curr_depth * 0.01) {
+        if (abs(curr_depth - prev_depth) > curr_depth * param.valid_depth_threshold) {
             out_history_ao = curr_ao;
         }
-        if (dot(curr_normal, prev_normal) < 0.5) {
+        if (dot(curr_normal, prev_normal) < param.valid_normal_threshold) {
             out_history_ao = curr_ao;
         }
 

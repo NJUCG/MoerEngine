@@ -97,23 +97,28 @@ struct RasterConfig {
     EAaMode aa_mode = EAaMode::SMAA_1X;
 
     // MARK: AO
-    EAoMode         ao_mode                           = EAoMode::SSAO;
-    float           ssao_intensity                    = 1.0f;
-    int             ssao_spp                          = 16;
-    int             ssao_sample_radius                = 2;
-    float           ssao_max_distance                 = 0.5f;
-    ERtaoSampleMode rtao_sample_mode                  = ERtaoSampleMode::COSINE_WEIGHTED;
-    float           rtao_intensity                    = 1.0f;
-    float           rtao_ray_trace_distance           = 1.0f;
-    int             rtao_spp                          = 1;
-    bool            rtao_denoiser_enable              = true;
-    bool            rtao_denoiser_reprojection_enable = true;
-    bool            rtao_denoiser_validation_enable   = true;
-    float           rtao_denoiser_history_ratio       = 0.9f;
-    float           ssdo_depth_bias                   = 0.001f;
-    float           ssdo_sample_radius                = 0.16f;
-    float           ssdo_indirect_intensity           = 1.0f;
-    float           ssdo_max_distance                 = 0.5f;
+    EAoMode ao_mode            = EAoMode::SSAO;
+    float   ssao_intensity     = 1.0f;
+    int     ssao_spp           = 16;
+    int     ssao_sample_radius = 2;
+    float   ssao_max_distance  = 0.5f;
+
+    ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
+    float           rtao_intensity          = 1.0f;
+    float           rtao_ray_trace_distance = 1.0f;
+    int             rtao_spp                = 2;
+
+    bool  rtao_denoiser_enable                 = true;
+    bool  rtao_denoiser_reprojection_enable    = true;
+    bool  rtao_denoiser_validation_enable      = true;
+    float rtao_denoiser_history_ratio          = 0.9f;
+    float rtao_denoiser_valid_depth_threshold  = 0.01f;
+    float rtao_denoiser_valid_normal_threshold = 0.8f;
+
+    float ssdo_depth_bias         = 0.001f;
+    float ssdo_sample_radius      = 0.16f;
+    float ssdo_indirect_intensity = 1.0f;
+    float ssdo_max_distance       = 0.5f;
 
     // MARK: SSR
     bool  ssr_is_ssr_enabled             = false;

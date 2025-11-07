@@ -99,6 +99,8 @@ struct RtaoDenoiserPassBindlessParam {
 
     uint  is_validation_enable;
     float history_ratio;
+    float valid_depth_threshold;
+    float valid_normal_threshold;
 };
 
 struct BilateralFilterDenoiserPipelineBindlessParam {
