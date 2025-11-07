@@ -235,8 +235,20 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         }
     };
 
-    auto root_path       = Moer::ConfigManager::GetInstance().GetEngineShaderPath();
-    auto file_path       = std::filesystem::canonical(root_path / _input.relative_source_file_path);
+    auto root_path = Moer::ConfigManager::GetInstance().GetEngineShaderPath();
+
+    std::filesystem::path file_path;
+    try {
+        file_path = std::filesystem::canonical(root_path / _input.relative_source_file_path);
+    } catch (const std::filesystem::filesystem_error& e) {
+        LOG_ERROR(
+            "Shader file not found: {}; Error info: {}",
+            (root_path / _input.relative_source_file_path).string(),
+            e.what()
+        );
+        throw; // 继续抛异常，这里解决不了
+    }
+
     auto last_write_time = std::filesystem::last_write_time(file_path);
 
     // if (LoadCache(last_write_time.time_since_epoch().count(), _input, _output)) {
