@@ -6,6 +6,7 @@ struct AoOutput {
 
 static const float Epsilon = 0.0001; // TODO: same with PBRMaterialFrag.hlsl
 
+// 结果是 NDC Space，目标为当前像素，上一帧指向当前帧
 float2 GetCameraMotionVector(float2 uv) {
     // camera_mv.world2clip
     // camera_mv.world2clip_prev

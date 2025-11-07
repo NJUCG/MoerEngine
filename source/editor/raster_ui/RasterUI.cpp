@@ -123,6 +123,7 @@ void RasterUI::ShowConfig() {
             ImGui::SliderFloat("Ray Trace Radius", &m_config.ssao_max_distance, 0.0f, 2.0f);
             ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 16);
             ImGui::SliderInt("Sample Radius", &m_config.ssao_sample_radius, 1, 8);
+
         } else if (m_config.ao_mode == EAoMode::RTAO || m_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
             ImGui::SliderFloat("Intensity", &m_config.rtao_intensity, 0.0f, 1.0f);
             ImGui::SliderFloat("Ray Trace Radius", &m_config.rtao_ray_trace_distance, 0.0f, 20.0f);
@@ -140,6 +141,39 @@ void RasterUI::ShowConfig() {
                 }
                 draw_border();
             }
+
+            ImGui::Separator();
+
+            ImGui::Checkbox("Enable RTAO TAA Denoiser", &m_config.rtao_denoiser_enable);
+
+            // Denoiser 启用后才能启用 Reprojection
+            if (m_config.rtao_denoiser_enable) {
+                ImGui::SliderFloat(
+                    "Denoiser History Ratio", &m_config.rtao_denoiser_history_ratio, 0.0f, 1.0f
+                );
+
+                ImGui::Checkbox("Enable RTAO Reprojection", &m_config.rtao_denoiser_reprojection_enable);
+            } else {
+                // m_config.rtao_denoiser_reprojection_enable = false;
+            }
+
+            // 启用 Reprojection 后才能启用 Validation
+            if (m_config.rtao_denoiser_reprojection_enable) {
+                ImGui::Checkbox("Enable RTAO Validation", &m_config.rtao_denoiser_validation_enable);
+            } else {
+                // m_config.rtao_denoiser_validation_enable = false;
+            }
+
+            // 启用 Validation 后的额外选项
+            if (m_config.rtao_denoiser_validation_enable) {
+                ImGui::SliderFloat(
+                    "Validation Depth Threshold", &m_config.rtao_denoiser_valid_depth_threshold, 0.0f, 0.1f
+                );
+                ImGui::SliderFloat(
+                    "Validation Normal Threshold", &m_config.rtao_denoiser_valid_normal_threshold, 0.0f, 1.0f
+                );
+            }
+
         } else if (m_config.ao_mode == EAoMode::SSDO || m_config.ao_mode == EAoMode::SSDO_AO_ONLY) {
             ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
             ImGui::SliderFloat("Indirect Intensity", &m_config.ssdo_indirect_intensity, 0.0f, 2.0f);
@@ -241,10 +275,6 @@ void RasterUI::ShowConfig() {
         draw_border();
 
         if (m_config.ai_is_cuda_enabled == 1) {
-            ImGui::Separator();
-            ImGui::SliderFloat("Debug Param", &m_config.ai_cuda_pass_debug_param, 0.0f, 1.0f);
-
-            ImGui::Separator();
             for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
                 if (ImGui::Selectable(
                         s_ai_trt_visualize_buffer_array[i].c_str(), m_config.ai_trt_visualize_buffer_idx == i
@@ -271,6 +301,16 @@ void RasterUI::ShowConfig() {
                 m_config.aa_mode = cur_enum;
             }
             draw_border();
+        }
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode("Debug")) {
+        ImGui::SliderFloat("Debug Param", &m_config.debug_param, 0.0f, 1.0f);
+        ImGui::Separator();
+        ImGui::Checkbox("Enable FPS Limit", &m_config.debug_fps_limit_enable);
+        if (m_config.debug_fps_limit_enable) {
+            ImGui::SliderFloat("FPS Limit", &m_config.debug_fps_limit, 0.5f, 240.0f);
         }
         ImGui::TreePop();
     }

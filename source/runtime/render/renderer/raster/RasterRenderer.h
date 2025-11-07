@@ -10,6 +10,7 @@ class ShadowDepthPass;
 class GeometryPass;
 class LightingPass;
 class AoPass;
+class RtaoDenoiserPass;
 class BilateralFilterDenoiserPass;
 class SsrPass;
 class AaPass;
@@ -65,6 +66,7 @@ private:
     UniquePtr<GeometryPass>                geometry_pass;
     UniquePtr<LightingPass>                lighting_pass;
     UniquePtr<AoPass>                      ao_pass;
+    UniquePtr<RtaoDenoiserPass>            rtao_denoiser_pass;
     UniquePtr<BilateralFilterDenoiserPass> bfd_pass;
     UniquePtr<SsrPass>                     ssr_pass;
     UniquePtr<AaPass>                      aa_pass;

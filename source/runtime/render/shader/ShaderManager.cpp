@@ -146,13 +146,30 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
     //           input.environment.ToString(),
     //           (it.first != nullptr ? "Cached" : "Compile"));
 
+    static auto get_remove_target_str = [](std::string input_string) -> std::string {
+        const std::string target_substring = "target/bin/Debug/resource/";
+        size_t            pos              = input_string.find(target_substring);
+
+        while (pos != std::string::npos) {
+            // 如果找到了子串，就创建一个新的字符串，跳过这个子串
+            std::string new_string = input_string.substr(0, pos);               // 子串之前的部分
+            new_string += input_string.substr(pos + target_substring.length()); // 子串之后的部分
+            input_string = new_string;                                          // 更新输入字符串
+            pos          = input_string.find(target_substring);                 // 继续查找下一个位置
+        }
+        // 如果没找到子串，就返回原始字符串的拷贝
+        return input_string;
+    };
+
     if (it.first != nullptr) {
         return *it.first;
     }
     auto&& output = ShaderCompiler::Compile(std::move(input));
     if (!output.b_succeeded) {
         for (const auto& error : output.errors) {
-            LOG_ERROR("Shader Compile Error: {}", error.data());
+            LOG_ERROR(
+                "Shader Compile Error: {}", get_remove_target_str(error)
+            ); // 返回原始Shader目录，而不是返回Target目录下的临时shader文件
         }
         assert(
             false &&
@@ -210,13 +227,15 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
     };
     auto get_shader_info = [&](EShaderType _type, Shader& _output) {
         ShaderEntry& entry = shader_manager.GetShaderEntry(_output);
-        return std::move(SingleShaderInfo{
-            .name             = _output.shader_path,
-            .entry_point      = _output.entry_name,
-            .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
-            .shader_type      = _type,
-            .shader_param_map = &_output.reflection
-        });
+        return std::move(
+            SingleShaderInfo{
+                .name             = _output.shader_path,
+                .entry_point      = _output.entry_name,
+                .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
+                .shader_type      = _type,
+                .shader_param_map = &_output.reflection
+            }
+        );
     };
     PipelineShaderInfo sd_info{
         .layout_hash = std::move(_hash_values), .arg_cpp_info = std::move(_arg_type_values)
@@ -285,13 +304,15 @@ PipelineShaderInfo ComputeConstructor::CompileShaderInfo(
     };
     auto get_shader_info = [&](EShaderType _type, Shader& _output) {
         ShaderEntry& entry = shader_manager.GetShaderEntry(_output);
-        return std::move(SingleShaderInfo{
-            .name             = _output.shader_path,
-            .entry_point      = _output.entry_name,
-            .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
-            .shader_type      = _type,
-            .shader_param_map = &_output.reflection
-        });
+        return std::move(
+            SingleShaderInfo{
+                .name             = _output.shader_path,
+                .entry_point      = _output.entry_name,
+                .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
+                .shader_type      = _type,
+                .shader_param_map = &_output.reflection
+            }
+        );
     };
 
     auto&              output = get_shader_output(shader_info, ST_COMPUTE);

@@ -86,6 +86,23 @@ struct RtaoPipelineBindlessParam {
     uint camera_mv_data_handle; // for camera motion vector
 };
 
+struct RtaoDenoiserPassBindlessParam {
+    uint history_ao_tex;
+    uint curr_ao_tex;
+    uint color_tex;
+    uint motion_vector_tex;
+
+    uint depth_tex;
+    uint normal_tex;
+    uint is_rtao_ao_only;
+    uint is_reprojection_enable;
+
+    uint  is_validation_enable;
+    float history_ratio;
+    float valid_depth_threshold;
+    float valid_normal_threshold;
+};
+
 struct BilateralFilterDenoiserPipelineBindlessParam {
     float2 inv_resolution;
     float  spatial_sigma_square;

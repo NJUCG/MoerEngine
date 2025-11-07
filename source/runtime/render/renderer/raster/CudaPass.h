@@ -97,7 +97,7 @@ public:
             cuda_res.cuda_texture->width,
             cuda_res.cuda_texture->height,
             cuda_res.cuda_texture->mip_levels,
-            ui_config.ai_cuda_pass_debug_param
+            1.0f
         );
 
         // wait

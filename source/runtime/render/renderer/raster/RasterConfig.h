@@ -97,19 +97,28 @@ struct RasterConfig {
     EAaMode aa_mode = EAaMode::SMAA_1X;
 
     // MARK: AO
-    EAoMode         ao_mode                 = EAoMode::SSAO;
-    float           ssao_intensity          = 1.0f;
-    int             ssao_spp                = 16;
-    int             ssao_sample_radius      = 2;
-    float           ssao_max_distance       = 0.5f;
+    EAoMode ao_mode            = EAoMode::SSAO;
+    float   ssao_intensity     = 1.0f;
+    int     ssao_spp           = 16;
+    int     ssao_sample_radius = 2;
+    float   ssao_max_distance  = 0.5f;
+
     ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
     float           rtao_intensity          = 1.0f;
     float           rtao_ray_trace_distance = 1.0f;
-    int             rtao_spp                = 1;
-    float           ssdo_depth_bias         = 0.001f;
-    float           ssdo_sample_radius      = 0.16f;
-    float           ssdo_indirect_intensity = 1.0f;
-    float           ssdo_max_distance       = 0.5f;
+    int             rtao_spp                = 2;
+
+    bool  rtao_denoiser_enable                 = true;
+    bool  rtao_denoiser_reprojection_enable    = true;
+    bool  rtao_denoiser_validation_enable      = true;
+    float rtao_denoiser_history_ratio          = 0.9f;
+    float rtao_denoiser_valid_depth_threshold  = 0.01f;
+    float rtao_denoiser_valid_normal_threshold = 0.8f;
+
+    float ssdo_depth_bias         = 0.001f;
+    float ssdo_sample_radius      = 0.16f;
+    float ssdo_indirect_intensity = 1.0f;
+    float ssdo_max_distance       = 0.5f;
 
     // MARK: SSR
     bool  ssr_is_ssr_enabled             = false;
@@ -128,7 +137,6 @@ struct RasterConfig {
 
     // MARK: AI (CUDA, TensorRT)
     bool        ai_is_cuda_enabled          = false;
-    float       ai_cuda_pass_debug_param    = 1.0f;
     int         ai_trt_visualize_buffer_idx = s_ai_trt_visualize_buffer_array.size() - 2; // output
     std::string ai_trt_visualize_buffer =
         s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2];
@@ -141,15 +149,20 @@ struct RasterConfig {
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera = {0.01, 0.04, 0.32, 1.0};
 
-    // MARK: Others
-    std::string default_selected_frame_buffer_name = "aa_output";
-    uint        selected_frame_buffer_index        = 0;
-
     // MARK: Upsample Process
     EUpsampleMode upsample_mode = EUpsampleMode::None;
     int           outSize_x     = 1080;
     int           outSize_y     = 1920;
     int           inSize_x      = 540;
+
+    // MARK: Debug
+    float debug_param            = 1.0f;
+    bool  debug_fps_limit_enable = false;
+    float debug_fps_limit        = 60;
+
+    // MARK: Others
+    std::string default_selected_frame_buffer_name = "aa_output";
+    uint        selected_frame_buffer_index        = 0;
 };
 
 } // namespace Moer
