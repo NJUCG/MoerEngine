@@ -225,9 +225,9 @@ public:
             }
 
             // Get new z min & max in Light View Space
-            float light_z_offset      = Dot(light_pos, light_direction);
-            aabb_min_z_in_light_space = min.z + light_z_offset;
-            aabb_max_z_in_light_space = max.z + light_z_offset;
+            float light_z_offset            = Dot(light_pos, light_direction);
+            float aabb_min_z_in_light_space = min.z + light_z_offset;
+            float aabb_max_z_in_light_space = max.z + light_z_offset;
 
             // 突发奇想的一个trick，用于修复以下问题：
             //   LightView2LightClip矩阵，会剔除摄像机视锥后方的一些Mesh。但是这些Mesh也需要产生阴影！
