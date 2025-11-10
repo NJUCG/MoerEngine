@@ -68,6 +68,13 @@ public:
             material_param.skybox_handles[i] = context.skybox_tex[i].handle;
         }
 
+        material_param.view_matrix = Transpose(camera->GetViewMatrix());
+        material_param.near_clip   = camera->GetNearClip();
+        material_param.far_clip    = camera->GetFarClip();
+        for (int i = 0; i < MAX_CSM_CASCADES; i++) {
+            material_param.csm_split_ratios[i] = ui_config.shadow_csm_cover_ratio_of_camera[i];
+        }
+
         // 注意生命周期！
         LightingData* lighting_data = MoerNew(LightingData);
 

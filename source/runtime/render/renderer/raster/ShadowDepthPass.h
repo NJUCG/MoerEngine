@@ -166,63 +166,47 @@ public:
          * 好文章&好评论区：https://zhuanlan.zhihu.com/p/116731971
          */
         auto get_world_to_shadow_clip_matrix = [&](uint cascade_index) {
-            // Cover ratio of camera frustum
-            // Method 1: 每次视锥取 a[i-1] ~ a[i]
-            // const float cover_ratio_near =
-            //     cascade_index == 0 ? 0.f : ui_config.shadow_csm_cover_ratio_of_camera[cascade_index - 1];
-            // Method 2：每次视锥都取 0 ~ a[i]
-            const float cover_ratio_near = 0.f;
-            const float cover_ratio_far  = ui_config.shadow_csm_cover_ratio_of_camera[cascade_index];
+            const float frustum_near_ratio =
+                (cascade_index == 0) ? 0.0f : ui_config.shadow_csm_cover_ratio_of_camera[cascade_index - 1];
+            const float frustum_far_ratio = ui_config.shadow_csm_cover_ratio_of_camera[cascade_index];
 
             // AABB
-            // - Get Frustum
             StaticArray<float3, 8> frustum_corners =
-                camera->GetFrustumCorners(cover_ratio_near, cover_ratio_far);
-            // - Transform to Light Space
-            StaticArray<float3, 8> corner_vector_in_light_space;
+                camera->GetFrustumCorners(frustum_near_ratio, frustum_far_ratio);
+            StaticArray<float3, 8> frustum_corner_in_light_space;
             for (uint i = 0; i < 8; i++) {
-                corner_vector_in_light_space[i] = world_to_light_view_rotate_only * frustum_corners[i];
+                frustum_corner_in_light_space[i] = world_to_light_view_rotate_only * frustum_corners[i];
             }
             // - Get 最长对角线
             float max_cross_distance = Max(
-                Lengthf(corner_vector_in_light_space[4] - corner_vector_in_light_space[6]), // 远平面对角线
+                Lengthf(frustum_corner_in_light_space[4] - frustum_corner_in_light_space[6]), // 远平面对角线
                 Lengthf(
-                    corner_vector_in_light_space[0] - corner_vector_in_light_space[6]
+                    frustum_corner_in_light_space[0] - frustum_corner_in_light_space[6]
                 ) // 近平面和远平面的最长对角线
             );
+
             // - Get AABB
-            float3 min = corner_vector_in_light_space[0];
-            float3 max = corner_vector_in_light_space[0];
+            float3 min = frustum_corner_in_light_space[0];
+            float3 max = frustum_corner_in_light_space[0];
             for (uint i = 1; i < 8; i++) {
-                min = Min(min, corner_vector_in_light_space[i]);
-                max = Max(max, corner_vector_in_light_space[i]);
+                min = Min(min, frustum_corner_in_light_space[i]);
+                max = Max(max, frustum_corner_in_light_space[i]);
             }
 
-            // Light Pos
+            // 最小跳跃单位，避免shadow swimming
             // Reference: https://zhuanlan.zhihu.com/p/116731971
             const float world_units_per_texel = max_cross_distance / ui_config.shadow_csm_sm_size;
             auto        get_fixed_coord       = [&](float x) {
                 return floorf(x / world_units_per_texel) * world_units_per_texel;
             };
 
-            //虚拟光源位置，放在包围盒正中心的稍微前方一点的位置（但是z最远，保证点都在前方）
+            //虚拟光源位置
             const float3 light_pos =
                 world_to_light_view_rotate_only_inverse * Vector3f(
                                                               get_fixed_coord((min.x + max.x) * 0.5f),
                                                               get_fixed_coord((min.y + max.y) * 0.5f),
                                                               get_fixed_coord(min.z - 0.01f)
                                                           );
-
-            // world to light clip0
-            const float4x4 light_view_matrix =
-                MakeLookatViewMatrixRH(light_pos, light_pos + light_direction, light_up);
-
-            // - Transform to Light Space
-            StaticArray<float3, 8> frustum_corners_lst;
-            for (uint i = 0; i < 8; i++) {
-                float4 v4              = light_view_matrix * float4(frustum_corners[i], 1.0f);
-                frustum_corners_lst[i] = v4.xyz / v4.w;
-            }
 
             // Get new z min & max in Light View Space
             float light_z_offset            = Dot(light_pos, light_direction);
@@ -244,6 +228,11 @@ public:
                 aabb_max_z_in_light_space + z_delta
             );
             light_view_to_light_clip[2][2] *= -1.f; // 反转z轴
+
+            // Final Matrix
+            // world to light clip0
+            const float4x4 light_view_matrix =
+                MakeLookatViewMatrixRH(light_pos, light_pos + light_direction, light_up);
 
             const float4x4 world_to_light_orth_matrix = light_view_to_light_clip * light_view_matrix;
 

@@ -62,79 +62,33 @@ float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) 
     return pos;
 }
 
+int get_cascade_index(Moer::LightingData lighting_data, float3 world_pos) {
+    //FIXME:移动到cpu端计算，会提高效率么？
+    float4 pixel_view_pos    = mul(param.view_matrix, float4(world_pos, 1.0));
+    float  pixel_depth_ratio = (pixel_view_pos.z - param.near_clip) / (param.far_clip - param.near_clip);
+    for (int i = 0; i < lighting_data.shadow_csm_num_of_cascades; i++) {
+        if (pixel_depth_ratio < param.csm_split_ratios[i]) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
-    // Cascade 0
-    {
-        float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[0], float4(world_pos, 1.0));
-        float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
-        float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
-
-        if (shadow_uv.x > 0.0 && shadow_uv.x < 1.0 && shadow_uv.y > 0.0 && shadow_uv.y < 1.0 &&
-            shadow_ndc_pos.z > 0.0 && shadow_ndc_pos.z < 1.0) {
-            float occluder_depth = TextureHandle(lighting_data.shadow_map[0]).Sample2D<float>(shadow_uv).x;
-            float fragment_depth = shadow_ndc_pos.z;
-            // near<->1.0; far<->0.0
-
-            return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
-        }
-    }
-    if (lighting_data.shadow_csm_num_of_cascades <= 1)
+    int cascade_index = get_cascade_index(lighting_data, world_pos);
+    if (cascade_index == -1)
         return 1.0;
-    // Cascade 1
-    {
-        float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[1], float4(world_pos, 1.0));
-        float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
-        float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
-
-        if (shadow_uv.x > 0.0 && shadow_uv.x < 1.0 && shadow_uv.y > 0.0 && shadow_uv.y < 1.0 &&
-            shadow_ndc_pos.z > 0.0 && shadow_ndc_pos.z < 1.0) {
-            float occluder_depth = TextureHandle(lighting_data.shadow_map[1]).Sample2D<float>(shadow_uv).x;
-            // float fragment_depth = 1.0f - shadow_ndc_pos.z; // Inverse Depth
-            float fragment_depth = shadow_ndc_pos.z;
-            // near<->1.0; far<->0.0
-
-            return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
-        }
+    float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[cascade_index], float4(world_pos, 1.0));
+    float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
+    float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
+    if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 &&
+        shadow_ndc_pos.z >= 0.0 && shadow_ndc_pos.z <= 1.0) {
+        float occluder_depth =
+            TextureHandle(lighting_data.shadow_map[cascade_index]).Sample2D<float>(shadow_uv).x;
+        float fragment_depth = shadow_ndc_pos.z;
+        return (shadow_ndc_pos.z + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
+        // near<->1.0; far<->0.0
     }
-    if (lighting_data.shadow_csm_num_of_cascades <= 2)
-        return 1.0;
-    // Cascade 2
-    {
-        float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[2], float4(world_pos, 1.0));
-        float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
-        float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
-
-        if (shadow_uv.x > 0.0 && shadow_uv.x < 1.0 && shadow_uv.y > 0.0 && shadow_uv.y < 1.0 &&
-            shadow_ndc_pos.z > 0.0 && shadow_ndc_pos.z < 1.0) {
-            float occluder_depth = TextureHandle(lighting_data.shadow_map[2]).Sample2D<float>(shadow_uv).x;
-            // float fragment_depth = 1.0f - shadow_ndc_pos.z; // Inverse Depth
-            float fragment_depth = shadow_ndc_pos.z;
-            // near<->1.0; far<->0.0
-
-            return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
-        }
-    }
-    if (lighting_data.shadow_csm_num_of_cascades <= 3)
-        return 1.0;
-    // Cascade 3
-    {
-        float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[3], float4(world_pos, 1.0));
-        float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
-        float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
-
-        if (shadow_uv.x > 0.0 && shadow_uv.x < 1.0 && shadow_uv.y > 0.0 && shadow_uv.y < 1.0 &&
-            shadow_ndc_pos.z > 0.0 && shadow_ndc_pos.z < 1.0) {
-            float occluder_depth = TextureHandle(lighting_data.shadow_map[3]).Sample2D<float>(shadow_uv).x;
-            // float fragment_depth = 1.0f - shadow_ndc_pos.z; // Inverse Depth
-            float fragment_depth = shadow_ndc_pos.z;
-            // near<->1.0; far<->0.0
-
-            return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
-        }
-    }
-    if (lighting_data.shadow_csm_num_of_cascades <= 4)
-        return 1.0;
-    // Default
     return 1.0;
 }
 
