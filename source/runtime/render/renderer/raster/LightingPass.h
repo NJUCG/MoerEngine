@@ -64,12 +64,9 @@ public:
         material_param.gbuffer_position    = context.textures.position.handle;
         material_param.global_param_handle = lighting_data_buffer.handle;
         material_param.light_buffer        = context.gpu_light_info_handle;
-        material_param.skybox_handle_posz  = context.skybox_tex[0].handle;
-        material_param.skybox_handle_negz  = context.skybox_tex[1].handle;
-        material_param.skybox_handle_posy  = context.skybox_tex[2].handle;
-        material_param.skybox_handle_negy  = context.skybox_tex[3].handle;
-        material_param.skybox_handle_posx  = context.skybox_tex[4].handle;
-        material_param.skybox_handle_negx  = context.skybox_tex[5].handle;
+        for (int i = 0; i < 6; i++) {
+            material_param.skybox_handles[i] = context.skybox_tex[i].handle;
+        }
 
         // 注意生命周期！
         LightingData* lighting_data = MoerNew(LightingData);

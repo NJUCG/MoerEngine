@@ -7,13 +7,12 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "shared/raster/lighting_pass/ShaderParameters.h"
 
-
 [[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
 
 float ndfGGX(float cosLh, float roughness) {
-    float alpha = roughness * roughness;
+    float alpha   = roughness * roughness;
     float alphaSq = alpha * alpha;
-    float denom = (cosLh * cosLh) * (alphaSq - 1.0) + 1.0;
+    float denom   = (cosLh * cosLh) * (alphaSq - 1.0) + 1.0;
     return alphaSq / (PI * denom * denom);
 }
 
@@ -32,31 +31,31 @@ float3 fresnelSchlick(float3 F0, float cosTheta) {
 }
 
 static const float3 Fdielectric = 0.04;
-static const float Epsilon = 0.0001;
+static const float  Epsilon     = 0.0001;
 struct PBRInfo {
-    float roughness;
+    float  roughness;
     float3 albedo;
-    float metalness;
+    float  metalness;
     float3 normal;
     float3 viewDir;
 
     float3 Evaluate(float3 lightDir) {
-        float3 F0 = lerp(Fdielectric, albedo, metalness);
-        float3 halfDir = normalize(lightDir + viewDir);
-        float cosLi = saturate(dot(normal, lightDir));
-        float cosLh = saturate(dot(normal, halfDir));
-        float cosLo = saturate(dot(normal, viewDir));
-        float3 F = fresnelSchlick(F0, cosLo);
-        float D = ndfGGX(cosLh, roughness);
-        float G = gaSchlickGGX(cosLi, cosLo, roughness);
-        float3 kd = lerp(float3(1, 1, 1) - F, float3(0, 0, 0), metalness);
-        float3 diffuseBRDF = kd * albedo;
+        float3 F0           = lerp(Fdielectric, albedo, metalness);
+        float3 halfDir      = normalize(lightDir + viewDir);
+        float  cosLi        = saturate(dot(normal, lightDir));
+        float  cosLh        = saturate(dot(normal, halfDir));
+        float  cosLo        = saturate(dot(normal, viewDir));
+        float3 F            = fresnelSchlick(F0, cosLo);
+        float  D            = ndfGGX(cosLh, roughness);
+        float  G            = gaSchlickGGX(cosLi, cosLo, roughness);
+        float3 kd           = lerp(float3(1, 1, 1) - F, float3(0, 0, 0), metalness);
+        float3 diffuseBRDF  = kd * albedo;
         float3 specularBRDF = (F * D * G) / max(Epsilon, 4.0 * cosLi * cosLo);
         return (diffuseBRDF + specularBRDF) * cosLi;
     }
 };
 
-float3 WorldPosFromDepth(float depth, float2 screen_uv,float4x4 inv_view_proj) {
+float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) {
     float4 clip    = float4(screen_uv.x * 2.f - 1.f, 1.f - screen_uv.y * 2.f, depth, 1.0);
     float4 world_w = mul(inv_view_proj, clip);
     float3 pos     = world_w.xyz / world_w.w;
@@ -67,20 +66,11 @@ float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
     // Cascade 0
     {
         float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[0], float4(world_pos, 1.0));
-        float3 shadow_ndc_pos = shadow_clip_pos.xyz / shadow_clip_pos.w;
-        float2 shadow_uv = float2(
-            shadow_ndc_pos.x * 0.5 + 0.5,
-            1.0 - (shadow_ndc_pos.y * 0.5 + 0.5)
-        );
+        float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
+        float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
 
-        if (
-            shadow_uv.x > 0.0
-            && shadow_uv.x < 1.0
-            && shadow_uv.y > 0.0
-            && shadow_uv.y < 1.0
-            && shadow_ndc_pos.z > 0.0
-            && shadow_ndc_pos.z < 1.0
-        ) {
+        if (shadow_uv.x > 0.0 && shadow_uv.x < 1.0 && shadow_uv.y > 0.0 && shadow_uv.y < 1.0 &&
+            shadow_ndc_pos.z > 0.0 && shadow_ndc_pos.z < 1.0) {
             float occluder_depth = TextureHandle(lighting_data.shadow_map[0]).Sample2D<float>(shadow_uv).x;
             float fragment_depth = shadow_ndc_pos.z;
             // near<->1.0; far<->0.0
@@ -88,24 +78,16 @@ float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
             return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
         }
     }
-    if (lighting_data.shadow_csm_num_of_cascades <= 1) return 1.0;
+    if (lighting_data.shadow_csm_num_of_cascades <= 1)
+        return 1.0;
     // Cascade 1
     {
         float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[1], float4(world_pos, 1.0));
-        float3 shadow_ndc_pos = shadow_clip_pos.xyz / shadow_clip_pos.w;
-        float2 shadow_uv = float2(
-            shadow_ndc_pos.x * 0.5 + 0.5,
-            1.0 - (shadow_ndc_pos.y * 0.5 + 0.5)
-        );
+        float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
+        float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
 
-        if (
-            shadow_uv.x > 0.0
-            && shadow_uv.x < 1.0
-            && shadow_uv.y > 0.0
-            && shadow_uv.y < 1.0
-            && shadow_ndc_pos.z > 0.0
-            && shadow_ndc_pos.z < 1.0
-        ) {
+        if (shadow_uv.x > 0.0 && shadow_uv.x < 1.0 && shadow_uv.y > 0.0 && shadow_uv.y < 1.0 &&
+            shadow_ndc_pos.z > 0.0 && shadow_ndc_pos.z < 1.0) {
             float occluder_depth = TextureHandle(lighting_data.shadow_map[1]).Sample2D<float>(shadow_uv).x;
             // float fragment_depth = 1.0f - shadow_ndc_pos.z; // Inverse Depth
             float fragment_depth = shadow_ndc_pos.z;
@@ -114,24 +96,16 @@ float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
             return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
         }
     }
-    if (lighting_data.shadow_csm_num_of_cascades <= 2) return 1.0;
+    if (lighting_data.shadow_csm_num_of_cascades <= 2)
+        return 1.0;
     // Cascade 2
     {
         float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[2], float4(world_pos, 1.0));
-        float3 shadow_ndc_pos = shadow_clip_pos.xyz / shadow_clip_pos.w;
-        float2 shadow_uv = float2(
-            shadow_ndc_pos.x * 0.5 + 0.5,
-            1.0 - (shadow_ndc_pos.y * 0.5 + 0.5)
-        );
+        float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
+        float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
 
-        if (
-            shadow_uv.x > 0.0
-            && shadow_uv.x < 1.0
-            && shadow_uv.y > 0.0
-            && shadow_uv.y < 1.0
-            && shadow_ndc_pos.z > 0.0
-            && shadow_ndc_pos.z < 1.0
-        ) {
+        if (shadow_uv.x > 0.0 && shadow_uv.x < 1.0 && shadow_uv.y > 0.0 && shadow_uv.y < 1.0 &&
+            shadow_ndc_pos.z > 0.0 && shadow_ndc_pos.z < 1.0) {
             float occluder_depth = TextureHandle(lighting_data.shadow_map[2]).Sample2D<float>(shadow_uv).x;
             // float fragment_depth = 1.0f - shadow_ndc_pos.z; // Inverse Depth
             float fragment_depth = shadow_ndc_pos.z;
@@ -140,24 +114,16 @@ float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
             return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
         }
     }
-    if (lighting_data.shadow_csm_num_of_cascades <= 3) return 1.0;
+    if (lighting_data.shadow_csm_num_of_cascades <= 3)
+        return 1.0;
     // Cascade 3
     {
         float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[3], float4(world_pos, 1.0));
-        float3 shadow_ndc_pos = shadow_clip_pos.xyz / shadow_clip_pos.w;
-        float2 shadow_uv = float2(
-            shadow_ndc_pos.x * 0.5 + 0.5,
-            1.0 - (shadow_ndc_pos.y * 0.5 + 0.5)
-        );
+        float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
+        float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
 
-        if (
-            shadow_uv.x > 0.0
-            && shadow_uv.x < 1.0
-            && shadow_uv.y > 0.0
-            && shadow_uv.y < 1.0
-            && shadow_ndc_pos.z > 0.0
-            && shadow_ndc_pos.z < 1.0
-        ) {
+        if (shadow_uv.x > 0.0 && shadow_uv.x < 1.0 && shadow_uv.y > 0.0 && shadow_uv.y < 1.0 &&
+            shadow_ndc_pos.z > 0.0 && shadow_ndc_pos.z < 1.0) {
             float occluder_depth = TextureHandle(lighting_data.shadow_map[3]).Sample2D<float>(shadow_uv).x;
             // float fragment_depth = 1.0f - shadow_ndc_pos.z; // Inverse Depth
             float fragment_depth = shadow_ndc_pos.z;
@@ -166,7 +132,8 @@ float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
             return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
         }
     }
-    if (lighting_data.shadow_csm_num_of_cascades <= 4) return 1.0;
+    if (lighting_data.shadow_csm_num_of_cascades <= 4)
+        return 1.0;
     // Default
     return 1.0;
 }
@@ -183,11 +150,11 @@ float calculate_shadow(Moer::LightingData lighting_data, float3 world_pos) {
 
 float4 calculate_ibl(Moer::LightingData lighting_data, float3 world_pos) {
     float3 view_dir = world_pos - lighting_data.camera_position;
-    
+
     float3 abs_dir = abs(view_dir);
-    uint axis = 0;
+    uint   axis    = 0;
     float2 uv;
-    uint handle_index;
+    uint   handle_index;
 
     if (abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z) {
         axis = 0; // X轴
@@ -196,30 +163,30 @@ float4 calculate_ibl(Moer::LightingData lighting_data, float3 world_pos) {
     } else {
         axis = 2; // Z轴
     }
-    
+
     if (axis == 0) {
         if (view_dir.x > 0) {
             uv = float2(-view_dir.z, -view_dir.y) / view_dir.x * 0.5 + 0.5;
-            return float4(TextureHandle(param.skybox_handle_posx).Sample2D<float3>(uv), 1.0);
+            return float4(TextureHandle(param.skybox_handles[2]).Sample2D<float3>(uv), 1.0);
         } else {
             uv = float2(view_dir.z, -view_dir.y) / (-view_dir.x) * 0.5 + 0.5;
-            return float4(TextureHandle(param.skybox_handle_negx).Sample2D<float3>(uv), 1.0);
+            return float4(TextureHandle(param.skybox_handles[3]).Sample2D<float3>(uv), 1.0);
         }
     } else if (axis == 1) {
         if (view_dir.y > 0) {
             uv = float2(view_dir.x, view_dir.z) / view_dir.y * 0.5 + 0.5;
-            return float4(TextureHandle(param.skybox_handle_posy).Sample2D<float3>(uv), 1.0);
+            return float4(TextureHandle(param.skybox_handles[4]).Sample2D<float3>(uv), 1.0);
         } else {
             uv = float2(view_dir.x, -view_dir.z) / (-view_dir.y) * 0.5 + 0.5;
-            return float4(TextureHandle(param.skybox_handle_negy).Sample2D<float3>(uv), 1.0);
+            return float4(TextureHandle(param.skybox_handles[5]).Sample2D<float3>(uv), 1.0);
         }
     } else {
         if (view_dir.z > 0) {
             uv = float2(view_dir.x, -view_dir.y) / view_dir.z * 0.5 + 0.5;
-            return float4(TextureHandle(param.skybox_handle_posz).Sample2D<float3>(uv), 1.0);
+            return float4(TextureHandle(param.skybox_handles[0]).Sample2D<float3>(uv), 1.0);
         } else {
             uv = float2(-view_dir.x, -view_dir.y) / (-view_dir.z) * 0.5 + 0.5;
-            return float4(TextureHandle(param.skybox_handle_negz).Sample2D<float3>(uv), 1.0);
+            return float4(TextureHandle(param.skybox_handles[1]).Sample2D<float3>(uv), 1.0);
         }
     }
 }
@@ -227,22 +194,22 @@ float4 calculate_ibl(Moer::LightingData lighting_data, float3 world_pos) {
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
     uint gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
-    uint mat_type = gbuffer_mat & 0x000000FF;
-    uint mat_id = (gbuffer_mat & 0xFFFFFF00) >> 8;
+    uint mat_type    = gbuffer_mat & 0x000000FF;
+    uint mat_id      = (gbuffer_mat & 0xFFFFFF00) >> 8;
     if (mat_type != param.material_type) {
         discard;
     }
     MaterialData mat = UnpackMaterialData<MaterialData>(param.material_buffer, mat_id);
 
     // MARK: Lighting Data
-    ArrayBuffer global_params = ArrayBuffer(param.global_param_handle);
+    ArrayBuffer        global_params = ArrayBuffer(param.global_param_handle);
     Moer::LightingData lighting_data = global_params.Load<Moer::LightingData>(0);
 
     // MARK: GBuffer
-    float2 uv = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
-    float depth = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
-    float3 normal = Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv));
-    float3 tangent = Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv));
+    float2 uv       = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
+    float  depth    = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
+    float3 normal   = Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv));
+    float3 tangent  = Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv));
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
     // Shoude be reconstructed from depth
     // Old code: float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
@@ -259,7 +226,8 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     PBRInfo pbrInfo;
 
     // - Albedo
-    pbrInfo.albedo = GetTextureData<float3>(mat.albedo_map, uv, mat.base_color_factor.xyz, MISSING_TEXTURE_COLOR);
+    pbrInfo.albedo =
+        GetTextureData<float3>(mat.albedo_map, uv, mat.base_color_factor.xyz, MISSING_TEXTURE_COLOR);
 
     // - Metallic & Roughness
     float2 metallic_roughness = GetTextureData<float2>(
@@ -273,7 +241,6 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     // - Normal
     pbrInfo.normal = GetNormalFromNormalMap(mat.normal_map, uv, normal, tangent);
-
 
     // FIXME: sponze - normal_map == 66 => bug
     if (mat.normal_map == 66) { // wtf...
@@ -290,7 +257,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     // - View Dir
     pbrInfo.viewDir = normalize(lighting_data.camera_position - position.xyz);
-    
+
     // - Lights
     ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
 

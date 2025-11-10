@@ -34,12 +34,16 @@ struct MaterialPassBindlessParam {
     uint   gbuffer_position;
     uint   global_param_handle;
     uint   shading_mode;
+    uint   skybox_handles[6]; //posz, negz, posy,negy, posx, negx
     uint   skybox_handle_posz;
     uint   skybox_handle_negz;
     uint   skybox_handle_posx;
     uint   skybox_handle_negx;
     uint   skybox_handle_posy;
     uint   skybox_handle_negy;
+
+    //TODO:加速csm计算
+    float4x4 vp_matrix;
 };
 struct LightingData {
     float4x4 world_to_shadow_clip[MAX_CSM_CASCADES];
