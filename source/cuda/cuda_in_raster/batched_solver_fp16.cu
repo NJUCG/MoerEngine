@@ -79,6 +79,8 @@ __global__ void BuildPtrArrayKernel(float** ptrs, float* base, int B, int stride
 
 // ---- Host function ----
 
+static constexpr bool IS_VERBOSE = false; // 如果需要输出错误信息，可以将此设置为true
+
 /*
   Solve for each batch:
     (XTX_b + eps * I) * W_b = XTY_b
@@ -151,7 +153,7 @@ void SolveBatchedFXP16(
     for (int i = 0; i < B; ++i)
         if (h_info[i] != 0)
             ++failures;
-    if (failures > 0) {
+    if (IS_VERBOSE && failures > 0) {
         std::cerr << "Warning: " << failures << " batches failed in cholesky (info!=0). First few info: ";
         for (int i = 0; i < std::min(B, 8); ++i)
             std::cerr << h_info[i] << " ";
@@ -170,7 +172,7 @@ void SolveBatchedFXP16(
     for (int i = 0; i < B; ++i)
         if (h_info[i] != 0)
             ++failures;
-    if (failures > 0) {
+    if (IS_VERBOSE && failures > 0) {
         std::cerr << "Warning: " << failures << " batches failed in spotrs (info!=0)." << std::endl;
     }
 

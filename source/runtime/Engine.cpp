@@ -26,6 +26,8 @@ namespace Moer {
 
 static UniquePtr<NFD::Guard> nfd_guard = nullptr;
 
+static bool ContainsNonAscii(const std::filesystem::path& p);
+
 Engine::Engine() {}
 
 Engine::~Engine() {}
@@ -37,6 +39,16 @@ void Engine::Init(int argc, const char** argv) {
     // Init ConfigManager
     std::filesystem::path path = argv[0];
     path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
+
+    LOG_INFO("Workspace Path : {}", path.string());
+
+    if (ContainsNonAscii(path)) {
+        LOG_ERROR(
+            "Workspace Path contains non-ASCII characters (e.g., Chinese characters)! This may cause "
+            "unexpected issues. Current path: {}",
+            path.string()
+        );
+    }
 
     ConfigManager::GetInstance().Init(path);
 
@@ -154,6 +166,36 @@ void Engine::Init3rdParty() {
 
 void Engine::ShutDown3rdParty() {
     nfd_guard.release();
+}
+
+// 检测路径中是否包含非ASCII字符（包括中文）
+bool ContainsNonAscii(const std::filesystem::path& p) {
+    // std::filesystem::path 内部存储可能是 wchar_t (Windows) 或 char (其他平台)
+    // 转换为 std::string (UTF-8) 或 std::wstring 进行检测更通用
+
+    // 在Windows上，std::filesystem::path::string() 会根据当前 locale 转换为 narrow string
+    // 但为了可靠检测非ASCII字符，最好是转换为宽字符串再检查，或者确保转换为UTF-8
+
+    // 方法1：转换为 UTF-8 string 并检查 (更通用，但依赖std::codecvt_utf8_utf16)
+    // std::string utf8_path_str = p.u8string(); // C++17，直接获取UTF-8编码
+    // for (unsigned char c : utf8_path_str) {
+    //     if (c > 127) { // 检查是否为非ASCII字符
+    //         return true;
+    //     }
+    // }
+    // return false;
+
+    // 方法2：直接检查宽字符串 (更适合Windows，因为内部存储可能是宽字符)
+    // 假设 std::filesystem::path 内部是 wchar_t 或可以转换为 wchar_t
+    std::wstring wide_path_str = p.generic_wstring(); // 获取宽字符串表示
+
+    for (wchar_t wc : wide_path_str) {
+        // ASCII字符的 wchar_t 值范围是 0-127
+        if (wc > 127) {
+            return true; // 发现非ASCII字符
+        }
+    }
+    return false;
 }
 
 } // namespace Moer

@@ -29,8 +29,5 @@ target_link_libraries(${target_name}
     PUBLIC nlohmann_json::nlohmann_json
     PUBLIC tomlplusplus
 )
-target_compile_definitions(${target_name} 
-    PRIVATE "DEVELOP_SHADER_PATH=${moer_root_dir}/shaders"
-)
 
 # add_dependencies(${target_name} CopyMimallocDlls )

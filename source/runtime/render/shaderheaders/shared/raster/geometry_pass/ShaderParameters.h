@@ -5,13 +5,13 @@
 #endif
 
 #ifdef __cplusplus
-#define CONST constexpr
+//#define CONST constexpr
 #include "misc/Traits.h"
 #include "shaderheaders/shared/raster/ShaderParametersUtils.h"
 namespace Moer::Render {
 #else
 #include "shared/raster/ShaderParametersUtils.h"
-#define CONST const
+//#define CONST const
 namespace Moer {
 #endif
 
@@ -36,10 +36,4 @@ struct ShadowDepthPassBindlessParam {
 //MARK:Enum Definitions Begin
 //gbuffer
 //geometrypass
-
-#ifdef __cplusplus
 }
-#else
-}
-#endif
-#undef CONST

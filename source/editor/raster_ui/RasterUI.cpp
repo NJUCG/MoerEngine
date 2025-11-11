@@ -130,21 +130,64 @@ void RasterUI::ShowConfig() {
             ImGui::SliderFloat("Ray Trace Radius", &m_config.ssao_max_distance, 0.0f, 2.0f);
             ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 16);
             ImGui::SliderInt("Sample Radius", &m_config.ssao_sample_radius, 1, 8);
+
         } else if (m_config.ao_mode == EAoMode::RTAO || m_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
             ImGui::SliderFloat("Intensity", &m_config.rtao_intensity, 0.0f, 1.0f);
             ImGui::SliderFloat("Ray Trace Radius", &m_config.rtao_ray_trace_distance, 0.0f, 20.0f);
             ImGui::SliderInt("Samples Per Pixel", &m_config.rtao_spp, 1, 32);
+
             ImGui::Text("RTAO Sample Mode:");
-            assert(s_rtao_sample_mode.size() == static_cast<uint32>(ERtaoSampleMode::NUM));
-            for (uint i = 0; i < s_rtao_sample_mode.size(); i++) {
+            assert(s_rtao_sample_mode_name_map.size() == static_cast<uint32>(ERtaoSampleMode::NUM));
+            for (uint i = 0; i < s_rtao_sample_mode_name_map.size(); i++) {
+                ERtaoSampleMode cur_enum = static_cast<ERtaoSampleMode>(i);
                 if (ImGui::Selectable(
-                        s_rtao_sample_mode[i].c_str(),
-                        m_config.rtao_sample_mode == static_cast<ERtaoSampleMode>(i)
+                        s_rtao_sample_mode_name_map.at(cur_enum).c_str(),
+                        m_config.rtao_sample_mode == cur_enum
                     )) {
-                    m_config.rtao_sample_mode = static_cast<ERtaoSampleMode>(i);
+                    m_config.rtao_sample_mode = cur_enum;
                 }
                 draw_border();
             }
+
+            ImGui::Separator();
+
+            ImGui::Checkbox("Enable RTAO TAA Denoiser", &m_config.rtao_denoiser_enable);
+
+            // Denoiser 启用后才能启用 Reprojection
+            if (m_config.rtao_denoiser_enable) {
+                ImGui::SliderFloat(
+                    "Denoiser History Ratio", &m_config.rtao_denoiser_history_ratio, 0.0f, 1.0f
+                );
+
+                ImGui::Checkbox("Enable RTAO Reprojection", &m_config.rtao_denoiser_reprojection_enable);
+            } else {
+                // m_config.rtao_denoiser_reprojection_enable = false;
+            }
+
+            // 启用 Reprojection 后才能启用 Validation
+            if (m_config.rtao_denoiser_reprojection_enable) {
+                ImGui::Checkbox("Enable RTAO Validation", &m_config.rtao_denoiser_validation_enable);
+            } else {
+                // m_config.rtao_denoiser_validation_enable = false;
+            }
+
+            // 启用 Validation 后的额外选项
+            if (m_config.rtao_denoiser_validation_enable) {
+                ImGui::SliderFloat(
+                    "Validation Depth Threshold", &m_config.rtao_denoiser_valid_depth_threshold, 0.0f, 0.1f
+                );
+                ImGui::SliderFloat(
+                    "Validation Normal Threshold", &m_config.rtao_denoiser_valid_normal_threshold, 0.0f, 1.0f
+                );
+            }
+
+        } else if (m_config.ao_mode == EAoMode::SSDO || m_config.ao_mode == EAoMode::SSDO_AO_ONLY) {
+            ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
+            ImGui::SliderFloat("Indirect Intensity", &m_config.ssdo_indirect_intensity, 0.0f, 2.0f);
+            ImGui::SliderFloat("Ray Trace Radius", &m_config.ssdo_max_distance, 0.0f, 20.0f);
+            ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 16);
+            ImGui::SliderFloat("Sample Radius", &m_config.ssdo_sample_radius, 0.0f, 5.0f);
+            ImGui::SliderFloat("Depth Bias", &m_config.ssdo_depth_bias, 0.0f, 0.1f);
         }
 
         ImGui::TreePop();
@@ -173,10 +216,42 @@ void RasterUI::ShowConfig() {
     }
 
     if (ImGui::TreeNode(
+            "Denoiser",
+            "Denoiser: [%s]",
+            s_denoiser_mode_name_map.at(static_cast<EDenoiserMode>(m_config.denoiser_mode)).c_str()
+        )) {
+
+        assert(s_denoiser_mode_name_map.size() == static_cast<uint32>(EDenoiserMode::NUM));
+        for (uint i = 0; i < s_denoiser_mode_name_map.size(); i++) {
+            EDenoiserMode cur_enum = static_cast<EDenoiserMode>(i);
+            if (ImGui::Selectable(
+                    s_denoiser_mode_name_map.at(cur_enum).c_str(), m_config.denoiser_mode == cur_enum
+                )) {
+                m_config.denoiser_mode = cur_enum;
+            }
+            draw_border();
+        }
+
+        ImGui::Separator();
+
+        ImGui::SliderInt("双边滤波 Radius", &m_config.denoiser_bfd_kernel_radius, 1, 10);
+        ImGui::SliderFloat(
+            "双边滤波 SpatialSigma^2", &m_config.denoiser_bfd_spatial_sigma_square, 1.0f, 150.0f
+        );
+        ImGui::SliderFloat("双边滤波 RangeSigma^2", &m_config.denoiser_bfd_range_sigma_square, 0.001f, 0.05f);
+
+        ImGui::TreePop();
+    }
+
+#if WITH_CUDA
+    if (ImGui::TreeNode(
             "Upsample",
             "Upsample: [%s]",
             s_upsample_mode_name_array[static_cast<uint32>(m_config.upsample_mode)].c_str()
         )) {
+
+        ImGui::Text("目前需要在RasterTextures.h中编译期启用");
+
         for (uint i = 0; i < s_upsample_mode_name_array.size(); i++) {
             if (ImGui::Selectable(
                     s_upsample_mode_name_array[i].c_str(),
@@ -196,7 +271,6 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
-#if WITH_CUDA
     if (ImGui::TreeNode("CUDA", "CUDA: [%s]", (m_config.ai_is_cuda_enabled == 1 ? "Enable" : "Disable"))) {
         if (ImGui::Selectable("Enable", m_config.ai_is_cuda_enabled == 1)) {
             m_config.ai_is_cuda_enabled = 1;
@@ -208,14 +282,6 @@ void RasterUI::ShowConfig() {
         draw_border();
 
         if (m_config.ai_is_cuda_enabled == 1) {
-            ImGui::SliderFloat("Debug Param", &m_config.ai_cuda_pass_debug_param, 0.0f, 1.0f);
-
-            // ImGui::Checkbox("Enable Jitter", &m_config.ssr_is_enable_jitter);
-            // ImGui::Checkbox("Force Ground Enable SSR", &m_config.ssr_is_force_ground_enable_ssr);
-            // ImGui::SliderInt("Sample Count", &m_config.ssr_sample_count, 1, 64);
-            // ImGui::SliderFloat("Roughness Threshold", &m_config.ssr_roughness_threshold, 0.0f, 1.0f);
-            // ImGui::SliderFloat("Metallic Threshold", &m_config.ssr_metallic_threshold, 0.0f, 1.0f);
-
             for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
                 if (ImGui::Selectable(
                         s_ai_trt_visualize_buffer_array[i].c_str(), m_config.ai_trt_visualize_buffer_idx == i
@@ -242,6 +308,16 @@ void RasterUI::ShowConfig() {
                 m_config.aa_mode = cur_enum;
             }
             draw_border();
+        }
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode("Debug")) {
+        ImGui::SliderFloat("Debug Param", &m_config.debug_param, 0.0f, 1.0f);
+        ImGui::Separator();
+        ImGui::Checkbox("Enable FPS Limit", &m_config.debug_fps_limit_enable);
+        if (m_config.debug_fps_limit_enable) {
+            ImGui::SliderFloat("FPS Limit", &m_config.debug_fps_limit, 0.5f, 240.0f);
         }
         ImGui::TreePop();
     }

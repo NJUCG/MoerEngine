@@ -34,8 +34,8 @@ PsOutput main(VertexFactory::VsOutput input) : SV_TARGET {
 
     PsOutput output;
     output.vbuffer = geom_data.mat_idx_and_type;
-    output.normal = float4(Raster::PackNormal(input.normal), 1.0);
-    output.tangent = float4(Raster::PackNormal(input.tangent), 1.0);
+    output.normal = float4(Raster::PackNormal(normalize(input.normal)), 1.0);
+    output.tangent = float4(Raster::PackNormal(normalize(input.tangent)), 1.0);
     output.texcoord0 = input.texcoord0;
     output.position = float4(input.world_position, 1.0);
 

@@ -826,7 +826,7 @@ public:
             res->color,
             ui_config.ai_trt_visualize_buffer.substr(8).c_str(),
             res->semaphore.stream_to_run,
-            ui_config.ai_cuda_pass_debug_param
+            1.0f
         );
 
         sync();

@@ -27,7 +27,7 @@ public:
 
     // 超分Pass前的分辨率
     uint2 GetResolutionBeforeSR() {
-#if SUPER_RESOLUTION_ENABLED
+#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
         return uint2(resolution->x / 2.0f, resolution->y / 2.0f);
 #else
         return uint2(resolution->x, resolution->y);

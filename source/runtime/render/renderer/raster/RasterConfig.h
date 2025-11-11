@@ -29,7 +29,6 @@ static const UnorderedMap<EAaMode, std::string> s_aa_mode_name_map = {
     {EAaMode::SMAA_T2X, "SMAA T2x"},
 };
 
-// Enum 在 ..../ShaderParameters.h中定义，让shader和cpp可以共用枚举值
 // EnumParam(EAoMode, NONE, SSAO, SSAO_AO_ONLY, RTAO, RTAO_AO_ONLY, LINEARIZED_DEPTH_DIV_10);
 static const UnorderedMap<EAoMode, std::string> s_ao_mode_name_map = {
     {EAoMode::NONE, "None"},
@@ -37,7 +36,21 @@ static const UnorderedMap<EAoMode, std::string> s_ao_mode_name_map = {
     {EAoMode::SSAO_AO_ONLY, "SSAO AO Only"},
     {EAoMode::RTAO, "RTAO"},
     {EAoMode::RTAO_AO_ONLY, "RTAO AO Only"},
+    {EAoMode::SSDO, "SSDO"},
+    {EAoMode::SSDO_AO_ONLY, "SSDO AO Only"},
     {EAoMode::LINEARIZED_DEPTH_DIV_10, "Linear. Depth / 10.0"},
+};
+
+// EnumParam(EDenoiserMode, NONE, BILATERAL_FILTER);
+static const UnorderedMap<EDenoiserMode, std::string> s_denoiser_mode_name_map = {
+    {EDenoiserMode::NONE, "None"},
+    {EDenoiserMode::BILATERAL_FILTER, "双边滤波 Bilateral Filter"},
+};
+
+// EnumParam(ERtaoSampleMode, UNIFORM, COSINE_WEIGHTED);
+static const UnorderedMap<ERtaoSampleMode, std::string> s_rtao_sample_mode_name_map = {
+    {ERtaoSampleMode::UNIFORM, "Uniform in Semisphere"},
+    {ERtaoSampleMode::COSINE_WEIGHTED, "Cosine-Weighted in Semisphere"},
 };
 
 enum class EUpsampleMode {
@@ -45,7 +58,6 @@ enum class EUpsampleMode {
     BILINEAR,
     DEPTH
 };
-
 static const Array<std::string> s_upsample_mode_name_array = {
     "None",
     "BILINEAR",
@@ -92,15 +104,28 @@ struct RasterConfig {
     EAaMode aa_mode = EAaMode::SMAA_1X;
 
     // MARK: AO
-    EAoMode         ao_mode                 = EAoMode::SSAO;
-    float           ssao_intensity          = 1.0f;
-    int             ssao_spp                = 8;
-    int             ssao_sample_radius      = 2;
-    float           ssao_max_distance       = 0.5f;
+    EAoMode ao_mode            = EAoMode::SSAO;
+    float   ssao_intensity     = 1.0f;
+    int     ssao_spp           = 16;
+    int     ssao_sample_radius = 2;
+    float   ssao_max_distance  = 0.5f;
+
     ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
     float           rtao_intensity          = 1.0f;
     float           rtao_ray_trace_distance = 1.0f;
-    int             rtao_spp                = 1;
+    int             rtao_spp                = 2;
+
+    bool  rtao_denoiser_enable                 = true;
+    bool  rtao_denoiser_reprojection_enable    = true;
+    bool  rtao_denoiser_validation_enable      = true;
+    float rtao_denoiser_history_ratio          = 0.9f;
+    float rtao_denoiser_valid_depth_threshold  = 0.01f;
+    float rtao_denoiser_valid_normal_threshold = 0.8f;
+
+    float ssdo_depth_bias         = 0.001f;
+    float ssdo_sample_radius      = 0.16f;
+    float ssdo_indirect_intensity = 1.0f;
+    float ssdo_max_distance       = 0.5f;
 
     // MARK: SSR
     bool  ssr_is_ssr_enabled             = false;
@@ -111,9 +136,14 @@ struct RasterConfig {
     float ssr_metallic_threshold         = 0.5;
     float ssr_step_base                  = 0.025;
 
+    // MARK: Denoiser
+    EDenoiserMode denoiser_mode                     = EDenoiserMode::NONE;
+    float         denoiser_bfd_spatial_sigma_square = 20.0f;  // [1, 200]
+    float         denoiser_bfd_range_sigma_square   = 0.001f; // [0.01, 0.1]
+    int           denoiser_bfd_kernel_radius        = 5;      // [1, 10]
+
     // MARK: AI (CUDA, TensorRT)
     bool        ai_is_cuda_enabled          = false;
-    float       ai_cuda_pass_debug_param    = 0.5f;
     int         ai_trt_visualize_buffer_idx = s_ai_trt_visualize_buffer_array.size() - 2; // output
     std::string ai_trt_visualize_buffer =
         s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2];
@@ -128,15 +158,20 @@ struct RasterConfig {
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera = {0.01, 0.04, 0.32, 1.0};
 
-    // MARK: Others
-    std::string default_selected_frame_buffer_name = "aa_output";
-    uint        selected_frame_buffer_index        = 0;
-
     // MARK: Upsample Process
     EUpsampleMode upsample_mode = EUpsampleMode::None;
     int           outSize_x     = 1080;
     int           outSize_y     = 1920;
     int           inSize_x      = 540;
+
+    // MARK: Debug
+    float debug_param            = 1.0f;
+    bool  debug_fps_limit_enable = false;
+    float debug_fps_limit        = 60;
+
+    // MARK: Others
+    std::string default_selected_frame_buffer_name = "aa_output";
+    uint        selected_frame_buffer_index        = 0;
 };
 
 } // namespace Moer
