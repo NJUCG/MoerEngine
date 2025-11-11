@@ -97,6 +97,8 @@ float calculate_shadow(Moer::LightingData lighting_data, float3 world_pos) {
         return 1.0;
     } else if (lighting_data.shadow_map_mode == 1) {
         return calculate_csm(lighting_data, world_pos);
+    } else if (lighting_data.shadow_map_mode == 2) {
+        return calculate_csm(lighting_data, world_pos);
     } else {
         return 1.0;
     }

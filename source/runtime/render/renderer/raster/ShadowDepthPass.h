@@ -165,10 +165,30 @@ public:
          * 
          * 好文章&好评论区：https://zhuanlan.zhihu.com/p/116731971
          */
-        auto get_world_to_shadow_clip_matrix = [&](uint cascade_index) {
-            const float frustum_near_ratio =
-                (cascade_index == 0) ? 0.0f : ui_config.shadow_csm_cover_ratio_of_camera[cascade_index - 1];
-            const float frustum_far_ratio = ui_config.shadow_csm_cover_ratio_of_camera[cascade_index];
+
+        //返回固定长度数组，但是不一定全部启用
+        //混合方案
+        auto get_cascade_ratios =
+            [&](uint csm_enable_layers, float near_clip, float far_clip, float lerp_factor) {
+                assert(csm_enable_layers <= CSM_MAX_CASCADES);
+                assert(near_clip > 0.f && far_clip > near_clip);
+                StaticArray<float, CSM_MAX_CASCADES> ratios;
+                for (uint i = 0; i < csm_enable_layers; i++) {
+                    float split_ratio  = (float)(i + 1) / (float)csm_enable_layers;
+                    float log_split    = near_clip * Pow(far_clip / near_clip, split_ratio);
+                    float linear_split = near_clip + (far_clip - near_clip) * split_ratio;
+                    ratios[i]          = Lerp(log_split, linear_split, lerp_factor);
+                    ratios[i]          = (ratios[i] - near_clip) / (far_clip - near_clip);
+                }
+                return ratios;
+            };
+
+        auto get_world_to_shadow_clip_matrix = [&](
+                                                   const uint                                  cascade_index,
+                                                   const StaticArray<float, CSM_MAX_CASCADES>& cascade_ratios
+                                               ) {
+            float frustum_near_ratio = (cascade_index == 0) ? 0.0f : cascade_ratios[cascade_index - 1];
+            float frustum_far_ratio  = cascade_ratios[cascade_index];
 
             // AABB
             StaticArray<float3, 8> frustum_corners =
@@ -248,12 +268,31 @@ public:
 
         shadow_depth_pass_names.resize(ui_config.shadow_csm_num_of_cascades);
 
+        //lerp csm ratios
+        StaticArray<float, CSM_MAX_CASCADES> cascade_ratios;
+        switch (ui_config.shadow_map_mode) {
+            case 2: // CSM_Auto
+            {
+                cascade_ratios = get_cascade_ratios(
+                    ui_config.shadow_csm_num_of_cascades,
+                    camera->GetNearClip(),
+                    camera->GetFarClip(),
+                    ui_config.shadow_csm_lerp_factor
+                );
+                break;
+            }
+            case 1: // CSM
+            default: {
+                cascade_ratios = ui_config.shadow_csm_cover_ratio_of_camera;
+            }
+        }
+
         for (uint i = 0; i < ui_config.shadow_csm_num_of_cascades; i++) {
             // Name
             shadow_depth_pass_names[i] = std::format("Shadow Depth Pass - {}", i);
 
             // World to Shadow Clip Matrix
-            context.world_to_shadow_clip[i] = get_world_to_shadow_clip_matrix(i);
+            context.world_to_shadow_clip[i] = get_world_to_shadow_clip_matrix(i, cascade_ratios);
 
             // Param
             param.world2clip = Transpose(context.world_to_shadow_clip[i]);
@@ -316,16 +355,21 @@ public:
     }
 
     void Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
-        if (ui_config.shadow_map_mode == 0) {
-            return;
-        } else if (ui_config.shadow_map_mode == 1) {
-            ProcessCsm(context, ui_config, camera);
-        } else if (ui_config.shadow_map_mode == 2) {
-            // ProcessVsm(context, ui_config, camera);
-        } else {
-            LOG_ERROR("Shadow map mode {} not supported", ui_config.shadow_map_mode);
-            return;
+        switch (ui_config.shadow_map_mode) {
+            case 0: // Disabled
+                break;
+            case 1: // CSM
+            case 2: // CSM_Auto
+                ProcessCsm(context, ui_config, camera);
+                break;
+            case 3: // VSM
+                // ProcessVsm(context, ui_config, camera);
+                break;
+            default:
+                LOG_ERROR("Shadow map mode {} not supported", ui_config.shadow_map_mode);
+                break;
         }
+        return;
     }
 
 private:

@@ -98,7 +98,13 @@ void RasterUI::ShowConfig() {
                     Max(m_config.shadow_csm_cover_ratio_of_camera[i], mx);
                 mx = m_config.shadow_csm_cover_ratio_of_camera[i];
             }
-        } else if (m_config.shadow_map_mode == 2) { // VSM
+        } else if (m_config.shadow_map_mode == 2) { // CSM_Auto
+            ImGui::SliderInt("Num of Cascades", &m_config.shadow_csm_num_of_cascades, 1, CSM_MAX_CASCADES);
+            ImGui::SliderFloat("Lerp Factor", &m_config.shadow_csm_lerp_factor, 0, 1);
+            ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
+        }
+
+        else if (m_config.shadow_map_mode == 3) { // VSM
             // TODO
         }
 
@@ -165,19 +171,22 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
-    if(ImGui::TreeNode("Upsample", 
-            "Upsample: [%s]", 
-             s_upsample_mode_name_array[static_cast<uint32>(m_config.upsample_mode)].c_str())){
-        for(uint i = 0; i < s_upsample_mode_name_array.size(); i++){
-            if(ImGui::Selectable(
-                s_upsample_mode_name_array[i].c_str(), m_config.upsample_mode == static_cast<EUpsampleMode>(i)
-            )){
+    if (ImGui::TreeNode(
+            "Upsample",
+            "Upsample: [%s]",
+            s_upsample_mode_name_array[static_cast<uint32>(m_config.upsample_mode)].c_str()
+        )) {
+        for (uint i = 0; i < s_upsample_mode_name_array.size(); i++) {
+            if (ImGui::Selectable(
+                    s_upsample_mode_name_array[i].c_str(),
+                    m_config.upsample_mode == static_cast<EUpsampleMode>(i)
+                )) {
                 m_config.upsample_mode = static_cast<EUpsampleMode>(i);
             }
             draw_border();
         }
 
-        if(m_config.upsample_mode == EUpsampleMode::BILINEAR) {
+        if (m_config.upsample_mode == EUpsampleMode::BILINEAR) {
             ImGui::SliderInt("Input Size", &m_config.inSize_x, 0, 1500);
             ImGui::SliderInt("Output Size X", &m_config.outSize_x, 0, 3000);
             ImGui::SliderInt("Output Size Y", &m_config.outSize_y, 0, 3000);
