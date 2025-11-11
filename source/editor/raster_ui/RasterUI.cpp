@@ -101,6 +101,7 @@ void RasterUI::ShowConfig() {
         } else if (m_config.shadow_map_mode == 2) { // CSM_Auto
             ImGui::SliderInt("Num of Cascades", &m_config.shadow_csm_num_of_cascades, 1, CSM_MAX_CASCADES);
             ImGui::SliderFloat("Lerp Factor", &m_config.shadow_csm_lerp_factor, 0, 1);
+            ImGui::SliderFloat("Blend Percentage", &m_config.shadow_csm_blend_percentage, 0, 1);
             ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
         }
 

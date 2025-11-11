@@ -153,17 +153,31 @@ public:
                 cascade_ratios = ui_config.shadow_csm_cover_ratio_of_camera;
         }
 
-        for (uint i = 0; i < ui_config.shadow_csm_num_of_cascades; i++) {
+        //混合
+        StaticArray<float, CSM_MAX_CASCADES> blend_widths; //useless now
+        StaticArray<float, CSM_MAX_CASCADES> blend_start_points =
+            get_csm_blend(cascade_ratios, ui_config.shadow_csm_blend_percentage, blend_widths);
+        transform_split_points_to_ratios(blend_start_points, near_clip, far_clip);
+
+        for (uint cascade_index = 0; cascade_index < ui_config.shadow_csm_num_of_cascades; cascade_index++) {
             // Name
-            shadow_depth_pass_names[i] = std::format("Shadow Depth Pass - {}", i);
+            shadow_depth_pass_names[cascade_index] = std::format("Shadow Depth Pass - {}", cascade_index);
 
             // World to Shadow Clip Matrix
-            context.world_to_shadow_clip[i] = get_world_to_shadow_clip_matrix(
-                light_direction_optional, camera, ui_config, i, cascade_ratios
+            const float frustum_near_ratio =
+                (cascade_index == 0) ? 0.0f : blend_start_points[cascade_index - 1];
+            const float frustum_far_ratio               = cascade_ratios[cascade_index];
+            context.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
+                light_direction_optional,
+                camera,
+                ui_config,
+                cascade_index,
+                frustum_near_ratio,
+                frustum_far_ratio
             );
 
             // Param
-            param.world2clip = Transpose(context.world_to_shadow_clip[i]);
+            param.world2clip = Transpose(context.world_to_shadow_clip[cascade_index]);
             auto arg_idx =
                 context.cmd_list.RegisterArgs(ShadowDepthPassPipeline::SetArgs(context.bdls, param));
 
@@ -213,9 +227,9 @@ public:
             // Draw
             context.cmd_list
                 .Gfx(
-                    shadow_depth_pass_names[i],
+                    shadow_depth_pass_names[cascade_index],
                     Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
-                    DepthAttachment(context.shadow_map_textures[i].tex->GetView().GetTexture())
+                    DepthAttachment(context.shadow_map_textures[cascade_index].tex->GetView().GetTexture())
                 )
                 .AcceptDrawBatch(std::move(draw_batch))
                 .Dispatch();
@@ -291,11 +305,12 @@ private:
     }
 
     float4x4 get_world_to_shadow_clip_matrix(
-        DirectionalLightComponent*                  light_direction_optional,
-        CameraRef&                                  camera,
-        const RasterConfig&                         ui_config,
-        const uint                                  cascade_index,
-        const StaticArray<float, CSM_MAX_CASCADES>& cascade_ratios
+        DirectionalLightComponent* light_direction_optional,
+        CameraRef&                 camera,
+        const RasterConfig&        ui_config,
+        const uint                 cascade_index,
+        const float                frustum_near_ratio,
+        const float                frustum_far_ratio
     ) {
         const float3 light_direction = Normalizef(light_direction_optional->GetDirection());
         const float3 light_right     = Normalizef(Cross(light_direction, float3(0.f, 1.f, 0.f)));
@@ -340,9 +355,6 @@ private:
          * 
          * 好文章&好评论区：https://zhuanlan.zhihu.com/p/116731971
          */
-
-        float frustum_near_ratio = (cascade_index == 0) ? 0.0f : cascade_ratios[cascade_index - 1];
-        float frustum_far_ratio  = cascade_ratios[cascade_index];
 
         // AABB
         StaticArray<float3, 8> frustum_corners =
