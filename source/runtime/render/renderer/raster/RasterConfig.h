@@ -64,11 +64,6 @@ static const Array<std::string> s_upsample_mode_name_array = {
     "DEPTH",
 };
 
-enum class ERtaoSampleMode {
-    UNIFORM = 0,
-    COSINE_WEIGHTED,
-    NUM
-};
 static const Array<std::string> s_rtao_sample_mode = {
     "Uniform in Semisphere",
     "Cosine-Weighted in Semisphere"

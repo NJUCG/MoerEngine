@@ -89,11 +89,12 @@ public:
         lighting_data->shadow_csm_sm_size         = ui_config.shadow_csm_sm_size;
         // Shadow Map
         for (uint i = 0; i < MAX_CSM_CASCADES; i++) {
-            lighting_data->shadow_map[i] = context.shadow_map_textures[i].handle;
+            lighting_data->shadow_map[i] = context.shadow_map_data.shadow_map_textures[i].handle;
         }
         // Shadow Transform
         for (uint i = 0; i < MAX_CSM_CASCADES; i++) {
-            lighting_data->world_to_shadow_clip[i] = Transpose(context.world_to_shadow_clip[i]);
+            lighting_data->world_to_shadow_clip[i] =
+                Transpose(context.shadow_map_data.world_to_shadow_clip[i]);
         }
         // 注：此处不一定使用所有4张CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
 

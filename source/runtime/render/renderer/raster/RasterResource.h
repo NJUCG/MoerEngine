@@ -51,8 +51,16 @@ public:
     uint gpu_light_info_handle        = 0;
 
     // Shadow Data
-    StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
-    StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
+    struct ShadowMapData {
+        StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
+        StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
+        StaticArray<float, CSM_MAX_CASCADES>
+            cascade_split_points; //actual split points between near_clip and far_clip
+        StaticArray<float, CSM_MAX_CASCADES>
+            cascade_split_ratios; //ratios between 0.0 and 1.0 according to near_clip and far_clip
+        StaticArray<float, CSM_MAX_CASCADES>
+            cascade_blend_start_ratios; //calculated in linear space, then converted to clip space
+    } shadow_map_data;
 
     // RayTracing
     RaytracingSceneRef rt_scene;

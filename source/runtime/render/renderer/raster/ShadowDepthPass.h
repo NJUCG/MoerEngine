@@ -36,7 +36,7 @@ public:
     void CreateCsmData(RasterContext& context, const RasterConfig& ui_config) {
         // 检查并创建所有ShadowMap
         for (uint i = 0; i < ui_config.shadow_csm_num_of_cascades; i++) {
-            auto& shadow_map_texture = context.shadow_map_textures[i];
+            auto& shadow_map_texture = context.shadow_map_data.shadow_map_textures[i];
 
             bool b_need_to_create = shadow_map_texture.tex == nullptr ||
                                     shadow_map_texture.tex->GetWidth() != ui_config.shadow_csm_sm_size ||
@@ -135,29 +135,37 @@ public:
         const float far_clip  = camera->GetFarClip();
 
         //lerp csm ratios
-        StaticArray<float, CSM_MAX_CASCADES> cascade_ratios;
         switch (ui_config.shadow_map_mode) {
             case 2: // CSM_Auto
             {
-                cascade_ratios = get_cascade_split_points(
+                context.shadow_map_data.cascade_split_points = get_cascade_split_points(
                     ui_config.shadow_csm_num_of_cascades,
                     near_clip,
                     far_clip,
                     ui_config.shadow_csm_lerp_factor
                 );
-                transform_split_points_to_ratios(cascade_ratios, near_clip, far_clip);
+                context.shadow_map_data.cascade_split_ratios = transform_split_points_to_ratios(
+                    context.shadow_map_data.cascade_split_points, near_clip, far_clip
+                );
                 break;
             }
             case 1: // CSM
             default:
-                cascade_ratios = ui_config.shadow_csm_cover_ratio_of_camera;
+                context.shadow_map_data.cascade_split_points = transform_split_ratios_to_points(
+                    ui_config.shadow_csm_cover_ratio_of_camera, near_clip, far_clip
+                );
+                context.shadow_map_data.cascade_split_ratios = ui_config.shadow_csm_cover_ratio_of_camera;
         }
 
         //混合
         StaticArray<float, CSM_MAX_CASCADES> blend_widths; //useless now
-        StaticArray<float, CSM_MAX_CASCADES> blend_start_points =
-            get_csm_blend(cascade_ratios, ui_config.shadow_csm_blend_percentage, blend_widths);
-        transform_split_points_to_ratios(blend_start_points, near_clip, far_clip);
+        context.shadow_map_data.cascade_blend_start_ratios = transform_split_points_to_ratios(
+            get_csm_blend(
+                context.shadow_map_data.cascade_split_points, ui_config.shadow_csm_blend_percentage
+            ),
+            near_clip,
+            far_clip
+        );
 
         for (uint cascade_index = 0; cascade_index < ui_config.shadow_csm_num_of_cascades; cascade_index++) {
             // Name
@@ -165,9 +173,10 @@ public:
 
             // World to Shadow Clip Matrix
             const float frustum_near_ratio =
-                (cascade_index == 0) ? 0.0f : blend_start_points[cascade_index - 1];
-            const float frustum_far_ratio               = cascade_ratios[cascade_index];
-            context.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
+                (cascade_index == 0) ? 0.0f :
+                                       context.shadow_map_data.cascade_blend_start_ratios[cascade_index - 1];
+            const float frustum_far_ratio = context.shadow_map_data.cascade_split_ratios[cascade_index];
+            context.shadow_map_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
                 light_direction_optional,
                 camera,
                 ui_config,
@@ -177,7 +186,7 @@ public:
             );
 
             // Param
-            param.world2clip = Transpose(context.world_to_shadow_clip[cascade_index]);
+            param.world2clip = Transpose(context.shadow_map_data.world_to_shadow_clip[cascade_index]);
             auto arg_idx =
                 context.cmd_list.RegisterArgs(ShadowDepthPassPipeline::SetArgs(context.bdls, param));
 
@@ -229,7 +238,9 @@ public:
                 .Gfx(
                     shadow_depth_pass_names[cascade_index],
                     Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
-                    DepthAttachment(context.shadow_map_textures[cascade_index].tex->GetView().GetTexture())
+                    DepthAttachment(
+                        context.shadow_map_data.shadow_map_textures[cascade_index].tex->GetView().GetTexture()
+                    )
                 )
                 .AcceptDrawBatch(std::move(draw_batch))
                 .Dispatch();
@@ -261,16 +272,12 @@ private:
     VertexShader                                               vertex_shader;
 
 private:
-    StaticArray<float, CSM_MAX_CASCADES> get_csm_blend(
-        const StaticArray<float, CSM_MAX_CASCADES> split_point_raw,
-        const float                                blend_percentage,
-        StaticArray<float, CSM_MAX_CASCADES>&      blend_widths
-    ) {
+    StaticArray<float, CSM_MAX_CASCADES>
+    get_csm_blend(const StaticArray<float, CSM_MAX_CASCADES> split_point_raw, const float blend_percentage) {
         StaticArray<float, CSM_MAX_CASCADES> blend_start_points;
         for (uint i = 0; i < split_point_raw.size(); i++) {
             float width_raw = (i == 0) ? split_point_raw[0] : (split_point_raw[i] - split_point_raw[i - 1]);
-            blend_widths[i] = width_raw * blend_percentage;
-            blend_start_points[i] = (i == 0 ? 0.0f : (split_point_raw[i - 1] - blend_widths[i - 1]));
+            blend_start_points[i] = split_point_raw[i] - width_raw * blend_percentage;
         }
         return blend_start_points;
     }
@@ -293,15 +300,28 @@ private:
         return split_points;
     }
 
-    void transform_split_points_to_ratios(
-        StaticArray<float, CSM_MAX_CASCADES>& split_points,
-        const float                           near_clip,
-        const float                           far_clip
+    StaticArray<float, CSM_MAX_CASCADES> transform_split_points_to_ratios(
+        const StaticArray<float, CSM_MAX_CASCADES> split_points,
+        const float                                near_clip,
+        const float                                far_clip
     ) {
+        StaticArray<float, CSM_MAX_CASCADES> split_ratios;
         for (uint i = 0; i < split_points.size(); i++) {
-            split_points[i] = (split_points[i] - near_clip) / (far_clip - near_clip);
+            split_ratios[i] = (split_points[i] - near_clip) / (far_clip - near_clip);
         }
-        return;
+        return split_ratios;
+    }
+
+    StaticArray<float, CSM_MAX_CASCADES> transform_split_ratios_to_points(
+        const StaticArray<float, CSM_MAX_CASCADES> split_ratios,
+        const float                                near_clip,
+        const float                                far_clip
+    ) {
+        StaticArray<float, CSM_MAX_CASCADES> split_points;
+        for (uint i = 0; i < split_ratios.size(); i++) {
+            split_points[i] = near_clip + split_ratios[i] * (far_clip - near_clip);
+        }
+        return split_points;
     }
 
     float4x4 get_world_to_shadow_clip_matrix(
