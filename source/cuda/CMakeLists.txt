@@ -76,6 +76,7 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
         POSITION_INDEPENDENT_CODE ON   # 编译动态库的时候需要打开
         LINKER_LANGUAGE CUDA           # 不然cmake会提示：CMake can not determine linker language for target: moer_cuda
         CUDA_ARCHITECTURES "61;86;120" # 支持非本机的计算架构（例如3060和3080的Compute Capability都是8.6）
+                                       # NV计算能力表格：https://developer.nvidia.cn/cuda-gpus
     )
 
     # 宏, link include, link sources
