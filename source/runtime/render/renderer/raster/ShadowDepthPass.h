@@ -275,7 +275,7 @@ private:
     StaticArray<float, CSM_MAX_CASCADES>
     get_csm_blend(const StaticArray<float, CSM_MAX_CASCADES> split_point_raw, const float blend_percentage) {
         StaticArray<float, CSM_MAX_CASCADES> blend_start_points;
-        for (uint i = 0; i < split_point_raw.size(); i++) {
+        for (uint i = 0; i < CSM_MAX_CASCADES; i++) {
             float width_raw = (i == 0) ? split_point_raw[0] : (split_point_raw[i] - split_point_raw[i - 1]);
             blend_start_points[i] = split_point_raw[i] - width_raw * blend_percentage;
         }

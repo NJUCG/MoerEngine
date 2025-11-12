@@ -63,21 +63,29 @@ float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) 
 }
 
 int get_cascade_index(Moer::LightingData lighting_data, float3 world_pos) {
-    //FIXME:移动到cpu端计算，会提高效率么？
-    float4 pixel_view_pos    = mul(param.view_matrix, float4(world_pos, 1.0));
-    float  pixel_depth_ratio = (pixel_view_pos.z - param.near_clip) / (param.far_clip - param.near_clip);
+    float pixel_view_pos_z = abs(mul(lighting_data.view_matrix, float4(world_pos, 1.0)).z);
+    float pixel_depth_ratio =
+        (pixel_view_pos_z - lighting_data.near_clip) / (lighting_data.far_clip - lighting_data.near_clip);
     for (int i = 0; i < lighting_data.shadow_csm_num_of_cascades; i++) {
-        if (pixel_depth_ratio < param.csm_split_ratios[i]) {
+        if (pixel_depth_ratio < lighting_data.cascade_split_ratios[i]) {
             return i;
         }
     }
     return -1;
 }
 
-float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
-    int cascade_index = get_cascade_index(lighting_data, world_pos);
-    if (cascade_index == -1)
-        return 1.0;
+float get_cascade_blend_ratio(Moer::LightingData lighting_data, float3 world_pos, int cascade_index) {
+    float pixel_view_pos_z =
+        abs(mul(lighting_data.view_matrix, float4(world_pos, 1.0)).z); //FIXME:需要取负吗？
+    float blend_band_start_z =
+        lighting_data.near_clip + lighting_data.cascade_blend_start_ratios[cascade_index] *
+                                      (lighting_data.far_clip - lighting_data.near_clip);
+    float blend_band_end_z = lighting_data.near_clip + lighting_data.cascade_split_ratios[cascade_index] *
+                                                           (lighting_data.far_clip - lighting_data.near_clip);
+    return smoothstep(blend_band_start_z, blend_band_end_z, pixel_view_pos_z);
+}
+
+float get_single_shadow(Moer::LightingData lighting_data, float3 world_pos, int cascade_index) {
     float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[cascade_index], float4(world_pos, 1.0));
     float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
     float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
@@ -90,6 +98,24 @@ float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
         // near<->1.0; far<->0.0
     }
     return 1.0;
+}
+
+float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
+    int cascade_index = get_cascade_index(lighting_data, world_pos);
+    if (cascade_index == -1)
+        return 1.0;
+
+    if (lighting_data.is_csm_blend_enabled) {
+        float shadow_current = get_single_shadow(lighting_data, world_pos, cascade_index);
+        float shadow_next    = (cascade_index + 1 < lighting_data.shadow_csm_num_of_cascades) ?
+                                   get_single_shadow(lighting_data, world_pos, cascade_index + 1) :
+                                   1.0;
+
+        float cascade_blend_ratio = get_cascade_blend_ratio(lighting_data, world_pos, cascade_index);
+        return lerp(shadow_current, shadow_next, cascade_blend_ratio);
+    } else {
+        return get_single_shadow(lighting_data, world_pos, cascade_index);
+    }
 }
 
 float calculate_shadow(Moer::LightingData lighting_data, float3 world_pos) {

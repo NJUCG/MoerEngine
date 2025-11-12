@@ -98,11 +98,13 @@ void RasterUI::ShowConfig() {
                     Max(m_config.shadow_csm_cover_ratio_of_camera[i], mx);
                 mx = m_config.shadow_csm_cover_ratio_of_camera[i];
             }
+            ImGui::Checkbox("Enable CSM Blend", &m_config.shadow_csm_blend_option);
         } else if (m_config.shadow_map_mode == 2) { // CSM_Auto
             ImGui::SliderInt("Num of Cascades", &m_config.shadow_csm_num_of_cascades, 1, CSM_MAX_CASCADES);
             ImGui::SliderFloat("Lerp Factor", &m_config.shadow_csm_lerp_factor, 0, 1);
             ImGui::SliderFloat("Blend Percentage", &m_config.shadow_csm_blend_percentage, 0, 1);
             ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
+            ImGui::Checkbox("Enable CSM Blend", &m_config.shadow_csm_blend_option);
         }
 
         else if (m_config.shadow_map_mode == 3) { // VSM

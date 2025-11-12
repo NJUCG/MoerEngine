@@ -68,13 +68,6 @@ public:
             material_param.skybox_handles[i] = context.skybox_tex[i].handle;
         }
 
-        material_param.view_matrix = Transpose(camera->GetViewMatrix());
-        material_param.near_clip   = camera->GetNearClip();
-        material_param.far_clip    = camera->GetFarClip();
-        for (int i = 0; i < MAX_CSM_CASCADES; i++) {
-            material_param.csm_split_ratios[i] = ui_config.shadow_csm_cover_ratio_of_camera[i];
-        }
-
         // 注意生命周期！
         LightingData* lighting_data = MoerNew(LightingData);
 
@@ -96,7 +89,18 @@ public:
             lighting_data->world_to_shadow_clip[i] =
                 Transpose(context.shadow_map_data.world_to_shadow_clip[i]);
         }
-        // 注：此处不一定使用所有4张CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
+        lighting_data->view_matrix = Transpose(camera->GetViewMatrix());
+        lighting_data->near_clip   = camera->GetNearClip();
+        lighting_data->far_clip    = camera->GetFarClip();
+        for (int i = 0; i < MAX_CSM_CASCADES; i++) {
+            lighting_data->cascade_split_ratios[i] = context.shadow_map_data.cascade_split_ratios[i];
+        }
+        for (int i = 0; i < MAX_CSM_CASCADES; i++) {
+            lighting_data->cascade_blend_start_ratios[i] =
+                context.shadow_map_data.cascade_blend_start_ratios[i];
+        }
+        lighting_data->is_csm_blend_enabled = ui_config.shadow_csm_blend_option;
+        // 注：此处不一定使用所有CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
 
         context.cmd_list.CopyFrom(
             std::span<byte>((byte*)lighting_data, sizeof(LightingData)), lighting_data_buffer.buf->GetView()

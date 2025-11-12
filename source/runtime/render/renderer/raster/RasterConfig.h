@@ -147,8 +147,9 @@ struct RasterConfig {
     int   shadow_map_mode             = 1; // 0: disabled, 1: CSM, 2: CSM_Auto, 3: VSM
     int   shadow_sampling_mode        = 0;
     int   shadow_csm_num_of_cascades  = 2;
-    float shadow_csm_lerp_factor      = 0.5f;
+    float shadow_csm_lerp_factor      = 0.1f;
     float shadow_csm_blend_percentage = 0.1f;
+    bool  shadow_csm_blend_option     = true;
     int   shadow_csm_sm_size          = 2048;
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera = {0.01, 0.04, 0.32, 1.0};

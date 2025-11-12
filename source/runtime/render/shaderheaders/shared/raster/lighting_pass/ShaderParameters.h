@@ -41,12 +41,6 @@ struct MaterialPassBindlessParam {
     uint   skybox_handle_negx;
     uint   skybox_handle_posy;
     uint   skybox_handle_negy;
-
-    //TODO:加速csm计算
-    float4x4 view_matrix;
-    float    near_clip;
-    float    far_clip;
-    float    csm_split_ratios[MAX_CSM_CASCADES];
 };
 struct LightingData {
     float4x4 world_to_shadow_clip[MAX_CSM_CASCADES];
@@ -62,6 +56,14 @@ struct LightingData {
     uint shadow_csm_sm_size;
 
     uint shadow_map[MAX_CSM_CASCADES];
+
+    //TODO:加速csm计算
+    float4x4 view_matrix;
+    float    near_clip;
+    float    far_clip;
+    float    cascade_split_ratios[MAX_CSM_CASCADES];
+    float    cascade_blend_start_ratios[MAX_CSM_CASCADES];
+    bool     is_csm_blend_enabled;
 };
 
 // MARK: Main Content End
