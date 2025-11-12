@@ -99,7 +99,7 @@ public:
             lighting_data->cascade_blend_start_ratios[i] =
                 context.shadow_map_data.cascade_blend_start_ratios[i];
         }
-        lighting_data->is_csm_blend_enabled = ui_config.shadow_csm_blend_option;
+        lighting_data->is_csm_blend_enabled = ui_config.shadow_csm_blend_option ? 1 : 0;
         // 注：此处不一定使用所有CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
 
         context.cmd_list.CopyFrom(

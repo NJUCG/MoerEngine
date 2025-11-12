@@ -144,7 +144,7 @@ struct RasterConfig {
         s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2];
 
     // MARK: Shadow
-    int   shadow_map_mode             = 1; // 0: disabled, 1: CSM, 2: CSM_Auto, 3: VSM
+    int   shadow_map_mode             = 2; // 0: disabled, 1: CSM, 2: CSM_Auto, 3: VSM
     int   shadow_sampling_mode        = 0;
     int   shadow_csm_num_of_cascades  = 2;
     float shadow_csm_lerp_factor      = 0.005f;

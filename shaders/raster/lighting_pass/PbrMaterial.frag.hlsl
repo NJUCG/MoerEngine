@@ -105,7 +105,7 @@ float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
     if (cascade_index == -1)
         return 1.0;
 
-    if (lighting_data.is_csm_blend_enabled) {
+    if (lighting_data.is_csm_blend_enabled == 1) {
         float shadow_current = get_single_shadow(lighting_data, world_pos, cascade_index);
         float shadow_next    = (cascade_index + 1 < lighting_data.shadow_csm_num_of_cascades) ?
                                    get_single_shadow(lighting_data, world_pos, cascade_index + 1) :

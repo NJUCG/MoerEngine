@@ -63,7 +63,7 @@ struct LightingData {
     float    far_clip;
     float    cascade_split_ratios[MAX_CSM_CASCADES];
     float    cascade_blend_start_ratios[MAX_CSM_CASCADES];
-    bool     is_csm_blend_enabled;
+    uint     is_csm_blend_enabled;
 };
 
 // MARK: Main Content End
