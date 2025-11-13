@@ -1,3 +1,10 @@
+/**
+ * 请统一Include如下文件，不要Include当前文件
+ * CPP:
+ *     #include "shaderheaders/shared/raster/ShaderParameters.h"
+ * HLSL:
+ *     #include "shared/raster/ShaderParameters.h"
+ */
 #pragma once
 
 #ifdef CONST
@@ -9,10 +16,8 @@
 #ifdef __cplusplus
 //#define CONST constexpr
 #include "misc/Traits.h"
-#include "shaderheaders/shared/raster/ShaderParametersUtils.h"
 namespace Moer::Render {
 #else
-#include "shared/raster/ShaderParametersUtils.h"
 //#define CONST const
 namespace Moer {
 #endif
@@ -54,6 +59,7 @@ struct LightingData {
     uint shadow_sampling_mode;
     uint shadow_csm_num_of_cascades;
     uint shadow_csm_sm_size;
+    uint shadow_csm_visualize_cascade;
 
     uint shadow_map[MAX_CSM_CASCADES];
 
@@ -66,11 +72,6 @@ struct LightingData {
 };
 
 // MARK: Main Content End
-
-//MARK:Enum Definitions Begin
-//deferred
-//shadowpass
-//ssrpass
 
 #ifdef __cplusplus
 }

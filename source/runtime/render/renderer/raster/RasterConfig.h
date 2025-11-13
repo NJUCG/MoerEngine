@@ -4,9 +4,7 @@
 #include "misc/Traits.h"
 
 #include "RasterCompileTimeConstants.h"
-#include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
-#include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
-#include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
+#include "shaderheaders/shared/raster/ShaderParameters.h"
 
 #include <string>
 
@@ -53,6 +51,13 @@ static const UnorderedMap<ERtaoSampleMode, std::string> s_rtao_sample_mode_name_
     {ERtaoSampleMode::COSINE_WEIGHTED, "Cosine-Weighted in Semisphere"},
 };
 
+// EnumParam(EShadowMapMode, NONE, CSM, CSM_AUTO);
+static const UnorderedMap<EShadowMapMode, std::string> s_shadow_map_mode_name_map = {
+    {EShadowMapMode::NONE, "None"},
+    {EShadowMapMode::CSM, "CSM"},
+    {EShadowMapMode::CSM_AUTO, "CSM Auto"},
+};
+
 enum class EUpsampleMode {
     None = 0,
     BILINEAR,
@@ -69,8 +74,6 @@ static const Array<std::string> s_rtao_sample_mode = {
     "Cosine-Weighted in Semisphere"
 };
 
-static const Array<std::string> s_shadow_map_mode_name_array =
-    {"Disabled", "Cascaded SM", "CSM_Auto", "Virtual SM"};
 static const Array<std::string> s_shadow_sampling_mode_name_array = {
     "No Filtering",
     "PCF 1x1",
@@ -144,13 +147,14 @@ struct RasterConfig {
         s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2];
 
     // MARK: Shadow
-    int   shadow_map_mode             = 2; // 0: disabled, 1: CSM, 2: CSM_Auto, 3: VSM
-    int   shadow_sampling_mode        = 0;
-    int   shadow_csm_num_of_cascades  = 2;
-    float shadow_csm_lerp_factor      = 0.005f;
-    float shadow_csm_blend_percentage = 0.3f;
-    bool  shadow_csm_blend_option     = true;
-    int   shadow_csm_sm_size          = 2048;
+    EShadowMapMode shadow_map_mode              = EShadowMapMode::CSM;
+    int            shadow_sampling_mode         = 0;
+    int            shadow_csm_num_of_cascades   = 2;
+    float          shadow_csm_lerp_factor       = 0.005f;
+    float          shadow_csm_blend_percentage  = 0.3f;
+    bool           shadow_csm_blend_option      = true;
+    int            shadow_csm_sm_size           = 2048;
+    bool           shadow_csm_visualize_cascade = false;
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
         {0.01, 0.04, 0.1, 0.25, 0.32, 1.0};

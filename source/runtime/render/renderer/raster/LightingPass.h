@@ -77,10 +77,11 @@ public:
         lighting_data->camera_position = camera->GetPosition();
 
         // Shadow Parameters
-        lighting_data->shadow_map_mode            = ui_config.shadow_map_mode;
-        lighting_data->shadow_sampling_mode       = ui_config.shadow_sampling_mode;
-        lighting_data->shadow_csm_num_of_cascades = csm_layers;
-        lighting_data->shadow_csm_sm_size         = ui_config.shadow_csm_sm_size;
+        lighting_data->shadow_map_mode              = static_cast<int>(ui_config.shadow_map_mode);
+        lighting_data->shadow_sampling_mode         = ui_config.shadow_sampling_mode;
+        lighting_data->shadow_csm_num_of_cascades   = csm_layers;
+        lighting_data->shadow_csm_sm_size           = ui_config.shadow_csm_sm_size;
+        lighting_data->shadow_csm_visualize_cascade = ui_config.shadow_csm_visualize_cascade;
         // Shadow Map
         for (uint i = 0; i < csm_layers; i++) {
             lighting_data->shadow_map[i] = context.shadow_map_data.shadow_map_textures[i].handle;

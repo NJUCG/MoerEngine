@@ -136,7 +136,7 @@ public:
 
         //lerp csm ratios
         switch (ui_config.shadow_map_mode) {
-            case 2: // CSM_Auto
+            case EShadowMapMode::CSM_AUTO: // CSM_Auto
             {
                 context.shadow_map_data.cascade_split_points =
                     get_cascade_split_points(near_clip, far_clip, ui_config.shadow_csm_lerp_factor);
@@ -145,7 +145,7 @@ public:
                 );
                 break;
             }
-            case 1: // CSM
+            case EShadowMapMode::CSM: // CSM
             default:
                 context.shadow_map_data.cascade_split_points = transform_split_ratios_to_points(
                     ui_config.shadow_csm_cover_ratio_of_camera, near_clip, far_clip
@@ -240,17 +240,14 @@ public:
 
     void Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
         switch (ui_config.shadow_map_mode) {
-            case 0: // Disabled
+            case EShadowMapMode::NONE:
                 break;
-            case 1: // CSM
-            case 2: // CSM_Auto
+            case EShadowMapMode::CSM:
+            case EShadowMapMode::CSM_AUTO:
                 ProcessCsm(context, ui_config, camera);
                 break;
-            case 3: // VSM
-                // ProcessVsm(context, ui_config, camera);
-                break;
             default:
-                LOG_ERROR("Shadow map mode {} not supported", ui_config.shadow_map_mode);
+                LOG_ERROR("Shadow map mode {} not supported", static_cast<int>(ui_config.shadow_map_mode));
                 break;
         }
         return;

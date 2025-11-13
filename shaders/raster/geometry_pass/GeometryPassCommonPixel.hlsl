@@ -6,7 +6,7 @@
 #include "framework/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/Geometry.h"
-#include "shared/raster/geometry_pass/ShaderParameters.h"
+#include "shared/raster/ShaderParameters.h"
 
 #include "raster/geometry_pass/VertexFactory.hlsl"
 

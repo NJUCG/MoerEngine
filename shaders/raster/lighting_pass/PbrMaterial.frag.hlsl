@@ -5,7 +5,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "framework/Lighting.hlsl"
 #include "framework/Material.hlsl"
 
-#include "shared/raster/lighting_pass/ShaderParameters.h"
+#include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
 
@@ -62,6 +62,7 @@ float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) 
     return pos;
 }
 
+// 获取Cascade Index
 int get_cascade_index(Moer::LightingData lighting_data, float3 world_pos) {
     float pixel_view_pos_z = abs(mul(lighting_data.view_matrix, float4(world_pos, 1.0)).z);
     float pixel_depth_ratio =
@@ -118,13 +119,24 @@ float calculate_csm(Moer::LightingData lighting_data, float3 world_pos) {
     }
 }
 
+float visualize_csm_cascade(Moer::LightingData lighting_data, float3 world_pos) {
+    int idx = get_cascade_index(lighting_data, world_pos);
+    return 1.0 * idx / lighting_data.shadow_csm_num_of_cascades;
+}
+
 float calculate_shadow(Moer::LightingData lighting_data, float3 world_pos) {
-    if (lighting_data.shadow_map_mode == 0) {
+    if (lighting_data.shadow_map_mode == Moer::EShadowMapMode::NONE) {
         return 1.0;
-    } else if (lighting_data.shadow_map_mode == 1) {
+
+    } else if (lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM ||
+               lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM_AUTO) {
+        // 用黑白来可视化CSM层数。全黑表示0层，全白表示最大层
+        if (lighting_data.shadow_csm_visualize_cascade != 0) {
+            return visualize_csm_cascade(lighting_data, world_pos);
+        }
+        // 正常渲染shadow
         return calculate_csm(lighting_data, world_pos);
-    } else if (lighting_data.shadow_map_mode == 2) {
-        return calculate_csm(lighting_data, world_pos);
+
     } else {
         return 1.0;
     }

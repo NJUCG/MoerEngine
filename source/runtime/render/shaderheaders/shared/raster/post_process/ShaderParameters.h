@@ -1,3 +1,10 @@
+/**
+ * 请统一Include如下文件，不要Include当前文件
+ * CPP:
+ *     #include "shaderheaders/shared/raster/ShaderParameters.h"
+ * HLSL:
+ *     #include "shared/raster/ShaderParameters.h"
+ */
 #pragma once
 
 #ifdef CONST
@@ -7,10 +14,8 @@
 #ifdef __cplusplus
 //#define CONST constexpr
 #include "misc/Traits.h"
-#include "shaderheaders/shared/raster/ShaderParametersUtils.h"
 namespace Moer::Render {
 #else
-#include "shared/raster/ShaderParametersUtils.h"
 //#define CONST const
 namespace Moer {
 #endif
@@ -180,11 +185,3 @@ struct UpsamplePipelineBindlessParam {
 }
 #endif
 //#undef CONST
-
-//Enum Definitions Begin
-namespace Moer {
-EnumParam(EAaMode, NONE, FXAA_SIMPLIFIED, FXAA_QUALITY, SMAA_1X, SMAA_T2X);
-EnumParam(EAoMode, NONE, SSAO, SSAO_AO_ONLY, RTAO, RTAO_AO_ONLY, SSDO, SSDO_AO_ONLY, LINEARIZED_DEPTH_DIV_10);
-EnumParam(EDenoiserMode, NONE, BILATERAL_FILTER);
-EnumParam(ERtaoSampleMode, UNIFORM, COSINE_WEIGHTED);
-} // namespace Moer

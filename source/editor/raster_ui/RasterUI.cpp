@@ -12,7 +12,7 @@ RasterUI::RasterUI(RasterConfig& config) : m_config(config) {
     m_config.shadow_map_mode =
         (ConfigManager::GetInstance().GetConfig().engine.render.raster.enable_shadow ?
              m_config.shadow_map_mode :
-             0);
+             EShadowMapMode::NONE);
 }
 
 void RasterUI::ShowConfig() {
@@ -71,21 +71,33 @@ void RasterUI::ShowConfig() {
     }
 
     if (ImGui::TreeNode(
-            "Shadow", "Shadow: [%s]", s_shadow_map_mode_name_array[m_config.shadow_map_mode].c_str()
+            "Shadow", "Shadow: [%s]", s_shadow_map_mode_name_map.at(m_config.shadow_map_mode).c_str()
         )) {
 
         ImGui::Text("Only project 1st Dir.Light");
 
-        for (uint i = 0; i < s_shadow_map_mode_name_array.size(); i++) {
-            if (ImGui::Selectable(s_shadow_map_mode_name_array[i].c_str(), m_config.shadow_map_mode == i)) {
-                m_config.shadow_map_mode = i;
+        for (uint i = 0; i < s_shadow_map_mode_name_map.size(); i++) {
+            EShadowMapMode cur_enum = static_cast<EShadowMapMode>(i);
+            if (ImGui::Selectable(
+                    s_shadow_map_mode_name_map.at(cur_enum).c_str(), m_config.shadow_map_mode == cur_enum
+                )) {
+                m_config.shadow_map_mode = cur_enum;
             }
             draw_border();
         }
 
-        if (m_config.shadow_map_mode == 1) { // CSM
+        auto csm_common_param = [&]() {
             ImGui::SliderInt("Num of Cascades", &m_config.shadow_csm_num_of_cascades, 1, CSM_MAX_CASCADES);
             ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
+            ImGui::Checkbox("Visualize CSM Cascade", &m_config.shadow_csm_visualize_cascade);
+            ImGui::Checkbox("Enable CSM Blend", &m_config.shadow_csm_blend_option);
+            if (m_config.shadow_csm_blend_option) {
+                ImGui::SliderFloat("Blend Percentage", &m_config.shadow_csm_blend_percentage, 0, 1);
+            }
+        };
+
+        if (m_config.shadow_map_mode == EShadowMapMode::CSM) { // CSM
+            csm_common_param();
             float mx = 0.0f;
             for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {
                 ImGui::SliderFloat(
@@ -98,17 +110,9 @@ void RasterUI::ShowConfig() {
                     Max(m_config.shadow_csm_cover_ratio_of_camera[i], mx);
                 mx = m_config.shadow_csm_cover_ratio_of_camera[i];
             }
-            ImGui::Checkbox("Enable CSM Blend", &m_config.shadow_csm_blend_option);
-        } else if (m_config.shadow_map_mode == 2) { // CSM_Auto
-            ImGui::SliderInt("Num of Cascades", &m_config.shadow_csm_num_of_cascades, 1, CSM_MAX_CASCADES);
+        } else if (m_config.shadow_map_mode == EShadowMapMode::CSM_AUTO) { // CSM_Auto
+            csm_common_param();
             ImGui::SliderFloat("Lerp Factor", &m_config.shadow_csm_lerp_factor, 0, 1);
-            ImGui::SliderFloat("Blend Percentage", &m_config.shadow_csm_blend_percentage, 0, 1);
-            ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
-            ImGui::Checkbox("Enable CSM Blend", &m_config.shadow_csm_blend_option);
-        }
-
-        else if (m_config.shadow_map_mode == 3) { // VSM
-            // TODO
         }
 
         ImGui::TreePop();

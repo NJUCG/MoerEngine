@@ -7,7 +7,7 @@
 #include "framework/Bindless.hlsl"
 #include "framework/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
-#include "shared/raster/post_process/ShaderParameters.h"
+#include "shared/raster/ShaderParameters.h"
 
 static const float fxaa_contrast_threshold = 0.025;
 static const uint  fxaa_search_limit       = 8;
