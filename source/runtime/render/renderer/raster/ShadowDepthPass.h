@@ -35,7 +35,7 @@ public:
 
     void CreateCsmData(RasterContext& context, const RasterConfig& ui_config) {
         // 检查并创建所有ShadowMap
-        for (uint i = 0; i < ui_config.shadow_csm_num_of_cascades; i++) {
+        for (uint i = 0; i < enabled_cascade_layers; i++) {
             auto& shadow_map_texture = context.shadow_map_data.shadow_map_textures[i];
 
             bool b_need_to_create = shadow_map_texture.tex == nullptr ||
@@ -112,6 +112,8 @@ public:
     }
 
     void ProcessCsm(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
+        enabled_cascade_layers = ui_config.shadow_csm_num_of_cascades;
+        assert(enabled_cascade_layers <= CSM_MAX_CASCADES);
 
         // CsmData
         CreateCsmData(context, ui_config);
@@ -129,8 +131,6 @@ public:
         param.geometry_data          = context.gpu_geometry_info_handle;
         param.geometry_instance_data = context.gpu_geometry_instance_handle;
 
-        shadow_depth_pass_names.resize(ui_config.shadow_csm_num_of_cascades);
-
         const float near_clip = camera->GetNearClip();
         const float far_clip  = camera->GetFarClip();
 
@@ -138,12 +138,8 @@ public:
         switch (ui_config.shadow_map_mode) {
             case 2: // CSM_Auto
             {
-                context.shadow_map_data.cascade_split_points = get_cascade_split_points(
-                    ui_config.shadow_csm_num_of_cascades,
-                    near_clip,
-                    far_clip,
-                    ui_config.shadow_csm_lerp_factor
-                );
+                context.shadow_map_data.cascade_split_points =
+                    get_cascade_split_points(near_clip, far_clip, ui_config.shadow_csm_lerp_factor);
                 context.shadow_map_data.cascade_split_ratios = transform_split_points_to_ratios(
                     context.shadow_map_data.cascade_split_points, near_clip, far_clip
                 );
@@ -167,7 +163,7 @@ public:
             far_clip
         );
 
-        for (uint cascade_index = 0; cascade_index < ui_config.shadow_csm_num_of_cascades; cascade_index++) {
+        for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
             // Name
             shadow_depth_pass_names[cascade_index] = std::format("Shadow Depth Pass - {}", cascade_index);
 
@@ -177,12 +173,7 @@ public:
                                        context.shadow_map_data.cascade_blend_start_ratios[cascade_index - 1];
             const float frustum_far_ratio = context.shadow_map_data.cascade_split_ratios[cascade_index];
             context.shadow_map_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
-                light_direction_optional,
-                camera,
-                ui_config,
-                cascade_index,
-                frustum_near_ratio,
-                frustum_far_ratio
+                light_direction_optional, camera, ui_config, frustum_near_ratio, frustum_far_ratio
             );
 
             // Param
@@ -266,7 +257,8 @@ public:
     }
 
 private:
-    Array<std::string> shadow_depth_pass_names;
+    StaticArray<std::string, CSM_MAX_CASCADES> shadow_depth_pass_names;
+    uint                                       enabled_cascade_layers;
 
     Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline> pipeline_map;
     VertexShader                                               vertex_shader;
@@ -275,24 +267,18 @@ private:
     StaticArray<float, CSM_MAX_CASCADES>
     get_csm_blend(const StaticArray<float, CSM_MAX_CASCADES> split_point_raw, const float blend_percentage) {
         StaticArray<float, CSM_MAX_CASCADES> blend_start_points;
-        for (uint i = 0; i < CSM_MAX_CASCADES; i++) {
+        for (uint i = 0; i < enabled_cascade_layers; i++) {
             float width_raw = (i == 0) ? split_point_raw[0] : (split_point_raw[i] - split_point_raw[i - 1]);
             blend_start_points[i] = split_point_raw[i] - width_raw * blend_percentage;
         }
         return blend_start_points;
     }
 
-    StaticArray<float, CSM_MAX_CASCADES> get_cascade_split_points(
-        const uint  csm_enable_layers,
-        const float near_clip,
-        const float far_clip,
-        const float lerp_factor
-    ) {
-        assert(csm_enable_layers <= CSM_MAX_CASCADES);
-        assert(near_clip > 0.f && far_clip > near_clip);
+    StaticArray<float, CSM_MAX_CASCADES>
+    get_cascade_split_points(const float near_clip, const float far_clip, const float lerp_factor) {
         StaticArray<float, CSM_MAX_CASCADES> split_points;
-        for (uint i = 0; i < csm_enable_layers; i++) {
-            float split_ratio  = (float)(i + 1) / (float)csm_enable_layers;
+        for (uint i = 0; i < enabled_cascade_layers; i++) {
+            float split_ratio  = (float)(i + 1) / (float)enabled_cascade_layers;
             float log_split    = near_clip * Pow(far_clip / near_clip, split_ratio);
             float linear_split = near_clip + (far_clip - near_clip) * split_ratio;
             split_points[i]    = Lerp(log_split, linear_split, lerp_factor);
@@ -306,7 +292,7 @@ private:
         const float                                far_clip
     ) {
         StaticArray<float, CSM_MAX_CASCADES> split_ratios;
-        for (uint i = 0; i < split_points.size(); i++) {
+        for (uint i = 0; i < enabled_cascade_layers; i++) {
             split_ratios[i] = (split_points[i] - near_clip) / (far_clip - near_clip);
         }
         return split_ratios;
@@ -318,7 +304,7 @@ private:
         const float                                far_clip
     ) {
         StaticArray<float, CSM_MAX_CASCADES> split_points;
-        for (uint i = 0; i < split_ratios.size(); i++) {
+        for (uint i = 0; i < enabled_cascade_layers; i++) {
             split_points[i] = near_clip + split_ratios[i] * (far_clip - near_clip);
         }
         return split_points;
@@ -328,7 +314,6 @@ private:
         DirectionalLightComponent* light_direction_optional,
         CameraRef&                 camera,
         const RasterConfig&        ui_config,
-        const uint                 cascade_index,
         const float                frustum_near_ratio,
         const float                frustum_far_ratio
     ) {

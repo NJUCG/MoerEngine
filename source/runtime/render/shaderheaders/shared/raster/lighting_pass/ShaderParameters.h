@@ -4,7 +4,7 @@
 #undef CONST
 #endif
 
-#define MAX_CSM_CASCADES 4
+#define MAX_CSM_CASCADES 6
 
 #ifdef __cplusplus
 //#define CONST constexpr
@@ -57,7 +57,6 @@ struct LightingData {
 
     uint shadow_map[MAX_CSM_CASCADES];
 
-    //TODO:加速csm计算
     float4x4 view_matrix;
     float    near_clip;
     float    far_clip;

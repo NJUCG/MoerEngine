@@ -70,6 +70,7 @@ public:
 
         // 注意生命周期！
         LightingData* lighting_data = MoerNew(LightingData);
+        uint          csm_layers    = ui_config.shadow_csm_num_of_cascades;
 
         lighting_data->inv_view_proj   = Transpose(camera->GetViewProjectionMatrixInv());
         lighting_data->light_count     = context.scene.GetLights().size();
@@ -78,24 +79,24 @@ public:
         // Shadow Parameters
         lighting_data->shadow_map_mode            = ui_config.shadow_map_mode;
         lighting_data->shadow_sampling_mode       = ui_config.shadow_sampling_mode;
-        lighting_data->shadow_csm_num_of_cascades = ui_config.shadow_csm_num_of_cascades;
+        lighting_data->shadow_csm_num_of_cascades = csm_layers;
         lighting_data->shadow_csm_sm_size         = ui_config.shadow_csm_sm_size;
         // Shadow Map
-        for (uint i = 0; i < MAX_CSM_CASCADES; i++) {
+        for (uint i = 0; i < csm_layers; i++) {
             lighting_data->shadow_map[i] = context.shadow_map_data.shadow_map_textures[i].handle;
         }
         // Shadow Transform
-        for (uint i = 0; i < MAX_CSM_CASCADES; i++) {
+        for (uint i = 0; i < csm_layers; i++) {
             lighting_data->world_to_shadow_clip[i] =
                 Transpose(context.shadow_map_data.world_to_shadow_clip[i]);
         }
         lighting_data->view_matrix = Transpose(camera->GetViewMatrix());
         lighting_data->near_clip   = camera->GetNearClip();
         lighting_data->far_clip    = camera->GetFarClip();
-        for (int i = 0; i < MAX_CSM_CASCADES; i++) {
+        for (int i = 0; i < csm_layers; i++) {
             lighting_data->cascade_split_ratios[i] = context.shadow_map_data.cascade_split_ratios[i];
         }
-        for (int i = 0; i < MAX_CSM_CASCADES; i++) {
+        for (int i = 0; i < csm_layers; i++) {
             lighting_data->cascade_blend_start_ratios[i] =
                 context.shadow_map_data.cascade_blend_start_ratios[i];
         }

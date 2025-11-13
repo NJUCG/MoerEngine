@@ -152,7 +152,8 @@ struct RasterConfig {
     bool  shadow_csm_blend_option     = true;
     int   shadow_csm_sm_size          = 2048;
 
-    StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera = {0.01, 0.04, 0.32, 1.0};
+    StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
+        {0.01, 0.04, 0.1, 0.25, 0.32, 1.0};
 
     // MARK: Upsample Process
     EUpsampleMode upsample_mode = EUpsampleMode::None;
