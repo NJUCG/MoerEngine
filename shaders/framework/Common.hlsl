@@ -16,7 +16,7 @@
 #define MIP_SHARP 2      // for albedo and roughness
 
 // Shadow
-#define SHADOW_BIAS 0.001
+#define SHADOW_BIAS 0.0001
 
 // BRDF
 #define RF0_DIELECTRICS 0.04

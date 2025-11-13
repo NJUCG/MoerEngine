@@ -150,7 +150,7 @@ struct RasterConfig {
     EShadowMapMode shadow_map_mode              = EShadowMapMode::CSM;
     int            shadow_sampling_mode         = 0;
     int            shadow_csm_num_of_cascades   = 2;
-    float          shadow_csm_lerp_factor       = 0.005f;
+    float          shadow_csm_lerp_factor       = 0.015f;
     float          shadow_csm_blend_percentage  = 0.3f;
     bool           shadow_csm_blend_option      = true;
     int            shadow_csm_sm_size           = 2048;
