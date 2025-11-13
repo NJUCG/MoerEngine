@@ -1,7 +1,7 @@
 #include "framework/Bindless.hlsl"
 #include "framework/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
-#include "shared/raster/post_process/ShaderParameters.h"
+#include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::BilateralFilterDenoiserPipelineBindlessParam> param;
 

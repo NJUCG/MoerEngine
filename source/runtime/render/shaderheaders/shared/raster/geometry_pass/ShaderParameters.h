@@ -1,3 +1,10 @@
+/**
+ * 请统一Include如下文件，不要Include当前文件
+ * CPP:
+ *     #include "shaderheaders/shared/raster/ShaderParameters.h"
+ * HLSL:
+ *     #include "shared/raster/ShaderParameters.h"
+ */
 #pragma once
 
 #ifdef CONST
@@ -7,10 +14,8 @@
 #ifdef __cplusplus
 //#define CONST constexpr
 #include "misc/Traits.h"
-#include "shaderheaders/shared/raster/ShaderParametersUtils.h"
 namespace Moer::Render {
 #else
-#include "shared/raster/ShaderParametersUtils.h"
 //#define CONST const
 namespace Moer {
 #endif
@@ -33,7 +38,8 @@ struct ShadowDepthPassBindlessParam {
 
 // MARK: Main Content End
 
-//MARK:Enum Definitions Begin
-//gbuffer
-//geometrypass
+#ifdef __cplusplus
 }
+#else
+}
+#endif
