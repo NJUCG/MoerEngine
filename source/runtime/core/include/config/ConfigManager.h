@@ -8,8 +8,7 @@
 #include <filesystem>
 
 //implement ConfigManager as Singleton
-#define FONTS_DIR  "fonts"
-#define CONFIG_DIR "config"
+#define FONTS_DIR "fonts"
 namespace Moer {
 
 class CORE_API ConfigManager {

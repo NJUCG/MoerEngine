@@ -119,12 +119,21 @@ else()
     set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") # 这是什么？
 endif()
 
+# 检查MoerEngine.toml是否存在
+set(MOER_ENGINE_CONFIG_FILE "${moer_root_dir}/MoerEngine.toml")
+
+# 2. 检查文件是否存在
+if(NOT EXISTS "${MOER_ENGINE_CONFIG_FILE}")
+    # 3. 如果不存在，直接报错停止，并打印清晰的路径
+    message(FATAL_ERROR "\nConfig file not found at path: ${MOER_ENGINE_CONFIG_FILE}.\nPlease generate MoerEngine.toml based on the template.MoerEngine.toml. 请根据模板文件template.MoerEngine.toml生成MoerEngine.toml配置文件。")
+endif()
+
 # 设置输出目录
 add_custom_target(
 	CopyResources
+    COMMAND ${CMAKE_COMMAND} -E copy "${moer_root_dir}/MoerEngine.toml"                    "${output_dir}/MoerEngine.toml"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}/resource"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/asset"                    "${output_dir}/resource"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_source_dir}/configs"                 "${output_dir}/config"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/shaders"                  "${output_dir}/resource/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/shaderheaders" "${output_dir}/resource/shaderheaders"
     COMMENT "Copying resources to ${output_dir}/resource"

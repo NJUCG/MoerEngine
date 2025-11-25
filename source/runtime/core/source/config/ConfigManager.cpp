@@ -36,7 +36,7 @@ void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
         _workspace_path / "resource" / MACRO_STR(SHADER_SHARED_PATH_RELATIVE_TO_RESOURCE);
 
     // check config exists
-    std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.toml";
+    std::filesystem::path config_path = _workspace_path / "MoerEngine.toml";
     if (!std::filesystem::exists(config_path)) {
         LOG_ERROR("Config `MoerEngine.toml` does not exist.");
         LOG_ERROR(
