@@ -40,6 +40,8 @@ void LoadFromFile(const std::filesystem::path& _file_path, Scene* _scene) {
             SceneCache::ConvertToScene(*scene_data, _scene, true);
             load_info->progress.store(1);
             LOG_INFO("Scene loaded successfully from file: {}", _file_path.string());
+        } else {
+            Scene::ResetAsyncLoadInfo();
         }
     });
 }
