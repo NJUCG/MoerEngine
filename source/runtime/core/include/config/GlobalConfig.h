@@ -34,6 +34,8 @@ struct GlobalConfig {
         uint  fps;
         uint  max_fps;
         float font_size;
+
+        std::string preset_imgui_config_path;
     } editor;
 
     struct Engine {
@@ -77,6 +79,9 @@ struct GlobalConfig {
         c.editor.fps             = config.at_path("editor.fps").value_or(60);
         c.editor.max_fps         = config.at_path("editor.max_fps").value_or(170);
         c.editor.font_size       = config.at_path("editor.font_size").value_or(16.f);
+
+        c.editor.preset_imgui_config_path =
+            config.at_path("editor.preset_imgui_config_path").value_or("./asset/preset_imgui.ini");
 
         // Engine
 
