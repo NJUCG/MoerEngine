@@ -108,8 +108,8 @@ add_dependencies(${MODULE_NAME} CopyNRDEncodingFile)
 # 定义拷贝资源的输出目录
 if(WIN32)
     target_compile_definitions(MoerCore # 注意，这里是MoerCore，因为ConfigManager在Core模块中
-        PUBLIC "SHADER_PATH_RELATIVE_TO_RESOURCE=shaders"
-        PUBLIC "SHADER_SHARED_PATH_RELATIVE_TO_RESOURCE=shaderheaders"
+        PUBLIC "SHADER_PATH_RELATIVE_TO_ASSET=shaders"
+        PUBLIC "SHADER_SHARED_PATH_RELATIVE_TO_ASSET=shaderheaders"
     )
 endif()
 
@@ -121,10 +121,8 @@ endif()
 
 # 检查MoerEngine.toml是否存在
 set(MOER_ENGINE_CONFIG_FILE "${moer_root_dir}/MoerEngine.toml")
-
-# 2. 检查文件是否存在
 if(NOT EXISTS "${MOER_ENGINE_CONFIG_FILE}")
-    # 3. 如果不存在，直接报错停止，并打印清晰的路径
+    # 如果不存在，直接停止，并打印路径
     message(FATAL_ERROR "\nConfig file not found at path: ${MOER_ENGINE_CONFIG_FILE}.\nPlease generate MoerEngine.toml based on the template.MoerEngine.toml. 请根据模板文件template.MoerEngine.toml生成MoerEngine.toml配置文件。")
 endif()
 
@@ -132,11 +130,11 @@ endif()
 add_custom_target(
 	CopyResources
     COMMAND ${CMAKE_COMMAND} -E copy "${moer_root_dir}/MoerEngine.toml"                    "${output_dir}/MoerEngine.toml"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}/resource"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/asset"                    "${output_dir}/resource"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/shaders"                  "${output_dir}/resource/shaders"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/shaderheaders" "${output_dir}/resource/shaderheaders"
-    COMMENT "Copying resources to ${output_dir}/resource"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}/asset"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/asset"                    "${output_dir}/asset"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/shaders"                  "${output_dir}/asset/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/shaderheaders" "${output_dir}/asset/shaderheaders"
+    COMMENT "Copying resources to ${output_dir}/asset"
 )
 
 add_dependencies(${MODULE_NAME} CopyResources)
