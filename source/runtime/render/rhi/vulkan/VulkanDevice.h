@@ -240,7 +240,7 @@ private:
 
     VmaAllocator                              m_allocator = VK_NULL_HANDLE;
     VulkanDescriptorHeap                      m_global_descriptor_heap{};
-    UniquePtr<VkCommandQueue>                 gfx_queue{};
+    UniquePtr<VkCommandQueue>                 gfx_queue{}; // VkCommandQueue是MoerEngine的封装！
     UniquePtr<VkCommandQueue>                 compute_queue{};
     UniquePtr<VkCopyQueue>                    copy_queue{};
     LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};

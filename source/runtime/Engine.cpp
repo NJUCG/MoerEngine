@@ -30,7 +30,9 @@ static bool ContainsNonAscii(const std::filesystem::path& p);
 
 Engine::Engine() {}
 
-Engine::~Engine() {}
+Engine::~Engine() {
+    assert(has_shutdown && "Engine::ShutDown() was not called before Engine destruction!");
+}
 
 void Engine::Init(int argc, const char** argv) {
     // Init LogSystem
@@ -158,6 +160,8 @@ void Engine::ShutDown() {
     ShaderManager::ShutDown();
     RenderDevice::Dispose();
     TaskSystem::ShutDown();
+
+    has_shutdown = true;
 }
 
 void Engine::Init3rdParty() {

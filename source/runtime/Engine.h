@@ -32,6 +32,8 @@ private:
     UniquePtr<RuntimeAssets> m_runtime_assets;
 
     UniquePtr<Render::Renderer> m_renderer;
+
+    bool has_shutdown = false;
 };
 
 } // namespace Moer
