@@ -9,7 +9,7 @@ set_target_folder(dxc ${third_party_folder})
 
 # spdlog
 set(SPDLOG_USE_STD_FORMAT ON)
-set(SPDLOG_BUILD_SHARED OFF)
+set(SPDLOG_BUILD_SHARED ON) # 需要build shared，否则Moer::Core模块设置log_level为debug，但是Moer::Render模块使用spdlog静态库时，log_level又是info，导致日志无法输出（一个经典的静态库/动态库问题）
 set(SPDLOG_SANITIZE_ADDRESS ON)
 add_subdirectory(spdlog)
 set_target_properties(spdlog PROPERTIES FOLDER ${third_party_folder}/spdlog)
