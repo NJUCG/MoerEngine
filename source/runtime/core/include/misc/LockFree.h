@@ -1,14 +1,15 @@
 #ifndef MOER_LOCK_FREE_H
 #define MOER_LOCK_FREE_H
+#include "API_Macro.h"
+#include "log/LogSystem.h"
+#include "misc/Alignment.h"
+#include "misc/MMemory.h"
+#include "misc/MacroUtils.h"
+#include "misc/STL.h"
 #include <atomic>
 #include <functional>
 #include <stdalign.h>
 #include <stdint.h>
-#include "API_Macro.h"
-#include "log/LogSystem.h"
-#include "misc/MMemory.h"
-#include "misc/MacroUtils.h"
-#include "misc/STL.h"
 
 #include "platform/Platform.h"
 
@@ -39,10 +40,8 @@ struct alignas(8) ABADoublePtr {
 
     static constexpr uint64_t s_counter_mask_in_state = 0xfffffull;
 
-    ABADoublePtr(uint64_t _value) : value{_value} {
-    }
-    ABADoublePtr(const ABADoublePtr& other) : value{other.value.load()} {
-    }
+    ABADoublePtr(uint64_t _value) : value{_value} {}
+    ABADoublePtr(const ABADoublePtr& other) : value{other.value.load()} {}
     ABADoublePtr() : value{0} {}
 
     uint64_t GetState() {
@@ -91,10 +90,18 @@ struct alignas(8) ABADoublePtr {
         return value.compare_exchange_strong(_expected, _desired, _order);
     }
 
-    bool AtomicCompareExchangeWeak(const ABADoublePtr& _expected, const ABADoublePtr& _desired, std::memory_order _order) {
+    bool AtomicCompareExchangeWeak(
+        const ABADoublePtr& _expected,
+        const ABADoublePtr& _desired,
+        std::memory_order   _order
+    ) {
         return value.compare_exchange_weak((uint64_t&)_expected.value, _desired.value, _order);
     }
-    bool AtomicCompareExchangeStrong(const ABADoublePtr& _expected, const ABADoublePtr& _desired, std::memory_order _order) {
+    bool AtomicCompareExchangeStrong(
+        const ABADoublePtr& _expected,
+        const ABADoublePtr& _desired,
+        std::memory_order   _order
+    ) {
         return value.compare_exchange_strong((uint64_t&)_expected.value, _desired.value, _order);
     }
 
@@ -153,10 +160,14 @@ public:
 
     //get without allocate new item
     FORCEINLINE T* Get(uint32_t index) {
-        if (!index) return nullptr;
+        if (!index)
+            return nullptr;
         uint32_t block_index = index / ITEM_PER_BLOCK;
         uint32_t item_index  = index % ITEM_PER_BLOCK;
-        assert(index < index_counter.load() && index < MAX_ITEM_COUNT && block_index < s_max_block_count && m_blocks[block_index] && "index out of range");
+        assert(
+            index < index_counter.load() && index < MAX_ITEM_COUNT && block_index < s_max_block_count &&
+            m_blocks[block_index] && "index out of range"
+        );
         return (T*)(m_blocks[block_index].load()) + item_index;
     }
 
@@ -164,7 +175,10 @@ private:
     void* GetPayLoad(uint32_t index) {
         uint32_t block_index = index / ITEM_PER_BLOCK;
         uint32_t item_index  = index % ITEM_PER_BLOCK;
-        assert(index < index_counter.load() && index < MAX_ITEM_COUNT && block_index < s_max_block_count && "index out of range");
+        assert(
+            index < index_counter.load() && index < MAX_ITEM_COUNT && block_index < s_max_block_count &&
+            "index out of range"
+        );
         if (!m_blocks[block_index]) {
             T* new_block = (T*)Memory::Malloc(ITEM_PER_BLOCK * sizeof(T));
             assert(Moer::IsAligned(new_block, alignof(T)));
@@ -197,24 +211,22 @@ enum class LockFreeNodeState : uint32_t {
 };
 struct CORE_API LockFreeNode {
 
-    LockFreeNode() : next_double{0}, next_single{0} {
-    }
+    LockFreeNode() : next_double{0}, next_single{0} {}
     // union {
-    ABADoublePtr next_double;//double index for queue, because we need to change both head&head-next or tail&tail-next
+    ABADoublePtr
+        next_double; //double index for queue, because we need to change both head&head-next or tail&tail-next
     // };
-    void*       data = nullptr;
-    uint32_t    next_single;//single index for stack, because we only need to change head
-    inline void SetData(void* _data) {
-        {
-            data = _data;
-        }
+    uint64_t    data = 0;
+    uint32_t    next_single; //single index for stack, because we only need to change head
+    inline void SetData(uint64_t _data) {
+        { data = _data; }
     }
 };
 struct LockFreeNodeStrategy {
     using TNodeIndex = int32_t;
     using TNode      = LockFreeNode;
 
-    static constexpr uint32_t s_node_per_block = (1 << 18) / sizeof(LockFreeNode);//16KB
+    static constexpr uint32_t s_node_per_block = (1 << 18) / sizeof(LockFreeNode); //16KB
 
     using TAllocator = LockFreeIndexedAllocator<LockFreeNode, MAX_LOCK_FREE_NODE_COUNT, s_node_per_block>;
 
@@ -228,6 +240,21 @@ struct LockFreeNodeStrategy {
     CORE_API static TAllocator& GetAllocator();
 
     // static LockFreeIndexedAllocator<LockFreeNode, MAX_LOCK_FREE_NODE_COUNT, s_node_per_block> fix_size_allocator;
+};
+
+template<typename T, bool SmallEnough>
+struct InlineValue {};
+
+template<typename T>
+struct InlineValue<T, false> {
+    using TValue                   = T*;
+    static constexpr T* zero_value = nullptr;
+};
+
+template<typename T>
+struct InlineValue<T, true> {
+    using TValue                  = T;
+    static constexpr T zero_value = T{};
 };
 
 /**
@@ -244,25 +271,27 @@ public:
     void Reset() {
         m_head.SetAll(0, 0);
     }
-    void Push(TNodeIndex index) {
+    void Push(TNodeIndex _index) {
         ABADoublePtr local_head;
         ABADoublePtr new_head;
         do {
             local_head = m_head;
             new_head   = local_head;
             new_head.AdvanceCounter(1);
-            new_head.SetValue(index);
-            LockFreeNodeStrategy::GetNode(index)->next_single = local_head.GetValue();
+            new_head.SetValue(_index);
+            LockFreeNodeStrategy::GetNode(_index)->next_single = local_head.GetValue();
         } while (!m_head.AtomicCompareExchangeWeak(local_head, new_head, std::memory_order_acq_rel));
     }
 
-    bool PushIf(std::function<TNodeIndex(uint64_t)> allocate_if_true) {
+    bool PushIf(std::function<TNodeIndex(uint64_t)> _allocate_if_true) {
         ABADoublePtr local_head;
         ABADoublePtr new_head;
         do {
-            local_head       = m_head;
-            TNodeIndex index = allocate_if_true(ABADoublePtr::AdvanceStateCounter(local_head.GetState(), 1ull));
-            if (index == 0) return false;
+            local_head = m_head;
+            TNodeIndex index =
+                _allocate_if_true(ABADoublePtr::AdvanceStateCounter(local_head.GetState(), 1ull));
+            if (index == 0)
+                return false;
 
             new_head = local_head;
             new_head.AdvanceCounter(1);
@@ -280,7 +309,8 @@ public:
         do {
             local_head = m_head;
             result     = local_head.GetValue();
-            if (result == 0) return 0;
+            if (result == 0)
+                return 0;
             new_head = local_head;
             new_head.AdvanceCounter(1);
             node = LockFreeNodeStrategy::GetNode(result);
@@ -291,6 +321,15 @@ public:
         // }
 
         return result;
+    }
+
+    // Consumer only(single consumer)
+    TNodeIndex Top() const {
+        ABADoublePtr local_head = m_head;
+        TNodeIndex   index      = local_head.GetValue();
+        if (index == 0)
+            return 0;
+        return index;
     }
 
     // TNodeIndex PopAll() {
@@ -317,7 +356,8 @@ public:
             new_head   = local_head;
             new_head.AdvanceCounter(1);
             new_head.SetValue(0);
-            new_head.SetState(func_change_state(ABADoublePtr::AdvanceStateCounter(local_head.GetState(), 1ull)));
+            new_head.SetState(func_change_state(ABADoublePtr::AdvanceStateCounter(local_head.GetState(), 1ull)
+            ));
         } while (!m_head.AtomicCompareExchangeWeak(local_head, new_head, std::memory_order_acq_rel));
         return index;
     }
@@ -331,25 +371,28 @@ private:
     alignas(Padding) ABADoublePtr m_head{0};
 };
 
-template<class T, uint32_t Padding>
+template<class T, bool InlineType, uint32_t Padding>
 class LockFreeStackBase {
-    using TNodeIndex = LockFreeNodeStrategy::TNodeIndex;
-    using TNode      = LockFreeNodeStrategy::TNode;
+    using TNodeIndex                 = LockFreeNodeStrategy::TNodeIndex;
+    using TNode                      = LockFreeNodeStrategy::TNode;
+    static constexpr bool use_inline = InlineType && sizeof(T) < sizeof(uint64_t);
 
 public:
+    using TValue        = InlineValue<T, use_inline>::TValue;
     LockFreeStackBase() = default;
     ~LockFreeStackBase() {
-        while (Pop() != nullptr) {}
+        while (Pop() != nullptr) {
+        }
     }
-    void Push(T* _payload) {
+    void Push(TValue _payload) {
         TNodeIndex index = LockFreeNodeStrategy::AllocateNodeIndex();
 
         LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
 
-        node->SetData(_payload);
+        node->SetData(uint64(_payload));
         node_list.Push(index);
     }
-    bool PushIf(T* _payload, std::function<bool(uint64_t)> push_if_true) {
+    bool PushIf(TValue _payload, std::function<bool(uint64_t)> push_if_true) {
         TNodeIndex index = 0;
 
         auto allocate_node_if_true = [&index, _payload, &push_if_true](uint64_t state) {
@@ -357,7 +400,7 @@ public:
                 if (index == 0) {
                     index              = LockFreeNodeStrategy::AllocateNodeIndex();
                     LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
-                    node->SetData(_payload);
+                    node->SetData(uint64_t(_payload));
                 }
                 return index;
             }
@@ -372,23 +415,24 @@ public:
         return true;
     }
 
-    T* Pop() {
+    TValue Pop() {
         TNodeIndex index = node_list.Pop();
-        if (index == 0) return nullptr;
+        if (index == 0)
+            return nullptr;
 
         LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
 
-        T* data = (T*)node->data;
+        TValue data = (TValue)node->data;
         LockFreeNodeStrategy::FreeNodeIndex(index);
 
         return data;
     }
 
-    void PopAll(Moer::Array<T*>& target) {
+    void PopAll(Moer::Array<TValue>& _target) {
         TNodeIndex index = node_list.PopAll();
         while (index != 0) {
             LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
-            target.push_back((T*)node->data);
+            _target.push_back((TValue)node->data);
             TNodeIndex current_node_index = index;
 
             index = node->next_single;
@@ -396,16 +440,29 @@ public:
         }
     }
 
-    void PopAllAndChangeTag(Moer::Array<T*>& target, std::function<uint64_t(uint64_t)> func_change_state) {
+    void
+    PopAllAndChangeTag(Moer::Array<TValue>& _target, std::function<uint64_t(uint64_t)> func_change_state) {
         TNodeIndex index = node_list.PopAllAndChangeTag(func_change_state);
         while (index != 0) {
             LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
-            target.push_back((T*)node->data);
+            _target.push_back((TValue)node->data);
             TNodeIndex current_node_index = index;
 
             index = node->next_single;
             LockFreeNodeStrategy::FreeNodeIndex(current_node_index);
         }
+    }
+
+    // Consumer only(single consumer)
+    TValue Top() {
+        TNodeIndex index = node_list.Top();
+        if (index == 0)
+            return nullptr;
+
+        LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
+        TValue        data = (TValue)node->data;
+
+        return data;
     }
 
     uint64_t GetState() const {
@@ -416,12 +473,15 @@ private:
     LockFreeNodeStack<Padding> node_list;
 };
 
-template<class T, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
+template<class T, bool InlineType = false, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
 class LockFreeQueueBase {
-    using TNodeIndex = LockFreeNodeStrategy::TNodeIndex;
-    using TNode      = LockFreeNodeStrategy::TNode;
+    using TNodeIndex                 = LockFreeNodeStrategy::TNodeIndex;
+    using TNode                      = LockFreeNodeStrategy::TNode;
+    static constexpr bool use_inline = InlineType && sizeof(T) < sizeof(uint64_t);
 
 public:
+    using TValue                       = InlineValue<T, use_inline>::TValue;
+    static constexpr TValue zero_value = InlineValue<T, use_inline>::zero_value;
     LockFreeQueueBase() {
         m_head.SetAll(0, 0);
         m_tail.SetAll(0, 0);
@@ -430,16 +490,16 @@ public:
         m_tail.SetValue(avoid_zero);
     };
     ~LockFreeQueueBase() {
-        while (Pop() != nullptr) {
+        while (Pop() != zero_value) {
         }
         //delete avoid zero node stub
         LockFreeNodeStrategy::FreeNodeIndex(m_head.GetValue());
     }
-    void Push(T* _payload) {
+    void Push(TValue _payload) {
         //use fetch and add
         TNodeIndex index = LockFreeNodeStrategy::AllocateNodeIndex();
 
-        LockFreeNodeStrategy::GetNode(index)->SetData(_payload);
+        LockFreeNodeStrategy::GetNode(index)->SetData(uint64_t(_payload));
 
         ABADoublePtr local_tail;
         ABADoublePtr new_tail;
@@ -463,7 +523,9 @@ public:
                     new_next = local_next;
                     new_next.AdvanceCounter(1);
                     new_next.SetValue(index);
-                    if (local_tail_node->next_double.AtomicCompareExchangeWeak(local_next, new_next, std::memory_order_acq_rel)) {
+                    if (local_tail_node->next_double.AtomicCompareExchangeWeak(
+                            local_next, new_next, std::memory_order_acq_rel
+                        )) {
                         break;
                     }
                 }
@@ -487,7 +549,7 @@ public:
         }
     }
 
-    T* Pop() {
+    TValue Pop() {
         ABADoublePtr local_head;
         ABADoublePtr new_head;
         ABADoublePtr local_tail;
@@ -495,7 +557,7 @@ public:
         ABADoublePtr local_next;
         ABADoublePtr new_next;
 
-        T* result = nullptr;
+        TValue result = zero_value;
 
         while (true) {
             local_head = m_head;
@@ -512,7 +574,7 @@ public:
                 if (local_head.GetValue() == local_tail.GetValue()) {
                     //empty return null
                     if (local_next.GetValue() == 0) {
-                        return nullptr;
+                        return zero_value;
                     }
                     //next has been pushed, help to update tail
                     new_tail = local_tail;
@@ -522,7 +584,7 @@ public:
 
                 } else {
                     //pop current node
-                    result   = (T*)LockFreeNodeStrategy::GetNode(local_next.GetValue())->data;
+                    result   = (TValue)LockFreeNodeStrategy::GetNode(local_next.GetValue())->data;
                     new_head = local_head;
                     new_head.AdvanceCounter(1);
                     new_head.SetValue(local_next.GetValue());
@@ -537,10 +599,21 @@ public:
         return result;
     }
 
-    void PopAll(Moer::Array<T*>& target) {
-        while (T* item = Pop()) {
-            target.push_back(item);
+    void PopAll(Moer::Array<TValue>& _target) {
+        while (TValue item = Pop()) {
+            _target.push_back(item);
         }
+    }
+
+    // Consumer only(single consumer)
+    TValue Top() {
+        ABADoublePtr local_head = m_head;
+        ABADoublePtr local_next = LockFreeNodeStrategy::GetNode(local_head.GetValue())->next_double;
+
+        if (local_next.GetValue() == 0)
+            return zero_value;
+
+        return (TValue)LockFreeNodeStrategy::GetNode(local_next.GetValue())->data;
     }
 
 private:
@@ -548,27 +621,29 @@ private:
     alignas(Padding) ABADoublePtr m_tail;
 };
 
-template<class T, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
-class ClosableLockFreeMpScStack : public LockFreeStackBase<T, Padding> {
+template<class T, bool InlineType = false, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
+class ClosableLockFreeMpScStack : public LockFreeStackBase<T, InlineType, Padding> {
+    using TValue = LockFreeStackBase<T, InlineType, Padding>::TValue;
+
 public:
-    ClosableLockFreeMpScStack() : LockFreeStackBase<T, Padding>() {
-    }
+    ClosableLockFreeMpScStack() : LockFreeStackBase<T, InlineType, Padding>() {}
     ClosableLockFreeMpScStack(ClosableLockFreeMpScStack const&)            = delete;
     ClosableLockFreeMpScStack& operator=(ClosableLockFreeMpScStack const&) = delete;
     // void Reset(){
 
     // }
-    bool TryPush(T* _payload) {
-        return LockFreeStackBase<T, Padding>::PushIf(_payload, [](uint64_t State) { return (ABADoublePtr::GetTagFromState(State) & 1) == 0; });
+    bool TryPush(TValue _payload) {
+        return LockFreeStackBase<T, InlineType, Padding>::PushIf(_payload, [](uint64_t State) {
+            return (ABADoublePtr::GetTagFromState(State) & 1) == 0;
+        });
     }
     bool IsClosed() const {
-        return ABADoublePtr::GetTagFromState(LockFreeStackBase<T, Padding>::GetState()) & 1;
+        return ABADoublePtr::GetTagFromState(LockFreeStackBase<T, InlineType, Padding>::GetState()) & 1;
     }
-    void ComsumeAllAndClose(Moer::Array<T*>& target) {
-        LockFreeStackBase<T, Padding>::PopAllAndChangeTag(target,
-                                                          [](uint64_t State) {
-                                                              return ABADoublePtr::SetTagInState(State, 1);
-                                                          });
+    void ComsumeAllAndClose(Moer::Array<TValue>& target) {
+        LockFreeStackBase<T, InlineType, Padding>::PopAllAndChangeTag(target, [](uint64_t State) {
+            return ABADoublePtr::SetTagInState(State, 1);
+        });
     }
 
 private:
@@ -581,14 +656,16 @@ class TaskFIFOQueue {
     static int32_t GetFirstOne(uint32_t target) {
         int index = -1;
         for (int i = 0; i < 31; i++) {
-            if (target == 0) break;
+            if (target == 0)
+                break;
             index++;
             if (target & (1ul << 31)) {
                 break;
             }
             target = target << 1;
         }
-        if (index == 32) return -1;
+        if (index == 32)
+            return -1;
         return index;
     }
 
@@ -632,23 +709,29 @@ public:
                         new_state   = local_state;
                         new_state.AdvanceCounter(1);
 
-                    } while (!state.AtomicCompareExchangeWeak(local_state.value, new_state.value, std::memory_order_acq_rel));
+                    } while (!state.AtomicCompareExchangeWeak(
+                        local_state.value, new_state.value, std::memory_order_acq_rel
+                    ));
                     return result;
                 }
             }
-            if (!allowHang) break;
+            if (!allowHang)
+                break;
             new_state = local_state;
             new_state.AdvanceCounter(1);
             auto new_ptr = local_state.GetValue() | (1ul << (32 - index - 1));
-            if (allowHang) new_state.SetValue(new_ptr);
+            if (allowHang)
+                new_state.SetValue(new_ptr);
 
-        } while (!state.AtomicCompareExchangeWeak(local_state.value, new_state.value, std::memory_order_acq_rel));
+        } while (
+            !state.AtomicCompareExchangeWeak(local_state.value, new_state.value, std::memory_order_acq_rel)
+        );
         return result;
     }
 
 private:
-    LockFreeQueueBase<T, PLATFORM_CACHELINE_SIZE> m_queue[TaskPriorityCount];
+    LockFreeQueueBase<T, false, PLATFORM_CACHELINE_SIZE> m_queue[TaskPriorityCount];
 
     ABADoublePtr state;
 };
-#endif// !ASYNC_QUEUE_H
+#endif // !ASYNC_QUEUE_H

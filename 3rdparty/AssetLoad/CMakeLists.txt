@@ -38,15 +38,14 @@ set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE INTERNAL "" FORCE)
 set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE INTERNAL "" FORCE)
 set(ASSIMP_BUILD_TESTS OFF CACHE INTERNAL "" FORCE)
 set(ASSIMP_INSTALL OFF CACHE INTERNAL "" FORCE)
+set(ASSIMP_BUILD_ZLIB ON CACHE INTERNAL "" FORCE)
 add_sub_target(assimp assimp ${third_party_folder}/assimp "")
 
-if(ZLIB_FROM_SOURCE)
-    target_compile_options(ZLIB_LIBRARIES
-        PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-non-prototype>"
-        PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-declarations>"
-        PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-unused-function>"
-    )
-endif()
+target_compile_options(zlibstatic
+    PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-non-prototype>"
+    PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-deprecated-declarations>"
+    PRIVATE "$<$<COMPILE_LANG_AND_ID:C,Clang>:-Wno-unused-function>"
+)
 
 target_compile_options(assimp PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-unused-function>")
 set_ide_folder(UpdateAssimpLibsDebugSymbolsAndDLLs ${third_party_folder}/assimp)
@@ -67,5 +66,9 @@ add_sub_target(exr tinyexr ${third_party_folder}/tinyexr "")
 set_ide_folder(miniz ${third_party_folder}/tinyexr)
 
 add_sub_target(ktx ktx ${third_party_folder}/ktx "")
+target_compile_options(ktx INTERFACE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-macro-redefined>")
+
 add_sub_target(astc astc ${third_party_folder}/astc "")
+target_compile_options(astc PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-deprecated-declarations>")
+
 add_sub_target(dds_image dds_image ${third_party_folder}/dds_image "")

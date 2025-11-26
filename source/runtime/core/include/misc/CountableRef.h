@@ -9,10 +9,10 @@
 #include <type_traits>
 template<typename TCountable>
 concept concept_is_countable = requires(TCountable t) {
-                                   t.AddRef() + (uint32_t)1;
-                                   t.DeRef() + (uint32_t)1;
-                                   t.GetRefCount() + (uint32_t)1;
-                               };
+    t.AddRef() + (uint32_t)1;
+    t.DeRef() + (uint32_t)1;
+    t.GetRefCount() + (uint32_t)1;
+};
 
 template<typename T>
 class CountableRef;
@@ -39,33 +39,44 @@ public:
         }
         return current - 1;
     };
-    int32_t GetRefCount() { return m_counter.load(); }
+    int32_t GetRefCount() {
+        return m_counter.load();
+    }
 
 protected:
     std::atomic<int32_t> m_counter;
 };
 
-#define COUNTABLE_IMPLEMENTATION                                         \
-    std::atomic<int32_t> m_counter{0};                                   \
-    inline int32_t       AddRef() { return m_counter.fetch_add(1) + 1; } \
-    inline uint32_t      DeRef() {                                       \
-        assert(m_counter >= 0);                                     \
-        int32_t current = m_counter.fetch_sub(1);                   \
-        if (current == 1) {                                         \
-            Destroy();                                              \
-        }                                                           \
-        return current - 1;                                         \
-    }                                                                    \
-    inline uint32_t GetRefCount() const { return m_counter.load(); }     \
-    inline void     SetRefCount(uint32_t _count) { m_counter.store(_count); }
+#define COUNTABLE_IMPLEMENTATION                  \
+    std::atomic<int32_t> m_counter{0};            \
+    inline int32_t       AddRef() {               \
+        return m_counter.fetch_add(1) + 1;  \
+    }                                             \
+    inline uint32_t DeRef() {                     \
+        assert(m_counter >= 0);                   \
+        int32_t current = m_counter.fetch_sub(1); \
+        if (current == 1) {                       \
+            Destroy();                            \
+        }                                         \
+        return current - 1;                       \
+    }                                             \
+    inline uint32_t GetRefCount() const {         \
+        return m_counter.load();                  \
+    }                                             \
+    inline void SetRefCount(uint32_t _count) {    \
+        m_counter.store(_count);                  \
+    }
 
 #define COUNTABLE_IMPLEMENTATION_AUTO_DESTROY \
     COUNTABLE_IMPLEMENTATION                  \
-    inline void Destroy() { MoerDelete(this); }
+    inline void Destroy() {                   \
+        MoerDelete(this);                     \
+    }
 
 template<typename T>
 class CountableRef {
 public:
+    using CountableType = T;
     CountableRef() : ptr{nullptr} {
         //if(std::is_convertible<T, Countable>::value) return;
         //assert(false);
@@ -162,7 +173,9 @@ public:
         }
         return *this;
     }
-    T* Get() const { return ptr; }
+    T* Get() const {
+        return ptr;
+    }
     T* operator->() const {
         return ptr;
     }
@@ -194,6 +207,12 @@ public:
         return ptr->GetRefCount();
     }
 
+    T* Release() {
+        T* old = ptr;
+        ptr    = nullptr;
+        return old;
+    }
+
 protected:
     T* ptr;
     template<typename OtherType>
@@ -222,9 +241,13 @@ public:
         return (uint32_t)ref_count;
     };
     //only for look-up purposes, don't care about sequences
-    uint32_t GetRefCount() const { return (uint32_t)flags.GetRefCount(std::memory_order_relaxed); }
+    uint32_t GetRefCount() const {
+        return (uint32_t)flags.GetRefCount(std::memory_order_relaxed);
+    }
 
-    bool IsValid() const { return flags.IsValid(std::memory_order_relaxed); }
+    bool IsValid() const {
+        return flags.IsValid(std::memory_order_relaxed);
+    }
     void Delete() {
         if (flags.MarkToDelete(std::memory_order_acquire)) {
             // delete this;
@@ -296,4 +319,4 @@ private:
     //for const resource state change
     mutable ResourceAtomicFlags flags;
 };
-#endif//MOERENGINE_COUNTABLEREF_H
+#endif //MOERENGINE_COUNTABLEREF_H

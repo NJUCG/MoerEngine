@@ -1,0 +1,16 @@
+# 该文件可以指定git辅助工具，在显示某行修改记录时，忽略特定commit
+# 使用 git config --local blame.ignoreRevsFile .git-blame-ignore-revs 让本文件生效
+#
+# 如果不激活此文件的话，可能在代码中看到大量的restyle/formatting的commit
+
+# feat(yxh): refactor MoerEditor!
+47606de8b8e1628f38855b2f0fbbc5ed2d63076c
+
+# chore: 整理并简化了引擎的目录结构 (请执行 git config --local blame.ignoreRevsFile .git-blame-ignore-revs 以消除本commit的影响)
+0e05e8ccb413616fc4f8327f119807dd7b64fdee
+
+# chore: 用新的clang-format格式化代码 (请执行 git config --local blame.ignoreRevsFile .git-blame-ignore-revs 以消除本commit的影响)
+817d6bbb41ad6a721e85b05fa886378f272d7c66
+
+# feat: 将RaytracingMain.cpp整理为RaytracingRenderer (请执行 git config --local blame.ignoreRevsFile .git-blame-ignore-revs 以消除本commit的影响)
+2c394664f401de96e535c51adf0849d99f1eeaaa

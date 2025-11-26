@@ -1,8 +1,8 @@
 #ifndef MOER_M_VECTOR_H
 #define MOER_M_VECTOR_H
 
-#include <cstddef>
 #include <assert.h>
+#include <cstddef>
 #include <initializer_list>
 #include <iterator>
 #include <mimalloc.h>
@@ -33,7 +33,10 @@ public:
         }
     }
 
-    m_vector(const_iterator _cbegin, const_iterator _cend) : _start(nullptr), _finish(nullptr), _endOfStorage(nullptr) {
+    m_vector(const_iterator _cbegin, const_iterator _cend) :
+        _start(nullptr),
+        _finish(nullptr),
+        _endOfStorage(nullptr) {
         iterator beg = const_cast<iterator>(_cbegin), end = const_cast<iterator>(_cend);
         reserve(end - beg);
         while (beg != end) {
@@ -47,14 +50,21 @@ public:
         swap(temp);
     }
 
-    m_vector(m_vector&& rhs) : _start(std::move(rhs._start)), _finish(std::move(rhs._finish)), _endOfStorage(std::move(rhs._endOfStorage)), allocator(std::move(rhs.allocator)) {
+    m_vector(m_vector&& rhs) :
+        _start(std::move(rhs._start)),
+        _finish(std::move(rhs._finish)),
+        _endOfStorage(std::move(rhs._endOfStorage)),
+        allocator(std::move(rhs.allocator)) {
         rhs._start        = nullptr;
         rhs._finish       = nullptr;
         rhs._endOfStorage = nullptr;
     }
 
     //receiving initializer_list as input
-    m_vector(const std::initializer_list<T>& list) : _start(nullptr), _finish(nullptr), _endOfStorage(nullptr) {
+    m_vector(const std::initializer_list<T>& list) :
+        _start(nullptr),
+        _finish(nullptr),
+        _endOfStorage(nullptr) {
         reserve(list.size());
         iterator pos = _start;
         for (auto l : list)
@@ -64,9 +74,9 @@ public:
 
     ~m_vector() {
         for (iterator p = _start; p != _finish; ++p) {
-            allocator.destroy(p);// p->~T
+            allocator.destroy(p); // p->~T
         }
-        allocator.deallocate(_start, capacity());//release the memory
+        allocator.deallocate(_start, capacity()); //release the memory
         _start = _finish = _endOfStorage = nullptr;
     }
 
@@ -161,7 +171,7 @@ public:
             int new_cap = capacity() == 0 ? 10 : 2 * capacity();
             reserve(new_cap);
         }
-        allocator.construct(_finish, std::forward<Args>(args)...);//std::forward: perfect forwarding
+        allocator.construct(_finish, std::forward<Args>(args)...); //std::forward: perfect forwarding
         ++_finish;
     }
 
@@ -173,7 +183,7 @@ public:
 
     //insert before pos
     iterator insert(iterator pos, const T& value) {
-        if(_start != _finish)
+        if (_start != _finish)
             assert(pos > _start && pos <= _finish && "out of boundary");
         else
             assert(pos == _start && "invalid pos");
@@ -198,7 +208,7 @@ public:
     iterator insert(iterator pos, size_t size, const T& value) {
         if (size == 0)
             return pos;
-        
+
         if (_start != _finish)
             assert(pos > _start && pos <= _finish && "out of boundary");
         else
@@ -206,7 +216,7 @@ public:
 
         if (_finish + size > _endOfStorage) {
             int n   = pos - _start;
-            int sum = capacity() == 0 ? size + 1 : capacity() + size + 1;// + size + 1 instead of * 2
+            int sum = capacity() == 0 ? size + 1 : capacity() + size + 1; // + size + 1 instead of * 2
             reserve(sum);
             pos = _start + n;
         }
@@ -236,7 +246,7 @@ public:
         auto size = end - beg;
         if (_finish + size > _endOfStorage) {
             int n   = pos - _start;
-            int sum = capacity() == 0 ? size + 1 : capacity() + size + 1;// + size + 1 instead of * 2
+            int sum = capacity() == 0 ? size + 1 : capacity() + size + 1; // + size + 1 instead of * 2
             reserve(sum);
             pos = _start + n;
         }
@@ -297,7 +307,7 @@ public:
             reserve(n);
         if (n > size()) {
             while (_finish != _start + n) {
-                allocator.construct(_finish, value);//std::move to be continued
+                allocator.construct(_finish, value); //std::move to be continued
                 ++_finish;
             }
         } else {
@@ -314,7 +324,9 @@ public:
             size_t s   = size();
             if (_start) {
                 for (int i = 0; i < s; ++i)
-                    allocator.construct(pos++, std::move(_start[i]));//must be std::move since classes like unique_ptr can't be copied
+                    allocator.construct(
+                        pos++, std::move(_start[i])
+                    ); //must be std::move since classes like unique_ptr can't be copied
                 clear();
                 allocator.deallocate(_start, capacity());
             }
@@ -335,7 +347,7 @@ public:
     }
 
     void shrink_to_fit() {
-        m_vector tmp(*this);//copy construct has no extra capacity
+        m_vector tmp(*this); //copy construct has no extra capacity
         swap(tmp);
     }
 
@@ -392,9 +404,9 @@ public:
 
 private:
     Allocator allocator;
-    iterator  _start;       //begin
-    iterator  _finish;      //end
-    iterator  _endOfStorage;//capacity
+    iterator  _start;        //begin
+    iterator  _finish;       //end
+    iterator  _endOfStorage; //capacity
 };
 
 #endif

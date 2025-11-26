@@ -2,21 +2,8 @@
 #define EVENT_H
 #include "API_Macro.h"
 #include "misc/LockFree.h"
-#include <mutex>
 #include <condition_variable>
-class Event;
-
-class EventPool {
-public:
-    ~EventPool();
-    CORE_API Event*            GetEvent(bool autoReset = true);
-    CORE_API static EventPool* Get();
-    CORE_API void              ReleaseEvent(Event* target);
-
-private:
-    EventPool();
-    LockFreeQueueBase<Event> m_pool;
-};
+#include <mutex>
 class Event {
     friend class EventPool;
     friend class EventRef;
@@ -36,6 +23,18 @@ private:
     //void* _event;
 };
 
+class EventPool {
+public:
+    ~EventPool();
+    CORE_API Event*            GetEvent(bool autoReset = true);
+    CORE_API static EventPool* Get();
+    CORE_API void              ReleaseEvent(Event* target);
+
+private:
+    EventPool();
+    LockFreeQueueBase<Event, false> m_pool;
+};
+
 class EventRef {
 public:
     EventRef() {
@@ -46,10 +45,12 @@ public:
         EventPool::Get()->ReleaseEvent(m_event);
     }
     void Trigger() {
-        if (m_event) m_event->Trigger();
+        if (m_event)
+            m_event->Trigger();
     }
     void Wait() {
-        if (m_event) m_event->Wait();
+        if (m_event)
+            m_event->Wait();
     }
     operator Event*() {
         return m_event;
@@ -71,13 +72,15 @@ public:
         EventPool::Get()->ReleaseEvent(m_event);
     }
     void Trigger() {
-        if (m_event) m_event->Trigger();
+        if (m_event)
+            m_event->Trigger();
     }
     void Wait() {
-        if (m_event) m_event->Wait();
+        if (m_event)
+            m_event->Wait();
     }
 
 private:
     Event* m_event;
 };
-#endif// !EVENT_H
+#endif // !EVENT_H

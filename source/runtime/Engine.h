@@ -1,45 +1,39 @@
-#ifndef MOREENGINE_ENGINE_H
-#define MOREENGINE_ENGINE_H
+#pragma once
 
-#include <filesystem>
-#include <functional>
+#include "renderer/Renderer.h"
 
 namespace Moer {
-    struct EngineInitInfo {
 
-        std::filesystem::path workspace_path;
-    };
+class EditorUI;
+class RuntimeAssets;
 
-    class Engine final {
-        friend class EngineLoop;
+class RENDER_API Engine {
+public:
+    Engine();
+    virtual ~Engine();
 
-    public:
-        void Init(const EngineInitInfo& _init_info);
+    void Init(int argc, const char** argv);
+    void Run(const Render::EngineHooks& hooks);
+    void ShutDown();
 
-        void PostInit();
+    SharedPtr<uint2> GetResolution() {
+        return m_editor_config->resolution;
+    }
 
-        void Run();
+    SharedPtr<EditorConfig> GetEditorConfig() {
+        return m_editor_config;
+    }
 
-        void Quit();
+private:
+    void Init3rdParty();
+    void ShutDown3rdParty();
 
-        bool IsRequestQuiting() const { return b_request_quiting; }
+    SharedPtr<EditorConfig>  m_editor_config;
+    UniquePtr<RuntimeAssets> m_runtime_assets;
 
-        void RegisterOnDrawUI(std::function<void()> _func);
+    UniquePtr<Render::Renderer> m_renderer;
 
-    private:
-        void InitCore(const std::filesystem::path&);
-        void ShutDownCore();
+    bool has_shutdown = false;
+};
 
-        void InitRenderSystem();
-        void PostInitRenderSystem();
-        void ShutDownRenderSystem();
-
-        void InitWindow();
-        void ShutDownWindow();
-
-    private:
-        bool b_request_quiting = false;
-    };
-}// namespace Moer
-
-#endif
+} // namespace Moer

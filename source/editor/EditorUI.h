@@ -1,0 +1,85 @@
+#pragma once
+
+#include "Core.h"
+#include "misc/Traits.h"
+#include "renderer/EditorConfig.h"
+#include "renderer/common/UIRenderer.h"
+#include "rhi/RHIResource.h"
+
+#include "raster_ui/RasterUI.h"
+#include "raytracing_ui/RaytracingUI.h"
+
+namespace Moer {
+
+class EditorUI {
+
+public:
+    EditorUI(
+        UniquePtr<Render::UIRenderer> renderer,
+        SharedPtr<uint2>              resolution,
+        SharedPtr<EditorConfig>       editor_config
+    );
+    ~EditorUI() = default;
+    void InitFromConfigManager(); // will be called by Constructor
+    void TickUI();
+    void RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output);
+    void PresentWindows();
+
+    float2 GetSceneColorResolution() const {
+        return m_scene_color_resolution;
+    }
+    float2 GetSceneColorPos() const {
+        return m_scene_color_pos;
+    }
+    SharedPtr<uint2> GetResolution() const {
+        return m_resolution;
+    }
+    const SharedPtr<EditorConfig> GetConfig() const {
+        return m_config;
+    }
+    bool IsNeedReload() const {
+        return m_b_need_reload;
+    }
+    float GetSceneColorAspectRatio() const {
+        return m_scene_color_resolution.x / m_scene_color_resolution.y;
+    }
+
+    void SetShowSubUI(bool show) {
+        m_b_show_sub_ui = show;
+    }
+
+    bool                IsSeperateWindow() const;
+    Render::TextureView GetWindowFrameBuffer();
+
+    void RegisterUIFunc(std::string _name, std::function<void()>&& _func);
+    void UnregisterUIFunc(std::string _name);
+
+public: // Sub UI
+    RasterUI     m_raster_ui;
+    RaytracingUI m_raytracing_ui;
+
+private:
+    void ResetState(); // reset m_b_need_reload, etc..
+    void ShowSceneColor();
+    void ShowConfig();
+
+private:
+    bool   m_b_show_scene_color = true;
+    bool   m_b_show_config      = true;
+    float2 m_scene_color_resolution; // TODO: why float2? not uint2?
+    float2 m_scene_color_pos;
+    bool   m_b_show = true;
+
+    bool m_b_need_reload = false;
+    bool m_b_show_sub_ui = true; // TODO: 【10.3 Refactor】这玩意是干什么的？
+
+    SharedPtr<EditorConfig> m_config;
+
+    UniquePtr<Render::UIRenderer> m_ui_renderer;
+    SharedPtr<uint2>              m_resolution; // TODO: update resolution in EditorUI
+
+    // Custom Func
+    UnorderedMap<std::string, std::function<void()>> m_show_func_map;
+};
+
+} // namespace Moer

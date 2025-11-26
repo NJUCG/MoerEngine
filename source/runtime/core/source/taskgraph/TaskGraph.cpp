@@ -1,7 +1,7 @@
 #include "taskgraph/TaskGraph.h"
-#include "taskgraph/ThreadManager.h"
 #include "platform/Platform.h"
 #include "taskgraph/GraphTask.h"
+#include "taskgraph/ThreadManager.h"
 //#define NOMINMAX 1
 #undef max
 TaskGraph* TaskGraph::instance = nullptr;
@@ -34,22 +34,27 @@ void TaskGraph::WakeUpWorkerThread(int32_t threadIndex, QueueIndex index) {
     assert(threadIndex >= 0);
     m_workers[threadIndex].task_thread->Wake(index);
 }
-void TaskGraph::WaitUntilTaskComplete(const GraphEventRef& task, EThread::Type currentThread) { WaitUntilTasksComplete({task}, currentThread); }
-void TaskGraph::WaitUntilTaskComplete(GraphEventRef&& task, EThread::Type currentThread) { WaitUntilTasksComplete({std::move(task)}, currentThread); };
+void TaskGraph::WaitUntilTaskComplete(const GraphEventRef& task, EThread::Type currentThread) {
+    WaitUntilTasksComplete({task}, currentThread);
+}
+void TaskGraph::WaitUntilTaskComplete(GraphEventRef&& task, EThread::Type currentThread) {
+    WaitUntilTasksComplete({std::move(task)}, currentThread);
+};
 TaskGraph::TaskGraph() {
     assert(instance == nullptr);
     int32_t actual_thread_num = Platform::GetProcessorCoreCount();
 
     m_named_thread_count                   = EThread::NamedThreadCount;
     int32_t min_worker_thread_per_priority = 1;
-    int32_t min_thread_count               = min_worker_thread_per_priority * EThread::PriorityCount + m_named_thread_count;
+    int32_t min_thread_count = min_worker_thread_per_priority * EThread::PriorityCount + m_named_thread_count;
 
     m_thread_count = std::max(min_thread_count, actual_thread_num);
 
     m_worker_thread_count = m_thread_count - m_named_thread_count;
 
-    m_worker_per_priority      = m_worker_thread_count / EThread::PriorityCount;
-    m_worker_per_priority      = m_worker_thread_count % EThread::PriorityCount ? m_worker_per_priority + 1 : m_worker_per_priority;
+    m_worker_per_priority = m_worker_thread_count / EThread::PriorityCount;
+    m_worker_per_priority =
+        m_worker_thread_count % EThread::PriorityCount ? m_worker_per_priority + 1 : m_worker_per_priority;
     int32_t priority_set_count = m_worker_thread_count / EThread::PriorityCount;
 
     for (int32_t i = 0; i < m_thread_count; i++) {
@@ -65,26 +70,29 @@ TaskGraph::TaskGraph() {
         }
         m_workers[i].task_thread->SetAttributes(type, &m_workers[i]);
     }
-    instance = this;//set here to make sure access of worker_threads below
+    instance = this; //set here to make sure access of worker_threads below
     //todo no handle for thread groups
     for (int32_t i = m_named_thread_count; i < m_thread_count; i++) {
-        int32_t     priority       = GetThreadPriorityFromIndex(i);
-        std::string name           = "WorkerThread_" + GetPriorityStr(priority) + "_" + std::to_string((i - m_named_thread_count) % m_worker_per_priority);
-        m_workers[i].actual_thread = RunnableThread::Create(&GetThread(i), ThreadAttributes{.affinity = Affinity::AnyOf(i, std::move(Affinity::All())), .name = name});
-        m_workers[i].attached      = true;
+        int32_t     priority = GetThreadPriorityFromIndex(i);
+        std::string name     = "WorkerThread_" + GetPriorityStr(priority) + "_" +
+                           std::to_string((i - m_named_thread_count) % m_worker_per_priority);
+        m_workers[i].actual_thread = RunnableThread::Create(
+            &GetThread(i),
+            ThreadAttributes{.affinity = Affinity::AnyOf(i, std::move(Affinity::All())), .name = name}
+        );
+        m_workers[i].attached = true;
     }
 }
 
 TaskGraph::~TaskGraph() {
     for (int32_t i = 0; i < m_thread_count; i++) {
-
         m_workers[i].task_thread->RequestQuit(QUIT);
     }
     for (int32_t i = 0; i < m_thread_count; i++) {
         if (i >= m_named_thread_count) {
             m_workers[i].actual_thread->WaitUntilFinished();
 
-            delete m_workers[i].actual_thread;
+            MoerDelete(m_workers[i].actual_thread);
             m_workers[i].actual_thread = nullptr;
         }
         m_workers[i].attached = false;
@@ -93,22 +101,34 @@ TaskGraph::~TaskGraph() {
 }
 EThread::Type TaskGraph::GetCurrentThread(bool localQueue) {
     ThreadIndex index = Platform::GetCurrentThreadID();
-    if (Platform::GetCurrentThreadID() == ThreadManager::g_game_thread_id) return EThread::Type(localQueue ? (EThread::EMainThread | EThread::LOCAL_QUEUE) : EThread::EMainThread);
-    if (Platform::GetCurrentThreadID() == ThreadManager::g_render_thread_id) return EThread::Type(localQueue ? (EThread::ERenderThread | EThread::LOCAL_QUEUE) : EThread::ERenderThread);
+    if (Platform::GetCurrentThreadID() == ThreadManager::g_game_thread_id)
+        return EThread::Type(
+            localQueue ? (EThread::EMainThread | EThread::LOCAL_QUEUE) : EThread::EMainThread
+        );
+    if (Platform::GetCurrentThreadID() == ThreadManager::g_render_thread_id)
+        return EThread::Type(
+            localQueue ? (EThread::ERenderThread | EThread::LOCAL_QUEUE) : EThread::ERenderThread
+        );
     auto* thread = ThreadManager::Instance().GetRunnableThread(Platform::GetCurrentThreadID());
     if (thread) {
         ThreadIndex index = thread->m_runnable->GetIndex();
-        return EThread::Type(m_workers[index].task_thread->m_thread_type | (localQueue ? EThread::LOCAL_QUEUE : EThread::MAIN_QUEUE));
+        return EThread::Type(
+            m_workers[index].task_thread->m_thread_type |
+            (localQueue ? EThread::LOCAL_QUEUE : EThread::MAIN_QUEUE)
+        );
     }
     assert(false);
     return EThread::UNKNOWN_THREAD;
 }
 bool TaskGraph::IsThreadProcessingTask(EThread::Type index) {
-    return m_workers[EThread::GetThreadIndex(index)].task_thread->IsProcessingTask(EThread::GetQueueIndex(index));
+    return m_workers[EThread::GetThreadIndex(index)].task_thread->IsProcessingTask(
+        EThread::GetQueueIndex(index)
+    );
 }
 void TaskGraph::ProcessThreadUntilIdle(EThread::Type index) {};
 void TaskGraph::ProcessThreadUntilReturn(EThread::Type index) {
-    m_workers[EThread::GetThreadIndex(index)].task_thread->ProcessTaskUntilQuit(EThread::GetQueueIndex(index));
+    m_workers[EThread::GetThreadIndex(index)].task_thread->ProcessTaskUntilQuit(EThread::GetQueueIndex(index)
+    );
 };
 void TaskGraph::ReturnThread(EThread::Type index) {
     QueueIndex queue_index = EThread::GetQueueIndex(index);
@@ -157,10 +177,16 @@ void TaskGraph::WaitUntilTasksComplete(const GraphEventArray& task_events, EThre
     }
 }
 
-void TaskGraph::TriggerEventWhenTasksComplete(Event* event, const GraphEventArray& task_events, EThread::Type currentThread, EThread::Type triggerThread) {
+void TaskGraph::TriggerEventWhenTasksComplete(
+    Event*                 event,
+    const GraphEventArray& task_events,
+    EThread::Type          currentThread,
+    EThread::Type          triggerThread
+) {
     assert(event != nullptr);
     bool pending = true;
-    if (task_events.size() < 8)// don't bother to check for completion if there are lots of prereqs...too expensive to check
+    if (task_events.size() <
+        8) // don't bother to check for completion if there are lots of prereqs...too expensive to check
     {
         bool pending = false;
         for (int32_t index = 0; index < task_events.size(); index++) {
@@ -179,13 +205,19 @@ void TaskGraph::TriggerEventWhenTasksComplete(Event* event, const GraphEventArra
 
     GraphTask<TriggerEventGraphTask>::Create(event, triggerThread).Wait(task_events).Dispatch();
 }
-void TaskGraph::QueueTask(BaseGraphTask* task, EThread::Type _prefered_thread, EThread::Type _current_thread, bool wake_worker) {
-    if (EThread::GetThreadIndex(_prefered_thread) == EThread::UNKNOWN_THREAD) {//any thread is ok
+void TaskGraph::QueueTask(
+    BaseGraphTask* task,
+    EThread::Type  _prefered_thread,
+    EThread::Type  _current_thread,
+    bool           wake_worker
+) {
+    if (EThread::GetThreadIndex(_prefered_thread) == EThread::UNKNOWN_THREAD) { //any thread is ok
         ThreadPriority priority                = task->GetPriority();
         int32_t        possible_thread_to_wake = m_task_queue[priority].Push(task, 0);
         if (possible_thread_to_wake >= 0) {
             //start task thread
-            possible_thread_to_wake = possible_thread_to_wake + priority * m_worker_per_priority + m_named_thread_count;
+            possible_thread_to_wake =
+                possible_thread_to_wake + priority * m_worker_per_priority + m_named_thread_count;
             WakeUpWorkerThread(possible_thread_to_wake, 0);
         }
         return;

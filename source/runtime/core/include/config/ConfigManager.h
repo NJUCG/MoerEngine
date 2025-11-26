@@ -1,71 +1,53 @@
 #ifndef MOER_ENGINE_CONFIG_MANAGER_H
 #define MOER_ENGINE_CONFIG_MANAGER_H
-#include <filesystem>
 
 #include "API_Macro.h"
+#include "config/GlobalConfig.h"
 #include "misc/STL.h"
 
+#include <filesystem>
+
 //implement ConfigManager as Singleton
-#define FONTS_DIR  "fonts"
-#define CONFIG_DIR "config"
+#define FONTS_DIR "fonts"
 namespace Moer {
-    struct MoerInitConfig {
-#if defined(EDITOR_MODE_ON)
-        //EDITOR CONFIGS
-        uint32_t editor_width;
-        uint32_t editor_height;
-        uint32_t editor_fullscreen : 1;
-        uint32_t editor_vsync : 1;
-        uint32_t editor_lock_frame_rate : 1;
-        uint32_t editor_fps : 8;
-        uint32_t editor_max_fps : 8;
 
-        float editor_font_size{16.f};
-#endif
-        //ENGINE CONFIGS
-        uint32_t max_frame_in_flight : 3;
-        bool     ray_tracing : 1;
+class CORE_API ConfigManager {
 
-        char default_rhi[32]{"Vulkan"};
-        char default_render_name[32]{"DeferredRenderer"};
-    };
-    class CORE_API ConfigManager {
-    private:
-        static ConfigManager* instance;
+public:
+    static ConfigManager& GetInstance();
 
-        Moer::UnorderedMap<std::string, std::string> configs;
+    void Init(const std::filesystem::path& _workspace_path);
 
-        std::filesystem::path workspace_path;
-        std::filesystem::path editor_resource_path;
-        std::filesystem::path engine_shader_path;
-        std::filesystem::path engine_shader_cached_path;
-        std::filesystem::path scene_path;
-        ConfigManager() {}
+    const std::filesystem::path& GetWorkspacePath() const;
+    const std::filesystem::path& GetEditorResourcePath() const;
+    const std::filesystem::path& GetEngineShaderPath() const;
+    const std::filesystem::path& GetEngineShaderSharedPath() const;
+    const std::filesystem::path& GetEngineShaderCachedPath() const;
+    const std::filesystem::path& GetScenePath() const;
+    const std::filesystem::path& GetCachePath() const;
 
-    public:
-        static ConfigManager& GetInstance();
+    //call after config manager init
+    const Config::GlobalConfig& GetConfig() const {
+        return m_config;
+    }
 
-        void Init(const std::filesystem::path& workspacePath);
+private:
+    static ConfigManager* instance;
 
-        // std::string GetConfig(const std::string& key);
+    ConfigManager() {}
 
-        const std::filesystem::path& GetWorkspacePath() const;
+private:
+    Config::GlobalConfig m_config;
 
-        const std::filesystem::path& GetEditorResourcePath() const;
+    std::filesystem::path workspace_path;
+    std::filesystem::path editor_resource_path;
+    std::filesystem::path engine_shader_path;
+    std::filesystem::path engine_shader_shared_path;
+    std::filesystem::path engine_shader_cached_path;
+    std::filesystem::path scene_path;
+    std::filesystem::path cache_path;
+};
 
-        const std::filesystem::path& GetEngineShaderPath() const;
+} // namespace Moer
 
-        const std::filesystem::path& GetEngineShaderCachedPath() const;
-
-        const std::filesystem::path& GetScenePath() const;
-
-        //call after config manager init
-        const MoerInitConfig& GetInitConfig() const { return init_config; }
-
-    private:
-        MoerInitConfig init_config;
-    };
-
-}// namespace Moer
-
-#endif//MOER_ENGINE_CONFIG_MANAGER_H
+#endif //MOER_ENGINE_CONFIG_MANAGER_H

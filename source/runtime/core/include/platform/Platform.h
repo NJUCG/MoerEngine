@@ -5,14 +5,16 @@
 #include <cstdint>
 #include <initializer_list>
 #include <variant>
-#if defined(WIN32) || defined(_WIN32) || defined(_WIN32_) || defined(WIN64) || defined(_WIN64) || defined(_WIN64_)
+#if defined(WIN32) || defined(_WIN32) || defined(_WIN32_) || defined(WIN64) || defined(_WIN64) || \
+    defined(_WIN64_)
 
 #define PLATFORM_WINDOWS 1
 #elif defined(ANDROID) || defined(_ANDROID_)
 #define PLATFORM_ANDROID 1
 #elif defined(__linux__)
 #define PLATFORM_LINUX 1
-#elif defined(__APPLE__) || defined(TARGET_OS_IPHONE) || defined(TARGET_IPHONE_SIMULATOR) || defined(TARGET_OS_MAC)
+#elif defined(__APPLE__) || defined(TARGET_OS_IPHONE) || defined(TARGET_IPHONE_SIMULATOR) || \
+    defined(TARGET_OS_MAC)
 #define PLATFORM_APPLE 1
 #else
 #define PLATFORM_UNKNOWN 1
@@ -78,15 +80,17 @@ class Platform {
 
 protected:
 public:
-    CORE_API static void     SetThreadAffinity(void* current_thread_handle, uint64_t mask);
-    CORE_API static void     SetCurrentThreadAffinity(Affinity&& _affinity);
-    CORE_API static void     SetCurrentThreadName(std::string_view _name);
-    CORE_API static void     SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask);
+    CORE_API static void SetThreadAffinity(void* current_thread_handle, uint64_t mask);
+    CORE_API static void SetCurrentThreadAffinity(Affinity&& _affinity);
+    CORE_API static void SetCurrentThreadName(std::string_view _name);
+    CORE_API static void
+    SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask);
     CORE_API static int32_t  GetProcessorWorkGroupCount();
     CORE_API static int32_t  GetProcessorCoreCountInGroup(uint32_t groupID);
     CORE_API static int32_t  GetProcessorCoreCount();
     CORE_API static uint32_t GetCurrentThreadID();
+    CORE_API static void     SetEnv(const char* _name, const char* _value);
 
     CORE_API static const PlatformMemoryInfo& GetMemoryInfo();
 };
-#endif// !PLATFORM_H
+#endif // !PLATFORM_H

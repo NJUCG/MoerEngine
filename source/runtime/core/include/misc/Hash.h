@@ -6,19 +6,20 @@
 
 #include "misc/STL.h"
 
-#include <cstring>
 #include <atomic>
+#include <cstdint>
+#include <cstring>
 #include <functional>
 #include <mutex>
-#include <type_traits>
-#include <string_view>
-#include <cstdint>
 #include <shared_mutex>
+#include <string_view>
+#include <type_traits>
 
 template<typename TEnum>
 concept concept_t_is_enum = std::is_enum<TEnum>::value;
 template<typename TEnum>
-concept concept_t_enum_underlying_uint8 = concept_t_is_enum<TEnum> && std::is_same_v<std::underlying_type_t<TEnum>, uint8_t>;
+concept concept_t_enum_underlying_uint8 =
+    concept_t_is_enum<TEnum> && std::is_same_v<std::underlying_type_t<TEnum>, uint8_t>;
 template<typename TNum>
 concept concept_t_is_vec2 = requires(TNum t) {
     t.x;
@@ -141,7 +142,9 @@ public:
     EnumInByte(int32_t _value) : value(static_cast<uint8_t>(_value)) {}
     EnumInByte& operator=(const EnumInByte&) = default;
 
-    operator TEnum() const { return (TEnum)value; }
+    operator TEnum() const {
+        return (TEnum)value;
+    }
     bool operator==(const EnumInByte& other) {
         return other.value == value;
     }
@@ -151,7 +154,9 @@ public:
     bool operator==(uint8_t _value) {
         return _value == value;
     }
-    inline TEnum GetValue() const { return (TEnum)value; }
+    inline TEnum GetValue() const {
+        return (TEnum)value;
+    }
     friend uint32_t inline GetHash(const EnumInByte& target) {
         return GetHash(target.value);
     };
@@ -211,13 +216,12 @@ public:
 static_assert(sizeof(Hash64City) == 8);
 
 namespace inner_utils {
-    template<typename T, std::size_t... Is>
-    constexpr Moer::StaticArray<T, sizeof...(Is)>
-    CreateArray(T value, std::index_sequence<Is...>) {
-        // cast Is to void to remove the warning: unused value
-        return {{(static_cast<void>(Is), value)...}};
-    }
-}// namespace inner_utils
+template<typename T, std::size_t... Is>
+constexpr Moer::StaticArray<T, sizeof...(Is)> CreateArray(T value, std::index_sequence<Is...>) {
+    // cast Is to void to remove the warning: unused value
+    return {{(static_cast<void>(Is), value)...}};
+}
+} // namespace inner_utils
 
 template<std::size_t N, typename T>
 constexpr Moer::StaticArray<T, N> CreateArray(const T& value) {
@@ -293,4 +297,4 @@ private:
 //     };
 // }// namespace std
 
-#endif// !HASHABLE_H
+#endif // !HASHABLE_H

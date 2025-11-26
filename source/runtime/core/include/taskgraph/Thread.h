@@ -1,10 +1,10 @@
 #ifndef THREAD_H
 #define THREAD_H
-#include "ThreadManager.h"
 #include "Event.h"
+#include "GraphTask.h"
+#include "ThreadManager.h"
 #include "misc/LockFree.h"
 #include <iostream>
-class BaseGraphTask;
 
 enum QuitCommand : int32_t {
     QUIT   = -1,
@@ -37,8 +37,7 @@ public:
 
     virtual void Wake(QueueIndex queueIndex = 0) = 0;
 
-    virtual void Init() override {
-    }
+    virtual void Init() override {}
     //thread stay awake even when there's no task to acquire until quit signal's recieved
     virtual void ProcessTaskUntilQuit(QueueIndex queueIndex) {}
 
@@ -48,10 +47,12 @@ public:
 
     virtual void EnqueueFromCurrentThread(QueueIndex queueIndex, BaseGraphTask* task) {}
 
-    virtual bool EnqueueFromExternThread(QueueIndex queueIndex, BaseGraphTask* task) { return false; }
+    virtual bool EnqueueFromExternThread(QueueIndex queueIndex, BaseGraphTask* task) {
+        return false;
+    }
 
     virtual void Tick() {
-        ProcessTaskUntilFinished(0);//for single threaded
+        ProcessTaskUntilFinished(0); //for single threaded
     }
     virtual uint32_t Run() override {
         ProcessTaskUntilQuit(0);
@@ -83,10 +84,11 @@ class TaskThreadAnyThread : public TaskThreadBase {
         uint32_t call_amount;
 
     public:
-        AnyThreadTaskQueue() : m_hang_event{EventPool::Get()->GetEvent()},
-                               call_amount{0},
-                               m_close{false}, m_hang{false} {
-        }
+        AnyThreadTaskQueue() :
+            m_hang_event{EventPool::Get()->GetEvent()},
+            call_amount{0},
+            m_close{false},
+            m_hang{false} {}
         ~AnyThreadTaskQueue() {
             EventPool::Get()->ReleaseEvent(m_hang_event);
             m_hang_event = nullptr;
@@ -100,7 +102,6 @@ public:
     virtual void ProcessTaskUntilQuit(QueueIndex queueIndex) override {
         do {
             ProcessTasks();
-
         } while (!m_queue.m_close);
     }
     virtual void ProcessTaskUntilFinished(QueueIndex queueIndex) override {
@@ -115,7 +116,7 @@ public:
         m_queue.m_hang_event->Trigger();
     }
     virtual uint32_t Run() override {
-        return TaskThreadBase::Run();//process task until quit
+        return TaskThreadBase::Run(); //process task until quit
     }
     uint32_t     ProcessTasks();
     virtual bool IsProcessingTask(QueueIndex queueIndex) override {
@@ -136,10 +137,12 @@ class NamedThread : public TaskThreadBase {
         bool                            m_hang;
         uint32_t                        call_amount;
 
-        explicit NamedTaskQueue() : m_hang_event{EventPool::Get()->GetEvent()},
-                                    call_amount{0},
-                                    m_close{false}, m_hang{false}, m_should_return{false} {
-        }
+        explicit NamedTaskQueue() :
+            m_hang_event{EventPool::Get()->GetEvent()},
+            call_amount{0},
+            m_close{false},
+            m_hang{false},
+            m_should_return{false} {}
         ~NamedTaskQueue() {
             EventPool::Get()->ReleaseEvent(m_hang_event);
             m_hang_event = nullptr;
@@ -150,19 +153,22 @@ public:
     virtual void ProcessTaskUntilQuit(QueueIndex queueIndex) override {
         m_queue[queueIndex].m_should_return = false;
         do {
-            ProcessTasks(queueIndex, true);//hang up thread when there's no task to execute
+            ProcessTasks(queueIndex, true); //hang up thread when there's no task to execute
 
         } while (!m_queue[queueIndex].m_close && !m_queue[queueIndex].m_should_return);
     }
     virtual void ProcessTaskUntilFinished(QueueIndex queueIndex) override {
         m_queue[queueIndex].m_should_return = false;
-        ProcessTasks(queueIndex, false);//don't hang up thread and break the loop when there's no task to execute
+        ProcessTasks(
+            queueIndex, false
+        ); //don't hang up thread and break the loop when there's no task to execute
     }
     virtual void Wake(QueueIndex queueIndex) override {
         m_queue[queueIndex].m_hang_event->Trigger();
     }
     virtual void RequestQuit(QueueIndex queueIndex) override {
-        if (m_queue[queueIndex].m_hang_event == nullptr) return;
+        if (m_queue[queueIndex].m_hang_event == nullptr)
+            return;
         //main queue means quit
         if (queueIndex == QUIT) {
             m_queue[EThread::MAIN_QUEUE].m_close = true;
@@ -192,7 +198,7 @@ public:
         return false;
     }
     virtual uint32_t Run() override {
-        return TaskThreadBase::Run();//process task until quit
+        return TaskThreadBase::Run(); //process task until quit
     }
     uint32_t     ProcessTasks(QueueIndex index, bool allowHang);
     virtual bool IsProcessingTask(QueueIndex queueIndex) override {
@@ -202,4 +208,4 @@ public:
 protected:
     NamedTaskQueue m_queue[2];
 };
-#endif// !THREAD_H
+#endif // !THREAD_H

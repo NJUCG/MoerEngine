@@ -1,5 +1,4 @@
 #include "taskgraph/Event.h"
-#include "spdlog/spdlog.h"
 #include "platform/Platform.h"
 #include <chrono>
 
@@ -29,11 +28,9 @@ EventPool::EventPool() {
         m_pool.Push(new Event());
     }
 }
-EventPool::~EventPool() {
-}
+EventPool::~EventPool() {}
 
-Event::Event(bool autoReset) : m_signal{0}, m_autoReset{autoReset} {
-}
+Event::Event(bool autoReset) : m_signal{0}, m_autoReset{autoReset} {}
 void Event::Trigger() {
     std::unique_lock<std::mutex> lock{m_mutex};
 
@@ -47,7 +44,8 @@ void Event::Wait() {
     if (m_signal < 1) {
         m_cond.wait(lock);
     }
-    if (m_autoReset) OnReset();
+    if (m_autoReset)
+        OnReset();
     lock.unlock();
 }
 

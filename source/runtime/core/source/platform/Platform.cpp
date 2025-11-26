@@ -25,47 +25,47 @@ Affinity::Affinity(std::initializer_list<Core> _cores) {
 }
 
 #if PLATFORM_WINDOWS
-#define WIN32_LEAN_AND_MEAN 1
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 namespace Moer {
-    static constexpr size_t max_core_cnt  = 256;
-    static constexpr size_t max_group_cnt = 256;
+static constexpr size_t max_core_cnt  = 256;
+static constexpr size_t max_group_cnt = 256;
 
-    struct ProcessorGroup {
-        uint32_t  cnt;
-        KAFFINITY mask;
-    };
-    struct ProcessorGroups {
-        StaticArray<ProcessorGroup, max_group_cnt> groups{};
-        size_t                                     cnt = 0;
-    };
+struct ProcessorGroup {
+    uint32_t  cnt;
+    KAFFINITY mask;
+};
+struct ProcessorGroups {
+    StaticArray<ProcessorGroup, max_group_cnt> groups{};
+    size_t                                     cnt = 0;
+};
 
-    const ProcessorGroups& GetProcessorGroups() {
-        static ProcessorGroups groups = [] {
-            ProcessorGroups                         groups;
-            SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info[32]{};
-            DWORD                                   length = sizeof(info);
-            if (!GetLogicalProcessorInformationEx(RelationGroup, info, &length)) {
-                assert(false && "GetLogicalProcessorInformationEx failed");
-            }
-            DWORD count = length / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
-            for (DWORD i = 0; i < count; ++i) {
-                if (info[i].Relationship == RelationGroup) {
-                    auto group_cnt = info[i].Group.ActiveGroupCount;
-                    for (DWORD j = 0; j < group_cnt; ++j) {
-                        groups.groups[j].cnt  = info[i].Group.GroupInfo[j].ActiveProcessorCount;
-                        groups.groups[j].mask = info[i].Group.GroupInfo[j].ActiveProcessorMask;
-                        groups.cnt++;
-                    }
+const ProcessorGroups& GetProcessorGroups() {
+    static ProcessorGroups groups = [] {
+        ProcessorGroups                         groups;
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info[32]{};
+        DWORD                                   length = sizeof(info);
+        if (!GetLogicalProcessorInformationEx(RelationGroup, info, &length)) {
+            assert(false && "GetLogicalProcessorInformationEx failed");
+        }
+        DWORD count = length / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+        for (DWORD i = 0; i < count; ++i) {
+            if (info[i].Relationship == RelationGroup) {
+                auto group_cnt = info[i].Group.ActiveGroupCount;
+                for (DWORD j = 0; j < group_cnt; ++j) {
+                    groups.groups[j].cnt  = info[i].Group.GroupInfo[j].ActiveProcessorCount;
+                    groups.groups[j].mask = info[i].Group.GroupInfo[j].ActiveProcessorMask;
+                    groups.cnt++;
                 }
             }
-            return groups;
-        }();
+        }
         return groups;
-    }
-}// namespace Moer
+    }();
+    return groups;
+}
+} // namespace Moer
 #else
 #endif
 Affinity Affinity::All() {
@@ -128,8 +128,14 @@ void Platform::SetThreadAffinity(void* current_thread_handle, uint64_t mask) {
 
     PlatformImplement::GetInstance()->SetThreadAffinityMask(current_thread_handle, mask);
 }
-void Platform::SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask) {
-    PlatformImplement::GetInstance()->SetThreadGroupAffinity(current_thread_handle, group_mask, affinity_mask);
+void Platform::SetThreadGroupAffinity(
+    void*    current_thread_handle,
+    uint16_t group_mask,
+    uint64_t affinity_mask
+) {
+    PlatformImplement::GetInstance()->SetThreadGroupAffinity(
+        current_thread_handle, group_mask, affinity_mask
+    );
 }
 
 int32_t Platform::GetProcessorWorkGroupCount() {
@@ -147,4 +153,8 @@ int32_t Platform::GetProcessorCoreCount() {
 
 uint32_t Platform::GetCurrentThreadID() {
     return PlatformImplement::GetInstance()->GetCurrentThreadID();
+}
+
+void Platform::SetEnv(const char* _name, const char* _value) {
+    PlatformImplement::GetInstance()->SetEnv(_name, _value);
 }

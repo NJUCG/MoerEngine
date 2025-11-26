@@ -1,0 +1,28 @@
+// .vscode/launch.json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Build & Run (Win Debug)", // 配置名称
+            "type": "cppvsdbg",  // MSVC 调试器类型
+            "request": "launch",
+            "program": "${workspaceFolder}/target/bin/Debug/MoerEditor.exe", // 修改为你的可执行文件路径
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "preLaunchTask": "CMake: build" // 自动构建任务
+        }, {
+            "name": "Run (Win Debug)", // 配置名称
+            "type": "cppvsdbg",  // MSVC 调试器类型
+            "request": "launch",
+            "program": "${workspaceFolder}/target/bin/Debug/MoerEditor.exe", // 修改为你的可执行文件路径
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+        },
+    ]
+}

@@ -12,10 +12,14 @@
 
 #ifdef _WIN32
 #include <Windows.h>
-static void msleep(unsigned long msecs) { Sleep(msecs); }
+static void msleep(unsigned long msecs) {
+    Sleep(msecs);
+}
 #else
 #include <unistd.h>
-static void msleep(unsigned long msecs) { usleep(msecs * 1000UL); }
+static void msleep(unsigned long msecs) {
+    usleep(msecs * 1000UL);
+}
 #endif
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -35,7 +39,7 @@ struct A {
 };
 
 void LockFreeStackTest() {
-    LockFreeQueueBase<class A, 64> stack;
+    LockFreeQueueBase<class A> stack;
 
     A a;
     stack.Push(MoerNew(A)());
@@ -68,7 +72,7 @@ void LockFreeStackTest() {
 }
 
 void LockFreeQueueTest() {
-    LockFreeQueueBase<class A, 64> queue;
+    LockFreeQueueBase<class A> queue;
 
     A a;
     queue.Push(&a);
@@ -113,7 +117,8 @@ void ClosableMpScStackTest() {
     auto push_operation = [&]() {
         for (int i = 0; i < 1; ++i) {
             bool b_pushed = stack.TryPush(&a);
-            if (b_pushed) push_count++;
+            if (b_pushed)
+                push_count++;
             if (!b_pushed) {
                 assert(stack.IsClosed());
             }

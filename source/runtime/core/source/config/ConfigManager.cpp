@@ -1,77 +1,81 @@
-#include <filesystem>
-#include <fstream>
-#include <sstream>
-// #include <string.h>
-#include <string>
 #include "config/ConfigManager.h"
 
 #include "config/ini.h"
+#include "log/LogSystem.h"
 #include "misc/MacroUtils.h"
 
-#ifndef DEVELOP_SHADER_PATH
-#define DEVELOP_SHADER_PATH resource / shaders
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <toml++/toml.hpp>
+
+// 在编译期，构建系统会对资源进行拷贝
+// 这两个宏是为了接收构建系统拷贝的目标路径
+#ifndef SHADER_PATH_RELATIVE_TO_ASSET
+#define SHADER_PATH_RELATIVE_TO_ASSET shaders
 #endif
+
+#ifndef SHADER_SHARED_PATH_RELATIVE_TO_ASSET
+#define SHADER_SHARED_PATH_RELATIVE_TO_ASSET shaderheaders
+#endif
+
 namespace Moer {
-    ConfigManager& ConfigManager::GetInstance() {
-        static ConfigManager instance;
-        return instance;
+ConfigManager& ConfigManager::GetInstance() {
+    static ConfigManager instance;
+    return instance;
+}
+
+void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
+    // pathes
+    workspace_path            = _workspace_path;
+    editor_resource_path      = _workspace_path / "asset";
+    engine_shader_path        = _workspace_path / "asset" / MACRO_STR(SHADER_PATH_RELATIVE_TO_ASSET);
+    engine_shader_cached_path = _workspace_path / "asset" / "shader_cache";
+    engine_shader_shared_path = _workspace_path / "asset" / MACRO_STR(SHADER_SHARED_PATH_RELATIVE_TO_ASSET);
+
+    // check config exists
+    std::filesystem::path config_path = _workspace_path / "MoerEngine.toml";
+    if (!std::filesystem::exists(config_path)) {
+        LOG_ERROR("Config `{}` does not exist.", config_path.generic_string());
+        LOG_ERROR(
+            "Please copy `template.MoerEngine.toml` to `MoerEngine.toml` in root directory. You can read "
+            "README.md for details. MoerEngine will abort."
+        );
+        throw std::runtime_error("Config file does not exist");
     }
 
-    void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
-        workspace_path            = _workspace_path;
-        editor_resource_path      = _workspace_path / "resource";
-        engine_shader_path        = MACRO_STR(DEVELOP_SHADER_PATH);
-        engine_shader_cached_path = _workspace_path / "resource" / "shader_cache";
+    // load config from .toml
+    m_config   = Config::GlobalConfig::LoadConfigFromTomlFile(config_path.generic_string());
+    scene_path = m_config.engine.scene.scene_path;
+    cache_path = _workspace_path / "cache";
+}
 
-        std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.ini";
-        if (!std::filesystem::exists(config_path)) {
-            throw std::runtime_error("Config directory does not exist");
-        }
+const std::filesystem::path& ConfigManager::GetWorkspacePath() const {
+    return workspace_path;
+}
 
-        //load init config to init_config by ini.h
-        inih::INIReader r{config_path.generic_string()};
-        if (r.ParseError() < 0) {
-            throw std::runtime_error("Can't load 'MoerEditor.ini'");
-        }
-#if defined(EDITOR_MODE_ON)
-        init_config.editor_width           = r.Get<int>("editor", "editor_width", 1920);
-        init_config.editor_height          = r.Get<int>("editor", "editor_height", 1080);
-        init_config.editor_fullscreen      = r.Get<int>("editor", "editor_fullscreen", 0);
-        init_config.editor_vsync           = r.Get<int>("editor", "editor_vsync", 1);
-        init_config.editor_lock_frame_rate = r.Get<int>("editor", "editor_lock_frame_rate", 0);
-        init_config.editor_fps             = r.Get<int>("editor", "editor_fps", 60);
-        init_config.editor_max_fps         = r.Get<int>("editor", "editor_max_fps", 120);
-        init_config.editor_font_size       = r.Get<float>("editor", "editor_font_size", 16.f);
-#endif
-        init_config.max_frame_in_flight = r.Get<int>("engine", "max_frame_in_flight", 3);
-        init_config.ray_tracing         = r.Get<int>("engine", "ray_tracing", 0);
-        scene_path                      = r.Get<std::string>("engine", "scene_path", "resource/scenes");
-        auto default_rhi                = r.Get<std::string>("engine", "default_rhi", "Vulkan");
-        strcpy_s(init_config.default_rhi, default_rhi.c_str());
-        auto defulat_render_name = r.Get<std::string>("engine", "render", "DeferredRenderer");
-        strcpy_s(init_config.default_render_name, defulat_render_name.c_str());
-    }
+const std::filesystem::path& ConfigManager::GetEditorResourcePath() const {
+    return editor_resource_path;
+}
 
-    // std::string ConfigManager::GetConfig(const std::string& key) {
-    //     return configs[key];
-    // }
+const std::filesystem::path& ConfigManager::GetEngineShaderPath() const {
+    return engine_shader_path;
+}
 
-    const std::filesystem::path& ConfigManager::GetWorkspacePath() const {
-        return workspace_path;
-    }
+const std::filesystem::path& ConfigManager::GetEngineShaderSharedPath() const {
+    return engine_shader_shared_path;
+}
 
-    const std::filesystem::path& ConfigManager::GetEditorResourcePath() const {
-        return editor_resource_path;
-    }
+const std::filesystem::path& ConfigManager::GetEngineShaderCachedPath() const {
+    return engine_shader_cached_path;
+}
 
-    const std::filesystem::path& ConfigManager::GetEngineShaderPath() const {
-        return engine_shader_path;
-    }
+const std::filesystem::path& ConfigManager::GetScenePath() const {
+    return scene_path;
+}
 
-    const std::filesystem::path& ConfigManager::GetEngineShaderCachedPath() const {
-        return engine_shader_cached_path;
-    }
-    const std::filesystem::path& ConfigManager::GetScenePath() const {
-        return scene_path;
-    }
-}// namespace Moer
+const std::filesystem::path& ConfigManager::GetCachePath() const {
+    return cache_path;
+}
+} // namespace Moer

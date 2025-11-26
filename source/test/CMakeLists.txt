@@ -2,40 +2,37 @@ set(moer_test_folder "test")
 
 add_subdirectory(math)
 
-add_executable(RuntimeTest EngineTest.cpp)
+# add_executable(RuntimeTest EngineTest.cpp)
+# target_include_directories(RuntimeTest
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+# )
+# target_link_libraries(RuntimeTest PUBLIC Moer::Runtime)
+# set_target_properties(RuntimeTest PROPERTIES FOLDER ${moer_test_folder})
 
-target_include_directories(RuntimeTest
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
-        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-)
+# add_executable(ShaderReflectionTest ShaderReflectionTest.cpp)
+# target_include_directories(ShaderReflectionTest
+#     PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+#     PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+#     PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+# )
+# target_link_libraries(ShaderReflectionTest 
+#     PRIVATE Moer::Render
+#     PRIVATE dxc
+#     )
+# set_target_properties(ShaderReflectionTest PROPERTIES FOLDER ${moer_test_folder})
 
-target_link_libraries(RuntimeTest PUBLIC MoerEngineRuntime)
-set_target_properties(RuntimeTest PROPERTIES FOLDER ${moer_test_folder})
-
-add_executable(ShaderReflectionTest ShaderReflectionTest.cpp)
-target_include_directories(ShaderReflectionTest
-        PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime>
-        PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
-        PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-)
-target_link_libraries(ShaderReflectionTest 
-    PRIVATE MoerRender
-    PRIVATE dxc
-    )
-set_target_properties(ShaderReflectionTest PROPERTIES FOLDER ${moer_test_folder})
-
-add_executable(VulkanRHITest VulkanRHITest.cpp)
-target_include_directories(VulkanRHITest
-        PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
-        PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-)
-target_link_libraries(VulkanRHITest
-        PRIVATE MoerRender
-        PRIVATE glfw
-)
-
-set_target_properties(VulkanRHITest PROPERTIES FOLDER ${moer_test_folder})
+# add_executable(VulkanRHITest VulkanRHITest.cpp)
+# target_include_directories(VulkanRHITest
+#     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
+#     PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+# )
+# target_link_libraries(VulkanRHITest
+#     PRIVATE Moer::Render
+#     PRIVATE glfw
+# )
+# set_target_properties(VulkanRHITest PROPERTIES FOLDER ${moer_test_folder})
 
 
 add_executable(TaskGraphTest "TaskGraphTest.cpp")
@@ -43,26 +40,163 @@ target_include_directories(TaskGraphTest
 PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
 )
 target_link_libraries(TaskGraphTest
-        # PUBLIC mimalloc
-        PUBLIC MoerRuntimeCore
+    # PUBLIC mimalloc
+    PUBLIC Moer::Core
 )
 set_target_properties(TaskGraphTest PROPERTIES FOLDER ${moer_test_folder})
 
-add_executable(MeshProcessTest "MeshProcessTest.cpp")
+# add_executable(MeshProcessTest "MeshProcessTest.cpp")
+# target_include_directories(MeshProcessTest 
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+#     PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/AssetLoad/assimp/include>)
+# target_link_libraries(MeshProcessTest PRIVATE render MeshProcess AssetLoad)
+# set_target_properties(MeshProcessTest PROPERTIES FOLDER ${moer_test_folder})
 
-target_include_directories(MeshProcessTest 
+# add_executable(VulkanRTRHITest VulkanRTRHITest.cpp)
+# target_include_directories(VulkanRTRHITest
+#     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
+#     PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+# )
+# target_link_libraries(VulkanRTRHITest
+#     PRIVATE Moer::Render
+#     PRIVATE glfw
+# )
+# set_target_properties(VulkanRTRHITest PROPERTIES FOLDER ${moer_test_folder})
+
+# Raster
+# file(GLOB_RECURSE RASTER_TEST_CPPS Raster/*.cpp)
+# add_executable(RHITest ${RASTER_TEST_CPPS})
+# target_include_directories(RHITest
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+#     PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Raster>
+# )
+# target_link_libraries(RHITest
+#     PRIVATE Moer::Render
+#     PRIVATE glfw
+#     PRIVATE Moer::Resource
+# )
+# set_target_properties(RHITest PROPERTIES FOLDER ${moer_test_folder})
+
+# # RaytracingTest
+# file(GLOB_RECURSE RT_TEST_CPPS Raytracing/*.cpp)
+# add_executable(RaytracingTest ${RT_TEST_CPPS})
+# target_include_directories(RaytracingTest
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+#     PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Raytracing>
+# )
+# target_link_libraries(RaytracingTest
+#     PRIVATE Moer::Render
+#     PRIVATE glfw
+#     PRIVATE Moer::Resource
+
+# )
+# set_target_properties(RaytracingTest PROPERTIES FOLDER ${moer_test_folder})
+
+# nrd
+# file(GLOB_RECURSE RT_NRD_TEST_CPPS RTNRD/*.cpp)
+# add_executable(NRDTest ${RT_NRD_TEST_CPPS})
+# target_include_directories(NRDTest
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+#     PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Raytracing>
+#     PRIVATE $<BUILD_INTERFACE:${moer_shader_dir}/nrd>
+# )
+# target_link_libraries(NRDTest
+#     PRIVATE Moer::Render
+#     PRIVATE glfw
+#     PRIVATE Moer::Resource
+
+# )
+# set_target_properties(NRDTest PROPERTIES FOLDER ${moer_test_folder})
+
+# VertexFactoryTest
+add_executable(VertexFactoryTest VertexFactoryTest.cpp)
+target_include_directories(VertexFactoryTest
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+)
+target_link_libraries(VertexFactoryTest
+    PRIVATE Moer::Render
+    PRIVATE glfw
+    PRIVATE Moer::Resource
+)
+set_target_properties(VertexFactoryTest PROPERTIES FOLDER ${moer_test_folder})
+
+# DX RHI Test
+add_executable(dxrhitest RHITest/dxrhitest.cpp)
+target_include_directories(dxrhitest
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+    PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/dxrhitest>
+)
+target_link_libraries(dxrhitest
+    PRIVATE Moer::Render
+    PRIVATE glfw
+    PRIVATE Moer::Resource
+)
+set_target_properties(dxrhitest PROPERTIES FOLDER ${moer_test_folder})
+
+# CUDA Test
+if (TARGET Moer::Cuda)
+    set(test_target cuda_test)
+    add_executable(${test_target} CudaTest.cpp)
+    target_include_directories(${test_target}
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-        PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/AssetLoad/assimp/include>)
-target_link_libraries(MeshProcessTest PRIVATE render MeshProcess AssetLoad)
-set_target_properties(MeshProcessTest PROPERTIES FOLDER ${moer_test_folder})
-
-add_executable(VulkanRTRHITest VulkanRTRHITest.cpp)
-target_include_directories(VulkanRTRHITest
-        PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
-        PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-)
-target_link_libraries(VulkanRTRHITest
-        PRIVATE MoerRender
+    )
+    target_link_libraries(${test_target}
+        PRIVATE Moer::Render
         PRIVATE glfw
-)
-set_target_properties(VulkanRTRHITest PROPERTIES FOLDER ${moer_test_folder})
+        PRIVATE Moer::Resource
+    )
+    target_link_libraries(${test_target}
+        PRIVATE Moer::Cuda # Link CUDA and add includes
+    )
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+endif()
+
+if (TARGET LibTorch)
+    set(test_target torch_test)
+    add_executable(${test_target} TorchTest.cpp)
+    target_include_directories(${test_target}
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+    )
+    target_link_libraries(${test_target}
+        PRIVATE Moer::Render
+        PRIVATE glfw
+        PRIVATE Moer::Resource
+    )
+    target_link_libraries(${test_target}
+        PRIVATE LibTorch
+    )
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+endif()
+
+if (TARGET TensorRT)
+    set(test_target tensorRT_test)
+    add_executable(${test_target} TensorRTTest.cpp)
+    target_include_directories(${test_target}
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+    )
+    target_link_libraries(${test_target}
+        PRIVATE Moer::Render
+        PRIVATE glfw
+        PRIVATE Moer::Resource
+    )
+    target_link_libraries(${test_target}
+        PRIVATE TensorRT
+    )
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+endif()

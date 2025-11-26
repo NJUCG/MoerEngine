@@ -1,21 +1,28 @@
----
 Language: Cpp
-# BasedOnStyle: LLVM
+BasedOnStyle: LLVM
+
 AccessModifierOffset: -4
-AlignAfterOpenBracket: Align 
+# AlignAfterOpenBracket: BlockIndent
+
+# 让多行的赋值语句和声明进行对齐
 AlignConsecutiveAssignments: true 
 AlignConsecutiveDeclarations: true
+
 AlignEscapedNewlines: Left
 AlignOperands: Align
 AlignTrailingComments: true
 AllowAllParametersOfDeclarationOnNextLine: false
-AllowShortBlocksOnASingleLine: Always
-AllowShortCaseLabelsOnASingleLine: true
-AllowShortFunctionsOnASingleLine: All
-AllowShortIfStatementsOnASingleLine: true
-AllowShortLambdasOnASingleLine: All
-AllowShortLoopsOnASingleLine: true
-AllowShortEnumsOnASingleLine: true
+# AllowAllConstructorInitializersOnNextLine: false
+
+# 禁止将多行语句写在一起
+AllowShortBlocksOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty # 只有空函数允许单行
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLambdasOnASingleLine: Empty
+AllowShortLoopsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+
 AlwaysBreakAfterDefinitionReturnType: None
 AlwaysBreakAfterReturnType: None
 AlwaysBreakBeforeMultilineStrings: false
@@ -45,11 +52,13 @@ BreakBeforeBinaryOperators: None
 BreakBeforeTernaryOperators: false
 BreakBeforeConceptDeclarations: true
 BreakBeforeInheritanceComma: false
+# BreakConstructorInitializers: AfterColon
 BreakAfterJavaFieldAnnotations: true
 BreakStringLiterals: true
 BreakConstructorInitializersBeforeComma: false
-ColumnLimit: 0
-SortIncludes: false
+# ColumnLimit: 110
+# ConstructorInitializerAllOnOneLineOrOnePerLine: true
+# SortIncludes: true
 CompactNamespaces: true
 ContinuationIndentWidth: 4
 IndentCaseLabels: true
@@ -58,7 +67,7 @@ IndentExternBlock: NoIndent
 IndentWidth: 4
 KeepEmptyLinesAtTheStartOfBlocks: true
 MaxEmptyLinesToKeep: 1
-NamespaceIndentation: All
+# NamespaceIndentation: None
 ObjCSpaceAfterProperty: false
 ObjCSpaceBeforeProtocolList: false
 PointerAlignment: Left
@@ -73,7 +82,7 @@ SpaceBeforeInheritanceColon: true
 SpaceBeforeParens: ControlStatements
 SpaceBeforeRangeBasedForLoopColon: true
 SpaceInEmptyParentheses: false
-SpacesBeforeTrailingComments: 0
+# SpacesBeforeTrailingComments: 1
 SpacesInAngles: false
 SpacesInCStyleCastParentheses: false
 SpacesInContainerLiterals: false
@@ -85,5 +94,25 @@ IndentRequires: true
 SpacesInConditionalStatement: false
 SortUsingDeclarations: true
 Standard: c++20
-...
 
+# 同一行长度限制
+ColumnLimit: 110
+
+# 排序include
+SortIncludes: true
+
+# 注释前面需要有1个空格
+SpacesBeforeTrailingComments: 1
+
+# 如果某行太长，则总是在左小括号后换行，同时右小括号也换行
+AlignAfterOpenBracket: BlockIndent
+
+# 构造函数的初始化列表前需要换行
+BreakConstructorInitializers: AfterColon
+# 构造函数的初始化列表必须换行
+AllowAllConstructorInitializersOnNextLine: false
+# 构造函数的初始化列表要么都在同一行，要么都各自一行
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+
+# 命名空间前面不空格
+NamespaceIndentation: None

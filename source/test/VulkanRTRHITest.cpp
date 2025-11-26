@@ -4,14 +4,14 @@
 
 #include <GLFW/glfw3.h>
 
-#include "rhi/vulkan/VulkanRHI.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/vulkan/VulkanRHI.h"
 #include "shader/Shader.h"
+#include "shader/ShaderCommon.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
-#include "shader/ShaderCommon.h"
 
 // global shader
 
@@ -43,7 +43,12 @@ public:
 
     END_ROOT_PARAMETER_DEFINITION(Parameters)
 };
-IMPLEMENT_SHADER_TYPE(TestRayClosestHitShader, "raytracingbasic/closesthit.rchit", "main", EShaderType::ST_RAY_CLOSESTHIT);
+IMPLEMENT_SHADER_TYPE(
+    TestRayClosestHitShader,
+    "raytracingbasic/closesthit.rchit",
+    "main",
+    EShaderType::ST_RAY_CLOSESTHIT
+);
 
 void Init(int argc, char** argv) {
     g_rhi                           = new VulkanRHIImpl();
@@ -62,9 +67,9 @@ void Init(int argc, char** argv) {
     ShaderResourceManager::Init(platform);
     ShaderResourceManager::GetInstance().PrepareGlobalShaderResources();
 
-    const auto& config_data = Moer::ConfigManager::GetInstance().GetInitConfig();
+    const auto& config_data = Moer::ConfigManager::GetInstance().GetConfig();
 
-    g_rhi->Initialize({config_data.max_frame_in_flight, config_data.ray_tracing});
+    g_rhi->Initialize({config_data.engine.rhi.max_frame_in_flight, false});
     g_rhi->PostInit();
 }
 
@@ -84,18 +89,28 @@ void Test() {
         {0.5, 0.5, 1},
 
     };
-    RHIBufferRef index_buffer = g_rhi->RHICreateBuffer<uint32_t>(sizeof(index_data), EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
-    void*        index_dst    = g_rhi->RHIMapBuffer(index_buffer, 0, sizeof(index_data));
+    RHIBufferRef index_buffer = g_rhi->RHICreateBuffer<uint32_t>(
+        sizeof(index_data),
+        EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE |
+            EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT
+    );
+    void* index_dst = g_rhi->RHIMapBuffer(index_buffer, 0, sizeof(index_data));
     memcpy(index_dst, index_data, sizeof(index_data));
     g_rhi->RHIUnmapBuffer(index_buffer);
 
-    RHIBufferRef vertex_buffer = g_rhi->RHICreateBuffer<float>(sizeof(vertex_data), EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT);
-    void*        vertex_dst    = g_rhi->RHIMapBuffer(vertex_buffer, 0, sizeof(vertex_data));
+    RHIBufferRef vertex_buffer = g_rhi->RHICreateBuffer<float>(
+        sizeof(vertex_data),
+        EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::CPU_VISIBLE |
+            EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT
+    );
+    void* vertex_dst = g_rhi->RHIMapBuffer(vertex_buffer, 0, sizeof(vertex_data));
     memcpy(vertex_dst, vertex_data, sizeof(vertex_data));
     g_rhi->RHIUnmapBuffer(vertex_buffer);
 
     Moer::Vector3f clear_value    = {0, 0, 0.2};
-    RHIBufferRef   uniform_buffer = CreateBufferFromData(sizeof(clear_value), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::CONSTANT_BUFFER, &clear_value);
+    RHIBufferRef   uniform_buffer = CreateBufferFromData(
+        sizeof(clear_value), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::CONSTANT_BUFFER, &clear_value
+    );
 
     RHIRayTracingTrianglesGeometry simple_triangle;
     simple_triangle.index_buffer         = index_buffer;
@@ -122,7 +137,8 @@ void Test() {
     blas_range_infos.push_back(blas_range_info);
 
     RHIRayTracingBLASInitializer init_blas{};
-    init_blas.build_flags = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD | ERayTracingAccelerationStructureBuildFlags::ALLOW_COMPACTION;
+    init_blas.build_flags = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD |
+                            ERayTracingAccelerationStructureBuildFlags::ALLOW_COMPACTION;
     init_blas.geometries  = blas_geometries;
     init_blas.range_infos = blas_range_infos;
 
@@ -147,7 +163,8 @@ void Test() {
 
     RHIShaderRef test_raygen_shader  = ShaderResourceManager::GetInstance().GetShader<TestRayGenShader>();
     RHIShaderRef test_raymiss_shader = ShaderResourceManager::GetInstance().GetShader<TestRayMissShader>();
-    RHIShaderRef test_raychit_shader = ShaderResourceManager::GetInstance().GetShader<TestRayClosestHitShader>();
+    RHIShaderRef test_raychit_shader =
+        ShaderResourceManager::GetInstance().GetShader<TestRayClosestHitShader>();
 
     init_rt_pipeline.SetRayGenShader(dynamic_cast<RHIRayGenShader*>(test_raygen_shader.Get()));
     init_rt_pipeline.AddMissShader(dynamic_cast<RHIRayMissShader*>(test_raymiss_shader.Get()));
@@ -175,17 +192,22 @@ void Test() {
     RHICBVRef     buffer_view = g_rhi->RHICreateCBV(uniform_buffer, sizeof(clear_value), 0);
 
     RHIBatchedShaderParameters batched_parameter{};
-    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back(RHIShaderResourceParameter{as_view.Get(), 0, 0});
-    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back({tex_view.Get(), 1, 0});
-    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters()).push_back({buffer_view.Get(), 0, 1});
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters())
+        .push_back(RHIShaderResourceParameter{as_view.Get(), 0, 0});
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters())
+        .push_back({tex_view.Get(), 1, 0});
+    const_cast<Moer::Array<RHIShaderResourceParameter>&>(batched_parameter.GetResourceParameters())
+        .push_back({buffer_view.Get(), 0, 1});
 
     g_rhi->RHISetBatchedShaderParameters(rt_pipeline, batched_parameter);
 
-    RHIRayTracingCommandList* command_list = g_rhi->RHICreateRayTracingCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+    RHIRayTracingCommandList* command_list =
+        g_rhi->RHICreateRayTracingCommandList(g_rhi->RHIGetCurrentCommandAllocator());
 
-    RHICopyCommandList* copy_command_list = g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
-    RHICommandQueue*    rt_queue          = g_rhi->RHICreateCommandQueue(ECommandQueueType::RAYTRACING);
-    RHICommandQueue*    copy_queue        = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
+    RHICopyCommandList* copy_command_list =
+        g_rhi->RHICreateCopyCommandList(g_rhi->RHIGetCurrentCommandAllocator());
+    RHICommandQueue* rt_queue   = g_rhi->RHICreateCommandQueue(ECommandQueueType::RAYTRACING);
+    RHICommandQueue* copy_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::COPY);
 
     RHIFenceRef raytracing_finish_fence = g_rhi->RHICreateFence({EFenceUsageFlags::TIMELINE});
     RHIFenceRef copying_finish_fence    = g_rhi->RHICreateFence({EFenceUsageFlags::PRESENT});
@@ -233,8 +255,10 @@ void Test() {
         raytracing_submit_info.Wait(copying_finish_fence, copying_fence_value);
         rt_queue->SubmitCommands(1, command_list, &raytracing_submit_info);
 
-        RHIViewportNextBackBufferInfo next_back_buffer_info = g_rhi->RHIGetNextFrameViewportBufferInfo(viewport);
-        RHIUAVRef                     next_back_buffer      = g_rhi->RHIGetViewportBackBufferUAV(viewport, next_back_buffer_info.backbuffer_index);
+        RHIViewportNextBackBufferInfo next_back_buffer_info =
+            g_rhi->RHIGetNextFrameViewportBufferInfo(viewport);
+        RHIUAVRef next_back_buffer =
+            g_rhi->RHIGetViewportBackBufferUAV(viewport, next_back_buffer_info.backbuffer_index);
         copy_command_list->Reset();
         copy_command_list->BeginRecording();
         RHICopyTextureInfo copyinfo;

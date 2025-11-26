@@ -1,0 +1,31 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/source/cuda",
+                "${workspaceFolder}/source/editor",
+                "${workspaceFolder}/source/runtime/core",
+                "${workspaceFolder}/source/runtime/render",
+                "${workspaceFolder}/source/runtime/resource",
+                "${workspaceFolder}/3rdparty/VulkanSDK/include",
+                "${env:CUDA_PATH}/include", // 给IntelliSence添加include目录（不影响CMake与实际编译）
+                "${env:LIBTORCH_PATH}/include",
+                "${env:LIBTORCH_PATH}/include/torch/csrc/api/include",
+                "${env:TENSORRT_PATH}/include"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE",
+                "WITH_CUDA=1" // See: source/cuda/CMakeLists.txt
+            ],
+            "windowsSdkVersion": "10.0.22621.0",
+            "cStandard": "c17",
+            "intelliSenseMode": "windows-msvc-x64",
+            "cppStandard": "c++20"
+        }
+    ],
+    "version": 4
+}

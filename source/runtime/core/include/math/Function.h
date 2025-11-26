@@ -2,15 +2,15 @@
 
 #include "API_Macro.h"
 #include "Base.h"
-#include "Matrix.h"
 #include "Constant.h"
+#include "Matrix.h"
 
 #include <cmath>
 #include <utility>
 
 // vector functions
 namespace Moer {
-    // clang-format off
+// clang-format off
     template<NumericType T> inline T Max(T lhs, T rhs) noexcept;
     template<NumericType T> inline T Min(T lhs, T rhs) noexcept;
     template<VectorType  T> inline T Max(const T& lhs, const T& rhs) noexcept;
@@ -55,6 +55,16 @@ namespace Moer {
     template<NumericType T> inline T Abs(T v) noexcept;
     template<VectorType  T> inline T Abs(const T& v) noexcept;
 
+    template<NumericFloatType T> inline T Sign(T v) noexcept;
+    template<VectorFloatType  T> inline T Sign(const T& v) noexcept;
+
+    // Compare(v1, v2) ? 0 === v1 ? v2;
+    // e.g. Compare(v1, v2) > 0 === v1 > v2
+    template<NumericFloatType T> inline T Compare(T v1, T v2) noexcept;
+
+    template<NumericFloatType T> inline bool IsZero(T v) noexcept;
+    template<VectorFloatType  T> inline bool IsZero(const T& v) noexcept;
+
                        inline float      Lerp(float a, float b, float t) noexcept;
     template<size_t N> inline Vectorf<N> Lerp(const Vectorf<N>& a, const Vectorf<N>& b, const Vectorf<N>& t) noexcept;
                        inline double     Lerp(double a, double b, double t) noexcept;
@@ -88,12 +98,12 @@ namespace Moer {
 
     template<size_t N,NumericType T> inline Matrix<T,N,N>  OuterProduct(const Vector<T, N>& lhs, const Vector<T, N>& rhs) noexcept;
 
-    // clang-format on
-}// namespace Moer
+// clang-format on
+} // namespace Moer
 
 // matrix functions
 namespace Moer {
-    // clang-format off
+// clang-format off
     template<NumericType T, NumericType U, size_t ROW, size_t COL> inline Matrix<T, ROW, COL> operator+(const Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept;
     template<NumericType T, NumericType U, size_t ROW, size_t COL> inline Matrix<T, ROW, COL> operator-(const Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept;
     template<NumericType T, NumericType U, size_t ROW, size_t COL> inline Matrix<T, ROW, COL> operator/(const Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept;
@@ -169,14 +179,14 @@ namespace Moer {
     template<NumericType T, size_t ROW, size_t COL> inline Matrix<T, 4, 4> FillDiagonal4x4(const Matrix<T, ROW, COL>& m, T diagonal_element) noexcept;
 
     // make the view matrix in right-handed system
-    Matrix4x4f MakeLookatViewMatrixRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
-    Matrix4x4d MakeLookatViewMatrixRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
+    CORE_API Matrix4x4f MakeLookatViewMatrixRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
+    CORE_API Matrix4x4d MakeLookatViewMatrixRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
     // make the camera to world matrix in right-handed system
-    Matrix4x4f MakeLookatToWorldMatrixRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
-    Matrix4x4d MakeLookatToWorldMatrixRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
+    CORE_API Matrix4x4f MakeLookatToWorldMatrixRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
+    CORE_API Matrix4x4d MakeLookatToWorldMatrixRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
     // return world to camera view matrix and camera to world matrix in right-handed system
-    std::pair<Matrix4x4f, Matrix4x4f> MakeLookatViewMatrixWithInverseRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
-    std::pair<Matrix4x4d, Matrix4x4d> MakeLookatViewMatrixWithInverseRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
+    CORE_API std::pair<Matrix4x4f, Matrix4x4f> MakeLookatViewMatrixWithInverseRH(const Vector3f& origin, const Vector3f& look_at, const Vector3f& up_dir) noexcept;
+    CORE_API std::pair<Matrix4x4d, Matrix4x4d> MakeLookatViewMatrixWithInverseRH(const Vector3d& origin, const Vector3d& look_at, const Vector3d& up_dir) noexcept;
 
     void QDUDecomposition(const Matrix3x3f& m, Matrix3x3f& Q, Vector3f& D, Vector3f& U) noexcept;
     void QDUDecomposition(const Matrix3x3d& m, Matrix3x3d& Q, Vector3d& D, Vector3d& U) noexcept;
@@ -187,6 +197,12 @@ namespace Moer {
      */ 
     CORE_API Matrix4x4f MakePerspectiveMatrixRH(float fov_y, float aspect_ratio, float near_clip, float far_clip) noexcept;
     CORE_API Matrix4x4d MakePerspectiveMatrixRH(double fov_y, double aspect_ratio, double near_clip, double far_clip) noexcept;
+
+    /**
+     * make the orthographic matrix in right-handed system
+     */ 
+    CORE_API Matrix4x4f MakeOrthoMatrixRH(float left, float right, float bottom, float top, float near_clip, float far_clip) noexcept;
+    CORE_API Matrix4x4d MakeOrthoMatrixRH(double left, double right, double bottom, double top, double near_clip, double far_clip) noexcept;
 
     template<NumericType T>
     inline Matrix<T, 4, 4> MakeTranslation(T x, T y, T z) noexcept {
@@ -210,527 +226,664 @@ namespace Moer {
         ret[3][3] = (T)1;
         return ret;
     }
-    // clang-format on
-}// namespace Moer
+// clang-format on
+} // namespace Moer
 
 // implementation
 namespace Moer {
-    template<NumericType T>
-    inline T Max(T lhs, T rhs) noexcept { return (std::max)(lhs, rhs); }
-    template<NumericType T>
-    inline T Min(T lhs, T rhs) noexcept { return (std::min)(lhs, rhs); }
-    template<VectorType T>
-    inline T Max(const T& lhs, const T& rhs) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = Max(lhs[i], rhs[i]);
-        return ret;
-    }
-    template<VectorType T>
-    inline T Min(const T& lhs, const T& rhs) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = Min(lhs[i], rhs[i]);
-        return ret;
-    }
+template<NumericType T>
+inline T Max(T lhs, T rhs) noexcept {
+    return (std::max)(lhs, rhs);
+}
+template<NumericType T>
+inline T Min(T lhs, T rhs) noexcept {
+    return (std::min)(lhs, rhs);
+}
+template<VectorType T>
+inline T Max(const T& lhs, const T& rhs) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = Max(lhs[i], rhs[i]);
+    return ret;
+}
+template<VectorType T>
+inline T Min(const T& lhs, const T& rhs) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = Min(lhs[i], rhs[i]);
+    return ret;
+}
 
-    template<VectorType T>
-    inline T operator+(const T& v) noexcept {
-        return v;
-    }
-    template<VectorType T>
-    inline T operator-(const T& v) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = -v[i];
-        return ret;
-    }
+template<VectorType T>
+inline T operator+(const T& v) noexcept {
+    return v;
+}
+template<VectorType T>
+inline T operator-(const T& v) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = -v[i];
+    return ret;
+}
 
-    template<VectorType T>
-    inline bool operator==(const T& lhs, const T& rhs) noexcept {
-        bool ret = true;
-        for (int i = 0; i < T::size; i++) ret &= (lhs[i] == rhs[i]);
-        return ret;
-    }
-    template<VectorType T>
-    inline bool operator!=(const T& lhs, const T& rhs) noexcept {
-        return !(lhs == rhs);
-    }
+template<VectorType T>
+inline bool operator==(const T& lhs, const T& rhs) noexcept {
+    bool ret = true;
+    for (int i = 0; i < T::size; i++)
+        ret &= (lhs[i] == rhs[i]);
+    return ret;
+}
+template<VectorType T>
+inline bool operator!=(const T& lhs, const T& rhs) noexcept {
+    return !(lhs == rhs);
+}
 
-    template<VectorType T, VectorType U>
-    inline T operator+(const T& lhs, const U& rhs) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = lhs[i] + rhs[i];
-        return ret;
-    }
-    template<VectorType T, VectorType U>
-    inline T operator-(const T& lhs, const U& rhs) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = lhs[i] - rhs[i];
-        return ret;
-    }
-    template<VectorType T, VectorType U>
-    inline T operator*(const T& lhs, const U& rhs) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = lhs[i] * rhs[i];
-        return ret;
-    }
-    template<VectorType T, VectorType U>
-    inline T operator/(const T& lhs, const U& rhs) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = lhs[i] / rhs[i];
-        return ret;
-    }
+template<VectorType T, VectorType U>
+inline T operator+(const T& lhs, const U& rhs) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = lhs[i] + rhs[i];
+    return ret;
+}
+template<VectorType T, VectorType U>
+inline T operator-(const T& lhs, const U& rhs) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = lhs[i] - rhs[i];
+    return ret;
+}
+template<VectorType T, VectorType U>
+inline T operator*(const T& lhs, const U& rhs) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = lhs[i] * rhs[i];
+    return ret;
+}
+template<VectorType T, VectorType U>
+inline T operator/(const T& lhs, const U& rhs) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = lhs[i] / rhs[i];
+    return ret;
+}
 
-    template<VectorType T, NumericType U>
-    inline T operator+(const T& lhs, const U rhs) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = lhs[i] + rhs;
-        return ret;
-    }
-    template<VectorType T, NumericType U>
-    inline T operator-(const T& lhs, const U rhs) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = lhs[i] - rhs;
-        return ret;
-    }
-    template<VectorType T, NumericType U>
-    inline T operator*(const T& lhs, const U rhs) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = lhs[i] * rhs;
-        return ret;
-    }
-    template<VectorType T, NumericType U>
-    inline T operator/(const T& lhs, const U rhs) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = lhs[i] / rhs;
-        return ret;
-    }
+template<VectorType T, NumericType U>
+inline T operator+(const T& lhs, const U rhs) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = lhs[i] + rhs;
+    return ret;
+}
+template<VectorType T, NumericType U>
+inline T operator-(const T& lhs, const U rhs) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = lhs[i] - rhs;
+    return ret;
+}
+template<VectorType T, NumericType U>
+inline T operator*(const T& lhs, const U rhs) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = lhs[i] * rhs;
+    return ret;
+}
+template<VectorType T, NumericType U>
+inline T operator/(const T& lhs, const U rhs) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = lhs[i] / rhs;
+    return ret;
+}
 
-    template<NumericType T, VectorType U>
-    inline U operator+(const T lhs, const U& rhs) noexcept {
-        U ret;
-        for (int i = 0; i < U::size; i++) ret[i] = lhs + rhs[i];
-        return ret;
-    }
-    template<NumericType T, VectorType U>
-    inline U operator-(const T lhs, const U& rhs) noexcept {
-        U ret;
-        for (int i = 0; i < U::size; i++) ret[i] = lhs - rhs[i];
-        return ret;
-    }
-    template<NumericType T, VectorType U>
-    inline U operator*(const T lhs, const U& rhs) noexcept {
-        U ret;
-        for (int i = 0; i < U::size; i++) ret[i] = lhs * rhs[i];
-        return ret;
-    }
-    template<NumericType T, VectorType U>
-    inline U operator/(const T lhs, const U& rhs) noexcept {
-        U ret;
-        for (int i = 0; i < U::size; i++) ret[i] = lhs / rhs[i];
-        return ret;
-    }
+template<NumericType T, VectorType U>
+inline U operator+(const T lhs, const U& rhs) noexcept {
+    U ret;
+    for (int i = 0; i < U::size; i++)
+        ret[i] = lhs + rhs[i];
+    return ret;
+}
+template<NumericType T, VectorType U>
+inline U operator-(const T lhs, const U& rhs) noexcept {
+    U ret;
+    for (int i = 0; i < U::size; i++)
+        ret[i] = lhs - rhs[i];
+    return ret;
+}
+template<NumericType T, VectorType U>
+inline U operator*(const T lhs, const U& rhs) noexcept {
+    U ret;
+    for (int i = 0; i < U::size; i++)
+        ret[i] = lhs * rhs[i];
+    return ret;
+}
+template<NumericType T, VectorType U>
+inline U operator/(const T lhs, const U& rhs) noexcept {
+    U ret;
+    for (int i = 0; i < U::size; i++)
+        ret[i] = lhs / rhs[i];
+    return ret;
+}
 
-    template<VectorType T, VectorType U>
-    inline void operator+=(T& lhs, const U& rhs) noexcept {
-        for (int i = 0; i < T::size; i++) lhs[i] += rhs[i];
-    }
-    template<VectorType T, VectorType U>
-    inline void operator-=(T& lhs, const U& rhs) noexcept {
-        for (int i = 0; i < T::size; i++) lhs[i] -= rhs[i];
-    }
-    template<VectorType T, VectorType U>
-    inline void operator*=(T& lhs, const U& rhs) noexcept {
-        for (int i = 0; i < T::size; i++) lhs[i] *= rhs[i];
-    }
-    template<VectorType T, VectorType U>
-    inline void operator/=(T& lhs, const U& rhs) noexcept {
-        for (int i = 0; i < T::size; i++) lhs[i] /= rhs[i];
-    }
+template<VectorType T, VectorType U>
+inline void operator+=(T& lhs, const U& rhs) noexcept {
+    for (int i = 0; i < T::size; i++)
+        lhs[i] += rhs[i];
+}
+template<VectorType T, VectorType U>
+inline void operator-=(T& lhs, const U& rhs) noexcept {
+    for (int i = 0; i < T::size; i++)
+        lhs[i] -= rhs[i];
+}
+template<VectorType T, VectorType U>
+inline void operator*=(T& lhs, const U& rhs) noexcept {
+    for (int i = 0; i < T::size; i++)
+        lhs[i] *= rhs[i];
+}
+template<VectorType T, VectorType U>
+inline void operator/=(T& lhs, const U& rhs) noexcept {
+    for (int i = 0; i < T::size; i++)
+        lhs[i] /= rhs[i];
+}
 
-    template<VectorType T, NumericType U>
-    inline void operator+=(T& lhs, const U rhs) noexcept {
-        for (int i = 0; i < T::size; i++) lhs[i] += rhs;
-    }
-    template<VectorType T, NumericType U>
-    inline void operator-=(T& lhs, const U rhs) noexcept {
-        for (int i = 0; i < T::size; i++) lhs[i] -= rhs;
-    }
-    template<VectorType T, NumericType U>
-    inline void operator*=(T& lhs, const U rhs) noexcept {
-        for (int i = 0; i < T::size; i++) lhs[i] *= rhs;
-    }
-    template<VectorType T, NumericType U>
-    inline void operator/=(T& lhs, const U rhs) noexcept {
-        for (int i = 0; i < T::size; i++) lhs[i] /= rhs;
-    }
+template<VectorType T, NumericType U>
+inline void operator+=(T& lhs, const U rhs) noexcept {
+    for (int i = 0; i < T::size; i++)
+        lhs[i] += rhs;
+}
+template<VectorType T, NumericType U>
+inline void operator-=(T& lhs, const U rhs) noexcept {
+    for (int i = 0; i < T::size; i++)
+        lhs[i] -= rhs;
+}
+template<VectorType T, NumericType U>
+inline void operator*=(T& lhs, const U rhs) noexcept {
+    for (int i = 0; i < T::size; i++)
+        lhs[i] *= rhs;
+}
+template<VectorType T, NumericType U>
+inline void operator/=(T& lhs, const U rhs) noexcept {
+    for (int i = 0; i < T::size; i++)
+        lhs[i] /= rhs;
+}
 
-    template<NumericType T>
-    inline bool ApproxEqual(T lhs, T rhs, float eps) noexcept {
-        return (abs(lhs - rhs) < eps);
-    }
-    template<NumericType T>
-    inline bool ApproxEqual(T lhs, T rhs, double eps) noexcept {
-        return (abs(lhs - rhs) < eps);
-    }
+template<NumericType T>
+inline bool ApproxEqual(T lhs, T rhs, float eps) noexcept {
+    return (abs(lhs - rhs) < eps);
+}
+template<NumericType T>
+inline bool ApproxEqual(T lhs, T rhs, double eps) noexcept {
+    return (abs(lhs - rhs) < eps);
+}
 
-    template<VectorType T>
-    inline bool ApproxEqual(const T& lhs, const T& rhs, float eps) noexcept {
-        bool ret = true;
-        for (int i = 0; i < T::size; i++) ret &= (abs(lhs[i] - rhs[i]) < eps);
-        return ret;
-    }
-    template<VectorType T>
-    inline bool ApproxEqual(const T& lhs, const T& rhs, double eps) noexcept {
-        bool ret = true;
-        for (int i = 0; i < T::size; i++) ret &= (abs(lhs[i] - rhs[i]) < eps);
-        return ret;
-    }
+template<VectorType T>
+inline bool ApproxEqual(const T& lhs, const T& rhs, float eps) noexcept {
+    bool ret = true;
+    for (int i = 0; i < T::size; i++)
+        ret &= (abs(lhs[i] - rhs[i]) < eps);
+    return ret;
+}
+template<VectorType T>
+inline bool ApproxEqual(const T& lhs, const T& rhs, double eps) noexcept {
+    bool ret = true;
+    for (int i = 0; i < T::size; i++)
+        ret &= (abs(lhs[i] - rhs[i]) < eps);
+    return ret;
+}
 
-    template<NumericType T>
-    inline T Abs(T v) noexcept {
-        return std::abs(v);
-    }
+template<NumericType T>
+inline T Abs(T v) noexcept {
+    return std::abs(v);
+}
 
-    template<VectorType T>
-    inline T Abs(const T& v) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = std::abs(v[i]);
-        return ret;
-    }
+template<VectorType T>
+inline T Abs(const T& v) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = std::abs(v[i]);
+    return ret;
+}
 
-    inline float Lerp(float a, float b, float t) noexcept { return a + t * (b - a); }
-    template<size_t N>
-    inline Vectorf<N> Lerp(const Vectorf<N>& a, const Vectorf<N>& b, const Vectorf<N>& t) noexcept {
-        Vectorf<N> ret;
-        for (int i = 0; i < N; i++) ret[i] = Lerp(a[i], b[i], t[i]);
-        return ret;
-    }
-    inline double Lerp(double a, double b, double t) noexcept { return a + t * (b - a); }
-    template<size_t N>
-    inline Vectord<N> Lerp(const Vectord<N>& a, const Vectord<N>& b, const Vectord<N>& t) noexcept {
-        Vectord<N> ret;
-        for (int i = 0; i < N; i++) ret[i] = Lerp(a[i], b[i], t[i]);
-        return ret;
-    }
+template<NumericFloatType T>
+inline T Sign(T v) noexcept {
+    return v < T(-EPS) ? T(-1) : (v > T(EPS) ? T(1) : T(0));
+}
 
-    inline float Pow(float base, float power) noexcept { return std::pow(base, power); }
-    template<size_t N>
-    inline Vectorf<N> Pow(const Vectorf<N>& base, float& power) noexcept {
-        Vectorf<N> ret;
-        for (int i = 0; i < N; i++) ret[i] = Pow(base[i], power);
-        return ret;
-    }
-    template<size_t N>
-    inline Vectorf<N> Pow(const Vectorf<N>& base, const Vectorf<N>& power) noexcept {
-        Vectorf<N> ret;
-        for (int i = 0; i < N; i++) ret[i] = Pow(base[i], power[i]);
-        return ret;
-    }
-    inline double Pow(double base, double power) noexcept { return std::pow(base, power); }
-    template<size_t N>
-    inline Vectord<N> Pow(const Vectord<N>& base, double& power) noexcept {
-        Vectord<N> ret;
-        for (int i = 0; i < N; i++) ret[i] = Pow(base[i], power);
-        return ret;
-    }
-    template<size_t N>
-    inline Vectord<N> Pow(const Vectord<N>& base, const Vectord<N>& power) noexcept {
-        Vectord<N> ret;
-        for (int i = 0; i < N; i++) ret[i] = Pow(base[i], power[i]);
-        return ret;
-    }
+template<VectorFloatType T>
+inline T Sign(const T& v) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = Sign(v[i]);
+    return ret;
+}
 
-    template<NumericType T>
-    inline T Clamp(T v, T a, T b) noexcept { return Max(a, Min(v, b)); }
-    template<VectorType T>
-    inline T Clamp(const T& v, const T& a, const T& b) noexcept { return Max(a, Min(v, b)); }
+template<NumericFloatType T>
+inline T Compare(T v1, T v2) noexcept {
+    return Sign(v1 - v2);
+}
 
-    template<VectorType T>
-    inline float Dotf(const T& lhs, const T& rhs) noexcept {
-        float ret = 0.f;
-        for (int i = 0; i < T::size; i++) ret += lhs[i] * rhs[i];
-        return ret;
-    }
+template<NumericFloatType T>
+inline T Signed(T v) noexcept {
+    return v < T(0) ? T(-1) : T(1);
+}
 
-    template<VectorType T>
-    inline float Lengthf(const T& v) noexcept {
-        return sqrtf(Dotf(v, v));
-    }
+template<VectorFloatType T>
+inline T Signed(const T& v) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = Signed(v[i]);
+    return ret;
+}
 
-    template<VectorType T>
-    inline float SquaredLengthf(const T& v) noexcept {
-        return Dotf(v, v);
-    }
+template<NumericFloatType T>
+inline T Select(T _comp, T _v1, T _v2) noexcept {
+    return Signed(_comp) == T(1) ? _v1 : _v2;
+}
 
-    template<VectorType T>
-    inline Vectorf<T::size> Normalizef(const T& v) noexcept {
-        return v / Lengthf(v);
-    }
+template<VectorFloatType T>
+inline T Select(const T& _comp, const T& _v1, const T& _v2) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = Select(_comp[i], _v1[i], _v2[i]);
+    return ret;
+}
 
-    template<VectorType T>
-    inline double Dot(const T& lhs, const T& rhs) noexcept {
-        double ret = 0.;
-        for (int i = 0; i < T::size; i++) ret += lhs[i] * rhs[i];
-        return ret;
-    }
+template<NumericFloatType T>
+inline bool IsZero(T v) noexcept {
+    return Abs(v) < T(EPS);
+}
 
-    template<VectorType T>
-    inline double Length(const T& v) noexcept {
-        return std::sqrt(Dot(v, v));
-    }
+template<VectorFloatType T>
+inline bool IsZero(const T& v) noexcept {
+    bool ret = true;
+    for (int i = 0; i < T::size; i++)
+        ret &= IsZero(v[i]);
+    return ret;
+}
 
-    template<VectorType T>
-    inline double SquaredLength(const T& v) noexcept {
-        return Dot(v, v);
-    }
+inline float Lerp(float a, float b, float t) noexcept {
+    return a + t * (b - a);
+}
+template<size_t N>
+inline Vectorf<N> Lerp(const Vectorf<N>& a, const Vectorf<N>& b, const Vectorf<N>& t) noexcept {
+    Vectorf<N> ret;
+    for (int i = 0; i < N; i++)
+        ret[i] = Lerp(a[i], b[i], t[i]);
+    return ret;
+}
+inline double Lerp(double a, double b, double t) noexcept {
+    return a + t * (b - a);
+}
+template<size_t N>
+inline Vectord<N> Lerp(const Vectord<N>& a, const Vectord<N>& b, const Vectord<N>& t) noexcept {
+    Vectord<N> ret;
+    for (int i = 0; i < N; i++)
+        ret[i] = Lerp(a[i], b[i], t[i]);
+    return ret;
+}
 
-    template<VectorType T>
-    inline Vectord<T::size> Normalize(const T& v) noexcept {
-        return v / Length(v);
-    }
+inline float Pow(float base, float power) noexcept {
+    return std::pow(base, power);
+}
+template<size_t N>
+inline Vectorf<N> Pow(const Vectorf<N>& base, float& power) noexcept {
+    Vectorf<N> ret;
+    for (int i = 0; i < N; i++)
+        ret[i] = Pow(base[i], power);
+    return ret;
+}
+template<size_t N>
+inline Vectorf<N> Pow(const Vectorf<N>& base, const Vectorf<N>& power) noexcept {
+    Vectorf<N> ret;
+    for (int i = 0; i < N; i++)
+        ret[i] = Pow(base[i], power[i]);
+    return ret;
+}
+inline double Pow(double base, double power) noexcept {
+    return std::pow(base, power);
+}
+template<size_t N>
+inline Vectord<N> Pow(const Vectord<N>& base, double& power) noexcept {
+    Vectord<N> ret;
+    for (int i = 0; i < N; i++)
+        ret[i] = Pow(base[i], power);
+    return ret;
+}
+template<size_t N>
+inline Vectord<N> Pow(const Vectord<N>& base, const Vectord<N>& power) noexcept {
+    Vectord<N> ret;
+    for (int i = 0; i < N; i++)
+        ret[i] = Pow(base[i], power[i]);
+    return ret;
+}
 
-    template<NumericType T>
-    inline Vector<T, 3> Cross(const Vector<T, 3>& lhs, const Vector<T, 3>& rhs) noexcept {
-        return Vector<T, 3>(lhs.y * rhs.z - lhs.z * rhs.y, lhs.z * rhs.x - lhs.x * rhs.z, lhs.x * rhs.y - lhs.y * rhs.x);
-    }
+template<NumericType T>
+inline T Clamp(T v, T a, T b) noexcept {
+    return Max(a, Min(v, b));
+}
+template<VectorType T>
+inline T Clamp(const T& v, const T& a, const T& b) noexcept {
+    return Max(a, Min(v, b));
+}
 
-    template<VectorType T>
-    inline T Reflect(const T& v, const T& n) noexcept {
-        return v - 2. * n * Dot(n, v);
-    }
+template<VectorType T>
+inline float Dotf(const T& lhs, const T& rhs) noexcept {
+    float ret = 0.f;
+    for (int i = 0; i < T::size; i++)
+        ret += lhs[i] * rhs[i];
+    return ret;
+}
 
-    template<VectorType T>
-    inline T Exp(const T& v) noexcept {
-        T ret;
-        for (int i = 0; i < T::size; i++) ret[i] = std::exp(v[i]);
-        return ret;
-    }
+template<VectorType T>
+inline float Lengthf(const T& v) noexcept {
+    return sqrtf(Dotf(v, v));
+}
 
-    inline uint64_t RoundUpToPowerOf2(uint64_t v) noexcept {
-        v--;
-        v |= v >> 1u;
-        v |= v >> 2u;
-        v |= v >> 4u;
-        v |= v >> 8u;
-        v |= v >> 16u;
-        v |= v >> 32u;
-        v++;
-        return v;
-    }
+template<VectorType T>
+inline float SquaredLengthf(const T& v) noexcept {
+    return Dotf(v, v);
+}
 
-    inline uint32_t RoundUpToPowerOf2(uint32_t v) noexcept {
-        v--;
-        v |= v >> 1u;
-        v |= v >> 2u;
-        v |= v >> 4u;
-        v |= v >> 8u;
-        v |= v >> 16u;
-        v++;
-        return v;
-    }
+template<VectorType T>
+inline Vectorf<T::size> Normalizef(const T& v) noexcept {
+    return v / Lengthf(v);
+}
 
-    inline uint32_t RoundDownToPowerOf2(uint32_t v) noexcept {
-        v |= v >> 1u;
-        v |= v >> 2u;
-        v |= v >> 4u;
-        v |= v >> 8u;
-        v |= v >> 16u;
-        return v ^ (v >> 1u);
-    }
+template<VectorType T>
+inline double Dot(const T& lhs, const T& rhs) noexcept {
+    double ret = 0.;
+    for (int i = 0; i < T::size; i++)
+        ret += lhs[i] * rhs[i];
+    return ret;
+}
 
-    inline uint64_t RoundDownToPowerOf2(uint64_t v) noexcept {
-        v |= v >> 1u;
-        v |= v >> 2u;
-        v |= v >> 4u;
-        v |= v >> 8u;
-        v |= v >> 16u;
-        v |= v >> 32u;
-        return v ^ (v >> 1u);
-    }
-}// namespace Moer
+template<VectorType T>
+inline double Length(const T& v) noexcept {
+    return std::sqrt(Dot(v, v));
+}
+
+template<VectorType T>
+inline double SquaredLength(const T& v) noexcept {
+    return Dot(v, v);
+}
+
+template<VectorType T>
+inline Vectord<T::size> Normalize(const T& v) noexcept {
+    return v / Length(v);
+}
+
+template<NumericType T>
+inline Vector<T, 3> Cross(const Vector<T, 3>& lhs, const Vector<T, 3>& rhs) noexcept {
+    return Vector<T, 3>(
+        lhs.y * rhs.z - lhs.z * rhs.y, lhs.z * rhs.x - lhs.x * rhs.z, lhs.x * rhs.y - lhs.y * rhs.x
+    );
+}
+
+template<VectorType T>
+inline T Reflect(const T& v, const T& n) noexcept {
+    return v - 2. * n * Dot(n, v);
+}
+
+template<VectorType T>
+inline T Exp(const T& v) noexcept {
+    T ret;
+    for (int i = 0; i < T::size; i++)
+        ret[i] = std::exp(v[i]);
+    return ret;
+}
+
+inline uint64_t RoundUpToPowerOf2(uint64_t v) noexcept {
+    v--;
+    v |= v >> 1u;
+    v |= v >> 2u;
+    v |= v >> 4u;
+    v |= v >> 8u;
+    v |= v >> 16u;
+    v |= v >> 32u;
+    v++;
+    return v;
+}
+
+inline uint32_t RoundUpToPowerOf2(uint32_t v) noexcept {
+    v--;
+    v |= v >> 1u;
+    v |= v >> 2u;
+    v |= v >> 4u;
+    v |= v >> 8u;
+    v |= v >> 16u;
+    v++;
+    return v;
+}
+
+inline uint32_t RoundDownToPowerOf2(uint32_t v) noexcept {
+    v |= v >> 1u;
+    v |= v >> 2u;
+    v |= v >> 4u;
+    v |= v >> 8u;
+    v |= v >> 16u;
+    return v ^ (v >> 1u);
+}
+
+inline uint64_t RoundDownToPowerOf2(uint64_t v) noexcept {
+    v |= v >> 1u;
+    v |= v >> 2u;
+    v |= v >> 4u;
+    v |= v >> 8u;
+    v |= v >> 16u;
+    v |= v >> 32u;
+    return v ^ (v >> 1u);
+}
+} // namespace Moer
 
 namespace Moer {
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<T, ROW, COL> operator+(const Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
-        Matrix<T, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs[i][j] + rhs[i][j];
-        return ret;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<T, ROW, COL> operator-(const Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
-        Matrix<T, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs[i][j] - rhs[i][j];
-        return ret;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<T, ROW, COL> operator/(const Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
-        Matrix<T, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs[i][j] / rhs[i][j];
-        return ret;
-    }
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<T, ROW, COL>
+operator+(const Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
+    Matrix<T, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs[i][j] + rhs[i][j];
+    return ret;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<T, ROW, COL>
+operator-(const Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
+    Matrix<T, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs[i][j] - rhs[i][j];
+    return ret;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<T, ROW, COL>
+operator/(const Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
+    Matrix<T, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs[i][j] / rhs[i][j];
+    return ret;
+}
 
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<T, ROW, COL> operator+(const Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
-        Matrix<T, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs[i][j] + rhs;
-        return ret;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<T, ROW, COL> operator-(const Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
-        Matrix<T, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs[i][j] - rhs;
-        return ret;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<T, ROW, COL> operator*(const Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
-        Matrix<T, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs[i][j] * rhs;
-        return ret;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<T, ROW, COL> operator/(const Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
-        Matrix<T, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs[i][j] / rhs;
-        return ret;
-    }
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<T, ROW, COL> operator+(const Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
+    Matrix<T, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs[i][j] + rhs;
+    return ret;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<T, ROW, COL> operator-(const Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
+    Matrix<T, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs[i][j] - rhs;
+    return ret;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<T, ROW, COL> operator*(const Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
+    Matrix<T, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs[i][j] * rhs;
+    return ret;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<T, ROW, COL> operator/(const Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
+    Matrix<T, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs[i][j] / rhs;
+    return ret;
+}
 
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<U, ROW, COL> operator+(const T lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
-        Matrix<U, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs + rhs[i][j];
-        return ret;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<U, ROW, COL> operator-(const T lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
-        Matrix<U, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs - rhs[i][j];
-        return ret;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<U, ROW, COL> operator*(const T lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
-        Matrix<U, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs * rhs[i][j];
-        return ret;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline Matrix<U, ROW, COL> operator/(const T lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
-        Matrix<U, ROW, COL> ret;
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) ret[i][j] = lhs / rhs[i][j];
-        return ret;
-    }
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<U, ROW, COL> operator+(const T lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
+    Matrix<U, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs + rhs[i][j];
+    return ret;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<U, ROW, COL> operator-(const T lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
+    Matrix<U, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs - rhs[i][j];
+    return ret;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<U, ROW, COL> operator*(const T lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
+    Matrix<U, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs * rhs[i][j];
+    return ret;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline Matrix<U, ROW, COL> operator/(const T lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
+    Matrix<U, ROW, COL> ret;
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            ret[i][j] = lhs / rhs[i][j];
+    return ret;
+}
 
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline void operator+=(Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) lhs[i][j] += rhs[i][j];
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline void operator-=(Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) lhs[i][j] -= rhs[i][j];
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline void operator/=(Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) lhs[i][j] /= rhs[i][j];
-    }
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline void operator+=(Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            lhs[i][j] += rhs[i][j];
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline void operator-=(Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            lhs[i][j] -= rhs[i][j];
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline void operator/=(Matrix<T, ROW, COL>& lhs, const Matrix<U, ROW, COL>& rhs) noexcept {
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            lhs[i][j] /= rhs[i][j];
+}
 
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline void operator+=(Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) lhs[i][j] += rhs;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline void operator-=(Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) lhs[i][j] -= rhs;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline void operator*=(Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) lhs[i][j] *= rhs;
-    }
-    template<NumericType T, NumericType U, size_t ROW, size_t COL>
-    inline void operator/=(Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
-        for (int i = 0; i < ROW; i++)
-            for (int j = 0; j < COL; j++) lhs[i][j] /= rhs;
-    }
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline void operator+=(Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            lhs[i][j] += rhs;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline void operator-=(Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            lhs[i][j] -= rhs;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline void operator*=(Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            lhs[i][j] *= rhs;
+}
+template<NumericType T, NumericType U, size_t ROW, size_t COL>
+inline void operator/=(Matrix<T, ROW, COL>& lhs, const U rhs) noexcept {
+    for (int i = 0; i < ROW; i++)
+        for (int j = 0; j < COL; j++)
+            lhs[i][j] /= rhs;
+}
 
-    template<NumericType T, NumericType U, size_t N, size_t M, size_t K>
-    inline Matrix<T, N, K> operator*(const Matrix<T, N, M>& lhs, const Matrix<U, M, K>& rhs) noexcept {
-        Matrix<T, N, K> ret;
-        for (int i = 0; i < N; i++)
-            for (int j = 0; j < K; j++) ret[i][j] = Dot(lhs[i], rhs.GetColumn(j));
-        return ret;
-    }
+template<NumericType T, NumericType U, size_t N, size_t M, size_t K>
+inline Matrix<T, N, K> operator*(const Matrix<T, N, M>& lhs, const Matrix<U, M, K>& rhs) noexcept {
+    Matrix<T, N, K> ret;
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < K; j++)
+            ret[i][j] = Dot(lhs[i], rhs.GetColumn(j));
+    return ret;
+}
 
-    template<NumericType T, size_t ROW, size_t COL>
-    inline Vector<T, ROW> operator*(const Matrix<T, ROW, COL>& m, const Vector<T, COL>& v) noexcept {
-        Vector<T, ROW> ret;
-        for (int i = 0; i < ROW; i++) ret[i] = Dot(m[i], v);
-        return ret;
-    }
-    template<NumericType T, size_t ROW, size_t COL>
-    inline Vector<T, COL> operator*(const Vector<T, ROW>& v, const Matrix<T, ROW, COL>& m) noexcept {
-        Vector<T, COL> ret;
-        for (int i = 0; i < COL; i++)
-            for (int j = 0; j < ROW; j++) ret[i] += m[j][i] * v[j];
-        return ret;
-    }
+template<NumericType T, size_t ROW, size_t COL>
+inline Vector<T, ROW> operator*(const Matrix<T, ROW, COL>& m, const Vector<T, COL>& v) noexcept {
+    Vector<T, ROW> ret;
+    for (int i = 0; i < ROW; i++)
+        ret[i] = Dot(m[i], v);
+    return ret;
+}
+template<NumericType T, size_t ROW, size_t COL>
+inline Vector<T, COL> operator*(const Vector<T, ROW>& v, const Matrix<T, ROW, COL>& m) noexcept {
+    Vector<T, COL> ret;
+    for (int i = 0; i < COL; i++)
+        for (int j = 0; j < ROW; j++)
+            ret[i] += m[j][i] * v[j];
+    return ret;
+}
 
-    template<NumericType T, size_t N, size_t M>
-    inline Matrix<T, M, N> Transpose(const Matrix<T, N, M>& m) noexcept {
-        Matrix<T, M, N> ret;
-        for (int i = 0; i < M; i++)
-            for (int j = 0; j < N; j++) ret[i][j] = m[j][i];
-        return ret;
-    }
+template<NumericType T, size_t N, size_t M>
+inline Matrix<T, M, N> Transpose(const Matrix<T, N, M>& m) noexcept {
+    Matrix<T, M, N> ret;
+    for (int i = 0; i < M; i++)
+        for (int j = 0; j < N; j++)
+            ret[i][j] = m[j][i];
+    return ret;
+}
 
-    template<NumericType T, size_t ROW, size_t COL>
-    inline Matrix<T, 2, 2> GetDiagonal2x2(const Matrix<T, ROW, COL>& m) noexcept {
-        return Matrix<T, 2, 2>(m[0][0], m[0][1], m[1][0], m[1][1]);
-    }
+template<NumericType T, size_t ROW, size_t COL>
+inline Matrix<T, 2, 2> GetDiagonal2x2(const Matrix<T, ROW, COL>& m) noexcept {
+    return Matrix<T, 2, 2>(m[0][0], m[0][1], m[1][0], m[1][1]);
+}
 
-    template<NumericType T, size_t ROW, size_t COL>
-    inline Matrix<T, 3, 3> GetDiagonal3x3(const Matrix<T, ROW, COL>& m) noexcept {
-        static_assert((ROW >= 3 && COL >= 3));
-        return Matrix<T, 3, 3>(m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]);
-    }
+template<NumericType T, size_t ROW, size_t COL>
+inline Matrix<T, 3, 3> GetDiagonal3x3(const Matrix<T, ROW, COL>& m) noexcept {
+    static_assert((ROW >= 3 && COL >= 3));
+    return Matrix<T, 3, 3>(m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]);
+}
 
-    template<NumericType T>
-    inline Matrix<T, 3, 3> FillDiagonal3x3(const Matrix<T, 2, 2>& m, T diagonal_element) noexcept {
-        return Matrix<T, 3, 3>(m[0][0], m[0][1], 0, m[1][0], m[1][1], 0, 0, 0, diagonal_element);
-    }
-    template<NumericType T, size_t ROW, size_t COL>
-    inline Matrix<T, 4, 4> FillDiagonal4x4(const Matrix<T, ROW, COL>& m, T diagonal_element) noexcept {
-        static_assert((ROW <= 3 && COL <= 3));
-        Matrix<T, 4, 4> ret;
-        ret.r0 = Vector<T, 4>(m.r0);
-        ret.r1 = Vector<T, 4>(m.r1);
-        if constexpr (ROW == 3)
-            ret.r2 = Vector<T, 4>(m.r2);
-        else
-            ret.r2 = Vector<T, 4>(0, 0, diagonal_element, 0);
-        ret.r3 = Vector<T, 4>(0, 0, 0, diagonal_element);
+template<NumericType T>
+inline Matrix<T, 3, 3> FillDiagonal3x3(const Matrix<T, 2, 2>& m, T diagonal_element) noexcept {
+    return Matrix<T, 3, 3>(m[0][0], m[0][1], 0, m[1][0], m[1][1], 0, 0, 0, diagonal_element);
+}
+template<NumericType T, size_t ROW, size_t COL>
+inline Matrix<T, 4, 4> FillDiagonal4x4(const Matrix<T, ROW, COL>& m, T diagonal_element) noexcept {
+    static_assert((ROW <= 3 && COL <= 3));
+    Matrix<T, 4, 4> ret;
+    ret.r0 = Vector<T, 4>(m.r0);
+    ret.r1 = Vector<T, 4>(m.r1);
+    if constexpr (ROW == 3)
+        ret.r2 = Vector<T, 4>(m.r2);
+    else
+        ret.r2 = Vector<T, 4>(0, 0, diagonal_element, 0);
+    ret.r3 = Vector<T, 4>(0, 0, 0, diagonal_element);
 
-        return ret;
-    }
+    return ret;
+}
 
-    template<size_t N, NumericType T>
-    Matrix<T, N, N> OuterProduct(const Vector<T, N>& lhs, const Vector<T, N>& rhs) noexcept {
-        Matrix<T, N, N> ret;
-        for (int i = 0; i < N; i++)
-            for (int j = 0; j < N; j++) ret[i][j] = lhs[i] * rhs[j];
-        return ret;
-    }
-}// namespace Moer
+template<size_t N, NumericType T>
+Matrix<T, N, N> OuterProduct(const Vector<T, N>& lhs, const Vector<T, N>& rhs) noexcept {
+    Matrix<T, N, N> ret;
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++)
+            ret[i][j] = lhs[i] * rhs[j];
+    return ret;
+}
+} // namespace Moer

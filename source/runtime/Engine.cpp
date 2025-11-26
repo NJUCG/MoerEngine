@@ -1,115 +1,205 @@
 #include "Engine.h"
-#include "PixelFormat.h"
+
+// Runtime
 #include "config/ConfigManager.h"
-
-#include "log/LogSystem.h"
-
-#include "Core.h"
+#include "misc/MMemory.h"
+#include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
-#include "rhi/RHICommon.h"
-#include "rhi/RHIResource.h"
+#include "shader/GeometryPassPsoManager.h"
+#include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
-#include "taskgraph/ThreadManager.h"
-#include "RenderSystem.h"
-#include "ui/UIBase.h"
 #include "window/WindowContext.h"
-#include "EngineLoop.h"
-#include "loader/LoaderInterface.h"
-#include "loader/ply/Ply.h"
 
-#include <filesystem>
-#include <stdint.h>
+// Editor
+#include "renderer/common/RuntimeAssets.h"
+#include "renderer/raster/RasterRenderer.h"
+#include "renderer/raytracing/RaytracingRenderer.h"
 
-#include "modules/resource/include/loader/gltf/Parser.h"
+// 3rd party (std)
+#include <cassert>
+#include <nfd.hpp>
+
+// namespace
+using namespace Moer::Render;
 
 namespace Moer {
 
-    void Engine::Init(const EngineInitInfo& _info) {
-        LOG_INFO("Engine Begin Initilization");
+static UniquePtr<NFD::Guard> nfd_guard = nullptr;
 
-        InitCore(_info.workspace_path);
-        InitRenderSystem();
-        InitWindow();
+static bool ContainsNonAscii(const std::filesystem::path& p);
 
-        LOG_INFO("Engine Initilization Finished");
+Engine::Engine() {}
+
+Engine::~Engine() {
+    assert(has_shutdown && "Engine::ShutDown() was not called before Engine destruction!");
+}
+
+void Engine::Init(int argc, const char** argv) {
+    // Init LogSystem
+    LogSystem::Init(); // for LOG_DEBUG & LOG_TRACE when debug mode
+
+    // Init ConfigManager
+    std::filesystem::path path = argv[0];
+    path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
+
+    LOG_INFO("Workspace Path : {}", path.string());
+
+    if (ContainsNonAscii(path)) {
+        LOG_ERROR(
+            "Workspace Path contains non-ASCII characters (e.g., Chinese characters)! This may cause "
+            "unexpected issues. Current path: {}",
+            path.string()
+        );
     }
 
-    void Engine::PostInit() {
-        LOG_INFO("Engine Begin Post Init");
-        PostInitRenderSystem();
-        LOG_INFO("Engine Post Init Finished");
-        auto scene_path = std::filesystem::weakly_canonical(ConfigManager::GetInstance().GetScenePath());
-        if (!std::filesystem::exists(scene_path)) {
-            LOG_ERROR("Scene path in Config is empty, Load Default Scene");
-            scene_path = std::filesystem::canonical(ConfigManager::GetInstance().GetEditorResourcePath() / "default" / "scenes" / "sponza" / "Sponza01.gltf");
+    ConfigManager::GetInstance().Init(path);
+
+    // Init TaskSystem
+    TaskSystem::Init();
+
+    // Init RenderDevice
+    std::string rhi_type_str = ConfigManager::GetInstance().GetConfig().engine.rhi.type;
+    std::transform(rhi_type_str.begin(), rhi_type_str.end(), rhi_type_str.begin(), ::tolower);
+
+    ERHIType rhi_type = [&]() {
+        if (rhi_type_str == "vulkan") {
+            LOG_INFO("Using Vulkan as RHI backend");
+            return ERHIType::Vulkan;
+        } else if (rhi_type_str == "d3d12") {
+            LOG_INFO("Using D3D12 as RHI backend");
+            return ERHIType::D3D12;
+        } else {
+            LOG_WARNING(
+                "Unknown RHI type '{}', fallback to Vulkan",
+                ConfigManager::GetInstance().GetConfig().engine.rhi.type
+            );
+            return ERHIType::Vulkan;
         }
-        //Config this in MoerEngine.ini
-        Resource::LoaderInterface::LoadSceneFromFileAsync(scene_path);
-    }
-    void Engine::Run() {
-        LOG_INFO("Engine Start Running");
+    }();
 
-        EngineLoop& loop = EngineLoop::GetInstance();
-        loop.Init();
+    RenderDevice::Init(
+        std::move(
+            DeviceInitInfo{
+                .rhi_type        = rhi_type,
+                .name            = "MoerEngine",
+                .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.api_version,
+            }
+        )
+    );
 
-        while (!loop.ShouldEndLoop()) {
-            loop.Run();
+    ShaderManager::Get(); // Explicit Init ShaderManager
+
+    m_editor_config = MakeShared<EditorConfig>();
+
+    // Init WindowContext
+    m_editor_config->resolution = MakeShared<uint2>(
+        ConfigManager::GetInstance().GetConfig().editor.width,
+        ConfigManager::GetInstance().GetConfig().editor.height
+    );
+    bool b_fullscreen = ConfigManager::GetInstance().GetConfig().editor.fullscreen;
+    LOG_INFO(
+        "Editor Window Resolution : {}x{}; Fullscreen : {}",
+        m_editor_config->resolution->x,
+        m_editor_config->resolution->y,
+        b_fullscreen
+    );
+
+    WindowContext::Init(SurfaceInitInfo(
+        RenderDevice::Get().GetRHIType(),
+        m_editor_config->resolution->x,
+        m_editor_config->resolution->y,
+        "MoerEditor",
+        b_fullscreen
+    ));
+
+    m_runtime_assets =
+        MakeUnique<RuntimeAssets>(ConfigManager::GetInstance().GetEditorResourcePath(), RenderDevice::Get());
+}
+
+void Engine::Run(const EngineHooks& hooks) {
+
+    // 猜猜为什么需要这个函数？猜对的话奖励一个重构MoerEngine的机会 (?)
+    auto wtf_load_scene = [](const std::filesystem::path& _file_path, Scene* scene) {
+        Resource::LoaderInterface::LoadSceneFromFileAsync(_file_path, scene);
+    };
+
+    while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+        LOG_INFO(
+            "Selecting Render Method : {}",
+            k_render_method_names[static_cast<uint>(m_editor_config->selected_render_method)]
+        );
+
+        if (m_editor_config->selected_render_method == ERenderMethod::Raster) {
+            m_renderer = MakeUnique<Raster::RasterRenderer>(
+                m_editor_config->resolution, m_editor_config, hooks, wtf_load_scene
+            );
+
+        } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
+            // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);
+            m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
+                m_editor_config->resolution, m_editor_config, hooks, wtf_load_scene, *m_runtime_assets
+            );
+
+        } else {
+            assert(false && "Unknown render method");
         }
-        loop.Quit();
 
-        LOG_INFO("Engine Stop Running");
-    }
+        m_renderer->Run(m_editor_config, hooks);
 
-    void Engine::InitCore(const std::filesystem::path& workspace_path) {
-        ConfigManager::GetInstance().Init(workspace_path);
-        TaskSystem::Init();
-        LogSystem::Init();
+        // Switch Renderer
+        m_renderer.reset();
     }
-    void Engine::ShutDownCore() {
-        TaskSystem::ShutDown();
-    }
+}
 
-    void Engine::InitRenderSystem() {
+void Engine::ShutDown() {
+    GeometryPassPsoManager::ShutDown(); // 如果这个单例没有Get过，则ShutDown时不会消耗额外资源
 
-        RenderSystem::Init();
-    }
-    void Engine::PostInitRenderSystem() {
-        RenderSystem::PostInit();
-    }
-    void Engine::ShutDownRenderSystem() {
-        RenderSystem::ShutDown();
-    }
+    m_runtime_assets.reset(); // 释放RuntimeAssets资源
 
-    void Engine::InitWindow() {
-        SurfaceInitInfo info;
-#if defined(EDITOR_MODE_ON)
-        const auto& config_data = ConfigManager::GetInstance().GetInitConfig();
-        info.width              = config_data.editor_width;
-        info.height             = config_data.editor_height;
-        info.title              = "MoerEditor";
-        info.b_fullscreen       = config_data.editor_fullscreen;
-        info.b_vsync            = config_data.editor_vsync;
-#else
-        //load application info
+    WindowContext::ShutDown();
+    ShaderManager::ShutDown();
+    RenderDevice::Dispose();
+    TaskSystem::ShutDown();
 
-#endif
+    has_shutdown = true;
+}
 
-        WindowContext::Init(info);
+void Engine::Init3rdParty() {
+    nfd_guard = MakeUnique<NFD::Guard>();
+}
+
+void Engine::ShutDown3rdParty() {
+    nfd_guard.release();
+}
+
+// 检测路径中是否包含非ASCII字符（包括中文）
+bool ContainsNonAscii(const std::filesystem::path& p) {
+    // std::filesystem::path 内部存储可能是 wchar_t (Windows) 或 char (其他平台)
+    // 转换为 std::string (UTF-8) 或 std::wstring 进行检测更通用
+
+    // 在Windows上，std::filesystem::path::string() 会根据当前 locale 转换为 narrow string
+    // 但为了可靠检测非ASCII字符，最好是转换为宽字符串再检查，或者确保转换为UTF-8
+
+    // 方法1：转换为 UTF-8 string 并检查 (更通用，但依赖std::codecvt_utf8_utf16)
+    // std::string utf8_path_str = p.u8string(); // C++17，直接获取UTF-8编码
+    // for (unsigned char c : utf8_path_str) {
+    //     if (c > 127) { // 检查是否为非ASCII字符
+    //         return true;
+    //     }
+    // }
+    // return false;
+
+    // 方法2：直接检查宽字符串 (更适合Windows，因为内部存储可能是宽字符)
+    // 假设 std::filesystem::path 内部是 wchar_t 或可以转换为 wchar_t
+    std::wstring wide_path_str = p.generic_wstring(); // 获取宽字符串表示
+
+    for (wchar_t wc : wide_path_str) {
+        // ASCII字符的 wchar_t 值范围是 0-127
+        if (wc > 127) {
+            return true; // 发现非ASCII字符
+        }
     }
-    void Engine::ShutDownWindow() {
-        WindowContext::ShutDown();
-    }
+    return false;
+}
 
-    void Engine::Quit() {
-        b_request_quiting = true;
-        ShutDownRenderSystem();
-        ShutDownWindow();
-        ShutDownCore();
-
-        LOG_INFO("Engine Quit");
-    }
-
-    void Engine::RegisterOnDrawUI(std::function<void()> _func) {
-        EngineLoop::GetInstance().RegisterOnDrawUI(_func);
-    }
-}// namespace Moer
+} // namespace Moer

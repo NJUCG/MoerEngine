@@ -1,19 +1,25 @@
-out
-.vs
-.vscode
-target
-build
-/.idea/codeStyles/codeStyleConfig.xml
-/.idea/codeStyles/Project.xml
-/.idea/.gitignore
-/.idea/misc.xml
-/.idea/modules.xml
-/.idea/MoerEngine.iml
-/.idea/vcs.xml
+# 1. IDE Files
+/.vscode/*
+!/.vscode/launch.json
+!/.vscode/c_cpp_properties.json
+/.vs/*
+/.idea/*
+
+# 2. Generated, Build Files, Cache
+/out/*
+/build/*
+/target/*
+/.cache/
 build_vs2022
 cmake-build-*/
-/.cache/
-.vscode/launch.json
-.vscode/settings.json
-/.idea
+*.MOERSCENE
+
+# 3. User Config Files
+imgui.ini
+EnableCuda.cmake
+MoerEngine.toml
+
+# 4. Logs
 logs/
+log*.txt
+.VSCodeCounter/

@@ -25,7 +25,7 @@ struct PS_INPUT {
 
 PS_INPUT main(VS_INPUT input) {
   PS_INPUT output;
-  output.pos = mul(vertexBuffer.mvp, float4(input.pos, 1.f));
+  output.pos = mul(float4(input.pos, 1.f), vertexBuffer.mvp);
   output.uv = input.uv;
   output.col = float4(input.uv, 0.f, 1.f);
   return output;

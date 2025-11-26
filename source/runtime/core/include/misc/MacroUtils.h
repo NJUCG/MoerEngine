@@ -2,7 +2,7 @@
 #define MACRO_H
 #ifndef FORCEINLINE
 #define FORCEINLINE __forceinline
-#endif// !FORCE_INLINE
+#endif // !FORCE_INLINE
 
 // clang-format off
 #if defined(_WIN32)
@@ -53,10 +53,10 @@
 
 #define CHECK_ASSERT(value, msg, ...)         \
     {                                         \
-        if (!value) {                         \
+        if (!(value)) {                       \
             LOG_CRITICAL(msg, ##__VA_ARGS__); \
             assert(false);                    \
         }                                     \
     }
 
-#endif// !MACRO_H
+#endif // !MACRO_H

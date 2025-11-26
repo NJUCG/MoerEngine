@@ -4,10 +4,10 @@
 
 #include <GLFW/glfw3.h>
 
-#include "rhi/vulkan/VulkanRHI.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/vulkan/VulkanRHI.h"
 #include "shader/Shader.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
@@ -112,15 +112,13 @@ void Test() {
 
     RHIGraphicsCommandList* command_list = g_rhi->RHICreateGraphicsCommandList()
 
-    RHIRenderPassInfo pass_info;
+                                               RHIRenderPassInfo pass_info;
     pass_info.GeneratePipelineAttachmentInfo();
     command_list->BeginRenderPass(pass_info, "triangle pass");
     command_list->BindVertexBuffers(0, 1, vertex_buffers.data(), 0);
 
     RHIUAVRef test_view =
-        g_rhi->RHICreateUAVInner(tex,
-                                 RHIViewInfo::CreateTextureUAVInfo()
-                                     .SetFormat((PF_R8G8B8A8_SRGB)));
+        g_rhi->RHICreateUAVInner(tex, RHIViewInfo::CreateTextureUAVInfo().SetFormat((PF_R8G8B8A8_SRGB)));
     auto                   test_shader_vs = ShaderResourceManager::GetInstance().GetShader<TestShader>();
     TestShader::Parameters params;
 
@@ -135,7 +133,7 @@ void Test() {
 
     command_list->EndRenderPass();
 
-    RHICommandQueue*                                graphics_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
+    RHICommandQueue* graphics_queue = g_rhi->RHICreateCommandQueue(ECommandQueueType::GRAPHICS);
     const Moer::StaticArray<RHICommandListBase*, 1> command_array{command_list};
     // graphics_queue->SubmitCommands(1, command_array.data());
 
