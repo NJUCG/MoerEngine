@@ -584,7 +584,7 @@ private:
         config->addOptimizationProfile(profile);
 
         // 3. Engine
-        LOG_DEBUG("Started to Build TensorRT ICudaEngine.");
+        LOG_INFO("Started to Build TensorRT ICudaEngine. It may take several minutes...");
 
         engine = std::unique_ptr<ICudaEngine>(builder->buildEngineWithConfig(*network, *config));
         if (!engine) {

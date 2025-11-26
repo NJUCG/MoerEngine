@@ -1,4 +1,4 @@
-# 如果CUDA成功导入，则cmake表达式 (TARGET moer_cuda) 为真；同时，链接moer_cuda后，cpp端会被设置宏 WITH_CUDA=1
+# 如果CUDA成功导入，则cmake表达式 (TARGET Moer::Cuda) 为真；同时，链接moer_cuda后，cpp端会被设置宏 WITH_CUDA=1
 # 
 # 只有CUDA成功导入时，才考虑LibTorch和TensorRT（版本需要自己手动校验）
 # - 如果LibTorch和TensorRT成功导入，则.......
@@ -68,45 +68,46 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
     file(GLOB_RECURSE moer_cuda_h CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
 
     # 编译一个CUDA的静态库，把上面这些cu文件都编译了（.h文件会被自动忽略）
-    add_library(moer_cuda SHARED ${moer_cuda_h} ${moer_cuda_cu})
+    set(target_name moer_cuda)
+    add_library(${target_name} SHARED ${moer_cuda_h} ${moer_cuda_cu})
+    add_library(Moer::Cuda ALIAS ${target_name})
 
     # 设置目标属性
-    set_target_properties(moer_cuda PROPERTIES
+    set_target_properties(${target_name} PROPERTIES
         CUDA_SEPARABLE_COMPILATION OFF # 需要分离编译时打开；如果打开的话，编译无法通过，貌似是因为兼容性bug
         POSITION_INDEPENDENT_CODE ON   # 编译动态库的时候需要打开
-        LINKER_LANGUAGE CUDA           # 不然cmake会提示：CMake can not determine linker language for target: moer_cuda
+        LINKER_LANGUAGE CUDA           # 不然cmake会提示：CMake can not determine linker language for target: ${target_name}
         CUDA_ARCHITECTURES "61;86;120" # 支持非本机的计算架构（例如3060和3080的Compute Capability都是8.6）
                                        # NV计算能力表格：https://developer.nvidia.cn/cuda-gpus
     )
 
     # 宏, link include, link sources
-    target_compile_definitions(moer_cuda PRIVATE MOER_CUDA_EXPORTS) # 只在编译moer_cuda时，启用这个宏，保证导出符号正确性
+    target_compile_definitions(${target_name} PRIVATE MOER_CUDA_EXPORTS) # 只在编译moer_cuda时，启用这个宏，保证导出符号正确性
     # 直接把当前文件夹作为include，这样开发的时候就不用把header和cu分开写了
-    target_include_directories(moer_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-    target_include_directories(moer_cuda PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
-    target_link_libraries(moer_cuda PUBLIC CUDA::cudart CUDA::cublas CUDA::cusolver LibTorch TensorRT)
-
+    target_include_directories(${target_name} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(${target_name} PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
+    target_link_libraries(${target_name} PUBLIC CUDA::cudart CUDA::cublas CUDA::cusolver LibTorch TensorRT)
     # Reference: https://github.com/microsoft/vcpkg/issues/30272#issuecomment-1817929528
     # Hack for the extra \EHsc that gets added on Windows to the nvcc compile line, which causes the error:
     # "nvcc fatal: A single input file is required for a non-link phase when an outputfile is specified..."
     if(${MSVC})
-        set_target_properties(moer_cuda PROPERTIES COMPILE_OPTIONS -Xcompiler)
+        set_target_properties(${target_name} PROPERTIES COMPILE_OPTIONS -Xcompiler)
     endif()
     # 这个语句会覆盖target_compile_options的设置，所以必须在target_compile_options之前执行
 
     # 其他编译选项
     # $<CONFIG:Debug>:..          # 如果是Debug模式，才添加下面的options
     # $<COMPILE_LANGUAGE:CUDA>:.. # 如果语言是CUDA，才添加下面的options
-    target_compile_options(moer_cuda PRIVATE
+    target_compile_options(${target_name} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler;"/utf-8"> # 支持utf-8
         $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=221> # 禁用float溢出警告，例如：((float)(1e+300))
         $<$<CONFIG:Debug>:$<$<COMPILE_LANGUAGE:CUDA>:-G>> # -G启动device端的调试信息
     )
 
     # 【重要】其他library编译时，使用下面这个语句进行link
-    # target_link_libraries(another_library PRIVATE moer_cuda)
+    # target_link_libraries(another_library PRIVATE ${target_name})
 
-    message(STATUS "MoerCuda has been configured successfully.")
+    message(STATUS "Moer::Cuda has been configured successfully.")
 
     # 检查PATH中是否包含了LibTorch和TensorRT的lib路径，避免程序直接闪退
     if (WIN32)
@@ -134,7 +135,7 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
     endif()
 
 else()
-    message(STATUS "MoerCuda has been skipped because lacking of dependencies.")
+    message(STATUS "Moer::Cuda has been skipped because lacking of dependencies.")
 endif()
 
 if (WITH_CUDA AND NOT (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT))

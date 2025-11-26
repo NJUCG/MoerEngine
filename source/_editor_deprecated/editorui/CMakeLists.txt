@@ -17,4 +17,4 @@ target_include_directories(
 )
 
 target_compile_options(${target_name} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/WX->")
-target_link_libraries(${target_name} MoerRuntime)
+target_link_libraries(${target_name} Moer::Runtime)

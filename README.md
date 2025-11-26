@@ -131,3 +131,31 @@
 - 设置中的 `C_Cpp.default.compilerPath` 字段不能使用msvc编译器，否则IntelliSense会出现假错。推荐使用clang
   - 注：和编译无关，只和 IntelliSense（IDE的智能代码高亮与补全）有关
 
+## 如何贡献
+
+### CMake命名规范 (推荐)
+
+|               | 命名风格        | 示例                                     |
+| ------------- | --------------- | ---------------------------------------- |
+| 指令/函数     | 小写            | add_executable(...), set(...)            |
+| 关键字        | 大写 & 下划线   | STATIC, GLOB_RECURSE, PRIVATE            |
+| 局部变量      | 小写 & 下划线   | set(my_source_files ...), libtorch_dir   |
+| 全局/缓存变量 | 大写 & 下划线   | option(WITH_CUDA), set(LIBTORCH_DIR ...) |
+| 目标          | 命名空间 & 驼峰 | Moer::Render, CUDA::cudart               |
+
+* 注：目标可以参考以下形式
+
+  ```cmake
+  # Moer::Render
+  set(target_name moer_render)
+  
+  add_library(${target_name} SHARED ...)
+  add_library(Moer::Render ALIAS ${target_name})
+  
+  # Moer::Cuda
+  set(target_name moer_cuda)
+  add_library(${target_name} SHARED ${moer_cuda_h} ${moer_cuda_cu})
+  add_library(Moer::Cuda ALIAS ${target_name})
+  ```
+
+  
