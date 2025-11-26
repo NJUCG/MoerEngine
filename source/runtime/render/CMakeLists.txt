@@ -4,8 +4,8 @@ set(target_name moer_render)
 
 configure_file(${moer_runtime_render_dir}/config.h.in ${moer_runtime_render_dir}/config.h)
 
-file(GLOB_RECURSE render_module_headers "*.h" ".hpp" "*.hlsli")
-file(GLOB_RECURSE render_module_sources "*.cpp")
+file(GLOB_RECURSE render_module_headers CONFIGURE_DEPENDS "*.h" ".hpp" "*.hlsli")
+file(GLOB_RECURSE render_module_sources CONFIGURE_DEPENDS "*.cpp")
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${render_module_headers} ${render_module_sources} )
 

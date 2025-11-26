@@ -5,6 +5,7 @@
 #include "VulkanDevice.h"
 #include "PixelFormat.h"
 #include "VulkanCommand.h"
+#include "VulkanDebugCallback.h"
 #include "VulkanExtension.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPlatform.h"
@@ -71,30 +72,6 @@ void VulkanDevice::PostInit() {
 
 VulkanDevice::~VulkanDevice() {
     Destroy();
-}
-
-VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT      message_severity,
-    VkDebugUtilsMessageTypeFlagsEXT             message_type,
-    const VkDebugUtilsMessengerCallbackDataEXT* p_callback_data,
-    void*                                       p_user_data
-) {
-
-    std::stringstream stream;
-    stream << "[" << p_callback_data->messageIdNumber << "]\n\t[" << p_callback_data->pMessageIdName
-           << "]:\n\t\t " << p_callback_data->pMessage;
-
-    if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
-        LOG_DEBUG(stream.str());
-    } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-        LOG_INFO(stream.str());
-    } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        LOG_WARNING(stream.str());
-    } else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-        LOG_ERROR(stream.str());
-    }
-
-    return VK_FALSE;
 }
 
 /**
@@ -750,6 +727,10 @@ void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateI
                                VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                                VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
     _create_info.pfnUserCallback = DebugCallback;
+}
+
+void VulkanDevice::FlushDebugMessages() const {
+    FlushBufferedDebugMessages();
 }
 
 void VulkanDevice::SetupDebugUtilsMessengerEXT() {

@@ -116,6 +116,10 @@ Ext* RenderDevice::LoadExtension() const {
     return static_cast<Ext*>(impl->LoadExtension(Ext::name));
 }
 
+void RenderDevice::FlushDebugMessages() const {
+    impl->FlushDebugMessages();
+}
+
 template RENDER_API Ext::NRDExtension* RenderDevice::LoadExtension<Ext::NRDExtension>() const;
 
 } // namespace Moer::Render

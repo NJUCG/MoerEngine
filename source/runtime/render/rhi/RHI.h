@@ -94,7 +94,10 @@ public:
 
 public:
     template<typename TElement>
-        requires(std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement> || NumericType<TElement> || user_trivial_type_v<TElement>)
+        requires(
+            std::is_trivially_copyable_v<TElement> && std::is_standard_layout_v<TElement> ||
+            NumericType<TElement> || user_trivial_type_v<TElement>
+        )
     BufferRef CreateBuffer(
         std::string_view  _name,
         uint              _element_cnt,
@@ -185,6 +188,8 @@ public:
 
     template<DeviceExt Ext>
     RENDER_API Ext* LoadExtension() const;
+
+    RENDER_API void FlushDebugMessages() const;
 
 protected:
     RENDER_API IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue);

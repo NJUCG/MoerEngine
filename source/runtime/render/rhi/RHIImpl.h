@@ -456,10 +456,12 @@ public:
         mip_level(_mip_level),
         offset{_offset.x, _offset.y, _offset.z},
         size{_size.x, _size.y, _size.z},
-        storage(std::span<const byte>(
-            reinterpret_cast<const byte*>(_data),
-            GetSizeFromImageFormat(_format, _size)
-        )) {}
+        storage(
+            std::span<const byte>(
+                reinterpret_cast<const byte*>(_data),
+                GetSizeFromImageFormat(_format, _size)
+            )
+        ) {}
 
     UploadTextureCmd(
         EPixelFormat     _format,
@@ -546,35 +548,51 @@ private:
 
 public:
     BarrierCmd& ReadTexture(const TextureView& _view, ETextureState _dst_state, EPassType _pass_type) {
-        read_textures.emplace_back(TextureBarrier{
-            reinterpret_cast<uint64>(_view.texture), _dst_state, _pass_type, _view.mip_level, _view.num_mips
-        });
+        read_textures.emplace_back(
+            TextureBarrier{
+                reinterpret_cast<uint64>(_view.texture),
+                _dst_state,
+                _pass_type,
+                _view.mip_level,
+                _view.num_mips
+            }
+        );
         return *this;
     }
     BarrierCmd& WriteTexture(const TextureView& _view, ETextureState _dst_state, EPassType _pass_type) {
-        write_textures.emplace_back(TextureBarrier{
-            reinterpret_cast<uint64>(_view.texture), _dst_state, _pass_type, _view.mip_level, _view.num_mips
-        });
+        write_textures.emplace_back(
+            TextureBarrier{
+                reinterpret_cast<uint64>(_view.texture),
+                _dst_state,
+                _pass_type,
+                _view.mip_level,
+                _view.num_mips
+            }
+        );
         return *this;
     }
     BarrierCmd& ReadBuffer(const BufferView& _view, EBufferState _dst_state, EPassType _pass_type) {
-        read_buffers.emplace_back(BufferBarrier{
-            reinterpret_cast<uint64>(_view.GetBuffer()),
-            _dst_state,
-            _pass_type,
-            _view.GetByteOffset(),
-            _view.GetByteSize()
-        });
+        read_buffers.emplace_back(
+            BufferBarrier{
+                reinterpret_cast<uint64>(_view.GetBuffer()),
+                _dst_state,
+                _pass_type,
+                _view.GetByteOffset(),
+                _view.GetByteSize()
+            }
+        );
         return *this;
     }
     BarrierCmd& WriteBuffer(const BufferView& _view, EBufferState _dst_state, EPassType _pass_type) {
-        write_buffers.emplace_back(BufferBarrier{
-            reinterpret_cast<uint64>(_view.GetBuffer()),
-            _dst_state,
-            _pass_type,
-            _view.GetByteOffset(),
-            _view.GetByteSize()
-        });
+        write_buffers.emplace_back(
+            BufferBarrier{
+                reinterpret_cast<uint64>(_view.GetBuffer()),
+                _dst_state,
+                _pass_type,
+                _view.GetByteOffset(),
+                _view.GetByteSize()
+            }
+        );
         return *this;
     }
 
@@ -1676,6 +1694,10 @@ public:
     virtual IOInterfaceRef CreateIOInterface(CopyQueue&) {
         return nullptr;
     };
+
+    virtual void FlushDebugMessages() const {
+        ; // do nothing by default
+    }
 };
 
 } // namespace Moer::Render

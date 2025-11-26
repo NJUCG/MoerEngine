@@ -247,6 +247,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }
     }
 
+    // 因为目前Vulkan的输出信息会聚合后再print，所以我们需要轮询，打印出最后添加的信息
+    device.FlushDebugMessages();
+
     if (hooks.on_render_gui) {
         hooks.on_render_gui(cmd_list, default_output_texture);
     }
