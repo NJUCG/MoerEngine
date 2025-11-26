@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.26.0)
 
+# 加载用户配置
 include("${CMAKE_SOURCE_DIR}/cmake/load_config.cmake")
 
+# 项目相关
 if (WITH_CUDA)
     project(MoerEngine LANGUAGES CXX C CUDA)
 else()
@@ -12,26 +14,28 @@ set(PROJECT_VERSION_MAJOR 0)
 set(PROJECT_VERSION_MINOR 1)
 set(PROJECT_VERSION_PATCH 0)
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
+# 路径
 set(moer_root_dir ${CMAKE_CURRENT_SOURCE_DIR})
 set(moer_source_dir ${moer_root_dir}/source) 
 set(moer_third_party_dir "${moer_root_dir}/3rdparty")
 set(moer_shader_dir "${moer_root_dir}/shaders")
+
+# 构建相关
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target/$<$<CXX_COMPILER_ID:MSVC>:>$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:$<CMAKE_BUILD_TYPE>>")
 if(MSVC)
     set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target")
 else()
     set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target/${CMAKE_BUILD_TYPE}")
-    endif()
+endif()
 
 set(BINARY_ROOT_DIR "${CMAKE_INSTALL_PREFIX}")
 
-# set ouput folder
+# set output folder
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/lib)
@@ -53,6 +57,8 @@ if(${MSVC})
     add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 endif()
 
+# 子目录：3rdparty
+
 function(add_subdirectory_silent dir)
     # 先全局静音
     set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 1 CACHE INTERNAL "")
@@ -65,5 +71,8 @@ function(add_subdirectory_silent dir)
 endfunction()
 
 add_subdirectory_silent("3rdparty")
+
+# 子目录：source
+
 add_subdirectory("source")
 

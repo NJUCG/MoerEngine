@@ -221,6 +221,26 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
     ImGuiIO& io = ImGui::GetIO();
     assert(io.BackendRendererUserData == nullptr && "GUI backend already initialized.");
 
+    { // Default ini file
+        io.IniFilename = "imgui.ini";
+
+        std::ifstream f(io.IniFilename);
+        if (f.good()) {
+            f.close();
+        } else {
+            LOG_INFO(
+                "No existing imgui.ini file found, loading preset config: {}",
+                ConfigManager::GetInstance().GetConfig().editor.preset_imgui_config_path
+            );
+
+            ImGui::LoadIniSettingsFromDisk(
+                ConfigManager::GetInstance().GetConfig().editor.preset_imgui_config_path.c_str()
+            );
+
+            ImGui::SaveIniSettingsToDisk(io.IniFilename);
+        }
+    }
+
     auto     config              = Moer::ConfigManager::GetInstance().GetConfig();
     uint32_t max_frame_in_flight = config.engine.rhi.max_frame_in_flight;
 

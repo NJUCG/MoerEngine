@@ -1,36 +1,25 @@
-# IDE files
-# Tip: 这里优先忽略所有文件，而不是忽略文件夹的原因，是为了下文的 !/.vscode/.. 能够生效。如果忽略了父文件夹，那么!将无法生效
+# 1. IDE Files
 /.vscode/*
+!/.vscode/launch.json
+!/.vscode/c_cpp_properties.json
 /.vs/*
 /.idea/*
 
-# Compiled
+# 2. Generated, Build Files, Cache
 /out/*
 /build/*
 /target/*
-
-# Ignore scene cache
+/.cache/
+build_vs2022
+cmake-build-*/
 *.MOERSCENE
 
-# Ignore all imgui.ini in project (prevent conflicts)
+# 3. User Config Files
 imgui.ini
-
-# Ignore Logs
-logs/
-log*.txt
-
-# Ignore user configs
 EnableCuda.cmake
 MoerEngine.toml
 
-build_vs2022
-cmake-build-*/
-/.cache/
+# 4. Logs
 logs/
+log*.txt
 .VSCodeCounter/
-
-# MARK: something should not be ignored
-
-# VS Code debugger config
-!/.vscode/launch.json
-!/.vscode/c_cpp_properties.json

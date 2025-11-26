@@ -1,20 +1,24 @@
-set(target_name MoerCore)
-file(GLOB_RECURSE CORE_HEADERS "include/*.h" "include/*.inl")
-file(GLOB_RECURSE CORE_SOURCES "source/*.cpp")
-file(GLOB_RECURSE CORE_PRIVATE_HEADERS "source/*.h")
+# Export Moer::Core target
 
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${CORE_HEADERS} ${CORE_SOURCES} ${CORE_PRIVATE_HEADERS})
+set(target_name moer_core)
+
+file(GLOB_RECURSE core_headers "include/*.h" "include/*.inl")
+file(GLOB_RECURSE core_sources "source/*.cpp")
+file(GLOB_RECURSE core_private_headers "source/*.h")
+
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${core_headers} ${core_sources} ${core_private_headers})
 
 option(MOER_CORE_SHARED_LIB "" ON)
 
 if(MOER_CORE_SHARED_LIB)
-    add_library(${target_name} SHARED ${CORE_HEADERS} ${CORE_SOURCES} ${CORE_PRIVATE_HEADERS})
+    add_library(${target_name} SHARED ${core_headers} ${core_sources} ${core_private_headers})
     target_compile_definitions(${target_name} PRIVATE MOER_CORE_SHARED_LIB)
 else()
-    add_library(${target_name} STATIC ${CORE_HEADERS} ${CORE_SOURCES} ${CORE_PRIVATE_HEADERS})
+    add_library(${target_name} STATIC ${core_headers} ${core_sources} ${core_private_headers})
 endif()
+add_library(Moer::Core ALIAS ${target_name})
 
-set_target_properties(${target_name} PROPERTIES FOLDER "runtime" )
+set_target_properties(${target_name} PROPERTIES FOLDER "runtime")
 
 target_include_directories(${target_name}
 	PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}/include>

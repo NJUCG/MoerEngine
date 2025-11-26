@@ -24,8 +24,8 @@ threads := "30"
 
 # MARK: debug printf
 
-export VK_LAYER_PRINTF_ENABLE := "1" # 如果想关闭shader的debug printf，可以将此项设置为0
-export VK_LAYER_PRINTF_TO_STDOUT := "1"
+# export VK_LAYER_PRINTF_ENABLE := "1" # 如果想关闭shader的debug printf，可以将此项设置为0
+# export VK_LAYER_PRINTF_TO_STDOUT := "1"
 
 # MARK: default
 

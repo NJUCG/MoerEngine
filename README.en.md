@@ -4,6 +4,8 @@ Engine for Realtime Rendering
 
 **| [简体中文](README.md) | English |**
 
+**This README is outdated. If you need English version, please raise an issue. We will update it as soon as possible.**
+
 ## Dependencies
 
 * OS

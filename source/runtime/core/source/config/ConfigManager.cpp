@@ -12,12 +12,12 @@
 
 // 在编译期，构建系统会对资源进行拷贝
 // 这两个宏是为了接收构建系统拷贝的目标路径
-#ifndef SHADER_PATH_RELATIVE_TO_RESOURCE
-#define SHADER_PATH_RELATIVE_TO_RESOURCE shaders
+#ifndef SHADER_PATH_RELATIVE_TO_ASSET
+#define SHADER_PATH_RELATIVE_TO_ASSET shaders
 #endif
 
-#ifndef SHADER_SHARED_PATH_RELATIVE_TO_RESOURCE
-#define SHADER_SHARED_PATH_RELATIVE_TO_RESOURCE shaderheaders
+#ifndef SHADER_SHARED_PATH_RELATIVE_TO_ASSET
+#define SHADER_SHARED_PATH_RELATIVE_TO_ASSET shaderheaders
 #endif
 
 namespace Moer {
@@ -29,20 +29,18 @@ ConfigManager& ConfigManager::GetInstance() {
 void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
     // pathes
     workspace_path            = _workspace_path;
-    editor_resource_path      = _workspace_path / "resource";
-    engine_shader_path        = _workspace_path / "resource" / MACRO_STR(SHADER_PATH_RELATIVE_TO_RESOURCE);
-    engine_shader_cached_path = _workspace_path / "resource" / "shader_cache";
-    engine_shader_shared_path =
-        _workspace_path / "resource" / MACRO_STR(SHADER_SHARED_PATH_RELATIVE_TO_RESOURCE);
+    editor_resource_path      = _workspace_path / "asset";
+    engine_shader_path        = _workspace_path / "asset" / MACRO_STR(SHADER_PATH_RELATIVE_TO_ASSET);
+    engine_shader_cached_path = _workspace_path / "asset" / "shader_cache";
+    engine_shader_shared_path = _workspace_path / "asset" / MACRO_STR(SHADER_SHARED_PATH_RELATIVE_TO_ASSET);
 
     // check config exists
-    std::filesystem::path config_path = _workspace_path / CONFIG_DIR / "MoerEngine.toml";
+    std::filesystem::path config_path = _workspace_path / "MoerEngine.toml";
     if (!std::filesystem::exists(config_path)) {
-        LOG_ERROR("Config `MoerEngine.toml` does not exist.");
+        LOG_ERROR("Config `{}` does not exist.", config_path.generic_string());
         LOG_ERROR(
-            "Please enter `./source/configs/` and copy `template.MoerEngine.toml` to `MoerEngine.toml`. You "
-            "can read README.md for details. MoerEngine will abort.",
-            config_path.generic_string()
+            "Please copy `template.MoerEngine.toml` to `MoerEngine.toml` in root directory. You can read "
+            "README.md for details. MoerEngine will abort."
         );
         throw std::runtime_error("Config file does not exist");
     }

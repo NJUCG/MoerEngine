@@ -95,7 +95,7 @@ void Editor::Run() {
 }
 
 void Editor::ShutDown() {
-
+    m_engine->ShutDown();
     m_engine.reset();
 }
 
