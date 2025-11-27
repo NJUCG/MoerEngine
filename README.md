@@ -36,7 +36,7 @@
   
   # 根据模板创建一份MoerEngine的配置文件
   # 配置文件中，可以设置默认的渲染器（光栅化、光追）、默认分辨率等选项
-  cp source/configs/template.MoerEngine.toml source/configs/MoerEngine.toml
+  cp template.MoerEngine.toml MoerEngine.toml
   
   # 构建
   cmake -B build
@@ -107,8 +107,8 @@
   - 打开MoerEditor后，点击 `OpenScene` 打开文件选择器，并根据右下角支持格式来选择不同格式的场景
 
 - 方法二：配置文件
-  - 在 `MoerEditor.exe` 同目录下的 `config/MoerEngine.toml` 中，修改启动时默认场景路径
-  - 注：在每次编译MoerEngine时，`./target/bin/Debug/config/*` 会被替换为 `./source/configs/*`。所以如果你是开发者，请修改 `./source/configs/MoerEngine.toml`
+  - `MoerEditor.exe` 会使用同目录下的 `MoerEngine.toml` 作为配置文件。这个配置文件包含了启动时的默认场景
+  - 注：在每次编译MoerEngine时，`./target/bin/Debug/MoerEngine.toml` 会被替换为 `./MoerEngine.toml`。所以如果你是开发者，请修改 `./MoerEngine.toml`
 
 ### 如何移动摄像机
 
@@ -139,6 +139,10 @@
 
 main分支为稳定分支，dev分支为开发分支，所以PR都应提交到dev分支。
 
+以下命名规范均为推荐规范，非强制要求。但请尽量遵循，以保持代码风格的一致性和可读性。
+
+### Git规范
+
 如果你是NJU META的成员（即 拥有仓库读写权限），你可以直接在MoerEngine仓库中创建对应分支进行开发。推荐的分支命名格式为 `feature/xxx` 或 `fix/xxx`。同时，也请创建分支对应的Draft PR，以告知其他开发者你正在开发的内容。
 
 Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 规范。
@@ -147,7 +151,7 @@ Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.
 
 *TODO*
 
-### CMake命名规范 (推荐)
+### CMake命名规范
 
 |               | 命名风格        | 示例                                     |
 | ------------- | --------------- | ---------------------------------------- |
