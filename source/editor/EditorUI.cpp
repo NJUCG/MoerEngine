@@ -54,7 +54,7 @@ void EditorUI::TickUI() {
 
     // 注：Resolution表示整个窗口的大小（不包含windows标题栏）；SceneColor只表示场景渲染区域的大小
     // 更新SceneColor的分辨率
-    m_config->aspect_ratio = m_scene_color_resolution.x / m_scene_color_resolution.y;
+    m_config->aspect_ratio = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
 
     m_ui_renderer->BeginGUIFrame();
 

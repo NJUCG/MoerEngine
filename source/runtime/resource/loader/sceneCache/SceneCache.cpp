@@ -212,7 +212,7 @@ void SceneCache::ReadSceneTextures(FInputStream& stream, SceneData& sceneData) {
         // stream >> texture_data.height;
         // stream >> texture_data.layers;
         // stream >> texture_data.mips;
-        // stream >> texture_data.channal;
+        // stream >> texture_data.channel;
         // stream >> texture_data.format;
         // stream >> texture_data.data_size;
 
@@ -540,12 +540,7 @@ void SceneCache::ConvertToScene(SceneData& _scene_data, Scene* _scene, bool _nee
         builder.Width(texture.second.width);
         builder.Height(texture.second.height);
         builder.Format(texture.second.format);
-        builder.MipAndLayers(
-            texture.second.mips,
-            texture.second.layers,
-            texture.second.mip_offsets.data(),
-            texture.second.mip_extents.data()
-        );
+        builder.MipAndLayers(texture.second.mips, texture.second.layers);
         builder.Name(texture.first);
     }
     textures = TextureBuilder::BuildTexturesInBatch(texture_builders);

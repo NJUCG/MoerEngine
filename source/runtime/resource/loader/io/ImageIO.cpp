@@ -200,87 +200,74 @@ EPixelFormat ConvertFormatFromDDSFormat(uint32_t format) {
     return EPixelFormat::PF_UNDEFINED;
 }
 
-//
-static void Generatemipmaps(ImageReadDesc& desc) {
-    if (desc.mip_offsets.size() > 1)
-        return;
+/// Generate mipmaps for the given image data
+/// @param _desc Image description containing the base image data
+static void Generatemipmaps(ImageReadDesc& _desc) {
+    if (_desc.mips > 1)
+        return; // Mipmaps already present
 
-    Extent3D                extent         = {desc.width, desc.height, desc.layers};
-    auto                    next_width     = desc.width;
-    auto                    next_height    = desc.height;
-    auto                    channels       = 4;
-    auto                    next_size      = 0;
-    uint32_t                one_image_size = desc.width * desc.height * channels;
-    std::vector<MipmapDesc> mipmaps;
+    // Setup variables
+    Extent3D extent          = {_desc.width, _desc.height, _desc.layers};
+    auto     next_width      = _desc.width;
+    auto     next_height     = _desc.height;
+    auto     channel         = _desc.channel;
+    auto     base_image_size = _desc.width * _desc.height * channel;
+    // Calculate mipmap chain
+    auto                             mipmaps_size   = base_image_size;
+    Array<uint32>                    mip_offsets    = {0};
+    Array<std::pair<uint32, uint32>> mipmap_extents = {{next_width, next_height}};
 
-    //  auto& mipmaps = desc.mip_map_descs;
-    uint32_t old_size = one_image_size;
-    desc.mip_offsets  = {0};
-    desc.mip_extents  = {extent};
-    mipmaps           = {{0, extent}};
-    while (true) {
-        auto& prev_mipmap = mipmaps.back();
+    while (next_width > 1 || next_height > 1) {
+        next_width     = std::max<uint32>(1u, next_width >> 1);
+        next_height    = std::max<uint32>(1u, next_height >> 1);
+        auto next_size = next_width * next_height * channel;
 
-        next_width  = std::max<uint32_t>(1u, next_width / 2);
-        next_height = std::max<uint32_t>(1u, next_height / 2);
-        next_size   = next_width * next_height * channels;
+        mip_offsets.emplace_back(mipmaps_size);
+        mipmap_extents.emplace_back(next_width, next_height);
 
-        MipmapDesc next_mipmap{};
-        next_mipmap.level  = prev_mipmap.level + 1;
-        next_mipmap.extent = {next_width, next_height, 1u};
-        mipmaps.emplace_back(next_mipmap);
-
-        desc.mip_offsets.emplace_back(old_size);
-        desc.mip_extents.push_back(next_mipmap.extent);
-
-        old_size += next_size;
-        if (next_width == 1 && next_height == 1) {
-            break;
-        }
+        mipmaps_size += next_size;
     }
-    uint32_t layer_offset = old_size;
-    for (uint32_t layer = 1; layer < desc.layers; layer++) {
-        for (int i = 0; i < mipmaps.size(); i++) {
-            desc.mip_offsets.push_back(desc.mip_offsets[desc.mip_offsets.size() - desc.mips] + layer_offset);
-        }
-    }
-    old_size             = desc.layers * old_size;
-    desc.mips            = mipmaps.size();
-    auto mip_mapped_data = new uint8_t[old_size];
 
-    for (uint32_t layer = 0; layer < desc.layers; layer++) {
-        memcpy(
-            mip_mapped_data + desc.mip_offsets[layer * desc.mips],
-            static_cast<uint8_t const*>(desc.data) + layer * one_image_size,
-            one_image_size
-        );
-        // auto & cur_layer_mipmaps = mipmaps[layer];
-        for (int mip = 1; mip < desc.mips; mip++) {
-            auto&    prev_mipmap         = mipmaps[mip - 1];
-            auto&    next_mipmap         = mipmaps[mip];
-            uint32_t prev_mip_map_offset = desc.mip_offsets[layer * desc.mips + mip - 1];
-            uint32_t next_mip_map_offset = desc.mip_offsets[layer * desc.mips + mip];
+    auto mip_level = mip_offsets.size();
 
-            assert(channels == 4 && "Default support 4 channels. If you need more, please modify the code");
-            auto channel_in_stbir = stbir_pixel_layout::STBIR_4CHANNEL;
+    // Allocate total mipmap memory
+    assert(channel == 4 && "Default support 4 channels. If you need more, please modify the code");
+    auto channel_in_stbir = stbir_pixel_layout::STBIR_4CHANNEL;
+
+    auto* mipmaps_mapped_data = new uint8[_desc.layers * mipmaps_size];
+    // Generate mipmaps for each layer
+    // TODO: #pragma omp parallel for
+    for (uint32_t layer = 0; layer < _desc.layers; ++layer) {
+        auto offset = layer * mipmaps_size;
+        // Copy base mipmap (level 0)
+        memcpy(mipmaps_mapped_data + offset, static_cast<uint8 const*>(_desc.data) + offset, base_image_size);
+
+        // Generate lower mipmap levels
+        for (uint32_t mip = 1; mip < mip_level; ++mip) {
+            auto prev_mipmap_offset = offset + mip_offsets[mip - 1];
+            auto next_mipmap_offset = offset + mip_offsets[mip];
 
             stbir_resize_uint8_linear(
-                mip_mapped_data + prev_mip_map_offset,
-                prev_mipmap.extent.width,
-                prev_mipmap.extent.height,
+                mipmaps_mapped_data + prev_mipmap_offset,
+                mipmap_extents[mip - 1].first,
+                mipmap_extents[mip - 1].second,
                 0,
-                mip_mapped_data + next_mip_map_offset,
-                next_mipmap.extent.width,
-                next_mipmap.extent.height,
+                mipmaps_mapped_data + next_mipmap_offset,
+                mipmap_extents[mip].first,
+                mipmap_extents[mip].second,
                 0,
                 channel_in_stbir
             );
         }
     }
-    desc.data_size = old_size;
-    desc.data_callback(desc.data);
-    desc.data          = mip_mapped_data;
-    desc.data_callback = free;
+
+    // Update descriptor with generated mipmaps
+    _desc.mips          = mip_level;
+    _desc.data_size     = mipmaps_size * _desc.layers;
+    _desc.data          = mipmaps_mapped_data;
+    _desc.data_callback = [](void* _ptr) {
+        delete[] static_cast<uint8*>(_ptr);
+    };
 }
 
 struct CallbackData final {
@@ -323,28 +310,24 @@ static KTX_error_code KTXAPIENTRY CallBack(
 
 bool ImageReadDesc::IsValid() {
     return (
-        data != nullptr && width != 0 && height != 0 && layers != 0 && mips != 0 && channal != 0 &&
+        data != nullptr && width != 0 && height != 0 && layers != 0 && mips != 0 && channel != 0 &&
         data_size != 0
     );
 }
 
 ImageReadDesc
-ImageIO::ReadFromFile(const std::filesystem::path& path, uint32_t desired_channal, EPixelFormat _fmt) {
+ImageIO::ReadFromFile(const std::filesystem::path& _path, uint32_t _desired_channal, EPixelFormat _fmt) {
     ImageReadDesc desc;
-    auto          path_str = path.string();
+    auto          path_str = _path.string();
     // to lowercase
-    for (int i = 0; i < path_str.size(); i++) {
-        if ('A' <= path_str[i] && path_str[i] <= 'Z') {
-            path_str[i] = path_str[i] - 'A' + 'a';
-        }
-    }
+    std::transform(path_str.begin(), path_str.end(), path_str.begin(), ::tolower);
     if (path_str.ends_with("png") || path_str.ends_with("jpg") || path_str.ends_with("jpeg")) {
         desc.data = stbi_load(
             path_str.c_str(),
             reinterpret_cast<int*>(&desc.width),
             reinterpret_cast<int*>(&desc.height),
-            reinterpret_cast<int*>(&desc.channal),
-            desired_channal
+            reinterpret_cast<int*>(&desc.channel),
+            _desired_channal
         );
         if (!desc.data) {
             return desc;
@@ -352,88 +335,59 @@ ImageIO::ReadFromFile(const std::filesystem::path& path, uint32_t desired_channa
 
         desc.data_callback = stbi_image_free;
         desc.format        = _fmt;
-        desc.data_size     = desc.width * desc.height * desc.channal;
+        desc.data_size     = desc.width * desc.height * desc.channel;
         Generatemipmaps(desc);
     } else if (path_str.ends_with("ktx")) {
-        ktxTexture* ktx_texture;
-        ktxResult   result = ktxTexture_CreateFromNamedFile(
+        ktxTexture* ktx_texture = nullptr;
+        ktxResult   result      = ktxTexture_CreateFromNamedFile(
             path_str.c_str(), KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &ktx_texture
         );
-        assert(result == KTX_SUCCESS);
-        //   this->extent3D = VkExtent3D{ktxTexture->baseWidth, ktxTexture->baseHeight, 1};
+        if (result != KTX_SUCCESS) {
+            LOG_ERROR("Failed to load KTX texture: {}", ktxErrorString(result));
+            throw std::runtime_error("Failed to load KTX texture");
+        }
+
+        // Set texture properties
         desc.width  = ktx_texture->baseWidth;
         desc.height = ktx_texture->baseHeight;
-
-        ktx_uint8_t* ktxTextureData = ktxTexture_GetData(ktx_texture);
-        ktx_size_t   ktxTextureSize = ktxTexture_GetSize(ktx_texture);
-
-        uint8_t* data = new uint8_t[ktxTextureSize];
-        memcpy(data, ktxTextureData, ktxTextureSize);
-
-        desc.data_callback = free;
-        desc.data          = data;
-        assert(result == KTX_SUCCESS);
-
-        desc.format = KtxImageHelper::GetFormatFromOpenGLInternalFormat(ktx_texture->glInternalformat);
         desc.layers = ktx_texture->numLayers;
-        if (desc.layers > 1) {
-            for (int i = 0; i < desc.layers; i++) {
-                ktx_size_t layer_offset = 0;
-                result                  = ktxTexture_GetImageOffset(ktx_texture, 0, i, 0, &layer_offset);
-                assert(result == KTX_SUCCESS);
-                desc.mip_offsets.push_back(layer_offset);
-            }
-        }
+        desc.mips   = ktx_texture->numLevels;
+        desc.faces  = ktx_texture->numFaces;
+        desc.format = KtxImageHelper::GetFormatFromOpenGLInternalFormat(ktx_texture->glInternalformat);
+
+        desc.data_size     = ktxTexture_GetSize(ktx_texture);
+        desc.data          = new uint8[desc.data_size];
+        desc.data_callback = [](void* _ptr) {
+            delete[] static_cast<uint8*>(_ptr);
+        };
+
+        auto* ktx_texture_data = ktxTexture_GetData(ktx_texture);
+        memcpy(desc.data, ktx_texture_data, desc.data_size);
 
         if (KtxImageHelper::IsAstc(desc.format)) {
             //todo Get this from rhi
             bool astc_supported = false;
             if (!astc_supported) {
                 KtxImageHelper::DecodeAstcImage(desc);
-                Generatemipmaps(desc);
-            }
-        } else {
-            desc.mips        = ktx_texture->numLevels;
-            desc.mip_offsets = Array<uint32_t>(ktx_texture->numLevels);
-            for (uint32_t layer = 0; layer < desc.layers; layer++) {
-                for (uint32_t miplevel = 0; miplevel < desc.mips; ++miplevel) {
-                    ktx_size_t offset;
-                    ktxTexture_GetImageOffset(ktx_texture, miplevel, layer, 0, &offset);
-                    desc.mip_offsets.push_back(offset);
-                }
             }
         }
+        Generatemipmaps(desc);
     } else if (path_str.ends_with("dds")) {
         dds::Image image;
         auto       result = dds::readFile(path_str, &image);
         assert(result == dds::Success);
-        desc.width     = image.width;
-        desc.height    = image.height;
-        desc.layers    = image.depth;
-        desc.data_size = image.data.size();
-        desc.data      = new uint8_t[desc.data_size];
-        desc.format    = ConvertFormatFromDxgiFormat(image.format, image.supportsAlpha);
+        desc.width         = image.width;
+        desc.height        = image.height;
+        desc.format        = ConvertFormatFromDxgiFormat(image.format, image.supportsAlpha);
+        desc.layers        = image.depth;
+        desc.mips          = image.numMips;
+        desc.data_size     = image.data.size();
+        desc.data          = new uint8[desc.data_size];
+        desc.data_callback = [](void* _ptr) {
+            delete[] static_cast<uint8*>(_ptr);
+        };
         memcpy(desc.data, image.data.data(), desc.data_size);
-        desc.data_callback = free;
-        desc.mips          = std::max(static_cast<uint32_t>(image.mipmaps.size()), 1u);
-        if (desc.mips > 1 && false) {
-            uint32_t offset = 0;
-            uint32_t width  = image.width;
-            uint32_t height = image.height;
-            for (uint32_t miplevel = 0; miplevel < desc.mips; ++miplevel) {
-                desc.mip_offsets.push_back(offset);
-                desc.mip_extents.push_back({width, height, 1});
-                offset += image.mipmaps[miplevel].size();
-                width  = std::max(1u, width / 2);
-                height = std::max(1u, height / 2);
-            }
-        }
-
-        else {
-            desc.mip_offsets = {0};
-            desc.mip_extents = {{image.width, image.height, 1}};
-            desc.mips        = 1;
-        }
+        Generatemipmaps(desc);
     } else {
         LOG_ERROR("Unsupported image format");
         throw std::runtime_error("Unsupported image format");
@@ -442,18 +396,18 @@ ImageIO::ReadFromFile(const std::filesystem::path& path, uint32_t desired_channa
 }
 
 ImageReadDesc
-ImageIO::ReadFromMemory(const unsigned char* memory_data, size_t len, uint32_t desired_channal) {
+ImageIO::ReadFromMemory(const unsigned char* _memory_data, size_t _len, uint32_t _desired_channal) {
     ImageReadDesc desc;
     desc.data = stbi_load_from_memory(
-        memory_data,
-        len,
+        _memory_data,
+        _len,
         reinterpret_cast<int*>(&desc.width),
         reinterpret_cast<int*>(&desc.height),
-        reinterpret_cast<int*>(&desc.channal),
-        desired_channal
+        reinterpret_cast<int*>(&desc.channel),
+        _desired_channal
     );
     desc.data_callback = free;
-    desc.data_size     = desc.width * desc.height * desc.channal;
+    desc.data_size     = desc.width * desc.height * desc.channel;
     desc.format        = EPixelFormat::PF_R8G8B8A8_UNORM;
     Generatemipmaps(desc);
     return desc;

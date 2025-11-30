@@ -97,18 +97,9 @@ TextureBuilder& TextureBuilder::Format(EPixelFormat format) noexcept {
     m_format = format;
     return *this;
 }
-TextureBuilder& TextureBuilder::MipAndLayers(
-    uint32_t        mip_levels,
-    uint32_t        layer_levels,
-    const uint32_t* offsets,
-    const Extent3D* extents
-) noexcept {
+TextureBuilder& TextureBuilder::MipAndLayers(uint32_t mip_levels, uint32_t layer_levels) noexcept {
     m_mip_levels   = mip_levels;
     m_layer_levels = layer_levels;
-    m_offsets      = new uint32_t[mip_levels * layer_levels];
-    m_mip_extents  = new Extent3D[mip_levels * layer_levels];
-    memcpy(m_offsets, offsets, mip_levels * layer_levels * sizeof(uint32_t));
-    memcpy(m_mip_extents, extents, mip_levels * layer_levels * sizeof(Extent3D));
     return *this;
 }
 TextureBuilder& TextureBuilder::CallBack(Callback callback) noexcept {
@@ -127,10 +118,6 @@ TextureBuilder& TextureBuilder::Name(const std::string& name) noexcept {
 TextureBuilder::~TextureBuilder() noexcept {
     if (m_data && m_callback)
         m_callback(m_data);
-    if (m_offsets)
-        delete[] m_offsets;
-    if (m_mip_extents)
-        delete[] m_mip_extents;
 }
 Moer::UnorderedMap<std::string, Render::TextureRef>
 TextureBuilder::BuildTexturesInBatch(Moer::Array<TextureBuilder>& builders) noexcept {

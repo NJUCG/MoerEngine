@@ -51,12 +51,7 @@ public:
     TextureBuilder& Height(uint32_t height) noexcept;
     TextureBuilder& Depth(uint32_t depth) noexcept;
     TextureBuilder& Format(EPixelFormat format) noexcept;
-    TextureBuilder& MipAndLayers(
-        uint32_t        mip_levels,
-        uint32_t        layer_levels,
-        const uint32_t* offsets,
-        const Extent3D* extents
-    ) noexcept;
+    TextureBuilder& MipAndLayers(uint32_t mip_levels, uint32_t layer_levels) noexcept;
     TextureBuilder& CallBack(Callback callback) noexcept;
     TextureBuilder& Data(void* data, uint32_t data_size) noexcept;
     TextureBuilder& Name(const std::string& name) noexcept;
@@ -70,10 +65,7 @@ protected:
     EPixelFormat m_format{EPixelFormat::PF_R8G8B8_UNORM};
     uint32_t     m_width{0}, m_height{0}, m_depth{0}, m_mip_levels{1}, m_layer_levels{1}, m_data_size{0};
     Callback     m_callback{nullptr};
-    // uint32_t*    m_mip_offsets{nullptr};
-    uint32_t* m_offsets{nullptr};
-    Extent3D* m_mip_extents{nullptr};
-    void*     m_data{nullptr};
+    void*        m_data{nullptr};
 };
 
 class RENDER_API GpuSceneBufferBuilder {

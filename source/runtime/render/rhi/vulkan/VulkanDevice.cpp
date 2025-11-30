@@ -1482,7 +1482,7 @@ TextureRef VulkanDevice::CreateTexture(
         b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
         _size,
         uint8(_mip_cnt),
-        uint8(_dimension == ETextureDimension::TEX_CUBE ? 6 : 1),
+        uint8((_dimension == ETextureDimension::TEX_CUBE ? 6 : 1) * _array_size),
         1
     };
     info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;

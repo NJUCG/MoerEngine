@@ -636,13 +636,11 @@ TextureData CreateTextureData(const ImageReadDesc& image_desc) {
     texture_data.layers    = image_desc.layers;
     texture_data.width     = image_desc.width;
     texture_data.height    = image_desc.height;
-    texture_data.channal   = image_desc.channal;
+    texture_data.channel   = image_desc.channel;
     texture_data.format    = image_desc.format;
     texture_data.data_size = image_desc.data_size;
     texture_data.data.resize(image_desc.data_size);
     std::copy_n(reinterpret_cast<uint8_t*>(image_desc.data), image_desc.data_size, texture_data.data.data());
-    texture_data.mip_offsets = image_desc.mip_offsets;
-    texture_data.mip_extents = image_desc.mip_extents;
 
     if (image_desc.data_callback != nullptr) {
         image_desc.data_callback(image_desc.data);
