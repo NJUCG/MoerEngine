@@ -86,6 +86,12 @@ void RasterUI::ShowConfig() {
             draw_border();
         }
 
+        ImGui::Checkbox("Enable PCSS", &m_config.shadow_pcss_enabled);
+        if(m_config.shadow_pcss_enabled)
+        {
+            ImGui::SliderFloat("Light Size World", &m_config.shadow_light_size_world, 0.1f, 10.0f);
+        }
+
         auto csm_common_param = [&]() {
             ImGui::SliderInt("Num of Cascades", &m_config.shadow_csm_num_of_cascades, 1, CSM_MAX_CASCADES);
             ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);

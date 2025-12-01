@@ -63,6 +63,11 @@ struct LightingData {
 
     uint shadow_map[MAX_CSM_CASCADES];
 
+    uint pcss_enabled;
+
+    float light_size_world;//假定的光源大小，用于软阴影计算
+    uint blocker_search_samples; 
+
     float4x4 view_matrix;
     float    near_clip;
     float    far_clip;

@@ -104,6 +104,9 @@ public:
         lighting_data->is_csm_blend_enabled = ui_config.shadow_csm_blend_option ? 1 : 0;
         // 注：此处不一定使用所有CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
 
+        lighting_data->light_size_world      = ui_config.shadow_light_size_world; //假定的光源大小，用于软阴影计算
+        lighting_data->pcss_enabled         = ui_config.shadow_pcss_enabled ? 1 : 0;
+
         context.cmd_list.CopyFrom(
             std::span<byte>((byte*)lighting_data, sizeof(LightingData)), lighting_data_buffer.buf->GetView()
         );
