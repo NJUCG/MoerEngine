@@ -1,7 +1,9 @@
 #ifndef VULKAN_DEVICE_FEATURE_H
 #define VULKAN_DEVICE_FEATURE_H
 
-#include <volk.h>
+#include "VulkanPlatform.h"
+
+namespace Moer::Render {
 
 class VulkanDeviceFeatures {
 public:
@@ -32,5 +34,7 @@ bool operator>=(const VkPhysicalDeviceFeatures& _lhs, const VkPhysicalDeviceFeat
 bool operator>=(const VkPhysicalDeviceVulkan11Features& _lhs, const VkPhysicalDeviceVulkan11Features& _rhs);
 bool operator>=(const VkPhysicalDeviceVulkan12Features& _lhs, const VkPhysicalDeviceVulkan12Features& _rhs);
 bool operator>=(const VkPhysicalDeviceVulkan13Features& _lhs, const VkPhysicalDeviceVulkan13Features& _rhs);
+
+} // namespace Moer::Render
 
 #endif //VULKAN_DEVICE_FEATURE_H

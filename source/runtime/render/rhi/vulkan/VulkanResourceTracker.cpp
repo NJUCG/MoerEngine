@@ -1,6 +1,6 @@
 #include "VulkanResourceTracker.h"
 #include "VulkanCommand.h"
-#include <volk.h>
+#include "VulkanPlatform.h"
 
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
@@ -484,19 +484,21 @@ void VkTracker::RegisterFlushBuffer(
     VkPipelineStageFlagBits2 _stage
 ) {
     VulkanBuffer* buffer = ResourceCast(_view.buffer);
-    buffer_barriers.emplace_back(VkBufferMemoryBarrier2{
-        VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-        nullptr,
-        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-        VK_ACCESS_2_NONE,
-        _stage,
-        _access,
-        VK_QUEUE_FAMILY_IGNORED,
-        VK_QUEUE_FAMILY_IGNORED,
-        buffer->GetHandle(),
-        _view.GetByteOffset(),
-        _view.GetByteSize()
-    });
+    buffer_barriers.emplace_back(
+        VkBufferMemoryBarrier2{
+            VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            nullptr,
+            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            VK_ACCESS_2_NONE,
+            _stage,
+            _access,
+            VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED,
+            buffer->GetHandle(),
+            _view.GetByteOffset(),
+            _view.GetByteSize()
+        }
+    );
     auto& state = flush_buffer_states[buffer];
     state.dst_access |= _access;
     state.dst_stage |= _stage;

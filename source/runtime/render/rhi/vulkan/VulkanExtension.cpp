@@ -8,7 +8,6 @@
 #include "VulkanExtension.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPlatform.h"
-#include <volk.h>
 
 template<typename ExistingChainType, typename NewStructType>
 static void AddToPNext(ExistingChainType& _existing, NewStructType& _added) {

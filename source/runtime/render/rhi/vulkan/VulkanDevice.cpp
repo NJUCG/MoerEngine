@@ -14,7 +14,6 @@
 #include "VulkanUtil.h"
 #include "extension/VulkanNrdExtension.h"
 #include <string_view>
-#include <volk.h>
 
 #include "log/LogSystem.h"
 #include "misc/STL.h"

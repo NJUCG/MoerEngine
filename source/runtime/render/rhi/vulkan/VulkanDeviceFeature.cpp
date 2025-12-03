@@ -1,6 +1,7 @@
 #include "VulkanDeviceFeature.h"
 #include "VulkanPlatform.h"
-#include <volk.h>
+
+namespace Moer::Render {
 
 VulkanDeviceFeatures VulkanDeviceFeatures::GetMERequiredFeatures(uint32_t _api_version) {
     VulkanDeviceFeatures enabled_features;
@@ -140,3 +141,5 @@ bool operator>=(const VkPhysicalDeviceVulkan13Features& _lhs, const VkPhysicalDe
     }
     return true;
 }
+
+} // namespace Moer::Render

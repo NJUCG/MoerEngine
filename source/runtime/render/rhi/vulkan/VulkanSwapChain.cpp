@@ -3,6 +3,7 @@
 //
 
 #include "VulkanSwapChain.h"
+
 #include "PixelFormat.h"
 #include "VulkanUtil.h"
 #include "log/LogSystem.h"
@@ -13,6 +14,8 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 
+#include "VulkanPlatform.h"
+
 #include "VulkanCommand.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
@@ -22,7 +25,6 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
-#include <volk.h>
 
 #include <stdint.h>
 

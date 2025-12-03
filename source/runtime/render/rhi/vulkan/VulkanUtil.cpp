@@ -5,8 +5,8 @@
 #include "misc/Crc32.h"
 
 #include "VulkanMacroUtils.h"
+#include "VulkanPlatform.h"
 #include "VulkanUtil.h"
-#include <volk.h>
 
 namespace Moer { namespace RHI { namespace Vulkan { namespace Util {
 
