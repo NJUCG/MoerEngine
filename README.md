@@ -10,6 +10,7 @@
   * Windows 10 or 11
 * 编译器（二选一）
   * MSVC == 19.44.*
+    * 注：MSVC安装时，语言包请选择英文，否则编译时有概率出现乱码错误
   * clang（待测试）
 
 * CMake >= 3.26.0 且 < 4.0.0 ([download link](https://github.com/Kitware/CMake/releases/tag/v3.31.9))
