@@ -7,7 +7,7 @@
 
 #include "misc/STL.h"
 
-#include <volk.h>
+#include "VulkanPlatform.h"
 
 namespace Moer { namespace RHI { namespace Vulkan { namespace Util {
 struct SwapChainSupportDetails {

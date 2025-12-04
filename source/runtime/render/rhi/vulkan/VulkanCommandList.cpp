@@ -12,9 +12,9 @@
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPipelineResourceCache.h"
+#include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include <string_view>
-#include <volk.h>
 
 #include "VulkanAllocator.h"
 #include "shader/ShaderPipeline.h"
@@ -220,10 +220,11 @@ void VulkanCmdList::CopyBufferToTexture(
             {static_cast<int32_t>(_dst_offset.x),
              static_cast<int32_t>(_dst_offset.y),
              static_cast<int32_t>(_dst_offset.z)},
-        .imageExtent =
-            {static_cast<uint32_t>(_extent.x),
-             static_cast<uint32_t>(_extent.y),
-             static_cast<uint32_t>(_extent.z)}
+        .imageExtent = {
+            static_cast<uint32_t>(_extent.x),
+            static_cast<uint32_t>(_extent.y),
+            static_cast<uint32_t>(_extent.z)
+        }
     };
 
     vkCmdCopyBufferToImage(
@@ -257,10 +258,11 @@ void VulkanCmdList::CopyTextureToBuffer(
             {static_cast<int32_t>(_src_offset.x),
              static_cast<int32_t>(_src_offset.y),
              static_cast<int32_t>(_src_offset.z)},
-        .imageExtent =
-            {static_cast<uint32_t>(_extent.x),
-             static_cast<uint32_t>(_extent.y),
-             static_cast<uint32_t>(_extent.z)}
+        .imageExtent = {
+            static_cast<uint32_t>(_extent.x),
+            static_cast<uint32_t>(_extent.y),
+            static_cast<uint32_t>(_extent.z)
+        }
     };
 
     vkCmdCopyImageToBuffer(
@@ -455,10 +457,11 @@ void VulkanCmdList::CopyTexture(
             {static_cast<int32_t>(_dst_offset.x),
              static_cast<int32_t>(_dst_offset.y),
              static_cast<int32_t>(_dst_offset.z)},
-        .extent =
-            {static_cast<uint32_t>(_extent.x),
-             static_cast<uint32_t>(_extent.y),
-             static_cast<uint32_t>(_extent.z)}
+        .extent = {
+            static_cast<uint32_t>(_extent.x),
+            static_cast<uint32_t>(_extent.y),
+            static_cast<uint32_t>(_extent.z)
+        }
     };
 
     vkCmdCopyImage(
@@ -701,9 +704,9 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
-                                VulkanAccelerationStructure* as =
-                                    ResourceCast(std::get<RaytracingTlasRef>(_args[set_info.param_idx]).Get()
-                                    );
+                                VulkanAccelerationStructure* as = ResourceCast(
+                                    std::get<RaytracingTlasRef>(_args[set_info.param_idx]).Get()
+                                );
                                 uint64 src_handle = descriptor_heap.GetAccelDescIdx(as);
                                 descriptor_heap.PushAccelDesc(src_handle, _binder.binding_infos[i].offset);
                                 break;

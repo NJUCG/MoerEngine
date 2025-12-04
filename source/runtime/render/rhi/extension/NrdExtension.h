@@ -1,6 +1,15 @@
 #ifndef MOER_NRD_EXTENSION_H
 #define MOER_NRD_EXTENSION_H
 
+/**
+ * 因为NVIDIA的NRD为闭源协议，所以MoerEngine无法直接引入NRD相关头文件和库文件，只能以插件的形式提供NRD支持。
+ * 
+ * 所以，MoerEngine在编译期引入了WITH_NRD选项，用于控制是否编译NRD相关代码。
+ * 在启用NRD时，宏WITH_NRD会被定义为1，否则为0。
+ * 该头文件需要保证WITH_NRD=0时，也可以正常编译。
+ * 换句话说，该头文件需要与nrd命名空间内的所有类型切割，保证独立性。
+ */
+
 #include "rhi/RHI.h"
 
 // NRD and NRI-based integration
@@ -10,10 +19,40 @@
 #include <Extensions/NRIHelper.h>
 // 3
 #include <Extensions/NRIWrapperVK.h>
+
+#if WITH_NRD
+
 // 4
 #include <NRD.h>
 // 5
 #include <NRDIntegration.h>
+
+#else
+// 模拟nrd
+
+namespace nrd {
+
+enum class Denoiser : uint32_t {
+    REBLUR_DIFFUSE_SPECULAR,
+    RELAX_DIFFUSE_SPECULAR,
+    MAX_NUM,
+};
+
+struct CommonSettings {};
+
+struct ReblurSettings {};
+
+struct RelaxSettings {};
+
+struct Integration {};
+
+struct UserPool {};
+
+typedef uint32_t Identifier;
+
+} // namespace nrd
+
+#endif
 
 namespace Moer::Render::Ext {
 

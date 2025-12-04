@@ -10,6 +10,7 @@
   * Windows 10 or 11
 * 编译器（二选一）
   * MSVC == 19.44.*
+    * 注：MSVC安装时，语言包请选择英文，否则编译时有概率出现乱码错误
   * clang（待测试）
 
 * CMake >= 3.26.0 且 < 4.0.0 ([download link](https://github.com/Kitware/CMake/releases/tag/v3.31.9))
@@ -99,6 +100,32 @@
 
 * 启用CUDA后，光栅化渲染器就不支持Stencil模板测试了。原因是CUDA不支持 `PF_D32_SFLOAT_S8_UINT`
 
+### NRD降噪器支持
+
+* MoerEngine支持NVIDIA NRD拓展。由于NVIDIA的封闭协议，MoerEngine无法直接引入NRD，需要用户自行下载NRD源码并进行配置。以下为具体操作步骤
+
+1. Clone NRD源码
+   ```bash
+   # 推荐在非MoerEngine目录下Clone NRD源码，避免不小心提交NRD源码
+   # 如果无法访问，请联系项目维护者
+   git clone git@github.com:NJUCG/NRD.git
+   ```
+
+2. 根据模板创建配置文件
+   * 根据 `template.EnableNrd.cmake` 创建 `EnableNrd.cmake`
+   * 修改 `EnableNrd.cmake` 的内容，将 `NRD_DIR` 设置为你Clone的NRD源码路径
+
+3. 重新编译MoerEngine
+
+   ```bash
+   cmake -B build
+   cmake --build build -j16
+   # 或者使用just
+   just gb # generate build
+   ```
+
+   * 观察日志，若generate的日志出现了 `WITH_NRD=1`，则成功启用NRD；若日志中为 `WITH_NRD=0`，则没有启用NRD
+
 ## 使用方法
 
 ### 如何渲染场景？
@@ -147,6 +174,12 @@ main分支为稳定分支，dev分支为开发分支，所以PR都应提交到de
 
 Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 规范。
 
+### 第三方库与依赖项
+
+引入第三方库时，请检查对应的协议。如果是MIT、Apache等宽松协议，可以直接引入。否则，请先和维护者沟通。
+
+此外，**请务必检查头文件是否有额外要求！**例如，`volk` 要求include头文件前定义平台相关宏、`NRD` 要求特定的头文件include顺序。这种情况下，请 **务必创建一个单独的头文件来封装该依赖库的include逻辑**，否则会导致其他开发者错误的include行为。
+
 ### C++命名规范
 
 *TODO*
@@ -175,3 +208,43 @@ Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.
   add_library(${target_name} SHARED ${moer_cuda_h} ${moer_cuda_cu})
   add_library(Moer::Cuda ALIAS ${target_name})
   ```
+
+## 开源协议
+
+MoerEngine源代码采用Apache-2.0 License授权。
+
+本项目开发过程中使用了以下项目：
+
+* [assimp](https://github.com/assimp/assimp)： BSD-3-Clause License
+* [astc-encoder](https://github.com/ARM-software/astc-encoder): Apache 2.0 License
+* [dds_image](https://github.com/spnda/dds_image): MIT License
+* [tinyexr](https://github.com/syoyo/tinyexr): BSD-3-Clause License
+* ktx: Apache-2.0 License
+* [pugixml](https://github.com/zeux/pugixml): MIT License
+* [stb](https://github.com/nothings/stb): MIT License
+* D3D12MemoryAllocator: MIT License
+* DirectXShaderCompiler: University of Illinois/NCSA Open Source License
+* [glfw](https://github.com/glfw/glfw): Zlib License
+* [imgui](https://github.com/ocornut/imgui): MIT License
+* [JSON for Modern C++](https://github.com/nlohmann/json): MIT License
+* [meshoptimizer](https://github.com/zeux/meshoptimizer): MIT License
+* [metis](https://github.com/KarypisLab/METIS/): Apache-2.0 License
+* [mimalloc](https://github.com/microsoft/mimalloc): MIT License
+* [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended): Zlib License
+* [NRI](https://github.com/NVIDIA-RTX/NRI): MIT License
+* [smaa](https://github.com/iryoku/smaa): MIT License
+* [spdlog](https://github.com/gabime/spdlog): MIT License
+* [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross): Apache-2.0 License
+* [tomlplusplus](https://github.com/marzer/tomlplusplus): MIT License
+* [volk](https://github.com/zeux/volk): MIT License
+* [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator): MIT License
+* [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers): Apache-2.0 License
+* WinPixEventRuntime: MIT License
+
+外部构建依赖（以下组件不包含在源码仓库中，需在构建时手动或自动下载）：
+
+* [NVIDIA NRD](https://github.com/NVIDIA-RTX/NRD): 通过git下载（可选）
+* [D3D12 Agility SDK](https://devblogs.microsoft.com/directx/directx12agility/)：通过CMake自动下载
+* [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit)：官网下载（可选）
+* [LibTorch](https://pytorch.org/get-started/locally/)：官网下载（可选）
+* [TensorRT](https://developer.nvidia.com/tensorrt/download/10x)：官网下载（可选）

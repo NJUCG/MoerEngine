@@ -1,5 +1,6 @@
 #ifndef MOER_VK_RESOURCE_TRACKER_H
 #define MOER_VK_RESOURCE_TRACKER_H
+#include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "misc/Crc32.h"
 #include "misc/STL.h"
@@ -7,7 +8,6 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "vulkan/vulkan_core.h"
-#include <volk.h>
 namespace Moer::Render {
 class VkTracker {
     struct BufferRange {

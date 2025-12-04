@@ -1,5 +1,7 @@
 #include "VulkanNrdExtension.h"
 
+#if WITH_NRD
+
 #include "../../vulkan/VulkanCustomCommand.h"
 #include "../../vulkan/VulkanDescriptor.h"
 #include "../../vulkan/VulkanDevice.h"
@@ -418,3 +420,5 @@ void VkNRDInterface::Denoise(CommandList& _cmd_list, const nrd::Denoiser _denois
 }
 
 } // namespace Moer::Render::Ext
+
+#endif

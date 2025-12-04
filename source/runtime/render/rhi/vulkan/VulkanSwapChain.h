@@ -11,10 +11,10 @@
 #include "rhi/RHIResource.h"
 #include "window/WindowContext.h"
 
+#include "VulkanPlatform.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
-#include <volk.h>
 namespace Moer::Render {
 struct SwapChainSupportDetails {
     VkSurfaceCapabilitiesKHR  capabilities;

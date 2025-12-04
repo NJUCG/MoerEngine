@@ -6,7 +6,7 @@
 #include "window/WindowContext.h"
 
 // 1： define vulkan ahead of glfw
-#include <volk.h>
+#include "rhi/vulkan/VulkanPlatform.h"
 // 2
 #include "GLFW/glfw3.h"
 

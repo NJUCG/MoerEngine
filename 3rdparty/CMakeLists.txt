@@ -120,5 +120,9 @@ set_target_folder(tomlplusplus ${third_party_folder}/tomlplusplus-3.4.0)
 
 # NRI, NRD, SPIRV-Cross
 include(NRI.cmake)
-include(NRD.cmake)
+
+if (WITH_NRD)
+    include(NRD.cmake)
+endif()
+
 include(SPIRV-Cross.cmake)
