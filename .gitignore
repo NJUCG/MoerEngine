@@ -1,5 +1,5 @@
 # 1. IDE Files
-/.vscode/*
+.vscode/*
 !/.vscode/launch.json
 !/.vscode/c_cpp_properties.json
 /.vs/*
@@ -23,4 +23,3 @@ MoerEngine.toml
 logs/
 log*.txt
 .VSCodeCounter/
-.vscode

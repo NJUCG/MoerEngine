@@ -87,9 +87,8 @@ void RasterUI::ShowConfig() {
         }
 
         ImGui::Checkbox("Enable PCSS", &m_config.shadow_pcss_enabled);
-        if(m_config.shadow_pcss_enabled)
-        {
-            ImGui::SliderFloat("Light Size World", &m_config.shadow_light_size_world, 0.1f, 10.0f);
+        if (m_config.shadow_pcss_enabled) {
+            ImGui::SliderFloat("Light Size World", &m_config.shadow_pcss_light_size_world, 0.1f, 10.0f);
         }
 
         auto csm_common_param = [&]() {
