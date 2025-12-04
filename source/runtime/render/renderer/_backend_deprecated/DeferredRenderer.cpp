@@ -1,4 +1,4 @@
-// #include "DeferredRenderer.h"
+﻿// #include "DeferredRenderer.h"
 // #include "Core.h"
 // #include "PixelFormat.h"
 // #include "RenderThread.h"
@@ -39,11 +39,11 @@
 // #include "scene/Material.h"
 // #include "deferred/RenderResourceDeferred.h"
 // #include "deferred/BasePass.h"
-// IMPLEMENT_SHADER_TYPE(CullInstancePrePassShader, "meshdebug/CullInstance.hlsl", "prepass", ST_COMPUTE)
-// IMPLEMENT_SHADER_TYPE(CullMeshletPrepassShader, "meshdebug/CullMeshlet.hlsl", "prepass", ST_COMPUTE)
+// IMPLEMENT_SHADER_TYPE(CullInstancePrePassShader, "features/debug/CullInstance.hlsl", "prepass", ST_COMPUTE)
+// IMPLEMENT_SHADER_TYPE(CullMeshletPrepassShader, "features/debug/CullMeshlet.hlsl", "prepass", ST_COMPUTE)
 
-// IMPLEMENT_SHADER_TYPE(CullInstanceRecheckShader, "meshdebug/CullInstance.hlsl", "recheck_pass", ST_COMPUTE)
-// IMPLEMENT_SHADER_TYPE(CullMeshletRecheckShader, "meshdebug/CullMeshlet.hlsl", "recheck_pass", ST_COMPUTE)
+// IMPLEMENT_SHADER_TYPE(CullInstanceRecheckShader, "features/debug/CullInstance.hlsl", "recheck_pass", ST_COMPUTE)
+// IMPLEMENT_SHADER_TYPE(CullMeshletRecheckShader, "features/debug/CullMeshlet.hlsl", "recheck_pass", ST_COMPUTE)
 
 // IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderVert, "test/TriangleDeferredVert.hlsl", "main", ST_VERTEX);
 // IMPLEMENT_SHADER_TYPE(TestDeferredTriangleShaderFrag, "test/TriangleDeferredFrag.hlsl", "main", ST_FRAGMENT);
@@ -62,8 +62,8 @@
 // DEFINE_SHADER_PARAM(Moer::Vector4f, info)
 // END_SHADER_CONSTANT_STRUCT_DEFINITION()
 
-// IMPLEMENT_SHADER_TYPE(TestGBufferShaderVert, "deferedshading/GBufferVert.hlsl", "main", ST_VERTEX);
-// IMPLEMENT_SHADER_TYPE(TestGBufferShaderFrag, "deferedshading/GBufferFrag.hlsl", "main", ST_FRAGMENT);
+// IMPLEMENT_SHADER_TYPE(TestGBufferShaderVert, "pipelines/raster/deferred/GBufferVert.hlsl", "main", ST_VERTEX);
+// IMPLEMENT_SHADER_TYPE(TestGBufferShaderFrag, "pipelines/raster/deferred/GBufferFrag.hlsl", "main", ST_FRAGMENT);
 
 // class LightingShaderVert : public Shader {
 //     DEFINE_SHADER_TYPE(LightingShaderVert, Global, RENDER_API, ...)
@@ -87,8 +87,8 @@
 //     END_ROOT_PARAMETER_DEFINITION(Parameters)
 // };
 
-// IMPLEMENT_SHADER_TYPE(LightingShaderVert, "deferedshading/LightingVert.hlsl", "main", ST_VERTEX);
-// IMPLEMENT_SHADER_TYPE(LightingShaderFrag, "deferedshading/LightingFrag.hlsl", "main", ST_FRAGMENT);
+// IMPLEMENT_SHADER_TYPE(LightingShaderVert, "pipelines/raster/deferred/LightingVert.hlsl", "main", ST_VERTEX);
+// IMPLEMENT_SHADER_TYPE(LightingShaderFrag, "pipelines/raster/deferred/LightingFrag.hlsl", "main", ST_FRAGMENT);
 
 // constexpr uint32_t uniform_buffer_size = sizeof(VirtualView);
 // namespace Moer {

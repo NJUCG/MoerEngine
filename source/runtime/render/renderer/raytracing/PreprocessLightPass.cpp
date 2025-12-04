@@ -1,4 +1,4 @@
-#include "PreprocessLightPass.h"
+﻿#include "PreprocessLightPass.h"
 
 #include "misc/Hash.h"
 #include "misc/STL.h"
@@ -51,7 +51,7 @@ PrepareLightPass::PrepareLightPass(RenderDevice& _device, ShaderManager& _manage
     manager(_manager),
     scene(_scene),
     prepare_light_pipeline(
-        ShaderManager::Get().Compute<PrepareLightShaderPipeline>("lighting/PrepareLights.hlsl")
+        ShaderManager::Get().Compute<PrepareLightShaderPipeline>("lighting/precompute/PrepareLights.hlsl")
     ) {}
 
 void PrepareLightPass::CountEmissiveInstances(uint& _num_emissive_meshes, uint& _num_emissive_triangles) {

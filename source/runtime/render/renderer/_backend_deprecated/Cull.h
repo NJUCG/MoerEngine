@@ -1,4 +1,4 @@
-// #ifndef MOER_DEFERRED_CULL_H
+﻿// #ifndef MOER_DEFERRED_CULL_H
 // #define MOER_DEFERRED_CULL_H
 // #include "math/Matrix.h"
 // #include "misc/MacroUtils.h"
@@ -170,7 +170,7 @@
 //     END_ROOT_PARAMETER_DEFINITION(Parameters)
 // };
 
-// // IMPLEMENT_SHADER_TYPE(CullInstanceShader, "meshdebug/CullInstance.hlsl", "main", ST_COMPUTE);
-// // IMPLEMENT_SHADER_TYPE(CullMeshletShader, "meshdebug/CullMeshlet.hlsl", "main", ST_COMPUTE);
+// // IMPLEMENT_SHADER_TYPE(CullInstanceShader, "features/debug/CullInstance.hlsl", "main", ST_COMPUTE);
+// // IMPLEMENT_SHADER_TYPE(CullMeshletShader, "features/debug/CullMeshlet.hlsl", "main", ST_COMPUTE);
 
 // #endif

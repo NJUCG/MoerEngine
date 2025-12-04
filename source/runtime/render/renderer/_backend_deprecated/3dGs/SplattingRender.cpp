@@ -1,4 +1,4 @@
-// #include "SplattingRender.h"
+﻿// #include "SplattingRender.h"
 // #include "rhi/RHICommon.h"
 // #include "rhi/RHIResource.h"
 // #include "3DGaissian.h"
@@ -11,14 +11,14 @@
 // #include "shader/ShaderResourceManager.h"
 // #include <fstream>
 
-// IMPLEMENT_SHADER_TYPE(SortHistShader, "3dgs_splatting/hist_temp.hlsl", "main", ST_COMPUTE);
-// IMPLEMENT_SHADER_TYPE(PrecompCov3dShader, "3dgs_splatting/precomp_cov3d.hlsl", "main", ST_COMPUTE)
-// IMPLEMENT_SHADER_TYPE(PreprocessShader, "3dgs_splatting/preprocess.hlsl", "main", ST_COMPUTE)
-// IMPLEMENT_SHADER_TYPE(PrefixSumShader, "3dgs_splatting/prefix_sum.hlsl", "main", ST_COMPUTE)
-// IMPLEMENT_SHADER_TYPE(PreprocessSortShader, "3dgs_splatting/preprocess_sort.hlsl", "main", ST_COMPUTE)
-// IMPLEMENT_SHADER_TYPE(RadixSortShader, "3dgs_splatting/sort.hlsl", "main", ST_COMPUTE);
-// IMPLEMENT_SHADER_TYPE(TileBoundaryShader, "3dgs_splatting/tile_boundary.hlsl", "main", ST_COMPUTE);
-// IMPLEMENT_SHADER_TYPE(RenderShader, "3dgs_splatting/render.hlsl", "main", ST_COMPUTE);
+// IMPLEMENT_SHADER_TYPE(SortHistShader, "features/3dgs/hist_temp.hlsl", "main", ST_COMPUTE);
+// IMPLEMENT_SHADER_TYPE(PrecompCov3dShader, "features/3dgs/precomp_cov3d.hlsl", "main", ST_COMPUTE)
+// IMPLEMENT_SHADER_TYPE(PreprocessShader, "features/3dgs/preprocess.hlsl", "main", ST_COMPUTE)
+// IMPLEMENT_SHADER_TYPE(PrefixSumShader, "features/3dgs/prefix_sum.hlsl", "main", ST_COMPUTE)
+// IMPLEMENT_SHADER_TYPE(PreprocessSortShader, "features/3dgs/preprocess_sort.hlsl", "main", ST_COMPUTE)
+// IMPLEMENT_SHADER_TYPE(RadixSortShader, "features/3dgs/sort.hlsl", "main", ST_COMPUTE);
+// IMPLEMENT_SHADER_TYPE(TileBoundaryShader, "features/3dgs/tile_boundary.hlsl", "main", ST_COMPUTE);
+// IMPLEMENT_SHADER_TYPE(RenderShader, "features/3dgs/render.hlsl", "main", ST_COMPUTE);
 
 // class Moer::SplattingRender::Impl {
 // public:

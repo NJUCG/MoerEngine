@@ -1,4 +1,4 @@
-
+﻿
 extern "C" {
 __declspec(dllexport) extern const unsigned int D3D12SDKVersion = MOER_AGILITY_SDK_VERSION;
 }
@@ -273,7 +273,7 @@ int main(int argc, char** argv) {
     //ShaderCompiler::Init();
     ////auto output = ShaderCompiler::Compile(input);
 
-    //auto pipeline = ShaderManager::Get().Compute<TemporalResmaplePipeline>("hwrt/ReSTIRDI/TemporalResampling.hlsl");
+    //auto pipeline = ShaderManager::Get().Compute<TemporalResmaplePipeline>("pipelines/raytracing/restir_di/TemporalResampling.hlsl");
 
     return 0;
 }

@@ -31,7 +31,7 @@ public:
 class ShadowDepthPass {
 public:
     ShadowDepthPass(RasterContext& context) :
-        vertex_shader("raster/geometry_pass/GeometryPassCommonVertex.hlsl") {}
+        vertex_shader("pipelines/raster/deferred/GeometryPassCommonVertex.hlsl") {}
 
     void CreateCsmData(RasterContext& context, const RasterConfig& ui_config) {
         // 检查并创建所有ShadowMap
@@ -136,7 +136,7 @@ public:
 
         //lerp csm ratios
         switch (ui_config.shadow_map_mode) {
-            case EShadowMapMode::CSM_AUTO: // CSM_Auto
+            case EShadowMapMode::CSM_AUTO:
             {
                 context.shadow_map_data.cascade_split_points =
                     get_cascade_split_points(near_clip, far_clip, ui_config.shadow_csm_lerp_factor);
@@ -145,7 +145,7 @@ public:
                 );
                 break;
             }
-            case EShadowMapMode::CSM: // CSM
+            case EShadowMapMode::CSM:
             default:
                 context.shadow_map_data.cascade_split_points = transform_split_ratios_to_points(
                     ui_config.shadow_csm_cover_ratio_of_camera, near_clip, far_clip
@@ -154,7 +154,6 @@ public:
         }
 
         //混合
-        StaticArray<float, CSM_MAX_CASCADES> blend_widths; //useless now
         context.shadow_map_data.cascade_blend_start_ratios = transform_split_points_to_ratios(
             get_csm_blend(
                 context.shadow_map_data.cascade_split_points, ui_config.shadow_csm_blend_percentage
@@ -205,7 +204,7 @@ public:
                     ShadowDepthPassPipeline::MutationSet mutation_set{};
                     mutation_set.SetMutation<ShadowDepthPassPipeline::SHADOW_DEPTH_PASS>(true);
                     Shader& frag = ShaderManager::Get().CompileShader(
-                        ST_FRAGMENT, "raster/geometry_pass/GeometryPassCommonPixel.hlsl", mutation_set
+                        ST_FRAGMENT, "pipelines/raster/deferred/GeometryPassCommonPixel.hlsl", mutation_set
                     );
 
                     pipeline_map.emplace(

@@ -1,4 +1,4 @@
-#include "CompositionPass.h"
+﻿#include "CompositionPass.h"
 
 #include "rhi/RHICommand.h"
 #include "shader/ShaderResourceManager.h"
@@ -10,7 +10,7 @@ CompositionPass::CompositionPass(RenderDevice& _device, ShaderManager& _manager,
     device(_device),
     manager(_manager),
     scene(_scene),
-    gbuffer_pass_pipeline{manager.Compute<CompositionPassPipeline>("hwrt/CompositionPass.hlsl")} {
+    gbuffer_pass_pipeline{manager.Compute<CompositionPassPipeline>("pipelines/raytracing/passes/CompositionPass.hlsl")} {
     gbuffer_constants = device.CreateBuffer<Moer::byte>(
         "CompositionPass::constant_buffer", sizeof(CompositingConstants), EBufferUsageFlags::CONSTANT_BUFFER
     );

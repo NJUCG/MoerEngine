@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "math/Function.h"
 #include "scene/Camera.h"
@@ -43,8 +43,8 @@ public:
         );
 
         ssr_pipeline = context.manager.Raster()
-                           .Vertex("utils/FullScreenQuad.hlsl")
-                           .Pixel("raster/post_process/Ssr.hlsl")
+                           .Vertex("core/utils/FullScreenQuad.hlsl")
+                           .Pixel("pipelines/postprocess/lighting_effects/Ssr.hlsl")
                            .Build<SsrPipeline>(std::move(pso_full_screen_info));
     }
 

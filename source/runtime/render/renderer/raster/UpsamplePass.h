@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 此文件应该只有在宏 WITH_CUDA 被设置的情况下使用
 */
 #pragma once
@@ -34,8 +34,8 @@ public:
         );
 
         upsample_pipeline = context.manager.Raster()
-                                .Vertex("utils/FullScreenQuad.hlsl")
-                                .Pixel("raster/post_process/Upsample.hlsl")
+                                .Vertex("core/utils/FullScreenQuad.hlsl")
+                                .Pixel("pipelines/postprocess/common/Upsample.hlsl")
                                 .Build<UpsamplePipeline>(std::move(pso_info));
     }
 

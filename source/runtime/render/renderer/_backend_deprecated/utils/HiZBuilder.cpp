@@ -1,4 +1,4 @@
-// #include "HiZBuilder.h"
+﻿// #include "HiZBuilder.h"
 // #include "PixelFormat.h"
 // #include "math/Base.h"
 // #include "math/Function.h"
@@ -15,7 +15,7 @@
 // #include <utility>
 // #include <variant>
 // namespace Moer {
-//     IMPLEMENT_SHADER_TYPE(BuildHiZShader, "utils/BuildHiZ.hlsl", "main", ST_COMPUTE);
+//     IMPLEMENT_SHADER_TYPE(BuildHiZShader, "core/utils/BuildHiZ.hlsl", "main", ST_COMPUTE);
 
 //     static constexpr uint32_t max_mip_levels = 12;
 

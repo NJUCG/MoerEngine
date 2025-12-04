@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "math/Function.h"
 #include "misc/MMemory.h"
@@ -32,8 +32,8 @@ public:
         );
 
         pbr_pipeline = context.manager.Raster()
-                           .Vertex("utils/FullScreenQuad.hlsl")
-                           .Pixel("raster/lighting_pass/PbrMaterial.frag.hlsl")
+                           .Vertex("core/utils/FullScreenQuad.hlsl")
+                           .Pixel("materials/PbrMaterial.frag.hlsl")
                            .Build<PbrMaterialShadingPipeline>(std::move(pso_full_screen_info));
 
         CreateLightingData(context);

@@ -1,4 +1,4 @@
-// #include "RenderGraphTestRender.h"
+﻿// #include "RenderGraphTestRender.h"
 // #include "PixelFormat.h"
 // #include "RenderThread.h"
 // #include "RendererManager.h"
@@ -64,8 +64,8 @@
 //     END_ROOT_PARAMETER_DEFINITION(Parameters)
 // };
 //
-// IMPLEMENT_SHADER_TYPE(TestGBufferShaderVert, "deferedshading/GBufferVert.hlsl", "main", ST_VERTEX);
-// IMPLEMENT_SHADER_TYPE(TestGBufferShaderFragg, "deferedshading/GBufferFrag.hlsl", "main", ST_FRAGMENT);
+// IMPLEMENT_SHADER_TYPE(TestGBufferShaderVert, "pipelines/raster/deferred/GBufferVert.hlsl", "main", ST_VERTEX);
+// IMPLEMENT_SHADER_TYPE(TestGBufferShaderFragg, "pipelines/raster/deferred/GBufferFrag.hlsl", "main", ST_FRAGMENT);
 //
 // class LightingShaderVert : public Shader {
 //     DEFINE_SHADER_TYPE(LightingShaderVert, Global, RENDER_API, ...)
@@ -89,8 +89,8 @@
 //     END_ROOT_PARAMETER_DEFINITION(Parameters)
 // };
 //
-// IMPLEMENT_SHADER_TYPE(LightingShaderVert, "deferedshading/LightingVert.hlsl", "main", ST_VERTEX);
-// IMPLEMENT_SHADER_TYPE(LightingShaderFrag, "deferedshading/LightingFrag.hlsl", "main", ST_FRAGMENT);
+// IMPLEMENT_SHADER_TYPE(LightingShaderVert, "pipelines/raster/deferred/LightingVert.hlsl", "main", ST_VERTEX);
+// IMPLEMENT_SHADER_TYPE(LightingShaderFrag, "pipelines/raster/deferred/LightingFrag.hlsl", "main", ST_FRAGMENT);
 //
 // namespace Moer {
 //     class RenderGraphRender::Impl {
