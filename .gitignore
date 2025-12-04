@@ -17,6 +17,7 @@ cmake-build-*/
 # 3. User Config Files
 imgui.ini
 EnableCuda.cmake
+EnableNrd.cmake
 MoerEngine.toml
 
 # 4. Logs

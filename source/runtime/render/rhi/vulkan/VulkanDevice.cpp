@@ -14,7 +14,6 @@
 #include "VulkanUtil.h"
 #include "extension/VulkanNrdExtension.h"
 #include <string_view>
-#include <volk.h>
 
 #include "log/LogSystem.h"
 #include "misc/STL.h"
@@ -1589,6 +1588,8 @@ void VulkanDevice::CopyData(void* _dst, const BufferView& _src, uint64 _size) {
 }
 
 void VulkanDevice::LoadDefaultExtensions() {
+
+#if WITH_NRD
     exts.try_emplace(
         Moer::Render::Ext::NRDExtension::name.data(),
         [](VulkanDevice* _device) -> DeviceExtension* {
@@ -1598,6 +1599,7 @@ void VulkanDevice::LoadDefaultExtensions() {
             MoerDelete(static_cast<Moer::Render::Ext::VkNRDExtension*>(_ext));
         }
     );
+#endif
 }
 
 // RHIViewportRef VulkanDevice::CreateViewport(const RHIViewportInitializer& _init) {

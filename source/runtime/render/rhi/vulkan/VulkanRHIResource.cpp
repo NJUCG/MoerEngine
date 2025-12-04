@@ -9,10 +9,10 @@
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPipelineResourceCache.h"
+#include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "VulkanSwapChain.h"
 #include <type_traits>
-#include <volk.h>
 
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"

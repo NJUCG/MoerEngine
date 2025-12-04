@@ -5,10 +5,6 @@
 #ifndef VULKAN_WINDOWS_PLATFORM_H
 #define VULKAN_WINDOWS_PLATFORM_H
 
-// and now, include the GenericPlatform class
-#include "../../VulkanTypeDefs.h"
-#include "../VulkanGenericPlatform.h"
-
 #ifndef VK_USE_PLATFORM_WIN32_KHR
 #define VK_USE_PLATFORM_WIN32_KHR 1
 #endif
@@ -27,6 +23,10 @@
 #else
 #define VK_API_VERSION VK_API_VERSION_1_1
 #endif // VULKAN_RHI_RAYTRACING
+
+// and now, include the GenericPlatform class
+#include "../../VulkanTypeDefs.h"
+#include "../VulkanGenericPlatform.h"
 
 namespace Moer::Render {
 class VulkanWindowsPlatform : public VulkanGenericPlatform {

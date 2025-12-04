@@ -2,10 +2,10 @@
 #define VULKAN_RHI_DESCRIPTOR_H
 
 #include "PixelFormat.h"
+#include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "VulkanTypeDefs.h"
 #include "rhi/RHIResource.h"
-#include <volk.h>
 // #include "spirv_reflect.h"
 #include "vulkan/vulkan_core.h"
 

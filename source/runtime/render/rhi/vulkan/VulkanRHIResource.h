@@ -14,13 +14,13 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 
+#include "VulkanPlatform.h"
 #include "VulkanSwapChain.h"
 #include "VulkanTypeDefs.h"
 #include "vulkan/vulkan_core.h"
 #include <atomic>
 #include <cstddef>
 #include <mutex>
-#include <volk.h>
 
 // #include <vk_mem_alloc.h>
 #include "VulkanMemoryAllocator.h"

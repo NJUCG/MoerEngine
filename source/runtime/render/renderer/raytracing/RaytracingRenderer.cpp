@@ -11,7 +11,7 @@
 #include "renderer/common/RuntimeAssets.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/extension//NrdExtension.h"
+#include "rhi/extension/NrdExtension.h"
 #include "scene/CameraManager.h"
 #include "scene/EntityManager.h"
 #include "scene/Material.h"
@@ -92,8 +92,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     Array<RaytracingGeometryRef> rt_geometries;
 
-    uint64 nrd_time     = 0ull;
-    float  elapsed_time = 0.0f;
+    float elapsed_time = 0.0f;
 
     TextureRef output = device.CreateTexture(
         Extent2D(resolution->x, resolution->y), swapchain->format, ETextureUsageFlags::COLOR_ATTACHMENT
@@ -158,11 +157,15 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     };
     UniquePtr<AntialiasPass> antialias_pass =
         MakeUnique<AntialiasPass>(device, manager, scene, antialias_pass_info);
-    //////////////////////////////////////////////////////////////////////////
-    // NRD
-    //////////////////////////////////////////////////////////////////////////
-    auto* nrd_ext       = device.LoadExtension<Ext::NRDExtension>();
-    auto  nrd_interface = nrd_ext->CreateInterface(max_frame_in_flight, resolution->x, resolution->y);
+
+//////////////////////////////////////////////////////////////////////////
+// NRD
+//////////////////////////////////////////////////////////////////////////
+#if WITH_NRD
+    uint64 nrd_time      = 0ull;
+    auto*  nrd_ext       = device.LoadExtension<Ext::NRDExtension>();
+    auto   nrd_interface = nrd_ext->CreateInterface(max_frame_in_flight, resolution->x, resolution->y);
+#endif
 
     VisualizeConfig visualize_config{};
     visualize_config.b_split        = false;
@@ -211,8 +214,11 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             is_ctx.~ImportanceSamplingContext();
             is_params.render_size = *resolution;
             new (&is_ctx) ImportanceSamplingContext(is_params);
+
+#if WITH_NRD
             nrd_interface =
                 nrd_ext->RecreateInterface(std::move(nrd_interface), resolution->x, resolution->y);
+#endif
 
             antialias_pass_info.motion              = rt_ctx->frame_rt.motion;
             antialias_pass_info.feedback_color_ping = rt_ctx->frame_rt.feedback_color_ping;
@@ -600,9 +606,10 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             g_buffer_pass->Process(cmd_list, *rt_ctx);
             lighting_pass->Process(cmd_list, *rt_ctx);
 
-            //////////////////////////////////////////////////////////////////////////
-            // NRD
-            //////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+// NRD
+//////////////////////////////////////////////////////////////////////////
+#if WITH_NRD
             {
                 bool          b_current_frame = rt_ctx->b_current_frame;
                 const auto&   frame_rt        = rt_ctx->frame_rt;
@@ -660,6 +667,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     }
                 }
             }
+#endif
 
             composition_pass->Process(cmd_list, *rt_ctx);
             antialias_pass->Process(

@@ -47,8 +47,13 @@ void CompositionPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             _rt_ctx.frame_rt.emission,
             _rt_ctx.frame_rt.diffuse_lighting,
             _rt_ctx.frame_rt.specular_lighting,
+#if WITH_NRD
             _rt_ctx.frame_rt.denoised_diffuse_lighting,
             _rt_ctx.frame_rt.denoised_specular_lighting,
+#else
+            _rt_ctx.frame_rt.diffuse_lighting,
+            _rt_ctx.frame_rt.specular_lighting,
+#endif
             scene.GetBindlessArray()
         )
         .Dispatch(

@@ -6,10 +6,10 @@
 
 #include "misc/STL.h"
 
+#include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
 #include <string_view>
-#include <volk.h>
 
 namespace Moer::Render {
 class VulkanDevice;
