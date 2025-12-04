@@ -149,12 +149,16 @@ struct RasterConfig {
     // MARK: Shadow
     EShadowMapMode shadow_map_mode              = EShadowMapMode::CSM;
     int            shadow_sampling_mode         = 0;
-    int            shadow_csm_num_of_cascades   = 2;
+    int            shadow_csm_num_of_cascades   = 4;
     float          shadow_csm_lerp_factor       = 0.015f;
     float          shadow_csm_blend_percentage  = 0.3f;
     bool           shadow_csm_blend_option      = true;
-    int            shadow_csm_sm_size           = 2048;
+    int            shadow_csm_sm_size           = 4096;
     bool           shadow_csm_visualize_cascade = false;
+
+    // MARK: Shadow - PCSS
+    bool  shadow_pcss_enabled          = true;
+    float shadow_pcss_light_size_world = 1.0f;
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
         {0.01, 0.04, 0.1, 0.25, 0.32, 1.0};

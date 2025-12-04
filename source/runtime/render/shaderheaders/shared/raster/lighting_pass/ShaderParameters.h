@@ -52,7 +52,7 @@ struct LightingData {
 
     float4x4 inv_view_proj;
     float3   camera_position;
-    // uint     padding;// FIXME: 需要加吗？
+    // uint     padding;// FIXME: need or not?
     uint light_count;
 
     uint shadow_map_mode;
@@ -62,6 +62,10 @@ struct LightingData {
     uint shadow_csm_visualize_cascade;
 
     uint shadow_map[MAX_CSM_CASCADES];
+
+    uint pcss_enabled;
+
+    float light_size_world;//assumed light size for soft shadow calculation
 
     float4x4 view_matrix;
     float    near_clip;

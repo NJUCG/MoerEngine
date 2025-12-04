@@ -7,6 +7,25 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "shared/raster/ShaderParameters.h"
 
+static const float2 POISSON_DISK_16[16] = {
+    float2( -0.94201624, -0.39906216 ),
+    float2(  0.94558609, -0.76890725 ),
+    float2( -0.09418410, -0.92938870 ),
+    float2(  0.34495938,  0.29387760 ),
+    float2( -0.91588581,  0.45771432 ),
+    float2( -0.81544232, -0.87912464 ),
+    float2( -0.38277543,  0.27676845 ),
+    float2(  0.97484398,  0.75648379 ),
+    float2(  0.44323325, -0.97511554 ),
+    float2(  0.53742981, -0.47373420 ),
+    float2( -0.26496911, -0.41893023 ),
+    float2(  0.79197514,  0.19090188 ),
+    float2( -0.24188840,  0.99706507 ),
+    float2( -0.81409955,  0.91437590 ),
+    float2(  0.19984126,  0.78641367 ),
+    float2(  0.14383161, -0.14100790 )
+};
+
 [[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
 
 float ndfGGX(float cosLh, float roughness) {
@@ -86,6 +105,65 @@ float get_cascade_blend_ratio(Moer::LightingData lighting_data, float3 world_pos
     return smoothstep(blend_band_start_z, blend_band_end_z, pixel_view_pos_z);
 }
 
+float get_blocker_depth(Moer::LightingData lighting_data,float2 uv,float fragment_depth,int cascade_index)
+{
+    float search_radius_uv = lighting_data.light_size_world / (lighting_data.shadow_csm_sm_size * fragment_depth);
+    uint num_blockers=0;
+    float avg_blocker_depth=0.0;
+    
+    for (int i = 0; i < 16; ++i) {
+        float2 offset = POISSON_DISK_16[i] * search_radius_uv;
+        float occluder_depth = TextureHandle(lighting_data.shadow_map[cascade_index]).Sample2D<float>(uv + offset).x;
+
+        if (occluder_depth > fragment_depth + SHADOW_BIAS) {
+            avg_blocker_depth += occluder_depth;
+            num_blockers++;
+        }
+    }
+
+    if (num_blockers == 0) {
+        return -1.0; // special value indicating no blockers found
+    }
+
+    return avg_blocker_depth / (float)num_blockers;
+}
+
+float calculate_penumbra_size(
+    Moer::LightingData lighting_data,
+    float fragment_depth,
+    float avg_blocker_depth,
+    float shadow_clip_w
+) {
+    if (avg_blocker_depth < 0.0) {
+        return 0.0;
+    }
+
+    float penumbra_radius_ndc = 
+        max(avg_blocker_depth-fragment_depth, 0.0) / (1.0-avg_blocker_depth + 1e-6) * lighting_data.light_size_world;
+
+    float penumbra_radius_uv = penumbra_radius_ndc / (lighting_data.shadow_csm_sm_size * shadow_clip_w);
+
+    return clamp(penumbra_radius_uv, 0.0, 0.1); // empirical maximum value to prevent excessive blur
+}
+
+float get_pcf_filter_result(Moer::LightingData lighting_data,float2 uv,float fragment_depth,float pcf_radius_uv,uint cascade_index)
+{
+    if(pcf_radius_uv<=0.0)return 1.0;//没有半影
+
+    float shadow_contribution = 0.0;
+
+    for (int i = 0; i < 16; ++i) {
+        float2 offset = POISSON_DISK_16[i] * pcf_radius_uv;
+        float occluder_depth = TextureHandle(lighting_data.shadow_map[cascade_index]).Sample2D<float>(uv + offset).x;
+        
+        if (occluder_depth > fragment_depth + SHADOW_BIAS) {
+            shadow_contribution += 1.0;
+        }
+    }
+    
+    return 1.0 - (shadow_contribution / 16);
+}
+
 float get_single_shadow(Moer::LightingData lighting_data, float3 world_pos, int cascade_index) {
     float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[cascade_index], float4(world_pos, 1.0));
     float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
@@ -95,8 +173,23 @@ float get_single_shadow(Moer::LightingData lighting_data, float3 world_pos, int 
         float occluder_depth =
             TextureHandle(lighting_data.shadow_map[cascade_index]).Sample2D<float>(shadow_uv).x;
         float fragment_depth = shadow_ndc_pos.z;
-        return (shadow_ndc_pos.z + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
-        // near<->1.0; far<->0.0
+        if(lighting_data.pcss_enabled==1)
+        {
+            float avg_blocker_depth = get_blocker_depth(lighting_data, shadow_uv, fragment_depth, cascade_index);
+            //return avg_blocker_depth;
+            float penumbra_size = calculate_penumbra_size(
+                lighting_data,
+                fragment_depth,
+                avg_blocker_depth,
+                shadow_clip_pos.w
+            );
+            float pcf_result = get_pcf_filter_result(lighting_data,shadow_uv, fragment_depth, penumbra_size, cascade_index);
+            return pcf_result;
+        }
+        else{
+            return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
+        }
+        // near=1.0, reverse-z
     }
     return 1.0;
 }
