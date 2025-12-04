@@ -1,7 +1,7 @@
 // 1. basic rhi
 
-#include "framework/Bindless.hlsl"
-#include "framework/Common.hlsl"
+#include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/raster/ShaderParameters.h"
 
@@ -55,7 +55,7 @@ Texture2D SMAAGetTexture2D(uint handle_idx) {
 #endif
 
 // 5. include "SMAA.hlsl"
-#include "raster/post_process/Smaa.hlsl"
+#include "pipelines/postprocess/aa/Smaa.hlsl"
 
 // 6. entry functions
 

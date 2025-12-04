@@ -1,4 +1,4 @@
-#include "3dgs.hlsl"
+#include "features/3dgs/3dgs.hlsl"
 
 [[vk::binding(0, 0)]] StructuredBuffer<VertexAttribute> vertex_attribute_buffer : register(t0, space0);
 [[vk::binding(1, 0)]] StructuredBuffer<uint>            boundaries : register(t1, space0);

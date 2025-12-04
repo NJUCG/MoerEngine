@@ -1,8 +1,8 @@
-#include <framework/Math.hlsli>
+#include <core/math/Math.hlsli>
 #include <shared/ShaderParameters.h>
 #include <shared/utils/Packing.h>
 
-#include <nrd/NRD.hlsli>
+#include <external/nrd/NRD.hlsli>
 
 [[vk::binding(1, 0)]] RWTexture2D<uint> rw_specular_roughness : register(u0);
 [[vk::binding(2, 0)]] RWTexture2D<float4> rw_normal_roughness : register(u1);

@@ -1,4 +1,4 @@
-#include "meshdebug/Cull.hlsl"
+#include "features/debug/Cull.hlsl"
 struct MeshletCullInput {
   uint counter_buffer_offset;
   uint draw_cmd_buffer_offset;

@@ -1,8 +1,8 @@
 #define BOILING_FILTER_GROUP_SIZE DI_SCREEN_TILE_SIZE
 #define USE_BOILING_FILTER 1
 
-#include <framework/DI/Bindings.hlsli>
-#include <framework/DI/ReSampleFunctions.hlsli>
+#include <lighting/lib/restir/Bindings.hlsli>
+#include <lighting/lib/restir/ResampleFunctions.hlsli>
 #include <hwrt/GBufferUtils.hlsli>
 
 [numthreads(DI_SCREEN_TILE_SIZE, DI_SCREEN_TILE_SIZE, 1)] void

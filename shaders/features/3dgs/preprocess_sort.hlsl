@@ -1,4 +1,4 @@
-#include "3dgs.hlsl"
+#include "features/3dgs/3dgs.hlsl"
 [[vk::binding(0, 0)]] StructuredBuffer<VertexAttribute> attr : register(t0, space0);
 [[vk::binding(1, 0)]] StructuredBuffer<uint>            prefix_sum : register(t1, space0);
 [[vk::binding(2, 0)]] RWStructuredBuffer<uint64_t>          keys : register(u2, space0);

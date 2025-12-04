@@ -7,9 +7,9 @@
 
 #include <shared/ShaderParameters.h>
 
-#include <framework/Bindless.hlsl>
-#include <framework/Common.hlsl>
-#include <framework/Math.hlsli>
+#include <core/common/Bindless.hlsl>
+#include <core/common/Common.hlsl>
+#include <core/math/Math.hlsli>
 #include <hwrt/GBufferUtils.hlsli>
 #include <shared/Geometry.h>
 #include <shared/utils/MoerMath.hlsli>
@@ -39,10 +39,10 @@
 [[vk::binding(12, DI_BINDING_SLOT)]] Buffer<float2> neighbor_offset_buf;
 
 BINDLESS_BINDINGS(3, 2, 4, 5)
-#include <framework/Material.hlsl>
-#include <framework/PolymorphicLight.hlsli>
+#include <materials/Material.hlsl>
+#include <lighting/common/PolymorphicLight.hlsli>
 
-#include <framework/RaytracingCommon.hlsli>
+#include <pipelines/raytracing/inline/RaytracingCommon.hlsli>
 
 #ifndef DI_LIGHT_RESERVOIR_BUFFER
 #define DI_LIGHT_RESERVOIR_BUFFER light_reservoirs

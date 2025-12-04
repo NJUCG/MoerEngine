@@ -1,4 +1,4 @@
-#include "framework/Common.hlsl"
+#include "core/common/Common.hlsl"
 
 [[vk::push_constant]] ConstantBuffer<CameraData> camera_data : register(b0);
 StructuredBuffer<InstanceData> instance_data : register(t0, space0);

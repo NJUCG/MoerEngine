@@ -1,7 +1,7 @@
 #ifndef MOER_DI_RESAMPLE_FUNCTIONS_HLSLI
 #define MOER_DI_RESAMPLE_FUNCTIONS_HLSLI
-#include <framework/DI/Reservoirs.hlsli>
-#include <hwrt/ReSTIRDI/Utils.hlsli>
+#include <lighting/lib/restir/Reservoirs.hlsli>
+#include <pipelines/raytracing/restir_di/Utils.hlsli>
 
 #define NAIVE_SAMPLING_M_THRESHOLD 2
 namespace Moer {

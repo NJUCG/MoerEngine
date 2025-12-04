@@ -1,9 +1,9 @@
 
-#include <framework/Bindless.hlsl>
+#include <core/common/Bindless.hlsl>
 #include <shared/ShaderParameters.h>
 
-#include <framework/DI/GridCommon.hlsli>
-#include <framework/Math.hlsli>
+#include <lighting/lib/restir/GridCommon.hlsli>
+#include <core/math/Math.hlsli>
 #include <shared/utils/Packing.h>
 
 BINDLESS_BINDINGS(1, 2, 3, 4);

@@ -1,7 +1,7 @@
 #ifndef FRAMEWORK_MATERIAL_HLSL
 #define FRAMEWORK_MATERIAL_HLSL
 
-// #include "framework/Bindless.hlsl"
+// #include "core/common/Bindless.hlsl"
 
 template <typename T>
 T UnpackMaterialData(uint material_buffer_handle, uint material_index) {

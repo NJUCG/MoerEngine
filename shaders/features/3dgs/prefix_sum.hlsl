@@ -1,4 +1,4 @@
-// #include "3dgs.hlsl"
+// #include "features/3dgs/3dgs.hlsl"
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<uint> src : register(u0, space0);
 [[vk::binding(1, 0)]] RWStructuredBuffer<uint> dst : register(u1, space0);

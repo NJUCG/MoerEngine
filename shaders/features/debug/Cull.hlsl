@@ -1,4 +1,4 @@
-#include "framework/Common.hlsl"
+#include "core/common/Common.hlsl"
 struct Culler {
 
   bool b_visible;

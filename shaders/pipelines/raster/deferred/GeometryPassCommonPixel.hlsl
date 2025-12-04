@@ -2,13 +2,13 @@
 #define SHADOW_DEPTH_PASS 0
 #endif
 
-#include "framework/Bindless.hlsl"
-#include "framework/Common.hlsl"
+#include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/Geometry.h"
 #include "shared/raster/ShaderParameters.h"
 
-#include "raster/geometry_pass/VertexFactory.hlsl"
+#include "pipelines/raster/deferred/VertexFactory.hlsl"
 
 [[vk::push_constant]] ConstantBuffer<Moer::GeometryPassBindlessParam> param;
 

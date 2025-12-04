@@ -1,6 +1,6 @@
 #ifndef FRAMEWORK_COMMON_HLSL
 #define FRAMEWORK_COMMON_HLSL
-#include "framework/Math.hlsli"
+#include "core/math/Math.hlsli"
 
 #define FP16_MAX 65504.0
 #define INF 1e5

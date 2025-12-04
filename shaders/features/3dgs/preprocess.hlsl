@@ -1,4 +1,4 @@
-#include "3dgs.hlsl"
+#include "features/3dgs/3dgs.hlsl"
 
 struct Params {
     float4   camera_position;

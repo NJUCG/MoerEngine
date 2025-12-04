@@ -1,18 +1,18 @@
 // bind bindless
-#include <framework/Bindless.hlsl>
-#include <framework/Common.hlsl>
+#include <core/common/Bindless.hlsl>
+#include <core/common/Common.hlsl>
 
 BINDLESS_BINDINGS(3, 2, 4, 5);
 
-#include <framework/Material.hlsl>
+#include <materials/Material.hlsl>
 
 #include <shared/Geometry.h>
 #include <shared/ShaderParameters.h>
 #include <shared/utils/MoerMath.hlsli>
 #include <shared/utils/Packing.h>
 
-#include <MathLib/STL.hlsli>
+#include <core/math/STL.hlsli>
 #include <hwrt/GBufferUtils.hlsli>
 
-#include <framework/RaytracingCommon.hlsli>
+#include <pipelines/raytracing/inline/RaytracingCommon.hlsli>
 

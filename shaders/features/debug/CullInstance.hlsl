@@ -1,5 +1,5 @@
-// #include "framework/Common.hlsl"
-#include "meshdebug/Cull.hlsl"
+// #include "core/common/Common.hlsl"
+#include "features/debug/Cull.hlsl"
 #define MAX_MESHLET_COUNT uint(1024 * 1024 * 8)
 
 struct TaskInput {

@@ -1,6 +1,6 @@
 #ifndef MOER_DI_GRID_COMMON_HLSLI
 #define MOER_DI_GRID_COMMON_HLSLI
-#include <MathLib/STL.hlsli>
+#include <core/math/STL.hlsli>
 namespace Moer {
 namespace Grid {
 

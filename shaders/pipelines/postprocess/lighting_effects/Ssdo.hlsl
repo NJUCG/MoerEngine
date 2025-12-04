@@ -1,12 +1,12 @@
-#include "framework/Bindless.hlsl"
-#include "framework/Common.hlsl"
+#include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::SsdoPipelineBindlessParam> param;
 
-#include "AoCommon.hlsl"
+#include "pipelines/postprocess/lighting_effects/AoCommon.hlsl"
 
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
 static const float3 DIFFUSE_ALBEDO = float3(0.5, 0.5, 0.5);
@@ -17,7 +17,7 @@ static const float3 DIFFUSE_ALBEDO = float3(0.5, 0.5, 0.5);
 // }
 
 float random_1to1(float2 seed) {
-    // 使用 sin 和一个大数的小数部分来产生伪随机性
+    // 使用 sin 和一个大数的小数部分来产生伪随机�?
     return frac(sin(dot(seed, float2(12.9898, 78.233))) * 43758.5453123);
 }
 
@@ -65,13 +65,13 @@ float3 GetVplIndirectLight(float3 vpl_pos, float3 vpl_normal, float3 shading_pos
     float  VPL_distance = length(vpl_pos - shading_pos);
     float  attenuation  = 1.0 / (VPL_distance * VPL_distance + 1.0); // 稳定衰减
 
-    // 面积项
+    // 面积�?
     float vpl_linear_depth = abs(mul(param.view_matrix, float4(vpl_pos, 1.0)).z);
     float area_weight      = vpl_linear_depth * vpl_linear_depth + 0.0001;
     area_weight            = min(2, area_weight); //防止过大
 
     // 简单的漫反射间接光
-    //由于采用了余弦加权采样，这里不用再乘以 shadingCosine 了
+    //由于采用了余弦加权采样，这里不用再乘�?shadingCosine �?
     float3 indirect_light = vplCosine * pixel_color * attenuation * area_weight;
 
     return indirect_light;

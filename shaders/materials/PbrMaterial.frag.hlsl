@@ -1,9 +1,9 @@
-#include "framework/Bindless.hlsl"
+#include "core/common/Bindless.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 
-#include "framework/Common.hlsl"
-#include "framework/Lighting.hlsl"
-#include "framework/Material.hlsl"
+#include "core/common/Common.hlsl"
+#include "lighting/common/Lighting.hlsl"
+#include "materials/Material.hlsl"
 
 #include "shared/raster/ShaderParameters.h"
 
@@ -96,7 +96,7 @@ int get_cascade_index(Moer::LightingData lighting_data, float3 world_pos) {
 
 float get_cascade_blend_ratio(Moer::LightingData lighting_data, float3 world_pos, int cascade_index) {
     float pixel_view_pos_z =
-        abs(mul(lighting_data.view_matrix, float4(world_pos, 1.0)).z); //FIXME:需要取负吗？
+        abs(mul(lighting_data.view_matrix, float4(world_pos, 1.0)).z); //FIXME:需要取负吗�?
     float blend_band_start_z =
         lighting_data.near_clip + lighting_data.cascade_blend_start_ratios[cascade_index] *
                                       (lighting_data.far_clip - lighting_data.near_clip);
@@ -223,7 +223,7 @@ float calculate_shadow(Moer::LightingData lighting_data, float3 world_pos) {
 
     } else if (lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM ||
                lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM_AUTO) {
-        // 用黑白来可视化CSM层数。全黑表示0层，全白表示最大层
+        // 用黑白来可视化CSM层数。全黑表�?层，全白表示最大层
         if (lighting_data.shadow_csm_visualize_cascade != 0) {
             return visualize_csm_cascade(lighting_data, world_pos);
         }
@@ -244,11 +244,11 @@ float4 calculate_ibl(Moer::LightingData lighting_data, float3 world_pos) {
     uint   handle_index;
 
     if (abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z) {
-        axis = 0; // X轴
+        axis = 0; // X�?
     } else if (abs_dir.y >= abs_dir.z) {
-        axis = 1; // Y轴
+        axis = 1; // Y�?
     } else {
-        axis = 2; // Z轴
+        axis = 2; // Z�?
     }
 
     if (axis == 0) {

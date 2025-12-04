@@ -1,6 +1,6 @@
 #ifndef MOER_MATH_HLSL
 #define MOER_MATH_HLSL
-#include <MathLib/STL.hlsli>
+#include <core/math/STL.hlsli>
 
 #define PI 3.1415926535897932384626433832795
 #define PI2 (2.0 * PI)

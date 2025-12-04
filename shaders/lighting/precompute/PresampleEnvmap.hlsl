@@ -1,5 +1,5 @@
-#include <framework/DI/Bindings.hlsli>
-#include <framework/DI/PresampleFunctions.hlsli>
+#include <lighting/lib/restir/Bindings.hlsli>
+#include <lighting/lib/restir/PresampleFunctions.hlsli>
 
 [numthreads(256, 1, 1)] void main(uint3 dtid
                                   : SV_DispatchThreadID) {

@@ -1,4 +1,4 @@
-#include "framework/Bindless.hlsl"
+#include "core/common/Bindless.hlsl"
 struct DrawParam {
   float2 min_xy;
   float2 max_xy;

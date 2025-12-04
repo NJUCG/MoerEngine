@@ -1,6 +1,6 @@
 #ifndef MOER_FRAMEWORK_DI_RESERVOIRS_HLSLI
 #define MOER_FRAMEWORK_DI_RESERVOIRS_HLSLI
-#include <framework/DI/Utils.hlsli>
+#include <lighting/lib/restir/Utils.hlsli>
 #include <shared/lighting/ShaderParameters.h>
 
 namespace Moer {

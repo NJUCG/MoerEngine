@@ -1,4 +1,4 @@
-#include <MathLib/STL.hlsli>
+#include <core/math/STL.hlsli>
 #include <shared/utils/ShaderParameters.h>
 
 [[vk::push_constant]] ConstantBuffer<Moer::GenLowDiscrepancySequenceParam> param : register(b0);

@@ -1,4 +1,4 @@
-#include "3dgs.hlsl"
+#include "features/3dgs/3dgs.hlsl"
 [[vk::binding(0, 0)]] StructuredBuffer<Vertex>  vertex_buffer : register(t0, space0);
 [[vk::binding(1, 0)]] RWStructuredBuffer<float> cov3ds_buffer : register(u0, space0);
 

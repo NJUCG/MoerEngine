@@ -1,17 +1,17 @@
-#include <framework/Bindless.hlsl>
-#include <framework/Common.hlsl>
+#include <core/common/Bindless.hlsl>
+#include <core/common/Common.hlsl>
 RTCONFIG_BINDING(1, 0);
 BINDLESS_BINDINGS(3, 2, 4, 5);
-#include <framework/Lighting.hlsl>
+#include <lighting/common/Lighting.hlsl>
 
-#include <framework/RaytracingShared.hlsli>
+#include <pipelines/raytracing/inline/RaytracingShared.hlsli>
 
-#include <framework/Material.hlsl>
+#include <materials/Material.hlsl>
 #include <shared/Geometry.h>
 #include <shared/ShaderParameters.h>
 #include <shared/utils/Packing.h>
 
-#include <nrd/NRD.hlsli>
+#include <external/nrd/NRD.hlsli>
 
 struct Param {
   uint instance_buffer_handle;

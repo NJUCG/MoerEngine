@@ -1,4 +1,4 @@
-#include <MathLib/STL.hlsli>
+#include <core/math/STL.hlsli>
 #include <shared/ShaderParameters.h>
 #include <shared/utils/MoerMath.hlsli>
 static const float PI = 3.1415926535f;

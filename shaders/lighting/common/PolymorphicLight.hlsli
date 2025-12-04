@@ -1,8 +1,8 @@
 #ifndef MOER_FRAMEWORK_POLYMORPHIC_LIGHT_HLSLI
 #define MOER_FRAMEWORK_POLYMORPHIC_LIGHT_HLSLI
 
-#include "MathLib/STL.hlsli"
-#include "framework/Math.hlsli"
+#include "core/math/STL.hlsli"
+#include "core/math/Math.hlsli"
 #include "shared/lighting/ShaderParameters.h"
 #include "shared/utils/Packing.h"
 

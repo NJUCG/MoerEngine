@@ -1,10 +1,10 @@
-#include "framework/Bindless.hlsl"
-#include "framework/Common.hlsl"
+#include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/ShaderParameters.h"
 #include "shared/raster/ShaderParameters.h"
 
-#include "framework/Math.hlsli"
+#include "core/math/Math.hlsli"
 
 #ifndef DI_BINDING_SLOT
 #define DI_BINDING_SLOT 0
@@ -14,8 +14,8 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 [[vk::binding(0, DI_BINDING_SLOT)]] RaytracingAccelerationStructure tlas;
 
-// 定义了AoOutput、CameraMotionVector等函数
-#include "AoCommon.hlsl"
+// 定义了AoOutput、CameraMotionVector等函�?
+#include "pipelines/postprocess/lighting_effects/AoCommon.hlsl"
 
 // TODO: 代码整理
 namespace Moer {
@@ -39,7 +39,7 @@ float4 SampleCosineHemisphere(float2 u) {
     return float4(r * cos(theta), y, r * sin(theta), /* pdf */ y / PI);
 }
 
-// 将一个半球坐标系中的vector转换到以某个特定normal为+z的半球上 (Written by AI)
+// 将一个半球坐标系中的vector转换到以某个特定normal�?z的半球上 (Written by AI)
 float3 LocalVectorToWorld(float3 local_vector, float3 normal) {
     float3 up = abs(normal.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0);
     float3 tangent = normalize(cross(up, normal));
@@ -50,7 +50,7 @@ float3 LocalVectorToWorld(float3 local_vector, float3 normal) {
            + local_vector.z * bitangent;
 }
 
-// TODO: 和RT那边的函数合并
+// TODO: 和RT那边的函数合�?
 bool CastVisibilityRay(float3 origin, float3 direction, float tmin, float tmax,
                        RaytracingAccelerationStructure accel,
                        uint instance_mask, uint ray_flags) {

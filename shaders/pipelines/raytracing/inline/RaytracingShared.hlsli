@@ -1,7 +1,7 @@
 #ifndef MOER_RT_SHARED_HLSL
 #define MOER_RT_SHARED_HLSL
 
-#include "MathLib/STL.hlsli"
+#include "core/math/STL.hlsli"
 #include "shared/ShaderParameters.h"
 
 

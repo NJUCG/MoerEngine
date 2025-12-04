@@ -1,23 +1,23 @@
 // bind bindless
-#include <framework/Bindless.hlsl>
-#include <framework/Common.hlsl>
+#include <core/common/Bindless.hlsl>
+#include <core/common/Common.hlsl>
 
 BINDLESS_BINDINGS(3, 2, 4, 5);
 
-#include <framework/Material.hlsl>
+#include <materials/Material.hlsl>
 
 #include <shared/Geometry.h>
 #include <shared/ShaderParameters.h>
 #include <shared/utils/MoerMath.hlsli>
 #include <shared/utils/Packing.h>
 
-#include <MathLib/STL.hlsli>
+#include <core/math/STL.hlsli>
 #include <hwrt/GBufferUtils.hlsli>
 
 #define WITH_NRD 1
 #ifdef WITH_NRD
 #define NRD_HEADER_ONLY
-#include <nrd/NRD.hlsli>
+#include <external/nrd/NRD.hlsli>
 
 #endif
 

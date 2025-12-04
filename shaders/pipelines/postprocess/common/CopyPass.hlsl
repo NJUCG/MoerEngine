@@ -1,5 +1,5 @@
-#include "framework/Bindless.hlsl"
-#include "framework/Common.hlsl"
+#include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/raster/ShaderParameters.h"
 

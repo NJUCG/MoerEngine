@@ -1,5 +1,5 @@
-#include "framework/Lighting.hlsl"
-#include "framework/Material.hlsl"
+#include "lighting/common/Lighting.hlsl"
+#include "materials/Material.hlsl"
 
 struct LightingData {
   float4x4 inv_view_proj;

@@ -1,12 +1,12 @@
-#include <framework/Bindless.hlsl>
-#include <framework/Common.hlsl>
+#include <core/common/Bindless.hlsl>
+#include <core/common/Common.hlsl>
 #include <shared/Geometry.h>
 #include <shared/lighting/ShaderParameters.h>
 #include <shared/utils/MoerMath.hlsli>
 
 BINDLESS_BINDINGS(3, 2, 4, 5)
-#include <framework/Material.hlsl>
-#include <framework/PolymorphicLight.hlsli>
+#include <materials/Material.hlsl>
+#include <lighting/common/PolymorphicLight.hlsli>
 #include <shared/utils/Packing.h>
 
 [[vk::push_constant]] ConstantBuffer<Moer::PrepareLightsParams> param;

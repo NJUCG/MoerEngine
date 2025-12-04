@@ -1,4 +1,4 @@
-#include <framework/Math.hlsli>
+#include <core/math/Math.hlsli>
 #include <shared/ShaderParameters.h>
 #include <shared/utils/Packing.h>
 

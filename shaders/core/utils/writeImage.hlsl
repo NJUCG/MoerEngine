@@ -1,4 +1,4 @@
-#include "3dgs.hlsl"
+#include "features/3dgs/3dgs.hlsl"
 
 [[vk::binding(0, 0)]] RWTexture2D<float4> output_image : register(u0);
 

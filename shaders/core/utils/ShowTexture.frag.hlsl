@@ -1,6 +1,6 @@
 
 
-#include <framework/Bindless.hlsl>
+#include <core/common/Bindless.hlsl>
 #include <shared/utils/ShaderParameters.h>
 
 [[vk::push_constant]] ConstantBuffer<Moer::ShowTextureParams> param;

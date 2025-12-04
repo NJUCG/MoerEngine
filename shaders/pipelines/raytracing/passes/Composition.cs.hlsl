@@ -1,11 +1,11 @@
-#include <framework/Bindless.hlsl>
-#include <framework/Common.hlsl>
+#include <core/common/Bindless.hlsl>
+#include <core/common/Common.hlsl>
 BINDLESS_BINDINGS(2, 1, 3, 4);
-#include <framework/Lighting.hlsl>
+#include <lighting/common/Lighting.hlsl>
 
-#include <framework/Material.hlsl>
+#include <materials/Material.hlsl>
 
-#include <nrd/NRD.hlsli>
+#include <external/nrd/NRD.hlsli>
 
 struct Param {
     float4x4 view2world;

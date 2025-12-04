@@ -1,4 +1,4 @@
-#include <framework/Common.hlsl>
+#include <core/common/Common.hlsl>
 #include <shared/utils/MoerMath.hlsli>
 #include <shared/utils/ShaderParameters.h>
 

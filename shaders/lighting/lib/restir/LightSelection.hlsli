@@ -1,7 +1,7 @@
 #ifndef MOER_DI_LIGHT_SELECTION_HLSLI
 #define MOER_DI_LIGHT_SELECTION_HLSLI
 
-#include <framework/DI/RISCommon.hlsli>
+#include <lighting/lib/restir/RISCommon.hlsli>
 namespace Moer {
 
 namespace DI {

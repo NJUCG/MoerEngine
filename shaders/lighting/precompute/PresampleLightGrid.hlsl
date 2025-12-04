@@ -1,5 +1,5 @@
-#include <framework/DI/Bindings.hlsli>
-#include <framework/DI/PresampleFunctions.hlsli>
+#include <lighting/lib/restir/Bindings.hlsli>
+#include <lighting/lib/restir/PresampleFunctions.hlsli>
 
 [numthreads(DI_PRESAMPLE_GRID_SIZE, 1, 1)] void main(uint dtid
                                   : SV_DispatchThreadID) {

@@ -1,5 +1,5 @@
-#include <framework/DI/Bindings.hlsli>
-#include <framework/DI/InitialSampleFunctions.hlsli>
+#include <lighting/lib/restir/Bindings.hlsli>
+#include <lighting/lib/restir/InitialSampleFunctions.hlsli>
 
 [numthreads(DI_SCREEN_TILE_SIZE, DI_SCREEN_TILE_SIZE, 1)] void
 main(uint2 dtid

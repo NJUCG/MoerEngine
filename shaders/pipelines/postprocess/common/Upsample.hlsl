@@ -1,5 +1,5 @@
-#include "framework/Bindless.hlsl"
-#include "framework/Common.hlsl"
+#include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
 SamplerState gLinearClamp : register(s0);
 BINDLESS_BINDINGS(3, 2, 4, 5)
 
@@ -24,14 +24,14 @@ float3 BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights_Color
 {
     float3 color = 0.0;
 
-    // 五点采样（4个主方向点 + 1个中心）
+    // 五点采样�?个主方向�?+ 1个中心）
     color  = tex.SampleLevel(uv01.xy, 0).rgb * w.x;
     color += tex.SampleLevel(uv01.zw, 0).rgb * w.y;
     color += tex.SampleLevel(uv23.xy, 0).rgb * w.z;
     color += tex.SampleLevel(uv23.zw, 0).rgb * w.w;
     color += tex.SampleLevel(uv4, 0).rgb * w4;
 
-    // 归一化（避免除零）
+    // 归一化（避免除零�?
     if (sum > 0.0001)
         color /= sum;
     else
@@ -40,28 +40,28 @@ float3 BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights_Color
     return color;
 }
 
-// 简单的双线性采样
+// 简单的双线性采�?
 float3 BilinearUpsample(float2 uv, float2 inSize, float2 outSize, uint input_image)
 {
 
-    // 将当前输出像素的 UV 映射回输入图像的归一化 UV
+    // 将当前输出像素的 UV 映射回输入图像的归一�?UV
     float2 inUV = uv * (inSize / outSize);
     // 计算输入图像中的像素坐标
     float2 texPos = inUV * inSize - 0.5;
-    float2 base   = floor(texPos);         // 左上角像素坐标
-    float2 fracUV = frac(texPos);          // 小数偏移，用于权重
+    float2 base   = floor(texPos);         // 左上角像素坐�?
+    float2 fracUV = frac(texPos);          // 小数偏移，用于权�?
 
     // ------------------------------
     // Bicubic 权重计算（Catmull-Rom 核）
     // ------------------------------
     float2 f = fracUV;
     float4 w;
-    w.x = ((-0.5 * f.x + 1.0) * f.x - 0.5) * f.x;          // 左1
-    w.y = ((1.5 * f.x - 2.5) * f.x) * f.x + 1.0;           // 左0
-    w.z = ((-1.5 * f.x + 2.0) * f.x + 0.5) * f.x;          // 右1
-    w.w = ((0.5 * f.x - 0.5) * f.x) * f.x;                 // 右2
+    w.x = ((-0.5 * f.x + 1.0) * f.x - 0.5) * f.x;          // �?
+    w.y = ((1.5 * f.x - 2.5) * f.x) * f.x + 1.0;           // �?
+    w.z = ((-1.5 * f.x + 2.0) * f.x + 0.5) * f.x;          // �?
+    w.w = ((0.5 * f.x - 0.5) * f.x) * f.x;                 // �?
     float w4 = 0.0;                                         // 中心点权重（可选）
-    float sum = w.x + w.y + w.z + w.w + w4;                 // 总权重
+    float sum = w.x + w.y + w.z + w.w + w4;                 // 总权�?
 
     // ------------------------------
     // 计算采样 UV 坐标
@@ -70,10 +70,10 @@ float3 BilinearUpsample(float2 uv, float2 inSize, float2 outSize, uint input_ima
     float4 uv23;
     float2 uv4;
 
-    uv01.xy = (base + float2(-1.0, 0.5)) / inSize;  // 左1
-    uv01.zw = (base + float2( 0.0, 0.5)) / inSize;  // 左0
-    uv23.xy = (base + float2( 1.0, 0.5)) / inSize;  // 右1
-    uv23.zw = (base + float2( 2.0, 0.5)) / inSize;  // 右2
+    uv01.xy = (base + float2(-1.0, 0.5)) / inSize;  // �?
+    uv01.zw = (base + float2( 0.0, 0.5)) / inSize;  // �?
+    uv23.xy = (base + float2( 1.0, 0.5)) / inSize;  // �?
+    uv23.zw = (base + float2( 2.0, 0.5)) / inSize;  // �?
     uv4     = (base + float2(0.5, 0.5)) / inSize;   // 中心点（可选）
     
     float3 color = BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights_Color(TextureHandle(input_image), uv01, uv23, uv4, w, w4, sum);
@@ -85,13 +85,13 @@ float3 BilinearUpsample(float2 uv, float2 inSize, float2 outSize, uint input_ima
 float3 BilinearUpsample_1(float2 uv, float2 inSize, float2 outSize, uint input_image)
 {
     // --- 1. 将高分输出UV映射回低分输入UV ---
-    // 例如 inSize=960x540, outSize=1920x1080 → scale=0.5
+    // 例如 inSize=960x540, outSize=1920x1080 �?scale=0.5
     //float2 inUV = uv * (inSize / outSize);
 
     // --- 2. 转为输入图像像素空间 ---
     float2 texPos = uv * inSize - float2(0.5, 0.5);
-    float2 base   = floor(texPos);  // 左上角像素坐标
-    float2 fracUV = frac(texPos);   // 小数部分 (0~1)，用于插值
+    float2 base   = floor(texPos);  // 左上角像素坐�?
+    float2 fracUV = frac(texPos);   // 小数部分 (0~1)，用于插�?
 
     // --- 3. 计算采样UV坐标 ---
     float2 uv00 = (base + float2(0.5, 0.5)) / inSize; // 左上
@@ -106,7 +106,7 @@ float3 BilinearUpsample_1(float2 uv, float2 inSize, float2 outSize, uint input_i
     float3 c01 = tex.SampleLevel(uv01, 0).rgb;
     float3 c11 = tex.SampleLevel(uv11, 0).rgb;
 
-    // --- 5. 双线性插值 ---
+    // --- 5. 双线性插�?---
     float3 cx0 = lerp(c00, c10, fracUV.x);
     float3 cx1 = lerp(c01, c11, fracUV.x);
     float3 color = lerp(cx0, cx1, fracUV.y);
@@ -116,14 +116,14 @@ float3 BilinearUpsample_1(float2 uv, float2 inSize, float2 outSize, uint input_i
 
 float3 DepthGuidedUpsample(TextureHandle lowTex, TextureHandle highDepth, float2 uv, float2 pixelSize)
 {
-    // 当前像素对应的高分深度
+    // 当前像素对应的高分深�?
     float depthCenter = highDepth.SampleLevel(uv, 0).r;
     float3 colorCenter = lowTex.SampleLevel(uv, 0).rgb;
 
     float3 colorSum = 0;
     float weightSum = 0;
 
-    const int radius = 1; // 小邻域 (3x3)
+    const int radius = 1; // 小邻�?(3x3)
     for (int y = -radius; y <= radius; ++y)
     {
         for (int x = -radius; x <= radius; ++x)
@@ -132,7 +132,7 @@ float3 DepthGuidedUpsample(TextureHandle lowTex, TextureHandle highDepth, float2
             float3 c = lowTex.SampleLevel(uv + offset, 0).rgb;
             float d = highDepth.SampleLevel(uv + offset, 0).r;
 
-            // 权重 = 深度差 + 距离差
+            // 权重 = 深度�?+ 距离�?
             float wDepth = exp(-abs(d - depthCenter) * 50.0);
             float wSpatial = exp(-dot(offset, offset) * 100.0);
             float w = wDepth * wSpatial;

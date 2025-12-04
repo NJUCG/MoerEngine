@@ -3,15 +3,15 @@
   * Reference: GAMES202
   */
 
-#include "framework/Bindless.hlsl"
-#include "framework/Common.hlsl"
+#include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::AoPipelineBindlessParam> param;
 
-// 定义了AoOutput、CameraMotionVector等函数
-#include "AoCommon.hlsl"
+// 定义了AoOutput、CameraMotionVector等函�?
+#include "pipelines/postprocess/lighting_effects/AoCommon.hlsl"
 
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
 

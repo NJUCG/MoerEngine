@@ -1,4 +1,4 @@
-#include "framework/Common.hlsl"
+#include "core/common/Common.hlsl"
 
 #define MAX_MESHLET_COUNT uint(1024 * 1024 * 8)
 struct TaskInput {

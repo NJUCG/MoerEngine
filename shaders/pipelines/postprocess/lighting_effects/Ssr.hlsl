@@ -3,10 +3,10 @@
   * Reference: GAMES202
   */
 
-#include "framework/Bindless.hlsl"
-#include "framework/Common.hlsl"
+#include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
-#include "framework/Material.hlsl"
+#include "materials/Material.hlsl"
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::SsrPipelineBindlessParam> param;
@@ -47,7 +47,7 @@ bool should_apply_ssr(float2 uv) { // the performance cost is so high
 float3 apply_view_projection(float3 position) {
     float4 p = mul(param.view_projection_matrix, float4(position, 1.0));
     p /= p.w;
-    // 两个究极大坑↓
+    // 两个究极大坑�?
     // p.z is not needed to apply f(x) = x * 0.5 + 0.5;
     // p.y is need to clip y;
     return float3(p.x * 0.5 + 0.5, -p.y * 0.5 + 0.5, p.z);
