@@ -106,6 +106,7 @@
 1. Clone NRD源码
    ```bash
    # 推荐在非MoerEngine目录下Clone NRD源码，避免不小心提交NRD源码
+   # 如果无法访问，请联系项目维护者
    git clone git@github.com:NJUCG/NRD.git
    ```
 
@@ -209,7 +210,9 @@ Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.
 
 ## 开源协议
 
-MoerEngine的开发主要引用了以下项目：
+MoerEngine源代码采用Apache-2.0 License授权。
+
+本项目开发过程中使用了以下项目：
 
 * [assimp](https://github.com/assimp/assimp)： BSD-3-Clause License
 * [astc-encoder](https://github.com/ARM-software/astc-encoder): Apache 2.0 License
@@ -237,5 +240,10 @@ MoerEngine的开发主要引用了以下项目：
 * [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers): Apache-2.0 License
 * WinPixEventRuntime: MIT License
 
+外部构建依赖（以下组件不包含在源码仓库中，需在构建时手动或自动下载）：
 
-d3d12_agilitysdk —— 不能用
+* [NVIDIA NRD](https://github.com/NVIDIA-RTX/NRD): 通过git下载（可选）
+* [D3D12 Agility SDK](https://devblogs.microsoft.com/directx/directx12agility/)：通过CMake自动下载
+* [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit)：官网下载（可选）
+* [LibTorch](https://pytorch.org/get-started/locally/)：官网下载（可选）
+* [TensorRT](https://developer.nvidia.com/tensorrt/download/10x)：官网下载（可选）
