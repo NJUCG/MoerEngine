@@ -115,14 +115,14 @@ float get_blocker_depth(Moer::LightingData lighting_data,float2 uv,float fragmen
         float2 offset = POISSON_DISK_16[i] * search_radius_uv;
         float occluder_depth = TextureHandle(lighting_data.shadow_map[cascade_index]).Sample2D<float>(uv + offset).x;
 
-        if (fragment_depth + SHADOW_BIAS < occluder_depth) {
+        if (occluder_depth > fragment_depth + SHADOW_BIAS) {
             avg_blocker_depth += occluder_depth;
             num_blockers++;
         }
     }
 
     if (num_blockers == 0) {
-        return -1.0; // 特殊值，表示没有找到遮挡物
+        return -1.0; // special value indicating no blockers found
     }
 
     return avg_blocker_depth / (float)num_blockers;
@@ -143,7 +143,7 @@ float calculate_penumbra_size(
 
     float penumbra_radius_uv = penumbra_radius_ndc / (lighting_data.shadow_csm_sm_size * shadow_clip_w);
 
-    return clamp(penumbra_radius_uv, 0.0, 0.1); // 经验最大值
+    return clamp(penumbra_radius_uv, 0.0, 0.1); // empirical maximum value to prevent excessive blur
 }
 
 float get_pcf_filter_result(Moer::LightingData lighting_data,float2 uv,float fragment_depth,float pcf_radius_uv,uint cascade_index)
@@ -156,7 +156,7 @@ float get_pcf_filter_result(Moer::LightingData lighting_data,float2 uv,float fra
         float2 offset = POISSON_DISK_16[i] * pcf_radius_uv;
         float occluder_depth = TextureHandle(lighting_data.shadow_map[cascade_index]).Sample2D<float>(uv + offset).x;
         
-        if (fragment_depth + SHADOW_BIAS < occluder_depth) {
+        if (occluder_depth > fragment_depth + SHADOW_BIAS) {
             shadow_contribution += 1.0;
         }
     }

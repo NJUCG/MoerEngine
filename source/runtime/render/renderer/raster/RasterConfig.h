@@ -155,11 +155,14 @@ struct RasterConfig {
     bool           shadow_csm_blend_option      = true;
     int            shadow_csm_sm_size           = 4096;
     bool           shadow_csm_visualize_cascade = false;
-    bool shadow_pcss_enabled = true;
-    float shadow_light_size_world = 1.0f;
-
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
         {0.01, 0.04, 0.1, 0.25, 0.32, 1.0};
+
+    // MARK: Shadow - PCSS
+    bool           shadow_pcss_enabled = true;
+    float          shadow_light_size_world = 1.0f;
+
+
 
     // MARK: Upsample Process
     EUpsampleMode upsample_mode = EUpsampleMode::None;
