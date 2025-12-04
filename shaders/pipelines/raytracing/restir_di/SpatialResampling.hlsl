@@ -1,6 +1,6 @@
 #include <lighting/lib/restir/Bindings.hlsli>
 #include <lighting/lib/restir/ResampleFunctions.hlsli>
-#include <hwrt/GBufferUtils.hlsli>
+#include <pipelines/raytracing/passes/GBufferUtils.hlsli>
 
 [numthreads(DI_SCREEN_TILE_SIZE, DI_SCREEN_TILE_SIZE, 1)] void
 main(uint2 dtid

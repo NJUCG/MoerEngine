@@ -10,7 +10,7 @@
 #include <core/common/Bindless.hlsl>
 #include <core/common/Common.hlsl>
 #include <core/math/Math.hlsli>
-#include <hwrt/GBufferUtils.hlsli>
+#include <pipelines/raytracing/passes/GBufferUtils.hlsli>
 #include <shared/Geometry.h>
 #include <shared/utils/MoerMath.hlsli>
 

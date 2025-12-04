@@ -86,7 +86,7 @@ values of "nrd::HitDistanceParameters"
 #define MOER_NRD_FRONTEND_HLSL
 
 #include "core/math/STL.hlsli"
-#include "NRDEncoding.hlsli"
+#include "external/nrd/NRDEncoding.hlsli"
 
 #include "shared/nrd/NRDDefinition.h"
 

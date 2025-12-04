@@ -39,7 +39,7 @@ add_dependencies(NRD NRI copy_dll_dxc)
 
 # post build
 set(NRD_ENCODING_FILE "${moer_third_party_dir}/NRD/Shaders/Include/NRDEncoding.hlsli")
-set(MOER_SHADER_NRD_DIR "${moer_shader_dir}/nrd")
+set(MOER_SHADER_NRD_DIR "${moer_shader_dir}/external/nrd")
 add_custom_command(
     OUTPUT "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
     COMMAND ${CMAKE_COMMAND} -E copy "${NRD_ENCODING_FILE}" "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
