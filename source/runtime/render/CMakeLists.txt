@@ -33,8 +33,6 @@ target_include_directories(${target_name}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/imgui>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/smaa>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRI/Include>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRD/Include>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRD/Integration>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Cross>
 )
 target_link_libraries(${target_name}
@@ -46,7 +44,6 @@ target_link_libraries(${target_name}
     PUBLIC smaa
     PUBLIC Moer::Core
     PUBLIC NRI
-    PUBLIC NRD
     PRIVATE spirv-cross-cpp
     # dx, maybe add a option based on platform
     PUBLIC d3d12_agilitysdk
@@ -66,6 +63,7 @@ if (TARGET Moer::Cuda)
         PUBLIC Moer::Cuda # Link CUDA and add includes
     )
     message(STATUS "Moer::Render linked Moer::Cuda")
+else()
 endif()
 
 # 设置WITH_CUDA宏
@@ -77,6 +75,25 @@ else()
 # 不启用
     target_compile_definitions(${target_name} PUBLIC WITH_CUDA=0)
     message(STATUS "WITH_CUDA=0 in Moer::Render")
+endif()
+
+# Link NRD & 设置NRD宏
+if (WITH_NRD)
+    target_include_directories(${target_name}
+        PUBLIC $<BUILD_INTERFACE:${NRD_ROOT}/Include>
+        PUBLIC $<BUILD_INTERFACE:${NRD_ROOT}/Integration>
+    )
+    target_link_libraries(${target_name}
+        PUBLIC NRD
+    )
+    
+    add_dependencies(${target_name} CopyNRDEncodingFile)
+
+    target_compile_definitions(${target_name} PUBLIC WITH_NRD=1)
+    message(STATUS "WITH_NRD=1 in Moer::Render. Linked NRD library.")
+else()
+    target_compile_definitions(${target_name} PUBLIC WITH_NRD=0)
+    message(STATUS "WITH_NRD=0 in Moer::Render")
 endif()
 
 target_compile_definitions(${target_name} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})
@@ -100,9 +117,7 @@ if(MSVC)
     set_property(TARGET ${target_name} PROPERTY
              MSVC_RUNTIME_LIBRARY  "${CMAKE_MSVC_RUNTIME_LIBRARY}")
 
-endif() 
-
-add_dependencies(${target_name} CopyNRDEncodingFile)
+endif()
 
 # MARK: Copy Resources
 
@@ -129,7 +144,7 @@ endif()
 
 # 设置输出目录
 add_custom_target(
-	CopyResources ALL
+	CopyResources
     COMMAND ${CMAKE_COMMAND} -E copy "${moer_root_dir}/MoerEngine.toml"                    "${output_dir}/MoerEngine.toml"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}/asset"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/asset"                    "${output_dir}/asset"
@@ -138,6 +153,4 @@ add_custom_target(
     COMMENT "Copying resources to ${output_dir}/asset"
 )
 
-# add_dependencies(${target_name} CopyResources)
-
-
+add_dependencies(${target_name} CopyResources)

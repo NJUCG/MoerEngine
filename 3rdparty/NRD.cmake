@@ -1,3 +1,15 @@
+
+# This file will be compiled if and only if WITH_NRD is ON
+
+if (NOT WITH_NRD)
+	message(FATAL_ERROR "NRD is disabled. NRD.cmake should not be included.")
+endif()
+
+# 检查${NRD_ROOT}路径是否存在
+if (NOT EXISTS "${NRD_ROOT}")
+	message(FATAL_ERROR "NRD_ROOT path does not exist: ${NRD_ROOT}. Please set the correct path to NRD library.")
+endif()
+
 # ShaderMake for NRD
 if (WIN32)
 	set(REDIST_DXC "${CMAKE_CURRENT_SOURCE_DIR}/DirectXShaderCompiler/bin/Windows/dxc.exe")
@@ -24,11 +36,12 @@ option(SHADERMAKE_FIND_FXC "" ON)
 # NRD
 set(NRD_DXC_PATH ${DXC_PATH})
 set(NRD_DXC_SPIRV_PATH ${DXC_SPIRV_PATH})
-set(NRD_SHADERS_PATH ${moer_third_party_dir}/NRD/Shaders/Binary CACHE STRING "")
+set(NRD_SHADERS_PATH ${NRD_ROOT}/Shaders/Binary CACHE STRING "")
 set(NRD_NORMAL_ENCODING "0" CACHE STRING "")
 set(NRD_ROUGHNESS_ENCODING "1" CACHE STRING "")
 message(STATUS NRD_DXC_PATH=${NRD_DXC_PATH})
-add_subdirectory(NRD)
+
+add_subdirectory(${NRD_ROOT} ${CMAKE_CURRENT_BINARY_DIR}/NRD)
 
 target_compile_options(
     NRD
@@ -38,7 +51,7 @@ target_compile_options(
 add_dependencies(NRD NRI copy_dll_dxc)
 
 # post build
-set(NRD_ENCODING_FILE "${moer_third_party_dir}/NRD/Shaders/Include/NRDEncoding.hlsli")
+set(NRD_ENCODING_FILE "${NRD_ROOT}/Shaders/Include/NRDEncoding.hlsli")
 set(MOER_SHADER_NRD_DIR "${moer_shader_dir}/nrd")
 add_custom_command(
     OUTPUT "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"

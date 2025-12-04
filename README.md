@@ -99,6 +99,31 @@
 
 * 启用CUDA后，光栅化渲染器就不支持Stencil模板测试了。原因是CUDA不支持 `PF_D32_SFLOAT_S8_UINT`
 
+### NRD降噪器支持
+
+* MoerEngine支持NVIDIA NRD拓展。由于NVIDIA的封闭协议，MoerEngine无法直接引入NRD，需要用户自行下载NRD源码并进行配置。以下为具体操作步骤
+
+1. Clone NRD源码
+   ```bash
+   # 推荐在非MoerEngine目录下Clone NRD源码，避免不小心提交NRD源码
+   git clone git@github.com:NJUCG/NRD.git
+   ```
+
+2. 根据模板创建配置文件
+   * 根据 `template.EnableNrd.cmake` 创建 `EnableNrd.cmake`
+   * 修改 `EnableNrd.cmake` 的内容，将 `NRD_DIR` 设置为你Clone的NRD源码路径
+
+3. 重新编译MoerEngine
+
+   ```bash
+   cmake -B build
+   cmake --build build -j16
+   # 或者使用just
+   just gb # generate build
+   ```
+
+   * 观察日志，若generate的日志出现了 `WITH_NRD=1`，则成功启用NRD；若日志中为 `WITH_NRD=0`，则没有启用NRD
+
 ## 使用方法
 
 ### 如何渲染场景？
@@ -181,3 +206,36 @@ Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.
   add_library(${target_name} SHARED ${moer_cuda_h} ${moer_cuda_cu})
   add_library(Moer::Cuda ALIAS ${target_name})
   ```
+
+## 开源协议
+
+MoerEngine的开发主要引用了以下项目：
+
+* [assimp](https://github.com/assimp/assimp)： BSD-3-Clause License
+* [astc-encoder](https://github.com/ARM-software/astc-encoder): Apache 2.0 License
+* [dds_image](https://github.com/spnda/dds_image): MIT License
+* [tinyexr](https://github.com/syoyo/tinyexr): BSD-3-Clause License
+* ktx: Apache-2.0 License
+* [pugixml](https://github.com/zeux/pugixml): MIT License
+* [stb](https://github.com/nothings/stb): MIT License
+* D3D12MemoryAllocator: MIT License
+* DirectXShaderCompiler: University of Illinois/NCSA Open Source License
+* [glfw](https://github.com/glfw/glfw): Zlib License
+* [imgui](https://github.com/ocornut/imgui): MIT License
+* [JSON for Modern C++](https://github.com/nlohmann/json): MIT License
+* [meshoptimizer](https://github.com/zeux/meshoptimizer): MIT License
+* [metis](https://github.com/KarypisLab/METIS/): Apache-2.0 License
+* [mimalloc](https://github.com/microsoft/mimalloc): MIT License
+* [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended): Zlib License
+* [NRI](https://github.com/NVIDIA-RTX/NRI): MIT License
+* [smaa](https://github.com/iryoku/smaa): MIT License
+* [spdlog](https://github.com/gabime/spdlog): MIT License
+* [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross): Apache-2.0 License
+* [tomlplusplus](https://github.com/marzer/tomlplusplus): MIT License
+* [volk](https://github.com/zeux/volk): MIT License
+* [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator): MIT License
+* [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers): Apache-2.0 License
+* WinPixEventRuntime: MIT License
+
+
+d3d12_agilitysdk —— 不能用

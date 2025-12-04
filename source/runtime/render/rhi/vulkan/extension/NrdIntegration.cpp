@@ -1,3 +1,6 @@
+
+#if WITH_NRD
+
 // NRD and NRI-based integration
 // 1
 #include <NRI.h>
@@ -9,3 +12,5 @@
 #include <NRD.h>
 // 5
 #include <NRDIntegration.hpp>
+
+#endif

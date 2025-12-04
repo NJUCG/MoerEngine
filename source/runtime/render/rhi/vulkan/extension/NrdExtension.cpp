@@ -1,5 +1,7 @@
 #include "rhi/extension/NrdExtension.h"
 
+#if WITH_NRD
+
 namespace Moer::Render::Ext {
 
 NRDInterface::~NRDInterface() {
@@ -136,4 +138,7 @@ void NRDInterface::SetDefaultCommonSettings(uint16 _frame_width, uint16 _frame_h
     nrd_common_settings.isBaseColorMetalnessAvailable       = false;
     nrd_common_settings.enableValidation                    = false;
 }
+
 }; // namespace Moer::Render::Ext
+
+#endif // WITH_NRD
