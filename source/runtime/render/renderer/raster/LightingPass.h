@@ -33,7 +33,7 @@ public:
 
         pbr_pipeline = context.manager.Raster()
                            .Vertex("core/utils/FullScreenQuad.hlsl")
-                           .Pixel("materials/PbrMaterial.frag.hlsl")
+                           .Pixel("pipelines/raster/deferred/lighting/RasterLightingPass.frag.hlsl")
                            .Build<PbrMaterialShadingPipeline>(std::move(pso_full_screen_info));
 
         CreateLightingData(context);
