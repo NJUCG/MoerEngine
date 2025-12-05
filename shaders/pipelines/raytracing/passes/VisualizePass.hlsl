@@ -2,7 +2,7 @@
 #include <core/common/Bindless.hlsl>
 #include <shared/ShaderParameters.h>
 
-#include <lighting/lib/restir/GridCommon.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/GridCommon.hlsli>
 #include <core/math/Math.hlsli>
 #include <shared/utils/Packing.h>
 

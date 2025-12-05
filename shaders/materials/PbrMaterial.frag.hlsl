@@ -2,7 +2,7 @@
 BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "core/common/Common.hlsl"
-#include "lighting/common/Lighting.hlsl"
+#include "pipelines/raytracing/lighting/common/Lighting.hlsl"
 #include "materials/Material.hlsl"
 
 #include "shared/raster/ShaderParameters.h"

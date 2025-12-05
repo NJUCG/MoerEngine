@@ -29,7 +29,7 @@ ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
     gen_low_discrepancy_pipeline =
         std::move(manager.Compute<GenLowDiscrepancyPipeline>("core/utils/GenLowDiscrepancySequence.hlsl"));
     generate_mip_pdf_pipeline =
-        std::move(manager.Compute<GenerateMipPdfPipeline>("lighting/precompute/ProcessEnvironmentMap.hlsl"));
+        std::move(manager.Compute<GenerateMipPdfPipeline>("pipelines/raytracing/lighting/precompute/ProcessEnvironmentMap.hlsl"));
     generate_mips_pipeline = std::move(manager.Compute<GenerateMipsPipeline>("core/utils/BuildMips.hlsl"));
 
     GfxPsoCreateInfo show_texture_pso_info(

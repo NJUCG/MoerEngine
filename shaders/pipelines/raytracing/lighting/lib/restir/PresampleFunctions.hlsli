@@ -1,8 +1,8 @@
 
 #ifndef MOER_DI_PRESAMPLE_FUNCTIONS_HLSLI
 #define MOER_DI_PRESAMPLE_FUNCTIONS_HLSLI
-#include <lighting/lib/restir/GridCommon.hlsli>
-#include <lighting/lib/restir/LightSelection.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/GridCommon.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/LightSelection.hlsli>
 namespace Moer {
 
 namespace SampleFunc {

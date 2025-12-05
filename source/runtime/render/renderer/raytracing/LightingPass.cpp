@@ -13,11 +13,11 @@ namespace Moer::Render::Raytracing {
 LightingPass::LightingPass(ShaderManager& _manager, Scene& _scene) : scene(_scene) {
 
     presample_light_pipeline =
-        std::move(_manager.Compute<PresampleLightPipeline>("lighting/precompute/PresampleLight.hlsl"));
+        std::move(_manager.Compute<PresampleLightPipeline>("pipelines/raytracing/lighting/precompute/PresampleLight.hlsl"));
     presample_env_map_pipeline =
-        std::move(_manager.Compute<PresampleEnvMapPipeline>("lighting/precompute/PresampleEnvmap.hlsl"));
+        std::move(_manager.Compute<PresampleEnvMapPipeline>("pipelines/raytracing/lighting/precompute/PresampleEnvmap.hlsl"));
     presample_light_grid_pipeline =
-        std::move(_manager.Compute<PresampleLightGridPipeline>("lighting/precompute/PresampleLightGrid.hlsl"));
+        std::move(_manager.Compute<PresampleLightGridPipeline>("pipelines/raytracing/lighting/precompute/PresampleLightGrid.hlsl"));
 
     generate_initial_sample_pipeline =
         std::move(_manager.Compute<GenerateInitialSamplePipeline>("pipelines/raytracing/restir_di/GenerateInitialSamples.hlsl")

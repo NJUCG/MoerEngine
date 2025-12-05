@@ -40,7 +40,7 @@
 
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include <materials/Material.hlsl>
-#include <lighting/common/PolymorphicLight.hlsli>
+#include <pipelines/raytracing/lighting/common/PolymorphicLight.hlsli>
 
 #include <pipelines/raytracing/inline/RaytracingCommon.hlsli>
 

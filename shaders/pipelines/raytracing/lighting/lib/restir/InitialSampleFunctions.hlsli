@@ -1,11 +1,11 @@
 #ifndef MOER_RESTIR_INITIAL_SAMPLE_FUNCTIONS_HLSLI
 #define MOER_RESTIR_INITIAL_SAMPLE_FUNCTIONS_HLSLI
-#include <lighting/lib/restir/Reservoirs.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/Reservoirs.hlsli>
 
-#include <lighting/lib/restir/GridCommon.hlsli>
-#include <lighting/lib/restir/RISCommon.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/GridCommon.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/RISCommon.hlsli>
 
-#include <lighting/lib/restir/LightSelection.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/LightSelection.hlsli>
 
 namespace Moer {
 namespace DI {

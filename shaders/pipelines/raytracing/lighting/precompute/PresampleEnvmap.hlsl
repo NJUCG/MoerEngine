@@ -1,5 +1,5 @@
-#include <lighting/lib/restir/Bindings.hlsli>
-#include <lighting/lib/restir/PresampleFunctions.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/Bindings.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/PresampleFunctions.hlsli>
 
 [numthreads(256, 1, 1)] void main(uint3 dtid
                                   : SV_DispatchThreadID) {

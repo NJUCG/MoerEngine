@@ -1,13 +1,13 @@
-#include <lighting/lib/restir/Bindings.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/Bindings.hlsli>
 
-#include <lighting/lib/restir/GridCommon.hlsli>
-#include <lighting/lib/restir/Reservoirs.hlsli>
-#include <lighting/lib/restir/Utils.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/GridCommon.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/Reservoirs.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/Utils.hlsli>
 #define WITH_NRD 1
 #ifdef WITH_NRD
 #include <external/nrd/NRD.hlsli>
 #endif
-#include <lighting/lib/restir/ShadingUtils.hlsli>
+#include <pipelines/raytracing/lighting/lib/restir/ShadingUtils.hlsli>
 
 [numthreads(DI_SCREEN_TILE_SIZE, DI_SCREEN_TILE_SIZE, 1)] void
 main(uint2 dtid
