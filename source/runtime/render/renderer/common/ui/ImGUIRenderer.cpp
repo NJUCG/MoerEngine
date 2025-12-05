@@ -1,4 +1,4 @@
-#include "ImGUIRenderer.h"
+﻿#include "ImGUIRenderer.h"
 
 #include "GLFW/glfw3.h"
 #include "IconsFontAwesome6.h"
@@ -262,8 +262,8 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
             {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(format)}
         );
         auto rast_pso = sd_mgr.Raster()
-                            .Vertex("GuiVert.hlsl")
-                            .Pixel("GuiFrag.hlsl")
+                            .Vertex("features/ui/GuiVert.hlsl")
+                            .Pixel("features/ui/GuiFrag.hlsl")
                             .Build<GUIPipelineBdls>(std::move(pso_info));
 
         render_backend_data->rast_psos[format] = std::move(rast_pso);

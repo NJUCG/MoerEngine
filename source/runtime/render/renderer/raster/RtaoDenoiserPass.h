@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "math/Function.h"
 #include "scene/Camera.h"
@@ -48,8 +48,8 @@ public:
             );
 
             rtao_denoiser_pso = context.manager.Raster()
-                                    .Vertex("utils/FullScreenQuad.hlsl")
-                                    .Pixel("raster/post_process/RtaoDenoiser.hlsl")
+                                    .Vertex("core/utils/FullScreenQuad.hlsl")
+                                    .Pixel("pipelines/postprocess/denoise/RtaoDenoiser.hlsl")
                                     .Build<RtaoDenoiserPassPipeline>(std::move(pso_full_screen_info));
         }
         {
@@ -57,8 +57,8 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(img_ao_only.tex->GetFormat())}
             );
             copy_pso = context.manager.Raster()
-                           .Vertex("utils/FullScreenQuad.hlsl")
-                           .Pixel("raster/CopyPass.hlsl")
+                           .Vertex("core/utils/FullScreenQuad.hlsl")
+                           .Pixel("pipelines/postprocess/common/CopyPass.hlsl")
                            .Build<CopyPassPipeline>(std::move(pso_full_screen_info));
         }
     }

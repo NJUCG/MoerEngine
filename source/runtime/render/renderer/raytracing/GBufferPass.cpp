@@ -1,4 +1,4 @@
-#include "GBufferPass.h"
+﻿#include "GBufferPass.h"
 
 #include "RTResource.h"
 #include "scene/CameraManager.h"
@@ -13,7 +13,7 @@ GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager, Scene& 
     device(_device),
     manager(_manager),
     scene(_scene),
-    post_process_pipeline{manager.Compute<PostProcessGBufferPipeline>("hwrt/PostProcessGBuffer.hlsl")} {
+    post_process_pipeline{manager.Compute<PostProcessGBufferPipeline>("pipelines/raytracing/passes/PostProcessGBuffer.hlsl")} {
 
     gbuffer_constants = device.CreateBuffer<Moer::byte>(
         "Raytracing::gbuffer_constants", sizeof(GBufferConstants), EBufferUsageFlags::CONSTANT_BUFFER
@@ -21,7 +21,7 @@ GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager, Scene& 
     RTGBufferMacros gbuffer_macros{};
     gbuffer_macros.SetMutation<RaytracingGBufferPipeline::PRINT_TEST>(true);
     gbuffer_pass_pipeline =
-        std::move(manager.Compute<RaytracingGBufferPipeline>("hwrt/GBufferRT.hlsl", gbuffer_macros));
+        std::move(manager.Compute<RaytracingGBufferPipeline>("pipelines/raytracing/passes/GBufferRT.hlsl", gbuffer_macros));
 }
 
 void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {

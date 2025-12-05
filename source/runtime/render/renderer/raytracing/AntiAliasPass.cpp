@@ -1,4 +1,4 @@
-#include "AntiAliasPass.h"
+﻿#include "AntiAliasPass.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/postprocess/ShaderParameters.h"
@@ -15,7 +15,7 @@ AntialiasPass::AntialiasPass(
 ) :
     manager(_manager),
     scene(_scene),
-    taa_pipeline(manager.Compute<TAAPipeline>("postprocess/TAAPass.hlsl")),
+    taa_pipeline(manager.Compute<TAAPipeline>("pipelines/postprocess/aa/TAAPass.hlsl")),
     frame_idx(0),
     jitter(float2(0.f)),
     jitter_mode(EJitter::MSAA),

@@ -1,4 +1,4 @@
-// #include "CopyDispatchArgs.h"
+﻿// #include "CopyDispatchArgs.h"
 // #include "rendergraph/RenderGraphPass.h"
 // #include "rhi/RHI.h"
 // #include "rhi/RHICommon.h"
@@ -6,7 +6,7 @@
 // #include "shader/Shader.h"
 // #include "shader/ShaderResourceManager.h"
 
-// IMPLEMENT_SHADER_TYPE(CopyDispatchArgsShader, "utils/CopyDispatchArgs.hlsl", "main", ST_COMPUTE)
+// IMPLEMENT_SHADER_TYPE(CopyDispatchArgsShader, "core/utils/CopyDispatchArgs.hlsl", "main", ST_COMPUTE)
 // namespace Moer {
 
 //     struct CopyDispatchArgs::Impl {

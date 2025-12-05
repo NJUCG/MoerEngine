@@ -1,4 +1,4 @@
-// #include "MeshDebugRenderer.h"
+﻿// #include "MeshDebugRenderer.h"
 // #include "RenderAPI.h"
 // #include "RenderThread.h"
 // #include "renderer/BackendRenderer.h"
@@ -34,7 +34,7 @@
 //     END_ROOT_PARAMETER_DEFINITION(Parameters);
 // };
 
-// IMPLEMENT_SHADER_TYPE(MeshDebugRendererVertexShader, "meshdebug/MeshDebugVert.hlsl", "main", ST_VERTEX);
+// IMPLEMENT_SHADER_TYPE(MeshDebugRendererVertexShader, "features/debug/MeshDebugVert.hlsl", "main", ST_VERTEX);
 
 // class MeshDebugRendererFragmentShader : public Shader {
 //     DEFINE_SHADER_TYPE(MeshDebugRendererFragmentShader, Shader, RENDER_API);
@@ -44,7 +44,7 @@
 //     END_ROOT_PARAMETER_DEFINITION(Parameters);
 // };
 
-// IMPLEMENT_SHADER_TYPE(MeshDebugRendererFragmentShader, "meshdebug/MeshDebugFrag.hlsl", "main", ST_FRAGMENT);
+// IMPLEMENT_SHADER_TYPE(MeshDebugRendererFragmentShader, "features/debug/MeshDebugFrag.hlsl", "main", ST_FRAGMENT);
 
 // class MeshletCullShader : public Shader {
 //     DEFINE_SHADER_TYPE(MeshletCullShader, Shader, RENDER_API);
@@ -54,7 +54,7 @@
 //     END_ROOT_PARAMETER_DEFINITION(Parameters);
 // };
 
-// // IMPLEMENT_SHADER_TYPE(MeshletCullShader, "meshdebug/Cull.hlsl", "main", ST_COMPUTE);
+// // IMPLEMENT_SHADER_TYPE(MeshletCullShader, "features/debug/Cull.hlsl", "main", ST_COMPUTE);
 
 // namespace Moer {
 //     class MeshDebugRenderer::Impl {

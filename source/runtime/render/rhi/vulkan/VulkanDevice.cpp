@@ -1,4 +1,4 @@
-//
+﻿//
 // Created by 74535 on 2023/10/2.
 //
 
@@ -486,7 +486,7 @@ void VulkanDevice::CreateDescriptorHeap() {
 void VulkanDevice::CreateInternalShaders() {
     internal_shaders = MakeUnique<DeviceInternalShaders>();
     internal_shaders->sd_component_shuffle =
-        ShaderManager::Get().Compute<ComponentShuffleShader>("utils/ShuffleBufferIndices.hlsl");
+        ShaderManager::Get().Compute<ComponentShuffleShader>("core/utils/ShuffleBufferIndices.hlsl");
 }
 
 void VulkanDevice::DestroyInternalShaders() {

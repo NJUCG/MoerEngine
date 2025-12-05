@@ -1,4 +1,4 @@
-#include "shader/GeometryPassPsoManager.h"
+﻿#include "shader/GeometryPassPsoManager.h"
 
 #include "misc/MMemory.h"
 #include "shader/ShaderCommon.h"
@@ -83,8 +83,8 @@ public:
         for (const auto& bitmask : supported_bitmask) {
             ans.push_back({
                 .vertex_attributes_bitmask = bitmask,
-                .vertex_shader_path        = "raster/geometry_pass/GeometryPassCommonVertex.hlsl",
-                .pixel_shader_path         = "raster/geometry_pass/GeometryPassCommonPixel.hlsl",
+                .vertex_shader_path        = "pipelines/raster/deferred/GeometryPassCommonVertex.hlsl",
+                .pixel_shader_path         = "pipelines/raster/deferred/GeometryPassCommonPixel.hlsl",
                 .vertex_shader_entry       = "main",
                 .pixel_shader_entry        = "main",
                 .vertex_shader_environment = [&]() -> ShaderCompilerEnvironment {

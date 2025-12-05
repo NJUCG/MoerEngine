@@ -1,4 +1,4 @@
-#include "LightingPass.h"
+﻿#include "LightingPass.h"
 
 #include "Configs.h"
 #include "rhi/RHI.h"
@@ -13,21 +13,21 @@ namespace Moer::Render::Raytracing {
 LightingPass::LightingPass(ShaderManager& _manager, Scene& _scene) : scene(_scene) {
 
     presample_light_pipeline =
-        std::move(_manager.Compute<PresampleLightPipeline>("lighting/PresampleLight.hlsl"));
+        std::move(_manager.Compute<PresampleLightPipeline>("pipelines/raytracing/lighting/precompute/PresampleLight.hlsl"));
     presample_env_map_pipeline =
-        std::move(_manager.Compute<PresampleEnvMapPipeline>("lighting/PresampleEnvMap.hlsl"));
+        std::move(_manager.Compute<PresampleEnvMapPipeline>("pipelines/raytracing/lighting/precompute/PresampleEnvmap.hlsl"));
     presample_light_grid_pipeline =
-        std::move(_manager.Compute<PresampleLightGridPipeline>("lighting/PresampleLightGrid.hlsl"));
+        std::move(_manager.Compute<PresampleLightGridPipeline>("pipelines/raytracing/lighting/precompute/PresampleLightGrid.hlsl"));
 
     generate_initial_sample_pipeline =
-        std::move(_manager.Compute<GenerateInitialSamplePipeline>("hwrt/ReSTIRDI/GenerateInitialSamples.hlsl")
+        std::move(_manager.Compute<GenerateInitialSamplePipeline>("pipelines/raytracing/restir_di/GenerateInitialSamples.hlsl")
         );
     temporal_resmaple_pipeline =
-        std::move(_manager.Compute<TemporalResmaplePipeline>("hwrt/ReSTIRDI/TemporalResampling.hlsl"));
+        std::move(_manager.Compute<TemporalResmaplePipeline>("pipelines/raytracing/restir_di/TemporalResampling.hlsl"));
     spatial_resample_pipeline =
-        std::move(_manager.Compute<SpatialResamplePipeline>("hwrt/ReSTIRDI/SpatialResampling.hlsl"));
+        std::move(_manager.Compute<SpatialResamplePipeline>("pipelines/raytracing/restir_di/SpatialResampling.hlsl"));
     di_shade_sample_pipeline =
-        std::move(_manager.Compute<DIShadeSamplePipeline>("hwrt/ReSTIRDI/Shading.hlsl"));
+        std::move(_manager.Compute<DIShadeSamplePipeline>("pipelines/raytracing/restir_di/Shading.hlsl"));
 
     auto& device    = RenderDevice::Get();
     resample_params = device.CreateBuffer<byte>(

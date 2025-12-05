@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "PixelFormat.h"
 #include "misc/STL.h"
@@ -45,8 +45,8 @@ public:
         //         RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(output_format)}
         //     );
         //     return _manager.Raster()
-        //         .Vertex("CombineGuiVert.hlsl")
-        //         .Pixel("CombineGuiFrag.hlsl")
+        //         .Vertex("features/ui/CombineGuiVert.hlsl")
+        //         .Pixel("features/ui/CombineGuiFrag.hlsl")
         //         .Build<CombineUIPipeline>(std::move(combine_pso_info));
         // }();
 
@@ -55,8 +55,8 @@ public:
         //         RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(output_format)}
         //     );
         //     return _manager.Raster()
-        //         .Vertex("framework/FullScreen.vert.hlsl")
-        //         .Pixel("utils/CopyTexture.frag.hlsl")
+        //         .Vertex("core/common/FullScreen.vert.hlsl")
+        //         .Pixel("core/utils/CopyTexture.frag.hlsl")
         //         .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
         // }();
 
@@ -65,8 +65,8 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
             combine_ui_pipelines[format] = _manager.Raster()
-                                               .Vertex("CombineGuiVert.hlsl")
-                                               .Pixel("CombineGuiFrag.hlsl")
+                                               .Vertex("features/ui/CombineGuiVert.hlsl")
+                                               .Pixel("features/ui/CombineGuiFrag.hlsl")
                                                .Build<CombineUIPipeline>(std::move(combine_pso_info));
 
             GfxPsoCreateInfo sample_tex_pso_info(
@@ -74,8 +74,8 @@ public:
             );
             sample_texture_pipelines[format] =
                 _manager.Raster()
-                    .Vertex("framework/FullScreen.vert.hlsl")
-                    .Pixel("utils/CopyTexture.frag.hlsl")
+                    .Vertex("core/common/FullScreen.vert.hlsl")
+                    .Pixel("core/utils/CopyTexture.frag.hlsl")
                     .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
         }
     }

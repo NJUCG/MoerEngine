@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "math/Function.h"
 #include "scene/Camera.h"
@@ -123,8 +123,8 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
             return context.manager.Raster()
-                .Vertex("raster/post_process/SmaaWrapper.hlsl", "SMAAEdgeDetectionVS_Wrapper")
-                .Pixel("raster/post_process/SmaaWrapper.hlsl", "SMAALumaEdgeDetectionPS_Wrapper")
+                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAAEdgeDetectionVS_Wrapper")
+                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAALumaEdgeDetectionPS_Wrapper")
                 .Build<SmaaEdgeDetectionPipeline>(std::move(pso_full_screen_info));
         }();
 
@@ -133,8 +133,8 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
             return context.manager.Raster()
-                .Vertex("raster/post_process/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper")
-                .Pixel("raster/post_process/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
+                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper")
+                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
                 .Build<SmaaBlendingWeightPipeline>(std::move(pso_full_screen_info));
         }();
 
@@ -143,8 +143,8 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
             return context.manager.Raster()
-                .Vertex("raster/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-                .Pixel("raster/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
+                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
+                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
                 .Build<SmaaNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
         }();
 
@@ -153,8 +153,8 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
             return context.manager.Raster()
-                .Vertex("raster/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-                .Pixel("raster/post_process/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
+                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
+                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
                 .Build<SmaaT2xNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
         }();
 
@@ -163,8 +163,8 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
             return context.manager.Raster()
-                .Vertex("raster/post_process/SmaaWrapper.hlsl", "SMAAResolveVS_Wrapper")
-                .Pixel("raster/post_process/SmaaWrapper.hlsl", "SMAAResolvePS_Wrapper")
+                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAAResolveVS_Wrapper")
+                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAAResolvePS_Wrapper")
                 .Build<SmaaT2xResolvePipeline>(std::move(pso_full_screen_info));
         }();
 
@@ -174,8 +174,8 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
             return context.manager.Raster()
-                .Vertex("utils/FullScreenQuad.hlsl")
-                .Pixel("raster/post_process/FxaaPrecompute.hlsl")
+                .Vertex("core/utils/FullScreenQuad.hlsl")
+                .Pixel("pipelines/postprocess/aa/FxaaPrecompute.hlsl")
                 .Build<FxaaPrecomputePipeline>(std::move(pso_full_screen_info));
         }();
 
@@ -184,8 +184,8 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
             return context.manager.Raster()
-                .Vertex("utils/FullScreenQuad.hlsl")
-                .Pixel("raster/post_process/Fxaa.hlsl")
+                .Vertex("core/utils/FullScreenQuad.hlsl")
+                .Pixel("pipelines/postprocess/aa/Fxaa.hlsl")
                 .Build<FxaaPipeline>(std::move(pso_full_screen_info));
         }();
 

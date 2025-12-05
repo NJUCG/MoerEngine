@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "math/Function.h"
 #include "misc/STL.h"
@@ -34,9 +34,9 @@ public:
 class GeometryPass {
 public:
     GeometryPass(RasterContext& _context) :
-        vertex_shader("raster/geometry_pass/GeometryPassCommonVertex.hlsl"),
+        vertex_shader("pipelines/raster/deferred/GeometryPassCommonVertex.hlsl"),
         shadow_vertex_shader(
-            "raster/geometry_pass/GeometryPassCommonVertex.hlsl",
+            "pipelines/raster/deferred/GeometryPassCommonVertex.hlsl",
             GeometryPassPipeline::MutationSet::GetMutationSetFromValues(true)
         ) {}
 
@@ -75,7 +75,7 @@ public:
                 GeometryPassPipeline::MutationSet mutation_set{};
                 mutation_set.SetMutation<GeometryPassPipeline::SHADOW_DEPTH_PASS>(false);
                 Shader& frag = ShaderManager::Get().CompileShader(
-                    ST_FRAGMENT, "raster/geometry_pass/GeometryPassCommonPixel.hlsl", mutation_set
+                    ST_FRAGMENT, "pipelines/raster/deferred/GeometryPassCommonPixel.hlsl", mutation_set
                 );
 
                 pipeline_map.emplace(

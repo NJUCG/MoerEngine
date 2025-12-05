@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "math/Function.h"
 #include "scene/Camera.h"
@@ -67,18 +67,18 @@ public:
         };
 
         ao_pipeline = context.manager.Raster()
-                          .Vertex("utils/FullScreenQuad.hlsl")
-                          .Pixel("raster/post_process/Ao.hlsl")
+                          .Vertex("core/utils/FullScreenQuad.hlsl")
+                          .Pixel("pipelines/postprocess/lighting_effects/Ao.hlsl")
                           .Build<AoPipeline>(std::move(create_pso_func()));
 
         rtao_pipeline = context.manager.Raster()
-                            .Vertex("utils/FullScreenQuad.hlsl")
-                            .Pixel("raster/post_process/Rtao.hlsl")
+                            .Vertex("core/utils/FullScreenQuad.hlsl")
+                            .Pixel("pipelines/postprocess/lighting_effects/Rtao.hlsl")
                             .Build<RtaoPipeline>(std::move(create_pso_func()));
 
         ssdo_pipeline = context.manager.Raster()
-                            .Vertex("utils/FullScreenQuad.hlsl")
-                            .Pixel("raster/post_process/Ssdo.hlsl")
+                            .Vertex("core/utils/FullScreenQuad.hlsl")
+                            .Pixel("pipelines/postprocess/lighting_effects/Ssdo.hlsl")
                             .Build<SsdoPipeline>(std::move(create_pso_func()));
 
         CreateMotionVectorData(context);

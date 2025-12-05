@@ -1,4 +1,4 @@
-#include "ShaderUtils.h"
+﻿#include "ShaderUtils.h"
 #include "PixelFormat.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
@@ -27,17 +27,17 @@ ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
     manager(_manager),
     device(_device) {
     gen_low_discrepancy_pipeline =
-        std::move(manager.Compute<GenLowDiscrepancyPipeline>("utils/GenLowDiscrepancySequence.hlsl"));
+        std::move(manager.Compute<GenLowDiscrepancyPipeline>("core/utils/GenLowDiscrepancySequence.hlsl"));
     generate_mip_pdf_pipeline =
-        std::move(manager.Compute<GenerateMipPdfPipeline>("lighting/ProcessEnvironmentMap.hlsl"));
-    generate_mips_pipeline = std::move(manager.Compute<GenerateMipsPipeline>("utils/BuildMips.hlsl"));
+        std::move(manager.Compute<GenerateMipPdfPipeline>("pipelines/raytracing/lighting/precompute/ProcessEnvironmentMap.hlsl"));
+    generate_mips_pipeline = std::move(manager.Compute<GenerateMipsPipeline>("core/utils/BuildMips.hlsl"));
 
     GfxPsoCreateInfo show_texture_pso_info(
         RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)}
     );
     show_texture_pipeline = std::move(manager.Raster()
-                                          .Vertex("utils/FullScreenQuad.hlsl")
-                                          .Pixel("utils/ShowTexture.frag.hlsl")
+                                          .Vertex("core/utils/FullScreenQuad.hlsl")
+                                          .Pixel("core/utils/ShowTexture.frag.hlsl")
                                           .Build<ShowTexturePipeline>(std::move(show_texture_pso_info)));
 
     // for (auto format : s_supported_formats) {
@@ -46,13 +46,13 @@ ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
     //     );
     //     sample_texture_pipeline_map[format] =
     //         std::move(manager.Raster()
-    //                       .Vertex("utils/FullScreenQuad.hlsl")
-    //                       .Pixel("utils/CopyTexture.frag.hlsl")
+    //                       .Vertex("core/utils/FullScreenQuad.hlsl")
+    //                       .Pixel("core/utils/CopyTexture.frag.hlsl")
     //                       .Build<UtilsSampleTexturePipeline>(std::move(sample_tex_pso_info)));
     // }
 
     sample_texture_cs_pipeline =
-        std::move(manager.Compute<UtilsSampleTexturePipelineCS>("utils/CopyTexture.cs.hlsl"));
+        std::move(manager.Compute<UtilsSampleTexturePipelineCS>("core/utils/CopyTexture.cs.hlsl"));
 }
 
 void ShaderUtils::GenerateLowDiscrepancySequence(

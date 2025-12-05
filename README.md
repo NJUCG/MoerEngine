@@ -184,6 +184,8 @@ Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.
 
 *TODO*
 
+Shaders文件夹架构及相关规范见`/shaders/README.md`。
+
 ### CMake命名规范
 
 |               | 命名风格        | 示例                                     |
