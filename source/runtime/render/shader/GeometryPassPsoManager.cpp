@@ -83,8 +83,8 @@ public:
         for (const auto& bitmask : supported_bitmask) {
             ans.push_back({
                 .vertex_attributes_bitmask = bitmask,
-                .vertex_shader_path        = "pipelines/raster/deferred/GeometryPassCommonVertex.hlsl",
-                .pixel_shader_path         = "pipelines/raster/deferred/GeometryPassCommonPixel.hlsl",
+                .vertex_shader_path        = "pipelines/raster/deferred/geometry/GeometryPassCommonVertex.hlsl",
+                .pixel_shader_path         = "pipelines/raster/deferred/geometry/GeometryPassCommonPixel.hlsl",
                 .vertex_shader_entry       = "main",
                 .pixel_shader_entry        = "main",
                 .vertex_shader_environment = [&]() -> ShaderCompilerEnvironment {

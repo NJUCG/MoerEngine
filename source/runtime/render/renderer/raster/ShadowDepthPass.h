@@ -31,7 +31,7 @@ public:
 class ShadowDepthPass {
 public:
     ShadowDepthPass(RasterContext& context) :
-        vertex_shader("pipelines/raster/deferred/GeometryPassCommonVertex.hlsl") {}
+        vertex_shader("pipelines/raster/deferred/geometry/GeometryPassCommonVertex.hlsl") {}
 
     void CreateCsmData(RasterContext& context, const RasterConfig& ui_config) {
         // 检查并创建所有ShadowMap
@@ -204,7 +204,7 @@ public:
                     ShadowDepthPassPipeline::MutationSet mutation_set{};
                     mutation_set.SetMutation<ShadowDepthPassPipeline::SHADOW_DEPTH_PASS>(true);
                     Shader& frag = ShaderManager::Get().CompileShader(
-                        ST_FRAGMENT, "pipelines/raster/deferred/GeometryPassCommonPixel.hlsl", mutation_set
+                        ST_FRAGMENT, "pipelines/raster/deferred/geometry/GeometryPassCommonPixel.hlsl", mutation_set
                     );
 
                     pipeline_map.emplace(
