@@ -1,5 +1,11 @@
 # NRI
 add_subdirectory(NRI)
+
+# 修复NRI使用D3D12AgilitySDK，而不是系统WindowsSDK的问题
+target_include_directories(NRI_D3D12 BEFORE PRIVATE 
+    "${MOER_AGILITYSDK_DIR}/build/native/include"
+)
+
 target_compile_options(NRI
 PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-return-type-c-linkage>"
 INTERFACE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-deprecated-declarations>"
