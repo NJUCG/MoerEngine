@@ -134,6 +134,8 @@ public:
         const float near_clip = camera->GetNearClip();
         const float far_clip  = camera->GetFarClip();
 
+        context.shadow_map_data.light_dir = Normalizef(light_direction_optional->GetDirection());
+
         //lerp csm ratios
         switch (ui_config.shadow_map_mode) {
             case EShadowMapMode::CSM_AUTO:

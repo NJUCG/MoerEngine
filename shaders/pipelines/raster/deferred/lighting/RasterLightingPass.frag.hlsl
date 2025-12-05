@@ -6,7 +6,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "materials/Material.hlsl"
 
 #include "materials/Pbr.hlsli"
-#include "pipelines/raster/deferred/lighting/Shadow.hlsli"
+#include "pipelines/raster/deferred/lighting/shadows/Shadows.hlsli"
 #include "pipelines/raster/deferred/lighting/IBL.hlsli"
 
 #include "shared/raster/ShaderParameters.h"
@@ -92,7 +92,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
 
     // - Shadow
-    float shadow = calculate_shadow(lighting_data, position);
+    float shadow = calculate_shadow(lighting_data, position,in_uv,normal);
 
     // - Shading
     for (uint i = 0; i < lighting_data.light_count; i++) {

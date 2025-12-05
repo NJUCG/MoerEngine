@@ -2,7 +2,6 @@
 #define RASTER_LIGHTING_IBL_HLSLI
 
 #include "core/common/Bindless.hlsl"
-#include "pipelines/raytracing/lighting/common/Lighting.hlsl"
 #include "shared/raster/ShaderParameters.h"
 
 float4 calculate_ibl(Moer::LightingData lighting_data, float3 world_pos,uint skybox_handles[6]) {

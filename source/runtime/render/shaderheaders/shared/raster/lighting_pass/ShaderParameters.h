@@ -54,6 +54,7 @@ struct LightingData {
     float3   camera_position;
     // uint     padding;// FIXME: need or not?
     uint light_count;
+    float3 main_light_direction;
 
     uint shadow_map_mode;
     uint shadow_sampling_mode;

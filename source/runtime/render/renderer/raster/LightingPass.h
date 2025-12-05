@@ -108,6 +108,8 @@ public:
             ui_config.shadow_pcss_light_size_world; //假定的光源大小，用于软阴影计算
         lighting_data->pcss_enabled = ui_config.shadow_pcss_enabled ? 1 : 0;
 
+        lighting_data->main_light_direction = context.shadow_map_data.light_dir;
+
         context.cmd_list.CopyFrom(
             std::span<byte>((byte*)lighting_data, sizeof(LightingData)), lighting_data_buffer.buf->GetView()
         );
