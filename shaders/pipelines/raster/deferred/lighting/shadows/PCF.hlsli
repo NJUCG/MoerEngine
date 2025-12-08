@@ -5,45 +5,41 @@
 #include "pipelines/raster/deferred/lighting/shadows/ShadowCore.hlsli"
 #include "pipelines/raster/deferred/lighting/shadows/ShadowSampling.hlsli"
 
-// 基础的 PCF 采样
-float calculate_pcf(uint shadow_map_handle, float2 uv, float fragment_depth, float radius_uv) {
-    if (radius_uv <= 0.0) return 1.0;
-    
-    float shadow_contribution = 0.0;
-    // 这里的循环次数 16 也可以考虑用宏控制，比如 #if HIGH_QUALITY_SHADOW
-    [unroll]
-    for (int i = 0; i < 16; ++i) {
-        float2 offset = POISSON_DISK_16[i] * radius_uv;
-        float occluder_depth = TextureHandle(shadow_map_handle).Sample2D<float>(uv + offset).x;
-        if (occluder_depth > fragment_depth + SHADOW_BIAS) {
-            shadow_contribution += 1.0;
-        }
-    }
-    return 1.0 - (shadow_contribution / 16.0);
-}
 
-// 基础 PCF (带随机旋转)
-float calculate_pcf(ShadowContext ctx, float radius_uv) {
-    if (radius_uv <= 0.0) return 1.0;
-    
-    float shadow_contribution = 0.0;
-    // 获取随机旋转矩阵
+float calculate_pcf(ShadowContext ctx, float penumbra_uv, float2x2 pcf_transform_matrix) {
+    float visibility = 0.0;
     float2x2 rotation = GetRandomRotation(ctx.screenUV);
+    float dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);
 
     [unroll]
-    for (int i = 0; i < 16; ++i) {
-        // 应用旋转
-        float2 offset = mul(rotation, POISSON_DISK_16[i]) * radius_uv;
+    for (int i = 0; i < PCSS_SAMPLES; ++i) {
+        float2 disk_sample = mul(rotation, POISSON_DISK_16[i]);
+        
+        // 应用椭圆变换
+        float2 offset = mul(pcf_transform_matrix, disk_sample) * penumbra_uv;
         
         float occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(ctx.shadowUV + offset).x;
         
-        // Reverse-Z 逻辑: occluder > fragment 代表更近 (遮挡)
-        if (occluder_depth > ctx.fragmentDepth + SHADOW_BIAS) {
-            shadow_contribution += 1.0;
+        if (occluder_depth <= ctx.fragmentDepth + dynamicBias) {
+            visibility += 1.0;
         }
     }
+    visibility /= float(PCSS_SAMPLES);
+
+    #if PCSS_SHARE_PER_PIXEL_QUAD == 2
+    float2 deriv = max(abs(ddx(ctx.fragmentDepth)), abs(ddy(ctx.fragmentDepth)));
+    float flat_factor = 1.0 - saturate(max(deriv.x, deriv.y) * 100.0);
     
-    return 1.0 - (shadow_contribution / 16.0);
+    if (flat_factor > 0.0) {
+        // 混合当前像素的可见性和邻居的平均可见性
+        // 这里的 0.5 是混合强度，可以调成 1.0 让它完全平均，或者 0.5 保留一点自己的特征
+        // UE 原版代码这里用了 DoPerQuad * 0.5，也就是 flat_factor * 0.5
+        float avg_vis = QuadAverage(visibility);
+        visibility = lerp(visibility, avg_vis, flat_factor*0.5);
+    }
+    #endif
+
+    return visibility;
 }
 
 #endif

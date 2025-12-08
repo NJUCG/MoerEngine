@@ -1,8 +1,6 @@
 #ifndef MOER_LIGHTING_SHADOWS_PCSS_HLSLI
 #define MOER_LIGHTING_SHADOWS_PCSS_HLSLI
 
-#include "pipelines/raster/deferred/lighting/shadows/PCF.hlsli"
-
 // CONFIGURATION OF PCSS
 // -----------------------------------------------------------------------
 
@@ -32,53 +30,40 @@
 #define PCSS_SAMPLE_BITS 4
 #define PCSS_SAMPLES (1 << PCSS_SAMPLE_BITS)
 
-float QuadAverage(float val) {
-    float val0 = QuadReadLaneAt(val, 0);
-    float val1 = QuadReadLaneAt(val, 1);
-    float val2 = QuadReadLaneAt(val, 2);
-    float val3 = QuadReadLaneAt(val, 3);
-    return (val0 + val1 + val2 + val3) * 0.25;
-}
-float2 QuadAverage(float2 val) {
-    return float2(QuadAverage(val.x), QuadAverage(val.y));
-}
+//必须先定义宏，再包含头文件
+#include "pipelines/raster/deferred/lighting/shadows/PCF.hlsli"
 
-// 生成一个沿特定方向缩放的 2x2 矩阵
-// Direction: 缩放的主轴方向 (必须归一化)
-// ScaleMinusOne: (缩放倍数 - 1)
-float2x2 GenerateDirectionalScale2x2Matrix(float2 Direction, float ScaleMinusOne)
-{
-    return float2x2(
-       1.0 + ScaleMinusOne * Direction.x * Direction.x, ScaleMinusOne * Direction.y * Direction.x,
-       ScaleMinusOne * Direction.x * Direction.y,       1.0 + ScaleMinusOne * Direction.y * Direction.y
-    );
-}
-
-
-float find_blocker(ShadowContext ctx, float search_radius_uv,out float2 out_occluder_uv_center) {
-    float num_blockers = 0;
-    float blocker_depth_sum = 0.0;
-    float2 blocker_uv_sum = float2(0, 0); 
+BlockerStats find_blocker(ShadowContext ctx, float search_radius_uv) {
+    BlockerStats stats;
+    stats.blockerCase=1;
+    stats.avgDepth = 0;
+    stats.numBlockers = 0;
+    stats.uvSum = float2(0, 0);
+    stats.uvSqSum = float2(0, 0);
+    stats.uvCrossSum = 0;
     
     float2x2 rotation = GetRandomRotation(ctx.screenUV);
     float dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);
 
     #if PCSS_MAX_DEPTH_BIAS
         // 限制最大 Bias，防止漏光
-        dynamicBias = min(dynamicBias, 0.0001);
+        dynamicBias = min(dynamicBias, 0.00001);
     #endif
 
     [unroll]
     for (int i = 0; i < PCSS_SEARCH_SAMPLES; ++i) {
-        float2 offset = mul(rotation, POISSON_DISK_16[i]) * search_radius_uv;
-        float occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(ctx.shadowUV + offset).x;
+
+        float2 raw_offset = mul(rotation, POISSON_DISK_16[i]); 
+        float2 sample_uv = ctx.shadowUV + raw_offset * search_radius_uv;
+        float occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(sample_uv).x;
         
-        // Reverse-Z 逻辑
-        //if (occluder_depth > ctx.fragmentDepth + SHADOW_BIAS) {
         if (occluder_depth > ctx.fragmentDepth + dynamicBias) {
-            blocker_depth_sum += occluder_depth;
-            blocker_uv_sum += offset;
-            num_blockers+=1.0;  
+            stats.avgDepth += occluder_depth;
+            stats.numBlockers += 1.0;
+            
+            stats.uvSum += raw_offset;
+            stats.uvSqSum += raw_offset * raw_offset;
+            stats.uvCrossSum += raw_offset.x * raw_offset.y;
         }
     }
 
@@ -88,64 +73,106 @@ float find_blocker(ShadowContext ctx, float search_radius_uv,out float2 out_occl
         float flat_factor = 1.0 - saturate(max(deriv.x, deriv.y) * 100.0); // 100.0 是敏感度参数
         
         // 只有在平坦区域才进行 Quad 共享
-        if (flat_factor > 0.0) {
-            float avg_num = QuadAverage(num_blockers);
-            float avg_sum = QuadAverage(blocker_depth_sum);
-            float2 avg_uv = QuadAverage(blocker_uv_sum);
-            
-            // 混合原始结果和 Quad 平均结果
-            num_blockers = lerp(num_blockers, avg_num, flat_factor);
-            blocker_depth_sum = lerp(blocker_depth_sum, avg_sum, flat_factor);
-            blocker_uv_sum = lerp(blocker_uv_sum, avg_uv, flat_factor);
+        if (flat_factor > 0.0) 
+        {
+            stats.numBlockers = lerp(stats.numBlockers, QuadAverage(stats.numBlockers), flat_factor);
+            stats.avgDepth    = lerp(stats.avgDepth,    QuadAverage(stats.avgDepth),    flat_factor);
+            stats.uvSum       = lerp(stats.uvSum,       QuadAverage(stats.uvSum),       flat_factor);
+            stats.uvSqSum     = lerp(stats.uvSqSum,     QuadAverage(stats.uvSqSum),     flat_factor);
+            stats.uvCrossSum  = lerp(stats.uvCrossSum,  QuadAverage(stats.uvCrossSum),  flat_factor);
         }
     #endif
     
-    if (num_blockers < 0.1) {
-        out_occluder_uv_center = float2(0, 0);
+    if (stats.numBlockers < 0.1) {
         #if PCSS_DEBUG_EARLY_RETURN
-            return -2.0; // 返回特殊值表示全亮 (Debug 红色/白色)
+            stats.blockerCase=2;
+            return stats; // 返回特殊值表示全亮 (Debug 红色/白色)
         #endif
-        return -1.0; 
     }
     
     // 如果所有采样点都被遮挡
-    if (num_blockers > (float(PCSS_SEARCH_SAMPLES) - 0.5)) {
-         #if PCSS_DEBUG_EARLY_RETURN
-            return -3.0; // 返回特殊值表示全黑
+    if (stats.numBlockers > (float(PCSS_SEARCH_SAMPLES) - 0.5)) {
+        #if PCSS_DEBUG_EARLY_RETURN
+            stats.blockerCase=0;
+            return stats; // 返回特殊值表示全黑
         #endif
     }
+
+    if (stats.numBlockers > 0.1) {
+        stats.avgDepth /= stats.numBlockers;
+    }
     
-    float inv_num = 1.0 / num_blockers;
-    out_occluder_uv_center = blocker_uv_sum * inv_num; // 重心
-    return blocker_depth_sum * inv_num;
+    return stats;
 }
 
-// 2. Penumbra Size
 float calculate_penumbra(ShadowContext ctx, float avg_blocker_depth) {
     return max(avg_blocker_depth - ctx.fragmentDepth, 0.0) / (1.0 - avg_blocker_depth + 1e-6) * ctx.lightSizeWorld;
 }
 
-// PCSS 主函数
+// PCSS
 float calculate_pcss(ShadowContext ctx) {
-    // Step 1: Blocker Search
+    // Blocker Search
     float search_radius_uv = ctx.lightSizeWorld / (ctx.shadowMapSize * ctx.fragmentDepth);
-    float2 occluder_uv_gradient;// 接收遮挡物重心
-    float avg_blocker_depth = find_blocker(ctx, search_radius_uv,occluder_uv_gradient);
+    BlockerStats stats=find_blocker(ctx, search_radius_uv);
 
     #if PCSS_DEBUG_EARLY_RETURN
-        if (avg_blocker_depth == -2.0) return 0.8; // Debug: 浅灰表示 Early Out (全亮)
-        if (avg_blocker_depth == -3.0) return 0.2; // Debug: 深灰表示 Early Out (全黑)
+        if (stats.avgDepth == -2.0) return 0.8; // Debug: 浅灰表示 Early Out (全亮)
+        if (stats.avgDepth == -3.0) return 0.2; // Debug: 深灰表示 Early Out (全黑)
     #endif
     
-    if (avg_blocker_depth < 0.0) return 1.0; // 无遮挡
+    if (stats.numBlockers < 0.1) return 1.0;
 
-    // Step 2: Penumbra Estimation (NDC Space)
-    float penumbra_ndc = calculate_penumbra(ctx, avg_blocker_depth);
+    // Penumbra Estimation (NDC Space)
+    float penumbra_ndc = calculate_penumbra(ctx, stats.avgDepth);
     
     float penumbra_uv = penumbra_ndc / (ctx.shadowMapSize * ctx.clipW);
     penumbra_uv = clamp(penumbra_uv, 0.0, 0.1);
 
-    float shadow_visibility = calculate_pcf(ctx, penumbra_uv);
+    // 计算自适应采样矩阵
+    float2x2 pcf_matrix = float2x2(1, 0, 0, 1); // 默认为单位矩阵(圆形)
+
+    #if PCSS_ANTI_ALIASING_METHOD == 2
+    {
+        // 我们利用 SumWeight * Sum(XY) - Sum(X)*Sum(Y) 的形式来避免过早除法带来的精度损失
+        float N = stats.numBlockers;
+        float2 mean = stats.uvSum / N;
+        
+        // 协方差矩阵
+        float cov_xy = N * stats.uvCrossSum - stats.uvSum.x * stats.uvSum.y;
+        float2 var   = N * stats.uvSqSum - stats.uvSum * stats.uvSum; // var.x, var.y
+
+        // 特征值分解
+        float trace = var.x + var.y;
+        float det_part = sqrt(max(0.0, trace * trace - 4.0 * (var.x * var.y - cov_xy * cov_xy)));
+        
+        float2 eigen_values = 0.5 * (trace + float2(det_part, -det_part));
+        float max_eigen = max(eigen_values.x, eigen_values.y);
+        float min_eigen = min(eigen_values.x, eigen_values.y);
+
+        // 计算主特征向量
+        float2 major_axis = normalize(float2(max_eigen - var.y, cov_xy));
+        // 如果 cov_xy 接近0，上述计算可能不稳定，加个保护
+        if (abs(cov_xy) < 1e-6) major_axis = float2(1, 0);
+
+        // 计算椭圆拉伸系数
+        float axis_ratio = sqrt(max_eigen / max(min_eigen, 1e-6));
+        float stretch_factor = axis_ratio - 1.3; // 1.3 是个经验阈值，只有比率超过它才开始拉伸
+        
+        // 混合因子：如果遮挡物太少(N<2)，协方差矩阵不可靠，就不要拉伸
+        float covariance_fade = saturate((N >= 2.0 ? 1.0 : 0.0) * stretch_factor);
+        
+        // 启发式调整
+        // 如果遮挡物重心偏离中心很远(mean很大)，说明是边缘，我们更倾向于相信这个方向
+        // 这里简化了 UE 的复杂逻辑，直接取一个简单的混合
+        float elliptical_factor = min(8.0 * stretch_factor, 6.0) * covariance_fade;
+        
+        // 生成变换矩阵
+        pcf_matrix = GenerateDirectionalScale2x2Matrix(major_axis, elliptical_factor);
+    }
+    #endif
+
+
+    float shadow_visibility = calculate_pcf(ctx, penumbra_uv,pcf_matrix);
 
     #if PCSS_ENABLE_POST_PCF_SHARPENING
         const float AverageSampleDistance = sqrt(1.0 / (float(PCSS_SEARCH_SAMPLES) * PI));
@@ -157,20 +184,20 @@ float calculate_pcss(ShadowContext ctx) {
         // 当前的半影半径
         float raw_filter_radius = penumbra_uv;
 
-        // 4. 计算锐化衰减
+        // 计算锐化衰减
         // 逻辑：如果遮挡物重心偏离中心很远 (length 大)，说明在边缘，需要锐化 (Fading -> 1)
         // 如果重心在中间 (length 小)，说明在内部，不需要锐化 (Fading -> 0)
-        float2 normalized_gradient = occluder_uv_gradient / max(search_radius_uv, 1e-6);
+        //float2 normalized_gradient = occluder_uv_gradient / max(search_radius_uv, 1e-6);
+        float2 normalized_gradient = stats.uvSum/stats.numBlockers; // 使用遮挡物重心作为梯度近似
         
         float sharpeness_fading = saturate(1.5 * (length(normalized_gradient) - AverageSampleDistance));
 
-        // 5. 计算最终锐化强度
-        // 如果半影 (raw_filter_radius) 很小，接近纹素大小 (min_filter_size)，说明是硬阴影，可以大力锐化
+        // 计算最终锐化强度
+        // 如果radius_ratio很小，接近min_filter_size，说明是硬阴影，可以大力锐化（提高锐化上限到MaxSharpnessFactor）
         // 如果半影很大，ratio 接近 0，lerp 结果接近 1 (不锐化)
         float radius_ratio = min_filter_size / max(raw_filter_radius, 1e-6);
         float final_sharpness_factor = lerp(1.0, clamp(radius_ratio, 1.0, MaxSharpnessFactor), sharpeness_fading);
 
-        // 6. 应用锐化
         shadow_visibility = saturate(final_sharpness_factor * (shadow_visibility - 0.5) + 0.5);
     #endif
 
