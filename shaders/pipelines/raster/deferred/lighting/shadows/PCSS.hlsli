@@ -4,7 +4,7 @@
 // CONFIGURATION OF PCSS
 // -----------------------------------------------------------------------
 
-// Wheather some computation should be shared across 2x2 pixel quad.
+// Whether some computation should be shared across 2x2 pixel quad.
 //  0: disabled.
 //  1: share occluder search result.
 //  2: share occluder search and PCF results.
@@ -13,13 +13,13 @@
 // Whether to debug pixel where they early return.
 #define PCSS_DEBUG_EARLY_RETURN 0
 
-// Wheather to set a maximum depth bias.
+// Whether to set a maximum depth bias.
 #define PCSS_MAX_DEPTH_BIAS 1
 
 // Idea of the experiment to turn on.
 #define PCSS_ANTI_ALIASING_METHOD 2
 
-// Wheather to enable the sharpening filter after PCF for sharper edges than the shadow map resolution.
+// Whether to enable the sharpening filter after PCF for sharper edges than the shadow map resolution.
 #define PCSS_ENABLE_POST_PCF_SHARPENING 1
 
 // Blocker search samples
