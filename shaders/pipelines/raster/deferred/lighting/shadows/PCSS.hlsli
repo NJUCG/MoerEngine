@@ -16,22 +16,59 @@
 // Whether to set a maximum depth bias.
 #define PCSS_MAX_DEPTH_BIAS 1
 
+// Whether to use dynamic depth bias based on slope.
+#define PCSS_DYNAMIC_DEPTH_BIAS 0
+
 // Idea of the experiment to turn on.
-#define PCSS_ANTI_ALIASING_METHOD 2
+#define PCSS_ANTI_ALIASING_METHOD 0
 
 // Whether to enable the sharpening filter after PCF for sharper edges than the shadow map resolution.
 #define PCSS_ENABLE_POST_PCF_SHARPENING 1
 
+// Light Type
+#define PCSS_LIGHT_TYPE 1 //0: Point/Spot Light, 1: Directional Light
+
 // Blocker search samples
-#define PCSS_SEARCH_BITS 4
+#define PCSS_SEARCH_BITS 5
 #define PCSS_SEARCH_SAMPLES (1 << PCSS_SEARCH_BITS)
 
 // Shadow filtering samples
-#define PCSS_SAMPLE_BITS 4
+#define PCSS_SAMPLE_BITS 5
 #define PCSS_SAMPLES (1 << PCSS_SAMPLE_BITS)
 
 //必须先定义宏，再包含头文件
 #include "pipelines/raster/deferred/lighting/shadows/PCF.hlsli"
+
+#if PCSS_LIGHT_TYPE == 1 // Directional Light
+float calculate_penumbra(ShadowContext ctx, float avg_blocker_depth) {
+    float orthoWidth = ctx.scaleData.x;
+    float zRange     = ctx.scaleData.z;
+    float diff_ndc = max(avg_blocker_depth - ctx.fragmentDepth, 0.0);
+    // 还原为世界距离 (米)
+    float dist_world = diff_ndc * zRange;
+    
+    // 计算世界半影 (米)
+    float penumbra_world = dist_world * ctx.lightSizeWorld; // lightSizeWorld 是 tan(theta)
+    
+    // 再次转回 UV 大小 (0~1)
+    return penumbra_world / orthoWidth;
+}
+float get_search_radius_uv(ShadowContext ctx) {
+    // 经验值：搜索周围 6 到 10 个像素的范围足够了
+    // 搜索范围太小 -> 找不到遮挡物，半影计算错误
+    // 搜索范围太大 -> 16次采样不够用，噪点爆炸
+    float search_pixel_radius = 8.0;
+    return search_pixel_radius / ctx.shadowMapSize;
+}
+#elif PCSS_LIGHT_TYPE == 0 // Point/Spot Light
+float calculate_penumbra(ShadowContext ctx, float avg_blocker_depth) {
+    float penumbra_ndc=max(avg_blocker_depth - ctx.fragmentDepth, 0.0) / (1.0 - avg_blocker_depth + 1e-6) * ctx.lightSizeWorld;
+    return penumbra_ndc / (ctx.shadowMapSize * ctx.clipW);
+}
+float get_search_radius_uv(ShadowContext ctx) {
+    return ctx.lightSizeWorld / (ctx.shadowMapSize * ctx.fragmentDepth);
+}
+#endif
 
 BlockerStats find_blocker(ShadowContext ctx, float search_radius_uv) {
     BlockerStats stats;
@@ -45,15 +82,20 @@ BlockerStats find_blocker(ShadowContext ctx, float search_radius_uv) {
     float2x2 rotation = GetRandomRotation(ctx.screenUV);
     float dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);
 
-    #if PCSS_MAX_DEPTH_BIAS
-        // 限制最大 Bias，防止漏光
-        dynamicBias = min(dynamicBias, 0.00001);
+    #if PCSS_DYNAMIC_DEPTH_BIAS
+        dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);
+        #if PCSS_MAX_DEPTH_BIAS
+            // 限制最大 Bias，防止漏光
+            dynamicBias = min(dynamicBias, 0.00001);
+        #endif
+    #else
+        dynamicBias = SHADOW_BIAS;
     #endif
 
     [unroll]
     for (int i = 0; i < PCSS_SEARCH_SAMPLES; ++i) {
 
-        float2 raw_offset = mul(rotation, POISSON_DISK_16[i]); 
+        float2 raw_offset = mul(rotation, POISSON_DISK[i]); 
         float2 sample_uv = ctx.shadowUV + raw_offset * search_radius_uv;
         float occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(sample_uv).x;
         
@@ -105,28 +147,31 @@ BlockerStats find_blocker(ShadowContext ctx, float search_radius_uv) {
     return stats;
 }
 
-float calculate_penumbra(ShadowContext ctx, float avg_blocker_depth) {
-    return max(avg_blocker_depth - ctx.fragmentDepth, 0.0) / (1.0 - avg_blocker_depth + 1e-6) * ctx.lightSizeWorld;
-}
-
 // PCSS
 float calculate_pcss(ShadowContext ctx) {
     // Blocker Search
-    float search_radius_uv = ctx.lightSizeWorld / (ctx.shadowMapSize * ctx.fragmentDepth);
+    float search_radius_uv = get_search_radius_uv(ctx);
     BlockerStats stats=find_blocker(ctx, search_radius_uv);
 
     #if PCSS_DEBUG_EARLY_RETURN
-        if (stats.avgDepth == -2.0) return 0.8; // Debug: 浅灰表示 Early Out (全亮)
-        if (stats.avgDepth == -3.0) return 0.2; // Debug: 深灰表示 Early Out (全黑)
+        if (stats.blockerCase == 2) return 0.8; // Debug: 浅灰表示 Early Out (全亮)
+        if (stats.blockerCase == 0) return 0.2; // Debug: 深灰表示 Early Out (全黑)
     #endif
     
     if (stats.numBlockers < 0.1) return 1.0;
 
-    // Penumbra Estimation (NDC Space)
-    float penumbra_ndc = calculate_penumbra(ctx, stats.avgDepth);
-    
-    float penumbra_uv = penumbra_ndc / (ctx.shadowMapSize * ctx.clipW);
+    float penumbra_uv = calculate_penumbra(ctx, stats.avgDepth);
+
+    #if PCSS_LIGHT_TYPE==1
+    // 给半影加一个最大值限制
+    // 比如限制最大模糊半径为 32 个像素 (32.0 / 2048.0 ≈ 0.015)
+    // 超过这个范围，阴影就不再变软了，防止采样崩坏
+    float max_penumbra = 32.0 / ctx.shadowMapSize; 
+    penumbra_uv = clamp(penumbra_uv, 0.0, max_penumbra);
+    #else
     penumbra_uv = clamp(penumbra_uv, 0.0, 0.1);
+    #endif
+    
 
     // 计算自适应采样矩阵
     float2x2 pcf_matrix = float2x2(1, 0, 0, 1); // 默认为单位矩阵(圆形)

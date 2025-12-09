@@ -30,8 +30,10 @@ float get_single_shadow(Moer::LightingData lighting_data, float3 world_pos, int 
     ctx.lightSizeWorld  = lighting_data.light_size_world;          
     ctx.shadowMapSize   = lighting_data.shadow_csm_sm_size;       
     ctx.clipW           = shadow_clip_pos.w;    
+    ctx.scaleData       = lighting_data.scale_data[cascade_index];
     ctx.normal   = normal;
     ctx.lightDir = lightDir;
+    
 
     float occluder_depth =TextureHandle(ctx.shadowMapHandle).Sample2D<float>(shadow_uv).x;
     float fragment_depth = shadow_ndc_pos.z;
@@ -44,7 +46,7 @@ float get_single_shadow(Moer::LightingData lighting_data, float3 world_pos, int 
         return calculate_pcss(ctx);
     } else {
         // 简单的 PCF 或者 硬阴影
-        float occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(ctx.shadowUV).x;
+        occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(ctx.shadowUV).x;
         return (fragment_depth + SHADOW_BIAS < occluder_depth) ? 0.0 : 1.0;
     }
 #endif

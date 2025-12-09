@@ -21,6 +21,7 @@ struct ShadowContext {
     float  lightSizeWorld;  // 光源物理大小
     float  shadowMapSize;   // ShadowMap 分辨率 (如 2048)
     float  clipW;           // 投影矩阵 W 分量 (用于透视校正)
+    float4 scaleData;      // 用于PCSS计算的正交投影参数
 
     // 用于计算 Slope Bias
     float3 normal;    // 世界空间法线

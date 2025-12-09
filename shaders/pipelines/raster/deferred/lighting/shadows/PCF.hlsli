@@ -9,11 +9,16 @@
 float calculate_pcf(ShadowContext ctx, float penumbra_uv, float2x2 pcf_transform_matrix) {
     float visibility = 0.0;
     float2x2 rotation = GetRandomRotation(ctx.screenUV);
-    float dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);
+
+    #if PCSS_DYNAMIC_DEPTH_BIAS
+        float dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);
+    #else
+        float dynamicBias = SHADOW_BIAS;
+    #endif
 
     [unroll]
     for (int i = 0; i < PCSS_SAMPLES; ++i) {
-        float2 disk_sample = mul(rotation, POISSON_DISK_16[i]);
+        float2 disk_sample = mul(rotation, POISSON_DISK[i]);
         
         // 应用椭圆变换
         float2 offset = mul(pcf_transform_matrix, disk_sample) * penumbra_uv;

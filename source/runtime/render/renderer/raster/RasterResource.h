@@ -53,6 +53,7 @@ public:
     // Shadow Data
     struct ShadowMapData {
         float3 light_dir;
+        StaticArray<float4,CSM_MAX_CASCADES> scaleDatas;// x: Width, y: Height, z: ZRange, w: NearPlane
         StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
         StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
         StaticArray<float, CSM_MAX_CASCADES>

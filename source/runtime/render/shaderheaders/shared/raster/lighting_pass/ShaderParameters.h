@@ -11,7 +11,7 @@
 #undef CONST
 #endif
 
-#define MAX_CSM_CASCADES 6
+#define MAX_CSM_CASCADES 8
 
 #ifdef __cplusplus
 //#define CONST constexpr
@@ -67,6 +67,7 @@ struct LightingData {
     uint pcss_enabled;
 
     float light_size_world;//assumed light size for soft shadow calculation
+    float4 scale_data[MAX_CSM_CASCADES];
 
     float4x4 view_matrix;
     float    near_clip;
