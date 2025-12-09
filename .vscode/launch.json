@@ -12,7 +12,7 @@
             "cwd": "${workspaceFolder}",
             "environment": [],
             "externalConsole": false,
-            "preLaunchTask": "CMake: build" // 自动构建任务
+            "preLaunchTask": "CMake Build Debug" // 自动构建任务
         }, {
             "name": "Run (Win Debug)", // 配置名称
             "type": "cppvsdbg",  // MSVC 调试器类型
