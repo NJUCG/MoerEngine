@@ -23,18 +23,18 @@ float4 calculate_ibl(Moer::LightingData lighting_data, float3 world_pos,uint sky
     if (axis == 0) {
         if (view_dir.x > 0) {
             uv = float2(-view_dir.z, -view_dir.y) / view_dir.x * 0.5 + 0.5;
-            return float4(TextureHandle(skybox_handles[2]).Sample2D<float3>(uv), 1.0);
+            return float4(TextureHandle(skybox_handles[4]).Sample2D<float3>(uv), 1.0);
         } else {
             uv = float2(view_dir.z, -view_dir.y) / (-view_dir.x) * 0.5 + 0.5;
-            return float4(TextureHandle(skybox_handles[3]).Sample2D<float3>(uv), 1.0);
+            return float4(TextureHandle(skybox_handles[5]).Sample2D<float3>(uv), 1.0);
         }
     } else if (axis == 1) {
         if (view_dir.y > 0) {
             uv = float2(view_dir.x, view_dir.z) / view_dir.y * 0.5 + 0.5;
-            return float4(TextureHandle(skybox_handles[4]).Sample2D<float3>(uv), 1.0);
+            return float4(TextureHandle(skybox_handles[2]).Sample2D<float3>(uv), 1.0);
         } else {
             uv = float2(view_dir.x, -view_dir.z) / (-view_dir.y) * 0.5 + 0.5;
-            return float4(TextureHandle(skybox_handles[5]).Sample2D<float3>(uv), 1.0);
+            return float4(TextureHandle(skybox_handles[3]).Sample2D<float3>(uv), 1.0);
         }
     } else {
         if (view_dir.z > 0) {
