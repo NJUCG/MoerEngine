@@ -1,0 +1,349 @@
+---
+interface Props {
+  // GitHub 仓库链接
+  githubUrl?: string;
+  // TODO 页面链接
+  todoUrl?: string;
+  // 标题
+  title?: string;
+  // 描述
+  description?: string;
+}
+
+const {
+  githubUrl = "https://github.com/njucg/MoerEngine",
+  todoUrl = "https://www.bilibili.com/video/BV1CtKJz4Ec6/?spm_id_from=333.337.search-card.all.click&vd_source=9bf143147b1951748c2b6e352a47e7dc",
+  title = "Get Source & Resources",
+  description = "获取 MoerEngine 的源代码和相关资源"
+} = Astro.props;
+---
+
+<section class="getsource-section">
+  <div class="container">
+    <!-- 标题区域 -->
+    <div class="getsource-header">
+      <h2 class="section-title">{title}</h2>
+      <p class="section-description">{description}</p>
+    </div>
+    
+    <!-- 卡片区域 -->
+    <div class="cards-grid">
+      <!-- Code 卡片 -->
+      <a 
+        href={githubUrl} 
+        class="source-card code-card"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="View source code on GitHub"
+      >
+        <div class="card-icon">
+          <span class="icon">💻</span>
+        </div>
+        <div class="card-content">
+          <h3 class="card-title">Code</h3>
+          <p class="card-description">
+            访问 GitHub 仓库，查看完整的源代码、文档和贡献指南
+          </p>
+          <div class="card-meta">
+            <span class="meta-item">⭐ Star us on GitHub</span>
+            <span class="meta-item">📖 Read documentation</span>
+          </div>
+        </div>
+        <div class="card-arrow">→</div>
+      </a>
+      
+      <!-- TODO 卡片 -->
+      <a 
+        href={todoUrl} 
+        class="source-card todo-card"
+        aria-label="View project roadmap and TODO list"
+      >
+        <div class="card-icon">
+          <span class="icon">📋</span>
+        </div>
+        <div class="card-content">
+          <h3 class="card-title">TODO & Roadmap</h3>
+          <p class="card-description">
+            查看项目路线图、待办事项和未来开发计划
+          </p>
+          <div class="card-meta">
+            <span class="meta-item">🎯 Upcoming features</span>
+            <span class="meta-item">🛠️ Development plan</span>
+          </div>
+        </div>
+        <div class="card-arrow">→</div>
+      </a>
+    </div>
+  </div>
+</section>
+
+<style>
+  /* 基础布局 */
+  .getsource-section {
+    padding: 80px 0;
+    width: 100%;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+  }
+
+  /* 标题区域 */
+  .getsource-header {
+    text-align: center;
+    margin-bottom: 60px;
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .section-title {
+    color: #2c3e50;
+    margin-bottom: 15px;
+    line-height: 1.2;
+  }
+
+  .section-description {
+    font-size: 1.2rem;
+    color: #6c757d;
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  /* 卡片网格 */
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+    gap: 30px;
+    justify-content: center;
+  }
+
+  @media (max-width: 992px) {
+    .cards-grid {
+      grid-template-columns: 1fr;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+  }
+
+  /* 卡片样式 */
+  .source-card {
+    display: flex;
+    align-items: center;
+    gap: 25px;
+    padding: 40px;
+    background: white;
+    border-radius: 16px;
+    text-decoration: none;
+    transition: all 0.3s ease;
+    border: 2px solid #e9ecef;
+    position: relative;
+    overflow: hidden;
+    height: 100%;
+    min-height: 200px;
+  }
+
+  .source-card:hover {
+    transform: translateY(-8px);
+    border-color: transparent;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.12);
+  }
+
+  .source-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, transparent 0%, currentColor 50%, transparent 100%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+
+  .source-card:hover::before {
+    opacity: 1;
+  }
+
+  /* Code 卡片特殊样式 */
+  .code-card {
+    color: #2c3e50;
+  }
+
+  .code-card:hover {
+    background: linear-gradient(135deg, #f8f9fa 0%, #f1f8ff 100%);
+    border-color: #3498db;
+  }
+
+  .code-card::before {
+    background: linear-gradient(90deg, #3498db 0%, #2ecc71 100%);
+  }
+
+  /* TODO 卡片特殊样式 */
+  .todo-card {
+    color: #2c3e50;
+  }
+
+  .todo-card:hover {
+    background: linear-gradient(135deg, #f8f9fa 0%, #fff8f1 100%);
+    border-color: #e67e22;
+  }
+
+  .todo-card::before {
+    background: linear-gradient(90deg, #e67e22 0%, #f1c40f 100%);
+  }
+
+  /* 卡片图标 */
+  .card-icon {
+    flex-shrink: 0;
+    width: 80px;
+    height: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 12px;
+    transition: all 0.3s ease;
+  }
+
+  .source-card:hover .card-icon {
+    transform: scale(1.1);
+  }
+
+  .icon {
+    font-size: 2.5rem;
+    line-height: 1;
+  }
+
+  /* 卡片内容 */
+  .card-content {
+    flex: 1;
+  }
+
+  .card-title {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin: 0 0 12px 0;
+    color: inherit;
+  }
+
+  .card-description {
+    font-size: 1rem;
+    line-height: 1.6;
+    color: #495057;
+    margin: 0 0 20px 0;
+  }
+
+  /* 卡片元信息 */
+  .card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .meta-item {
+    font-size: 0.85rem;
+    color: #6c757d;
+    background: #f8f9fa;
+    padding: 6px 12px;
+    border-radius: 20px;
+    border: 1px solid #e9ecef;
+    transition: all 0.2s ease;
+  }
+
+  .source-card:hover .meta-item {
+    background: rgba(255, 255, 255, 0.9);
+  }
+
+  /* 卡片箭头 */
+  .card-arrow {
+    font-size: 2rem;
+    color: #adb5bd;
+    transition: all 0.3s ease;
+    opacity: 0.7;
+  }
+
+  .source-card:hover .card-arrow {
+    transform: translateX(10px);
+    color: currentColor;
+    opacity: 1;
+  }
+
+  /* 响应式设计 */
+  @media (max-width: 768px) {
+    .getsource-section {
+      padding: 60px 0;
+    }
+    
+    .section-title {
+      font-size: 2.3rem;
+    }
+    
+    .section-description {
+      font-size: 1.1rem;
+    }
+    
+    .source-card {
+      flex-direction: column;
+      text-align: center;
+      padding: 30px;
+      gap: 20px;
+    }
+    
+    .card-icon {
+      width: 70px;
+      height: 70px;
+    }
+    
+    .icon {
+      font-size: 2rem;
+    }
+    
+    .card-title {
+      font-size: 1.6rem;
+    }
+    
+    .cards-grid {
+      gap: 20px;
+    }
+  }
+
+  @media (max-width: 576px) {
+    .cards-grid {
+      grid-template-columns: 1fr;
+    }
+    
+    .source-card {
+      padding: 25px 20px;
+    }
+    
+    .section-title {
+      font-size: 2rem;
+    }
+    
+    .card-meta {
+      justify-content: center;
+    }
+    
+    .meta-item {
+      font-size: 0.8rem;
+      padding: 5px 10px;
+    }
+  }
+
+  @media (max-width: 400px) {
+    .section-title {
+      font-size: 1.8rem;
+    }
+    
+    .card-title {
+      font-size: 1.4rem;
+    }
+    
+    .card-description {
+      font-size: 0.95rem;
+    }
+  }
+</style>
