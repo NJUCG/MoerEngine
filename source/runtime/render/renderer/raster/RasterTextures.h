@@ -90,7 +90,8 @@ struct DepthBufferWithHandleAndName {
     X(TexHandle, aa_texture_3, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)        \
     X(TexHandle, aa_texture_4, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)        \
     X(TexHandle, aa_output, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)           \
-    X(TexHandle, ui_frame_buffer, PF_R8G8B8A8_SRGB, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)           \
+    X(TexHandle, tonemapping_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)       \
+    X(TexHandle, ui_frame_buffer, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)          \
     X(TexHandle, output, PF_R8G8B8A8_SRGB, E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)
 
 struct RasterTextures {

@@ -45,6 +45,7 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Shading
     if (ImGui::TreeNode(
             "Shading",
             "Shading: [%s]",
@@ -70,6 +71,14 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Tonemapping
+    // 因为Tonemapping很重要，并且时常和Shading一起调节，所以把它放在Shading后面
+    if (ImGui::TreeNode("Tonemapping", "Tonemapping")) {
+
+        ImGui::TreePop();
+    }
+
+    // MARK: Shadow
     if (ImGui::TreeNode(
             "Shadow", "Shadow: [%s]", s_shadow_map_mode_name_map.at(m_config.shadow_map_mode).c_str()
         )) {
@@ -123,6 +132,7 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: AO
     if (ImGui::TreeNode(
             "Ambient Occlusion", "Ambient Occlusion: [%s]", s_ao_mode_name_map.at(m_config.ao_mode).c_str()
         )) {
@@ -204,6 +214,7 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: SSR
     if (ImGui::TreeNode("SSR", "SSR: [%s]", (m_config.ssr_is_ssr_enabled == 1 ? "Enable" : "Disable"))) {
         if (ImGui::Selectable("Enable", m_config.ssr_is_ssr_enabled == 1)) {
             m_config.ssr_is_ssr_enabled = 1;
@@ -226,6 +237,7 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Denoiser
     if (ImGui::TreeNode(
             "Denoiser",
             "Denoiser: [%s]",
@@ -255,6 +267,7 @@ void RasterUI::ShowConfig() {
     }
 
 #if WITH_CUDA
+    // MARK: AI - Upsample
     if (ImGui::TreeNode(
             "Upsample",
             "Upsample: [%s]",
@@ -282,6 +295,7 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: AI - CUDA
     if (ImGui::TreeNode("CUDA", "CUDA: [%s]", (m_config.ai_is_cuda_enabled == 1 ? "Enable" : "Disable"))) {
         if (ImGui::Selectable("Enable", m_config.ai_is_cuda_enabled == 1)) {
             m_config.ai_is_cuda_enabled = 1;
@@ -308,6 +322,7 @@ void RasterUI::ShowConfig() {
     }
 #endif
 
+    // MARK: Anti-Aliasing
     if (ImGui::TreeNode(
             "Anti-Aliasing", "Anti-Aliasing: [%s]", s_aa_mode_name_map.at(m_config.aa_mode).c_str()
         )) {
@@ -357,7 +372,7 @@ void RasterUI::RegisterFrameBuffers(const Array<Render::TextureView>& frame_buff
 }
 
 uint RasterUI::GetDefaultSelectedFrameBufferIndex() const {
-    const std::string default_selected_frame_buffer_name = "aa_output";
+    const std::string default_selected_frame_buffer_name = "tonemapping_output";
 
     for (uint i = 0; i < m_frame_buffer_and_name_array.size(); ++i) {
         if (m_frame_buffer_and_name_array[i].GetTexture()->GetName() == default_selected_frame_buffer_name) {

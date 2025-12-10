@@ -14,6 +14,7 @@ class RtaoDenoiserPass;
 class BilateralFilterDenoiserPass;
 class SsrPass;
 class AaPass;
+class TonemappingPass;
 
 #if WITH_CUDA
 class CudaPass;
@@ -70,6 +71,7 @@ private:
     UniquePtr<BilateralFilterDenoiserPass> bfd_pass;
     UniquePtr<SsrPass>                     ssr_pass;
     UniquePtr<AaPass>                      aa_pass;
+    UniquePtr<TonemappingPass>             tonemapping_pass;
 
 #if WITH_CUDA
     UniquePtr<CudaPass>     cuda_pass;

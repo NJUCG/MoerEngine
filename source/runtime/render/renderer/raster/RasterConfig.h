@@ -169,14 +169,16 @@ struct RasterConfig {
     int           outSize_y     = 1920;
     int           inSize_x      = 540;
 
+    // MARK: Tonemapping
+
     // MARK: Debug
     float debug_param            = 1.0f;
     bool  debug_fps_limit_enable = false;
     float debug_fps_limit        = 60;
 
     // MARK: Others
-    std::string default_selected_frame_buffer_name = "aa_output";
-    uint        selected_frame_buffer_index        = 0;
+
+    uint selected_frame_buffer_index = 0;
 };
 
 } // namespace Moer
