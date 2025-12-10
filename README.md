@@ -26,7 +26,7 @@
   ```bash
   # Clone仓库
   # 如果没有配置SSH的话，请把 `git@xxx` 替换为 `https://github.com/NJUCG/MoerEngine.git`
-  git clone --branch dev-rhi-remake git@github.com:NJUCG/MoerEngine.git
+  git clone git@github.com:NJUCG/MoerEngine.git
   cd MoerEngine
   
   # 忽略一些特定commit对commit历史的影响
@@ -164,7 +164,7 @@
 
 如果你想要开发的功能较为复杂，请提前在Issue中和维护者进行沟通，以确保PR可以被合并。在开发复杂功能的过程中，推荐使用Draft PR，以便让维护者和其他开发者随时查看你的进度并进行交流。
 
-main分支为稳定分支，dev分支为开发分支，所以PR都应提交到dev分支。
+main分支为开发分支，release分支为稳定分支，所以PR都应提交到main分支。
 
 以下命名规范均为推荐规范，非强制要求。但请尽量遵循，以保持代码风格的一致性和可读性。
 
