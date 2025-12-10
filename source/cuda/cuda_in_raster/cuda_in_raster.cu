@@ -17,6 +17,15 @@
 
 namespace Moer::Cuda {
 
+// MARK: moer_half4
+
+struct moer_half4 {
+    __half x;
+    __half y;
+    __half z;
+    __half w;
+};
+
 // 添加类型转换辅助函数
 template<typename T>
 __device__ T convert_float_to_type(float value);
@@ -350,6 +359,11 @@ __device__ float4 convertToFloat4<__half2>(const __half2& t) {
     return make_float4(t.x, t.y, 0.0f, 0.0f);
 }
 
+template<>
+__device__ float4 convertToFloat4<moer_half4>(const moer_half4& t) {
+    return make_float4(t.x, t.y, t.z, t.w);
+}
+
 // MARK: - kernel
 
 // 模板化的多通道复制函数
@@ -390,6 +404,16 @@ __global__ void CopySurfaceToBuffer_Resize_NCHW_Template(
             uint32_t h_raw = surf2Dread<uint32_t>(surface[0], src_x * sizeof(uint32_t), src_y);
 
             t2 = *reinterpret_cast<SurfaceEType*>(&h_raw);
+
+        } else if constexpr (std::is_same_v<SurfaceEType, moer_half4>) {
+            uint32_t h_raw = surf2Dread<uint32_t>(surface[0], src_x * sizeof(uint32_t) * 2, src_y);
+            uint32_t h_raw1 =
+                surf2Dread<uint32_t>(surface[0], src_x * sizeof(uint32_t) * 2 + sizeof(uint32_t), src_y);
+
+            t2.x = reinterpret_cast<__half*>(&h_raw)[0];
+            t2.y = reinterpret_cast<__half*>(&h_raw)[1];
+            t2.z = reinterpret_cast<__half*>(&h_raw1)[0];
+            t2.w = reinterpret_cast<__half*>(&h_raw1)[1];
 
         } else {
             t2 = surf2Dread<SurfaceEType>(surface[0], src_x * sizeof(SurfaceEType), src_y);
@@ -584,6 +608,24 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Half2(
     );
 }
 
+void CopySurfaceToBuffer_Resize_NCHW_Half_Half4(
+    dim3                 gridSize,
+    dim3                 blockSize,
+    cudaStream_t         stream,
+    cudaSurfaceObject_t* surface,
+    __half*              output_buffer,
+    int                  src_width,
+    int                  src_height,
+    int                  dst_width,
+    int                  dst_height,
+    int                  channels
+) {
+    assert(1 <= channels && channels <= 4);
+    CopySurfaceToBuffer_Resize_NCHW_Template<__half, moer_half4><<<gridSize, blockSize, 0, stream>>>(
+        surface, output_buffer, src_width, src_height, dst_width, dst_height, channels, 0
+    );
+}
+
 // MARK: feature可视化
 
 // ======== 简单随机数生成器：线性同余发生器 (LCG) ========
@@ -658,47 +700,27 @@ __global__ void VisualizeFeatureBuf_Kernel(
 
         int base_idx = src_y * src_width + src_x; // batch=0固定
 
-        float r, g, b;
+        __half r, g, b;
+        __half a = 1.0f;
+
         if (src_channels >= 3) {
-            r = __half2float(feature_buffer[0 * src_height * src_width + base_idx]); // 第0通道
-            g = __half2float(feature_buffer[1 * src_height * src_width + base_idx]); // 第1通道
-            b = __half2float(feature_buffer[2 * src_height * src_width + base_idx]); // 第2通道
+            r = feature_buffer[0 * src_height * src_width + base_idx]; // 第0通道
+            g = feature_buffer[1 * src_height * src_width + base_idx]; // 第1通道
+            b = feature_buffer[2 * src_height * src_width + base_idx]; // 第2通道
         } else if (src_channels == 2) {
-            r = __half2float(feature_buffer[0 * src_height * src_width + base_idx]);
-            g = __half2float(feature_buffer[1 * src_height * src_width + base_idx]);
+            r = feature_buffer[0 * src_height * src_width + base_idx];
+            g = feature_buffer[1 * src_height * src_width + base_idx];
             b = 0.0f;
         } else if (src_channels == 1) {
-            r = g = b = __half2float(feature_buffer[0 * src_height * src_width + base_idx]);
+            r = g = b = feature_buffer[0 * src_height * src_width + base_idx];
         }
 
-        // 可选：对剩余通道做处理（这里简单设置alpha为1）
-        float a = 1.0f;
-
-        // 归一化到[0,1]范围（根据实际特征值范围调整）
-        r = __saturatef(r);
-        g = __saturatef(g);
-        b = __saturatef(b);
-
-        // 转换为uchar4格式写入surface
-        uchar4 pixel = make_uchar4(
-            (unsigned char)(r * 255.0f),
-            (unsigned char)(g * 255.0f),
-            (unsigned char)(b * 255.0f),
-            (unsigned char)(a * 255.0f)
-        );
-
-        // blend with input image
-
-        uchar4 input_raw = surf2Dread<uchar4>(surface[0], dst_x * sizeof(uchar4), dst_y);
-
-        uchar4 result = make_uchar4(
-            (unsigned char)(input_raw.x + debug_param * (pixel.x - input_raw.x)),
-            (unsigned char)(input_raw.y + debug_param * (pixel.y - input_raw.y)),
-            (unsigned char)(input_raw.z + debug_param * (pixel.z - input_raw.z)),
-            255
-        );
-
-        surf2Dwrite(result, surface[0], dst_x * sizeof(uchar4), dst_y);
+        // 写入 PF_R16G16B16A16_SFLOAT
+        uint32_t offset = dst_x * sizeof(__half) * 4;
+        surf2Dwrite(*reinterpret_cast<uint16_t*>(&r), surface[0], offset, dst_y);
+        surf2Dwrite(*reinterpret_cast<uint16_t*>(&g), surface[0], offset + sizeof(__half), dst_y);
+        surf2Dwrite(*reinterpret_cast<uint16_t*>(&b), surface[0], offset + 2 * sizeof(__half), dst_y);
+        surf2Dwrite(*reinterpret_cast<uint16_t*>(&a), surface[0], offset + 3 * sizeof(__half), dst_y);
     }
 }
 
