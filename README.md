@@ -170,7 +170,7 @@ main分支为开发分支，release分支为稳定分支，所以PR都应提交�
 
 ### Git规范
 
-如果你是NJU META的成员（即 拥有仓库读写权限），你可以直接在MoerEngine仓库中创建对应分支进行开发。推荐的分支命名格式为 `feature/xxx` 或 `fix/xxx`。同时，也请创建分支对应的Draft PR，以告知其他开发者你正在开发的内容。
+如果你是NJU META的成员（即 拥有仓库读写权限），你可以直接在MoerEngine仓库中创建对应分支进行开发。推荐的分支命名格式为 `feature/xxx` 或 `bugfix/xxx`。同时，也请创建分支对应的Draft PR，以告知其他开发者你正在开发的内容。
 
 Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 规范。
 
