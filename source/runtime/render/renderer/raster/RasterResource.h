@@ -14,6 +14,20 @@
 
 namespace Moer::Render::Raster {
 
+struct PointLightShadowData {
+    struct ShadowCubeResource {
+        TextureRef tex;       // CubeMap (ArrayLayers=6)
+        uint       handle; 
+        std::string name;
+        float      far_plane; // 存下来，Shader 里做深度线性化时需要用到 (Far)
+        float      near_plane;// 存下来 (Near)
+    };
+
+    // 支持多个点光源 (例如 4 个)
+    static constexpr uint MAX_POINT_SHADOWS = 1;
+    std::array<ShadowCubeResource, MAX_POINT_SHADOWS> shadow_cubes;
+};
+
 struct RasterContext {
 public:
     // MARK: Only hold reference
@@ -143,7 +157,7 @@ public:
 
         cubemap_tex.tex = device.CreateCubeMap(
             "cubemap_tex",
-            Extent2D(2048, 2048),
+            Extent2D(2048, 2048),//FIXME:动态参数？
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );

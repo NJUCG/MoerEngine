@@ -447,7 +447,6 @@ public:
     uint32       array_layer{};
     uint3        offset{};
     uint3        size{};
-    // const void*  data{};
     std::variant<std::span<const byte>, Array<byte>> storage;
 
 private:

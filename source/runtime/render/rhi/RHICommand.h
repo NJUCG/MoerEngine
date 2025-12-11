@@ -830,7 +830,8 @@ public:
 
     struct RENDER_API MutiDrawDispatcher {
         template<typename... TRenderTarget>
-        MutiDrawDispatcher(CommandList& _cmd_list, Rect2D _rect, TRenderTarget... _attachments) {
+        MutiDrawDispatcher(CommandList& _cmd_list, Rect2D _rect, TRenderTarget... _attachments) :
+            cmd_list(_cmd_list) {
             pass_info =
                 RenderPassInfo({std::forward<TRenderTarget>(_attachments)...}, DepthAttachment{}, _rect);
         }

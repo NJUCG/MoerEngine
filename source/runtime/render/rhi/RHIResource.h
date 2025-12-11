@@ -1182,6 +1182,15 @@ struct ColorAttachment {
     Texture*          target;
     EAttachmentAction action      = AC_CLEAR_STORE;
     float4            clear_color = {0, 0, 0, 0};
+
+    ColorAttachment() = default;
+    ColorAttachment(Texture* _target) : target(_target) {}
+    ColorAttachment(const TextureView& _view) : target(_view.texture) {}
+    ColorAttachment(TextureRef _ref) : target(_ref) {}
+    ColorAttachment(Texture* _target, EAttachmentAction _action, float4 _clear_color = {0, 0, 0, 0}) :
+        target(_target),
+        action(_action),
+        clear_color(_clear_color) {}
 };
 
 struct DepthAttachment {
