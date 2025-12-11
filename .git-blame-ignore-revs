@@ -15,5 +15,9 @@
 # feat: 将RaytracingMain.cpp整理为RaytracingRenderer (请执行 git config --local blame.ignoreRevsFile .git-blame-ignore-revs 以消除本commit的影响)
 2c394664f401de96e535c51adf0849d99f1eeaaa
 
+# MARK: Shader相关
+
 # refactor：重构shaders目录结构&拆分Raster LightingPass (请执行 git config --local blame.ignoreRevsFile .git-blame-ignore-revs 以消除本commit的影响)
 92c44b973d539c26c09d793b4275510324ba5d22
+# chore(shaders): 更新了shader目录
+8d9a69022b8c89f0239873be5053c2f910cc9d07
