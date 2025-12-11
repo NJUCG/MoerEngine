@@ -153,6 +153,7 @@ void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _
         _dst.byte_offset,
         _src.extent,
         _src.mip_level,
+        _src.array_layer,
         _name
     ));
 }
@@ -165,13 +166,14 @@ void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _
         _dst.offset,
         _dst.extent,
         _dst.mip_level,
+        _dst.array_layer,
         _name
     ));
 }
 
 // Be careful with the Lifetime of the data!
+//TMP:here
 void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
-    //
     uint3 extent = uint3(
         std::max(uint(_texture.extent.x) >> _texture.mip_level, 1u),
         std::max(uint(_texture.extent.y) >> _texture.mip_level, 1u),
@@ -181,6 +183,7 @@ void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::str
         _texture.texture->GetFormat(),
         reinterpret_cast<uint64>(_texture.texture),
         _texture.mip_level,
+        _texture.array_layer,
         _texture.offset,
         extent,
         _data.data(),
@@ -257,6 +260,7 @@ void CommandList::CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_vi
         _dst.texture->GetFormat(),
         reinterpret_cast<uint64>(_dst.texture),
         _dst.mip_level,
+        _dst.array_layer,
         _dst.offset,
         _dst.extent,
         std::move(_data),

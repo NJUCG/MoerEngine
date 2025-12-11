@@ -485,11 +485,12 @@ public:
     uint3          extent{};
     uint8          mip_level;
     uint8          num_mips;
-    uint8          array_index;
+    uint8          array_layer;
     uint8          num_array;
     Texture*       GetTexture() const {
         return texture;
     }
+    TextureView Slice(uint layer, uint count = 1) const;
 };
 
 struct TextureInfo {

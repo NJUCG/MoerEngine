@@ -429,6 +429,7 @@ class VulkanEnumTranslator final {
 public:
     static VkIndexType           METoVKIndexType(EIndexElementType _type);
     static VkFormat              METoVKFormat(EPixelFormat _format);
+    static VkImageCreateFlags    METoVKImageCreateFlags(ETextureDimension _dim);
     static VkImageType           METoVKImageType(ETextureDimension _dim);
     static VkImageUsageFlags     METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
     static EPixelFormat          VKToMEFormat(VkFormat _format);

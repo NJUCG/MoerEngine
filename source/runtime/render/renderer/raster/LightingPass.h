@@ -64,9 +64,7 @@ public:
         material_param.gbuffer_position    = context.textures.position.handle;
         material_param.global_param_handle = lighting_data_buffer.handle;
         material_param.light_buffer        = context.gpu_light_info_handle;
-        for (int i = 0; i < 6; i++) {
-            material_param.skybox_handles[i] = context.skybox_tex[i].handle;
-        }
+        material_param.cubemap_handle = context.cubemap_tex.handle;
 
         // 注意生命周期！
         LightingData* lighting_data = MoerNew(LightingData);

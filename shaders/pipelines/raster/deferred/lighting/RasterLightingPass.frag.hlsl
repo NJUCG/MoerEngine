@@ -48,7 +48,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     if (depth == 0.0) {
         float3 pos_inf = WorldPosFromDepth(0.99, in_uv, lighting_data.inv_view_proj);
         // printf("pos_inf: %f, %f, %f\n", pos_inf.x, pos_inf.y, pos_inf.z);
-        return calculate_ibl(lighting_data, pos_inf,param.skybox_handles);
+        return calculate_ibl(lighting_data, pos_inf, param.cubemap_handle);
         //return float4(0.0, 0.0, 0.0, 1.0); // Black Skybox
     }
 

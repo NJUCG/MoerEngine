@@ -41,7 +41,7 @@ public:
     // MARK: Hold ownership
     RasterTextures    textures;
     TextureWithHandle noise_tex;
-    TextureWithHandle skybox_tex[6];
+    TextureWithHandle cubemap_tex;
 
     // Data from scene
     uint gpu_instance_info_handle     = 0;
@@ -97,7 +97,7 @@ public:
 
         // other resources
         LoadNoiseTexture();
-        LoadSkybox();
+        LoadCubemap();
     }
 
     void LoadNoiseTexture() {
@@ -131,15 +131,24 @@ public:
         noise_tex.handle = bdls->AllocateTexture(noise_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
     }
 
-    void LoadSkybox() {
+    void LoadCubemap() {
         const std::array<std::string, 6> skybox_faces = {
-            "skybox_posz.jpg",
-            "skybox_negz.jpg",
+            "skybox_posx.jpg",
+            "skybox_negx.jpg",
             "skybox_posy.jpg",
             "skybox_negy.jpg",
-            "skybox_posx.jpg",
-            "skybox_negx.jpg"
+            "skybox_posz.jpg",
+            "skybox_negz.jpg"
         };
+
+        cubemap_tex.tex = device.CreateCubeMap(
+            "cubemap_tex",
+            Extent2D(2048, 2048),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+        );
+        TextureView skybox_view(cubemap_tex.tex);
+
         for (size_t i = 0; i < 6; i++) {
             std::string filepath =
                 (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" / skybox_faces[i])
@@ -156,22 +165,17 @@ public:
             int    width, height, channels;
             ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
 
-            skybox_tex[i].tex = device.CreateTexture(
-                "skybox_tex" + std::to_string(i),
-                Extent2D(width, height),
-                PF_R8G8B8A8_UNORM,
-                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+            cmd_list.CopyFrom(
+                std::span<Moer::byte>((Moer::byte*)data, width * height * channels), skybox_view.Slice(i)
             );
 
-            cmd_list.CopyFrom(
-                std::span<Moer::byte>((Moer::byte*)data, width * height * channels), skybox_tex[i].tex
-            );
             cmd_list.AddCallback([data]() {
                 stbi_image_free(data);
             });
 
-            skybox_tex[i].handle = bdls->AllocateTexture(skybox_tex[i].tex, Sampler(SF_LINEAR, SAM_REPEAT));
+            
         }
+        cubemap_tex.handle = bdls->AllocateTexture(cubemap_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
     }
 
     // Called from `FirstLoad`

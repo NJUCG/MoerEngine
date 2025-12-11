@@ -1218,7 +1218,8 @@ public:
             tmp_buffer.GetByteOffset(),
             _cmd.Offset(),
             _cmd.Size(),
-            _cmd.MipLevel()
+            _cmd.MipLevel(),
+            _cmd.ArrayLayer()
         );
     }
 
@@ -1300,7 +1301,8 @@ public:
             _cmd.SrcOffset(),
             _cmd.DstOffset(),
             _cmd.Size(),
-            _cmd.MipLevel()
+            _cmd.MipLevel(),
+            _cmd.ArrayLayer()
         );
     }
 

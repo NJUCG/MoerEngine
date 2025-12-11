@@ -81,6 +81,14 @@ VkFormat VulkanEnumTranslator::METoVKFormat(EPixelFormat _format) {
     return VkFormat(_format); // MARK...
 }
 
+VkImageCreateFlags VulkanEnumTranslator::METoVKImageCreateFlags(ETextureDimension _dim) {
+    VkImageCreateFlags flags = 0;
+    if (_dim == ETextureDimension::TEX_CUBE || _dim == ETextureDimension::TEX_CUBE_ARRAY) {
+        flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    }
+    return flags;
+}
+
 VkImageType VulkanEnumTranslator::METoVKImageType(ETextureDimension _dim) {
     switch (_dim) {
         case ETextureDimension::TEX_2D:
@@ -1591,7 +1599,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             return;
         }
         VkImageCreateInfo image_create_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        image_create_info.flags       = 0;
+        image_create_info.flags       = VulkanEnumTranslator::METoVKImageCreateFlags(_info.dimension);
         image_create_info.imageType   = VulkanEnumTranslator::METoVKImageType(_info.dimension);
         image_create_info.format      = VulkanEnumTranslator::METoVKFormat(_info.format);
         image_create_info.extent      = {uint(_info.extent.x), uint(_info.extent.y), _info.depth};
