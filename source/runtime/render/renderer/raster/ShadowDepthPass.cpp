@@ -374,10 +374,10 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
 
         RenderShadow(
             context,
-            context.shadow_map_data.world_to_shadow_clip[cascade_index],               // 传入矩阵
-            Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),  // 传入视口大小
-            context.shadow_map_data.shadow_map_textures[cascade_index].tex->GetView(), // 传入目标 View
-            shadow_depth_pass_names[cascade_index]                                     // 传入名字
+            context.shadow_map_data.world_to_shadow_clip[cascade_index],
+            Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
+            context.shadow_map_data.shadow_map_textures[cascade_index].tex->GetView(),
+            shadow_depth_pass_names[cascade_index]
         );
     }
 }
@@ -403,24 +403,21 @@ void ShadowDepthPass::RenderShadow(
     RasterContext&   context,
     const float4x4&  view_proj,
     const Rect2D&    rect,
-    TextureView      depth_attachment,
+    TextureView      depth_view,
     std::string_view pass_name
 ) {
-    // 1. 准备 Shader 参数 (MVP 中的 VP)
     GeometryPassBindlessParam param;
     param.instance_data          = context.gpu_instance_info_handle;
     param.geometry_data          = context.gpu_geometry_info_handle;
     param.geometry_instance_data = context.gpu_geometry_instance_handle;
-    param.world2clip             = Transpose(view_proj); // 使用传入的矩阵
+    param.world2clip             = Transpose(view_proj);
 
     auto arg_idx = context.cmd_list.RegisterArgs(ShadowDepthPassPipeline::SetArgs(context.bdls, param));
 
-    // 2. 获取 Mesh 数据
     // (优化提示：GetDrawMeshDatasMap 其实一帧只需要调一次，以后可以提到外层)
     UnorderedMap<VertexFactory, Array<MeshDrawData>> mesh_draw_datas_map =
         RasterTool::GetDrawMeshDatasMap(context, true);
 
-    // 3. 准备 Pipeline (Lazy Creation)
     for (auto& [factory, _] : mesh_draw_datas_map) {
         if (!pipeline_map.contains(factory)) {
             VertexStream     stream = factory.GetVertexStream();
@@ -446,7 +443,6 @@ void ShadowDepthPass::RenderShadow(
         }
     }
 
-    // 4. 构建 DrawBatch
     auto draw_batch = DrawBatch{};
     for (auto& [factory, draw_array] : mesh_draw_datas_map) {
         if (pipeline_map.contains(factory)) {
@@ -455,16 +451,7 @@ void ShadowDepthPass::RenderShadow(
         }
     }
 
-    // 5. 发送绘制命令
-    // context.cmd_list
-    //     .Gfx(
-    //         pass_name,
-    //         rect,
-    //         depth_attachment // 使用传入的 View
-    //     )
-    //     .AcceptDrawBatch(std::move(draw_batch))
-    //     .Dispatch();
-    context.cmd_list.Gfx(pass_name, rect, DepthAttachment(depth_attachment.GetTexture()))
+    context.cmd_list.Gfx(pass_name, rect, DepthAttachment(depth_view))
         .AcceptDrawBatch(std::move(draw_batch))
         .Dispatch();
 }
