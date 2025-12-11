@@ -35,7 +35,7 @@ public:
 
         tonemapping_pipeline = context.manager.Raster()
                                    .Vertex("core/utils/FullScreenQuad.hlsl")
-                                   .Pixel("pipelines/raster/deferred/postprocess/Tonemapping.hlsl")
+                                   .Pixel("pipelines/postprocess/color/Tonemapping.hlsl")
                                    .Build<TonemappingPipeline>(std::move(pso_full_screen_info));
     }
 

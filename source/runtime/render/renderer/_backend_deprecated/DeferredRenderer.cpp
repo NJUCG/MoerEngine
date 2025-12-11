@@ -62,8 +62,8 @@
 // DEFINE_SHADER_PARAM(Moer::Vector4f, info)
 // END_SHADER_CONSTANT_STRUCT_DEFINITION()
 
-// IMPLEMENT_SHADER_TYPE(TestGBufferShaderVert, "pipelines/raster/deferred/GBufferVert.hlsl", "main", ST_VERTEX);
-// IMPLEMENT_SHADER_TYPE(TestGBufferShaderFrag, "pipelines/raster/deferred/GBufferFrag.hlsl", "main", ST_FRAGMENT);
+// IMPLEMENT_SHADER_TYPE(TestGBufferShaderVert, "deprecated/pipelines/raster/GBufferVert.hlsl", "main", ST_VERTEX);
+// IMPLEMENT_SHADER_TYPE(TestGBufferShaderFrag, "deprecated/pipelines/raster/GBufferFrag.hlsl", "main", ST_FRAGMENT);
 
 // class LightingShaderVert : public Shader {
 //     DEFINE_SHADER_TYPE(LightingShaderVert, Global, RENDER_API, ...)
@@ -87,8 +87,8 @@
 //     END_ROOT_PARAMETER_DEFINITION(Parameters)
 // };
 
-// IMPLEMENT_SHADER_TYPE(LightingShaderVert, "pipelines/raster/deferred/LightingVert.hlsl", "main", ST_VERTEX);
-// IMPLEMENT_SHADER_TYPE(LightingShaderFrag, "pipelines/raster/deferred/LightingFrag.hlsl", "main", ST_FRAGMENT);
+// IMPLEMENT_SHADER_TYPE(LightingShaderVert, "deprecated/pipelines/raster/LightingVert.hlsl", "main", ST_VERTEX);
+// IMPLEMENT_SHADER_TYPE(LightingShaderFrag, "deprecated/pipelines/raster/LightingFrag.hlsl", "main", ST_FRAGMENT);
 
 // constexpr uint32_t uniform_buffer_size = sizeof(VirtualView);
 // namespace Moer {

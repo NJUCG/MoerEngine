@@ -15,7 +15,7 @@ AntialiasPass::AntialiasPass(
 ) :
     manager(_manager),
     scene(_scene),
-    taa_pipeline(manager.Compute<TAAPipeline>("pipelines/postprocess/aa/TAAPass.hlsl")),
+    taa_pipeline(manager.Compute<TAAPipeline>("pipelines/raytracing/postprocess/TAAPass.hlsl")),
     frame_idx(0),
     jitter(float2(0.f)),
     jitter_mode(EJitter::MSAA),
