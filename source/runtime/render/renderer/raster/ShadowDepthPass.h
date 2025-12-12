@@ -44,18 +44,20 @@ public:
 
 private:
     void RenderShadow(
-        RasterContext&   context,
-        const float4x4&  view_proj,
-        const Rect2D&    rect,
-        TextureView      depth_attachment,
-        std::string_view pass_name
+        RasterContext&                                              context,
+        const float4x4&                                             view_proj,
+        const Rect2D&                                               rect,
+        TextureView                                                 depth_attachment,
+        std::string_view                                            pass_name,
+        Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline>& pipeline_map
     );
 
 private:
-    StaticArray<std::string, CSM_MAX_CASCADES> shadow_depth_pass_names;
-    uint                                       enabled_cascade_layers;
+    uint enabled_cascade_layers;
 
-    Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline> pipeline_map;
+    Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline> csm_pipeline_map;
+    Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline> point_pipeline_map;
     VertexShader                                               vertex_shader;
+    VertexShader                                               point_vertex_shader;
 };
 } // namespace Moer::Render::Raster

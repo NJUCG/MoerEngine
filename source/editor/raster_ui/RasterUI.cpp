@@ -101,7 +101,9 @@ void RasterUI::ShowConfig() {
             }
         };
 
-        if (m_config.shadow_map_mode == EShadowMapMode::CSM) { // CSM
+        if (m_config.shadow_map_mode == EShadowMapMode::POINT_CUBE) { // Point Cube
+            ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
+        } else if (m_config.shadow_map_mode == EShadowMapMode::CSM) { // CSM
             csm_common_param();
             float mx = 0.0f;
             for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {

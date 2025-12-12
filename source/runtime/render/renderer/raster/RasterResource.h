@@ -16,15 +16,15 @@ namespace Moer::Render::Raster {
 
 struct PointLightShadowData {
     struct ShadowCubeResource {
-        TextureRef tex;       // CubeMap (ArrayLayers=6)
-        uint       handle; 
+        TextureRef  tex; // CubeMap (ArrayLayers=6)
+        uint        handle;
         std::string name;
-        float      far_plane; // 存下来，Shader 里做深度线性化时需要用到 (Far)
-        float      near_plane;// 存下来 (Near)
+        float       far_plane;  // 存下来，Shader 里做深度线性化时需要用到 (Far)
+        float       near_plane; // 存下来 (Near)
     };
 
     // 支持多个点光源 (例如 4 个)
-    static constexpr uint MAX_POINT_SHADOWS = 1;
+    static constexpr uint                             MAX_POINT_SHADOWS = 1;
     std::array<ShadowCubeResource, MAX_POINT_SHADOWS> shadow_cubes;
 };
 
@@ -65,9 +65,9 @@ public:
     uint gpu_light_info_handle        = 0;
 
     // Shadow Data
-    struct ShadowMapData {
-        float3 light_dir;
-        StaticArray<float4,CSM_MAX_CASCADES> scaleDatas;// x: Width, y: Height, z: ZRange, w: NearPlane
+    struct CSMData {
+        float3                                light_dir;
+        StaticArray<float4, CSM_MAX_CASCADES> scaleDatas; // x: Width, y: Height, z: ZRange, w: NearPlane
         StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
         StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
         StaticArray<float, CSM_MAX_CASCADES>
@@ -76,7 +76,27 @@ public:
             cascade_split_ratios; //ratios between 0.0 and 1.0 according to near_clip and far_clip
         StaticArray<float, CSM_MAX_CASCADES>
             cascade_blend_start_ratios; //calculated in linear space, then converted to clip space
-    } shadow_map_data;
+    } csm_data;
+
+    struct PointShadowData {
+        // 定义最大支持的点光源阴影数量
+        static constexpr uint MAX_POINT_SHADOWS = 1;
+
+        struct ShadowCube {
+            TextureRef  tex;        // CubeMap 资源
+            uint        handle = 0; // Bindless Handle
+            std::string name;       // Debug Name
+
+            // 存储投影参数，供 Lighting Pass 做深度线性化或 VSM 计算
+            float  near_plane = 0.1f;
+            float  far_plane  = 100.0f;
+            float3 light_pos; // 记录生成阴影时的光源位置
+        };
+
+        StaticArray<ShadowCube, MAX_POINT_SHADOWS> shadow_cubes;
+
+        uint active_count = 1;
+    } point_shadow_data;
 
     // RayTracing
     RaytracingSceneRef rt_scene;
@@ -157,7 +177,7 @@ public:
 
         cubemap_tex.tex = device.CreateCubeMap(
             "cubemap_tex",
-            Extent2D(2048, 2048),//FIXME:动态参数？
+            Extent2D(2048, 2048), //TODO:动态参数？
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
@@ -186,8 +206,6 @@ public:
             cmd_list.AddCallback([data]() {
                 stbi_image_free(data);
             });
-
-            
         }
         cubemap_tex.handle = bdls->AllocateTexture(cubemap_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
     }

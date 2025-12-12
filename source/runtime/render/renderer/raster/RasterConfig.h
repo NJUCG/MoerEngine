@@ -54,6 +54,7 @@ static const UnorderedMap<ERtaoSampleMode, std::string> s_rtao_sample_mode_name_
 // EnumParam(EShadowMapMode, NONE, CSM, CSM_AUTO);
 static const UnorderedMap<EShadowMapMode, std::string> s_shadow_map_mode_name_map = {
     {EShadowMapMode::NONE, "None"},
+    {EShadowMapMode::POINT_CUBE, "Point Cube"},
     {EShadowMapMode::CSM, "CSM"},
     {EShadowMapMode::CSM_AUTO, "CSM Auto"},
 };

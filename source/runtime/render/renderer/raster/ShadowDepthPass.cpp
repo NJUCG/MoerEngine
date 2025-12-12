@@ -14,6 +14,7 @@
 namespace {
 
 using namespace Moer;
+constexpr float DEG2RAD = PI / 180.0f;
 
 StaticArray<float, CSM_MAX_CASCADES> get_csm_blend(
     const StaticArray<float, CSM_MAX_CASCADES> split_point_raw,
@@ -202,11 +203,12 @@ float4x4 get_world_to_shadow_clip_matrix(
 namespace Moer::Render::Raster {
 
 ShadowDepthPass::ShadowDepthPass(RasterContext& context) :
-    vertex_shader("pipelines/raster/deferred/geometry/GeometryPassCommonVertex.hlsl") {}
+    vertex_shader("pipelines/raster/deferred/geometry/GeometryPassCommonVertex.hlsl"),
+    point_vertex_shader("pipelines/raster/deferred/geometry/GeometryPassCommonVertex.hlsl") {}
 
 void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config) {
     for (uint i = 0; i < enabled_cascade_layers; i++) {
-        auto& shadow_map_texture = context.shadow_map_data.shadow_map_textures[i];
+        auto& shadow_map_texture = context.csm_data.shadow_map_textures[i];
 
         bool b_need_to_create = shadow_map_texture.tex == nullptr ||
                                 shadow_map_texture.tex->GetWidth() != ui_config.shadow_csm_sm_size ||
@@ -249,7 +251,50 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
     }
 }
 
-void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const RasterConfig& ui_config) {}
+void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const RasterConfig& ui_config) {
+    for (uint i = 0; i < RasterContext::PointShadowData::MAX_POINT_SHADOWS; i++) {
+        auto& cube_res = context.point_shadow_data.shadow_cubes[i];
+
+        // 检查是否需要创建或重建 (例如分辨率发生变化)
+        bool b_need_to_create = cube_res.tex == nullptr ||
+                                cube_res.tex->GetWidth() != ui_config.shadow_csm_sm_size ||
+                                cube_res.tex->GetHeight() != ui_config.shadow_csm_sm_size;
+
+        if (b_need_to_create) {
+            // 清理旧资源
+            if (cube_res.tex) {
+                context.bdls->FreeTexture(cube_res.handle);
+                cube_res.tex = nullptr;
+            }
+
+            cube_res.name = std::format("PointShadowCube_{}", i);
+
+            // 格式：复用 CSM 的深度格式 (通常是 D32_FLOAT)
+            // 用途：既要被采样 (SAMPLED)，又要作为深度附件写入 (DEPTH_STENCIL_ATTACHMENT)
+            cube_res.tex = context.device.CreateCubeMap(
+                cube_res.name.c_str(),
+                Extent2D(ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
+                context.textures.depth_linear_sampler.tex->GetFormat(),
+                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+            );
+
+            // GetView 必须请求完整的 6 层 (0, 1, 0, 6)，这样 Shader 才能把它当 Cube 采
+            cube_res.handle =
+                context.bdls->AllocateTexture(cube_res.tex, Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
+
+            LOG_DEBUG(
+                "Create PointLight ShadowMap: {}, size ({}, {}), bindless handle: {}",
+                cube_res.name,
+                ui_config.shadow_csm_sm_size,
+                ui_config.shadow_csm_sm_size,
+                cube_res.handle
+            );
+
+            // 5. 更新 Bindless Array (提交描述符更新)
+            context.cmd_list.UpdateBindlessArray(context.bdls);
+        }
+    }
+}
 
 DirectionalLightComponent* ShadowDepthPass::GetMainLightDirection(RasterContext& context) {
 
@@ -321,31 +366,31 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
     const float near_clip = camera->GetNearClip();
     const float far_clip  = camera->GetFarClip();
 
-    context.shadow_map_data.light_dir = Normalizef(light_direction_optional->GetDirection());
+    context.csm_data.light_dir = Normalizef(light_direction_optional->GetDirection());
 
     //lerp csm ratios
     switch (ui_config.shadow_map_mode) {
         case EShadowMapMode::CSM_AUTO: {
-            context.shadow_map_data.cascade_split_points = get_cascade_split_points(
+            context.csm_data.cascade_split_points = get_cascade_split_points(
                 near_clip, far_clip, ui_config.shadow_csm_lerp_factor, enabled_cascade_layers
             );
-            context.shadow_map_data.cascade_split_ratios = transform_split_points_to_ratios(
-                context.shadow_map_data.cascade_split_points, near_clip, far_clip, enabled_cascade_layers
+            context.csm_data.cascade_split_ratios = transform_split_points_to_ratios(
+                context.csm_data.cascade_split_points, near_clip, far_clip, enabled_cascade_layers
             );
             break;
         }
         case EShadowMapMode::CSM:
         default:
-            context.shadow_map_data.cascade_split_points = transform_split_ratios_to_points(
+            context.csm_data.cascade_split_points = transform_split_ratios_to_points(
                 ui_config.shadow_csm_cover_ratio_of_camera, near_clip, far_clip, enabled_cascade_layers
             );
-            context.shadow_map_data.cascade_split_ratios = ui_config.shadow_csm_cover_ratio_of_camera;
+            context.csm_data.cascade_split_ratios = ui_config.shadow_csm_cover_ratio_of_camera;
     }
 
     //混合
-    context.shadow_map_data.cascade_blend_start_ratios = transform_split_points_to_ratios(
+    context.csm_data.cascade_blend_start_ratios = transform_split_points_to_ratios(
         get_csm_blend(
-            context.shadow_map_data.cascade_split_points,
+            context.csm_data.cascade_split_points,
             ui_config.shadow_csm_blend_percentage,
             enabled_cascade_layers
         ),
@@ -355,29 +400,27 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
     );
 
     for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
-        // Name
-        shadow_depth_pass_names[cascade_index] = std::format("Shadow Depth Pass - {}", cascade_index);
 
         // World to Shadow Clip Matrix
         const float frustum_near_ratio =
-            (cascade_index == 0) ? 0.0f :
-                                   context.shadow_map_data.cascade_blend_start_ratios[cascade_index - 1];
-        const float frustum_far_ratio = context.shadow_map_data.cascade_split_ratios[cascade_index];
-        context.shadow_map_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
+            (cascade_index == 0) ? 0.0f : context.csm_data.cascade_blend_start_ratios[cascade_index - 1];
+        const float frustum_far_ratio = context.csm_data.cascade_split_ratios[cascade_index];
+        context.csm_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
             light_direction_optional,
             camera,
             ui_config,
             frustum_near_ratio,
             frustum_far_ratio,
-            context.shadow_map_data.scaleDatas[cascade_index]
+            context.csm_data.scaleDatas[cascade_index]
         );
 
         RenderShadow(
             context,
-            context.shadow_map_data.world_to_shadow_clip[cascade_index],
+            context.csm_data.world_to_shadow_clip[cascade_index],
             Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
-            context.shadow_map_data.shadow_map_textures[cascade_index].tex->GetView(),
-            shadow_depth_pass_names[cascade_index]
+            context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
+            std::format("Shadow Depth Pass - {}", cascade_index),
+            csm_pipeline_map
         );
     }
 }
@@ -385,6 +428,9 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
 void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
     switch (ui_config.shadow_map_mode) {
         case EShadowMapMode::NONE:
+            break;
+        case EShadowMapMode::POINT_CUBE:
+            RenderPointShadows(context, ui_config);
             break;
         case EShadowMapMode::CSM:
         case EShadowMapMode::CSM_AUTO:
@@ -397,14 +443,72 @@ void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_con
     return;
 }
 
-void ShadowDepthPass::RenderPointShadows(RasterContext& context, const RasterConfig& config) {}
+void ShadowDepthPass::RenderPointShadows(RasterContext& context, const RasterConfig& config) {
+    PreparePointShadowResources(context, config);
+
+    PointLightComponent* light = GetMainPointLight(context);
+
+    const uint light_idx = 0; // 目前我们只处理第一个点光源的阴影
+    auto&      cube_res  = context.point_shadow_data.shadow_cubes[light_idx];
+
+    // 记录光源信息供 Lighting Pass 使用
+    float near_plane    = 0.1f;               // 近平面 (根据场景尺度调整)
+    float far_plane     = light->GetRadius(); // 远平面 = 光源半径
+    cube_res.near_plane = near_plane;
+    cube_res.far_plane  = far_plane;
+    cube_res.light_pos  = light->GetPosition();
+
+    // 计算投影矩阵 (90度 FOV, Aspect 1.0)
+    // 交换了 near_plane 和 far_plane 以适应 Inverse Depth
+    float4x4 proj = MakePerspectiveMatrixRH(90.0f * DEG2RAD, 1.0f, far_plane, near_plane);
+
+    // 定义 6 个面的朝向 (方向, 上向量)
+    // 顺序必须符合 CubeMap 标准: +X, -X, +Y, -Y, +Z, -Z
+    struct FaceInfo {
+        float3 dir;
+        float3 up;
+    };
+    static const FaceInfo faces[] = {
+        {{1, 0, 0}, {0, -1, 0}},  // +X (Right) - Vulkan Y-down usually implies Up is -Y for horizontal faces
+        {{-1, 0, 0}, {0, -1, 0}}, // -X (Left)
+        {{0, 1, 0}, {0, 0, 1}},   // +Y (Top)   - Up is +Z
+        {{0, -1, 0}, {0, 0, -1}}, // -Y (Bottom)- Up is -Z
+        {{0, 0, 1}, {0, -1, 0}},  // +Z (Front)
+        {{0, 0, -1}, {0, -1, 0}}  // -Z (Back)
+    };
+
+    // 4. 遍历 6 个面进行渲染
+    for (uint face = 0; face < 6; ++face) {
+        // A. 计算 View 矩阵
+        float3   light_pos = light->GetPosition();
+        float4x4 view      = MakeLookatViewMatrixRH(light_pos, light_pos + faces[face].dir, faces[face].up);
+
+        // B. 合成 VP 矩阵
+        float4x4 view_proj = proj * view;
+
+        // 构造切片 View
+        // 我们需要渲染到 CubeMap 的第 face 层
+        // 修改：使用 Slice 函数直接获取特定层的 View，或者手动设置 array_layer (原代码 array_index 是错误的)
+        TextureView face_view = TextureView(cube_res.tex.Get()).Slice(face, 1);
+
+        RenderShadow(
+            context,
+            view_proj,
+            Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
+            face_view,
+            std::format("PointShadow L{} F{}", light_idx, face),
+            point_pipeline_map
+        );
+    }
+}
 
 void ShadowDepthPass::RenderShadow(
-    RasterContext&   context,
-    const float4x4&  view_proj,
-    const Rect2D&    rect,
-    TextureView      depth_view,
-    std::string_view pass_name
+    RasterContext&                                              context,
+    const float4x4&                                             view_proj,
+    const Rect2D&                                               rect,
+    TextureView                                                 depth_view,
+    std::string_view                                            pass_name,
+    Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline>& pipeline_map
 ) {
     GeometryPassBindlessParam param;
     param.instance_data          = context.gpu_instance_info_handle;
