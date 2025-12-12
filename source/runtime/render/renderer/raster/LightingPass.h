@@ -82,8 +82,12 @@ public:
         lighting_data->shadow_csm_visualize_cascade = ui_config.shadow_csm_visualize_cascade;
         // Shadow Map
         for (uint i = 0; i < csm_layers; i++) {
-            lighting_data->shadow_map[i] = context.csm_data.shadow_map_textures[i].handle;
+            lighting_data->cascade_shadow_map[i] = context.csm_data.shadow_map_textures[i].handle;
         }
+        lighting_data->point_shadow_map = context.point_shadow_data.shadow_cubes[0].handle;
+        lighting_data->light_pos        = context.point_shadow_data.shadow_cubes[0].light_pos;
+        lighting_data->light_radius     = context.point_shadow_data.shadow_cubes[0].far_plane;
+
         // Shadow Transform
         for (uint i = 0; i < csm_layers; i++) {
             lighting_data->world_to_shadow_clip[i] = Transpose(context.csm_data.world_to_shadow_clip[i]);

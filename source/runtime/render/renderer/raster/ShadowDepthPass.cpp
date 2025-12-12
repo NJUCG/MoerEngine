@@ -86,11 +86,11 @@ float4x4 get_world_to_shadow_clip_matrix(
     // World Space to Light Space (Light View Space)
     // 假设光源在世界坐标系原点，z轴=平行光反方向，y轴=光源上方向，x轴=光源右方向
     // clang-format off
-        const float3x3 world_to_light_view_rotate_only = float3x3(
-            light_right.x,      light_right.y,      light_right.z,
-            light_up.x,         light_up.y,         light_up.z,
-            -light_direction.x, -light_direction.y, -light_direction.z
-        );
+    const float3x3 world_to_light_view_rotate_only = float3x3(
+        light_right.x,      light_right.y,      light_right.z,
+        light_up.x,         light_up.y,         light_up.z,
+        -light_direction.x, -light_direction.y, -light_direction.z
+    );
     // clang-format on
     const float3x3 world_to_light_view_rotate_only_inverse = Inverse(world_to_light_view_rotate_only);
 
@@ -488,7 +488,7 @@ void ShadowDepthPass::RenderPointShadows(RasterContext& context, const RasterCon
 
         // 构造切片 View
         // 我们需要渲染到 CubeMap 的第 face 层
-        // 修改：使用 Slice 函数直接获取特定层的 View，或者手动设置 array_layer (原代码 array_index 是错误的)
+        // 使用 Slice 函数直接获取特定层的 View
         TextureView face_view = TextureView(cube_res.tex.Get()).Slice(face, 1);
 
         RenderShadow(

@@ -125,10 +125,10 @@ Array<LightComponentRef> LightComponent::CreateDefaultLightComponents() {
     // Point Light
     {
         LightComponentRef point_light = MoerNew(PointLightComponent)(
-            Vector3f(1.0f, 0.9f, 0.7f), // color
+            Vector3f(1.0f, 1.0f, 1.0f), // color
             50.0f,                      // intensity
-            Vector3f(0.0f, 4.0f, 0.0f), // position
-            150.0f                      // radius
+            Vector3f(1.0f, 1.0f, 1.0f), // position
+            15000.0f                    // radius
         );
         lights.push_back(point_light);
     }
