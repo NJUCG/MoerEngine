@@ -74,7 +74,7 @@ float calculate_point_shadow(
 
     ShadowContext ctx;
     ctx.shadowMapHandle = shadow_cube_handle;
-    ctx.fragmentDepth   = distance;
+    ctx.fragmentDepth   = local_z;
     ctx.screenUV        = screen_uv;
     GetTangentBasis(dir, ctx.Tangent, ctx.Bitangent);
     ctx.lightSizeWorld = lighting_data.light_size_world;
@@ -84,7 +84,6 @@ float calculate_point_shadow(
     ctx.scaleData.y    = far_plane;
     ctx.normal         = normal;
     ctx.lightDir       = dir;
-
 
     if (lighting_data.pcss_enabled == 1) {
         return calculate_pcss(ctx);

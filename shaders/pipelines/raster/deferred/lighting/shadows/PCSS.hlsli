@@ -8,7 +8,7 @@
 //  0: disabled.
 //  1: share occluder search result.
 //  2: share occluder search and PCF results.
-#define PCSS_SHARE_PER_PIXEL_QUAD 0
+#define PCSS_SHARE_PER_PIXEL_QUAD 2
 
 // Whether to debug pixel where they early return.
 #define PCSS_DEBUG_EARLY_RETURN 0
@@ -23,7 +23,7 @@
 #define PCSS_ANTI_ALIASING_METHOD 0
 
 // Whether to enable the sharpening filter after PCF for sharper edges than the shadow map resolution.
-#define PCSS_ENABLE_POST_PCF_SHARPENING 0
+#define PCSS_ENABLE_POST_PCF_SHARPENING 1
 
 // Light Type
 #define PCSS_LIGHT_TYPE 0 //0: Point/Spot Light, 1: Directional Light
