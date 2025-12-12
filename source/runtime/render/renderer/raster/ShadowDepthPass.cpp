@@ -430,7 +430,7 @@ void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_con
         case EShadowMapMode::NONE:
             break;
         case EShadowMapMode::POINT_CUBE:
-            RenderPointShadows(context, ui_config);
+            RenderPointShadows(context, ui_config, camera);
             break;
         case EShadowMapMode::CSM:
         case EShadowMapMode::CSM_AUTO:
@@ -443,7 +443,11 @@ void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_con
     return;
 }
 
-void ShadowDepthPass::RenderPointShadows(RasterContext& context, const RasterConfig& config) {
+void ShadowDepthPass::RenderPointShadows(
+    RasterContext&      context,
+    const RasterConfig& config,
+    CameraRef&          camera
+) {
     PreparePointShadowResources(context, config);
 
     PointLightComponent* light = GetMainPointLight(context);
@@ -452,8 +456,8 @@ void ShadowDepthPass::RenderPointShadows(RasterContext& context, const RasterCon
     auto&      cube_res  = context.point_shadow_data.shadow_cubes[light_idx];
 
     // 记录光源信息供 Lighting Pass 使用
-    float near_plane    = 0.1f;               // 近平面 (根据场景尺度调整)
-    float far_plane     = light->GetRadius(); // 远平面 = 光源半径
+    float near_plane    = camera->GetNearClip(); // 近平面 (根据场景尺度调整)
+    float far_plane     = camera->GetFarClip();  // TODO:远平面 = 光源半径
     cube_res.near_plane = near_plane;
     cube_res.far_plane  = far_plane;
     cube_res.light_pos  = light->GetPosition();
@@ -479,16 +483,10 @@ void ShadowDepthPass::RenderPointShadows(RasterContext& context, const RasterCon
 
     // 4. 遍历 6 个面进行渲染
     for (uint face = 0; face < 6; ++face) {
-        // A. 计算 View 矩阵
         float3   light_pos = light->GetPosition();
         float4x4 view      = MakeLookatViewMatrixRH(light_pos, light_pos + faces[face].dir, faces[face].up);
-
-        // B. 合成 VP 矩阵
         float4x4 view_proj = proj * view;
 
-        // 构造切片 View
-        // 我们需要渲染到 CubeMap 的第 face 层
-        // 使用 Slice 函数直接获取特定层的 View
         TextureView face_view = TextureView(cube_res.tex.Get()).Slice(face, 1);
 
         RenderShadow(
@@ -518,7 +516,7 @@ void ShadowDepthPass::RenderShadow(
 
     auto arg_idx = context.cmd_list.RegisterArgs(ShadowDepthPassPipeline::SetArgs(context.bdls, param));
 
-    // (优化提示：GetDrawMeshDatasMap 其实一帧只需要调一次，以后可以提到外层)
+    // GetDrawMeshDatasMap 其实一帧只需要调一次，以后可以提到外层
     UnorderedMap<VertexFactory, Array<MeshDrawData>> mesh_draw_datas_map =
         RasterTool::GetDrawMeshDatasMap(context, true);
 

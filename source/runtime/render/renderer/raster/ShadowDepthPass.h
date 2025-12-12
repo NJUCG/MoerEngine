@@ -40,7 +40,7 @@ public:
     // 渲染逻辑
 
     void RenderCSM(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera);
-    void RenderPointShadows(RasterContext& context, const RasterConfig& config);
+    void RenderPointShadows(RasterContext& context, const RasterConfig& config, CameraRef& camera);
 
 private:
     void RenderShadow(
