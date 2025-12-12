@@ -138,8 +138,7 @@ public:
 
         //lerp csm ratios
         switch (ui_config.shadow_map_mode) {
-            case EShadowMapMode::CSM_AUTO:
-            {
+            case EShadowMapMode::CSM_AUTO: {
                 context.shadow_map_data.cascade_split_points =
                     get_cascade_split_points(near_clip, far_clip, ui_config.shadow_csm_lerp_factor);
                 context.shadow_map_data.cascade_split_ratios = transform_split_points_to_ratios(
@@ -174,7 +173,12 @@ public:
                                        context.shadow_map_data.cascade_blend_start_ratios[cascade_index - 1];
             const float frustum_far_ratio = context.shadow_map_data.cascade_split_ratios[cascade_index];
             context.shadow_map_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
-                light_direction_optional, camera, ui_config, frustum_near_ratio, frustum_far_ratio,context.shadow_map_data.scaleDatas[cascade_index]
+                light_direction_optional,
+                camera,
+                ui_config,
+                frustum_near_ratio,
+                frustum_far_ratio,
+                context.shadow_map_data.scaleDatas[cascade_index]
             );
 
             // Param
@@ -206,7 +210,9 @@ public:
                     ShadowDepthPassPipeline::MutationSet mutation_set{};
                     mutation_set.SetMutation<ShadowDepthPassPipeline::SHADOW_DEPTH_PASS>(true);
                     Shader& frag = ShaderManager::Get().CompileShader(
-                        ST_FRAGMENT, "pipelines/raster/deferred/geometry/GeometryPassCommonPixel.hlsl", mutation_set
+                        ST_FRAGMENT,
+                        "pipelines/raster/deferred/geometry/GeometryPassCommonPixel.hlsl",
+                        mutation_set
                     );
 
                     pipeline_map.emplace(
@@ -314,7 +320,7 @@ private:
         const RasterConfig&        ui_config,
         const float                frustum_near_ratio,
         const float                frustum_far_ratio,
-        float4& outScaleData
+        float4&                    outScaleData
     ) {
         const float3 light_direction = Normalizef(light_direction_optional->GetDirection());
         const float3 light_right     = Normalizef(Cross(light_direction, float3(0.f, 1.f, 0.f)));
@@ -428,12 +434,12 @@ private:
 
         // 保存正交矩阵数据，供PCSS方向光软阴影使用
         float ortho_width = max_cross_distance;
-        float z_near_val = aabb_min_z_in_light_space - z_delta;
-        float z_far_val  = aabb_max_z_in_light_space + z_delta;
-        float z_range    = z_far_val - z_near_val;
+        float z_near_val  = aabb_min_z_in_light_space - z_delta;
+        float z_far_val   = aabb_max_z_in_light_space + z_delta;
+        float z_range     = z_far_val - z_near_val;
 
         outScaleData = float4(ortho_width, ortho_width, z_range, z_near_val);
-        
+
         return world_to_light_orth_matrix; // RVO
     }
 };

@@ -63,7 +63,7 @@ bool ShadeSurface(inout DI::Reservoir _res, Surface _surface,
 void StoreShadingResults(uint2 _pixel_pos, float _view_depth, float _roughness,
                          float3 _diffuse, float3 _specular, float _light_dist,
                          bool _is_first_pass) {
-#ifdef WITH_NRD
+#if WITH_NRD
   if (resample_params.denoiser_mode != Moer::s_denoiser_mode_off) {
 
     bool b_relax = resample_params.denoiser_mode == Moer::s_denoiser_mode_relax;
