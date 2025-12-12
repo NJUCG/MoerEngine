@@ -2,7 +2,13 @@
 #include <shared/ShaderParameters.h>
 #include <shared/utils/Packing.h>
 
+#ifndef WITH_NRD
+#define WITH_NRD 1
+#endif
+
+#if WITH_NRD
 #include <external/nrd/NRD.hlsli>
+#endif
 
 [[vk::binding(1, 0)]] RWTexture2D<uint> rw_specular_roughness : register(u0);
 [[vk::binding(2, 0)]] RWTexture2D<float4> rw_normal_roughness : register(u1);
@@ -75,6 +81,9 @@ float GetModifiedRoughnessFromNormalVariance(float _roughness,
   }
   rw_specular_roughness[_pixel_pos] = Moer::Pack_R8G8B8A8_Gamma_UFLOAT(
       float4(spec_roughness.xyz, roughness_mod));
+
+#if WITH_NRD
   rw_normal_roughness[_pixel_pos] =
       NRD_FrontEnd_PackNormalAndRoughness(normal, roughness, 0u);
+#endif
 }

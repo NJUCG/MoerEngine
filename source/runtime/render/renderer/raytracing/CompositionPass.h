@@ -48,6 +48,12 @@ public:
         denoised_specular_lighting,
         bdls
     );
+
+#pragma push_macro("WITH_NRD")            // 保存WITH_NRD宏的值
+#undef WITH_NRD                           // 释放WITH_NRD宏
+    MUTATION_SPARSE_UINT(WITH_NRD, 0, 1); // Value could be 0 or 1
+    MUTATION_SET(MutationSet, WITH_NRD);
+#pragma pop_macro("WITH_NRD") // 用之前的值重新定义WITH_NRD宏
 };
 
 class CompositionPass {
