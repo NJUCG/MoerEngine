@@ -649,7 +649,12 @@ public:
     static VkImageUsageFlags METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
 
     uint        GetMipByteSize(uint _mip_idx) const override;
-    VkImageView GetView(uint _mip_level = 0, uint _mip_cnt = 1);
+    VkImageView GetView(
+        uint _mip_level  = 0,
+        uint _mip_cnt    = 1,
+        uint _base_layer = 0,
+        uint _layer_cnt  = 0
+    ); //layer_cnt 0 means all layers
 
     void          SetName(const std::string_view _name) override;
     bool          b_has_preferred_state : 1 = false;
@@ -687,8 +692,8 @@ private:
         VkImage       image;
         VmaAllocation alloc;
     } m_alloc;
-    UnorderedMap<uint, VkImageView> m_views;
-    VkImageLayout                   m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
+    UnorderedMap<uint64, VkImageView> m_views;
+    VkImageLayout                     m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
 };
 
 class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
