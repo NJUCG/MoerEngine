@@ -9,8 +9,19 @@ namespace Moer::Render::Raytracing {
 CompositionPass::CompositionPass(RenderDevice& _device, ShaderManager& _manager, Scene& _scene) :
     device(_device),
     manager(_manager),
-    scene(_scene),
-    gbuffer_pass_pipeline{manager.Compute<CompositionPassPipeline>("pipelines/raytracing/passes/CompositionPass.hlsl")} {
+    scene(_scene) {
+
+    int with_nrd = WITH_NRD;
+#pragma push_macro("WITH_NRD")
+#undef WITH_NRD
+    CompositionPassPipeline::MutationSet mutation_set;
+    mutation_set.SetMutation<CompositionPassPipeline::WITH_NRD>(with_nrd);
+#pragma pop_macro("WITH_NRD")
+
+    gbuffer_pass_pipeline = std::move(manager.Compute<CompositionPassPipeline>(
+        "pipelines/raytracing/passes/CompositionPass.hlsl", mutation_set
+    ));
+
     gbuffer_constants = device.CreateBuffer<Moer::byte>(
         "CompositionPass::constant_buffer", sizeof(CompositingConstants), EBufferUsageFlags::CONSTANT_BUFFER
     );

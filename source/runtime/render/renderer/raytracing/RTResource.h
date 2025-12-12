@@ -13,6 +13,10 @@
 #include <filesystem>
 #include <string_view>
 
+#ifndef WITH_NRD
+#define WITH_NRD 0
+#endif
+
 namespace Moer::Render::Raytracing {
 
 struct FrameResources {

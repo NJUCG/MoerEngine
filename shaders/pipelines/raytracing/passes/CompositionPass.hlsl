@@ -14,11 +14,12 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 #include <core/math/STL.hlsli>
 #include <pipelines/raytracing/passes/GBufferUtils.hlsli>
 
+#ifndef WITH_NRD
 #define WITH_NRD 1
-#ifdef WITH_NRD
-#define NRD_HEADER_ONLY
-#include <external/nrd/NRD.hlsli>
+#endif
 
+#if WITH_NRD
+#include <external/nrd/NRD.hlsli>
 #endif
 
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::CompositingConstants> params
@@ -61,7 +62,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
     float4 diffuse = diffuse_lighting[gtid];
     float4 specular = specular_lighting[gtid];
 
-#ifdef WITH_NRD
+#if WITH_NRD
     if (params.denoiser_mode != Moer::s_denoiser_mode_off) {
       float4 denoised_diffuse = denoised_diffuse_lighting[gtid];
       float4 denoised_specular = denoised_specular_lighting[gtid];
