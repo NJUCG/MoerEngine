@@ -96,7 +96,7 @@ struct RasterConfig {
     EShadingMode shading_mode                    = EShadingMode::DEFAULT;
     bool         shading_enable_extra_ambient    = true;
     float3       shading_extra_ambient_color     = float3(1.f, 1.f, 1.f);
-    float        shading_extra_ambient_intensity = 0.1f;
+    float        shading_extra_ambient_intensity = 0.01f;
 
     // MARK: AA
     EAaMode aa_mode = EAaMode::SMAA_1X;
@@ -158,7 +158,7 @@ struct RasterConfig {
 
     // MARK: Shadow - PCSS
     bool  shadow_pcss_enabled          = true;
-    float shadow_pcss_light_size_world = 1.0f;
+    float shadow_pcss_light_size_world = 0.02f;
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
         {0.01, 0.04, 0.1, 0.25, 0.32, 1.0};
@@ -170,6 +170,8 @@ struct RasterConfig {
     int           inSize_x      = 540;
 
     // MARK: Tonemapping
+    float tonemapping_exposure_ev      = 0.0;
+    bool  tonemapping_reinhard_enabled = true;
 
     // MARK: Debug
     float debug_param            = 1.0f;

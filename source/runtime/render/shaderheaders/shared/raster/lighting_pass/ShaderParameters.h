@@ -53,7 +53,7 @@ struct LightingData {
     float4x4 inv_view_proj;
     float3   camera_position;
     // uint     padding;// FIXME: need or not?
-    uint light_count;
+    uint   light_count;
     float3 main_light_direction;
 
     uint shadow_map_mode;
@@ -66,7 +66,7 @@ struct LightingData {
 
     uint pcss_enabled;
 
-    float light_size_world;//assumed light size for soft shadow calculation
+    float  light_size_world; //assumed light size for soft shadow calculation
     float4 scale_data[MAX_CSM_CASCADES];
 
     float4x4 view_matrix;
@@ -75,6 +75,10 @@ struct LightingData {
     float    cascade_split_ratios[MAX_CSM_CASCADES];
     float    cascade_blend_start_ratios[MAX_CSM_CASCADES];
     uint     is_csm_blend_enabled;
+
+    // Shading
+    uint lut_ggx_emu_handle;
+    uint lut_ggx_eavg_handle;
 };
 
 // MARK: Main Content End

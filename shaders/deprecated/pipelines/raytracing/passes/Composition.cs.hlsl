@@ -1,7 +1,6 @@
 #include <core/common/Bindless.hlsl>
 #include <core/common/Common.hlsl>
 BINDLESS_BINDINGS(2, 1, 3, 4);
-#include <pipelines/raytracing/lighting/common/Lighting.hlsl>
 
 #include <materials/Material.hlsl>
 

@@ -28,6 +28,17 @@ void RasterUI::ShowConfig() {
         ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
     };
 
+    // MARK: Tonemapping
+
+    // Tonemapping究极重要，所以放到最开头，以提示用户调节选项
+    ImGui::SliderFloat("Exposure EV", &m_config.tonemapping_exposure_ev, -5.0f, 5.0f);
+
+    if (ImGui::TreeNode("Tonemapping")) {
+        ImGui::Checkbox("Enable Reinhard Tone Mapping", &m_config.tonemapping_reinhard_enabled);
+
+        ImGui::TreePop();
+    }
+
     if (ImGui::TreeNode(
             "Output Frame Buffer",
             "Output: [%s]",
@@ -67,13 +78,6 @@ void RasterUI::ShowConfig() {
         ImGui::Checkbox("Enable Extra Ambient", &m_config.shading_enable_extra_ambient);
         ImGui::SliderFloat("Ambient Intensity", &m_config.shading_extra_ambient_intensity, 0.0f, 1.0f);
         ImGui::SliderFloat3("Ambient Color", (float*)&m_config.shading_extra_ambient_color, 0.0f, 1.0f);
-
-        ImGui::TreePop();
-    }
-
-    // MARK: Tonemapping
-    // 因为Tonemapping很重要，并且时常和Shading一起调节，所以把它放在Shading后面
-    if (ImGui::TreeNode("Tonemapping", "Tonemapping")) {
 
         ImGui::TreePop();
     }

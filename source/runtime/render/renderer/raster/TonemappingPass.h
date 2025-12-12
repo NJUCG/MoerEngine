@@ -42,7 +42,9 @@ public:
     uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image) {
 
         TonemappingPipelineBindlessParam param;
-        param.input_image = input_image;
+        param.input_image      = input_image;
+        param.exposure_ev      = ui_config.tonemapping_exposure_ev;
+        param.reinhard_enabled = ui_config.tonemapping_reinhard_enabled ? 1 : 0;
 
         context.cmd_list.Gfx(tonemapping_pipeline, context.bdls, param)
             .Draw(

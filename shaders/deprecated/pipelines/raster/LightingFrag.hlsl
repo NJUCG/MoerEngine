@@ -1,4 +1,3 @@
-#include "pipelines/raytracing/lighting/common/Lighting.hlsl"
 #include "materials/Material.hlsl"
 
 struct LightingData {

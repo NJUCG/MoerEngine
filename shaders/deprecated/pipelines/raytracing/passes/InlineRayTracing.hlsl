@@ -2,7 +2,6 @@
 #include <core/common/Common.hlsl>
 RTCONFIG_BINDING(1, 0);
 BINDLESS_BINDINGS(3, 2, 4, 5);
-#include <pipelines/raytracing/lighting/common/Lighting.hlsl>
 
 #include <deprecated/pipelines/raytracing/inline/RaytracingShared.hlsli>
 

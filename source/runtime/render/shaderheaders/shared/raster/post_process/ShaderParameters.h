@@ -178,7 +178,11 @@ struct UpsamplePipelineBindlessParam {
 };
 
 struct TonemappingPipelineBindlessParam {
-    uint input_image;
+    uint  input_image;
+    float exposure_ev;
+    uint  reinhard_enabled;
+
+    uint padding;
 };
 
 // MARK: Main Content End
