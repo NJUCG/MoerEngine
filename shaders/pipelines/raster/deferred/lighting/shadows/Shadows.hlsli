@@ -4,6 +4,9 @@
 #include "pipelines/raster/deferred/lighting/shadows/CSM.hlsli"
 #include "pipelines/raster/deferred/lighting/shadows/PCSS.hlsli"
 
+DEFINE_CALCULATE_PCSS(Point)
+DEFINE_CALCULATE_PCSS(Dir)
+
 float get_single_shadow(
     Moer::LightingData lighting_data,
     float3             world_pos,
@@ -37,10 +40,10 @@ float get_single_shadow(
     float fragment_depth = shadow_ndc_pos.z;
 
     if (lighting_data.pcss_enabled == 1) {
-        return calculate_pcss(ctx);
+        return CalculatePcssDir(ctx);
     } else {
         occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(ctx.shadowUV).x;
-        return is_shadowed(occluder_depth, fragment_depth, SHADOW_BIAS) ? 0.0 : 1.0;
+        return IsShadowedDir(occluder_depth, fragment_depth, SHADOW_BIAS) ? 0.0 : 1.0;
     }
 }
 
@@ -86,13 +89,17 @@ float calculate_point_shadow(
     ctx.lightDir       = dir;
 
     if (lighting_data.pcss_enabled == 1) {
-        return calculate_pcss(ctx);
+        return CalculatePcssPoint(ctx);
     } else {
-        if (occluder_depth > fragment_depth + SHADOW_BIAS) {
-            return 0.0;
-        } else {
-            return 1.0;
-        }
+        float dynamicBias = SHADOW_BIAS;
+#if PCSS_DYNAMIC_DEPTH_BIAS == 1
+        dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);
+#if PCSS_MAX_DEPTH_BIAS == 1
+        dynamicBias = min(dynamicBias, SHADOW_BIAS);
+#endif
+#endif
+        //这里还是Inverse-Z的
+        return IsShadowedDir(occluder_depth, fragment_depth, dynamicBias) ? 0.0 : 1.0;
     }
 }
 

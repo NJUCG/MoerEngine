@@ -118,27 +118,30 @@ float2 GetSampleOffset(int index, float radius, float2x2 rotation) {
     return mul(rotation, POISSON_DISK[index]) * radius;
 }
 
-// 抽象层函数
-#if PCSS_LIGHT_TYPE == 1 // Directional Light
+// =================================================================================================
+// PCSS 采样核心函数
+// =================================================================================================
 
-float3 GetShadowSamplingPos(ShadowContext ctx, float2 offset_uv) {
+// Directional Light
+
+float3 GetShadowSamplingPosDir(ShadowContext ctx, float2 offset_uv) {
     return float3(ctx.shadowUV + offset_uv, 0.0);
 }
 
-float SampleShadowDepth(ShadowContext ctx, float3 pos) {
+float SampleShadowDepthDir(ShadowContext ctx, float3 pos) {
     return TextureHandle(ctx.shadowMapHandle).Sample2D<float>(pos.xy).x;
 }
 
-float LinearizeShadowDepth(ShadowContext ctx, float raw_depth) {
+float LinearizeShadowDepthDir(ShadowContext ctx, float raw_depth) {
     return raw_depth;
 }
 
 // 获取当前像素深度 (非线性)
-float GetFragmentDepth(ShadowContext ctx) {
+float GetFragmentDepthDir(ShadowContext ctx) {
     return ctx.fragmentDepth;
 }
 
-float calculate_penumbra(ShadowContext ctx, float avg_blocker_depth) {
+float CalculatePenumbraDir(ShadowContext ctx, float avg_blocker_depth) {
     float orthoWidth     = ctx.scaleData.x;
     float zRange         = ctx.scaleData.z;
     float diff_ndc       = max(avg_blocker_depth - ctx.fragmentDepth, 0.0);
@@ -146,7 +149,7 @@ float calculate_penumbra(ShadowContext ctx, float avg_blocker_depth) {
     float penumbra_world = dist_world * ctx.lightSizeWorld; // 计算世界半影 (米), lightSizeWorld 是 tan(theta)
     return penumbra_world / orthoWidth;                     // 再次转回 UV 大小 (0~1)
 }
-float get_search_radius_uv(ShadowContext ctx) {
+float GetSearchRadiusUVDir(ShadowContext ctx) {
     // 经验值：搜索周围 6 到 10 个像素的范围足够了
     // 搜索范围太小 -> 找不到遮挡物，半影计算错误
     // 搜索范围太大 -> 16次采样不够用，噪点爆炸
@@ -154,24 +157,24 @@ float get_search_radius_uv(ShadowContext ctx) {
     return search_pixel_radius / ctx.shadowMapSize;
 }
 
-bool is_shadowed(float occluder_depth, float fragment_depth, float bias) {
+bool IsShadowedDir(float occluder_depth, float fragment_depth, float bias) {
     return occluder_depth >= fragment_depth + bias; // Inverse-Z
 }
 
-#elif PCSS_LIGHT_TYPE == 0 // Point Light
+// Point Light
 
 // 对于点光源，我们需要切线空间基向量来扰动方向
 // 计算采样坐标: Dir + T*x + B*y
-float3 GetShadowSamplingPos(ShadowContext ctx, float2 offset_uv) {
+float3 GetShadowSamplingPosPoint(ShadowContext ctx, float2 offset_uv) {
     return normalize(ctx.lightDir + ctx.Tangent * offset_uv.x + ctx.Bitangent * offset_uv.y);
 }
 
-float SampleShadowDepth(ShadowContext ctx, float3 pos) {
+float SampleShadowDepthPoint(ShadowContext ctx, float3 pos) {
     return TextureHandle(ctx.shadowMapHandle).SampleCube<float>(pos).x;
 }
 
 // 线性化: Reverse-Z -> Linear Distance
-float LinearizeShadowDepth(ShadowContext ctx, float raw_depth) {
+float LinearizeShadowDepthPoint(ShadowContext ctx, float raw_depth) {
     float n = ctx.scaleData.x;
     float f = ctx.scaleData.y;
     float a = n / (n - f);
@@ -180,7 +183,7 @@ float LinearizeShadowDepth(ShadowContext ctx, float raw_depth) {
 }
 
 // 获取当前像素深度 (线性距离)
-float GetFragmentDepth(ShadowContext ctx) {
+float GetFragmentDepthPoint(ShadowContext ctx) {
     return ctx.fragmentDepth;
 }
 
@@ -190,8 +193,8 @@ float GetFragmentDepth(ShadowContext ctx) {
 //     return penumbra_ndc / (ctx.shadowMapSize * ctx.clipW);
 // }
 
-float calculate_penumbra(ShadowContext ctx, float avg_blocker_dist) {
-    float d_receiver     = GetFragmentDepth(ctx);
+float CalculatePenumbraPoint(ShadowContext ctx, float avg_blocker_dist) {
+    float d_receiver     = GetFragmentDepthPoint(ctx);
     float d_blocker      = avg_blocker_dist;
     float penumbra_world = (d_receiver - d_blocker) / d_blocker * ctx.lightSizeWorld;
 
@@ -205,15 +208,14 @@ float calculate_penumbra(ShadowContext ctx, float avg_blocker_dist) {
 //     return ctx.lightSizeWorld / (ctx.shadowMapSize * ctx.fragmentDepth);
 // }
 
-float get_search_radius_uv(ShadowContext ctx) {
-    float d_receiver = GetFragmentDepth(ctx);
+float GetSearchRadiusUVPoint(ShadowContext ctx) {
+    float d_receiver = GetFragmentDepthPoint(ctx);
     float near       = ctx.scaleData.x;
     return ctx.lightSizeWorld * (d_receiver - near) / d_receiver;
 }
 
-bool is_shadowed(float occluder_depth, float fragment_depth, float bias) {
+bool IsShadowedPoint(float occluder_depth, float fragment_depth, float bias) {
     return occluder_depth <= fragment_depth - bias; // 正常物理距离，并非 Inverse-Z。且标准Z下bias应该减去
 }
-#endif
 
 #endif
