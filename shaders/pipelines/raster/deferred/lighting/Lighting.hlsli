@@ -82,7 +82,7 @@ struct LightContext {
         );
 
         float dist2       = dot(L_unnorm, L_unnorm);
-        float attenuation = 1.0 / dist2;
+        float attenuation = 1.0 / (4.0 * PI * dist2); // Irradiance = Intensity / (4πr²) * NoL = attenuation * NoL
 
         return brdf_context.Evaluate() * attenuation;
     }

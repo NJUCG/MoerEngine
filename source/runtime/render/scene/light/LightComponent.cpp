@@ -84,6 +84,20 @@ CountableRef<LightComponent> LightComponent::ReadFromStream(InputStream& _stream
     }
 }
 
+/**
+ * 在创建光源时，请参考 光源强度单位参考表
+ * 
+ * 平行光：单位   W/m^2
+ * - 正午阳光    1000.0
+ * - 多云/阴天   100.0
+ * - 满月月光    0.01
+ * 
+ * 点光源：单位    W (Flux)
+ * - 体育场探照灯  500.0+
+ * - 街灯         20-50
+ * - 家用灯泡      1.5-2.0
+ * - 蜡烛         0.02
+ */
 Array<LightComponentRef> LightComponent::CreateDefaultLightComponents() {
     Array<LightComponentRef> lights;
 

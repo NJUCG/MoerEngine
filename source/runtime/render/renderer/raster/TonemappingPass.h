@@ -20,9 +20,12 @@ public:
 };
 
 /**
- * MARK: Tonemap Pass
+ * MARK: Tonemapping Pass
  * 
  * 注：Gamma矫正使用硬件sRGB实现，不需要在Shader中手动进行Gamma矫正
+ * 
+ * 创建光源或者实现曝光时，请参考 光源强度单位参考表
+ * - 详见 source\runtime\render\scene\light\LightComponent.cpp: LightComponent::CreateDefaultLightComponents
  */
 class TonemappingPass {
 public:
