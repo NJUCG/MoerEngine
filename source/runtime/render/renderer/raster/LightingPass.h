@@ -122,10 +122,9 @@ public:
 
                 lighting_data->brdf_enable_multi_scatter =
                     ui_config.shading_brdf_enable_multi_scatter ? 1 : 0;
-                lighting_data->brdf_G_use_smith_joint_ggx =
-                    ui_config.shading_brdf_G_use_smith_joint_ggx ? 1 : 0;
-                lighting_data->brdf_G_is_ibl = ui_config.shading_brdf_G_is_ibl ? 1 : 0;
                 lighting_data->brdf_NDF_mode = static_cast<uint>(ui_config.shading_brdf_NDF_mode);
+                lighting_data->brdf_G_mode   = static_cast<uint>(ui_config.shading_brdf_G_mode);
+                lighting_data->brdf_G_is_ibl = ui_config.shading_brdf_G_is_ibl ? 1 : 0;
             }
 
             context.cmd_list.CopyFrom(

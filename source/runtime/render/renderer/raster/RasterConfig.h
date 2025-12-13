@@ -24,6 +24,15 @@ static const UnorderedMap<EBrdfNdfMode, std::string> s_brdf_ndf_mode_name_map = 
     {EBrdfNdfMode::GTR1, "GTR Gamma=1"},
 };
 
+// EnumParam(EBrdfGMode, G_SCHLICK, VIS_UE4, VIS_UNITY, VIS_FILAMENT, VIS_RESPAWN);
+static const UnorderedMap<EBrdfGMode, std::string> s_brdf_geometry_mode_name_map = {
+    {EBrdfGMode::G_SCHLICK, "GGX-Smith Separable (UE4)"},
+    {EBrdfGMode::VIS_UE4, "GGX-Smith Joint (UE4)"},
+    {EBrdfGMode::VIS_UNITY, "GGX-Smith Joint (Unity)"},
+    {EBrdfGMode::VIS_FILAMENT, "GGX-Smith Joint (Filament)"},
+    {EBrdfGMode::VIS_RESPAWN, "GGX-Smith Joint (Respawn E.)"},
+};
+
 // Enum 在 ..../ShaderParameters.h中定义，让shader和cpp可以共用枚举值
 // EnumParam(EAaMode, NONE, FXAA_SIMPLIFIED, FXAA_QUALITY, SMAA_1X, SMAA_T2X);
 static const UnorderedMap<EAaMode, std::string> s_aa_mode_name_map = {
@@ -107,10 +116,10 @@ struct RasterConfig {
     float3 shading_extra_ambient_color     = float3(1.f, 1.f, 1.f);
     float  shading_extra_ambient_intensity = 0.01f;
 
-    bool         shading_brdf_enable_multi_scatter  = true;  // kulla-conty approximation
-    bool         shading_brdf_G_use_smith_joint_ggx = false; // 用 Vis_SmithJointGGX 来代替 G_Smith
-    bool         shading_brdf_G_is_ibl              = false; // 是否使用IBL的Fresnel近似
-    EBrdfNdfMode shading_brdf_NDF_mode              = EBrdfNdfMode::GGX;
+    bool         shading_brdf_enable_multi_scatter = true; // kulla-conty approximation
+    EBrdfNdfMode shading_brdf_NDF_mode             = EBrdfNdfMode::GGX;
+    EBrdfGMode   shading_brdf_G_mode               = EBrdfGMode::VIS_UE4;
+    bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
 
     // MARK: Tonemapping
     bool  tonemapping_auto_exposure    = false;

@@ -79,10 +79,10 @@ struct LightingData {
     uint lut_ggx_emu_handle;
     uint lut_ggx_eavg_handle;
 
-    uint brdf_enable_multi_scatter;  // kulla-conty approximation
-    uint brdf_G_use_smith_joint_ggx; // 用 Vis_SmithJointGGX 来代替 G_Smith
-    uint brdf_G_is_ibl;              // 是否使用IBL的Fresnel近似
-    uint brdf_NDF_mode;              // NDF Mode
+    uint brdf_enable_multi_scatter; // kulla-conty approximation
+    uint brdf_NDF_mode;             // NDF Mode
+    uint brdf_G_mode;               // 用 Vis_SmithJointGGX 来代替 G_Smith
+    uint brdf_G_is_ibl;             // 是否使用IBL的Fresnel近似
 };
 
 // MARK: Main Content End

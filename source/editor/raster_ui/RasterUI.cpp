@@ -63,35 +63,52 @@ void RasterUI::ShowConfig() {
         // ImGui::Separator();
 
         if (m_config.shading_mode == EShadingMode::DEFAULT_PBR) {
-            if (ImGui::TreeNode("BRDF Settings")) {
-                // TODO: 添加注释，不然没人知道这些设置有什么用
+            // TODO: 添加注释，不然没人知道这些设置有什么用
+            ImGui::Text("BRDF Settings:");
 
-                // BRDF, Multi-Scatter
-                ImGui::Checkbox("MultiScatter (Kulla-Conty)", &m_config.shading_brdf_enable_multi_scatter);
+            // BRDF, Multi-Scatter
+            ImGui::Checkbox("MultiScatter (Kulla-Conty)", &m_config.shading_brdf_enable_multi_scatter);
 
-                // Geometry Term, Smith Joint GGX
-                ImGui::Checkbox("G - Smith Joint GGX", &m_config.shading_brdf_G_use_smith_joint_ggx);
-                // Geometry Term, IBL Fresnel Approximation
-                ImGui::Checkbox("G - Assume IBL", &m_config.shading_brdf_G_is_ibl);
+            // Spacing
+            ImGui::Dummy(ImVec2(0.0f, 5.0f));
 
-                // NDF
-                ImGui::Text("NDF:");
-                for (uint i = 0; i < s_brdf_ndf_mode_name_map.size(); i++) {
-                    auto cur_enum = static_cast<EBrdfNdfMode>(i);
-                    if (ImGui::Selectable(
-                            s_brdf_ndf_mode_name_map.at(cur_enum).c_str(),
-                            m_config.shading_brdf_NDF_mode == cur_enum
-                        )) {
-                        m_config.shading_brdf_NDF_mode = cur_enum;
-                    }
-                    draw_border();
+            // NDF
+            ImGui::Text("NDF:");
+            for (uint i = 0; i < s_brdf_ndf_mode_name_map.size(); i++) {
+                auto cur_enum = static_cast<EBrdfNdfMode>(i);
+                if (ImGui::Selectable(
+                        s_brdf_ndf_mode_name_map.at(cur_enum).c_str(),
+                        m_config.shading_brdf_NDF_mode == cur_enum
+                    )) {
+                    m_config.shading_brdf_NDF_mode = cur_enum;
                 }
-
-                ImGui::TreePop();
+                draw_border();
             }
+
+            // Spacing
+            ImGui::Dummy(ImVec2(0.0f, 5.0f));
+
+            // Geometry Function
+            ImGui::Text("Geometry Function:");
+            for (uint i = 0; i < s_brdf_geometry_mode_name_map.size(); i++) {
+                auto cur_enum = static_cast<EBrdfGMode>(i);
+                if (ImGui::Selectable(
+                        s_brdf_geometry_mode_name_map.at(cur_enum).c_str(),
+                        m_config.shading_brdf_G_mode == cur_enum
+                    )) {
+                    m_config.shading_brdf_G_mode = cur_enum;
+                }
+                draw_border();
+            }
+            if (m_config.shading_brdf_G_mode == EBrdfGMode::G_SCHLICK) {
+                // Light Source is IBL
+                ImGui::Checkbox("Light Source is IBL", &m_config.shading_brdf_G_is_ibl);
+            }
+            ImGui::Dummy(ImVec2(0.0f, 5.0f));
         }
 
         ImGui::Separator();
+        ImGui::Dummy(ImVec2(0.0f, 5.0f));
 
         ImGui::Checkbox("Enable Extra Ambient", &m_config.shading_enable_extra_ambient);
         ImGui::SliderFloat("Ambient Intensity", &m_config.shading_extra_ambient_intensity, 0.0f, 1.0f);

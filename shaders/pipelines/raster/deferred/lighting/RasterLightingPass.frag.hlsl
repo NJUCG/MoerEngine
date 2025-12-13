@@ -80,9 +80,9 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     brdf_ctx.SetConfig(
         lighting_data.brdf_enable_multi_scatter,
-        lighting_data.brdf_G_use_smith_joint_ggx,
-        lighting_data.brdf_G_is_ibl,
-        lighting_data.brdf_NDF_mode
+        lighting_data.brdf_NDF_mode,
+        lighting_data.brdf_G_mode,
+        lighting_data.brdf_G_is_ibl
     );
 
     // - Lights

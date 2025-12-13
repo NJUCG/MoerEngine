@@ -28,7 +28,10 @@
  * - MicrofacetBRDF = (D * F * G) / (4 * NoL * NoV) = D * F * VisTerm
  *   我们支持多种不同D、F、G的计算方式，可以在GUI参数中进行设置
  * 
- * References: GAMES202 Homework4 Code
+ * References:
+ * - https://github.com/QianMo/PBR-White-Paper
+ * - GAMES202 Homework4 Code
+ * 如果你对学习PBR/BRDF感兴趣，推荐阅读毛星云大神的文章和GAMES202的课程作业代码，链接如上
  */
 
 struct BRDFContext {
@@ -60,10 +63,10 @@ struct BRDFContext {
     // kulla_conty_E_avg = TextureHandle(lut_ggx_eavg_handle).Sample2D<float3>(float2(0.0, roughness));
 
     // Config
-    uint  BRDF_multi_scatter;      // kulla-conty approximation
-    uint  G_use_smith_joint_ggx;   // 用 Vis_SmithJointGGX 来代替 G_Smith
-    uint  G_is_ibl;                // 是否使用IBL的Fresnel近似
-    uint  NDF_mode;                // EBrdfNdfMode: Beckmann, GGX, GTR2, GTR1
+    uint  BRDF_multi_scatter; // kulla-conty approximation
+    uint  NDF_mode;           // EBrdfNdfMode: Beckmann, GGX, GTR2, GTR1
+    uint  G_mode;             // 用 Vis_SmithJointGGX 来代替 G_Smith
+    uint  G_is_ibl;           // 是否使用IBL的Fresnel近似
 
     // MARK: Init Func
 
@@ -95,14 +98,14 @@ struct BRDFContext {
 
     void SetConfig(
         uint  _BRDF_multi_scatter,
-        uint  _G_use_smith_joint_ggx,
-        uint  _G_is_ibl,
-        uint  _NDF_mode
+        uint  _NDF_mode,
+        uint  _G_mode,
+        uint  _G_is_ibl
     ) {
-        BRDF_multi_scatter      = _BRDF_multi_scatter;
-        G_use_smith_joint_ggx   = _G_use_smith_joint_ggx;
-        G_is_ibl                = _G_is_ibl;
-        NDF_mode                = _NDF_mode;
+        BRDF_multi_scatter = _BRDF_multi_scatter;
+        NDF_mode           = _NDF_mode;
+        G_mode             = _G_mode;
+        G_is_ibl           = _G_is_ibl;
     }
 
     void UpdatePerLight(float3 _light_radiance, float3 _L, float3 _kulla_conty_E_o) {
@@ -120,10 +123,7 @@ struct BRDFContext {
         kulla_conty_E_o = _kulla_conty_E_o;
     }
 
-    // MARK: Microfacet BRDF
-
-    // NDF Functions，基于毛星云的博客修改，做了一边界处理
-    // Reference: https://zhuanlan.zhihu.com/p/69380665
+    // MARK: NDF
 
     float _D_Beckmann() {
         // 这里实现过程中有一个坑，如果NoH==0，那么 NoH2 -> 0
@@ -158,59 +158,99 @@ struct BRDFContext {
         return (a2 - 1.0) / (PI * den * log(a2));
     }
 
+    // MARK: Geometry
     // Geometry Functions (Shadowing-Masking)
+    // - 注：理论上，Geometry函数和NDF应该是配套使用的。换句话说，替换了NDF，那么对应的Geometry函数也应该更换
+    // - 此处简化实现，假设所有Geometry函数均基于GGX NDF
+    // - （即 如果你将NDF切换为Beckmann，那么实际上渲染结果是非物理正确的）
 
-    float _G_SchlickGGX(float NoX) {
+    float _G_SchlickApprox_G1(float NoX) { // (UE4) Schlick Approximation
         // 直接光: k = (r + 1)^2 / 8
         // IBL:   k = (r^2) / 2
         float a = roughness;
         float k = (G_is_ibl) ? (a * a) / 2.0 : ((a + 1) * (a + 1)) / 8.0;
 
-        float nom   = NoX;
-        float denom = NoX * (1.0 - k) + k;
-
-        return nom / denom;
+        return NoX / (NoX * (1.0 - k) + k);
     }
 
-    // Geometry
-    float _G_Smith() {
-        float NoV = max(dot(N, V), 0.0);
-        float NoL = max(dot(N, L), 0.0);
-
-        float ggx1 = _G_SchlickGGX(NoV);
-        float ggx2 = _G_SchlickGGX(NoL);
-
+    float _G_SchlickApprox_G2() { // (UE4) Schlick Approximation
+        float ggx1 = _G_SchlickApprox_G1(NoV);
+        float ggx2 = _G_SchlickApprox_G1(NoL);
         return ggx1 * ggx2;
     }
 
-    // Fresnel, Schlick's Approximation
+    // Note: Vis = G / (4 * NoL * NoV)
+
+    float _Vis_SmithJointApprox_UE4() {
+        float Vis_SmithV = NoL * (NoV * (1.0 - alpha) + alpha);
+        float Vis_SmithL = NoV * (NoL * (1.0 - alpha) + alpha);
+        return 0.5 / (Vis_SmithV + Vis_SmithL);
+    }
+
+    float _Vis_SmithJointApprox_Unity() {
+        float lambdaV = NoL * NoV * (1.0 - roughness) + roughness;
+        float lambdaL = NoV * sqrt((-NoL * alpha + NoL) * NoL + alpha);
+        return 0.5 / (lambdaV + lambdaL);
+    }
+
+    float _Vis_SmithJointApprox_Filament() {
+        float ggxV = NoL * sqrt((-NoV * alpha2 + NoV) * NoV + alpha2);
+        float ggxL = NoV * sqrt((-NoL * alpha2 + NoL) * NoL + alpha2);
+        return 0.5 / (ggxV + ggxL);
+    }
+
+    float _Vis_SmithJointApprox_RespawnEntertainment() {
+        float x = 2.0 * NoL * NoV;
+        float y = NoL + NoV;
+        return 0.5 / lerp(x, y, alpha);
+    }
+
+    // MARK: Fresnel
+    // Schlick's Approximation
     // 注意，这里参数是VoH，而不是NoV。使用半程向量计算才是对的，使用Normal计算是错的！
-    float3 _F_Schlick(float3 F0) {
+    float3 _F_SchlickApprox(float3 F0) {
         return F0 + (1.0 - F0) * Math::pow5(1.0 - VoH);
     }
 
+    // MARK: BRDF
+
     float3 _BRDF_Microfacet(float3 F0) {
         // Fresnel
-        float3 F = _F_Schlick(F0);
+        float3 F = _F_SchlickApprox(F0);
 
         // NDF
         // - 为什么GTR1和GTR2不合并？因为GTX(Extending GGX)没有 *形状不变性 shape-invariant*，所以无法用一个统一的公式计算
         // - 这也是为什么GTR没有被广泛使用的原因之一
-        float  D = (NDF_mode == Moer::EBrdfNdfMode::BECKMANN) ? _D_Beckmann() :
-                   (NDF_mode == Moer::EBrdfNdfMode::GGX) ? _D_GGX() :
-                   (NDF_mode == Moer::EBrdfNdfMode::GTR2) ? _D_GTR2() :
-                   (NDF_mode == Moer::EBrdfNdfMode::GTR1) ? _D_GTR1() : _D_GGX();
+        float D = (NDF_mode == Moer::EBrdfNdfMode::BECKMANN) ? _D_Beckmann() :
+                  (NDF_mode == Moer::EBrdfNdfMode::GGX) ? _D_GGX() :
+                  (NDF_mode == Moer::EBrdfNdfMode::GTR2) ? _D_GTR2() :
+                  (NDF_mode == Moer::EBrdfNdfMode::GTR1) ? _D_GTR1() : _D_GGX();
 
         // Geometry (Shadowing-Masking)
-        float  G = _G_Smith();
+        float Vis = 1.0;
 
-        float3 nom   = D * F * G;
-        float  denom = max(Epsilon, 4.0 * NoL * NoV);
+        if (G_mode == Moer::EBrdfGMode::G_SCHLICK) {
+            // Separable Smith-GGX
 
-        return nom / denom;
+            float G = _G_SchlickApprox_G2();
+
+            Vis = G / max(Epsilon, 4.0 * NoL * NoV);
+
+        } else {
+            // Joint Smith-GGX
+
+            Vis = (G_mode == Moer::EBrdfGMode::VIS_UE4) ? _Vis_SmithJointApprox_UE4() :
+                  (G_mode == Moer::EBrdfGMode::VIS_UNITY) ? _Vis_SmithJointApprox_Unity() :
+                  (G_mode == Moer::EBrdfGMode::VIS_FILAMENT) ? _Vis_SmithJointApprox_Filament() :
+                  (G_mode == Moer::EBrdfGMode::VIS_RESPAWN) ? _Vis_SmithJointApprox_RespawnEntertainment() :
+                                                            _Vis_SmithJointApprox_UE4();
+        }
+
+        return D * F * Vis;
     }
 
-    // MARK: Kulla-Conty Multi-Scatter BRDF (From GAMES202 Homework4)
+    // MARK: Multi-Scatter BRDF
+    // Kulla-Conty (From GAMES202 Homework4)
 
     // https://blog.selfshadow.com/publications/s2017-shading-course/imageworks/s2017_pbs_imageworks_slides_v2.pdf
     float3 _AverageFresnel(float3 r, float3 g) {
@@ -229,10 +269,10 @@ struct BRDFContext {
         return f_ms * f_add;
     }
 
-    // MARK: Main Evaluate Func
+    // MARK: Evaluate
     float3 Evaluate() {
         float3 F0 = float3(0.04, 0.04, 0.04);
-        F0        = lerp(F0, albedo, 1.0 - metallic);
+        F0        = lerp(albedo, F0, metallic); // 在games202hw4代码框架里，这个地方写反了
 
         float3 brdf_microfacet   = _BRDF_Microfacet(F0);
         float3 brdf_multi_scatter = BRDF_multi_scatter ? _BRDF_MultiScatter() : float3(0.0, 0.0, 0.0);
