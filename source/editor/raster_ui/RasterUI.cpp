@@ -28,17 +28,6 @@ void RasterUI::ShowConfig() {
         ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
     };
 
-    // MARK: Tonemapping
-
-    // Tonemapping究极重要，所以放到最开头，以提示用户调节选项
-    ImGui::SliderFloat("Exposure EV", &m_config.tonemapping_exposure_ev, -5.0f, 5.0f);
-
-    if (ImGui::TreeNode("Tonemapping")) {
-        ImGui::Checkbox("Enable Reinhard Tone Mapping", &m_config.tonemapping_reinhard_enabled);
-
-        ImGui::TreePop();
-    }
-
     if (ImGui::TreeNode(
             "Output Frame Buffer",
             "Output: [%s]",
@@ -58,19 +47,48 @@ void RasterUI::ShowConfig() {
 
     // MARK: Shading
     if (ImGui::TreeNode(
-            "Shading",
-            "Shading: [%s]",
-            s_shading_mode_name_array[static_cast<size_t>(m_config.shading_mode)].c_str()
+            "Shading", "Shading: [%s]", s_shading_mode_name_map.at(m_config.shading_mode).c_str()
         )) {
-        assert(s_shading_mode_name_array.size() == static_cast<size_t>(EShadingMode::NUM));
-        for (uint i = 0; i < s_shading_mode_name_array.size(); i++) {
-            if (ImGui::Selectable(
-                    s_shading_mode_name_array[i].c_str(),
-                    m_config.shading_mode == static_cast<EShadingMode>(i)
-                )) {
-                m_config.shading_mode = static_cast<EShadingMode>(i);
+
+        // 有多个ShadingMode的时候，再显示这个选项
+        // for (uint i = 0; i < s_shading_mode_name_map.size(); i++) {
+        //     auto cur_enum = static_cast<EShadingMode>(i);
+        //     if (ImGui::Selectable(
+        //             s_shading_mode_name_map.at(cur_enum).c_str(), m_config.shading_mode == cur_enum
+        //         )) {
+        //         m_config.shading_mode = cur_enum;
+        //     }
+        //     draw_border();
+        // }
+        // ImGui::Separator();
+
+        if (m_config.shading_mode == EShadingMode::DEFAULT_PBR) {
+            if (ImGui::TreeNode("BRDF Settings")) {
+                // TODO: 添加注释，不然没人知道这些设置有什么用
+
+                // BRDF, Multi-Scatter
+                ImGui::Checkbox("MultiScatter (Kulla-Conty)", &m_config.shading_brdf_enable_multi_scatter);
+
+                // Geometry Term, Smith Joint GGX
+                ImGui::Checkbox("G - Smith Joint GGX", &m_config.shading_brdf_G_use_smith_joint_ggx);
+                // Geometry Term, IBL Fresnel Approximation
+                ImGui::Checkbox("G - Assume IBL", &m_config.shading_brdf_G_is_ibl);
+
+                // NDF
+                ImGui::Text("NDF:");
+                for (uint i = 0; i < s_brdf_ndf_mode_name_map.size(); i++) {
+                    auto cur_enum = static_cast<EBrdfNdfMode>(i);
+                    if (ImGui::Selectable(
+                            s_brdf_ndf_mode_name_map.at(cur_enum).c_str(),
+                            m_config.shading_brdf_NDF_mode == cur_enum
+                        )) {
+                        m_config.shading_brdf_NDF_mode = cur_enum;
+                    }
+                    draw_border();
+                }
+
+                ImGui::TreePop();
             }
-            draw_border();
         }
 
         ImGui::Separator();
@@ -78,6 +96,22 @@ void RasterUI::ShowConfig() {
         ImGui::Checkbox("Enable Extra Ambient", &m_config.shading_enable_extra_ambient);
         ImGui::SliderFloat("Ambient Intensity", &m_config.shading_extra_ambient_intensity, 0.0f, 1.0f);
         ImGui::SliderFloat3("Ambient Color", (float*)&m_config.shading_extra_ambient_color, 0.0f, 1.0f);
+
+        ImGui::TreePop();
+    }
+
+    // MARK: Tonemapping
+    // Tonemapping究极重要，所以放到最开头，以提示用户调节选项
+    if (ImGui::TreeNode("Tonemapping")) {
+
+        // 自动曝光
+        ImGui::Checkbox("Enable Auto Exposure", &m_config.tonemapping_auto_exposure);
+        // 手动曝光
+        if (m_config.tonemapping_auto_exposure == false) {
+            ImGui::SliderFloat("Exposure EV", &m_config.tonemapping_exposure_ev, -15.0f, 10.0f);
+        }
+        // 色调映射
+        ImGui::Checkbox("Enable Reinhard Tone Mapping", &m_config.tonemapping_reinhard_enabled);
 
         ImGui::TreePop();
     }
@@ -101,7 +135,7 @@ void RasterUI::ShowConfig() {
 
         ImGui::Checkbox("Enable PCSS", &m_config.shadow_pcss_enabled);
         if (m_config.shadow_pcss_enabled) {
-            ImGui::SliderFloat("Light Size World", &m_config.shadow_pcss_light_size_world, 0.001f, 10.0f);
+            ImGui::SliderFloat("Light Size World", &m_config.shadow_pcss_light_size_world, 0.001f, 0.1f);
         }
 
         auto csm_common_param = [&]() {

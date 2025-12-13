@@ -78,6 +78,13 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
         TextureHandle(lighting_data.lut_ggx_eavg_handle).Sample2D<float3>(float2(0.0, roughness))
     );
 
+    brdf_ctx.SetConfig(
+        lighting_data.brdf_enable_multi_scatter,
+        lighting_data.brdf_G_use_smith_joint_ggx,
+        lighting_data.brdf_G_is_ibl,
+        lighting_data.brdf_NDF_mode
+    );
+
     // - Lights
     ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
 

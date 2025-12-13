@@ -115,8 +115,18 @@ public:
 
             lighting_data->main_light_direction = context.csm_data.light_dir;
 
-            lighting_data->lut_ggx_emu_handle  = context.lut_ggx_emu.handle;
-            lighting_data->lut_ggx_eavg_handle = context.lut_ggx_eavg.handle;
+            // BRDF
+            {
+                lighting_data->lut_ggx_emu_handle  = context.lut_ggx_emu.handle;
+                lighting_data->lut_ggx_eavg_handle = context.lut_ggx_eavg.handle;
+
+                lighting_data->brdf_enable_multi_scatter =
+                    ui_config.shading_brdf_enable_multi_scatter ? 1 : 0;
+                lighting_data->brdf_G_use_smith_joint_ggx =
+                    ui_config.shading_brdf_G_use_smith_joint_ggx ? 1 : 0;
+                lighting_data->brdf_G_is_ibl = ui_config.shading_brdf_G_is_ibl ? 1 : 0;
+                lighting_data->brdf_NDF_mode = static_cast<uint>(ui_config.shading_brdf_NDF_mode);
+            }
 
             context.cmd_list.CopyFrom(
                 std::span<byte>((byte*)lighting_data, sizeof(LightingData)),
