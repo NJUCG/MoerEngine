@@ -136,7 +136,6 @@ float LinearizeShadowDepthDir(ShadowContext ctx, float raw_depth) {
     return raw_depth;
 }
 
-// 获取当前像素深度 (非线性)
 float GetFragmentDepthDir(ShadowContext ctx) {
     return ctx.fragmentDepth;
 }
@@ -158,7 +157,7 @@ float GetSearchRadiusUVDir(ShadowContext ctx) {
 }
 
 bool IsShadowedDir(float occluder_depth, float fragment_depth, float bias) {
-    return occluder_depth >= fragment_depth + bias; // Inverse-Z
+    return occluder_depth > fragment_depth + bias; // Inverse-Z
 }
 
 // Point Light
@@ -215,7 +214,7 @@ float GetSearchRadiusUVPoint(ShadowContext ctx) {
 }
 
 bool IsShadowedPoint(float occluder_depth, float fragment_depth, float bias) {
-    return occluder_depth <= fragment_depth - bias; // 正常物理距离，并非 Inverse-Z。且标准Z下bias应该减去
+    return occluder_depth < fragment_depth - bias; // 正常物理距离，并非 Inverse-Z。且标准Z下bias应该减去
 }
 
 #endif

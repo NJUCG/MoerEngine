@@ -13,6 +13,9 @@
         float dynamicBias = SHADOW_BIAS;                                                              \
         if (PCSS_DYNAMIC_DEPTH_BIAS) {                                                                \
             dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);                               \
+            if (PCSS_MAX_DEPTH_BIAS) {                                                                \
+                dynamicBias = min(dynamicBias, SHADOW_BIAS);                                          \
+            }                                                                                         \
         }                                                                                             \
                                                                                                       \
         [unroll] for (int i = 0; i < PCSS_SAMPLES; ++i) {                                             \
