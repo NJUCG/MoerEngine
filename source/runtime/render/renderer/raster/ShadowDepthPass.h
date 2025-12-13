@@ -55,9 +55,7 @@ private:
 private:
     uint enabled_cascade_layers;
 
-    Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline> csm_pipeline_map;
-    Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline> point_pipeline_map;
+    Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline> pipeline_map;
     VertexShader                                               vertex_shader;
-    VertexShader                                               point_vertex_shader;
 };
 } // namespace Moer::Render::Raster
