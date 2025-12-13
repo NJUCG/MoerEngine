@@ -12,16 +12,27 @@ namespace Moer::Render::Raytracing {
 GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager, Scene& _scene) :
     device(_device),
     manager(_manager),
-    scene(_scene),
-    post_process_pipeline{manager.Compute<PostProcessGBufferPipeline>("pipelines/raytracing/passes/PostProcessGBuffer.hlsl")} {
+    scene(_scene) {
 
     gbuffer_constants = device.CreateBuffer<Moer::byte>(
         "Raytracing::gbuffer_constants", sizeof(GBufferConstants), EBufferUsageFlags::CONSTANT_BUFFER
     );
     RTGBufferMacros gbuffer_macros{};
     gbuffer_macros.SetMutation<RaytracingGBufferPipeline::PRINT_TEST>(true);
-    gbuffer_pass_pipeline =
-        std::move(manager.Compute<RaytracingGBufferPipeline>("pipelines/raytracing/passes/GBufferRT.hlsl", gbuffer_macros));
+    gbuffer_pass_pipeline = std::move(manager.Compute<RaytracingGBufferPipeline>(
+        "pipelines/raytracing/passes/GBufferRT.hlsl", gbuffer_macros
+    ));
+
+    int with_nrd = WITH_NRD;
+#pragma push_macro("WITH_NRD")
+#undef WITH_NRD
+    PostProcessGBufferPipeline::MutationSet mutation_set;
+    mutation_set.SetMutation<PostProcessGBufferPipeline::WITH_NRD>(with_nrd);
+#pragma pop_macro("WITH_NRD")
+
+    post_process_pipeline = std::move(manager.Compute<PostProcessGBufferPipeline>(
+        "pipelines/raytracing/passes/PostProcessGBuffer.hlsl", mutation_set
+    ));
 }
 
 void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {

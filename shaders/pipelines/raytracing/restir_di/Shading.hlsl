@@ -3,10 +3,16 @@
 #include <pipelines/raytracing/lighting/lib/restir/GridCommon.hlsli>
 #include <pipelines/raytracing/lighting/lib/restir/Reservoirs.hlsli>
 #include <pipelines/raytracing/lighting/lib/restir/Utils.hlsli>
+
+#ifndef WITH_NRD
 #define WITH_NRD 1
-#ifdef WITH_NRD
+#endif
+
+#if WITH_NRD
 #include <external/nrd/NRD.hlsli>
 #endif
+
+// The following header must after WITH_NRD & NRD header
 #include <pipelines/raytracing/lighting/lib/restir/ShadingUtils.hlsli>
 
 [numthreads(DI_SCREEN_TILE_SIZE, DI_SCREEN_TILE_SIZE, 1)] void

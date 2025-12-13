@@ -26,8 +26,17 @@ LightingPass::LightingPass(ShaderManager& _manager, Scene& _scene) : scene(_scen
         std::move(_manager.Compute<TemporalResmaplePipeline>("pipelines/raytracing/restir_di/TemporalResampling.hlsl"));
     spatial_resample_pipeline =
         std::move(_manager.Compute<SpatialResamplePipeline>("pipelines/raytracing/restir_di/SpatialResampling.hlsl"));
-    di_shade_sample_pipeline =
-        std::move(_manager.Compute<DIShadeSamplePipeline>("pipelines/raytracing/restir_di/Shading.hlsl"));
+
+    int with_nrd = WITH_NRD;
+#pragma push_macro("WITH_NRD")
+#undef WITH_NRD
+    DIShadeSamplePipeline::MutationSet mutation_set;
+    mutation_set.SetMutation<DIShadeSamplePipeline::WITH_NRD>(with_nrd);
+#pragma pop_macro("WITH_NRD")
+
+    di_shade_sample_pipeline = std::move(
+        _manager.Compute<DIShadeSamplePipeline>("pipelines/raytracing/restir_di/Shading.hlsl", mutation_set)
+    );
 
     auto& device    = RenderDevice::Get();
     resample_params = device.CreateBuffer<byte>(
