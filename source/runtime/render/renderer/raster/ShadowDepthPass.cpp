@@ -451,6 +451,9 @@ void ShadowDepthPass::RenderPointShadows(
     PreparePointShadowResources(context, config);
 
     PointLightComponent* light = GetMainPointLight(context);
+    if (light == nullptr) {
+        return;
+    }
 
     const uint light_idx = 0; // 目前我们只处理第一个点光源的阴影
     auto&      cube_res  = context.point_shadow_data.shadow_cubes[light_idx];
