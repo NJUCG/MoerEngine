@@ -203,8 +203,7 @@ float4x4 get_world_to_shadow_clip_matrix(
 namespace Moer::Render::Raster {
 
 ShadowDepthPass::ShadowDepthPass(RasterContext& context) :
-    vertex_shader("pipelines/raster/deferred/geometry/GeometryPassCommonVertex.hlsl"),
-    point_vertex_shader("pipelines/raster/deferred/geometry/GeometryPassCommonVertex.hlsl") {}
+    vertex_shader("pipelines/raster/deferred/geometry/GeometryPassCommonVertex.hlsl") {}
 
 void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config) {
     for (uint i = 0; i < enabled_cascade_layers; i++) {
@@ -420,7 +419,7 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
             context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
             std::format("Shadow Depth Pass - {}", cascade_index),
-            csm_pipeline_map
+            pipeline_map
         );
     }
 }
@@ -498,7 +497,7 @@ void ShadowDepthPass::RenderPointShadows(
             Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
             face_view,
             std::format("PointShadow L{} F{}", light_idx, face),
-            point_pipeline_map
+            pipeline_map
         );
     }
 }
