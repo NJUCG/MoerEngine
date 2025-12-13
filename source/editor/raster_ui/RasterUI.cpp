@@ -28,6 +28,9 @@ void RasterUI::ShowConfig() {
         ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
     };
 
+    // 自动曝光还没写，为了避免不知可以调亮度，所以这里加一个slider
+    ImGui::SliderFloat("Exposure EV", &m_config.tonemapping_exposure_ev, -15.0f, 10.0f);
+
     if (ImGui::TreeNode(
             "Output Frame Buffer",
             "Output: [%s]",
