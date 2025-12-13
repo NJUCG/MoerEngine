@@ -653,8 +653,8 @@ public:
         uint _mip_level  = 0,
         uint _mip_cnt    = 1,
         uint _base_layer = 0,
-        uint _layer_cnt  = 0
-    ); //layer_cnt 0 means all layers
+        uint _layer_cnt  = VK_REMAINING_ARRAY_LAYERS
+    );
 
     void          SetName(const std::string_view _name) override;
     bool          b_has_preferred_state : 1 = false;
