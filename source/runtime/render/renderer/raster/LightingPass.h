@@ -64,9 +64,7 @@ public:
         material_param.gbuffer_position    = context.textures.position.handle;
         material_param.global_param_handle = lighting_data_buffer.handle;
         material_param.light_buffer        = context.gpu_light_info_handle;
-        for (int i = 0; i < 6; i++) {
-            material_param.skybox_handles[i] = context.skybox_tex[i].handle;
-        }
+        material_param.cubemap_handle      = context.cubemap_tex.handle;
 
         // 注意生命周期！
         LightingData* lighting_data = MoerNew(LightingData);
@@ -84,22 +82,24 @@ public:
         lighting_data->shadow_csm_visualize_cascade = ui_config.shadow_csm_visualize_cascade;
         // Shadow Map
         for (uint i = 0; i < csm_layers; i++) {
-            lighting_data->shadow_map[i] = context.shadow_map_data.shadow_map_textures[i].handle;
+            lighting_data->cascade_shadow_map[i] = context.csm_data.shadow_map_textures[i].handle;
         }
+        lighting_data->point_shadow_map = context.point_shadow_data.shadow_cubes[0].handle;
+        lighting_data->light_pos        = context.point_shadow_data.shadow_cubes[0].light_pos;
+        lighting_data->light_radius     = context.point_shadow_data.shadow_cubes[0].far_plane;
+
         // Shadow Transform
         for (uint i = 0; i < csm_layers; i++) {
-            lighting_data->world_to_shadow_clip[i] =
-                Transpose(context.shadow_map_data.world_to_shadow_clip[i]);
+            lighting_data->world_to_shadow_clip[i] = Transpose(context.csm_data.world_to_shadow_clip[i]);
         }
         lighting_data->view_matrix = Transpose(camera->GetViewMatrix());
         lighting_data->near_clip   = camera->GetNearClip();
         lighting_data->far_clip    = camera->GetFarClip();
         for (int i = 0; i < csm_layers; i++) {
-            lighting_data->cascade_split_ratios[i] = context.shadow_map_data.cascade_split_ratios[i];
+            lighting_data->cascade_split_ratios[i] = context.csm_data.cascade_split_ratios[i];
         }
         for (int i = 0; i < csm_layers; i++) {
-            lighting_data->cascade_blend_start_ratios[i] =
-                context.shadow_map_data.cascade_blend_start_ratios[i];
+            lighting_data->cascade_blend_start_ratios[i] = context.csm_data.cascade_blend_start_ratios[i];
         }
         lighting_data->is_csm_blend_enabled = ui_config.shadow_csm_blend_option ? 1 : 0;
         // 注：此处不一定使用所有CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
@@ -108,11 +108,11 @@ public:
         lighting_data->light_size_world =
             ui_config.shadow_pcss_light_size_world; //假定的光源大小，用于软阴影计算
         lighting_data->pcss_enabled = ui_config.shadow_pcss_enabled ? 1 : 0;
-        for(uint i=0;i<csm_layers;i++){
-            lighting_data->scale_data[i] = context.shadow_map_data.scaleDatas[i];
+        for (uint i = 0; i < csm_layers; i++) {
+            lighting_data->scale_data[i] = context.csm_data.scaleDatas[i];
         }
-        
-        lighting_data->main_light_direction = context.shadow_map_data.light_dir;
+
+        lighting_data->main_light_direction = context.csm_data.light_dir;
 
         context.cmd_list.CopyFrom(
             std::span<byte>((byte*)lighting_data, sizeof(LightingData)), lighting_data_buffer.buf->GetView()

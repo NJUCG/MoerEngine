@@ -153,6 +153,7 @@ void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _
         _dst.byte_offset,
         _src.extent,
         _src.mip_level,
+        _src.array_layer,
         _name
     ));
 }
@@ -165,13 +166,13 @@ void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _
         _dst.offset,
         _dst.extent,
         _dst.mip_level,
+        _dst.array_layer,
         _name
     ));
 }
 
 // Be careful with the Lifetime of the data!
 void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
-    //
     uint3 extent = uint3(
         std::max(uint(_texture.extent.x) >> _texture.mip_level, 1u),
         std::max(uint(_texture.extent.y) >> _texture.mip_level, 1u),
@@ -181,6 +182,7 @@ void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::str
         _texture.texture->GetFormat(),
         reinterpret_cast<uint64>(_texture.texture),
         _texture.mip_level,
+        _texture.array_layer,
         _texture.offset,
         extent,
         _data.data(),
@@ -190,7 +192,6 @@ void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::str
 
 // Be careful with the Lifetime of the data!
 void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::string_view _name) {
-    //
     if (_data.size() == 0) {
         return;
     }
@@ -204,7 +205,6 @@ void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::strin
 }
 
 void CommandList::CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name) {
-    //
     commands.push_back(MakeUnique<CopyBackBufferCmd>(
         reinterpret_cast<uint64>(_src.GetBuffer()),
         _src.GetByteOffset(),
@@ -215,7 +215,6 @@ void CommandList::CopyFrom(BufferView _src, std::span<byte> _data, std::string_v
 }
 
 void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
-    //check if size is 0
     bool b_valid_size = _data.size() > 0 && _src.GetTexture();
     if (!b_valid_size) {
         return;
@@ -235,7 +234,6 @@ void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_
 }
 
 void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name) {
-    //
     if (_data.size() == 0) {
         return;
     }
@@ -249,7 +247,6 @@ void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_vie
 }
 
 void CommandList::CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_view _name) {
-    //
     if (_data.size() == 0) {
         return;
     }
@@ -257,6 +254,7 @@ void CommandList::CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_vi
         _dst.texture->GetFormat(),
         reinterpret_cast<uint64>(_dst.texture),
         _dst.mip_level,
+        _dst.array_layer,
         _dst.offset,
         _dst.extent,
         std::move(_data),

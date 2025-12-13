@@ -206,7 +206,8 @@ void VulkanCmdList::CopyBufferToTexture(
     uint64         _src_offset,
     uint3          _dst_offset,
     uint3          _extent,
-    uint32         _mip_level
+    uint32         _mip_level,
+    uint32         _array_layer
 ) {
     VkImageAspectFlags aspect =
         _src->GetResourceType() == RRT_DEPTH ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
@@ -215,7 +216,7 @@ void VulkanCmdList::CopyBufferToTexture(
         .bufferRowLength   = 0,
         .bufferImageHeight = 0,
         .imageSubresource =
-            {.aspectMask = aspect, .mipLevel = _mip_level, .baseArrayLayer = 0, .layerCount = 1},
+            {.aspectMask = aspect, .mipLevel = _mip_level, .baseArrayLayer = _array_layer, .layerCount = 1},
         .imageOffset =
             {static_cast<int32_t>(_dst_offset.x),
              static_cast<int32_t>(_dst_offset.y),

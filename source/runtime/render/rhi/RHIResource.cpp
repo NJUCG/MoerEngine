@@ -15,7 +15,7 @@ TextureView::TextureView(Texture* _texture) :
     offset(0),
     extent(_texture->GetExtent()),
     mip_level(0),
-    array_index(0),
+    array_layer(0),
     num_array(_texture->GetNumArray()),
     num_mips(1),
     format(_texture->GetFormat()) {}
@@ -26,9 +26,17 @@ TextureView::TextureView(Texture* _tex, EPixelFormat _fmt, uint8 _mip_level, uin
     mip_level(_mip_level),
     num_mips(_mip_cnt),
     extent(_tex->GetExtent()),
-    array_index(0),
+    array_layer(0),
     num_array(_tex->GetNumArray()) {
     //calculate extent
+}
+
+//in case of const TextureView, so return copy
+TextureView TextureView::Slice(uint layer, uint count) const {
+    TextureView copy = *this;
+    copy.array_layer = layer;
+    copy.num_array = count;
+    return copy;
 }
 
 TextureView Texture::GetView(uint8 _mip_level, uint8 _mip_cnt) {

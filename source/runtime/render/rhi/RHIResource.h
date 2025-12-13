@@ -483,13 +483,14 @@ public:
     EPixelFormat   format;
     uint3          offset{};
     uint3          extent{};
-    uint8          mip_level;
+    uint8          mip_level = 0;
     uint8          num_mips;
-    uint8          array_index;
+    uint8          array_layer = 0;
     uint8          num_array;
     Texture*       GetTexture() const {
         return texture;
     }
+    TextureView Slice(uint layer, uint count = 1) const;
 };
 
 struct TextureInfo {
@@ -1177,20 +1178,28 @@ FORCEINLINE EAttachmentStoreOp GetStoreOp(EAttachmentAction _load_store_action) 
 
 namespace Moer::Render {
 struct ColorAttachment {
-
     Texture*          target;
     EAttachmentAction action      = AC_CLEAR_STORE;
     float4            clear_color = {0, 0, 0, 0};
 };
 
+// 聚合初始化会触发零初始化，但构造函数不会，所以必须设置默认值
 struct DepthAttachment {
     Texture*          target{nullptr};
-    EAttachmentAction action = AC_DS_CLEAR_STORE;
-    float             clear_depth;
-    uint              clear_stencil;
+    uint              array_layer   = 0;
+    uint              mip_level     = 0;
+    EAttachmentAction action        = AC_DS_CLEAR_STORE;
+    float             clear_depth   = 0.f;
+    uint              clear_stencil = 0;
     bool              Valid() const {
         return target != nullptr;
     }
+    DepthAttachment() = default;
+    DepthAttachment(Texture* _tex) : target(_tex) {}
+    DepthAttachment(const TextureView& _view) :
+        target(_view.GetTexture()),
+        array_layer(_view.array_layer),
+        mip_level(_view.mip_level) {}
 };
 
 struct RenderPassInfo {

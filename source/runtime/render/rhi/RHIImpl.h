@@ -310,6 +310,7 @@ public:
     uint3        dst_offset{};
     uint3        size{};
     uint         mip_level{};
+    uint32       array_layer{};
 
 private:
     CopyBufferToTextureCmd() : Command(EType::BufferToTexture) {}
@@ -323,6 +324,7 @@ public:
         uint3            _dst_offset,
         uint3            _size,
         uint             _mip_level,
+        uint32           _array_layer,
         std::string_view _name = typenames[uint(EType::BufferToTexture)]
     ) :
         Command(EType::BufferToTexture, _name),
@@ -332,7 +334,8 @@ public:
         src_offset(_src_offset),
         dst_offset{_dst_offset.x, _dst_offset.y, _dst_offset.z},
         size{_size.x, _size.y, _size.z},
-        mip_level{_mip_level} {}
+        mip_level{_mip_level},
+        array_layer{_array_layer} {}
 
     EQueueType GetQueueType() const override {
         return EQueueType::Copy;
@@ -362,6 +365,9 @@ public:
     auto MipLevel() const {
         return mip_level;
     }
+    auto ArrayLayer() const {
+        return array_layer;
+    }
 };
 
 struct CopyTextureToBufferCmd : public Command {
@@ -373,6 +379,7 @@ public:
     uint         dst_offset{};
     uint3        size{};
     uint         mip_level{};
+    uint         array_layer{};
 
 private:
     CopyTextureToBufferCmd() : Command(EType::TextureToBuffer) {}
@@ -386,6 +393,7 @@ public:
         uint             _dst_offset,
         uint3            _size,
         uint             _mip_level,
+        uint             _array_layer,
         std::string_view _name = typenames[uint(EType::TextureToBuffer)]
     ) :
         Command(EType::TextureToBuffer, _name),
@@ -395,7 +403,8 @@ public:
         src_offset{_src_offset.x, _src_offset.y, _src_offset.z},
         dst_offset(_dst_offset),
         size{_size.x, _size.y, _size.z},
-        mip_level(_mip_level) {}
+        mip_level(_mip_level),
+        array_layer(_array_layer) {}
 
     EQueueType GetQueueType() const override {
         return EQueueType::Copy;
@@ -425,16 +434,19 @@ public:
     auto MipLevel() const {
         return mip_level;
     }
+    auto ArrayLayer() const {
+        return array_layer;
+    }
 };
 
 struct UploadTextureCmd : public Command {
 public:
     EPixelFormat format{};
     uint64       handle{};
-    uint         mip_level{};
+    uint32       mip_level{};
+    uint32       array_layer{};
     uint3        offset{};
     uint3        size{};
-    // const void*  data{};
     std::variant<std::span<const byte>, Array<byte>> storage;
 
 private:
@@ -445,6 +457,7 @@ public:
         EPixelFormat     _format,
         uint64           _handle,
         uint             _mip_level,
+        uint32           _array_layer,
         uint3            _offset,
         uint3            _size,
         const void*      _data,
@@ -454,6 +467,7 @@ public:
         format(_format),
         handle(_handle),
         mip_level(_mip_level),
+        array_layer(_array_layer),
         offset{_offset.x, _offset.y, _offset.z},
         size{_size.x, _size.y, _size.z},
         storage(
@@ -467,6 +481,7 @@ public:
         EPixelFormat     _format,
         uint64           _handle,
         uint             _mip_level,
+        uint32           _array_layer,
         uint3            _offset,
         uint3            _size,
         Array<byte>&&    _data,
@@ -476,6 +491,7 @@ public:
         format(_format),
         handle(_handle),
         mip_level(_mip_level),
+        array_layer(_array_layer),
         offset{_offset.x, _offset.y, _offset.z},
         size{_size.x, _size.y, _size.z},
         storage(std::move(_data)) {}
@@ -492,6 +508,9 @@ public:
     }
     auto MipLevel() const {
         return mip_level;
+    }
+    auto ArrayLayer() const {
+        return array_layer;
     }
     auto Offset() const {
         return offset;

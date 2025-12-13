@@ -132,9 +132,10 @@ class RENDER_API PointLightComponent : public LightComponent {
 
 public:
     PointLightComponent() noexcept {}
-    PointLightComponent(Vector3f color, float intensity, Vector3f position) noexcept :
+    PointLightComponent(Vector3f color, float intensity, Vector3f position, float radius = 100.0f) noexcept :
         LightComponent(color, intensity, ELightComponentType::POINT),
-        m_position(position) {}
+        m_position(position),
+        m_radius(radius) {}
 
     Vector3f GetPosition() const noexcept {
         return m_position;
@@ -142,19 +143,28 @@ public:
     void SetPosition(Vector3f position) noexcept {
         m_position = position;
     }
+
+    float GetRadius() const noexcept {
+        return m_radius;
+    }
+    void SetRadius(float radius) noexcept {
+        m_radius = radius;
+    }
+
     LightComponentData ToData() const noexcept override {
         LightComponentData data;
         data.color     = GetColor();
         data.intensity = GetIntensity();
         data.position  = m_position;
         data.direction = Vector3f(0.0f);
-        data.info      = Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
+        data.info      = Vector4f(m_radius, 0.0f, 0.0f, 0.0f); // 将半径存储在 info.x 中
         data.type      = static_cast<uint32_t>(GetType());
         return data;
     }
 
 private:
     Vector3f m_position{};
+    float    m_radius{10.0f};
 };
 
 // MARK: Spot

@@ -122,6 +122,17 @@ Array<LightComponentRef> LightComponent::CreateDefaultLightComponents() {
         );
     }
 
+    // Point Light
+    {
+        LightComponentRef point_light = MoerNew(PointLightComponent)(
+            Vector3f(1.0f, 1.0f, 1.0f), // color
+            50.0f,                      // intensity
+            Vector3f(1.0f, 1.0f, 1.0f), // position
+            15000.0f                    // radius
+        );
+        lights.push_back(point_light);
+    }
+
     // // Point light
     // {
     //     // The following lights should be placed in the Sponza scene.
