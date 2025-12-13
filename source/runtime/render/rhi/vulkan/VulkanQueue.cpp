@@ -55,7 +55,7 @@ VkRenderingAttachmentInfo FromDepthAttachmentInfo(const DepthAttachment& _attach
     attachment_info.pNext = nullptr;
 
     VulkanTexture* vk_texture = reinterpret_cast<VulkanTexture*>(_attachment.target);
-    attachment_info.imageView = vk_texture->GetView();
+    attachment_info.imageView = vk_texture->GetView(_attachment.mip_level, 1, _attachment.array_layer, 1);
 
     attachment_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     attachment_info.loadOp =
@@ -1218,7 +1218,8 @@ public:
             tmp_buffer.GetByteOffset(),
             _cmd.Offset(),
             _cmd.Size(),
-            _cmd.MipLevel()
+            _cmd.MipLevel(),
+            _cmd.ArrayLayer()
         );
     }
 
@@ -1300,7 +1301,8 @@ public:
             _cmd.SrcOffset(),
             _cmd.DstOffset(),
             _cmd.Size(),
-            _cmd.MipLevel()
+            _cmd.MipLevel(),
+            _cmd.ArrayLayer()
         );
     }
 

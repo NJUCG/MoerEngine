@@ -39,7 +39,8 @@ public:
         uint64         _src_offset,
         uint3          _dst_offset,
         uint3          _dst_extent,
-        uint32         _mip_level
+        uint32         _mip_level,
+        uint32         _array_layer
     );
     void CopyTextureToBuffer(
         VulkanTexture* _src,

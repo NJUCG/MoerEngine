@@ -56,6 +56,17 @@ TextureRef RenderDevice::CreateTexture(
     return impl->CreateTexture(_name, dim, _size, _format, _usage, _mip_cnt, _array_size);
 }
 
+TextureRef RenderDevice::CreateCubeMap(
+        std::string_view   _name,
+        Extent2D           _size,
+        EPixelFormat       _format,
+        ETextureUsageFlags _usage,
+        uint32_t           _mip_cnt
+){
+    ETextureDimension dim= ETextureDimension::TEX_CUBE;// TODO:未来支持CUBE_ARRAY
+    return impl->CreateTexture(_name, dim, _size, _format, _usage, _mip_cnt, 6);
+}
+
 DepthBufferRef RenderDevice::CreateDepthBuffer(
     std::string_view   _name,
     Extent2D           _size,

@@ -290,7 +290,7 @@ void Parser::Impl::LoadCameras(const aiScene* scene) {
      * Load lights from gltf scene
      * Refer to: https://assimp-docs.readthedocs.io/en/latest/API/API-Documentation.html#_CPPv47aiLight
      */
-void Parser::Impl::LoadLights(const aiScene* _scene) {
+void Parser::Impl::LoadLights(const aiScene* _scene) {//HERE:add default light
     const uint32_t light_num = _scene->mNumLights;
     if (light_num == 0) {
         LOG_INFO("No lights found, loader will use default lights");

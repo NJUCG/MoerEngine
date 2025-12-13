@@ -81,6 +81,14 @@ VkFormat VulkanEnumTranslator::METoVKFormat(EPixelFormat _format) {
     return VkFormat(_format); // MARK...
 }
 
+VkImageCreateFlags VulkanEnumTranslator::METoVKImageCreateFlags(ETextureDimension _dim) {
+    VkImageCreateFlags flags = 0;
+    if (_dim == ETextureDimension::TEX_CUBE || _dim == ETextureDimension::TEX_CUBE_ARRAY) {
+        flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    }
+    return flags;
+}
+
 VkImageType VulkanEnumTranslator::METoVKImageType(ETextureDimension _dim) {
     switch (_dim) {
         case ETextureDimension::TEX_2D:
@@ -1557,7 +1565,11 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
 #pragma region viewable resources definitions
 
-    uint EncodeViewKey(uint _mip_level, uint _mip_cnt) { return _mip_level | (_mip_cnt << 8); }
+    uint64 EncodeViewKey(uint _mip_level, uint _mip_cnt,uint _base_layer,uint _layer_cnt) {
+        return ((uint64)_mip_level)
+        | ((uint64)_mip_cnt << 16) 
+        | ((uint64)_base_layer << 32) 
+        | ((uint64)_layer_cnt << 48); }
 
 
     VkImageTiling GetVkImageTilling(VkImageCreateInfo _create_infos, VulkanDevice& _device){
@@ -1591,7 +1603,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             return;
         }
         VkImageCreateInfo image_create_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        image_create_info.flags       = 0;
+        image_create_info.flags       = VulkanEnumTranslator::METoVKImageCreateFlags(_info.dimension);
         image_create_info.imageType   = VulkanEnumTranslator::METoVKImageType(_info.dimension);
         image_create_info.format      = VulkanEnumTranslator::METoVKFormat(_info.format);
         image_create_info.extent      = {uint(_info.extent.x), uint(_info.extent.y), _info.depth};
@@ -1623,21 +1635,28 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         }
     }
 
-    VkImageView VulkanTexture::GetView(uint _mip_level, uint _mip_cnt) {
-        uint key = EncodeViewKey(_mip_level, _mip_cnt);
+    VkImageView VulkanTexture::GetView(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt) {
+        uint64 key = EncodeViewKey(_mip_level, _mip_cnt, _base_layer, _layer_cnt);
         auto it  = m_views.find(key);
         if (it != m_views.end()) { return it->second; }
         VkImageView           view;
         VkImageViewCreateInfo view_create_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         view_create_info.image                           = m_alloc.image;
-        view_create_info.viewType                        = VulkanEnumTranslator::METoVKImageViewType(GetDimension());
+
+        // 如果是 CubeMap 但只请求了 1 层，必须降级为 2D View
+        if (GetDimension() == ETextureDimension::TEX_CUBE && _layer_cnt == 1) {
+            view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        } else { 
+            view_create_info.viewType = VulkanEnumTranslator::METoVKImageViewType(GetDimension());
+        }
+
         view_create_info.format                          = VulkanEnumTranslator::METoVKFormat(GetFormat());
         view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
         view_create_info.subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(GetAspectFlags());
         view_create_info.subresourceRange.baseMipLevel   = _mip_level;
-        view_create_info.subresourceRange.levelCount     = _mip_cnt;
-        view_create_info.subresourceRange.baseArrayLayer = 0;
-        view_create_info.subresourceRange.layerCount     = GetNumArray();
+        view_create_info.subresourceRange.levelCount     = _mip_cnt;// 含义：这次我想看多少，而不是纹理总共有多少
+        view_create_info.subresourceRange.baseArrayLayer = _base_layer;
+        view_create_info.subresourceRange.layerCount     = _layer_cnt;// 含义：这次我想看多少，而不是纹理总共有多少
         view_create_info.pNext                           = nullptr;
         view_create_info.flags                           = 0;
 
