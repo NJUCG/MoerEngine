@@ -1,10 +1,10 @@
+#include "core/math/Math.hlsli"
+
 struct AoOutput {
     float4 color_with_ao : SV_Target0;
     float ambient_only : SV_Target1;
     float2 camera_motion_vector : SV_Target2;
 };
-
-static const float Epsilon = 0.0001; // TODO: same with PBRMaterialFrag.hlsl
 
 // 结果是 NDC Space，目标为当前像素，上一帧指向当前帧
 float2 GetCameraMotionVector(float2 uv) {

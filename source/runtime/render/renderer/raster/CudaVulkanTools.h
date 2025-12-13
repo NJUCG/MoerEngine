@@ -348,6 +348,17 @@ private:
                 result.element_type_count = 4;
                 break;
             }
+            case PF_R16G16B16A16_SFLOAT: { // hdr color
+                result.desc.x             = 16;
+                result.desc.y             = 16;
+                result.desc.z             = 16;
+                result.desc.w             = 16;
+                result.desc.f             = cudaChannelFormatKindFloat;
+                result.read_mode          = cudaReadModeElementType; // 只影响texture：原数值读取
+                result.element_type       = EFormatElementType::HALF;
+                result.element_type_count = 4;
+                break;
+            }
             case PF_D32_SFLOAT_S8_UINT: {
                 assert(false);
                 // cuda不支持这种格式！

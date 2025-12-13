@@ -2,17 +2,15 @@
 BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "core/common/Common.hlsl"
-#include "pipelines/raytracing/lighting/common/Lighting.hlsl"
+#include "materials/Brdf.hlsli"
 #include "materials/Material.hlsl"
-
-#include "materials/Pbr.hlsli"
-#include "pipelines/raster/deferred/lighting/shadows/Shadows.hlsli"
 #include "pipelines/raster/deferred/lighting/IBL.hlsli"
+#include "pipelines/raster/deferred/lighting/Lighting.hlsli"
+#include "pipelines/raster/deferred/lighting/shadows/Shadows.hlsli"
 
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
-
 
 float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) {
     float4 clip    = float4(screen_uv.x * 2.f - 1.f, 1.f - screen_uv.y * 2.f, depth, 1.0);
@@ -53,60 +51,60 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     }
 
     // MARK: PBR
-    PBRInfo pbrInfo;
-
-    // - Albedo
-    pbrInfo.albedo =
+    float3 albedo =
         GetTextureData<float3>(mat.albedo_map, uv, mat.base_color_factor.xyz, MISSING_TEXTURE_COLOR);
 
-    // - Metallic & Roughness
     float2 metallic_roughness = GetTextureData<float2>(
         mat.metallic_roughness_map,
         uv,
         float2(mat.metallic_factor, mat.roughness_factor),
         float2(mat.metallic_factor, mat.roughness_factor)
     );
-    pbrInfo.metalness = metallic_roughness.x;
-    pbrInfo.roughness = metallic_roughness.y;
+    float metallic  = metallic_roughness.x;
+    float roughness = metallic_roughness.y;
 
-    // - Normal
-    pbrInfo.normal = GetNormalFromNormalMap(mat.normal_map, uv, normal, tangent);
+    float3 N   = GetNormalFromNormalMap(mat.normal_map, uv, normal, tangent);
+    float3 V   = normalize(lighting_data.camera_position - position.xyz);
+    float  NoV = saturate(dot(N, V));
 
-    // FIXME: sponze - normal_map == 66 => bug
-    if (mat.normal_map == 66) { // wtf...
-        pbrInfo.normal = normal;
-    }
-    // float3 normal_map_test = TextureHandle(mat.normal_map).Sample2D<float3>(uv);
-    // if (in_uv.x < 0.00032 && in_uv.y < 0.00056) {
-    //     printf("normal_map: %d\n", mat.normal_map);
-    // }
-    // return float4(normal_map_test, 1.0);
+    BRDFContext brdf_ctx;
+    brdf_ctx.Init(
+        roughness,
+        albedo,
+        metallic,
+        N,
+        V,
+        TextureHandle(lighting_data.lut_ggx_emu_handle).Sample2D<float3>(float2(NoV, roughness)),
+        TextureHandle(lighting_data.lut_ggx_eavg_handle).Sample2D<float3>(float2(0.0, roughness))
+    );
 
-    // MARK: Shading
-    float3 color = float3(0, 0, 0);
-
-    // - View Dir
-    pbrInfo.viewDir = normalize(lighting_data.camera_position - position.xyz);
+    brdf_ctx.SetConfig(
+        lighting_data.brdf_enable_multi_scatter,
+        lighting_data.brdf_NDF_mode,
+        lighting_data.brdf_G_mode,
+        lighting_data.brdf_G_is_ibl
+    );
 
     // - Lights
     ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
 
     // - Shadow
-    float shadow = calculate_shadow(lighting_data, position,in_uv,normal);
+    float shadow = calculate_shadow(lighting_data, position, in_uv, normal);
 
-    // - Shading
+    // MARK: Shading
+    LightContext light_ctx;
+    light_ctx.Init(brdf_ctx, position, lighting_data.lut_ggx_emu_handle);
+
     for (uint i = 0; i < lighting_data.light_count; i++) {
         LightData light = light_buffer.Load<LightData>(i);
 
-        float3 light_dir = calculate_light_dir(light, position, normal);
-
-        float3 brdf = pbrInfo.Evaluate(light_dir);
-
-        color += apply_light(light, position, normal, brdf, shadow);
+        light_ctx.AccumulateLight(light, shadow);
     }
 
+    float3 color = light_ctx.GetResult();
+
     if (param.enable_extra_ambient) {
-        color += param.extra_ambient_intensity * param.extra_ambient_color * pbrInfo.albedo;
+        color += param.extra_ambient_intensity * param.extra_ambient_color * brdf_ctx.albedo;
     }
 
     return float4(color, 1.0);

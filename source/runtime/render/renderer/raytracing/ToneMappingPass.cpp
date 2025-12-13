@@ -19,8 +19,8 @@ ToneMappingPass::ToneMappingPass(
 ) :
     device(_device),
     manager(_manager),
-    histogram_pipeline{manager.Compute<HistogramPipeline>("pipelines/postprocess/color/Histogram.hlsl")},
-    exposure_pipeline{manager.Compute<ExposurePipeline>("pipelines/postprocess/color/Exposure.hlsl")},
+    histogram_pipeline{manager.Compute<HistogramPipeline>("pipelines/raytracing/postprocess/Histogram.hlsl")},
+    exposure_pipeline{manager.Compute<ExposurePipeline>("pipelines/raytracing/postprocess/Exposure.hlsl")},
     scene(_scene) {
 
     VertexStream     stream{};
@@ -30,7 +30,7 @@ ToneMappingPass::ToneMappingPass(
 
     tone_mapping_pass_pipeline = manager.Raster()
                                      .Vertex("core/utils/FullScreenQuad.hlsl")
-                                     .Pixel("pipelines/postprocess/color/ToneMappingPass.hlsl")
+                                     .Pixel("pipelines/raytracing/postprocess/ToneMappingPass.hlsl")
                                      .Build<ToneMappingPassPipeline>(std::move(pso_info));
 
     tone_mapping_constants = device.CreateBuffer<Moer::byte>(

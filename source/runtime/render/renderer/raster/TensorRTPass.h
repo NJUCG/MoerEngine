@@ -294,6 +294,20 @@ public:
                         dst_height,
                         channels
                     );
+                } else if (type == CudaTexture::EFormatElementType::HALF && type_count == 4) {
+                    Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Half4(
+                        gridSize,
+                        blockSize,
+                        res.semaphore.stream_to_run,
+                        // 0, // no stream object
+                        src_tex.GetSurfaceObjectList(),
+                        d_target,
+                        src_tex.width,
+                        src_tex.height,
+                        dst_width,
+                        dst_height,
+                        channels
+                    );
                 } else {
                     assert(false);
                 }

@@ -2,6 +2,8 @@
 #define MOER_MATH_HLSL
 #include <core/math/STL.hlsli>
 
+#define Epsilon (1e-4)
+
 #define PI 3.1415926535897932384626433832795
 #define PI2 (2.0 * PI)
 
@@ -51,6 +53,18 @@ float2 square(float2 x) { return x * x; }
 float3 square(float3 x) { return x * x; }
 
 float4 square(float4 x) { return x * x; }
+
+float pow3(float x) { return x * x * x; }
+
+float pow4(float x) {
+  float x2 = x * x;
+  return x2 * x2;
+}
+
+float pow5(float x) {
+  float x2 = x * x;
+  return x2 * x2 * x;
+}
 
 float3 slerp(float3 a, float3 b, float angle, float t) {
   t = saturate(t);

@@ -147,7 +147,7 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
     //           (it.first != nullptr ? "Cached" : "Compile"));
 
     static auto get_remove_target_str = [](std::string input_string) -> std::string {
-        const std::string target_substring = "target/bin/Debug/resource/";
+        const std::string target_substring = "target/bin/Debug/asset/";
         size_t            pos              = input_string.find(target_substring);
 
         while (pos != std::string::npos) {

@@ -1,4 +1,4 @@
-#ifndef SHADOW_DEPTH_PASS
+﻿#ifndef SHADOW_DEPTH_PASS
 #define SHADOW_DEPTH_PASS 0
 #endif
 

@@ -12,8 +12,6 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 static const float fxaa_contrast_threshold = 0.025;
 static const uint  fxaa_search_limit       = 8;
 
-static const float Epsilon = 0.0001; // same with PBRMaterialFrag.hlsl
-
 [[vk::push_constant]] ConstantBuffer<Moer::FxaaPipelineBindlessParam> param;
 
 float get_luminance(float2 uv) {

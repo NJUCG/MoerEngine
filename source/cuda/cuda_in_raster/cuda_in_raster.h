@@ -142,6 +142,19 @@ MOER_CUDA_API void CopySurfaceToBuffer_Resize_NCHW_Half_Half2(
     int                  channels
 );
 
+MOER_CUDA_API void CopySurfaceToBuffer_Resize_NCHW_Half_Half4(
+    dim3                 gridSize,
+    dim3                 blockSize,
+    cudaStream_t         stream,
+    cudaSurfaceObject_t* surface,
+    __half*              output_buffer,
+    int                  src_width,
+    int                  src_height,
+    int                  dst_width,
+    int                  dst_height,
+    int                  channels
+);
+
 constexpr int RANDOMS_PER_THREAD = 256;
 
 MOER_CUDA_API void FillRandomHalf(

@@ -28,6 +28,9 @@ void RasterUI::ShowConfig() {
         ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
     };
 
+    // 自动曝光还没写，为了避免不知可以调亮度，所以这里加一个slider
+    ImGui::SliderFloat("Exposure EV", &m_config.tonemapping_exposure_ev, -15.0f, 10.0f);
+
     if (ImGui::TreeNode(
             "Output Frame Buffer",
             "Output: [%s]",
@@ -45,23 +48,70 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Shading
     if (ImGui::TreeNode(
-            "Shading",
-            "Shading: [%s]",
-            s_shading_mode_name_array[static_cast<size_t>(m_config.shading_mode)].c_str()
+            "Shading", "Shading: [%s]", s_shading_mode_name_map.at(m_config.shading_mode).c_str()
         )) {
-        assert(s_shading_mode_name_array.size() == static_cast<size_t>(EShadingMode::NUM));
-        for (uint i = 0; i < s_shading_mode_name_array.size(); i++) {
-            if (ImGui::Selectable(
-                    s_shading_mode_name_array[i].c_str(),
-                    m_config.shading_mode == static_cast<EShadingMode>(i)
-                )) {
-                m_config.shading_mode = static_cast<EShadingMode>(i);
+
+        // 有多个ShadingMode的时候，再显示这个选项
+        // for (uint i = 0; i < s_shading_mode_name_map.size(); i++) {
+        //     auto cur_enum = static_cast<EShadingMode>(i);
+        //     if (ImGui::Selectable(
+        //             s_shading_mode_name_map.at(cur_enum).c_str(), m_config.shading_mode == cur_enum
+        //         )) {
+        //         m_config.shading_mode = cur_enum;
+        //     }
+        //     draw_border();
+        // }
+        // ImGui::Separator();
+
+        if (m_config.shading_mode == EShadingMode::DEFAULT_PBR) {
+            // TODO: 添加注释，不然没人知道这些设置有什么用
+            ImGui::Text("BRDF Settings:");
+
+            // BRDF, Multi-Scatter
+            ImGui::Checkbox("MultiScatter (Kulla-Conty)", &m_config.shading_brdf_enable_multi_scatter);
+
+            // Spacing
+            ImGui::Dummy(ImVec2(0.0f, 5.0f));
+
+            // NDF
+            ImGui::Text("NDF:");
+            for (uint i = 0; i < s_brdf_ndf_mode_name_map.size(); i++) {
+                auto cur_enum = static_cast<EBrdfNdfMode>(i);
+                if (ImGui::Selectable(
+                        s_brdf_ndf_mode_name_map.at(cur_enum).c_str(),
+                        m_config.shading_brdf_NDF_mode == cur_enum
+                    )) {
+                    m_config.shading_brdf_NDF_mode = cur_enum;
+                }
+                draw_border();
             }
-            draw_border();
+
+            // Spacing
+            ImGui::Dummy(ImVec2(0.0f, 5.0f));
+
+            // Geometry Function
+            ImGui::Text("Geometry Function:");
+            for (uint i = 0; i < s_brdf_geometry_mode_name_map.size(); i++) {
+                auto cur_enum = static_cast<EBrdfGMode>(i);
+                if (ImGui::Selectable(
+                        s_brdf_geometry_mode_name_map.at(cur_enum).c_str(),
+                        m_config.shading_brdf_G_mode == cur_enum
+                    )) {
+                    m_config.shading_brdf_G_mode = cur_enum;
+                }
+                draw_border();
+            }
+            if (m_config.shading_brdf_G_mode == EBrdfGMode::G_SCHLICK) {
+                // Light Source is IBL
+                ImGui::Checkbox("Light Source is IBL", &m_config.shading_brdf_G_is_ibl);
+            }
+            ImGui::Dummy(ImVec2(0.0f, 5.0f));
         }
 
         ImGui::Separator();
+        ImGui::Dummy(ImVec2(0.0f, 5.0f));
 
         ImGui::Checkbox("Enable Extra Ambient", &m_config.shading_enable_extra_ambient);
         ImGui::SliderFloat("Ambient Intensity", &m_config.shading_extra_ambient_intensity, 0.0f, 1.0f);
@@ -70,6 +120,23 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Tonemapping
+    // Tonemapping究极重要，所以放到最开头，以提示用户调节选项
+    if (ImGui::TreeNode("Tonemapping")) {
+
+        // 自动曝光
+        ImGui::Checkbox("Enable Auto Exposure", &m_config.tonemapping_auto_exposure);
+        // 手动曝光
+        if (m_config.tonemapping_auto_exposure == false) {
+            ImGui::SliderFloat("Exposure EV", &m_config.tonemapping_exposure_ev, -15.0f, 10.0f);
+        }
+        // 色调映射
+        ImGui::Checkbox("Enable Reinhard Tone Mapping", &m_config.tonemapping_reinhard_enabled);
+
+        ImGui::TreePop();
+    }
+
+    // MARK: Shadow
     if (ImGui::TreeNode(
             "Shadow", "Shadow: [%s]", s_shadow_map_mode_name_map.at(m_config.shadow_map_mode).c_str()
         )) {
@@ -88,7 +155,7 @@ void RasterUI::ShowConfig() {
 
         ImGui::Checkbox("Enable PCSS", &m_config.shadow_pcss_enabled);
         if (m_config.shadow_pcss_enabled) {
-            ImGui::SliderFloat("Light Size World", &m_config.shadow_pcss_light_size_world, 0.001f, 10.0f);
+            ImGui::SliderFloat("Light Size World", &m_config.shadow_pcss_light_size_world, 0.001f, 0.1f);
         }
 
         auto csm_common_param = [&]() {
@@ -125,6 +192,7 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: AO
     if (ImGui::TreeNode(
             "Ambient Occlusion", "Ambient Occlusion: [%s]", s_ao_mode_name_map.at(m_config.ao_mode).c_str()
         )) {
@@ -206,6 +274,7 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: SSR
     if (ImGui::TreeNode("SSR", "SSR: [%s]", (m_config.ssr_is_ssr_enabled == 1 ? "Enable" : "Disable"))) {
         if (ImGui::Selectable("Enable", m_config.ssr_is_ssr_enabled == 1)) {
             m_config.ssr_is_ssr_enabled = 1;
@@ -228,6 +297,7 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Denoiser
     if (ImGui::TreeNode(
             "Denoiser",
             "Denoiser: [%s]",
@@ -257,6 +327,7 @@ void RasterUI::ShowConfig() {
     }
 
 #if WITH_CUDA
+    // MARK: AI - Upsample
     if (ImGui::TreeNode(
             "Upsample",
             "Upsample: [%s]",
@@ -284,6 +355,7 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: AI - CUDA
     if (ImGui::TreeNode("CUDA", "CUDA: [%s]", (m_config.ai_is_cuda_enabled == 1 ? "Enable" : "Disable"))) {
         if (ImGui::Selectable("Enable", m_config.ai_is_cuda_enabled == 1)) {
             m_config.ai_is_cuda_enabled = 1;
@@ -310,6 +382,7 @@ void RasterUI::ShowConfig() {
     }
 #endif
 
+    // MARK: Anti-Aliasing
     if (ImGui::TreeNode(
             "Anti-Aliasing", "Anti-Aliasing: [%s]", s_aa_mode_name_map.at(m_config.aa_mode).c_str()
         )) {
@@ -359,7 +432,7 @@ void RasterUI::RegisterFrameBuffers(const Array<Render::TextureView>& frame_buff
 }
 
 uint RasterUI::GetDefaultSelectedFrameBufferIndex() const {
-    const std::string default_selected_frame_buffer_name = "aa_output";
+    const std::string default_selected_frame_buffer_name = "tonemapping_output";
 
     for (uint i = 0; i < m_frame_buffer_and_name_array.size(); ++i) {
         if (m_frame_buffer_and_name_array[i].GetTexture()->GetName() == default_selected_frame_buffer_name) {

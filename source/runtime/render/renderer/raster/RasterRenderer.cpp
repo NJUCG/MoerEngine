@@ -16,11 +16,12 @@
 #include "RtaoDenoiserPass.h"
 #include "ShadowDepthPass.h"
 #include "SsrPass.h"
-#include "UpsamplePass.h"
+#include "TonemappingPass.h"
 
 #if WITH_CUDA
 #include "CudaPass.h"
 #include "TensorRTPass.h"
+#include "UpsamplePass.h"
 #endif
 
 namespace Moer::Render::Raster {
@@ -52,6 +53,7 @@ RasterRenderer::RasterRenderer(
     bfd_pass           = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
     ssr_pass           = MakeUnique<SsrPass>(raster_context);
     aa_pass            = MakeUnique<AaPass>(raster_context);
+    tonemapping_pass   = MakeUnique<TonemappingPass>(raster_context);
 
 #if WITH_CUDA
     // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
@@ -224,6 +226,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // - Upsample Pass
         processing_image = upsample_pass->Process(raster_context, raster_config, processing_image);
 #endif
+
+        // - Tonemapping Pass
+        processing_image = tonemapping_pass->Process(raster_context, raster_config, processing_image);
 
         if (hooks.on_ui_combine_pass) {
             default_output_texture = hooks.on_ui_combine_pass(

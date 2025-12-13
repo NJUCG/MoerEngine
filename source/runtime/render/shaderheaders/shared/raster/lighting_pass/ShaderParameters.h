@@ -74,6 +74,15 @@ struct LightingData {
     float    cascade_split_ratios[MAX_CSM_CASCADES];
     float    cascade_blend_start_ratios[MAX_CSM_CASCADES];
     uint     is_csm_blend_enabled;
+
+    // Shading
+    uint lut_ggx_emu_handle;
+    uint lut_ggx_eavg_handle;
+
+    uint brdf_enable_multi_scatter; // kulla-conty approximation
+    uint brdf_NDF_mode;             // NDF Mode
+    uint brdf_G_mode;               // 用 Vis_SmithJointGGX 来代替 G_Smith
+    uint brdf_G_is_ibl;             // 是否使用IBL的Fresnel近似
 };
 
 // MARK: Main Content End

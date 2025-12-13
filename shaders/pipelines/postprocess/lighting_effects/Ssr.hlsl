@@ -11,9 +11,6 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 [[vk::push_constant]] ConstantBuffer<Moer::SsrPipelineBindlessParam> param;
 
-static const float Epsilon = 0.0001; // same with PBRMaterialFrag.hlsl
-static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
-
 float linearize_depth(float depth) {
     // 1.0 - d => reverse z to regular z
     return param.near_clip * param.far_clip / (param.far_clip + (1.0 - depth) * (param.near_clip - param.far_clip));
@@ -47,7 +44,7 @@ bool should_apply_ssr(float2 uv) { // the performance cost is so high
 float3 apply_view_projection(float3 position) {
     float4 p = mul(param.view_projection_matrix, float4(position, 1.0));
     p /= p.w;
-    // 两个究极大坑�?
+    // 两个究极大坑�?
     // p.z is not needed to apply f(x) = x * 0.5 + 0.5;
     // p.y is need to clip y;
     return float3(p.x * 0.5 + 0.5, -p.y * 0.5 + 0.5, p.z);

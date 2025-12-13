@@ -177,6 +177,14 @@ struct UpsamplePipelineBindlessParam {
     uint upsample_mode;
 };
 
+struct TonemappingPipelineBindlessParam {
+    uint  input_image;
+    float exposure_ev;
+    uint  reinhard_enabled;
+
+    uint padding;
+};
+
 // MARK: Main Content End
 
 #ifdef __cplusplus

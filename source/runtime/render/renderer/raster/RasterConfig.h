@@ -10,12 +10,28 @@
 
 namespace Moer {
 
-enum class EShadingMode {
-    DEFAULT = 0,
-    DEBUG,
-    NUM
+// EnumParam(EShadingMode, DEFAULT, DEBUG);
+static const UnorderedMap<EShadingMode, std::string> s_shading_mode_name_map = {
+    {EShadingMode::DEFAULT_PBR, "Default PBR (GAMES202)"},
+    {EShadingMode::DEBUG, "Debug"},
 };
-static const Array<std::string> s_shading_mode_name_array = {"Default", "Debug"};
+
+// EnumParam(EBrdfNdfMode, BECKMANN, GGX, EXTENDING_GGX);
+static const UnorderedMap<EBrdfNdfMode, std::string> s_brdf_ndf_mode_name_map = {
+    {EBrdfNdfMode::BECKMANN, "Beckmann"},
+    {EBrdfNdfMode::GGX, "GGX"},
+    {EBrdfNdfMode::GTR2, "GTR Gamma=2"},
+    {EBrdfNdfMode::GTR1, "GTR Gamma=1"},
+};
+
+// EnumParam(EBrdfGMode, G_SCHLICK, VIS_UE4, VIS_UNITY, VIS_FILAMENT, VIS_RESPAWN);
+static const UnorderedMap<EBrdfGMode, std::string> s_brdf_geometry_mode_name_map = {
+    {EBrdfGMode::G_SCHLICK, "GGX-Smith Separable (UE4)"},
+    {EBrdfGMode::VIS_UE4, "GGX-Smith Joint (UE4)"},
+    {EBrdfGMode::VIS_UNITY, "GGX-Smith Joint (Unity)"},
+    {EBrdfGMode::VIS_FILAMENT, "GGX-Smith Joint (Filament)"},
+    {EBrdfGMode::VIS_RESPAWN, "GGX-Smith Joint (Respawn E.)"},
+};
 
 // Enum 在 ..../ShaderParameters.h中定义，让shader和cpp可以共用枚举值
 // EnumParam(EAaMode, NONE, FXAA_SIMPLIFIED, FXAA_QUALITY, SMAA_1X, SMAA_T2X);
@@ -94,10 +110,21 @@ static const Array<std::string> s_ai_trt_visualize_buffer_array = {
 struct RasterConfig {
 
     // MARK: Shading
-    EShadingMode shading_mode                    = EShadingMode::DEFAULT;
-    bool         shading_enable_extra_ambient    = true;
-    float3       shading_extra_ambient_color     = float3(1.f, 1.f, 1.f);
-    float        shading_extra_ambient_intensity = 0.1f;
+    EShadingMode shading_mode = EShadingMode::DEFAULT_PBR;
+
+    bool   shading_enable_extra_ambient    = false;
+    float3 shading_extra_ambient_color     = float3(1.f, 1.f, 1.f);
+    float  shading_extra_ambient_intensity = 0.01f;
+
+    bool         shading_brdf_enable_multi_scatter = true; // kulla-conty approximation
+    EBrdfNdfMode shading_brdf_NDF_mode             = EBrdfNdfMode::GGX;
+    EBrdfGMode   shading_brdf_G_mode               = EBrdfGMode::VIS_UE4;
+    bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
+
+    // MARK: Tonemapping
+    bool  tonemapping_auto_exposure    = false;
+    float tonemapping_exposure_ev      = 6.0;
+    bool  tonemapping_reinhard_enabled = true;
 
     // MARK: AA
     EAaMode aa_mode = EAaMode::SMAA_1X;
@@ -158,7 +185,7 @@ struct RasterConfig {
     bool           shadow_csm_visualize_cascade = false;
 
     // MARK: Shadow - PCSS
-    bool  shadow_pcss_enabled          = true;
+    bool  shadow_pcss_enabled          = false;
     float shadow_pcss_light_size_world = 0.0015f;
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
@@ -176,8 +203,8 @@ struct RasterConfig {
     float debug_fps_limit        = 60;
 
     // MARK: Others
-    std::string default_selected_frame_buffer_name = "aa_output";
-    uint        selected_frame_buffer_index        = 0;
+
+    uint selected_frame_buffer_index = 0;
 };
 
 } // namespace Moer

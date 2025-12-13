@@ -1,6 +1,7 @@
 #ifndef MOER_LIGHTING_SHADOWS_ENTRY_HLSLI
 #define MOER_LIGHTING_SHADOWS_ENTRY_HLSLI
 
+#include "shared/raster/ShaderParameters.h"
 #include "pipelines/raster/deferred/lighting/shadows/CSM.hlsli"
 #include "pipelines/raster/deferred/lighting/shadows/PCSS.hlsli"
 
@@ -132,10 +133,20 @@ float calculate_csm_shadow(
 }
 
 float calculate_shadow(Moer::LightingData lighting_data, float3 world_pos, float2 screen_uv, float3 normal) {
-    if (lighting_data.shadow_map_mode == 1) {
+    if (lighting_data.shadow_map_mode == Moer::EShadowMapMode::NONE) {
+        return 1.0;
+
+    } else if (lighting_data.shadow_map_mode == Moer::EShadowMapMode::POINT_CUBE) {
         return calculate_point_shadow(lighting_data, world_pos, screen_uv, normal);
-    } else {
+
+    } else if (
+        lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM
+        || lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM_AUTO
+    ) {
         return calculate_csm_shadow(lighting_data, world_pos, screen_uv, normal);
+
+    } else {
+        return 1.0;
     }
 }
 
