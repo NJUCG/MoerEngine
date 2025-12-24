@@ -34,14 +34,15 @@ enum EPolyLightType
     ELPoint,
     ELTriangleIndirect
 };
-static const uint  g_poly_morphic_light_type_shift        = 24;
-static const uint  g_poly_morphic_light_type_mask         = 0xf;
-static const float g_poly_morphic_light_min_log2_radiance = -8.f;
-static const float g_poly_morphic_light_max_log2_radiance = 40.f;
-static const uint  g_poly_morphic_light_shaping_bit       = 1 << 28;
-static const uint  g_poly_morphic_light_env_is_scalar_bit = 1 << 16;
-static const uint  g_poly_morphic_light_log_radiance_mask = 0xffff;
-static const uint  g_task_prim_light_bit                  = 0x80000000u;
+static const float3 g_poly_morphic_light_max_radiance      = float3(1e4f, 1e4f, 1e4f);
+static const uint   g_poly_morphic_light_type_shift        = 24;
+static const uint   g_poly_morphic_light_type_mask         = 0xf;
+static const float  g_poly_morphic_light_min_log2_radiance = -8.f;
+static const float  g_poly_morphic_light_max_log2_radiance = 40.f;
+static const uint   g_poly_morphic_light_shaping_bit       = 1 << 28;
+static const uint   g_poly_morphic_light_env_is_scalar_bit = 1 << 16;
+static const uint   g_poly_morphic_light_log_radiance_mask = 0xffff;
+static const uint   g_task_prim_light_bit                  = 0x80000000u;
 
 //////////////////////////////////////////////////////////////////////////
 //Common definitions

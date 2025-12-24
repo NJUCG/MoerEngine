@@ -51,7 +51,9 @@ PrepareLightPass::PrepareLightPass(RenderDevice& _device, ShaderManager& _manage
     manager(_manager),
     scene(_scene),
     prepare_light_pipeline(
-        ShaderManager::Get().Compute<PrepareLightShaderPipeline>("pipelines/raytracing/lighting/precompute/PrepareLights.hlsl")
+        ShaderManager::Get().Compute<PrepareLightShaderPipeline>(
+            "pipelines/raytracing/lighting/precompute/PrepareLights.hlsl"
+        )
     ) {}
 
 void PrepareLightPass::CountEmissiveInstances(uint& _num_emissive_meshes, uint& _num_emissive_triangles) {
@@ -180,15 +182,22 @@ static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
     switch (_light.GetType()) {
         case Moer::ELightComponentType::DIRECTIONAL: {
             DirectionalLightComponent* dir_light = static_cast<DirectionalLightComponent*>(&_light);
-            float  half_angluar_size_rad = Angle::DegreeToRadian(std::max(dir_light->GetAngularSize(), 0.1f));
-            float  solid_angle           = 2 * PI * (1 - cos(half_angluar_size_rad));
-            float3 radiance =
+
+            // 0.533度是太阳的视角直径
+            float angular_size = (IsZero(dir_light->GetAngularSize()) ? 0.533f : dir_light->GetAngularSize());
+
+            float half_angular_size_rad = Angle::DegreeToRadian(std::max(angular_size, 0.1f));
+            float solid_angle           = 2 * PI * (1 - cos(half_angular_size_rad));
+
+            float3 unlimited_radiance =
                 dir_light->GetColor() * dir_light->GetIntensity() / std::max(solid_angle, 1e-6f);
+
+            float3 radiance = Min(unlimited_radiance, float3(g_poly_morphic_light_max_radiance));
 
             _info.color_type_flags = (uint)EPolyLightType::ELDirectional << g_poly_morphic_light_type_shift;
             PackPolyLightColor(radiance, _info);
             _info.direction1 = PackNormalizedVector(Normalizef(dir_light->GetDirection()));
-            _info.scalars    = Fp32ToFp16(half_angluar_size_rad) | (Fp32ToFp16(solid_angle) << 16);
+            _info.scalars    = Fp32ToFp16(half_angular_size_rad) | (Fp32ToFp16(solid_angle) << 16);
             break;
         }
         case Moer::ELightComponentType::SPOT: {
