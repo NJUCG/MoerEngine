@@ -1,6 +1,6 @@
 # 1. IDE Files
 .vscode/*
-!/.vscode/launch.json
+!/.vscode/template.launch.json
 !/.vscode/c_cpp_properties.json
 /.vs/*
 /.idea/*
