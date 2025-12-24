@@ -572,7 +572,7 @@ OutputStream& Camera::operator<<(OutputStream& _stream) const {
     return _stream;
 }
 
-float Camera::GetDeletaTime() const noexcept {
+float Camera::GetDeltaTime() const noexcept {
     return WindowInput::Get().delta_time;
 }
 

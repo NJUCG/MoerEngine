@@ -700,7 +700,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             //  cmd_list.CopyFrom(out_direct_lighting->GetView(),
             //  scene_color->GetView());
             rt_ctx->AdvanceFrame();
-            tone_mapping_pass->AdvanceFrame(camera->GetDeletaTime());
+            tone_mapping_pass->AdvanceFrame(camera->GetDeltaTime());
             antialias_pass->AdvanceFrame();
             b_feedback_valid = true;
 

@@ -150,7 +150,7 @@ public:
     InputStream&  operator>>(InputStream& _stream);
     OutputStream& operator<<(OutputStream& _stream) const;
 
-    float GetDeletaTime() const noexcept;
+    float GetDeltaTime() const noexcept;
 
     std::string ToString();
     float2      GetJitter() const noexcept;
