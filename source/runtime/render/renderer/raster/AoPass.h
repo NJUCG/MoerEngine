@@ -48,10 +48,10 @@ public:
 class AoPass {
 public:
     struct AoPassOutput {
-        uint ao_with_color;
-        uint ao_only;
-        uint ao_only_idx; // 0 or 1 表示ao_only的顺序
-        uint camera_motion_vector;
+        TextureWithHandle ao_with_color;
+        uint              ao_only;
+        uint              ao_only_idx; // 0 or 1 表示ao_only的顺序
+        uint              camera_motion_vector;
     };
 
     AoPass(RasterContext& context) {
@@ -111,7 +111,7 @@ public:
         const RasterConfig& ui_config,
         const CameraRef&    camera,
         uint64              frame_idx,
-        uint                input_image
+        TextureWithHandle   input_image
     ) {
         TextureWithHandle ao_only     = context.textures.ao_output_ambient_only;
         static uint       ao_only_idx = 0;
@@ -129,7 +129,7 @@ public:
         }
 
         return AoPassOutput{
-            .ao_with_color        = context.textures.ao_output.handle,            //
+            .ao_with_color        = context.textures.ao_output,                   //
             .ao_only              = ao_only.handle,                               //
             .ao_only_idx          = ao_only_idx,                                  //
             .camera_motion_vector = context.textures.camera_motion_vector.handle, //
@@ -141,7 +141,7 @@ public:
         const RasterConfig& ui_config,
         const CameraRef&    camera,
         uint64              frame_idx,
-        uint                input_image,
+        TextureWithHandle   input_image,
         TextureWithHandle   ao_only
     ) {
         AoPipelineBindlessParam param;
@@ -152,7 +152,7 @@ public:
         param.ssao_sample_count = ui_config.ssao_spp;
         param.ssao_radius       = ui_config.ssao_sample_radius;
         param.ao_mode           = static_cast<uint32>(ui_config.ao_mode);
-        param.input_image       = input_image;
+        param.input_image       = input_image.handle;
         param.normal_tex        = context.textures.normal.handle;
         param.position_tex      = context.textures.position.handle;
         param.depth_tex         = context.textures.depth_nearest_sampler.handle;
@@ -177,7 +177,7 @@ public:
         const RasterConfig& ui_config,
         const CameraRef&    camera,
         uint64              frame_idx,
-        uint                input_image,
+        TextureWithHandle   input_image,
         TextureWithHandle   ao_only
     ) {
 
@@ -188,7 +188,7 @@ public:
         param.frame_idx          = frame_idx;
         param.resolution         = float2(context.textures.ao_output.GetSize());
         param.inv_resolution     = float2(1.0) / float2(context.textures.ao_output.GetSize());
-        param.input_image        = input_image;
+        param.input_image        = input_image.handle;
         param.normal_tex         = context.textures.normal.handle;
         param.position_tex       = context.textures.position.handle;
         param.depth_tex          = context.textures.depth_nearest_sampler.handle;
@@ -217,7 +217,7 @@ public:
         const RasterConfig& ui_config,
         const CameraRef&    camera,
         uint64              frame_idx,
-        uint                input_image,
+        TextureWithHandle   input_image,
         TextureWithHandle   ao_only
     ) {
         SsdoPipelineBindlessParam param;
@@ -234,7 +234,7 @@ public:
         param.noise_tex               = context.noise_tex.handle;
         param.ao_mode                 = static_cast<uint32>(ui_config.ao_mode);
         param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
-        param.input_image             = input_image;
+        param.input_image             = input_image.handle;
         param.view_projection_matrix  = Transpose(camera->GetViewProjectionMatrix());
         param.view_matrix             = Transpose(camera->GetViewMatrix());
         param.camera_position         = camera->GetPosition();

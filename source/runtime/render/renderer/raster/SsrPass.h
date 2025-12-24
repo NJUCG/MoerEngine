@@ -48,11 +48,11 @@ public:
                            .Build<SsrPipeline>(std::move(pso_full_screen_info));
     }
 
-    uint Process(
+    TextureWithHandle Process(
         RasterContext&      context,
         const RasterConfig& ui_config,
         const CameraRef&    camera,
-        uint                input_image
+        TextureWithHandle   input_image
     ) {
         if (ui_config.ssr_is_ssr_enabled == 0) {
             return input_image;
@@ -70,7 +70,7 @@ public:
         param.ssr_sample_count               = ui_config.ssr_sample_count;
         param.ssr_is_enable_jitter           = ui_config.ssr_is_enable_jitter;
         param.ssr_is_force_ground_enable_ssr = ui_config.ssr_is_force_ground_enable_ssr;
-        param.color_tex                      = input_image;
+        param.color_tex                      = input_image.handle;
         param.position_tex                   = context.textures.position.handle;
         param.normal_tex                     = context.textures.normal.handle;
         param.depth_tex                      = context.textures.depth_linear_sampler.handle;
@@ -86,7 +86,7 @@ public:
                 ColorAttachment(context.textures.ssr_output.tex)
             );
 
-        return context.textures.ssr_output.handle;
+        return context.textures.ssr_output;
     }
 
 private:

@@ -122,9 +122,11 @@ struct RasterConfig {
     bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
 
     // MARK: Tonemapping
-    bool  tonemapping_auto_exposure    = false;
-    float tonemapping_exposure_ev      = 6.0;
-    bool  tonemapping_reinhard_enabled = true;
+    bool  tonemapping_auto_exposure        = false;
+    float tonemapping_exposure_ev          = 6.0;
+    float tonemapping_exposure_log2lum_min = -10.0f;
+    float tonemapping_exposure_log2lum_max = 12.0f;
+    bool  tonemapping_reinhard_enabled     = true;
 
     // MARK: AA
     EAaMode aa_mode = EAaMode::SMAA_1X;

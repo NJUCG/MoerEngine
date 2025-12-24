@@ -805,7 +805,12 @@ public:
 
     */
 
-    uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image, uint ao_only_idx) {
+    TextureWithHandle Process(
+        RasterContext&      context,
+        const RasterConfig& ui_config,
+        TextureWithHandle   input_image,
+        uint                ao_only_idx
+    ) {
         assert(ui_config.ai_is_cuda_enabled);
 
         // signal

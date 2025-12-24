@@ -38,7 +38,8 @@ public:
                            .Build<BilateralFilterDenoiserPipeline>(std::move(pso_full_screen_info));
     }
 
-    uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image) {
+    TextureWithHandle
+    Process(RasterContext& context, const RasterConfig& ui_config, TextureWithHandle input_image) {
         if (ui_config.denoiser_mode == EDenoiserMode::NONE) {
             return input_image; // 直接返回输入
         }
@@ -49,7 +50,7 @@ public:
         param.kernel_radius        = ui_config.denoiser_bfd_kernel_radius;
         param.spatial_sigma_square = ui_config.denoiser_bfd_spatial_sigma_square;
         param.range_sigma_square   = ui_config.denoiser_bfd_range_sigma_square;
-        param.input_image          = input_image;
+        param.input_image          = input_image.handle;
 
         context.cmd_list.Gfx(bfd_pipeline, context.bdls, param)
             .Draw(
@@ -59,7 +60,7 @@ public:
                 ColorAttachment(output_image.tex)
             );
 
-        return output_image.handle;
+        return output_image;
     }
 
 private:

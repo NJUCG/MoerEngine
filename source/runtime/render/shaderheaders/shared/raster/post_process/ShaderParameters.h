@@ -12,11 +12,11 @@
 #endif
 
 #ifdef __cplusplus
-//#define CONST constexpr
+#define CONST constexpr
 #include "misc/Traits.h"
 namespace Moer::Render {
 #else
-//#define CONST const
+#define CONST const
 namespace Moer {
 #endif
 
@@ -178,12 +178,25 @@ struct UpsamplePipelineBindlessParam {
 };
 
 struct TonemappingPipelineBindlessParam {
+    uint2  resolution;
+    float2 resolution_inv;
+
+    float log2lum_saturate_scale;
+    float log2lum_saturate_bias;
+
     uint  input_image;
     float exposure_ev;
     uint  reinhard_enabled;
 
-    uint padding;
+    float debug_param;
 };
+
+static CONST uint TONEMAPPING_HISTOGRAM_GROUP_X = 16;
+static CONST uint TONEMAPPING_HISTOGRAM_GROUP_Y = 16;
+static CONST uint TONEMAPPING_HISTOGRAM_BIN_COUNT =
+    TONEMAPPING_HISTOGRAM_GROUP_X * TONEMAPPING_HISTOGRAM_GROUP_Y;
+static CONST uint TONEMAPPING_HISTOGRAM_POINT_FRAC_BITS       = 6;
+static CONST uint TONEMAPPING_HISTOGRAM_POINT_FRAC_MULTIPLIER = 1UL << TONEMAPPING_HISTOGRAM_POINT_FRAC_BITS;
 
 // MARK: Main Content End
 

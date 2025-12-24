@@ -47,7 +47,8 @@ public:
         lighting_data_buffer.handle = context.bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
     }
 
-    uint Process(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera) {
+    TextureWithHandle
+    Process(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera) {
 
         MaterialPassBindlessParam material_param;
         material_param.extra_ambient_color     = ui_config.shading_extra_ambient_color;
@@ -148,7 +149,7 @@ public:
                 );
         };
 
-        return context.textures.lighting_output.handle;
+        return context.textures.lighting_output;
     }
 
 private:

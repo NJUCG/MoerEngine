@@ -133,7 +133,9 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
             return context.manager.Raster()
-                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper")
+                .Vertex(
+                    "pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper"
+                )
                 .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
                 .Build<SmaaBlendingWeightPipeline>(std::move(pso_full_screen_info));
         }();
@@ -232,11 +234,11 @@ public:
         smaa_search_tex.handle = context.bdls->AllocateTexture(smaa_search_tex.tex, linear_sampler);
     }
 
-    uint Process(
+    TextureWithHandle Process(
         RasterContext&      context,
         const RasterConfig& ui_config,
         const CameraRef&    camera,
-        uint                input_image
+        TextureWithHandle   input_image
     ) {
         if (ui_config.aa_mode == EAaMode::NONE || ui_config.aa_mode == EAaMode::FXAA_SIMPLIFIED ||
             ui_config.aa_mode == EAaMode::FXAA_QUALITY) {
@@ -251,14 +253,14 @@ public:
         return input_image;
     }
 
-    uint ProcessFxaa(
+    TextureWithHandle ProcessFxaa(
         RasterContext&      context,
         const RasterConfig& ui_config,
         const CameraRef&    camera,
-        uint                input_image
+        TextureWithHandle   input_image
     ) {
         FxaaPrecomputePipelineBindlessParam param_fxaa_precomputed;
-        param_fxaa_precomputed.input_image = input_image;
+        param_fxaa_precomputed.input_image = input_image.handle;
 
         context.cmd_list.Gfx(fxaa_precompute_pipeline, context.bdls, param_fxaa_precomputed)
             .Draw(
@@ -282,14 +284,14 @@ public:
                 ColorAttachment(context.textures.aa_output.tex)
             );
 
-        return context.textures.aa_output.handle;
+        return context.textures.aa_output;
     }
 
-    uint ProcessSmaa(
+    TextureWithHandle ProcessSmaa(
         RasterContext&      context,
         const RasterConfig& ui_config,
         const CameraRef&    camera,
-        uint                input_image
+        TextureWithHandle   input_image
     ) {
         // TODO: optimize the following code
         //           以下是我会写出这段代码的原因：
@@ -327,7 +329,7 @@ public:
         auto smaa_shared_param = [&]() {
             SmaaSharedPipelineBindlessParam param;
             param.aa_mode            = static_cast<uint32>(ui_config.aa_mode);
-            param.color_tex          = input_image;
+            param.color_tex          = input_image.handle;
             param.position_tex       = context.textures.position.handle;
             param.depth_tex          = context.textures.depth_linear_sampler.handle;
             param.search_tex         = smaa_search_tex.handle;
@@ -393,7 +395,7 @@ public:
             assert(false && "Invalid antialiasing mode");
         }
 
-        return context.textures.aa_output.handle;
+        return context.textures.aa_output;
     }
 
 private:
