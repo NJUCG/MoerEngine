@@ -39,6 +39,8 @@ public:
     CommandList&     cmd_list;
     Scene&           scene;
 
+    float frame_time;
+
     // 超分Pass前的分辨率
     uint2 GetResolutionBeforeSR() {
 #if WITH_CUDA && SUPER_RESOLUTION_ENABLED
@@ -135,6 +137,10 @@ public:
         LoadLUT();
         LoadNoiseTexture();
         LoadCubemap();
+    }
+
+    void Update(float delta_time) {
+        frame_time = delta_time;
     }
 
     // TODO: 考虑统一Skybox，因为写这段代码的时候，LoadSkybox()正在被dragonk修改，所以没有更新LoadSkybox()（如果不需要更新，则删掉本注释）

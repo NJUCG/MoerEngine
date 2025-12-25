@@ -41,8 +41,9 @@ public:
     DEFINE_SHADER_CONSTANT_STRUCT(TonemappingPipelineBindlessParam, param);
     DEFINE_SHADER_TEX(input_image); // input
     DEFINE_SHADER_BUFFER(exposure); // input
+    DEFINE_SHADER_BUFFER(histogram);
 
-    DEFINE_SHADER_ARGS(param, input_image, exposure);
+    DEFINE_SHADER_ARGS(param, input_image, exposure, histogram);
 };
 
 /**
@@ -92,16 +93,39 @@ public:
 
         TonemappingPipelineBindlessParam param;
         {
+            auto& ae  = param.ae;
+            auto& uae = ui_config.tonemapping_ae;
+
+            ae.enabled = uae.enabled ? 1 : 0;
+
+            // from [x, y] to [0, 1]: v * scale + bias
+            ae.log2lum_to01_scale = 1.0f / (uae.log2lum_max - uae.log2lum_min);
+            ae.log2lum_to01_bias  = -uae.log2lum_min * ae.log2lum_to01_scale;
+            // from [0, 1] to [x, y]: v * scale_inv + bias_inv
+            ae.log2lum_to01_scale_inv = uae.log2lum_max - uae.log2lum_min;
+            ae.log2lum_to01_bias_inv  = uae.log2lum_min;
+
+            ae.histogram_low_percentile  = uae.histogram_low_percentile;
+            ae.histogram_high_percentile = uae.histogram_high_percentile;
+
+            ae.min_adapted_luminance = uae.min_adapted_luminance;
+            ae.max_adapted_luminance = uae.max_adapted_luminance;
+
+            ae.eye_adaptation_speed_up   = uae.eye_adaptation_speed_up;
+            ae.eye_adaptation_speed_down = uae.eye_adaptation_speed_down;
+
+            ae.frame_time          = context.frame_time;
+            ae.diff_log2_threshold = uae.diff_log2_threshold;
+
+            ae.debug_visualize = uae.debug_visualize ? 1 : 0;
+        }
+        {
             param.resolution     = input_res;
             param.resolution_inv = float2(1.f / input_res.x, 1.f / input_res.y);
 
-            // 这两个参数用于将log2x in [min, max]映射到 log2x in [0, 1]
-            param.log2lum_saturate_scale = 1.0f / (ui_config.tonemapping_exposure_log2lum_max -
-                                                   ui_config.tonemapping_exposure_log2lum_min);
-            param.log2lum_saturate_bias =
-                -ui_config.tonemapping_exposure_log2lum_min * param.log2lum_saturate_scale;
+            // 这个参数是共用的
+            param.exposure_ev = std::exp2f(ui_config.tonemapping_exposure_ev);
 
-            param.exposure_ev      = ui_config.tonemapping_exposure_ev;
             param.reinhard_enabled = ui_config.tonemapping_reinhard_enabled ? 1 : 0;
 
             param.debug_param = ui_config.debug_param;
@@ -110,7 +134,8 @@ public:
         // Reset
         {
             context.cmd_list.ClearResource(histogram_buffer->GetView(), 0);
-            context.cmd_list.ClearResource(exposure_buffer->GetView(), 0);
+            // 需要last_exposure，所以不能清零
+            // context.cmd_list.ClearResource(exposure_buffer->GetView(), 0);
         }
 
         // Histogram Pass
@@ -134,7 +159,8 @@ public:
 
         // Tonemapping Pass
         {
-            context.cmd_list.Gfx(tonemapping_pipeline, param, input_image.tex, exposure_buffer)
+            context.cmd_list
+                .Gfx(tonemapping_pipeline, param, input_image.tex, exposure_buffer, histogram_buffer)
                 .Draw(
                     "Tonemapping Pass",
                     context.textures.tonemapping_output.GetRect2D(),

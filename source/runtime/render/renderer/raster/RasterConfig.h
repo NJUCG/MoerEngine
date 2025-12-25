@@ -122,11 +122,28 @@ struct RasterConfig {
     bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
 
     // MARK: Tonemapping
-    bool  tonemapping_auto_exposure        = false;
-    float tonemapping_exposure_ev          = 6.0;
-    float tonemapping_exposure_log2lum_min = -10.0f;
-    float tonemapping_exposure_log2lum_max = 12.0f;
-    bool  tonemapping_reinhard_enabled     = true;
+    float tonemapping_exposure_ev      = -2.0f;
+    bool  tonemapping_reinhard_enabled = true;
+
+    struct TonemappingAutoExposureConfig {
+        bool enabled = true;
+
+        float log2lum_min = -10.0f;
+        float log2lum_max = 16.0f;
+
+        float histogram_low_percentile  = 0.5f;
+        float histogram_high_percentile = 0.9f;
+
+        float min_adapted_luminance = 1e-3f;
+        float max_adapted_luminance = 5e3f;
+
+        float eye_adaptation_speed_up   = 2.0f;
+        float eye_adaptation_speed_down = 2.0f;
+
+        float diff_log2_threshold = 0.05f; // 小于这个值，则直接使用目标曝光值，避免过度缓慢变化
+
+        bool debug_visualize = false;
+    } tonemapping_ae;
 
     // MARK: AA
     EAaMode aa_mode = EAaMode::SMAA_1X;
@@ -206,7 +223,8 @@ struct RasterConfig {
 
     // MARK: Others
 
-    uint selected_frame_buffer_index = 0;
+    uint  selected_frame_buffer_index = 0;
+    float frame_time                  = 1.0f / 60.0f; // default 0.0167s
 };
 
 } // namespace Moer

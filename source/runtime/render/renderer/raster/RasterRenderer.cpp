@@ -183,6 +183,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         camera->Tick(editor_config->aspect_ratio, editor_config->camera_speed, editor_config->camera_fovy);
 
+        raster_context.Update(camera->GetDeltaTime());
+
         // others
         RasterTool::UpdateRaytracingScene(raster_context);
 
