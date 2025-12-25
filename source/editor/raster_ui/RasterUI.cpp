@@ -209,7 +209,7 @@ void RasterUI::ShowConfig() {
                     std::format("{}-th CSM Cover Ratio", i).c_str(),
                     &m_config.shadow_csm_cover_ratio_of_camera[i],
                     0.0f,
-                    1.0f
+                    (i < m_config.shadow_csm_num_of_cascades - 1) ? 0.2f : 1.0f
                 );
                 m_config.shadow_csm_cover_ratio_of_camera[i] =
                     Max(m_config.shadow_csm_cover_ratio_of_camera[i], mx);
