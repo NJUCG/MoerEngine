@@ -24,7 +24,7 @@ float3 ConvertToLDR(float3 hdr_color) {
       src_luminance * params.exposure_scale / adapted_luminance;
   float mapped_luminance =
       scaled_luminance *
-      (1.0f + scaled_luminance / params.white_point_inv_squared) /
+      (1.0f + scaled_luminance * params.white_point_inv_squared) /
       (1.0f + scaled_luminance);
 
   return hdr_color * mapped_luminance / src_luminance;
