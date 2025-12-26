@@ -216,6 +216,10 @@ struct RasterConfig {
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
         {0.005, 0.02, 0.1, 0.25, 0.32, 1.0};
 
+    // MARK: Skybox
+    bool  skybox_exposure_correct_enabled      = true;         // 启用的话，就会找到第一个平行光，乘上它的颜色
+    float skybox_exposure_correct_factor_log10 = log10f(0.5f); // 曝光校正因子
+
     // MARK: Upsample Process
     EUpsampleMode upsample_mode = EUpsampleMode::None;
     int           outSize_x     = 1080;

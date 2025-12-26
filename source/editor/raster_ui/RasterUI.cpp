@@ -339,6 +339,17 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Skybox
+    if (ImGui::TreeNode("Skybox")) {
+
+        ImGui::Checkbox("Enable Exposure Correction", &m_config.skybox_exposure_correct_enabled);
+        ImGui::SliderFloat(
+            "Exp.Cect. Factor (log10)", &m_config.skybox_exposure_correct_factor_log10, -3.0f, 1.0f
+        );
+
+        ImGui::TreePop();
+    }
+
     // MARK: Denoiser
     if (ImGui::TreeNode(
             "Denoiser",

@@ -128,6 +128,14 @@ public:
                 lighting_data->brdf_G_is_ibl = ui_config.shading_brdf_G_is_ibl ? 1 : 0;
             }
 
+            // Skybox
+            {
+                lighting_data->skybox_exposure_correct_enabled =
+                    ui_config.skybox_exposure_correct_enabled ? 1 : 0;
+                lighting_data->skybox_exposure_correct_factor =
+                    powf(10.0f, ui_config.skybox_exposure_correct_factor_log10);
+            }
+
             context.cmd_list.CopyFrom(
                 std::span<byte>((byte*)lighting_data, sizeof(LightingData)),
                 lighting_data_buffer.buf->GetView()
