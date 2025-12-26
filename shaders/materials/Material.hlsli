@@ -1,7 +1,7 @@
 #ifndef FRAMEWORK_MATERIAL_HLSLI
 #define FRAMEWORK_MATERIAL_HLSLI
 
-// #include "core/common/Bindless.hlsl"
+#include "core/common/Bindless.hlsl"
 
 template <typename T>
 T UnpackMaterialData(uint material_buffer_handle, uint material_index) {
@@ -12,6 +12,11 @@ T UnpackMaterialData(uint material_buffer_handle, uint material_index) {
 template <typename T>
 T UnpackMaterialData(ByteAddressBuffer _material_buffer, uint material_index) {
   return _material_buffer.Load<T>(material_index * 512);
+}
+
+void GetMaterialTypeAndIndex(uint material_type_and_index, out uint mat_type, out uint mat_id) {
+  mat_type    = material_type_and_index & 0x000000FF;
+  mat_id      = (material_type_and_index & 0xFFFFFF00) >> 8;
 }
 
 template <typename T>
@@ -40,6 +45,8 @@ float3 GetNormalFromNormalMap(int normal_map, float2 uv, float3 normal, float3 t
     return normal;
   }
 }
+
+
 
 #define Material_Standard_PBR 0
 

@@ -45,6 +45,7 @@ public:
 private:
     void RenderShadow(
         RasterContext&                                              context,
+        const RasterConfig&                                         config,
         const float4x4&                                             view_proj,
         const Rect2D&                                               rect,
         TextureView                                                 depth_attachment,

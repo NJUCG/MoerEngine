@@ -415,6 +415,7 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
 
         RenderShadow(
             context,
+            ui_config,
             context.csm_data.world_to_shadow_clip[cascade_index],
             Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
             context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
@@ -493,6 +494,7 @@ void ShadowDepthPass::RenderPointShadows(
 
         RenderShadow(
             context,
+            config,
             view_proj,
             Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
             face_view,
@@ -504,6 +506,7 @@ void ShadowDepthPass::RenderPointShadows(
 
 void ShadowDepthPass::RenderShadow(
     RasterContext&                                              context,
+    const RasterConfig&                                         config,
     const float4x4&                                             view_proj,
     const Rect2D&                                               rect,
     TextureView                                                 depth_view,
@@ -511,10 +514,13 @@ void ShadowDepthPass::RenderShadow(
     Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline>& pipeline_map
 ) {
     GeometryPassBindlessParam param;
-    param.instance_data          = context.gpu_instance_info_handle;
-    param.geometry_data          = context.gpu_geometry_info_handle;
-    param.geometry_instance_data = context.gpu_geometry_instance_handle;
-    param.world2clip             = Transpose(view_proj);
+    param.instance_data                 = context.gpu_instance_info_handle;
+    param.geometry_data                 = context.gpu_geometry_info_handle;
+    param.geometry_instance_data        = context.gpu_geometry_instance_handle;
+    param.world2clip                    = Transpose(view_proj);
+    param.material_buffer               = context.gpu_material_info_handle;
+    param.enable_alpha_test             = config.geometry_enable_alpha_test ? 1 : 0;
+    param.alpha_test_blend_pixel_cutoff = config.geometry_alpha_test_blend_pixel_cutoff;
 
     auto arg_idx = context.cmd_list.RegisterArgs(ShadowDepthPassPipeline::SetArgs(context.bdls, param));
 

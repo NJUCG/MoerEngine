@@ -45,6 +45,15 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Geometry & Culling
+    if (ImGui::TreeNode("Geometry & Culling")) {
+
+        ImGui::Checkbox("Enable Alpha Test", &m_config.geometry_enable_alpha_test);
+        ImGui::SliderFloat("Alpha Cutoff", &m_config.geometry_alpha_test_blend_pixel_cutoff, 0.0f, 1.0f);
+
+        ImGui::TreePop();
+    }
+
     // MARK: Shading
     if (ImGui::TreeNode(
             "Shading", "Shading: [%s]", s_shading_mode_name_map.at(m_config.shading_mode).c_str()

@@ -154,11 +154,16 @@ struct RTConfigParam {
 };
 
 struct MaterialData {
+  // parameter
   float4 base_color_factor;
   float3 emissive_factor;
   float metallic_factor;
   float roughness_factor;
   float ao;
+  uint alpha_mode; // Ref: source\runtime\render\shaderheaders\shared\raster\ShaderParameters.h: EAlphaMode
+  float alpha_cutoff;
+
+  // texture handle
   int albedo_map;
   int normal_map;
   int metallic_roughness_map;

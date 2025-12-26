@@ -22,8 +22,10 @@ float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
     uint gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
-    uint mat_type    = gbuffer_mat & 0x000000FF;
-    uint mat_id      = (gbuffer_mat & 0xFFFFFF00) >> 8;
+
+    uint mat_type, mat_id;
+    GetMaterialTypeAndIndex(gbuffer_mat, mat_type, mat_id);
+    
     if (mat_type != param.material_type) {
         discard;
     }

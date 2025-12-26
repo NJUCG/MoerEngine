@@ -27,13 +27,11 @@ struct GeometryPassBindlessParam {
     uint     instance_data;
     uint     geometry_data;
     uint     geometry_instance_data;
-};
 
-struct ShadowDepthPassBindlessParam {
-    float4x4 world2clip;
-    uint     instance_data;
-    uint     geometry_data;
-    uint     geometry_instance_data;
+    // about material & alpha test
+    uint  material_buffer;
+    uint  enable_alpha_test;
+    float alpha_test_blend_pixel_cutoff;
 };
 
 // MARK: Main Content End

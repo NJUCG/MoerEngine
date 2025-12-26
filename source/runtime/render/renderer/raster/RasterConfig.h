@@ -109,6 +109,11 @@ static const Array<std::string> s_ai_trt_visualize_buffer_array = {
 
 struct RasterConfig {
 
+    // MARK: Geometry
+
+    bool  geometry_enable_alpha_test             = true;
+    float geometry_alpha_test_blend_pixel_cutoff = 0.5f; // 当AlphaMode为BLEND时，低于该值的像素会被丢弃
+
     // MARK: Shading
     EShadingMode shading_mode = EShadingMode::DEFAULT_PBR;
 
@@ -208,7 +213,7 @@ struct RasterConfig {
     float shadow_pcss_light_size_world = 0.0015f;
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
-        {0.005, 0.02, 0.1, 0.25, 0.32, 1.0};
+        {0.001, 0.005, 0.025, 0.125, 0.32, 1.0};
 
     // MARK: Upsample Process
     EUpsampleMode upsample_mode = EUpsampleMode::None;
