@@ -205,7 +205,8 @@ struct AutoExposureParam {
     // Enabled
     uint enabled;
     uint debug_visualize;
-    uint padding[2];
+    uint aces_tonemapping_enabled;
+    uint padding;
 };
 
 struct TonemappingPipelineBindlessParam {

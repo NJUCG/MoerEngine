@@ -140,6 +140,8 @@ void RasterUI::ShowConfig() {
 
             ImGui::Checkbox("Visualize (Try this!)", &m_config.tonemapping_ae.debug_visualize);
 
+            ImGui::Checkbox("Enable ACES ToneMapping", &m_config.tonemapping_ae.aces_tonemapping_enabled);
+
             ImGui::SliderFloat("Luminance(log2) Min", &m_config.tonemapping_ae.log2lum_min, -20.0f, 5.0f);
             ImGui::SliderFloat("Luminance(log2) Max", &m_config.tonemapping_ae.log2lum_max, -5.0f, 20.0f);
             m_config.tonemapping_ae.log2lum_min =

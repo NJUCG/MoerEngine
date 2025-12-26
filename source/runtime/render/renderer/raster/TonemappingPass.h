@@ -117,7 +117,8 @@ public:
             ae.frame_time          = context.frame_time;
             ae.diff_log2_threshold = uae.diff_log2_threshold;
 
-            ae.debug_visualize = uae.debug_visualize ? 1 : 0;
+            ae.debug_visualize          = uae.debug_visualize ? 1 : 0;
+            ae.aces_tonemapping_enabled = uae.aces_tonemapping_enabled ? 1 : 0;
         }
         {
             param.resolution     = input_res;

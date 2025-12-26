@@ -127,7 +127,7 @@ struct RasterConfig {
     bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
 
     // MARK: Tonemapping
-    float tonemapping_exposure_ev      = -2.0f;
+    float tonemapping_exposure_ev      = -2.7f;
     bool  tonemapping_reinhard_enabled = true;
 
     struct TonemappingAutoExposureConfig {
@@ -147,7 +147,8 @@ struct RasterConfig {
 
         float diff_log2_threshold = 0.05f; // 小于这个值，则直接使用目标曝光值，避免过度缓慢变化
 
-        bool debug_visualize = false;
+        bool aces_tonemapping_enabled = true;
+        bool debug_visualize          = false;
     } tonemapping_ae;
 
     // MARK: AA
@@ -210,10 +211,10 @@ struct RasterConfig {
 
     // MARK: Shadow - PCSS
     bool  shadow_pcss_enabled          = true;
-    float shadow_pcss_light_size_world = 0.0015f;
+    float shadow_pcss_light_size_world = 0.01f;
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
-        {0.001, 0.005, 0.025, 0.125, 0.32, 1.0};
+        {0.005, 0.02, 0.1, 0.25, 0.32, 1.0};
 
     // MARK: Upsample Process
     EUpsampleMode upsample_mode = EUpsampleMode::None;
