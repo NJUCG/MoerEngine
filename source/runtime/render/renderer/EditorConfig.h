@@ -19,9 +19,11 @@ struct EditorConfig {
     ERenderMethod selected_render_method = ERenderMethod::Raster;
     std::string   scene_path             = "";
 
-    float            camera_speed = 25.f;
-    float            camera_fovy  = 60.f;
-    float            aspect_ratio = 1.f;
+    float            camera_speed_log10     = log10f(25.f);
+    float            camera_fovy            = 60.f;
+    float            aspect_ratio           = 1.f;
+    float            camera_far_clip_log10  = 3.f;
+    float            camera_near_clip_log10 = -2.f;
     SharedPtr<uint2> resolution; // hold ownership
 
     RasterConfig     raster_config;

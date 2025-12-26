@@ -489,9 +489,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             // prepare frame
             {
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
-                camera->Tick(
-                    editor_config->aspect_ratio, editor_config->camera_speed, editor_config->camera_fovy
-                );
+                camera->Tick(editor_config);
             }
 
             // update light direction from ui data

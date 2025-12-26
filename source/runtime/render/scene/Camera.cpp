@@ -4,6 +4,7 @@
 #include "math/Base.h"
 #include "math/Constant.h"
 #include "math/Function.h"
+#include "renderer/EditorConfig.h"
 
 namespace Moer {
 
@@ -439,19 +440,29 @@ void Camera::UpdatePlanesAndFrustum() {
      * - Drag `left mouse button` to rotate the camera and move forward/backward
      * - Drag `both mouse buttons` or `middle button` to move the camera
      */
-void Camera::Tick(float aspect_ratio, float config_camera_speed, float config_camera_fov) {
+void Camera::Tick(const SharedPtr<EditorConfig> config) {
+    // float aspect_ratio, float config_camera_speed, float config_camera_fov
 
-    if (aspect_ratio <= EPS) {
+    if (config->aspect_ratio <= EPS) {
         this->SetAspectRatio(WindowInput::Get().aspect_ratio);
     } else {
-        this->SetAspectRatio(aspect_ratio);
+        this->SetAspectRatio(config->aspect_ratio);
+    }
+
+    const float near_clip_log10 = log10f(this->GetNearClip());
+    const float far_clip_log10  = log10f(this->GetFarClip());
+    if (Compare(config->camera_near_clip_log10, near_clip_log10) != 0) {
+        this->SetNearClip(powf(10.f, config->camera_near_clip_log10));
+    }
+    if (Compare(config->camera_far_clip_log10, far_clip_log10) != 0) {
+        this->SetFarClip(powf(10.f, config->camera_far_clip_log10));
     }
 
     if (!WindowInput::Get().is_cursor_hiding) {
 
         // fov & aspect_ratio
-        if (config_camera_fov >= k_fov_min && config_camera_fov <= k_fov_max) {
-            this->SetFov(config_camera_fov);
+        if (config->camera_fovy >= k_fov_min && config->camera_fovy <= k_fov_max) {
+            this->SetFov(config->camera_fovy);
         } else if (!IsZero(WindowInput::Get().scroll_offset)) {
             float coef;
             if (Compare(m_fov_y, k_fov_default) <= 0) {
@@ -468,8 +479,9 @@ void Camera::Tick(float aspect_ratio, float config_camera_speed, float config_ca
 
         // camera speed
 
-        if (config_camera_speed >= k_camera_speed_min && config_camera_speed <= k_camera_speed_max) {
-            camera_speed = config_camera_speed;
+        float camera_speed_cfg = powf(10.f, config->camera_speed_log10);
+        if (camera_speed_cfg >= k_camera_speed_min && camera_speed_cfg <= k_camera_speed_max) {
+            camera_speed = camera_speed_cfg;
         } else {
             if (WindowInput::Get().speed_up) {
                 camera_speed += k_camera_speed_up_delta * WindowInput::Get().delta_time;
