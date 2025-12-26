@@ -5,7 +5,7 @@
 #include <shared/utils/MoerMath.hlsli>
 
 BINDLESS_BINDINGS(3, 2, 4, 5)
-#include <materials/Material.hlsl>
+#include <materials/Material.hlsli>
 #include <pipelines/raytracing/lighting/common/PolymorphicLight.hlsli>
 #include <shared/utils/Packing.h>
 

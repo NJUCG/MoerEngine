@@ -6,7 +6,7 @@
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
-#include "materials/Material.hlsl"
+#include "materials/Material.hlsli"
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::SsrPipelineBindlessParam> param;

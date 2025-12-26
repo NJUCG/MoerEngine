@@ -1,5 +1,5 @@
-#ifndef FRAMEWORK_MATERIAL_HLSL
-#define FRAMEWORK_MATERIAL_HLSL
+#ifndef FRAMEWORK_MATERIAL_HLSLI
+#define FRAMEWORK_MATERIAL_HLSLI
 
 // #include "core/common/Bindless.hlsl"
 

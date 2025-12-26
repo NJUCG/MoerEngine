@@ -5,7 +5,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 
 #include <deprecated/pipelines/raytracing/inline/RaytracingShared.hlsli>
 
-#include <materials/Material.hlsl>
+#include <materials/Material.hlsli>
 #include <shared/Geometry.h>
 #include <shared/ShaderParameters.h>
 #include <shared/utils/Packing.h>

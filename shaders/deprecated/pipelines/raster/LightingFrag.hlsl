@@ -1,4 +1,4 @@
-#include "materials/Material.hlsl"
+#include "materials/Material.hlsli"
 
 struct LightingData {
   float4x4 inv_view_proj;
