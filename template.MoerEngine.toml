@@ -33,4 +33,4 @@ enable_shadow = true
 # 注：Toml中使用单引号包裹路径，可以避免反斜杠被识别为转义符
 # 注：scene_path支持绝对路径
 scene_path = './asset/scenes/sponza/Sponza.gltf'
-enable_cache = true
+enable_cache = true # 如果在开发SceneParser等功能，需要每次重新读取场景，那么可以关闭这个选项
