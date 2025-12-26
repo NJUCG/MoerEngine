@@ -39,6 +39,8 @@ public:
     CommandList&     cmd_list;
     Scene&           scene;
 
+    float frame_time;
+
     // 超分Pass前的分辨率
     uint2 GetResolutionBeforeSR() {
 #if WITH_CUDA && SUPER_RESOLUTION_ENABLED
@@ -137,6 +139,10 @@ public:
         LoadCubemap();
     }
 
+    void Update(float delta_time) {
+        frame_time = delta_time;
+    }
+
     // TODO: 考虑统一Skybox，因为写这段代码的时候，LoadSkybox()正在被dragonk修改，所以没有更新LoadSkybox()（如果不需要更新，则删掉本注释）
     void LoadExternalTexture(TextureWithHandle& out_tex, const std::string& path, const char* name) const {
         FILE* file = nullptr;
@@ -194,26 +200,19 @@ public:
 
     void LoadCubemap() {
         const std::array<std::string, 6> skybox_faces = {
-            "skybox_posx.jpg",
-            "skybox_negx.jpg",
-            "skybox_posy.jpg",
-            "skybox_negy.jpg",
-            "skybox_posz.jpg",
-            "skybox_negz.jpg"
+            "posx.jpg", "negx.jpg", "posy.jpg", "negy.jpg", "posz.jpg", "negz.jpg"
         };
 
-        cubemap_tex.tex = device.CreateCubeMap(
-            "cubemap_tex",
-            Extent2D(2048, 2048), //TODO:动态参数？
-            PF_R8G8B8A8_UNORM,
-            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
-        );
-        TextureView skybox_view(cubemap_tex.tex);
+        // TODO: GUI和Config切换天空盒，而不是现在硬编码
+        // const std::string skybox_path = "Shibuya";
+        const std::string skybox_path = "WaterScene";
+
+        TextureView skybox_view;
 
         for (size_t i = 0; i < 6; i++) {
-            std::string filepath =
-                (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" / skybox_faces[i])
-                    .string();
+            std::string filepath = (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" /
+                                    "Skybox" / skybox_path / skybox_faces[i])
+                                       .string();
 
             FILE* file = nullptr;
             fopen_s(&file, filepath.c_str(), "rb");
@@ -225,6 +224,17 @@ public:
 
             int    width, height, channels;
             ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
+
+            if (i == 0) { // first time
+                // 延迟创建，这样可以读取width & height
+                cubemap_tex.tex = device.CreateCubeMap(
+                    "cubemap_tex",
+                    Extent2D(width, height), //TODO:动态参数？
+                    PF_R8G8B8A8_UNORM,
+                    ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+                );
+                skybox_view = TextureView(cubemap_tex.tex);
+            }
 
             cmd_list.CopyFrom(
                 std::span<Moer::byte>((Moer::byte*)data, width * height * channels), skybox_view.Slice(i)

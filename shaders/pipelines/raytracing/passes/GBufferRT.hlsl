@@ -7,7 +7,7 @@
 
 BINDLESS_BINDINGS(3, 2, 4, 5);
 
-#include <materials/Material.hlsl>
+#include <materials/Material.hlsli>
 
 #include <shared/Geometry.h>
 #include <shared/ShaderParameters.h>

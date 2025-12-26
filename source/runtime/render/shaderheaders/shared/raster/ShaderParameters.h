@@ -57,4 +57,6 @@ EnumParam(EAoMode, NONE, SSAO, SSAO_AO_ONLY, RTAO, RTAO_AO_ONLY, SSDO, SSDO_AO_O
 EnumParam(EDenoiserMode, NONE, BILATERAL_FILTER);
 EnumParam(ERtaoSampleMode, UNIFORM, COSINE_WEIGHTED);
 EnumParam(EShadowMapMode, NONE, POINT_CUBE, CSM, CSM_AUTO);
+// Used for glTF material alpha mode (gltf..Parser.cpp)
+EnumParam(EAlphaMode, AM_OPAQUE, AM_MASK, AM_BLEND); // 注：这里加AM_的原因是，某sbwin库有OPAQUE宏定义，冲突了
 } // namespace Moer

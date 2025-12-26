@@ -83,6 +83,10 @@ struct LightingData {
     uint brdf_NDF_mode;             // NDF Mode
     uint brdf_G_mode;               // 用 Vis_SmithJointGGX 来代替 G_Smith
     uint brdf_G_is_ibl;             // 是否使用IBL的Fresnel近似
+
+    // Skybox
+    uint  skybox_exposure_correct_enabled; // 是否启用Skybox曝光校正，找到第一个平行光，乘上它的颜色
+    float skybox_exposure_correct_factor;  // 曝光校正因子
 };
 
 // MARK: Main Content End

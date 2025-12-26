@@ -42,6 +42,7 @@
 #include <stb/stb_image.h>
 
 #include "shaderheaders/shared/Geometry.h"
+#include "shaderheaders/shared/raster/ShaderParameters.h"
 #include "shaderheaders/shared/utils/Packing.h"
 
 namespace Moer::Resource::Gltf {
@@ -290,7 +291,7 @@ void Parser::Impl::LoadCameras(const aiScene* scene) {
      * Load lights from gltf scene
      * Refer to: https://assimp-docs.readthedocs.io/en/latest/API/API-Documentation.html#_CPPv47aiLight
      */
-void Parser::Impl::LoadLights(const aiScene* _scene) {//HERE:add default light
+void Parser::Impl::LoadLights(const aiScene* _scene) { //HERE:add default light
     const uint32_t light_num = _scene->mNumLights;
     if (light_num == 0) {
         LOG_INFO("No lights found, loader will use default lights");
@@ -360,12 +361,15 @@ MaterialRef GetDefaultMaterial() {
     materialBuilder.SetParameter("metalic_factor", UniformType::FLOAT);
     materialBuilder.SetParameter("roughness_factor", UniformType::FLOAT);
     materialBuilder.SetParameter("ao", UniformType::FLOAT);
+    materialBuilder.SetParameter("alpha_mode", UniformType::UINT);
+    materialBuilder.SetParameter("alpha_cutoff", UniformType::FLOAT);
 
     materialBuilder.SetTexture("albedo_map", ETextureDimension::TEX_2D);
     materialBuilder.SetTexture("normal_map", ETextureDimension::TEX_2D);
     materialBuilder.SetTexture("metallic_roughness_map", ETextureDimension::TEX_2D);
     materialBuilder.SetTexture("ao_map", ETextureDimension::TEX_2D);
     materialBuilder.SetTexture("emissive_map", ETextureDimension::TEX_2D);
+
     materialBuilder.SetType(EMaterialType::E_PBR_STANDARD);
     materialBuilder.SetName("standered");
 
@@ -511,6 +515,42 @@ void Parser::Impl::LoadMaterial(
             LoadTexture(_ai_scene, ao_path, mi, "ao_map");
         } else if (_ai_material->GetTexture(aiTextureType_LIGHTMAP, 0, &ao_path) == AI_SUCCESS) {
             LoadTexture(_ai_scene, ao_path, mi, "ao_map");
+        }
+    }
+
+    // MARK: AlphaMode (gltf)
+    {
+        mi->SetParameter("alpha_mode", static_cast<uint>(EAlphaMode::AM_OPAQUE));
+        mi->SetParameter("alpha_cutoff", 0.0f);
+
+        aiString alpha_mode;
+        if (_ai_material->Get(AI_MATKEY_GLTF_ALPHAMODE, alpha_mode) == AI_SUCCESS) {
+            if (alpha_mode == aiString("BLEND")) {
+                mi->SetParameter("alpha_mode", static_cast<uint>(EAlphaMode::AM_BLEND));
+                LOG_DEBUG("\tLoad Alpha Mode: BLEND");
+
+            } else if (alpha_mode == aiString("MASK")) {
+                mi->SetParameter("alpha_mode", static_cast<uint>(EAlphaMode::AM_MASK));
+
+                // MASK才有alpha_cutoff参数
+                float alpha_cutoff = 0.0f; // default value
+                if (_ai_material->Get(AI_MATKEY_GLTF_ALPHACUTOFF, alpha_cutoff) == AI_SUCCESS) {
+                    mi->SetParameter("alpha_cutoff", alpha_cutoff);
+                    LOG_DEBUG("\tLoad Alpha Mode: MASK. And Alpha Cutoff: {}", alpha_cutoff);
+
+                } else {
+                    mi->SetParameter("alpha_cutoff", alpha_cutoff);
+                    LOG_DEBUG("\tLoad Alpha Mode: MASK. And Alpha Cutoff (Default Value): {}", alpha_cutoff);
+                }
+
+            } else if (alpha_mode == aiString("OPAQUE")) {
+                LOG_DEBUG("\tLoad Alpha Mode: OPAQUE");
+
+            } else {
+                LOG_DEBUG("\tLoad Alpha Mode: OPAQUE (Default)");
+            }
+        } else {
+            LOG_DEBUG("\tLoad Alpha Mode: OPAQUE (Default)");
         }
     }
 }

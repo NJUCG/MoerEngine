@@ -43,10 +43,13 @@ public:
     void Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
 
         GeometryPassBindlessParam param;
-        param.world2clip             = Transpose(camera->GetViewProjectionMatrix());
-        param.instance_data          = context.gpu_instance_info_handle;
-        param.geometry_data          = context.gpu_geometry_info_handle;
-        param.geometry_instance_data = context.gpu_geometry_instance_handle;
+        param.world2clip                    = Transpose(camera->GetViewProjectionMatrix());
+        param.instance_data                 = context.gpu_instance_info_handle;
+        param.geometry_data                 = context.gpu_geometry_info_handle;
+        param.geometry_instance_data        = context.gpu_geometry_instance_handle;
+        param.material_buffer               = context.gpu_material_info_handle;
+        param.enable_alpha_test             = ui_config.geometry_enable_alpha_test ? 1 : 0;
+        param.alpha_test_blend_pixel_cutoff = ui_config.geometry_alpha_test_blend_pixel_cutoff;
 
         // MeshDrawDatas
         auto mesh_draw_datas_map = RasterTool::GetDrawMeshDatasMap(context, false);
@@ -75,7 +78,9 @@ public:
                 GeometryPassPipeline::MutationSet mutation_set{};
                 mutation_set.SetMutation<GeometryPassPipeline::SHADOW_DEPTH_PASS>(false);
                 Shader& frag = ShaderManager::Get().CompileShader(
-                    ST_FRAGMENT, "pipelines/raster/deferred/geometry/GeometryPassCommonPixel.hlsl", mutation_set
+                    ST_FRAGMENT,
+                    "pipelines/raster/deferred/geometry/GeometryPassCommonPixel.hlsl",
+                    mutation_set
                 );
 
                 pipeline_map.emplace(

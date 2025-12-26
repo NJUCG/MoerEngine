@@ -12,11 +12,11 @@
 #endif
 
 #ifdef __cplusplus
-//#define CONST constexpr
+#define CONST constexpr
 #include "misc/Traits.h"
 namespace Moer::Render {
 #else
-//#define CONST const
+#define CONST const
 namespace Moer {
 #endif
 
@@ -177,13 +177,57 @@ struct UpsamplePipelineBindlessParam {
     uint upsample_mode;
 };
 
+struct AutoExposureParam {
+    // *记得对齐*
+
+    // 用于将亮度从[min, max]映射到[0, 1]
+    float log2lum_to01_scale;
+    float log2lum_to01_bias;
+    // 用于将亮度从[0, 1]映射回[min, max]
+    float log2lum_to01_scale_inv;
+    float log2lum_to01_bias_inv;
+
+    // 只取histogram中[low_percentile, high_percentile]范围内的亮度用于计算平均亮度
+    float histogram_low_percentile;  // e.g. 10%
+    float histogram_high_percentile; // e.g. 90%
+    // 最终曝光值min/max限制
+    float min_adapted_luminance;
+    float max_adapted_luminance;
+
+    // 眼动适应速度
+    float eye_adaptation_speed_up;
+    float eye_adaptation_speed_down;
+    // 当前帧时间（秒）
+    float frame_time;
+    // 小于这个值，则直接使用目标曝光值，避免过度缓慢变化
+    float diff_log2_threshold;
+
+    // Enabled
+    uint enabled;
+    uint debug_visualize;
+    uint aces_tonemapping_enabled;
+    uint padding;
+};
+
 struct TonemappingPipelineBindlessParam {
-    uint  input_image;
+    AutoExposureParam ae;
+
+    uint2  resolution;
+    float2 resolution_inv;
+
+    // tonemapping 参数
     float exposure_ev;
     uint  reinhard_enabled;
 
-    uint padding;
+    float debug_param;
 };
+
+static CONST uint TONEMAPPING_HISTOGRAM_GROUP_X = 16;
+static CONST uint TONEMAPPING_HISTOGRAM_GROUP_Y = 16;
+static CONST uint TONEMAPPING_HISTOGRAM_BIN_COUNT =
+    TONEMAPPING_HISTOGRAM_GROUP_X * TONEMAPPING_HISTOGRAM_GROUP_Y;
+static CONST uint TONEMAPPING_HISTOGRAM_POINT_FRAC_BITS       = 6;
+static CONST uint TONEMAPPING_HISTOGRAM_POINT_FRAC_MULTIPLIER = 1UL << TONEMAPPING_HISTOGRAM_POINT_FRAC_BITS;
 
 // MARK: Main Content End
 

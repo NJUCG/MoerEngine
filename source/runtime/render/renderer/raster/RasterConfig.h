@@ -109,6 +109,11 @@ static const Array<std::string> s_ai_trt_visualize_buffer_array = {
 
 struct RasterConfig {
 
+    // MARK: Geometry
+
+    bool  geometry_enable_alpha_test             = true;
+    float geometry_alpha_test_blend_pixel_cutoff = 0.5f; // 当AlphaMode为BLEND时，低于该值的像素会被丢弃
+
     // MARK: Shading
     EShadingMode shading_mode = EShadingMode::DEFAULT_PBR;
 
@@ -122,9 +127,29 @@ struct RasterConfig {
     bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
 
     // MARK: Tonemapping
-    bool  tonemapping_auto_exposure    = false;
-    float tonemapping_exposure_ev      = 6.0;
+    float tonemapping_exposure_ev      = -2.7f;
     bool  tonemapping_reinhard_enabled = true;
+
+    struct TonemappingAutoExposureConfig {
+        bool enabled = true;
+
+        float log2lum_min = -10.0f;
+        float log2lum_max = 16.0f;
+
+        float histogram_low_percentile  = 0.5f;
+        float histogram_high_percentile = 0.9f;
+
+        float min_adapted_luminance = 1e-3f;
+        float max_adapted_luminance = 5e3f;
+
+        float eye_adaptation_speed_up   = 2.0f;
+        float eye_adaptation_speed_down = 2.0f;
+
+        float diff_log2_threshold = 0.05f; // 小于这个值，则直接使用目标曝光值，避免过度缓慢变化
+
+        bool aces_tonemapping_enabled = true;
+        bool debug_visualize          = false;
+    } tonemapping_ae;
 
     // MARK: AA
     EAaMode aa_mode = EAaMode::SMAA_1X;
@@ -185,11 +210,15 @@ struct RasterConfig {
     bool           shadow_csm_visualize_cascade = false;
 
     // MARK: Shadow - PCSS
-    bool  shadow_pcss_enabled          = false;
-    float shadow_pcss_light_size_world = 0.0015f;
+    bool  shadow_pcss_enabled          = true;
+    float shadow_pcss_light_size_world = 0.01f;
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
-        {0.01, 0.04, 0.1, 0.25, 0.32, 1.0};
+        {0.005, 0.02, 0.1, 0.25, 0.32, 1.0};
+
+    // MARK: Skybox
+    bool  skybox_exposure_correct_enabled      = true;         // 启用的话，就会找到第一个平行光，乘上它的颜色
+    float skybox_exposure_correct_factor_log10 = log10f(0.5f); // 曝光校正因子
 
     // MARK: Upsample Process
     EUpsampleMode upsample_mode = EUpsampleMode::None;
@@ -204,7 +233,8 @@ struct RasterConfig {
 
     // MARK: Others
 
-    uint selected_frame_buffer_index = 0;
+    uint  selected_frame_buffer_index = 0;
+    float frame_time                  = 1.0f / 60.0f; // default 0.0167s
 };
 
 } // namespace Moer

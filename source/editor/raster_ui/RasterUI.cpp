@@ -28,9 +28,6 @@ void RasterUI::ShowConfig() {
         ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
     };
 
-    // 自动曝光还没写，为了避免不知可以调亮度，所以这里加一个slider
-    ImGui::SliderFloat("Exposure EV", &m_config.tonemapping_exposure_ev, -15.0f, 10.0f);
-
     if (ImGui::TreeNode(
             "Output Frame Buffer",
             "Output: [%s]",
@@ -45,6 +42,15 @@ void RasterUI::ShowConfig() {
             }
             draw_border();
         }
+        ImGui::TreePop();
+    }
+
+    // MARK: Geometry & Culling
+    if (ImGui::TreeNode("Geometry & Culling")) {
+
+        ImGui::Checkbox("Enable Alpha Test", &m_config.geometry_enable_alpha_test);
+        ImGui::SliderFloat("Alpha Cutoff", &m_config.geometry_alpha_test_blend_pixel_cutoff, 0.0f, 1.0f);
+
         ImGui::TreePop();
     }
 
@@ -124,14 +130,50 @@ void RasterUI::ShowConfig() {
     // Tonemapping究极重要，所以放到最开头，以提示用户调节选项
     if (ImGui::TreeNode("Tonemapping")) {
 
+        ImGui::Checkbox("Enable Auto Exposure", &m_config.tonemapping_ae.enabled);
+
+        // 自动曝光或手动曝光都可以调整Exposure EV
+        ImGui::SliderFloat("Exposure EV", &m_config.tonemapping_exposure_ev, -15.0f, 10.0f);
+
         // 自动曝光
-        ImGui::Checkbox("Enable Auto Exposure", &m_config.tonemapping_auto_exposure);
-        // 手动曝光
-        if (m_config.tonemapping_auto_exposure == false) {
-            ImGui::SliderFloat("Exposure EV", &m_config.tonemapping_exposure_ev, -15.0f, 10.0f);
+        if (m_config.tonemapping_ae.enabled) {
+
+            ImGui::Checkbox("Visualize (Try this!)", &m_config.tonemapping_ae.debug_visualize);
+
+            ImGui::Checkbox("Enable ACES ToneMapping", &m_config.tonemapping_ae.aces_tonemapping_enabled);
+
+            ImGui::SliderFloat("Luminance(log2) Min", &m_config.tonemapping_ae.log2lum_min, -20.0f, 5.0f);
+            ImGui::SliderFloat("Luminance(log2) Max", &m_config.tonemapping_ae.log2lum_max, -5.0f, 20.0f);
+            m_config.tonemapping_ae.log2lum_min =
+                Min(m_config.tonemapping_ae.log2lum_min, m_config.tonemapping_ae.log2lum_max);
+            m_config.tonemapping_ae.log2lum_max =
+                Max(m_config.tonemapping_ae.log2lum_min, m_config.tonemapping_ae.log2lum_max);
+
+            ImGui::SliderFloat(
+                "Histogram Low Percentile", &m_config.tonemapping_ae.histogram_low_percentile, 0.0f, 1.0f
+            );
+            ImGui::SliderFloat(
+                "Histogram High Percentile", &m_config.tonemapping_ae.histogram_high_percentile, 0.0f, 1.0f
+            );
+            m_config.tonemapping_ae.histogram_low_percentile =
+                Min(m_config.tonemapping_ae.histogram_low_percentile,
+                    m_config.tonemapping_ae.histogram_high_percentile);
+            m_config.tonemapping_ae.histogram_high_percentile =
+                Max(m_config.tonemapping_ae.histogram_low_percentile,
+                    m_config.tonemapping_ae.histogram_high_percentile);
+
+            ImGui::SliderFloat(
+                "Eye Adaptation Speed (Up)", &m_config.tonemapping_ae.eye_adaptation_speed_up, 0.1f, 10.0f
+            );
+            ImGui::SliderFloat(
+                "Eye Adaptation Speed (Down)", &m_config.tonemapping_ae.eye_adaptation_speed_down, 0.1f, 10.0f
+            );
+
+        } else {
+
+            // 手动曝光
+            ImGui::Checkbox("Enable Reinhard Tone Mapping", &m_config.tonemapping_reinhard_enabled);
         }
-        // 色调映射
-        ImGui::Checkbox("Enable Reinhard Tone Mapping", &m_config.tonemapping_reinhard_enabled);
 
         ImGui::TreePop();
     }
@@ -178,7 +220,7 @@ void RasterUI::ShowConfig() {
                     std::format("{}-th CSM Cover Ratio", i).c_str(),
                     &m_config.shadow_csm_cover_ratio_of_camera[i],
                     0.0f,
-                    1.0f
+                    (i < m_config.shadow_csm_num_of_cascades - 1) ? 0.2f : 1.0f
                 );
                 m_config.shadow_csm_cover_ratio_of_camera[i] =
                     Max(m_config.shadow_csm_cover_ratio_of_camera[i], mx);
@@ -293,6 +335,17 @@ void RasterUI::ShowConfig() {
             ImGui::SliderFloat("Roughness Threshold", &m_config.ssr_roughness_threshold, 0.0f, 1.0f);
             ImGui::SliderFloat("Metallic Threshold", &m_config.ssr_metallic_threshold, 0.0f, 1.0f);
         }
+
+        ImGui::TreePop();
+    }
+
+    // MARK: Skybox
+    if (ImGui::TreeNode("Skybox")) {
+
+        ImGui::Checkbox("Enable Exposure Correction", &m_config.skybox_exposure_correct_enabled);
+        ImGui::SliderFloat(
+            "Exp.Cect. Factor (log10)", &m_config.skybox_exposure_correct_factor_log10, -3.0f, 1.0f
+        );
 
         ImGui::TreePop();
     }

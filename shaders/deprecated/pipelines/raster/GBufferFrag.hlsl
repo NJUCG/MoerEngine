@@ -1,5 +1,5 @@
 #include "core/common/Common.hlsl"
-#include "materials/Material.hlsl"
+#include "materials/Material.hlsli"
 
 StructuredBuffer<InstanceData> instance_data : register(t0, space0);
 

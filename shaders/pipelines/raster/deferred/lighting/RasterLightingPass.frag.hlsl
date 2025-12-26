@@ -3,7 +3,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "core/common/Common.hlsl"
 #include "materials/Brdf.hlsli"
-#include "materials/Material.hlsl"
+#include "materials/Material.hlsli"
 #include "pipelines/raster/deferred/lighting/IBL.hlsli"
 #include "pipelines/raster/deferred/lighting/Lighting.hlsli"
 #include "pipelines/raster/deferred/lighting/shadows/Shadows.hlsli"
@@ -22,8 +22,10 @@ float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
     uint gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
-    uint mat_type    = gbuffer_mat & 0x000000FF;
-    uint mat_id      = (gbuffer_mat & 0xFFFFFF00) >> 8;
+
+    uint mat_type, mat_id;
+    GetMaterialTypeAndIndex(gbuffer_mat, mat_type, mat_id);
+
     if (mat_type != param.material_type) {
         discard;
     }
@@ -42,12 +44,27 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // Shoude be reconstructed from depth
     // Old code: float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
 
+    // - Lights
+    ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
+
     // MARK: Skybox
     if (depth == 0.0) {
-        float3 pos_inf = WorldPosFromDepth(0.99, in_uv, lighting_data.inv_view_proj);
-        // printf("pos_inf: %f, %f, %f\n", pos_inf.x, pos_inf.y, pos_inf.z);
-        return calculate_ibl(lighting_data, pos_inf, param.cubemap_handle);
-        //return float4(0.0, 0.0, 0.0, 1.0); // Black Skybox
+        float3 pos_inf   = WorldPosFromDepth(0.99, in_uv, lighting_data.inv_view_proj);
+        float3 ibl_color = calculate_ibl(lighting_data, pos_inf, param.cubemap_handle);
+
+        if (lighting_data.skybox_exposure_correct_enabled == 0) {
+            return float4(ibl_color, 1.0);
+        }
+
+        // 找到第一个平行光，并且乘上其强度
+        for (uint i = 0; i < lighting_data.light_count; i++) {
+            LightData light = light_buffer.Load<LightData>(i);
+            if (light.type == Directional_LIGHT_TYPE) {
+                ibl_color *= light.color * light.intensity * lighting_data.skybox_exposure_correct_factor;
+                break;
+            }
+        }
+        return float4(ibl_color, 1.0);
     }
 
     // MARK: PBR
@@ -84,9 +101,6 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
         lighting_data.brdf_G_mode,
         lighting_data.brdf_G_is_ibl
     );
-
-    // - Lights
-    ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
 
     // - Shadow
     float shadow = calculate_shadow(lighting_data, position, in_uv, normal);

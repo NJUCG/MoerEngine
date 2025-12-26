@@ -70,6 +70,8 @@ struct VsInput {
 
 struct VsOutput {
   float4 position : SV_POSITION;
+  float2 texcoord0 : TEXCOORD0;
+  int instance_id : INSTANCEID;
 };
 
 VsOutput GetConvertedAttributes(VsInput input, float3x4 model2world,
@@ -81,6 +83,8 @@ VsOutput GetConvertedAttributes(VsInput input, float3x4 model2world,
 
   VsOutput output;
   output.position = pos;
+  output.texcoord0 = input.GetTexcoord0();
+  output.instance_id = instance_id;
 
   return output;
 }

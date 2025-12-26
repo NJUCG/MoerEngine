@@ -8,6 +8,8 @@
 
 namespace Moer {
 
+struct EditorConfig;
+
 class RENDER_API Camera : public CountableResource {
     enum {
         FRUSTUM_LEFT = 0,
@@ -137,10 +139,8 @@ public:
     /**
          * ## Update the camera based on input per frame
          * 
-         * @param aspect_ratio: aspect ratio of the window. If not set, use wndInput.aspect_ratio instead.
          */
-    void
-    Tick(float aspect_ratio, float config_camera_speed, float config_camera_fov); //update camera per frame
+    void Tick(const SharedPtr<EditorConfig> editor_config); //update camera per frame
 
     bool IsDirty() const; //judge if camera changed compared to last frame
 
@@ -150,7 +150,7 @@ public:
     InputStream&  operator>>(InputStream& _stream);
     OutputStream& operator<<(OutputStream& _stream) const;
 
-    float GetDeletaTime() const noexcept;
+    float GetDeltaTime() const noexcept;
 
     std::string ToString();
     float2      GetJitter() const noexcept;

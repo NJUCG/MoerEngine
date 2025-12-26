@@ -295,8 +295,13 @@ void EditorUI::ShowConfig() {
 
     if (ImGui::TreeNode("Camera")) {
 
-        ImGui::SliderFloat("Speed", &m_config->camera_speed, 0.1f, 400.f);
+        ImGui::SliderFloat("Speed (log10)", &m_config->camera_speed_log10, -1.f, 2.6f);
         ImGui::SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
+
+        ImGui::SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 1.f);
+        ImGui::SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 1.f, 6.f);
+        m_config->camera_near_clip_log10 =
+            std::min(m_config->camera_near_clip_log10, m_config->camera_far_clip_log10 - 0.1f);
 
         ImGui::TreePop();
     }

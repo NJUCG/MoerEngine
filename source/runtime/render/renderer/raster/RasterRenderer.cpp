@@ -181,7 +181,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             }
         }
 
-        camera->Tick(editor_config->aspect_ratio, editor_config->camera_speed, editor_config->camera_fovy);
+        camera->Tick(editor_config);
+
+        raster_context.Update(camera->GetDeltaTime());
 
         // others
         RasterTool::UpdateRaytracingScene(raster_context);
@@ -193,13 +195,14 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         geometry_pass->Process(raster_context, raster_config, camera);
 
         // Lighting Pass
-        uint lighting_pass_output = lighting_pass->Process(raster_context, raster_config, camera);
+        TextureWithHandle lighting_pass_output =
+            lighting_pass->Process(raster_context, raster_config, camera);
 
         // Post Process Passes
         // - Ambient Occlusion
         auto ao_result = ao_pass->Process(raster_context, raster_config, camera, time, lighting_pass_output);
-        uint processing_image = ao_result.ao_with_color;
-        uint ao_only_idx      = ao_result.ao_only_idx;
+        TextureWithHandle processing_image = ao_result.ao_with_color;
+        uint              ao_only_idx      = ao_result.ao_only_idx;
 
         rtao_denoiser_pass->ProcessInPlace(raster_context, raster_config, ao_only_idx);
 
