@@ -104,7 +104,7 @@ Array<LightComponentRef> LightComponent::CreateDefaultLightComponents() {
     // Directional light
     {
         LightComponentRef directional_light = MoerNew(DirectionalLightComponent)(
-            Vector3f(1.0f, 1.0f, 1.0f),    // color
+            Vector3f(0.9f, 0.65f, 0.4f),   // color
             100.0f,                        // intensity
             Vector3f(-1.0f, -2.5f, -1.0f), // direction
             0.f
