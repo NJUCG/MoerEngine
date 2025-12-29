@@ -826,7 +826,8 @@ void SceneCache::ConvertToScene(SceneData& _scene_data, Scene* _scene, bool _nee
     sampled_textures.reserve(textures.size());
 
     for (auto& [name, tex] : textures) {
-        sampled_textures.emplace_back(ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE)
+        sampled_textures.emplace_back(
+            ImportTexture(tex->GetView(0, tex->GetNumMips()), ETextureState::SAMPLE)
         );
     }
 
@@ -860,10 +861,9 @@ void SceneCache::LoadSceneFromCacheAsync(const std::filesystem::path& path, Scen
         AsyncSceneLoadInfoRef load_info = MoerNew(AsyncSceneLoadInfo)();
         load_info->b_valid              = true;
         load_info->progress.store(0);
-        Scene::RegisterAsyncLoadInfo(load_info);
-        FromFile(RemapScenePath(path), scene);
-        // load_info->scene = scene_data;
-        // Scene::SetCurrentScene(load_info->scene);
+        auto remapped_path = RemapScenePath(path);
+        LOG_INFO("Scene Cache Path: {}", remapped_path.string());
+        FromFile(remapped_path, scene);
         load_info->progress.store(1);
     });
 }
@@ -872,9 +872,9 @@ void SceneCache::LoadSceneFromCache(const std::filesystem::path& path, Scene* sc
     load_info->b_valid              = true;
     load_info->progress.store(0);
     Scene::RegisterAsyncLoadInfo(load_info);
-    FromFile(RemapScenePath(path), scene);
-    // load_info->scene = scene_data;
-    // Scene::SetCurrentScene(load_info->scene);
+    auto remapped_path = RemapScenePath(path);
+    LOG_INFO("Scene Cache Path: {}", remapped_path.string());
+    FromFile(remapped_path, scene);
     load_info->progress.store(1);
 }
 
