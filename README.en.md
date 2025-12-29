@@ -32,10 +32,10 @@ Engine for Realtime Rendering
   git config --local blame.ignoreRevsFile .git-blame-ignore-revs
   
   # Download Sponza scene to `./asset/scenes/`
-  git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
+  git clone --branch scene/sponza --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
   
   # Configure the engine (use default settings)
-  cp source/configs/template.MoerEngine.toml source/configs/MoerEngine.toml
+  cp template.MoerEngine.toml MoerEngine.toml
   
   # Build
   cmake -B build
