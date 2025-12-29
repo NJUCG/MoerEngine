@@ -1,0 +1,297 @@
+---
+interface Props {
+  // 小组主页的URL
+  groupHomeUrl?: string;
+  // 自定义标题
+  title?: string;
+  // 自定义按钮文字
+  buttonText?: string;
+  // 背景颜色
+  backgroundColor?: string;
+}
+
+const {
+  groupHomeUrl = "https://github.com/NJUCG", // 默认小组GitHub主页
+  title = "Interested? Contact us!",
+  buttonText = "Visit Group Homepage",
+  backgroundColor = "linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)"
+} = Astro.props;
+---
+
+<section 
+  class="contact-section"
+  style={`background: ${backgroundColor}`}
+>
+  <div class="contact-center">
+    <div class="contact-wrapper">
+      <!-- 主标题 -->
+      <h2 class="contact-title">{title}</h2>
+      
+      <!-- 按钮 -->
+      <a 
+        href={groupHomeUrl} 
+        class="contact-button"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <span class="button-icon">→</span>
+        <span class="button-text">{buttonText}</span>
+      </a>
+      
+      <!-- 可选：额外联系信息 -->
+      <div class="contact-info">
+        <p class="contact-subtitle">Or reach us through:</p>
+        <div class="contact-links">
+          <a 
+            href="mailto:moerengine@nju.edu.cn" 
+            class="contact-link"
+            aria-label="Send email"
+          >
+            <span class="link-icon">✉️</span>
+            <span class="link-text">Email</span>
+          </a>
+          <a 
+            href="https://github.com/NJUCG/MoerEngine" 
+            class="contact-link"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="GitHub repository"
+          >
+            <span class="link-icon">
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+              </svg></span>
+            <span class="link-text">GitHub</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  /* 基础样式 */
+  .contact-section {
+    width: 100%;
+    padding: 100px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    min-height: 400px;
+    margin: 60px auto 0;
+    box-sizing: border-box;
+  }
+
+  .contact-center {
+    max-width: 1000px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .contact-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 50px;
+  }
+
+  /* 主标题样式 */
+  .contact-title {
+    color: #2c3e50;
+    margin: 0;
+    line-height: 1.1;
+    text-align: center;
+    max-width: 800px;
+  }
+
+  /* 主按钮样式 */
+  .contact-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 15px;
+    padding: 20px 50px;
+    background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+    color: white;
+    text-decoration: none;
+    border-radius: 12px;
+    font-weight: 700;
+    font-size: 1.4rem;
+    transition: all 0.3s ease;
+    border: 2px solid transparent;
+    cursor: pointer;
+    box-shadow: 0 4px 20px rgba(52, 152, 219, 0.3);
+  }
+
+  .contact-button:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 35px rgba(52, 152, 219, 0.4);
+    gap: 20px;
+    background: linear-gradient(135deg, #2980b9 0%, #1f639e 100%);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .button-icon {
+    font-size: 1.5rem;
+    transition: transform 0.3s ease;
+  }
+
+  .contact-button:hover .button-icon {
+    transform: translateX(5px);
+  }
+
+  /* 联系信息区域 */
+  .contact-info {
+    margin-top: 20px;
+  }
+
+  .contact-subtitle {
+    font-size: 1.2rem;
+    color: #6c757d;
+    margin-bottom: 20px;
+    font-weight: 500;
+  }
+
+  .contact-links {
+    display: flex;
+    gap: 30px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .contact-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 25px;
+    background: white;
+    color: #495057;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 1rem;
+    transition: all 0.3s ease;
+    border: 1px solid #e9ecef;
+  }
+
+  .contact-link:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+    color: #3498db;
+    border-color: #3498db;
+  }
+
+  .link-icon {
+    font-size: 1.2rem;
+  }
+
+  .link-text {
+    font-size: 1rem;
+  }
+
+  /* 响应式设计 */
+  @media (max-width: 1200px) {
+    .contact-title {
+      font-size: 3rem;
+    }
+    
+    .contact-button {
+      padding: 18px 45px;
+      font-size: 1.3rem;
+    }
+  }
+
+  @media (max-width: 992px) {
+    .contact-section {
+      padding: 80px 20px;
+      min-height: 350px;
+      margin-top: 50px;
+    }
+    
+    .contact-title {
+      font-size: 2.8rem;
+    }
+    
+    .contact-wrapper {
+      gap: 40px;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .contact-section {
+      padding: 70px 20px;
+      min-height: 300px;
+      margin-top: 40px;
+      border-radius: 12px;
+    }
+    
+    .contact-title {
+      font-size: 2.3rem;
+    }
+    
+    .contact-button {
+      padding: 16px 40px;
+      font-size: 1.2rem;
+    }
+    
+    .contact-links {
+      gap: 20px;
+    }
+    
+    .contact-link {
+      padding: 10px 20px;
+    }
+  }
+
+  @media (max-width: 576px) {
+    .contact-section {
+      padding: 60px 20px;
+      min-height: 280px;
+      margin-top: 30px;
+    }
+    
+    .contact-title {
+      font-size: 2rem;
+    }
+    
+    .contact-button {
+      padding: 14px 35px;
+      font-size: 1.1rem;
+      width: 100%;
+      max-width: 300px;
+      justify-content: center;
+    }
+    
+    .contact-wrapper {
+      gap: 35px;
+    }
+    
+    .contact-subtitle {
+      font-size: 1.1rem;
+    }
+    
+    .contact-links {
+      flex-direction: column;
+      align-items: center;
+      gap: 15px;
+    }
+    
+    .contact-link {
+      width: 100%;
+      max-width: 250px;
+      justify-content: center;
+    }
+  }
+
+  @media (max-width: 400px) {
+    .contact-title {
+      font-size: 1.8rem;
+    }
+    
+    .contact-button {
+      font-size: 1rem;
+      padding: 12px 30px;
+    }
+  }
+</style>

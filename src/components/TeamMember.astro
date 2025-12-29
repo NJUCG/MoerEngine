@@ -1,0 +1,93 @@
+---
+interface Props {
+  name: string;
+  role: string;
+  bio: string;
+  avatar: string;
+}
+
+const { name, role, bio, avatar } = Astro.props;
+---
+
+<div class="team-member">
+  <div class="member-avatar">
+    <img 
+      src={avatar} 
+      alt={name}
+      width="200"
+      height="200"
+    />
+  </div>
+  <h3>{name}</h3>
+  <p class="member-role">{role}</p>
+  <p class="member-bio">{bio}</p>
+  <div class="social-links">
+    <a href="#" aria-label="Twitter">🐦</a>
+    <a href="#" aria-label="GitHub">🐙</a>
+    <a href="#" aria-label="LinkedIn">💼</a>
+  </div>
+</div>
+
+<style>
+  .team-member {
+    text-align: center;
+    background: white;
+    border-radius: var(--border-radius);
+    padding: 30px;
+    box-shadow: var(--shadow);
+    transition: var(--transition);
+  }
+
+  .team-member:hover {
+    transform: translateY(-5px);
+  }
+
+  .member-avatar {
+    width: 150px;
+    height: 150px;
+    margin: 0 auto 20px;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 5px solid var(--light-color);
+  }
+
+  .member-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .member-role {
+    color: var(--secondary-color);
+    font-weight: 600;
+    margin-bottom: 15px;
+  }
+
+  .member-bio {
+    color: #666;
+    margin-bottom: 20px;
+  }
+
+  .social-links {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+  }
+
+  .social-links a {
+    display: inline-block;
+    width: 40px;
+    height: 40px;
+    line-height: 40px;
+    background: var(--light-color);
+    border-radius: 50%;
+    text-decoration: none;
+    transition: var(--transition);
+  }
+
+  .social-links a:hover {
+    background: var(--secondary-color);
+    color: white;
+    transform: translateY(-3px);
+  }
+</style>

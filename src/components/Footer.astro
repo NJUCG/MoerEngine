@@ -1,0 +1,91 @@
+---
+const currentYear = new Date().getFullYear();
+---
+
+<footer class="footer-simple">
+  <div class="container">
+    <div class="footer-content">
+      <!-- Logo 和描述 -->
+      <div class="footer-info">
+        <a href="#home" class="footer-logo">MoerEngine</a>
+        <p>High-performance real-time rendering engine · NJUCG</p>
+      </div>
+      
+      <!-- 版权信息 -->
+      <div class="footer-copyright">
+        <p>&copy; {currentYear} The MoerEngine Contributors. All rights reserved.</p>
+        <div class="footer-links">
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="https://github.com/NJUCG/MoerEngine">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<style>
+  .footer-simple {
+    background-color: var(--dark-color);
+    color: var(--light-color);
+    padding: 40px 0;
+    text-align: center;
+  }
+  
+  .footer-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    align-items: center;
+  }
+  
+  .footer-logo {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: white;
+    text-decoration: none;
+    margin-bottom: 10px;
+    display: inline-block;
+  }
+  
+  .footer-info p {
+    color: #aaa;
+    font-size: 0.95rem;
+    margin-bottom: 15px;
+  }
+  
+  .footer-copyright {
+    color: #888;
+    font-size: 0.9rem;
+  }
+  
+  .footer-links {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    margin-top: 10px;
+  }
+  
+  .footer-links a {
+    color: #aaa;
+    text-decoration: none;
+    transition: color 0.3s ease;
+  }
+  
+  .footer-links a:hover {
+    color: white;
+  }
+  
+  @media (min-width: 768px) {
+    .footer-content {
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
+      text-align: left;
+    }
+    
+    .footer-info {
+      max-width: 400px;
+    }
+  }
+</style>

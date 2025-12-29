@@ -1,0 +1,99 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Hero from '../components/Hero.astro';
+import Introduction from '../components/Introduction.astro';
+import ArticleList from '../components/ArticleList.astro';
+import Gallery from '../components/Gallery.astro';
+import FeatureCard from '../components/FeatureCard.astro';
+import Contact from '../components/Contact.astro';
+import GetSource from '../components/GetSource.astro'
+
+const features = [
+  {
+    title: 'Aggrated Command-Driven',
+  },
+  {
+    title: 'Real-time Ray Tracing',
+  },
+  {
+    title: 'Multiple Renderers',
+  }
+];
+
+---
+
+<Layout>
+  <!-- <Hero /> -->
+
+  <!-- Introduction 部分 -->
+  <section id="introduction" class="section-introduction">
+      <Introduction />
+  </section>
+
+  <section id="features" class="features">
+    <div class="container">
+      <h2>Features</h2>
+      <div class="features-grid">
+        {features.map(feature => (
+          <FeatureCard {...feature} />
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- Gallery 部分 -->
+  <section id="gallery" class="gallery">
+    <div class="container">
+      <h2>Gallery</h2>
+      <Gallery />
+    </div>
+  </section>
+
+  <!-- 等有文章了再取消注释 -->
+  <!-- Article List 部分 -->
+  <section id="articles">
+	  <ArticleList />
+  </section>
+
+  <!-- GetSource 部分 -->
+  <!-- <section id="getsource">
+      <GetSource />
+  </section> -->
+  
+  <!-- Contact 部分 -->
+  <!-- <section id="contact">
+      <Contact/>
+  </section> -->
+</Layout>
+
+<style> 
+  section {
+    margin-bottom: 40px;
+  }
+
+  /* Introduction 样式 */
+  .section-introduction {
+    min-height: 100%;
+   padding-top: 80px;
+    padding-bottom: 40px;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  }
+
+  /* Feature-card 样式 */
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 30px;
+    margin-top: 50px;
+  }
+
+  /* Gallery 部分样式 */
+  .gallery {
+    background-color: #f8f9fa;
+  }
+  
+  /* Contact 部分样式 */
+  #contact {
+    margin-bottom: 0; /* Contact部分不需要底部间距 */
+  }
+</style>

@@ -1,0 +1,547 @@
+---
+// 文章数据 - 列表形式更适合增删管理
+const articles = [
+  // TODO: 等有文章了再改，目前先直接注释掉ArticleList
+  // {
+  //   id: 1,
+  //   title: "MoerEngine 入门指南",
+  //   date: "2024-01-15",
+  //   excerpt: "学习如何快速开始使用 MoerEngine，创建你的第一个 3D 场景。",
+  //   author: "哈基米",
+  //   URL: "https://www.bilibili.com/video/BV135pmzZE4K/?spm_id_from=333.337.search-card.all.click&vd_source=9bf143147b1951748c2b6e352a47e7dc"
+  // },
+  // {
+  //   id: 2,
+  //   title: "渲染管线详解",
+  //   date: "2024-01-10",
+  //   excerpt: "深入解析 MoerEngine 的现代渲染管线架构和优化策略。",
+  //   author: "南北",
+  //   URL: "https://www.bilibili.com/video/BV1N3PpezEpv/?spm_id_from=333.337.search-card.all.click&vd_source=9bf143147b1951748c2b6e352a47e7dc"
+  // },
+  // {
+  //   id: 3,
+  //   title: "PBR 材质系统",
+  //   date: "2024-01-05",
+  //   excerpt: "了解如何在 MoerEngine 中创建和使用物理基础渲染材质。",
+  //   author: "绿豆",
+  //   URL: "https://www.bilibili.com/video/BV1F8EDz6EFg/?spm_id_from=333.337.search-card.all.click&vd_source=9bf143147b1951748c2b6e352a47e7dc"
+  // },
+];
+
+interface Props {
+  maxArticles?: number;
+  showFilters?: boolean;
+}
+
+const { maxArticles, showFilters = true } = Astro.props;
+
+// 如果需要限制文章数量
+const displayArticles = maxArticles ? articles.slice(0, maxArticles) : articles;
+
+// 排序：最新的文章在前面
+const sortedArticles = [...displayArticles].sort((a, b) => 
+  new Date(b.date).getTime() - new Date(a.date).getTime()
+);
+---
+
+<section class="article-list-section">
+  <div class="container">
+    <div class="section-header">
+      <h2>Article List</h2>
+      <p class="section-description">Explore more about MoreEngine</p>
+    </div>
+
+    <!-- 统计和操作栏 -->
+    <div class="article-list-header">
+      <div class="article-count">
+        <span class="count-number">{sortedArticles.length}</span>
+        <span class="count-label">Articles</span>
+      </div>
+      
+      {showFilters && (
+        <div class="list-actions">
+          <div class="sort-options">
+            <label for="sort-by">Sort: </label>
+            <select id="sort-by" class="sort-select">
+              <option value="date-desc">New</option>
+              <option value="date-asc">Early</option>
+              <option value="title-asc"> A-Z </option>
+            </select>
+          </div>
+        </div>
+      )}
+    </div>
+
+    <!-- 文章列表 -->
+    <div class="articles-list">
+      {sortedArticles.map((article, index) => (
+        <article class="article-list-item">
+          <!-- 序号和日期 -->
+          <div class="article-list-meta">
+            <span class="article-index">#{String(index + 1).padStart(2, '0')}</span>
+            <time datetime={article.date} class="article-date">
+              <span class="date-year">{article.date.split('-')[0]}</span>
+              <span class="date-month-day">
+                {article.date.split('-')[1]}-{article.date.split('-')[2]}
+              </span>
+            </time>
+          </div>
+          
+          <!-- 文章内容 -->
+          <div class="article-list-content">
+            <div class="article-title-row">
+              <h3 class="article-title">
+                <a href={article.URL} target="_blank" rel="noopener noreferrer" class="article-title-link">
+                  {article.title}
+                </a>
+              </h3>
+            </div>
+            
+            <p class="article-excerpt">{article.excerpt}</p>
+            
+            <div class="article-footer">
+              <div class="article-info">
+                <span class="article-author">👤 {article.author}</span>
+                <a href={article.URL} target="_blank" rel="noopener noreferrer" class="article-read-more">
+                  Click to read →
+                </a>
+              </div>
+            </div>
+          </div>
+        </article>
+      ))}
+    </div>
+
+    <!-- 操作按钮 -->
+    <div class="article-list-footer">
+    </div>
+  </div>
+</section>
+
+<style>
+  .article-list-section {
+    padding: 60px 0;
+  }
+
+  .section-header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+
+  .section-header h2 {
+    font-size: 2.5rem;
+    color: #2c3e50;
+    margin-bottom: 10px;
+  }
+
+  .section-description {
+    color: #6c757d;
+    font-size: 1.1rem;
+  }
+
+  /* 列表头部 */
+  .article-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 30px;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #e9ecef;
+  }
+
+  .article-count {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .count-number {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #3498db;
+  }
+
+  .count-label {
+    font-size: 1.1rem;
+    color: #6c757d;
+  }
+
+  .list-actions {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+  }
+
+  .sort-options, .category-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  label {
+    font-size: 0.9rem;
+    color: #6c757d;
+    font-weight: 500;
+  }
+
+  .sort-select, .category-select {
+    padding: 8px 12px;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background: white;
+    color: #495057;
+    font-size: 0.9rem;
+    cursor: pointer;
+    min-width: 120px;
+  }
+
+  .sort-select:focus, .category-select:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+  }
+
+  /* 文章列表 */
+  .articles-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .article-list-item {
+    display: flex;
+    gap: 20px;
+    padding: 25px 0;
+    border-bottom: 1px solid #e9ecef;
+    transition: all 0.2s ease;
+  }
+
+  .article-list-item:last-child {
+    border-bottom: none;
+  }
+
+  .article-list-item:hover {
+    background-color: #f8f9fa;
+    padding-left: 15px;
+    padding-right: 15px;
+    margin: 0 -15px;
+    border-radius: 8px;
+  }
+
+  /* 左侧元信息 */
+  .article-list-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 80px;
+    flex-shrink: 0;
+  }
+
+  .article-index {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #adb5bd;
+    margin-bottom: 5px;
+  }
+
+  .article-date {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 0.85rem;
+    color: #6c757d;
+  }
+
+  .date-year {
+    font-size: 0.8rem;
+    color: #adb5bd;
+  }
+
+  .date-month-day {
+    font-weight: 600;
+    color: #495057;
+  }
+
+  /* 文章内容区域 */
+  .article-list-content {
+    flex: 1;
+  }
+
+  .article-title-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+
+  .article-title {
+    margin: 0;
+    font-size: 1.3rem;
+    color: #2c3e50;
+    line-height: 1.4;
+    flex: 1;
+  }
+
+  .article-title-link {
+    color: inherit;
+    text-decoration: none;
+    transition: color 0.2s ease;
+  }
+
+  .article-title-link:hover {
+    color: #3498db;
+  }
+
+  .article-category {
+    background: #e7f5ff;
+    color: #0c8599;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .article-excerpt {
+    color: #495057;
+    line-height: 1.6;
+    margin-bottom: 15px;
+    font-size: 0.95rem;
+    flex: 1;
+  }
+
+  /* 文章底部信息 */
+  .article-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 15px;
+    margin-top:auto;
+  }
+
+  .article-info {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    color: #6c757d;
+    font-size: 0.85rem;
+    justify-content: flex-end;
+  }
+
+  .article-read-more {
+    color: #3498db;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+    transition: gap 0.2s ease;
+  }
+
+  .article-read-more:hover {
+    gap: 8px;
+  }
+
+  /* 列表底部 */
+  .article-list-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid #e9ecef;
+  }
+
+  .pagination {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+  }
+
+  .pagination-btn {
+    padding: 8px 16px;
+    border: 1px solid #dee2e6;
+    background: white;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #495057;
+    transition: all 0.2s ease;
+  }
+
+  .pagination-btn:hover:not(:disabled) {
+    border-color: #3498db;
+    color: #3498db;
+  }
+
+  .pagination-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .pagination-info {
+    color: #6c757d;
+    font-size: 0.9rem;
+  }
+
+  .export-actions {
+    display: flex;
+    gap: 15px;
+  }
+
+  .export-btn, .add-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .export-btn {
+    background: #e9ecef;
+    color: #495057;
+  }
+
+  .export-btn:hover {
+    background: #dee2e6;
+  }
+
+  .add-btn {
+    background: #3498db;
+    color: white;
+  }
+
+  .add-btn:hover {
+    background: #2980b9;
+  }
+
+  /* 响应式设计 */
+  @media (max-width: 992px) {
+    .article-list-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 20px;
+    }
+    
+    .list-actions {
+      width: 100%;
+      justify-content: space-between;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .article-list-section {
+      padding: 40px 0;
+    }
+    
+    .section-header h2 {
+      font-size: 2rem;
+    }
+    
+    .article-list-item {
+      flex-direction: column;
+      gap: 15px;
+    }
+    
+    .article-list-meta {
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+    }
+    
+    .article-footer {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    
+    .article-info {
+      width: 100%;
+      justify-content: space-between;
+    }
+    
+    .article-list-footer {
+      flex-direction: column;
+      gap: 20px;
+      align-items: flex-start;
+    }
+    
+    .export-actions {
+      width: 100%;
+      justify-content: space-between;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .list-actions {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 15px;
+    }
+    
+    .article-title-row {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    
+    .export-actions {
+      flex-direction: column;
+    }
+  }
+
+  /* 空状态 */
+  .no-articles {
+    text-align: center;
+    padding: 60px 20px;
+    color: #6c757d;
+  }
+
+  .no-articles p {
+    margin-bottom: 20px;
+  }
+</style>
+
+<!-- 交互功能脚本 -->
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    console.log('Article list initialized');
+    
+    const articlesList = document.querySelector('.articles-list');
+    const sortSelect = document.getElementById('sort-by');
+    const articleItems = document.querySelectorAll('.article-list-item');
+    
+    // 排序功能
+    if (sortSelect) {
+      sortSelect.addEventListener('change', function() {
+        const sortValue = this.value;
+        const items = Array.from(articleItems);
+        
+        items.sort((a, b) => {
+          switch(sortValue) {
+            case 'date-desc':
+              return new Date(b.querySelector('.article-date').getAttribute('datetime')) - 
+                     new Date(a.querySelector('.article-date').getAttribute('datetime'));
+            case 'date-asc':
+              return new Date(a.querySelector('.article-date').getAttribute('datetime')) - 
+                     new Date(b.querySelector('.article-date').getAttribute('datetime'));
+            case 'title-asc':
+              return a.querySelector('.article-title').textContent.localeCompare(
+                b.querySelector('.article-title').textContent
+              );
+            default:
+              return 0;
+          }
+        });
+        
+        // 重新排序显示
+        items.forEach(item => articlesList.appendChild(item));
+      });
+    }
+  });
+</script>

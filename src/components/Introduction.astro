@@ -1,0 +1,200 @@
+---
+interface Props {
+  title?: string;
+  subtitle?: string;
+  description1?: string;
+  description2?: string;
+}
+
+const {
+  title = "MoerEngine",
+  // subtitle = "高性能实时渲染引擎",
+  // description = "MoerEngine 是一个开源的实时渲染引擎，专注于计算机图形学教学和研究。由南京大学计算机图形学小组开发和维护，提供现代化的渲染管线、物理基础渲染（PBR）材质系统，以及实时光线追踪等先进特性。"
+  subtitle = "High-Performance Real-Time Rendering Engine",
+  description1 = "MoerEngine is an open-source real-time rendering engine, developed and maintained by NJU META.",
+  description2 = " It focuses on computer graphics education and research, providing a modern rendering pipeline, Physically Based Rendering (PBR) material system, and advanced features such as real-time ray tracing."
+} = Astro.props;
+---
+
+<div class="introduction">
+  <div class="container">
+    <!-- 标题和副标题 -->
+    <div class="intro-header">
+      <h1>{title}</h1>
+      <p class="subtitle">{subtitle}</p>
+    </div>
+    
+    <!-- 描述文字 -->
+    <div class="intro-description">
+      <p>{description1}</p>
+      <p>{description2}</p>
+    </div>
+    
+    <!-- 操作按钮 -->
+    <div class="intro-actions">
+      <a 
+        href="https://github.com/NJUCG/MoerEngine" 
+        class="btn btn-primary" 
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <span>GitHub Repo</span>
+        <!-- <span class="icon">→</span> -->
+      </a>
+      <!-- <a href="#gallery" class="btn btn-secondary">
+        查看示例场景
+      </a> -->
+    </div>
+  </div>
+</div>
+
+<style>
+  .introduction {
+    padding: 80px 0 40px; /* 减少底部padding：从 80px 0 改为 80px 0 40px */
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    /* 移除 margin-bottom: 60px; */
+  }
+
+  .intro-header {
+    text-align: center;
+    margin-bottom: 30px;
+  }
+
+  .intro-header h1 {
+    font-size: 3.2rem;
+    color: #2c3e50;
+    margin-bottom: 15px;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .subtitle {
+    font-size: 1.4rem;
+    color: #3498db;
+    font-weight: 500;
+    line-height: 1.4;
+  }
+
+  .intro-description {
+    max-width: 900px;
+    margin: 0 auto 50px;
+    text-align: center;
+  }
+
+  .intro-description p {
+    font-size: 1.2rem;
+    line-height: 1.8;
+    color: #495057;
+    margin-bottom: 0;
+  }
+
+  .intro-actions {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 14px 32px;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 1.1rem;
+    transition: all 0.3s ease;
+    border: none;
+    cursor: pointer;
+  }
+
+  .btn-primary {
+    background: #3498db;
+    color: white;
+  }
+
+  .btn-primary:hover {
+    background: #2980b9;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(52, 152, 219, 0.3);
+  }
+
+  .btn-secondary {
+    background: white;
+    color: #2c3e50;
+    border: 2px solid #e9ecef;
+  }
+
+  .btn-secondary:hover {
+    border-color: #3498db;
+    color: #3498db;
+    transform: translateY(-2px);
+  }
+
+  .btn-secondary .icon {
+    margin-left: 8px;
+    transition: transform 0.3s ease;
+  }
+
+  .btn-secondary:hover .icon {
+    transform: translateX(4px);
+  }
+
+  /* 响应式设计 */
+  @media (max-width: 768px) {
+    .introduction {
+      padding: 60px 0;
+    }
+    
+    .intro-header h1 {
+      font-size: 2.5rem;
+    }
+    
+    .subtitle {
+      font-size: 1.2rem;
+    }
+    
+    .intro-description p {
+      font-size: 1.1rem;
+      line-height: 1.7;
+    }
+    
+    .btn {
+      padding: 12px 24px;
+      font-size: 1rem;
+    }
+    
+    .intro-actions {
+      gap: 15px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .introduction {
+      padding: 50px 0;
+    }
+    
+    .intro-header h1 {
+      font-size: 2.2rem;
+    }
+    
+    .subtitle {
+      font-size: 1.1rem;
+    }
+    
+    .intro-description p {
+      font-size: 1rem;
+    }
+    
+    .intro-actions {
+      flex-direction: column;
+      align-items: center;
+    }
+    
+    .btn {
+      width: 100%;
+      max-width: 300px;
+      justify-content: center;
+    }
+  }
+</style>

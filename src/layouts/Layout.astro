@@ -1,0 +1,114 @@
+---
+import '../styles/global.css';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- Character encoding -->
+  <meta charset="UTF-8">
+  
+  <!-- Responsive design -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <!-- SEO Meta Tags -->
+  <meta name="description" content="MoerEngine - A high-performance real-time rendering engine for computer graphics education and research.">
+  <meta name="keywords" content="rendering engine, computer graphics, real-time, WebGL, 3D graphics">
+  <meta name="author" content="NJU Computer Graphics Group">
+  
+  <!-- Open Graph for social sharing -->
+  <meta property="og:title" content="MoerEngine">
+  <meta property="og:description" content="High-performance real-time rendering engine">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://moerengine.com">
+  
+  <!-- Page title -->
+  <title>MoerEngine | Real-time Rendering Engine</title>
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/x-icon" href="/favicon.svg">
+  
+  <!-- Preload critical resources -->
+  <link rel="preload" href="/fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
+  
+  <!-- Canonical URL -->
+  <link rel="canonical" href="https://moerengine.com">
+</head>
+<body>
+  <!-- Header component -->
+  <Header />
+  
+  <!-- Main content area -->
+  <main id="main-content" role="main">
+    <slot />
+  </main>
+  
+  <!-- Footer component -->
+  <Footer />
+  
+  <!-- JavaScript for interactive features -->
+  <script>
+    // Mobile navigation toggle
+    document.addEventListener('DOMContentLoaded', () => {
+      const menuToggle = document.querySelector('.menu-toggle');
+      const navMenu = document.querySelector('.nav-menu');
+      
+      if (menuToggle) {
+        menuToggle.addEventListener('click', () => {
+          navMenu.classList.toggle('active');
+          // Update ARIA attribute for accessibility
+          const isExpanded = navMenu.classList.contains('active');
+          menuToggle.setAttribute('aria-expanded', isExpanded);
+        });
+      }
+      
+      // Close menu when clicking outside
+      document.addEventListener('click', (event) => {
+        if (navMenu && navMenu.classList.contains('active')) {
+          if (!event.target.closest('.nav-menu') && !event.target.closest('.menu-toggle')) {
+            navMenu.classList.remove('active');
+            menuToggle.setAttribute('aria-expanded', false);
+          }
+        }
+      });
+      
+      // Smooth scrolling for anchor links
+      document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function(e) {
+          const href = this.getAttribute('href');
+          if (href !== '#') {
+            e.preventDefault();
+            const target = document.querySelector(href);
+            if (target) {
+              target.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start'
+              });
+            }
+          }
+        });
+      });
+    });
+    
+    // Lazy load images
+    if ('IntersectionObserver' in window) {
+      const imageObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const img = entry.target;
+            img.src = img.dataset.src;
+            img.classList.add('loaded');
+            imageObserver.unobserve(img);
+          }
+        });
+      });
+      
+      document.querySelectorAll('img[data-src]').forEach(img => {
+        imageObserver.observe(img);
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+---
+const heroData = {
+  title: 'Welcome to Moer Engine',
+  subtitle: 'A modern, responsive template for your next project',
+  buttonText: 'Get Started',
+  buttonLink: '#introduction',
+  backgroundImage: '/images/hero-bg.jpg'
+};
+---
+
+<section id="home" class="hero">
+  <div class="container">
+    <div class="hero-content">
+      <h1>{heroData.title}</h1>
+      <p>{heroData.subtitle}</p>
+      <a href={heroData.buttonLink} class="btn">{heroData.buttonText}</a>
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero {
+    background: linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)),
+                url('/images/hero-bg.jpg');
+    background-size: cover;
+    background-position: center;
+    color: white;
+    text-align: center;
+    padding: 150px 0;
+    margin-top: 70px; /* 为固定导航栏留出空间 */
+  }
+
+  .hero h1 {
+    color: white;
+    font-size: 3.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .hero p {
+    font-size: 1.2rem;
+    max-width: 600px;
+    margin: 0 auto 2rem;
+    color: var(--light-color);
+  }
+
+  @media (max-width: 768px) {
+    .hero {
+      padding: 100px 20px;
+    }
+    
+    .hero h1 {
+      font-size: 2.5rem;
+    }
+  }
+</style>
