@@ -38,7 +38,7 @@ Engine for Realtime Rendering
   cd MoerEngine
   
   # Download Sponza scene to `./asset/scenes/`
-  git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
+  git clone --branch scene/sponza --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
   
   # Configure the engine (use default settings)
   cp source/configs/template.MoerEngine.toml source/configs/MoerEngine.toml
