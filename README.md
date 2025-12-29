@@ -213,6 +213,23 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
   add_library(Moer::Cuda ALIAS ${target_name})
   ```
 
+## 预览图
+
+### RayTracing Renderer
+
+![image-20251229125336195](README/image-20251229125336195.png)
+
+![image-20251229124932154](README/image-20251229124932154.png)
+
+![image-20251229125512698](README/image-20251229125512698.png)
+
+### Raster Renderer
+
+![image-20251229140647045](README/image-20251229140647045.png)
+
+![image-20251229125126217](README/image-20251229125126217.png)
+
+
 ## 开源协议
 
 MoerEngine源代码采用Apache-2.0 License授权。
