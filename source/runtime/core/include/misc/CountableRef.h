@@ -204,6 +204,9 @@ public:
         return ptr == _other;
     }
     int32_t GetRefCount() {
+        if (ptr == nullptr) {
+            return 0;
+        }
         return ptr->GetRefCount();
     }
 
