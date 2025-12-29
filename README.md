@@ -223,6 +223,8 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
 
 ![image-20251229125512698](README/image-20251229125512698.png)
 
+![image-20251229154103450](README/image-20251229154103450.png)
+
 ### Raster Renderer
 
 ![image-20251229140647045](README/image-20251229140647045.png)
