@@ -1385,10 +1385,28 @@ public:
         const auto&     args = _cmd.Args();
         PipelineHandle& pso  = _cmd.Pipeline();
 
-        const auto&                      pass_info = _cmd.RenderPassInfo();
+        const auto& pass_info = _cmd.RenderPassInfo();
+
+        uint tex_min_width  = pass_info.render_area.extent.width + pass_info.render_area.offset.x;
+        uint tex_min_height = pass_info.render_area.extent.height + pass_info.render_area.offset.y;
+
         Array<VkRenderingAttachmentInfo> color_attachments(pass_info.color_attachments.size());
         for (size_t i = 0; i < pass_info.color_attachments.size(); ++i) {
             color_attachments[i] = FromColorAttachmentInfo(pass_info.color_attachments[i]);
+
+            if (pass_info.color_attachments[i].target->GetWidth() < tex_min_width ||
+                pass_info.color_attachments[i].target->GetHeight() < tex_min_height) {
+                LOG_ERROR(
+                    "Render target size is smaller than render area! target size: {}x{}, render area size: "
+                    "{}x{}. Tex Name: {}. Command Name: {}",
+                    pass_info.color_attachments[i].target->GetWidth(),
+                    pass_info.color_attachments[i].target->GetHeight(),
+                    tex_min_width,
+                    tex_min_height,
+                    pass_info.color_attachments[i].target->GetName(),
+                    _cmd.name
+                );
+            }
         }
         std::optional<VkRenderingAttachmentInfo> depth_stencil_attachment;
         if (pass_info.depth_attachment.Valid()) {
