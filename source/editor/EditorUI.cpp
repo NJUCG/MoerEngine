@@ -17,13 +17,8 @@ using namespace Moer::Render;
 
 namespace Moer {
 
-EditorUI::EditorUI(
-    UniquePtr<Render::UIRenderer> renderer,
-    SharedPtr<uint2>              resolution,
-    SharedPtr<EditorConfig>       editor_config
-) :
+EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
     m_ui_renderer(std::move(renderer)),
-    m_resolution(resolution),
     m_config(editor_config),
     m_raster_ui(editor_config->raster_config),
     m_raytracing_ui(editor_config->raytracing_config) {
@@ -57,6 +52,8 @@ void EditorUI::InitFromConfigManager() {
 
 void EditorUI::TickUI() {
 
+    // 注：Resolution表示整个窗口的大小（不包含windows标题栏）；SceneColor只表示场景渲染区域的大小
+    // 更新SceneColor的分辨率
     m_config->aspect_ratio = m_scene_color_resolution.x / m_scene_color_resolution.y;
 
     m_ui_renderer->BeginGUIFrame();
@@ -242,24 +239,35 @@ void EditorUI::ShowConfig() {
 
     EditorUIStyle::ShowStyleSelector("Style##Default");
 
-    auto last_selected_render_method = m_config->selected_render_method;
-    if (ImGui::BeginCombo(
-            "Render Method", k_render_method_names[static_cast<uint>(m_config->selected_render_method)].data()
-        )) {
-        for (int i = 0; i < IM_ARRAYSIZE(k_render_method_names); i++) {
-            const bool is_selected = (m_config->selected_render_method == static_cast<ERenderMethod>(i));
-            if (ImGui::Selectable(k_render_method_names[i].data(), is_selected)) {
-                m_config->selected_render_method = static_cast<ERenderMethod>(i);
+    // MARK: Common Configs
+
+    /////////////////////////////////////////////////// Begin Disabled Here
+    // 避免场景加载一半，切换场景或渲染器，导致崩溃
+    bool is_scene_found_but_not_ready = Scene::IsSceneFound() && !Scene::IsSceneReady();
+    ImGui::BeginDisabled(is_scene_found_but_not_ready);
+
+    // Render Method
+    {
+        auto last_selected_render_method = m_config->selected_render_method;
+        if (ImGui::BeginCombo(
+                "Render Method",
+                k_render_method_names[static_cast<uint>(m_config->selected_render_method)].data()
+            )) {
+            for (int i = 0; i < IM_ARRAYSIZE(k_render_method_names); i++) {
+                const bool is_selected = (m_config->selected_render_method == static_cast<ERenderMethod>(i));
+                if (ImGui::Selectable(k_render_method_names[i].data(), is_selected)) {
+                    m_config->selected_render_method = static_cast<ERenderMethod>(i);
+                }
+                if (is_selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
             }
-            if (is_selected) {
-                ImGui::SetItemDefaultFocus();
-            }
+            ImGui::EndCombo();
         }
-        ImGui::EndCombo();
-    }
-    if (last_selected_render_method != m_config->selected_render_method) {
-        m_b_need_reload = true;
-        SetShowSubUI(false);
+        if (last_selected_render_method != m_config->selected_render_method) {
+            m_b_need_reload = true;
+            SetShowSubUI(false);
+        }
     }
 
     { // Scene Path
@@ -321,6 +329,12 @@ void EditorUI::ShowConfig() {
     }
 
     ImGui::Separator();
+
+    ImGui::EndDisabled();
+    if (is_scene_found_but_not_ready) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Scene is loading... Please wait.");
+    }
+    /////////////////////////////////////////////////// End Disabled Here
 
     ImGui::Text("Infos: ");
     ImGui::Text("\tFPS: %.1f", io.Framerate);

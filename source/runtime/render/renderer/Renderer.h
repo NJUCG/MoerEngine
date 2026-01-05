@@ -43,16 +43,8 @@ public:
         Num,
     };
 
-    struct TickResult {
-        CommandList&     cmd_list;
-        SharedPtr<uint2> resolution;
-        TextureView      input_image_texture;
-        TextureView      input_ui_texture;
-        TextureView      output_texture;
-    };
-
     Renderer(
-        SharedPtr<uint2>                                          _resolution,
+        uint2&                                                    _resolution,
         const SharedPtr<EditorConfig>                             _config,
         const EngineHooks&                                        hooks,
         std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
@@ -63,6 +55,7 @@ public:
     void ReleaseResources();
 
     EWindowState TickWindowContext(const EngineHooks& hooks);
+    void         LogSceneLoadStatus(const EditorConfig& config) const;
 
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
@@ -77,8 +70,8 @@ protected:
     RenderDevice&  device;
     ShaderManager& manager;
     CommandQueue&  gfx_queue;
+    uint2&         resolution; // 数据源位于EditorConfig中
 
-    SharedPtr<uint2> resolution;
     SwapchainRef     swapchain;
     BindlessArrayRef bindless_array;
 

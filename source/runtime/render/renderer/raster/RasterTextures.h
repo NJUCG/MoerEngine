@@ -103,15 +103,13 @@ struct RasterTextures {
     DepthBufferWithHandle depth_linear_sampler;
     DepthBufferWithHandle depth_nearest_sampler;
 
-    void CreateFrameBuffers(RenderDevice& device, SharedPtr<uint2> size) {
+    void CreateFrameBuffers(RenderDevice& device, const uint2& size) {
         // 批量生成
-#define X(TYPE, NAME, PF, USAGE, SIZE, SR_TAG)                                                            \
-    NAME.tex = device.CreateTexture(                                                                      \
-        #NAME, (SR_TAG ? Extent2D(size->x / 2, size->y / 2) : Extent2D(size->x, size->y)), PF, USAGE      \
-    );                                                                                                    \
-    LOG_DEBUG(                                                                                            \
-        "tex {}, size {} x {}", #NAME, (SR_TAG ? size->x / 2 : size->x), (SR_TAG ? size->y / 2 : size->y) \
-    );
+#define X(TYPE, NAME, PF, USAGE, SIZE, SR_TAG)                                                   \
+    NAME.tex = device.CreateTexture(                                                             \
+        #NAME, (SR_TAG ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)), PF, USAGE \
+    );                                                                                           \
+    LOG_DEBUG("tex {}, size {} x {}", #NAME, (SR_TAG ? size.x / 2 : size.x), (SR_TAG ? size.y / 2 : size.y));
         RASTER_TEXTURES_TABLE
 #undef X
         // 手动维护: depth
@@ -119,9 +117,9 @@ struct RasterTextures {
             "depth",
 
 #if WITH_CUDA && SUPER_RESOLUTION_ENABLED
-            Extent2D(size->x / 2.0f, size->y / 2.0f),
+            Extent2D(size.x / 2.0f, size.y / 2.0f),
 #else
-            Extent2D(size->x, size->y),
+            Extent2D(size.x, size.y),
 #endif
 
 #if WITH_CUDA

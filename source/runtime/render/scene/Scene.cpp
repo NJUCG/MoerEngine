@@ -407,6 +407,16 @@ AsyncSceneLoadInfoRef Scene::GetCurrentSceneLoadInfo() noexcept {
     return Impl::GetCurrentSceneLoadInfo();
 }
 
+bool Scene::IsSceneFound() noexcept {
+    auto load_info = Impl::GetCurrentSceneLoadInfo().Get();
+    return load_info != nullptr;
+}
+
+bool Scene::IsSceneReady() noexcept {
+    auto load_info = Impl::GetCurrentSceneLoadInfo().Get();
+    return load_info != nullptr && load_info->IsReady();
+}
+
 bool Scene::RegisterAsyncLoadInfo(AsyncSceneLoadInfoRef _load_info) {
     if (Impl::m_load_info) {
         if (Impl::m_load_info.IsValid() && !Impl::m_load_info->IsReady()) {

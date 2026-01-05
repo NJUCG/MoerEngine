@@ -385,6 +385,11 @@ public:
 
     static AsyncSceneLoadInfoRef GetCurrentSceneLoadInfo() noexcept;
 
+    // 场景是否正在加载（是否找到场景文件）
+    static bool IsSceneFound() noexcept;
+    // 场景是否加载完成
+    static bool IsSceneReady() noexcept;
+
     static bool RegisterAsyncLoadInfo(AsyncSceneLoadInfoRef _load_info);
     static void ResetAsyncLoadInfo() noexcept;
 

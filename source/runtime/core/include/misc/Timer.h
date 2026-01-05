@@ -39,13 +39,15 @@ private:
 // 返回true后，默认重置计时器，可以通过额外的参数控制是否重置
 class LoopedTimer {
 public:
-    LoopedTimer(double interval_seconds) noexcept :
+    LoopedTimer(double interval_seconds, bool is_trigger_immediately = true) noexcept :
         m_interval(std::chrono::duration<double>(interval_seconds)) {
-        Reset();
+
+        Reset(is_trigger_immediately);
     }
 
     bool Tick(bool is_reset_when_trigger = true) noexcept {
         auto now = std::chrono::system_clock::now();
+
         if (now - m_last_time >= m_interval) {
             if (is_reset_when_trigger) {
                 m_last_time = now;
@@ -55,8 +57,14 @@ public:
         return false;
     }
 
-    void Reset() noexcept {
-        m_last_time = std::chrono::system_clock::now();
+    void Reset(bool is_trigger_immediately) noexcept {
+        using sys_clock = std::chrono::system_clock;
+        if (is_trigger_immediately) {
+            m_last_time = sys_clock::now() - std::chrono::duration_cast<sys_clock::duration>(m_interval) -
+                          std::chrono::milliseconds(1);
+        } else {
+            m_last_time = sys_clock::now();
+        }
     }
 
 private:

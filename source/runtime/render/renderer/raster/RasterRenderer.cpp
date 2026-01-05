@@ -2,7 +2,6 @@
 
 // Runtime
 #include "renderer/raster/RasterRenderer.h"
-#include "misc/Timer.h"
 
 // Editor
 #include "AaPass.h"
@@ -27,7 +26,7 @@
 namespace Moer::Render::Raster {
 
 RasterRenderer::RasterRenderer(
-    SharedPtr<uint2>                                          _resolution,
+    uint2&                                                    _resolution,
     const SharedPtr<EditorConfig>                             _config,
     const EngineHooks&                                        _hooks,
     std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
@@ -96,14 +95,9 @@ void RasterRenderer::Run(const SharedPtr<EditorConfig> editor_config, const Engi
 bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     auto& raster_context = *raster_context_ptr;
 
-    if (hooks.on_tick_ui) {
-        hooks.on_tick_ui();
-    }
+    LogSceneLoadStatus(*editor_config);
 
-    if (hooks.on_raster_register_frame_buffers) {
-        hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
-    }
-
+    // MARK: 1. Tick Window
     auto window_state = TickWindowContext(hooks);
 
     if (window_state == EWindowState::Hiding) {
@@ -124,7 +118,15 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         raster_context.AllocateFrameBuffers();
 
 #if WITH_CUDA
-        cuda_pass->RecreateResource(raster_context.textures.ao_output.tex);
+        tensor_rt_pass->RecreateResource(
+            raster_context,
+            raster_context.textures.ao_output_ambient_only.tex,
+            raster_context.textures.depth_linear_sampler.tex->CastToTextureRef(),
+            // 下面这个color，需要传入lighting_output，而非ao_output，因为模型的输入需要不带ao的color
+            raster_context.textures.lighting_output.tex,
+            raster_context.textures.camera_motion_vector.tex,
+            raster_context.textures.ao_output_ambient_only_1.tex
+        );
 #endif
 
         if (hooks.on_raster_register_frame_buffers) {
@@ -138,25 +140,20 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         assert(false);
     }
 
+    // MARK: 2. Tick UI
+    if (hooks.on_tick_ui) {
+        hooks.on_tick_ui();
+    }
+
+    if (hooks.on_raster_register_frame_buffers) {
+        hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
+    }
+
     TextureRef default_output_texture = raster_context.textures.output.tex;
 
-    bool is_loading_scene = Scene::GetCurrentSceneLoadInfo().Get();
-    bool is_loaded_scene  = is_loading_scene && Scene::GetCurrentSceneLoadInfo()->IsReady();
+    // MARK: 3. Run Render Passes
 
-    if (is_loaded_scene == false) {
-        if (is_loading_scene == false) {
-            // 没有找到场景，每隔一段时间在命令行打印提示信息，避免用户不知道发生了什么
-            static LoopedTimer timer(2.0);
-            if (timer.Tick()) { // 每隔1s触发一次
-                LOG_WARNING(
-                    "Don't find scene or scene format isn't supported. Please load a valid scene. Latest "
-                    "attempted scene: {}",
-                    editor_config->scene_path
-                );
-            }
-        }
-
-    } else {
+    if (Scene::IsSceneReady()) {
         if (first_load) {
             first_load = false;
 
@@ -208,8 +205,6 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // - CUDA Pass
 #if WITH_CUDA
-        // processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
-
         if (raster_config.ai_is_cuda_enabled) {
             processing_image =
                 tensor_rt_pass->Process(raster_context, raster_config, lighting_pass_output, ao_only_idx);

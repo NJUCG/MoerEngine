@@ -10,6 +10,7 @@
 #endif
 
 #include "log/LogSystem.h"
+#include "misc/Timer.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
@@ -194,7 +195,12 @@ public:
     }
 
     // MARK: Engine1 Load
-    void Engine1_LoadTexturesToBuffers(TensorRTResource& res, uint ao_only_idx, bool is_verbose) {
+    void Engine1_LoadTexturesToBuffers(
+        TensorRTResource& res,
+        uint              ao_only_idx,
+        bool              is_verbose,
+        bool              is_force_ldr
+    ) {
 
         int nbIOTensors = engine->getNbIOTensors();
 
@@ -224,6 +230,9 @@ public:
                 CudaTexture::EFormatElementType type       = src_tex.GetElementType();
                 size_t                          type_count = src_tex.GetElementTypeCount();
 
+                bool use_tone_mapping =
+                    is_force_ldr && (std::string(name).find("color") != std::string::npos);
+
                 if (type == CudaTexture::EFormatElementType::UCHAR && type_count == 4) {
                     Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Uchar4(
                         gridSize,
@@ -232,6 +241,7 @@ public:
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
+                        use_tone_mapping,
                         src_tex.width,
                         src_tex.height,
                         dst_width,
@@ -246,6 +256,7 @@ public:
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
+                        use_tone_mapping,
                         src_tex.width,
                         src_tex.height,
                         dst_width,
@@ -260,6 +271,7 @@ public:
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
+                        use_tone_mapping,
                         src_tex.width,
                         src_tex.height,
                         dst_width,
@@ -274,6 +286,7 @@ public:
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
+                        use_tone_mapping,
                         src_tex.width,
                         src_tex.height,
                         dst_width,
@@ -288,6 +301,7 @@ public:
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
+                        use_tone_mapping,
                         src_tex.width,
                         src_tex.height,
                         dst_width,
@@ -302,6 +316,7 @@ public:
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
+                        use_tone_mapping,
                         src_tex.width,
                         src_tex.height,
                         dst_width,
@@ -770,6 +785,7 @@ public:
         TextureRef     prev_ao_tex
     ) {
         res.reset();
+        res = MakeUnique<TensorRTResource>(context, ao_tex, depth_tex, color_tex, motion_tex, prev_ao_tex);
     }
 
     /**
@@ -813,6 +829,10 @@ public:
     ) {
         assert(ui_config.ai_is_cuda_enabled);
 
+        // log
+
+        LogTips(ui_config);
+
         // signal
 
         res->semaphore.Signal();
@@ -826,7 +846,7 @@ public:
 
         // engine1->LoadRandomValueToBuffers(*res);
         // engine1->LoadZeroToBuffers();
-        engine1->Engine1_LoadTexturesToBuffers(*res, ao_only_idx, false);
+        engine1->Engine1_LoadTexturesToBuffers(*res, ao_only_idx, false, ui_config.ai_trt_force_ldr);
         sync();
 
         engine1->Run(res->semaphore.stream_to_run);
@@ -845,7 +865,8 @@ public:
             res->color,
             ui_config.ai_trt_visualize_buffer.substr(8).c_str(),
             res->semaphore.stream_to_run,
-            1.0f
+            1.0f,
+            ui_config.ai_trt_force_ldr
         );
 
         sync();
@@ -860,13 +881,34 @@ public:
     }
 
 private:
+    void LogTips(const RasterConfig& ui_config) {
+        if (ui_config.ao_mode != EAoMode::RTAO) {
+            static LoopedTimer timer(2.0);
+            if (timer.Tick()) { // 每隔2s触发一次
+                LOG_WARNING("Ambient Occlusion Mode is not RTAO. Please switch to RTAO!");
+            }
+        }
+
+        if (res->color.width != 1920 || res->color.height != 1080) {
+            static LoopedTimer timer(2.0);
+            if (timer.Tick()) { // 每隔2s触发一次
+                LOG_WARNING(
+                    "This network only support 1920 x 1080. Current resolution is {} x {}.",
+                    res->color.width,
+                    res->color.height
+                );
+            }
+        }
+    }
+
     // MARK: Visualize
     void VisualizeFeature(
         TensorRTEngine&     engine,
         CudaTexture&        color,
         const char*         name,
         const cudaStream_t& stream_to_run,
-        float               debug_param
+        float               debug_param,
+        bool                is_force_ldr
     ) {
 
         const static uint64 TILE = 16;
@@ -885,12 +927,16 @@ private:
             return;
         }
 
+        // 只要输出中包含"color"这个子串，就启用 tone mapping
+        bool use_tone_mapping = is_force_ldr && (std::string(name).find("color") != std::string::npos);
+
         Moer::Cuda::VisualizeFeatureBuf(
             blocksPerGrid,
             threadsPerBlock,
             stream_to_run,
             color.GetSurfaceObjectList(),
             (__half*)engine.device_mem_addr_map[name],
+            use_tone_mapping,
             engine.engine->getTensorShape(name).d[3], // width
             engine.engine->getTensorShape(name).d[2], // height
             engine.engine->getTensorShape(name).d[1], // channels

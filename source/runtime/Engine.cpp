@@ -92,22 +92,22 @@ void Engine::Init(int argc, const char** argv) {
     m_editor_config = MakeShared<EditorConfig>();
 
     // Init WindowContext
-    m_editor_config->resolution = MakeShared<uint2>(
+    m_editor_config->SetResolution(
         ConfigManager::GetInstance().GetConfig().editor.width,
         ConfigManager::GetInstance().GetConfig().editor.height
     );
     bool b_fullscreen = ConfigManager::GetInstance().GetConfig().editor.fullscreen;
     LOG_INFO(
         "Editor Window Resolution : {}x{}; Fullscreen : {}",
-        m_editor_config->resolution->x,
-        m_editor_config->resolution->y,
+        m_editor_config->GetResolution().x,
+        m_editor_config->GetResolution().y,
         b_fullscreen
     );
 
     WindowContext::Init(SurfaceInitInfo(
         RenderDevice::Get().GetRHIType(),
-        m_editor_config->resolution->x,
-        m_editor_config->resolution->y,
+        m_editor_config->GetResolution().x,
+        m_editor_config->GetResolution().y,
         "MoerEditor",
         b_fullscreen
     ));
@@ -131,13 +131,13 @@ void Engine::Run(const EngineHooks& hooks) {
 
         if (m_editor_config->selected_render_method == ERenderMethod::Raster) {
             m_renderer = MakeUnique<Raster::RasterRenderer>(
-                m_editor_config->resolution, m_editor_config, hooks, wtf_load_scene
+                m_editor_config->GetResolution(), m_editor_config, hooks, wtf_load_scene
             );
 
         } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
             // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);
             m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
-                m_editor_config->resolution, m_editor_config, hooks, wtf_load_scene, *m_runtime_assets
+                m_editor_config->GetResolution(), m_editor_config, hooks, wtf_load_scene, *m_runtime_assets
             );
 
         } else {

@@ -52,7 +52,7 @@ union FloatBits {
 static Box3D scene_bounding{};
 
 RaytracingRenderer::RaytracingRenderer(
-    SharedPtr<uint2>                                          _resolution,
+    uint2&                                                    _resolution,
     const SharedPtr<EditorConfig>                             _config,
     const EngineHooks&                                        _hooks,
     std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async,
@@ -74,7 +74,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     ShaderUtils sd_utils(device, manager);
 
     ImportantSamplingParams is_params{};
-    is_params.render_size = *resolution;
+    is_params.render_size = resolution;
     ImportanceSamplingContext is_ctx(is_params);
 
     bool first_load = true;
@@ -95,12 +95,12 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     float elapsed_time = 0.0f;
 
     TextureRef output = device.CreateTexture(
-        Extent2D(resolution->x, resolution->y), swapchain->format, ETextureUsageFlags::COLOR_ATTACHMENT
+        Extent2D(resolution.x, resolution.y), swapchain->format, ETextureUsageFlags::COLOR_ATTACHMENT
     );
 
     TextureRef ui_frame_buffer = device.CreateTexture(
         "ui_frame_buffer",
-        Extent2D(resolution->x, resolution->y),
+        Extent2D(resolution.x, resolution.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
     );
@@ -147,7 +147,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     UniquePtr<ToneMappingPass>  tone_mapping_pass;
     UniquePtr<UiCombinePass>    ui_combine_pass = MakeUnique<UiCombinePass>(manager);
 
-    rt_ctx->SetResolution(*resolution);
+    rt_ctx->SetResolution(resolution);
     AntialiasPass::CreateInfo antialias_pass_info{
         .motion              = rt_ctx->frame_rt.motion,
         .feedback_color_ping = rt_ctx->frame_rt.feedback_color_ping,
@@ -164,7 +164,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 #if WITH_NRD
     uint64 nrd_time      = 0ull;
     auto*  nrd_ext       = device.LoadExtension<Ext::NRDExtension>();
-    auto   nrd_interface = nrd_ext->CreateInterface(max_frame_in_flight, resolution->x, resolution->y);
+    auto   nrd_interface = nrd_ext->CreateInterface(max_frame_in_flight, resolution.x, resolution.y);
 #endif
 
     VisualizeConfig visualize_config{};
@@ -188,11 +188,9 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
 
-        if (hooks.on_tick_ui) {
-            hooks.on_tick_ui();
-        }
-
         RaytracingConfig& ui_config = editor_config->raytracing_config;
+
+        LogSceneLoadStatus(*editor_config);
 
         auto window_state = TickWindowContext(hooks);
 
@@ -207,17 +205,16 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             continue;
 
         } else if (window_state == EWindowState::SizeChanged) {
-            create_frame_buffers(*resolution);
+            create_frame_buffers(resolution);
 
-            rt_ctx->SetResolution(*resolution);
+            rt_ctx->SetResolution(resolution);
 
             is_ctx.~ImportanceSamplingContext();
-            is_params.render_size = *resolution;
+            is_params.render_size = resolution;
             new (&is_ctx) ImportanceSamplingContext(is_params);
 
 #if WITH_NRD
-            nrd_interface =
-                nrd_ext->RecreateInterface(std::move(nrd_interface), resolution->x, resolution->y);
+            nrd_interface = nrd_ext->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
 #endif
 
             antialias_pass_info.motion              = rt_ctx->frame_rt.motion;
@@ -233,6 +230,10 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         } else {
             assert(false);
+        }
+
+        if (hooks.on_tick_ui) {
+            hooks.on_tick_ui();
         }
 
         timer.Stop();
@@ -626,7 +627,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     nrd_interface->Begin();
                     nrd_interface->UpdateCommonSettings(
                         nrd_time++,
-                        Vector2ui(resolution->x, resolution->y),
+                        Vector2ui(resolution.x, resolution.y),
                         antialias_pass->GetPixelOffset(),
                         Transpose(camera->GetViewMatrix()),
                         Transpose(camera->GetProjectionMatrix())
@@ -685,7 +686,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 TextureRef texture =
                     scene.GetGpuScene().material_textures[selected_material_texture_name].texture;
                 ShowTextureParams show_texture_params{};
-                show_texture_params.dst_dim = *resolution;
+                show_texture_params.dst_dim = resolution;
                 show_texture_params.bdls_handle =
                     scene.GetGpuScene().material_textures[selected_material_texture_name].bindless_handle;
                 show_texture_params.mip_level    = mip_level;

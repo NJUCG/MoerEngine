@@ -364,6 +364,52 @@ __device__ float4 convertToFloat4<moer_half4>(const moer_half4& t) {
     return make_float4(t.x, t.y, t.z, t.w);
 }
 
+// Local device helpers: small, static, not exported
+static __device__ float tone_map_reinhard_scalar(float v, float a) {
+    if (!isfinite(v))
+        return 0.0f;
+    float denom = v + a;
+    if (denom <= 1e-8f)
+        return 0.0f;
+    float r = v / denom;
+    if (!isfinite(r))
+        return 0.0f;
+    return r;
+}
+
+static __device__ float4 tone_map_reinhard(const float4& v, float a) {
+    float4 out;
+    out.x = tone_map_reinhard_scalar(v.x, a);
+    out.y = tone_map_reinhard_scalar(v.y, a);
+    out.z = tone_map_reinhard_scalar(v.z, a);
+    out.w = v.w; // preserve alpha/unmodified
+    return out;
+}
+
+// Local inverse helpers: LDR -> HDR inverse of v' = v/(v + a)
+static __device__ float inverse_tone_map_reinhard_scalar(float vp, float a) {
+    if (!isfinite(vp))
+        return 0.0f;
+    // avoid division by zero when vp -> 1.0
+    float       denom = 1.0f - vp;
+    const float eps   = 1e-6f;
+    if (denom <= eps)
+        denom = eps;
+    float v = (a * vp) / denom;
+    if (!isfinite(v))
+        return 0.0f;
+    return v;
+}
+
+static __device__ float4 inverse_tone_map_reinhard(const float4& vp, float a) {
+    float4 out;
+    out.x = inverse_tone_map_reinhard_scalar(vp.x, a);
+    out.y = inverse_tone_map_reinhard_scalar(vp.y, a);
+    out.z = inverse_tone_map_reinhard_scalar(vp.z, a);
+    out.w = vp.w; // preserve alpha
+    return out;
+}
+
 // MARK: - kernel
 
 // 模板化的多通道复制函数
@@ -371,6 +417,7 @@ template<typename T, typename SurfaceEType>
 __global__ void CopySurfaceToBuffer_Resize_NCHW_Template(
     cudaSurfaceObject_t* surface,
     T*                   output_buffer,
+    bool                 use_tone_mapping,
     int                  src_width,
     int                  src_height,
     int                  dst_width,
@@ -437,6 +484,12 @@ __global__ void CopySurfaceToBuffer_Resize_NCHW_Template(
             pixel.y = t.y;
         } else if (channels == 1) {
             pixel.x = t.x; // cuda支持float1，可以通过t.x访问值
+        }
+
+        // HDR -> LDR
+        if (use_tone_mapping) {
+            // apply a small, local Reinhard-style tone map to keep HDR values bounded
+            pixel = tone_map_reinhard(pixel, 1.0f);
         }
 
         // 转换为 NCHW 格式
@@ -524,6 +577,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Uchar4(
     cudaStream_t         stream,
     cudaSurfaceObject_t* surface,
     __half*              output_buffer,
+    bool                 use_tone_mapping,
     int                  src_width,
     int                  src_height,
     int                  dst_width,
@@ -532,7 +586,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Uchar4(
 ) {
     assert(1 <= channels && channels <= 4);
     CopySurfaceToBuffer_Resize_NCHW_Template<__half, uchar4><<<gridSize, blockSize, 0, stream>>>(
-        surface, output_buffer, src_width, src_height, dst_width, dst_height, channels, 0
+        surface, output_buffer, use_tone_mapping, src_width, src_height, dst_width, dst_height, channels, 0
     );
 }
 
@@ -542,6 +596,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Uchar1(
     cudaStream_t         stream,
     cudaSurfaceObject_t* surface,
     __half*              output_buffer,
+    bool                 use_tone_mapping,
     int                  src_width,
     int                  src_height,
     int                  dst_width,
@@ -550,7 +605,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Uchar1(
 ) {
     assert(1 <= channels && channels <= 4);
     CopySurfaceToBuffer_Resize_NCHW_Template<__half, uchar1><<<gridSize, blockSize, 0, stream>>>(
-        surface, output_buffer, src_width, src_height, dst_width, dst_height, channels, 0
+        surface, output_buffer, use_tone_mapping, src_width, src_height, dst_width, dst_height, channels, 0
     );
 }
 
@@ -560,6 +615,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Float1(
     cudaStream_t         stream,
     cudaSurfaceObject_t* surface,
     __half*              output_buffer,
+    bool                 use_tone_mapping,
     int                  src_width,
     int                  src_height,
     int                  dst_width,
@@ -568,7 +624,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Float1(
 ) {
     assert(1 <= channels && channels <= 4);
     CopySurfaceToBuffer_Resize_NCHW_Template<__half, float1><<<gridSize, blockSize, 0, stream>>>(
-        surface, output_buffer, src_width, src_height, dst_width, dst_height, channels, 0
+        surface, output_buffer, use_tone_mapping, src_width, src_height, dst_width, dst_height, channels, 0
     );
 }
 
@@ -578,6 +634,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Float4(
     cudaStream_t         stream,
     cudaSurfaceObject_t* surface,
     __half*              output_buffer,
+    bool                 use_tone_mapping,
     int                  src_width,
     int                  src_height,
     int                  dst_width,
@@ -586,7 +643,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Float4(
 ) {
     assert(1 <= channels && channels <= 4);
     CopySurfaceToBuffer_Resize_NCHW_Template<__half, float4><<<gridSize, blockSize, 0, stream>>>(
-        surface, output_buffer, src_width, src_height, dst_width, dst_height, channels, 0
+        surface, output_buffer, use_tone_mapping, src_width, src_height, dst_width, dst_height, channels, 0
     );
 }
 
@@ -596,6 +653,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Half2(
     cudaStream_t         stream,
     cudaSurfaceObject_t* surface,
     __half*              output_buffer,
+    bool                 use_tone_mapping,
     int                  src_width,
     int                  src_height,
     int                  dst_width,
@@ -604,7 +662,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Half2(
 ) {
     assert(1 <= channels && channels <= 4);
     CopySurfaceToBuffer_Resize_NCHW_Template<__half, __half2><<<gridSize, blockSize, 0, stream>>>(
-        surface, output_buffer, src_width, src_height, dst_width, dst_height, channels, 0
+        surface, output_buffer, use_tone_mapping, src_width, src_height, dst_width, dst_height, channels, 0
     );
 }
 
@@ -614,6 +672,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Half4(
     cudaStream_t         stream,
     cudaSurfaceObject_t* surface,
     __half*              output_buffer,
+    bool                 use_tone_mapping,
     int                  src_width,
     int                  src_height,
     int                  dst_width,
@@ -622,7 +681,7 @@ void CopySurfaceToBuffer_Resize_NCHW_Half_Half4(
 ) {
     assert(1 <= channels && channels <= 4);
     CopySurfaceToBuffer_Resize_NCHW_Template<__half, moer_half4><<<gridSize, blockSize, 0, stream>>>(
-        surface, output_buffer, src_width, src_height, dst_width, dst_height, channels, 0
+        surface, output_buffer, use_tone_mapping, src_width, src_height, dst_width, dst_height, channels, 0
     );
 }
 
@@ -676,6 +735,7 @@ void FillRandomHalf(
 __global__ void VisualizeFeatureBuf_Kernel(
     cudaSurfaceObject_t* surface,
     __half*              feature_buffer, // [must 1, must 19, src_width, src_height]
+    bool                 use_tone_mapping,
     int                  src_width,
     int                  src_height,
     int                  src_channels,
@@ -715,6 +775,20 @@ __global__ void VisualizeFeatureBuf_Kernel(
             r = g = b = feature_buffer[0 * src_height * src_width + base_idx];
         }
 
+        if (use_tone_mapping) {
+            // LDR -> HDR (inverse Reinhard): v = a * v' / (1 - v')
+            float fr = __half2float(r);
+            float fg = __half2float(g);
+            float fb = __half2float(b);
+
+            float4 vf = make_float4(fr, fg, fb, 1.0f);
+            vf        = inverse_tone_map_reinhard(vf, 1.0f);
+
+            r = __float2half(vf.x);
+            g = __float2half(vf.y);
+            b = __float2half(vf.z);
+        }
+
         // 写入 PF_R16G16B16A16_SFLOAT
         uint32_t offset = dst_x * sizeof(__half) * 4;
         surf2Dwrite(*reinterpret_cast<uint16_t*>(&r), surface[0], offset, dst_y);
@@ -730,6 +804,7 @@ void VisualizeFeatureBuf(
     cudaStream_t         stream,
     cudaSurfaceObject_t* surface,
     __half*              feature_buffer,
+    bool                 use_tone_mapping,
     int                  src_width,
     int                  src_height,
     int                  src_channels,
@@ -738,7 +813,15 @@ void VisualizeFeatureBuf(
     float                debug_param
 ) {
     VisualizeFeatureBuf_Kernel<<<gridSize, blockSize, 0, stream>>>(
-        surface, feature_buffer, src_width, src_height, src_channels, dst_width, dst_height, debug_param
+        surface,
+        feature_buffer,
+        use_tone_mapping,
+        src_width,
+        src_height,
+        src_channels,
+        dst_width,
+        dst_height,
+        debug_param
     );
 }
 
