@@ -850,7 +850,7 @@ void VkTracker::ResolveBarriers() {
             barrier.subresourceRange.aspectMask =
                 VulkanEnumTranslator::METoVKImageAspectFlags(texture->GetAspectFlags());
             barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount     = 1;
+            barrier.subresourceRange.layerCount     = texture->GetNumArray();
             barrier.subresourceRange.baseMipLevel   = 0;
             barrier.subresourceRange.levelCount     = texture->GetNumMips();
             barrier.oldLayout                       = state.src_layout;

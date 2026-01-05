@@ -228,8 +228,8 @@ public:
             if (i == 0) { // first time
                 // 延迟创建，这样可以读取width & height
                 cubemap_tex.tex = device.CreateCubeMap(
-                    "cubemap_tex",
-                    Extent2D(width, height), //TODO:动态参数？
+                    "Skybox Cubemap",
+                    Extent2D(width, height),
                     PF_R8G8B8A8_UNORM,
                     ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
                 );
@@ -237,7 +237,9 @@ public:
             }
 
             cmd_list.CopyFrom(
-                std::span<Moer::byte>((Moer::byte*)data, width * height * channels), skybox_view.Slice(i)
+                std::span<Moer::byte>((Moer::byte*)data, width * height * channels),
+                skybox_view.Slice(i),
+                std::format("Skybox Cubemap #{}", i)
             );
 
             cmd_list.AddCallback([data]() {
