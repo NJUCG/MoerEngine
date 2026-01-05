@@ -188,10 +188,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
 
-        if (hooks.on_tick_ui) {
-            hooks.on_tick_ui();
-        }
-
         RaytracingConfig& ui_config = editor_config->raytracing_config;
 
         auto window_state = TickWindowContext(hooks);
@@ -233,6 +229,10 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         } else {
             assert(false);
+        }
+
+        if (hooks.on_tick_ui) {
+            hooks.on_tick_ui();
         }
 
         timer.Stop();

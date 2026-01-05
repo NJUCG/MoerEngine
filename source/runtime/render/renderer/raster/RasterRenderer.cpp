@@ -96,14 +96,7 @@ void RasterRenderer::Run(const SharedPtr<EditorConfig> editor_config, const Engi
 bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     auto& raster_context = *raster_context_ptr;
 
-    if (hooks.on_tick_ui) {
-        hooks.on_tick_ui();
-    }
-
-    if (hooks.on_raster_register_frame_buffers) {
-        hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
-    }
-
+    // MARK: 1. Tick Window
     auto window_state = TickWindowContext(hooks);
 
     if (window_state == EWindowState::Hiding) {
@@ -138,7 +131,18 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         assert(false);
     }
 
+    // MARK: 2. Tick UI
+    if (hooks.on_tick_ui) {
+        hooks.on_tick_ui();
+    }
+
+    if (hooks.on_raster_register_frame_buffers) {
+        hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
+    }
+
     TextureRef default_output_texture = raster_context.textures.output.tex;
+
+    // MARK: 3. Run Render Passes
 
     bool is_loading_scene = Scene::GetCurrentSceneLoadInfo().Get();
     bool is_loaded_scene  = is_loading_scene && Scene::GetCurrentSceneLoadInfo()->IsReady();
