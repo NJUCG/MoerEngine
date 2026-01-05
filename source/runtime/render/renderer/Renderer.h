@@ -55,6 +55,7 @@ public:
     void ReleaseResources();
 
     EWindowState TickWindowContext(const EngineHooks& hooks);
+    void         LogSceneLoadStatus(const EditorConfig& config) const;
 
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;

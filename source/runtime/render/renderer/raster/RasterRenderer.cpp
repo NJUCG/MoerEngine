@@ -2,7 +2,6 @@
 
 // Runtime
 #include "renderer/raster/RasterRenderer.h"
-#include "misc/Timer.h"
 
 // Editor
 #include "AaPass.h"
@@ -96,6 +95,8 @@ void RasterRenderer::Run(const SharedPtr<EditorConfig> editor_config, const Engi
 bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     auto& raster_context = *raster_context_ptr;
 
+    LogSceneLoadStatus(*editor_config);
+
     // MARK: 1. Tick Window
     auto window_state = TickWindowContext(hooks);
 
@@ -144,23 +145,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
     // MARK: 3. Run Render Passes
 
-    bool is_loading_scene = Scene::GetCurrentSceneLoadInfo().Get();
-    bool is_loaded_scene  = is_loading_scene && Scene::GetCurrentSceneLoadInfo()->IsReady();
-
-    if (is_loaded_scene == false) {
-        if (is_loading_scene == false) {
-            // 没有找到场景，每隔一段时间在命令行打印提示信息，避免用户不知道发生了什么
-            static LoopedTimer timer(2.0);
-            if (timer.Tick()) { // 每隔1s触发一次
-                LOG_WARNING(
-                    "Don't find scene or scene format isn't supported. Please load a valid scene. Latest "
-                    "attempted scene: {}",
-                    editor_config->scene_path
-                );
-            }
-        }
-
-    } else {
+    if (Scene::IsSceneReady()) {
         if (first_load) {
             first_load = false;
 

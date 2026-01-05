@@ -190,6 +190,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         RaytracingConfig& ui_config = editor_config->raytracing_config;
 
+        LogSceneLoadStatus(*editor_config);
+
         auto window_state = TickWindowContext(hooks);
 
         if (window_state == EWindowState::Hiding) {
