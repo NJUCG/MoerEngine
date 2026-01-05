@@ -155,7 +155,7 @@ struct RasterConfig {
     EAaMode aa_mode = EAaMode::SMAA_1X;
 
     // MARK: AO
-    EAoMode ao_mode            = EAoMode::SSAO;
+    EAoMode ao_mode            = EAoMode::RTAO;
     float   ssao_intensity     = 1.0f;
     int     ssao_spp           = 16;
     int     ssao_sample_radius = 2;

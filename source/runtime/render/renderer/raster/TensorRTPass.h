@@ -785,6 +785,7 @@ public:
         TextureRef     prev_ao_tex
     ) {
         res.reset();
+        res = MakeUnique<TensorRTResource>(context, ao_tex, depth_tex, color_tex, motion_tex, prev_ao_tex);
     }
 
     /**
@@ -885,6 +886,17 @@ private:
             static LoopedTimer timer(2.0);
             if (timer.Tick()) { // 每隔2s触发一次
                 LOG_WARNING("Ambient Occlusion Mode is not RTAO. Please switch to RTAO!");
+            }
+        }
+
+        if (res->color.width != 1920 || res->color.height != 1080) {
+            static LoopedTimer timer(2.0);
+            if (timer.Tick()) { // 每隔2s触发一次
+                LOG_WARNING(
+                    "This network only support 1920 x 1080. Current resolution is {} x {}.",
+                    res->color.width,
+                    res->color.height
+                );
             }
         }
     }

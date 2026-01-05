@@ -118,7 +118,15 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         raster_context.AllocateFrameBuffers();
 
 #if WITH_CUDA
-        cuda_pass->RecreateResource(raster_context.textures.ao_output.tex);
+        tensor_rt_pass->RecreateResource(
+            raster_context,
+            raster_context.textures.ao_output_ambient_only.tex,
+            raster_context.textures.depth_linear_sampler.tex->CastToTextureRef(),
+            // 下面这个color，需要传入lighting_output，而非ao_output，因为模型的输入需要不带ao的color
+            raster_context.textures.lighting_output.tex,
+            raster_context.textures.camera_motion_vector.tex,
+            raster_context.textures.ao_output_ambient_only_1.tex
+        );
 #endif
 
         if (hooks.on_raster_register_frame_buffers) {
