@@ -198,6 +198,7 @@ struct RasterConfig {
     int         ai_trt_visualize_buffer_idx = s_ai_trt_visualize_buffer_array.size() - 2; // output
     std::string ai_trt_visualize_buffer =
         s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2];
+    bool ai_trt_force_ldr = true;
 
     // MARK: Shadow
     EShadowMapMode shadow_map_mode              = EShadowMapMode::CSM;

@@ -412,12 +412,27 @@ void RasterUI::ShowConfig() {
     if (ImGui::TreeNode("CUDA", "CUDA: [%s]", (m_config.ai_is_cuda_enabled == 1 ? "Enable" : "Disable"))) {
         if (ImGui::Selectable("Enable", m_config.ai_is_cuda_enabled == 1)) {
             m_config.ai_is_cuda_enabled = 1;
+            // 自动选择out_final_output
+            for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {
+                if (strcmp(s_ai_trt_visualize_buffer_array[i].c_str(), "Engine2 out_final_output") == 0) {
+                    m_config.ai_trt_visualize_buffer_idx = i;
+                }
+            }
+            // 自动启用RTAO
+            if (m_config.ao_mode != EAoMode::RTAO) {
+                m_config.ao_mode = EAoMode::RTAO;
+                LOG_INFO("Ambient Occlusion Mode switched to RTAO automatically.");
+            }
         }
         draw_border();
         if (ImGui::Selectable("Disable", m_config.ai_is_cuda_enabled == 0)) {
             m_config.ai_is_cuda_enabled = 0;
         }
         draw_border();
+
+        // 这里这个选项，是为了修复ONNX网络无法处理HDR的问题
+        // 此处使用了一个非常简单的Reinhard ToneMapping，没有自动曝光。所以明亮处会过曝
+        ImGui::Checkbox("Force LDR Input & Output", &m_config.ai_trt_force_ldr);
 
         if (m_config.ai_is_cuda_enabled == 1) {
             for (uint i = 0; i < s_ai_trt_visualize_buffer_array.size(); i++) {

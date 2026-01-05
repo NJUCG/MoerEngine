@@ -197,8 +197,6 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // - CUDA Pass
 #if WITH_CUDA
-        // processing_image = cuda_pass->Process(raster_context, raster_config, processing_image);
-
         if (raster_config.ai_is_cuda_enabled) {
             processing_image =
                 tensor_rt_pass->Process(raster_context, raster_config, lighting_pass_output, ao_only_idx);
