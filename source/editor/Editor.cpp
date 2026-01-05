@@ -24,10 +24,10 @@ void Editor::Init(int argc, const char** argv) {
 
 void Editor::Run() {
     // init
-    auto             ui_renderer = MakeUnique<Render::UIRenderer>(RenderDevice::Get());
-    SharedPtr<uint2> resolution  = m_engine->GetResolution();
+    auto   ui_renderer = MakeUnique<Render::UIRenderer>(RenderDevice::Get());
+    uint2& resolution  = m_engine->GetResolution();
 
-    auto editor_ui = MakeUnique<EditorUI>(std::move(ui_renderer), resolution, m_engine->GetEditorConfig());
+    auto editor_ui = MakeUnique<EditorUI>(std::move(ui_renderer), m_engine->GetEditorConfig());
 
     // run
     m_engine->Run(
@@ -60,7 +60,7 @@ void Editor::Run() {
                     return ui_combine_pass->Process(
                         cmd_list,
                         editor_ui->IsSeperateWindow(),
-                        editor_ui->GetConfig()->resolution,
+                        editor_ui->GetConfig()->GetResolution(),
                         editor_ui->GetSceneColorPos(),
                         editor_ui->GetSceneColorResolution(),
                         editor_ui->GetWindowFrameBuffer(),

@@ -16,8 +16,8 @@ public:
     void Run(const Render::EngineHooks& hooks);
     void ShutDown();
 
-    SharedPtr<uint2> GetResolution() {
-        return m_editor_config->resolution;
+    uint2& GetResolution() {
+        return m_editor_config->GetResolution();
     }
 
     SharedPtr<EditorConfig> GetEditorConfig() {

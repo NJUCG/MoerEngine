@@ -81,15 +81,15 @@ public:
     }
 
     TextureRef Process(
-        CommandList&           cmd_list,
-        bool                   is_seperate_window,
-        const SharedPtr<uint2> resolution,
-        float2                 scene_color_pos,
-        float2                 scene_color_resolution,
-        TextureView            input_window_frame_buffer,
-        TextureView            input_color_texture,
-        TextureView            input_ui_texture, // TODO: is this necessary?
-        TextureView            default_output_texture
+        CommandList& cmd_list,
+        bool         is_seperate_window,
+        const uint2& resolution,
+        float2       scene_color_pos,
+        float2       scene_color_resolution,
+        TextureView  input_window_frame_buffer,
+        TextureView  input_color_texture,
+        TextureView  input_ui_texture, // TODO: is this necessary?
+        TextureView  default_output_texture
     ) {
         if (is_seperate_window && input_window_frame_buffer.GetTexture()) {
             // assert(false && "Has some bug here");
@@ -123,7 +123,7 @@ public:
                 combine_ui_pipelines.contains(default_output_texture.format) &&
                 "Unsupported format for CombineUIPipeline"
             );
-            float2 f_res  = float2(resolution->x, resolution->y);
+            float2 f_res  = float2(resolution.x, resolution.y);
             float2 min_xy = scene_color_pos / f_res;
             float2 max_xy = (scene_color_pos + scene_color_resolution) / f_res;
             cmd_list
@@ -136,7 +136,7 @@ public:
                 )
                 .Draw(
                     "Combine UI Pass",
-                    Rect2D(0, 0, resolution->x, resolution->y),
+                    Rect2D(0, 0, resolution.x, resolution.y),
                     {},
                     3,
                     {SingleDrawParam(3, 1, 0, 0, 0)},

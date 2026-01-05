@@ -17,13 +17,8 @@ using namespace Moer::Render;
 
 namespace Moer {
 
-EditorUI::EditorUI(
-    UniquePtr<Render::UIRenderer> renderer,
-    SharedPtr<uint2>              resolution,
-    SharedPtr<EditorConfig>       editor_config
-) :
+EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
     m_ui_renderer(std::move(renderer)),
-    m_resolution(resolution),
     m_config(editor_config),
     m_raster_ui(editor_config->raster_config),
     m_raytracing_ui(editor_config->raytracing_config) {
@@ -57,6 +52,8 @@ void EditorUI::InitFromConfigManager() {
 
 void EditorUI::TickUI() {
 
+    // 注：Resolution表示整个窗口的大小（不包含windows标题栏）；SceneColor只表示场景渲染区域的大小
+    // 更新SceneColor的分辨率
     m_config->aspect_ratio = m_scene_color_resolution.x / m_scene_color_resolution.y;
 
     m_ui_renderer->BeginGUIFrame();

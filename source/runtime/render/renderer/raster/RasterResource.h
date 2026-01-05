@@ -44,14 +44,14 @@ public:
     // 超分Pass前的分辨率
     uint2 GetResolutionBeforeSR() {
 #if WITH_CUDA && SUPER_RESOLUTION_ENABLED
-        return uint2(resolution->x / 2.0f, resolution->y / 2.0f);
+        return uint2(resolution.x / 2.0f, resolution.y / 2.0f);
 #else
-        return uint2(resolution->x, resolution->y);
+        return uint2(resolution.x, resolution.y);
 #endif
     }
     // 超分Pass后的分辨率（原始分辨率）
     uint2 GetResolutionOriginal() {
-        return uint2(resolution->x, resolution->y);
+        return uint2(resolution.x, resolution.y);
     }
 
     // MARK: Hold ownership
@@ -106,7 +106,7 @@ public:
     RaytracingSceneRef rt_scene;
 
 private:
-    SharedPtr<uint2> resolution; // Be careful, resolution is also a reference
+    uint2& resolution; // Be careful, resolution is also a reference
 
 public:
     // Constructor
@@ -117,7 +117,7 @@ public:
         BindlessArrayRef bdls,
         CommandList&     cmd_list,
         Scene&           scene,
-        SharedPtr<uint2> resolution
+        uint2&           resolution
     ) :
         device(device),
         manager(manager),

@@ -46,7 +46,7 @@ class RENDER_API RasterRenderer : public Renderer {
 
 public:
     RasterRenderer(
-        SharedPtr<uint2>                                          _resolution,
+        uint2&                                                    _resolution,
         const SharedPtr<EditorConfig>                             _config,
         const EngineHooks&                                        _hooks,
         std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
