@@ -96,6 +96,40 @@ else()
     message(STATUS "WITH_NRD=0 in Moer::Render")
 endif()
 
+# Link RenderDoc & 设置RENDER_DOC宏
+if (WITH_RENDERDOC)
+
+    # 如果不是windows，则报错
+    if (NOT WIN32)
+        message(FATAL_ERROR "RenderDoc integration is only supported on Windows.")
+    endif()
+
+    # 1. 检查源文件是否存在（防御性编程）
+    set(RENDERDOC_SRC_HEADER "${RENDERDOC_ROOT}/renderdoc_app.h")
+    
+    if (NOT EXISTS ${RENDERDOC_SRC_HEADER})
+        message(FATAL_ERROR "RenderDoc header not found at: ${RENDERDOC_SRC_HEADER}")
+    endif()
+
+    # 2. 定义临时存放头文件的目录 (在 build 目录下)
+    set(RENDERDOC_TEMP_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/renderdoc_include")
+
+    # 3. 创建目录并将文件拷贝进去
+    # configure_file 会在 cmake 配置阶段执行，COPYONLY 保证不修改文件内容
+    configure_file("${RENDERDOC_SRC_HEADER}" "${RENDERDOC_TEMP_INCLUDE_DIR}/renderdoc_app.h" COPYONLY)
+
+    # 4. 将该临时目录添加为包含路径
+    # 使用 RENDERDOC_TEMP_INCLUDE_DIR 这样你就可以直接 #include "renderdoc_app.h"
+    target_include_directories(${target_name} PUBLIC $<BUILD_INTERFACE:${RENDERDOC_TEMP_INCLUDE_DIR}>)
+
+    # 5. 设置宏
+    target_compile_definitions(${target_name} PUBLIC WITH_RENDERDOC=1)
+    message(STATUS "WITH_RENDERDOC=1 in Moer::Render.")
+else()
+    target_compile_definitions(${target_name} PUBLIC WITH_RENDERDOC=0)
+    message(STATUS "WITH_RENDERDOC=0 in Moer::Render")
+endif()
+
 target_compile_definitions(${target_name} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})
 # agilitysdk need to export symbols from exe, however current render module is dll, so not easy for exe to import this then export again...
 # so here use PUBLIC not PRIVATE
