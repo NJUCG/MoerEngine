@@ -166,7 +166,9 @@ TextureBuilder::BuildTexturesInBatch(Moer::Array<TextureBuilder>& builders) noex
                 builder.m_mip_levels,
                 builder.m_layer_levels
             );
-            // staging_buffers[count] = device.CreateBuffer<byte>(builder.m_data_size, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::CPU_VISIBLE);
+
+            // 原来这里是手动生成MIPMAP的！没有使用硬件生成MIPMAP！
+            // 问了下AI，发现这么做的是工业界标准。手动生成MIPMAP的优势还挺多的
             auto   target_texture = textures[builder.m_name];
             uint64 offset         = 0;
             for (uint i = 0; i < builder.m_mip_levels * builder.m_layer_levels; i++) {

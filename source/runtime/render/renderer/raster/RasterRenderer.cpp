@@ -1,9 +1,7 @@
 #pragma once
 
-// Runtime
 #include "renderer/raster/RasterRenderer.h"
 
-// Editor
 #include "AaPass.h"
 #include "AoPass.h"
 #include "BilateralFilterDenoiserPass.h"
@@ -16,6 +14,8 @@
 #include "ShadowDepthPass.h"
 #include "SsrPass.h"
 #include "TonemappingPass.h"
+#include "debug/RenderDocApi.h"
+#include "misc/Timer.h"
 
 #if WITH_CUDA
 #include "CudaPass.h"
@@ -269,6 +269,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     if (hooks.on_present_windows) {
         hooks.on_present_windows();
     }
+
     if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {
         return false; // break
     }

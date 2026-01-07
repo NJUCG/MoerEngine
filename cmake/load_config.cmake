@@ -25,3 +25,15 @@ if (EXISTS "${CMAKE_SOURCE_DIR}/EnableNrd.cmake")
 else()
     message(STATUS "EnableNrd.cmake not found")
 endif()
+
+# template.EnableRenderDoc.cmake
+set(WITH_RENDERDOC OFF CACHE BOOL "WITH_RENDERDOC" FORCE)
+set(RENDERDOC_ROOT "/path/to/renderdoc"  CACHE PATH "RENDERDOC_ROOT" FORCE)
+
+if (EXISTS "${CMAKE_SOURCE_DIR}/EnableRenderDoc.cmake")
+    include("${CMAKE_SOURCE_DIR}/EnableRenderDoc.cmake")
+    
+    message(STATUS "EnableRenderDoc.cmake found")
+else()
+    message(STATUS "EnableRenderDoc.cmake not found")
+endif()

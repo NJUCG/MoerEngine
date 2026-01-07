@@ -46,6 +46,10 @@ public:
     }
 
     bool Tick(bool is_reset_when_trigger = true) noexcept {
+        if (!m_is_enabled) {
+            return false;
+        }
+
         auto now = std::chrono::system_clock::now();
 
         if (now - m_last_time >= m_interval) {
@@ -67,9 +71,18 @@ public:
         }
     }
 
+    void SetEnable(bool enable) noexcept {
+        m_is_enabled = enable;
+    }
+
+    bool IsEnabled() const noexcept {
+        return m_is_enabled;
+    }
+
 private:
     std::chrono::duration<double>                      m_interval;
     std::chrono::time_point<std::chrono::system_clock> m_last_time;
+    bool                                               m_is_enabled = true;
 };
 
 } // namespace Moer

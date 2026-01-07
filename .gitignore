@@ -18,6 +18,7 @@ cmake-build-*/
 imgui.ini
 EnableCuda.cmake
 EnableNrd.cmake
+EnableRenderDoc.cmake
 MoerEngine.toml
 
 # 4. Logs
