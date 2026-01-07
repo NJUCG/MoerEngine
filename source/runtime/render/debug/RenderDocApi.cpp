@@ -30,9 +30,9 @@ RenderDocApi::RenderDocApi() {
             get_api(eRENDERDOC_API_Version_1_1_2, (void**)&m_api);
         }
 
-        LOG_INFO("RenderDoc API initialized.");
+        LOG_INFO("RenderDoc API is enabled.");
     } else {
-        LOG_WARNING("RenderDoc isn't running. RenderDoc API not initialized.");
+        LOG_WARNING("RenderDoc isn't running. RenderDoc API is disabled.");
     }
 }
 

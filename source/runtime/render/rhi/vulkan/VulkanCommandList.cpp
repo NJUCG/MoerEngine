@@ -228,6 +228,20 @@ void VulkanCmdList::CopyBufferToTexture(
         }
     };
 
+    // _dst->GetExtent() 是整个texture的尺寸
+    // _extent 是这次mipmap的尺寸
+    assert(
+        // 这里写一大坨，是为了Release优化掉整个assert语句。这样Release模式下就不会计算expected_size
+        _size == ([&]() -> uint {
+            uint expected_size = GetSizeFromImageFormat(_dst->GetFormat(), _extent);
+            if (expected_size % 16 != 0) {
+                expected_size += 16 - (expected_size % 16);
+            }
+            return expected_size;
+        }()) &&
+        "Copy size does not match texture extent"
+    );
+
     vkCmdCopyBufferToImage(
         command_buffer,
         _src->GetHandle(),

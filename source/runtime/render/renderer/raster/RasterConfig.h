@@ -164,12 +164,12 @@ struct RasterConfig {
     ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
     float           rtao_intensity          = 1.0f;
     float           rtao_ray_trace_distance = 1.0f;
-    int             rtao_spp                = 2;
+    int             rtao_spp                = 4;
 
     bool  rtao_denoiser_enable                 = true;
     bool  rtao_denoiser_reprojection_enable    = true;
     bool  rtao_denoiser_validation_enable      = true;
-    float rtao_denoiser_history_ratio          = 0.9f;
+    float rtao_denoiser_history_ratio          = 0.8f;
     float rtao_denoiser_valid_depth_threshold  = 0.01f;
     float rtao_denoiser_valid_normal_threshold = 0.8f;
 

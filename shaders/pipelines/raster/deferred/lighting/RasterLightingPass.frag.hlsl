@@ -38,8 +38,8 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: GBuffer
     float2 uv       = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
     float  depth    = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
-    float3 normal   = Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv));
-    float3 tangent  = Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv));
+    float3 normal   = normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv))); // 因为法线mipmap不满足线性关系，所以这里需要normalize
+    float3 tangent  = normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv))); // 同上
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
     // Shoude be reconstructed from depth
     // Old code: float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
@@ -83,6 +83,8 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 N   = GetNormalFromNormalMap(mat.normal_map, uv, normal, tangent);
     float3 V   = normalize(lighting_data.camera_position - position.xyz);
     float  NoV = saturate(dot(N, V));
+
+    // return float4(N, 1.0); // Debug Normal
 
     BRDFContext brdf_ctx;
     brdf_ctx.Init(

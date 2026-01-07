@@ -22,7 +22,9 @@ void GetMaterialTypeAndIndex(uint material_type_and_index, out uint mat_type, ou
 template <typename T>
 T GetTextureData(int bindless_handle, float2 uv, T default_value, T missing_value) {
   if (bindless_handle >= 0) {
+    // 可以通过禁用mipmap来消除mesh之间的描边
     return TextureHandle(bindless_handle).Sample2D<T>(uv);
+    // return TextureHandle(bindless_handle).SampleLevel<T>(uv, 0.0);
 
   } else if (bindless_handle == -1) {
     return default_value;
@@ -36,11 +38,10 @@ T GetTextureData(int bindless_handle, float2 uv, T default_value, T missing_valu
 
 float3 GetNormalFromNormalMap(int normal_map, float2 uv, float3 normal, float3 tangent) {
   if (normal_map >= 0) {
-    float3 normal_in_tbn = (TextureHandle(normal_map).Sample2D<float3>(uv) * 2.0) - 1.0;
+    float3 normal_in_tbn = normalize((TextureHandle(normal_map).Sample2D<float3>(uv) * 2.0) - 1.0); // Mipmap采样后的法线需要normalize
     float3 bitangent = cross(normal, tangent);
     float3x3 tbn = float3x3(tangent, bitangent, normal);
-    return normalize(mul(normal_in_tbn, tbn));
-    // return mul(tbn, normal_in_tbn);
+    return normalize(mul(normal_in_tbn, tbn)); // TBN变换不保证长度不变，所以需要normalize
   } else {
     return normal;
   }
