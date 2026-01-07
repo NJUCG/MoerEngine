@@ -142,6 +142,7 @@ private:
     struct StackAllocator {
         uint64 init_capacity;
         uint64 capacity;
+        uint64 stack_memory_id;
         double growth_factor;
         struct Chunk {
             uint64 handle;
@@ -160,6 +161,7 @@ private:
         Chunk                 Allocate(uint64 _size);
         void                  Reset();
         void                  Dispose();
+        std::string_view      GetStackBufferName();
     };
     Array<VulkanBuffer*> large_buffers;
     VkTmpBufferAllocator allocator;

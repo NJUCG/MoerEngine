@@ -330,14 +330,15 @@ VulkanAllocator::StackAllocator::StackAllocator(
 ) :
     allocator(_alloc),
     init_capacity(_init_cap),
-    growth_factor(_grouth_factor) {
+    growth_factor(_grouth_factor),
+    stack_memory_id(0) {
     capacity = std::max<uint64>(init_capacity, 1);
-    allocated_buffers.push_back({allocator->Allocate(capacity, "VkBackend::StackAllocBuffer"), capacity, 0});
+    allocated_buffers.push_back({allocator->Allocate(capacity, GetStackBufferName()), capacity, 0});
 }
 
 VulkanAllocator::StackAllocator::Chunk VulkanAllocator::StackAllocator::Allocate(uint64 _size, uint _align) {
 
-    auto align_size = std::max(_align, 16u);
+    uint64 align_size = std::max(_align, 16u);
     for (auto& alloc_buf : allocated_buffers) {
         auto offset = Moer::AlignUp(alloc_buf.offset, align_size);
         if (alloc_buf.size - offset >= _size) {
@@ -345,11 +346,14 @@ VulkanAllocator::StackAllocator::Chunk VulkanAllocator::StackAllocator::Allocate
             return {alloc_buf.handle, offset};
         }
     }
+
     align_size = std::max(align_size, _size);
+
     if (capacity < align_size) {
         capacity = std::max<uint64>(capacity * growth_factor, align_size);
     }
-    auto buffer = allocator->Allocate(capacity, "VkBackend::StackAllocBuffer");
+
+    auto buffer = allocator->Allocate(capacity, GetStackBufferName());
     allocated_buffers.push_back({buffer, capacity, align_size});
     return {buffer, 0};
 }
@@ -362,10 +366,12 @@ VulkanAllocator::StackAllocator::Chunk VulkanAllocator::StackAllocator::Allocate
             return {alloc_buf.handle, offset};
         }
     }
+
     if (capacity < _size) {
         capacity = std::max<uint64>(capacity * growth_factor, _size);
     }
-    auto buffer = allocator->Allocate(capacity, "VkBackend::StackAllocBuffer");
+
+    auto buffer = allocator->Allocate(capacity, GetStackBufferName());
     allocated_buffers.push_back({buffer, capacity, _size});
     return {buffer, 0};
 }
@@ -382,9 +388,10 @@ void VulkanAllocator::StackAllocator::Reset() {
             allocator->DeAllocate(alloc_buf.handle);
         }
         allocated_buffers.clear();
-        allocated_buffers.push_back(
-            {allocator->Allocate(sum_size, "VkBackend::StackAllocBuffer"), sum_size, 0}
-        );
+
+        stack_memory_id = 0;
+
+        allocated_buffers.push_back({allocator->Allocate(sum_size, GetStackBufferName()), sum_size, 0});
     }
 }
 
@@ -393,6 +400,10 @@ void VulkanAllocator::StackAllocator::Dispose() {
         allocator->DeAllocate(alloc_buf.handle);
     }
     allocated_buffers.clear();
+}
+
+std::string_view VulkanAllocator::StackAllocator::GetStackBufferName() {
+    return std::format("VkBackend::StackAllocBuffer_{}", stack_memory_id++);
 }
 
 VulkanAllocator::ShaderBufferAllocator::ShaderBufferAllocator(
