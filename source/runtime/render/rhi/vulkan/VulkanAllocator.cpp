@@ -345,6 +345,7 @@ VulkanAllocator::StackAllocator::Chunk VulkanAllocator::StackAllocator::Allocate
             return {alloc_buf.handle, offset};
         }
     }
+    align_size = std::max(align_size, _size);
     if (capacity < align_size) {
         capacity = std::max<uint64>(capacity * growth_factor, align_size);
     }
