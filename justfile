@@ -1,26 +1,26 @@
-# Only support Powershell currently
+#
+# 这个文件是命令行工具just的配置文件
+#
+# 使用方式：
+# - just setup                => 初始化MoerEngine Config、下载默认场景
+# - just gbr                  => 以Debug模式 生成、构建、运行MoerEditor
+# - just gbr Release TestEnTT => 以Release模式 生成、构建、运行测试用例TestEnTT
+# - just br Debug             => 以Debug模式 构建、运行MoerEditor
+# - just r Release            => 以Release模式 运行MoerEditor
+# - just clean                => 清除build和target目录
+#
 
 set windows-shell := ["powershell", "-c"]
 set shell := ["bash", "-c"]
 
-alias c := clean
-alias gen := generate
-alias g := generate
-alias b := build
-alias r := run
-alias gb := generate-build
-alias br := build-run
-alias gbr := default
-alias rr := run-release
-alias brr := build-run-release
+# MARK: Directories
 
-# MARK: Assignments
-editor_debug_dir := "./target/bin/Debug/MoerEditor.exe"
-editor_release_dir := "./target/bin/Release/MoerEditor.exe"
-build_dir := "./build"
-target_dir := "./target"
+dir_build := "./build/"
+dir_target := "./target/"
+dir_bin := dir_target + "bin/"
+exe_suffix := ".exe"
 
-threads := "30"
+default_threads := "30"
 
 # MARK: debug printf
 
@@ -31,51 +31,50 @@ threads := "30"
 
 default: generate build run
 
-# MARK: setup
+# MARK: internal functions
 
-default_sponza_dir := "./asset/scenes/sponza"
-default_config_dir := "./source/configs/MoerEngine.toml"
-setup:
-    git config --local blame.ignoreRevsFile .git-blame-ignore-revs
-    if (!(Test-Path {{default_sponza_dir}})) { git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git {{default_sponza_dir}} }
-    if (!(Test-Path {{default_config_dir}})) { cp source/configs/template.MoerEngine.toml {{default_config_dir}} }
+_rm path:
+    if (Test-Path "{{path}}") { Remove-Item -Force "{{path}}" }
 
-# MARK: clean
+_rm_exe config="Debug" exe="MoerEditor":
+    if (Test-Path "{{dir_bin}}{{config}}/{{exe}}{{exe_suffix}}") { Remove-Item -Force "{{dir_bin}}{{config}}/{{exe}}{{exe_suffix}}" }
 
-clean-exe:
-    if (Test-Path {{editor_debug_dir}}) { Remove-Item -Force {{editor_debug_dir}} }
-
-clean-exe-release:
-    if (Test-Path {{editor_release_dir}}) { Remove-Item -Force {{editor_release_dir}} }
-
-clean:
-    if (Test-Path {{build_dir}}) { Remove-Item -Recurse -Force {{build_dir}} }
-    if (Test-Path {{target_dir}}) { Remove-Item -Recurse -Force {{target_dir}} }
-
-# MARK: build
-
-generate:
+_generate:
     cmake -B build
 
-build:
-    cmake --build build -j{{threads}}
+_build config="Debug" threads="30":
+    cmake --build build -j{{threads}} --config {{config}}
 
-build-release:
-    cmake --build build -j{{threads}} --config Release
+_run config="Debug" exe="MoerEditor":
+    {{dir_bin}}{{config}}/{{exe}}{{exe_suffix}}
 
-# MARK: debug
+# MARK: setup
 
-run:
-    {{editor_debug_dir}}
+dir_sponza := "./asset/scenes/sponza"
+dir_config := "./source/configs/MoerEngine.toml"
+setup:
+    git config --local blame.ignoreRevsFile .git-blame-ignore-revs
+    if (!(Test-Path {{dir_sponza}})) { git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git {{dir_sponza}} }
+    if (!(Test-Path {{dir_config}})) { cp source/configs/template.MoerEngine.toml {{dir_config}} }
 
-generate-build: generate build
+# MARK: gbr
 
-build-run: clean-exe build run
+clean-exe config="Debug": (_rm_exe config)
 
-# MARK: release
+clean: (_rm dir_build) (_rm dir_target)
 
-run-release:
-    {{editor_release_dir}}
+generate: (_generate)
 
+build config="Debug" exe="MoerEditor" threads=default_threads: (_build config threads)
 
-build-run-release: clean-exe-release build-release run-release
+run config="Debug" exe="MoerEditor" threads=default_threads: (_run config exe)
+
+build-run config="Debug" exe="MoerEditor" threads=default_threads: (build config threads) (run config exe)
+
+generate-build-run config="Debug" exe="MoerEditor" threads=default_threads: (generate) (build config threads) (run config exe)
+
+# MARK: aliases
+
+alias gbr := generate-build-run
+alias br := build-run
+alias r := run
