@@ -3,7 +3,9 @@
 #if WITH_RENDERDOC
 
 // 减少 Windows.h 的污染
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
