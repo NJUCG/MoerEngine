@@ -42,6 +42,7 @@ target_link_libraries(${target_name}
     PUBLIC glfw
     PUBLIC ImGui::imgui
     PUBLIC smaa
+    PUBLIC EnTT::EnTT
     PUBLIC Moer::Core
     PUBLIC NRI
     PRIVATE spirv-cross-cpp
@@ -137,9 +138,7 @@ target_compile_definitions(${target_name} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MO
 
 
 if(WIN32)
-target_compile_definitions(${target_name}
-    PUBLIC "NOMINMAX"
-    )
+    target_compile_definitions(${target_name} PUBLIC "NOMINMAX")
 elseif(LINUX)
 endif()
 
