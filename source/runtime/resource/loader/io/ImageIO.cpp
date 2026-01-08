@@ -333,6 +333,10 @@ ImageIO::ReadFromFile(const std::filesystem::path& _path, uint32_t _desired_chan
             return desc;
         }
 
+        // stbi_load 返回的 desc.channel 是原图通道数
+        // _desired_channal 是期望通道数 和 当前data通道数！
+        desc.channel = _desired_channal;
+
         desc.data_callback = stbi_image_free;
         desc.format        = _fmt;
         desc.data_size     = desc.width * desc.height * desc.channel;
