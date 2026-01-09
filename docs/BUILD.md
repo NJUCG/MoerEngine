@@ -29,7 +29,9 @@
   ```bash
   # Clone仓库
   # 如果没有配置SSH的话，请把 `git@xxx` 替换为 `https://github.com/NJUCG/MoerEngine.git`
-  git clone git@github.com:NJUCG/MoerEngine.git
+  # MoerEngine新的依赖项均使用submodule形式引入，所以请添加--recursive来clone所有依赖项
+  # - 如果在clone时忘记添加 --recursive，请执行git submodule update --init --recursive
+  git clone git@github.com:NJUCG/MoerEngine.git --recursive
   cd MoerEngine
   
   # 忽略一些特定commit对commit历史的影响
