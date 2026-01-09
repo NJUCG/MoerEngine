@@ -5,6 +5,8 @@ CheckOptions:
     value: CamelCase
   - key: readability-identifier-naming.EnumCase
     value: CamelCase
+  - key: readability-identifier-naming.EnumPrefix
+    value: E
   - key: readability-identifier-naming.FunctionCase
     value: CamelCase
   # Exclude from scanning as this is an exported symbol used for fuzzing
@@ -13,10 +15,12 @@ CheckOptions:
     value: "LLVMFuzzerTestOneInput"
   - key: readability-identifier-naming.MemberCase
     value: lower_case
+  - key: readability-identifier-naming.MemberPrefix
+    value: m_
+  - key: readability-identifier-naming.PublicMemberCase
+    value: lower_case
   - key: readability-identifier-naming.ParameterCase
     value: lower_case
-  - key: readability-identifier-naming.ParameterPrefix
-    value: _
   - key: readability-identifier-naming.UnionCase
     value: CamelCase
   - key: readability-identifier-naming.VariableCase
