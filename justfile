@@ -42,8 +42,8 @@ _rm_exe config="Debug" exe="MoerEditor":
 _generate:
     cmake -B build
 
-_build config="Debug" threads="30":
-    cmake --build build -j{{threads}} --config {{config}}
+_build config="Debug" threads="30" target="MoerEditor":
+    cmake --build build -j{{threads}} --config {{config}} --target {{target}}
 
 _run config="Debug" exe="MoerEditor":
     {{dir_bin}}{{config}}/{{exe}}{{exe_suffix}}
@@ -65,13 +65,13 @@ clean: (_rm dir_build) (_rm dir_target)
 
 generate: (_generate)
 
-build config="Debug" exe="MoerEditor" threads=default_threads: (_build config threads)
+build config="Debug" exe="MoerEditor" threads=default_threads: (_build config threads exe)
 
 run config="Debug" exe="MoerEditor" threads=default_threads: (_run config exe)
 
-build-run config="Debug" exe="MoerEditor" threads=default_threads: (build config threads) (run config exe)
+build-run config="Debug" exe="MoerEditor" threads=default_threads: (build config exe threads) (run config exe threads)
 
-generate-build-run config="Debug" exe="MoerEditor" threads=default_threads: (generate) (build config threads) (run config exe)
+generate-build-run config="Debug" exe="MoerEditor" threads=default_threads: (generate) (build config exe threads) (run config exe threads)
 
 # MARK: aliases
 

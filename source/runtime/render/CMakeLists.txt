@@ -42,6 +42,7 @@ target_link_libraries(${target_name}
     PUBLIC glfw
     PUBLIC ImGui::imgui
     PUBLIC smaa
+    PUBLIC gtl
     PUBLIC EnTT::EnTT
     PUBLIC Moer::Core
     PUBLIC NRI
