@@ -1217,8 +1217,8 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
         state.pNext = nullptr;
         state.flags = 0;
         state.depthTestEnable =
-            (info.b_enable_depth_write || info.depth_test_op == ECompareOption::CO_ALWAYS) ? VK_TRUE :
-                                                                                             VK_FALSE;
+            (info.b_enable_depth_write || info.depth_test_op != ECompareOption::CO_NEVER) ? VK_TRUE :
+                                                                                            VK_FALSE;
         state.depthWriteEnable      = info.b_enable_depth_write;
         state.depthCompareOp        = VulkanEnumTranslator::METoVKCompareOp(info.depth_test_op);
         state.depthBoundsTestEnable = VK_FALSE; // MARK...

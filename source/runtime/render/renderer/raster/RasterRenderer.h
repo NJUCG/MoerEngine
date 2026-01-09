@@ -9,6 +9,7 @@ class RasterContext;
 class ShadowDepthPass;
 class GeometryPass;
 class LightingPass;
+class SkyboxPass;
 class AoPass;
 class RtaoDenoiserPass;
 class BilateralFilterDenoiserPass;
@@ -66,6 +67,7 @@ private:
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
     UniquePtr<GeometryPass>                geometry_pass;
     UniquePtr<LightingPass>                lighting_pass;
+    UniquePtr<SkyboxPass>                  skybox_pass;
     UniquePtr<AoPass>                      ao_pass;
     UniquePtr<RtaoDenoiserPass>            rtao_denoiser_pass;
     UniquePtr<BilateralFilterDenoiserPass> bfd_pass;

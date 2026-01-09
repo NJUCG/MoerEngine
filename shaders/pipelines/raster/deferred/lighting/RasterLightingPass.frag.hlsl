@@ -36,10 +36,13 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     Moer::LightingData lighting_data = global_params.Load<Moer::LightingData>(0);
 
     // MARK: GBuffer
-    float2 uv       = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
-    float  depth    = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
-    float3 normal   = normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv))); // 因为法线mipmap不满足线性关系，所以这里需要normalize
-    float3 tangent  = normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv))); // 同上
+    float2 uv     = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
+    float  depth  = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
+    float3 normal = normalize(
+        Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv))
+    ); // 因为法线mipmap不满足线性关系，所以这里需要normalize
+    float3 tangent =
+        normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv))); // 同上
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
     // Shoude be reconstructed from depth
     // Old code: float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
@@ -49,6 +52,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     // MARK: Skybox
     if (depth == 0.0) {
+        return float4(0.0, 0.0, 0.0, 1.0); // 避免采样错误，直接返回黑色
         float3 pos_inf   = WorldPosFromDepth(0.99, in_uv, lighting_data.inv_view_proj);
         float3 ibl_color = calculate_ibl(lighting_data, pos_inf, param.cubemap_handle);
 

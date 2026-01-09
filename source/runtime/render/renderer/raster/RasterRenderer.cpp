@@ -12,6 +12,7 @@
 #include "RasterTool.h"
 #include "RtaoDenoiserPass.h"
 #include "ShadowDepthPass.h"
+#include "SkyboxPass.h"
 #include "SsrPass.h"
 #include "TonemappingPass.h"
 #include "debug/RenderDocApi.h"
@@ -47,6 +48,7 @@ RasterRenderer::RasterRenderer(
     shadow_depth_pass  = MakeUnique<ShadowDepthPass>(raster_context);
     geometry_pass      = MakeUnique<GeometryPass>(raster_context);
     lighting_pass      = MakeUnique<LightingPass>(raster_context);
+    skybox_pass        = MakeUnique<SkyboxPass>(raster_context);
     ao_pass            = MakeUnique<AoPass>(raster_context);
     rtao_denoiser_pass = MakeUnique<RtaoDenoiserPass>(raster_context);
     bfd_pass           = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
@@ -192,12 +194,14 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         geometry_pass->Process(raster_context, raster_config, camera);
 
         // Lighting Pass
-        TextureWithHandle lighting_pass_output =
-            lighting_pass->Process(raster_context, raster_config, camera);
+        lighting_pass->Process(raster_context, raster_config, camera);
+
+        //Env&Atmo Pass
+        skybox_pass->Process(raster_context, raster_config, camera);
 
         // Post Process Passes
         // - Ambient Occlusion
-        auto ao_result = ao_pass->Process(raster_context, raster_config, camera, time, lighting_pass_output);
+        auto              ao_result        = ao_pass->Process(raster_context, raster_config, camera, time);
         TextureWithHandle processing_image = ao_result.ao_with_color;
         uint              ao_only_idx      = ao_result.ao_only_idx;
 
@@ -206,8 +210,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // - CUDA Pass
 #if WITH_CUDA
         if (raster_config.ai_is_cuda_enabled) {
-            processing_image =
-                tensor_rt_pass->Process(raster_context, raster_config, lighting_pass_output, ao_only_idx);
+            processing_image = tensor_rt_pass->Process(
+                raster_context, raster_config, ao_only_idx
+            ); //如果开启了该Pass，Ao结果会被替换成TensorRT的结果（在纹理context.textures.lighting_output上执行），后续在该纹理上处理。否则，在纹理ao_with_color上处理
         }
 #endif
 
