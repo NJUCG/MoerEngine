@@ -19,6 +19,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 in_pos       = WorldPosFromDepth(0.99, in_uv, param.inv_view_proj);
     float3 view_dir     = normalize(in_pos - param.camera_pos);
     float3 skybox_color = TextureHandle(param.cubemap_handle).SampleCube<float3>(view_dir);
+    skybox_color *= param.exposure_factor;
     return float4(skybox_color, 1.0);
 }
 

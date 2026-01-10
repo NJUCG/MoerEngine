@@ -26,7 +26,7 @@ namespace Moer {
 
 struct SkyboxPassBindlessParam {
     uint     cubemap_handle;
-    float    exposure_factor;
+    float3   exposure_factor;
     float3   camera_pos;
     float4x4 inv_view_proj;
 };

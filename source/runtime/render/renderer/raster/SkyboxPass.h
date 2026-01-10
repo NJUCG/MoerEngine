@@ -28,6 +28,8 @@ public:
 
     void Process(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera);
 
+    DirectionalLightComponent* GetMainLightDirection(RasterContext& context);
+
 private:
     SkyboxPipeline skybox_pipeline;
 };

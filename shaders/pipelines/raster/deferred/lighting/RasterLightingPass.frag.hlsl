@@ -50,25 +50,9 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // - Lights
     ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
 
-    // MARK: Skybox
+    // MARK: Skybox(Deprecated)
     if (depth == 0.0) {
-        return float4(0.0, 0.0, 0.0, 1.0); // 避免采样错误，直接返回黑色
-        float3 pos_inf   = WorldPosFromDepth(0.99, in_uv, lighting_data.inv_view_proj);
-        float3 ibl_color = calculate_ibl(lighting_data, pos_inf, param.cubemap_handle);
-
-        if (lighting_data.skybox_exposure_correct_enabled == 0) {
-            return float4(ibl_color, 1.0);
-        }
-
-        // 找到第一个平行光，并且乘上其强度
-        for (uint i = 0; i < lighting_data.light_count; i++) {
-            LightData light = light_buffer.Load<LightData>(i);
-            if (light.type == Directional_LIGHT_TYPE) {
-                ibl_color *= light.color * light.intensity * lighting_data.skybox_exposure_correct_factor;
-                break;
-            }
-        }
-        return float4(ibl_color, 1.0);
+        return float4(1.0, 0.0, 0.0, 1.0);
     }
 
     // MARK: PBR

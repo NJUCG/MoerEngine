@@ -24,11 +24,21 @@ public:
 class LightingPass {
 public:
     LightingPass(RasterContext& context) {
+        //TODO： 开启深度模板测试提高性能
+        //RHIDepthStencilStateInfo ds_info = RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE>();
+
+        // ds_info.b_enable_front_face_stencil = true;
+        // ds_info.front_face_stencil_test     = ECompareOption::CO_EQUAL;
+        // ds_info.front_face_pass_stencil_op  = EStencilOp::SO_KEEP;
+        // ds_info.b_enable_back_face_stencil  = true;
+        // ds_info.back_face_stencil_test      = ECompareOption::CO_EQUAL;
+        // ds_info.back_face_pass_stencil_op   = EStencilOp::SO_KEEP;
 
         GfxPsoCreateInfo pso_full_screen_info(
             RHIRasterizeInfo::Preset(),
             {},
-            {RHIColorAttachmentInfo::Preset(context.textures.lighting_output.tex->GetFormat())}
+            {RHIColorAttachmentInfo::Preset(context.textures.lighting_output.tex->GetFormat())} //,ds_info,
+            //context.textures.depth_linear_sampler.tex->GetFormat()
         );
 
         pbr_pipeline = context.manager.Raster()
@@ -144,14 +154,22 @@ public:
             });
         }
 
+        //context.cmd_list.SetStencilReference(1, 1);
+
         Moer::UnorderedSet<EMaterialType> material_types = {EMaterialType::E_PBR_STANDARD};
         for (auto type : material_types) {
             material_param.material_type = uint(type);
+
+            DepthAttachment depth_attachment =
+                DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture());
+            depth_attachment.action = AC_DS_LOAD_STORE;
+
             context.cmd_list.Gfx(pbr_pipeline, context.bdls, material_param)
                 .Draw(
                     "Lighting Pass",
                     context.textures.lighting_output.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
+                    depth_attachment,
                     ColorAttachment(context.textures.lighting_output.tex)
                 );
         };
