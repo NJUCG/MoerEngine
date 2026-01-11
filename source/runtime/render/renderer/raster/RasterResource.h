@@ -4,6 +4,7 @@
 #include "rhi/RHICommand.h"
 #include "scene/Scene.h"
 #include "shader/ShaderPipeline.h"
+#include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 #include <config/ConfigManager.h>
 #include <shader/ShaderResourceManager.h>
@@ -60,6 +61,8 @@ public:
     TextureWithHandle lut_ggx_eavg; // games202 hw4 Eavg
     TextureWithHandle noise_tex;
     TextureWithHandle cubemap_tex;
+    BufferWithHandle  lighting_data_buffer; //帧级别光照数据
+    LightingData      lighting_data;
 
     // Data from scene
     uint gpu_instance_info_handle     = 0;
@@ -137,6 +140,7 @@ public:
         LoadLUT();
         LoadNoiseTexture();
         LoadCubemap();
+        CreateLightingData();
     }
 
     void Update(float delta_time) {
@@ -269,6 +273,16 @@ public:
 
         // Bindless
         cmd_list.UpdateBindlessArray(bdls);
+    }
+
+    void CreateLightingData() {
+        //CPU Side 在Render循环中填充数据
+
+        //GPU Side
+        lighting_data_buffer.buf = device.CreateBuffer<byte>(
+            "Raster::LightData", sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS
+        );
+        lighting_data_buffer.handle = bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
     }
 
     // MARK: Frame Buffers

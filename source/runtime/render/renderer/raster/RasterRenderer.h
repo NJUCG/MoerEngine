@@ -59,6 +59,9 @@ public:
 
     bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
 
+    void
+    UpdateGlobalLightingData(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera);
+
 private:
     // Context
     UniquePtr<RasterContext> raster_context_ptr; // For forward declaration
