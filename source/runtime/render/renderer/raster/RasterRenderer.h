@@ -8,6 +8,7 @@ namespace Moer::Render::Raster {
 class RasterContext;
 class ShadowDepthPass;
 class GeometryPass;
+class DirectionalShadowMaskPass;
 class LightingPass;
 class SkyboxPass;
 class AoPass;
@@ -68,6 +69,7 @@ private:
 
     // Pass
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
+    UniquePtr<DirectionalShadowMaskPass>   directional_shadow_mask_pass;
     UniquePtr<GeometryPass>                geometry_pass;
     UniquePtr<LightingPass>                lighting_pass;
     UniquePtr<SkyboxPass>                  skybox_pass;

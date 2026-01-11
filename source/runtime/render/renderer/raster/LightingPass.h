@@ -65,6 +65,7 @@ public:
         material_param.global_param_handle = context.lighting_data_buffer.handle;
         material_param.light_buffer        = context.gpu_light_info_handle;
         material_param.cubemap_handle      = context.cubemap_tex.handle;
+        material_param.shadow_mask_handle  = context.textures.shadow_mask.handle;
 
         //context.cmd_list.SetStencilReference(1, 1);
 

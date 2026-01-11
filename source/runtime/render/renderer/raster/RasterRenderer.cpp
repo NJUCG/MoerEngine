@@ -5,6 +5,7 @@
 #include "AaPass.h"
 #include "AoPass.h"
 #include "BilateralFilterDenoiserPass.h"
+#include "DirectionalShadowMaskPass.h"
 #include "GeometryPass.h"
 #include "LightingPass.h"
 #include "RasterResource.h"
@@ -45,16 +46,17 @@ RasterRenderer::RasterRenderer(
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
-    shadow_depth_pass  = MakeUnique<ShadowDepthPass>(raster_context);
-    geometry_pass      = MakeUnique<GeometryPass>(raster_context);
-    lighting_pass      = MakeUnique<LightingPass>(raster_context);
-    skybox_pass        = MakeUnique<SkyboxPass>(raster_context);
-    ao_pass            = MakeUnique<AoPass>(raster_context);
-    rtao_denoiser_pass = MakeUnique<RtaoDenoiserPass>(raster_context);
-    bfd_pass           = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
-    ssr_pass           = MakeUnique<SsrPass>(raster_context);
-    aa_pass            = MakeUnique<AaPass>(raster_context);
-    tonemapping_pass   = MakeUnique<TonemappingPass>(raster_context);
+    shadow_depth_pass            = MakeUnique<ShadowDepthPass>(raster_context);
+    directional_shadow_mask_pass = MakeUnique<DirectionalShadowMaskPass>(raster_context);
+    geometry_pass                = MakeUnique<GeometryPass>(raster_context);
+    lighting_pass                = MakeUnique<LightingPass>(raster_context);
+    skybox_pass                  = MakeUnique<SkyboxPass>(raster_context);
+    ao_pass                      = MakeUnique<AoPass>(raster_context);
+    rtao_denoiser_pass           = MakeUnique<RtaoDenoiserPass>(raster_context);
+    bfd_pass                     = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
+    ssr_pass                     = MakeUnique<SsrPass>(raster_context);
+    aa_pass                      = MakeUnique<AaPass>(raster_context);
+    tonemapping_pass             = MakeUnique<TonemappingPass>(raster_context);
 
 #if WITH_CUDA
     // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
@@ -254,6 +256,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // Geometry Pass
         geometry_pass->Process(raster_context, raster_config, camera);
+
+        // Directional Shadow Mask Pass
+        directional_shadow_mask_pass->Process(raster_context, raster_config, camera);
 
         // Lighting Pass
         lighting_pass->Process(raster_context, raster_config, camera);

@@ -4,9 +4,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "core/common/Common.hlsl"
 #include "materials/Brdf.hlsli"
 #include "materials/Material.hlsli"
-#include "pipelines/raster/deferred/lighting/IBL.hlsli"
 #include "pipelines/raster/deferred/lighting/Lighting.hlsli"
-#include "pipelines/raster/deferred/lighting/shadows/Shadows.hlsli"
 
 #include "shared/raster/ShaderParameters.h"
 
@@ -44,8 +42,6 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 tangent =
         normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv))); // 同上
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
-    // Shoude be reconstructed from depth
-    // Old code: float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
 
     // - Lights
     ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
@@ -72,8 +68,6 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 V   = normalize(lighting_data.camera_position - position.xyz);
     float  NoV = saturate(dot(N, V));
 
-    // return float4(N, 1.0); // Debug Normal
-
     BRDFContext brdf_ctx;
     brdf_ctx.Init(
         roughness,
@@ -93,7 +87,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     );
 
     // - Shadow
-    float shadow = calculate_shadow(lighting_data, position, in_uv, normal);
+    float shadow = TextureHandle(param.shadow_mask_handle).Sample2D<float>(in_uv);
 
     // MARK: Shading
     LightContext light_ctx;
