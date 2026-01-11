@@ -73,16 +73,9 @@ public:
 
     // Shadow Data
     struct CSMData {
-        float3                                light_dir;
-        StaticArray<float4, CSM_MAX_CASCADES> scaleDatas; // x: Width, y: Height, z: ZRange, w: NearPlane
+        float3                                                      light_dir;
         StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
         StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
-        StaticArray<float, CSM_MAX_CASCADES>
-            cascade_split_points; //actual split points between near_clip and far_clip
-        StaticArray<float, CSM_MAX_CASCADES>
-            cascade_split_ratios; //ratios between 0.0 and 1.0 according to near_clip and far_clip
-        StaticArray<float, CSM_MAX_CASCADES>
-            cascade_blend_start_ratios; //calculated in linear space, then converted to clip space
     } csm_data;
 
     struct PointShadowData {

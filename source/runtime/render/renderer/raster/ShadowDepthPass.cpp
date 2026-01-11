@@ -194,6 +194,7 @@ float4x4 get_world_to_shadow_clip_matrix(
     float z_far_val   = aabb_max_z_in_light_space + z_delta;
     float z_range     = z_far_val - z_near_val;
 
+    // x: Width, y: Height, z: ZRange, w: NearPlane
     outScaleData = float4(ortho_width, ortho_width, z_range, z_near_val);
 
     return world_to_light_orth_matrix; // RVO
@@ -365,58 +366,69 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
     const float near_clip = camera->GetNearClip();
     const float far_clip  = camera->GetFarClip();
 
-    context.csm_data.light_dir = Normalizef(light_direction_optional->GetDirection());
+    //context.csm_data.light_dir                 = Normalizef(light_direction_optional->GetDirection());
+    context.lighting_data.main_light_direction = Normalizef(light_direction_optional->GetDirection());
 
     //lerp csm ratios
+    StaticArray<float, CSM_MAX_CASCADES>
+        local_cascade_split_points; //actual split points between near_clip and far_clip
     switch (ui_config.shadow_map_mode) {
         case EShadowMapMode::CSM_AUTO: {
-            context.csm_data.cascade_split_points = get_cascade_split_points(
+            local_cascade_split_points = get_cascade_split_points(
                 near_clip, far_clip, ui_config.shadow_csm_lerp_factor, enabled_cascade_layers
             );
-            context.csm_data.cascade_split_ratios = transform_split_points_to_ratios(
-                context.csm_data.cascade_split_points, near_clip, far_clip, enabled_cascade_layers
+            auto ratios = transform_split_points_to_ratios(
+                local_cascade_split_points, near_clip, far_clip, enabled_cascade_layers
             );
+
+            for (uint i = 0; i < enabled_cascade_layers; i++) {
+                context.lighting_data.cascade_split_ratios[i] = ratios[i];
+            }
             break;
         }
         case EShadowMapMode::CSM:
         default:
-            context.csm_data.cascade_split_points = transform_split_ratios_to_points(
+            local_cascade_split_points = transform_split_ratios_to_points(
                 ui_config.shadow_csm_cover_ratio_of_camera, near_clip, far_clip, enabled_cascade_layers
             );
-            context.csm_data.cascade_split_ratios = ui_config.shadow_csm_cover_ratio_of_camera;
+            for (uint i = 0; i < enabled_cascade_layers; i++) {
+                context.lighting_data.cascade_split_ratios[i] = ui_config.shadow_csm_cover_ratio_of_camera[i];
+            }
     }
 
     //混合
-    context.csm_data.cascade_blend_start_ratios = transform_split_points_to_ratios(
+    auto local_cascade_blend_start_ratios = transform_split_points_to_ratios(
         get_csm_blend(
-            context.csm_data.cascade_split_points,
-            ui_config.shadow_csm_blend_percentage,
-            enabled_cascade_layers
+            local_cascade_split_points, ui_config.shadow_csm_blend_percentage, enabled_cascade_layers
         ),
         near_clip,
         far_clip,
         enabled_cascade_layers
     );
+    for (uint i = 0; i < enabled_cascade_layers; i++) {
+        context.lighting_data.cascade_blend_start_ratios[i] = local_cascade_blend_start_ratios[i];
+    }
 
     for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
 
         // World to Shadow Clip Matrix
         const float frustum_near_ratio =
-            (cascade_index == 0) ? 0.0f : context.csm_data.cascade_blend_start_ratios[cascade_index - 1];
-        const float frustum_far_ratio = context.csm_data.cascade_split_ratios[cascade_index];
-        context.csm_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
+            (cascade_index == 0) ? 0.0f : context.lighting_data.cascade_blend_start_ratios[cascade_index - 1];
+        const float frustum_far_ratio = context.lighting_data.cascade_split_ratios[cascade_index];
+
+        context.lighting_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
             light_direction_optional,
             camera,
             ui_config,
             frustum_near_ratio,
             frustum_far_ratio,
-            context.csm_data.scaleDatas[cascade_index]
+            context.lighting_data.scale_data[cascade_index]
         );
 
         RenderShadow(
             context,
             ui_config,
-            context.csm_data.world_to_shadow_clip[cascade_index],
+            context.lighting_data.world_to_shadow_clip[cascade_index],
             Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
             context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
             std::format("Shadow Depth Pass - {}", cascade_index),

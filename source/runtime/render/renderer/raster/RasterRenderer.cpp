@@ -123,28 +123,18 @@ void RasterRenderer::UpdateGlobalLightingData(
 
     // Shadow Transform
     for (uint i = 0; i < csm_layers; i++) {
-        lighting_data->world_to_shadow_clip[i] = Transpose(context.csm_data.world_to_shadow_clip[i]);
+        lighting_data->world_to_shadow_clip[i] = Transpose(lighting_data->world_to_shadow_clip[i]);
     }
     lighting_data->view_matrix = Transpose(camera->GetViewMatrix());
     lighting_data->near_clip   = camera->GetNearClip();
     lighting_data->far_clip    = camera->GetFarClip();
-    for (int i = 0; i < csm_layers; i++) {
-        lighting_data->cascade_split_ratios[i] = context.csm_data.cascade_split_ratios[i];
-    }
-    for (int i = 0; i < csm_layers; i++) {
-        lighting_data->cascade_blend_start_ratios[i] = context.csm_data.cascade_blend_start_ratios[i];
-    }
+
     lighting_data->is_csm_blend_enabled = ui_config.shadow_csm_blend_option ? 1 : 0;
     // 注：此处不一定使用所有CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
 
     // PCSS
     lighting_data->light_size_world = ui_config.shadow_pcss_light_size_world; //假定的光源大小，用于软阴影计算
     lighting_data->pcss_enabled     = ui_config.shadow_pcss_enabled ? 1 : 0;
-    for (uint i = 0; i < csm_layers; i++) {
-        lighting_data->scale_data[i] = context.csm_data.scaleDatas[i];
-    }
-
-    lighting_data->main_light_direction = context.csm_data.light_dir;
 
     // BRDF
     {
@@ -155,13 +145,6 @@ void RasterRenderer::UpdateGlobalLightingData(
         lighting_data->brdf_NDF_mode             = static_cast<uint>(ui_config.shading_brdf_NDF_mode);
         lighting_data->brdf_G_mode               = static_cast<uint>(ui_config.shading_brdf_G_mode);
         lighting_data->brdf_G_is_ibl             = ui_config.shading_brdf_G_is_ibl ? 1 : 0;
-    }
-
-    // Skybox
-    {
-        lighting_data->skybox_exposure_correct_enabled = ui_config.skybox_exposure_correct_enabled ? 1 : 0;
-        lighting_data->skybox_exposure_correct_factor =
-            powf(10.0f, ui_config.skybox_exposure_correct_factor_log10);
     }
 
     context.cmd_list.CopyFrom(
@@ -263,11 +246,11 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // others
         RasterTool::UpdateRaytracingScene(raster_context);
 
-        // Update Global Lighting Data
-        UpdateGlobalLightingData(raster_context, raster_config, camera);
-
         // Shadow Depth Pass
         shadow_depth_pass->Process(raster_context, raster_config, camera);
+
+        // Update Global Lighting Data
+        UpdateGlobalLightingData(raster_context, raster_config, camera);
 
         // Geometry Pass
         geometry_pass->Process(raster_context, raster_config, camera);
