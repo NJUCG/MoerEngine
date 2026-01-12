@@ -102,6 +102,41 @@ public:
     RaytracingSceneRef rt_scene;
 
 private:
+    ubyte* LoadImageData(const std::string& path, int& width, int& height) const {
+        FILE* file = nullptr;
+        fopen_s(&file, path.c_str(), "rb");
+
+        if (!file) {
+            LOG_ERROR("Failed to load texture file: {}", path);
+            return nullptr;
+        }
+
+        int    channels;
+        ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
+
+        if (!data) {
+            LOG_ERROR("Failed to decode texture data: {}", path);
+            fclose(file);
+            return nullptr;
+        }
+
+        fclose(file);
+        return data;
+    }
+
+    void UploadTextureData(
+        TextureView        target,
+        ubyte*             data,
+        int                width,
+        int                height,
+        const std::string& debug_name
+    ) const {
+        cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * 4), target, debug_name);
+        cmd_list.AddCallback([data]() {
+            stbi_image_free(data);
+        });
+    }
+
     uint2& resolution; // Be careful, resolution is also a reference
 
 public:
@@ -142,16 +177,11 @@ public:
 
     // TODO: 考虑统一Skybox，因为写这段代码的时候，LoadSkybox()正在被dragonk修改，所以没有更新LoadSkybox()（如果不需要更新，则删掉本注释）
     void LoadExternalTexture(TextureWithHandle& out_tex, const std::string& path, const char* name) const {
-        FILE* file = nullptr;
-        fopen_s(&file, path.c_str(), "rb");
+        int    width, height;
+        ubyte* data = LoadImageData(path, width, height);
 
-        if (!file) {
-            LOG_ERROR("Failed to load texture in RasterPipeline");
+        if (!data)
             return;
-        }
-
-        int    width, height, channels;
-        ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
 
         out_tex.tex = device.CreateTexture(
             name,
@@ -160,10 +190,7 @@ public:
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
 
-        cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * channels), out_tex.tex);
-        cmd_list.AddCallback([data]() {
-            stbi_image_free(data);
-        });
+        UploadTextureData(out_tex.tex, data, width, height, name);
 
         out_tex.handle = bdls->AllocateTexture(out_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
     }
@@ -211,19 +238,14 @@ public:
                                     "Skybox" / skybox_path / skybox_faces[i])
                                        .string();
 
-            FILE* file = nullptr;
-            fopen_s(&file, filepath.c_str(), "rb");
+            int    width, height;
+            ubyte* data = LoadImageData(filepath, width, height);
 
-            if (!file) {
-                LOG_ERROR("Failed to load skybox texture");
+            if (!data)
                 return;
-            }
-
-            int    width, height, channels;
-            ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
 
             if (i == 0) { // first time
-                // 延迟创建，这样可以读取width & height
+                // 延迟创建，这样可以读取 width & height
                 cubemap_tex.tex = device.CreateCubeMap(
                     "Skybox Cubemap",
                     Extent2D(width, height),
@@ -233,15 +255,9 @@ public:
                 skybox_view = TextureView(cubemap_tex.tex);
             }
 
-            cmd_list.CopyFrom(
-                std::span<Moer::byte>((Moer::byte*)data, width * height * channels),
-                skybox_view.Slice(i),
-                std::format("Skybox Cubemap #{}", i)
+            UploadTextureData(
+                skybox_view.Slice(i), data, width, height, std::format("Skybox Cubemap #{}", i)
             );
-
-            cmd_list.AddCallback([data]() {
-                stbi_image_free(data);
-            });
         }
         cubemap_tex.handle = bdls->AllocateTexture(cubemap_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
     }
