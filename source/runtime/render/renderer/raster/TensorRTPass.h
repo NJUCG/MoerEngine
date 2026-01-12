@@ -821,12 +821,7 @@ public:
 
     */
 
-    TextureWithHandle Process(
-        RasterContext&      context,
-        const RasterConfig& ui_config,
-        TextureWithHandle   input_image,
-        uint                ao_only_idx
-    ) {
+    TextureWithHandle Process(RasterContext& context, const RasterConfig& ui_config, uint ao_only_idx) {
         assert(ui_config.ai_is_cuda_enabled);
 
         // log
@@ -877,7 +872,7 @@ public:
 
         // return
 
-        return input_image;
+        return context.textures.lighting_output;
     }
 
 private:

@@ -4,6 +4,7 @@
 #include "rhi/RHICommand.h"
 #include "scene/Scene.h"
 #include "shader/ShaderPipeline.h"
+#include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 #include <config/ConfigManager.h>
 #include <shader/ShaderResourceManager.h>
@@ -60,6 +61,8 @@ public:
     TextureWithHandle lut_ggx_eavg; // games202 hw4 Eavg
     TextureWithHandle noise_tex;
     TextureWithHandle cubemap_tex;
+    BufferWithHandle  lighting_data_buffer; //帧级别光照数据
+    LightingData      lighting_data;
 
     // Data from scene
     uint gpu_instance_info_handle     = 0;
@@ -70,16 +73,9 @@ public:
 
     // Shadow Data
     struct CSMData {
-        float3                                light_dir;
-        StaticArray<float4, CSM_MAX_CASCADES> scaleDatas; // x: Width, y: Height, z: ZRange, w: NearPlane
+        float3                                                      light_dir;
         StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
         StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
-        StaticArray<float, CSM_MAX_CASCADES>
-            cascade_split_points; //actual split points between near_clip and far_clip
-        StaticArray<float, CSM_MAX_CASCADES>
-            cascade_split_ratios; //ratios between 0.0 and 1.0 according to near_clip and far_clip
-        StaticArray<float, CSM_MAX_CASCADES>
-            cascade_blend_start_ratios; //calculated in linear space, then converted to clip space
     } csm_data;
 
     struct PointShadowData {
@@ -137,6 +133,7 @@ public:
         LoadLUT();
         LoadNoiseTexture();
         LoadCubemap();
+        CreateLightingData();
     }
 
     void Update(float delta_time) {
@@ -269,6 +266,16 @@ public:
 
         // Bindless
         cmd_list.UpdateBindlessArray(bdls);
+    }
+
+    void CreateLightingData() {
+        //CPU Side 在Render循环中填充数据
+
+        //GPU Side
+        lighting_data_buffer.buf = device.CreateBuffer<byte>(
+            "Raster::LightData", sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS
+        );
+        lighting_data_buffer.handle = bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
     }
 
     // MARK: Frame Buffers

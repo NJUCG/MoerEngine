@@ -4,9 +4,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "core/common/Common.hlsl"
 #include "materials/Brdf.hlsli"
 #include "materials/Material.hlsli"
-#include "pipelines/raster/deferred/lighting/IBL.hlsli"
 #include "pipelines/raster/deferred/lighting/Lighting.hlsli"
-#include "pipelines/raster/deferred/lighting/shadows/Shadows.hlsli"
 
 #include "shared/raster/ShaderParameters.h"
 
@@ -36,35 +34,21 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     Moer::LightingData lighting_data = global_params.Load<Moer::LightingData>(0);
 
     // MARK: GBuffer
-    float2 uv       = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
-    float  depth    = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
-    float3 normal   = normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv))); // 因为法线mipmap不满足线性关系，所以这里需要normalize
-    float3 tangent  = normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv))); // 同上
+    float2 uv     = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
+    float  depth  = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
+    float3 normal = normalize(
+        Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv))
+    ); // 因为法线mipmap不满足线性关系，所以这里需要normalize
+    float3 tangent =
+        normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv))); // 同上
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
-    // Shoude be reconstructed from depth
-    // Old code: float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
 
     // - Lights
     ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
 
-    // MARK: Skybox
+    // MARK: Skybox(Deprecated)
     if (depth == 0.0) {
-        float3 pos_inf   = WorldPosFromDepth(0.99, in_uv, lighting_data.inv_view_proj);
-        float3 ibl_color = calculate_ibl(lighting_data, pos_inf, param.cubemap_handle);
-
-        if (lighting_data.skybox_exposure_correct_enabled == 0) {
-            return float4(ibl_color, 1.0);
-        }
-
-        // 找到第一个平行光，并且乘上其强度
-        for (uint i = 0; i < lighting_data.light_count; i++) {
-            LightData light = light_buffer.Load<LightData>(i);
-            if (light.type == Directional_LIGHT_TYPE) {
-                ibl_color *= light.color * light.intensity * lighting_data.skybox_exposure_correct_factor;
-                break;
-            }
-        }
-        return float4(ibl_color, 1.0);
+        return float4(1.0, 0.0, 0.0, 1.0);
     }
 
     // MARK: PBR
@@ -83,8 +67,6 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 N   = GetNormalFromNormalMap(mat.normal_map, uv, normal, tangent);
     float3 V   = normalize(lighting_data.camera_position - position.xyz);
     float  NoV = saturate(dot(N, V));
-
-    // return float4(N, 1.0); // Debug Normal
 
     BRDFContext brdf_ctx;
     brdf_ctx.Init(
@@ -105,7 +87,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     );
 
     // - Shadow
-    float shadow = calculate_shadow(lighting_data, position, in_uv, normal);
+    float shadow = TextureHandle(param.shadow_mask_handle).Sample2D<float>(in_uv);
 
     // MARK: Shading
     LightContext light_ctx;

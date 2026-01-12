@@ -1217,8 +1217,8 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
         state.pNext = nullptr;
         state.flags = 0;
         state.depthTestEnable =
-            (info.b_enable_depth_write || info.depth_test_op == ECompareOption::CO_ALWAYS) ? VK_TRUE :
-                                                                                             VK_FALSE;
+            (info.b_enable_depth_write || info.depth_test_op != ECompareOption::CO_NEVER) ? VK_TRUE :
+                                                                                            VK_FALSE;
         state.depthWriteEnable      = info.b_enable_depth_write;
         state.depthCompareOp        = VulkanEnumTranslator::METoVKCompareOp(info.depth_test_op);
         state.depthBoundsTestEnable = VK_FALSE; // MARK...
@@ -1227,14 +1227,26 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
 
         state.stencilTestEnable =
             (info.b_enable_front_face_stencil || info.b_enable_back_face_stencil) ? VK_TRUE : VK_FALSE;
-        state.front.failOp = VulkanEnumTranslator::METoVKStencilOp(info.front_face_stencil_fail_stencil_op);
-        state.front.passOp = VulkanEnumTranslator::METoVKStencilOp(info.front_face_pass_stencil_op);
-        state.front.depthFailOp =
-            VulkanEnumTranslator::METoVKStencilOp(info.front_face_depth_fail_stencil_op);
-        state.front.compareOp   = VulkanEnumTranslator::METoVKCompareOp(info.front_face_stencil_test);
-        state.front.compareMask = info.stencil_readmask;
-        state.front.writeMask   = info.stencil_writemask;
-        state.front.reference   = 0;
+
+        if (info.b_enable_front_face_stencil) {
+            state.front.failOp =
+                VulkanEnumTranslator::METoVKStencilOp(info.front_face_stencil_fail_stencil_op);
+            state.front.passOp = VulkanEnumTranslator::METoVKStencilOp(info.front_face_pass_stencil_op);
+            state.front.depthFailOp =
+                VulkanEnumTranslator::METoVKStencilOp(info.front_face_depth_fail_stencil_op);
+            state.front.compareOp   = VulkanEnumTranslator::METoVKCompareOp(info.front_face_stencil_test);
+            state.front.compareMask = info.stencil_readmask;
+            state.front.writeMask   = info.stencil_writemask;
+            state.front.reference   = 0;
+        } else {
+            state.front.failOp      = VK_STENCIL_OP_KEEP;
+            state.front.passOp      = VK_STENCIL_OP_KEEP;
+            state.front.depthFailOp = VK_STENCIL_OP_KEEP;
+            state.front.compareOp   = VK_COMPARE_OP_ALWAYS;
+            state.front.compareMask = 0;
+            state.front.writeMask   = 0;
+            state.front.reference   = 0;
+        }
 
         if (info.b_enable_back_face_stencil) {
             state.back.failOp = VulkanEnumTranslator::METoVKStencilOp(info.back_face_stencil_fail_stencil_op);
@@ -1246,15 +1258,24 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
             state.back.writeMask   = info.stencil_writemask;
             state.back.reference   = 0;
         } else {
-            state.front = state.back;
+            state.back.failOp      = VK_STENCIL_OP_KEEP;
+            state.back.passOp      = VK_STENCIL_OP_KEEP;
+            state.back.depthFailOp = VK_STENCIL_OP_KEEP;
+            state.back.compareOp   = VK_COMPARE_OP_ALWAYS;
+            state.back.compareMask = 0;
+            state.back.writeMask   = 0;
+            state.back.reference   = 0;
         }
         return std::move(state);
     };
     auto vk_depth_stencil_state = to_depth_stencil_state(_create_info.depth_stencil_info);
 
     // dynamic state
-    Moer::StaticArray<VkDynamicState, 2> states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo     dynamic_state{};
+    Moer::StaticArray<VkDynamicState, 2> states = {
+        VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR
+        //VK_DYNAMIC_STATE_STENCIL_REFERENCE //TODO：用于动态设置模板Ref值
+    };
+    VkPipelineDynamicStateCreateInfo dynamic_state{};
     dynamic_state.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
     dynamic_state.pNext             = nullptr;
     dynamic_state.flags             = 0;

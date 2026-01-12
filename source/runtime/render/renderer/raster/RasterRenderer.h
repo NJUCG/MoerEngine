@@ -8,7 +8,9 @@ namespace Moer::Render::Raster {
 class RasterContext;
 class ShadowDepthPass;
 class GeometryPass;
+class DirectionalShadowMaskPass;
 class LightingPass;
+class SkyboxPass;
 class AoPass;
 class RtaoDenoiserPass;
 class BilateralFilterDenoiserPass;
@@ -58,14 +60,19 @@ public:
 
     bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
 
+    void
+    UpdateGlobalLightingData(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera);
+
 private:
     // Context
     UniquePtr<RasterContext> raster_context_ptr; // For forward declaration
 
     // Pass
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
+    UniquePtr<DirectionalShadowMaskPass>   directional_shadow_mask_pass;
     UniquePtr<GeometryPass>                geometry_pass;
     UniquePtr<LightingPass>                lighting_pass;
+    UniquePtr<SkyboxPass>                  skybox_pass;
     UniquePtr<AoPass>                      ao_pass;
     UniquePtr<RtaoDenoiserPass>            rtao_denoiser_pass;
     UniquePtr<BilateralFilterDenoiserPass> bfd_pass;

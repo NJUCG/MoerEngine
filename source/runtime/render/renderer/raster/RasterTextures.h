@@ -75,6 +75,7 @@ struct DepthBufferWithHandleAndName {
     X(TexHandle, tangent, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)         \
     X(TexHandle, uv, PF_R32G32_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)                         \
     X(TexHandle, position, PF_R32G32B32A32_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)             \
+    X(TexHandle, shadow_mask, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)                     \
     X(TexHandle, lighting_output, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)      \
     X(TexHandle, ao_output, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)            \
     X(TexHandle, ao_output_ambient_only, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)          \

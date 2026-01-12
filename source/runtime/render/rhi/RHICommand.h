@@ -558,6 +558,25 @@ public:
             std::string_view         _name,
             Rect2D                   _rect,
             Array<SingleDrawParam>&& _mesh_data,
+            DepthAttachment          _depth,
+            TRenderTarget&&... _render_targets
+        ) {
+            RenderPassInfo      pass_info({std::forward<TRenderTarget>(_render_targets)...}, _depth, _rect);
+            Array<MeshDrawData> mesh_data;
+            mesh_data.emplace_back();
+            mesh_data.back().draw_params = std::move(_mesh_data);
+
+            cmd_list.SetRenderCmds(
+                pso.handle, std::move(args), std::move(pass_info), std::move(mesh_data), _name
+            );
+        };
+
+        // Named Draw with draw list
+        template<typename... TRenderTarget>
+        void Draw(
+            std::string_view         _name,
+            Rect2D                   _rect,
+            Array<SingleDrawParam>&& _mesh_data,
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info(
