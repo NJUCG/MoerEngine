@@ -91,8 +91,6 @@ public:
 
 private:
     PbrMaterialShadingPipeline pbr_pipeline;
-
-    //BufferWithHandle lighting_data_buffer;
 };
 
 } // namespace Moer::Render::Raster

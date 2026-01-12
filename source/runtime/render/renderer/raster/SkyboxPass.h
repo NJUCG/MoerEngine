@@ -13,7 +13,6 @@
 
 namespace Moer::Render::Raster {
 
-// 新增：专门用于天空盒的 Pipeline
 class SkyboxPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(SkyboxPipeline);
