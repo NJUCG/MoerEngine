@@ -73,6 +73,7 @@ public:
         for (auto type : material_types) {
             material_param.material_type = uint(type);
 
+            //未来希望能用该Attachment进行深度模板测试
             DepthAttachment depth_attachment =
                 DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture());
             depth_attachment.action = AC_DS_LOAD_STORE;
@@ -82,7 +83,7 @@ public:
                     "Lighting Pass",
                     context.textures.lighting_output.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
-                    depth_attachment,
+                    //depth_attachment,
                     ColorAttachment(context.textures.lighting_output.tex)
                 );
         };
