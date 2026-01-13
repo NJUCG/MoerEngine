@@ -30,7 +30,7 @@ SkyboxPass::SkyboxPass(RasterContext& context) {
 
 void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera) {
     SkyboxPassBindlessParam skybox_param;
-    skybox_param.cubemap_handle = context.cubemap_tex.handle;
+    skybox_param.cubemap_handle = context.textures.cubemap_tex.handle;
     auto directional_light      = GetMainLightDirection(context);
     if (directional_light != nullptr && ui_config.skybox_exposure_correct_enabled) {
         skybox_param.exposure_factor = directional_light->GetColor() * directional_light->GetIntensity() *

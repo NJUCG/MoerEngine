@@ -1,55 +1,18 @@
 #pragma once
 
+#include "AssetTool.h"
 #include "rhi/RHI.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
+#include <type_traits>
 
 namespace Moer::Render::Raster {
-
-struct TextureWithHandle {
-    TextureRef tex;
-    uint       handle;
-
-    uint2 GetSize() {
-        return uint2(tex->GetExtent().x, tex->GetExtent().y);
-    }
-    uint GetSizeX() {
-        return tex->GetExtent().x;
-    }
-    uint GetSizeY() {
-        return tex->GetExtent().y;
-    }
-    Rect2D GetRect2D() {
-        return Rect2D(0, 0, GetSizeX(), GetSizeY());
-    }
-};
-struct DepthBufferWithHandle {
-    DepthBufferRef tex;
-    uint           handle;
-};
-struct BufferWithHandle {
-    BufferRef buf;
-    uint      handle;
-};
-
-// 如果texture的名字不是编译期决定的，则需要找一个地方存名字。否则string_view会出现悬垂指针
-struct DepthBufferWithHandleAndName {
-    DepthBufferRef tex;
-    uint           handle;
-    std::string    name;
-};
-
-/**
- * 下面使用宏来维护Raster中所需要的Textures，避免代码过多导致的维护困难（或许，如果某天发现这么写还是难以使用，可以改回去）
- * 
- * 例外：
- *   - depth手动维护，原因是需要两个不同的Sampler (nearest, linear)
- */
 
 #define TexHandle       TextureWithHandle
 #define E_SAMPLED_COLOR ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT
 #define E_C_ATTACH      ETextureUsageFlags::COLOR_ATTACHMENT
-#define E_D_S_ATTACH    ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+#define E_S_DEPTH       ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+#define E_S_TRANSFER    ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
 
 #define SCREEN_SIZE           Extent2D(size->x, size->y)
 #define CUSTOMIZED_SIZE(x, y) Extent2D(x, y)
@@ -69,117 +32,275 @@ struct DepthBufferWithHandleAndName {
 #define SR_TAG_false false
 #endif
 
-#define RASTER_TEXTURES_TABLE                                                                             \
-    X(TexHandle, vbuffer, PF_R32_UINT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)                         \
-    X(TexHandle, normal, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)          \
-    X(TexHandle, tangent, PF_A2R10G10B10_UNORM_PACK32, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)         \
-    X(TexHandle, uv, PF_R32G32_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)                         \
-    X(TexHandle, position, PF_R32G32B32A32_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)             \
-    X(TexHandle, shadow_mask, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)                     \
-    X(TexHandle, lighting_output, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)      \
-    X(TexHandle, ao_output, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)            \
-    X(TexHandle, ao_output_ambient_only, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)          \
-    X(TexHandle, ao_output_ambient_only_1, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)        \
-    X(TexHandle, ao_denoiser_accumulate, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)          \
-    X(TexHandle, ao_denoiser_accumulate_1, PF_R8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)        \
-    X(TexHandle, camera_motion_vector, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true) \
-    X(TexHandle, denoiser_output, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_true)      \
-    X(TexHandle, upsample_output, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)     \
-    X(TexHandle, ssr_output, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)          \
-    X(TexHandle, aa_texture_1, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)        \
-    X(TexHandle, aa_texture_2, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)        \
-    X(TexHandle, aa_texture_3, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)        \
-    X(TexHandle, aa_texture_4, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)        \
-    X(TexHandle, aa_output, PF_R16G16B16A16_SFLOAT, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)           \
-    X(TexHandle, tonemapping_output, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)       \
-    X(TexHandle, ui_frame_buffer, PF_R8G8B8A8_UNORM, E_SAMPLED_COLOR, SCREEN_SIZE, SR_TAG_false)          \
-    X(TexHandle, output, PF_R8G8B8A8_SRGB, E_C_ATTACH, SCREEN_SIZE, SR_TAG_false)
+/**
+ * 静态分发处理器：根据持有者类型自动选择创建方法
+ */
+template<typename IntentTag, typename T_Holder>
+void CreateRasterResource(
+    T_Holder&     target,
+    RenderDevice& device,
+    const char*   name,
+    const uint2&  size,
+    TexConfig&    cfg
+) {
+    if (cfg.is_asset) {
+        // 资源纹理不在这里创建
+        return;
+    }
+    if (cfg.alias_ptr) {
+        target.tex = static_cast<T_Holder*>(cfg.alias_ptr)->tex;
+    } else {
+        if constexpr (std::is_same_v<IntentTag, TexDepthTag>) {
+            cfg.type = TexType::TEX_TYPE_DEPTH;
+            cfg.dim  = ETextureDimension::TEX_2D;
+
+            target.tex = device.CreateDepthBuffer(
+                name,
+                (cfg.b_super_resolution ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)),
+                cfg.format,
+                1,
+                cfg.usage
+            );
+        } else if constexpr (std::is_same_v<IntentTag, TexCubeTag>) {
+            cfg.type = TexType::TEX_TYPE_CUBE;
+            cfg.dim  = ETextureDimension::TEX_CUBE;
+            cfg.size = {0, 0, 6};
+
+            target.tex = device.CreateCubeMap(
+                name,
+                (cfg.b_super_resolution ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)),
+                cfg.format,
+                cfg.usage,
+                cfg.mip_cnt
+            );
+        } else if constexpr (std::is_same_v<IntentTag, Tex2DTag>) {
+            cfg.type = TexType::TEX_TYPE_2D;
+            cfg.dim  = ETextureDimension::TEX_2D;
+
+            target.tex = device.CreateTexture(
+                name,
+                (cfg.b_super_resolution ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)),
+                cfg.format,
+                cfg.usage,
+                cfg.mip_cnt
+            );
+        } else {
+            static_assert(always_false<T_Holder>, "Unsupported Tex IntentTag");
+        }
+        LOG_DEBUG(
+            "tex {}, size {} x {}",
+            name,
+            (cfg.b_super_resolution ? size.x / 2 : size.x),
+            (cfg.b_super_resolution ? size.y / 2 : size.y)
+        );
+    }
+}
+
+#define RASTER_TEXTURES_TABLE_CONFIG                                                                        \
+    X(TexHandle, vbuffer, Tex2DTag, TexConfig::Default(PF_R32_UINT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true)) \
+    X(TexHandle,                                                                                            \
+      normal,                                                                                               \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_A2R10G10B10_UNORM_PACK32).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))               \
+    X(TexHandle,                                                                                            \
+      tangent,                                                                                              \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_A2R10G10B10_UNORM_PACK32).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))               \
+    X(TexHandle, uv, Tex2DTag, TexConfig::Default(PF_R32G32_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true)) \
+    X(TexHandle,                                                                                            \
+      position,                                                                                             \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R32G32B32A32_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                    \
+    X(TexHandle,                                                                                            \
+      shadow_mask,                                                                                          \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                               \
+    X(TexHandle,                                                                                            \
+      lighting_output,                                                                                      \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                    \
+    X(TexHandle,                                                                                            \
+      ao_output,                                                                                            \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                    \
+    X(TexHandle,                                                                                            \
+      ao_output_ambient_only,                                                                               \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                               \
+    X(TexHandle,                                                                                            \
+      ao_output_ambient_only_1,                                                                             \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                               \
+    X(TexHandle,                                                                                            \
+      ao_denoiser_accumulate,                                                                               \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                               \
+    X(TexHandle,                                                                                            \
+      ao_denoiser_accumulate_1,                                                                             \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                               \
+    X(TexHandle,                                                                                            \
+      camera_motion_vector,                                                                                 \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                    \
+    X(TexHandle,                                                                                            \
+      denoiser_output,                                                                                      \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                    \
+    X(TexHandle,                                                                                            \
+      upsample_output,                                                                                      \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))                   \
+    X(TexHandle,                                                                                            \
+      ssr_output,                                                                                           \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))                   \
+    X(TexHandle,                                                                                            \
+      aa_texture_1,                                                                                         \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))                   \
+    X(TexHandle,                                                                                            \
+      aa_texture_2,                                                                                         \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))                   \
+    X(TexHandle,                                                                                            \
+      aa_texture_3,                                                                                         \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))                   \
+    X(TexHandle,                                                                                            \
+      aa_texture_4,                                                                                         \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))                   \
+    X(TexHandle,                                                                                            \
+      aa_output,                                                                                            \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))                   \
+    X(TexHandle,                                                                                            \
+      bloom_downsample_chain,                                                                               \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_B10G11R11_UFLOAT_PACK32).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))               \
+    X(TexHandle,                                                                                            \
+      bloom_upsample_chain,                                                                                 \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_B10G11R11_UFLOAT_PACK32).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))               \
+    X(TexHandle,                                                                                            \
+      tonemapping_output,                                                                                   \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))                        \
+    X(TexHandle,                                                                                            \
+      ui_frame_buffer,                                                                                      \
+      Tex2DTag,                                                                                             \
+      TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR).SR(SR_TAG_false))                        \
+    X(TexHandle, output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_SRGB).Usage(E_C_ATTACH).SR(SR_TAG_false)) \
+    X(DepthBufferWithHandle,                                                                                \
+      depth_linear_sampler,                                                                                 \
+      TexDepthTag,                                                                                          \
+      TexConfig::Default(WITH_CUDA ? PF_D32_SFLOAT : PF_D32_SFLOAT_S8_UINT)                                 \
+          .Usage(E_S_DEPTH)                                                                                 \
+          .SR(SR_TAG_true)                                                                                  \
+          .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                     \
+    X(DepthBufferWithHandle,                                                                                \
+      depth_nearest_sampler,                                                                                \
+      TexDepthTag,                                                                                          \
+      TexConfig::Default(WITH_CUDA ? PF_D32_SFLOAT : PF_D32_SFLOAT_S8_UINT)                                 \
+          .Usage(E_S_DEPTH)                                                                                 \
+          .SR(SR_TAG_true)                                                                                  \
+          .SamplerConfig(SF_NEAREST, SAM_CLAMP_TO_EDGE)                                                     \
+          .From(depth_linear_sampler))                                                                      \
+    X(TexHandle,                                                                                            \
+      noise_tex,                                                                                            \
+      Tex2DTag,                                                                                             \
+      TexConfig::Asset("noise_256x256.png")                                                                 \
+          .Format(PF_R8G8B8A8_UNORM)                                                                        \
+          .Usage(E_S_TRANSFER)                                                                              \
+          .SR(SR_TAG_false)                                                                                 \
+          .SamplerConfig(SF_LINEAR, SAM_REPEAT))                                                            \
+    X(TexHandle,                                                                                            \
+      lut_ggx_emu,                                                                                          \
+      Tex2DTag,                                                                                             \
+      TexConfig::Asset("LUT/GGX_E_LUT.png")                                                                 \
+          .Format(PF_R8G8B8A8_UNORM)                                                                        \
+          .Usage(E_S_TRANSFER)                                                                              \
+          .SR(SR_TAG_false)                                                                                 \
+          .SamplerConfig(SF_LINEAR, SAM_REPEAT))                                                            \
+    X(TexHandle,                                                                                            \
+      lut_ggx_eavg,                                                                                         \
+      Tex2DTag,                                                                                             \
+      TexConfig::Asset("LUT/GGX_Eavg_LUT.png")                                                              \
+          .Format(PF_R8G8B8A8_UNORM)                                                                        \
+          .Usage(E_S_TRANSFER)                                                                              \
+          .SR(SR_TAG_false)                                                                                 \
+          .SamplerConfig(SF_LINEAR, SAM_REPEAT))                                                            \
+    X(TexHandle,                                                                                            \
+      cubemap_tex,                                                                                          \
+      TexCubeTag,                                                                                           \
+      TexConfig::Asset("Skybox/WaterScene")                                                                 \
+          .Format(PF_R8G8B8A8_UNORM)                                                                        \
+          .Usage(E_S_TRANSFER)                                                                              \
+          .SR(SR_TAG_false)                                                                                 \
+          .SamplerConfig(SF_LINEAR, SAM_REPEAT))
 
 struct RasterTextures {
     // 批量生成
-#define X(TYPE, NAME, PF, USAGE, SIZE, SR_TAG) TYPE NAME;
-    RASTER_TEXTURES_TABLE
+#define X(TYPE, NAME, TEXTYPE, CONFIG) TYPE NAME;
+    RASTER_TEXTURES_TABLE_CONFIG
 #undef X
-    // 手动维护: depth
-    DepthBufferWithHandle depth_linear_sampler;
-    DepthBufferWithHandle depth_nearest_sampler;
 
     void CreateFrameBuffers(RenderDevice& device, const uint2& size) {
         // 批量生成
-#define X(TYPE, NAME, PF, USAGE, SIZE, SR_TAG)                                                   \
-    NAME.tex = device.CreateTexture(                                                             \
-        #NAME, (SR_TAG ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)), PF, USAGE \
-    );                                                                                           \
-    LOG_DEBUG("tex {}, size {} x {}", #NAME, (SR_TAG ? size.x / 2 : size.x), (SR_TAG ? size.y / 2 : size.y));
-        RASTER_TEXTURES_TABLE
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                       \
+    {                                                                        \
+        TexConfig cfg = (CONFIG);                                            \
+        CreateRasterResource<TEXTYPE>(this->NAME, device, #NAME, size, cfg); \
+        LOG_DEBUG(                                                           \
+            "tex {}, size {} x {}",                                          \
+            #NAME,                                                           \
+            (cfg.b_super_resolution ? size.x / 2 : size.x),                  \
+            (cfg.b_super_resolution ? size.y / 2 : size.y)                   \
+        );                                                                   \
+    }
+        RASTER_TEXTURES_TABLE_CONFIG
 #undef X
-        // 手动维护: depth
-        depth_linear_sampler.tex = device.CreateDepthBuffer(
-            "depth",
+    }
 
-#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
-            Extent2D(size.x / 2.0f, size.y / 2.0f),
-#else
-            Extent2D(size.x, size.y),
-#endif
-
-#if WITH_CUDA
-            PF_D32_SFLOAT,
-#else
-            PF_D32_SFLOAT_S8_UINT, // cuda不支持
-#endif
-            1,
-            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
-        );
-        depth_nearest_sampler.tex = depth_linear_sampler.tex;
-        LOG_DEBUG(
-            "tex {}, size {} x {}",
-            "depth",
-            depth_linear_sampler.tex->GetExtent().x,
-            depth_linear_sampler.tex->GetExtent().y
-        );
+    void LoadAndUploadAssets(RenderDevice& device, CommandList& cmd_list) {
+        // 批量生成
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                               \
+    {                                                                                \
+        TexConfig cfg = (CONFIG);                                                    \
+        if ((CONFIG).is_asset) {                                                     \
+            AssetTool::LoadTexture<TEXTYPE>(device, cmd_list, NAME.tex, cfg, #NAME); \
+        }                                                                            \
+    }
+        RASTER_TEXTURES_TABLE_CONFIG
+#undef X
     }
 
     void AllocateFrameBuffers(CommandList& cmd_list, BindlessArrayRef& bindless_array) {
-        // 默认Sampler
-        Sampler linear_sampler(SF_LINEAR, SAM_REPEAT);
-
         // 批量生成
-#define X(TYPE, NAME, PF, USAGE, SIZE, SR_TAG) \
-    NAME.handle = bindless_array->AllocateTexture(NAME.tex, linear_sampler);
-        RASTER_TEXTURES_TABLE
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                \
+    LOG_DEBUG("Allocating tex handle for {}", #NAME); \
+    NAME.handle = bindless_array->AllocateTexture(NAME.tex->GetView(), (CONFIG).sampler);
+        RASTER_TEXTURES_TABLE_CONFIG
 #undef X
-        // 手动维护: depth
-        depth_linear_sampler.handle = bindless_array->AllocateTexture(
-            depth_linear_sampler.tex->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
-        );
-        depth_nearest_sampler.handle = bindless_array->AllocateTexture(
-            depth_nearest_sampler.tex->GetView(), Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE)
-        );
-
         // 提交
         cmd_list.UpdateBindlessArray(bindless_array);
     }
 
     void FreeFrameBuffers(BindlessArrayRef& bindless_array) {
         // 批量生成
-#define X(TYPE, NAME, PF, USAGE, SIZE, SR_TAG) bindless_array->FreeTexture(NAME.handle);
-        RASTER_TEXTURES_TABLE
+#define X(TYPE, NAME, TEXTYPE, CONFIG) bindless_array->FreeTexture(NAME.handle);
+        RASTER_TEXTURES_TABLE_CONFIG
 #undef X
-        // 手动维护: depth
-        bindless_array->FreeTexture(depth_linear_sampler.handle);
-        bindless_array->FreeTexture(depth_nearest_sampler.handle);
     }
 
     Array<TextureView> GetDisplayableFrameBuffersView() {
         Array<TextureView> views;
-        // 手动维护: depth (这里把depth push在前面，这样GUI里就会显示在最前面)
-        views.emplace_back(depth_linear_sampler.tex->GetView());
         // 批量生成
-#define X(TYPE, NAME, PF, USAGE, SIZE, SR_TAG)                       \
-    assert(NAME.tex != nullptr && "There is an empty FrameBuffer!"); \
-    views.emplace_back(NAME.tex->GetView());
-        RASTER_TEXTURES_TABLE
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                     \
+    assert(this->NAME.tex != nullptr && "There is an empty FrameBuffer!"); \
+    views.emplace_back(this->NAME.tex->GetView());
+        RASTER_TEXTURES_TABLE_CONFIG
 #undef X
         // 去除 output
         bool b_has_erased = false;
@@ -194,9 +315,9 @@ struct RasterTextures {
         // 返回
         return views;
     }
-};
+}; // namespace Moer::Render::Raster
 
-#undef RASTER_TEXTURES_TABLE
+#undef RASTER_TEXTURES_TABLE_CONFIG
 
 #undef SCREEN_SIZE
 #undef CUSTOMIZED_SIZE
@@ -205,5 +326,6 @@ struct RasterTextures {
 #undef E_SAMPLED_COLOR
 #undef E_C_ATTACH
 #undef E_D_S_ATTACH
+#undef E_S_DEPTH
 
 } // namespace Moer::Render::Raster

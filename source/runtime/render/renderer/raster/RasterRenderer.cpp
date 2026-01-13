@@ -5,6 +5,7 @@
 #include "AaPass.h"
 #include "AoPass.h"
 #include "BilateralFilterDenoiserPass.h"
+//#include "BloomPass.h"
 #include "DirectionalShadowMaskPass.h"
 #include "GeometryPass.h"
 #include "LightingPass.h"
@@ -41,6 +42,7 @@ RasterRenderer::RasterRenderer(
     auto& raster_context = *raster_context_ptr;
 
     raster_context.CreateFrameBuffers();
+    raster_context.UploadExternalFrameBuffers();
     raster_context.AllocateFrameBuffers();
 
     gfx_queue.Execute(cmd_list.Submit());
@@ -56,7 +58,8 @@ RasterRenderer::RasterRenderer(
     bfd_pass                     = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
     ssr_pass                     = MakeUnique<SsrPass>(raster_context);
     aa_pass                      = MakeUnique<AaPass>(raster_context);
-    tonemapping_pass             = MakeUnique<TonemappingPass>(raster_context);
+    //bloom_pass                   = MakeUnique<BloomPass>(raster_context);
+    tonemapping_pass = MakeUnique<TonemappingPass>(raster_context);
 
 #if WITH_CUDA
     // 固定CudaPass位于AoPass之后（需要保证AoPass必定往 ao_output 中写入数据
@@ -140,8 +143,8 @@ void RasterRenderer::UpdateGlobalLightingData(
 
     // BRDF
     {
-        lighting_data->lut_ggx_emu_handle  = context.lut_ggx_emu.handle;
-        lighting_data->lut_ggx_eavg_handle = context.lut_ggx_eavg.handle;
+        lighting_data->lut_ggx_emu_handle  = context.textures.lut_ggx_emu.handle;
+        lighting_data->lut_ggx_eavg_handle = context.textures.lut_ggx_eavg.handle;
 
         lighting_data->brdf_enable_multi_scatter = ui_config.shading_brdf_enable_multi_scatter ? 1 : 0;
         lighting_data->brdf_NDF_mode             = static_cast<uint>(ui_config.shading_brdf_NDF_mode);
@@ -178,6 +181,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         raster_context.FreeFrameBuffers();
         raster_context.CreateFrameBuffers();
+        raster_context.UploadExternalFrameBuffers();
         raster_context.AllocateFrameBuffers();
 
 #if WITH_CUDA
@@ -296,6 +300,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // - Upsample Pass
         processing_image = upsample_pass->Process(raster_context, raster_config, processing_image);
 #endif
+
+        //Bloom Pass
+        //processing_image = bloom_pass->Process(raster_context, raster_config, processing_image);
 
         // - Tonemapping Pass
         processing_image = tonemapping_pass->Process(raster_context, raster_config, processing_image);

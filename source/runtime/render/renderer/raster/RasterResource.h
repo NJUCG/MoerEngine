@@ -56,13 +56,9 @@ public:
     }
 
     // MARK: Hold ownership
-    RasterTextures    textures;
-    TextureWithHandle lut_ggx_emu;  // games202 hw4 Emu
-    TextureWithHandle lut_ggx_eavg; // games202 hw4 Eavg
-    TextureWithHandle noise_tex;
-    TextureWithHandle cubemap_tex;
-    BufferWithHandle  lighting_data_buffer; //帧级别光照数据
-    LightingData      lighting_data;
+    RasterTextures   textures;
+    BufferWithHandle lighting_data_buffer; //帧级别光照数据
+    LightingData     lighting_data;
 
     // Data from scene
     uint gpu_instance_info_handle     = 0;
@@ -165,101 +161,11 @@ public:
         textures = RasterTextures{};
 
         // other resources
-        LoadLUT();
-        LoadNoiseTexture();
-        LoadCubemap();
         CreateLightingData();
     }
 
     void Update(float delta_time) {
         frame_time = delta_time;
-    }
-
-    // TODO: 考虑统一Skybox，因为写这段代码的时候，LoadSkybox()正在被dragonk修改，所以没有更新LoadSkybox()（如果不需要更新，则删掉本注释）
-    void LoadExternalTexture(TextureWithHandle& out_tex, const std::string& path, const char* name) const {
-        int    width, height;
-        ubyte* data = LoadImageData(path, width, height);
-
-        if (!data)
-            return;
-
-        out_tex.tex = device.CreateTexture(
-            name,
-            Extent2D(width, height),
-            PF_R8G8B8A8_UNORM,
-            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
-        );
-
-        UploadTextureData(out_tex.tex, data, width, height, name);
-
-        out_tex.handle = bdls->AllocateTexture(out_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
-    }
-
-    void LoadLUT() {
-        {
-            std::string filepath =
-                (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" / "LUT" / "GGX_E_LUT.png")
-                    .string();
-
-            LoadExternalTexture(lut_ggx_emu, filepath, "lut_ggx_emu");
-        }
-        {
-            std::string filepath = (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" /
-                                    "LUT" / "GGX_Eavg_LUT.png")
-                                       .string();
-
-            LoadExternalTexture(lut_ggx_eavg, filepath, "lut_ggx_eavg");
-        }
-    }
-
-    void LoadNoiseTexture() {
-        {
-            std::string filepath =
-                (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" / "noise_256x256.png")
-                    .string();
-
-            LoadExternalTexture(noise_tex, filepath, "noise_tex");
-        }
-    }
-
-    void LoadCubemap() {
-        const std::array<std::string, 6> skybox_faces = {
-            "posx.jpg", "negx.jpg", "posy.jpg", "negy.jpg", "posz.jpg", "negz.jpg"
-        };
-
-        // TODO: GUI和Config切换天空盒，而不是现在硬编码
-        // const std::string skybox_path = "Shibuya";
-        const std::string skybox_path = "WaterScene";
-
-        TextureView skybox_view;
-
-        for (size_t i = 0; i < 6; i++) {
-            std::string filepath = (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" /
-                                    "Skybox" / skybox_path / skybox_faces[i])
-                                       .string();
-
-            int    width, height;
-            ubyte* data = LoadImageData(filepath, width, height);
-
-            if (!data)
-                return;
-
-            if (i == 0) { // first time
-                // 延迟创建，这样可以读取 width & height
-                cubemap_tex.tex = device.CreateCubeMap(
-                    "Skybox Cubemap",
-                    Extent2D(width, height),
-                    PF_R8G8B8A8_UNORM,
-                    ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
-                );
-                skybox_view = TextureView(cubemap_tex.tex);
-            }
-
-            UploadTextureData(
-                skybox_view.Slice(i), data, width, height, std::format("Skybox Cubemap #{}", i)
-            );
-        }
-        cubemap_tex.handle = bdls->AllocateTexture(cubemap_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
     }
 
     // Called from `FirstLoad`
@@ -298,6 +204,11 @@ public:
 
     void CreateFrameBuffers() {
         textures.CreateFrameBuffers(device, resolution);
+    }
+
+    //功能：加载外部纹理并在这一步Create它们的buffer
+    void UploadExternalFrameBuffers() {
+        textures.LoadAndUploadAssets(device, cmd_list);
     }
 
     void AllocateFrameBuffers() {
