@@ -216,31 +216,26 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
 
         if (b_need_to_create) {
 
-            // 释放已有的Texture
-            if (shadow_map_texture.tex) {
-                // TODO: 需要销毁申请的Texture吧。我发现RasterTextures.h中的texture也都没有销毁，是否是遗漏了？
-                // context.device.DestroyTexture(shadow_map_texture.tex);
-                context.bdls->FreeTexture(shadow_map_texture.handle);
+            AssetTool::FreeRasterResourceHandle(context.bdls, shadow_map_texture);
 
-                shadow_map_texture.tex = nullptr;
-            }
+            uint2     sm_size(ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size);
+            TexConfig tex_cfg =
+                TexConfig::Depth(
+                    context.textures.depth_linear_sampler.tex->GetFormat() // 使用普通DepthBuffer的格式
+                )
+                    .Size(sm_size)
+                    .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+                    .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE);
 
-            shadow_map_texture.name = std::format("ShadowMapTexture_{}", i);
-            shadow_map_texture.tex  = context.device.CreateDepthBuffer(
-                shadow_map_texture.name.c_str(),
-                Extent2D(ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
-                context.textures.depth_linear_sampler.tex->GetFormat(), // 使用普通DepthBuffer的格式
-                1,
-                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+            AssetTool::CreateRasterResource<TexDepthTag>(
+                shadow_map_texture, context.device, std::format("ShadowMapTexture_{}", i), sm_size, tex_cfg
             );
 
-            shadow_map_texture.handle = context.bdls->AllocateTexture(
-                shadow_map_texture.tex->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
-            ); // 默认使用 Linear Sampler
+            AssetTool::AllocateRasterResourceHandle(context.bdls, shadow_map_texture, tex_cfg);
 
             LOG_DEBUG(
                 "Create ShadowMap Texture: {}, size ({}, {}), bindless handle: {}",
-                shadow_map_texture.name,
+                std::format("ShadowMapTexture_{}", i),
                 ui_config.shadow_csm_sm_size,
                 ui_config.shadow_csm_sm_size,
                 shadow_map_texture.handle

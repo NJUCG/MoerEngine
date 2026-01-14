@@ -22,36 +22,45 @@ template<typename...>
 inline constexpr bool always_false = false;
 
 struct TextureWithHandle {
-    TextureRef tex;
-    uint       handle;
+    TextureRef  tex;
+    uint        handle;      //主Handle
+    Array<uint> mip_handles; //每个Mip的Handle
 
-    uint2 GetSize() {
-        return uint2(tex->GetExtent().x, tex->GetExtent().y);
+    uint2 GetSize(uint mip = 0) {
+        return uint2(std::max(1u, tex->GetExtent().x >> mip), std::max(1u, tex->GetExtent().y >> mip));
     }
-    uint GetSizeX() {
-        return tex->GetExtent().x;
+    uint GetSizeX(uint mip = 0) {
+        return std::max(1u, tex->GetExtent().x >> mip);
     }
-    uint GetSizeY() {
-        return tex->GetExtent().y;
+    uint GetSizeY(uint mip = 0) {
+        return std::max(1u, tex->GetExtent().y >> mip);
     }
-    Rect2D GetRect2D() {
-        return Rect2D(0, 0, GetSizeX(), GetSizeY());
+    Rect2D GetRect2D(uint mip = 0) {
+        uint2 size = GetSize(mip);
+        return Rect2D(0, 0, size.x, size.y);
+    }
+
+    uint GetMipHandle(uint mip) {
+        if (mip_handles.size() > mip) {
+            return mip_handles[mip];
+        }
+        return handle;
     }
 };
 struct DepthBufferWithHandle {
     DepthBufferRef tex;
-    uint           handle;
+    uint           handle = 0;
 };
 
 struct BufferWithHandle {
     BufferRef buf;
-    uint      handle;
+    uint      handle = 0;
 };
 
 // 如果texture的名字不是编译期决定的，则需要找一个地方存名字。否则string_view会出现悬垂指针
 struct DepthBufferWithHandleAndName {
     DepthBufferRef tex;
-    uint           handle;
+    uint           handle = 0;
     std::string    name;
 };
 
@@ -133,7 +142,7 @@ struct TexConfig {
     }
 
     //只为我们需要显式访问不同Mip的纹理开启
-    TexConfig& IndividualMips() {
+    TexConfig& IndivisualMips() {
         b_create_mip_views = true;
         return *this;
     }
@@ -184,7 +193,7 @@ public:
     ) {}
 
     template<typename Tag>
-        requires(std::is_same_v<Tag, Tex2DTag> || std::is_same_v<Tag, TexDepthTag>)
+        requires(std::is_same_v<Tag, Tex2DTag>)
     static void LoadTexture(
         RenderDevice&          device,
         CommandList&           cmd_list,
@@ -243,6 +252,146 @@ public:
             UploadTextureData(
                 cmd_list, skybox_view.Slice(i), data, width, height, std::format("Skybox Cubemap #{}", i)
             );
+        }
+    }
+
+    template<typename IntentTag, typename T_Holder>
+    static void CreateRasterResource(
+        T_Holder&        target,
+        RenderDevice&    device,
+        std::string_view name,
+        const uint2&     size,
+        TexConfig&       cfg
+    ) {
+        if (cfg.is_asset) {
+            // 资源纹理不在这里创建
+            return;
+        }
+        if (cfg.alias_ptr) {
+            target.tex = static_cast<T_Holder*>(cfg.alias_ptr)->tex;
+        } else {
+            if constexpr (std::is_same_v<IntentTag, TexDepthTag>) {
+                cfg.type = TexType::TEX_TYPE_DEPTH;
+                cfg.dim  = ETextureDimension::TEX_2D;
+
+                target.tex = device.CreateDepthBuffer(
+                    name,
+                    (cfg.b_super_resolution ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)),
+                    cfg.format,
+                    1,
+                    cfg.usage
+                );
+            } else if constexpr (std::is_same_v<IntentTag, TexCubeTag>) {
+                cfg.type = TexType::TEX_TYPE_CUBE;
+                cfg.dim  = ETextureDimension::TEX_CUBE;
+                cfg.size = {0, 0, 6};
+
+                target.tex = device.CreateCubeMap(
+                    name,
+                    (cfg.b_super_resolution ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)),
+                    cfg.format,
+                    cfg.usage,
+                    cfg.mip_cnt
+                );
+            } else if constexpr (std::is_same_v<IntentTag, Tex2DTag>) {
+                cfg.type = TexType::TEX_TYPE_2D;
+                cfg.dim  = ETextureDimension::TEX_2D;
+
+                target.tex = device.CreateTexture(
+                    name,
+                    (cfg.b_super_resolution ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)),
+                    cfg.format,
+                    cfg.usage,
+                    cfg.mip_cnt
+                );
+            } else {
+                static_assert(always_false<T_Holder>, "Unsupported Tex IntentTag");
+            }
+            LOG_DEBUG(
+                "tex {}, size {} x {}",
+                name,
+                (cfg.b_super_resolution ? size.x / 2 : size.x),
+                (cfg.b_super_resolution ? size.y / 2 : size.y)
+            );
+        }
+    }
+
+    template<typename T>
+        requires requires(T t) {
+            t.handle;
+            t.mip_handles;
+            t.tex;
+        }
+    static void
+    AllocateRasterResourceHandle(BindlessArrayRef& bindless_array, T& target, const TexConfig& cfg) {
+        //Main Handle
+        target.handle = bindless_array->AllocateTexture(target.tex->GetView(), cfg.sampler);
+
+        // Mip Handles
+        if (cfg.b_create_mip_views) {
+            target.mip_handles.resize(cfg.mip_cnt);
+            for (uint mip = 0; mip < cfg.mip_cnt; ++mip) {
+                target.mip_handles[mip] = bindless_array->AllocateTexture(
+                    target.tex->GetView(static_cast<uint8>(mip), 1), cfg.sampler
+                );
+            }
+        }
+    }
+
+    template<typename T>
+        requires requires(T t) {
+            t.handle;
+            t.tex;
+        } && (!requires(T t) { t.mip_handles; })
+    static void
+    AllocateRasterResourceHandle(BindlessArrayRef& bindless_array, T& target, const TexConfig& cfg) {
+        //Main Handle
+        target.handle = bindless_array->AllocateTexture(target.tex->GetView(), cfg.sampler);
+    }
+
+    //方案：tex和handle的生命周期绑定
+    //TODO:理论上外部资源纹理分辨率固定，不需要释放显存，但如何管理好呢？
+    template<typename T>
+        requires requires(T t) {
+            t.handle;
+            t.mip_handles;
+            t.tex;
+        }
+    static void FreeRasterResourceHandle(BindlessArrayRef& bindless_array, T& target) {
+        //Main Handle
+        if (target.handle != 0) {
+            bindless_array->FreeTexture(target.handle);
+            target.handle = 0;
+            target.tex    = nullptr;
+        } else {
+            LOG_WARNING("Trying to free a texture handle that is already zeroed.");
+        }
+
+        // Mip Handles
+        for (uint& hdl : target.mip_handles) {
+            if (hdl != 0) {
+                bindless_array->FreeTexture(hdl);
+                hdl = 0;
+            } else {
+                LOG_WARNING("Trying to free a mip texture handle that is already zeroed.");
+            }
+        }
+        target.mip_handles.clear();
+    }
+
+    template<typename T>
+        requires requires(T t) {
+            t.handle;
+            t.tex;
+        } && (!requires(T t) { t.mip_handles; })
+    static void FreeRasterResourceHandle(BindlessArrayRef& bindless_array, T& target) {
+        //Main Handle
+        if (target.handle != 0) {
+            bindless_array->FreeTexture(target.handle);
+            target.handle = 0;
+            target.tex    = nullptr;
+        } else {
+            LOG_WARNING("Trying to free a texture handle that is already zeroed.");
         }
     }
 
