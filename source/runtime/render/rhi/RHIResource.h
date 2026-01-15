@@ -1181,6 +1181,8 @@ struct ColorAttachment {
     Texture*          target;
     EAttachmentAction action      = AC_CLEAR_STORE;
     float4            clear_color = {0, 0, 0, 0};
+    uint              mip_level   = 0;
+    uint              array_layer = 0;
 };
 
 // 聚合初始化会触发零初始化，但构造函数不会，所以必须设置默认值

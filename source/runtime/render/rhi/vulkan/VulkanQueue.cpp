@@ -32,7 +32,9 @@ VkRenderingAttachmentInfo FromColorAttachmentInfo(const ColorAttachment& _attach
     attachment_info.pNext = nullptr;
 
     VulkanTexture* vk_texture = reinterpret_cast<VulkanTexture*>(_attachment.target);
-    attachment_info.imageView = vk_texture->GetView();
+    attachment_info.imageView = vk_texture->GetView(
+        static_cast<uint8>(_attachment.mip_level), 1, static_cast<uint8>(_attachment.array_layer), 1
+    );
 
     attachment_info.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     attachment_info.loadOp      = VulkanEnumTranslator::METoVKAttachmentLoadOp(GetLoadOp(_attachment.action));
@@ -55,7 +57,9 @@ VkRenderingAttachmentInfo FromDepthAttachmentInfo(const DepthAttachment& _attach
     attachment_info.pNext = nullptr;
 
     VulkanTexture* vk_texture = reinterpret_cast<VulkanTexture*>(_attachment.target);
-    attachment_info.imageView = vk_texture->GetView(_attachment.mip_level, 1, _attachment.array_layer, 1);
+    attachment_info.imageView = vk_texture->GetView(
+        static_cast<uint8>(_attachment.mip_level), 1, static_cast<uint8>(_attachment.array_layer), 1
+    );
 
     attachment_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     attachment_info.loadOp =
@@ -3225,6 +3229,7 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
     return {};
 }
 
+//TODO:看看barrier
 IOWaitEvt VkCopyQueue::Execute(CmdSubmit&& _evt) {
     Array<UniquePtr<Command>> cmds = std::move(_evt.cmds);
 
