@@ -8,7 +8,7 @@
 
 暴雪在2017年GDC分享了一个讲座[《守望先锋的游戏架构和网络代码》](https://www.bilibili.com/video/BV1p4411k7N8)，从这个讲座之后，ECS开始变得广为人知。
 
-ECS的概念，此处不再阐述，请自行询问AI。
+【ECS的概念，请自行询问AI】
 
 接下来的内容，主要是笔者(YXH咸鱼)对ECS框架的理解，避免AI出现遗漏。
 
@@ -38,7 +38,7 @@ ECS的概念，此处不再阐述，请自行询问AI。
 
 ECS具体在实现上，有许多不同的设计思路。此处介绍一个最核心的区别 **Archetype**。
 
-这块AI说的比我好，直接问AI吧。
+【Archetype的概念请自行询问AI】
 
 #### MoerEngine的ECS
 
@@ -49,6 +49,55 @@ MoerEngine目前只在场景表示（`LogicalScene`）中使用了ECS框架。
 `LogicalData.h` 中存储了Component的定义。
 
 `LogicalScene.h/cpp` 中存储了System的定义。
+
+在ECS开发中，笔者更喜欢扁平化划分代码：按照功能划分代码，而不是按照对象划分逻辑，即 **面向数据编程（DOP），而不是面向对象编程（OOP）**。下面是具体的例子：
+
+```c++
+// 面向数据编程 DOP【笔者喜欢的】
+void Update(Registry& r) {
+    r.view<ComponentA&>.each([](){
+        // do something for ComponentA
+    });
+    r.view<ComponentB&>.each([](){
+        // do something for ComponentB
+    });
+    r.view<ComponentC&>.each([](){
+        // do something for ComponentC
+    });
+}
+
+void CacheToDisk(Registry& r) {
+    r.view<const ComponentA&>.each([](){
+        // do something for ComponentA
+    });
+    r.view<const ComponentB&>.each([](){
+        // do something for ComponentB
+    });
+    r.view<const ComponentC&>.each([](){
+        // do something for ComponentC
+    });
+}
+
+// 面向对象编程 OOP【传统】
+class ComponentA {
+    void Update();
+    void CacheToDisk() const;
+}
+
+class ComponentB {
+    void Update();
+    void CacheToDisk() const;
+}
+
+class ComponentB {
+    void Update();
+    void CacheToDisk() const;
+}
+```
+
+在阅读已有代码的时候，你可以发现非常多类似的写法。重构后，新的场景表示，基本上都是以面向数据的方式组织代码的。
+
+【这种编码方式的优缺点，请自行询问AI】
 
 ## 规范
 
@@ -79,18 +128,21 @@ MoerEngine开发早期使用 `.clang-tidy` 对命名风格进行规范，但强�
 **变量均为 全小写 & 下划线 风格**。
 
 
-| 类别                | 命名风格                        | 示例                                                |
-| ------------------- | ------------------------------- | --------------------------------------------------- |
-| **局部变量**        |                                 | `shadow_map_texture`, `pso_full_screen_info`        |
-| **形参**            |                                 | `context`, `input_image`                            |
-| **成员变量**        | `m_` 开头                       | `m_renderer`, `m_buffer_handle`                     |
-| **常量**            | `k_` 开头                       | `k_fov_default`, `k_camera_speed_up_delta`          |
-| **Bool**            | `is_` / `has_` / `should_` 开头 | `is_shadow_enabled`, `is_dirty`, `m_is_initialized` |
-| **Pointer**         | `_ptr` 结尾                     | `renderer_ptr`                                      |
-| **Bindless Handle** | `_hdl` 结尾                     | `albedo_map_hdl`, `output_tex_hdl`                  |
-| **entt::Entity**    | `_id` 结尾 或 `entity`结尾      | `albedo_map_id`, `material_id`, `entity`            |
+| 类别                | 命名风格                               | 示例                                                |
+| ------------------- | -------------------------------------- | --------------------------------------------------- |
+| **局部变量**        |                                        | `shadow_map_texture`, `pso_full_screen_info`        |
+| **形参**            |                                        | `context`, `input_image`                            |
+| **成员变量**        | `m_` 开头                              | `m_renderer`, `m_buffer_handle`                     |
+| **常量**            | `k_` 开头                              | `k_fov_default`, `k_camera_speed_up_delta`          |
+| **Bool**            | `is_` / `b_` / `has_` / `should_` 开头 | `is_shadow_enabled`, `is_dirty`, `m_is_initialized` |
+| **Bindless Handle** | `_hdl` 结尾                            | `albedo_map_hdl`, `output_tex_hdl`                  |
+| **entt::Entity**    | `_entt` / `entity` 结尾                | `albedo_map_entt`, `material_entt`, `entity`        |
+| **数组下标**        | `_id` 结尾                             |                                                     |
+| **数量**            | `num_` / `_count` / `_cnt` 标记        | `mip_level_count`, `mip_level_cnt`, `num_of_images` |
 
-成员变量补充：如果一个类型为POD，即没有任何方法，则 **其成员变量不应该以 `m_` 开头**！如 `RasterConfig`。
+**成员变量** 补充：如果一个类型为POD，即没有任何方法，则 **其成员变量不应该以 `m_` 开头**！如 `RasterConfig`。
+
+**数量** 补充：如果不加count等限定，会让其他开发者感到十分疑惑。好的例子：`mip_level_count`；坏的反例：`mips`。其他开发者看到 `mips`，完全不知道这里表示的是 ① Texture对应第`mips`层mip 还是 ② 总共有`mips`层mipmap层数。
 
 #### 命名规范 - 其他
 
@@ -147,3 +199,18 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
 
 - 设置中的 `C_Cpp.default.compilerPath` 字段不能使用msvc编译器，否则IntelliSense会出现假错。推荐使用clang
   - 注：和编译无关，只和 IntelliSense（IDE的智能代码高亮与补全）有关
+
+## 如何Code Review
+
+这里贴一下Code Review时可以注意的内容：
+
+1. 是否可以正常编译与运行，并且没有错误或警告
+   * 如果修改涉及构建系统，或者改动幅度较大，需要完整测试一下多插件情况下的编译与运行（例如启用NRD、CUDA拓展）
+2. 是否重复造轮子（例如重复实现一份代码里已有的工具）
+   * 这通常是由于开发手册（即本文档）中没有详细介绍工具类导致的。出现这种情况的话，需要补充本文，并且告知开发者对应工具类的存在
+3. 是否存在不规范的写法
+   * 例如，函数形参忘加引用、子类的虚函数不添加virtual标记、类的特殊函数没有遵守零三五法则、没有禁用一些类的拷贝构造&拷贝赋值函数、没有考虑变量生命周期（滥用SharedPtr）
+4. 是否有补充必要的注释
+   * 有没有用什么设计模式？有没有什么容易出错的地方？有没有什么多线程相关内容？
+   * etc...
+5. 命名是否存在歧义或者不规范
