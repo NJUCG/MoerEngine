@@ -1,11 +1,6 @@
 #pragma once
-#include "BufferInterfaceBlock.h"
-#include "TextureInterfaceBlock.h"
 #include "misc/CountableRef.h"
 #include "rhi/RHIResource.h"
-
-#include "scene/MaterialInstance.h"
-// Add the above line to fix: CountableRef.h(120,13): error C2027: 使用了未定义类型“Moer::MaterialInstance”
 
 namespace Moer {
 class TextureInterfaceBlock;

@@ -26,13 +26,12 @@
 namespace Moer::Render::Raster {
 
 RasterRenderer::RasterRenderer(
-    uint2&                                                    _resolution,
-    const SharedPtr<EditorConfig>                             _config,
-    const EngineHooks&                                        _hooks,
-    std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
+    uint2&                        _resolution,
+    const SharedPtr<EditorConfig> _config,
+    const EngineHooks&            _hooks
 ) :
     // Super
-    Renderer(_resolution, _config, _hooks, _load_scene_async) {
+    Renderer(_resolution, _config, _hooks) {
 
     raster_context_ptr =
         MakeUnique<RasterContext>(device, manager, gfx_queue, bindless_array, cmd_list, scene, resolution);

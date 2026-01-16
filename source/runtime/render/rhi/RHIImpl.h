@@ -441,12 +441,12 @@ public:
 
 struct UploadTextureCmd : public Command {
 public:
-    EPixelFormat format{};
-    uint64       handle{};
-    uint32       mip_level{};
-    uint32       array_layer{};
-    uint3        offset{};
-    uint3        size{};
+    EPixelFormat                                     format{};
+    uint64                                           handle{};
+    uint32                                           mip_level{};
+    uint32                                           array_layer{};
+    uint3                                            offset{};
+    uint3                                            size{};
     std::variant<std::span<const byte>, Array<byte>> storage;
 
 private:

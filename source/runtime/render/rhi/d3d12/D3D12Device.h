@@ -951,7 +951,8 @@ public:
     D3D12StagingBufferView AllocateUploadBuffer(uint64 _size, uint32 _alignment);
     D3D12StagingBufferView AllocateReadbackBuffer(uint64 _size, uint32 _alignment);
     D3D12Buffer*           AllocateScratch(uint64 _size);
-    D3D12Buffer*           AllocateDefaultBuffer(uint64 _size
+    D3D12Buffer*           AllocateDefaultBuffer(
+                  uint64 _size
               ); // no special usage(uav), mainly for intermediate uploaded/staging resource vb,ib
 };
 

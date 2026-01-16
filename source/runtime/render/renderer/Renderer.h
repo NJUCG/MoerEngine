@@ -5,7 +5,7 @@
 #include "loader/LoaderInterface.h"
 #include "renderer/EditorConfig.h"
 #include "rhi/RHI.h"
-#include "scene/CameraManager.h"
+#include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowContext.h"
 
@@ -43,12 +43,7 @@ public:
         Num,
     };
 
-    Renderer(
-        uint2&                                                    _resolution,
-        const SharedPtr<EditorConfig>                             _config,
-        const EngineHooks&                                        hooks,
-        std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
-    );
+    Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks);
 
     virtual ~Renderer();
 

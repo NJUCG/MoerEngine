@@ -15,14 +15,14 @@
 #ifdef __cplusplus
 #define CONST constexpr
 #include "misc/Traits.h"
-#include "shaderheaders/shared/raster/ShaderParametersUtils.h"
+#include "shaderheaders/shared/raster/SharedEnum.h"
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 namespace Moer::Render {
 #else
 #define CONST const
-#include "shared/raster/ShaderParametersUtils.h"
+#include "shaderheaders/shared/raster/SharedEnum.h"
 #include "shared/raster/geometry_pass/ShaderParameters.h"
 #include "shared/raster/lighting_pass/ShaderParameters.h"
 #include "shared/raster/post_process/ShaderParameters.h"
@@ -46,17 +46,3 @@ struct CopyPassBindlessParam {
 }
 #endif
 #undef CONST
-
-//Enum Definitions Begin
-namespace Moer {
-EnumParam(EShadingMode, DEFAULT_PBR, DEBUG);
-EnumParam(EBrdfNdfMode, BECKMANN, GGX, GTR2, GTR1);
-EnumParam(EBrdfGMode, G_SCHLICK, VIS_UE4, VIS_UNITY, VIS_FILAMENT, VIS_RESPAWN);
-EnumParam(EAaMode, NONE, FXAA_SIMPLIFIED, FXAA_QUALITY, SMAA_1X, SMAA_T2X);
-EnumParam(EAoMode, NONE, SSAO, SSAO_AO_ONLY, RTAO, RTAO_AO_ONLY, SSDO, SSDO_AO_ONLY, LINEARIZED_DEPTH_DIV_10);
-EnumParam(EDenoiserMode, NONE, BILATERAL_FILTER);
-EnumParam(ERtaoSampleMode, UNIFORM, COSINE_WEIGHTED);
-EnumParam(EShadowMapMode, NONE, POINT_CUBE, CSM, CSM_AUTO);
-// Used for glTF material alpha mode (gltf..Parser.cpp)
-EnumParam(EAlphaMode, AM_OPAQUE, AM_MASK, AM_BLEND); // 注：这里加AM_的原因是，某sbwin库有OPAQUE宏定义，冲突了
-} // namespace Moer

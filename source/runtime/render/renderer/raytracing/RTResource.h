@@ -6,7 +6,7 @@
 #include "misc/STL.h"
 #include "renderer/common/RuntimeAssets.h"
 #include "rhi/RHIResource.h"
-#include "scene/Camera.h"
+#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/utils/ShaderParameters.h"
@@ -96,7 +96,7 @@ public:
         uint _num_geom_instance
     );
 
-    void Tick(CameraRef _camera, float2 _jitter);
+    void Tick(Camera& _camera, float2 _jitter);
     void AdvanceFrame();
 
     void SetEnvMapInfos(float _scale, float _rotation);

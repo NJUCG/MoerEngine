@@ -8,11 +8,9 @@ class RENDER_API RaytracingRenderer : public Renderer {
 
 public:
     RaytracingRenderer(
-        uint2&                                                    _resolution,
-        const SharedPtr<EditorConfig>                             _config,
-        const EngineHooks&                                        _hooks,
-        std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async,
-        RuntimeAssets&                                            _runtime_assets
+        uint2&                                   _resolution,
+        const SharedPtr<EditorConfig>            _config,
+        const EngineHooks& _hooks RuntimeAssets& _runtime_assets
     );
 
     virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) override;

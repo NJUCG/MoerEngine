@@ -1,6 +1,5 @@
 #pragma once
 
-#include "TextureInterfaceBlock.h"
 #include "misc/CountableRef.h"
 #include "rhi/RHIResource.h"
 

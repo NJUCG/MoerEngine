@@ -245,7 +245,8 @@ void D3D12PipelineState::PipelineLayout::Add(
             uint8(_resource_info.space)
         );
     } else {
-        ASSERT(!_resource_info.IsBindless()
+        ASSERT(
+            !_resource_info.IsBindless()
         ); // maybe not consider user defined bindless. just builtin bindless array.
         const uint bind_count = _resource_info.IsBindless() ? 0 : _resource_info.count;
         if (!_resource_info.IsBindless()) {
@@ -701,8 +702,8 @@ void D3D12Device::GetHardwareAdapter(
     *ppAdapter = adapter.Detach();
 }
 
-D3D12_GPU_DESCRIPTOR_HANDLE D3D12Device::PushCsuDescriptor(std::span<const DescriptorIndex> _index_in_cpu_heap
-) {
+D3D12_GPU_DESCRIPTOR_HANDLE
+D3D12Device::PushCsuDescriptor(std::span<const DescriptorIndex> _index_in_cpu_heap) {
     const uint            count = _index_in_cpu_heap.size();
     const DescriptorIndex start = csu_heap_gpu->Allocate(count);
     for (uint i = 0; i < count; ++i) {
@@ -2062,11 +2063,12 @@ void D3D12BuddyAllocator::Initialize() {
 
     // Create the underlying buffer
     underlying_buffer = CreateLargeStagingBuffer(device, heap_type, total_byte_size);
-    underlying_buffer->Native()->SetName(StringWiden(std::format(
-                                                         "D3D12BuddyAllocator-back-buffer-{}",
-                                                         heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" :
-                                                                                               "readback"
-                                                     ))
+    underlying_buffer->Native()->SetName(StringWiden(
+                                             std::format(
+                                                 "D3D12BuddyAllocator-back-buffer-{}",
+                                                 heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback"
+                                             )
+    )
                                              .c_str());
     DX_CHECK_HRESULT(underlying_buffer->Native()->Map(0, nullptr, reinterpret_cast<void**>(&ptr_mapped)));
 }
@@ -2325,7 +2327,8 @@ uint D3D12Texture::GetMipByteSize(uint _mip_level) const {
     uint mip_height = std::max(1u, GetHeight() >> _mip_level);
     uint mip_depth  = std::max(1u, GetDepth() >> _mip_level);
     return mip_width * mip_height * mip_depth *
-           D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetBitsPerUnit(D3D12EnumTranslation::METoDxFormat(GetFormat())
+           D3D12_PROPERTY_LAYOUT_FORMAT_TABLE::GetBitsPerUnit(
+               D3D12EnumTranslation::METoDxFormat(GetFormat())
            ) /
            8;
 }
@@ -2554,7 +2557,6 @@ D3D12_RESOURCE_FLAGS METoDxTextureResourceFlags(ETextureUsageFlags _me_flags) {
                 | ETextureUsageFlags::FRAGMENT_SHADING_RATE_ATTACHMENT
                 | ETextureUsageFlags::VIDEO_DECODE
                 | ETextureUsageFlags::VIDEO_ENCODE
-                | ETextureUsageFlags::SRGB
                 | ETextureUsageFlags::PRESENT)) {
         // clang-format on
         LOG_WARNING("Unsupported texture usage flags: {}", static_cast<uint32_t>(_me_flags));

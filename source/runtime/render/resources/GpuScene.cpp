@@ -149,7 +149,7 @@ TextureBuilder::BuildTexturesInBatch(Moer::Array<TextureBuilder>& builders) noex
                 builder.m_name,
                 Extent2D{builder.m_width, builder.m_height},
                 builder.m_format,
-                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::SRGB | ETextureUsageFlags::TRANSFER_DST,
+                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST,
                 builder.m_mip_levels,
                 builder.m_layer_levels
             );

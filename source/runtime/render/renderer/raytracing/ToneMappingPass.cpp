@@ -149,6 +149,26 @@ void ToneMappingPass::Render(
         std::memcpy(upload_data.data(), &draw_indexed_cmd_data, sizeof(DrawIndexedCmdData));
         _cmd_list.CopyFrom(std::move(upload_data), indirect_buffer->GetView(sizeof(DrawCmdData)));
 
+        /**
+         * 注意！
+         * 
+         * 这里虽然把DrawCmdData和DrawIndexedCmdData都上传到了indirect_buffer
+         * 但是后续的DrawIndirect调用时，只会使用其中一种结构体
+         * 
+         * DrawCmdData，不带索引的indirect绘制
+         * DrawIndexedCmdData，带索引的indirect绘制
+         * 
+         * 关键是 indirect_buffer->GetView(偏移, 大小)
+         * 
+         * 比如下文，DrawIndexedIndirect，关键的 `GetView(sizeof(DrawCmdData))`
+         * => 意味着使用DrawIndexedCmdData结构体
+         * 
+         * DrawIndirect，关键的 `GetView(0, sizeof(DrawCmdData))`
+         * => 意味着使用DrawCmdData结构体
+         * 
+         * 潇神的小作业😭
+         */
+
         uint count = 1;
         upload_data.resize(sizeof(uint));
         std::memcpy(upload_data.data(), &count, sizeof(uint));
@@ -197,11 +217,11 @@ void ToneMappingPass::Render(
             .DrawIndirect(
                 "ToneMapping",
                 Rect2D(0, 0, _target->GetExtent().x, _target->GetExtent().y),
-                {},
-                0, //0 for draw, struct for draw indexed
-                indirect_buffer->GetView(0, sizeof(DrawCmdData)),
-                1, // cpu count
-                sizeof(DrawCmdData),
+                {}, // Vertex Buffer
+                0,  // Vertex Count. 0 for draw, struct for draw indexed
+                indirect_buffer->GetView(0, sizeof(DrawCmdData)), // Indirect Buffer
+                1,                                                // Indirect Buffer Count, cpu count
+                sizeof(DrawCmdData),                              // Indirect Buffer Stride
                 ColorAttachment(_target)
             );
     } else {

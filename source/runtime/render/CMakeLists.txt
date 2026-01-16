@@ -45,6 +45,7 @@ target_link_libraries(${target_name}
     PUBLIC gtl
     PUBLIC EnTT::EnTT
     PUBLIC Moer::Core
+    PUBLIC Moer::Resource
     PUBLIC NRI
     PRIVATE spirv-cross-cpp
     # dx, maybe add a option based on platform

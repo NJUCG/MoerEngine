@@ -22,7 +22,6 @@ target_include_directories(${target_name}
 target_link_libraries(${target_name}
     PUBLIC AssetLoad
     PUBLIC Moer::Core
-    PUBLIC Moer::Render
     PUBLIC MeshProcess
     PUBLIC nlohmann_json::nlohmann_json
 )

@@ -52,13 +52,12 @@ union FloatBits {
 static Box3D scene_bounding{};
 
 RaytracingRenderer::RaytracingRenderer(
-    uint2&                                                    _resolution,
-    const SharedPtr<EditorConfig>                             _config,
-    const EngineHooks&                                        _hooks,
-    std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async,
-    RuntimeAssets&                                            _runtime_assets
+    uint2&                        _resolution,
+    const SharedPtr<EditorConfig> _config,
+    const EngineHooks&            _hooks,
+    RuntimeAssets&                _runtime_assets
 ) :
-    Renderer(_resolution, _config, _hooks, _load_scene_async),
+    Renderer(_resolution, _config, _hooks),
     runtime_assets(_runtime_assets) {}
 
 void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {

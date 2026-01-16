@@ -45,12 +45,7 @@ class UpsamplePass;
 class RENDER_API RasterRenderer : public Renderer {
 
 public:
-    RasterRenderer(
-        uint2&                                                    _resolution,
-        const SharedPtr<EditorConfig>                             _config,
-        const EngineHooks&                                        _hooks,
-        std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
-    );
+    RasterRenderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& _hooks);
 
     virtual ~RasterRenderer() override;
 

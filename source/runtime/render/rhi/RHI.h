@@ -150,7 +150,9 @@ public:
         ETextureUsageFlags _usage      = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
     );
 
-    RENDER_API BindlessArrayRef CreateBindlessArray(uint _max_size = 5000);
+    static constexpr uint       k_default_bindless_array_size = 5000;
+    RENDER_API BindlessArrayRef CreateBindlessArray(uint _max_size = k_default_bindless_array_size);
+
     // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);
 
     // TextureView GetBackBuffer(RHIViewport* _viewport, uint32_t _index);

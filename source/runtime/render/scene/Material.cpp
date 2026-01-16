@@ -5,9 +5,6 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
-#include "scene/BufferInterfaceBlock.h"
-#include "scene/MaterialInstance.h"
-#include "scene/TextureInterfaceBlock.h"
 #include "shader/Shader.h"
 
 namespace Moer {

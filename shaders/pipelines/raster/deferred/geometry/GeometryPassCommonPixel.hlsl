@@ -23,13 +23,13 @@ void DiscardByAlphaTest(uint mat_idx_and_type, float2 uv_in_map) {
     GetMaterialTypeAndIndex(mat_idx_and_type, mat_type, mat_id);
     MaterialData mat = UnpackMaterialData<MaterialData>(param.material_buffer, mat_id);
 
-    if (mat.alpha_mode == Moer::EAlphaMode::AM_MASK) {
+    if (mat.alpha_mode == Moer::EAlphaMode::Mask) {
         float alpha = TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a * mat.base_color_factor.a;
         // printf("MASK: alpha: %f, cutoff: %f, albedo_map.a: %f, base_color.a: %f\n", alpha, mat.alpha_cutoff, TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a, mat.base_color_factor.a);
         if (alpha < mat.alpha_cutoff) {
             discard;
         }
-    } else if (mat.alpha_mode == Moer::EAlphaMode::AM_BLEND) {
+    } else if (mat.alpha_mode == Moer::EAlphaMode::Blend) {
         float alpha = TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a * mat.base_color_factor.a;
         // printf("BLEND: alpha: %f; albedo_map.a: %f; base_color.a: %f\n", alpha, TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a, mat.base_color_factor.a);
         if (alpha < param.alpha_test_blend_pixel_cutoff) {

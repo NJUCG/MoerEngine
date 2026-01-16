@@ -9,8 +9,8 @@ set(moer_runtime_render_dir ${moer_runtime_dir}/render)
 set(moer_runtime_resource_dir ${moer_runtime_dir}/resource)
 
 add_subdirectory(core)
-add_subdirectory(render)
 add_subdirectory(resource)
+add_subdirectory(render)
 
 # CONFIGURE_DEPENDS，指如果文件变化了，则自动重新GLOB
 # 这里不能递归GLOB，因为子文件夹内是其他模块
