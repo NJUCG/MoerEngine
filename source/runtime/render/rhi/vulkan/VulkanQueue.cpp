@@ -125,7 +125,9 @@ struct VkCmdPreprocessor {
     VulkanDevice&    device;
     EQueueType       current_queue;
 
-    UnorderedSet<uint64>   writed_resources;
+    UnorderedSet<uint64>   writed_buffer_resources;
+    UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
+        writed_texture_resources;
     const TCachedArgArray& cached_args;
 
     VkCmdPreprocessor(
@@ -154,20 +156,37 @@ struct VkCmdPreprocessor {
         }
         auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bindless_array.Get());
 
-        Moer::Array<VulkanTexture*> to_read_textures;
-        for (const auto& i : tracker.GetWritedStateTextures()) {
-            if (vk_bindless_array->IsResourceAllocated(uint64(i)) && !writed_resources.contains(uint64(i))) {
-                to_read_textures.push_back(i);
+        Moer::Array<TextureSubresourceKeyT<VulkanTexture>> to_read_textures;
+        for (const auto& key : tracker.GetWritedStateTextures()) {
+            if (vk_bindless_array->IsTextureViewAllocated(
+                    uint64(key.texture),
+                    key.mip_level,
+                    key.mip_count,
+                    key.array_layer,
+                    key.array_count
+                ) &&
+                !writed_texture_resources.contains(key)) {
+                to_read_textures.push_back(key);
             }
         }
         if (!to_read_textures.empty()) {
-            for (const auto& i : to_read_textures) {
-                tracker.RecordState(i, tracker.ReadTexture(i, ETextureState::SAMPLE, pass_type));
+            for (const auto& key : to_read_textures) {
+                auto access = tracker.ReadTexture(key.texture, ETextureState::SAMPLE, pass_type);
+                tracker.RecordState(
+                    key.texture,
+                    std::get<0>(access),
+                    std::get<1>(access),
+                    std::get<2>(access),
+                    key.mip_level,
+                    key.mip_count,
+                    key.array_layer,
+                    key.array_count
+                );
             }
         }
         Moer::Array<VulkanBuffer*> to_read_buffers;
         for (const auto& i : tracker.GetWritedStateBuffers()) {
-            if (vk_bindless_array->IsResourceAllocated(uint64(i)) && !writed_resources.contains(uint64(i))) {
+            if (vk_bindless_array->IsResourceAllocated(uint64(i)) && !writed_buffer_resources.contains(uint64(i))) {
                 to_read_buffers.push_back(i);
             }
         }
@@ -249,22 +268,30 @@ struct VkCmdPreprocessor {
                     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer());
                     tracker.RecordState(vk_buffer, GetBufferAccess(_flag), _pipelines);
                     if (IsBufferTextureWrite(_flag)) {
-                        writed_resources.insert(uint64(vk_buffer));
+                        writed_buffer_resources.insert(uint64(vk_buffer));
                     }
                 } else if constexpr (std::is_same_v<T, TextureView>) {
                     if (_flag.resource_type == SRT_INVALID)
                         return;
-                    auto* vk_texture = reinterpret_cast<VulkanTexture*>(_arg.GetTexture());
+                    auto* vk_texture = ResourceCast(_arg.GetTexture());
                     tracker.RecordState(
                         vk_texture,
                         GetTextureAccess(_flag),
                         GetTextureLayout(_flag),
                         _pipelines,
                         _arg.mip_level,
-                        _arg.num_mips
+                        _arg.num_mips,
+                        _arg.array_layer,
+                        _arg.num_array
                     );
                     if (IsBufferTextureWrite(_flag)) {
-                        writed_resources.insert(uint64(vk_texture));
+                        ValidateSubresourceRange(
+                            _arg.texture, _arg.mip_level, _arg.num_mips, _arg.array_layer, _arg.num_array
+                        );
+                        TextureSubresourceKeyT<VulkanTexture> key{
+                            vk_texture, _arg.mip_level, _arg.num_mips, _arg.array_layer, _arg.num_array
+                        };
+                        writed_texture_resources.insert(key);
                     }
                 } else if constexpr (std::is_same_v<T, std::span<TextureView>>) {
                     for (auto&& i : _arg) {
@@ -495,7 +522,8 @@ struct VkCmdPreprocessor {
 
         const auto& pipeline = _cmd->Pipeline();
 
-        writed_resources.clear();
+        writed_buffer_resources.clear();
+        writed_texture_resources.clear();
 
         auto func = [&](const TArg& _arg, uint _idx) {
             if (pipeline.valid_bits & (1 << _idx))
@@ -640,14 +668,30 @@ struct VkCmdPreprocessor {
 
             for (auto& barrier : _cmd->ReadTextures()) {
                 auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
+                auto access = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
                 tracker.RecordState(
-                    vk_texture, tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type)
+                    vk_texture,
+                    std::get<0>(access),
+                    std::get<1>(access),
+                    std::get<2>(access),
+                    static_cast<uint8>(barrier.mip_level),
+                    static_cast<uint8>(barrier.mip_cnt),
+                    0,
+                    kRemainingSubresource
                 );
             }
             for (auto& barrier : _cmd->WriteTextures()) {
                 auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
+                auto access = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
                 tracker.RecordState(
-                    vk_texture, tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type)
+                    vk_texture,
+                    std::get<0>(access),
+                    std::get<1>(access),
+                    std::get<2>(access),
+                    static_cast<uint8>(barrier.mip_level),
+                    static_cast<uint8>(barrier.mip_cnt),
+                    0,
+                    kRemainingSubresource
                 );
             }
 
@@ -700,18 +744,32 @@ struct VkCmdPreprocessor {
 
         for (auto& barrier : _cmd->ReadTextures()) {
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
+            auto access = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
             tracker.RecordState(
                 vk_texture,
-                tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type),
+                std::get<0>(access),
+                std::get<1>(access),
+                std::get<2>(access),
+                static_cast<uint8>(barrier.mip_level),
+                static_cast<uint8>(barrier.mip_cnt),
+                0,
+                kRemainingSubresource,
                 src_queue_family,
                 dst_queue_family
             );
         }
         for (auto& barrier : _cmd->WriteTextures()) {
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
+            auto access = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
             tracker.RecordState(
                 vk_texture,
-                tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type),
+                std::get<0>(access),
+                std::get<1>(access),
+                std::get<2>(access),
+                static_cast<uint8>(barrier.mip_level),
+                static_cast<uint8>(barrier.mip_cnt),
+                0,
+                kRemainingSubresource,
                 src_queue_family,
                 dst_queue_family
             );
@@ -814,7 +872,8 @@ struct VkCmdPreprocessor {
         // };
         // _cmd->IterateArgs(func);
 
-        writed_resources.clear();
+        writed_buffer_resources.clear();
+        writed_texture_resources.clear();
 
         const auto& pipeline = _cmd->Pipeline();
         auto        func     = [&](const TArg& _arg, uint _idx) {
@@ -843,7 +902,9 @@ struct VkCmdPreprocessor {
                     (b_store ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                0,
+                static_cast<uint8>(rt.mip_level),
+                1,
+                static_cast<uint8>(rt.array_layer),
                 1
             );
         }
@@ -862,7 +923,9 @@ struct VkCmdPreprocessor {
                     (b_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                0,
+                static_cast<uint8>(_cmd->RenderPassInfo().depth_attachment.mip_level),
+                1,
+                static_cast<uint8>(_cmd->RenderPassInfo().depth_attachment.array_layer),
                 1
             );
         }
@@ -890,7 +953,8 @@ struct VkCmdPreprocessor {
             );
         }
 
-        writed_resources.clear();
+        writed_buffer_resources.clear();
+        writed_texture_resources.clear();
 
         UnorderedSet<const ArrayArguments*> temp_arg_batch;
         for (const auto& draw_cmd : _cmd->draw_batch.draw_cmds) {
@@ -934,7 +998,9 @@ struct VkCmdPreprocessor {
                     (b_store ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                0,
+                static_cast<uint8>(rt.mip_level),
+                1,
+                static_cast<uint8>(rt.array_layer),
                 1
             );
         }
@@ -953,7 +1019,9 @@ struct VkCmdPreprocessor {
                     (b_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                0,
+                static_cast<uint8>(_cmd->RenderPassInfo().depth_attachment.mip_level),
+                1,
+                static_cast<uint8>(_cmd->RenderPassInfo().depth_attachment.array_layer),
                 1
             );
         }

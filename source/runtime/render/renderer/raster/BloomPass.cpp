@@ -62,6 +62,16 @@ BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, Textur
     prefilter_param.threshold     = 1.0f;
     prefilter_param.knee          = 0.5f;
 
+    context.cmd_list.TextureBarriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Graphics,
+        Array<ReadTexture>{{input_texture.tex->GetView(0, 1), ETextureState::SAMPLE}},
+        Array<WriteTexture>{
+            {context.textures.bloom_downsample_chain.tex->GetView(0, 1), ETextureState::RENDER_TARGET}
+        }
+    );
+
     //Prefilter Pass
     context.cmd_list.Gfx(prefilter_pipeline, context.bdls, prefilter_param)
         .Draw(
@@ -83,6 +93,18 @@ BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, Textur
 
         uint2 src_size            = context.textures.bloom_downsample_chain.GetSize(i - 1);
         downsample_param.inv_size = float2(1.0f / src_size.x, 1.0f / src_size.y);
+
+        context.cmd_list.TextureBarriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Graphics,
+            Array<ReadTexture>{
+                {context.textures.bloom_downsample_chain.tex->GetView(i - 1, 1), ETextureState::SAMPLE}
+            },
+            Array<WriteTexture>{
+                {context.textures.bloom_downsample_chain.tex->GetView(i, 1), ETextureState::RENDER_TARGET}
+            }
+        );
 
         context.cmd_list.Gfx(downsample_pipeline, context.bdls, downsample_param)
             .Draw(
@@ -111,6 +133,19 @@ BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, Textur
         upsample_param.inv_size      = float2(1.0f / small_size.x, 1.0f / small_size.y);
         upsample_param.filter_radius = 0.005f;
 
+        context.cmd_list.TextureBarriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Graphics,
+            Array<ReadTexture>{
+                {context.textures.bloom_downsample_chain.tex->GetView(i, 1), ETextureState::SAMPLE},
+                {context.textures.bloom_upsample_chain.tex->GetView(i + 1, 1), ETextureState::SAMPLE}
+            },
+            Array<WriteTexture>{
+                {context.textures.bloom_upsample_chain.tex->GetView(i, 1), ETextureState::RENDER_TARGET}
+            }
+        );
+
         context.cmd_list.Gfx(upsample_pipeline, context.bdls, upsample_param)
             .Draw(
                 std::format("Bloom Upsample Pass #{}", i),
@@ -127,6 +162,17 @@ BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, Textur
     // 最终结果在 upsample 链的 mip 0
     apply_param.bloom_result_hdl = context.textures.bloom_upsample_chain.mip_handles[0];
     apply_param.bloom_intensity  = 0.1f; // Bloom 强度
+
+    context.cmd_list.TextureBarriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Graphics,
+        Array<ReadTexture>{
+            {context.textures.bloom_upsample_chain.tex->GetView(0, 1), ETextureState::SAMPLE}
+        },
+        Array<WriteTexture>{{input_texture.tex->GetView(0, 1), ETextureState::RENDER_TARGET}}
+    );
+
     context.cmd_list.Gfx(apply_pipeline, context.bdls, apply_param)
         .Draw(
             "Apply Bloom to Scene",
