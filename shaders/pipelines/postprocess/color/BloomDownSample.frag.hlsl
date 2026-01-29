@@ -20,22 +20,22 @@ float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
 
     // 采样中心和周围的 13 个点
     // 利用 Sample2D<float4> 配合 Linear Sampler 自动执行双线性插值
-    float3 a = src_tex.Sample2D<float4>(uv + float2(-2 * x, 2 * y)).rgb;
-    float3 b = src_tex.Sample2D<float4>(uv + float2(0, 2 * y)).rgb;
-    float3 c = src_tex.Sample2D<float4>(uv + float2(2 * x, 2 * y)).rgb;
+    float3 a = src_tex.SampleLevel<float4>(uv + float2(-2 * x, 2 * y), 0.0).rgb;
+    float3 b = src_tex.SampleLevel<float4>(uv + float2(0, 2 * y), 0.0).rgb;
+    float3 c = src_tex.SampleLevel<float4>(uv + float2(2 * x, 2 * y), 0.0).rgb;
 
-    float3 d = src_tex.Sample2D<float4>(uv + float2(-2 * x, 0)).rgb;
-    float3 e = src_tex.Sample2D<float4>(uv + float2(0, 0)).rgb;
-    float3 f = src_tex.Sample2D<float4>(uv + float2(2 * x, 0)).rgb;
+    float3 d = src_tex.SampleLevel<float4>(uv + float2(-2 * x, 0), 0.0).rgb;
+    float3 e = src_tex.SampleLevel<float4>(uv + float2(0, 0), 0.0).rgb;
+    float3 f = src_tex.SampleLevel<float4>(uv + float2(2 * x, 0), 0.0).rgb;
 
-    float3 g = src_tex.Sample2D<float4>(uv + float2(-2 * x, -2 * y)).rgb;
-    float3 h = src_tex.Sample2D<float4>(uv + float2(0, -2 * y)).rgb;
-    float3 i = src_tex.Sample2D<float4>(uv + float2(2 * x, -2 * y)).rgb;
+    float3 g = src_tex.SampleLevel<float4>(uv + float2(-2 * x, -2 * y), 0.0).rgb;
+    float3 h = src_tex.SampleLevel<float4>(uv + float2(0, -2 * y), 0.0).rgb;
+    float3 i = src_tex.SampleLevel<float4>(uv + float2(2 * x, -2 * y), 0.0).rgb;
 
-    float3 j = src_tex.Sample2D<float4>(uv + float2(-x, y)).rgb;
-    float3 k = src_tex.Sample2D<float4>(uv + float2(x, y)).rgb;
-    float3 l = src_tex.Sample2D<float4>(uv + float2(-x, -y)).rgb;
-    float3 m = src_tex.Sample2D<float4>(uv + float2(x, -y)).rgb;
+    float3 j = src_tex.SampleLevel<float4>(uv + float2(-x, y), 0.0).rgb;
+    float3 k = src_tex.SampleLevel<float4>(uv + float2(x, y), 0.0).rgb;
+    float3 l = src_tex.SampleLevel<float4>(uv + float2(-x, -y), 0.0).rgb;
+    float3 m = src_tex.SampleLevel<float4>(uv + float2(x, -y), 0.0).rgb;
 
     // 加权平均计算 (权重总和为 1.0)
     float3 result = e * 0.125;

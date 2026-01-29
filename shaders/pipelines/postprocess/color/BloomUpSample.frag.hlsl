@@ -1,7 +1,6 @@
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
 
-// 确保绑定槽位一致
 BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "shared/raster/ShaderParameters.h"

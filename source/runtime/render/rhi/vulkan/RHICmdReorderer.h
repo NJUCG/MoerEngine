@@ -166,16 +166,39 @@ public:
     };
 
     struct Range {
-        int64 min;
-        int64 max;
-        Range() : min(std::numeric_limits<int64>::min()), max(std::numeric_limits<int64>::max()) {}
-        Range(int64 _val) : min(_val), max(_val + 1) {}
-        Range(int64 _min, int64 _size) : min(_min), max(_min + _size) {}
+        int64 primary_min;
+        int64 primary_max;
+        int64 layer_min;
+        int64 layer_max;
+        Range() :
+            primary_min(std::numeric_limits<int64>::min()),
+            primary_max(std::numeric_limits<int64>::max()),
+            layer_min(std::numeric_limits<int64>::min()),
+            layer_max(std::numeric_limits<int64>::max()) {}
+        Range(int64 _val) :
+            primary_min(_val),
+            primary_max(_val + 1),
+            layer_min(std::numeric_limits<int64>::min()),
+            layer_max(std::numeric_limits<int64>::max()) {}
+        Range(int64 _min, int64 _size) :
+            primary_min(_min),
+            primary_max(_min + _size),
+            layer_min(std::numeric_limits<int64>::min()),
+            layer_max(std::numeric_limits<int64>::max()) {}
+        Range(int64 _min, int64 _size, int64 _layer_min, int64 _layer_size) :
+            primary_min(_min),
+            primary_max(_min + _size),
+            layer_min(_layer_min),
+            layer_max(_layer_min + _layer_size) {}
         bool Colide(const Range& _other) const {
-            return min < _other.max && _other.min < max;
+            return primary_min < _other.primary_max && _other.primary_min < primary_max &&
+                   layer_min < _other.layer_max &&
+                   _other.layer_min < layer_max;
         }
         bool operator==(const Range& _other) const {
-            return min == _other.min && max == _other.max;
+            return primary_min == _other.primary_min && primary_max == _other.primary_max &&
+                   layer_min == _other.layer_min &&
+                   layer_max == _other.layer_max;
         }
         bool operator!=(const Range& _other) const {
             return !operator==(_other);
@@ -185,8 +208,10 @@ public:
     struct RangeHash {
         size_t operator()(const Range& _range) const {
             uint64 hash = 0;
-            HashCombine(hash, GetHash(_range.min));
-            HashCombine(hash, GetHash(_range.max));
+            HashCombine(hash, GetHash(_range.primary_min));
+            HashCombine(hash, GetHash(_range.primary_max));
+            HashCombine(hash, GetHash(_range.layer_min));
+            HashCombine(hash, GetHash(_range.layer_max));
             return hash;
         }
     };
@@ -214,8 +239,18 @@ public:
 
     public:
         RangeHandle(const ArenaAllocatorWrapper<ResourceView>& _alloc) :
-            read_range(std::numeric_limits<int64>::max(), std::numeric_limits<int64>::min()),
-            write_range(std::numeric_limits<int64>::max(), std::numeric_limits<int64>::min()),
+            read_range(
+                std::numeric_limits<int64>::max(),
+                std::numeric_limits<int64>::min(),
+                std::numeric_limits<int64>::max(),
+                std::numeric_limits<int64>::min()
+            ),
+            write_range(
+                std::numeric_limits<int64>::max(),
+                std::numeric_limits<int64>::min(),
+                std::numeric_limits<int64>::max(),
+                std::numeric_limits<int64>::min()
+            ),
             range2view(max_range_size, _alloc) {}
 
         int64 GetMaxReadLayer(const Range& _range) {
@@ -261,8 +296,10 @@ public:
 
         void EmplaceReadLayer(const Range& _range, int64 _layer) {
 
-            read_range.min = std::min(read_range.min, _range.min);
-            read_range.max = std::max(read_range.max, _range.max);
+            read_range.primary_min = std::min(read_range.primary_min, _range.primary_min);
+            read_range.primary_max = std::max(read_range.primary_max, _range.primary_max);
+            read_range.layer_min = std::min(read_range.layer_min, _range.layer_min);
+            read_range.layer_max = std::max(read_range.layer_max, _range.layer_max);
 
             max_view.read_layer = std::max(max_view.read_layer, _layer);
             if (range2view.size() >= max_range_size) {
@@ -279,10 +316,14 @@ public:
         }
 
         void EmplaceWriteLayer(const Range& _range, int64 _layer) {
-            read_range.min       = std::min(read_range.min, _range.min);
-            read_range.max       = std::max(read_range.max, _range.max);
-            write_range.min      = std::min(write_range.min, _range.min);
-            write_range.max      = std::max(write_range.max, _range.max);
+            read_range.primary_min = std::min(read_range.primary_min, _range.primary_min);
+            read_range.primary_max = std::max(read_range.primary_max, _range.primary_max);
+            read_range.layer_min = std::min(read_range.layer_min, _range.layer_min);
+            read_range.layer_max = std::max(read_range.layer_max, _range.layer_max);
+            write_range.primary_min = std::min(write_range.primary_min, _range.primary_min);
+            write_range.primary_max = std::max(write_range.primary_max, _range.primary_max);
+            write_range.layer_min = std::min(write_range.layer_min, _range.layer_min);
+            write_range.layer_max = std::max(write_range.layer_max, _range.layer_max);
             max_view.read_layer  = std::max(max_view.read_layer, _layer);
             max_view.write_layer = std::max(max_view.write_layer, _layer);
             if (range2view.size() >= max_range_size) {
@@ -673,7 +714,7 @@ public:
                     EmplaceArg(
                         (uint64)(_arg.GetTexture()),
                         ResourceType::Texture_Buffer,
-                        Range(_arg.mip_level, _arg.num_mips),
+                        Range(_arg.mip_level, _arg.num_mips, _arg.array_layer, _arg.num_array),
                         b_write
                     );
                 } else if constexpr (std::is_same_v<T, std::span<TextureView>>) {
@@ -681,7 +722,7 @@ public:
                         EmplaceArg(
                             (uint64)(tex.GetTexture()),
                             ResourceType::Texture_Buffer,
-                            Range(tex.mip_level, tex.num_mips),
+                            Range(tex.mip_level, tex.num_mips, tex.array_layer, tex.num_array),
                             m_funcs.is_resource_write(_flag)
                         );
                     }
@@ -857,7 +898,10 @@ public:
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
-                layer = GetLastLayerRead(range_handle, Range(handle.mip_level, handle.num_mips));
+                layer = GetLastLayerRead(
+                    range_handle,
+                    Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array)
+                );
                 assert(
                     layer == 0 &&
                     std::format(
@@ -883,7 +927,10 @@ public:
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
-                range_handle->EmplaceWriteLayer(Range(handle.mip_level, handle.num_mips), layer);
+                range_handle->EmplaceWriteLayer(
+                    Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array),
+                    layer
+                );
             }
 
             for (const auto& [handle, state] : _cmd->ImportBuffers()) {
@@ -900,7 +947,10 @@ public:
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
-                layer = GetLastLayerWrite(range_handle, Range(handle.mip_level, handle.num_mips));
+                layer = GetLastLayerWrite(
+                    range_handle,
+                    Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array)
+                );
             }
 
             for (const auto& [handle, state] : _cmd->ExportBuffers()) {
@@ -915,7 +965,10 @@ public:
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
-                range_handle->EmplaceWriteLayer(Range(handle.mip_level, handle.num_mips), layer);
+                range_handle->EmplaceWriteLayer(
+                    Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array),
+                    layer
+                );
             }
 
             for (const auto& [handle, state] : _cmd->ExportBuffers()) {
@@ -996,19 +1049,39 @@ public:
             const auto& depth          = pass_info.depth_attachment;
             auto        depth_store_op = GetStoreOp(GetDepthAction(depth.action));
             if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD) {
-                EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), false);
+                EmplaceArg(
+                    (uint64)(depth.target),
+                    ResourceType::Texture_Buffer,
+                    Range(depth.mip_level, 1, depth.array_layer, 1),
+                    false
+                );
             }
             if (depth_store_op == EAttachmentStoreOp::STORE) {
-                EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), true);
+                EmplaceArg(
+                    (uint64)(depth.target),
+                    ResourceType::Texture_Buffer,
+                    Range(depth.mip_level, 1, depth.array_layer, 1),
+                    true
+                );
             }
         }
         for (const auto& target : pass_info.color_attachments) {
             auto color_store_op = GetStoreOp(target.action);
             if (GetLoadOp(target.action) == EAttachmentLoadOp::LOAD) {
-                EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), false);
+                EmplaceArg(
+                    (uint64)(target.target),
+                    ResourceType::Texture_Buffer,
+                    Range(target.mip_level, 1, target.array_layer, 1),
+                    false
+                );
             }
             if (color_store_op == EAttachmentStoreOp::STORE) {
-                EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), true);
+                EmplaceArg(
+                    (uint64)(target.target),
+                    ResourceType::Texture_Buffer,
+                    Range(target.mip_level, 1, target.array_layer, 1),
+                    true
+                );
             }
         }
         for (const auto& write_res : m_arg_write_resources) {
@@ -1093,19 +1166,39 @@ public:
             const auto& depth          = pass_info.depth_attachment;
             auto        depth_store_op = GetStoreOp(GetDepthAction(depth.action));
             if (GetLoadOp(GetDepthAction(depth.action)) == EAttachmentLoadOp::LOAD) {
-                EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), false);
+                EmplaceArg(
+                    (uint64)(depth.target),
+                    ResourceType::Texture_Buffer,
+                    Range(depth.mip_level, 1, depth.array_layer, 1),
+                    false
+                );
             }
             if (depth_store_op == EAttachmentStoreOp::STORE) {
-                EmplaceArg((uint64)(depth.target), ResourceType::Texture_Buffer, Range(0), true);
+                EmplaceArg(
+                    (uint64)(depth.target),
+                    ResourceType::Texture_Buffer,
+                    Range(depth.mip_level, 1, depth.array_layer, 1),
+                    true
+                );
             }
         }
         for (const auto& target : pass_info.color_attachments) {
             auto color_store_op = GetStoreOp(target.action);
             if (GetLoadOp(target.action) == EAttachmentLoadOp::LOAD) {
-                EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), false);
+                EmplaceArg(
+                    (uint64)(target.target),
+                    ResourceType::Texture_Buffer,
+                    Range(target.mip_level, 1, target.array_layer, 1),
+                    false
+                );
             }
             if (color_store_op == EAttachmentStoreOp::STORE) {
-                EmplaceArg((uint64)(target.target), ResourceType::Texture_Buffer, Range(0), true);
+                EmplaceArg(
+                    (uint64)(target.target),
+                    ResourceType::Texture_Buffer,
+                    Range(target.mip_level, 1, target.array_layer, 1),
+                    true
+                );
             }
         }
 
