@@ -25,3 +25,16 @@ MoerEngine.toml
 logs/
 log*.txt
 .VSCodeCounter/
+rhi_docs/01-overview.md
+rhi_docs/02-core-abstractions.md
+rhi_docs/03-command-lists-and-queues.md
+rhi_docs/04-resource-states-and-barriers.md
+rhi_docs/05-pipelines-and-shader-binding.md
+rhi_docs/06-backend-vulkan.md
+rhi_docs/07-backend-d3d12.md
+rhi_docs/08-raytracing.md
+rhi_docs/09-io-copy-and-extensions.md
+rhi_docs/10-command-recording-and-reorder.md
+rhi_docs/11-reorder-deep-dive.md
+rhi_docs/12-vulkan-bindless-array.md
+rhi_docs/README.md

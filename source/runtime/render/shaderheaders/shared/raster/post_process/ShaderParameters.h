@@ -229,6 +229,30 @@ static CONST uint TONEMAPPING_HISTOGRAM_BIN_COUNT =
 static CONST uint TONEMAPPING_HISTOGRAM_POINT_FRAC_BITS       = 6;
 static CONST uint TONEMAPPING_HISTOGRAM_POINT_FRAC_MULTIPLIER = 1UL << TONEMAPPING_HISTOGRAM_POINT_FRAC_BITS;
 
+//MARK:Bloom
+struct BloomPrefilterBindlessParam {
+    uint  input_tex_hdl;
+    float threshold; // 阈值，建议 1.0f
+    float knee;      // 软膝盖，建议 0.5f
+};
+
+struct BloomDownsampleBindlessParam {
+    uint   downsample_chain_hdl;
+    float2 inv_size;
+};
+
+struct BloomUpsampleBindlessParam {
+    uint   upsample_chain_hdl;
+    uint   downsample_chain_hdl;
+    float  filter_radius; // 采样偏移半径
+    float2 inv_size;
+};
+
+struct BloomApplyBindlessParam {
+    uint  bloom_result_hdl;
+    float bloom_intensity;
+};
+
 // MARK: Main Content End
 
 #ifdef __cplusplus

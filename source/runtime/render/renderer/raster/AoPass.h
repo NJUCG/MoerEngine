@@ -154,7 +154,7 @@ public:
         param.normal_tex        = context.textures.normal.handle;
         param.position_tex      = context.textures.position.handle;
         param.depth_tex         = context.textures.depth_nearest_sampler.handle;
-        param.noise_tex         = context.noise_tex.handle;
+        param.noise_tex         = context.textures.noise_tex.handle;
 
         UpdateMotionVectorData(context, camera);
         param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;
@@ -227,7 +227,7 @@ public:
         param.normal_tex              = context.textures.normal.handle;
         param.depth_tex               = context.textures.depth_nearest_sampler.handle;
         param.position_tex            = context.textures.position.handle;
-        param.noise_tex               = context.noise_tex.handle;
+        param.noise_tex               = context.textures.noise_tex.handle;
         param.ao_mode                 = static_cast<uint32>(ui_config.ao_mode);
         param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
         param.input_image             = context.textures.lighting_output.handle;
