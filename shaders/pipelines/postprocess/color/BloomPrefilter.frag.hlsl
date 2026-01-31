@@ -1,9 +1,9 @@
-#include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
-BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/raster/ShaderParameters.h"
 
-[[vk::push_constant]] ConstantBuffer<Moer::BloomPrefilterBindlessParam> param;
+[[vk::binding(0, 0)]] Texture2D<float4> input_tex : register(t0);
+[[vk::binding(1, 0)]] SamplerState      linear_sampler : register(s0);
+[[vk::push_constant]] ConstantBuffer<Moer::BloomPrefilterParam> param;
 
 float Luminance(float3 color) {
     return dot(color, float3(0.2126, 0.7152, 0.0722));
@@ -11,7 +11,7 @@ float Luminance(float3 color) {
 
 float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
 
-    float3 color      = TextureHandle(param.input_tex_hdl).Sample2D<float4>(uv).rgb;
+    float3 color      = input_tex.Sample(linear_sampler, uv).rgb;
     float  brightness = Luminance(color);
 
     // 软膝盖曲线计算

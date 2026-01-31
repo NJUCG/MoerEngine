@@ -16,33 +16,38 @@ namespace Moer::Render::Raster {
 class BloomPassPrefilterPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(BloomPassPrefilterPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(BloomPrefilterBindlessParam, param);
-    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_ARGS(bdls, param);
+    DEFINE_SHADER_TEX(input_tex);
+    DEFINE_SHADER_SAMPLER(linear_sampler);
+    DEFINE_SHADER_CONSTANT_STRUCT(BloomPrefilterParam, param);
+    DEFINE_SHADER_ARGS(input_tex, linear_sampler, param);
 };
 
 class BloomPassUpSamplePipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(BloomPassUpSamplePipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(BloomUpsampleBindlessParam, param);
-    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_ARGS(bdls, param);
+    DEFINE_SHADER_TEX(upsample_tex);
+    DEFINE_SHADER_TEX(downsample_tex);
+    DEFINE_SHADER_SAMPLER(linear_sampler);
+    DEFINE_SHADER_CONSTANT_STRUCT(BloomUpsampleParam, param);
+    DEFINE_SHADER_ARGS(upsample_tex, downsample_tex, linear_sampler, param);
 };
 
 class BloomPassDownSamplePipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(BloomPassDownSamplePipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(BloomDownsampleBindlessParam, param);
-    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_ARGS(bdls, param);
+    DEFINE_SHADER_TEX(src_tex);
+    DEFINE_SHADER_SAMPLER(linear_sampler);
+    DEFINE_SHADER_CONSTANT_STRUCT(BloomDownsampleParam, param);
+    DEFINE_SHADER_ARGS(src_tex, linear_sampler, param);
 };
 
 class BloomApplyPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(BloomApplyPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(BloomApplyBindlessParam, param);
-    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_ARGS(bdls, param);
+    DEFINE_SHADER_TEX(bloom_tex);
+    DEFINE_SHADER_SAMPLER(linear_sampler);
+    DEFINE_SHADER_CONSTANT_STRUCT(BloomApplyParam, param);
+    DEFINE_SHADER_ARGS(bloom_tex, linear_sampler, param);
 };
 
 class BloomPass {
