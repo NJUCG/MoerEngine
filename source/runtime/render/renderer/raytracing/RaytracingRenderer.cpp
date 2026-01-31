@@ -193,16 +193,11 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         LogSceneLoadStatus(*editor_config);
 
         auto window_state = TickWindowContext(hooks);
+        bool skip_present = false;
 
         if (window_state == EWindowState::Hiding) {
             std::this_thread::yield();
-
-            // hook: RenderGUI
-            if (hooks.on_render_gui) {
-                hooks.on_render_gui(cmd_list, output);
-            }
-
-            continue;
+            skip_present = true;
 
         } else if (window_state == EWindowState::SizeChanged) {
             create_frame_buffers(resolution);
@@ -740,10 +735,12 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
-        gfx_queue.Present(swapchain, output);
+        if (!skip_present) {
+            gfx_queue.Present(swapchain, output);
 
-        if (hooks.on_present_windows) {
-            hooks.on_present_windows();
+            if (hooks.on_present_windows) {
+                hooks.on_present_windows();
+            }
         }
         if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {
             break;

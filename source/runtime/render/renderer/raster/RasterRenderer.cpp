@@ -166,15 +166,10 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     // MARK: 1. Tick Window
     auto window_state = TickWindowContext(hooks);
 
+    bool skip_present = false;
     if (window_state == EWindowState::Hiding) {
         std::this_thread::yield(); // FIXME: 这个东西有用吗？
-
-        // hook: RenderGUI
-        if (hooks.on_render_gui) {
-            hooks.on_render_gui(cmd_list, raster_context.textures.output.tex);
-        }
-
-        return true; // continue to next main loop body
+        skip_present = true;
 
     } else if (window_state == EWindowState::SizeChanged) { // FIXME: Runtime Error
         LOG_INFO("Size Changed.");
@@ -343,10 +338,11 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         that we've done flushing copy queue resources
         */
     gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources());
-    gfx_queue.Present(swapchain, default_output_texture);
-
-    if (hooks.on_present_windows) {
-        hooks.on_present_windows();
+    if (!skip_present) {
+        gfx_queue.Present(swapchain, default_output_texture);
+        if (hooks.on_present_windows) {
+            hooks.on_present_windows();
+        }
     }
 
     if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {
