@@ -325,15 +325,22 @@ public:
     static void
     AllocateRasterResourceHandle(BindlessArrayRef& bindless_array, T& target, const TexConfig& cfg) {
         //Main Handle
-        target.handle = bindless_array->AllocateTexture(target.tex->GetView(), cfg.sampler);
+        bool        is_depth = EnumHasAnyFlag(target.tex->GetAspectFlags(), ETextureAspectFlags::DEPTH_SLICE);
+        bool        is_color = EnumHasAnyFlag(target.tex->GetAspectFlags(), ETextureAspectFlags::COLOR);
+        TextureView base_view =
+            (is_depth && !is_color) ? target.tex->GetView(ETextureAspectFlags::DEPTH_SLICE) :
+                                      target.tex->GetView();
+        target.handle = bindless_array->AllocateTexture(base_view, cfg.sampler);
 
         // Mip Handles
         if (cfg.b_create_mip_views) {
             target.mip_handles.resize(cfg.mip_cnt);
             for (uint mip = 0; mip < cfg.mip_cnt; ++mip) {
-                target.mip_handles[mip] = bindless_array->AllocateTexture(
-                    target.tex->GetView(static_cast<uint8>(mip), 1), cfg.sampler
-                );
+                TextureView mip_view =
+                    (is_depth && !is_color) ?
+                        target.tex->GetView(ETextureAspectFlags::DEPTH_SLICE, uint8(mip), 1) :
+                        target.tex->GetView(uint8(mip), 1);
+                target.mip_handles[mip] = bindless_array->AllocateTexture(mip_view, cfg.sampler);
             }
         }
     }
@@ -346,7 +353,12 @@ public:
     static void
     AllocateRasterResourceHandle(BindlessArrayRef& bindless_array, T& target, const TexConfig& cfg) {
         //Main Handle
-        target.handle = bindless_array->AllocateTexture(target.tex->GetView(), cfg.sampler);
+        bool        is_depth = EnumHasAnyFlag(target.tex->GetAspectFlags(), ETextureAspectFlags::DEPTH_SLICE);
+        bool        is_color = EnumHasAnyFlag(target.tex->GetAspectFlags(), ETextureAspectFlags::COLOR);
+        TextureView base_view =
+            (is_depth && !is_color) ? target.tex->GetView(ETextureAspectFlags::DEPTH_SLICE) :
+                                      target.tex->GetView();
+        target.handle = bindless_array->AllocateTexture(base_view, cfg.sampler);
     }
 
     //方案：tex和handle的生命周期绑定

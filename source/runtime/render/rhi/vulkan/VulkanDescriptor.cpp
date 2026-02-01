@@ -278,7 +278,12 @@ void VulkanDescriptorHeap::FreeBufferDescIdx(uint _idx) {
 uint VulkanDescriptorHeap::GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout) {
     auto* texture = ResourceCast(_in_image->texture);
     assert(texture != nullptr && "texture is nullptr");
-    VkTextureDescKey key{_layout, _in_image->mip_level, _in_image->num_mips};
+    VkTextureDescKey key{
+        _layout,
+        _in_image->mip_level,
+        _in_image->num_mips,
+        uint32(_in_image->aspect_flags)
+    };
     auto             res = texture->m_descriptor_indices.try_emplace(key, -1);
     if (!res.second) {
         return res.first->second * image_desc_stride + texture_desc_offset;
@@ -286,7 +291,14 @@ uint VulkanDescriptorHeap::GetImageDescIdx(const TextureView* _in_image, VkImage
     auto& idx = res.first->second;
     {
         VkDescriptorImageInfo image_info{
-            .imageView = texture->GetView(_in_image->mip_level, _in_image->num_mips), .imageLayout = _layout
+            .imageView = texture->GetView(
+                _in_image->mip_level,
+                _in_image->num_mips,
+                _in_image->array_layer,
+                _in_image->num_array,
+                _in_image->aspect_flags
+            ),
+            .imageLayout = _layout
         };
         VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
         desc_info.type               = _layout == VK_IMAGE_LAYOUT_GENERAL ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE :

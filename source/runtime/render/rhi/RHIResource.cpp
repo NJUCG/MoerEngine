@@ -18,11 +18,30 @@ TextureView::TextureView(Texture* _texture) :
     array_layer(0),
     num_array(_texture->GetNumArray()),
     num_mips(1),
-    format(_texture->GetFormat()) {}
+    format(_texture->GetFormat()),
+    aspect_flags(_texture->GetAspectFlags()) {}
 TextureView::TextureView(TextureRef _texture_ref) : TextureView(_texture_ref.Get()) {}
 TextureView::TextureView(Texture* _tex, EPixelFormat _fmt, uint8 _mip_level, uint8 _mip_cnt) :
     texture(_tex),
     format(_fmt),
+    aspect_flags(_tex->GetAspectFlags()),
+    mip_level(_mip_level),
+    num_mips(_mip_cnt),
+    extent(_tex->GetExtent()),
+    array_layer(0),
+    num_array(_tex->GetNumArray()) {
+    //calculate extent
+}
+TextureView::TextureView(
+    Texture* _tex,
+    EPixelFormat _fmt,
+    ETextureAspectFlags _aspect,
+    uint8 _mip_level,
+    uint8 _mip_cnt
+) :
+    texture(_tex),
+    format(_fmt),
+    aspect_flags(_aspect),
     mip_level(_mip_level),
     num_mips(_mip_cnt),
     extent(_tex->GetExtent()),
@@ -45,6 +64,19 @@ TextureView Texture::GetView(uint8 _mip_level, uint8 _mip_cnt) {
 
 TextureView Texture::GetView(EPixelFormat _format, uint8 _mip_level, uint8 _mip_cnt) {
     return TextureView(this, _format, _mip_level, _mip_cnt);
+}
+
+TextureView Texture::GetView(ETextureAspectFlags _aspect, uint8 _mip_level, uint8 _mip_cnt) {
+    return TextureView(this, this->GetFormat(), _aspect, _mip_level, _mip_cnt);
+}
+
+TextureView Texture::GetView(
+    EPixelFormat _format,
+    ETextureAspectFlags _aspect,
+    uint8 _mip_level,
+    uint8 _mip_cnt
+) {
+    return TextureView(this, _format, _aspect, _mip_level, _mip_cnt);
 }
 
 BufferView::BufferView(Buffer* _buffer, EPixelFormat _fmt) :

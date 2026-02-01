@@ -1565,11 +1565,16 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
 #pragma region viewable resources definitions
 
-    uint64 EncodeViewKey(uint _mip_level, uint _mip_cnt,uint _base_layer,uint _layer_cnt) {
-        return ((uint64)_mip_level)
-        | ((uint64)_mip_cnt << 16) 
-        | ((uint64)_base_layer << 32) 
-        | ((uint64)_layer_cnt << 48); }
+    VulkanTexture::VkImageViewKey
+    EncodeViewKey(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt, ETextureAspectFlags _aspect) {
+        return VulkanTexture::VkImageViewKey{
+            uint16(_mip_level),
+            uint16(_mip_cnt),
+            uint16(_base_layer),
+            uint16(_layer_cnt),
+            _aspect
+        };
+    }
 
 
     VkImageTiling GetVkImageTilling(VkImageCreateInfo _create_infos, VulkanDevice& _device){
@@ -1635,10 +1640,20 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         }
     }
 
-    VkImageView VulkanTexture::GetView(uint _mip_level, uint _mip_cnt, uint _base_layer, uint _layer_cnt) {
-        uint64 key = EncodeViewKey(_mip_level, _mip_cnt, _base_layer, _layer_cnt);
+    VkImageView VulkanTexture::GetView(
+        uint _mip_level,
+        uint _mip_cnt,
+        uint _base_layer,
+        uint _layer_cnt,
+        ETextureAspectFlags _aspect_override
+    ) {
+        ETextureAspectFlags aspect = _aspect_override == ETextureAspectFlags::NONE ? GetAspectFlags() :
+                                                                                     _aspect_override;
+        auto key = EncodeViewKey(_mip_level, _mip_cnt, _base_layer, _layer_cnt, aspect);
         auto it  = m_views.find(key);
-        if (it != m_views.end()) { return it->second; }
+        if (it != m_views.end()) {
+            return it->second;
+        }
         VkImageView           view;
         VkImageViewCreateInfo view_create_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         view_create_info.image                           = m_alloc.image;
@@ -1652,7 +1667,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
         view_create_info.format                          = VulkanEnumTranslator::METoVKFormat(GetFormat());
         view_create_info.components                      = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-        view_create_info.subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(GetAspectFlags());
+        view_create_info.subresourceRange.aspectMask     = VulkanEnumTranslator::METoVKImageAspectFlags(aspect);
         view_create_info.subresourceRange.baseMipLevel   = _mip_level;
         view_create_info.subresourceRange.levelCount     = _mip_cnt;// 含义：这次我想看多少，而不是纹理总共有多少
         view_create_info.subresourceRange.baseArrayLayer = _base_layer;
@@ -2022,7 +2037,11 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                             if(!_cmd.free){
                                 handles[_cmd.array_idx] = Handle((uint64)_cmd.texture.Get(), _cmd.slot, 1, VulkanBindlessArray::Texture);
                                 VulkanTexture* vk_texture = ResourceCast(_cmd.texture.Get());
-                                TextureView    view(vk_texture, _cmd.format, _cmd.mip_level, _cmd.num_mips);
+                                ETextureAspectFlags aspect = _cmd.aspect_flags;
+                                if (aspect == ETextureAspectFlags::NONE) {
+                                    aspect = vk_texture->GetAspectFlags();
+                                }
+                                TextureView    view(vk_texture, _cmd.format, aspect, _cmd.mip_level, _cmd.num_mips);
                                 if (_cmd.array_count > 0) {
                                     view = view.Slice(_cmd.array_layer, _cmd.array_count);
                                 }
@@ -2103,6 +2122,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 _texture.texture,
                 _sampler,
                 _texture.format,
+                _texture.aspect_flags,
                 slot_idx,
                 texture_slot,
                 _texture.mip_level,
@@ -2179,9 +2199,18 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
         const auto& handle = handles[_array_idx];
         if(handle.type == Texture){
-            update_cmds.emplace_back(
-                TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, 0, 0, true}
-            );
+            update_cmds.emplace_back(TextureUpdateInfo{
+                nullptr,
+                s_spl,
+                PF_UNDEFINED,
+                ETextureAspectFlags::NONE,
+                _array_idx,
+                handle.slot,
+                0,
+                0,
+                0,
+                0,
+                true});
             UntrackTextureView(_array_idx);
         }else if (handle.type == Buffer){
             update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, PF_UNDEFINED, true});
@@ -2229,7 +2258,18 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         if(handle.type == Texture){
             // textures_freed.push_back(handle.slot);
             update_cmds.emplace_back(
-                TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, 0, 0, true}
+                TextureUpdateInfo{
+                    nullptr,
+                    s_spl,
+                    PF_UNDEFINED,
+                    ETextureAspectFlags::NONE,
+                    _array_idx,
+                    handle.slot,
+                    0,
+                    0,
+                    0,
+                    0,
+                    true}
             );
         }else if (handle.type == Buffer){
             // buffers_freed.push_back(handle.slot);

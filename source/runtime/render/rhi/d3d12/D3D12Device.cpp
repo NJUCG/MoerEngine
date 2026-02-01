@@ -532,6 +532,44 @@ TextureRef D3D12Device::CreateTexture(
     uint32_t           _mip_cnt,
     uint               _array_size
 ) {
+    auto has_depth = [](EPixelFormat format) {
+        switch (format) {
+            case PF_D16_UNORM:
+            case PF_X8_D24_UNORM_PACK32:
+            case PF_D32_SFLOAT:
+            case PF_D16_UNORM_S8_UINT:
+            case PF_D24_UNORM_S8_UINT:
+            case PF_D32_SFLOAT_S8_UINT:
+                return true;
+            default:
+                return false;
+        }
+    };
+    auto has_stencil = [](EPixelFormat format) {
+        switch (format) {
+            case PF_S8_UINT:
+            case PF_D16_UNORM_S8_UINT:
+            case PF_D24_UNORM_S8_UINT:
+            case PF_D32_SFLOAT_S8_UINT:
+                return true;
+            default:
+                return false;
+        }
+    };
+    auto calc_aspect_flags = [&](EPixelFormat format) {
+        ETextureAspectFlags flags = ETextureAspectFlags::NONE;
+        if (has_depth(format)) {
+            flags = flags | ETextureAspectFlags::DEPTH_SLICE;
+        }
+        if (has_stencil(format)) {
+            flags = flags | ETextureAspectFlags::STENCIL_SLICE;
+        }
+        if (flags == ETextureAspectFlags::NONE) {
+            flags = ETextureAspectFlags::COLOR;
+        }
+        return flags;
+    };
+
     bool        b_depth = uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
     TextureInfo info{
         _dimension,
@@ -543,7 +581,7 @@ TextureRef D3D12Device::CreateTexture(
         uint8(_dimension == ETextureDimension::TEX_CUBE ? 6 : _array_size),
         1
     }; // TODO ? msaa tex
-    info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
+    info.aspect_flags = calc_aspect_flags(_format);
     info.debug_name   = _name;
     return TextureRef{MoerNew(D3D12Texture)(this, info)};
 }

@@ -479,8 +479,10 @@ public:
     TextureView(class Texture*);
     TextureView(TextureRef);
     TextureView(Texture* _texture, EPixelFormat _fmt, uint8 _mip_idx, uint8 _mip_cnt);
+    TextureView(Texture* _texture, EPixelFormat _fmt, ETextureAspectFlags _aspect, uint8 _mip_idx, uint8 _mip_cnt);
     class Texture* texture;
     EPixelFormat   format;
+    ETextureAspectFlags aspect_flags = ETextureAspectFlags::COLOR;
     uint3          offset{};
     uint3          extent{};
     uint8          mip_level = 0;
@@ -644,6 +646,9 @@ public:
     }
     RENDER_API TextureView  GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
     RENDER_API TextureView  GetView(EPixelFormat _format, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
+    RENDER_API TextureView  GetView(ETextureAspectFlags _aspect, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
+    RENDER_API TextureView
+    GetView(EPixelFormat _format, ETextureAspectFlags _aspect, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
     virtual RENDER_API void SetName(const std::string_view _name) = 0;
 
 protected:
@@ -719,6 +724,9 @@ public:
     RENDER_API TextureView GetView() {
         return tex_handle->GetView();
     }
+    RENDER_API TextureView GetView(ETextureAspectFlags _aspect) {
+        return tex_handle->GetView(_aspect);
+    }
     RENDER_API void SetName(const std::string_view _name) {
         tex_handle->SetName(_name);
     }
@@ -766,6 +774,7 @@ public:
         TextureRef   texture;
         Sampler      sampler;
         EPixelFormat format;
+        ETextureAspectFlags aspect_flags;
         uint         array_idx;
         uint         slot;
         uint8        mip_level;

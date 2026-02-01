@@ -613,16 +613,19 @@ struct VkTextureDescKey {
     VkImageLayout layout;
     uint8         mip_level;
     uint8         mip_cnt;
+    uint32        aspect_mask;
 
     bool operator==(const VkTextureDescKey& _other) const {
-        return layout == _other.layout && mip_level == _other.mip_level && mip_cnt == _other.mip_cnt;
+        return layout == _other.layout && mip_level == _other.mip_level && mip_cnt == _other.mip_cnt &&
+               aspect_mask == _other.aspect_mask;
     }
 
     struct Hasher {
         size_t operator()(const VkTextureDescKey& _key) const {
             return std::hash<uint32_t>()(uint32_t(_key.layout)) ^
                    std::hash<uint32_t>()(uint32_t(_key.mip_level)) ^
-                   std::hash<uint32_t>()(uint32_t(_key.mip_cnt));
+                   std::hash<uint32_t>()(uint32_t(_key.mip_cnt)) ^
+                   std::hash<uint32_t>()(_key.aspect_mask);
         }
     };
 };
@@ -653,7 +656,8 @@ public:
         uint _mip_level  = 0,
         uint _mip_cnt    = 1,
         uint _base_layer = 0,
-        uint _layer_cnt  = VK_REMAINING_ARRAY_LAYERS
+        uint _layer_cnt  = VK_REMAINING_ARRAY_LAYERS,
+        ETextureAspectFlags _aspect_override = ETextureAspectFlags::NONE
     );
 
     void          SetName(const std::string_view _name) override;
@@ -677,7 +681,7 @@ public:
     }
 
     int32 GetDescriptorIndex(uint _mip_level, uint _mip_idx, VkImageLayout _layout) {
-        VkTextureDescKey key = {_layout, uint8(_mip_level), uint8(_mip_idx)};
+        VkTextureDescKey key = {_layout, uint8(_mip_level), uint8(_mip_idx), uint32(GetAspectFlags())};
         auto             it  = m_descriptor_indices.find(key);
         if (it != m_descriptor_indices.end()) {
             return it->second;
@@ -685,6 +689,27 @@ public:
         return -1;
     }
     UnorderedMap<VkTextureDescKey, uint64, VkTextureDescKey::Hasher> m_descriptor_indices;
+    struct VkImageViewKey {
+        uint16              mip_level;
+        uint16              mip_cnt;
+        uint16              base_layer;
+        uint16              layer_cnt;
+        ETextureAspectFlags aspect;
+        bool operator==(const VkImageViewKey& _other) const {
+            return mip_level == _other.mip_level && mip_cnt == _other.mip_cnt &&
+                   base_layer == _other.base_layer && layer_cnt == _other.layer_cnt &&
+                   aspect == _other.aspect;
+        }
+        struct Hasher {
+            size_t operator()(const VkImageViewKey& _key) const {
+                size_t h0 = (size_t(_key.mip_level) << 48) | (size_t(_key.mip_cnt) << 32) |
+                            (size_t(_key.base_layer) << 16) | size_t(_key.layer_cnt);
+                size_t h1 = std::hash<uint32>()(uint32(_key.aspect));
+                return h0 ^ (h1 + 0x9e3779b9 + (h0 << 6) + (h0 >> 2));
+            }
+        };
+    };
+    UnorderedMap<VkImageViewKey, VkImageView, VkImageViewKey::Hasher> m_views;
 
 private:
     void Destroy() override;
@@ -692,7 +717,6 @@ private:
         VkImage       image;
         VmaAllocation alloc;
     } m_alloc;
-    UnorderedMap<uint64, VkImageView> m_views;
     VkImageLayout                     m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
 };
 

@@ -274,8 +274,10 @@ void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
             );
 
             // GetView 必须请求完整的 6 层 (0, 1, 0, 6)，这样 Shader 才能把它当 Cube 采
-            cube_res.handle =
-                context.bdls->AllocateTexture(cube_res.tex, Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
+            cube_res.handle = context.bdls->AllocateTexture(
+                cube_res.tex->GetView(ETextureAspectFlags::DEPTH_SLICE),
+                Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
+            );
 
             LOG_DEBUG(
                 "Create PointLight ShadowMap: {}, size ({}, {}), bindless handle: {}",
