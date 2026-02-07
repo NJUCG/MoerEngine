@@ -3297,7 +3297,6 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
     return {};
 }
 
-//TODO:看看barrier
 IOWaitEvt VkCopyQueue::Execute(CmdSubmit&& _evt) {
     Array<UniquePtr<Command>> cmds = std::move(_evt.cmds);
 

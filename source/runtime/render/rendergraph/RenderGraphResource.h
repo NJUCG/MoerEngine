@@ -5,6 +5,158 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 namespace Moer {
+
+enum class ERDGViewableResourceType : uint8 {
+    Texture,
+    Buffer,
+    NUM
+};
+
+class FRDGResource {
+public:
+    FRDGResource(const FRDGResource&) = delete;
+    virtual ~FRDGResource()           = default;
+
+    // Name of the resource for debugging purpose.
+    const char* Name = nullptr;
+
+    /** Marks this resource as actually used by a resource. This is to track what dependencies on pass was actually unnecessary. */
+    inline void MarkResourceAsUsed() {}
+
+    FRHIResource* GetRHI() const {
+        IF_RDG_ENABLE_DEBUG(ValidateRHIAccess());
+        return ResourceRHI;
+    }
+
+protected:
+    FRDGResource(const char* InName) : Name(InName) {}
+
+    FRHIResource* GetRHIUnchecked() const {
+        return ResourceRHI;
+    }
+
+    bool HasRHI() const {
+        return ResourceRHI != nullptr;
+    }
+
+    FRHIResource* ResourceRHI = nullptr;
+
+private:
+    // friend FRDGBuilder;
+    // friend FRDGUserValidation;
+    // friend FRDGBarrierValidation;
+};
+
+class FRDGViewableResource : public FRDGResource {
+public:
+    /** The type of this resource; useful for casting between types. */
+    const ERDGViewableResourceType Type;
+
+    /** Whether this resource is externally registered with the graph (i.e. the user holds a reference to the underlying resource outside the graph). */
+    bool IsExternal() const {
+        return bExternal;
+    }
+
+    /** Whether this resource is has been queued for extraction at the end of graph execution. */
+    bool IsExtracted() const {
+        return bExtracted;
+    }
+
+    /** Whether a prior pass added to the graph produced contents for this resource. External resources are not considered produced
+	 *  until used for a write operation. This is a union of all subresources, so any subresource write will set this to true.
+	 */
+    bool HasBeenProduced() const {
+        return bProduced;
+    }
+
+protected:
+    FRDGViewableResource(const char* InName, ERDGViewableResourceType InType);
+
+    bool IsCullRoot() const {
+        return bExternal || bExtracted;
+    }
+
+    static const ERHIAccess DefaultEpilogueAccess = ERHIAccess::SRVMask;
+
+    enum class EAccessMode : uint8 {
+        Internal,
+        External
+    };
+
+    /** Whether this is an externally registered resource. */
+    uint8 bExternal : 1;
+
+    /** Whether this is an extracted resource. */
+    uint8 bExtracted : 1;
+
+    /** Whether any sub-resource has been used for write by a pass. */
+    uint8 bProduced : 1;
+
+    // struct FAccessModeState {
+    //     bool IsExternalAccess() const {
+    //         return ActiveMode == EAccessMode::External;
+    //     }
+
+    //     FAccessModeState() :
+    //         Pipelines(ERHIPipeline::None),
+    //         Mode(EAccessMode::Internal),
+    //         bLocked(0),
+    //         bQueued(0) {}
+
+    //     ERHIAccess   Access = ERHIAccess::None;
+    //     ERHIPipeline Pipelines : 2;
+    //     EAccessMode  Mode : 1;
+    //     uint8        bLocked : 1;
+    //     uint8        bQueued : 1;
+
+    //     /** The actual access mode replayed on the setup pass timeline. */
+    //     EAccessMode ActiveMode = EAccessMode::Internal;
+
+    // } AccessModeState;
+    EAccessMode AccessMode = EAccessMode::Internal;
+
+    FRDGPassHandle            AcquirePass;
+    FRDGPassHandle            DiscardPass;
+    FRDGPassHandle            FirstPass;
+    FRDGPassHandlesByPipeline LastPasses;
+
+    /** Number of references in passes and deferred queries. */
+    uint32 ReferenceCount;
+
+    /** Scratch index allocated for the resource in the pass being setup. */
+    uint32 PassStateIndex = 0;
+
+    /** The state of the resource at the graph epilogue. */
+    ERHIAccess EpilogueAccess = DefaultEpilogueAccess;
+
+private:
+    static const uint32 DeallocatedReferenceCount = ~0;
+
+    void SetRHI(FRHIResource* Resource) {
+        check(!ResourceRHI);
+        ResourceRHI = Resource;
+    }
+
+    void SetExternalAccessMode(ERHIAccess InAccess, ERHIPipeline InPipelines) {
+        check(!AccessModeState.bLocked);
+
+        AccessModeState.Mode      = EAccessMode::External;
+        AccessModeState.Access    = InAccess;
+        AccessModeState.Pipelines = InPipelines;
+
+        EpilogueAccess = InAccess;
+    }
+
+    friend bool IsExtendedLifetimeResource(FRDGViewableResource*);
+
+    // friend FRDGBuilder;
+    // friend FRDGUserValidation;
+    // friend FRDGBarrierBatchBegin;
+    // friend FRDGResourceDumpContext;
+    // friend FRDGTrace;
+    // friend FRDGPass;
+};
+
 class PassNode;
 // class RHIGraphicsCommandList;
 class RENDER_API RenderGraphResource : public DepdencyGraph::Node {
@@ -128,33 +280,6 @@ protected:
         uint32_t array_min : 16 {0};
         uint32_t array_num : 16 {1};
     };
-
-    // struct ViewInfoHashFunc
-    // {
-    //     std::size_t operator()(const RHIViewInfo& view_info) const
-    //     {
-    //        size_t hash = 0;
-    //        HashCombine(hash,view_info.base_info.view_type);
-    //        HashCombine(hash,view_info.base_info.format);
-    //        if(view_info.IsSRV()) {
-    //           HashCombine(hash,view_info.texture.srv.mip_min);
-    //           HashCombine(hash,view_info.texture.srv.mip_num);
-    //           HashCombine(hash,view_info.texture.srv.array_min);
-    //           HashCombine(hash,view_info.texture.srv.array_num);
-    //        }
-    //         if(view_info.IsUAV()) {
-    //             HashCombine(hash,view_info.texture.uav.mip_min);
-    //             HashCombine(hash,view_info.texture.uav.mip_num);
-    //             HashCombine(hash,view_info.texture.uav.array_min);
-    //             HashCombine(hash,view_info.texture.uav.array_num);
-    //         }
-    //         return hash;
-    //     }
-    // };
-    //
-    //
-    // mutable std::unordered_map<RHIViewInfo, RHISRVRef, ViewInfoHashFunc> mSrvs;
-    // mutable std::unordered_map<RHIViewInfo, RHIUAVRef, ViewInfoHashFunc> mUavs;
 };
 
 struct TextureSubResource {
