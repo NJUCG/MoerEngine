@@ -31,6 +31,56 @@ struct DeviceInitInfo {
 };
 namespace Moer::Render {
 
+enum class ERHIPipeline : uint8 {
+    Graphics     = 1 << 0,
+    AsyncCompute = 1 << 1,
+
+    None = 0,
+    All  = Graphics | AsyncCompute,
+    Num  = 2
+};
+
+inline constexpr size_t GetRHIPipelineCount() {
+    return static_cast<size_t>(ERHIPipeline::Num);
+}
+
+inline constexpr size_t GetRHIPipelineIndex(ERHIPipeline Pipeline) {
+    switch (Pipeline) {
+        case ERHIPipeline::Graphics:
+            return 0;
+        case ERHIPipeline::AsyncCompute:
+            return 1;
+        default:
+            assert(false && "Invalid ERHIPipeline for indexing.");
+            return 0;
+    }
+}
+
+/** Array of elements by RHI pipeline, with overloads to help with enum conversion. */
+template<typename ElementType>
+class TRHIPipelineArray : public Moer::StaticArray<ElementType, GetRHIPipelineCount()> {
+    using Base = Moer::StaticArray<ElementType, GetRHIPipelineCount()>;
+
+public:
+    using Base::Base;
+
+    inline ElementType& operator[](int32 Index) {
+        return Base::operator[](static_cast<size_t>(Index));
+    }
+
+    inline const ElementType& operator[](int32 Index) const {
+        return Base::operator[](static_cast<size_t>(Index));
+    }
+
+    inline ElementType& operator[](ERHIPipeline Pipeline) {
+        return Base::operator[](GetRHIPipelineIndex(Pipeline));
+    }
+
+    inline const ElementType& operator[](ERHIPipeline Pipeline) const {
+        return Base::operator[](GetRHIPipelineIndex(Pipeline));
+    }
+};
+
 template<typename T>
 static T ResolveConfigAs(const DeviceInitInfo& _info);
 

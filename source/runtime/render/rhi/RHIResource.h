@@ -409,6 +409,96 @@ public:
     EPixelFormat  format = PF_UNDEFINED;
 };
 
+/** Buffer SRV creation parameters - describes how to create a shader resource view */
+struct FRHIBufferSRVCreateInfo {
+    FRHIBufferSRVCreateInfo() = default;
+
+    explicit FRHIBufferSRVCreateInfo(EPixelFormat InFormat) : Format(InFormat) {}
+
+    FRHIBufferSRVCreateInfo(uint32 InStartOffsetBytes, uint32 InNumElements) :
+        StartOffsetBytes(InStartOffsetBytes),
+        NumElements(InNumElements) {}
+
+    FRHIBufferSRVCreateInfo(RaytracingScene* InRayTracingScene, uint32 InStartOffsetBytes) :
+        StartOffsetBytes(InStartOffsetBytes),
+        RayTracingScene(InRayTracingScene) {}
+
+    bool operator==(const FRHIBufferSRVCreateInfo& Other) const {
+        return Format == Other.Format && StartOffsetBytes == Other.StartOffsetBytes &&
+               NumElements == Other.NumElements && RayTracingScene == Other.RayTracingScene;
+    }
+
+    bool operator!=(const FRHIBufferSRVCreateInfo& Other) const {
+        return !(*this == Other);
+    }
+
+    friend uint32 GetTypeHash(const FRHIBufferSRVCreateInfo& Desc) {
+        uint32 Hash = GetHash(static_cast<uint32>(Desc.Format));
+        HashCombine(Hash, Desc.StartOffsetBytes);
+        HashCombine(Hash, Desc.NumElements);
+        HashCombine(Hash, reinterpret_cast<uint64>(Desc.RayTracingScene));
+        return Hash;
+    }
+
+    /** Encoding format for the element. */
+    EPixelFormat Format = PF_UNDEFINED;
+
+    /** Offset in bytes from the beginning of buffer */
+    uint32 StartOffsetBytes = 0;
+
+    /** Number of elements (whole buffer by default) */
+    uint32 NumElements = UINT32_MAX;
+
+    /** Ray tracing scene associated with the SRV (if acceleration structure buffer) */
+    RaytracingScene* RayTracingScene = nullptr;
+};
+
+/** Buffer UAV creation parameters - describes how to create an unordered access view */
+struct FRHIBufferUAVCreateInfo {
+    FRHIBufferUAVCreateInfo() = default;
+
+    explicit FRHIBufferUAVCreateInfo(EPixelFormat InFormat) : Format(InFormat) {}
+
+    FRHIBufferUAVCreateInfo(EPixelFormat InFormat, uint32 InStartOffsetBytes, uint32 InNumElements) :
+        Format(InFormat),
+        StartOffsetBytes(InStartOffsetBytes),
+        NumElements(InNumElements) {}
+
+    bool operator==(const FRHIBufferUAVCreateInfo& Other) const {
+        return Format == Other.Format && StartOffsetBytes == Other.StartOffsetBytes &&
+               NumElements == Other.NumElements && bSupportsAtomicCounter == Other.bSupportsAtomicCounter &&
+               bSupportsAppendBuffer == Other.bSupportsAppendBuffer;
+    }
+
+    bool operator!=(const FRHIBufferUAVCreateInfo& Other) const {
+        return !(*this == Other);
+    }
+
+    friend uint32 GetTypeHash(const FRHIBufferUAVCreateInfo& Info) {
+        uint32 Hash = static_cast<uint32>(Info.Format);
+        HashCombine(Hash, Info.StartOffsetBytes);
+        HashCombine(Hash, Info.NumElements);
+        HashCombine(Hash, static_cast<uint32>(Info.bSupportsAtomicCounter));
+        HashCombine(Hash, static_cast<uint32>(Info.bSupportsAppendBuffer));
+        return Hash;
+    }
+
+    /** Format for typed buffer elements. */
+    EPixelFormat Format = PF_UNDEFINED;
+
+    /** Offset in bytes from the beginning of buffer */
+    uint32 StartOffsetBytes = 0;
+
+    /** Number of elements (whole buffer by default) */
+    uint32 NumElements = UINT32_MAX;
+
+    /** Whether the UAV supports atomic counter operations (for structured buffers) */
+    bool bSupportsAtomicCounter = false;
+
+    /** Whether the UAV supports append buffer operations (for structured buffers) */
+    bool bSupportsAppendBuffer = false;
+};
+
 struct BufferInfo {
     uint64_t          size;
     uint32_t          stride;
@@ -435,7 +525,7 @@ struct BufferInfo {
 class Buffer : public RHIResource {
 public:
     /**
-	 * @brief Construct a new RHIBuffer object
+	 * @brief Construct a new RHIBuffer object                                       
 	 *
 	 * @param _info
 	 */
@@ -479,17 +569,23 @@ public:
     TextureView(class Texture*);
     TextureView(TextureRef);
     TextureView(Texture* _texture, EPixelFormat _fmt, uint8 _mip_idx, uint8 _mip_cnt);
-    TextureView(Texture* _texture, EPixelFormat _fmt, ETextureAspectFlags _aspect, uint8 _mip_idx, uint8 _mip_cnt);
-    class Texture* texture;
-    EPixelFormat   format;
+    TextureView(
+        Texture*            _texture,
+        EPixelFormat        _fmt,
+        ETextureAspectFlags _aspect,
+        uint8               _mip_idx,
+        uint8               _mip_cnt
+    );
+    class Texture*      texture;
+    EPixelFormat        format;
     ETextureAspectFlags aspect_flags = ETextureAspectFlags::COLOR;
-    uint3          offset{};
-    uint3          extent{};
-    uint8          mip_level = 0;
-    uint8          num_mips;
-    uint8          array_layer = 0;
-    uint8          num_array;
-    Texture*       GetTexture() const {
+    uint3               offset{};
+    uint3               extent{};
+    uint8               mip_level = 0;
+    uint8               num_mips;
+    uint8               array_layer = 0;
+    uint8               num_array;
+    Texture*            GetTexture() const {
         return texture;
     }
     TextureView Slice(uint layer, uint count = 1) const;
@@ -498,15 +594,14 @@ public:
 template<typename TTexture>
 struct TextureSubresourceKeyT {
     TTexture* texture{nullptr};
-    uint8    mip_level{0};
-    uint8    mip_count{1};
-    uint8    array_layer{0};
-    uint8    array_count{1};
+    uint8     mip_level{0};
+    uint8     mip_count{1};
+    uint8     array_layer{0};
+    uint8     array_count{1};
 
     bool operator==(const TextureSubresourceKeyT& _other) const {
-        return texture == _other.texture && mip_level == _other.mip_level &&
-               mip_count == _other.mip_count && array_layer == _other.array_layer &&
-               array_count == _other.array_count;
+        return texture == _other.texture && mip_level == _other.mip_level && mip_count == _other.mip_count &&
+               array_layer == _other.array_layer && array_count == _other.array_count;
     }
 };
 
@@ -523,8 +618,8 @@ struct TextureSubresourceKeyHashT {
     }
 };
 
-using TextureSubresourceKey      = TextureSubresourceKeyT<Texture>;
-using TextureSubresourceKeyHash  = TextureSubresourceKeyHashT<Texture>;
+using TextureSubresourceKey     = TextureSubresourceKeyT<Texture>;
+using TextureSubresourceKeyHash = TextureSubresourceKeyHashT<Texture>;
 
 inline constexpr uint8 kRemainingSubresource = 0xFF;
 
@@ -604,6 +699,30 @@ struct TextureInfo {
     }
 
     TextureInfo& operator=(const TextureInfo& _other) = default;
+
+    bool IsTexture2D() const {
+        return dimension == ETextureDimension::TEX_2D || dimension == ETextureDimension::TEX_2D_ARRAY;
+    }
+
+    bool IsTexture3D() const {
+        return dimension == ETextureDimension::TEX_3D;
+    }
+
+    bool IsTextureCube() const {
+        return dimension == ETextureDimension::TEX_CUBE || dimension == ETextureDimension::TEX_CUBE_ARRAY;
+    }
+
+    bool IsTextureArray() const {
+        return dimension == ETextureDimension::TEX_2D_ARRAY || dimension == ETextureDimension::TEX_CUBE_ARRAY;
+    }
+
+    bool IsMipChain() const {
+        return num_mips > 1;
+    }
+
+    bool IsMultisample() const {
+        return num_samples > 1;
+    }
 };
 
 class Texture : public RHIResource {
@@ -644,9 +763,9 @@ public:
     const std::string_view GetName() const {
         return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data());
     }
-    RENDER_API TextureView  GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
-    RENDER_API TextureView  GetView(EPixelFormat _format, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
-    RENDER_API TextureView  GetView(ETextureAspectFlags _aspect, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
+    RENDER_API TextureView GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
+    RENDER_API TextureView GetView(EPixelFormat _format, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
+    RENDER_API TextureView GetView(ETextureAspectFlags _aspect, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
     RENDER_API TextureView
     GetView(EPixelFormat _format, ETextureAspectFlags _aspect, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
     virtual RENDER_API void SetName(const std::string_view _name) = 0;
@@ -669,10 +788,8 @@ inline void ValidateSubresourceRange(
     assert(_texture && "ValidateSubresourceRange requires a valid texture");
     uint8 max_mips   = _texture->GetNumMips();
     uint8 max_arrays = _texture->GetNumArray();
-    uint8 mip_count =
-        _mip_count == kRemainingSubresource ? uint8(max_mips - _mip_level) : _mip_count;
-    uint8 arr_count =
-        _array_count == kRemainingSubresource ? uint8(max_arrays - _array_layer) : _array_count;
+    uint8 mip_count  = _mip_count == kRemainingSubresource ? uint8(max_mips - _mip_level) : _mip_count;
+    uint8 arr_count = _array_count == kRemainingSubresource ? uint8(max_arrays - _array_layer) : _array_count;
 
     assert(_mip_level < max_mips && "mip_level out of range");
     assert(mip_count >= 1 && "mip_count must be >= 1");
@@ -771,17 +888,17 @@ struct ExportBuffer {
 class RENDER_API BindlessArray : public RHIResource {
 public:
     struct TextureUpdateInfo {
-        TextureRef   texture;
-        Sampler      sampler;
-        EPixelFormat format;
+        TextureRef          texture;
+        Sampler             sampler;
+        EPixelFormat        format;
         ETextureAspectFlags aspect_flags;
-        uint         array_idx;
-        uint         slot;
-        uint8        mip_level;
-        uint8        num_mips;
-        uint8        array_layer;
-        uint8        array_count;
-        bool         free;
+        uint                array_idx;
+        uint                slot;
+        uint8               mip_level;
+        uint8               num_mips;
+        uint8               array_layer;
+        uint8               array_count;
+        bool                free;
     };
 
     struct BufferUpdateInfo {

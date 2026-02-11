@@ -260,6 +260,31 @@ enum EPixelFormat : uint8_t {
     PF_Num
 };
 
+inline bool IsDepthOrStencilFormat(EPixelFormat Format) {
+    switch (Format) {
+        case PF_D16_UNORM:
+        case PF_X8_D24_UNORM_PACK32:
+        case PF_D32_SFLOAT:
+        case PF_S8_UINT:
+        case PF_D16_UNORM_S8_UINT:
+        case PF_D24_UNORM_S8_UINT:
+        case PF_D32_SFLOAT_S8_UINT:
+            return true;
+    }
+    return false;
+}
+
+inline bool IsStencilFormat(EPixelFormat Format) {
+    switch (Format) {
+        case PF_S8_UINT:
+        case PF_D16_UNORM_S8_UINT:
+        case PF_D24_UNORM_S8_UINT:
+        case PF_D32_SFLOAT_S8_UINT:
+            return true;
+    }
+    return false;
+}
+
 namespace Moer::Render {
 bool   IsPixelFormatBC(EPixelFormat _format);
 uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size);

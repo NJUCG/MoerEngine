@@ -1002,6 +1002,13 @@ enum class ETextureAspectFlags : uint32_t {
 
 ENUM_BIT_OP_IMPL(ETextureAspectFlags, FLAG)
 
+// Minimal compatibility shim for RDG plane-slice helpers.
+// Depth plane is 0, stencil plane is 1 for depth-stencil resources.
+struct FRHITransitionInfo {
+    static constexpr uint8 kDepthPlaneSlice   = 0;
+    static constexpr uint8 kStencilPlaneSlice = 1;
+};
+
 /* various shading rate palette, VSR_{fragment_invocation_count}_{region_size}
  * @fragment_invocation_count means fragment shading invocation per region
  * @region_size means one shading result will be used to color ${regions_size} pixels

@@ -49,7 +49,7 @@ public:
     template<typename T, typename... TArgs>
     T* AllocNoDestruct(TArgs&&... Args) {
         void* Mem = AllocRaw(sizeof(T), alignof(T));
-        void* return new (Mem) T(std::forward<TArgs>(Args)...);
+        return new (Mem) T(std::forward<TArgs>(Args)...);
     }
 
     void ReleaseAll() {
@@ -72,7 +72,7 @@ public:
 
     explicit TRDGAdapter(FRDGAllocator& InAlloc) : Allocator(InAlloc) {}
 
-    // 必须有这个，否则 std::list 或复杂的嵌套容器无法工作
+    // 必须有这个，否则 std::list 或复杂的嵌套容器无法工作AllocNoDestruct
     template<typename U>
     struct rebind {
         using other = TRDGAdapter<U>;

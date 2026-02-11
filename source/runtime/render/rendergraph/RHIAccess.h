@@ -1,4 +1,5 @@
 #pragma once
+#include <cassert>
 #include <cstdint>
 #include <limits>
 
@@ -27,6 +28,8 @@ enum class ERHIAccess : uint32 {
     UAVMask = UAVCompute | UAVGraphics,
 
     ReadOnlyMask = CPURead | Present | IndirectArgs | VertexOrIndexBuffer | SRVMask | CopySrc | DSVRead,
+    ReadableMask = ReadOnlyMask,
+    ReadOnlyExclusiveMask = ReadOnlyMask,
 
     WritableMask = UAVMask | RTV | CopyDest | DSVWrite,
 
