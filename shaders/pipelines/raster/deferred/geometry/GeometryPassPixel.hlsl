@@ -1,4 +1,4 @@
-﻿#ifndef SHADOW_DEPTH_PASS
+#ifndef SHADOW_DEPTH_PASS
 #define SHADOW_DEPTH_PASS 0
 #endif
 
@@ -7,6 +7,7 @@
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/Geometry.h"
 #include "shared/raster/ShaderParameters.h"
+#include "shared/scene/SharedSceneStruct.h"
 
 #include "materials/Material.hlsli"
 #include "pipelines/raster/deferred/geometry/GeometryPassCommon.hlsli"
@@ -18,29 +19,25 @@ void DiscardByAlphaTest(uint material_id, float2 uv_in_map) {
         return;
     }
     
-    // TODO: remake with new geometry pass
+    ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
+
+    Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(material_id);
 
     // 是否需要discard该像素（AlphaMode为BLEND或MASK时，需要进行discard）
-    uint mat_type, mat_id;
-    GetMaterialTypeAndIndex(mat_idx_and_type, mat_type, mat_id);
-    MaterialData mat = UnpackMaterialData<MaterialData>(param.material_buffer, mat_id);
-
     if (mat.alpha_mode == Moer::EAlphaMode::Mask) {
-        float alpha = TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a * mat.base_color_factor.a;
+        float alpha = TextureHandle(mat.albedo_map_hdl).Sample2D<float4>(uv_in_map).a * mat.albedo_factor.a;
         // printf("MASK: alpha: %f, cutoff: %f, albedo_map.a: %f, base_color.a: %f\n", alpha, mat.alpha_cutoff, TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a, mat.base_color_factor.a);
         if (alpha < mat.alpha_cutoff) {
             discard;
         }
     } else if (mat.alpha_mode == Moer::EAlphaMode::Blend) {
-        float alpha = TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a * mat.base_color_factor.a;
+        float alpha = TextureHandle(mat.albedo_map_hdl).Sample2D<float4>(uv_in_map).a * mat.albedo_factor.a;
         // printf("BLEND: alpha: %f; albedo_map.a: %f; base_color.a: %f\n", alpha, TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a, mat.base_color_factor.a);
         if (alpha < param.alpha_test_blend_pixel_cutoff) {
             discard;
         }
     }
 }
-
-
 
 #if SHADOW_DEPTH_PASS // MARK: ShadowDepthPass
 

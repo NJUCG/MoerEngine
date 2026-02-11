@@ -53,6 +53,7 @@ public:
         param.normal_buf_hdl     = gpu_scene_res.packed_normal_buf.hdl;
         param.tangent_buf_hdl    = gpu_scene_res.packed_tangent_buf.hdl;
         param.texcoord0_buf_hdl  = gpu_scene_res.texcoord0_buf.hdl;
+        param.material_buf_hdl   = gpu_scene_res.material_buf.hdl;
         
         // Legacy fields (deprecated, kept for compatibility)
         param.instance_data                 = context.gpu_instance_info_handle;

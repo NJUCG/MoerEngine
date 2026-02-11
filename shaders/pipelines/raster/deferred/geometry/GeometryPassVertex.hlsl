@@ -8,6 +8,7 @@
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/Geometry.h"
 #include "shared/raster/ShaderParameters.h"
+#include "shared/scene/SharedSceneStruct.h"
 #include "shared/utils/Packing.h"
 
 #include "pipelines/raster/deferred/geometry/GeometryPassCommon.hlsli"

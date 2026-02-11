@@ -32,6 +32,7 @@ struct GeometryPassBindlessParam {
     uint normal_buf_hdl;       // Array<uint> (packed normal)
     uint tangent_buf_hdl;       // Array<uint> (packed tangent)
     uint texcoord0_buf_hdl;    // Array<float2>
+    uint material_buf_hdl;     // Array<GMaterial>
     
     // Legacy fields (deprecated, kept for compatibility)
     uint instance_data;
