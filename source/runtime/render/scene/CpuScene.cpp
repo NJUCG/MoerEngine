@@ -1,6 +1,6 @@
 #include "CpuScene.h"
 
-#include "LogicalData.h"
+#include "LogicalComponents.h"
 #include "LogicalEnum.h"
 #include "LogicalScene.h"
 #include "SharedSceneStruct.h"
@@ -182,19 +182,19 @@ void CpuScene::InitializeMeshes() {
 
             if (c_primitive.position.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::Position;
-                g_primitive.position_offset = static_cast<uint>(c_primitive.position.offset);
+                g_primitive.position_start_idx = static_cast<uint>(c_primitive.position.start_idx);
             }
             if (c_primitive.packed_normal.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::PackedNormal;
-                g_primitive.packed_normal_offset = static_cast<uint>(c_primitive.packed_normal.offset);
+                g_primitive.packed_normal_start_idx = static_cast<uint>(c_primitive.packed_normal.start_idx);
             }
             if (c_primitive.packed_tangent.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::PackedTangent;
-                g_primitive.packed_tangent_offset = static_cast<uint>(c_primitive.packed_tangent.offset);
+                g_primitive.packed_tangent_start_idx = static_cast<uint>(c_primitive.packed_tangent.start_idx);
             }
             if (c_primitive.texcoord0.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::Texcoord0;
-                g_primitive.texcoord0_offset = static_cast<uint>(c_primitive.texcoord0.offset);
+                g_primitive.texcoord0_start_idx = static_cast<uint>(c_primitive.texcoord0.start_idx);
             }
 
             uint primitive_id = static_cast<uint>(m_primitive_buf.size());
@@ -244,7 +244,10 @@ void CpuScene::InitializeMeshes() {
                     const uint primitive_id = m_map_primitive_entity_to_id[primitive_entt];
 
                     m_primitive_id_to_transform_entt_arrays[primitive_id].emplace_back(
-                        GInstance{.world_transform = c_transform.d_world_transform}
+                        GInstance{
+                            .world_transform = c_transform.d_world_transform,
+                            .primitive_id    = primitive_id  // 存储 Primitive ID 用于反向映射
+                        }
                     );
                     instance_cnt++;
                 }
@@ -260,6 +263,70 @@ void CpuScene::InitializeMeshes() {
                 m_instance_buf.emplace_back(instance);
             }
         }
+
+    }
+
+    {
+        // 3. DrawIndexedCmdData填充
+        // 
+        // 需要为每个 Primitive 填充 DrawIndexedCmdData
+        // - index_cnt: 从 CPrimitive.index_count 获取
+        // - instance_cnt: 从 m_primitive_id_to_transform_entt_arrays[i].size() 获取
+        // - first_index: 从 CPrimitive.index.offset 转换为索引偏移 (除以 sizeof(uint32))
+        // - vertex_offset: 通常为 0，因为顶点数据通过 GPrimitive 中的 offset 字段访问
+        // - first_instance: 前面所有 Primitive 的 Instance 总数
+
+        m_draw_cmd_buf.clear();
+        m_draw_cmd_buf.reserve(m_primitive_buf.size());
+
+        // 计算每个 Primitive 的 first_instance (前面所有 Primitive 的 Instance 总数)
+        uint cumulative_instance_count = 0;
+
+        // 再次遍历 CPrimitive，顺序与第一次遍历一致
+        r.view<const ecs::CPrimitive>().each([&](const auto entity, const ecs::CPrimitive& c_primitive) {
+            const uint primitive_id = m_map_primitive_entity_to_id.at(entity);
+            const uint instance_cnt  = static_cast<uint>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
+
+            Render::DrawIndexedCmdData draw_cmd_data{};
+
+            // index_cnt: 索引数量
+            draw_cmd_data.index_cnt = c_primitive.index_count;
+
+            // instance_cnt: 该 Primitive 有多少个 Instance
+            draw_cmd_data.instance_cnt = instance_cnt;
+
+            // first_index: 第一个索引在 Index Buffer 中的偏移
+            // CPrimitive.index.offset 是字节偏移，需要转换为索引偏移
+            if (c_primitive.index.is_valid) {
+                draw_cmd_data.first_index = c_primitive.index.offset / sizeof(uint32);
+            } else {
+                draw_cmd_data.first_index = 0;
+                assert(false && "CPrimitive.index is invalid");
+            }
+
+            // vertex_offset: 顶点偏移，通常为 0
+            // 因为顶点数据通过 GPrimitive 中的 position_offset 等字段访问
+            draw_cmd_data.vertex_offset = 0;
+
+            // first_instance: 该 Primitive 的第一个 Instance 在 instance_buf 中的索引
+            draw_cmd_data.first_instance = cumulative_instance_count;
+
+            m_draw_cmd_buf.emplace_back(draw_cmd_data);
+
+            // 累加 Instance 数量，供下一个 Primitive 使用
+            cumulative_instance_count += instance_cnt;
+        });
+    }
+
+    {
+        // assert
+
+        assert(m_primitive_buf.size() == r.view<const ecs::CPrimitive>().size() && "Primitive count mismatch");
+        assert(m_primitive_id_to_transform_entt_arrays.size() == r.view<const ecs::CPrimitive>().size() && "Primitive ID to Transform Entity Arrays count mismatch");
+    
+        assert(m_instance_buf.size() == instance_cnt);
+
+        assert(m_draw_cmd_buf.size() == m_primitive_buf.size());
     }
 }
 

@@ -42,7 +42,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
     const Sampler default_sampler = Sampler(ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_REPEAT);
 
     {
-        auto& view = m_logical_scene.r().view<const ecs::CTexture, const ecs::CName>();
+        auto view = m_logical_scene.r().view<const ecs::CTexture, const ecs::CName>();
 
         m_res.texture_array.clear();
         m_res.texture_array.reserve(view.size_hint());
@@ -93,7 +93,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
 
     {
 
-        auto& view = m_logical_scene.r().view<const ecs::CMaterial>();
+        auto view = m_logical_scene.r().view<const ecs::CMaterial>();
 
         auto to_hdl = [&](const entt::entity entity) -> int64 {
             if (entity == entt::null) {
@@ -354,8 +354,8 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
 
         cmd_list.ExportResourcesToQueue(EQueueType::Graphics, std::move(export_tex), std::move(export_buf));
 
-        auto& fence = copy_queue.GetFenceHandle();
-        auto& evt   = copy_queue.Execute(cmd_list.Submit().Wait(fence, fence->GetValue()));
+        auto fence = copy_queue.GetFenceHandle();
+        auto evt   = copy_queue.Execute(cmd_list.Submit().Wait(fence, fence->GetValue()));
         copy_queue.Sync(evt.timeline);
     }
 

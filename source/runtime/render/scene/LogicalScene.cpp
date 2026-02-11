@@ -1,6 +1,6 @@
 #include "LogicalScene.h"
 
-#include "LogicalData.h"
+#include "LogicalComponents.h"
 
 #include "misc/Hash.h"
 #include "taskgraph/TaskGraph.h"

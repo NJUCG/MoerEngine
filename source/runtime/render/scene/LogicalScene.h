@@ -2,7 +2,7 @@
 
 #include <entt/fwd.hpp>
 
-#include "LogicalData.h"
+#include "LogicalComponents.h"
 
 namespace Moer::ecs {
 

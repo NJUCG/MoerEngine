@@ -12,7 +12,7 @@
 #include "log/LogSystem.h"
 #include "misc/Hash.h"
 #include "misc/Timer.h"
-#include "scene/LogicalData.h"
+#include "scene/LogicalComponents.h"
 #include "scene/LogicalEnum.h"
 #include "scene/LogicalScene.h"
 #include "shaderheaders/shared/utils/Packing.h"
@@ -167,9 +167,9 @@ bool Parser::Impl::LoadSceneFromFile(
 
             auto make_buffer_view = [&](uint32 existing_size, uint32 current_size, uint32 stride) {
                 return ecs::CPrimitive::BufferView{
-                    .offset   = existing_size * stride,
-                    .stride   = stride,
-                    .is_valid = true // 该mesh是否存在这个顶点属性
+                    .start_idx = existing_size,
+                    .stride    = stride,
+                    .is_valid  = true // 该mesh是否存在这个顶点属性
                 };
             };
 

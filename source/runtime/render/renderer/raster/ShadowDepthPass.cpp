@@ -1,8 +1,8 @@
 #pragma once
 
-#include "scene/Camera.h"
 #include "scene/Material.h"
 #include "scene/RenderableManager.h"
+#include "scene/camera/Camera.h"
 #include "scene/light/LightComponentManager.h"
 #include "shader/GeometryPassPsoManager.h"
 

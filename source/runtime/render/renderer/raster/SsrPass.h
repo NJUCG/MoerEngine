@@ -1,7 +1,7 @@
 ﻿#pragma once
 
 #include "math/Function.h"
-#include "scene/Camera.h"
+#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 

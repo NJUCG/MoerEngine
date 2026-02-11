@@ -9,14 +9,16 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/raster/ShaderParameters.h"
 
 #include "materials/Material.hlsli"
-#include "pipelines/raster/deferred/geometry/VertexFactory.hlsl"
+#include "pipelines/raster/deferred/geometry/GeometryPassCommon.hlsli"
 
 [[vk::push_constant]] ConstantBuffer<Moer::GeometryPassBindlessParam> param;
 
-void DiscardByAlphaTest(uint mat_idx_and_type, float2 uv_in_map) {
+void DiscardByAlphaTest(uint material_id, float2 uv_in_map) {
     if (param.enable_alpha_test == 0) {
         return;
     }
+    
+    // TODO: remake with new geometry pass
 
     // 是否需要discard该像素（AlphaMode为BLEND或MASK时，需要进行discard）
     uint mat_type, mat_id;
@@ -38,16 +40,13 @@ void DiscardByAlphaTest(uint mat_idx_and_type, float2 uv_in_map) {
     }
 }
 
+
+
 #if SHADOW_DEPTH_PASS // MARK: ShadowDepthPass
 
 void main(VertexFactory::VsOutput input) : SV_TARGET {
-    ArrayBuffer geometry_data_array = ArrayBuffer(param.geometry_data);
 
-    Moer::GeometryData geom_data = Moer::LoadGeometryData(
-        geometry_data_array.GetByteAddressBuffer(), input.instance_id * sizeof(Moer::GeometryData)
-    );
-
-    DiscardByAlphaTest(geom_data.mat_idx_and_type, input.texcoord0); // 此处有可能触发discard，直接终止shader
+    DiscardByAlphaTest(input.material_id, input.texcoord0); // 此处有可能触发discard，直接终止shader
 }
 
 #else // MARK: GeometryPass
@@ -61,17 +60,12 @@ struct PsOutput {
 };
 
 PsOutput main(VertexFactory::VsOutput input) : SV_TARGET {
-    ArrayBuffer geometry_data_array = ArrayBuffer(param.geometry_data);
 
-    Moer::GeometryData geom_data = Moer::LoadGeometryData(
-        geometry_data_array.GetByteAddressBuffer(), input.instance_id * sizeof(Moer::GeometryData)
-    );
-
-    DiscardByAlphaTest(geom_data.mat_idx_and_type, input.texcoord0); // 此处有可能触发discard，直接终止shader
+    DiscardByAlphaTest(input.material_id, input.texcoord0); // 此处有可能触发discard，直接终止shader
     
 
     PsOutput output;
-    output.vbuffer   = geom_data.mat_idx_and_type;
+    output.vbuffer   = input.material_id;
     output.normal    = float4(Raster::PackNormal(normalize(input.normal)), 1.0);
     output.tangent   = float4(Raster::PackNormal(normalize(input.tangent)), 1.0);
     output.texcoord0 = input.texcoord0;

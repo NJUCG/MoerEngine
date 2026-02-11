@@ -60,17 +60,23 @@ struct GPrimitive {
     uint material_idx;
     uint attribute_mask;
 
-    uint position_offset;       // in bytes
-    uint packed_normal_offset;  // in bytes
-    uint packed_tangent_offset; // in bytes
-    uint texcoord0_offset;      // in bytes
+    uint position_start_idx;       // in element (not bytes)
+    uint packed_normal_start_idx;  // in element (not bytes)
+    uint packed_tangent_start_idx; // in element (not bytes)
+    uint texcoord0_start_idx;      // in element (not bytes)
 };
 
 /**
  * GInstance 和 CNode&CTransform 是一一对应的
+ * 
+ * primitive_id: 反向映射到 Primitive/DrawIndex
+ * - 因为目前HLSL标准不存在SV_DrawID这种用于定位DrawCall Index的变量
+ * - 所以我们只能在Instance数据中对DrawCall Index进行反向索引
+ * - 注：Draw Call Index == Primitive Index
  */
 struct GInstance {
     float4x4 world_transform;
+    uint     primitive_id;  // Primitive ID (DrawIndex)，用于反向映射
 };
 
 /**

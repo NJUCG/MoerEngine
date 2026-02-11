@@ -113,9 +113,9 @@ struct CName {
 
 struct CPrimitive {
     struct BufferView {
-        uint32 offset   = 0;     // in bytes
-        uint32 stride   = 0;     // in bytes
-        bool   is_valid = false; // 该CPrimitive是否拥有该顶点属性
+        uint32 start_idx = 0;     // in element (not bytes)
+        uint32 stride    = 0;     // in bytes
+        bool   is_valid  = false; // 该CPrimitive是否拥有该顶点属性
     };
 
     uint32     vertex_count = 0;

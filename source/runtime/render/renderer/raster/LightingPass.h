@@ -2,8 +2,8 @@
 
 #include "math/Function.h"
 #include "misc/MMemory.h"
-#include "scene/Camera.h"
 #include "scene/Material.h"
+#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "math/Function.h"
 #include "misc/STL.h"
@@ -44,17 +44,6 @@ public:
 
         GeometryPassBindlessParam param;
         param.world2clip                    = Transpose(camera->GetViewProjectionMatrix());
-        
-        // Get bindless handles from GpuScene
-        const auto& gpu_scene_res = context.scene.gpu_scene_res();
-        param.instance_buf_hdl   = gpu_scene_res.instance_buf.hdl;
-        param.primitive_buf_hdl   = gpu_scene_res.primitive_buf.hdl;
-        param.position_buf_hdl   = gpu_scene_res.position_buf.hdl;
-        param.normal_buf_hdl     = gpu_scene_res.packed_normal_buf.hdl;
-        param.tangent_buf_hdl    = gpu_scene_res.packed_tangent_buf.hdl;
-        param.texcoord0_buf_hdl  = gpu_scene_res.texcoord0_buf.hdl;
-        
-        // Legacy fields (deprecated, kept for compatibility)
         param.instance_data                 = context.gpu_instance_info_handle;
         param.geometry_data                 = context.gpu_geometry_info_handle;
         param.geometry_instance_data        = context.gpu_geometry_instance_handle;

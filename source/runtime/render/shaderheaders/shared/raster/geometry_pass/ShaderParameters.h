@@ -24,9 +24,19 @@ namespace Moer {
 
 struct GeometryPassBindlessParam {
     float4x4 world2clip;
-    uint     instance_data;
-    uint     geometry_data;
-    uint     geometry_instance_data;
+    
+    // Bindless handles for bindless rendering
+    uint instance_buf_hdl;      // Array<GInstance>
+    uint primitive_buf_hdl;    // Array<GPrimitive>
+    uint position_buf_hdl;     // Array<float3>
+    uint normal_buf_hdl;       // Array<uint> (packed normal)
+    uint tangent_buf_hdl;       // Array<uint> (packed tangent)
+    uint texcoord0_buf_hdl;    // Array<float2>
+    
+    // Legacy fields (deprecated, kept for compatibility)
+    uint instance_data;
+    uint geometry_data;
+    uint geometry_instance_data;
 
     // about material & alpha test
     uint  material_buffer;
