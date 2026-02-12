@@ -16,6 +16,8 @@
 #include "TonemappingPass.h"
 #include "debug/RenderDocApi.h"
 #include "misc/Timer.h"
+#include "scene/LogicalComponents.h"
+#include "window/WindowContext.h"
 
 #if WITH_CUDA
 #include "CudaPass.h"
@@ -152,19 +154,19 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
     // MARK: 3. Run Render Passes
 
-    if (Scene::IsSceneReady()) {
+    if (scene.IsReady()) {
         if (first_load) {
             first_load = false;
 
-            raster_context.LoadSceneData();
-            RasterTool::InitRaytracingScene(raster_context, rt_geometries);
+            // TODO: 设置 rt_scene 引用以保持向后兼容
+            raster_context.rt_scene = scene.GetGpuSceneRes().rt_scene;
 
             gfx_queue.Execute(cmd_list.Submit());
             gfx_queue.Sync();
         }
 
         const auto& raster_config = editor_config->raster_config;
-        auto        camera        = CameraManager::Get().Get(scene.GetCameras()[0]);
+        auto&       camera        = scene.GetMainCamera().camera;
 
         {
             // Jitter Camera for SMAA T2x
@@ -173,16 +175,17 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
                 smaa_current_frame_index ^= 1;
                 static StaticArray<float2, 2> smaa_jitter = {float2(0.25f, -0.25f), float2(-0.25f, 0.25f)};
-                camera->SetJitterMatrix(smaa_jitter[smaa_current_frame_index]);
+                camera.SetJitterMatrix(smaa_jitter[smaa_current_frame_index]);
             }
         }
 
-        camera->Tick(editor_config);
+        camera.Tick(editor_config);
 
-        raster_context.Update(camera->GetDeltaTime());
+        raster_context.Update(camera.GetDeltaTime());
 
         // others
-        RasterTool::UpdateRaytracingScene(raster_context);
+        // FIXME: 统一update scene
+        // scene.GetGpuScene().UpdateRaytracingScene(cmd_list);
 
         // Shadow Depth Pass
         shadow_depth_pass->Process(raster_context, raster_config, camera);
@@ -238,7 +241,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }
 
         // without test
-        raster_context.rt_scene->AdvanceFrame();
+        // FIXME: 统一advance frame
+        // scene.GetRaytracingScene()->AdvanceFrame();
 
         // debug
         if (raster_config.debug_fps_limit_enable) {

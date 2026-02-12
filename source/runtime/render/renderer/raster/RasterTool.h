@@ -1,10 +1,9 @@
 #pragma once
 
+#include "log/LogSystem.h"
 #include "rhi/RHI.h"
-#include "shader/ShaderCommon.h"
-#include "shader/ShaderPipeline.h"
-#include "shader/ShaderResourceManager.h"
-#include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
+#include "scene/LogicalComponents.h"
+#include "scene/Scene.h"
 
 #include "RasterResource.h"
 
@@ -94,81 +93,152 @@ public:
     //     return mesh_draw_datas_map;
     // }
 
-    // TODO: 和Raytracing中对应部分合并
+    // TODO: InitRaytracingScene 和 UpdateRaytracingScene 已迁移到 GpuScene
+    // 请使用 scene.GetGpuScene().InitRaytracingScene(cmd_list) 和 scene.GetGpuScene().UpdateRaytracingScene(cmd_list)
+    // 以下代码已废弃，保留用于参考
+    /*
     static void InitRaytracingScene(RasterContext& context, Array<RaytracingGeometryRef>& rt_geometries) {
-        auto& scene    = context.scene;
         auto& device   = context.device;
         auto& rt_scene = context.rt_scene;
         auto& cmd_list = context.cmd_list;
 
+        // 获取 LogicalScene 和 GpuScene 资源
+        auto&       r       = context.scene.r();
+        const auto& gpu_res = context.scene.gpu_scene_res();
+
+        // 获取共享的 vertex 和 index buffers
+        BufferRef position_buf_ref = gpu_res.position_buf.buf;
+        BufferRef index_buf_ref    = gpu_res.index_buf.buf;
+
         Array<AccelerationStructureBuildParam> build_params;
 
-        rt_geometries.reserve(scene.GetEntityCount());
-        build_params.reserve(scene.GetEntityCount());
+        // 遍历所有有 CRenderable 的 entity
+        auto renderable_view = r.view<const ecs::CRenderable, const ecs::CTransform>();
+        // 使用 size_hint() 估算大小（EnTT view 没有 size() 方法）
+        rt_geometries.reserve(renderable_view.size_hint());
+        build_params.reserve(renderable_view.size_hint());
 
-        scene.ForEach([&](Entity _entity) {
-            auto&                  mesh = RenderableManager::Get().GetMeshInfo(_entity);
-            RaytracingGeometryInfo rt_geo_info{};
-            rt_geo_info.build_flags   = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
-            rt_geo_info.vertex_format = PF_R32G32B32_SFLOAT;
-            rt_geo_info.index_type    = IET_UINT32;
+        renderable_view.each(
+            [&](const auto entity, const ecs::CRenderable& c_renderable, const ecs::CTransform& c_transform) {
+                // 获取 CMesh
+                if (!r.valid(c_renderable.mesh_entt) || !r.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
+                    LOG_WARNING("Invalid mesh entity: {}", static_cast<uint>(c_renderable.mesh_entt));
+                    return; // Skip invalid mesh
+                }
 
-            for (uint i = 0; i < mesh->geometries.size(); i++) {
-                uint vtx_offset = mesh->geometries[i]->local_vtx_offset;
-                uint vtx_count  = mesh->geometries[i]->local_vtx_count;
-                uint idx_offset = mesh->geometries[i]->local_idx_offset;
-                uint idx_count  = mesh->geometries[i]->local_idx_count;
-                auto vtx_buffer = mesh->geometries[i]->mesh_buffers->vertex_buffer;
-                auto idx_buffer = mesh->geometries[i]->mesh_buffers->index_buffer;
+                const ecs::CMesh& c_mesh = r.get<ecs::CMesh>(c_renderable.mesh_entt);
 
-                rt_geo_info.segments.emplace_back(
-                    0,                                         // vertex_offset
-                    0,                                         // index_offset
-                    vtx_offset,                                // first_vertex
-                    vtx_count,                                 // vertex_count
-                    sizeof(float3),                            // vertex_stride
-                    idx_offset / 3,                            // first_primitive
-                    idx_count / 3,                             // primitive_count
-                    vtx_buffer,                                // vertex_buffer
-                    idx_buffer,                                // index_buffer
-                    RTGT_TRIANGLES,                            // type
-                    ERayTracingGeometryFlags::GEOMETRY_OPAQUE, // flags
-                    false,                                     // b_force_opaque
-                    false,                                     // b_cull_back_face
-                    false                                      // b_flip_face
+                // 为每个 CRenderable 创建一个 BLAS（包含对应CRenderable的所有 primitive，并且会重复创建）
+                // TODO: 去重
+                RaytracingGeometryInfo rt_geo_info{};
+                rt_geo_info.build_flags   = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
+                rt_geo_info.vertex_format = PF_R32G32B32_SFLOAT;
+                rt_geo_info.index_type    = IET_UINT32;
+
+                // 遍历该 Mesh 的所有 Primitive
+                for (const entt::entity primitive_entt : c_mesh.primitive_entts) {
+                    if (!r.valid(primitive_entt) || !r.all_of<ecs::CPrimitive>(primitive_entt)) {
+                        LOG_WARNING("Invalid primitive entity: {}", static_cast<uint>(primitive_entt));
+                        continue; // Skip invalid primitive
+                    }
+
+                    const ecs::CPrimitive& c_primitive = r.get<ecs::CPrimitive>(primitive_entt);
+
+                    // 检查必要的 buffer view 是否有效
+                    if (!c_primitive.position.is_valid || !c_primitive.index.is_valid) {
+                        continue; // Skip primitive without valid position/index
+                    }
+
+                    // 从 CPrimitive 获取顶点和索引信息
+                    uint vtx_offset = c_primitive.position.start_idx; // element offset
+                    uint vtx_count  = c_primitive.vertex_count;
+                    uint idx_offset = c_primitive.index.start_idx; // element offset (in indices)
+                    uint idx_count  = c_primitive.index_count;
+
+                    // 使用 GpuScene 的共享 buffers（RaytracingSegment 需要 BufferRef，不是 BufferView）
+                    rt_geo_info.segments.emplace_back(
+                        0,                // vertex_offset
+                        0,                // index_offset
+                        vtx_offset,       // first_vertex
+                        vtx_count,        // vertex_count
+                        sizeof(float3),   // vertex_stride
+                        idx_offset / 3,   // first_primitive (indices are uint32, 3 per triangle)
+                        idx_count / 3,    // primitive_count
+                        position_buf_ref, // vertex_buffer (BufferRef)
+                        index_buf_ref,    // index_buffer (BufferRef)
+                        RTGT_TRIANGLES,   // type
+                        ERayTracingGeometryFlags::GEOMETRY_OPAQUE, // flags
+                        false,                                     // b_force_opaque
+                        false,                                     // b_cull_back_face
+                        false                                      // b_flip_face
+                    );
+                }
+
+                // 如果没有有效的 segments，跳过这个 entity
+                if (rt_geo_info.segments.empty()) {
+                    return;
+                }
+
+                // 创建 BLAS
+                RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
+                rt_geometries.push_back(blas);
+
+                // 添加 instance
+                auto& instance = rt_scene->AddInstance();
+                instance.geom  = blas;
+                // 将 float4x4 转换为 Matrix3x4f
+                instance.transform = Matrix3x4f(
+                    c_transform.d_world_transform.r0,
+                    c_transform.d_world_transform.r1,
+                    c_transform.d_world_transform.r2
                 );
+
+                instance.flag.need_create = true;
+                instance.custom_index     = instance.instance_id;
+                instance.visible_mask     = RTVM_ALL;
+                rt_scene->MarkModified(instance.instance_id);
+                
+                // 建立 entity -> instance_idx 映射
+                rt_scene->SetEntityToInstanceMapping(entity, instance.array_idx);
+                
+                build_params.push_back({blas, ERaytracingBuildMode::BUILD});
             }
-
-            RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
-            rt_geometries.push_back(blas);
-
-            auto& instance     = rt_scene->AddInstance();
-            instance.geom      = blas;
-            instance.transform = TransformManager::Get().Get(_entity).GetMatrix3x4();
-
-            instance.flag.need_create = true;
-            instance.custom_index     = instance.instance_id;
-            instance.visible_mask     = RTVM_ALL;
-            rt_scene->MarkModified(instance.instance_id);
-            build_params.push_back({blas, ERaytracingBuildMode::BUILD});
-        });
+        );
 
         cmd_list.BuildAccelerationStructures(std::move(build_params));
         cmd_list.UpdateRaytracingScene(rt_scene);
     }
+    */
 
+    /*
     static void UpdateRaytracingScene(RasterContext& context) {
-
-        auto& scene    = context.scene;
         auto& rt_scene = context.rt_scene;
         auto& cmd_list = context.cmd_list;
+        auto& r        = context.scene.r();
 
-        for (size_t i = 0; i < scene.GetEntityCount(); i++) {
-            auto& instance = rt_scene->GetInstance(i);
+        // 遍历所有有 CRenderable 的 entity，更新对应的 instance transform
+        auto renderable_view = r.view<const ecs::CRenderable, const ecs::CTransform>();
+
+        renderable_view.each([&](const auto entity, const ecs::CRenderable& c_renderable, const ecs::CTransform& c_transform) {
+            // 通过映射获取 instance_idx
+            uint instance_idx = rt_scene->GetInstanceIdxFromEntity(entity);
+            if (instance_idx == UINT_MAX) {
+                return; // Skip entity without valid instance mapping
+            }
+
+            // 更新 transform
+            auto& instance = rt_scene->GetInstance(instance_idx);
+            instance.transform = Matrix3x4f(
+                c_transform.d_world_transform.r0,
+                c_transform.d_world_transform.r1,
+                c_transform.d_world_transform.r2
+            );
             rt_scene->MarkModified(instance.instance_id);
-        }
+        });
+
         cmd_list.UpdateRaytracingScene(rt_scene);
     }
+    */
 };
 
 } // namespace Moer::Render::Raster

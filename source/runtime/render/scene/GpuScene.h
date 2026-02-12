@@ -61,6 +61,9 @@ public:
         BufferWithHandle texcoord0_buf;
 
         BufferWithHandle index_buf;
+
+        // raytracing scene
+        RaytracingSceneRef rt_scene;
     };
 
     /**
@@ -79,6 +82,25 @@ public:
         return m_bindless_array;
     }
 
+    /**
+     * MARK: Raytracing Scene
+     * 
+     * 初始化 Raytracing Scene，创建所有 BLAS 和 instance
+     */
+    void InitRaytracingScene(CommandList& cmd_list);
+
+    /**
+     * 更新 Raytracing Scene，更新所有 instance 的 transform
+     */
+    void UpdateRaytracingScene(CommandList& cmd_list);
+
+    /**
+     * 获取 Raytracing Scene 引用
+     */
+    RaytracingSceneRef GetRaytracingScene() const {
+        return m_res.rt_scene;
+    }
+
 private:
     ecs::LogicalScene& m_logical_scene;
     CpuScene&          m_cpu_scene;
@@ -88,6 +110,10 @@ private:
     BindlessArrayRef m_bindless_array; // TODO: 移动到RenderDevice里？
 
     UnorderedMap<entt::entity, uint> m_map_texture_entity_to_bindless_handle;
+
+    // Raytracing Scene Cache
+    Array<RaytracingGeometryRef>     m_rt_geometries;
+    UnorderedMap<entt::entity, uint> m_map_entity_to_instance_idx; // entity -> instance array_idx mapping
 };
 
 } // namespace Moer::Render

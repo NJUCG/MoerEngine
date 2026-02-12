@@ -6,6 +6,7 @@
 #include "RenderAPI.h"
 #include "SceneLoadInfoAsync.h"
 #include "entt/entity/fwd.hpp"
+#include "scene/LogicalComponents.h"
 #include <filesystem>
 
 namespace Moer {
@@ -108,6 +109,21 @@ public:
 
     Render::BindlessArrayRef bindless_array();
     Render::BindlessArrayRef GetBindlessArray();
+
+public:
+    /**
+     * MARK: 封装一些常用逻辑
+     */
+
+    entt::entity GetMainCameraEntity() const;
+    entt::entity GetMainDirectionalLightEntity() const;
+    entt::entity GetMainPointLightEntity() const;
+
+    ecs::CCamera&                 GetMainCamera();
+    const ecs::CLightDirectional& GetMainDirectionalLight() const;
+    const ecs::CLightPoint&       GetMainPointLight() const;
+
+    const ecs::CTransform& GetTransform(entt::entity entity) const;
 };
 
 } // namespace Moer

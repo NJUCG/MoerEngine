@@ -105,4 +105,50 @@ Render::BindlessArrayRef Scene::GetBindlessArray() {
     return bindless_array();
 }
 
+/**
+ * MARK: 封装一些常用逻辑
+ */
+
+/*
+ 
+
+    entt::entity GetMainCameraEntity() const;
+    entt::entity GetMainDirectionalLightEntity() const;
+    entt::entity GetMainPointLightEntity() const;
+
+    const ecs::CCamera&           GetMainCamera() const;
+    const ecs::CLightDirectional& GetMainDirectionalLight() const;
+    const ecs::CLightPoint&       GetMainPointLight() const;
+
+    const ecs::CTransform& GetTransform(entt::entity entity) const;
+    */
+
+entt::entity Scene::GetMainCameraEntity() const {
+    return r().view<ecs::CTagMainCamera>().front();
+}
+
+entt::entity Scene::GetMainDirectionalLightEntity() const {
+    return r().view<ecs::CLightDirectional, ecs::CTagMainLight>().front();
+}
+
+entt::entity Scene::GetMainPointLightEntity() const {
+    return r().view<ecs::CLightPoint, ecs::CTagMainLight>().front();
+}
+
+ecs::CCamera& Scene::GetMainCamera() {
+    return r().get<ecs::CCamera>(GetMainCameraEntity());
+}
+
+const ecs::CLightDirectional& Scene::GetMainDirectionalLight() const {
+    return r().get<ecs::CLightDirectional>(GetMainDirectionalLightEntity());
+}
+
+const ecs::CLightPoint& Scene::GetMainPointLight() const {
+    return r().get<ecs::CLightPoint>(GetMainPointLightEntity());
+}
+
+const ecs::CTransform& Scene::GetTransform(entt::entity entity) const {
+    return r().get<ecs::CTransform>(entity);
+}
+
 } // namespace Moer

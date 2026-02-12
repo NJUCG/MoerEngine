@@ -75,7 +75,7 @@ private:
 #endif
 
     // Other vars
-    Array<RaytracingGeometryRef> rt_geometries;
+    // TODO: rt_geometries 已迁移到 GpuScene，未来应移除
 }; // namespace Moer::Render::Raster
 
 } // namespace Moer::Render::Raster
