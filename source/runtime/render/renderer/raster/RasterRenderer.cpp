@@ -9,7 +9,6 @@
 #include "LightingPass.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
-#include "RasterTool.h"
 #include "RtaoDenoiserPass.h"
 #include "ShadowDepthPass.h"
 #include "SsrPass.h"

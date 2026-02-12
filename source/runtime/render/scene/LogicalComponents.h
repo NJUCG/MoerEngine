@@ -1,12 +1,10 @@
 #pragma once
 
-#include "LogicalEnum.h"
 #include "PixelFormat.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "scene/camera/Camera.h"
 #include "shaderheaders/shared/raster/SharedEnum.h"
-
 
 #include <entt/entity/entity.hpp>
 #include <string>
@@ -40,7 +38,7 @@ struct CCamera {
  */
 struct CTagMainLight {};
 struct CLight {
-    ECLightType type = ECLightType::None;
+    ELightType type = ELightType::None;
 };
 struct CLightDirectional {
     float3 color     = float3(1.f, 1.f, 1.f);

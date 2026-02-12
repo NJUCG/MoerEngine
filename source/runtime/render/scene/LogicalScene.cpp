@@ -3,7 +3,6 @@
 #include "LogicalComponents.h"
 
 #include "misc/Hash.h"
-#include "taskgraph/TaskGraph.h"
 
 #include <entt/entt.hpp>
 
@@ -37,8 +36,8 @@ void LogicalScene::SBuildPrimitiveHash() {
         uint64 hash = 14695981039346656037ULL;
 
         // 将 BufferView 视为一个整体进行处理
-        auto hash_bv = [&](const ecs::BufferView& bv) {
-            HashCombine(hash, bv.offset);
+        auto hash_bv = [&](const CPrimitive::BufferView& bv) {
+            HashCombine(hash, bv.start_idx);
             HashCombine(hash, bv.stride);
             HashCombine(hash, (uint32)bv.is_valid);
         };
@@ -100,9 +99,9 @@ void LogicalScene::SUpdateAllNodeTransforms() {
         bool     is_parent_dirty  = false;
         float4x4 parent_transform = float4x4::Identity();
         if (c_node.parent_entt != entt::null) {
-            const auto& parent_transform = registry.get<ecs::CTransform>(c_node.parent_entt);
-            is_parent_dirty              = parent_transform.is_dirty;
-            parent_transform             = parent_transform.d_world_transform;
+            const auto& parent_c_transform = registry.get<ecs::CTransform>(c_node.parent_entt);
+            is_parent_dirty                = parent_c_transform.is_dirty;
+            parent_transform               = parent_c_transform.d_world_transform;
         }
 
         // is_dirty会向下传递
@@ -111,9 +110,9 @@ void LogicalScene::SUpdateAllNodeTransforms() {
             c_transform.d_world_transform = float4x4::Identity();
 
             float4x4 local_transform =
-                Transform(c_transform.translation, c_transform.scale, c_transform.rotation);
+                Transform(c_transform.translation, c_transform.scale, c_transform.rotation).GetMatrix4x4();
 
-            c_transform.d_world_transform = parent_transform.d_world_transform * local_transform;
+            c_transform.d_world_transform = parent_transform * local_transform;
         }
     });
 
@@ -193,7 +192,7 @@ void LogicalScene::UCreateDefaultLights(entt::entity parent_node_id, bool should
     }
     auto& parent_node = r().get<ecs::CNode>(parent_node_id);
 
-    auto create_light_entity = [&](ECLightType light_type) -> entt::entity {
+    auto create_light_entity = [&](ELightType light_type) -> entt::entity {
         entt::entity light_entity = r().create();
 
         auto& c_node      = r().emplace<ecs::CNode>(light_entity);
@@ -208,7 +207,7 @@ void LogicalScene::UCreateDefaultLights(entt::entity parent_node_id, bool should
 
     // first directional main light
     {
-        entt::entity main_light_entity = create_light_entity(ECLightType::Directional);
+        entt::entity main_light_entity = create_light_entity(ELightType::Directional);
         if (should_create_main_light) {
             r().emplace<ecs::CTagMainLight>(main_light_entity);
         }

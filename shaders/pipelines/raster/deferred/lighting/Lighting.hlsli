@@ -2,29 +2,15 @@
 #define RASTER_LIGHTING_LIGHTING_HLSLI
 
 #include "materials/Brdf.hlsli"
-
-static const uint Directional_LIGHT_TYPE = 1;
-static const uint Point_LIGHT_TYPE       = 2;
-static const uint Spot_LIGHT_TYPE        = 3;
-static const uint Environment_LIGHT_TYPE = 4;
-static const uint Ambient_LIGHT_TYPE     = 5;
-
-struct LightData {
-    float3 color;
-    float  intensity;
-    uint   type;
-
-    float3 position;
-    float3 direction;
-    float4 info;
-};
+#include "shared/scene/SharedSceneStruct.h"
+#include "shared/raster/SharedEnum.h"
 
 struct LightContext {
     BRDFContext brdf_context;
     float3      frag_pos;
     uint        lut_ggx_emu_handle;
 
-    LightData light;
+    Moer::GLight light;
 
     float3 accumulated_color;
 
@@ -36,18 +22,18 @@ struct LightContext {
         accumulated_color = float3(0.0f, 0.0f, 0.0f);
     }
 
-    void AccumulateLight(LightData _light, float shadow) {
+    void AccumulateLight(Moer::GLight _light, float shadow) {
         light = _light;
 
-        if (light.type == Directional_LIGHT_TYPE) {
+        if (light.type == Moer::ELightType::Directional) {
             accumulated_color += _AccumulateDirectionalLight(shadow);
-        } else if (light.type == Point_LIGHT_TYPE) {
+        } else if (light.type == Moer::ELightType::Point) {
             accumulated_color += _AccumulatePointLight();
-        } else if (light.type == Spot_LIGHT_TYPE) {
+        } else if (light.type == Moer::ELightType::Spot) {
             accumulated_color += _AccumulateSpotLight();
-        } else if (light.type == Environment_LIGHT_TYPE) {
+        } else if (light.type == Moer::ELightType::Environment) {
             accumulated_color += _AccumulateEnvironmentLight();
-        } else if (light.type == Ambient_LIGHT_TYPE) {
+        } else if (light.type == Moer::ELightType::Ambient) {
             accumulated_color += _AccumulateAmbientLight();
         }
     }

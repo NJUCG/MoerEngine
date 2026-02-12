@@ -1,7 +1,6 @@
 #include "CpuScene.h"
 
 #include "LogicalComponents.h"
-#include "LogicalEnum.h"
 #include "LogicalScene.h"
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
 #include <entt/entt.hpp>
@@ -46,7 +45,7 @@ void CpuScene::InitializeLights() {
                 GLight{
                     .color     = c_light_dir.color,
                     .intensity = c_light_dir.intensity,
-                    .type      = static_cast<uint8>(ecs::ECLightType::Directional),
+                    .type      = static_cast<uint8>(ELightType::Directional),
                     .direction = r.get<ecs::CTransform>(entity).rotation.Rotate(float3(0.f, 0.f, -1.f)),
                 }
             );
@@ -60,7 +59,7 @@ void CpuScene::InitializeLights() {
                 GLight{
                     .color     = c_light_point.color,
                     .intensity = c_light_point.intensity,
-                    .type      = static_cast<uint8>(ecs::ECLightType::Point),
+                    .type      = static_cast<uint8>(ELightType::Point),
                     .position  = r.get<ecs::CTransform>(entity).translation,
                 }
             );
@@ -74,7 +73,7 @@ void CpuScene::InitializeLights() {
                 GLight{
                     .color     = c_light_ambient.color,
                     .intensity = c_light_ambient.intensity,
-                    .type      = static_cast<uint8>(ecs::ECLightType::Ambient),
+                    .type      = static_cast<uint8>(ELightType::Ambient),
                 }
             );
         });

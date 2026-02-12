@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "math/Function.h"
 #include "scene/camera/Camera.h"
@@ -96,9 +96,9 @@ public:
     }
 
     // 更新CMV数据
-    void UpdateMotionVectorData(RasterContext& context, const CameraRef& camera) {
+    void UpdateMotionVectorData(RasterContext& context, const Camera& camera) {
         camera_mv_data_in_cpu.world2clip_prev = camera_mv_data_in_cpu.world2clip;
-        camera_mv_data_in_cpu.world2clip      = Transpose(camera->GetViewProjectionMatrix());
+        camera_mv_data_in_cpu.world2clip      = Transpose(camera.GetViewProjectionMatrix());
 
         context.cmd_list.CopyFrom(
             std::span<byte>((byte*)&camera_mv_data_in_cpu, sizeof(CameraMotionVectorData)),
@@ -109,7 +109,7 @@ public:
     AoPassOutput Process(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         uint64              frame_idx,
         TextureWithHandle   input_image
     ) {
@@ -139,7 +139,7 @@ public:
     void ProcessAo(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         uint64              frame_idx,
         TextureWithHandle   input_image,
         TextureWithHandle   ao_only
@@ -175,7 +175,7 @@ public:
     void ProcessRtao(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         uint64              frame_idx,
         TextureWithHandle   input_image,
         TextureWithHandle   ao_only
@@ -183,8 +183,8 @@ public:
 
         RtaoPipelineBindlessParam param;
 
-        param.clip2world         = Transpose(camera->GetViewProjectionMatrixInv());
-        param.camera_pos         = camera->GetPosition();
+        param.clip2world         = Transpose(camera.GetViewProjectionMatrixInv());
+        param.camera_pos         = camera.GetPosition();
         param.frame_idx          = frame_idx;
         param.resolution         = float2(context.textures.ao_output.GetSize());
         param.inv_resolution     = float2(1.0) / float2(context.textures.ao_output.GetSize());
@@ -215,7 +215,7 @@ public:
     void ProcessSsdo(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         uint64              frame_idx,
         TextureWithHandle   input_image,
         TextureWithHandle   ao_only
@@ -235,9 +235,9 @@ public:
         param.ao_mode                 = static_cast<uint32>(ui_config.ao_mode);
         param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
         param.input_image             = input_image.handle;
-        param.view_projection_matrix  = Transpose(camera->GetViewProjectionMatrix());
-        param.view_matrix             = Transpose(camera->GetViewMatrix());
-        param.camera_position         = camera->GetPosition();
+        param.view_projection_matrix  = Transpose(camera.GetViewProjectionMatrix());
+        param.view_matrix             = Transpose(camera.GetViewMatrix());
+        param.camera_position         = camera.GetPosition();
 
         UpdateMotionVectorData(context, camera);
         param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;

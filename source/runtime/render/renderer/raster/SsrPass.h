@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "math/Function.h"
 #include "scene/camera/Camera.h"
@@ -51,7 +51,7 @@ public:
     TextureWithHandle Process(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         TextureWithHandle   input_image
     ) {
         if (ui_config.ssr_is_ssr_enabled == 0) {
@@ -59,11 +59,11 @@ public:
         }
 
         SsrPipelineBindlessParam param;
-        param.view_projection_matrix         = Transpose(camera->GetViewProjectionMatrix());
-        param.camera_position                = camera->GetPosition();
-        param.near_clip                      = camera->GetNearClip();
+        param.view_projection_matrix         = Transpose(camera.GetViewProjectionMatrix());
+        param.camera_position                = camera.GetPosition();
+        param.near_clip                      = camera.GetNearClip();
         param.resolution                     = float2(context.textures.ssr_output.GetSize());
-        param.far_clip                       = camera->GetFarClip();
+        param.far_clip                       = camera.GetFarClip();
         param.ssr_roughness_threshold        = ui_config.ssr_roughness_threshold;
         param.ssr_metallic_threshold         = ui_config.ssr_metallic_threshold;
         param.ssr_step_base                  = ui_config.ssr_step_base;
@@ -76,7 +76,7 @@ public:
         param.depth_tex                      = context.textures.depth_linear_sampler.handle;
         param.vbuffer                        = context.textures.vbuffer.handle;
         param.gbuffer_uv                     = context.textures.uv.handle;
-        param.material_buffer                = context.gpu_material_info_handle;
+        param.material_buf_hdl               = context.scene.GetGpuSceneRes().material_buf.hdl;
 
         context.cmd_list.Gfx(ssr_pipeline, context.bdls, param)
             .Draw(

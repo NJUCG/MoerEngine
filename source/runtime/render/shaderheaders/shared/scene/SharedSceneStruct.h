@@ -26,7 +26,7 @@ struct GLight {
     float3 color;
     float  intensity;
     float3 position;
-    uint   type;
+    uint   type; // <=> ELightType, in shared/raster/SharedEnum.h
     float4 info;
     float3 direction;
 };
@@ -76,7 +76,7 @@ struct GPrimitive {
  */
 struct GInstance {
     float4x4 world_transform;
-    uint     primitive_id;  // Primitive ID (DrawIndex)，用于反向映射
+    uint     primitive_id; // Primitive ID (DrawIndex)，用于反向映射
 };
 
 /**

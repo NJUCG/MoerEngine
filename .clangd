@@ -1,0 +1,14 @@
+Diagnostics:
+  # 禁用 "main file cannot be included recursively" 错误
+  # 这个错误在大型重构项目中很常见，暂时禁用
+  Suppress: [pp_including_mainfile_in_preamble]
+  
+  # 可选：如果还有其他相关的包含错误，也可以禁用
+  # Suppress: [pp_including_mainfile_in_preamble, pp_file_not_found]
+
+# 其他 clangd 配置
+Index:
+  Background: Build
+
+CompileFlags:
+  Add: [-std=c++20]

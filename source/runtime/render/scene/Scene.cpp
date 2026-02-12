@@ -109,20 +109,6 @@ Render::BindlessArrayRef Scene::GetBindlessArray() {
  * MARK: 封装一些常用逻辑
  */
 
-/*
- 
-
-    entt::entity GetMainCameraEntity() const;
-    entt::entity GetMainDirectionalLightEntity() const;
-    entt::entity GetMainPointLightEntity() const;
-
-    const ecs::CCamera&           GetMainCamera() const;
-    const ecs::CLightDirectional& GetMainDirectionalLight() const;
-    const ecs::CLightPoint&       GetMainPointLight() const;
-
-    const ecs::CTransform& GetTransform(entt::entity entity) const;
-    */
-
 entt::entity Scene::GetMainCameraEntity() const {
     return r().view<ecs::CTagMainCamera>().front();
 }

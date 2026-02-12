@@ -744,7 +744,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         }
 
         if (light->mType == aiLightSourceType::aiLightSource_DIRECTIONAL) {
-            c_light.type = ecs::ECLightType::Directional;
+            c_light.type = ELightType::Directional;
 
             float intensity =
                 std::max(light->mColorDiffuse.r, std::max(light->mColorDiffuse.g, light->mColorDiffuse.b));
@@ -769,7 +769,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             }
 
         } else if (light->mType == aiLightSourceType::aiLightSource_POINT) {
-            c_light.type = ecs::ECLightType::Point;
+            c_light.type = ELightType::Point;
 
             r.emplace<ecs::CLightPoint>(
                 node_entt,
@@ -788,12 +788,12 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             }
 
         } else if (light->mType == aiLightSourceType::aiLightSource_SPOT) {
-            c_light.type = ecs::ECLightType::Spot;
+            c_light.type = ELightType::Spot;
 
             LOG_WARNING("Spot light is not supported yet. TODO");
 
         } else if (light->mType == aiLightSourceType::aiLightSource_AMBIENT) {
-            c_light.type = ecs::ECLightType::Ambient;
+            c_light.type = ELightType::Ambient;
 
             LOG_WARNING("Ambient light is not supported yet. TODO");
 

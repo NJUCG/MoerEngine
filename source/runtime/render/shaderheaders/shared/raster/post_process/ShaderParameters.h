@@ -137,7 +137,7 @@ struct SsrPipelineBindlessParam {
     uint     depth_tex;
     uint     vbuffer;
     uint     gbuffer_uv;
-    uint     material_buffer;
+    uint     material_buf_hdl;
 };
 
 struct SmaaSharedPipelineBindlessParam {

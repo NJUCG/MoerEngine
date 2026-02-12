@@ -45,7 +45,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // Old code: float3 position = TextureHandle(param.gbuffer_position).Sample2D<float3>(in_uv);
 
     // - Lights
-    ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
+    ArrayBuffer light_buf = ArrayBuffer(param.light_buf_hdl);
 
     // MARK: Skybox
     if (depth == 0.0) {
@@ -58,7 +58,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
         // 找到第一个平行光，并且乘上其强度
         for (uint i = 0; i < lighting_data.light_count; i++) {
-            LightData light = light_buffer.Load<LightData>(i);
+            Moer::GLight light = light_buf.Load<Moer::GLight>(i);
             if (light.type == Directional_LIGHT_TYPE) {
                 ibl_color *= light.color * light.intensity * lighting_data.skybox_exposure_correct_factor;
                 break;
@@ -112,7 +112,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     light_ctx.Init(brdf_ctx, position, lighting_data.lut_ggx_emu_handle);
 
     for (uint i = 0; i < lighting_data.light_count; i++) {
-        LightData light = light_buffer.Load<LightData>(i);
+        Moer::GLight light = light_buf.Load<Moer::GLight>(i);
 
         light_ctx.AccumulateLight(light, shadow);
     }

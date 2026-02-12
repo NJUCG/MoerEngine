@@ -2,12 +2,11 @@
 
 #include <filesystem>
 
-namespace Moer::ecs {
+namespace Moer { namespace ecs {
 class LogicalScene;
-}
+}} // namespace Moer::ecs
 
 namespace Moer::Gltf {
-
 class Parser {
 public:
     Parser()  = default;

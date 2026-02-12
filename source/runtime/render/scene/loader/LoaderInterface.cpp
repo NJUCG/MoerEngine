@@ -1,14 +1,11 @@
-#include "loader/LoaderInterface.h"
+#include "LoaderInterface.h"
 
-#include "RenderAPI.h"
-#include "config/ConfigManager.h"
-#include "loader/gltf/Parser.h"
 #include "log/LogSystem.h"
+#include "scene/loader/gltf/Parser.h"
 #include "sceneCache/SceneCache.h"
 #include "taskgraph/TaskGraph.h"
 #include <cassert>
 #include <filesystem>
-#include <mutex>
 
 namespace Moer {
 
