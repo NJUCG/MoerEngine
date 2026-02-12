@@ -1243,6 +1243,7 @@ struct MeshBoundInfo {
 };
 
 class ShaderCompiler;
+class DXCompiler;
 namespace Moer::Render {
 
 enum class EQueueType : uint8 {
@@ -1351,8 +1352,8 @@ struct DrawInstanceCmd {
     uint32_t padding[3];
 };
 struct ShaderParametersInfoMap {
-    friend class ShaderCompiler;
-    friend class DXCompiler;
+    friend class ::ShaderCompiler;
+    friend class ::DXCompiler;
 
 public:
     // const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {
