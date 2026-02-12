@@ -2,10 +2,13 @@
 
 ## 目录
 
-- [1. 依赖](#1-依赖)
-- [2. MoerEngine](#2-moerengine)
-- [3. CUDA等AI组件支持](#3-cuda等ai组件支持)
-- [4. NRD降噪器支持](#4-nrd降噪器支持)
+- [构建手册](#构建手册)
+  - [目录](#目录)
+  - [1. 依赖](#1-依赖)
+  - [2. MoerEngine](#2-moerengine)
+  - [3. CUDA等AI组件支持](#3-cuda等ai组件支持)
+    - [注意事项](#注意事项)
+  - [4. NRD降噪器支持](#4-nrd降噪器支持)
 
 ## 1. 依赖
 
@@ -13,8 +16,7 @@
   * Windows 10 or 11
 * 编译器（二选一）
   * MSVC == 19.44.*
-    * 注：MSVC安装时，语言包请选择英文，否则编译时有概率出现乱码错误
-  * clang（待测试）
+  * clang + ninja
 * Vulkan SDK 1.3 ([download link](https://vulkan.lunarg.com/sdk/home))
   * 推荐使用Vulkan SDK 1.3
   * Vulkan SDK 1.4版本会导致无法使用DebugPrintfEXT（待解决）
@@ -46,6 +48,7 @@
   
   # 构建
   cmake -B build
+  # 如果想要使用clang+ninja，可以替换为：cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
   cmake --build build -j16 # change 16 to your cpu core count
   
   # 运行
@@ -59,6 +62,7 @@
     ```
 
 - 方法二：Rider
+  
   - TODO
 
 ## 3. CUDA等AI组件支持
