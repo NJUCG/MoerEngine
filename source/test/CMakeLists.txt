@@ -125,7 +125,6 @@ target_include_directories(${test_target}
 target_link_libraries(${test_target}
     PRIVATE Moer::Render
     PRIVATE glfw
-    PRIVATE Moer::Resource
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
@@ -141,7 +140,6 @@ target_include_directories(${test_target}
 target_link_libraries(${test_target}
     PRIVATE Moer::Render
     PRIVATE glfw
-    PRIVATE Moer::Resource
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
@@ -157,7 +155,6 @@ if (TARGET Moer::Cuda)
     target_link_libraries(${test_target}
         PRIVATE Moer::Render
         PRIVATE glfw
-        PRIVATE Moer::Resource
     )
     target_link_libraries(${test_target}
         PRIVATE Moer::Cuda # Link CUDA and add includes
@@ -176,7 +173,6 @@ if (TARGET LibTorch)
     target_link_libraries(${test_target}
         PRIVATE Moer::Render
         PRIVATE glfw
-        PRIVATE Moer::Resource
     )
     target_link_libraries(${test_target}
         PRIVATE LibTorch
@@ -195,7 +191,6 @@ if (TARGET TensorRT)
     target_link_libraries(${test_target}
         PRIVATE Moer::Render
         PRIVATE glfw
-        PRIVATE Moer::Resource
     )
     target_link_libraries(${test_target}
         PRIVATE TensorRT
@@ -212,16 +207,11 @@ if (TARGET EnTT::EnTT)
     set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 endif()
 
-message(STATUS "=============GTL=============")
-
 if (TARGET gtl)
-    message(STATUS "GTL found, adding GTL test")
     set(test_target TestGtl)
     add_executable(${test_target} TestGtl.cpp)
     target_link_libraries(${test_target}
         PRIVATE gtl
     )
     set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-else()
-    message(STATUS "GTL not found, skipping GTL test")
 endif()

@@ -1,6 +1,6 @@
 #ifndef MORE_MESH_PROCESSOR_H
 #define MORE_MESH_PROCESSOR_H
-#include "ResourceAPI.h"
+
 #include "math/Base.h"
 #include "misc/CountableRef.h"
 #include "misc/STL.h"
@@ -9,6 +9,7 @@
 #include "rhi/RHICommon.h"
 
 namespace Moer {
+
 struct MeshProcessInput {
     void*     vertex_data;
     uint32_t  vertex_count;
@@ -17,7 +18,7 @@ struct MeshProcessInput {
     uint32_t  index_count;
 };
 
-class RESOURCE_API MeshProcessOutput {
+class MeshProcessOutput {
 
 public:
     friend class MeshProcessor;
@@ -27,7 +28,7 @@ public:
     Array<uint32_t>             primitive_indices;
 };
 
-class RESOURCE_API MeshProcessor {
+class MeshProcessor {
 public:
     MeshProcessor();
     static MeshProcessOutput GenerateMeshlets(const MeshProcessInput& input);

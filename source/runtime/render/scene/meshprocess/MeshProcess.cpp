@@ -1,4 +1,5 @@
-#include "meshprocess/MeshProcessor.h"
+#include "MeshProcessor.h"
+
 #include <algorithm>
 #include <meshoptimizer.h>
 

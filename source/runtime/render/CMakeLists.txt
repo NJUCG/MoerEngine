@@ -45,10 +45,10 @@ target_link_libraries(${target_name}
     PUBLIC gtl
     PUBLIC EnTT::EnTT
     PUBLIC Moer::Core
-    PUBLIC Moer::Resource
     PUBLIC NRI
     PRIVATE spirv-cross-cpp
     # dx, maybe add a option based on platform
+    PRIVATE MeshProcess # for scene/meshprocess/MeshProcessor.h
     PUBLIC d3d12_agilitysdk
     PUBLIC d3d12_agilitysdk_d3dx12
     PUBLIC d3d12 
