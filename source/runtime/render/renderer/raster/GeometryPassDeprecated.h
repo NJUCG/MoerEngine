@@ -27,8 +27,8 @@ public:
     DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
     DEFINE_SHADER_ARGS(bdls, param);
 
-    MUTATION_BOOL(SHADOW_DEPTH_PASS);
-    MUTATION_SET(MutationSet, SHADOW_DEPTH_PASS);
+    MUTATION_BOOL(ShadowDepthPass);
+    MUTATION_SET(MutationSet, ShadowDepthPass);
 };
 
 class GeometryPass {

@@ -1,15 +1,18 @@
-#pragma once
+#include "ShadowDepthPass.h"
 
-#include "scene/Material.h"
-#include "scene/RenderableManager.h"
-#include "scene/camera/Camera.h"
-#include "scene/light/LightComponentManager.h"
-#include "shader/GeometryPassPsoManager.h"
-
+#include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
-#include "RasterTool.h"
-#include "ShadowDepthPass.h"
+#include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
+#include "scene/LogicalComponents.h"
+#include "scene/camera/Camera.h"
+#include "shader/ShaderCommon.h"
+#include "shader/ShaderMutation.h"
+#include "shader/ShaderPipeline.h"
+#include "shader/ShaderResourceManager.h"
+#include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
+
 
 namespace {
 
@@ -72,16 +75,16 @@ StaticArray<float, CSM_MAX_CASCADES> transform_split_ratios_to_points(
 }
 
 float4x4 get_world_to_shadow_clip_matrix(
-    DirectionalLightComponent* light_direction_optional,
-    CameraRef&                 camera,
-    const RasterConfig&        ui_config,
-    const float                frustum_near_ratio,
-    const float                frustum_far_ratio,
-    float4&                    outScaleData
+    const float3&       light_direction,
+    const Camera&       camera,
+    const RasterConfig& ui_config,
+    const float         frustum_near_ratio,
+    const float         frustum_far_ratio,
+    float4&             out_scale_data
 ) {
-    const float3 light_direction = Normalizef(light_direction_optional->GetDirection());
-    const float3 light_right     = Normalizef(Cross(light_direction, float3(0.f, 1.f, 0.f)));
-    const float3 light_up        = Normalizef(Cross(light_right, light_direction));
+    const float3 normalized_light_dir = Normalizef(light_direction);
+    const float3 light_right          = Normalizef(Cross(normalized_light_dir, float3(0.f, 1.f, 0.f)));
+    const float3 light_up             = Normalizef(Cross(light_right, normalized_light_dir));
 
     // World Space to Light Space (Light View Space)
     // 假设光源在世界坐标系原点，z轴=平行光反方向，y轴=光源上方向，x轴=光源右方向
@@ -89,7 +92,7 @@ float4x4 get_world_to_shadow_clip_matrix(
     const float3x3 world_to_light_view_rotate_only = float3x3(
         light_right.x,      light_right.y,      light_right.z,
         light_up.x,         light_up.y,         light_up.z,
-        -light_direction.x, -light_direction.y, -light_direction.z
+        -normalized_light_dir.x, -normalized_light_dir.y, -normalized_light_dir.z
     );
     // clang-format on
     const float3x3 world_to_light_view_rotate_only_inverse = Inverse(world_to_light_view_rotate_only);
@@ -124,7 +127,7 @@ float4x4 get_world_to_shadow_clip_matrix(
          */
 
     // AABB
-    StaticArray<float3, 8> frustum_corners = camera->GetFrustumCorners(frustum_near_ratio, frustum_far_ratio);
+    StaticArray<float3, 8> frustum_corners = camera.GetFrustumCorners(frustum_near_ratio, frustum_far_ratio);
     StaticArray<float3, 8> frustum_corner_in_light_space;
     for (uint i = 0; i < 8; i++) {
         frustum_corner_in_light_space[i] = world_to_light_view_rotate_only * frustum_corners[i];
@@ -194,7 +197,7 @@ float4x4 get_world_to_shadow_clip_matrix(
     float z_far_val   = aabb_max_z_in_light_space + z_delta;
     float z_range     = z_far_val - z_near_val;
 
-    outScaleData = float4(ortho_width, ortho_width, z_range, z_near_val);
+    out_scale_data = float4(ortho_width, ortho_width, z_range, z_near_val);
 
     return world_to_light_orth_matrix; // RVO
 }
@@ -202,8 +205,30 @@ float4x4 get_world_to_shadow_clip_matrix(
 
 namespace Moer::Render::Raster {
 
-ShadowDepthPass::ShadowDepthPass(RasterContext& context) :
-    vertex_shader("pipelines/raster/deferred/geometry/GeometryPassCommonVertex.hlsl") {}
+ShadowDepthPass::ShadowDepthPass(RasterContext& context) {
+    // 1. PSO
+    GfxPsoCreateInfo pso_info(
+        RHIRasterizeInfo::Preset(),
+        {}, // Vertex Buffers 通过 Bindless 访问
+        {}, // Shadow depth pass 不需要 color attachments
+        RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),
+        context.textures.depth_linear_sampler.tex->GetFormat()
+    );
+
+    Shader& vtx = ShaderManager::Get().CompileShader(
+        ST_VERTEX, "pipelines/raster/deferred/geometry/GeometryPassVertex.hlsl"
+    );
+
+    ShadowDepthPassPipeline::MutationSet mutation_set{};
+    mutation_set.SetMutation<ShadowDepthPassPipeline::SHADOW_DEPTH_PASS>(true);
+    Shader& frag = ShaderManager::Get().CompileShader(
+        ST_FRAGMENT, "pipelines/raster/deferred/geometry/GeometryPassPixel.hlsl", mutation_set
+    );
+
+    m_pso = ShaderManager::Get().Raster().Vertex(vtx).Pixel(frag).Build<ShadowDepthPassPipeline>(
+        std::move(pso_info)
+    );
+}
 
 void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config) {
     for (uint i = 0; i < enabled_cascade_layers; i++) {
@@ -295,77 +320,99 @@ void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
     }
 }
 
-DirectionalLightComponent* ShadowDepthPass::GetMainLightDirection(RasterContext& context) {
+std::optional<entt::entity> ShadowDepthPass::GetMainLightDirectionEntity(RasterContext& context) {
+    auto& r = context.scene.r();
 
-    auto lights          = context.scene.GetLights();
-    auto light_component = LightComponentManager::Get().Get(lights[0]);
+    // 首先尝试查找有 CTagMainLight + CLightDirectional 的实体
+    auto main_light_view = r.view<ecs::CLightDirectional, ecs::CTagMainLight>();
+    auto main_it         = main_light_view.begin();
 
-    for (int i = 1; i < lights.size(); i++) {
-        auto light_entity            = lights[i];
-        auto light_component_current = LightComponentManager::Get().Get(light_entity);
-        if (light_component_current->GetType() == ELightComponentType::DIRECTIONAL) {
-            light_component = light_component_current;
-            break;
-        }
+    if (main_it != main_light_view.end()) {
+        return *main_it;
     }
 
-    if (light_component->GetType() != ELightComponentType::DIRECTIONAL) {
-        LOG_WARNING("No Directional Light found in the scene, shadow depth pass will be skipped.");
-        return nullptr;
-    }
-    auto* directional_light = dynamic_cast<DirectionalLightComponent*>(light_component.Get());
-    if (directional_light == nullptr) {
-        LOG_ERROR("LightComponent is not DirectionalLightComponent! This should not happen, code error.");
-        return nullptr;
+    // 如果没有找到带 CTagMainLight 的，则查找第一个 CLightDirectional
+    auto fallback_view = r.view<ecs::CLightDirectional>();
+    auto fallback_it   = fallback_view.begin();
+
+    if (fallback_it != fallback_view.end()) {
+        return *fallback_it;
     }
 
-    return directional_light;
+    return std::nullopt;
 }
 
-PointLightComponent* ShadowDepthPass::GetMainPointLight(RasterContext& context) {
-
-    auto lights          = context.scene.GetLights();
-    auto light_component = LightComponentManager::Get().Get(lights[0]);
-
-    for (int i = 1; i < lights.size(); i++) {
-        auto light_entity            = lights[i];
-        auto light_component_current = LightComponentManager::Get().Get(light_entity);
-        if (light_component_current->GetType() == ELightComponentType::POINT) {
-            light_component = light_component_current;
-            break;
-        }
+std::optional<ecs::CLightDirectional> ShadowDepthPass::GetMainLightDirection(RasterContext& context) {
+    auto entity_opt = GetMainLightDirectionEntity(context);
+    if (!entity_opt.has_value()) {
+        LOG_ERROR(
+            "No directional light found in the scene. Please ensure at least one entity has "
+            "CLightDirectional component."
+        );
+        return std::nullopt;
     }
 
-    if (light_component->GetType() != ELightComponentType::POINT) {
-        LOG_WARNING("No Point Light found in the scene, shadow depth pass will be skipped.");
-        return nullptr;
-    }
-    auto* point_light = dynamic_cast<PointLightComponent*>(light_component.Get());
-    if (point_light == nullptr) {
-        LOG_ERROR("LightComponent is not PointLightComponent! This should not happen, code error.");
-        return nullptr;
-    }
-
-    return point_light;
+    auto& r = context.scene.r();
+    return r.get<ecs::CLightDirectional>(entity_opt.value());
 }
 
-void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
+std::optional<entt::entity> ShadowDepthPass::GetMainPointLightEntity(RasterContext& context) {
+    auto& r = context.scene.r();
+
+    // 首先尝试查找有 CTagMainLight + CLightPoint 的实体
+    auto main_light_view = r.view<ecs::CLightPoint, ecs::CTagMainLight>();
+    auto main_it         = main_light_view.begin();
+
+    if (main_it != main_light_view.end()) {
+        return *main_it;
+    }
+
+    // 如果没有找到带 CTagMainLight 的，则查找第一个 CLightPoint
+    auto fallback_view = r.view<ecs::CLightPoint>();
+    auto fallback_it   = fallback_view.begin();
+
+    if (fallback_it != fallback_view.end()) {
+        return *fallback_it;
+    }
+
+    return std::nullopt;
+}
+
+std::optional<ecs::CLightPoint> ShadowDepthPass::GetMainPointLight(RasterContext& context) {
+    auto entity_opt = GetMainPointLightEntity(context);
+    if (!entity_opt.has_value()) {
+        LOG_ERROR(
+            "No point light found in the scene. Please ensure at least one entity has CLightPoint component."
+        );
+        return std::nullopt;
+    }
+
+    auto& r = context.scene.r();
+    return r.get<ecs::CLightPoint>(entity_opt.value());
+}
+
+void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
     enabled_cascade_layers = ui_config.shadow_csm_num_of_cascades;
     assert(enabled_cascade_layers <= CSM_MAX_CASCADES);
 
     PrepareCSMResources(context, ui_config);
 
     // Light
-    auto light_direction_optional = GetMainLightDirection(context);
-    if (light_direction_optional == nullptr) {
+    auto light_entity_opt = GetMainLightDirectionEntity(context);
+    if (!light_entity_opt.has_value()) {
         return;
     }
 
-    // Light Space Transform
-    const float near_clip = camera->GetNearClip();
-    const float far_clip  = camera->GetFarClip();
+    auto& r            = context.scene.r();
+    auto  light_entity = light_entity_opt.value();
 
-    context.csm_data.light_dir = Normalizef(light_direction_optional->GetDirection());
+    // Light Space Transform
+    const float near_clip = camera.GetNearClip();
+    const float far_clip  = camera.GetFarClip();
+
+    // 从 CTransform 计算方向（默认方向为 (0, 0, -1)）
+    const auto& c_transform    = r.get<ecs::CTransform>(light_entity);
+    context.csm_data.light_dir = Normalizef(c_transform.rotation.Rotate(float3(0.f, 0.f, -1.f)));
 
     //lerp csm ratios
     switch (ui_config.shadow_map_mode) {
@@ -405,7 +452,7 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             (cascade_index == 0) ? 0.0f : context.csm_data.cascade_blend_start_ratios[cascade_index - 1];
         const float frustum_far_ratio = context.csm_data.cascade_split_ratios[cascade_index];
         context.csm_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
-            light_direction_optional,
+            context.csm_data.light_dir,
             camera,
             ui_config,
             frustum_near_ratio,
@@ -419,13 +466,12 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             context.csm_data.world_to_shadow_clip[cascade_index],
             Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
             context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
-            std::format("Shadow Depth Pass - {}", cascade_index),
-            pipeline_map
+            std::format("Shadow Depth Pass - {}", cascade_index)
         );
     }
 }
 
-void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera) {
+void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
     switch (ui_config.shadow_map_mode) {
         case EShadowMapMode::NONE:
             break;
@@ -446,24 +492,34 @@ void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_con
 void ShadowDepthPass::RenderPointShadows(
     RasterContext&      context,
     const RasterConfig& config,
-    CameraRef&          camera
+    const Camera&       camera
 ) {
     PreparePointShadowResources(context, config);
 
-    PointLightComponent* light = GetMainPointLight(context);
-    if (light == nullptr) {
+    auto light_entity_opt = GetMainPointLightEntity(context);
+    if (!light_entity_opt.has_value()) {
         return;
     }
+
+    auto& r            = context.scene.r();
+    auto  light_entity = light_entity_opt.value();
 
     const uint light_idx = 0; // 目前我们只处理第一个点光源的阴影
     auto&      cube_res  = context.point_shadow_data.shadow_cubes[light_idx];
 
     // 记录光源信息供 Lighting Pass 使用
-    float near_plane    = camera->GetNearClip(); // 近平面 (根据场景尺度调整)
-    float far_plane     = camera->GetFarClip();  // TODO:远平面 = 光源半径
+    float near_plane    = camera.GetNearClip(); // 近平面 (根据场景尺度调整)
+    float far_plane     = camera.GetFarClip();  // TODO:远平面 = 光源半径
     cube_res.near_plane = near_plane;
     cube_res.far_plane  = far_plane;
-    cube_res.light_pos  = light->GetPosition();
+
+    // 从 CTransform 获取位置（translation 在矩阵的第 4 列的 xyz 分量）
+    const auto& c_transform = r.get<ecs::CTransform>(light_entity);
+    cube_res.light_pos      = float3(
+        c_transform.d_world_transform[0].w,
+        c_transform.d_world_transform[1].w,
+        c_transform.d_world_transform[2].w
+    );
 
     // 计算投影矩阵 (90度 FOV, Aspect 1.0)
     // 交换了 near_plane 和 far_plane 以适应 Inverse Depth
@@ -486,7 +542,7 @@ void ShadowDepthPass::RenderPointShadows(
 
     // 4. 遍历 6 个面进行渲染
     for (uint face = 0; face < 6; ++face) {
-        float3   light_pos = light->GetPosition();
+        float3   light_pos = cube_res.light_pos;
         float4x4 view      = MakeLookatViewMatrixRH(light_pos, light_pos + faces[face].dir, faces[face].up);
         float4x4 view_proj = proj * view;
 
@@ -498,72 +554,48 @@ void ShadowDepthPass::RenderPointShadows(
             view_proj,
             Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
             face_view,
-            std::format("PointShadow L{} F{}", light_idx, face),
-            pipeline_map
+            std::format("PointShadow L{} F{}", light_idx, face)
         );
     }
 }
 
 void ShadowDepthPass::RenderShadow(
-    RasterContext&                                              context,
-    const RasterConfig&                                         config,
-    const float4x4&                                             view_proj,
-    const Rect2D&                                               rect,
-    TextureView                                                 depth_view,
-    std::string_view                                            pass_name,
-    Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline>& pipeline_map
+    RasterContext&      context,
+    const RasterConfig& config,
+    const float4x4&     view_proj,
+    const Rect2D&       rect,
+    TextureView         depth_view,
+    std::string_view    pass_name
 ) {
+    // 1. Params
     GeometryPassBindlessParam param;
-    param.instance_data                 = context.gpu_instance_info_handle;
-    param.geometry_data                 = context.gpu_geometry_info_handle;
-    param.geometry_instance_data        = context.gpu_geometry_instance_handle;
-    param.world2clip                    = Transpose(view_proj);
-    param.material_buffer               = context.gpu_material_info_handle;
+    param.world2clip = Transpose(view_proj);
+
+    // Get bindless handles from GpuScene
+    const auto& gpu_scene_res    = context.scene.gpu_scene_res();
+    param.instance_buf_hdl       = gpu_scene_res.instance_buf.hdl;
+    param.primitive_buf_hdl      = gpu_scene_res.primitive_buf.hdl;
+    param.position_buf_hdl       = gpu_scene_res.position_buf.hdl;
+    param.packed_normal_buf_hdl  = gpu_scene_res.packed_normal_buf.hdl;
+    param.packed_tangent_buf_hdl = gpu_scene_res.packed_tangent_buf.hdl;
+    param.texcoord0_buf_hdl      = gpu_scene_res.texcoord0_buf.hdl;
+    param.material_buf_hdl       = gpu_scene_res.material_buf.hdl;
+
     param.enable_alpha_test             = config.geometry_enable_alpha_test ? 1 : 0;
     param.alpha_test_blend_pixel_cutoff = config.geometry_alpha_test_blend_pixel_cutoff;
 
-    auto arg_idx = context.cmd_list.RegisterArgs(ShadowDepthPassPipeline::SetArgs(context.bdls, param));
-
-    // GetDrawMeshDatasMap 其实一帧只需要调一次，以后可以提到外层
-    UnorderedMap<VertexFactory, Array<MeshDrawData>> mesh_draw_datas_map =
-        RasterTool::GetDrawMeshDatasMap(context, true);
-
-    for (auto& [factory, _] : mesh_draw_datas_map) {
-        if (!pipeline_map.contains(factory)) {
-            VertexStream     stream = factory.GetVertexStream();
-            GfxPsoCreateInfo pso_info(
-                RHIRasterizeInfo::Preset(),
-                std::move(stream),
-                {},
-                RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),
-                context.textures.depth_linear_sampler.tex->GetFormat()
-            );
-            Shader& vtx = vertex_shader.GetShader(const_cast<VertexFactory*>(&factory));
-            ShadowDepthPassPipeline::MutationSet mutation_set{};
-            mutation_set.SetMutation<ShadowDepthPassPipeline::SHADOW_DEPTH_PASS>(true);
-            Shader& frag = ShaderManager::Get().CompileShader(
-                ST_FRAGMENT, "pipelines/raster/deferred/geometry/GeometryPassCommonPixel.hlsl", mutation_set
-            );
-            pipeline_map.emplace(
-                factory,
-                ShaderManager::Get().Raster().Vertex(vtx).Pixel(frag).Build<ShadowDepthPassPipeline>(
-                    std::move(pso_info)
-                )
-            );
-        }
-    }
-
-    auto draw_batch = DrawBatch{};
-    for (auto& [factory, draw_array] : mesh_draw_datas_map) {
-        if (pipeline_map.contains(factory)) {
-            draw_batch.Emplace(pipeline_map[factory].handle, arg_idx)
-                .RegisterDrawDatas(std::move(draw_array));
-        }
-    }
-
-    context.cmd_list.Gfx(pass_name, rect, DepthAttachment(depth_view))
-        .AcceptDrawBatch(std::move(draw_batch))
-        .Dispatch();
+    // 2. Draw
+    context.cmd_list.Gfx(m_pso, context.bdls, param)
+        .DrawIndirect(
+            pass_name,
+            rect,
+            {}, // Vertex Buffers 通过 Bindless 访问
+            IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
+            gpu_scene_res.draw_cmd_buf.buf->GetView(),       // DrawIndexedCmdData 数组
+            gpu_scene_res.draw_cmd_buf.buf->GetNumElement(), // CPU count
+            gpu_scene_res.draw_cmd_buf.buf->GetStride(),
+            DepthAttachment(depth_view.GetTexture())
+        );
 }
 
 } // namespace Moer::Render::Raster

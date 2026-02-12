@@ -61,13 +61,6 @@ public:
     TextureWithHandle noise_tex;
     TextureWithHandle cubemap_tex;
 
-    // Data from scene
-    uint gpu_instance_info_handle     = 0;
-    uint gpu_geometry_info_handle     = 0;
-    uint gpu_geometry_instance_handle = 0;
-    uint gpu_material_info_handle     = 0;
-    uint gpu_light_info_handle        = 0;
-
     // Shadow Data
     struct CSMData {
         float3                                light_dir;
@@ -247,28 +240,6 @@ public:
             });
         }
         cubemap_tex.handle = bdls->AllocateTexture(cubemap_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
-    }
-
-    // Called from `FirstLoad`
-    void LoadSceneData() {
-        assert(
-            Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady() &&
-            "Scene not ready, but called LoadSceneData"
-        );
-
-        gpu_instance_info_handle =
-            bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
-        gpu_geometry_info_handle =
-            bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView());
-        gpu_geometry_instance_handle =
-            bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView());
-        gpu_material_info_handle =
-            bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
-        gpu_light_info_handle =
-            bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
-
-        // Bindless
-        cmd_list.UpdateBindlessArray(bdls);
     }
 
     // MARK: Frame Buffers

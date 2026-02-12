@@ -1,6 +1,5 @@
 #pragma once
 
-#include "RenderAPI.h"
 #include <filesystem>
 
 namespace Moer::ecs {
@@ -11,16 +10,10 @@ namespace Moer::Gltf {
 
 class Parser {
 public:
-    Parser() noexcept;
-    ~Parser() noexcept;
+    Parser()  = default;
+    ~Parser() = default;
 
-    // PImpl模式
-    static RENDER_API bool
-    LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::filesystem::path& file_path) noexcept;
-
-private:
-    // PImpl模式
-    struct Impl;
-    Impl* m_impl = nullptr;
+    static bool
+    LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::filesystem::path& file_path);
 };
 } // namespace Moer::Gltf

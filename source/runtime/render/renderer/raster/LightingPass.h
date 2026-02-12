@@ -2,7 +2,6 @@
 
 #include "math/Function.h"
 #include "misc/MMemory.h"
-#include "scene/Material.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
@@ -47,8 +46,7 @@ public:
         lighting_data_buffer.handle = context.bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
     }
 
-    TextureWithHandle
-    Process(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera) {
+    TextureWithHandle Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
 
         MaterialPassBindlessParam material_param;
         material_param.extra_ambient_color     = ui_config.shading_extra_ambient_color;
@@ -56,7 +54,7 @@ public:
         material_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
         material_param.shading_mode            = static_cast<uint>(ui_config.shading_mode);
 
-        material_param.material_buffer     = context.gpu_material_info_handle;
+        material_param.material_buf_hdl    = context.scene.GetGpuSceneRes().material_buf.hdl;
         material_param.vbuffer             = context.textures.vbuffer.handle;
         material_param.gbuffer_normal      = context.textures.normal.handle;
         material_param.gbuffer_tangent     = context.textures.tangent.handle;
@@ -64,7 +62,7 @@ public:
         material_param.gbuffer_depth       = context.textures.depth_nearest_sampler.handle;
         material_param.gbuffer_position    = context.textures.position.handle;
         material_param.global_param_handle = lighting_data_buffer.handle;
-        material_param.light_buffer        = context.gpu_light_info_handle;
+        material_param.light_buf_hdl       = context.scene.GetGpuSceneRes().light_buf.hdl;
         material_param.cubemap_handle      = context.cubemap_tex.handle;
 
         {
@@ -72,9 +70,12 @@ public:
             LightingData* lighting_data = MoerNew(LightingData);
             uint          csm_layers    = ui_config.shadow_csm_num_of_cascades;
 
-            lighting_data->inv_view_proj   = Transpose(camera->GetViewProjectionMatrixInv());
-            lighting_data->light_count     = context.scene.GetLights().size();
-            lighting_data->camera_position = camera->GetPosition();
+            lighting_data->inv_view_proj = Transpose(camera.GetViewProjectionMatrixInv());
+
+            // 从LogicalScene中，获取CLight Component数量
+            lighting_data->light_count = context.scene.r().view<ecs::CLight>().size();
+
+            lighting_data->camera_position = camera.GetPosition();
 
             // Shadow Parameters
             lighting_data->shadow_map_mode              = static_cast<int>(ui_config.shadow_map_mode);
@@ -94,9 +95,9 @@ public:
             for (uint i = 0; i < csm_layers; i++) {
                 lighting_data->world_to_shadow_clip[i] = Transpose(context.csm_data.world_to_shadow_clip[i]);
             }
-            lighting_data->view_matrix = Transpose(camera->GetViewMatrix());
-            lighting_data->near_clip   = camera->GetNearClip();
-            lighting_data->far_clip    = camera->GetFarClip();
+            lighting_data->view_matrix = Transpose(camera.GetViewMatrix());
+            lighting_data->near_clip   = camera.GetNearClip();
+            lighting_data->far_clip    = camera.GetFarClip();
             for (int i = 0; i < csm_layers; i++) {
                 lighting_data->cascade_split_ratios[i] = context.csm_data.cascade_split_ratios[i];
             }
@@ -145,17 +146,13 @@ public:
             });
         }
 
-        Moer::UnorderedSet<EMaterialType> material_types = {EMaterialType::E_PBR_STANDARD};
-        for (auto type : material_types) {
-            material_param.material_type = uint(type);
-            context.cmd_list.Gfx(pbr_pipeline, context.bdls, material_param)
-                .Draw(
-                    "Lighting Pass",
-                    context.textures.lighting_output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(context.textures.lighting_output.tex)
-                );
-        };
+        context.cmd_list.Gfx(pbr_pipeline, context.bdls, material_param)
+            .Draw(
+                "Lighting Pass",
+                context.textures.lighting_output.GetRect2D(),
+                std::move(RasterTool::GetFullScreenDrawDatas()),
+                ColorAttachment(context.textures.lighting_output.tex)
+            );
 
         return context.textures.lighting_output;
     }

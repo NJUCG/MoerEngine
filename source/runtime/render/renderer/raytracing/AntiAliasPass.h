@@ -2,9 +2,11 @@
 #define MOER_ANTIALIASPASS_H
 
 #include "RTResource.h"
+#include "RaytracingConfig.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
+
 
 namespace Moer::Render::Raytracing {
 
@@ -24,14 +26,6 @@ public:
 };
 class AntialiasPass {
 public:
-    enum class EJitter {
-        MSAA,
-        Halton,
-        R2,
-        WhiteNoise,
-        Num
-    };
-
     struct Params {
         float new_frame_weight     = 0.04f;
         float clamping_factor      = 1.3f;

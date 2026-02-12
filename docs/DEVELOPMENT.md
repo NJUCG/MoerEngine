@@ -128,17 +128,18 @@ MoerEngine开发早期使用 `.clang-tidy` 对命名风格进行规范，但强�
 **变量均为 全小写 & 下划线 风格**。
 
 
-| 类别                | 命名风格                               | 示例                                                |
-| ------------------- | -------------------------------------- | --------------------------------------------------- |
-| **局部变量**        |                                        | `shadow_map_texture`, `pso_full_screen_info`        |
-| **形参**            |                                        | `context`, `input_image`                            |
-| **成员变量**        | `m_` 开头                              | `m_renderer`, `m_buffer_handle`                     |
-| **常量**            | `k_` 开头                              | `k_fov_default`, `k_camera_speed_up_delta`          |
-| **Bool**            | `is_` / `b_` / `has_` / `should_` 开头 | `is_shadow_enabled`, `is_dirty`, `m_is_initialized` |
-| **Bindless Handle** | `_hdl` 结尾                            | `albedo_map_hdl`, `output_tex_hdl`                  |
-| **entt::Entity**    | `_entt` / `entity` 结尾                | `albedo_map_entt`, `material_entt`, `entity`        |
-| **数组下标**        | `_id` 结尾                             |                                                     |
-| **数量**            | `num_` / `_count` / `_cnt` 标记        | `mip_level_count`, `mip_level_cnt`, `num_of_images` |
+| 类别                   | 命名风格                               | 示例                                                |
+| ---------------------- | -------------------------------------- | --------------------------------------------------- |
+| **局部变量**           |                                        | `shadow_map_texture`, `pso_full_screen_info`        |
+| **形参**               |                                        | `context`, `input_image`                            |
+| **成员变量**           | `m_` 开头                              | `m_renderer`, `m_buffer_handle`                     |
+| **常量**               | `k_` 开头                              | `k_fov_default`, `k_camera_speed_up_delta`          |
+| **Bool**               | `is_` / `b_` / `has_` / `should_` 开头 | `is_shadow_enabled`, `is_dirty`, `m_is_initialized` |
+| **Bindless Handle**    | `_hdl` 结尾                            | `albedo_map_hdl`, `output_tex_hdl`                  |
+| **entt::Entity**       | `_entt` / `entity` 结尾                | `albedo_map_entt`, `material_entt`, `entity`        |
+| **数组下标**           | `_id` 结尾                             |                                                     |
+| **数量**               | `num_` / `_count` / `_cnt` 标记        | `mip_level_count`, `mip_level_cnt`, `num_of_images` |
+| **用于输出的引用形参** | `out_` 开头                            | `out_param`                                         |
 
 **成员变量** 补充：如果一个类型为POD，即没有任何方法，则 **其成员变量不应该以 `m_` 开头**！如 `RasterConfig`。
 

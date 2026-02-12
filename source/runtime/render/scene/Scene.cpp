@@ -69,6 +69,22 @@ ecs::LogicalScene& Scene::GetLogicalScene() {
     return logical_scene();
 }
 
+entt::registry& Scene::r() {
+    return logical_scene().r();
+}
+
+const entt::registry& Scene::r() const {
+    return logical_scene().r();
+}
+
+entt::registry& Scene::GetRegistry() {
+    return r();
+}
+
+const entt::registry& Scene::GetRegistry() const {
+    return r();
+}
+
 const Render::GpuScene::Res& Scene::gpu_scene_res() const {
     assert(m_gpu_scene && "Scene is not ready");
     return m_gpu_scene->res();

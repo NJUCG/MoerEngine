@@ -59,17 +59,17 @@ public:
     // Note: front vs. forward: forward parallel to the XZ plane; front is the direction the camera is facing
     Vector3f GetForward() const noexcept;
 
-    Matrix4x4f GetViewMatrix() noexcept;
-    Matrix4x4f GetViewMatrixInv() noexcept;
-    Matrix4x4f GetToWorldMatrix() noexcept;
+    Matrix4x4f GetViewMatrix() const noexcept;
+    Matrix4x4f GetViewMatrixInv() const noexcept;
+    Matrix4x4f GetToWorldMatrix() const noexcept;
     // Note: ToWorldMatrix == InverseViewMatrix
-    Matrix4x4f GetRotateMatrix() noexcept;
-    Matrix4x4f GetTranslateMatrix() noexcept;
+    Matrix4x4f GetRotateMatrix() const noexcept;
+    Matrix4x4f GetTranslateMatrix() const noexcept;
 
-    Matrix4x4f GetProjectionMatrix() noexcept;
-    Matrix4x4f GetProjectionMatrixInv() noexcept;
-    Matrix4x4f GetViewProjectionMatrix() noexcept;
-    Matrix4x4f GetViewProjectionMatrixInv() noexcept;
+    Matrix4x4f GetProjectionMatrix() const noexcept;
+    Matrix4x4f GetProjectionMatrixInv() const noexcept;
+    Matrix4x4f GetViewProjectionMatrix() const noexcept;
+    Matrix4x4f GetViewProjectionMatrixInv() const noexcept;
 
     /**
          * 获取WorldSpace下，Camera视锥体的AABB
@@ -89,10 +89,10 @@ public:
          * 比如，如果想获取完整的视锥体对应的AABB，这两个参数可以分别为0和1；
          * 如果想获取前50%视锥体对应的AABB，这两个参数可以分别为0和0.5；
          */
-    StaticArray<Vector3f, 8> GetFrustumCorners(float near_clip_ratio, float far_clip_ratio);
+    StaticArray<Vector3f, 8> GetFrustumCorners(float near_clip_ratio, float far_clip_ratio) const;
 
-    void     GetPlanes(Vector4f _planes[6]);
-    Vector4f GetFrustum() noexcept;
+    void     GetPlanes(Vector4f out_planes[6]) const;
+    Vector4f GetFrustum() const noexcept;
 
     // MARK: Setter
 

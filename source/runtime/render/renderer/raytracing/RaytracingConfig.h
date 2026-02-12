@@ -3,8 +3,6 @@
 #include "misc/Traits.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
-#include "AntiAliasPass.h"
-
 namespace Moer {
 
 enum EAnitiAliasMode {
@@ -15,6 +13,13 @@ enum EOutputTexture {
     EOT_LDR = 0,
     EOT_HDR,
     EOT_Num
+};
+enum class EJitter {
+    MSAA,
+    Halton,
+    R2,
+    WhiteNoise,
+    Num
 };
 
 struct GridConfig {
@@ -81,7 +86,7 @@ struct ToneMappingConfig {
 struct AntiAliasConfig {
     EAnitiAliasMode aa_mode = EAnitiAliasMode::EAA_TAA;
 
-    Render::Raytracing::AntialiasPass::EJitter jitter_mode = Render::Raytracing::AntialiasPass::EJitter::MSAA;
+    EJitter jitter_mode = EJitter::MSAA;
 
     float new_frame_weight        = 0.04f;
     float clamping_factor         = 1.3f;

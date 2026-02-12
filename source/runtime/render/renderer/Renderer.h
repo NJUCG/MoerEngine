@@ -1,13 +1,10 @@
 #pragma once
 
 // Runtime
-#include "config/ConfigManager.h"
-#include "loader/LoaderInterface.h"
 #include "renderer/EditorConfig.h"
 #include "rhi/RHI.h"
 #include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
-#include "window/WindowContext.h"
 
 #include "common/UiCombinePass.h"
 

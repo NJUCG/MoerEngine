@@ -77,39 +77,39 @@ Vector3f Camera::GetForward() const noexcept {
     return m_forward;
 }
 
-Matrix4x4f Camera::GetViewMatrix() noexcept {
+Matrix4x4f Camera::GetViewMatrix() const noexcept {
     return m_view_matrix; // world to camera
 }
 
-Matrix4x4f Camera::GetViewMatrixInv() noexcept {
+Matrix4x4f Camera::GetViewMatrixInv() const noexcept {
     return m_view_matrix_inv;
 }
 
-Matrix4x4f Camera::GetToWorldMatrix() noexcept {
+Matrix4x4f Camera::GetToWorldMatrix() const noexcept {
     return GetViewMatrixInv();
 }
 
-Matrix4x4f Camera::GetRotateMatrix() noexcept {
+Matrix4x4f Camera::GetRotateMatrix() const noexcept {
     return m_view_matrix_rotate_submatrix;
 }
 
-Matrix4x4f Camera::GetTranslateMatrix() noexcept {
+Matrix4x4f Camera::GetTranslateMatrix() const noexcept {
     return MakeTranslation(m_position.x, m_position.y, m_position.z);
 }
 
-Matrix4x4f Camera::GetProjectionMatrix() noexcept {
+Matrix4x4f Camera::GetProjectionMatrix() const noexcept {
     return m_projection_matrix;
 }
 
-Matrix4x4f Camera::GetProjectionMatrixInv() noexcept {
+Matrix4x4f Camera::GetProjectionMatrixInv() const noexcept {
     return m_projection_matrix_inv;
 }
 
-Matrix4x4f Camera::GetViewProjectionMatrix() noexcept {
+Matrix4x4f Camera::GetViewProjectionMatrix() const noexcept {
     return m_view_projection_matrix;
 }
 
-Matrix4x4f Camera::GetViewProjectionMatrixInv() noexcept {
+Matrix4x4f Camera::GetViewProjectionMatrixInv() const noexcept {
     return m_view_projection_matrix_inv;
 }
 
@@ -264,8 +264,8 @@ void Camera::GetAABB(float near_clip_ratio, float far_clip_ratio, Vector3f& out_
     }
 }
 
-StaticArray<Vector3f, 8> Camera::GetFrustumCorners(float near_clip_ratio, float far_clip_ratio) {
-    // 函数说明见Camera.h
+// 函数说明见Camera.h
+StaticArray<Vector3f, 8> Camera::GetFrustumCorners(float near_clip_ratio, float far_clip_ratio) const {
 
     float near_clip = m_near_clip + (m_far_clip - m_near_clip) * near_clip_ratio;
     float far_clip  = m_near_clip + (m_far_clip - m_near_clip) * far_clip_ratio;
@@ -286,13 +286,13 @@ StaticArray<Vector3f, 8> Camera::GetFrustumCorners(float near_clip_ratio, float 
     return corners; // RVO
 }
 
-Vector4f Camera::GetFrustum() noexcept {
+Vector4f Camera::GetFrustum() const noexcept {
     return m_frustum;
 }
 
-void Camera::GetPlanes(Vector4f _out_planes[6]) {
+void Camera::GetPlanes(Vector4f out_planes[6]) const {
     for (int i = 0; i < 6; i++) {
-        _out_planes[i] = m_planes[i];
+        out_planes[i] = m_planes[i];
     }
 }
 

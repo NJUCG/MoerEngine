@@ -237,7 +237,7 @@ public:
     TextureWithHandle Process(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         TextureWithHandle   input_image
     ) {
         if (ui_config.aa_mode == EAaMode::NONE || ui_config.aa_mode == EAaMode::FXAA_SIMPLIFIED ||
@@ -256,7 +256,7 @@ public:
     TextureWithHandle ProcessFxaa(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         TextureWithHandle   input_image
     ) {
         FxaaPrecomputePipelineBindlessParam param_fxaa_precomputed;
@@ -290,7 +290,7 @@ public:
     TextureWithHandle ProcessSmaa(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         TextureWithHandle   input_image
     ) {
         // TODO: optimize the following code
@@ -321,8 +321,8 @@ public:
         static Matrix4x4f current_inv_view_proj = Matrix4x4f::Identity();
 
         previous_view_proj    = current_view_proj;
-        current_view_proj     = camera->GetViewProjectionMatrix();
-        current_inv_view_proj = camera->GetViewProjectionMatrixInv();
+        current_view_proj     = camera.GetViewProjectionMatrix();
+        current_inv_view_proj = camera.GetViewProjectionMatrixInv();
 
         frame_parity ^= 1;
 

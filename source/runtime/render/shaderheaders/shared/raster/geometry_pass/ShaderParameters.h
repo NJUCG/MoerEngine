@@ -26,21 +26,16 @@ struct GeometryPassBindlessParam {
     float4x4 world2clip;
     
     // Bindless handles for bindless rendering
-    uint instance_buf_hdl;      // Array<GInstance>
-    uint primitive_buf_hdl;    // Array<GPrimitive>
-    uint position_buf_hdl;     // Array<float3>
-    uint normal_buf_hdl;       // Array<uint> (packed normal)
-    uint tangent_buf_hdl;       // Array<uint> (packed tangent)
-    uint texcoord0_buf_hdl;    // Array<float2>
-    uint material_buf_hdl;     // Array<GMaterial>
-    
-    // Legacy fields (deprecated, kept for compatibility)
-    uint instance_data;
-    uint geometry_data;
-    uint geometry_instance_data;
+    uint material_buf_hdl;  // Array<GMaterial>
+    uint instance_buf_hdl;  // Array<GInstance>
+    uint primitive_buf_hdl; // Array<GPrimitive>
+
+    uint position_buf_hdl;       // Array<float3>
+    uint packed_normal_buf_hdl;  // Array<uint> (packed normal)
+    uint packed_tangent_buf_hdl; // Array<uint> (packed tangent)
+    uint texcoord0_buf_hdl;      // Array<float2>
 
     // about material & alpha test
-    uint  material_buffer;
     uint  enable_alpha_test;
     float alpha_test_blend_pixel_cutoff;
 };

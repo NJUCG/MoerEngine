@@ -1,4 +1,4 @@
-#include "loader/gltf/Parser.h"
+#include "Parser.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/pbrmaterial.h>
@@ -7,32 +7,15 @@
 #include <entt/entt.hpp>
 #include <gtl/phmap.hpp>
 
-#include "PixelFormat.h"
-#include "loader/io/ImageIO.h"
 #include "log/LogSystem.h"
 #include "misc/Hash.h"
 #include "misc/Timer.h"
-#include "scene/LogicalComponents.h"
-#include "scene/LogicalEnum.h"
 #include "scene/LogicalScene.h"
+#include "scene/loader/io/ImageIO.h"
 #include "shaderheaders/shared/utils/Packing.h"
 #include "taskgraph/TaskGraph.h"
 
 namespace Moer::Gltf {
-
-// PImpl模式，转发
-bool Parser::LoadSceneFromFile(
-    ecs::LogicalScene&           out_logical_scene,
-    const std::filesystem::path& file_path
-) noexcept {
-    Impl impl;
-    impl.LoadSceneFromFile(out_logical_scene, file_path);
-}
-
-struct Parser::Impl {
-    bool LoadSceneFromFile(ecs::LogicalScene& logical_scene, const std::filesystem::path& file_path) noexcept;
-    ~Impl() = default;
-};
 
 int32_t GetEmbeddedTextureId(const std::string& path) {
     if (path.length() >= 2 && path[0] == '*') {
@@ -46,10 +29,8 @@ int32_t GetEmbeddedTextureId(const std::string& path) {
     return -1;
 }
 
-bool Parser::Impl::LoadSceneFromFile(
-    ecs::LogicalScene&           out_logical_scene,
-    const std::filesystem::path& file_path
-) {
+// PImpl模式，转发
+bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::filesystem::path& file_path) {
     // MARK: Assimp
     const aiScene* ai_scene = ([&]() -> const aiScene* {
         Assimp::Importer importer;
@@ -720,7 +701,7 @@ bool Parser::Impl::LoadSceneFromFile(
 
         auto& c_camera = r.emplace<ecs::CCamera>(node_entt);
         if (main_camera_name == camera->mName.C_Str()) {
-            r.ctx().emplace<ecs::CTagMainCamera>(node_entt);
+            r.emplace<ecs::CTagMainCamera>(node_entt);
         }
 
         float4 position = float4(camera->mPosition.x, camera->mPosition.y, camera->mPosition.z, 1.0f);
@@ -759,7 +740,7 @@ bool Parser::Impl::LoadSceneFromFile(
 
         auto& c_light = r.emplace<ecs::CLight>(node_entt);
         if (main_light_name == light->mName.C_Str()) {
-            r.ctx().emplace<ecs::CTagMainLight>(node_entt);
+            r.emplace<ecs::CTagMainLight>(node_entt);
         }
 
         if (light->mType == aiLightSourceType::aiLightSource_DIRECTIONAL) {
@@ -820,7 +801,7 @@ bool Parser::Impl::LoadSceneFromFile(
             LOG_WARNING(
                 "Unsupported light type: {}. Only Directional, Point, Spot, and Ambient lights are "
                 "supported.",
-                light->mType
+                static_cast<uint32>(light->mType)
             );
             return;
         }

@@ -4,7 +4,6 @@
 
 // Runtime
 #include "config/ConfigManager.h"
-#include "loader/LoaderInterface.h"
 #include "misc/Timer.h"
 #include "renderer/EditorConfig.h"
 #include "rhi/RHI.h"

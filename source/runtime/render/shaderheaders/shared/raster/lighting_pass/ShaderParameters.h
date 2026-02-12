@@ -29,8 +29,8 @@ struct MaterialPassBindlessParam {
     float  extra_ambient_intensity;
     uint   enable_extra_ambient;
     uint   material_type;
-    uint   light_buffer;
-    uint   material_buffer;
+    uint   light_buf_hdl;
+    uint   material_buf_hdl;
     uint   vbuffer;
     uint   gbuffer_normal;
     uint   gbuffer_tangent;

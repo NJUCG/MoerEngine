@@ -2,7 +2,7 @@
 
 #include "CpuScene.h"
 
-#include "RHIResource.h"
+#include "rhi/RHIResource.h"
 
 namespace Moer::Render {
 

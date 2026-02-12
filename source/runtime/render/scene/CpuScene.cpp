@@ -3,7 +3,7 @@
 #include "LogicalComponents.h"
 #include "LogicalEnum.h"
 #include "LogicalScene.h"
-#include "SharedSceneStruct.h"
+#include "shaderheaders/shared/scene/SharedSceneStruct.h"
 #include <entt/entt.hpp>
 
 namespace Moer {
@@ -44,9 +44,9 @@ void CpuScene::InitializeLights() {
             emplace_light(
                 entity,
                 GLight{
-                    .type      = static_cast<uint8>(ECLightType::Directional),
                     .color     = c_light_dir.color,
                     .intensity = c_light_dir.intensity,
+                    .type      = static_cast<uint8>(ecs::ECLightType::Directional),
                     .direction = r.get<ecs::CTransform>(entity).rotation.Rotate(float3(0.f, 0.f, -1.f)),
                 }
             );
@@ -58,9 +58,9 @@ void CpuScene::InitializeLights() {
             emplace_light(
                 entity,
                 GLight{
-                    .type      = static_cast<uint8>(ECLightType::Point),
                     .color     = c_light_point.color,
                     .intensity = c_light_point.intensity,
+                    .type      = static_cast<uint8>(ecs::ECLightType::Point),
                     .position  = r.get<ecs::CTransform>(entity).translation,
                 }
             );
@@ -72,9 +72,9 @@ void CpuScene::InitializeLights() {
             emplace_light(
                 entity,
                 GLight{
-                    .type      = static_cast<uint8>(ECLightType::Ambient),
                     .color     = c_light_ambient.color,
                     .intensity = c_light_ambient.intensity,
+                    .type      = static_cast<uint8>(ecs::ECLightType::Ambient),
                 }
             );
         });
@@ -106,9 +106,8 @@ void CpuScene::InitializeMaterials() {
     auto to_hdl = [&](const entt::entity entity) -> int64 {
         if (entity == entt::null) {
             return -1; // 不存在，应该使用factor
-        } else {
-            return -2; // 存在，但还没上传到Gpu
         }
+        return -2; // 存在，但还没上传到Gpu
     };
 
     r.view<const ecs::CMaterial>().each([&](const auto entity, const ecs::CMaterial& c_material) {
@@ -132,7 +131,7 @@ void CpuScene::InitializeMaterials() {
 
         uint material_id = static_cast<uint>(m_material_buf.size());
         m_material_buf.emplace_back(g_material);
-        m_map_entity_to_material_id[entity] = material_id; // build index cache
+        m_map_material_entity_to_id[entity] = material_id; // build index cache
     });
 }
 
@@ -178,7 +177,7 @@ void CpuScene::InitializeMeshes() {
 
             GPrimitive g_primitive{};
 
-            g_primitive.material_id = m_map_entity_to_material_id[c_primitive.material_id];
+            g_primitive.material_idx = m_map_material_entity_to_id.at(c_primitive.material_entt);
 
             if (c_primitive.position.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::Position;
@@ -190,7 +189,8 @@ void CpuScene::InitializeMeshes() {
             }
             if (c_primitive.packed_tangent.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::PackedTangent;
-                g_primitive.packed_tangent_start_idx = static_cast<uint>(c_primitive.packed_tangent.start_idx);
+                g_primitive.packed_tangent_start_idx =
+                    static_cast<uint>(c_primitive.packed_tangent.start_idx);
             }
             if (c_primitive.texcoord0.is_valid) {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::Texcoord0;
@@ -246,7 +246,7 @@ void CpuScene::InitializeMeshes() {
                     m_primitive_id_to_transform_entt_arrays[primitive_id].emplace_back(
                         GInstance{
                             .world_transform = c_transform.d_world_transform,
-                            .primitive_id    = primitive_id  // 存储 Primitive ID 用于反向映射
+                            .primitive_id    = primitive_id // 存储 Primitive ID 用于反向映射
                         }
                     );
                     instance_cnt++;
@@ -263,12 +263,11 @@ void CpuScene::InitializeMeshes() {
                 m_instance_buf.emplace_back(instance);
             }
         }
-
     }
 
     {
         // 3. DrawIndexedCmdData填充
-        // 
+        //
         // 需要为每个 Primitive 填充 DrawIndexedCmdData
         // - index_cnt: 从 CPrimitive.index_count 获取
         // - instance_cnt: 从 m_primitive_id_to_transform_entt_arrays[i].size() 获取
@@ -285,7 +284,8 @@ void CpuScene::InitializeMeshes() {
         // 再次遍历 CPrimitive，顺序与第一次遍历一致
         r.view<const ecs::CPrimitive>().each([&](const auto entity, const ecs::CPrimitive& c_primitive) {
             const uint primitive_id = m_map_primitive_entity_to_id.at(entity);
-            const uint instance_cnt  = static_cast<uint>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
+            const uint instance_cnt =
+                static_cast<uint>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
 
             Render::DrawIndexedCmdData draw_cmd_data{};
 
@@ -298,7 +298,7 @@ void CpuScene::InitializeMeshes() {
             // first_index: 第一个索引在 Index Buffer 中的偏移
             // CPrimitive.index.offset 是字节偏移，需要转换为索引偏移
             if (c_primitive.index.is_valid) {
-                draw_cmd_data.first_index = c_primitive.index.offset / sizeof(uint32);
+                draw_cmd_data.first_index = c_primitive.index.start_idx;
             } else {
                 draw_cmd_data.first_index = 0;
                 assert(false && "CPrimitive.index is invalid");
@@ -321,9 +321,14 @@ void CpuScene::InitializeMeshes() {
     {
         // assert
 
-        assert(m_primitive_buf.size() == r.view<const ecs::CPrimitive>().size() && "Primitive count mismatch");
-        assert(m_primitive_id_to_transform_entt_arrays.size() == r.view<const ecs::CPrimitive>().size() && "Primitive ID to Transform Entity Arrays count mismatch");
-    
+        assert(
+            m_primitive_buf.size() == r.view<const ecs::CPrimitive>().size() && "Primitive count mismatch"
+        );
+        assert(
+            m_primitive_id_to_transform_entt_arrays.size() == r.view<const ecs::CPrimitive>().size() &&
+            "Primitive ID to Transform Entity Arrays count mismatch"
+        );
+
         assert(m_instance_buf.size() == instance_cnt);
 
         assert(m_draw_cmd_buf.size() == m_primitive_buf.size());

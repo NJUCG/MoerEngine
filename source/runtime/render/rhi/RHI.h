@@ -2,16 +2,12 @@
 #define RHI_H
 #include "Core.h"
 #include "PixelFormat.h"
-#include "RHICommand.h"
 #include "RenderAPI.h"
-#include "log/LogSystem.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "taskgraph/TaskGraph.h"
 #include "taskgraph/ThreadManager.h"
 #include <cstdint>
-#include <optional>
 #include <type_traits>
 
 struct RHIInitInfo {

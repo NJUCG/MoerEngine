@@ -14,6 +14,10 @@
 #include <entt/entt.hpp>
 
 namespace Moer {
+namespace Render {
+// 前向声明 GpuScene
+class GpuScene;
+} // namespace Render
 
 /**
  * CPU Scene
@@ -29,7 +33,7 @@ namespace Moer {
  */
 class CpuScene {
 
-    friend class Moer::Render::GpuScene; // 友元类GpuScene
+    friend class Render::GpuScene; // 友元类GpuScene
 
 public:
     CpuScene(ecs::LogicalScene& logical_scene);
@@ -74,8 +78,8 @@ private:
     // mesh
     Array<Render::DrawIndexedCmdData> m_draw_cmd_buf;  // 1:1 GPrimitive
     Array<GPrimitive>                 m_primitive_buf; // 1:1 GPrimitive & DrawIndexedCmdData
-                                                       // primitive_buf 与 draw_cmd_buf 是对应的，index相同则对应相同primitive
-    Array<GInstance>                  m_instance_buf;  // N:1 GPrimitive
+    // primitive_buf 与 draw_cmd_buf 是对应的，index相同则对应相同primitive
+    Array<GInstance> m_instance_buf; // N:1 GPrimitive
     /**
      * 从LogicalScene中获取MegaBuffers引用
      * 

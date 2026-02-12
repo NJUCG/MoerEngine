@@ -5,6 +5,7 @@
 #include "LogicalScene.h"
 #include "RenderAPI.h"
 #include "SceneLoadInfoAsync.h"
+#include "entt/entity/fwd.hpp"
 #include <filesystem>
 
 namespace Moer {
@@ -92,22 +93,20 @@ public:
      * MARK: 一系列public getter
      */
 
-    // 获取LogicalScene引用
-    ecs::LogicalScene& logical_scene();
+    ecs::LogicalScene&       logical_scene();
+    const ecs::LogicalScene& logical_scene() const;
+    ecs::LogicalScene&       GetLogicalScene();
+    const ecs::LogicalScene& GetLogicalScene() const;
 
-    // 获取LogicalScene引用
-    ecs::LogicalScene& GetLogicalScene();
+    entt::registry&       r();
+    const entt::registry& r() const;
+    entt::registry&       GetRegistry();
+    const entt::registry& GetRegistry() const;
 
-    // 获取GpuScene::Res引用
     const Render::GpuScene::Res& gpu_scene_res() const;
-
-    // 获取GpuScene::Res引用
     const Render::GpuScene::Res& GetGpuSceneRes() const;
 
-    // 获取Bindless Array引用
     Render::BindlessArrayRef bindless_array();
-
-    // 获取Bindless Array引用
     Render::BindlessArrayRef GetBindlessArray();
 };
 

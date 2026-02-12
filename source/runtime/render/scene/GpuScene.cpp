@@ -73,7 +73,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 uint mip_level_byte_size = tex_with_hdl.tex->GetMipByteSize(i);
                 cmd_list.CopyFrom(
                     std::span<byte>((byte*)c_texture.data.data() + offset, mip_level_byte_size),
-                    tex_with_hdl.tex->GetView(i, 1),
+                    tex_with_hdl.tex->GetView(i, 1)
                 );
                 offset += mip_level_byte_size;
             }
@@ -304,6 +304,8 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
 
         buf_with_hdl.hdl = bdls->AllocateBuffer(buf_with_hdl.buf->GetView());
     }
+
+    cmd_list.UpdateBindlessArray(bdls); // FIXME: 需要吗？
 
     /**
      * MARK: Upload & Execute
