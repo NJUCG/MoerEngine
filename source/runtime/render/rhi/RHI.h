@@ -3,12 +3,23 @@
 #include "Core.h"
 #include "PixelFormat.h"
 #include "RenderAPI.h"
-#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "taskgraph/ThreadManager.h"
 #include <cstdint>
+#include <filesystem>
+#include <memory>
 #include <type_traits>
+
+// Forward declarations to break circular dependency
+namespace Moer::Render {
+class CommandQueue;
+class CopyQueue;
+class IOInterface;
+using IOInterfaceRef = std::shared_ptr<IOInterface>;
+} // namespace Moer::Render
+
+#include "rhi/RHICommand.h"
 
 struct RHIInitInfo {
     uint32_t max_frame_in_flight = 3;
