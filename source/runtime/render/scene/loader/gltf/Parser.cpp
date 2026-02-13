@@ -650,7 +650,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     };
     auto is_light_node = [&](const aiNode* node) -> bool {
         std::string node_name = node->mName.C_Str();
-        return camera_map.contains(node_name);
+        return light_map.contains(node_name);
     };
 
     // MARK: Mesh
@@ -900,17 +900,26 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             /**
              * mesh or light or camera
              * 
-             * 注意，assimp保证一个node最多只有一类对象。也就是mesh/light/camera三选一（gltf也保证这一点）
+             * 注意：虽然 glTF 规范保证一个 node 最多只有一类对象（mesh/light/camera 三选一），
+             * 但 Assimp 在某些情况下（如格式转换）可能会产生同时有 mesh 和 camera/light 引用的节点。
+             * 如果出现这种情况，我们按优先级处理：mesh > camera > light
              */
 
             bool is_mesh   = is_mesh_node(y);
             bool is_light  = is_light_node(y);
             bool is_camera = is_camera_node(y);
 
-            assert(
-                (uint(is_mesh) + uint(is_light) + uint(is_camera)) <= 1 &&
-                "Assimp Node has more than one type of object (mesh/light/camera), which is not supported."
-            );
+            uint type_count = uint(is_mesh) + uint(is_light) + uint(is_camera);
+            if (type_count > 1) {
+                LOG_WARNING(
+                    "Node '{}' has multiple types (mesh: {}, camera: {}, light: {}). "
+                    "Processing with priority: mesh > camera > light.",
+                    y->mName.C_Str(),
+                    is_mesh,
+                    is_camera,
+                    is_light
+                );
+            }
 
             if (is_mesh) {
                 create_mesh_to_node(x, y);
