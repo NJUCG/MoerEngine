@@ -1279,6 +1279,12 @@ public:
     virtual void        Present(SwapchainRef _swapchain, TextureView _target) = 0;
     virtual void        Sync()                                                = 0;
     virtual ProfileData GetProfilerEntry()                                    = 0;
+
+    CommandQueue& operator=(CommandQueue& other) = delete;
+    CommandQueue(const CommandQueue& other)      = delete;
+
+    CommandQueue& operator=(CommandQueue&& other) = delete;
+    CommandQueue(CommandQueue&& other)            = delete;
 };
 
 class RENDER_API CopyQueue {
@@ -1297,6 +1303,12 @@ public:
 
     virtual FenceRef GetFenceHandle()       = 0;
     virtual void     Sync(uint64 _timeline) = 0;
+
+    CopyQueue& operator=(CopyQueue& other) = delete;
+    CopyQueue(const CopyQueue& other)      = delete;
+
+    CopyQueue& operator=(CopyQueue&& other) = delete;
+    CopyQueue(CopyQueue&& other)            = delete;
 };
 
 class IOInterface;
