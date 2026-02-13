@@ -211,7 +211,9 @@ void CpuScene::InitializeMeshes() {
         Queue<entt::entity> node_queue;
 
         // Init root nodes
-        r.view<const ecs::CTagRootNode>().each([&](const auto entity, const ecs::CTagRootNode&) {
+        // 注：这里CTagRootNode是空结构体，entt的each只会传递entity参数，不会传递Component引用
+        //    因此，如果添加了...ecs::CTagRootNode&，就会编译错误
+        r.view<const ecs::CTagRootNode>().each([&](const auto entity) {
             node_queue.push(entity);
         });
 

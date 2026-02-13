@@ -65,7 +65,16 @@ ecs::LogicalScene& Scene::logical_scene() {
     return *m_logical_scene;
 }
 
+const ecs::LogicalScene& Scene::logical_scene() const {
+    assert(m_logical_scene && "Scene is not ready");
+    return *m_logical_scene;
+}
+
 ecs::LogicalScene& Scene::GetLogicalScene() {
+    return logical_scene();
+}
+
+const ecs::LogicalScene& Scene::GetLogicalScene() const {
     return logical_scene();
 }
 

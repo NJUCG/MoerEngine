@@ -1,4 +1,4 @@
-#include "loader/mixml/XmlObject.h"
+#include "XmlObject.h"
 
 namespace Moer::MiXml {
 std::string Object::GetProperty(std::string_view property_name) const noexcept {

@@ -427,6 +427,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
     // MARK: Load Materials
 
+    gtl::flat_hash_map<uint, entt::entity> material_index_to_entity_map;
     {
         gtl::flat_hash_map<std::string, entt::entity> mat_map;
 
@@ -572,7 +573,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             const auto entity     = r.create();
             auto&      c_material = r.emplace<ecs::CMaterial>(entity);
 
-            mat_map[material_name] = entity;
+            mat_map[material_name]          = entity;
+            material_index_to_entity_map[i] = entity;
 
             // Load Data
 
@@ -590,6 +592,32 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             load_roughness_factor(c_material, material);
 
             load_alpha_param(c_material, material);
+        }
+    }
+
+    // MARK: 在CPrimitive上挂载Material Entity
+    {
+        // 遍历所有 mesh，将对应的 material entity 挂载到 primitive 上
+        for (const auto& [mesh, primitive_entity] : mesh_entity_map) {
+            if (!r.valid(primitive_entity) || !r.all_of<ecs::CPrimitive>(primitive_entity)) {
+                continue;
+            }
+
+            auto& c_primitive = r.get<ecs::CPrimitive>(primitive_entity);
+
+            // 通过 mesh->mMaterialIndex 找到对应的 material entity
+            uint material_index = mesh->mMaterialIndex;
+            if (material_index_to_entity_map.contains(material_index)) {
+                c_primitive.material_entt = material_index_to_entity_map[material_index];
+            } else {
+                LOG_WARNING(
+                    "Mesh material index {} out of range. Total materials: {}. "
+                    "Primitive will have null material.",
+                    material_index,
+                    ai_scene->mNumMaterials
+                );
+                c_primitive.material_entt = entt::null;
+            }
         }
     }
 

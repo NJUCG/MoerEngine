@@ -47,12 +47,12 @@ public:
             context.textures.depth_linear_sampler.tex->GetFormat()
         );
 
-        Shader& vtx = ShaderManager::Get().CompileShader(
-            ST_VERTEX, "pipelines/raster/deferred/geometry/GeometryPassVertex.hlsl"
-        );
-
         GeometryPassPipeline::MutationSet mutation_set{};
         mutation_set.SetMutation<GeometryPassPipeline::SHADOW_DEPTH_PASS>(false);
+
+        Shader& vtx = ShaderManager::Get().CompileShader(
+            ST_VERTEX, "pipelines/raster/deferred/geometry/GeometryPassVertex.hlsl", mutation_set
+        );
         Shader& frag = ShaderManager::Get().CompileShader(
             ST_FRAGMENT, "pipelines/raster/deferred/geometry/GeometryPassPixel.hlsl", mutation_set
         );

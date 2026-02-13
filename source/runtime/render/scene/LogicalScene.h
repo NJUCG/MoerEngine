@@ -1,8 +1,8 @@
 #pragma once
 
-#include <entt/fwd.hpp>
-
 #include "LogicalComponents.h"
+#include "RenderAPI.h"
+#include <entt/fwd.hpp>
 
 namespace Moer::ecs {
 
@@ -39,7 +39,7 @@ namespace Moer::ecs {
  * 
  * 所有System均以 S 开头；所有的辅助函数均以 U (utility) 开头
  */
-class LogicalScene {
+class RENDER_API LogicalScene {
 
 public:
     LogicalScene();

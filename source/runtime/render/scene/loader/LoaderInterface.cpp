@@ -58,7 +58,7 @@ bool LoaderInterface::LoadSceneFromFileCommon(
     // TODO: cache
     // bool is_enabled_cache = ConfigManager::GetInstance().GetConfig().engine.scene.enable_cache;
 
-    auto ext = file_path.extension().string();
+    auto ext = file_path.extension().string().substr(1); // ".gltf" -> "gltf"
     // auto ext = file_path.string().substr(_file_path.string().find_last_of(".") + 1);
 
     if (scene_load_function_maps.contains(ext) == false) {

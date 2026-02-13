@@ -1,6 +1,6 @@
-#include "loader/mixml/Parser.h"
-#include "loader/mixml/XmlObject.h"
-#include "pugixml.hpp"
+#include "scene/loader/mixml/Parser.h"
+#include "scene/loader/mixml/XmlObject.h"
+#include <pugixml.hpp>
 
 namespace Moer::MiXml {
 

@@ -19,13 +19,15 @@
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
+#include "shaderheaders/shared/scene/SharedSceneStruct.h"
 namespace Moer::Render {
 #else
 #define CONST const
-#include "shaderheaders/shared/raster/SharedEnum.h"
+#include "shared/raster/SharedEnum.h"
 #include "shared/raster/geometry_pass/ShaderParameters.h"
 #include "shared/raster/lighting_pass/ShaderParameters.h"
 #include "shared/raster/post_process/ShaderParameters.h"
+#include "shared/scene/SharedSceneStruct.h"
 namespace Moer {
 #endif
 

@@ -13,7 +13,6 @@
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 
-
 namespace {
 
 using namespace Moer;
@@ -215,12 +214,12 @@ ShadowDepthPass::ShadowDepthPass(RasterContext& context) {
         context.textures.depth_linear_sampler.tex->GetFormat()
     );
 
-    Shader& vtx = ShaderManager::Get().CompileShader(
-        ST_VERTEX, "pipelines/raster/deferred/geometry/GeometryPassVertex.hlsl"
-    );
-
     ShadowDepthPassPipeline::MutationSet mutation_set{};
     mutation_set.SetMutation<ShadowDepthPassPipeline::SHADOW_DEPTH_PASS>(true);
+
+    Shader& vtx = ShaderManager::Get().CompileShader(
+        ST_VERTEX, "pipelines/raster/deferred/geometry/GeometryPassVertex.hlsl", mutation_set
+    );
     Shader& frag = ShaderManager::Get().CompileShader(
         ST_FRAGMENT, "pipelines/raster/deferred/geometry/GeometryPassPixel.hlsl", mutation_set
     );
