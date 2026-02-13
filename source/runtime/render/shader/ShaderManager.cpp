@@ -146,18 +146,14 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
     //           input.environment.ToString(),
     //           (it.first != nullptr ? "Cached" : "Compile"));
 
-    static auto get_remove_target_str = [](std::string input_string) -> std::string {
-        const std::string target_substring = "target/bin/Debug/asset/";
-        size_t            pos              = input_string.find(target_substring);
-
-        while (pos != std::string::npos) {
-            // 如果找到了子串，就创建一个新的字符串，跳过这个子串
-            std::string new_string = input_string.substr(0, pos);               // 子串之前的部分
-            new_string += input_string.substr(pos + target_substring.length()); // 子串之后的部分
-            input_string = new_string;                                          // 更新输入字符串
-            pos          = input_string.find(target_substring);                 // 继续查找下一个位置
+    static auto get_remove_target_str = [](std::string               input_string,
+                                           const Array<std::string>& target_substring_array) -> std::string {
+        for (const auto& target_substring : target_substring_array) {
+            size_t pos = input_string.find(target_substring);
+            if (pos != std::string::npos) {
+                return input_string.substr(0, pos) + input_string.substr(pos + target_substring.length());
+            }
         }
-        // 如果没找到子串，就返回原始字符串的拷贝
         return input_string;
     };
 
@@ -167,9 +163,9 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
     auto&& output = ShaderCompiler::Compile(std::move(input));
     if (!output.b_succeeded) {
         for (const auto& error : output.errors) {
-            LOG_ERROR(
-                "Shader Compile Error: {}", get_remove_target_str(error)
-            ); // 返回原始Shader目录，而不是返回Target目录下的临时shader文件
+            std::string error_string =
+                get_remove_target_str(error, {"target/bin/Debug/asset/", "target/bin/Release/asset/"});
+            LOG_ERROR("Shader Compile Error: {}", error_string);
         }
         assert(
             false &&
