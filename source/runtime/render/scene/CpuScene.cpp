@@ -40,42 +40,33 @@ void CpuScene::InitializeLights() {
     {
         const auto& view = r.view<const ecs::CLightDirectional>();
         view.each([&](const auto entity, const ecs::CLightDirectional& c_light_dir) {
-            emplace_light(
-                entity,
-                GLight{
-                    .color     = c_light_dir.color,
-                    .intensity = c_light_dir.intensity,
-                    .type      = static_cast<uint8>(ELightType::Directional),
-                    .direction = r.get<ecs::CTransform>(entity).rotation.Rotate(float3(0.f, 0.f, -1.f)),
-                }
-            );
+            GLight light;
+            light.color     = c_light_dir.color;
+            light.intensity = c_light_dir.intensity;
+            light.type      = static_cast<uint>(ELightType::Directional);
+            light.direction = r.get<ecs::CTransform>(entity).rotation.Rotate(float3(0.f, 0.f, -1.f));
+            emplace_light(entity, light);
         });
     }
     {
         const auto& view = r.view<const ecs::CLightPoint>();
         view.each([&](const auto entity, const ecs::CLightPoint& c_light_point) {
-            emplace_light(
-                entity,
-                GLight{
-                    .color     = c_light_point.color,
-                    .intensity = c_light_point.intensity,
-                    .type      = static_cast<uint8>(ELightType::Point),
-                    .position  = r.get<ecs::CTransform>(entity).translation,
-                }
-            );
+            GLight light;
+            light.color     = c_light_point.color;
+            light.intensity = c_light_point.intensity;
+            light.type      = static_cast<uint>(ELightType::Point);
+            light.position  = r.get<ecs::CTransform>(entity).translation;
+            emplace_light(entity, light);
         });
     }
     {
         const auto& view = r.view<const ecs::CLightAmbient>();
         view.each([&](const auto entity, const ecs::CLightAmbient& c_light_ambient) {
-            emplace_light(
-                entity,
-                GLight{
-                    .color     = c_light_ambient.color,
-                    .intensity = c_light_ambient.intensity,
-                    .type      = static_cast<uint8>(ELightType::Ambient),
-                }
-            );
+            GLight light;
+            light.color     = c_light_ambient.color;
+            light.intensity = c_light_ambient.intensity;
+            light.type      = static_cast<uint>(ELightType::Ambient);
+            emplace_light(entity, light);
         });
     }
     {
