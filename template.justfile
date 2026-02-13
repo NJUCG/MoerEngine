@@ -1,5 +1,6 @@
 #
 # 这个文件是命令行工具just的配置文件
+# 此模板适用于windows、msvc编译器环境
 #
 # 使用方式：
 # - just setup                => 初始化MoerEngine Config、下载默认场景

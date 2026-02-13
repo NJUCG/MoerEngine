@@ -16,6 +16,7 @@ cmake-build-*/
 
 # 3. User Config Files
 imgui.ini
+justfile
 EnableCuda.cmake
 EnableNrd.cmake
 EnableRenderDoc.cmake
