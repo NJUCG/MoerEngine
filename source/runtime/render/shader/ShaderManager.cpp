@@ -146,12 +146,17 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
     //           input.environment.ToString(),
     //           (it.first != nullptr ? "Cached" : "Compile"));
 
-    static auto get_remove_target_str = [](std::string               input_string,
-                                           const Array<std::string>& target_substring_array) -> std::string {
+    static auto get_all_removed_target_strings =
+        [](std::string input_string, const Array<std::string>& target_substring_array) -> std::string {
         for (const auto& target_substring : target_substring_array) {
-            size_t pos = input_string.find(target_substring);
-            if (pos != std::string::npos) {
-                return input_string.substr(0, pos) + input_string.substr(pos + target_substring.length());
+            while (true) {
+                size_t pos = input_string.find(target_substring);
+                if (pos != std::string::npos) {
+                    input_string =
+                        input_string.substr(0, pos) + input_string.substr(pos + target_substring.length());
+                } else {
+                    break;
+                }
             }
         }
         return input_string;
@@ -163,8 +168,13 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
     auto&& output = ShaderCompiler::Compile(std::move(input));
     if (!output.b_succeeded) {
         for (const auto& error : output.errors) {
-            std::string error_string =
-                get_remove_target_str(error, {"target/bin/Debug/asset/", "target/bin/Release/asset/"});
+            std::string error_string = get_all_removed_target_strings(
+                error,
+                {"target/bin/Debug/asset/",
+                 "target/bin/Release/asset/",
+                 "target/Debug/bin/asset/",
+                 "target/Release/bin/asset/"}
+            );
             LOG_ERROR("Shader Compile Error: {}", error_string);
         }
         assert(
