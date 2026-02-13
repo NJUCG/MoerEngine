@@ -5,7 +5,7 @@
 struct VsOutput {
     float4 position : SV_POSITION;
     float2 texcoord0 : TEXCOORD0;
-    int material_id;
+    nointerpolation uint material_id : MATERIAL_ID;
 };
 
 #else
@@ -13,10 +13,10 @@ struct VsOutput {
 struct VsOutput {
     float4 position : SV_POSITION;
     float3 world_position : POSITION;
-    float2 texcoord0 : TEXCOORD0;
     float3 normal : NORMAL;
     float3 tangent : TANGENT;
-    int material_id;
+    float2 texcoord0 : TEXCOORD0;
+    nointerpolation uint material_id : MATERIAL_ID;
 };
 
 #endif

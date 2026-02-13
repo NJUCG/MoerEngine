@@ -41,7 +41,7 @@ void DiscardByAlphaTest(uint material_id, float2 uv_in_map) {
 
 #if SHADOW_DEPTH_PASS // MARK: ShadowDepthPass
 
-void main(VertexFactory::VsOutput input) : SV_TARGET {
+void main(VsOutput input) : SV_TARGET {
 
     DiscardByAlphaTest(input.material_id, input.texcoord0); // 此处有可能触发discard，直接终止shader
 }
@@ -56,7 +56,7 @@ struct PsOutput {
     float4 position : SV_TARGET4;
 };
 
-PsOutput main(VertexFactory::VsOutput input) : SV_TARGET {
+PsOutput main(VsOutput input) : SV_TARGET {
 
     DiscardByAlphaTest(input.material_id, input.texcoord0); // 此处有可能触发discard，直接终止shader
     
