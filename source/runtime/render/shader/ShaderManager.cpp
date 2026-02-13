@@ -162,6 +162,17 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
         return input_string;
     };
 
+    static auto replace_shared_directry_strings = [](std::string input_string) -> std::string {
+        // shaderheaders
+        // => source/runtime/render/shaderheaders
+        size_t pos = input_string.find("shaderheaders");
+        if (pos != std::string::npos) {
+            input_string = input_string.substr(0, pos) + "source/runtime/render/shaderheaders" +
+                           input_string.substr(pos + 13);
+        }
+        return input_string;
+    };
+
     if (it.first != nullptr) {
         return *it.first;
     }
@@ -175,6 +186,8 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
                  "target/Debug/bin/asset/",
                  "target/Release/bin/asset/"}
             );
+            error_string = replace_shared_directry_strings(error_string);
+
             LOG_ERROR("Shader Compile Error: {}", error_string);
         }
         assert(
