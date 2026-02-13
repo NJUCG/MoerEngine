@@ -313,11 +313,16 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
      * 这部分代码是从旧的SceneCache.cpp中抄过来的
      */
 
-    Array<ExportTexture> export_tex(m_res.texture_array.size());
-    Array<ExportBuffer>  export_buf(buffers.size());
+    // 注意，此处不能在这两个数组中添加空资源，否则会触发RHI崩溃
+    Array<ExportTexture> export_tex;
+    Array<ExportBuffer>  export_buf;
+    Array<ImportTexture> import_tex;
+    Array<ImportBuffer>  import_buf;
 
-    Array<ImportTexture> import_tex(m_res.texture_array.size());
-    Array<ImportBuffer>  import_buf(buffers.size());
+    export_tex.reserve(m_res.texture_array.size());
+    export_buf.reserve(buffers.size());
+    import_tex.reserve(m_res.texture_array.size());
+    import_buf.reserve(buffers.size());
 
     for (const auto& tex_with_hdl : m_res.texture_array) {
 
