@@ -32,9 +32,11 @@ int32_t GetEmbeddedTextureId(const std::string& path) {
 // PImpl模式，转发
 bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::filesystem::path& file_path) {
     // MARK: Assimp
-    const aiScene* ai_scene = ([&]() -> const aiScene* {
-        Assimp::Importer importer;
 
+    // ai_scene资源的持有者是importer，所以需要注意importer生命周期
+    Assimp::Importer importer;
+
+    const aiScene* ai_scene = ([&]() -> const aiScene* {
         auto path = std::filesystem::weakly_canonical(file_path);
 
         if (!std::filesystem::exists(path)) {
@@ -338,7 +340,6 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 image_desc.channel == Render::GetChannelFromPixelFormat(image_desc.format) &&
                 "Image channel does not match its format."
             );
-            assert(image_desc.mips == 1 && "LogicalScene should not generate mipmap.");
         };
 
         /**
