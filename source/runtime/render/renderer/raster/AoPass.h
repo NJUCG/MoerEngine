@@ -201,7 +201,7 @@ public:
         UpdateMotionVectorData(context, camera);
         param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;
 
-        context.cmd_list.Gfx(rtao_pipeline, context.rt_scene->GetTlas(), context.bdls, param)
+        context.cmd_list.Gfx(rtao_pipeline, context.rt_scene()->GetTlas(), context.bdls, param)
             .Draw(
                 "RTAO Pass",
                 context.textures.ao_output.GetRect2D(),

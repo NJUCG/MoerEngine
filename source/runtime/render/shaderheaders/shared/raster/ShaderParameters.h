@@ -1,3 +1,6 @@
+#ifndef MOER_SHARED_RASTER_SHADER_PARAMETERS_H
+#define MOER_SHARED_RASTER_SHADER_PARAMETERS_H
+
 /**
  * Include此文件即可
  * CPP:
@@ -5,8 +8,6 @@
  * HLSL:
  *     #include "shared/raster/ShaderParameters.h"
  */
-
-#pragma once
 
 #ifdef CONST
 #undef CONST
@@ -48,3 +49,5 @@ struct CopyPassBindlessParam {
 }
 #endif
 #undef CONST
+
+#endif // MOER_SHARED_RASTER_SHADER_PARAMETERS_H

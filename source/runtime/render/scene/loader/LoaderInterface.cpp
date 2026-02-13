@@ -27,6 +27,8 @@ bool LoaderInterface::LoadSceneFromFile(
     return LoaderInterface::LoadSceneFromFileCommon(out_logical_scene, file_path);
 }
 
+// 在目前实现中，我们不调用这个接口，而是Scene类同时异步加载LogicalScene, CpuScene和GpuScene
+// - 三个Scene一起异步，而不是此函数只异步LogicalScene
 SharedPtr<SceneLoadInfoAsync> LoaderInterface::LoadSceneFromFileAsync(
     ecs::LogicalScene&           out_logical_scene,
     const std::filesystem::path& file_path

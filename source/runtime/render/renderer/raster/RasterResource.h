@@ -96,9 +96,9 @@ public:
     } point_shadow_data;
 
     // RayTracing
-    // TODO: rt_scene 已迁移到 GpuScene，通过 scene.GetRaytracingScene() 访问
-    // 保留此字段用于向后兼容，未来应移除
-    RaytracingSceneRef rt_scene;
+    RaytracingSceneRef rt_scene() {
+        return scene.GetGpuSceneRes().rt_scene;
+    }
 
 private:
     uint2& resolution; // Be careful, resolution is also a reference
@@ -121,11 +121,6 @@ public:
         cmd_list(cmd_list),
         scene(scene),
         resolution(resolution) {
-
-        // rt scene
-        // TODO: rt_scene 已迁移到 GpuScene，这里不再创建
-        // 保留此字段用于向后兼容，通过 scene.GetRaytracingScene() 获取
-        rt_scene = nullptr; // Will be set from scene.GetRaytracingScene() if needed
 
         // textures
         textures = RasterTextures{};

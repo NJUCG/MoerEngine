@@ -4,6 +4,7 @@
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHICommon.h"
 #include "scene/LogicalComponents.h"
 
 namespace Moer::Render {
@@ -137,9 +138,10 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         EBufferUsageFlags::UNORDERED_ACCESS
     );
 
-    m_res.draw_cmd_buf.buf = device.CreateBuffer<byte>(
+    // 这里不设置为byte，是为了GeometryPass中可以直接获取 命令的数量(cpu count)、DrawIndexedCmdData的stride
+    m_res.draw_cmd_buf.buf = device.CreateBuffer<Render::DrawIndexedCmdData>(
         "GpuScene::DrawCmdBuffer",
-        m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData),
+        m_cpu_scene.m_draw_cmd_buf.size(),
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER
     );
 
@@ -304,7 +306,9 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         buf_with_hdl.hdl = bdls->AllocateBuffer(buf_with_hdl.buf->GetView());
     }
 
-    cmd_list.UpdateBindlessArray(bdls); // FIXME: 需要吗？
+    // NOTE: UpdateBindlessArray 需要在 Graphics/Compute Queue 中执行，不能在 Copy Queue 中执行
+    // 这里只分配了 handle，实际的 bindless array 更新应该在后续的 Graphics Queue 命令中完成
+    // cmd_list.UpdateBindlessArray(bdls);
 
     /**
      * MARK: Upload & Execute
@@ -372,10 +376,24 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         gfx_queue.Execute(cmd_list.Submit());
         gfx_queue.Sync();
     }
+
+    InitRaytracingScene(cmd_list);
+
+    gfx_queue.Execute(cmd_list.Submit()); // 提交RaytracingScene的新操作
+    gfx_queue.Sync();
 }
 
 void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene) {
-    // TODO
+    CommandList cmd_list{};
+    auto&       device    = RenderDevice::Get();
+    auto&       gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
+
+    // TODO: others
+
+    UpdateRaytracingScene(cmd_list);
+
+    gfx_queue.Execute(cmd_list.Submit()); // 提交RaytracingScene的新操作
+    gfx_queue.Sync();
 }
 
 void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
@@ -485,6 +503,9 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
 
     cmd_list.BuildAccelerationStructures(std::move(build_params));
     cmd_list.UpdateRaytracingScene(m_res.rt_scene);
+
+    RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Execute(cmd_list.Submit());
+    RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Sync();
 }
 
 void GpuScene::UpdateRaytracingScene(CommandList& cmd_list) {

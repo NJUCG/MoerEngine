@@ -1,6 +1,4 @@
-#pragma once
-
-#include "renderer/raster/RasterRenderer.h"
+#include "RasterRenderer.h"
 
 #include "AaPass.h"
 #include "AoPass.h"
@@ -157,8 +155,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         if (first_load) {
             first_load = false;
 
-            // TODO: 设置 rt_scene 引用以保持向后兼容
-            raster_context.rt_scene = scene.GetGpuSceneRes().rt_scene;
+            // 随手加一句，避免出错（重构完毕后可以尝试去除）
+            cmd_list.UpdateBindlessArray(bindless_array);
 
             gfx_queue.Execute(cmd_list.Submit());
             gfx_queue.Sync();

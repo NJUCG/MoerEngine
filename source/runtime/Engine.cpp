@@ -118,11 +118,6 @@ void Engine::Init(int argc, const char** argv) {
 
 void Engine::Run(const EngineHooks& hooks) {
 
-    // 猜猜为什么需要这个函数？猜对的话奖励一个重构MoerEngine的机会 (?)
-    auto wtf_load_scene = [](const std::filesystem::path& _file_path, Scene* scene) {
-        Resource::LoaderInterface::LoadSceneFromFileAsync(_file_path, scene);
-    };
-
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         LOG_INFO(
             "Selecting Render Method : {}",
@@ -130,9 +125,8 @@ void Engine::Run(const EngineHooks& hooks) {
         );
 
         if (m_editor_config->selected_render_method == ERenderMethod::Raster) {
-            m_renderer = MakeUnique<Raster::RasterRenderer>(
-                m_editor_config->GetResolution(), m_editor_config, hooks, wtf_load_scene
-            );
+            m_renderer =
+                MakeUnique<Raster::RasterRenderer>(m_editor_config->GetResolution(), m_editor_config, hooks);
 
         } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
             // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);

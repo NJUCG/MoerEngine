@@ -1,7 +1,7 @@
 #include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 
-#include "core/common/Common.hlsl"
 #include "materials/Brdf.hlsli"
 #include "materials/Material.hlsli"
 #include "pipelines/raster/deferred/lighting/IBL.hlsli"
