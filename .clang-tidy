@@ -23,6 +23,9 @@ CheckOptions:
     value: lower_case
   - key: readability-identifier-naming.ParameterCase
     value: lower_case
+  # Allow _lower_case (leading underscore) as well as lower_case
+  - key: readability-identifier-naming.ParameterIgnoredRegexp
+    value: "^_[a-z][a-z0-9_]*$"
   - key: readability-identifier-naming.UnionCase
     value: CamelCase
   - key: readability-identifier-naming.VariableCase
