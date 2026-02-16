@@ -396,6 +396,14 @@ void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_
     gfx_queue.Sync();
 }
 
+GpuScene::~GpuScene() noexcept {
+    // TODO: 释放所有资源
+
+    // 1. Buffers, Textures
+
+    // 2. Bindless Resources
+}
+
 void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
     auto& device = RenderDevice::Get();
     auto& r      = m_logical_scene.r();

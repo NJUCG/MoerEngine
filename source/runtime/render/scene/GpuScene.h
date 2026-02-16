@@ -29,7 +29,7 @@ class GpuScene {
 
 public:
     GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array);
-    ~GpuScene() = default;
+    ~GpuScene() noexcept;
 
     GpuScene(const GpuScene&)            = delete;
     GpuScene& operator=(const GpuScene&) = delete;

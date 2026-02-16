@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PixelFormat.h"
+#include "misc/BoundingBox.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "scene/camera/Camera.h"
@@ -66,9 +67,10 @@ struct CTransform {
     Quaternion rotation    = Quaternion();
     float3     scale       = float3(1.f, 1.f, 1.f);
 
-    bool is_dirty = true;
+    bool is_dirty = true; // 是否需要更新 变换矩阵 & AABB
 
     float4x4 d_world_transform = float4x4::Identity(); // derived
+    Box3D    d_aabb = Box3D(); // derived，AABB = 儿子CTransform的AABB * 自己的变换 + 挂载的CMesh的AABB
 };
 
 struct CTagRootNode {};
@@ -126,15 +128,19 @@ struct CPrimitive {
     uint32     index_count = 0;
     BufferView index;
 
+    Box3D aabb = Box3D(); // 以Mesh为单位的AABB
+
     entt::entity material_entt = entt::null;
 
-    uint64 d_primitive_hash = 0;
+    uint64 d_primitive_hash = 0; // derived
 };
 
 struct CMesh {
     Array<entt::entity> primitive_entts;
 
     uint64 d_mesh_hash = 0;
+
+    Box3D d_aabb = Box3D(); // derived，AABB = 所有Primitive的AABB的并集
 };
 
 struct CRenderable {

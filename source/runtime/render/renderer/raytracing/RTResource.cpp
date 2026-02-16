@@ -45,15 +45,16 @@ RTContext::RTContext(
     // AllocateAndFreeBdlsIfNeeded(bindless_handles.neighbor_offset, neighbor_offset_buf->GetView());
 }
 
-void RTContext::SetBindlessHandles(
-    uint _geom_data_buf_handle,
-    uint _instance_data_buf_handle,
-    uint _material_data_buf_handle
-) {
-
-    bindless_handles.geom_data     = _geom_data_buf_handle;
-    bindless_handles.instance_data = _instance_data_buf_handle;
-    bindless_handles.material_data = _material_data_buf_handle;
+void RTContext::SetBindlessHandles(const GpuScene::Res& gpu_scene_res) {
+    bindless_handles.light_buf_hdl          = gpu_scene_res.light_buf.hdl;
+    bindless_handles.material_buf_hdl       = gpu_scene_res.material_buf.hdl;
+    bindless_handles.primitive_buf_hdl      = gpu_scene_res.primitive_buf.hdl;
+    bindless_handles.instance_buf_hdl       = gpu_scene_res.instance_buf.hdl;
+    bindless_handles.position_buf_hdl       = gpu_scene_res.position_buf.hdl;
+    bindless_handles.packed_normal_buf_hdl  = gpu_scene_res.packed_normal_buf.hdl;
+    bindless_handles.packed_tangent_buf_hdl = gpu_scene_res.packed_tangent_buf.hdl;
+    bindless_handles.texcoord0_buf_hdl      = gpu_scene_res.texcoord0_buf.hdl;
+    bindless_handles.index_buf_hdl          = gpu_scene_res.index_buf.hdl;
 }
 
 void RTContext::FillFrameResources(uint2 _resolution) {
@@ -279,9 +280,9 @@ void RTContext::FillLowDiscrepancySequence(CommandList& _cmd_list) {
     // _cmd_list.Compute(sd_utils.gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), "GenerateLowDiscrepancySequence");
 }
 
-void RTContext::CreateEnvMapResources(EnvMapResource _env_tex, CommandList& _cmd_list) {
+void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _cmd_list) {
 
-    uint2         extent = _env_tex.texture->GetExtent().xy;
+    uint2         extent = _env_tex.tex->GetExtent().xy;
     RenderDevice& device = RenderDevice::Get();
 
     env_pdf_mips.clear();
@@ -290,20 +291,20 @@ void RTContext::CreateEnvMapResources(EnvMapResource _env_tex, CommandList& _cmd
         Extent2D(extent.x, extent.y),
         PF_R16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
-        _env_tex.texture->GetNumMips()
+        _env_tex.tex->GetNumMips()
     );
 
     for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) {
         env_pdf_mips.push_back(env_pdf_tex->GetView(i));
     }
-    sd_utils.GenerateMipPdf(_cmd_list, _env_tex.texture, env_pdf_mips);
+    sd_utils.GenerateMipPdf(_cmd_list, _env_tex.tex, env_pdf_mips);
 
     AllocateAndFreeBdlsIfNeeded(
         bindless_handles.env_pdf,
         env_pdf_tex->GetView(0, env_pdf_tex->GetNumMips()),
         Sampler{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE}
     );
-    scene_params.env_map_handle = _env_tex.bindless_handle;
+    scene_params.env_map_handle = _env_tex.hdl;
     scene_params.enable_env_map = 1;
     SetEnvMapInfos(1.f, 0.f);
 }
@@ -416,17 +417,17 @@ void RTContext::SetEnvMapInfos(float _scale, float _rotation) {
     scene_params.env_map_rotation = _rotation;
 }
 
-void RTContext::Tick(CameraRef _camera, float2 _jitter) {
+void RTContext::Tick(Camera& _camera, float2 _jitter) {
     auto& device = RenderDevice::Get();
     prev_view    = main_view;
 
     float2 delta = 2.f / float2(frame_rt.ldr_color->GetExtent().xy);
 
-    main_view.view2world = Transpose(_camera->GetToWorldMatrix());
-    main_view.world2view = Transpose(_camera->GetViewMatrix());
+    main_view.view2world = Transpose(_camera.GetToWorldMatrix());
+    main_view.world2view = Transpose(_camera.GetViewMatrix());
 
-    float4x4 view = _camera->GetViewMatrix();
-    float4x4 proj = _camera->GetProjectionMatrix();
+    float4x4 view = _camera.GetViewMatrix();
+    float4x4 proj = _camera.GetProjectionMatrix();
 
     // float4 test_prev = float4(0, 0, -1, 1);
     // test_prev        = proj * test_prev;
@@ -449,12 +450,12 @@ void RTContext::Tick(CameraRef _camera, float2 _jitter) {
     // main_view.view2clip         = Transpose(_camera->GetProjectionMatrix());
     // main_view.clip2view         = Transpose(_camera->GetProjectionMatrixInv());
     // main_view.clip2world        = Transpose(_camera->GetViewProjectionMatrixInv());
-    main_view.frustum  = _camera->GetFrustum();
-    main_view.near_far = float2(_camera->GetNearClip(), _camera->GetFarClip());
+    main_view.frustum  = _camera.GetFrustum();
+    main_view.near_far = float2(_camera.GetNearClip(), _camera.GetFarClip());
     main_view.rect =
         float2(is_ctx.GetReSTIRDIConfig().render_width, is_ctx.GetReSTIRDIConfig().render_height);
     main_view.inv_rect          = float2(1.f / main_view.rect.x, 1.f / main_view.rect.y);
-    main_view.dir_or_pos        = float4(_camera->GetPosition(), 1.f);
+    main_view.dir_or_pos        = float4(_camera.GetPosition(), 1.f);
     main_view.clip2window_scale = float2(0.5f * main_view.rect.x, -0.5f * main_view.rect.y);
     main_view.clip2window_bias  = float2(0.5f * main_view.rect.x, 0.5f * main_view.rect.y);
     main_view.window2clip_scale = float2(2.f / main_view.rect.x, -2.f / main_view.rect.y);

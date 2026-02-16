@@ -44,7 +44,7 @@ void CpuScene::InitializeLights() {
             light.color     = c_light_dir.color;
             light.intensity = c_light_dir.intensity;
             light.type      = static_cast<uint>(ELightType::Directional);
-            light.direction = r.get<ecs::CTransform>(entity).rotation.Rotate(float3(0.f, 0.f, -1.f));
+            light.direction = m_logical_scene.GetDirectionalLightDirection(entity);
             emplace_light(entity, light);
         });
     }
@@ -55,7 +55,7 @@ void CpuScene::InitializeLights() {
             light.color     = c_light_point.color;
             light.intensity = c_light_point.intensity;
             light.type      = static_cast<uint>(ELightType::Point);
-            light.position  = r.get<ecs::CTransform>(entity).translation;
+            light.position  = m_logical_scene.GetPointLightPosition(entity);
             emplace_light(entity, light);
         });
     }

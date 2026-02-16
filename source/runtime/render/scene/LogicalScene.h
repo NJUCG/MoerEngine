@@ -2,6 +2,7 @@
 
 #include "LogicalComponents.h"
 #include "RenderAPI.h"
+#include "entt/entity/fwd.hpp"
 #include <entt/fwd.hpp>
 
 namespace Moer::ecs {
@@ -54,7 +55,11 @@ public:
 
     void SBuildMeshHash();
 
-    void SUpdateAllNodeTransforms();
+    // SBuildMeshAABB 只负责将Primitive的AABB同步到Mesh
+    void SBuildMeshAABB();
+
+    // SUpdateAllNodeTransformAndAABB 负责将Node的变换和AABB同步到整个场景
+    void SUpdateAllNodeTransformAndAABB();
 
     /**
      * 在指定parent下，添加一个child节点
@@ -80,6 +85,16 @@ public:
      * 若parent_node_id为entt::null，则创建在根节点CTagRootNode下
      */
     void UCreateDefaultLights(entt::entity parent_node_id = entt::null, bool should_create_main_light = true);
+
+    /**
+     * 获取主方向光的方向
+     */
+    float3 GetDirectionalLightDirection(entt::entity entity) const;
+
+    /**
+     * 获取主点光源的位置
+     */
+    float3 GetPointLightPosition(entt::entity entity) const;
 };
 
 } // namespace Moer::ecs

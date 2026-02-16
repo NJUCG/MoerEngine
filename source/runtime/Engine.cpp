@@ -65,16 +65,17 @@ void Engine::Init(int argc, const char** argv) {
         if (rhi_type_str == "vulkan") {
             LOG_INFO("Using Vulkan as RHI backend");
             return ERHIType::Vulkan;
-        } else if (rhi_type_str == "d3d12") {
+        }
+        if (rhi_type_str == "d3d12") {
             LOG_INFO("Using D3D12 as RHI backend");
             return ERHIType::D3D12;
-        } else {
-            LOG_WARNING(
-                "Unknown RHI type '{}', fallback to Vulkan",
-                ConfigManager::GetInstance().GetConfig().engine.rhi.type
-            );
-            return ERHIType::Vulkan;
         }
+
+        LOG_WARNING(
+            "Unknown RHI type '{}', fallback to Vulkan",
+            ConfigManager::GetInstance().GetConfig().engine.rhi.type
+        );
+        return ERHIType::Vulkan;
     }();
 
     RenderDevice::Init(
@@ -131,7 +132,7 @@ void Engine::Run(const EngineHooks& hooks) {
         } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
             // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);
             m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
-                m_editor_config->GetResolution(), m_editor_config, hooks, wtf_load_scene, *m_runtime_assets
+                m_editor_config->GetResolution(), m_editor_config, hooks, *m_runtime_assets
             );
 
         } else {

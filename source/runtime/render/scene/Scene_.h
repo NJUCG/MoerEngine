@@ -84,27 +84,6 @@ struct Range {
     uint64 size;
 };
 
-struct Box3D {
-    float3 min;
-    float3 max;
-
-    float3 GetCenter() const noexcept {
-        return (min + max) * 0.5f;
-    }
-    float3 GetExtent() const noexcept {
-        return max - min;
-    }
-
-    void Expand(const float3& _point) noexcept {
-        min = Min(min, _point);
-        max = Max(max, _point);
-    }
-    void Expand(const Box3D& _box) noexcept {
-        min = Min(min, _box.min);
-        max = Max(max, _box.max);
-    }
-};
-
 struct SceneTexture {
     Render::TextureRef texture;
     uint               bindless_handle;

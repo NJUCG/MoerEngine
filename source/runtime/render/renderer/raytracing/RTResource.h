@@ -13,6 +13,8 @@
 #include <filesystem>
 #include <string_view>
 
+#include "scene/GpuScene.h"
+
 #ifndef WITH_NRD
 #define WITH_NRD 0
 #endif
@@ -70,11 +72,7 @@ struct RTContext {
 public:
     RTContext(ShaderUtils& _sd_utils, ImportanceSamplingContext& _is_ctx, BindlessArrayRef _bindless_array);
 
-    void SetBindlessHandles(
-        uint _geom_data_buf_handle,
-        uint _instance_data_buf_handle,
-        uint _material_data_buf_handle
-    );
+    void SetBindlessHandles(const GpuScene::Res& gpu_scene_res);
 
     void FillFrameResources(uint2 _resolution);
 
@@ -86,7 +84,7 @@ public:
 
     void FillLowDiscrepancySequence(CommandList& _cmd_list);
 
-    void CreateEnvMapResources(EnvMapResource _env_map, CommandList& _cmd_list);
+    void CreateEnvMapResources(TextureWithHandle _env_map, CommandList& _cmd_list);
 
     // Create light sampling buffers
     void CreateBuffersIfNeeded(

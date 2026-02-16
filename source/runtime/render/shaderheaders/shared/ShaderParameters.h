@@ -172,11 +172,24 @@ struct RaytracingBindlessHandles {
     uint motion;
     uint denoiser_normal_roughness;
 
-    //gpu scene
-    uint geom_data;
+    // // deprecated gpu scene
+    // uint geom_data;
+    // uint instance_data;
+    // uint material_data;
 
-    uint instance_data;
-    uint material_data;
+    // gpu scene (FIXME: 删除不要的hdl)
+    uint light_buf_hdl;
+    uint material_buf_hdl;
+
+    uint primitive_buf_hdl;
+    uint instance_buf_hdl;
+
+    uint position_buf_hdl;
+    uint packed_normal_buf_hdl;
+    uint packed_tangent_buf_hdl;
+    uint texcoord0_buf_hdl;
+
+    uint index_buf_hdl;
 
     //lighting
     uint poly_light_data;

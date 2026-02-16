@@ -160,6 +160,15 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
             auto& c_primitive = r.emplace<ecs::CPrimitive>(entity);
 
+            // bounding box
+
+            c_primitive.aabb = Box3D(
+                float3(mesh->mAABB.mMin.x, mesh->mAABB.mMin.y, mesh->mAABB.mMin.z),
+                float3(mesh->mAABB.mMax.x, mesh->mAABB.mMax.y, mesh->mAABB.mMax.z)
+            );
+
+            // mesh
+
             c_primitive.vertex_count = mesh->mNumVertices;
             c_primitive.index_count  = mesh->mNumFaces * 3;
 
@@ -987,9 +996,14 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
     out_logical_scene.SBuildMeshHash();
 
+    // AABB计算分为两步
+    // 1. 如果Mesh有更新，则把AABB向Mesh同步：SBuildMeshAABB
+    // 2. Node更新时，取Renderable对应的Mesh的AABB，在树上进行AABB合并：SUpdateAllNodeTransformAndAABB
+    out_logical_scene.SBuildMeshAABB();
+
     // 有camera和light，会修改CTransform的数据
     // - 例如，平行光会把自己的direction叠加到对应transform的rotation上
-    out_logical_scene.SUpdateAllNodeTransforms();
+    out_logical_scene.SUpdateAllNodeTransformAndAABB();
 
     return true;
 }

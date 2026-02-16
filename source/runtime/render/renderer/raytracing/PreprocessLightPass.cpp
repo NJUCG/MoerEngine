@@ -1,4 +1,4 @@
-﻿#include "PreprocessLightPass.h"
+#include "PreprocessLightPass.h"
 
 #include "misc/Hash.h"
 #include "misc/STL.h"
@@ -6,9 +6,6 @@
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "scene/Entity.h"
-#include "scene/MaterialInstance.h"
-#include "scene/RenderableManager.h"
 #include "scene/Scene.h"
 #include "scene/light/LightComponent.h"
 #include "scene/light/LightComponentManager.h"
@@ -59,25 +56,53 @@ PrepareLightPass::PrepareLightPass(RenderDevice& _device, ShaderManager& _manage
 void PrepareLightPass::CountEmissiveInstances(uint& _num_emissive_meshes, uint& _num_emissive_triangles) {
     _num_emissive_meshes    = 0;
     _num_emissive_triangles = 0;
-    scene.ForEach([&](Entity _entity) {
-        const MeshInfo&                mesh_info     = *RenderableManager::Get().GetMeshInfo(_entity);
-        std::span<MaterialInstanceRef> mat_instances = RenderableManager::Get().GetMaterialInstances(_entity);
-        for (uint i = 0; i < mesh_info.geometries.size(); ++i) {
-            const MaterialInstanceRef& mat_instance = mat_instances[i];
-            float3                     emissive     = mat_instance->GetParameter<float3>("emissive_factor");
-            if (emissive != float3(0.f)) {
+
+    auto& r = scene.r();
+
+    // 遍历所有有 CRenderable 的 entity
+    r.view<const ecs::CRenderable>().each([&](const auto entity, const ecs::CRenderable& c_renderable) {
+        // 获取 CMesh
+        if (!r.valid(c_renderable.mesh_entt) || !r.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
+            return; // Skip invalid mesh
+        }
+
+        const ecs::CMesh& c_mesh = r.get<ecs::CMesh>(c_renderable.mesh_entt);
+
+        // 遍历该 Mesh 的所有 Primitive
+        for (const entt::entity primitive_entt : c_mesh.primitive_entts) {
+            if (!r.valid(primitive_entt) || !r.all_of<ecs::CPrimitive>(primitive_entt)) {
+                continue; // Skip invalid primitive
+            }
+
+            const ecs::CPrimitive& c_primitive = r.get<ecs::CPrimitive>(primitive_entt);
+
+            // 获取材质
+            if (!r.valid(c_primitive.material_entt) || !r.all_of<ecs::CMaterial>(c_primitive.material_entt)) {
+                continue; // Skip invalid material
+            }
+
+            const ecs::CMaterial& c_material = r.get<ecs::CMaterial>(c_primitive.material_entt);
+
+            // 检查 emissive_factor 是否为非零
+            if (c_material.emissive_factor != float3(0.f)) {
                 _num_emissive_meshes++;
-                _num_emissive_triangles += mesh_info.geometries[i]->local_idx_count / 3;
+                _num_emissive_triangles += c_primitive.index_count / 3;
             }
         }
     });
 }
 
-static uint LightPriority(LightComponentRef _light) {
-    switch (_light->GetType()) {
-        case ELightComponentType::DIRECTIONAL:
+static uint LightPriority(entt::entity entity, const Moer::Scene& scene) {
+    auto& r = scene.r();
+    if (!r.valid(entity) || !r.all_of<ecs::CLight>(entity)) {
+        return 0;
+    }
+
+    const auto& c_light = r.get<ecs::CLight>(entity);
+    switch (c_light.type) {
+        case Moer::ELightType::Directional:
             return 1;
-        case ELightComponentType::ENVIRONMENT:
+        case Moer::ELightType::Environment:
             return 2;
         default:
             return 0;
@@ -164,80 +189,85 @@ static uint32_t PackNormalizedVector(const float3 _x) {
     packed_output |= y << 16;
     return packed_output;
 }
-static bool CanConvert(LightComponent& _light) {
-    switch (_light.GetType()) {
-        case Moer::ELightComponentType::DIRECTIONAL:
-        case Moer::ELightComponentType::SPOT:
-        case Moer::ELightComponentType::POINT:
-        case Moer::ELightComponentType::ENVIRONMENT:
-            return true;
+static bool CanConvert(entt::entity entity, const Moer::Scene& scene) {
+    auto& r = scene.r();
+    if (!r.valid(entity))
+        return false;
+
+    // 检查是否有 CLight 组件
+    if (!r.all_of<ecs::CLight>(entity))
+        return false;
+
+    const auto& c_light = r.get<ecs::CLight>(entity);
+    switch (c_light.type) {
+        case Moer::ELightType::Directional:
+            return r.all_of<ecs::CLightDirectional, ecs::CTransform>(entity);
+        case Moer::ELightType::Point:
+            return r.all_of<ecs::CLightPoint, ecs::CTransform>(entity);
+        case Moer::ELightType::Spot:
+            // TODO: CLightSpot 还未实现
+            return false;
+        case Moer::ELightType::Environment:
+            // TODO: CLightEnvironment 还未实现
+            return false;
         default:
             return false;
     }
 }
 
-static bool ConvertLight(LightComponent& _light, PolymorphicLightInfo& _info) {
-    if (!CanConvert(_light))
+static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, PolymorphicLightInfo& _info) {
+    if (!CanConvert(entity, scene))
         return false;
-    switch (_light.GetType()) {
-        case Moer::ELightComponentType::DIRECTIONAL: {
-            DirectionalLightComponent* dir_light = static_cast<DirectionalLightComponent*>(&_light);
 
-            // 0.533度是太阳的视角直径
-            float angular_size = (IsZero(dir_light->GetAngularSize()) ? 0.533f : dir_light->GetAngularSize());
+    auto&       r       = scene.r();
+    const auto& c_light = r.get<ecs::CLight>(entity);
+
+    switch (c_light.type) {
+        case Moer::ELightType::Directional: {
+            const auto& c_light_dir = r.get<ecs::CLightDirectional>(entity);
+
+            // 0.533度是太阳的视角直径（默认值，因为新系统中没有 angular_size 字段）
+            float angular_size = 0.533f;
 
             float half_angular_size_rad = Angle::DegreeToRadian(std::max(angular_size, 0.1f));
             float solid_angle           = 2 * PI * (1 - cos(half_angular_size_rad));
 
             float3 unlimited_radiance =
-                dir_light->GetColor() * dir_light->GetIntensity() / std::max(solid_angle, 1e-6f);
+                c_light_dir.color * c_light_dir.intensity / std::max(solid_angle, 1e-6f);
 
             float3 radiance = Min(unlimited_radiance, float3(g_poly_morphic_light_max_radiance));
 
             _info.color_type_flags = (uint)EPolyLightType::ELDirectional << g_poly_morphic_light_type_shift;
             PackPolyLightColor(radiance, _info);
-            _info.direction1 = PackNormalizedVector(Normalizef(dir_light->GetDirection()));
+
+            // 从 LogicalScene 获取方向光的方向
+            float3 direction = scene.GetLogicalScene().GetDirectionalLightDirection(entity);
+            _info.direction1 = PackNormalizedVector(Normalizef(direction));
             _info.scalars    = Fp32ToFp16(half_angular_size_rad) | (Fp32ToFp16(solid_angle) << 16);
             break;
         }
-        case Moer::ELightComponentType::SPOT: {
-            SpotLightComponent* spot_light = static_cast<SpotLightComponent*>(&_light);
-            float3              flux       = spot_light->GetColor() * spot_light->GetIntensity();
-            float               softness =
-                Saturate(1.f / (spot_light->GetOuterConeAngle() - spot_light->GetInnerConeAngle()));
+        case Moer::ELightType::Spot: {
+            // TODO: CLightSpot 还未实现
+            LOG_INFO("Spot light not yet supported in new ECS system");
+            return false;
+        }
+        case Moer::ELightType::Point: {
+            const auto& c_light_point = r.get<ecs::CLightPoint>(entity);
+            float3      flux          = c_light_point.color * c_light_point.intensity;
+            _info.color_type_flags    = (uint)EPolyLightType::ELPoint << g_poly_morphic_light_type_shift;
+            PackPolyLightColor(flux, _info);
 
-            _info.color_type_flags = (uint)EPolyLightType::ELSphere << g_poly_morphic_light_type_shift;
-            _info.color_type_flags |= g_poly_morphic_light_shaping_bit;
-            PackPolyLightColor(flux, _info);
-            _info.center       = spot_light->GetPosition();
-            _info.primary_axis = PackNormalizedVector(Normalizef(spot_light->GetDirection()));
-            _info.cos_cone_angle_softness =
-                Fp32ToFp16(Angle::DegreeToRadian(spot_light->GetOuterConeAngle())) |
-                (Fp32ToFp16(softness) << 16);
+            // 从 LogicalScene 获取点光的位置
+            _info.center = scene.GetLogicalScene().GetPointLightPosition(entity);
             break;
         }
-        case Moer::ELightComponentType::POINT: {
-            PointLightComponent* point_light = static_cast<PointLightComponent*>(&_light);
-            float3               flux        = point_light->GetColor() * point_light->GetIntensity();
-            _info.color_type_flags = (uint)EPolyLightType::ELPoint << g_poly_morphic_light_type_shift;
-            PackPolyLightColor(flux, _info);
-            _info.center = point_light->GetPosition();
-            break;
-        }
-        case Moer::ELightComponentType::ENVIRONMENT: {
-            EnvironmentLightComponent* env_light = static_cast<EnvironmentLightComponent*>(&_light);
-            if (!env_light->bdls_handle)
-                return false;
-            _info.color_type_flags = (uint)EPolyLightType::ELEnv << g_poly_morphic_light_type_shift;
-            PackPolyLightColor(env_light->GetColorScale(), _info);
-            _info.direction1 = env_light->bdls_handle;
-            _info.direction2 = env_light->size.x | (env_light->size.y << 16);
-            _info.scalars    = Fp32ToFp16(env_light->rotation);
-            _info.scalars |= g_poly_morphic_light_env_is_scalar_bit;
-            break;
+        case Moer::ELightType::Environment: {
+            // TODO: CLightEnvironment 还未实现
+            LOG_INFO("Environment light not yet supported in new ECS system");
+            return false;
         }
         default: {
-            LOG_INFO("Light Type {} not supported", uint(_light.GetType()));
+            LOG_INFO("Light Type {} not supported", uint(c_light.type));
             return false;
         }
     }
