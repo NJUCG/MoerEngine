@@ -503,8 +503,8 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
 
             auto& instance = m_res.rt_scene->AddInstance();
             instance.geom  = blas_ref;
-            instance.transform =
-                Matrix3x4f(ginst.world_transform.r0, ginst.world_transform.r1, ginst.world_transform.r2);
+            // Vulkan TLAS 需要 3x4 行主序（M 的前三行）；ginst.world_transform 存的是列主序 M（即 r0..r3 为 M 的列）
+            instance.transform        = ginst.world_transform.ToTransposedMatrix3x4f();
             instance.flag.need_create = true;
             instance.custom_index     = static_cast<uint>(m_res.rt_scene->GetInstanceCount() - 1);
             instance.visible_mask     = RTVM_ALL;
@@ -536,8 +536,7 @@ void GpuScene::UpdateRaytracingScene(CommandList& cmd_list) {
             if (tlas_instance_idx < m_res.rt_scene->GetInstanceCount()) {
                 const GInstance& ginst    = cpu_scene.GetInstanceForPrimitive(primitive_id, instance_idx);
                 auto&            instance = m_res.rt_scene->GetInstance(tlas_instance_idx);
-                instance.transform =
-                    Matrix3x4f(ginst.world_transform.r0, ginst.world_transform.r1, ginst.world_transform.r2);
+                instance.transform        = ginst.world_transform.ToTransposedMatrix3x4f();
                 m_res.rt_scene->MarkModified(instance.instance_id);
             }
             tlas_instance_idx++;

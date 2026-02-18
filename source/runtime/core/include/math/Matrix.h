@@ -293,6 +293,22 @@ struct Matrix<T, 4, 4> {
         str += "}";
         return str;
     }
+
+    /**
+     * 将矩阵输出3x4矩阵
+     */
+    Matrix<T, 3, 4> ToMatrix3x4f() const noexcept {
+        return Matrix<T, 3, 4>(r0, r1, r2);
+    }
+
+    /**
+     * 将矩阵转置且输出3x4矩阵
+     * 
+     * 适用于构建TLAS时，重新输出一次转置矩阵
+     */
+    Matrix<T, 3, 4> ToTransposedMatrix3x4f() const noexcept {
+        return Matrix<T, 3, 4>(r0.x, r1.x, r2.x, r3.x, r0.y, r1.y, r2.y, r3.y, r0.z, r1.z, r2.z, r3.z);
+    }
 };
 
 // clang-format off

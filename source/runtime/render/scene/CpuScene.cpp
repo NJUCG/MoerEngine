@@ -2,8 +2,10 @@
 
 #include "LogicalComponents.h"
 #include "LogicalScene.h"
+#include "log/LogSystem.h"
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
 #include <entt/entt.hpp>
+#include <sstream>
 
 namespace Moer {
 
@@ -284,8 +286,9 @@ void CpuScene::InitializeMeshes() {
 
                     m_primitive_id_to_transform_entt_arrays[primitive_id].emplace_back(
                         GInstance{
-                            .world_transform = c_transform.d_world_transform,
-                            .primitive_id    = primitive_id // 存储 Primitive ID 用于反向映射
+                            .world_transform =
+                                Transpose(c_transform.d_world_transform), // HLSL列主序，需要转置
+                            .primitive_id = primitive_id                  // 存储 Primitive ID 用于反向映射
                         }
                     );
                     instance_cnt++;
@@ -309,6 +312,20 @@ void CpuScene::InitializeMeshes() {
             prefix_sum += static_cast<uint>(m_primitive_id_to_transform_entt_arrays[i].size());
         }
     }
+
+    // {
+    //     // log
+    //     std::stringstream ss;
+    //     ss << "\nArray of GInstances Arrays: \n";
+    //     for (uint i = 0; i < m_primitive_id_to_transform_entt_arrays.size(); ++i) {
+    //         ss << "\tPrimitive " << i << ": " << m_primitive_id_to_transform_entt_arrays[i].size()
+    //            << " instances\n";
+    //         for (const auto& instance : m_primitive_id_to_transform_entt_arrays[i]) {
+    //             ss << "\t\tInstance " << instance.world_transform.ToString(false, 3) << "\n";
+    //         }
+    //     }
+    //     LOG_INFO("{}", ss.str());
+    // }
 
     {
         // 3. DrawIndexedCmdData填充
