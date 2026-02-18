@@ -396,7 +396,7 @@ void RTContext::CreateBuffersIfNeeded(
 
 void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _view, Sampler _sampler) {
     if (_target) {
-        bdls->FreeTexture(_target);
+        bdls->UnbindTexture(_target);
         if (allocated_bdls_tex.contains(_target)) {
             allocated_bdls_tex.erase(_target);
         }
@@ -407,7 +407,7 @@ void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _v
 
 void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const BufferView& _view) {
     if (_target) {
-        bdls->FreeBuffer(_target);
+        bdls->UnbindBuffer(_target);
         if (allocated_bdls_buf.contains(_target)) {
             allocated_bdls_buf.erase(_target);
         }

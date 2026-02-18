@@ -243,7 +243,7 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
             if (shadow_map_texture.tex) {
                 // TODO: 需要销毁申请的Texture吧。我发现RasterTextures.h中的texture也都没有销毁，是否是遗漏了？
                 // context.device.DestroyTexture(shadow_map_texture.tex);
-                context.bdls->FreeTexture(shadow_map_texture.handle);
+                context.bdls->UnbindTexture(shadow_map_texture.handle);
 
                 shadow_map_texture.tex = nullptr;
             }
@@ -286,7 +286,7 @@ void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
         if (b_need_to_create) {
             // 清理旧资源
             if (cube_res.tex) {
-                context.bdls->FreeTexture(cube_res.handle);
+                context.bdls->UnbindTexture(cube_res.handle);
                 cube_res.tex = nullptr;
             }
 

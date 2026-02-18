@@ -2104,7 +2104,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         return slot_idx;
     }
     static const Sampler s_spl = {ESamplerFilter::SF_LINEAR, SAM_CLAMP_TO_BORDER};
-    void VulkanBindlessArray::FreeTexture(uint _array_idx) {
+    void VulkanBindlessArray::UnbindTexture(uint _array_idx) {
         std::unique_lock<std::mutex> lk(mtx);
         if(auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()){
             const UpdateCmd& src_cmd = update_cmds[iter->second];
@@ -2149,7 +2149,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         }
     }
 
-    void VulkanBindlessArray::FreeBuffer(uint _array_idx) {
+    void VulkanBindlessArray::UnbindBuffer(uint _array_idx) {
         std::unique_lock<std::mutex> lk(mtx);
 
         if(auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()){

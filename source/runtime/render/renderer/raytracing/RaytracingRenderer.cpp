@@ -158,13 +158,13 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     auto add_on_free_buffer = [&](uint _buffer_handle) {
         on_free_buffer_callbacks.emplace_back([&, _buffer_handle](uint _timeline) {
-            bindless_array->FreeBuffer(_buffer_handle);
+            bindless_array->UnbindBuffer(_buffer_handle);
         });
     };
 
     auto add_on_free_texture = [&](uint _texture_handle) {
         on_free_buffer_callbacks.emplace_back([&, _texture_handle](uint _timeline) {
-            bindless_array->FreeTexture(_texture_handle);
+            bindless_array->UnbindTexture(_texture_handle);
         });
     };
 
@@ -629,12 +629,12 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
     for (auto& buf : allocated_buf) {
-        bindless_array->FreeBuffer(buf);
+        bindless_array->UnbindBuffer(buf);
     }
 
     const auto& allocated_tex = rt_ctx->GetAllocatedBdlsTex();
     for (auto& tex : allocated_tex) {
-        bindless_array->FreeTexture(tex);
+        bindless_array->UnbindTexture(tex);
     }
 
     for (auto& callback : on_free_buffer_callbacks) {

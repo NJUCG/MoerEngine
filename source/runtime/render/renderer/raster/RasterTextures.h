@@ -162,12 +162,12 @@ struct RasterTextures {
 
     void FreeFrameBuffers(BindlessArrayRef& bindless_array) {
         // 批量生成
-#define X(TYPE, NAME, PF, USAGE, SIZE, SR_TAG) bindless_array->FreeTexture(NAME.handle);
+#define X(TYPE, NAME, PF, USAGE, SIZE, SR_TAG) bindless_array->UnbindTexture(NAME.handle);
         RASTER_TEXTURES_TABLE
 #undef X
         // 手动维护: depth
-        bindless_array->FreeTexture(depth_linear_sampler.handle);
-        bindless_array->FreeTexture(depth_nearest_sampler.handle);
+        bindless_array->UnbindTexture(depth_linear_sampler.handle);
+        bindless_array->UnbindTexture(depth_nearest_sampler.handle);
     }
 
     Array<TextureView> GetDisplayableFrameBuffersView() {
