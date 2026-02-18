@@ -59,17 +59,7 @@ endif()
 
 # 子目录：3rdparty
 
-function(add_subdirectory_silent dir)
-    # 先全局静音
-    set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 1 CACHE INTERNAL "")
-    set(CMAKE_WARN_DEPRECATED OFF CACHE INTERNAL "")
-    # 添加第三方库
-    add_subdirectory(${dir})
-    # 恢复默认设置，只对你自己源码目录有效
-    set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 0 CACHE INTERNAL "")
-    set(CMAKE_WARN_DEPRECATED ON CACHE INTERNAL "")
-endfunction()
-
+include(${CMAKE_SOURCE_DIR}/cmake/functions.cmake)
 add_subdirectory_silent("3rdparty")
 
 # 子目录：source
