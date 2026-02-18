@@ -407,7 +407,7 @@ enum class ETextureDimension : uint8_t {
     TEX_3D,
     TEX_CUBE,
     TEX_CUBE_ARRAY,
-    NumBits = 3
+    NumBits = 5
 };
 
 enum class EParamaterType : uint8_t {

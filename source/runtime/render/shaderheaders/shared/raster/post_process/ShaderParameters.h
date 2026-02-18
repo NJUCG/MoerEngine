@@ -229,6 +229,26 @@ static CONST uint TONEMAPPING_HISTOGRAM_BIN_COUNT =
 static CONST uint TONEMAPPING_HISTOGRAM_POINT_FRAC_BITS       = 6;
 static CONST uint TONEMAPPING_HISTOGRAM_POINT_FRAC_MULTIPLIER = 1UL << TONEMAPPING_HISTOGRAM_POINT_FRAC_BITS;
 
+//MARK:Bloom
+
+struct BloomPrefilterParam {
+    float threshold;
+    float knee;
+};
+
+struct BloomDownsampleParam {
+    float2 inv_size;
+};
+
+struct BloomUpsampleParam {
+    float  filter_radius;
+    float2 inv_size;
+};
+
+struct BloomApplyParam {
+    float bloom_intensity;
+};
+
 // MARK: Main Content End
 
 #ifdef __cplusplus

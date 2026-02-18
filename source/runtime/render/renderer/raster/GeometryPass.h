@@ -33,6 +33,14 @@ public:
 
         // 1. PSO
 
+        RHIDepthStencilStateInfo ds_info =
+            RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>();
+        //TODO：开启深度模板测试提高性能
+        // ds_info.b_enable_front_face_stencil = true;
+        // ds_info.front_face_pass_stencil_op  = EStencilOp::SO_REPLACE;
+        // ds_info.b_enable_back_face_stencil  = true;
+        // ds_info.back_face_pass_stencil_op   = EStencilOp::SO_REPLACE;
+
         GfxPsoCreateInfo pso_info(
             RHIRasterizeInfo::Preset(),
             {},
@@ -43,7 +51,7 @@ public:
                 RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT),            // uv
                 RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)       // position
             },
-            RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(), // depth buf
+            ds_info, // depth buf
             context.textures.depth_linear_sampler.tex->GetFormat()
         );
 

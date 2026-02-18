@@ -196,6 +196,7 @@ float4x4 get_world_to_shadow_clip_matrix(
     float z_far_val   = aabb_max_z_in_light_space + z_delta;
     float z_range     = z_far_val - z_near_val;
 
+    // x: Width, y: Height, z: ZRange, w: NearPlane
     out_scale_data = float4(ortho_width, ortho_width, z_range, z_near_val);
 
     return world_to_light_orth_matrix; // RVO
@@ -239,31 +240,26 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
 
         if (b_need_to_create) {
 
-            // 释放已有的Texture
-            if (shadow_map_texture.tex) {
-                // TODO: 需要销毁申请的Texture吧。我发现RasterTextures.h中的texture也都没有销毁，是否是遗漏了？
-                // context.device.DestroyTexture(shadow_map_texture.tex);
-                context.bdls->UnbindTexture(shadow_map_texture.handle);
+            AssetTool::FreeRasterResourceHandle(context.bdls, shadow_map_texture);
 
-                shadow_map_texture.tex = nullptr;
-            }
+            uint2     sm_size(ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size);
+            TexConfig tex_cfg =
+                TexConfig::Depth(
+                    context.textures.depth_linear_sampler.tex->GetFormat() // 使用普通DepthBuffer的格式
+                )
+                    .Size(sm_size)
+                    .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+                    .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE);
 
-            shadow_map_texture.name = std::format("ShadowMapTexture_{}", i);
-            shadow_map_texture.tex  = context.device.CreateDepthBuffer(
-                shadow_map_texture.name.c_str(),
-                Extent2D(ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
-                context.textures.depth_linear_sampler.tex->GetFormat(), // 使用普通DepthBuffer的格式
-                1,
-                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+            AssetTool::CreateRasterResource<TexDepthTag>(
+                shadow_map_texture, context.device, std::format("ShadowMapTexture_{}", i), sm_size, tex_cfg
             );
 
-            shadow_map_texture.handle = context.bdls->AllocateTexture(
-                shadow_map_texture.tex->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
-            ); // 默认使用 Linear Sampler
+            AssetTool::AllocateRasterResourceHandle(context.bdls, shadow_map_texture, tex_cfg);
 
             LOG_DEBUG(
                 "Create ShadowMap Texture: {}, size ({}, {}), bindless handle: {}",
-                shadow_map_texture.name,
+                std::format("ShadowMapTexture_{}", i),
                 ui_config.shadow_csm_sm_size,
                 ui_config.shadow_csm_sm_size,
                 shadow_map_texture.handle
@@ -405,64 +401,74 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
     auto& r            = context.scene.r();
     auto  light_entity = light_entity_opt.value();
 
-    // Light Space Transform
     const float near_clip = camera.GetNearClip();
     const float far_clip  = camera.GetFarClip();
 
     // 从 CTransform 计算方向（默认方向为 (0, 0, -1)）
-    const auto& c_transform    = r.get<ecs::CTransform>(light_entity);
-    context.csm_data.light_dir = Normalizef(c_transform.rotation.Rotate(float3(0.f, 0.f, -1.f)));
+    const auto& c_transform = r.get<ecs::CTransform>(light_entity);
+    context.lighting_data.main_light_direction =
+        Normalizef(c_transform.rotation.Rotate(float3(0.f, 0.f, -1.f)));
 
     //lerp csm ratios
+    StaticArray<float, CSM_MAX_CASCADES>
+        local_cascade_split_points; //actual split points between near_clip and far_clip
     switch (ui_config.shadow_map_mode) {
         case EShadowMapMode::CSM_AUTO: {
-            context.csm_data.cascade_split_points = get_cascade_split_points(
+            local_cascade_split_points = get_cascade_split_points(
                 near_clip, far_clip, ui_config.shadow_csm_lerp_factor, enabled_cascade_layers
             );
-            context.csm_data.cascade_split_ratios = transform_split_points_to_ratios(
-                context.csm_data.cascade_split_points, near_clip, far_clip, enabled_cascade_layers
+            auto ratios = transform_split_points_to_ratios(
+                local_cascade_split_points, near_clip, far_clip, enabled_cascade_layers
             );
+
+            for (uint i = 0; i < enabled_cascade_layers; i++) {
+                context.lighting_data.cascade_split_ratios[i] = ratios[i];
+            }
             break;
         }
         case EShadowMapMode::CSM:
         default:
-            context.csm_data.cascade_split_points = transform_split_ratios_to_points(
+            local_cascade_split_points = transform_split_ratios_to_points(
                 ui_config.shadow_csm_cover_ratio_of_camera, near_clip, far_clip, enabled_cascade_layers
             );
-            context.csm_data.cascade_split_ratios = ui_config.shadow_csm_cover_ratio_of_camera;
+            for (uint i = 0; i < enabled_cascade_layers; i++) {
+                context.lighting_data.cascade_split_ratios[i] = ui_config.shadow_csm_cover_ratio_of_camera[i];
+            }
     }
 
     //混合
-    context.csm_data.cascade_blend_start_ratios = transform_split_points_to_ratios(
+    auto local_cascade_blend_start_ratios = transform_split_points_to_ratios(
         get_csm_blend(
-            context.csm_data.cascade_split_points,
-            ui_config.shadow_csm_blend_percentage,
-            enabled_cascade_layers
+            local_cascade_split_points, ui_config.shadow_csm_blend_percentage, enabled_cascade_layers
         ),
         near_clip,
         far_clip,
         enabled_cascade_layers
     );
+    for (uint i = 0; i < enabled_cascade_layers; i++) {
+        context.lighting_data.cascade_blend_start_ratios[i] = local_cascade_blend_start_ratios[i];
+    }
 
     for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
 
         // World to Shadow Clip Matrix
         const float frustum_near_ratio =
-            (cascade_index == 0) ? 0.0f : context.csm_data.cascade_blend_start_ratios[cascade_index - 1];
-        const float frustum_far_ratio = context.csm_data.cascade_split_ratios[cascade_index];
-        context.csm_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
-            context.csm_data.light_dir,
+            (cascade_index == 0) ? 0.0f : context.lighting_data.cascade_blend_start_ratios[cascade_index - 1];
+        const float frustum_far_ratio = context.lighting_data.cascade_split_ratios[cascade_index];
+
+        context.lighting_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
+            context.lighting_data.main_light_direction,
             camera,
             ui_config,
             frustum_near_ratio,
             frustum_far_ratio,
-            context.csm_data.scaleDatas[cascade_index]
+            context.lighting_data.scale_data[cascade_index]
         );
 
         RenderShadow(
             context,
             ui_config,
-            context.csm_data.world_to_shadow_clip[cascade_index],
+            context.lighting_data.world_to_shadow_clip[cascade_index],
             Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
             context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
             std::format("Shadow Depth Pass - {}", cascade_index)

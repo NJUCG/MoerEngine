@@ -368,8 +368,10 @@ void ImGUIRenderBackend::RenderGUI(CommandList& _cmd_list, const TextureView& _f
         GUIRender(main_draw_data, _framebuffer, _cmd_list);
     }
     {
-        auto& io = ImGui::GetIO();
-        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        ImGuiContext* g  = ImGui::GetCurrentContext();
+        auto&         io = ImGui::GetIO();
+        if (g && (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) &&
+            g->FrameCountEnded == g->FrameCount && g->FrameCountPlatformEnded < g->FrameCount) {
             ImGui::UpdatePlatformWindows();
         }
         ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();

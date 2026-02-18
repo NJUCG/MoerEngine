@@ -10,6 +10,7 @@
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
 class VkTracker {
+private:
     struct BufferRange {
         uint64 min;
         uint64 max;
@@ -32,7 +33,6 @@ class VkTracker {
         uint32_t                 src_queue_family;
         uint32_t                 dst_queue_family;
     };
-
 public:
     VkTracker(EQueueType _queue = EQueueType::Graphics) : queue_type(_queue) {
         switch (_queue) {
@@ -116,6 +116,8 @@ public:
         VkPipelineStageFlagBits2 _stage,
         uint8_t                  _mip_level        = 0,
         uint8_t                  _mip_count        = 1,
+        uint8_t                  _array_layer      = 0,
+        uint8_t                  _array_count      = 1,
         uint32_t                 _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
         uint32_t                 _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
     );
@@ -140,7 +142,8 @@ public:
         pass_type = _type;
     }
 
-    const Set<VulkanTexture*>& GetWritedStateTextures() const {
+    const UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>&
+    GetWritedStateTextures() const {
         return writed_state_textures;
     }
 
@@ -171,10 +174,17 @@ public:
         return write_blas_states;
     }
 
-    void MarkWriteable(VulkanTexture* _texture, bool _writeable = true);
+    void MarkWriteable(const TextureSubresourceKeyT<VulkanTexture>& _key, bool _writeable = true);
     void MarkWriteable(VulkanBuffer* _buffer, bool _writeable = true);
 
 private:
+    TextureSubresourceKeyT<VulkanTexture> MakeTextureStateKey(
+        VulkanTexture* _texture,
+        uint8          _mip_level,
+        uint8          _mip_count,
+        uint8          _array_layer,
+        uint8          _array_count
+    ) const;
     EPassType             pass_type;
     EQueueType            queue_type  = EQueueType::Graphics;
     VkPipelineStageFlags2 last_stage  = 0;
@@ -184,16 +194,19 @@ private:
     Array<VkImageMemoryBarrier2>  texture_barriers;
     Array<VkMemoryBarrier2>       memory_barriers;
 
-    UnorderedMap<VulkanBuffer*, BufferState>   buffer_states;
-    UnorderedMap<VulkanTexture*, TextureState> texture_states;
+    UnorderedMap<VulkanBuffer*, BufferState>                buffer_states;
+    UnorderedMap<TextureSubresourceKeyT<VulkanTexture>, TextureState, TextureSubresourceKeyHashT<VulkanTexture>>
+        texture_states;
     Set<VulkanTexture*>                        exported_textures;
     Set<VulkanBuffer*>                         exported_buffers;
 
     Set<VulkanBuffer*>  pending_buffers;
-    Set<VulkanTexture*> pending_textures;
+    UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
+        pending_textures;
 
     Set<uint64>         write_blas_states;
-    Set<VulkanTexture*> writed_state_textures;
+    UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
+        writed_state_textures;
     Set<VulkanBuffer*>  writed_state_buffers;
 
     UnorderedMap<VulkanBuffer*, BufferState> flush_buffer_states;

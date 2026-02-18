@@ -106,13 +106,8 @@ public:
         );
     }
 
-    AoPassOutput Process(
-        RasterContext&      context,
-        const RasterConfig& ui_config,
-        const Camera&       camera,
-        uint64              frame_idx,
-        TextureWithHandle   input_image
-    ) {
+    AoPassOutput
+    Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera, uint64 frame_idx) {
         TextureWithHandle ao_only     = context.textures.ao_output_ambient_only;
         static uint       ao_only_idx = 0;
         ao_only_idx ^= 1;
@@ -121,11 +116,11 @@ public:
         }
 
         if (ui_config.ao_mode == EAoMode::RTAO || ui_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
-            ProcessRtao(context, ui_config, camera, frame_idx, input_image, ao_only);
+            ProcessRtao(context, ui_config, camera, frame_idx, ao_only);
         } else if (ui_config.ao_mode == EAoMode::SSDO || ui_config.ao_mode == EAoMode::SSDO_AO_ONLY) {
-            ProcessSsdo(context, ui_config, camera, frame_idx, input_image, ao_only);
+            ProcessSsdo(context, ui_config, camera, frame_idx, ao_only);
         } else {
-            ProcessAo(context, ui_config, camera, frame_idx, input_image, ao_only);
+            ProcessAo(context, ui_config, camera, frame_idx, ao_only);
         }
 
         return AoPassOutput{
@@ -141,7 +136,6 @@ public:
         const RasterConfig& ui_config,
         const Camera&       camera,
         uint64              frame_idx,
-        TextureWithHandle   input_image,
         TextureWithHandle   ao_only
     ) {
         AoPipelineBindlessParam param;
@@ -152,11 +146,11 @@ public:
         param.ssao_sample_count = ui_config.ssao_spp;
         param.ssao_radius       = ui_config.ssao_sample_radius;
         param.ao_mode           = static_cast<uint32>(ui_config.ao_mode);
-        param.input_image       = input_image.handle;
+        param.input_image       = context.textures.lighting_output.handle;
         param.normal_tex        = context.textures.normal.handle;
         param.position_tex      = context.textures.position.handle;
         param.depth_tex         = context.textures.depth_nearest_sampler.handle;
-        param.noise_tex         = context.noise_tex.handle;
+        param.noise_tex         = context.textures.noise_tex.handle;
 
         UpdateMotionVectorData(context, camera);
         param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;
@@ -177,7 +171,6 @@ public:
         const RasterConfig& ui_config,
         const Camera&       camera,
         uint64              frame_idx,
-        TextureWithHandle   input_image,
         TextureWithHandle   ao_only
     ) {
 
@@ -188,7 +181,7 @@ public:
         param.frame_idx          = frame_idx;
         param.resolution         = float2(context.textures.ao_output.GetSize());
         param.inv_resolution     = float2(1.0) / float2(context.textures.ao_output.GetSize());
-        param.input_image        = input_image.handle;
+        param.input_image        = context.textures.lighting_output.handle;
         param.normal_tex         = context.textures.normal.handle;
         param.position_tex       = context.textures.position.handle;
         param.depth_tex          = context.textures.depth_nearest_sampler.handle;
@@ -217,7 +210,6 @@ public:
         const RasterConfig& ui_config,
         const Camera&       camera,
         uint64              frame_idx,
-        TextureWithHandle   input_image,
         TextureWithHandle   ao_only
     ) {
         SsdoPipelineBindlessParam param;
@@ -231,10 +223,10 @@ public:
         param.normal_tex              = context.textures.normal.handle;
         param.depth_tex               = context.textures.depth_nearest_sampler.handle;
         param.position_tex            = context.textures.position.handle;
-        param.noise_tex               = context.noise_tex.handle;
+        param.noise_tex               = context.textures.noise_tex.handle;
         param.ao_mode                 = static_cast<uint32>(ui_config.ao_mode);
         param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
-        param.input_image             = input_image.handle;
+        param.input_image             = context.textures.lighting_output.handle;
         param.view_projection_matrix  = Transpose(camera.GetViewProjectionMatrix());
         param.view_matrix             = Transpose(camera.GetViewMatrix());
         param.camera_position         = camera.GetPosition();

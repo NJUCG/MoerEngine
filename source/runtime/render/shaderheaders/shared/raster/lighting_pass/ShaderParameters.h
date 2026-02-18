@@ -40,6 +40,7 @@ struct MaterialPassBindlessParam {
     uint   global_param_handle;
     uint   shading_mode;
     uint   cubemap_handle;
+    uint   shadow_mask_handle;
 };
 struct LightingData {
     float4x4 world_to_shadow_clip[MAX_CSM_CASCADES];
@@ -87,6 +88,12 @@ struct LightingData {
     // Skybox
     uint  skybox_exposure_correct_enabled; // 是否启用Skybox曝光校正，找到第一个平行光，乘上它的颜色
     float skybox_exposure_correct_factor;  // 曝光校正因子
+};
+
+struct DirectionalShadowMaskPassBindlessParam {
+    uint global_param_hdl;
+    uint normal_hdl;
+    uint depth_hdl;
 };
 
 // MARK: Main Content End

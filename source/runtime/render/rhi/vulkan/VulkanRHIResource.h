@@ -735,6 +735,13 @@ public:
     void UnbindTexture(uint _slot) override;
     void UnbindBuffer(uint _slot) override;
     bool IsResourceAllocated(uint64 _handle) const;
+    bool IsTextureViewAllocated(
+        uint64 _texture,
+        uint8  _mip_level,
+        uint8  _mip_count,
+        uint8  _array_layer,
+        uint8  _array_count
+    ) const;
     void DeAllocateResource(uint64 _handle);
 
     //call on frame end free
@@ -765,6 +772,8 @@ public:
 
 private:
     std::mutex mtx;
+    void       TrackTextureView(uint _array_idx, const TextureView& _view);
+    void       UntrackTextureView(uint _array_idx);
 
 protected:
     UniquePtr<Command>          CreateUpdateCommand() override;
@@ -788,7 +797,10 @@ protected:
     Array<byte>                  buffer_dat;
     UnorderedMap<uint, uint>     temp_slot_to_cmd;
 
-    UnorderedSet<uint64> resource_allocated_set;
+    UnorderedSet<uint64>                                                   resource_allocated_set;
+    UnorderedMap<uint64, UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>>
+        texture_view_map;
+    Array<TextureSubresourceKeyT<VulkanTexture>>                           texture_view_infos;
 };
 
 #pragma endregion

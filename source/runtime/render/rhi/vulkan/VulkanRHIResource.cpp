@@ -1779,6 +1779,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     buffer_slot_offset(1),
     slot_offset(1),
     handles(_max_size),
+    texture_view_infos(_max_size),
     texture_offset_in_buffer(_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * 256) {
         BufferInfo buffer_info(
             uint64(_max_size),
@@ -1922,6 +1923,47 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         return idx;
     }
 
+    static bool RangeOverlap(uint32 _a_start, uint32 _a_count, uint32 _b_start, uint32 _b_count) {
+        uint32 a_count = _a_count == 0 ? 1u : _a_count;
+        uint32 b_count = _b_count == 0 ? 1u : _b_count;
+        uint32 a_end   = _a_start + a_count;
+        uint32 b_end   = _b_start + b_count;
+        return _a_start < b_end && _b_start < a_end;
+    }
+
+    void VulkanBindlessArray::TrackTextureView(uint _array_idx, const TextureView& _view) {
+        UntrackTextureView(_array_idx);
+        auto*  vk_texture  = ResourceCast(_view.texture);
+        uint64 texture_ptr = uint64(vk_texture);
+        if (texture_ptr == 0) {
+            return;
+        }
+        ValidateSubresourceRange(_view.texture, _view.mip_level, _view.num_mips, _view.array_layer, _view.num_array);
+        TextureSubresourceKeyT<VulkanTexture> key{
+            vk_texture, _view.mip_level, _view.num_mips, _view.array_layer, _view.num_array
+        };
+        texture_view_infos[_array_idx] = key;
+        texture_view_map[texture_ptr].insert(key);
+    }
+
+    void VulkanBindlessArray::UntrackTextureView(uint _array_idx) {
+        if (_array_idx >= texture_view_infos.size()) {
+            return;
+        }
+        const auto& key = texture_view_infos[_array_idx];
+        if (key.texture == nullptr) {
+            return;
+        }
+        uint64 texture_ptr = uint64(key.texture);
+        if (auto it = texture_view_map.find(texture_ptr); it != texture_view_map.end()) {
+            it->second.erase(key);
+            if (it->second.empty()) {
+                texture_view_map.erase(it);
+            }
+        }
+        texture_view_infos[_array_idx] = {};
+    }
+
     UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand(){
         std::unique_lock<std::mutex> lk(mtx);
 
@@ -1951,6 +1993,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                                 free_slots.Push(_cmd.array_idx);
                                 free_texture_slots.Push(_cmd.slot);
                                 resource_allocated_set.erase(handle.Ptr());
+                                UntrackTextureView(_cmd.array_idx);
 
                                 handle = Handle(0ull, 0, 0, 0);
     
@@ -2006,6 +2049,9 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                                 handles[_cmd.array_idx] = Handle((uint64)_cmd.texture.Get(), _cmd.slot, 1, VulkanBindlessArray::Texture);
                                 VulkanTexture* vk_texture = ResourceCast(_cmd.texture.Get());
                                 TextureView    view(vk_texture, _cmd.format, _cmd.mip_level, _cmd.num_mips);
+                                if (_cmd.array_count > 0) {
+                                    view = view.Slice(_cmd.array_layer, _cmd.array_count);
+                                }
 
                                 uint           src_idx;
                                 if (uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
@@ -2078,10 +2124,24 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         if (texture_slot_ptr == 0) { texture_slot = texture_slot_offset++; } else { texture_slot = texture_slot_ptr; }
         std::unique_lock<std::mutex> lk(mtx);
 
-        update_cmds.emplace_back(TextureUpdateInfo{_texture.texture, _sampler, _texture.format, slot_idx, texture_slot, _texture.mip_level, _texture.num_mips, false});
+        update_cmds.emplace_back(
+            TextureUpdateInfo{
+                _texture.texture,
+                _sampler,
+                _texture.format,
+                slot_idx,
+                texture_slot,
+                _texture.mip_level,
+                _texture.num_mips,
+                _texture.array_layer,
+                _texture.num_array,
+                false
+            }
+        );
         temp_slot_to_cmd[slot_idx] = update_cmds.size() - 1;
         // textures_allocated.emplace_back(_texture.texture, _sampler, _texture.format, slot_idx, texture_slot, _texture.mip_level, _texture.num_mips);
         resource_allocated_set.insert(uint64(_texture.texture));
+        TrackTextureView(slot_idx, _texture);
         return slot_idx;
     }
 
@@ -2120,19 +2180,21 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                             //TODO: invalidate update command
                             LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
                             resource_allocated_set.erase((uint64)_cmd.texture.Get());
+                            UntrackTextureView(_array_idx);
 
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
                         }
-                    } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>){
-                        if(_cmd.free){
-                            LOG_WARNING("You are releasing a bindless buffer that's pending releasing, array index: {}", _array_idx);
-                            return;
-                        }else{
-                            LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
-                            resource_allocated_set.erase((uint64)_cmd.buffer.Get());
-                            update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
-                        }
-                    } else if constexpr (std::is_same_v<TCmd, InvalidUpdateInfo>){
+                } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>){
+                    if(_cmd.free){
+                        LOG_WARNING("You are releasing a bindless buffer that's pending releasing, array index: {}", _array_idx);
+                        return;
+                    }else{
+                        LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
+                        resource_allocated_set.erase((uint64)_cmd.buffer.Get());
+                        UntrackTextureView(_array_idx);
+                        update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
+                    }
+                } else if constexpr (std::is_same_v<TCmd, InvalidUpdateInfo>){
                         
                     }
                 }, src_cmd
@@ -2143,7 +2205,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
         const auto& handle = handles[_array_idx];
         if(handle.type == Texture){
-            update_cmds.emplace_back(TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, true});
+            update_cmds.emplace_back(
+                TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, 0, 0, true}
+            );
+            UntrackTextureView(_array_idx);
         }else if (handle.type == Buffer){
             update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, PF_UNDEFINED, true});
         }
@@ -2189,7 +2254,9 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         const auto& handle = handles[_array_idx];
         if(handle.type == Texture){
             // textures_freed.push_back(handle.slot);
-            update_cmds.emplace_back(TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, true});
+            update_cmds.emplace_back(
+                TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, 0, 0, true}
+            );
         }else if (handle.type == Buffer){
             // buffers_freed.push_back(handle.slot);
             update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, PF_UNDEFINED, true});
@@ -2199,6 +2266,33 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
     bool VulkanBindlessArray::IsResourceAllocated(uint64 _resource) const {
         return resource_allocated_set.find(_resource) != resource_allocated_set.end();
+    }
+
+    bool VulkanBindlessArray::IsTextureViewAllocated(
+        uint64 _texture,
+        uint8  _mip_level,
+        uint8  _mip_count,
+        uint8  _array_layer,
+        uint8  _array_count
+    ) const {
+        auto it = texture_view_map.find(_texture);
+        if (it == texture_view_map.end()) {
+            return false;
+        }
+        auto* vk_texture = reinterpret_cast<VulkanTexture*>(_texture);
+        uint32 mip_level   = _mip_level;
+        uint32 mip_count   =
+            _mip_count == kRemainingSubresource ? (vk_texture->GetNumMips() - mip_level) : _mip_count;
+        uint32 array_layer = _array_layer;
+        uint32 array_count =
+            _array_count == kRemainingSubresource ? (vk_texture->GetNumArray() - array_layer) : _array_count;
+        for (const auto& view : it->second) {
+            if (RangeOverlap(view.mip_level, view.mip_count, mip_level, mip_count) &&
+                RangeOverlap(view.array_layer, view.array_count, array_layer, array_count)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     void VulkanBindlessArray::DeAllocateResource(uint64 _res){

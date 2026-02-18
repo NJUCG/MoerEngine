@@ -144,6 +144,10 @@ void VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
     CreateOrRecreate(_info);
 }
 void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
+    if (_info.size.x == 0 || _info.size.y == 0) {
+        LOG_WARNING("Swapchain recreate skipped due to zero window size.");
+        return;
+    }
     bool           b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
     VkSwapchainKHR old_sc     = handle;
     VkInstance     instance   = device.GetInstance();
@@ -158,15 +162,23 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     auto details = VkUtil::QuerySwapChainSupport(device.GetGpu(), surface);
     fmt          = ChooseSwapSurfaceFormat(details.formats, _info.preferred_format);
     ChooseSwapExtent(&size.x, &size.y, details.capabilities);
+    if (size.x == 0 || size.y == 0) {
+        LOG_WARNING("Swapchain recreate skipped due to zero swapchain extent.");
+        return;
+    }
     VkPresentModeKHR present_mode               = ChooseSwapPresentMode(details.present_modes, false);
     format                                      = (EPixelFormat)fmt.format;
     uint                     queue_family_index = device.GetQueueFamilyIndices().graphics.value();
+    uint32_t image_count = capabilities.minImageCount + 1;
+    if (capabilities.maxImageCount > 0 && image_count > capabilities.maxImageCount) {
+        image_count = capabilities.maxImageCount;
+    }
     VkSwapchainCreateInfoKHR create_info{
         .sType                 = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .pNext                 = nullptr,
         .flags                 = 0,
         .surface               = surface,
-        .minImageCount         = capabilities.minImageCount,
+        .minImageCount         = image_count,
         .imageFormat           = fmt.format,
         .imageColorSpace       = fmt.colorSpace,
         .imageExtent           = {size.x, size.y},
@@ -179,12 +191,13 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         .compositeAlpha        = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
         .presentMode           = present_mode,
         .clipped               = VK_TRUE,
-        .oldSwapchain          = VK_NULL_HANDLE
+        .oldSwapchain          = old_sc
     };
-    if (old_sc != VK_NULL_HANDLE)
-        vkDestroySwapchainKHR(device.GetDevice(), old_sc, VK_NULL_HANDLE);
     //create swapchain
     VK_CHECK_RESULT(vkCreateSwapchainKHR(device.GetDevice(), &create_info, nullptr, &handle));
+    if (old_sc != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(device.GetDevice(), old_sc, VK_NULL_HANDLE);
+    }
 
     uint image_cnt;
     vkGetSwapchainImagesKHR(device.GetDevice(), handle, &image_cnt, nullptr);

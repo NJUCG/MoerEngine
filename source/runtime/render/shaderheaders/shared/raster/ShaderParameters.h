@@ -16,19 +16,25 @@
 #ifdef __cplusplus
 #define CONST constexpr
 #include "misc/Traits.h"
+#include "shaderheaders/shared/raster/ShaderParametersUtils.h"
 #include "shaderheaders/shared/raster/SharedEnum.h"
+#include "shaderheaders/shared/raster/env_and_atmo_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
+
 namespace Moer::Render {
 #else
 #define CONST const
+#include "shared/raster/ShaderParametersUtils.h"
 #include "shared/raster/SharedEnum.h"
+#include "shared/raster/env_and_atmo_pass/ShaderParameters.h"
 #include "shared/raster/geometry_pass/ShaderParameters.h"
 #include "shared/raster/lighting_pass/ShaderParameters.h"
 #include "shared/raster/post_process/ShaderParameters.h"
 #include "shared/scene/SharedSceneStruct.h"
+
 namespace Moer {
 #endif
 

@@ -493,6 +493,47 @@ public:
     TextureView Slice(uint layer, uint count = 1) const;
 };
 
+template<typename TTexture>
+struct TextureSubresourceKeyT {
+    TTexture* texture{nullptr};
+    uint8    mip_level{0};
+    uint8    mip_count{1};
+    uint8    array_layer{0};
+    uint8    array_count{1};
+
+    bool operator==(const TextureSubresourceKeyT& _other) const {
+        return texture == _other.texture && mip_level == _other.mip_level &&
+               mip_count == _other.mip_count && array_layer == _other.array_layer &&
+               array_count == _other.array_count;
+    }
+};
+
+template<typename TTexture>
+struct TextureSubresourceKeyHashT {
+    size_t operator()(const TextureSubresourceKeyT<TTexture>& _key) const {
+        size_t hash = std::hash<uint64>()(reinterpret_cast<uint64>(_key.texture));
+        hash ^= std::hash<uint32>()(
+                    (uint32(_key.mip_level) << 24) | (uint32(_key.mip_count) << 16) |
+                    (uint32(_key.array_layer) << 8) | uint32(_key.array_count)
+                ) +
+                0x9e3779b9 + (hash << 6) + (hash >> 2);
+        return hash;
+    }
+};
+
+using TextureSubresourceKey      = TextureSubresourceKeyT<Texture>;
+using TextureSubresourceKeyHash  = TextureSubresourceKeyHashT<Texture>;
+
+inline constexpr uint8 kRemainingSubresource = 0xFF;
+
+inline void ValidateSubresourceRange(
+    Texture* _texture,
+    uint8    _mip_level,
+    uint8    _mip_count,
+    uint8    _array_layer,
+    uint8    _array_count
+);
+
 struct TextureInfo {
     TextureInfo() = default;
 
@@ -613,6 +654,30 @@ private:
     TextureInfo info;
 };
 
+inline void ValidateSubresourceRange(
+    Texture* _texture,
+    uint8    _mip_level,
+    uint8    _mip_count,
+    uint8    _array_layer,
+    uint8    _array_count
+) {
+    assert(_texture && "ValidateSubresourceRange requires a valid texture");
+    uint8 max_mips   = _texture->GetNumMips();
+    uint8 max_arrays = _texture->GetNumArray();
+    uint8 mip_count =
+        _mip_count == kRemainingSubresource ? uint8(max_mips - _mip_level) : _mip_count;
+    uint8 arr_count =
+        _array_count == kRemainingSubresource ? uint8(max_arrays - _array_layer) : _array_count;
+
+    assert(_mip_level < max_mips && "mip_level out of range");
+    assert(mip_count >= 1 && "mip_count must be >= 1");
+    assert(_mip_level + mip_count <= max_mips && "mip range out of bounds");
+
+    assert(_array_layer < max_arrays && "array_layer out of range");
+    assert(arr_count >= 1 && "array_count must be >= 1");
+    assert(_array_layer + arr_count <= max_arrays && "array range out of bounds");
+}
+
 class DepthBuffer : public RHIResource {
     friend class RenderDevice;
     DepthBuffer(TextureRef _tex) : RHIResource(RRT_DEPTH), tex_handle(_tex) {}
@@ -705,6 +770,8 @@ public:
         uint         slot;
         uint8        mip_level;
         uint8        num_mips;
+        uint8        array_layer;
+        uint8        array_count;
         bool         free;
     };
 
@@ -1182,6 +1249,8 @@ struct ColorAttachment {
     Texture*          target;
     EAttachmentAction action      = AC_CLEAR_STORE;
     float4            clear_color = {0, 0, 0, 0};
+    uint              mip_level   = 0;
+    uint              array_layer = 0;
 };
 
 // 聚合初始化会触发零初始化，但构造函数不会，所以必须设置默认值

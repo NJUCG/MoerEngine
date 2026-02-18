@@ -380,11 +380,11 @@ static bool IsWriteState(VkAccessFlags2 _access) {
            _access & VK_ACCESS_2_MEMORY_WRITE_BIT || _access & VK_ACCESS_2_TRANSFER_WRITE_BIT;
 }
 
-void VkTracker::MarkWriteable(VulkanTexture* _texture, bool _writeable) {
+void VkTracker::MarkWriteable(const TextureSubresourceKeyT<VulkanTexture>& _key, bool _writeable) {
     if (_writeable) {
-        writed_state_textures.insert(_texture);
+        writed_state_textures.insert(_key);
     } else {
-        writed_state_textures.erase(_texture);
+        writed_state_textures.erase(_key);
     }
 }
 
@@ -458,8 +458,10 @@ void VkTracker::FlushSrcState(
     VkImageLayout            _layout,
     VkPipelineStageFlagBits2 _stage
 ) {
-    if (auto it = texture_states.find(_texture); it != texture_states.end()) {
-        auto& state      = it->second;
+    for (auto& [key, state] : texture_states) {
+        if (key.texture != _texture) {
+            continue;
+        }
         state.src_access = _access;
         state.src_layout = _layout;
         state.src_stage  = _stage;
@@ -541,6 +543,8 @@ void VkTracker::RecordState(
         std::get<2>(_state),
         0,
         _texture->GetNumMips(),
+        0,
+        _texture->GetNumArray(),
         _src_queue_family,
         _dst_queue_family
     );
@@ -575,8 +579,9 @@ void VkTracker::QueueTransferReleaseResource(
     VkImageLayout  _src_layout,
     VkImageLayout  _dst_layout
 ) {
-    pending_textures.insert(_texture);
-    if (auto it = texture_states.find(_texture); it != texture_states.end()) {
+    auto key = MakeTextureStateKey(_texture, 0, _texture->GetNumMips(), 0, _texture->GetNumArray());
+    pending_textures.insert(key);
+    if (auto it = texture_states.find(key); it != texture_states.end()) {
         auto& state            = it->second;
         state.src_queue_family = _src_queue;
         state.dst_queue_family = _dst_queue;
@@ -595,7 +600,7 @@ void VkTracker::QueueTransferReleaseResource(
             _dst_queue
         };
         GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
-        texture_states[_texture] = state;
+        texture_states.emplace(key, state);
     }
     exported_textures.insert(_texture);
 }
@@ -656,8 +661,9 @@ void VkTracker::QueueTransferAcquireResource(
     VkAccessFlagBits2        _dst_access,
     VkPipelineStageFlagBits2 _dst_stage
 ) {
-    pending_textures.insert(_texture);
-    if (auto it = texture_states.find(_texture); it != texture_states.end()) {
+    auto key = MakeTextureStateKey(_texture, 0, _texture->GetNumMips(), 0, _texture->GetNumArray());
+    pending_textures.insert(key);
+    if (auto it = texture_states.find(key); it != texture_states.end()) {
         auto& state            = it->second;
         state.src_queue_family = _src_queue;
         state.dst_queue_family = _dst_queue;
@@ -677,12 +683,29 @@ void VkTracker::QueueTransferAcquireResource(
             _src_queue,
             _dst_queue
         };
-        texture_states[_texture] = state;
+        texture_states.emplace(key, state);
     }
 }
 
 uint8 Min(uint8 a, uint8 b) {
     return a < b ? a : b;
+}
+
+TextureSubresourceKeyT<VulkanTexture> VkTracker::MakeTextureStateKey(
+    VulkanTexture* _texture,
+    uint8          _mip_level,
+    uint8          _mip_count,
+    uint8          _array_layer,
+    uint8          _array_count
+) const {
+    ValidateSubresourceRange(_texture, _mip_level, _mip_count, _array_layer, _array_count);
+    uint8 mip_count = _mip_count == kRemainingSubresource ?
+                          uint8(_texture->GetNumMips() - _mip_level) :
+                          _mip_count;
+    uint8 array_count = _array_count == kRemainingSubresource ?
+                            uint8(_texture->GetNumArray() - _array_layer) :
+                            _array_count;
+    return {_texture, _mip_level, mip_count, _array_layer, array_count};
 }
 
 void VkTracker::EmplaceWriteBLAS(uint64 _blas_buf) {
@@ -700,10 +723,13 @@ void VkTracker::RecordState(
     VkPipelineStageFlagBits2 _stage,
     uint8_t                  _mip_level,
     uint8_t                  _mip_count,
+    uint8_t                  _array_layer,
+    uint8_t                  _array_count,
     uint32_t                 _src_queue_family,
     uint32_t                 _dst_queue_family
 ) {
     // Range range{_mip_level, _mip_count};
+    auto key = MakeTextureStateKey(_texture, _mip_level, _mip_count, _array_layer, _array_count);
     TextureState state{
         VK_ACCESS_2_NONE,
         VK_IMAGE_LAYOUT_UNDEFINED,
@@ -715,9 +741,9 @@ void VkTracker::RecordState(
         _dst_queue_family
     };
 
-    auto state_iter = texture_states.find(_texture);
+    auto state_iter = texture_states.find(key);
 
-    pending_textures.insert(_texture);
+    pending_textures.insert(key);
     if (state_iter != texture_states.end()) {
         auto& target_state = state_iter->second;
 
@@ -761,10 +787,10 @@ void VkTracker::RecordState(
         // }
         GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
 
-        texture_states[_texture] = {state};
+        texture_states.emplace(key, state);
     }
     bool is_write = IsWriteState(_layout, _access) || state.src_layout != state.dst_layout;
-    MarkWriteable(_texture, is_write);
+    MarkWriteable(key, is_write);
 }
 
 void VkTracker::ResolveBarriers() {
@@ -823,8 +849,8 @@ void VkTracker::ResolveBarriers() {
         }
     }
 
-    for (VulkanTexture* texture : pending_textures) {
-        if (auto it = texture_states.find(texture); it != texture_states.end()) {
+    for (const auto& key : pending_textures) {
+        if (auto it = texture_states.find(key); it != texture_states.end()) {
             auto& state = it->second;
             if (((state.dst_access & VK_ACCESS_2_SHADER_WRITE_BIT) == 0) &&
                 state.src_access == state.dst_access && state.src_stage == state.dst_stage &&
@@ -836,6 +862,7 @@ void VkTracker::ResolveBarriers() {
                 state.dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
                 continue;
             }
+            VulkanTexture* texture = key.texture;
             texture_barriers.emplace_back();
             VkImageMemoryBarrier2& barrier = texture_barriers.back();
             barrier.sType                  = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -849,10 +876,10 @@ void VkTracker::ResolveBarriers() {
             barrier.image                  = texture->GetHandle();
             barrier.subresourceRange.aspectMask =
                 VulkanEnumTranslator::METoVKImageAspectFlags(texture->GetAspectFlags());
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount     = texture->GetNumArray();
-            barrier.subresourceRange.baseMipLevel   = 0;
-            barrier.subresourceRange.levelCount     = texture->GetNumMips();
+            barrier.subresourceRange.baseArrayLayer = key.array_layer;
+            barrier.subresourceRange.layerCount     = key.array_count;
+            barrier.subresourceRange.baseMipLevel   = key.mip_level;
+            barrier.subresourceRange.levelCount     = key.mip_count;
             barrier.oldLayout                       = state.src_layout;
             barrier.newLayout                       = state.dst_layout;
 
@@ -890,7 +917,8 @@ void VkTracker::DispatchBarriers(VulkanCmdList& _cmdlist) {
 }
 
 void VkTracker::RestoreState() {
-    for (auto& [texture, state] : texture_states) {
+    for (auto& [key, state] : texture_states) {
+        VulkanTexture* texture = key.texture;
         if (exported_textures.find(texture) != exported_textures.end())
             continue;
         texture->b_has_preferred_state = true;
@@ -910,10 +938,10 @@ void VkTracker::RestoreState() {
         barrier.image                  = texture->GetHandle();
         barrier.subresourceRange.aspectMask =
             VulkanEnumTranslator::METoVKImageAspectFlags(texture->GetAspectFlags());
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount     = 1;
-        barrier.subresourceRange.baseMipLevel   = 0;
-        barrier.subresourceRange.levelCount     = texture->GetNumMips();
+        barrier.subresourceRange.baseArrayLayer = key.array_layer;
+        barrier.subresourceRange.layerCount     = key.array_count;
+        barrier.subresourceRange.baseMipLevel   = key.mip_level;
+        barrier.subresourceRange.levelCount     = key.mip_count;
         barrier.oldLayout                       = state.src_layout;
         barrier.newLayout                       = layout;
 
