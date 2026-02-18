@@ -1,4 +1,4 @@
-Checks: '-*,clang-diagnostic-*,llvm-*,-llvm-header-guard,-llvm-namespace-comment,-llvm-include-order,readability-identifier-naming'
+Checks: '-*,clang-diagnostic-*,llvm-*,-llvm-header-guard,-llvm-namespace-comment,-llvm-include-order,-llvm-else-after-return,readability-identifier-naming'
 
 CheckOptions:
   - key: readability-identifier-naming.ClassCase

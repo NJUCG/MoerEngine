@@ -108,7 +108,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         return true; // continue to next main loop body
 
-    } else if (window_state == EWindowState::SizeChanged) { // FIXME: Runtime Error
+    } else if (window_state == EWindowState::SizeChanged) {
         LOG_INFO("Size Changed.");
 
         raster_context.FreeFrameBuffers();
