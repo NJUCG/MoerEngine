@@ -8,8 +8,11 @@
 #include <gtl/phmap.hpp>
 
 #include "log/LogSystem.h"
+#include "math/Function.h"
+#include "math/Transform.h"
 #include "misc/Hash.h"
 #include "misc/Timer.h"
+#include "misc/Traits.h"
 #include "scene/LogicalScene.h"
 #include "scene/loader/io/ImageIO.h"
 #include "shaderheaders/shared/utils/Packing.h"
@@ -98,6 +101,19 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             {ai_mat[2][0], ai_mat[2][1], ai_mat[2][2], ai_mat[2][3]},
             {ai_mat[3][0], ai_mat[3][1], ai_mat[3][2], ai_mat[3][3]}
         };
+    };
+
+    auto color3_to_string = [](const aiColor3D& ai_color) -> std::string {
+        return "(" + std::to_string(ai_color.r) + ", " + std::to_string(ai_color.g) + ", " +
+               std::to_string(ai_color.b) + ")";
+    };
+    auto color4_to_string = [](const aiColor4D& ai_color) -> std::string {
+        return "(" + std::to_string(ai_color.r) + ", " + std::to_string(ai_color.g) + ", " +
+               std::to_string(ai_color.b) + ", " + std::to_string(ai_color.a) + ")";
+    };
+    auto vec3_to_string = [](const aiVector3D& ai_vec) -> std::string {
+        return "(" + std::to_string(ai_vec.x) + ", " + std::to_string(ai_vec.y) + ", " +
+               std::to_string(ai_vec.z) + ")";
     };
 
     // MARK: Initialize Logical Scene
@@ -784,46 +800,64 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         if (light->mType == aiLightSourceType::aiLightSource_DIRECTIONAL) {
             c_light.type = ELightType::Directional;
 
-            float intensity =
-                std::max(light->mColorDiffuse.r, std::max(light->mColorDiffuse.g, light->mColorDiffuse.b));
-            float3 color = color3_to_float3(light->mColorDiffuse) / intensity;
+            // 处理方向：light->mDirection 是相对于 node transform 的局部空间方向（根据 assimp 文档）
+            float3 local_dir = vec3_to_float3(light->mDirection);
+            // 归一化局部方向
+            float len = Lengthf(local_dir);
+            if (len > 1e-6f) {
+                local_dir = local_dir / len;
+            } else {
+                // 如果方向为零向量，使用默认方向
+                local_dir = float3(0.0f, 0.0f, -1.0f);
+            }
 
+            // 应用 node 的 transform 到 light direction
+            // direction 是向量，只需要应用 rotation（scale 不影响方向向量的方向，只影响长度）
+            const auto& c_transform    = r.get<ecs::CTransform>(node_entt);
+            float3x3    world_rotation = float3x3{
+                float3(c_transform.d_world_transform.r0.xyz),
+                float3(c_transform.d_world_transform.r1.xyz),
+                float3(c_transform.d_world_transform.r2.xyz)
+            };
+            float3 world_dir = Normalizef(world_rotation * local_dir);
+
+            // 存储应用了 node transform 后的方向
             r.emplace<ecs::CLightDirectional>(
-                node_entt, ecs::CLightDirectional{.color = color, .intensity = intensity}
+                node_entt,
+                ecs::CLightDirectional{.color = color3_to_float3(light->mColorDiffuse), .intensity = 1.0f}
             );
-            // 平行光direction需要通过CTransform计算，默认方向为(0, 0, -1)
 
-            if (Compare(light->mDirection.x, 0.f) != 0 || Compare(light->mDirection.y, 0.f) != 0 ||
-                Compare(light->mDirection.z, -1.0f) != 0) {
-
-                float3 target_dir = vec3_to_float3(light->mDirection);
-                float3 origin_dir = float3(0.0f, 0.0f, -1.0f);
-
-                Quaternion rot_quat = Quaternion(origin_dir, target_dir);
-
-                auto& c_transform    = r.get<ecs::CTransform>(node_entt);
-                c_transform.rotation = rot_quat * c_transform.rotation;
-                c_transform.is_dirty = true;
+            // 更新 CTransform 的 rotation，使得默认方向 (0, 0, -1) 旋转到 world_dir
+            float3 origin_dir = float3(0.0f, 0.0f, -1.0f);
+            if (Dotf(world_dir, origin_dir) < 0.9999f) {
+                Quaternion light_rot_quat = Quaternion(origin_dir, world_dir);
+                // 直接设置 rotation，因为 world_dir 已经应用了 node 的 transform
+                auto& c_transform_mut    = r.get<ecs::CTransform>(node_entt);
+                c_transform_mut.rotation = light_rot_quat;
+                c_transform_mut.is_dirty = true;
             }
 
         } else if (light->mType == aiLightSourceType::aiLightSource_POINT) {
             c_light.type = ELightType::Point;
 
+            float3 local_pos = vec3_to_float3(light->mPosition);
+
+            // 应用 node 的 transform 到 light position
+            // position 是点，需要应用完整的 transform（translation + rotation + scale）
+            const auto& c_transform = r.get<ecs::CTransform>(node_entt);
+            Transform   node_transform(c_transform.translation, c_transform.scale, c_transform.rotation);
+            float3      world_pos = node_transform * local_pos;
+
+            // 存储应用了 node transform 后的位置
             r.emplace<ecs::CLightPoint>(
                 node_entt,
-                ecs::CLightPoint{
-                    .color     = color3_to_float3(light->mColorDiffuse),
-                    .intensity = 1.0f,
-                }
+                ecs::CLightPoint{.color = color3_to_float3(light->mColorDiffuse), .intensity = 1.0f}
             );
 
-            float3 pos = vec3_to_float3(light->mPosition);
-
-            if (IsZero(pos) == false) {
-                auto& c_transform = r.get<ecs::CTransform>(node_entt);
-                c_transform.translation += pos;
-                c_transform.is_dirty = true;
-            }
+            // 更新 CTransform 的 translation 为 world_pos
+            auto& c_transform_mut       = r.get<ecs::CTransform>(node_entt);
+            c_transform_mut.translation = world_pos;
+            c_transform_mut.is_dirty    = true;
 
         } else if (light->mType == aiLightSourceType::aiLightSource_SPOT) {
             c_light.type = ELightType::Spot;
@@ -981,7 +1015,54 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
         dfs_node(root_node_entt, ai_scene->mRootNode);
 
-        LOG_INFO("Total Nodes Loaded: {}", total_node_cnt);
+        // log all nodes info
+        std::stringstream ss;
+        ss << "\nScene Info: \n";
+
+        // node & mesh
+        ss << "\tTotal Node Count: " << total_node_cnt << "\n";
+        ss << "\tAssimp Mesh Count: " << ai_scene->mNumMeshes << "\n";
+        r.view<const ecs::CNode>().each([&](auto entity_id, const ecs::CNode& c_node) {
+            // get the num of mesh from CRenderable
+            uint mesh_cnt = 0;
+            if (r.all_of<ecs::CRenderable>(entity_id)) {
+                const auto& c_renderable = r.get<ecs::CRenderable>(entity_id);
+                if (c_renderable.mesh_entt != entt::null && r.valid(c_renderable.mesh_entt) &&
+                    r.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
+                    const auto& c_mesh = r.get<ecs::CMesh>(c_renderable.mesh_entt);
+                    mesh_cnt           = static_cast<uint>(c_mesh.primitive_entts.size());
+                }
+            }
+
+            ss << "\t\tNode " << (uint32)entity_id << ": mesh count: " << mesh_cnt << "\n";
+        });
+
+        // camera
+        ss << "\tTotal Camera Count: " << camera_map.size() << ". Assimp: " << ai_scene->mNumCameras << "\n";
+        for (const auto& [name, camera] : camera_map) {
+            ss << "\t\tCamera " << name << ": " << camera->mPosition.x << ", " << camera->mPosition.y << ", "
+               << camera->mPosition.z << "\n";
+        }
+
+        // light
+        ss << "\tTotal Light Count: " << light_map.size() << ". Assimp: " << ai_scene->mNumLights << "\n";
+        for (const auto& [name, light] : light_map) {
+            if (light->mType == aiLightSourceType::aiLightSource_DIRECTIONAL) {
+                ss << "\t\tLight " << name
+                   << ": Directional. Color: " << color3_to_string(light->mColorDiffuse) << "\n";
+            } else if (light->mType == aiLightSourceType::aiLightSource_POINT) {
+                ss << "\t\tLight " << name << ": Point. Color: " << color3_to_string(light->mColorDiffuse)
+                   << "\n";
+            } else if (light->mType == aiLightSourceType::aiLightSource_SPOT) {
+                ss << "\t\tLight " << name << ": Spot. Color: " << color3_to_string(light->mColorDiffuse)
+                   << "\n";
+            } else if (light->mType == aiLightSourceType::aiLightSource_AMBIENT) {
+                ss << "\t\tLight " << name << ": Ambient. Color: " << color3_to_string(light->mColorDiffuse)
+                   << "\n";
+            }
+        }
+
+        LOG_INFO("{}", ss.str());
     }
 
     if (camera_map.size() == 0) {
