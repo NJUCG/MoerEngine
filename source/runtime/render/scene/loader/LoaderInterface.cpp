@@ -2,7 +2,6 @@
 
 #include "log/LogSystem.h"
 #include "scene/loader/gltf/Parser.h"
-#include "sceneCache/SceneCache.h"
 #include "taskgraph/TaskGraph.h"
 #include <cassert>
 #include <filesystem>
