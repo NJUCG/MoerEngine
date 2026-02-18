@@ -166,18 +166,18 @@ struct VulkanIOTaskThread {
             if (task = queue.Pop(); task) {
                 // Process the submission
                 // ...
-                auto copy_file_to_mem = [&](const FileDesc& _src, size_t _file_offset, std::span<ubyte> _dst
-                                        ) {
-                    FILE* result_handle = nullptr;
-                    fopen_s(&result_handle, (const char*)_src.handle.file, "r");
-                    if (!result_handle) {
-                        SPDLOG_ERROR("Failed to open file {}", (const char*)_src.handle.file);
-                        assert(false && "Failed to open file");
-                    }
-                    std::fseek(result_handle, _file_offset, SEEK_SET);
-                    std::fread(_dst.data(), sizeof(ubyte), _dst.size_bytes(), result_handle);
-                    std::fclose(result_handle);
-                };
+                auto copy_file_to_mem =
+                    [&](const FileDesc& _src, size_t _file_offset, std::span<ubyte> _dst) {
+                        FILE* result_handle = nullptr;
+                        fopen_s(&result_handle, (const char*)_src.handle.file, "r");
+                        if (!result_handle) {
+                            SPDLOG_ERROR("Failed to open file {}", (const char*)_src.handle.file);
+                            assert(false && "Failed to open file");
+                        }
+                        std::fseek(result_handle, _file_offset, SEEK_SET);
+                        std::fread(_dst.data(), sizeof(ubyte), _dst.size_bytes(), result_handle);
+                        std::fclose(result_handle);
+                    };
                 uint64 temp_size = 0;
                 for (auto& cmd : task->file_cmds) {
                     // Process each command
@@ -693,6 +693,7 @@ VulkanCommitSession* VulkanStorage::GetCurrentSession() {
     }
     assert(!current_session && "current session not signaled!");
     current_session = MoerNew(VulkanCommitSession)(*this);
+    return current_session;
 }
 
 VkCopyQueue& VulkanStorage::GetQueue() {
