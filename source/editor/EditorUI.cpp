@@ -6,6 +6,7 @@
 
 // Editor
 #include "EditorUIStyle.h"
+#include "scene/SceneGlobalEntry.h"
 
 // 3rd party (std)
 #include <imgui.h>
@@ -243,8 +244,8 @@ void EditorUI::ShowConfig() {
 
     /////////////////////////////////////////////////// Begin Disabled Here
     // 避免场景加载一半，切换场景或渲染器，导致崩溃
-    // bool is_scene_found_but_not_ready = Scene::IsSceneFound() && !Scene::IsSceneReady();
-    bool is_scene_found_but_not_ready = false; // FIXME: 新架构需要提供一个scene的全局访问api
+    bool is_scene_found_but_not_ready = !SceneGlobalEntry::Get().GetScene()->IsReady() &&
+                                        SceneGlobalEntry::Get().GetScene()->IsStartLoading();
     ImGui::BeginDisabled(is_scene_found_but_not_ready);
 
     // Render Method
