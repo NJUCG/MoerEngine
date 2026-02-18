@@ -11,11 +11,12 @@ namespace Moer {
 #define LIGHT_TASK_PRIMITIVE_LIGHT_BIT 0x80000000
 
 struct PrepareLightsTask {
-    uint
-        instance_geo_idx; //highest bit is LIGHT_TASK_PRIMITIVE_LIGHT_BIT, mid 19 bits is instance idx, low 12 bits is geo idx
+    uint primitive_id; // primitive_id（对于自发光三角形）或 prim_light_idx（对于场景光源）
     uint num_triangles;
-    uint light_offset;      //offset in light buffer
-    int  prev_light_offset; //offset in prev-frame light buffer, -1 if not exist
+    uint light_offset;       // offset in light buffer
+    int  prev_light_offset;  // offset in prev-frame light buffer, -1 if not exist
+    uint index_start_idx;    // 新架构：索引在 MegaBuffer 中的起始位置（元素偏移，不是字节偏移）
+    uint first_instance_idx; // 新架构：第一个 Instance 在 m_instance_buf 中的索引（用于获取 world_transform）
 };
 
 #ifdef __cplusplus
@@ -34,15 +35,16 @@ enum EPolyLightType
     ELPoint,
     ELTriangleIndirect
 };
-static const float3 g_poly_morphic_light_max_radiance      = float3(1e4f, 1e4f, 1e4f);
-static const uint   g_poly_morphic_light_type_shift        = 24;
-static const uint   g_poly_morphic_light_type_mask         = 0xf;
-static const float  g_poly_morphic_light_min_log2_radiance = -8.f;
-static const float  g_poly_morphic_light_max_log2_radiance = 40.f;
-static const uint   g_poly_morphic_light_shaping_bit       = 1 << 28;
-static const uint   g_poly_morphic_light_env_is_scalar_bit = 1 << 16;
-static const uint   g_poly_morphic_light_log_radiance_mask = 0xffff;
-static const uint   g_task_prim_light_bit                  = 0x80000000u;
+static const float g_poly_morphic_light_max_radiance      = 1e4f;
+static const float g_poly_morphic_light_max_flux          = 1.0f;
+static const uint  g_poly_morphic_light_type_shift        = 24;
+static const uint  g_poly_morphic_light_type_mask         = 0xf;
+static const float g_poly_morphic_light_min_log2_radiance = -8.f;
+static const float g_poly_morphic_light_max_log2_radiance = 40.f;
+static const uint  g_poly_morphic_light_shaping_bit       = 1 << 28;
+static const uint  g_poly_morphic_light_env_is_scalar_bit = 1 << 16;
+static const uint  g_poly_morphic_light_log_radiance_mask = 0xffff;
+static const uint  g_task_prim_light_bit                  = 0x80000000u;
 
 //////////////////////////////////////////////////////////////////////////
 //Common definitions
@@ -77,13 +79,18 @@ struct RLightInfo {
 };
 
 struct PrepareLightsParams {
-    uint instance_data_handle;
-    uint geometry_data_handle;
-    uint material_data_handle;
+    // 新架构：使用 GPrimitive, GInstance, GMaterial 和 MegaBuffers
+    uint primitive_buf_hdl;  // GPrimitive 数组的 bindless handle
+    uint instance_buf_hdl;   // GInstance 数组的 bindless handle
+    uint material_buf_hdl;   // GMaterial 数组的 bindless handle
+    uint position_buf_hdl;   // CtxMegaBuffers.position 的 bindless handle
+    uint index_buf_hdl;      // CtxMegaBuffers.index 的 bindless handle
+    uint texcoord0_buf_hdl;  // CtxMegaBuffers.texcoord0 的 bindless handle（用于自发光纹理）
+    uint primitive_to_light; // primitive_id -> light_offset 映射数组的 bindless handle
+
     uint num_tasks;
     uint cur_light_offset;
     uint prev_light_offset;
-    uint geom_inst_to_light;
 };
 
 struct EnvironmentMapParams {};

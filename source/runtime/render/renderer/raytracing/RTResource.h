@@ -91,7 +91,7 @@ public:
         uint _num_emissive_meshes,
         uint _num_emissive_triangles,
         uint _num_prim_lights,
-        uint _num_geom_instance
+        uint _max_primitives
     );
 
     void Tick(Camera& _camera, float2 _jitter);
@@ -126,10 +126,10 @@ public:
     ViewParam main_view{};
     ViewParam prev_view{};
 
-    BufferRef geo_instance_to_light_buf;
     BufferRef light_mapping_buf;
     BufferRef prim_light_buf;
     BufferRef task_buf;
+    BufferRef primitive_to_light_buf; // primitive_id -> light_offset 映射
     // polymorphic light info
     BufferRef light_data_buf;
 
@@ -150,7 +150,6 @@ public:
 
     uint max_emissive_meshes;
     uint max_emissive_triangles;
-    uint max_geom_instance;
     uint max_prim_lights;
 
     FrameResources   frame_rt;

@@ -456,8 +456,8 @@ uint GetLightIndex(uint _instance_idx, uint _geom_idx, uint _prim_idx) {
     Moer::GInstance instance     = instance_buf.Load<Moer::GInstance>(_instance_idx);
     uint            primitive_id = instance.primitive_id;
 
-    // 使用 primitive_to_light 映射（存储在 geo_instance_to_light buffer 中）
-    ArrayBuffer primitive_to_light_arr = ArrayBuffer(resample_params.bindless_handles.geo_instance_to_light);
+    // 使用 primitive_to_light 映射
+    ArrayBuffer primitive_to_light_arr = ArrayBuffer(resample_params.bindless_handles.primitive_to_light);
     light_idx                          = primitive_to_light_arr.Load<uint>(primitive_id);
 
     if (light_idx == s_invalid_light_idx)

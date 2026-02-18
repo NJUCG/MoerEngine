@@ -29,7 +29,6 @@ RTContext::RTContext(
 ) :
     max_emissive_meshes(0),
     max_emissive_triangles(0),
-    max_geom_instance(0),
     max_prim_lights(0),
     sd_utils(_sd_utils),
     is_ctx(_is_ctx),
@@ -310,11 +309,10 @@ void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _
 }
 
 void RTContext::CreateBuffersIfNeeded(
-
     uint _num_emissive_meshes,
     uint _num_emissive_triangles,
     uint _num_prim_lights,
-    uint _num_geom_instance
+    uint _max_primitives
 ) {
 
     RenderDevice& device   = RenderDevice::Get();
@@ -326,22 +324,14 @@ void RTContext::CreateBuffersIfNeeded(
         );
     }
 
-    // task_buf             = device.CreateBuffer<PrepareLightsTask>(max_emissive_meshes + max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS);
-    if (!geo_instance_to_light_buf || _num_geom_instance > max_geom_instance) {
-        geo_instance_to_light_buf = device.CreateBuffer<uint>(
-            "Raytracing::geo_instance_to_light_buf", _num_geom_instance, EBufferUsageFlags::UNORDERED_ACCESS
-        );
-        AllocateAndFreeBdlsIfNeeded(
-            bindless_handles.geo_instance_to_light, geo_instance_to_light_buf->GetView()
-        );
-    }
-    max_geom_instance      = _num_geom_instance;
     max_prim_lights        = _num_prim_lights;
     max_emissive_meshes    = _num_emissive_meshes;
     max_emissive_triangles = _num_emissive_triangles;
 
     uint max_local_lights  = max_emissive_triangles + max_prim_lights;
     uint light_buf_element = max_local_lights * 2;
+    // light_buf_element 必须大于 0（即使没有光源，也需要至少 1 个元素用于双缓冲）
+    assert(light_buf_element > 0 && "light_buf_element must be greater than 0");
 
     if (!light_mapping_buf || light_buf_element > light_data_buf->GetNumElement()) {
         light_mapping_buf = device.CreateBuffer<uint>(
@@ -356,15 +346,29 @@ void RTContext::CreateBuffersIfNeeded(
     }
 
     if (!prim_light_buf || max_prim_lights > prim_light_buf->GetNumElement()) {
-        prim_light_buf = device.CreateBuffer<PolymorphicLightInfo>(
-            "Raytracing::prim_light_buf", max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS
+        // max_prim_lights 可以为 0（没有场景光源），但 buffer 大小必须至少为 1
+        uint prim_light_buf_size = max_prim_lights > 0 ? max_prim_lights : 1u;
+        prim_light_buf           = device.CreateBuffer<PolymorphicLightInfo>(
+            "Raytracing::prim_light_buf", prim_light_buf_size, EBufferUsageFlags::UNORDERED_ACCESS
         );
     }
-    //
+
+    // 创建 primitive_to_light buffer（primitive_id -> light_offset 映射）
+    // _max_primitives 必须大于 0（场景必须至少有一个 primitive）
+    assert(_max_primitives > 0 && "_max_primitives must be greater than 0");
+    if (!primitive_to_light_buf || _max_primitives > primitive_to_light_buf->GetNumElement()) {
+        primitive_to_light_buf = device.CreateBuffer<uint>(
+            "Raytracing::primitive_to_light_buf", _max_primitives, EBufferUsageFlags::UNORDERED_ACCESS
+        );
+        AllocateAndFreeBdlsIfNeeded(bindless_handles.primitive_to_light, primitive_to_light_buf->GetView());
+    }
     {
+        // 计算 texture 尺寸
+        // light_buf_element 已经通过上面的 assert 确保 > 0
         uint texture_width  = RoundUpToPowerOf2(uint(ceil(sqrt(double(light_buf_element)))));
         uint texture_height = RoundUpToPowerOf2(uint(ceil(double(light_buf_element) / texture_width)));
-        uint mips           = Max(1u, uint(log2(Max(texture_width, texture_height))) + 1u);
+        assert(texture_width > 0 && texture_height > 0 && "Texture dimensions must be greater than 0");
+        uint mips = Max(1u, uint(log2(Max(texture_width, texture_height))) + 1u);
 
         if (!local_light_pdf_tex || texture_height != local_light_pdf_tex->GetExtent().y ||
             texture_width != local_light_pdf_tex->GetExtent().x) {

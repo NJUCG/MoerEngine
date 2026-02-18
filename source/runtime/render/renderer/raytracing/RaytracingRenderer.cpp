@@ -466,11 +466,13 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             static constexpr uint s_mesh_alloc_chunk      = 128;
             static constexpr uint s_triangle_alloc_chunk  = 1024;
             static constexpr uint s_primitive_alloc_chunk = 128;
+            uint                  max_primitives          = scene.GetCpuScene().GetPrimitiveCount();
             rt_ctx->CreateBuffersIfNeeded(
                 (num_emissive_meshes + s_mesh_alloc_chunk - 1) & ~(s_mesh_alloc_chunk - 1),
                 (num_emissive_triangles + s_triangle_alloc_chunk - 1) & ~(s_triangle_alloc_chunk - 1),
                 (scene.GetCpuScene().GetLightCount() + s_primitive_alloc_chunk - 1) &
-                    ~(s_primitive_alloc_chunk - 1)
+                    ~(s_primitive_alloc_chunk - 1),
+                max_primitives
             );
             cmd_list.UpdateBindlessArray(bindless_array);
 

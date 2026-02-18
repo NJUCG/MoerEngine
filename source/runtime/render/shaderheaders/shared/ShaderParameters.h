@@ -203,7 +203,7 @@ struct RaytracingBindlessHandles {
     uint light_index;
 
     uint restir_luminance;
-    uint geo_instance_to_light;
+    uint primitive_to_light;
     uint local_light_pdf;
     uint env_pdf;
 
