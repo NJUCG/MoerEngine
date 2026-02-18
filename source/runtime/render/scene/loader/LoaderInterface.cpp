@@ -1,7 +1,7 @@
 #include "LoaderInterface.h"
 
 #include "log/LogSystem.h"
-#include "scene/loader/gltf/Parser.h"
+#include "scene/loader/assimp/Parser.h"
 #include "taskgraph/TaskGraph.h"
 #include <cassert>
 #include <filesystem>
@@ -10,11 +10,11 @@ namespace Moer {
 
 using LoadFunction = std::function<bool(ecs::LogicalScene&, const std::filesystem::path&)>;
 static Moer::Map<std::string, LoadFunction> scene_load_function_maps = {
-    {"gltf", Gltf::Parser::LoadSceneFromFile},
-    {"glb", Gltf::Parser::LoadSceneFromFile},
-    {"fbx", Gltf::Parser::LoadSceneFromFile},
-    {"obj", Gltf::Parser::LoadSceneFromFile},
-    {"dae", Gltf::Parser::LoadSceneFromFile},
+    {"gltf", assimp::Parser::LoadSceneFromFile},
+    {"glb", assimp::Parser::LoadSceneFromFile},
+    {"fbx", assimp::Parser::LoadSceneFromFile},
+    {"obj", assimp::Parser::LoadSceneFromFile},
+    {"dae", assimp::Parser::LoadSceneFromFile},
 };
 
 bool LoaderInterface::LoadSceneFromFile(

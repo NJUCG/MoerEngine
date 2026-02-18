@@ -18,7 +18,7 @@
 #include "shaderheaders/shared/utils/Packing.h"
 #include "taskgraph/TaskGraph.h"
 
-namespace Moer::Gltf {
+namespace Moer::assimp {
 
 int32_t GetEmbeddedTextureId(const std::string& path) {
     if (path.length() >= 2 && path[0] == '*') {
@@ -332,14 +332,14 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                     preferred_channel,
                     is_generate_mipmaps
                 );
-            } else {
-                const auto            preferred_format  = EPixelFormat::PF_R8G8B8A8_UNORM;
-                std::filesystem::path texture_file_path = file_path.parent_path() / texture_path;
-
-                return ImageIO::ReadFromFile(
-                    texture_file_path, preferred_channel, preferred_format, is_generate_mipmaps
-                );
             }
+
+            const auto            preferred_format  = EPixelFormat::PF_R8G8B8A8_UNORM;
+            std::filesystem::path texture_file_path = file_path.parent_path() / texture_path;
+
+            return ImageIO::ReadFromFile(
+                texture_file_path, preferred_channel, preferred_format, is_generate_mipmaps
+            );
         };
 
         // 初始化CTexture
@@ -452,6 +452,9 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
     // MARK: Load Materials
 
+    std::stringstream mat_ss;
+    mat_ss << "\nMaterial Info: \n";
+
     gtl::flat_hash_map<uint, entt::entity> material_index_to_entity_map;
     {
         gtl::flat_hash_map<std::string, entt::entity> mat_map;
@@ -467,7 +470,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                         "Texture is needed, but hasn't loaded. Perhaps internal code error"
                     );
 
-                    LOG_DEBUG("\tLinked Texture: {} for type {}", texture_path.C_Str(), type_name);
+                    mat_ss << "\t\tLinked Texture: " << texture_path.C_Str() << " for type " << type_name
+                           << "\n";
 
                     return tex_map[texture_path.C_Str()];
                 }
@@ -513,7 +517,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 );
 
                 out_mat.metallic_roughness_map_entt = tex_map[texture_path.C_Str()];
-                LOG_DEBUG("\tLinked Texture: {} for type {}", texture_path.C_Str(), "metallic roughness map");
+                mat_ss << "\t\tLinked Texture: " << texture_path.C_Str() << " for type metallic roughness map"
+                       << "\n";
             }
         };
 
@@ -523,7 +528,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 return;
 
             out_mat.albedo_factor = color4_to_float4(albedo_factor);
-            LOG_DEBUG("\tLoad Albedo Factor: {}", out_mat.albedo_factor.ToString());
+            mat_ss << "\t\tLoad Albedo Factor: " << out_mat.albedo_factor.ToString() << "\n";
         };
 
         auto load_emissive_factor = [&](ecs::CMaterial& out_mat, const aiMaterial* mat) {
@@ -532,7 +537,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 return;
 
             out_mat.emissive_factor = color3_to_float3(emissive_factor);
-            LOG_DEBUG("\tLoad Emissive Factor: {}", out_mat.emissive_factor.ToString());
+            mat_ss << "\t\tLoad Emissive Factor: " << out_mat.emissive_factor.ToString() << "\n";
         };
 
         auto load_metallic_factor = [&](ecs::CMaterial& out_mat, const aiMaterial* mat) {
@@ -541,7 +546,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 return;
 
             out_mat.metallic_factor = static_cast<float>(metallic_factor);
-            LOG_DEBUG("\tLoad Metallic Factor: {}", out_mat.metallic_factor);
+            mat_ss << "\t\tLoad Metallic Factor: " << out_mat.metallic_factor << "\n";
         };
 
         auto load_roughness_factor = [&](ecs::CMaterial& out_mat, const aiMaterial* mat) {
@@ -550,20 +555,20 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 return;
 
             out_mat.roughness_factor = static_cast<float>(roughness_factor);
-            LOG_DEBUG("\tLoad Roughness Factor: {}", out_mat.roughness_factor);
+            mat_ss << "\t\tLoad Roughness Factor: " << out_mat.roughness_factor << "\n";
         };
 
         auto load_alpha_param = [&](ecs::CMaterial& out_mat, const aiMaterial* mat) {
             aiString alpha_mode;
 
             if (mat->Get(AI_MATKEY_GLTF_ALPHAMODE, alpha_mode) != AI_SUCCESS) {
-                LOG_DEBUG("\tLoad Alpha Mode: OPAQUE (Default)");
+                mat_ss << "\t\tLoad Alpha Mode: OPAQUE (Default)" << "\n";
                 return;
             }
 
             if (alpha_mode == aiString("BLEND")) {
                 out_mat.alpha_mode = EAlphaMode::Blend;
-                LOG_DEBUG("\tLoad Alpha Mode: BLEND");
+                mat_ss << "\t\tLoad Alpha Mode: BLEND" << "\n";
 
             } else if (alpha_mode == aiString("MASK")) {
                 out_mat.alpha_mode = EAlphaMode::Mask;
@@ -571,11 +576,11 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 float alpha_cutoff = 0.5f;
                 if (mat->Get(AI_MATKEY_GLTF_ALPHACUTOFF, alpha_cutoff) == AI_SUCCESS) {
                     out_mat.alpha_cutoff = static_cast<float>(alpha_cutoff);
-                    LOG_DEBUG("\tLoad Alpha Mode: MASK. And Alpha Cutoff: {}", out_mat.alpha_cutoff);
+                    mat_ss << "\t\tLoad Alpha Mode: MASK. And Alpha Cutoff: " << out_mat.alpha_cutoff << "\n";
                 }
 
             } else if (alpha_mode == aiString("OPAQUE")) {
-                LOG_DEBUG("\tLoad Alpha Mode: OPAQUE");
+                mat_ss << "\t\tLoad Alpha Mode: OPAQUE" << "\n";
 
             } else {
                 assert(false && "Unknown Alpha Mode in glTF material.");
@@ -603,7 +608,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
             // Load Data
 
-            LOG_DEBUG("Loading Material: {}", material_name);
+            mat_ss << "\tLoading Material: " << material_name << "\n";
 
             load_normal_map(c_material, material);
             load_ao_map(c_material, material);
@@ -881,8 +886,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
     // MARK: Load Node
 
+    uint32 total_node_cnt = 0;
     {
-
         auto decompose_transform = [&](const aiMatrix4x4& ai_mat,
                                        float3&            out_translation,
                                        Quaternion&        out_rotation_quaternion,
@@ -917,8 +922,6 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             c_scene_meta_data.root_node_entt = root_node_entt;
             c_scene_meta_data.scene_path     = file_path.string();
         }
-
-        uint32 total_node_cnt = 0;
 
         // Traverse Nodes
         std::function<void(entt::entity, const aiNode*)> dfs_node = [&](const entt::entity x,
@@ -1014,6 +1017,31 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         };
 
         dfs_node(root_node_entt, ai_scene->mRootNode);
+    }
+
+    if (camera_map.size() == 0) {
+        out_logical_scene.UCreateDefaultCamera();
+    }
+
+    if (light_map.size() == 0) {
+        out_logical_scene.UCreateDefaultLights();
+    }
+
+    out_logical_scene.SBuildPrimitiveHash();
+
+    out_logical_scene.SBuildMeshHash();
+
+    // AABB计算分为两步
+    // 1. 如果Mesh有更新，则把AABB向Mesh同步：SBuildMeshAABB
+    // 2. Node更新时，取Renderable对应的Mesh的AABB，在树上进行AABB合并：SUpdateAllNodeTransformAndAABB
+    out_logical_scene.SBuildMeshAABB();
+
+    // 有camera和light，会修改CTransform的数据
+    // - 例如，平行光会把自己的direction叠加到对应transform的rotation上
+    out_logical_scene.SUpdateAllNodeTransformAndAABB();
+
+    {
+        // log
 
         // log all nodes info
         std::stringstream ss;
@@ -1034,7 +1062,14 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 }
             }
 
-            ss << "\t\tNode " << (uint32)entity_id << ": mesh count: " << mesh_cnt << "\n";
+            ss << "\t\tNode " << (uint32)entity_id << ": mesh count: " << mesh_cnt;
+
+            if (r.all_of<ecs::CTransform>(entity_id)) {
+                const ecs::CTransform& c_transform = r.get<ecs::CTransform>(entity_id);
+                ss << ": transform: " << c_transform.d_world_transform.ToString(false, 3);
+            }
+
+            ss << "\n";
         });
 
         // camera
@@ -1063,30 +1098,10 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         }
 
         LOG_INFO("{}", ss.str());
+        LOG_INFO("{}", mat_ss.str());
     }
-
-    if (camera_map.size() == 0) {
-        out_logical_scene.UCreateDefaultCamera();
-    }
-
-    if (light_map.size() == 0) {
-        out_logical_scene.UCreateDefaultLights();
-    }
-
-    out_logical_scene.SBuildPrimitiveHash();
-
-    out_logical_scene.SBuildMeshHash();
-
-    // AABB计算分为两步
-    // 1. 如果Mesh有更新，则把AABB向Mesh同步：SBuildMeshAABB
-    // 2. Node更新时，取Renderable对应的Mesh的AABB，在树上进行AABB合并：SUpdateAllNodeTransformAndAABB
-    out_logical_scene.SBuildMeshAABB();
-
-    // 有camera和light，会修改CTransform的数据
-    // - 例如，平行光会把自己的direction叠加到对应transform的rotation上
-    out_logical_scene.SUpdateAllNodeTransformAndAABB();
 
     return true;
 }
 
-} // namespace Moer::Gltf
+} // namespace Moer::assimp
