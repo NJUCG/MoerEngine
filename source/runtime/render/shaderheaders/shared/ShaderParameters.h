@@ -151,10 +151,17 @@ struct LightRegion {
 };
 
 struct GBufferPassParams {
-    uint geometry_instance_handle;
-    uint geometry_data_handle;
-    uint instance_data_handle;
-    uint material_data_handle;
+    // 场景结构数据
+    uint instance_buf_hdl;  // GInstance[]
+    uint primitive_buf_hdl; // GPrimitive[]
+    uint material_buf_hdl;  // GMaterial[]
+
+    // MegaBuffers
+    uint position_buf_hdl;       // CtxMegaBuffers.position
+    uint packed_normal_buf_hdl;  // CtxMegaBuffers.packed_normal
+    uint packed_tangent_buf_hdl; // CtxMegaBuffers.packed_tangent
+    uint texcoord0_buf_hdl;      // CtxMegaBuffers.texcoord0
+    uint index_buf_hdl;          // CtxMegaBuffers.index
 };
 
 struct RaytracingBindlessHandles {
@@ -200,10 +207,8 @@ struct RaytracingBindlessHandles {
     uint local_light_pdf;
     uint env_pdf;
 
-    // uint env_map;
-    // uint padding1;
-    // uint padding2;
-    // uint padding3;
+    uint padding0;
+    uint padding1;
 };
 
 struct SceneGlobalParams {

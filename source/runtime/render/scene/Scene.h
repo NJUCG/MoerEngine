@@ -107,6 +107,9 @@ public:
     const Render::GpuScene::Res& gpu_scene_res() const;
     const Render::GpuScene::Res& GetGpuSceneRes() const;
 
+    const CpuScene& cpu_scene() const;
+    const CpuScene& GetCpuScene() const;
+
     Render::BindlessArrayRef bindless_array();
     Render::BindlessArrayRef GetBindlessArray();
 

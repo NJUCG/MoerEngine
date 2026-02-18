@@ -10,6 +10,7 @@
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
 
 #include "LogicalScene.h"
+#include "RenderAPI.h"
 #include "rhi/RHICommandDrawData.h" // 为了准备IndirectDrawCommand
 #include <entt/entt.hpp>
 
@@ -31,7 +32,7 @@ class GpuScene;
  * TODO: LogicalScene数据变更时，增量更新CpuScene数据
  *       考虑使用 事件队列 或 观察者模式
  */
-class CpuScene {
+class RENDER_API CpuScene {
 
     friend class Render::GpuScene; // 友元类GpuScene
 
@@ -43,6 +44,48 @@ public:
     CpuScene& operator=(const CpuScene&) = delete;
 
     void Update();
+
+    /**
+     * 获取 Primitive ID（在 m_primitive_buf 中的索引）
+     * @param primitive_entt CPrimitive 的 entity
+     * @return primitive_id，如果不存在则返回无效值（需要调用者检查）
+     */
+    uint GetPrimitiveId(entt::entity primitive_entt) const;
+
+    /**
+     * 获取指定 Primitive 的第一个 Instance 在 m_instance_buf 中的索引
+     * @param primitive_id Primitive ID
+     * @return 第一个 Instance 的索引，如果不存在则返回 UINT_MAX
+     */
+    uint GetFirstInstanceIndex(uint primitive_id) const;
+
+    /**
+     * 获取 Primitive 数量（用于确定数组大小）
+     * @return Primitive 数量
+     */
+    uint GetPrimitiveCount() const;
+
+    /**
+     * 获取指定 Primitive 的 Instance 数量（与 m_primitive_id_to_transform_entt_arrays[primitive_id].size() 一致）
+     * @param primitive_id Primitive ID
+     * @return 该 Primitive 的 Instance 数量，若 primitive_id 无效则返回 0
+     */
+    uint GetInstanceCountForPrimitive(uint primitive_id) const;
+
+    /**
+     * 获取指定 Primitive 下第 instance_idx 个 GInstance（只读）
+     * 顺序与 m_instance_buf 中该 Primitive 的 Instance 段一致。
+     * @param primitive_id Primitive ID
+     * @param instance_idx 该 Primitive 内的 Instance 索引 [0, GetInstanceCountForPrimitive(primitive_id))
+     * @return 对应的 GInstance 引用
+     */
+    const GInstance& GetInstanceForPrimitive(uint primitive_id, uint instance_idx) const;
+
+    /**
+     * 获取 Light 数量
+     * @return Light 数量
+     */
+    uint GetLightCount() const;
 
 private:
     ecs::LogicalScene& m_logical_scene;
@@ -94,6 +137,8 @@ private:
 
     UnorderedMap<entt::entity, uint> m_map_primitive_entity_to_id;
     Array<Array<GInstance>>          m_primitive_id_to_transform_entt_arrays;
+    Array<uint>
+        m_primitive_id_to_first_instance_idx; // m_primitive_id_to_transform_entt_arrays的前缀和，表示每个Primitive对应的第一个Instance在m_instance_buf中的索引
 
     // Mesh必须在Materials之后初始化，因为Primitive需要Material ID
     void InitializeMeshes();

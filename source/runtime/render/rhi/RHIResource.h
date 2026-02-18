@@ -900,6 +900,7 @@ public:
 
     RENDER_API RaytracingInstance&       GetInstance(uint _array_idx);
     RENDER_API const RaytracingInstance& GetInstance(uint _array_idx) const;
+    RENDER_API uint                      GetInstanceCount() const;
 
 protected:
     Array<RaytracingInstance> instances;

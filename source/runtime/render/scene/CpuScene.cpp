@@ -23,6 +23,48 @@ void CpuScene::Update() {
     UpdateMeshes();
 }
 
+uint CpuScene::GetPrimitiveId(entt::entity primitive_entt) const {
+    auto it = m_map_primitive_entity_to_id.find(primitive_entt);
+    if (it != m_map_primitive_entity_to_id.end()) {
+        return it->second;
+    }
+    return UINT_MAX; // 返回无效值
+}
+
+uint CpuScene::GetFirstInstanceIndex(uint primitive_id) const {
+    if (primitive_id >= m_primitive_id_to_first_instance_idx.size()) {
+        return UINT_MAX;
+    }
+    // 检查该 Primitive 是否有 Instance
+    if (m_primitive_id_to_transform_entt_arrays[primitive_id].empty()) {
+        return UINT_MAX;
+    }
+    // O(1) 查询：直接使用前缀和数组
+    return m_primitive_id_to_first_instance_idx[primitive_id];
+}
+
+uint CpuScene::GetPrimitiveCount() const {
+    return static_cast<uint>(m_primitive_buf.size());
+}
+
+uint CpuScene::GetInstanceCountForPrimitive(uint primitive_id) const {
+    if (primitive_id >= m_primitive_id_to_transform_entt_arrays.size()) {
+        return 0;
+    }
+    return static_cast<uint>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
+}
+
+const GInstance& CpuScene::GetInstanceForPrimitive(uint primitive_id, uint instance_idx) const {
+    assert(primitive_id < m_primitive_id_to_transform_entt_arrays.size());
+    auto& arr = m_primitive_id_to_transform_entt_arrays[primitive_id];
+    assert(instance_idx < arr.size());
+    return arr[instance_idx];
+}
+
+uint CpuScene::GetLightCount() const {
+    return static_cast<uint>(m_light_buf.size());
+}
+
 void CpuScene::InitializeLights() {
     auto& r = m_logical_scene.r();
 
@@ -186,6 +228,11 @@ void CpuScene::InitializeMeshes() {
                 g_primitive.attribute_mask |= GPrimitiveEAttributeMask::Texcoord0;
                 g_primitive.texcoord0_start_idx = static_cast<uint>(c_primitive.texcoord0.start_idx);
             }
+            if (c_primitive.index.is_valid) {
+                g_primitive.index_start_idx = static_cast<uint>(c_primitive.index.start_idx);
+            } else {
+                g_primitive.index_start_idx = 0; // 默认值
+            }
 
             uint primitive_id = static_cast<uint>(m_primitive_buf.size());
             m_primitive_buf.emplace_back(g_primitive);
@@ -250,10 +297,16 @@ void CpuScene::InitializeMeshes() {
     {
         m_instance_buf.reserve(instance_cnt);
 
-        for (auto& array : m_primitive_id_to_transform_entt_arrays) {
-            for (const auto& instance : array) {
+        // 构建前缀和数组：m_primitive_id_to_first_instance_idx[i] = 前 i 个 Primitive 的 Instance 总数
+        m_primitive_id_to_first_instance_idx.clear();
+        m_primitive_id_to_first_instance_idx.resize(m_primitive_id_to_transform_entt_arrays.size());
+        uint prefix_sum = 0;
+        for (uint i = 0; i < m_primitive_id_to_transform_entt_arrays.size(); ++i) {
+            m_primitive_id_to_first_instance_idx[i] = prefix_sum;
+            for (const auto& instance : m_primitive_id_to_transform_entt_arrays[i]) {
                 m_instance_buf.emplace_back(instance);
             }
+            prefix_sum += static_cast<uint>(m_primitive_id_to_transform_entt_arrays[i].size());
         }
     }
 
@@ -269,9 +322,6 @@ void CpuScene::InitializeMeshes() {
 
         m_draw_cmd_buf.clear();
         m_draw_cmd_buf.reserve(m_primitive_buf.size());
-
-        // 计算每个 Primitive 的 first_instance (前面所有 Primitive 的 Instance 总数)
-        uint cumulative_instance_count = 0;
 
         // 再次遍历 CPrimitive，顺序与第一次遍历一致
         r.view<const ecs::CPrimitive>().each([&](const auto entity, const ecs::CPrimitive& c_primitive) {
@@ -300,13 +350,10 @@ void CpuScene::InitializeMeshes() {
             // 因为顶点数据通过 GPrimitive 中的 position_offset 等字段访问
             draw_cmd_data.vertex_offset = 0;
 
-            // first_instance: 该 Primitive 的第一个 Instance 在 instance_buf 中的索引
-            draw_cmd_data.first_instance = cumulative_instance_count;
+            // first_instance: 直接使用前缀和数组（O(1)查询）
+            draw_cmd_data.first_instance = m_primitive_id_to_first_instance_idx[primitive_id];
 
             m_draw_cmd_buf.emplace_back(draw_cmd_data);
-
-            // 累加 Instance 数量，供下一个 Primitive 使用
-            cumulative_instance_count += instance_cnt;
         });
     }
 

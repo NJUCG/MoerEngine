@@ -60,10 +60,11 @@ struct GPrimitive {
     uint material_idx;
     uint attribute_mask;
 
-    uint position_start_idx;       // in element (not bytes)
-    uint packed_normal_start_idx;  // in element (not bytes)
-    uint packed_tangent_start_idx; // in element (not bytes)
-    uint texcoord0_start_idx;      // in element (not bytes)
+    uint position_start_idx;       // in element (float3)
+    uint packed_normal_start_idx;  // in element (uint)
+    uint packed_tangent_start_idx; // in element (uint)
+    uint texcoord0_start_idx;      // in element (float2)
+    uint index_start_idx;          // in uint（index buffer的元素是以uint为单位，而非uint3）
 };
 
 /**

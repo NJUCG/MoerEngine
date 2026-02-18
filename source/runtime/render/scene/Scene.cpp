@@ -104,6 +104,15 @@ const Render::GpuScene::Res& Scene::GetGpuSceneRes() const {
     return gpu_scene_res();
 }
 
+const CpuScene& Scene::cpu_scene() const {
+    assert(m_cpu_scene && "Scene is not ready");
+    return *m_cpu_scene;
+}
+
+const CpuScene& Scene::GetCpuScene() const {
+    return cpu_scene();
+}
+
 Render::BindlessArrayRef Scene::bindless_array() {
     if (!m_bindless_array) {
         m_bindless_array = Render::RenderDevice::Get().CreateBindlessArray();

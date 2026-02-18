@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PixelFormat.h"
+#include "entt/entity/fwd.hpp"
 #include "misc/BoundingBox.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
@@ -57,6 +58,7 @@ struct CLightSpot { // 聚光灯
     // TODO
 };
 struct CLightEnvironment { // IBL
+    entt::entity env_map_entt = entt::null;
     // TODO
 };
 
@@ -126,7 +128,7 @@ struct CPrimitive {
     BufferView texcoord0;
 
     uint32     index_count = 0;
-    BufferView index;
+    BufferView index; // index buffer的stride是uint，而非uint3
 
     Box3D aabb = Box3D(); // 以Mesh为单位的AABB
 

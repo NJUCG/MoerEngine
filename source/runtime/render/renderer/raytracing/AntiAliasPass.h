@@ -7,7 +7,6 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 
-
 namespace Moer::Render::Raytracing {
 
 class TAAPipeline : public ComputePipeline {

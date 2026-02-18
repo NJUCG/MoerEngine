@@ -465,19 +465,15 @@ float3 GetEnvMapRadiance(float3 _dir) {
 uint GetLightIndex(uint _instance_idx, uint _geom_idx, uint _prim_idx) {
   uint light_idx = s_invalid_light_idx;
 
-  ArrayBuffer inst_buf_arr =
-      (ArrayBuffer)resample_params.bindless_handles.instance_data;
+  // 从 GInstance 获取 primitive_id
+  ArrayBuffer instance_buf = ArrayBuffer(resample_params.bindless_handles.instance_buf_hdl);
+  Moer::GInstance instance = instance_buf.Load<Moer::GInstance>(_instance_idx);
+  uint primitive_id = instance.primitive_id;
 
-  ByteAddressBuffer inst_buf = inst_buf_arr.GetByteAddressBuffer();
-  InstanceData instance =
-      LoadInstanceData(inst_buf, _instance_idx * sizeof(InstanceData));
-  uint geom_idx = instance.first_geom_idx + _geom_idx;
-  ArrayBuffer geom_to_light_arr =
-      (ArrayBuffer)resample_params.bindless_handles.geo_instance_to_light;
-  light_idx = geom_to_light_arr.Load<uint>(geom_idx);
-  if(_instance_idx == 5 && light_idx < 0)
-  printf("instance_idx %d, geom_idx %d, prim_idx %d, light_idx %d\n",
-         _instance_idx, _geom_idx, _prim_idx, light_idx);
+  // 使用 primitive_to_light 映射（存储在 geo_instance_to_light buffer 中）
+  ArrayBuffer primitive_to_light_arr = ArrayBuffer(resample_params.bindless_handles.geo_instance_to_light);
+  light_idx = primitive_to_light_arr.Load<uint>(primitive_id);
+
   if (light_idx == s_invalid_light_idx)
     return light_idx;
   return light_idx + _prim_idx;
@@ -582,17 +578,19 @@ struct RayPayload {
 bool EvalTransparentMaterial(uint _instance_id, uint _geom_id, uint _tri_id,
                              float2 _ray_barycentrics,
                              inout float3 _throughput) {
-  ArrayBuffer instance_data_array =
-      ArrayBuffer(resample_params.bindless_handles.instance_data);
-  ArrayBuffer geom_data_array =
-      ArrayBuffer(resample_params.bindless_handles.geom_data);
-  ArrayBuffer material_data_array =
-      ArrayBuffer(resample_params.bindless_handles.material_data);
+  // 构造 GBufferPassParams（从 ResampleConstants 中获取 bindless handles）
+  Moer::GBufferPassParams gbuffer_params;
+  gbuffer_params.instance_buf_hdl       = resample_params.bindless_handles.instance_buf_hdl;
+  gbuffer_params.primitive_buf_hdl      = resample_params.bindless_handles.primitive_buf_hdl;
+  gbuffer_params.material_buf_hdl       = resample_params.bindless_handles.material_buf_hdl;
+  gbuffer_params.position_buf_hdl       = resample_params.bindless_handles.position_buf_hdl;
+  gbuffer_params.packed_normal_buf_hdl  = resample_params.bindless_handles.packed_normal_buf_hdl;
+  gbuffer_params.packed_tangent_buf_hdl = resample_params.bindless_handles.packed_tangent_buf_hdl;
+  gbuffer_params.texcoord0_buf_hdl      = resample_params.bindless_handles.texcoord0_buf_hdl;
+  gbuffer_params.index_buf_hdl          = resample_params.bindless_handles.index_buf_hdl;
+
   Moer::GeometryRecord geom = Moer::GetGeometryRecordFrom(
-      _instance_id, _geom_id, _tri_id, _ray_barycentrics, Moer::EGA_UV,
-      instance_data_array.GetByteAddressBuffer(),
-      geom_data_array.GetByteAddressBuffer(),
-      material_data_array.GetByteAddressBuffer());
+      gbuffer_params, _instance_id, _tri_id, _ray_barycentrics, Moer::EGA_UV);
 
   Moer::MaterialSample mat = Moer::SampleGeometryMaterial(
       geom, 0.f, 0.f, 0.f, Moer::EMA_BaseColor | Moer::EMA_Transmission);

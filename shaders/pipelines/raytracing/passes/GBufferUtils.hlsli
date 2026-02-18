@@ -20,13 +20,16 @@ RayDesc SetupPrimaryRay(uint2 pixelPosition, Moer::ViewParam _view) {
 }
 
 // Get 2.5D motion for denoising
+// 用两个 float4x4 矩阵替代旧的 InstanceData
+// _model2world:      当前帧的模型→世界变换
+// _prev_model2world: 上一帧的模型→世界变换
 float3 GetMotion(Moer::ViewParam _view, Moer::ViewParam _prev_view,
-                 Moer::InstanceData _instance, float3 _model_pos,
-                 float3 _model_pos_prev, out float _clip_depth,
-                 out float _view_depth) {
-  float3 world_pos = mul(_instance.model2world, float4(_model_pos, 1.0f)).xyz;
+                 float4x4 _model2world, float4x4 _prev_model2world,
+                 float3 _model_pos, float3 _model_pos_prev,
+                 out float _clip_depth, out float _view_depth) {
+  float3 world_pos = mul(_model2world, float4(_model_pos, 1.0f)).xyz;
   float3 world_pos_prev =
-      mul(_instance.prev_model2world, float4(_model_pos_prev, 1.0f)).xyz;
+      mul(_prev_model2world, float4(_model_pos_prev, 1.0f)).xyz;
 
   float4 clip_pos = mul(_view.world2clip, float4(world_pos, 1.0f));
 
@@ -45,7 +48,6 @@ float3 GetMotion(Moer::ViewParam _view, Moer::ViewParam _prev_view,
   float3 motion;
   motion.xy = (clip_pos_prev.xy - clip_pos.xy) * _view.clip2window_scale;
   motion.xy += (_view.jitter - _prev_view.jitter);
-  // printf("motion.xy %f %f\n", motion.x, motion.y);
   motion.z = clip_pos_prev.w - clip_pos.w;
 
   return motion; // 2.5D motion

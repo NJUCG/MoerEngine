@@ -60,6 +60,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     Array<TextureView> env_mips;
     TextureRef         env_pdf{};
     Array<TextureView> env_pdf_mips;
+    TextureWithHandle  env_tex_with_hdl;
 
     RaytracingSceneRef rt_scene = {}; // 在场景初始化完毕后，才可以被赋值
 
@@ -224,6 +225,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         if (scene.IsReady() && runtime_assets.IsReady()) {
             // load scene
             if (first_load) {
+                first_load = false;
+
                 b_new_env_map = true;
                 // calculate bounding box
                 scene_bounding.min = float3(0.f);
@@ -245,15 +248,13 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 float cell_size                 = max_extent * 2 / is_ctx.GetGridConfig().grid_size.x;
                 ui_config.grid_config.cell_size = cell_size;
 
+                rt_scene = scene.GetGpuSceneRes().rt_scene;
+
                 rt_ctx->SetBindlessHandles(scene.GetGpuSceneRes());
                 rt_ctx->SetRaytracingScene(rt_scene);
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
 
-                first_load = false;
-
                 cmd_list.UpdateBindlessArray(bindless_array);
-
-                rt_scene = scene.GetGpuSceneRes().rt_scene;
 
                 if (hooks.on_register_ui_func) {
 
@@ -319,36 +320,14 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
                     src_env_map->GetNumMips()
                 );
-                auto cur_env = scene.GetCurrentEnvMap();
                 sd_utils.SampleTextureCS(
                     cmd_list, src_env_map->GetView(0, 1), env_map->GetView(0, 1), src_env_map->GetFormat()
                 );
-                Moer::EnvironmentLightComponent* env_light =
-                    MoerNew(Moer::EnvironmentLightComponent)(float3(1.f), env_map->GetExtent().xy);
 
                 Sampler sampler{SF_CUBIC, SAM_REPEAT};
-                env_light->bdls_handle =
+                env_tex_with_hdl.tex = env_map;
+                env_tex_with_hdl.hdl =
                     bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
-                add_on_free_texture(env_light->bdls_handle);
-
-                Entity env_entity;
-
-                // replace entity
-                if (cur_env.texture != nullptr) {
-                    assert(env_map && "env map is null");
-                    env_entity = cur_env.entity;
-                    LightComponentManager::Get().Put(env_entity, env_light);
-
-                } else {
-                    env_entity = EntityManager::Get().Create();
-                    LightComponentManager::Get().Put(env_entity, env_light);
-
-                    scene.AddLight(env_entity);
-                }
-                EnvMapResource env_tex{env_map, env_light->bdls_handle, env_entity};
-                scene.SetCurrentEnvMap(env_tex);
-
-                env_map = scene.GetCurrentEnvMap().texture;
 
                 for (int i = 0; i < env_map->GetNumMips(); ++i) {
                     env_mips.push_back(env_map->GetView(i));
@@ -357,17 +336,19 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 b_new_env_map = false;
 
                 rt_ctx->LoadDefaultResources(runtime_assets);
-                rt_ctx->CreateEnvMapResources(scene.GetCurrentEnvMap(), cmd_list);
+                rt_ctx->CreateEnvMapResources(env_tex_with_hdl, cmd_list);
             }
 
-            // TODO: update raytracing scene
-            // if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
-            //     for (size_t i = 0; i < scene.GetEntityCount(); i++) {
-            //         auto& instance = rt_scene->GetInstance(i);
-            //         rt_scene->MarkModified(instance.instance_id);
-            //     }
-            //     cmd_list.UpdateRaytracingScene(rt_scene);
-            // }
+            // TODO: 统一update代码
+            // 疑问：为什么这段 UpdateRaytracingScene 的代码必须写在这个位置，不能挪到前面去？
+            if (scene.IsReady()) {
+                for (size_t i = 0; i < rt_scene->GetInstanceCount(); i++) {
+                    auto& instance = rt_scene->GetInstance(i);
+                    rt_scene->MarkModified(instance.instance_id);
+                }
+                cmd_list.UpdateRaytracingScene(rt_scene);
+            }
+
             if (!tone_mapping_pass) {
                 ToneMappingPass::CreateInfo info{};
                 info.color_lut    = rt_ctx->default_res.black_tex;
@@ -488,8 +469,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             rt_ctx->CreateBuffersIfNeeded(
                 (num_emissive_meshes + s_mesh_alloc_chunk - 1) & ~(s_mesh_alloc_chunk - 1),
                 (num_emissive_triangles + s_triangle_alloc_chunk - 1) & ~(s_triangle_alloc_chunk - 1),
-                (scene.GetLights().size() + s_primitive_alloc_chunk - 1) & ~(s_primitive_alloc_chunk - 1),
-                scene.GetGeometryInstances().size()
+                (scene.GetCpuScene().GetLightCount() + s_primitive_alloc_chunk - 1) &
+                    ~(s_primitive_alloc_chunk - 1)
             );
             cmd_list.UpdateBindlessArray(bindless_array);
 
@@ -628,7 +609,9 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             hooks.on_render_gui(cmd_list, output);
         }
 
-        rt_scene->AdvanceFrame();
+        if (rt_scene) {
+            rt_scene->AdvanceFrame();
+        }
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CpuScene.h"
-
+#include "RenderAPI.h"
 #include "rhi/RHIResource.h"
 
 namespace Moer::Render {
@@ -25,7 +25,7 @@ struct TextureWithHandle {
  * 
  * TODO: 析构函数（资源释放）
  */
-class GpuScene {
+class RENDER_API GpuScene {
 
 public:
     GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array);
@@ -111,9 +111,8 @@ private:
 
     UnorderedMap<entt::entity, uint> m_map_texture_entity_to_bindless_handle;
 
-    // Raytracing Scene Cache
-    Array<RaytracingGeometryRef>     m_rt_geometries;
-    UnorderedMap<entt::entity, uint> m_map_entity_to_instance_idx; // entity -> instance array_idx mapping
+    // Raytracing Scene Cache: BLAS 按 primitive_id 顺序存储，与 CpuScene 的 primitive 顺序一致
+    Array<RaytracingGeometryRef> m_primitive_id_to_blas;
 };
 
 } // namespace Moer::Render

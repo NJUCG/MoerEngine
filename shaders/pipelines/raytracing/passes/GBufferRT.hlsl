@@ -50,14 +50,8 @@ bool ProcessAnyHit(inout RayPayload payload, uint instance_id, uint geom_id,
                    uint prim_id, float2 barycentrics, float t,
                    bool b_backface = false) {
 
-  ArrayBuffer instance_data_array = ArrayBuffer(param.instance_data_handle);
-  ArrayBuffer geom_data_array = ArrayBuffer(param.geometry_data_handle);
-  ArrayBuffer material_data_array = ArrayBuffer(param.material_data_handle);
   Moer::GeometryRecord geom = Moer::GetGeometryRecordFrom(
-      instance_id, geom_id, prim_id, barycentrics, Moer::EGA_UV,
-      instance_data_array.GetByteAddressBuffer(),
-      geom_data_array.GetByteAddressBuffer(),
-      material_data_array.GetByteAddressBuffer());
+      param, instance_id, prim_id, barycentrics, Moer::EGA_UV, b_backface);
 
   Moer::MaterialSample mat_sample = Moer::SampleGeometryMaterial(
       geom, 0.f, 0.f, 0.f, Moer::EMA_BaseColor | Moer::EMA_Transmission);
@@ -113,7 +107,7 @@ float3 UintHashToColor(uint _idx) {
     if (ray_query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
       if (ProcessAnyHit(payload, ray_query.CandidateInstanceID(),
                         ray_query.CandidateGeometryIndex(),
-                        ray_query.CandidatePrimitiveIndex(),
+                        ray_query.CandidatePrimitiveIndex(), // 返回的应该是三角形索引，而非index(uint)索引
                         ray_query.CandidateTriangleBarycentrics(),
                         ray_query.CandidateTriangleRayT())) {
         ray_query.CommitNonOpaqueTriangleHit();
@@ -139,39 +133,29 @@ float3 UintHashToColor(uint _idx) {
   const float max_glass_hit_t = hit_glass ? hit_t : 0.f;
 
   if (payload.instance_id != ~0u) {
-    // shader surface
-
-    ArrayBuffer instance_data_array = ArrayBuffer(param.instance_data_handle);
-    ArrayBuffer geom_data_array = ArrayBuffer(param.geometry_data_handle);
-    ArrayBuffer material_data_array = ArrayBuffer(param.material_data_handle);
-
     Moer::GeometryRecord geom = Moer::GetGeometryRecordFrom(
-        payload.instance_id, payload.geom_id, payload.prim_id,
-        payload.barycentrics, Moer::EGA_All,
-        instance_data_array.GetByteAddressBuffer(),
-        geom_data_array.GetByteAddressBuffer(),
-        material_data_array.GetByteAddressBuffer(), payload.b_backface);
+        param, payload.instance_id, payload.prim_id,
+        payload.barycentrics, Moer::EGA_All, payload.b_backface);
 
-    // compute gradient
+    float4x4 model2world = geom.instance.world_transform;
+
+    // 计算纹理梯度（用于各向异性采样）
     RayDesc r0 = ray;
     RayDesc r1 = Moer::SetupPrimaryRay(pixel_pos + uint2(1, 0),
                                        gbuffer_constants.main_view);
     RayDesc r2 = Moer::SetupPrimaryRay(pixel_pos + uint2(0, 1),
                                        gbuffer_constants.main_view);
 
+    // 三角形顶点变换到世界空间
     float3 pos_ws[3];
-    pos_ws[0] =
-        mul(geom.instance.model2world, float4(geom.vtx_positions[0], 1.f)).xyz;
-    pos_ws[1] =
-        mul(geom.instance.model2world, float4(geom.vtx_positions[1], 1.f)).xyz;
-    pos_ws[2] =
-        mul(geom.instance.model2world, float4(geom.vtx_positions[2], 1.f)).xyz;
+    pos_ws[0] = mul(model2world, float4(geom.vtx_positions[0], 1.f)).xyz;
+    pos_ws[1] = mul(model2world, float4(geom.vtx_positions[1], 1.f)).xyz;
+    pos_ws[2] = mul(model2world, float4(geom.vtx_positions[2], 1.f)).xyz;
 
     float3 bary0 = Moer::RayIntersectBarycentrics(
         r0.Origin, r0.Direction, pos_ws[0], pos_ws[1], pos_ws[2]);
     float3 baryx = Moer::RayIntersectBarycentrics(
         r1.Origin, r1.Direction, pos_ws[0], pos_ws[1], pos_ws[2]);
-
     float3 baryy = Moer::RayIntersectBarycentrics(
         r2.Origin, r2.Direction, pos_ws[0], pos_ws[1], pos_ws[2]);
 
@@ -181,22 +165,20 @@ float3 UintHashToColor(uint _idx) {
 
     float2 tex_grad_x = (texcoord_x - texcoord_0);
     float2 tex_grad_y = (texcoord_y - texcoord_0);
-    // sample gradient
+
+    // 采样材质
     Moer::MaterialSample mat_sample = Moer::SampleGeometryMaterial(
         geom, tex_grad_x, tex_grad_y, -1.f, Moer::EMA_All);
 
+    // 计算 motion vector（用于去噪）
     float clip_depth = 0.f;
     float view_depth = 0.f;
     float3 motion = Moer::GetMotion(
-        gbuffer_constants.main_view, gbuffer_constants.prev_view, geom.instance,
+        gbuffer_constants.main_view, gbuffer_constants.prev_view,
+        model2world, model2world, // TODO: 暂无 prev_model2world，传入当前帧变换
         geom.model_pos, geom.model_pos_prev, clip_depth, view_depth);
-    float4 clip_xy = mul(
-        gbuffer_constants.main_view.world2clip,
-        float4(mul(geom.instance.model2world, float4(geom.model_pos, 1.0f)).xyz,
-               1.f));
 
-    clip_xy.xyz /= clip_xy.w;
-
+    // 写入 GBuffer
     gbuffer_view_depth[pixel_pos] = view_depth;
     gbuffer_clip_depth[pixel_pos] = clip_depth;
     gbuffer_diffuse_albedo[pixel_pos] =
@@ -208,7 +190,6 @@ float3 UintHashToColor(uint _idx) {
     gbuffer_emissive[pixel_pos] = float4(mat_sample.emissive, max_glass_hit_t);
     gbuffer_motion[pixel_pos] = float4(motion, 0.f);
 
-    // printf("hit depth %d\n", clip_depth);
     return;
   }
 

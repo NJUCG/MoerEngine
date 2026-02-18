@@ -35,7 +35,7 @@ TextureView::TextureView(Texture* _tex, EPixelFormat _fmt, uint8 _mip_level, uin
 TextureView TextureView::Slice(uint layer, uint count) const {
     TextureView copy = *this;
     copy.array_layer = layer;
-    copy.num_array = count;
+    copy.num_array   = count;
     return copy;
 }
 
@@ -77,6 +77,10 @@ RaytracingInstance& RaytracingScene::GetInstance(uint _array_idx) {
 
 const RaytracingInstance& RaytracingScene::GetInstance(uint _array_idx) const {
     return instances[_array_idx];
+}
+
+uint RaytracingScene::GetInstanceCount() const {
+    return instances.size();
 }
 
 } // namespace Moer::Render
