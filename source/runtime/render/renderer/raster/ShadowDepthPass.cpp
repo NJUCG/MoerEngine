@@ -240,7 +240,10 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
 
         if (b_need_to_create) {
 
-            AssetTool::FreeRasterResourceHandle(context.bdls, shadow_map_texture);
+            if (shadow_map_texture.tex) {
+                assert(shadow_map_texture.handle != 0 && "ShadowMap Texture handle is 0");
+                AssetTool::FreeRasterResourceHandle(context.bdls, shadow_map_texture);
+            }
 
             uint2     sm_size(ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size);
             TexConfig tex_cfg =
