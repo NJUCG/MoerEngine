@@ -12,18 +12,8 @@
 #include "rhi/RHIResource.h"
 class ShaderParametersMetadata;
 
-namespace Moer {
+namespace Moer::Render::RenderGraph {
 
-using Render::Buffer;
-using Render::BufferView;
-using Render::CommandList;
-using Render::ERHIPipeline;
-// using Render::GetRHIPipelineCount;
-// using Render::GetRHIPipelineIndex;
-using Render::RaytracingScene;
-using Render::Texture;
-using Render::TextureView;
-using Render::TRHIPipelineArray;
 using FRDGPassHandlesByPipeline = TRHIPipelineArray<FRDGPassHandle>;
 
 // 在 GPU 渲染中，为了加速性能，硬件会在显存里为 Texture 额外维护一些“缩略信息”或“压缩标记”，这些被称为 Hardware Metadata。
@@ -36,12 +26,25 @@ enum class ERDGTextureMetaDataAccess : uint8 {
     Stencil
 };
 
+/** Barrier location controls where the barrier is 'Ended' relative to the pass lambda being executed.
+ *  Most barrier locations are done in the prologue prior to the executing lambda. But certain cases
+ *  like an aliasing discard operation need to be done *after* the pass being invoked. Therefore, when
+ *  adding a transition the user can specify where to place the barrier.
+ */
+enum class ERDGBarrierLocation : uint8 {
+    /** The barrier occurs in the prologue of the pass (before execution). */
+    Prologue,
+
+    /** The barrier occurs in the epilogue of the pass (after execution). */
+    Epilogue
+};
+
 /** Used for tracking pass producer / consumer edges in the graph for culling and pipe fencing. */
 struct FRDGProducerState {
     FRDGPass*      Pass                 = nullptr;
     FRDGPass*      PassIfSkipUAVBarrier = nullptr;
     FRDGPass*      PassIfReadAccess     = nullptr;
-    ERHIAccess     Access               = ERHIAccess::None;
+    ERHIAccess     Access               = ERHIAccess::Unknown;
     FRDGViewHandle NoUAVBarrierHandle;
 };
 
@@ -86,7 +89,7 @@ struct FRDGSubresourceState {
     ERHIPipeline GetPipelines() const;
 
     /** The last used access on the pass. */
-    ERHIAccess Access = ERHIAccess::None;
+    ERHIAccess Access = ERHIAccess::Unknown;
 
     /** The first pass in this state. */
     FRDGPassHandlesByPipeline FirstPass;
@@ -117,7 +120,7 @@ public:
     const char* Name = nullptr;
 
     /** Marks this resource as actually used by a resource. This is to track what dependencies on pass was actually unnecessary. */
-    inline void MarkResourceAsUsed() {}
+    inline RENDER_API void MarkResourceAsUsed() {}
 
     RHIResource* GetRHI() const {
         return ResourceRHI;
@@ -165,7 +168,7 @@ public:
     }
 
 protected:
-    FRDGViewableResource(const char* InName, ERDGViewableResourceType InType);
+    RENDER_API FRDGViewableResource(const char* InName, ERDGViewableResourceType InType);
 
     bool IsCullRoot() const {
         return bExternal || bExtracted;
@@ -192,7 +195,7 @@ protected:
             return ActiveMode == EAccessMode::External;
         }
 
-        ERHIAccess   Access    = ERHIAccess::None;
+        ERHIAccess   Access    = ERHIAccess::Unknown;
         ERHIPipeline Pipelines = ERHIPipeline::None;
         EAccessMode  Mode      = EAccessMode::Internal;
         bool         bLocked   = false;
@@ -284,7 +287,7 @@ public:
         return Layout.GetSubresource(SubresourceIndex);
     }
 
-    FRDGTextureSubresourceRange GetSubresourceRangeSRV() const {
+    RENDER_API FRDGTextureSubresourceRange GetSubresourceRangeSRV() const {
         FRDGTextureSubresourceRange Range = GetSubresourceRange();
 
         // When binding a whole texture for shader read (SRV), we only use the first plane.
@@ -300,7 +303,7 @@ public:
     }
 
 private:
-    FRDGTexture(const char* InName, const FRDGTextureDesc& InDesc, ERDGTextureFlags InFlags);
+    RENDER_API FRDGTexture(const char* InName, const FRDGTextureDesc& InDesc, ERDGTextureFlags InFlags);
 
     /** Returns RHI texture without access checks. */
     Texture* GetRHIUnchecked() const {
@@ -613,8 +616,8 @@ public:
     }
 
 private:
-    FRDGBuffer(const char* InName, const FRDGBufferDesc& InDesc, ERDGBufferFlags InFlags);
-    FRDGBuffer(
+    RENDER_API FRDGBuffer(const char* InName, const FRDGBufferDesc& InDesc, ERDGBufferFlags InFlags);
+    RENDER_API FRDGBuffer(
         const char*                    InName,
         const FRDGBufferDesc&          InDesc,
         ERDGBufferFlags                InFlags,
@@ -622,7 +625,7 @@ private:
     );
 
     /** Finalizes any pending field of the buffer descriptor. */
-    void FinalizeDesc();
+    RENDER_API void FinalizeDesc();
 
     Buffer* GetRHIUnchecked() const {
         return static_cast<Buffer*>(FRDGResource::GetRHIUnchecked());
@@ -953,4 +956,6 @@ ExtractRenderTargetsInfo(const FRDGParameterStruct& ParameterStruct);
 inline FGraphicsPipelineRenderTargetsInfo
 ExtractRenderTargetsInfo(const FRenderTargetBindingSlots& RenderTargets);
 
-} // namespace Moer
+#include "RenderGraphResources.inl"
+
+} // namespace Moer::Render::RenderGraph

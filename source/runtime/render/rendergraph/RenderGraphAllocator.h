@@ -6,7 +6,7 @@
 
 #include "RenderGraphArena.h"
 #include "misc/Traits.h"
-namespace Moer {
+namespace Moer::Render::RenderGraph {
 
 class FRDGAllocator {
 public:
@@ -91,7 +91,16 @@ public:
     FRDGAllocator& Allocator;
 };
 
+class FRDGAllocatorScope {
+public:
+    RENDERCORE_API FRDGAllocatorScope(FRDGAllocator& Allocator);
+    RENDERCORE_API ~FRDGAllocatorScope();
+
+private:
+    void* AllocatorToRestore;
+};
+
 template<typename T>
 using FRDGArrayAllocator = TRDGAdapter<T>;
 
-} // namespace Moer
+} // namespace Moer::Render::RenderGraph

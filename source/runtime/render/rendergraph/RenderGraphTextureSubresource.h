@@ -1,6 +1,6 @@
 #pragma once
 #include "rhi/RHIResource.h"
-namespace Moer {
+namespace Moer::Render::RenderGraph {
 
 template<typename InElementType, typename InAllocatorType = m_defualt_allocator<InElementType>>
 using TRDGTextureSubresourceArray = Array<InElementType, InAllocatorType>;
@@ -240,4 +240,4 @@ inline void EnumerateSubresourceRange(
         Function(GetSubresource(SubresourceArray, Layout, Subresource));
     });
 }
-} // namespace Moer
+} // namespace Moer::Render::RenderGraph

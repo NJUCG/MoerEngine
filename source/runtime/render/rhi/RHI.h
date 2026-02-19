@@ -32,12 +32,12 @@ struct DeviceInitInfo {
 namespace Moer::Render {
 
 enum class ERHIPipeline : uint8 {
-    Graphics     = 1 << 0,
-    AsyncCompute = 1 << 1,
+    None         = 0,
+    Graphics     = 1,
+    AsyncCompute = 2,
 
-    None = 0,
-    All  = Graphics | AsyncCompute,
-    Num  = 2
+    All = 3,
+    Num = 2
 };
 
 inline constexpr size_t GetRHIPipelineCount() {

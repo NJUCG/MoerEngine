@@ -3,8 +3,10 @@
 #include <cstdint>
 #include <limits>
 
+namespace Moer::Render::RenderGraph {
+
 enum class ERHIAccess : uint32 {
-    None = 0,
+    Unknown = 0,
 
     // Read
     CPURead             = 1 << 0,
@@ -33,8 +35,11 @@ enum class ERHIAccess : uint32 {
 
     WritableMask = UAVMask | RTV | CopyDest | DSVWrite,
 
-    WriteOnlyMask = RTV | CopyDest | DSVWrite
+    WriteOnlyMask          = RTV | CopyDest | DSVWrite,
+    WriteOnlyExclusiveMask = WriteOnlyMask
 };
+
+ENUM_BIT_OP_IMPL(ERHIAccess, FLAG)
 
 inline ERHIAccess operator|(ERHIAccess A, ERHIAccess B) {
     return (ERHIAccess)((uint32)A | (uint32)B);
@@ -61,3 +66,5 @@ inline constexpr bool IsInvalidAccess(ERHIAccess Access) {
 inline void ValidateAccess(ERHIAccess Access) {
     assert(!IsInvalidAccess(Access) && "Detected invalid RDG resource access state!");
 }
+
+} // namespace Moer::Render::RenderGraph

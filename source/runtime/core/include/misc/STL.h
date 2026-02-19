@@ -21,6 +21,28 @@ template<typename T>
 using m_defualt_allocator = MoerStlAllocator<T>;
 
 namespace Moer {
+
+// SFINAE detection for GetTypeHash
+namespace detail {
+template<typename T, typename = void>
+struct has_get_type_hash : std::false_type {};
+
+template<typename T>
+struct has_get_type_hash<T, std::void_t<decltype(GetTypeHash(std::declval<const T&>()))>> : std::true_type {};
+} // namespace detail
+
+// Moer hash: uses GetTypeHash if available, otherwise falls back to std::hash
+template<typename T>
+struct MoerHash {
+    size_t operator()(const T& val) const noexcept {
+        if constexpr (detail::has_get_type_hash<T>::value) {
+            return static_cast<size_t>(GetTypeHash(val));
+        } else {
+            return std::hash<T>{}(val);
+        }
+    }
+};
+
 template<typename T, class allocator = m_defualt_allocator<T>>
 using Array = std::vector<T, allocator>;
 
@@ -37,7 +59,7 @@ using Map = std::map<K, V, Pr, allocator>;
 template<
     typename K,
     typename V,
-    class Hash      = std::hash<K>,
+    class Hash      = MoerHash<K>,
     class KeyEqual  = std::equal_to<K>,
     class allocator = m_defualt_allocator<std::pair<const K, V>>>
 using UnorderedMap = std::unordered_map<K, V, Hash, KeyEqual, allocator>;
@@ -47,7 +69,7 @@ using Set = std::set<K, Pr, allocator>;
 
 template<
     typename K,
-    class Hash      = std::hash<K>,
+    class Hash      = MoerHash<K>,
     class KeyEqual  = std::equal_to<K>,
     class allocator = m_defualt_allocator<K>>
 using UnorderedSet = std::unordered_set<K, Hash, KeyEqual, allocator>;

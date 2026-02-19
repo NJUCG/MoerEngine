@@ -2,10 +2,10 @@
 #include "rhi/RHIResource.h"
 #include <string>
 
-namespace Moer {
-using Moer::Render::RHIClearAttachment;
-using Moer::Render::Texture;
-using Moer::Render::TextureRef;
+namespace Moer::Render::RenderGraph {
+using ::Moer::Render::RHIClearAttachment;
+using ::Moer::Render::Texture;
+using ::Moer::Render::TextureRef;
 
 /** All necessary data to create a render target from the pooled render targets. */
 struct FPooledRenderTargetDesc {
@@ -370,4 +370,4 @@ protected:
     FSceneRenderTargetItem RenderTargetItem;
 };
 
-} // namespace Moer
+} // namespace Moer::Render::RenderGraph

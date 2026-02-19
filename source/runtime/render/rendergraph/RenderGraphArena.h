@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <cstdlib>
 
+namespace Moer::Render::RenderGraph {
+
 class FLinearArena {
 public:
     static constexpr size_t DEFAULT_PAGE_SIZE = 2 * 1024 * 1024;
@@ -106,3 +108,5 @@ private:
     FPage*       HeadPage;
     FPage*       CurrentPage;
 };
+
+} // namespace Moer::Render::RenderGraph

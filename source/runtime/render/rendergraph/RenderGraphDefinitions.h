@@ -1,14 +1,47 @@
 #pragma once
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <limits>
+#include <string>
+#include <type_traits>
+#include <vector>
 
 #include "RenderGraphAllocator.h"
 #include "rhi/RHIResource.h"
 
-namespace Moer {
+namespace Moer::Render::RenderGraph {
 
-using Render::TextureInfo;
+using TCHAR = char;
+
+/** Render graph event name used for debugging and profiling. */
+class FRDGEventName final {
+public:
+    FRDGEventName() = default;
+
+    // Constructor for direct string (no formatting)
+    explicit FRDGEventName(const char* InEventName) : EventName(InEventName) {}
+
+    // Constructor for formatted string (printf-style)
+    template<typename... Args>
+    FRDGEventName(const char* InEventFormat, Args&&... args) {
+        char Buffer[512];
+        snprintf(Buffer, sizeof(Buffer), InEventFormat, std::forward<Args>(args)...);
+        FormattedEventName = Buffer;
+        EventName          = FormattedEventName.c_str();
+    }
+
+    FRDGEventName(const FRDGEventName&)            = default;
+    FRDGEventName& operator=(const FRDGEventName&) = default;
+
+    const char* GetCStr() const {
+        return EventName;
+    }
+
+private:
+    const char* EventName = "";
+    std::string FormattedEventName; // Only used when formatting is needed
+};
 
 enum class ERDGHandleRegistryDestructPolicy {
     Registry,
@@ -451,6 +484,79 @@ enum class ERDGTextureFlags : uint8 {
     MaintainCompression = 1 << 3,
 };
 
+ENUM_BIT_OP_IMPL(ERDGTextureFlags, FLAG)
+
+/** Flags to annotate a render graph buffer. */
+enum class ERDGBufferFlags : uint8 {
+    None = 0,
+
+    /** Tag the buffer to survive through frame, that is important for multi GPU alternate frame rendering. */
+    MultiFrame = 1 << 0,
+
+    /** The buffer is ignored by RDG tracking and will never be transitioned. Use the flag when registering a buffer with no writable GPU flags.
+	 *  Write access is not allowed for the duration of the graph. This flag is intended as an optimization to cull out tracking of read-only
+	 *  buffers that are used frequently throughout the graph. Note that it's the user's responsibility to ensure the resource is in the correct
+	 *  readable state for use with RDG passes, as RDG does not know the exact state of the resource.
+	 */
+    SkipTracking = 1 << 1,
+
+    /** When set, RDG will perform its first barrier without splitting. Practically, this means the resource is left in its initial state
+	 *  until the first pass it's used within the graph. Without this flag, the resource is split-transitioned at the start of the graph.
+	 */
+    ForceImmediateFirstBarrier = 1 << 2
+};
+
+ENUM_BIT_OP_IMPL(ERDGBufferFlags, FLAG)
+
+enum class ERDGPassFlags : uint16 {
+    /** Pass doesn't have any inputs or outputs tracked by the graph. This may only be used by the parameterless AddPass function. */
+    None = 0,
+
+    /** Pass uses rasterization on the graphics pipe. */
+    Raster = 1 << 0,
+
+    /** Pass uses compute on the graphics pipe. */
+    Compute = 1 << 1,
+
+    /** Pass uses compute on the async compute pipe. */
+    AsyncCompute = 1 << 2,
+
+    /** Pass uses copy commands on the graphics pipe. */
+    Copy = 1 << 3,
+
+    /** Pass (and its producers) will never be culled. Necessary if outputs cannot be tracked by the graph. */
+    NeverCull = 1 << 4,
+
+    /** Render pass begin / end is skipped and left to the user. Only valid when combined with 'Raster'. Disables render pass merging for the pass. */
+    SkipRenderPass = 1 << 5,
+
+    /** Pass will never have its render pass merged with other passes. */
+    NeverMerge = 1 << 6,
+
+    /** Pass will never run off the render thread. */
+    NeverParallel = 1 << 7,
+
+    /** Pass uses copy commands but writes to a staging resource. */
+    Readback = Copy | NeverCull
+};
+
+ENUM_BIT_OP_IMPL(ERDGPassFlags, FLAG)
+
+class FRDGEventName {
+public:
+    FRDGEventName(const char* InName) : Name(InName) {}
+
+    const char* GetCStr() const {
+        return Name;
+    }
+
+    FRDGEventName(std::string&& InName) : OwnedName(std::move(InName)), Name(OwnedName.c_str()) {}
+
+private:
+    const char* Name;
+    std::string OwnedName;
+};
+
 #region Type Definitions
 
 class FRDGPass;
@@ -472,14 +578,25 @@ using FRDGTextureBitArray = TRDGHandleBitArray<FRDGTextureHandle>;
 using FRDGBufferNumElementsCallback     = std::function<uint32()>;
 using FRDGBufferInitialDataCallback     = std::function<const void*()>;
 using FRDGBufferInitialDataSizeCallback = std::function<uint64()>;
+
+using FRDGPassHandlesByPipeline = TRHIPipelineArray<FRDGPassHandle>;
+using FRDGPassesByPipeline      = TRHIPipelineArray<FRDGPass*>;
+
+template<typename T>
+struct IsStdVector : std::false_type {};
+template<typename T, typename Allocator>
+struct IsStdVector<std::vector<T, Allocator>> : std::true_type {};
+template<typename T>
+inline constexpr bool is_std_vector_v = IsStdVector<T>::value;
+
 template<
     typename ArrayType,
     typename ArrayTypeNoRef = std::remove_reference_t<ArrayType>,
-    typename                = typename TEnableIf<TIsTArray_V<ArrayTypeNoRef>>::Type>
+    typename                = std::enable_if_t<is_std_vector_v<ArrayTypeNoRef>>>
 using TRDGBufferArrayCallback           = std::function<const ArrayType&()>;
 using FRDGBufferInitialDataFreeCallback = std::function<void(const void* InData)>;
 using FRDGBufferInitialDataFillCallback = std::function<void(void* InData, uint32 InDataSize)>;
-using FRDGDispatchGroupCountCallback    = std::function<FIntVector()>;
+using FRDGDispatchGroupCountCallback    = std::function<uint3()>;
 #pragma endregion
 
-} // namespace Moer
+} // namespace Moer::Render::RenderGraph
