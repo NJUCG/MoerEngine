@@ -215,6 +215,8 @@ public:
         out_tex = device.CreateTexture(name, Extent2D(width, height), cfg.format, cfg.usage, cfg.mip_cnt);
 
         UploadTextureData(cmd_list, out_tex, data, width, height, name.data());
+
+        LOG_DEBUG("Load 2D Texture: {}, size ({}, {}) from \"{}\"", name, width, height, filepath);
     }
 
     template<typename Tag>
@@ -252,6 +254,15 @@ public:
             UploadTextureData(
                 cmd_list, skybox_view.Slice(i), data, width, height, std::format("Skybox Cubemap #{}", i)
             );
+
+            LOG_DEBUG(
+                "Load CubeMap Texture: {}_{}, size ({}, {}) from \"{}\"",
+                name,
+                skybox_faces[i],
+                width,
+                height,
+                filepath
+            );
         }
     }
 
@@ -261,7 +272,8 @@ public:
         RenderDevice&    device,
         std::string_view name,
         const uint2&     size,
-        TexConfig&       cfg
+        TexConfig&       cfg,
+        bool             is_verbose = true
     ) {
         if (cfg.is_asset) {
             // 资源纹理不在这里创建
@@ -307,12 +319,15 @@ public:
             } else {
                 static_assert(always_false<T_Holder>, "Unsupported Tex IntentTag");
             }
-            LOG_DEBUG(
-                "tex {}, size {} x {}",
-                name,
-                (cfg.b_super_resolution ? size.x / 2 : size.x),
-                (cfg.b_super_resolution ? size.y / 2 : size.y)
-            );
+
+            if (is_verbose) {
+                LOG_DEBUG(
+                    "tex {}, size {} x {}",
+                    name,
+                    (cfg.b_super_resolution ? size.x / 2 : size.x),
+                    (cfg.b_super_resolution ? size.y / 2 : size.y)
+                );
+            }
         }
     }
 

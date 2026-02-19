@@ -255,7 +255,12 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
                     .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE);
 
             AssetTool::CreateRasterResource<TexDepthTag>(
-                shadow_map_texture, context.device, std::format("ShadowMapTexture_{}", i), sm_size, tex_cfg
+                shadow_map_texture,
+                context.device,
+                std::format("ShadowMapTexture_{}", i),
+                sm_size,
+                tex_cfg,
+                false
             );
 
             AssetTool::AllocateRasterResourceHandle(context.bdls, shadow_map_texture, tex_cfg);

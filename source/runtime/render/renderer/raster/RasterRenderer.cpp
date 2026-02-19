@@ -83,7 +83,7 @@ RasterRenderer::RasterRenderer(
 
 RasterRenderer::~RasterRenderer() {
     auto& raster_context = *raster_context_ptr;
-    raster_context.FreeFrameBuffers();
+    raster_context.FreeFrameBuffers(true);
 
     // 下面这段需要在Renderer子类中执行。否则各种Pass对象被Release的时候，对应的资源还没有被释放
     ReleaseResources();
@@ -172,9 +172,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     } else if (window_state == EWindowState::SizeChanged) {
         LOG_INFO("Size Changed.");
 
-        raster_context.FreeFrameBuffers();
+        raster_context.FreeFrameBuffers(false);
         raster_context.CreateFrameBuffers();
-        raster_context.UploadExternalFrameBuffers();
+        // raster_context.UploadExternalFrameBuffers(); // 窗口大小变化时，外部纹理不会变化，所以不需要上传
         raster_context.AllocateFrameBuffers();
 
 #if WITH_CUDA

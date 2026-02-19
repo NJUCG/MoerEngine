@@ -1,5 +1,3 @@
-#pragma once
-
 #include "scene/Scene.h"
 
 #include "RasterResource.h"

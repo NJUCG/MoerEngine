@@ -290,8 +290,8 @@ public:
         textures.AllocateFrameBuffers(cmd_list, bdls);
     }
 
-    void FreeFrameBuffers() {
-        textures.FreeFrameBuffers(bdls);
+    void FreeFrameBuffers(bool is_free_external_assets) {
+        textures.FreeFrameBuffers(bdls, is_free_external_assets);
     }
 
     Array<TextureView> GetDisplayableFrameBuffersView() {
