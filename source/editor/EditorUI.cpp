@@ -2,6 +2,7 @@
 
 // Runtime
 #include "config/ConfigManager.h"
+#include "log/LogSystem.h"
 #include "window/WindowInput.h"
 
 // Editor
@@ -244,8 +245,14 @@ void EditorUI::ShowConfig() {
 
     /////////////////////////////////////////////////// Begin Disabled Here
     // 避免场景加载一半，切换场景或渲染器，导致崩溃
-    bool is_scene_found_but_not_ready = !SceneGlobalEntry::Get().GetScene()->IsReady() &&
-                                        SceneGlobalEntry::Get().GetScene()->IsStartLoading();
+    Scene* scene = SceneGlobalEntry::Get().GetScene();
+
+    bool is_scene_found_but_not_ready = false;
+    if (scene) {
+        is_scene_found_but_not_ready = !scene->IsReady() && scene->IsStartLoading();
+    } else {
+        LOG_WARNING("Please bind a scene by `SceneGlobalEntry::Get().BindScene(scene)`");
+    }
     ImGui::BeginDisabled(is_scene_found_but_not_ready);
 
     // Render Method
