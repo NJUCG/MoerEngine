@@ -46,7 +46,7 @@ public:
 
     void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
 
-        MaterialPassBindlessParam material_param;
+        MaterialPassBindlessParam material_param{};
         material_param.extra_ambient_color     = ui_config.shading_extra_ambient_color;
         material_param.extra_ambient_intensity = ui_config.shading_extra_ambient_intensity;
         material_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
