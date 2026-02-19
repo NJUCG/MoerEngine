@@ -241,7 +241,7 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
         if (b_need_to_create) {
 
             if (shadow_map_texture.tex) {
-                assert(shadow_map_texture.handle != 0 && "ShadowMap Texture handle is 0");
+                assert(shadow_map_texture.hdl != 0 && "ShadowMap Texture handle is 0");
                 AssetTool::FreeRasterResourceHandle(context.bdls, shadow_map_texture);
             }
 
@@ -270,7 +270,7 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
                 std::format("ShadowMapTexture_{}", i),
                 ui_config.shadow_csm_sm_size,
                 ui_config.shadow_csm_sm_size,
-                shadow_map_texture.handle
+                shadow_map_texture.hdl
             );
 
             context.cmd_list.UpdateBindlessArray(context.bdls);

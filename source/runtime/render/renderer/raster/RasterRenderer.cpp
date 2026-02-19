@@ -118,7 +118,7 @@ void RasterRenderer::UpdateGlobalLightingData(
 
     // Shadow Map
     for (uint i = 0; i < csm_layers; i++) {
-        lighting_data->cascade_shadow_map[i] = context.csm_data.shadow_map_textures[i].handle;
+        lighting_data->cascade_shadow_map[i] = context.csm_data.shadow_map_textures[i].hdl;
     }
     lighting_data->point_shadow_map = context.point_shadow_data.shadow_cubes[0].handle;
     lighting_data->light_pos        = context.point_shadow_data.shadow_cubes[0].light_pos;
@@ -141,8 +141,8 @@ void RasterRenderer::UpdateGlobalLightingData(
 
     // BRDF
     {
-        lighting_data->lut_ggx_emu_handle  = context.textures.lut_ggx_emu.handle;
-        lighting_data->lut_ggx_eavg_handle = context.textures.lut_ggx_eavg.handle;
+        lighting_data->lut_ggx_emu_handle  = context.textures.lut_ggx_emu.hdl;
+        lighting_data->lut_ggx_eavg_handle = context.textures.lut_ggx_eavg.hdl;
 
         lighting_data->brdf_enable_multi_scatter = ui_config.shading_brdf_enable_multi_scatter ? 1 : 0;
         lighting_data->brdf_NDF_mode             = static_cast<uint>(ui_config.shading_brdf_NDF_mode);

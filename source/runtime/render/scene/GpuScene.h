@@ -6,18 +6,6 @@
 
 namespace Moer::Render {
 
-// TODO: 与Raster中对应类型合并
-
-struct BufferWithHandle {
-    BufferRef buf;
-    uint      hdl;
-};
-
-struct TextureWithHandle {
-    TextureRef tex;
-    uint       hdl;
-};
-
 /**
  * GPU Scene
  * 

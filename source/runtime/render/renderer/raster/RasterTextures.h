@@ -1,10 +1,7 @@
 #pragma once
 
 #include "AssetTool.h"
-#include "rhi/RHI.h"
-#include "shader/ShaderPipeline.h"
-#include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
-#include <type_traits>
+#include "rhi/RHIResource.h"
 
 namespace Moer::Render::Raster {
 

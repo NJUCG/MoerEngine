@@ -150,6 +150,36 @@ using BindlessArrayRef      = CountableRef<BindlessArray>;
 using RaytracingGeometryRef = CountableRef<RaytracingGeometry>;
 using RaytracingSceneRef    = CountableRef<RaytracingScene>;
 using RaytracingTlasRef     = CountableRef<RaytracingTlas>;
+
+struct TextureWithHandle {
+    TextureRef  tex;
+    uint        hdl;         //主Handle
+    Array<uint> mip_handles; //每个Mip的Handle
+
+    uint2  GetSize(uint mip = 0);
+    uint   GetSizeX(uint mip = 0);
+    uint   GetSizeY(uint mip = 0);
+    Rect2D GetRect2D(uint mip = 0);
+    uint   GetMipHandle(uint mip);
+};
+
+struct DepthBufferWithHandle {
+    DepthBufferRef tex;
+    uint           hdl = 0;
+};
+
+struct BufferWithHandle {
+    BufferRef buf;
+    uint      hdl = 0;
+};
+
+// 如果texture的名字不是编译期决定的，则需要找一个地方存名字。否则string_view会出现悬垂指针
+struct DepthBufferWithHandleAndName {
+    DepthBufferRef tex;
+    uint           hdl = 0;
+    std::string    name;
+};
+
 }; // namespace Moer::Render
 
 class Shader;
@@ -496,15 +526,14 @@ public:
 template<typename TTexture>
 struct TextureSubresourceKeyT {
     TTexture* texture{nullptr};
-    uint8    mip_level{0};
-    uint8    mip_count{1};
-    uint8    array_layer{0};
-    uint8    array_count{1};
+    uint8     mip_level{0};
+    uint8     mip_count{1};
+    uint8     array_layer{0};
+    uint8     array_count{1};
 
     bool operator==(const TextureSubresourceKeyT& _other) const {
-        return texture == _other.texture && mip_level == _other.mip_level &&
-               mip_count == _other.mip_count && array_layer == _other.array_layer &&
-               array_count == _other.array_count;
+        return texture == _other.texture && mip_level == _other.mip_level && mip_count == _other.mip_count &&
+               array_layer == _other.array_layer && array_count == _other.array_count;
     }
 };
 
@@ -521,8 +550,8 @@ struct TextureSubresourceKeyHashT {
     }
 };
 
-using TextureSubresourceKey      = TextureSubresourceKeyT<Texture>;
-using TextureSubresourceKeyHash  = TextureSubresourceKeyHashT<Texture>;
+using TextureSubresourceKey     = TextureSubresourceKeyT<Texture>;
+using TextureSubresourceKeyHash = TextureSubresourceKeyHashT<Texture>;
 
 inline constexpr uint8 kRemainingSubresource = 0xFF;
 
@@ -664,10 +693,8 @@ inline void ValidateSubresourceRange(
     assert(_texture && "ValidateSubresourceRange requires a valid texture");
     uint8 max_mips   = _texture->GetNumMips();
     uint8 max_arrays = _texture->GetNumArray();
-    uint8 mip_count =
-        _mip_count == kRemainingSubresource ? uint8(max_mips - _mip_level) : _mip_count;
-    uint8 arr_count =
-        _array_count == kRemainingSubresource ? uint8(max_arrays - _array_layer) : _array_count;
+    uint8 mip_count  = _mip_count == kRemainingSubresource ? uint8(max_mips - _mip_level) : _mip_count;
+    uint8 arr_count = _array_count == kRemainingSubresource ? uint8(max_arrays - _array_layer) : _array_count;
 
     assert(_mip_level < max_mips && "mip_level out of range");
     assert(mip_count >= 1 && "mip_count must be >= 1");

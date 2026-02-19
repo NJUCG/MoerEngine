@@ -23,9 +23,9 @@ void DirectionalShadowMaskPass::Process(
     const Camera&       camera
 ) {
     DirectionalShadowMaskPassBindlessParam param;
-    param.global_param_hdl = context.lighting_data_buffer.handle;
-    param.normal_hdl       = context.textures.normal.handle;
-    param.depth_hdl        = context.textures.depth_nearest_sampler.handle;
+    param.global_param_hdl = context.lighting_data_buffer.hdl;
+    param.normal_hdl       = context.textures.normal.hdl;
+    param.depth_hdl        = context.textures.depth_nearest_sampler.hdl;
 
     context.cmd_list.Gfx(directional_shadow_mask_pipeline, context.bdls, param)
         .Draw(

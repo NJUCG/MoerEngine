@@ -215,7 +215,7 @@ public:
             ),
             smaa_area_tex.tex
         );
-        smaa_area_tex.handle = context.bdls->AllocateTexture(smaa_area_tex.tex, linear_sampler);
+        smaa_area_tex.hdl = context.bdls->AllocateTexture(smaa_area_tex.tex, linear_sampler);
 
         // smaa search tex
         smaa_search_tex.tex = context.device.CreateTexture(
@@ -231,7 +231,7 @@ public:
             ),
             smaa_search_tex.tex
         );
-        smaa_search_tex.handle = context.bdls->AllocateTexture(smaa_search_tex.tex, linear_sampler);
+        smaa_search_tex.hdl = context.bdls->AllocateTexture(smaa_search_tex.tex, linear_sampler);
     }
 
     TextureWithHandle Process(
@@ -260,7 +260,7 @@ public:
         TextureWithHandle   input_image
     ) {
         FxaaPrecomputePipelineBindlessParam param_fxaa_precomputed;
-        param_fxaa_precomputed.input_image = input_image.handle;
+        param_fxaa_precomputed.input_image = input_image.hdl;
 
         context.cmd_list.Gfx(fxaa_precompute_pipeline, context.bdls, param_fxaa_precomputed)
             .Draw(
@@ -271,7 +271,7 @@ public:
             );
 
         FxaaPipelineBindlessParam param_fxaa;
-        param_fxaa.input_image    = context.textures.aa_texture_1.handle;
+        param_fxaa.input_image    = context.textures.aa_texture_1.hdl;
         param_fxaa.fxaa_mode      = static_cast<uint32>(ui_config.aa_mode);
         param_fxaa.resolution     = float2(context.textures.aa_output.GetSize());
         param_fxaa.inv_resolution = float2(1.0) / float2(context.textures.aa_output.GetSize());
@@ -329,15 +329,15 @@ public:
         auto smaa_shared_param = [&]() {
             SmaaSharedPipelineBindlessParam param;
             param.aa_mode            = static_cast<uint32>(ui_config.aa_mode);
-            param.color_tex          = input_image.handle;
-            param.position_tex       = context.textures.position.handle;
-            param.depth_tex          = context.textures.depth_linear_sampler.handle;
-            param.search_tex         = smaa_search_tex.handle;
-            param.area_tex           = smaa_area_tex.handle;
-            param.edges_tex          = context.textures.aa_texture_1.handle;
-            param.blend_tex          = context.textures.aa_texture_2.handle;
-            param.current_color_tex  = aa_texture_34[frame_parity]->handle;
-            param.previous_color_tex = aa_texture_34[frame_parity ^ 1]->handle;
+            param.color_tex          = input_image.hdl;
+            param.position_tex       = context.textures.position.hdl;
+            param.depth_tex          = context.textures.depth_linear_sampler.hdl;
+            param.search_tex         = smaa_search_tex.hdl;
+            param.area_tex           = smaa_area_tex.hdl;
+            param.edges_tex          = context.textures.aa_texture_1.hdl;
+            param.blend_tex          = context.textures.aa_texture_2.hdl;
+            param.current_color_tex  = aa_texture_34[frame_parity]->hdl;
+            param.previous_color_tex = aa_texture_34[frame_parity ^ 1]->hdl;
             param.frame_index        = frame_parity;
             param.point_sampler      = GetSamplerIdx(Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
             param.linear_sampler     = GetSamplerIdx(Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));

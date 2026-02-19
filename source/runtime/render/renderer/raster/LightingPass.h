@@ -53,17 +53,17 @@ public:
         material_param.shading_mode            = static_cast<uint>(ui_config.shading_mode);
 
         material_param.material_buf_hdl    = context.scene.GetGpuSceneRes().material_buf.hdl;
-        material_param.vbuffer             = context.textures.vbuffer.handle;
-        material_param.gbuffer_normal      = context.textures.normal.handle;
-        material_param.gbuffer_tangent     = context.textures.tangent.handle;
-        material_param.gbuffer_uv          = context.textures.uv.handle;
-        material_param.gbuffer_depth       = context.textures.depth_nearest_sampler.handle;
-        material_param.gbuffer_position    = context.textures.position.handle;
-        material_param.global_param_handle = context.lighting_data_buffer.handle;
+        material_param.vbuffer             = context.textures.vbuffer.hdl;
+        material_param.gbuffer_normal      = context.textures.normal.hdl;
+        material_param.gbuffer_tangent     = context.textures.tangent.hdl;
+        material_param.gbuffer_uv          = context.textures.uv.hdl;
+        material_param.gbuffer_depth       = context.textures.depth_nearest_sampler.hdl;
+        material_param.gbuffer_position    = context.textures.position.hdl;
+        material_param.global_param_handle = context.lighting_data_buffer.hdl;
 
         material_param.light_buf_hdl      = context.scene.GetGpuSceneRes().light_buf.hdl;
-        material_param.cubemap_handle     = context.textures.cubemap_tex.handle;
-        material_param.shadow_mask_handle = context.textures.shadow_mask.handle;
+        material_param.cubemap_handle     = context.textures.cubemap_tex.hdl;
+        material_param.shadow_mask_handle = context.textures.shadow_mask.hdl;
 
         //context.cmd_list.SetStencilReference(1, 1);
 

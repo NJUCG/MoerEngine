@@ -160,111 +160,6 @@ public:
         frame_time = delta_time;
     }
 
-    //     // TODO: 考虑统一Skybox，因为写这段代码的时候，LoadSkybox()正在被dragonk修改，所以没有更新LoadSkybox()（如果不需要更新，则删掉本注释）
-    //     void LoadExternalTexture(TextureWithHandle& out_tex, const std::string& path, const char* name) const {
-    //         FILE* file = nullptr;
-    //         fopen_s(&file, path.c_str(), "rb");
-
-    //         if (!file) {
-    //             LOG_ERROR("Failed to load texture in RasterPipeline");
-    //             return;
-    //         }
-
-    //         int    width, height, channels;
-    //         ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
-
-    //         out_tex.tex = device.CreateTexture(
-    //             name,
-    //             Extent2D(width, height),
-    //             PF_R8G8B8A8_UNORM,
-    //             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
-    //         );
-
-    //         cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * channels), out_tex.tex);
-    //         cmd_list.AddCallback([data]() {
-    //             stbi_image_free(data);
-    //         });
-
-    //         out_tex.handle = bdls->AllocateTexture(out_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
-    //     }
-
-    //     void LoadLUT() {
-    //         {
-    //             std::string filepath =
-    //                 (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" / "LUT" / "GGX_E_LUT.png")
-    //                     .string();
-
-    //             LoadExternalTexture(lut_ggx_emu, filepath, "lut_ggx_emu");
-    //         }
-    //         {
-    //             std::string filepath = (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" /
-    //                                     "LUT" / "GGX_Eavg_LUT.png")
-    //                                        .string();
-
-    //             LoadExternalTexture(lut_ggx_eavg, filepath, "lut_ggx_eavg");
-    //         }
-    //     }
-
-    //     void LoadNoiseTexture() {
-    //         {
-    //             std::string filepath =
-    //                 (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" / "noise_256x256.png")
-    //                     .string();
-
-    //             LoadExternalTexture(noise_tex, filepath, "noise_tex");
-    //         }
-    //     }
-
-    //     void LoadCubemap() {
-    //         const std::array<std::string, 6> skybox_faces = {
-    //             "posx.jpg", "negx.jpg", "posy.jpg", "negy.jpg", "posz.jpg", "negz.jpg"
-    //         };
-
-    //         // TODO: GUI和Config切换天空盒，而不是现在硬编码
-    //         // const std::string skybox_path = "Shibuya";
-    //         const std::string skybox_path = "WaterScene";
-
-    //         TextureView skybox_view;
-
-    //         for (size_t i = 0; i < 6; i++) {
-    //             std::string filepath = (ConfigManager::GetInstance().GetEditorResourcePath() / "textures" /
-    //                                     "Skybox" / skybox_path / skybox_faces[i])
-    //                                        .string();
-
-    //             FILE* file = nullptr;
-    //             fopen_s(&file, filepath.c_str(), "rb");
-
-    //             if (!file) {
-    //                 LOG_ERROR("Failed to load skybox texture");
-    //                 return;
-    //             }
-
-    //             int    width, height, channels;
-    //             ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
-
-    //             if (i == 0) { // first time
-    //                 // 延迟创建，这样可以读取width & height
-    //                 cubemap_tex.tex = device.CreateCubeMap(
-    //                     "Skybox Cubemap",
-    //                     Extent2D(width, height),
-    //                     PF_R8G8B8A8_UNORM,
-    //                     ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
-    //                 );
-    //                 skybox_view = TextureView(cubemap_tex.tex);
-    //             }
-
-    //             cmd_list.CopyFrom(
-    //                 std::span<Moer::byte>((Moer::byte*)data, width * height * channels),
-    //                 skybox_view.Slice(i),
-    //                 std::format("Skybox Cubemap #{}", i)
-    //             );
-
-    //             cmd_list.AddCallback([data]() {
-    //                 stbi_image_free(data);
-    //             });
-    //         }
-    //         cubemap_tex.handle = bdls->AllocateTexture(cubemap_tex.tex, Sampler(SF_LINEAR, SAM_REPEAT));
-
     void CreateLightingData() {
         //CPU Side 在Render循环中填充数据
 
@@ -272,7 +167,7 @@ public:
         lighting_data_buffer.buf = device.CreateBuffer<byte>(
             "Raster::LightData", sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS
         );
-        lighting_data_buffer.handle = bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
+        lighting_data_buffer.hdl = bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
     }
 
     // MARK: Frame Buffers

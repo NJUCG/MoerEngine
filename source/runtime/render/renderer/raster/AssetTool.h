@@ -1,17 +1,10 @@
 #pragma once
 
-#include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "scene/Scene.h"
-#include "shader/ShaderPipeline.h"
-#include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
-#include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
+#include "rhi/RHIResource.h"
 #include <config/ConfigManager.h>
 #include <shader/ShaderResourceManager.h>
 #include <stb_image.h>
-
-#include "RasterCompileTimeConstants.h"
-#include "RasterTextures.h"
 
 namespace Moer::Render::Raster {
 struct Tex2DTag {};
@@ -20,49 +13,6 @@ struct TexDepthTag {};
 
 template<typename...>
 inline constexpr bool always_false = false;
-
-struct TextureWithHandle {
-    TextureRef  tex;
-    uint        handle;      //主Handle
-    Array<uint> mip_handles; //每个Mip的Handle
-
-    uint2 GetSize(uint mip = 0) {
-        return uint2(std::max(1u, tex->GetExtent().x >> mip), std::max(1u, tex->GetExtent().y >> mip));
-    }
-    uint GetSizeX(uint mip = 0) {
-        return std::max(1u, tex->GetExtent().x >> mip);
-    }
-    uint GetSizeY(uint mip = 0) {
-        return std::max(1u, tex->GetExtent().y >> mip);
-    }
-    Rect2D GetRect2D(uint mip = 0) {
-        uint2 size = GetSize(mip);
-        return Rect2D(0, 0, size.x, size.y);
-    }
-
-    uint GetMipHandle(uint mip) {
-        if (mip_handles.size() > mip) {
-            return mip_handles[mip];
-        }
-        return handle;
-    }
-};
-struct DepthBufferWithHandle {
-    DepthBufferRef tex;
-    uint           handle = 0;
-};
-
-struct BufferWithHandle {
-    BufferRef buf;
-    uint      handle = 0;
-};
-
-// 如果texture的名字不是编译期决定的，则需要找一个地方存名字。否则string_view会出现悬垂指针
-struct DepthBufferWithHandleAndName {
-    DepthBufferRef tex;
-    uint           handle = 0;
-    std::string    name;
-};
 
 enum TexType {
     TEX_TYPE_2D,
@@ -333,14 +283,14 @@ public:
 
     template<typename T>
         requires requires(T t) {
-            t.handle;
+            t.hdl;
             t.mip_handles;
             t.tex;
         }
     static void
     AllocateRasterResourceHandle(BindlessArrayRef& bindless_array, T& target, const TexConfig& cfg) {
-        //Main Handle
-        target.handle = bindless_array->AllocateTexture(target.tex->GetView(), cfg.sampler);
+        // Main Handle
+        target.hdl = bindless_array->AllocateTexture(target.tex->GetView(), cfg.sampler);
 
         // Mip Handles
         if (cfg.b_create_mip_views) {
@@ -355,29 +305,30 @@ public:
 
     template<typename T>
         requires requires(T t) {
-            t.handle;
+            t.hdl;
             t.tex;
         } && (!requires(T t) { t.mip_handles; })
     static void
     AllocateRasterResourceHandle(BindlessArrayRef& bindless_array, T& target, const TexConfig& cfg) {
         //Main Handle
-        target.handle = bindless_array->AllocateTexture(target.tex->GetView(), cfg.sampler);
+        target.hdl = bindless_array->AllocateTexture(target.tex->GetView(), cfg.sampler);
     }
 
     //方案：tex和handle的生命周期绑定
     //TODO:理论上外部资源纹理分辨率固定，不需要释放显存，但如何管理好呢？
+    // ↑ —— 已解决，直接在外部管理：SizeChanged的时候不执行这个函数（wk看到这个注释就可以把这两行删掉了）
     template<typename T>
         requires requires(T t) {
-            t.handle;
+            t.hdl;
             t.mip_handles;
             t.tex;
         }
     static void FreeRasterResourceHandle(BindlessArrayRef& bindless_array, T& target) {
         //Main Handle
-        if (target.handle != 0) {
-            bindless_array->UnbindTexture(target.handle);
-            target.handle = 0;
-            target.tex    = nullptr;
+        if (target.hdl != 0) {
+            bindless_array->UnbindTexture(target.hdl);
+            target.hdl = 0;
+            target.tex = nullptr;
         } else {
             LOG_WARNING("Trying to free a texture handle that is already zeroed.");
         }
@@ -396,15 +347,15 @@ public:
 
     template<typename T>
         requires requires(T t) {
-            t.handle;
+            t.hdl;
             t.tex;
         } && (!requires(T t) { t.mip_handles; })
     static void FreeRasterResourceHandle(BindlessArrayRef& bindless_array, T& target) {
         //Main Handle
-        if (target.handle != 0) {
-            bindless_array->UnbindTexture(target.handle);
-            target.handle = 0;
-            target.tex    = nullptr;
+        if (target.hdl != 0) {
+            bindless_array->UnbindTexture(target.hdl);
+            target.hdl = 0;
+            target.tex = nullptr;
         } else {
             LOG_WARNING("Trying to free a texture handle that is already zeroed.");
         }

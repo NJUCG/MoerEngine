@@ -50,7 +50,7 @@ public:
         param.kernel_radius        = ui_config.denoiser_bfd_kernel_radius;
         param.spatial_sigma_square = ui_config.denoiser_bfd_spatial_sigma_square;
         param.range_sigma_square   = ui_config.denoiser_bfd_range_sigma_square;
-        param.input_image          = input_image.handle;
+        param.input_image          = input_image.hdl;
 
         context.cmd_list.Gfx(m_bfd_pipeline, context.bdls, param)
             .Draw(

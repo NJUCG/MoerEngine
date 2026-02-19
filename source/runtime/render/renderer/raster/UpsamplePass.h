@@ -47,8 +47,8 @@ public:
         param.upsample_mode = static_cast<uint32>(ui_config.upsample_mode);
         param.outSize       = ui_config.outSize_x;
         param.inSize        = ui_config.inSize_x;
-        param.input_image   = input_image.handle;
-        //param.high_res_depth = context.textures.position.handle; // 可用 position/深度图作为引导
+        param.input_image   = input_image.hdl;
+        //param.high_res_depth = context.textures.position.hdl; // 可用 position/深度图作为引导
         //param.inv_low_res = float2(1.0f / ui_config.render_res.x, 1.0f / ui_config.render_res.y);
         //param.inv_high_res = float2(1.0f / ui_config.display_res.x, 1.0f / ui_config.display_res.y);
         //param.scale_ratio = float2(

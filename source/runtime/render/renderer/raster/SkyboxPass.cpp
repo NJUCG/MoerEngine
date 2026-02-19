@@ -25,7 +25,7 @@ SkyboxPass::SkyboxPass(RasterContext& context) {
 
 void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
     SkyboxPassBindlessParam skybox_param;
-    skybox_param.cubemap_handle = context.textures.cubemap_tex.handle;
+    skybox_param.cubemap_handle = context.textures.cubemap_tex.hdl;
     auto directional_light_entt = context.scene.GetMainDirectionalLightEntity();
     if (directional_light_entt != entt::null && ui_config.skybox_exposure_correct_enabled) {
         auto directional_light       = context.scene.GetMainDirectionalLight();
