@@ -1,11 +1,5 @@
-﻿#pragma once
+﻿#include "BloomPass.h"
 
-#include "scene/Camera.h"
-#include "scene/Material.h"
-#include "scene/RenderableManager.h"
-#include "scene/light/LightComponentManager.h"
-
-#include "BloomPass.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"

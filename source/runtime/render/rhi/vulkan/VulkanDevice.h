@@ -116,6 +116,7 @@ public:
     IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;
 
     void FlushDebugMessages() const override;
+    void WaitIdle() override;
 
 public:
     void           EnqueueDeferredRelease(RHIResource* _object);

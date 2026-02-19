@@ -104,7 +104,8 @@ void RuntimeAssets::LoadTextures() {
                         Extent2D(width, height),
                         PF_R32G32B32A32_SFLOAT,
                         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
-                        CalcMaxMipCount(uint2(width, height))
+                        // CalcMaxMipCount(uint2(width, height)) // TODO: 给exr生成mipmap
+                        1 // 临时解决方案，不生成mipmap
                     );
                     exp_textures.emplace_back(texture, ETextureState::SAMPLE);
 

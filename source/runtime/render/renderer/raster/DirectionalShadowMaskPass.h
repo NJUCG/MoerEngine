@@ -1,15 +1,11 @@
 #pragma once
 
-#include "math/Function.h"
-#include "misc/MMemory.h"
-#include "scene/Camera.h"
-#include "scene/Material.h"
+#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
-#include "RasterTool.h"
 
 namespace Moer::Render::Raster {
 
@@ -25,7 +21,7 @@ class DirectionalShadowMaskPass {
 public:
     DirectionalShadowMaskPass(RasterContext& context);
 
-    void Process(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera);
+    void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 
 private:
     DirectionalShadowMaskPassPipeline directional_shadow_mask_pipeline;

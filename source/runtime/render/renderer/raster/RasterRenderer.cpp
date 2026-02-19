@@ -1,6 +1,4 @@
-#pragma once
-
-#include "renderer/raster/RasterRenderer.h"
+#include "RasterRenderer.h"
 
 #include "AaPass.h"
 #include "AoPass.h"
@@ -11,7 +9,6 @@
 #include "LightingPass.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
-#include "RasterTool.h"
 #include "RtaoDenoiserPass.h"
 #include "ShadowDepthPass.h"
 #include "SkyboxPass.h"
@@ -19,6 +16,8 @@
 #include "TonemappingPass.h"
 #include "debug/RenderDocApi.h"
 #include "misc/Timer.h"
+#include "scene/LogicalComponents.h"
+#include "window/WindowContext.h"
 
 #if WITH_CUDA
 #include "CudaPass.h"
@@ -29,13 +28,12 @@
 namespace Moer::Render::Raster {
 
 RasterRenderer::RasterRenderer(
-    uint2&                                                    _resolution,
-    const SharedPtr<EditorConfig>                             _config,
-    const EngineHooks&                                        _hooks,
-    std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
+    uint2&                        _resolution,
+    const SharedPtr<EditorConfig> _config,
+    const EngineHooks&            _hooks
 ) :
     // Super
-    Renderer(_resolution, _config, _hooks, _load_scene_async) {
+    Renderer(_resolution, _config, _hooks) {
 
     raster_context_ptr =
         MakeUnique<RasterContext>(device, manager, gfx_queue, bindless_array, cmd_list, scene, resolution);
@@ -85,7 +83,7 @@ RasterRenderer::RasterRenderer(
 
 RasterRenderer::~RasterRenderer() {
     auto& raster_context = *raster_context_ptr;
-    raster_context.FreeFrameBuffers();
+    raster_context.FreeFrameBuffers(true);
 
     // 下面这段需要在Renderer子类中执行。否则各种Pass对象被Release的时候，对应的资源还没有被释放
     ReleaseResources();
@@ -102,14 +100,14 @@ void RasterRenderer::Run(const SharedPtr<EditorConfig> editor_config, const Engi
 void RasterRenderer::UpdateGlobalLightingData(
     RasterContext&      context,
     const RasterConfig& ui_config,
-    const CameraRef&    camera
+    const Camera&       camera
 ) {
     uint          csm_layers    = ui_config.shadow_csm_num_of_cascades;
     LightingData* lighting_data = &context.lighting_data;
 
-    lighting_data->inv_view_proj   = Transpose(camera->GetViewProjectionMatrixInv());
-    lighting_data->light_count     = context.scene.GetLights().size();
-    lighting_data->camera_position = camera->GetPosition();
+    lighting_data->inv_view_proj   = Transpose(camera.GetViewProjectionMatrixInv());
+    lighting_data->light_count     = context.scene.cpu_scene().GetLightCount();
+    lighting_data->camera_position = camera.GetPosition();
 
     // Shadow Parameters
     lighting_data->shadow_map_mode              = static_cast<int>(ui_config.shadow_map_mode);
@@ -120,7 +118,7 @@ void RasterRenderer::UpdateGlobalLightingData(
 
     // Shadow Map
     for (uint i = 0; i < csm_layers; i++) {
-        lighting_data->cascade_shadow_map[i] = context.csm_data.shadow_map_textures[i].handle;
+        lighting_data->cascade_shadow_map[i] = context.csm_data.shadow_map_textures[i].hdl;
     }
     lighting_data->point_shadow_map = context.point_shadow_data.shadow_cubes[0].handle;
     lighting_data->light_pos        = context.point_shadow_data.shadow_cubes[0].light_pos;
@@ -130,9 +128,9 @@ void RasterRenderer::UpdateGlobalLightingData(
     for (uint i = 0; i < csm_layers; i++) {
         lighting_data->world_to_shadow_clip[i] = Transpose(lighting_data->world_to_shadow_clip[i]);
     }
-    lighting_data->view_matrix = Transpose(camera->GetViewMatrix());
-    lighting_data->near_clip   = camera->GetNearClip();
-    lighting_data->far_clip    = camera->GetFarClip();
+    lighting_data->view_matrix = Transpose(camera.GetViewMatrix());
+    lighting_data->near_clip   = camera.GetNearClip();
+    lighting_data->far_clip    = camera.GetFarClip();
 
     lighting_data->is_csm_blend_enabled = ui_config.shadow_csm_blend_option ? 1 : 0;
     // 注：此处不一定使用所有CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
@@ -143,8 +141,8 @@ void RasterRenderer::UpdateGlobalLightingData(
 
     // BRDF
     {
-        lighting_data->lut_ggx_emu_handle  = context.textures.lut_ggx_emu.handle;
-        lighting_data->lut_ggx_eavg_handle = context.textures.lut_ggx_eavg.handle;
+        lighting_data->lut_ggx_emu_handle  = context.textures.lut_ggx_emu.hdl;
+        lighting_data->lut_ggx_eavg_handle = context.textures.lut_ggx_eavg.hdl;
 
         lighting_data->brdf_enable_multi_scatter = ui_config.shading_brdf_enable_multi_scatter ? 1 : 0;
         lighting_data->brdf_NDF_mode             = static_cast<uint>(ui_config.shading_brdf_NDF_mode);
@@ -171,12 +169,12 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         std::this_thread::yield(); // FIXME: 这个东西有用吗？
         skip_present = true;
 
-    } else if (window_state == EWindowState::SizeChanged) { // FIXME: Runtime Error
+    } else if (window_state == EWindowState::SizeChanged) {
         LOG_INFO("Size Changed.");
 
-        raster_context.FreeFrameBuffers();
+        raster_context.FreeFrameBuffers(false);
         raster_context.CreateFrameBuffers();
-        raster_context.UploadExternalFrameBuffers();
+        // raster_context.UploadExternalFrameBuffers(); // 窗口大小变化时，外部纹理不会变化，所以不需要上传
         raster_context.AllocateFrameBuffers();
 
 #if WITH_CUDA
@@ -215,19 +213,19 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
     // MARK: 3. Run Render Passes
 
-    if (Scene::IsSceneReady()) {
+    if (scene.IsReady()) {
         if (first_load) {
             first_load = false;
 
-            raster_context.LoadSceneData();
-            RasterTool::InitRaytracingScene(raster_context, rt_geometries);
+            // 随手加一句，避免出错（重构完毕后可以尝试去除）
+            cmd_list.UpdateBindlessArray(bindless_array);
 
             gfx_queue.Execute(cmd_list.Submit());
             gfx_queue.Sync();
         }
 
         const auto& raster_config = editor_config->raster_config;
-        auto        camera        = CameraManager::Get().Get(scene.GetCameras()[0]);
+        auto&       camera        = scene.GetMainCamera().camera;
 
         {
             // Jitter Camera for SMAA T2x
@@ -236,16 +234,17 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
                 smaa_current_frame_index ^= 1;
                 static StaticArray<float2, 2> smaa_jitter = {float2(0.25f, -0.25f), float2(-0.25f, 0.25f)};
-                camera->SetJitterMatrix(smaa_jitter[smaa_current_frame_index]);
+                camera.SetJitterMatrix(smaa_jitter[smaa_current_frame_index]);
             }
         }
 
-        camera->Tick(editor_config);
+        camera.Tick(editor_config);
 
-        raster_context.Update(camera->GetDeltaTime());
+        raster_context.Update(camera.GetDeltaTime());
 
         // others
-        RasterTool::UpdateRaytracingScene(raster_context);
+        // FIXME: 统一update scene
+        // scene.GetGpuScene().UpdateRaytracingScene(cmd_list);
 
         // Shadow Depth Pass
         shadow_depth_pass->Process(raster_context, raster_config, camera);
@@ -313,7 +312,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }
 
         // without test
-        raster_context.rt_scene->AdvanceFrame();
+        // FIXME: 统一advance frame
+        // scene.GetRaytracingScene()->AdvanceFrame();
 
         // debug
         if (raster_config.debug_fps_limit_enable) {

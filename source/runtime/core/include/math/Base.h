@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <format>
 #include <type_traits>
@@ -55,8 +56,15 @@ struct Vector<T, 2> {
         return e[i];
     }
 
-    std::string ToString() const {
-        return std::format("({},{})", x, y);
+    std::string ToString(int decimal_places = -1) const {
+        if (decimal_places < 0 || !std::is_floating_point_v<T>) {
+            return std::format("({},{})", x, y);
+        }
+        auto fmt = [decimal_places](T v) {
+            return (v == std::trunc(v)) ? std::format("{:.0f}", v) :
+                                          std::format("{:.{}f}", v, decimal_places);
+        };
+        return std::format("({},{})", fmt(x), fmt(y));
     }
 };
 
@@ -112,8 +120,15 @@ struct Vector<T, 3> {
         return e[i];
     }
 
-    std::string ToString() const {
-        return std::format("({},{},{})", x, y, z);
+    std::string ToString(int decimal_places = -1) const {
+        if (decimal_places < 0 || !std::is_floating_point_v<T>) {
+            return std::format("({},{},{})", x, y, z);
+        }
+        auto fmt = [decimal_places](T v) {
+            return (v == std::trunc(v)) ? std::format("{:.0f}", v) :
+                                          std::format("{:.{}f}", v, decimal_places);
+        };
+        return std::format("({},{},{})", fmt(x), fmt(y), fmt(z));
     }
 };
 
@@ -166,8 +181,15 @@ struct Vector<T, 4> {
         return e[i];
     }
 
-    std::string ToString() const {
-        return std::format("({},{},{},{})", x, y, z, w);
+    std::string ToString(int decimal_places = -1) const {
+        if (decimal_places < 0 || !std::is_floating_point_v<T>) {
+            return std::format("({},{},{},{})", x, y, z, w);
+        }
+        auto fmt = [decimal_places](T v) {
+            return (v == std::trunc(v)) ? std::format("{:.0f}", v) :
+                                          std::format("{:.{}f}", v, decimal_places);
+        };
+        return std::format("({},{},{},{})", fmt(x), fmt(y), fmt(z), fmt(w));
     }
 };
 

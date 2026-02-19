@@ -4,6 +4,7 @@
 
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
+#include "log/LogSystem.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "vulkan/vulkan_core.h"
@@ -579,28 +580,32 @@ void VkTracker::QueueTransferReleaseResource(
     VkImageLayout  _src_layout,
     VkImageLayout  _dst_layout
 ) {
-    auto key = MakeTextureStateKey(_texture, 0, _texture->GetNumMips(), 0, _texture->GetNumArray());
-    pending_textures.insert(key);
-    if (auto it = texture_states.find(key); it != texture_states.end()) {
-        auto& state            = it->second;
-        state.src_queue_family = _src_queue;
-        state.dst_queue_family = _dst_queue;
-        state.src_layout       = _src_layout;
-        state.dst_layout       = _dst_layout;
-        state.dst_stage        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    } else {
-        TextureState state{
-            VK_ACCESS_2_NONE,
-            VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            VK_ACCESS_2_NONE,
-            _dst_layout,
-            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            _src_queue,
-            _dst_queue
-        };
-        GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
-        texture_states.emplace(key, state);
+    uint8 num_mips   = _texture->GetNumMips();
+    uint8 num_arrays = _texture->GetNumArray();
+    for (uint8 mip = 0; mip < num_mips; ++mip) {
+        auto key = MakeTextureStateKey(_texture, mip, 1, 0, num_arrays);
+        pending_textures.insert(key);
+        if (auto it = texture_states.find(key); it != texture_states.end()) {
+            auto& state            = it->second;
+            state.src_queue_family = _src_queue;
+            state.dst_queue_family = _dst_queue;
+            state.src_layout       = _src_layout;
+            state.dst_layout       = _dst_layout;
+            state.dst_stage        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        } else {
+            TextureState state{
+                VK_ACCESS_2_NONE,
+                VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_NONE,
+                _dst_layout,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                _src_queue,
+                _dst_queue
+            };
+            GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
+            texture_states.emplace(key, state);
+        }
     }
     exported_textures.insert(_texture);
 }
@@ -661,29 +666,32 @@ void VkTracker::QueueTransferAcquireResource(
     VkAccessFlagBits2        _dst_access,
     VkPipelineStageFlagBits2 _dst_stage
 ) {
-    auto key = MakeTextureStateKey(_texture, 0, _texture->GetNumMips(), 0, _texture->GetNumArray());
-    pending_textures.insert(key);
-    if (auto it = texture_states.find(key); it != texture_states.end()) {
-        auto& state            = it->second;
-        state.src_queue_family = _src_queue;
-        state.dst_queue_family = _dst_queue;
-        state.src_layout       = _src_layout;
-        state.dst_layout       = _dst_layout;
-        state.dst_access       = _dst_access;
-        state.dst_stage        = _dst_stage;
-    } else {
-        //src access and stage are ignored in vulkan
-        TextureState state{
-            VK_ACCESS_2_NONE,
-            _src_layout,
-            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            VK_ACCESS_2_NONE,
-            _dst_layout,
-            _dst_stage,
-            _src_queue,
-            _dst_queue
-        };
-        texture_states.emplace(key, state);
+    uint8 num_mips   = _texture->GetNumMips();
+    uint8 num_arrays = _texture->GetNumArray();
+    for (uint8 mip = 0; mip < num_mips; ++mip) {
+        auto key = MakeTextureStateKey(_texture, mip, 1, 0, num_arrays);
+        pending_textures.insert(key);
+        if (auto it = texture_states.find(key); it != texture_states.end()) {
+            auto& state            = it->second;
+            state.src_queue_family = _src_queue;
+            state.dst_queue_family = _dst_queue;
+            state.src_layout       = _src_layout;
+            state.dst_layout       = _dst_layout;
+            state.dst_access       = _dst_access;
+            state.dst_stage        = _dst_stage;
+        } else {
+            TextureState state{
+                VK_ACCESS_2_NONE,
+                _src_layout,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_NONE,
+                _dst_layout,
+                _dst_stage,
+                _src_queue,
+                _dst_queue
+            };
+            texture_states.emplace(key, state);
+        }
     }
 }
 
@@ -699,12 +707,10 @@ TextureSubresourceKeyT<VulkanTexture> VkTracker::MakeTextureStateKey(
     uint8          _array_count
 ) const {
     ValidateSubresourceRange(_texture, _mip_level, _mip_count, _array_layer, _array_count);
-    uint8 mip_count = _mip_count == kRemainingSubresource ?
-                          uint8(_texture->GetNumMips() - _mip_level) :
-                          _mip_count;
-    uint8 array_count = _array_count == kRemainingSubresource ?
-                            uint8(_texture->GetNumArray() - _array_layer) :
-                            _array_count;
+    uint8 mip_count =
+        _mip_count == kRemainingSubresource ? uint8(_texture->GetNumMips() - _mip_level) : _mip_count;
+    uint8 array_count =
+        _array_count == kRemainingSubresource ? uint8(_texture->GetNumArray() - _array_layer) : _array_count;
     return {_texture, _mip_level, mip_count, _array_layer, array_count};
 }
 
@@ -728,8 +734,32 @@ void VkTracker::RecordState(
     uint32_t                 _src_queue_family,
     uint32_t                 _dst_queue_family
 ) {
-    // Range range{_mip_level, _mip_count};
-    auto key = MakeTextureStateKey(_texture, _mip_level, _mip_count, _array_layer, _array_count);
+    uint8 resolved_mip_count =
+        _mip_count == kRemainingSubresource ? uint8(_texture->GetNumMips() - _mip_level) : _mip_count;
+
+    // Decompose multi-mip ranges into per-mip entries to prevent overlapping
+    // subresource ranges in barriers (Vulkan requires oldLayout to match the
+    // actual current layout; overlapping ranges cause desynchronized tracking).
+    // （RecordState的时候，需要把多mip的range分解为单mip的range，否则会把0~5和0~1+2~5识别成完全不同的资源）
+    if (resolved_mip_count > 1) {
+        for (uint8_t i = 0; i < resolved_mip_count; ++i) {
+            RecordState(
+                _texture,
+                _access,
+                _layout,
+                _stage,
+                _mip_level + i,
+                1,
+                _array_layer,
+                _array_count,
+                _src_queue_family,
+                _dst_queue_family
+            );
+        }
+        return;
+    }
+
+    auto         key = MakeTextureStateKey(_texture, _mip_level, 1, _array_layer, _array_count);
     TextureState state{
         VK_ACCESS_2_NONE,
         VK_IMAGE_LAYOUT_UNDEFINED,
@@ -747,49 +777,37 @@ void VkTracker::RecordState(
     if (state_iter != texture_states.end()) {
         auto& target_state = state_iter->second;
 
-        if (target_state.dst_stage == state.dst_stage && target_state.dst_access == state.dst_access &&
-            target_state.dst_layout == state.dst_layout) {
-            return;
-        }
-        // target_state.src_access = target_state.dst_access;
-        // target_state.src_layout = target_state.dst_layout;
-        // target_state.src_stage  = target_state.dst_stage;
         if (target_state.src_layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
-            target_state.src_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             target_state.src_access = VK_ACCESS_2_NONE;
-            // target_state.src_stage  = _stage;
         }
+
         if (target_state.dst_layout != VK_IMAGE_LAYOUT_UNDEFINED &&
-            target_state.dst_layout != state.dst_layout) {
-            //need push barriers
-
-            // FIXME: Comment the assertion for multiple times of gbuffer passes
-            // assert(target_state.dst_stage == state.dst_stage && "state transition error");
+            target_state.dst_layout == state.dst_layout) {
+            // Same layout already pending — merge access/stage flags
+            target_state.dst_access |= state.dst_access;
+            target_state.dst_stage |= state.dst_stage;
+        } else {
+            // Different layout or first record after resolve — overwrite dst.
+            // Do NOT promote the previous dst to src: the barrier for
+            // src→previous_dst was never generated, so the actual GPU layout
+            // is still src, not previous_dst.  Only ResolveBarriers (after
+            // emitting a real barrier) may advance src.
+            target_state.dst_layout = state.dst_layout;
+            target_state.dst_access = state.dst_access;
+            target_state.dst_stage  = state.dst_stage;
         }
-        target_state.dst_layout = state.dst_layout;
-        target_state.dst_access = state.dst_access;
-        target_state.dst_stage  = state.dst_stage;
-
     } else {
-        // bool b_init      = _texture->b_has_init_state;
-        // bool b_preferred = _texture->b_has_preferred_state;
-
-        // if (b_preferred || b_init) {
-        //     if (_texture->b_present) {
-        //         state.src_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        //         state.src_access = VK_ACCESS_2_NONE;
-        //         // state.src_stage  = _stage;
-        //     } else if (b_preferred)
-        //         state.src_layout = _texture->GetPreferredLayout();
-        //     else if (b_init) {
-        //         state.src_layout = _texture->GetInitlayout();
-        //     }
-        // }
         GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
-
         texture_states.emplace(key, state);
     }
-    bool is_write = IsWriteState(_layout, _access) || state.src_layout != state.dst_layout;
+    bool is_write = IsWriteState(_layout, _access);
+    if (state_iter != texture_states.end()) {
+        is_write = is_write || state_iter->second.src_layout != state_iter->second.dst_layout;
+    } else {
+        auto it = texture_states.find(key);
+        if (it != texture_states.end())
+            is_write = is_write || it->second.src_layout != it->second.dst_layout;
+    }
     MarkWriteable(key, is_write);
 }
 

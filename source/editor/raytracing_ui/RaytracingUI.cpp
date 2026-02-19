@@ -242,9 +242,9 @@ void RaytracingUI::ShowConfig() {
         }
 
         if (ImGui::TreeNode("Jitter Settings")) {
-            for (uint i = 0; i < uint(AntialiasPass::EJitter::WhiteNoise) + 1; i++) {
+            for (uint i = 0; i < uint(EJitter::WhiteNoise) + 1; i++) {
                 if (ImGui::Selectable(s_jitter_mode_names[i].data(), uint(config.aa_cfg.jitter_mode) == i)) {
-                    config.aa_cfg.jitter_mode = (AntialiasPass::EJitter)i;
+                    config.aa_cfg.jitter_mode = (EJitter)i;
                 }
             }
             ImGui::TreePop();

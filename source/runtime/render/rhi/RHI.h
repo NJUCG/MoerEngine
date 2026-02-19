@@ -2,17 +2,24 @@
 #define RHI_H
 #include "Core.h"
 #include "PixelFormat.h"
-#include "RHICommand.h"
 #include "RenderAPI.h"
-#include "log/LogSystem.h"
-#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "taskgraph/TaskGraph.h"
 #include "taskgraph/ThreadManager.h"
 #include <cstdint>
-#include <optional>
+#include <filesystem>
+#include <memory>
 #include <type_traits>
+
+// Forward declarations to break circular dependency
+namespace Moer::Render {
+class CommandQueue;
+class CopyQueue;
+class IOInterface;
+using IOInterfaceRef = std::shared_ptr<IOInterface>;
+} // namespace Moer::Render
+
+#include "rhi/RHICommand.h"
 
 struct RHIInitInfo {
     uint32_t max_frame_in_flight = 3;
@@ -150,7 +157,9 @@ public:
         ETextureUsageFlags _usage      = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
     );
 
-    RENDER_API BindlessArrayRef CreateBindlessArray(uint _max_size = 5000);
+    static constexpr uint       k_default_bindless_array_size = 5000;
+    RENDER_API BindlessArrayRef CreateBindlessArray(uint _max_size = k_default_bindless_array_size);
+
     // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);
 
     // TextureView GetBackBuffer(RHIViewport* _viewport, uint32_t _index);
@@ -190,6 +199,7 @@ public:
     RENDER_API Ext* LoadExtension() const;
 
     RENDER_API void FlushDebugMessages() const;
+    RENDER_API void WaitIdle();
 
 protected:
     RENDER_API IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue);

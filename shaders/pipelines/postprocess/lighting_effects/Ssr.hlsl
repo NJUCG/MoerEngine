@@ -27,10 +27,12 @@ bool should_apply_ssr(float2 uv) { // the performance cost is so high
     }
 
     // reference PBRMaterialFrag.hlsl
-    uint mat_id = (TextureHandle(param.vbuffer).Sample2D<uint>(uv) & 0xFFFFFF00) >> 8;
-    MaterialData mat = UnpackMaterialData<MaterialData>(param.material_buffer, mat_id);
+    uint material_id = TextureHandle(param.vbuffer).Sample2D<uint>(uv);
+    ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
+    Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(material_id);
+    
     float2 metallic_roughness = GetTextureData<float2>(
-        mat.metallic_roughness_map,
+        mat.metallic_roughness_map_hdl,
         TextureHandle(param.gbuffer_uv).Sample2D<float2>(uv),
         float2(mat.metallic_factor, mat.roughness_factor),
         float2(mat.metallic_factor, mat.roughness_factor)

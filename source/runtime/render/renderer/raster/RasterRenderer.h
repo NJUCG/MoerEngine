@@ -48,12 +48,7 @@ class UpsamplePass;
 class RENDER_API RasterRenderer : public Renderer {
 
 public:
-    RasterRenderer(
-        uint2&                                                    _resolution,
-        const SharedPtr<EditorConfig>                             _config,
-        const EngineHooks&                                        _hooks,
-        std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
-    );
+    RasterRenderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& _hooks);
 
     virtual ~RasterRenderer() override;
 
@@ -62,7 +57,7 @@ public:
     bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
 
     void
-    UpdateGlobalLightingData(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera);
+    UpdateGlobalLightingData(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 
 private:
     // Context
@@ -89,7 +84,7 @@ private:
 #endif
 
     // Other vars
-    Array<RaytracingGeometryRef> rt_geometries;
+    // TODO: rt_geometries 已迁移到 GpuScene，未来应移除
 }; // namespace Moer::Render::Raster
 
 } // namespace Moer::Render::Raster

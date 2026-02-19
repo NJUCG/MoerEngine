@@ -732,8 +732,8 @@ public:
 
     uint AllocateTexture(const TextureView& _texture, Sampler _sampler) override;
     uint AllocateBuffer(BufferView _buffer) override;
-    void FreeTexture(uint _slot) override;
-    void FreeBuffer(uint _slot) override;
+    void UnbindTexture(uint _slot) override;
+    void UnbindBuffer(uint _slot) override;
     bool IsResourceAllocated(uint64 _handle) const;
     bool IsTextureViewAllocated(
         uint64 _texture,

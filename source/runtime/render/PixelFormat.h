@@ -261,7 +261,12 @@ enum EPixelFormat : uint8_t {
 };
 
 namespace Moer::Render {
+
 bool   IsPixelFormatBC(EPixelFormat _format);
 uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size);
+uint64 GetByteFromPixelFormat(EPixelFormat format);
+uint64 GetChannelFromPixelFormat(EPixelFormat format);
+uint64 GetSizeFromPixelFormat(EPixelFormat format, const uint3 size);
+
 } // namespace Moer::Render
 #endif //MOERENGINE_PIXELFORMAT_H

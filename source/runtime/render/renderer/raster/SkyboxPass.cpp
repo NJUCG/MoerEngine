@@ -1,9 +1,4 @@
-#pragma once
-
-#include "scene/Camera.h"
-#include "scene/Material.h"
-#include "scene/RenderableManager.h"
-#include "scene/light/LightComponentManager.h"
+#include "scene/Scene.h"
 
 #include "RasterResource.h"
 #include "RasterTextures.h"
@@ -28,18 +23,19 @@ SkyboxPass::SkyboxPass(RasterContext& context) {
                           .Build<SkyboxPipeline>(std::move(pso_full_screen_info));
 }
 
-void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera) {
+void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
     SkyboxPassBindlessParam skybox_param;
-    skybox_param.cubemap_handle = context.textures.cubemap_tex.handle;
-    auto directional_light      = GetMainLightDirection(context);
-    if (directional_light != nullptr && ui_config.skybox_exposure_correct_enabled) {
-        skybox_param.exposure_factor = directional_light->GetColor() * directional_light->GetIntensity() *
+    skybox_param.cubemap_handle = context.textures.cubemap_tex.hdl;
+    auto directional_light_entt = context.scene.GetMainDirectionalLightEntity();
+    if (directional_light_entt != entt::null && ui_config.skybox_exposure_correct_enabled) {
+        auto directional_light       = context.scene.GetMainDirectionalLight();
+        skybox_param.exposure_factor = directional_light.color * directional_light.intensity *
                                        powf(10.0f, ui_config.skybox_exposure_correct_factor_log10);
     } else {
         skybox_param.exposure_factor = float3(1.0f, 1.0f, 1.0f);
     }
-    skybox_param.camera_pos    = camera->GetPosition();
-    skybox_param.inv_view_proj = Transpose(camera->GetViewProjectionMatrixInv());
+    skybox_param.camera_pos    = camera.GetPosition();
+    skybox_param.inv_view_proj = Transpose(camera.GetViewProjectionMatrixInv());
 
     DepthAttachment depth_att(context.textures.depth_linear_sampler.tex->GetView().GetTexture());
     depth_att.action = EAttachmentAction::AC_DS_LOAD_STORE;
@@ -54,32 +50,6 @@ void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, 
                 context.textures.lighting_output.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
             } //防止清空
         );
-}
-
-DirectionalLightComponent* SkyboxPass::GetMainLightDirection(RasterContext& context) {
-    auto lights          = context.scene.GetLights();
-    auto light_component = LightComponentManager::Get().Get(lights[0]);
-
-    for (int i = 1; i < lights.size(); i++) {
-        auto light_entity            = lights[i];
-        auto light_component_current = LightComponentManager::Get().Get(light_entity);
-        if (light_component_current->GetType() == ELightComponentType::DIRECTIONAL) {
-            light_component = light_component_current;
-            break;
-        }
-    }
-
-    if (light_component->GetType() != ELightComponentType::DIRECTIONAL) {
-        LOG_WARNING("No Directional Light found in the scene, exposure calculation will be skipped.");
-        return nullptr;
-    }
-    auto* directional_light = dynamic_cast<DirectionalLightComponent*>(light_component.Get());
-    if (directional_light == nullptr) {
-        LOG_ERROR("LightComponent is not DirectionalLightComponent! This should not happen, code error.");
-        return nullptr;
-    }
-
-    return directional_light;
 }
 
 } // namespace Moer::Render::Raster

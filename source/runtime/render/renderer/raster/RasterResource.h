@@ -60,13 +60,6 @@ public:
     BufferWithHandle lighting_data_buffer; //帧级别光照数据
     LightingData     lighting_data;
 
-    // Data from scene
-    uint gpu_instance_info_handle     = 0;
-    uint gpu_geometry_info_handle     = 0;
-    uint gpu_geometry_instance_handle = 0;
-    uint gpu_material_info_handle     = 0;
-    uint gpu_light_info_handle        = 0;
-
     // Shadow Data
     struct CSMData {
         float3                                                      light_dir;
@@ -95,7 +88,9 @@ public:
     } point_shadow_data;
 
     // RayTracing
-    RaytracingSceneRef rt_scene;
+    RaytracingSceneRef rt_scene() {
+        return scene.GetGpuSceneRes().rt_scene;
+    }
 
 private:
     ubyte* LoadImageData(const std::string& path, int& width, int& height) const {
@@ -154,9 +149,6 @@ public:
         scene(scene),
         resolution(resolution) {
 
-        // rt scene
-        rt_scene = device.CreateRaytracingScene();
-
         // textures
         textures = RasterTextures{};
 
@@ -168,28 +160,6 @@ public:
         frame_time = delta_time;
     }
 
-    // Called from `FirstLoad`
-    void LoadSceneData() {
-        assert(
-            Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady() &&
-            "Scene not ready, but called LoadSceneData"
-        );
-
-        gpu_instance_info_handle =
-            bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView());
-        gpu_geometry_info_handle =
-            bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView());
-        gpu_geometry_instance_handle =
-            bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView());
-        gpu_material_info_handle =
-            bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView());
-        gpu_light_info_handle =
-            bdls->AllocateBuffer(scene.GetBuffer(EGpuSceneResource::LightInfo)->GetView());
-
-        // Bindless
-        cmd_list.UpdateBindlessArray(bdls);
-    }
-
     void CreateLightingData() {
         //CPU Side 在Render循环中填充数据
 
@@ -197,7 +167,7 @@ public:
         lighting_data_buffer.buf = device.CreateBuffer<byte>(
             "Raster::LightData", sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS
         );
-        lighting_data_buffer.handle = bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
+        lighting_data_buffer.hdl = bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
     }
 
     // MARK: Frame Buffers
@@ -215,8 +185,8 @@ public:
         textures.AllocateFrameBuffers(cmd_list, bdls);
     }
 
-    void FreeFrameBuffers() {
-        textures.FreeFrameBuffers(bdls);
+    void FreeFrameBuffers(bool is_free_external_assets) {
+        textures.FreeFrameBuffers(bdls, is_free_external_assets);
     }
 
     Array<TextureView> GetDisplayableFrameBuffersView() {

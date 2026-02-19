@@ -1,15 +1,10 @@
 #pragma once
 
-#include "math/Function.h"
-#include "misc/MMemory.h"
-#include "scene/Camera.h"
-#include "scene/Material.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
-#include "RasterTool.h"
 
 namespace Moer::Render::Raster {
 

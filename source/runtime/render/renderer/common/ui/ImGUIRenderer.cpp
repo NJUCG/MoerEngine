@@ -1,4 +1,4 @@
-﻿#include "ImGUIRenderer.h"
+#include "ImGUIRenderer.h"
 
 #include "GLFW/glfw3.h"
 #include "IconsFontAwesome6.h"
@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -528,7 +529,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
             {(r + l) / (l - r), (t + b) / (b - t), 0.5f, 1.0f},
         };
 
-        memcpy(&constant.mvp, mvp, sizeof(mvp));
+        memcpy(static_cast<void*>(&constant.mvp), mvp, sizeof(mvp));
     }
     for (int32_t n = 0; n < draw_data->CmdListsCount; n++) {
         const ImDrawList* cmd_list = draw_data->CmdLists[n];

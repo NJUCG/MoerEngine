@@ -1,22 +1,31 @@
-Checks: '-*,clang-diagnostic-*,llvm-*,-llvm-header-guard,-llvm-namespace-comment,-llvm-include-order,readability-identifier-naming'
+Checks: '-*,clang-diagnostic-*,llvm-*,-llvm-header-guard,-llvm-namespace-comment,-llvm-include-order,-llvm-else-after-return,readability-identifier-naming'
 
 CheckOptions:
   - key: readability-identifier-naming.ClassCase
     value: CamelCase
   - key: readability-identifier-naming.EnumCase
     value: CamelCase
+  - key: readability-identifier-naming.EnumPrefix
+    value: E
   - key: readability-identifier-naming.FunctionCase
     value: CamelCase
   # Exclude from scanning as this is an exported symbol used for fuzzing
   # throughout the code base.
+  # Allow both CamelCase and lower_case function names
+  # This regex matches lower_case functions (allowing them to bypass CamelCase check)
   - key: readability-identifier-naming.FunctionIgnoredRegexp
-    value: "LLVMFuzzerTestOneInput"
+    value: "LLVMFuzzerTestOneInput|^[a-z][a-z0-9_]*$"
   - key: readability-identifier-naming.MemberCase
+    value: lower_case
+  - key: readability-identifier-naming.MemberPrefix
+    value: m_
+  - key: readability-identifier-naming.PublicMemberCase
     value: lower_case
   - key: readability-identifier-naming.ParameterCase
     value: lower_case
-  - key: readability-identifier-naming.ParameterPrefix
-    value: _
+  # Allow _lower_case (leading underscore) as well as lower_case
+  - key: readability-identifier-naming.ParameterIgnoredRegexp
+    value: "^_[a-z][a-z0-9_]*$"
   - key: readability-identifier-naming.UnionCase
     value: CamelCase
   - key: readability-identifier-naming.VariableCase

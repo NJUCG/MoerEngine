@@ -2,6 +2,10 @@
 
 #include <chrono>
 namespace Moer {
+
+/**
+ * 用于测量运行时间
+ */
 class Timer {
 public:
     void Start() noexcept {
@@ -34,9 +38,13 @@ private:
     bool                                               m_is_running = false;
 };
 
-// 初始化时，传入interval；
-// 每次调用时，检测当前时间是否超过上次触发时间+interval，如果超过则更新上次触发时间并返回true，否则返回false
-// 返回true后，默认重置计时器，可以通过额外的参数控制是否重置
+/**
+ * 循环定时器，用于周期性触发事件
+ * 
+ * 初始化时，传入interval；
+ * 每次调用时，检测当前时间是否超过上次触发时间+interval，如果超过则更新上次触发时间并返回true，否则返回false
+ * 返回true后，默认重置计时器，可以通过额外的参数控制是否重置
+ */
 class LoopedTimer {
 public:
     LoopedTimer(double interval_seconds, bool is_trigger_immediately = true) noexcept :

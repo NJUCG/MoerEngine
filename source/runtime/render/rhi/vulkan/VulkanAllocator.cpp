@@ -402,7 +402,7 @@ void VulkanAllocator::StackAllocator::Dispose() {
     allocated_buffers.clear();
 }
 
-std::string_view VulkanAllocator::StackAllocator::GetStackBufferName() {
+std::string VulkanAllocator::StackAllocator::GetStackBufferName() {
     return std::format("VkBackend::StackAllocBuffer_{}", stack_memory_id++);
 }
 

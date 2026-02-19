@@ -1,7 +1,7 @@
 ﻿#pragma once
 
 #include "math/Function.h"
-#include "scene/Camera.h"
+#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
@@ -27,15 +27,15 @@ public:
  */
 class BilateralFilterDenoiserPass {
 public:
-    BilateralFilterDenoiserPass(RasterContext& context) : output_image(context.textures.denoiser_output) {
+    BilateralFilterDenoiserPass(RasterContext& context) : m_output_image(context.textures.denoiser_output) {
         GfxPsoCreateInfo pso_full_screen_info(
-            RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(output_image.tex->GetFormat())}
+            RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(m_output_image.tex->GetFormat())}
         );
 
-        bfd_pipeline = context.manager.Raster()
-                           .Vertex("core/utils/FullScreenQuad.hlsl")
-                           .Pixel("pipelines/postprocess/denoise/BilateralFilterDenoiser.hlsl")
-                           .Build<BilateralFilterDenoiserPipeline>(std::move(pso_full_screen_info));
+        m_bfd_pipeline = context.manager.Raster()
+                             .Vertex("core/utils/FullScreenQuad.hlsl")
+                             .Pixel("pipelines/postprocess/denoise/BilateralFilterDenoiser.hlsl")
+                             .Build<BilateralFilterDenoiserPipeline>(std::move(pso_full_screen_info));
     }
 
     TextureWithHandle
@@ -50,22 +50,22 @@ public:
         param.kernel_radius        = ui_config.denoiser_bfd_kernel_radius;
         param.spatial_sigma_square = ui_config.denoiser_bfd_spatial_sigma_square;
         param.range_sigma_square   = ui_config.denoiser_bfd_range_sigma_square;
-        param.input_image          = input_image.handle;
+        param.input_image          = input_image.hdl;
 
-        context.cmd_list.Gfx(bfd_pipeline, context.bdls, param)
+        context.cmd_list.Gfx(m_bfd_pipeline, context.bdls, param)
             .Draw(
                 "BilateralFilterDenoiser Pass",
-                output_image.GetRect2D(),
+                m_output_image.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(output_image.tex)
+                ColorAttachment(m_output_image.tex)
             );
 
-        return output_image;
+        return m_output_image;
     }
 
 private:
-    BilateralFilterDenoiserPipeline bfd_pipeline;
-    TextureWithHandle&              output_image;
+    BilateralFilterDenoiserPipeline m_bfd_pipeline;
+    TextureWithHandle&              m_output_image;
 };
 
 } // namespace Moer::Render::Raster

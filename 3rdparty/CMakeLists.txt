@@ -118,6 +118,14 @@ set(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION ${MOER_WINDOWS_SDK_VERSION})
 include(${CMAKE_CURRENT_SOURCE_DIR}/tomlplusplus.cmake)
 set_target_folder(tomlplusplus ${third_party_folder}/tomlplusplus-3.4.0)
 
+# entt
+include(${CMAKE_CURRENT_SOURCE_DIR}/entt.cmake)
+set_target_folder(entt ${third_party_folder}/entt)
+
+# gtl
+include(gtl.cmake)
+set_target_folder(gtl ${third_party_folder}/gtl)
+
 # NRI, NRD, SPIRV-Cross
 include(NRI.cmake)
 

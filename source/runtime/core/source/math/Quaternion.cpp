@@ -67,6 +67,45 @@ Quaternion::Quaternion(const Vector3f& x_axis, const Vector3f& y_axis, const Vec
     vec = QuaternionFromRotation(rotation);
 }
 
+Quaternion::Quaternion(const Vector3f& from, const Vector3f& to) noexcept {
+    Vector3f f = Normalizef(from);
+    Vector3f t = Normalizef(to);
+
+    float cos_theta = Dotf(f, t);
+
+    if (cos_theta >= 1.f - 1e-5f) {
+        // 情况 1: 方向相同
+        vec = Vector4f(0.f, 0.f, 0.f, 1.f);
+    } else if (cos_theta <= -1.f + 1e-5f) {
+        // 情况 2: 方向完全相反 (旋转 180 度)
+        // 寻找一个垂直轴。选择 f 中绝对值最小的分量对应的轴
+        Vector3f axis;
+        if (std::abs(f.x) < std::abs(f.y) && std::abs(f.x) < std::abs(f.z)) {
+            axis = Cross(f, Vector3f(1.f, 0.f, 0.f));
+        } else if (std::abs(f.y) < std::abs(f.z)) {
+            axis = Cross(f, Vector3f(0.f, 1.f, 0.f));
+        } else {
+            axis = Cross(f, Vector3f(0.f, 0.f, 1.f));
+        }
+        axis = Normalizef(axis);
+        // 180度旋转：w = cos(90) = 0, xyz = axis * sin(90) = axis
+        vec = Vector4f(axis.x, axis.y, axis.z, 0.f);
+    } else {
+        // 情况 3: 普通情况 (最快且数值稳定的公式)
+        // 计算 f 和 t 的“半角方向”向量的四元数表示
+        // 下面代码等价于：axis = Cross(f, t); angle = acos(dot);
+        // 但消除了 trig 函数
+        Vector3f c     = Cross(f, t);
+        float    s     = std::sqrt((1.f + cos_theta) * 2.f);
+        float    inv_s = 1.f / s;
+
+        vec.x = c.x * inv_s;
+        vec.y = c.y * inv_s;
+        vec.z = c.z * inv_s;
+        vec.w = s * 0.5f;
+    }
+}
+
 Quaternion Quaternion::Inverse() const noexcept {
     return Quaternion(-vec.x, -vec.y, -vec.z, vec.w);
 }

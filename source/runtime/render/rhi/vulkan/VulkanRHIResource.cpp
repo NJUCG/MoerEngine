@@ -1602,6 +1602,17 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             m_alloc.alloc = {};
             return;
         }
+        // 验证 texture 参数
+        if (_info.extent.x == 0 || _info.extent.y == 0) {
+            LOG_ERROR(
+                "Invalid texture extent: ({}, {}). Texture name: {}",
+                _info.extent.x,
+                _info.extent.y,
+                _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown"
+            );
+            assert(false && "Texture extent cannot be zero");
+        }
+
         VkImageCreateInfo image_create_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         image_create_info.flags       = VulkanEnumTranslator::METoVKImageCreateFlags(_info.dimension);
         image_create_info.imageType   = VulkanEnumTranslator::METoVKImageType(_info.dimension);
@@ -1627,7 +1638,22 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         alloc_create_info.usage = VulkanMemoryManager::MEGenerateVmaMemoryUsage();
 
         VmaAllocator allocator = m_device->GetVmaAllocator();
-        VK_CHECK_RESULT(vmaCreateImage(allocator, &image_create_info, &alloc_create_info, &m_alloc.image, &m_alloc.alloc, nullptr));
+        VkResult     result    = vmaCreateImage(allocator, &image_create_info, &alloc_create_info, &m_alloc.image, &m_alloc.alloc, nullptr);
+        if (result != VK_SUCCESS) {
+            std::string texture_name = _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown";
+            LOG_CRITICAL(
+                "Failed to create texture '{}': extent=({},{}), format={}, mips={}, layers={}, "
+                "VkResult={}",
+                texture_name,
+                _info.extent.x,
+                _info.extent.y,
+                uint(_info.format),
+                _info.num_mips,
+                _info.array_size,
+                int(result)
+            );
+            VK_CHECK_RESULT(result);
+        }
         if(!_info.debug_name.has_value()){
             SetName("UserTexture");
         }else{
@@ -2138,7 +2164,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         return slot_idx;
     }
     static const Sampler s_spl = {ESamplerFilter::SF_LINEAR, SAM_CLAMP_TO_BORDER};
-    void VulkanBindlessArray::FreeTexture(uint _array_idx) {
+    void VulkanBindlessArray::UnbindTexture(uint _array_idx) {
         std::unique_lock<std::mutex> lk(mtx);
         if(auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()){
             const UpdateCmd& src_cmd = update_cmds[iter->second];
@@ -2188,7 +2214,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         }
     }
 
-    void VulkanBindlessArray::FreeBuffer(uint _array_idx) {
+    void VulkanBindlessArray::UnbindBuffer(uint _array_idx) {
         std::unique_lock<std::mutex> lk(mtx);
 
         if(auto iter = temp_slot_to_cmd.find(_array_idx); iter != temp_slot_to_cmd.end()){

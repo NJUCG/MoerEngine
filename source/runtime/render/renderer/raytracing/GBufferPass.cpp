@@ -1,8 +1,6 @@
-﻿#include "GBufferPass.h"
+#include "GBufferPass.h"
 
 #include "RTResource.h"
-#include "scene/CameraManager.h"
-#include "scene/RenderableManager.h"
 #include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/ShaderParameters.h"
@@ -38,11 +36,18 @@ GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager, Scene& 
 void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     GBufferPassParams         params{};
     RaytracingBindlessHandles bindless_handles = _rt_ctx.GetBindlessHandles();
-    params.geometry_data_handle                = bindless_handles.geom_data;
-    params.instance_data_handle                = bindless_handles.instance_data;
-    params.material_data_handle                = bindless_handles.material_data;
 
-    Entity main_cam_entity = scene.GetMainCamera();
+    // 场景结构数据
+    params.instance_buf_hdl  = bindless_handles.instance_buf_hdl;
+    params.primitive_buf_hdl = bindless_handles.primitive_buf_hdl;
+    params.material_buf_hdl  = bindless_handles.material_buf_hdl;
+
+    // MegaBuffers
+    params.position_buf_hdl       = bindless_handles.position_buf_hdl;
+    params.packed_normal_buf_hdl  = bindless_handles.packed_normal_buf_hdl;
+    params.packed_tangent_buf_hdl = bindless_handles.packed_tangent_buf_hdl;
+    params.texcoord0_buf_hdl      = bindless_handles.texcoord0_buf_hdl;
+    params.index_buf_hdl          = bindless_handles.index_buf_hdl;
 
     constants.main_view = _rt_ctx.main_view;
     constants.prev_view = _rt_ctx.prev_view;

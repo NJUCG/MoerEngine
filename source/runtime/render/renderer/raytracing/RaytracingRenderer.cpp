@@ -1,25 +1,18 @@
-#pragma once
-
 #include "RaytracingRenderer.h"
 
 // Runtime
 #include "PixelFormat.h"
 #include "RaytracingConfig.h"
 #include "config/ConfigManager.h"
-#include "loader/LoaderInterface.h"
+#include "misc/BoundingBox.h"
 #include "misc/Timer.h"
 #include "renderer/common/RuntimeAssets.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIResource.h"
 #include "rhi/extension/NrdExtension.h"
-#include "scene/CameraManager.h"
-#include "scene/EntityManager.h"
-#include "scene/Material.h"
-#include "scene/MaterialInstance.h"
-#include "scene/RenderableManager.h"
-#include "scene/light/LightComponent.h"
-#include "scene/light/LightComponentManager.h"
-#include "shader/GeometryPassPsoManager.h"
+#include "scene/GpuScene.h"
+#include "scene/loader/LoaderInterface.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskGraph.h"
 #include "window/WindowContext.h"
@@ -52,13 +45,12 @@ union FloatBits {
 static Box3D scene_bounding{};
 
 RaytracingRenderer::RaytracingRenderer(
-    uint2&                                                    _resolution,
-    const SharedPtr<EditorConfig>                             _config,
-    const EngineHooks&                                        _hooks,
-    std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async,
-    RuntimeAssets&                                            _runtime_assets
+    uint2&                        _resolution,
+    const SharedPtr<EditorConfig> _config,
+    const EngineHooks&            _hooks,
+    RuntimeAssets&                _runtime_assets
 ) :
-    Renderer(_resolution, _config, _hooks, _load_scene_async),
+    Renderer(_resolution, _config, _hooks),
     runtime_assets(_runtime_assets) {}
 
 void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
@@ -68,8 +60,9 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     Array<TextureView> env_mips;
     TextureRef         env_pdf{};
     Array<TextureView> env_pdf_mips;
+    TextureWithHandle  env_tex_with_hdl;
 
-    RaytracingSceneRef rt_scene = device.CreateRaytracingScene();
+    RaytracingSceneRef rt_scene = {}; // 在场景初始化完毕后，才可以被赋值
 
     ShaderUtils sd_utils(device, manager);
 
@@ -78,19 +71,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     ImportanceSamplingContext is_ctx(is_params);
 
     bool first_load = true;
-    uint instance_buffer_handle;
-    uint geometry_buffer_handle;
-    uint geometry_instance_buffer_handle;
-    uint material_buffer_idx;
-    uint view_buffer_handle = 0;
 
-    // gbuffer bdls handle
-    uint bdls_tex_handle_uv      = 0;
-    uint bdls_tex_handle_normal  = 0;
-    uint bdls_tex_handle_vbuffer = 0;
-    uint bdls_tex_handle_depth   = 0;
-
-    Array<RaytracingGeometryRef> rt_geometries;
+    UnorderedMap<std::string, TextureWithHandle> material_textures;
 
     float elapsed_time = 0.0f;
 
@@ -176,13 +158,13 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     auto add_on_free_buffer = [&](uint _buffer_handle) {
         on_free_buffer_callbacks.emplace_back([&, _buffer_handle](uint _timeline) {
-            bindless_array->FreeBuffer(_buffer_handle);
+            bindless_array->UnbindBuffer(_buffer_handle);
         });
     };
 
     auto add_on_free_texture = [&](uint _texture_handle) {
         on_free_buffer_callbacks.emplace_back([&, _texture_handle](uint _timeline) {
-            bindless_array->FreeTexture(_texture_handle);
+            bindless_array->UnbindTexture(_texture_handle);
         });
     };
 
@@ -235,19 +217,24 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         auto frame_time = timer.ElapsedMilliseconds();
         timer.Start();
 
-        if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady() &&
-            runtime_assets.IsReady()) {
+        if (scene.IsReady() && runtime_assets.IsReady()) {
             // load scene
             if (first_load) {
+                first_load = false;
+
                 b_new_env_map = true;
                 // calculate bounding box
                 scene_bounding.min = float3(0.f);
                 scene_bounding.max = float3(0.f);
 
-                scene.ForEach([&](Entity _entity) {
-                    auto& mesh = RenderableManager::Get().GetMeshInfo(_entity);
-                    scene_bounding.Expand(mesh->bounding_box);
-                });
+                // 遍历所有有 CRenderable 和 CTransform 的 entity，合并它们的 AABB
+                scene.r().view<ecs::CRenderable, ecs::CTransform>().each(
+                    [&](auto entity_id, const auto& c_renderable, const auto& c_transform) {
+                        if (c_transform.d_aabb.IsValid()) {
+                            scene_bounding.Expand(c_transform.d_aabb);
+                        }
+                    }
+                );
 
                 // new_cell size
                 float3 extent = scene_bounding.max - scene_bounding.min;
@@ -256,120 +243,21 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 float cell_size                 = max_extent * 2 / is_ctx.GetGridConfig().grid_size.x;
                 ui_config.grid_config.cell_size = cell_size;
 
-                instance_buffer_handle = bindless_array->AllocateBuffer(
-                    scene.GetBuffer(EGpuSceneResource::InstanceInfo)->GetView()
-                );
-                geometry_buffer_handle = bindless_array->AllocateBuffer(
-                    scene.GetBuffer(EGpuSceneResource::GeometryInfo)->GetView()
-                );
-                geometry_instance_buffer_handle = bindless_array->AllocateBuffer(
-                    scene.GetBuffer(EGpuSceneResource::GeometryInstance)->GetView()
-                );
-                material_buffer_idx = bindless_array->AllocateBuffer(
-                    scene.GetBuffer(EGpuSceneResource::MaterialInfo)->GetView()
-                );
+                rt_scene = scene.GetGpuSceneRes().rt_scene;
 
-                add_on_free_buffer(instance_buffer_handle);
-                add_on_free_buffer(geometry_buffer_handle);
-                add_on_free_buffer(geometry_instance_buffer_handle);
-                add_on_free_buffer(material_buffer_idx);
-
-                rt_ctx->SetBindlessHandles(
-                    geometry_buffer_handle, instance_buffer_handle, material_buffer_idx
-                );
+                rt_ctx->SetBindlessHandles(scene.GetGpuSceneRes());
                 rt_ctx->SetRaytracingScene(rt_scene);
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
 
-                first_load = false;
-
-                // {
-
-                //     Array<ImportTexture> sampled_textures;
-                //     sampled_textures.reserve((scene.GetGpuScene().material_textures.size()));
-
-                //     for (auto& [name, tex] : scene.GetGpuScene().material_textures) {
-                //         sampled_textures.emplace_back(ImportTexture(
-                //             tex.texture->GetView(0, tex.texture->GetNumMips()), ETextureState::SAMPLE
-                //         ));
-                //     }
-
-                //     Array<ImportBuffer> io_buffers;
-                //     io_buffers.reserve(scene.GetIOPendingBuffers().size());
-
-                //     for (auto& buffer : scene.GetIOPendingBuffers()) {
-                //         io_buffers.emplace_back(ImportBuffer(buffer->GetView()));
-                //     }
-
-                //     cmd_list.ImportResourcesFromQueue(
-                //         EQueueType::Copy, std::move(sampled_textures), std::move(io_buffers)
-                //     );
-                //     gfx_queue.Execute(cmd_list.Submit());
-                //     gfx_queue.Sync();
-                // }
                 cmd_list.UpdateBindlessArray(bindless_array);
-
-                rt_geometries.reserve(scene.GetEntityCount());
-                Array<AccelerationStructureBuildParam> build_params;
-                build_params.reserve(scene.GetEntityCount());
-
-                scene.ForEach([&](Entity _entity) {
-                    auto&                  mesh = RenderableManager::Get().GetMeshInfo(_entity);
-                    RaytracingGeometryInfo rt_geo_info{};
-                    rt_geo_info.build_flags   = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
-                    rt_geo_info.vertex_format = PF_R32G32B32_SFLOAT;
-                    rt_geo_info.index_type    = IET_UINT32;
-
-                    for (uint i = 0; i < mesh->geometries.size(); i++) {
-                        uint vtx_offset = mesh->geometries[i]->local_vtx_offset;
-                        uint vtx_count  = mesh->geometries[i]->local_vtx_count;
-                        uint idx_offset = mesh->geometries[i]->local_idx_offset;
-                        uint idx_count  = mesh->geometries[i]->local_idx_count;
-                        auto vtx_buffer = mesh->geometries[i]->mesh_buffers->vertex_buffer;
-                        auto idx_buffer = mesh->geometries[i]->mesh_buffers->index_buffer;
-
-                        rt_geo_info.segments.emplace_back(
-                            0,                                         // vertex_offset
-                            0,                                         // index_offset
-                            vtx_offset,                                // first_vertex
-                            vtx_count,                                 // vertex_count
-                            sizeof(float3),                            // vertex_stride
-                            idx_offset / 3,                            // first_primitive
-                            idx_count / 3,                             // primitive_count
-                            vtx_buffer,                                // vertex_buffer
-                            idx_buffer,                                // index_buffer
-                            RTGT_TRIANGLES,                            // type
-                            ERayTracingGeometryFlags::GEOMETRY_OPAQUE, // flags
-                            false,                                     // b_force_opaque
-                            false,                                     // b_cull_back_face
-                            false                                      // b_flip_face
-                        );
-                    }
-
-                    RaytracingGeometryRef blas = device.CreateRaytracingGeometry(rt_geo_info);
-                    rt_geometries.push_back(blas);
-
-                    auto& instance     = rt_scene->AddInstance();
-                    instance.geom      = blas;
-                    instance.transform = TransformManager::Get().Get(_entity).GetMatrix3x4();
-
-                    instance.flag.need_create = true;
-                    instance.custom_index     = instance.instance_id;
-                    instance.visible_mask     = RTVM_ALL;
-                    rt_scene->MarkModified(instance.instance_id);
-                    build_params.push_back({blas, ERaytracingBuildMode::BUILD});
-                });
-
-                cmd_list.BuildAccelerationStructures(std::move(build_params));
-                cmd_list.UpdateRaytracingScene(rt_scene);
 
                 if (hooks.on_register_ui_func) {
 
-                    auto& _scene     = scene;
                     auto& _gfx_queue = gfx_queue;
 
                     hooks.on_register_ui_func(
                         "Display MaterialTexture",
-                        [&_scene,
+                        [&material_textures,
                          &selected_material_texture_name,
                          &b_use_bindless,
                          &b_final_show_texture,
@@ -379,7 +267,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                             ImGui::SliderInt("Mip Level", (int*)&mip_level, 0, 12);
                             ImGui::Checkbox("Use Bindless", &b_use_bindless);
                             if (ImGui::TreeNode("MaterialTexture")) {
-                                for (auto& [name, tex] : _scene.GetGpuScene().material_textures) {
+                                for (auto& [name, tex] : material_textures) {
                                     // selectable
                                     if (ImGui::Selectable(
                                             name.data(), selected_material_texture_name == name
@@ -427,36 +315,14 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
                     src_env_map->GetNumMips()
                 );
-                auto cur_env = scene.GetCurrentEnvMap();
                 sd_utils.SampleTextureCS(
                     cmd_list, src_env_map->GetView(0, 1), env_map->GetView(0, 1), src_env_map->GetFormat()
                 );
-                Moer::EnvironmentLightComponent* env_light =
-                    MoerNew(Moer::EnvironmentLightComponent)(float3(1.f), env_map->GetExtent().xy);
 
                 Sampler sampler{SF_CUBIC, SAM_REPEAT};
-                env_light->bdls_handle =
+                env_tex_with_hdl.tex = env_map;
+                env_tex_with_hdl.hdl =
                     bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
-                add_on_free_texture(env_light->bdls_handle);
-
-                Entity env_entity;
-
-                // replace entity
-                if (cur_env.texture != nullptr) {
-                    assert(env_map && "env map is null");
-                    env_entity = cur_env.entity;
-                    LightComponentManager::Get().Put(env_entity, env_light);
-
-                } else {
-                    env_entity = EntityManager::Get().Create();
-                    LightComponentManager::Get().Put(env_entity, env_light);
-
-                    scene.AddLight(env_entity);
-                }
-                EnvMapResource env_tex{env_map, env_light->bdls_handle, env_entity};
-                scene.SetCurrentEnvMap(env_tex);
-
-                env_map = scene.GetCurrentEnvMap().texture;
 
                 for (int i = 0; i < env_map->GetNumMips(); ++i) {
                     env_mips.push_back(env_map->GetView(i));
@@ -465,43 +331,53 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 b_new_env_map = false;
 
                 rt_ctx->LoadDefaultResources(runtime_assets);
-                rt_ctx->CreateEnvMapResources(scene.GetCurrentEnvMap(), cmd_list);
+                rt_ctx->CreateEnvMapResources(env_tex_with_hdl, cmd_list);
             }
 
-            if (Scene::GetCurrentSceneLoadInfo().Get() && Scene::GetCurrentSceneLoadInfo()->IsReady()) {
-                for (size_t i = 0; i < scene.GetEntityCount(); i++) {
+            // TODO: 统一update代码
+            // 疑问：为什么这段 UpdateRaytracingScene 的代码必须写在这个位置，不能挪到前面去？
+            if (scene.IsReady()) {
+                for (size_t i = 0; i < rt_scene->GetInstanceCount(); i++) {
                     auto& instance = rt_scene->GetInstance(i);
                     rt_scene->MarkModified(instance.instance_id);
                 }
                 cmd_list.UpdateRaytracingScene(rt_scene);
             }
+
             if (!tone_mapping_pass) {
                 ToneMappingPass::CreateInfo info{};
                 info.color_lut    = rt_ctx->default_res.black_tex;
                 tone_mapping_pass = MakeUnique<ToneMappingPass>(device, manager, scene, info);
             }
-            auto camera_entity = scene.GetCameras()[0];
-            auto camera        = CameraManager::Get().Get(camera_entity);
+
+            auto& camera = scene.GetMainCamera().camera;
+
             // prepare frame
             {
                 rt_ctx->FillLowDiscrepancySequence(cmd_list);
-                camera->Tick(editor_config);
+                camera.Tick(editor_config);
             }
 
             // update light direction from ui data
             {
                 b_export = ui_config.export_cfg.b_export;
 
-                auto light_entity = scene.GetLights()[0];
-                auto light        = LightComponentManager::Get().Get(light_entity);
-                if (light->GetType() == ELightComponentType::DIRECTIONAL) {
-                    DirectionalLightComponent* dir_light =
-                        static_cast<DirectionalLightComponent*>(light.Get());
-                    dir_light->SetDirection(-ui_config.sun_direction);
-                    dir_light->SetIntensity(ui_config.exposure);
-                    dir_light->SetColor(float3(0.9f, 0.65f, 0.4f));
+                auto light_entity = scene.GetMainDirectionalLightEntity();
+                if (light_entity != entt::null && scene.r().valid(light_entity) &&
+                    scene.r().all_of<ecs::CLightDirectional, ecs::CTransform>(light_entity)) {
+                    // 更新方向光的颜色和强度
+                    auto& c_light_dir     = scene.r().get<ecs::CLightDirectional>(light_entity);
+                    c_light_dir.color     = float3(0.9f, 0.65f, 0.4f);
+                    c_light_dir.intensity = ui_config.exposure;
+
+                    // 更新方向光的旋转（从默认方向 float3(0.f, 0.f, -1.f) 到目标方向）
+                    auto& c_transform    = scene.r().get<ecs::CTransform>(light_entity);
+                    c_transform.rotation = Quaternion(float3(0.f, 0.f, -1.f), -ui_config.sun_direction);
+                    c_transform.is_dirty = true;
+                    // FIXME: ECS更新框架还没写完，这里代码无法生效
                 }
             }
+
             ToneMappingPass::Params tone_params{};
             AntialiasPass::Params   aa_params{};
             // fill ui data
@@ -509,7 +385,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 auto        grid_cfg           = is_ctx.GetGridChangableConfig();
                 const auto& ui_cfg             = ui_config;
                 grid_cfg.cell_size             = ui_config.grid_config.cell_size;
-                grid_cfg.center                = camera->GetPosition();
+                grid_cfg.center                = camera.GetPosition();
                 auto grid_static_cfg           = is_ctx.GetGridConfig();
                 grid_static_cfg.light_per_ceil = ui_config.grid_config.light_per_ceil;
                 grid_static_cfg.grid_mode      = ui_config.grid_config.grid_mode;
@@ -585,11 +461,13 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             static constexpr uint s_mesh_alloc_chunk      = 128;
             static constexpr uint s_triangle_alloc_chunk  = 1024;
             static constexpr uint s_primitive_alloc_chunk = 128;
+            uint                  max_primitives          = scene.GetCpuScene().GetPrimitiveCount();
             rt_ctx->CreateBuffersIfNeeded(
                 (num_emissive_meshes + s_mesh_alloc_chunk - 1) & ~(s_mesh_alloc_chunk - 1),
                 (num_emissive_triangles + s_triangle_alloc_chunk - 1) & ~(s_triangle_alloc_chunk - 1),
-                (scene.GetLights().size() + s_primitive_alloc_chunk - 1) & ~(s_primitive_alloc_chunk - 1),
-                scene.GetGeometryInstances().size()
+                (scene.GetCpuScene().GetLightCount() + s_primitive_alloc_chunk - 1) &
+                    ~(s_primitive_alloc_chunk - 1),
+                max_primitives
             );
             cmd_list.UpdateBindlessArray(bindless_array);
 
@@ -624,8 +502,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                         nrd_time++,
                         Vector2ui(resolution.x, resolution.y),
                         antialias_pass->GetPixelOffset(),
-                        Transpose(camera->GetViewMatrix()),
-                        Transpose(camera->GetProjectionMatrix())
+                        Transpose(camera.GetViewMatrix()),
+                        Transpose(camera.GetProjectionMatrix())
                     );
 
                     // opaque
@@ -676,14 +554,11 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 cmd_list, *rt_ctx, tone_params, rt_ctx->frame_rt.resolved_color, rt_ctx->frame_rt.ldr_color
             );
             visualize_pass->Process(cmd_list, *rt_ctx, visualize_config, bindless_array);
-            if (b_final_show_texture &&
-                scene.GetGpuScene().material_textures.contains(selected_material_texture_name)) {
-                TextureRef texture =
-                    scene.GetGpuScene().material_textures[selected_material_texture_name].texture;
+            if (b_final_show_texture && material_textures.contains(selected_material_texture_name)) {
+                TextureRef        texture = material_textures[selected_material_texture_name].tex;
                 ShowTextureParams show_texture_params{};
-                show_texture_params.dst_dim = resolution;
-                show_texture_params.bdls_handle =
-                    scene.GetGpuScene().material_textures[selected_material_texture_name].bindless_handle;
+                show_texture_params.dst_dim      = resolution;
+                show_texture_params.bdls_handle  = material_textures[selected_material_texture_name].hdl;
                 show_texture_params.mip_level    = mip_level;
                 show_texture_params.use_bindless = b_use_bindless;
                 sd_utils.ShowTexture(
@@ -694,7 +569,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             //  cmd_list.CopyFrom(out_direct_lighting->GetView(),
             //  scene_color->GetView());
             rt_ctx->AdvanceFrame();
-            tone_mapping_pass->AdvanceFrame(camera->GetDeltaTime());
+            tone_mapping_pass->AdvanceFrame(camera.GetDeltaTime());
             antialias_pass->AdvanceFrame();
             b_feedback_valid = true;
 
@@ -731,7 +606,9 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             hooks.on_render_gui(cmd_list, output);
         }
 
-        rt_scene->AdvanceFrame();
+        if (rt_scene) {
+            rt_scene->AdvanceFrame();
+        }
 
         time++;
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
@@ -749,12 +626,12 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
     for (auto& buf : allocated_buf) {
-        bindless_array->FreeBuffer(buf);
+        bindless_array->UnbindBuffer(buf);
     }
 
     const auto& allocated_tex = rt_ctx->GetAllocatedBdlsTex();
     for (auto& tex : allocated_tex) {
-        bindless_array->FreeTexture(tex);
+        bindless_array->UnbindTexture(tex);
     }
 
     for (auto& callback : on_free_buffer_callbacks) {
