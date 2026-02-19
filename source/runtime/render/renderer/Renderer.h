@@ -77,6 +77,7 @@ protected:
     FenceRef timeline;
     uint64   time;
     bool     first_load;
+    bool     released = false;
     uint     max_frame_in_flight;
 };
 

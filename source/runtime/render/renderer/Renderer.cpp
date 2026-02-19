@@ -55,10 +55,14 @@ Renderer::Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, co
 }
 
 Renderer::~Renderer() {
-    ReleaseResources(); // 这里也需要释放，否则退出Engine时会崩溃 (Why?)
+    // ReleaseResources(); // 在Renderer子类中释放
 }
 
 void Renderer::ReleaseResources() {
+    if (released)
+        return;
+    released = true;
+
     timeline->Wait(time);
     gfx_queue.Sync();
 
