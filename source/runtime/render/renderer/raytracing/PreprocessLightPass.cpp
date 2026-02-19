@@ -367,11 +367,11 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     uint num_infinite_prim_lights = 0;
     uint num_is_env_lights        = 0;
 
-    // 下面注释掉的这一段代码，是原来的多线程处理光线的代码
-    // - 场景表示重构后，目前没有时间进行迁移，所以保留此处的注释
-
     auto                light_view = scene.r().view<const ecs::CLight>();
     Array<entt::entity> light_entities(light_view.begin(), light_view.end());
+
+    // 下面注释掉的这一段代码，是原来的多线程处理光线的代码
+    // - 场景管理在重构后，目前没有时间进行迁移，所以保留此处的注释
 
     // uint chunk_size    = 1024;
     // uint parrallel_cnt = std::max(_rt_ctx.num_threads, 1u);

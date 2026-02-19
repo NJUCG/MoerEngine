@@ -1,5 +1,6 @@
-﻿#include "ShaderUtils.h"
+#include "ShaderUtils.h"
 #include "PixelFormat.h"
+#include "log/LogSystem.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/utils/Packing.h"
@@ -28,9 +29,10 @@ ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
     device(_device) {
     gen_low_discrepancy_pipeline =
         std::move(manager.Compute<GenLowDiscrepancyPipeline>("core/utils/GenLowDiscrepancySequence.hlsl"));
-    generate_mip_pdf_pipeline =
-        std::move(manager.Compute<GenerateMipPdfPipeline>("pipelines/raytracing/lighting/precompute/ProcessEnvironmentMap.hlsl"));
-    generate_mips_pipeline = std::move(manager.Compute<GenerateMipsPipeline>("core/utils/BuildMips.hlsl"));
+    generate_mip_pdf_pipeline = std::move(manager.Compute<GenerateMipPdfPipeline>(
+        "pipelines/raytracing/lighting/precompute/ProcessEnvironmentMap.hlsl"
+    ));
+    generate_mips_pipeline    = std::move(manager.Compute<GenerateMipsPipeline>("core/utils/BuildMips.hlsl"));
 
     GfxPsoCreateInfo show_texture_pso_info(
         RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)}
@@ -118,6 +120,29 @@ void ShaderUtils::GenerateMips(CommandList& _cmd_list, std::span<TextureView> _m
 
     uint width  = _mips[0].extent.x;
     uint height = _mips[0].extent.y;
+
+    if (_mips.size() > 5) {
+        /**
+         * FIXME:
+         * 注意到，这里每次都会将所有mips全部传入RHI中，所以如果mips > 5的话，那么每个mip都会被重复传入RHI中
+         * 目前不确定这里是否会引发bug，需要进一步测试
+         * 
+         * 确认后/修复后，请删除本段代码
+         */
+        static bool b_first_time = true; // 只警告一次
+        if (b_first_time) {
+            b_first_time = false;
+            LOG_WARNING(
+                "Here may be a bug when total mips > 5. GenerateMips for {} will be called. mip_level={}, "
+                "extent={},{}",
+                _mips[0].GetTexture()->GetName(),
+                _mips[0].mip_level,
+                _mips[0].extent.x,
+                _mips[0].extent.y
+            );
+        }
+    }
+
     for (uint i = 0; i < _mips.size(); i += 5) {
         param.num_mip_levels = _mips.size();
         param.src_mip_level  = i;

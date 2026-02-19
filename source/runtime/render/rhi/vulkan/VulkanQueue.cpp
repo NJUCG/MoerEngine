@@ -1138,7 +1138,9 @@ struct VkCmdPreprocessor {
                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                         _arg.mip_level,
-                        _arg.num_mips
+                        _arg.num_mips,
+                        _arg.array_layer,
+                        _arg.num_array
                     );
                 } else if constexpr (std::is_same_v<T, BufferView>) {
                     auto* vk_buffer = ResourceCast(_arg.GetBuffer());

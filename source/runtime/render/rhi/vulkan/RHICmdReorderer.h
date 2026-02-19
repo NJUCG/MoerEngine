@@ -192,13 +192,11 @@ public:
             layer_max(_layer_min + _layer_size) {}
         bool Colide(const Range& _other) const {
             return primary_min < _other.primary_max && _other.primary_min < primary_max &&
-                   layer_min < _other.layer_max &&
-                   _other.layer_min < layer_max;
+                   layer_min < _other.layer_max && _other.layer_min < layer_max;
         }
         bool operator==(const Range& _other) const {
             return primary_min == _other.primary_min && primary_max == _other.primary_max &&
-                   layer_min == _other.layer_min &&
-                   layer_max == _other.layer_max;
+                   layer_min == _other.layer_min && layer_max == _other.layer_max;
         }
         bool operator!=(const Range& _other) const {
             return !operator==(_other);
@@ -298,8 +296,8 @@ public:
 
             read_range.primary_min = std::min(read_range.primary_min, _range.primary_min);
             read_range.primary_max = std::max(read_range.primary_max, _range.primary_max);
-            read_range.layer_min = std::min(read_range.layer_min, _range.layer_min);
-            read_range.layer_max = std::max(read_range.layer_max, _range.layer_max);
+            read_range.layer_min   = std::min(read_range.layer_min, _range.layer_min);
+            read_range.layer_max   = std::max(read_range.layer_max, _range.layer_max);
 
             max_view.read_layer = std::max(max_view.read_layer, _layer);
             if (range2view.size() >= max_range_size) {
@@ -316,16 +314,16 @@ public:
         }
 
         void EmplaceWriteLayer(const Range& _range, int64 _layer) {
-            read_range.primary_min = std::min(read_range.primary_min, _range.primary_min);
-            read_range.primary_max = std::max(read_range.primary_max, _range.primary_max);
-            read_range.layer_min = std::min(read_range.layer_min, _range.layer_min);
-            read_range.layer_max = std::max(read_range.layer_max, _range.layer_max);
+            read_range.primary_min  = std::min(read_range.primary_min, _range.primary_min);
+            read_range.primary_max  = std::max(read_range.primary_max, _range.primary_max);
+            read_range.layer_min    = std::min(read_range.layer_min, _range.layer_min);
+            read_range.layer_max    = std::max(read_range.layer_max, _range.layer_max);
             write_range.primary_min = std::min(write_range.primary_min, _range.primary_min);
             write_range.primary_max = std::max(write_range.primary_max, _range.primary_max);
-            write_range.layer_min = std::min(write_range.layer_min, _range.layer_min);
-            write_range.layer_max = std::max(write_range.layer_max, _range.layer_max);
-            max_view.read_layer  = std::max(max_view.read_layer, _layer);
-            max_view.write_layer = std::max(max_view.write_layer, _layer);
+            write_range.layer_min   = std::min(write_range.layer_min, _range.layer_min);
+            write_range.layer_max   = std::max(write_range.layer_max, _range.layer_max);
+            max_view.read_layer     = std::max(max_view.read_layer, _layer);
+            max_view.write_layer    = std::max(max_view.write_layer, _layer);
             if (range2view.size() >= max_range_size) {
                 ClearLayerViews();
             } else {
@@ -928,8 +926,7 @@ public:
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
                 range_handle->EmplaceWriteLayer(
-                    Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array),
-                    layer
+                    Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array), layer
                 );
             }
 
@@ -966,8 +963,7 @@ public:
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
                 range_handle->EmplaceWriteLayer(
-                    Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array),
-                    layer
+                    Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array), layer
                 );
             }
 
