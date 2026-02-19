@@ -56,6 +56,7 @@ struct CORE_API GlobalConfig {
         struct Scene {
             std::string scene_path;
             bool        enable_cache;
+            int         material_info_log_lines; // -1 to log all
         } scene;
 
     } engine;

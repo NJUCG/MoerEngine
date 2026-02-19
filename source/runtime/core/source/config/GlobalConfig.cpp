@@ -42,6 +42,9 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         config.at_path("engine.scene.scene_path").value_or("./asset/scenes/sponza/Sponza.gltf");
     c.engine.scene.enable_cache = config.at_path("engine.scene.enable_cache").value_or(true); // 默认启用cache
 
+    c.engine.scene.material_info_log_lines =
+        config.at_path("engine.scene.material_info_log_lines").value_or(-1); // -1 to log all
+
     return c;
 }
 

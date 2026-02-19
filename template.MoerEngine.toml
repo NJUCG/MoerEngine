@@ -34,3 +34,4 @@ enable_shadow = true
 # 注：scene_path支持绝对路径
 scene_path = './asset/scenes/sponza/Sponza.gltf'
 enable_cache = true # 如果在开发SceneParser等功能，需要每次重新读取场景，那么可以关闭这个选项
+material_info_log_lines = 20 # 加载场景时，打印材质信息的最大行数。-1 表示全部打印

@@ -3,7 +3,6 @@
 
 #include "API_Macro.h"
 #include "config/GlobalConfig.h"
-#include "misc/STL.h"
 
 #include <filesystem>
 

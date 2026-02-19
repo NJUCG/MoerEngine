@@ -7,6 +7,7 @@
 #include <entt/entt.hpp>
 #include <gtl/phmap.hpp>
 
+#include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "math/Function.h"
 #include "math/Transform.h"
@@ -1098,7 +1099,29 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         }
 
         LOG_INFO("{}", ss.str());
-        LOG_INFO("{}", mat_ss.str());
+
+        const int material_info_log_lines =
+            ConfigManager::GetInstance().GetConfig().engine.scene.material_info_log_lines;
+
+        if (material_info_log_lines < 0) {
+            LOG_INFO("{}", mat_ss.str());
+
+        } else {
+            std::string mat_str = mat_ss.str();
+            std::string output;
+            size_t      line_count = 0;
+            for (size_t i = 0; i < mat_str.length(); ++i) {
+                output += mat_str[i];
+                if (mat_str[i] == '\n' && ++line_count >= material_info_log_lines)
+                    break;
+            }
+
+            output += "\n......\n\n";
+            output += "The rest of the material info is not logged.\nSet `material_info_log_lines` in "
+                      "\"MoerEngine.toml\" to modify it.\n";
+
+            LOG_INFO("{}", output);
+        }
     }
 
     return true;
