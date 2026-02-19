@@ -125,9 +125,9 @@ struct VkCmdPreprocessor {
     VulkanDevice&    device;
     EQueueType       current_queue;
 
-    UnorderedSet<uint64>   writed_buffer_resources;
+    UnorderedSet<uint64> writed_buffer_resources;
     UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
-        writed_texture_resources;
+                           writed_texture_resources;
     const TCachedArgArray& cached_args;
 
     VkCmdPreprocessor(
@@ -159,11 +159,7 @@ struct VkCmdPreprocessor {
         Moer::Array<TextureSubresourceKeyT<VulkanTexture>> to_read_textures;
         for (const auto& key : tracker.GetWritedStateTextures()) {
             if (vk_bindless_array->IsTextureViewAllocated(
-                    uint64(key.texture),
-                    key.mip_level,
-                    key.mip_count,
-                    key.array_layer,
-                    key.array_count
+                    uint64(key.texture), key.mip_level, key.mip_count, key.array_layer, key.array_count
                 ) &&
                 !writed_texture_resources.contains(key)) {
                 to_read_textures.push_back(key);
@@ -186,7 +182,8 @@ struct VkCmdPreprocessor {
         }
         Moer::Array<VulkanBuffer*> to_read_buffers;
         for (const auto& i : tracker.GetWritedStateBuffers()) {
-            if (vk_bindless_array->IsResourceAllocated(uint64(i)) && !writed_buffer_resources.contains(uint64(i))) {
+            if (vk_bindless_array->IsResourceAllocated(uint64(i)) &&
+                !writed_buffer_resources.contains(uint64(i))) {
                 to_read_buffers.push_back(i);
             }
         }
@@ -415,7 +412,10 @@ struct VkCmdPreprocessor {
             VK_ACCESS_2_TRANSFER_WRITE_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->MipLevel()
+            _cmd->MipLevel(),
+            1,                 // mip_count
+            _cmd->array_layer, // array_layer
+            1                  // array_count
         );
         tracker.RegisterFlushBufferRange(
             _cmd->staging_buffer,
@@ -458,7 +458,10 @@ struct VkCmdPreprocessor {
             VK_ACCESS_2_TRANSFER_WRITE_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->MipLevel()
+            _cmd->MipLevel(),
+            1,                 // mip_count
+            _cmd->array_layer, // array_layer
+            1                  // array_count
         );
     }
 
@@ -668,7 +671,7 @@ struct VkCmdPreprocessor {
 
             for (auto& barrier : _cmd->ReadTextures()) {
                 auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-                auto access = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
+                auto  access     = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
                 tracker.RecordState(
                     vk_texture,
                     std::get<0>(access),
@@ -682,7 +685,7 @@ struct VkCmdPreprocessor {
             }
             for (auto& barrier : _cmd->WriteTextures()) {
                 auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-                auto access = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
+                auto  access     = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
                 tracker.RecordState(
                     vk_texture,
                     std::get<0>(access),
@@ -744,7 +747,7 @@ struct VkCmdPreprocessor {
 
         for (auto& barrier : _cmd->ReadTextures()) {
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-            auto access = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
+            auto  access     = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
             tracker.RecordState(
                 vk_texture,
                 std::get<0>(access),
@@ -760,7 +763,7 @@ struct VkCmdPreprocessor {
         }
         for (auto& barrier : _cmd->WriteTextures()) {
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-            auto access = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
+            auto  access     = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
             tracker.RecordState(
                 vk_texture,
                 std::get<0>(access),
