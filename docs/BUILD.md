@@ -36,11 +36,11 @@
   git clone git@github.com:NJUCG/MoerEngine.git --recursive
   cd MoerEngine
   
-  # 忽略一些特定commit对commit历史的影响
+  # 忽略一些特定commit对commit历史的影响（只影响开发过程，不影响编译和使用）
   git config --local blame.ignoreRevsFile .git-blame-ignore-revs
   
   # 下载Sponza场景文件，到此目录：`./asset/scenes/`
-  git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
+  git clone --branch scene/sponza --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
   
   # 根据模板创建一份MoerEngine的配置文件
   # 配置文件中，可以设置默认的渲染器（光栅化、光追）、默认分辨率等选项
@@ -55,12 +55,8 @@
   ./target/bin/Debug/MoerEditor.exe
   ```
 
-  - 如果安装了 [just](https://github.com/casey/just)，你可以通过如下这两条命令部署、构建、启动引擎
-    ```bash
-    just setup
-    just gbr # generate build run
-    ```
-
+  - 如果安装了 [just](https://github.com/casey/just)，你可以参考根目录下的 `template.justfile` 文件来编写你自己的脚本
+  
 - 方法二：Rider
   
   - TODO
