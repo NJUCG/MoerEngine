@@ -65,11 +65,12 @@ void Renderer::ReleaseResources() {
 
     timeline->Wait(time);
     gfx_queue.Sync();
+    swapchain->Sync();
+    device.WaitIdle();
 
     cmd_list.UpdateBindlessArray(bindless_array);
     gfx_queue.Execute(cmd_list.Submit().DeleteResources());
     gfx_queue.Sync();
-    swapchain->Sync();
 
     scene.Reset();
 }

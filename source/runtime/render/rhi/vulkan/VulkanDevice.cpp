@@ -1,4 +1,4 @@
-﻿//
+//
 // Created by 74535 on 2023/10/2.
 //
 
@@ -730,6 +730,10 @@ void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateI
 
 void VulkanDevice::FlushDebugMessages() const {
     FlushBufferedDebugMessages();
+}
+
+void VulkanDevice::WaitIdle() {
+    vkDeviceWaitIdle(m_device);
 }
 
 void VulkanDevice::SetupDebugUtilsMessengerEXT() {

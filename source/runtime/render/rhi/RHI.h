@@ -199,6 +199,7 @@ public:
     RENDER_API Ext* LoadExtension() const;
 
     RENDER_API void FlushDebugMessages() const;
+    RENDER_API void WaitIdle();
 
 protected:
     RENDER_API IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue);

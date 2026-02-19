@@ -1717,6 +1717,8 @@ public:
     virtual void FlushDebugMessages() const {
         ; // do nothing by default
     }
+
+    virtual void WaitIdle() {};
 };
 
 } // namespace Moer::Render

@@ -131,6 +131,10 @@ void RenderDevice::FlushDebugMessages() const {
     impl->FlushDebugMessages();
 }
 
+void RenderDevice::WaitIdle() {
+    impl->WaitIdle();
+}
+
 template RENDER_API Ext::NRDExtension* RenderDevice::LoadExtension<Ext::NRDExtension>() const;
 
 } // namespace Moer::Render
