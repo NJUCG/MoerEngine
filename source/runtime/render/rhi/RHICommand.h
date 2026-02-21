@@ -1,6 +1,8 @@
 #ifndef MOER_ENGINE_RHI_COMMAND_H
 #define MOER_ENGINE_RHI_COMMAND_H
 
+#include "RHI.h"
+#include "RHICommandDrawData.h"
 #include "RHIIO.h"
 #include "RenderAPI.h"
 #include "math/Base.h"
@@ -95,14 +97,6 @@ struct SignalEvent {
 template<typename TRenderTarget>
 concept is_render_target = std::is_same_v<TRenderTarget, ColorAttachment>;
 
-struct SingleDrawParam {
-    uint index_cnt;
-    uint instance_cnt;
-    uint first_index;
-    uint vertex_offset;
-    uint first_instance;
-};
-
 struct IndirectDrawParam {
     BufferView                buffer;
     std::optional<BufferView> count_buffer;
@@ -110,21 +104,6 @@ struct IndirectDrawParam {
     //when count_buffer is not null, count is the max count of draw calls
     uint count;
     uint stride;
-};
-
-struct DrawCmdData {
-    uint vertex_cnt;
-    uint instance_cnt;
-    uint first_vtx;
-    uint first_instance;
-};
-
-struct DrawIndexedCmdData {
-    uint index_cnt;
-    uint instance_cnt;
-    uint first_index;
-    uint vertex_offset;
-    uint first_instance;
 };
 
 using TDrawParam = std::variant<Array<SingleDrawParam>, IndirectDrawParam>;
@@ -1319,6 +1298,12 @@ public:
     virtual void        Present(SwapchainRef _swapchain, TextureView _target) = 0;
     virtual void        Sync()                                                = 0;
     virtual ProfileData GetProfilerEntry()                                    = 0;
+
+    CommandQueue& operator=(CommandQueue& other) = delete;
+    CommandQueue(const CommandQueue& other)      = delete;
+
+    CommandQueue& operator=(CommandQueue&& other) = delete;
+    CommandQueue(CommandQueue&& other)            = delete;
 };
 
 class RENDER_API CopyQueue {
@@ -1337,6 +1322,12 @@ public:
 
     virtual FenceRef GetFenceHandle()       = 0;
     virtual void     Sync(uint64 _timeline) = 0;
+
+    CopyQueue& operator=(CopyQueue& other) = delete;
+    CopyQueue(const CopyQueue& other)      = delete;
+
+    CopyQueue& operator=(CopyQueue&& other) = delete;
+    CopyQueue(CopyQueue&& other)            = delete;
 };
 
 class IOInterface;

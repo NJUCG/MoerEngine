@@ -13,7 +13,7 @@ add_compile_definitions("moer_root_dir=${BINARY_ROOT_DIR}")
 set_target_properties(${target_name} PROPERTIES CXX_STANDARD 20 OUTPUT_NAME "MoerEditor")
 set_target_properties(${target_name} PROPERTIES FOLDER "editor")
 
-# Dependencies : Moer::Runtime (including Moer::Core, Moer::Render, Moer::Resource)
+# Dependencies : Moer::Runtime (including Moer::Core, Moer::Render)
 target_link_libraries(${target_name}
     PRIVATE Moer::Runtime
     PRIVATE nfd

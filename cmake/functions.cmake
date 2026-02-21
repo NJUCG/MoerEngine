@@ -45,3 +45,31 @@ function(copy_dll target_name dll_name type src_root )
     elseif(LINUX)
     endif()
 endfunction()
+
+function(add_subdirectory_silent dir)
+    # 1. 静默 CMake 自身的开发者警告和 deprecated 警告
+    set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 1 CACHE INTERNAL "")
+    set(CMAKE_WARN_DEPRECATED OFF CACHE INTERNAL "")
+
+    # 2. 静默编译器警告：临时为子目录添加 -w（Clang/GCC）或 /w（MSVC）
+    set(_saved_c_flags "${CMAKE_C_FLAGS}")
+    set(_saved_cxx_flags "${CMAKE_CXX_FLAGS}")
+    if(MSVC)
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /w")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /w")
+    else()
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
+    endif()
+
+    # 3. 添加第三方库（SYSTEM 标记 include 路径，CMake 3.25+）
+    add_subdirectory(${dir} SYSTEM)
+
+    # 4. 恢复编译器警告设置
+    set(CMAKE_C_FLAGS "${_saved_c_flags}")
+    set(CMAKE_CXX_FLAGS "${_saved_cxx_flags}")
+
+    # 5. 恢复 CMake 警告设置
+    set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 0 CACHE INTERNAL "")
+    set(CMAKE_WARN_DEPRECATED ON CACHE INTERNAL "")
+endfunction()

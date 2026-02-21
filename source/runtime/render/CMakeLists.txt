@@ -42,10 +42,13 @@ target_link_libraries(${target_name}
     PUBLIC glfw
     PUBLIC ImGui::imgui
     PUBLIC smaa
+    PUBLIC gtl
+    PUBLIC EnTT::EnTT
     PUBLIC Moer::Core
     PUBLIC NRI
     PRIVATE spirv-cross-cpp
     # dx, maybe add a option based on platform
+    PRIVATE MeshProcess # for scene/meshprocess/MeshProcessor.h
     PUBLIC d3d12_agilitysdk
     PUBLIC d3d12_agilitysdk_d3dx12
     PUBLIC d3d12 
@@ -137,9 +140,7 @@ target_compile_definitions(${target_name} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MO
 
 
 if(WIN32)
-target_compile_definitions(${target_name}
-    PUBLIC "NOMINMAX"
-    )
+    target_compile_definitions(${target_name} PUBLIC "NOMINMAX")
 elseif(LINUX)
 endif()
 

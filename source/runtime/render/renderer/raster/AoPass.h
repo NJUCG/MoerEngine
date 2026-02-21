@@ -1,7 +1,7 @@
-﻿#pragma once
+#pragma once
 
 #include "math/Function.h"
-#include "scene/Camera.h"
+#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
@@ -92,13 +92,13 @@ public:
             EBufferUsageFlags::UNORDERED_ACCESS
         );
 
-        camera_mv_data_in_gpu.handle = context.bdls->AllocateBuffer(camera_mv_data_in_gpu.buf->GetView());
+        camera_mv_data_in_gpu.hdl = context.bdls->AllocateBuffer(camera_mv_data_in_gpu.buf->GetView());
     }
 
     // 更新CMV数据
-    void UpdateMotionVectorData(RasterContext& context, const CameraRef& camera) {
+    void UpdateMotionVectorData(RasterContext& context, const Camera& camera) {
         camera_mv_data_in_cpu.world2clip_prev = camera_mv_data_in_cpu.world2clip;
-        camera_mv_data_in_cpu.world2clip      = Transpose(camera->GetViewProjectionMatrix());
+        camera_mv_data_in_cpu.world2clip      = Transpose(camera.GetViewProjectionMatrix());
 
         context.cmd_list.CopyFrom(
             std::span<byte>((byte*)&camera_mv_data_in_cpu, sizeof(CameraMotionVectorData)),
@@ -106,12 +106,8 @@ public:
         );
     }
 
-    AoPassOutput Process(
-        RasterContext&      context,
-        const RasterConfig& ui_config,
-        const CameraRef&    camera,
-        uint64              frame_idx
-    ) {
+    AoPassOutput
+    Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera, uint64 frame_idx) {
         TextureWithHandle ao_only     = context.textures.ao_output_ambient_only;
         static uint       ao_only_idx = 0;
         ao_only_idx ^= 1;
@@ -128,17 +124,17 @@ public:
         }
 
         return AoPassOutput{
-            .ao_with_color        = context.textures.ao_output,                   //
-            .ao_only              = ao_only.handle,                               //
-            .ao_only_idx          = ao_only_idx,                                  //
-            .camera_motion_vector = context.textures.camera_motion_vector.handle, //
+            .ao_with_color        = context.textures.ao_output,                //
+            .ao_only              = ao_only.hdl,                               //
+            .ao_only_idx          = ao_only_idx,                               //
+            .camera_motion_vector = context.textures.camera_motion_vector.hdl, //
         };
     }
 
     void ProcessAo(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         uint64              frame_idx,
         TextureWithHandle   ao_only
     ) {
@@ -150,14 +146,14 @@ public:
         param.ssao_sample_count = ui_config.ssao_spp;
         param.ssao_radius       = ui_config.ssao_sample_radius;
         param.ao_mode           = static_cast<uint32>(ui_config.ao_mode);
-        param.input_image       = context.textures.lighting_output.handle;
-        param.normal_tex        = context.textures.normal.handle;
-        param.position_tex      = context.textures.position.handle;
-        param.depth_tex         = context.textures.depth_nearest_sampler.handle;
-        param.noise_tex         = context.textures.noise_tex.handle;
+        param.input_image       = context.textures.lighting_output.hdl;
+        param.normal_tex        = context.textures.normal.hdl;
+        param.position_tex      = context.textures.position.hdl;
+        param.depth_tex         = context.textures.depth_nearest_sampler.hdl;
+        param.noise_tex         = context.textures.noise_tex.hdl;
 
         UpdateMotionVectorData(context, camera);
-        param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;
+        param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
 
         context.cmd_list.Gfx(ao_pipeline, context.bdls, param)
             .Draw(
@@ -173,22 +169,22 @@ public:
     void ProcessRtao(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         uint64              frame_idx,
         TextureWithHandle   ao_only
     ) {
 
         RtaoPipelineBindlessParam param;
 
-        param.clip2world         = Transpose(camera->GetViewProjectionMatrixInv());
-        param.camera_pos         = camera->GetPosition();
+        param.clip2world         = Transpose(camera.GetViewProjectionMatrixInv());
+        param.camera_pos         = camera.GetPosition();
         param.frame_idx          = frame_idx;
         param.resolution         = float2(context.textures.ao_output.GetSize());
         param.inv_resolution     = float2(1.0) / float2(context.textures.ao_output.GetSize());
-        param.input_image        = context.textures.lighting_output.handle;
-        param.normal_tex         = context.textures.normal.handle;
-        param.position_tex       = context.textures.position.handle;
-        param.depth_tex          = context.textures.depth_nearest_sampler.handle;
+        param.input_image        = context.textures.lighting_output.hdl;
+        param.normal_tex         = context.textures.normal.hdl;
+        param.position_tex       = context.textures.position.hdl;
+        param.depth_tex          = context.textures.depth_nearest_sampler.hdl;
         param.ao_mode            = static_cast<uint>(ui_config.ao_mode);
         param.sample_mode        = static_cast<uint>(ui_config.rtao_sample_mode);
         param.spp                = ui_config.rtao_spp;
@@ -196,9 +192,9 @@ public:
         param.intensity          = ui_config.rtao_intensity;
 
         UpdateMotionVectorData(context, camera);
-        param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;
+        param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
 
-        context.cmd_list.Gfx(rtao_pipeline, context.rt_scene->GetTlas(), context.bdls, param)
+        context.cmd_list.Gfx(rtao_pipeline, context.rt_scene()->GetTlas(), context.bdls, param)
             .Draw(
                 "RTAO Pass",
                 context.textures.ao_output.GetRect2D(),
@@ -212,7 +208,7 @@ public:
     void ProcessSsdo(
         RasterContext&      context,
         const RasterConfig& ui_config,
-        const CameraRef&    camera,
+        const Camera&       camera,
         uint64              frame_idx,
         TextureWithHandle   ao_only
     ) {
@@ -224,19 +220,19 @@ public:
         param.ssdo_max_distance       = ui_config.ssdo_max_distance;
         param.ssdo_intensity          = ui_config.ssao_intensity;
         param.ssdo_indirect_intensity = ui_config.ssdo_indirect_intensity;
-        param.normal_tex              = context.textures.normal.handle;
-        param.depth_tex               = context.textures.depth_nearest_sampler.handle;
-        param.position_tex            = context.textures.position.handle;
-        param.noise_tex               = context.textures.noise_tex.handle;
+        param.normal_tex              = context.textures.normal.hdl;
+        param.depth_tex               = context.textures.depth_nearest_sampler.hdl;
+        param.position_tex            = context.textures.position.hdl;
+        param.noise_tex               = context.textures.noise_tex.hdl;
         param.ao_mode                 = static_cast<uint32>(ui_config.ao_mode);
         param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
-        param.input_image             = context.textures.lighting_output.handle;
-        param.view_projection_matrix  = Transpose(camera->GetViewProjectionMatrix());
-        param.view_matrix             = Transpose(camera->GetViewMatrix());
-        param.camera_position         = camera->GetPosition();
+        param.input_image             = context.textures.lighting_output.hdl;
+        param.view_projection_matrix  = Transpose(camera.GetViewProjectionMatrix());
+        param.view_matrix             = Transpose(camera.GetViewMatrix());
+        param.camera_position         = camera.GetPosition();
 
         UpdateMotionVectorData(context, camera);
-        param.camera_mv_data_handle = camera_mv_data_in_gpu.handle;
+        param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
 
         context.cmd_list.Gfx(ssdo_pipeline, context.bdls, param)
             .Draw(

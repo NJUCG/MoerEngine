@@ -151,10 +151,17 @@ struct LightRegion {
 };
 
 struct GBufferPassParams {
-    uint geometry_instance_handle;
-    uint geometry_data_handle;
-    uint instance_data_handle;
-    uint material_data_handle;
+    // 场景结构数据
+    uint instance_buf_hdl;  // GInstance[]
+    uint primitive_buf_hdl; // GPrimitive[]
+    uint material_buf_hdl;  // GMaterial[]
+
+    // MegaBuffers
+    uint position_buf_hdl;       // CtxMegaBuffers.position
+    uint packed_normal_buf_hdl;  // CtxMegaBuffers.packed_normal
+    uint packed_tangent_buf_hdl; // CtxMegaBuffers.packed_tangent
+    uint texcoord0_buf_hdl;      // CtxMegaBuffers.texcoord0
+    uint index_buf_hdl;          // CtxMegaBuffers.index
 };
 
 struct RaytracingBindlessHandles {
@@ -172,25 +179,36 @@ struct RaytracingBindlessHandles {
     uint motion;
     uint denoiser_normal_roughness;
 
-    //gpu scene
-    uint geom_data;
+    // // deprecated gpu scene
+    // uint geom_data;
+    // uint instance_data;
+    // uint material_data;
 
-    uint instance_data;
-    uint material_data;
+    // gpu scene (FIXME: 删除不要的hdl)
+    uint light_buf_hdl;
+    uint material_buf_hdl;
+
+    uint primitive_buf_hdl;
+    uint instance_buf_hdl;
+
+    uint position_buf_hdl;
+    uint packed_normal_buf_hdl;
+    uint packed_tangent_buf_hdl;
+    uint texcoord0_buf_hdl;
+
+    uint index_buf_hdl;
 
     //lighting
     uint poly_light_data;
     uint light_index;
 
     uint restir_luminance;
-    uint geo_instance_to_light;
+    uint primitive_to_light;
     uint local_light_pdf;
     uint env_pdf;
 
-    // uint env_map;
-    // uint padding1;
-    // uint padding2;
-    // uint padding3;
+    uint padding0;
+    uint padding1;
 };
 
 struct SceneGlobalParams {

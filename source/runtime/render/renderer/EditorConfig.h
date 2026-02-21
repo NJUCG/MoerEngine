@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Core.h"
-#include "misc/MMemory.h"
 #include "misc/Traits.h"
 
 #include "raster/RasterConfig.h"

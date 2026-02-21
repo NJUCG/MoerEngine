@@ -4,22 +4,6 @@
 #include "core/common/Bindless.hlsl"
 
 template <typename T>
-T UnpackMaterialData(uint material_buffer_handle, uint material_index) {
-  ArrayBuffer buf = ArrayBuffer(material_buffer_handle);
-  return buf.Load<T>(0, material_index * 512);
-}
-
-template <typename T>
-T UnpackMaterialData(ByteAddressBuffer _material_buffer, uint material_index) {
-  return _material_buffer.Load<T>(material_index * 512);
-}
-
-void GetMaterialTypeAndIndex(uint material_type_and_index, out uint mat_type, out uint mat_id) {
-  mat_type    = material_type_and_index & 0x000000FF;
-  mat_id      = (material_type_and_index & 0xFFFFFF00) >> 8;
-}
-
-template <typename T>
 T GetTextureData(int bindless_handle, float2 uv, T default_value, T missing_value) {
   if (bindless_handle >= 0) {
     // 可以通过禁用mipmap来消除mesh之间的描边

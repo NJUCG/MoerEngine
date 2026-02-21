@@ -28,19 +28,20 @@ namespace Moer {
      *             0   2bc+2ad     1-2bb-2dd   2cd-2ab
      *             0   2bd-2ac     2ab+2cd     1-2bb-2cc] * (v^T)
     */
-struct Quaternion {
+struct CORE_API Quaternion {
     Vector4f vec;
 
     Quaternion() noexcept : vec(0.f, 0.f, 0.f, 1.f) {}
     Quaternion(float w, float x, float y, float z) noexcept : vec(x, y, z, w) {}
 
     explicit Quaternion(const Vector4f& q) noexcept : vec(q) {}
-    CORE_API explicit Quaternion(const Vector3f& axis, const Angle& angle) noexcept;
+    explicit Quaternion(const Vector3f& axis, const Angle& angle) noexcept;
     explicit Quaternion(const Matrix3x3f& rotation) noexcept;
     // construct from local orthonormal coordinate system
     explicit Quaternion(const Vector3f& x_axis, const Vector3f& y_axis, const Vector3f& z_axis) noexcept;
+    explicit Quaternion(const Vector3f& from, const Vector3f& to) noexcept;
 
-    CORE_API Matrix3x3f        GetRotation() const noexcept;
+    Matrix3x3f        GetRotation() const noexcept;
     std::pair<Vector3f, Angle> GetAxisAngle() const noexcept;
     void GetLocalAxes(Vector3f& x_axis, Vector3f& y_axis, Vector3f& z_axis) const noexcept;
 

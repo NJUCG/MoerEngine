@@ -1,9 +1,6 @@
 ﻿#pragma once
 
-#include "math/Function.h"
-#include "misc/MMemory.h"
-#include "scene/Camera.h"
-#include "scene/Material.h"
+#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
@@ -47,46 +44,42 @@ public:
                            .Build<PbrMaterialShadingPipeline>(std::move(pso_full_screen_info));
     }
 
-    void Process(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera) {
+    void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
 
-        MaterialPassBindlessParam material_param;
+        MaterialPassBindlessParam material_param{};
         material_param.extra_ambient_color     = ui_config.shading_extra_ambient_color;
         material_param.extra_ambient_intensity = ui_config.shading_extra_ambient_intensity;
         material_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
         material_param.shading_mode            = static_cast<uint>(ui_config.shading_mode);
 
-        material_param.material_buffer     = context.gpu_material_info_handle;
-        material_param.vbuffer             = context.textures.vbuffer.handle;
-        material_param.gbuffer_normal      = context.textures.normal.handle;
-        material_param.gbuffer_tangent     = context.textures.tangent.handle;
-        material_param.gbuffer_uv          = context.textures.uv.handle;
-        material_param.gbuffer_depth       = context.textures.depth_nearest_sampler.handle;
-        material_param.gbuffer_position    = context.textures.position.handle;
-        material_param.global_param_handle = context.lighting_data_buffer.handle;
-        material_param.light_buffer        = context.gpu_light_info_handle;
-        material_param.cubemap_handle      = context.textures.cubemap_tex.handle;
-        material_param.shadow_mask_handle  = context.textures.shadow_mask.handle;
+        material_param.material_buf_hdl    = context.scene.GetGpuSceneRes().material_buf.hdl;
+        material_param.vbuffer             = context.textures.vbuffer.hdl;
+        material_param.gbuffer_normal      = context.textures.normal.hdl;
+        material_param.gbuffer_tangent     = context.textures.tangent.hdl;
+        material_param.gbuffer_uv          = context.textures.uv.hdl;
+        material_param.gbuffer_depth       = context.textures.depth_nearest_sampler.hdl;
+        material_param.gbuffer_position    = context.textures.position.hdl;
+        material_param.global_param_handle = context.lighting_data_buffer.hdl;
+
+        material_param.light_buf_hdl      = context.scene.GetGpuSceneRes().light_buf.hdl;
+        material_param.cubemap_handle     = context.textures.cubemap_tex.hdl;
+        material_param.shadow_mask_handle = context.textures.shadow_mask.hdl;
 
         //context.cmd_list.SetStencilReference(1, 1);
 
-        Moer::UnorderedSet<EMaterialType> material_types = {EMaterialType::E_PBR_STANDARD};
-        for (auto type : material_types) {
-            material_param.material_type = uint(type);
+        //未来希望能用该Attachment进行深度模板测试
+        DepthAttachment depth_attachment =
+            DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture());
+        depth_attachment.action = AC_DS_LOAD_STORE;
 
-            //未来希望能用该Attachment进行深度模板测试
-            DepthAttachment depth_attachment =
-                DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture());
-            depth_attachment.action = AC_DS_LOAD_STORE;
-
-            context.cmd_list.Gfx(pbr_pipeline, context.bdls, material_param)
-                .Draw(
-                    "Lighting Pass",
-                    context.textures.lighting_output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    //depth_attachment,
-                    ColorAttachment(context.textures.lighting_output.tex)
-                );
-        };
+        context.cmd_list.Gfx(pbr_pipeline, context.bdls, material_param)
+            .Draw(
+                "Lighting Pass",
+                context.textures.lighting_output.GetRect2D(),
+                std::move(RasterTool::GetFullScreenDrawDatas()),
+                //depth_attachment,
+                ColorAttachment(context.textures.lighting_output.tex)
+            );
     }
 
 private:

@@ -957,7 +957,7 @@ enum class ETextureUsageFlags : uint32_t {
 
     VIDEO_ENCODE = 1 << 16,
     // ATTACHMENT_FEEDBACK_LOOP = 1 << 17,
-    SRGB    = 1 << 18,
+    // SRGB    = 1 << 18, // 这个Enum貌似没用
     PRESENT = 1 << 19,
     Num     = 20
 };
@@ -1243,6 +1243,7 @@ struct MeshBoundInfo {
 };
 
 class ShaderCompiler;
+class DXCompiler;
 namespace Moer::Render {
 
 enum class EQueueType : uint8 {
@@ -1351,8 +1352,8 @@ struct DrawInstanceCmd {
     uint32_t padding[3];
 };
 struct ShaderParametersInfoMap {
-    friend class ShaderCompiler;
-    friend class DXCompiler;
+    friend class ::ShaderCompiler;
+    friend class ::DXCompiler;
 
 public:
     // const Moer::UnorderedMap<std::string, ParameterInfo>& GetShaderParameterInfoMap() const {

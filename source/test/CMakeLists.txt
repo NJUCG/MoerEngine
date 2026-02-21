@@ -34,16 +34,16 @@ add_subdirectory(math)
 # )
 # set_target_properties(VulkanRHITest PROPERTIES FOLDER ${moer_test_folder})
 
-
-add_executable(TaskGraphTest "TaskGraphTest.cpp")
-target_include_directories(TaskGraphTest
+set(test_target TestTaskGraph)
+add_executable(${test_target} "TaskGraphTest.cpp")
+target_include_directories(${test_target}
 PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
 )
-target_link_libraries(TaskGraphTest
+target_link_libraries(${test_target}
     # PUBLIC mimalloc
     PUBLIC Moer::Core
 )
-set_target_properties(TaskGraphTest PROPERTIES FOLDER ${moer_test_folder})
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
 # add_executable(MeshProcessTest "MeshProcessTest.cpp")
 # target_include_directories(MeshProcessTest 
@@ -115,37 +115,37 @@ set_target_properties(TaskGraphTest PROPERTIES FOLDER ${moer_test_folder})
 # set_target_properties(NRDTest PROPERTIES FOLDER ${moer_test_folder})
 
 # VertexFactoryTest
-add_executable(VertexFactoryTest VertexFactoryTest.cpp)
-target_include_directories(VertexFactoryTest
+set(test_target TestVertexFactory)
+add_executable(${test_target} VertexFactoryTest.cpp)
+target_include_directories(${test_target}
     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
 )
-target_link_libraries(VertexFactoryTest
+target_link_libraries(${test_target}
     PRIVATE Moer::Render
     PRIVATE glfw
-    PRIVATE Moer::Resource
 )
-set_target_properties(VertexFactoryTest PROPERTIES FOLDER ${moer_test_folder})
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
 # DX RHI Test
-add_executable(dxrhitest RHITest/dxrhitest.cpp)
-target_include_directories(dxrhitest
+set(test_target TestDxRhi)
+add_executable(${test_target} RHITest/dxrhitest.cpp)
+target_include_directories(${test_target}
     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
     PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/dxrhitest>
 )
-target_link_libraries(dxrhitest
+target_link_libraries(${test_target}
     PRIVATE Moer::Render
     PRIVATE glfw
-    PRIVATE Moer::Resource
 )
-set_target_properties(dxrhitest PROPERTIES FOLDER ${moer_test_folder})
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
 # CUDA Test
 if (TARGET Moer::Cuda)
-    set(test_target cuda_test)
+    set(test_target TestCuda)
     add_executable(${test_target} CudaTest.cpp)
     target_include_directories(${test_target}
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
@@ -155,7 +155,6 @@ if (TARGET Moer::Cuda)
     target_link_libraries(${test_target}
         PRIVATE Moer::Render
         PRIVATE glfw
-        PRIVATE Moer::Resource
     )
     target_link_libraries(${test_target}
         PRIVATE Moer::Cuda # Link CUDA and add includes
@@ -164,7 +163,7 @@ if (TARGET Moer::Cuda)
 endif()
 
 if (TARGET LibTorch)
-    set(test_target torch_test)
+    set(test_target TestTorch)
     add_executable(${test_target} TorchTest.cpp)
     target_include_directories(${test_target}
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
@@ -174,7 +173,6 @@ if (TARGET LibTorch)
     target_link_libraries(${test_target}
         PRIVATE Moer::Render
         PRIVATE glfw
-        PRIVATE Moer::Resource
     )
     target_link_libraries(${test_target}
         PRIVATE LibTorch
@@ -183,7 +181,7 @@ if (TARGET LibTorch)
 endif()
 
 if (TARGET TensorRT)
-    set(test_target tensorRT_test)
+    set(test_target TestTensorRT)
     add_executable(${test_target} TensorRTTest.cpp)
     target_include_directories(${test_target}
         PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
@@ -193,10 +191,27 @@ if (TARGET TensorRT)
     target_link_libraries(${test_target}
         PRIVATE Moer::Render
         PRIVATE glfw
-        PRIVATE Moer::Resource
     )
     target_link_libraries(${test_target}
         PRIVATE TensorRT
+    )
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+endif()
+
+if (TARGET EnTT::EnTT)
+    set(test_target TestEnTT)
+    add_executable(${test_target} EnTTTest.cpp)
+    target_link_libraries(${test_target}
+        PRIVATE EnTT::EnTT
+    )
+    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+endif()
+
+if (TARGET gtl)
+    set(test_target TestGtl)
+    add_executable(${test_target} TestGtl.cpp)
+    target_link_libraries(${test_target}
+        PRIVATE gtl
     )
     set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 endif()

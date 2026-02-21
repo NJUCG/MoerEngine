@@ -441,6 +441,31 @@ void CommandList::ImportResourcesFromQueue(
     Array<ImportTexture>&& _textures_to_import,
     Array<ImportBuffer>&&  _buffers_to_import
 ) {
+    {
+        // 空资源检测
+        for (uint i = 0; i < _textures_to_import.size(); ++i) {
+            const auto& texture_to_import = _textures_to_import[i];
+            if (texture_to_import.texture.GetTexture() == nullptr) {
+                LOG_WARNING(
+                    "ImportResourcesFromQueue got empty texture at index {}. src_queue={}",
+                    i,
+                    static_cast<uint>(_src_queue)
+                );
+            }
+        }
+        for (uint i = 0; i < _buffers_to_import.size(); ++i) {
+            const auto& buffer_to_import = _buffers_to_import[i];
+            if (buffer_to_import.buffer.GetBuffer() == nullptr ||
+                buffer_to_import.buffer.GetByteSize() == 0) {
+                LOG_WARNING(
+                    "ImportResourcesFromQueue got empty buffer at index {}. src_queue={}",
+                    i,
+                    static_cast<uint>(_src_queue)
+                );
+            }
+        }
+    }
+
     // QueueTransferCmd cmd(_src_queue, std::move(_textures_to_import));
     commands.emplace_back(
         MakeUnique<QueueTransferCmd>(
@@ -454,6 +479,31 @@ void CommandList::ExportResourcesToQueue(
     Array<ExportTexture>&& _textures_to_export,
     Array<ExportBuffer>&&  _buffers_to_export
 ) {
+    {
+        // 空资源检测
+        for (uint i = 0; i < _textures_to_export.size(); ++i) {
+            const auto& texture_to_export = _textures_to_export[i];
+            if (texture_to_export.texture.GetTexture() == nullptr) {
+                LOG_WARNING(
+                    "ExportResourcesToQueue got empty texture at index {}. dst_queue={}",
+                    i,
+                    static_cast<uint>(_dst_queue)
+                );
+            }
+        }
+        for (uint i = 0; i < _buffers_to_export.size(); ++i) {
+            const auto& buffer_to_export = _buffers_to_export[i];
+            if (buffer_to_export.buffer.GetBuffer() == nullptr ||
+                buffer_to_export.buffer.GetByteSize() == 0) {
+                LOG_WARNING(
+                    "ExportResourcesToQueue got empty buffer at index {}. dst_queue={}",
+                    i,
+                    static_cast<uint>(_dst_queue)
+                );
+            }
+        }
+    }
+
     commands.emplace_back(
         MakeUnique<QueueTransferCmd>(
             _dst_queue, std::move(_textures_to_export), std::move(_buffers_to_export)

@@ -1,4 +1,4 @@
-﻿//
+//
 // Created by 74535 on 2023/10/2.
 //
 
@@ -730,6 +730,10 @@ void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateI
 
 void VulkanDevice::FlushDebugMessages() const {
     FlushBufferedDebugMessages();
+}
+
+void VulkanDevice::WaitIdle() {
+    vkDeviceWaitIdle(m_device);
 }
 
 void VulkanDevice::SetupDebugUtilsMessengerEXT() {
@@ -1540,7 +1544,7 @@ TextureRef VulkanDevice::CreateTexture(
         b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
         _size,
         uint8(_mip_cnt),
-        uint8(_dimension == ETextureDimension::TEX_CUBE ? 6 : 1),
+        uint8((_dimension == ETextureDimension::TEX_CUBE ? 6 : 1) * _array_size),
         1
     };
     info.aspect_flags = calc_aspect_flags(_format);

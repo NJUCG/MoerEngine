@@ -1,15 +1,10 @@
 #pragma once
 
-#include "math/Function.h"
-#include "misc/MMemory.h"
-#include "scene/Camera.h"
-#include "scene/Material.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/env_and_atmo_pass/ShaderParameters.h"
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
-#include "RasterTool.h"
 
 namespace Moer::Render::Raster {
 
@@ -25,9 +20,7 @@ class SkyboxPass {
 public:
     SkyboxPass(RasterContext& context);
 
-    void Process(RasterContext& context, const RasterConfig& ui_config, const CameraRef& camera);
-
-    DirectionalLightComponent* GetMainLightDirection(RasterContext& context);
+    void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 
 private:
     SkyboxPipeline skybox_pipeline;

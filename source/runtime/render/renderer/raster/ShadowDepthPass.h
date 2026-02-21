@@ -4,6 +4,8 @@
 #include "math/Function.h"
 #include "shader/ShaderPipeline.h"
 
+#include <optional>
+
 namespace Moer {
 class DirectionalLightComponent;
 class PointLightComponent;
@@ -27,36 +29,36 @@ class ShadowDepthPass {
 public:
     ShadowDepthPass(RasterContext& context);
 
-    void Process(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera);
+    void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 
     // 资源管理
     void PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config);
     void PreparePointShadowResources(RasterContext& context, const RasterConfig& ui_config);
 
     // 辅助函数
-    static DirectionalLightComponent* GetMainLightDirection(RasterContext& context);
-    static PointLightComponent*       GetMainPointLight(RasterContext& context);
+    static std::optional<ecs::CLightDirectional> GetMainLightDirection(RasterContext& context);
+    static std::optional<ecs::CLightPoint>       GetMainPointLight(RasterContext& context);
+    // 获取主光源实体 ID（用于获取 CTransform）
+    static std::optional<entt::entity> GetMainLightDirectionEntity(RasterContext& context);
+    static std::optional<entt::entity> GetMainPointLightEntity(RasterContext& context);
 
     // 渲染逻辑
 
-    void RenderCSM(RasterContext& context, const RasterConfig& ui_config, CameraRef& camera);
-    void RenderPointShadows(RasterContext& context, const RasterConfig& config, CameraRef& camera);
+    void RenderCSM(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
+    void RenderPointShadows(RasterContext& context, const RasterConfig& config, const Camera& camera);
 
 private:
     void RenderShadow(
-        RasterContext&                                              context,
-        const RasterConfig&                                         config,
-        const float4x4&                                             view_proj,
-        const Rect2D&                                               rect,
-        TextureView                                                 depth_attachment,
-        std::string_view                                            pass_name,
-        Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline>& pipeline_map
+        RasterContext&      context,
+        const RasterConfig& config,
+        const float4x4&     view_proj,
+        const Rect2D&       rect,
+        TextureView         depth_view,
+        std::string_view    pass_name
     );
 
 private:
-    uint enabled_cascade_layers;
-
-    Moer::UnorderedMap<VertexFactory, ShadowDepthPassPipeline> pipeline_map;
-    VertexShader                                               vertex_shader;
+    uint                    enabled_cascade_layers;
+    ShadowDepthPassPipeline m_pso;
 };
 } // namespace Moer::Render::Raster

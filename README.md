@@ -24,7 +24,7 @@
 
     ```bash
     # Clone仓库
-    git clone git@github.com:NJUCG/MoerEngine.git
+    git clone git@github.com:NJUCG/MoerEngine.git --recursive
     cd MoerEngine
     
     # 下载Sponza场景文件，到此目录：`./asset/scenes/`

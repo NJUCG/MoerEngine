@@ -161,7 +161,7 @@ private:
         Chunk                 Allocate(uint64 _size);
         void                  Reset();
         void                  Dispose();
-        std::string_view      GetStackBufferName();
+        std::string           GetStackBufferName();
     };
     Array<VulkanBuffer*> large_buffers;
     VkTmpBufferAllocator allocator;

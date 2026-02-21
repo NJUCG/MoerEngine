@@ -1,4 +1,3 @@
-#include "resources/GpuScene.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderResourceManager.h"

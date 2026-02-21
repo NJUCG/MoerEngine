@@ -33,6 +33,7 @@ private:
         uint32_t                 src_queue_family;
         uint32_t                 dst_queue_family;
     };
+
 public:
     VkTracker(EQueueType _queue = EQueueType::Graphics) : queue_type(_queue) {
         switch (_queue) {
@@ -194,20 +195,23 @@ private:
     Array<VkImageMemoryBarrier2>  texture_barriers;
     Array<VkMemoryBarrier2>       memory_barriers;
 
-    UnorderedMap<VulkanBuffer*, BufferState>                buffer_states;
-    UnorderedMap<TextureSubresourceKeyT<VulkanTexture>, TextureState, TextureSubresourceKeyHashT<VulkanTexture>>
-        texture_states;
-    Set<VulkanTexture*>                        exported_textures;
-    Set<VulkanBuffer*>                         exported_buffers;
+    UnorderedMap<VulkanBuffer*, BufferState> buffer_states;
+    UnorderedMap<
+        TextureSubresourceKeyT<VulkanTexture>,
+        TextureState,
+        TextureSubresourceKeyHashT<VulkanTexture>>
+                        texture_states;
+    Set<VulkanTexture*> exported_textures;
+    Set<VulkanBuffer*>  exported_buffers;
 
-    Set<VulkanBuffer*>  pending_buffers;
+    Set<VulkanBuffer*> pending_buffers;
     UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
         pending_textures;
 
-    Set<uint64>         write_blas_states;
+    Set<uint64> write_blas_states;
     UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
-        writed_state_textures;
-    Set<VulkanBuffer*>  writed_state_buffers;
+                       writed_state_textures;
+    Set<VulkanBuffer*> writed_state_buffers;
 
     UnorderedMap<VulkanBuffer*, BufferState> flush_buffer_states;
     UnorderedMap<VulkanBuffer*, BufferRange> flush_buffer_ranges;

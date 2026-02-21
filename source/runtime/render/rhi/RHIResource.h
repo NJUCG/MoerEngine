@@ -150,6 +150,36 @@ using BindlessArrayRef      = CountableRef<BindlessArray>;
 using RaytracingGeometryRef = CountableRef<RaytracingGeometry>;
 using RaytracingSceneRef    = CountableRef<RaytracingScene>;
 using RaytracingTlasRef     = CountableRef<RaytracingTlas>;
+
+struct TextureWithHandle {
+    TextureRef  tex;
+    uint        hdl;         //主Handle
+    Array<uint> mip_handles; //每个Mip的Handle
+
+    uint2  GetSize(uint mip = 0);
+    uint   GetSizeX(uint mip = 0);
+    uint   GetSizeY(uint mip = 0);
+    Rect2D GetRect2D(uint mip = 0);
+    uint   GetMipHandle(uint mip);
+};
+
+struct DepthBufferWithHandle {
+    DepthBufferRef tex;
+    uint           hdl = 0;
+};
+
+struct BufferWithHandle {
+    BufferRef buf;
+    uint      hdl = 0;
+};
+
+// 如果texture的名字不是编译期决定的，则需要找一个地方存名字。否则string_view会出现悬垂指针
+struct DepthBufferWithHandleAndName {
+    DepthBufferRef tex;
+    uint           hdl = 0;
+    std::string    name;
+};
+
 }; // namespace Moer::Render
 
 class Shader;
@@ -921,8 +951,8 @@ public:
     virtual uint AllocateTexture(const TextureView& _texture, Sampler _sampler) = 0;
     virtual uint AllocateBuffer(BufferView _buffer)                             = 0;
 
-    virtual void FreeTexture(uint _handle) = 0;
-    virtual void FreeBuffer(uint _handle)  = 0;
+    virtual void UnbindTexture(uint _handle) = 0;
+    virtual void UnbindBuffer(uint _handle)  = 0;
 
     virtual uint64 ArrayHandle() const = 0;
 
@@ -1093,6 +1123,7 @@ public:
 
     RENDER_API RaytracingInstance&       GetInstance(uint _array_idx);
     RENDER_API const RaytracingInstance& GetInstance(uint _array_idx) const;
+    RENDER_API uint                      GetInstanceCount() const;
 
 protected:
     Array<RaytracingInstance> instances;

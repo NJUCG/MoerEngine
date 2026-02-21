@@ -1,10 +1,7 @@
 #pragma once
 
 #include "AssetTool.h"
-#include "rhi/RHI.h"
-#include "shader/ShaderPipeline.h"
-#include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
-#include <type_traits>
+#include "rhi/RHIResource.h"
 
 namespace Moer::Render::Raster {
 
@@ -167,12 +164,6 @@ struct RasterTextures {
     {                                                                                   \
         TexConfig cfg = (CONFIG);                                                       \
         AssetTool::CreateRasterResource<TEXTYPE>(this->NAME, device, #NAME, size, cfg); \
-        LOG_DEBUG(                                                                      \
-            "tex {}, size {} x {}",                                                     \
-            #NAME,                                                                      \
-            (cfg.b_super_resolution ? size.x / 2 : size.x),                             \
-            (cfg.b_super_resolution ? size.y / 2 : size.y)                              \
-        );                                                                              \
     }
         RASTER_TEXTURES_TABLE_CONFIG
 #undef X
@@ -193,8 +184,7 @@ struct RasterTextures {
 
     void AllocateFrameBuffers(CommandList& cmd_list, BindlessArrayRef& bindless_array) {
         // 批量生成
-#define X(TYPE, NAME, TEXTYPE, CONFIG)                \
-    LOG_DEBUG("Allocating tex handle for {}", #NAME); \
+#define X(TYPE, NAME, TEXTYPE, CONFIG) \
     AssetTool::AllocateRasterResourceHandle(bindless_array, NAME, (CONFIG));
         RASTER_TEXTURES_TABLE_CONFIG
 #undef X
@@ -202,9 +192,15 @@ struct RasterTextures {
         cmd_list.UpdateBindlessArray(bindless_array);
     }
 
-    void FreeFrameBuffers(BindlessArrayRef& bindless_array) {
-        // 批量生成
-#define X(TYPE, NAME, TEXTYPE, CONFIG) AssetTool::FreeRasterResourceHandle(bindless_array, NAME);
+    void FreeFrameBuffers(BindlessArrayRef& bindless_array, bool is_free_external_assets){
+    // 批量生成
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                 \
+    {                                                                  \
+        TexConfig cfg = (CONFIG);                                      \
+        if (!cfg.is_asset || is_free_external_assets) {                \
+            AssetTool::FreeRasterResourceHandle(bindless_array, NAME); \
+        }                                                              \
+    }
         RASTER_TEXTURES_TABLE_CONFIG
 #undef X
     }

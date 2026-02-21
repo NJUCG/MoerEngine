@@ -6,12 +6,14 @@
 #include "misc/STL.h"
 #include "renderer/common/RuntimeAssets.h"
 #include "rhi/RHIResource.h"
-#include "scene/Camera.h"
+#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/utils/ShaderParameters.h"
 #include <filesystem>
 #include <string_view>
+
+#include "scene/GpuScene.h"
 
 #ifndef WITH_NRD
 #define WITH_NRD 0
@@ -70,11 +72,7 @@ struct RTContext {
 public:
     RTContext(ShaderUtils& _sd_utils, ImportanceSamplingContext& _is_ctx, BindlessArrayRef _bindless_array);
 
-    void SetBindlessHandles(
-        uint _geom_data_buf_handle,
-        uint _instance_data_buf_handle,
-        uint _material_data_buf_handle
-    );
+    void SetBindlessHandles(const GpuScene::Res& gpu_scene_res);
 
     void FillFrameResources(uint2 _resolution);
 
@@ -86,17 +84,17 @@ public:
 
     void FillLowDiscrepancySequence(CommandList& _cmd_list);
 
-    void CreateEnvMapResources(EnvMapResource _env_map, CommandList& _cmd_list);
+    void CreateEnvMapResources(TextureWithHandle _env_map, CommandList& _cmd_list);
 
     // Create light sampling buffers
     void CreateBuffersIfNeeded(
         uint _num_emissive_meshes,
         uint _num_emissive_triangles,
         uint _num_prim_lights,
-        uint _num_geom_instance
+        uint _max_primitives
     );
 
-    void Tick(CameraRef _camera, float2 _jitter);
+    void Tick(Camera& _camera, float2 _jitter);
     void AdvanceFrame();
 
     void SetEnvMapInfos(float _scale, float _rotation);
@@ -128,10 +126,10 @@ public:
     ViewParam main_view{};
     ViewParam prev_view{};
 
-    BufferRef geo_instance_to_light_buf;
     BufferRef light_mapping_buf;
     BufferRef prim_light_buf;
     BufferRef task_buf;
+    BufferRef primitive_to_light_buf; // primitive_id -> light_offset 映射
     // polymorphic light info
     BufferRef light_data_buf;
 
@@ -152,7 +150,6 @@ public:
 
     uint max_emissive_meshes;
     uint max_emissive_triangles;
-    uint max_geom_instance;
     uint max_prim_lights;
 
     FrameResources   frame_rt;

@@ -54,6 +54,21 @@ set_target_folder(zlibstatic "${third_party_folder}/assimp")
 target_link_libraries(${third_lib_for_asset_load_target} PUBLIC assimp)
 target_include_directories(${third_lib_for_asset_load_target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/assimp)
 
+# 下面这段脚本是为了修复clang在Release下编译assimp时，不会输出assimp.dll的问题
+# Copy assimp.dll to output directory after AssetLoad is built
+# We add this to AssetLoad target instead of assimp to avoid timing issues
+if(WIN32 AND BUILD_SHARED_LIBS AND TARGET assimp)
+    # Copy DLL to the same directory as AssetLoad DLL (which goes to CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+    add_custom_command(
+        TARGET ${third_lib_for_asset_load_target}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:assimp>"
+            "$<TARGET_FILE_DIR:${third_lib_for_asset_load_target}>/assimp.dll"
+        COMMENT "Copying assimp.dll to output directory"
+    )
+endif()
+
 add_sub_target(stb stb ${third_party_folder} ${CMAKE_CURRENT_SOURCE_DIR}/stb)
 target_compile_options(stb
     PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-unused-function>")

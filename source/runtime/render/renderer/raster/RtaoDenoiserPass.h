@@ -1,7 +1,7 @@
 ﻿#pragma once
 
 #include "math/Function.h"
-#include "scene/Camera.h"
+#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/ShaderParameters.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -86,12 +86,12 @@ public:
 
         // Pass 1
         RtaoDenoiserPassBindlessParam param;
-        param.history_ao_tex    = img_denoiser_history_read.handle;
-        param.curr_ao_tex       = img_ao_only.handle;
-        param.color_tex         = context.textures.lighting_output.handle;
-        param.motion_vector_tex = context.textures.camera_motion_vector.handle;
-        param.depth_tex         = context.textures.depth_nearest_sampler.handle;
-        param.normal_tex        = context.textures.normal.handle;
+        param.history_ao_tex    = img_denoiser_history_read.hdl;
+        param.curr_ao_tex       = img_ao_only.hdl;
+        param.color_tex         = context.textures.lighting_output.hdl;
+        param.motion_vector_tex = context.textures.camera_motion_vector.hdl;
+        param.depth_tex         = context.textures.depth_nearest_sampler.hdl;
+        param.normal_tex        = context.textures.normal.hdl;
 
         param.history_ratio          = ui_config.rtao_denoiser_history_ratio;
         param.valid_depth_threshold  = ui_config.rtao_denoiser_valid_depth_threshold;
@@ -112,7 +112,7 @@ public:
 
         // Pass 2
         CopyPassBindlessParam copy_param;
-        copy_param.input_image = img_denoiser_history_write.handle;
+        copy_param.input_image = img_denoiser_history_write.hdl;
 
         context.cmd_list.Gfx(copy_pso, context.bdls, copy_param)
             .Draw(
@@ -122,7 +122,7 @@ public:
                 ColorAttachment(img_ao_only.tex)
             );
 
-        // return output_image.handle;
+        // return output_image.hdl;
         return ao_only_idx ^ 1; // 0 <-> 1
     }
 

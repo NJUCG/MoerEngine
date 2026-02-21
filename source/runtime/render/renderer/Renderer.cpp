@@ -1,14 +1,12 @@
-#pragma once
-
 #include "renderer/Renderer.h"
 
 // Runtime
 #include "config/ConfigManager.h"
-#include "loader/LoaderInterface.h"
 #include "misc/Timer.h"
 #include "renderer/EditorConfig.h"
 #include "rhi/RHI.h"
-#include "scene/CameraManager.h"
+#include "scene/Scene.h"
+#include "scene/SceneGlobalEntry.h"
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowContext.h"
 
@@ -16,12 +14,7 @@
 
 namespace Moer::Render {
 
-Renderer::Renderer(
-    uint2&                                                    _resolution,
-    const SharedPtr<EditorConfig>                             _config,
-    const EngineHooks&                                        hooks,
-    std::function<void(const std::filesystem::path&, Scene*)> _load_scene_async
-) :
+Renderer::Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks) :
     resolution(_resolution),
     device(RenderDevice::Get()),
     manager(ShaderManager::Get()),
@@ -38,9 +31,12 @@ Renderer::Renderer(
         };
         swapchain = device.CreateSwapchain(swapchain_createinfo);
     }
-    bindless_array = scene.GetBindlessArray();
     {
-        _load_scene_async(_config->scene_path, &scene);
+        bindless_array = scene.bindless_array();
+
+        scene.LoadSceneFromFileAsync(_config->scene_path);
+
+        SceneGlobalEntry::Get().BindScene(&scene);
     }
     // Other vars
     {
@@ -59,19 +55,24 @@ Renderer::Renderer(
 }
 
 Renderer::~Renderer() {
-    ReleaseResources(); // 这里也需要释放，否则退出Engine时会崩溃 (Why?)
+    // ReleaseResources(); // 在Renderer子类中释放
 }
 
 void Renderer::ReleaseResources() {
+    if (released)
+        return;
+    released = true;
+
     timeline->Wait(time);
     gfx_queue.Sync();
+    swapchain->Sync();
+    device.WaitIdle();
 
     cmd_list.UpdateBindlessArray(bindless_array);
     gfx_queue.Execute(cmd_list.Submit().DeleteResources());
     gfx_queue.Sync();
-    swapchain->Sync();
 
-    Scene::ResetAsyncLoadInfo();
+    scene.Reset();
 }
 
 Renderer::EWindowState Renderer::TickWindowContext(const EngineHooks& hooks) {
@@ -102,7 +103,7 @@ Renderer::EWindowState Renderer::TickWindowContext(const EngineHooks& hooks) {
 }
 
 void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {
-    if (Scene::IsSceneFound() == false) {
+    if (scene.IsStartLoading() == false) {
         // 没有找到场景，每隔一段时间在命令行打印提示信息，避免用户不知道发生了什么
         static LoopedTimer timer(2.0);
         if (timer.Tick()) { // 每隔1s触发一次

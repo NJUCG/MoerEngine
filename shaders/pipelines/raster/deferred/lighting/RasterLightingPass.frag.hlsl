@@ -1,7 +1,7 @@
 #include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 
-#include "core/common/Common.hlsl"
 #include "materials/Brdf.hlsli"
 #include "materials/Material.hlsli"
 #include "pipelines/raster/deferred/lighting/Lighting.hlsli"
@@ -19,15 +19,9 @@ float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) 
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
-    uint gbuffer_mat = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
-
-    uint mat_type, mat_id;
-    GetMaterialTypeAndIndex(gbuffer_mat, mat_type, mat_id);
-
-    if (mat_type != param.material_type) {
-        discard;
-    }
-    MaterialData mat = UnpackMaterialData<MaterialData>(param.material_buffer, mat_id);
+    uint material_id = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
+    ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
+    Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(material_id);
 
     // MARK: Lighting Data
     ArrayBuffer        global_params = ArrayBuffer(param.global_param_handle);
@@ -44,7 +38,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
 
     // - Lights
-    ArrayBuffer light_buffer = ArrayBuffer(param.light_buffer);
+    ArrayBuffer light_buf = ArrayBuffer(param.light_buf_hdl);
 
     // MARK: Skybox(Deprecated)
     if (depth == 0.0) {
@@ -53,10 +47,10 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     // MARK: PBR
     float3 albedo =
-        GetTextureData<float3>(mat.albedo_map, uv, mat.base_color_factor.xyz, MISSING_TEXTURE_COLOR);
+        GetTextureData<float3>(mat.albedo_map_hdl, uv, mat.albedo_factor.xyz, MISSING_TEXTURE_COLOR);
 
     float2 metallic_roughness = GetTextureData<float2>(
-        mat.metallic_roughness_map,
+        mat.metallic_roughness_map_hdl,
         uv,
         float2(mat.metallic_factor, mat.roughness_factor),
         float2(mat.metallic_factor, mat.roughness_factor)
@@ -64,7 +58,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     float metallic  = metallic_roughness.x;
     float roughness = metallic_roughness.y;
 
-    float3 N   = GetNormalFromNormalMap(mat.normal_map, uv, normal, tangent);
+    float3 N   = GetNormalFromNormalMap(mat.normal_map_hdl, uv, normal, tangent);
     float3 V   = normalize(lighting_data.camera_position - position.xyz);
     float  NoV = saturate(dot(N, V));
 
@@ -94,7 +88,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     light_ctx.Init(brdf_ctx, position, lighting_data.lut_ggx_emu_handle);
 
     for (uint i = 0; i < lighting_data.light_count; i++) {
-        LightData light = light_buffer.Load<LightData>(i);
+        Moer::GLight light = light_buf.Load<Moer::GLight>(i);
 
         light_ctx.AccumulateLight(light, shadow);
     }

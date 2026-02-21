@@ -10,6 +10,28 @@ void RHIResource::Destroy() {
     MoerDelete(this);
 }
 namespace Moer::Render {
+
+uint2 TextureWithHandle::GetSize(uint mip) {
+    return uint2(std::max(1u, tex->GetExtent().x >> mip), std::max(1u, tex->GetExtent().y >> mip));
+}
+uint TextureWithHandle::GetSizeX(uint mip) {
+    return std::max(1u, tex->GetExtent().x >> mip);
+}
+uint TextureWithHandle::GetSizeY(uint mip) {
+    return std::max(1u, tex->GetExtent().y >> mip);
+}
+Rect2D TextureWithHandle::GetRect2D(uint mip) {
+    uint2 size = GetSize(mip);
+    return Rect2D(0, 0, size.x, size.y);
+}
+
+uint TextureWithHandle::GetMipHandle(uint mip) {
+    if (mip_handles.size() > mip) {
+        return mip_handles[mip];
+    }
+    return hdl;
+}
+
 TextureView::TextureView(Texture* _texture) :
     texture(_texture),
     offset(0),
@@ -54,7 +76,7 @@ TextureView::TextureView(
 TextureView TextureView::Slice(uint layer, uint count) const {
     TextureView copy = *this;
     copy.array_layer = layer;
-    copy.num_array = count;
+    copy.num_array   = count;
     return copy;
 }
 
@@ -109,6 +131,10 @@ RaytracingInstance& RaytracingScene::GetInstance(uint _array_idx) {
 
 const RaytracingInstance& RaytracingScene::GetInstance(uint _array_idx) const {
     return instances[_array_idx];
+}
+
+uint RaytracingScene::GetInstanceCount() const {
+    return instances.size();
 }
 
 } // namespace Moer::Render

@@ -54,6 +54,16 @@ struct Matrix<T, 2, 2> {
         identity[1][1] = (T)1;
         return identity;
     }
+
+    std::string ToString(bool _is_newline = true, int decimal_places = -1) const noexcept {
+        std::string str = "Matrix2x2f {";
+        str += (_is_newline ? "\n" : "");
+        for (size_t i = 0; i < 2; i++) {
+            str += "  " + re[i].ToString(decimal_places) + (_is_newline ? "\n" : "");
+        }
+        str += "}";
+        return str;
+    }
 };
 
 template<NumericType T>
@@ -109,6 +119,16 @@ struct Matrix<T, 3, 3> {
         identity[1][1] = (T)1;
         identity[2][2] = (T)1;
         return identity;
+    }
+
+    std::string ToString(bool _is_newline = true, int decimal_places = -1) const noexcept {
+        std::string str = "Matrix3x3f {";
+        str += (_is_newline ? "\n" : "");
+        for (size_t i = 0; i < 3; i++) {
+            str += "  " + re[i].ToString(decimal_places) + (_is_newline ? "\n" : "");
+        }
+        str += "}";
+        return str;
     }
 };
 
@@ -170,6 +190,16 @@ struct Matrix<T, 3, 4> {
 
     Vector<T, 3> GetColumn(size_t i) const noexcept {
         return Vector<T, 3>(re[0][i], re[1][i], re[2][i]);
+    }
+
+    std::string ToString(bool _is_newline = true, int decimal_places = -1) const noexcept {
+        std::string str = "Matrix3x4f {";
+        str += (_is_newline ? "\n" : "");
+        for (size_t i = 0; i < 3; i++) {
+            str += "  " + re[i].ToString(decimal_places) + (_is_newline ? "\n" : "");
+        }
+        str += "}";
+        return str;
     }
 };
 
@@ -254,13 +284,30 @@ struct Matrix<T, 4, 4> {
         return identity;
     }
 
-    std::string ToString() const noexcept {
-        std::string str = "Matrix4x4f {\n";
+    std::string ToString(bool _is_newline = true, int decimal_places = -1) const noexcept {
+        std::string str = "Matrix4x4f {";
+        str += (_is_newline ? "\n" : "");
         for (size_t i = 0; i < 4; i++) {
-            str += "  " + re[i].ToString() + "\n";
+            str += "  " + re[i].ToString(decimal_places) + (_is_newline ? "\n" : "");
         }
         str += "}";
         return str;
+    }
+
+    /**
+     * 将矩阵输出3x4矩阵
+     */
+    Matrix<T, 3, 4> ToMatrix3x4f() const noexcept {
+        return Matrix<T, 3, 4>(r0, r1, r2);
+    }
+
+    /**
+     * 将矩阵转置且输出3x4矩阵
+     * 
+     * 适用于构建TLAS时，重新输出一次转置矩阵
+     */
+    Matrix<T, 3, 4> ToTransposedMatrix3x4f() const noexcept {
+        return Matrix<T, 3, 4>(r0.x, r1.x, r2.x, r3.x, r0.y, r1.y, r2.y, r3.y, r0.z, r1.z, r2.z, r3.z);
     }
 };
 

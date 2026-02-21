@@ -29,7 +29,6 @@ RTContext::RTContext(
 ) :
     max_emissive_meshes(0),
     max_emissive_triangles(0),
-    max_geom_instance(0),
     max_prim_lights(0),
     sd_utils(_sd_utils),
     is_ctx(_is_ctx),
@@ -45,15 +44,16 @@ RTContext::RTContext(
     // AllocateAndFreeBdlsIfNeeded(bindless_handles.neighbor_offset, neighbor_offset_buf->GetView());
 }
 
-void RTContext::SetBindlessHandles(
-    uint _geom_data_buf_handle,
-    uint _instance_data_buf_handle,
-    uint _material_data_buf_handle
-) {
-
-    bindless_handles.geom_data     = _geom_data_buf_handle;
-    bindless_handles.instance_data = _instance_data_buf_handle;
-    bindless_handles.material_data = _material_data_buf_handle;
+void RTContext::SetBindlessHandles(const GpuScene::Res& gpu_scene_res) {
+    bindless_handles.light_buf_hdl          = gpu_scene_res.light_buf.hdl;
+    bindless_handles.material_buf_hdl       = gpu_scene_res.material_buf.hdl;
+    bindless_handles.primitive_buf_hdl      = gpu_scene_res.primitive_buf.hdl;
+    bindless_handles.instance_buf_hdl       = gpu_scene_res.instance_buf.hdl;
+    bindless_handles.position_buf_hdl       = gpu_scene_res.position_buf.hdl;
+    bindless_handles.packed_normal_buf_hdl  = gpu_scene_res.packed_normal_buf.hdl;
+    bindless_handles.packed_tangent_buf_hdl = gpu_scene_res.packed_tangent_buf.hdl;
+    bindless_handles.texcoord0_buf_hdl      = gpu_scene_res.texcoord0_buf.hdl;
+    bindless_handles.index_buf_hdl          = gpu_scene_res.index_buf.hdl;
 }
 
 void RTContext::FillFrameResources(uint2 _resolution) {
@@ -279,9 +279,9 @@ void RTContext::FillLowDiscrepancySequence(CommandList& _cmd_list) {
     // _cmd_list.Compute(sd_utils.gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), "GenerateLowDiscrepancySequence");
 }
 
-void RTContext::CreateEnvMapResources(EnvMapResource _env_tex, CommandList& _cmd_list) {
+void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _cmd_list) {
 
-    uint2         extent = _env_tex.texture->GetExtent().xy;
+    uint2         extent = _env_tex.tex->GetExtent().xy;
     RenderDevice& device = RenderDevice::Get();
 
     env_pdf_mips.clear();
@@ -290,30 +290,29 @@ void RTContext::CreateEnvMapResources(EnvMapResource _env_tex, CommandList& _cmd
         Extent2D(extent.x, extent.y),
         PF_R16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
-        _env_tex.texture->GetNumMips()
+        _env_tex.tex->GetNumMips()
     );
 
     for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) {
         env_pdf_mips.push_back(env_pdf_tex->GetView(i));
     }
-    sd_utils.GenerateMipPdf(_cmd_list, _env_tex.texture, env_pdf_mips);
+    sd_utils.GenerateMipPdf(_cmd_list, _env_tex.tex, env_pdf_mips);
 
     AllocateAndFreeBdlsIfNeeded(
         bindless_handles.env_pdf,
         env_pdf_tex->GetView(0, env_pdf_tex->GetNumMips()),
         Sampler{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE}
     );
-    scene_params.env_map_handle = _env_tex.bindless_handle;
+    scene_params.env_map_handle = _env_tex.hdl;
     scene_params.enable_env_map = 1;
     SetEnvMapInfos(1.f, 0.f);
 }
 
 void RTContext::CreateBuffersIfNeeded(
-
     uint _num_emissive_meshes,
     uint _num_emissive_triangles,
     uint _num_prim_lights,
-    uint _num_geom_instance
+    uint _max_primitives
 ) {
 
     RenderDevice& device   = RenderDevice::Get();
@@ -325,22 +324,14 @@ void RTContext::CreateBuffersIfNeeded(
         );
     }
 
-    // task_buf             = device.CreateBuffer<PrepareLightsTask>(max_emissive_meshes + max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS);
-    if (!geo_instance_to_light_buf || _num_geom_instance > max_geom_instance) {
-        geo_instance_to_light_buf = device.CreateBuffer<uint>(
-            "Raytracing::geo_instance_to_light_buf", _num_geom_instance, EBufferUsageFlags::UNORDERED_ACCESS
-        );
-        AllocateAndFreeBdlsIfNeeded(
-            bindless_handles.geo_instance_to_light, geo_instance_to_light_buf->GetView()
-        );
-    }
-    max_geom_instance      = _num_geom_instance;
     max_prim_lights        = _num_prim_lights;
     max_emissive_meshes    = _num_emissive_meshes;
     max_emissive_triangles = _num_emissive_triangles;
 
     uint max_local_lights  = max_emissive_triangles + max_prim_lights;
     uint light_buf_element = max_local_lights * 2;
+    // light_buf_element 必须大于 0（即使没有光源，也需要至少 1 个元素用于双缓冲）
+    assert(light_buf_element > 0 && "light_buf_element must be greater than 0");
 
     if (!light_mapping_buf || light_buf_element > light_data_buf->GetNumElement()) {
         light_mapping_buf = device.CreateBuffer<uint>(
@@ -355,15 +346,29 @@ void RTContext::CreateBuffersIfNeeded(
     }
 
     if (!prim_light_buf || max_prim_lights > prim_light_buf->GetNumElement()) {
-        prim_light_buf = device.CreateBuffer<PolymorphicLightInfo>(
-            "Raytracing::prim_light_buf", max_prim_lights, EBufferUsageFlags::UNORDERED_ACCESS
+        // max_prim_lights 可以为 0（没有场景光源），但 buffer 大小必须至少为 1
+        uint prim_light_buf_size = max_prim_lights > 0 ? max_prim_lights : 1u;
+        prim_light_buf           = device.CreateBuffer<PolymorphicLightInfo>(
+            "Raytracing::prim_light_buf", prim_light_buf_size, EBufferUsageFlags::UNORDERED_ACCESS
         );
     }
-    //
+
+    // 创建 primitive_to_light buffer（primitive_id -> light_offset 映射）
+    // _max_primitives 必须大于 0（场景必须至少有一个 primitive）
+    assert(_max_primitives > 0 && "_max_primitives must be greater than 0");
+    if (!primitive_to_light_buf || _max_primitives > primitive_to_light_buf->GetNumElement()) {
+        primitive_to_light_buf = device.CreateBuffer<uint>(
+            "Raytracing::primitive_to_light_buf", _max_primitives, EBufferUsageFlags::UNORDERED_ACCESS
+        );
+        AllocateAndFreeBdlsIfNeeded(bindless_handles.primitive_to_light, primitive_to_light_buf->GetView());
+    }
     {
+        // 计算 texture 尺寸
+        // light_buf_element 已经通过上面的 assert 确保 > 0
         uint texture_width  = RoundUpToPowerOf2(uint(ceil(sqrt(double(light_buf_element)))));
         uint texture_height = RoundUpToPowerOf2(uint(ceil(double(light_buf_element) / texture_width)));
-        uint mips           = Max(1u, uint(log2(Max(texture_width, texture_height))) + 1u);
+        assert(texture_width > 0 && texture_height > 0 && "Texture dimensions must be greater than 0");
+        uint mips = Max(1u, uint(log2(Max(texture_width, texture_height))) + 1u);
 
         if (!local_light_pdf_tex || texture_height != local_light_pdf_tex->GetExtent().y ||
             texture_width != local_light_pdf_tex->GetExtent().x) {
@@ -391,7 +396,7 @@ void RTContext::CreateBuffersIfNeeded(
 
 void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _view, Sampler _sampler) {
     if (_target) {
-        bdls->FreeTexture(_target);
+        bdls->UnbindTexture(_target);
         if (allocated_bdls_tex.contains(_target)) {
             allocated_bdls_tex.erase(_target);
         }
@@ -402,7 +407,7 @@ void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _v
 
 void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const BufferView& _view) {
     if (_target) {
-        bdls->FreeBuffer(_target);
+        bdls->UnbindBuffer(_target);
         if (allocated_bdls_buf.contains(_target)) {
             allocated_bdls_buf.erase(_target);
         }
@@ -416,17 +421,17 @@ void RTContext::SetEnvMapInfos(float _scale, float _rotation) {
     scene_params.env_map_rotation = _rotation;
 }
 
-void RTContext::Tick(CameraRef _camera, float2 _jitter) {
+void RTContext::Tick(Camera& _camera, float2 _jitter) {
     auto& device = RenderDevice::Get();
     prev_view    = main_view;
 
     float2 delta = 2.f / float2(frame_rt.ldr_color->GetExtent().xy);
 
-    main_view.view2world = Transpose(_camera->GetToWorldMatrix());
-    main_view.world2view = Transpose(_camera->GetViewMatrix());
+    main_view.view2world = Transpose(_camera.GetToWorldMatrix());
+    main_view.world2view = Transpose(_camera.GetViewMatrix());
 
-    float4x4 view = _camera->GetViewMatrix();
-    float4x4 proj = _camera->GetProjectionMatrix();
+    float4x4 view = _camera.GetViewMatrix();
+    float4x4 proj = _camera.GetProjectionMatrix();
 
     // float4 test_prev = float4(0, 0, -1, 1);
     // test_prev        = proj * test_prev;
@@ -449,12 +454,12 @@ void RTContext::Tick(CameraRef _camera, float2 _jitter) {
     // main_view.view2clip         = Transpose(_camera->GetProjectionMatrix());
     // main_view.clip2view         = Transpose(_camera->GetProjectionMatrixInv());
     // main_view.clip2world        = Transpose(_camera->GetViewProjectionMatrixInv());
-    main_view.frustum  = _camera->GetFrustum();
-    main_view.near_far = float2(_camera->GetNearClip(), _camera->GetFarClip());
+    main_view.frustum  = _camera.GetFrustum();
+    main_view.near_far = float2(_camera.GetNearClip(), _camera.GetFarClip());
     main_view.rect =
         float2(is_ctx.GetReSTIRDIConfig().render_width, is_ctx.GetReSTIRDIConfig().render_height);
     main_view.inv_rect          = float2(1.f / main_view.rect.x, 1.f / main_view.rect.y);
-    main_view.dir_or_pos        = float4(_camera->GetPosition(), 1.f);
+    main_view.dir_or_pos        = float4(_camera.GetPosition(), 1.f);
     main_view.clip2window_scale = float2(0.5f * main_view.rect.x, -0.5f * main_view.rect.y);
     main_view.clip2window_bias  = float2(0.5f * main_view.rect.x, 0.5f * main_view.rect.y);
     main_view.window2clip_scale = float2(2.f / main_view.rect.x, -2.f / main_view.rect.y);

@@ -2,10 +2,13 @@
 
 ## 目录
 
-- [1. 依赖](#1-依赖)
-- [2. MoerEngine](#2-moerengine)
-- [3. CUDA等AI组件支持](#3-cuda等ai组件支持)
-- [4. NRD降噪器支持](#4-nrd降噪器支持)
+- [构建手册](#构建手册)
+  - [目录](#目录)
+  - [1. 依赖](#1-依赖)
+  - [2. MoerEngine](#2-moerengine)
+  - [3. CUDA等AI组件支持](#3-cuda等ai组件支持)
+    - [注意事项](#注意事项)
+  - [4. NRD降噪器支持](#4-nrd降噪器支持)
 
 ## 1. 依赖
 
@@ -13,8 +16,7 @@
   * Windows 10 or 11
 * 编译器（二选一）
   * MSVC == 19.44.*
-    * 注：MSVC安装时，语言包请选择英文，否则编译时有概率出现乱码错误
-  * clang（待测试）
+  * clang + ninja
 * Vulkan SDK 1.3 ([download link](https://vulkan.lunarg.com/sdk/home))
   * 推荐使用Vulkan SDK 1.3
   * Vulkan SDK 1.4版本会导致无法使用DebugPrintfEXT（待解决）
@@ -29,14 +31,16 @@
   ```bash
   # Clone仓库
   # 如果没有配置SSH的话，请把 `git@xxx` 替换为 `https://github.com/NJUCG/MoerEngine.git`
-  git clone git@github.com:NJUCG/MoerEngine.git
+  # MoerEngine新的依赖项均使用submodule形式引入，所以请添加--recursive来clone所有依赖项
+  # - 如果在clone时忘记添加 --recursive，请执行git submodule update --init --recursive
+  git clone git@github.com:NJUCG/MoerEngine.git --recursive
   cd MoerEngine
   
-  # 忽略一些特定commit对commit历史的影响
+  # 忽略一些特定commit对commit历史的影响（只影响开发过程，不影响编译和使用）
   git config --local blame.ignoreRevsFile .git-blame-ignore-revs
   
   # 下载Sponza场景文件，到此目录：`./asset/scenes/`
-  git clone --branch sponza-scene-files --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
+  git clone --branch scene/sponza --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
   
   # 根据模板创建一份MoerEngine的配置文件
   # 配置文件中，可以设置默认的渲染器（光栅化、光追）、默认分辨率等选项
@@ -44,19 +48,17 @@
   
   # 构建
   cmake -B build
+  # 如果想要使用clang+ninja，可以替换为：cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
   cmake --build build -j16 # change 16 to your cpu core count
   
   # 运行
   ./target/bin/Debug/MoerEditor.exe
   ```
 
-  - 如果安装了 [just](https://github.com/casey/just)，你可以通过如下这两条命令部署、构建、启动引擎
-    ```bash
-    just setup
-    just gbr # generate build run
-    ```
-
+  - 如果安装了 [just](https://github.com/casey/just)，你可以参考根目录下的 `template.justfile` 文件来编写你自己的脚本
+  
 - 方法二：Rider
+  
   - TODO
 
 ## 3. CUDA等AI组件支持
