@@ -3,6 +3,10 @@
 #include "RenderGraphFwd.h"
 #include "RenderGraphResource.h"
 
+namespace Moer::Render {
+class CommandList;
+} // namespace Moer::Render
+
 namespace Moer::Render::RenderGraph {
 
 enum class ERDGPassTaskMode : uint8 {
@@ -121,14 +125,11 @@ public:
     // - RHICmdList: target command list
     // - Pipeline: Graphics/AsyncCompute (used to choose stages if needed)
     // - Translate Transitions/Aliases into Vk/D3D12 barriers and emit
-    RENDER_API void Submit(FRHIComputeCommandList& RHICmdList, ERHIPipeline Pipeline);
+    RENDER_API void Submit(CommandList& RHICmdList, ERHIPipeline Pipeline);
     // TODO: Split-barrier path
     // - TransitionsToBegin: queue of transitions to begin now and end later
-    RENDER_API void Submit(
-        FRHIComputeCommandList& RHICmdList,
-        ERHIPipeline            Pipeline,
-        FRDGTransitionQueue&    TransitionsToBegin
-    );
+    RENDER_API void
+    Submit(CommandList& RHICmdList, ERHIPipeline Pipeline, FRDGTransitionQueue& TransitionsToBegin);
 
     void Reserve(uint32 TransitionCount) {
         Transitions.Reserve(TransitionCount);
@@ -167,7 +168,7 @@ public:
     RENDER_API void AddDependency(FRDGBarrierBatchBegin* BeginBatch);
 
     //TODO
-    RENDER_API void Submit(FRHIComputeCommandList& RHICmdList, ERHIPipeline Pipeline);
+    RENDER_API void Submit(CommandList& RHICmdList, ERHIPipeline Pipeline);
 
     void Reserve(uint32 TransitionBatchCount) {
         Dependencies.Reserve(TransitionBatchCount);
@@ -309,7 +310,7 @@ protected:
     RENDER_API FRDGBarrierBatchEnd& GetPrologueBarriersToEnd(FRDGAllocator& Allocator);
     RENDER_API FRDGBarrierBatchEnd& GetEpilogueBarriersToEnd(FRDGAllocator& Allocator);
 
-    virtual void Execute(FRHIComputeCommandList& RHICmdList) {}
+    virtual void Execute(CommandList& RHICmdList) {}
 
     const FRDGEventName       Name;
     const FRDGParameterStruct ParameterStruct;
@@ -426,7 +427,6 @@ protected:
     Array<FTextureState, FRDGArrayAllocator>           TextureStates;
     Array<FBufferState, FRDGArrayAllocator>            BufferStates;
     Array<FRDGViewHandle, FRDGArrayAllocator>          Views;
-    Array<FRDGUniformBufferHandle, FRDGArrayAllocator> UniformBuffers;
 
     struct FExternalAccessOp {
         FExternalAccessOp() = default;
@@ -461,4 +461,53 @@ protected:
     friend FRDGTrace;
     friend FRDGUserValidation;
 };
+
+/** Render graph pass with lambda execute function. */
+template<typename ParameterStructType, typename ExecuteLambdaType>
+class TRDGLambdaPass : public FRDGPass {
+    // Verify that the amount of stuff captured by the pass lambda is reasonable.
+    static constexpr int32_t kMaximumLambdaCaptureSize = 1024;
+    static_assert(
+        sizeof(ExecuteLambdaType) <= kMaximumLambdaCaptureSize,
+        "The amount of data captured for the pass looks abnormally high."
+    );
+
+public:
+    TRDGLambdaPass(
+        FRDGEventName&&     InName,
+        FRDGParameterStruct InParameterStruct,
+        ERDGPassFlags       InPassFlags,
+        ExecuteLambdaType&& InExecuteLambda
+    ) :
+        FRDGPass(std::move(InName), std::move(InParameterStruct), InPassFlags, ERDGPassTaskMode::Inline),
+        ExecuteLambda(std::move(InExecuteLambda)) {}
+
+private:
+    void Execute(CommandList& RHICmdList) override {
+        ExecuteLambda(RHICmdList);
+    }
+
+    ExecuteLambdaType ExecuteLambda;
+};
+
+/** Render graph pass with lambda but no parameter struct. Always marked NeverCull. */
+template<typename ExecuteLambdaType>
+class TRDGEmptyLambdaPass : public FRDGPass {
+public:
+    TRDGEmptyLambdaPass(
+        FRDGEventName&&     InName,
+        ERDGPassFlags       InPassFlags,
+        ExecuteLambdaType&& InExecuteLambda
+    ) :
+        FRDGPass(std::move(InName), FRDGParameterStruct(), InPassFlags, ERDGPassTaskMode::Inline),
+        ExecuteLambda(std::move(InExecuteLambda)) {}
+
+private:
+    void Execute(CommandList& RHICmdList) override {
+        ExecuteLambda(RHICmdList);
+    }
+
+    ExecuteLambdaType ExecuteLambda;
+};
+
 } // namespace Moer::Render::RenderGraph

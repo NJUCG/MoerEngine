@@ -575,6 +575,11 @@ using FRDGTextureHandle   = TRDGHandle<FRDGTexture, uint32>;
 using FRDGTextureRegistry = TRDGHandleRegistry<FRDGTextureHandle, ERDGHandleRegistryDestructPolicy::Never>;
 using FRDGTextureBitArray = TRDGHandleBitArray<FRDGTextureHandle>;
 
+using FRDGBufferHandle               = TRDGHandle<FRDGBuffer, uint32>;
+using FRDGBufferReservedCommitHandle = TRDGHandle<FRDGBuffer, uint16>;
+using FRDGBufferRegistry = TRDGHandleRegistry<FRDGBufferHandle, ERDGHandleRegistryDestructPolicy::Never>;
+using FRDGBufferBitArray = TRDGHandleBitArray<FRDGBufferHandle>;
+
 using FRDGBufferNumElementsCallback     = std::function<uint32()>;
 using FRDGBufferInitialDataCallback     = std::function<const void*()>;
 using FRDGBufferInitialDataSizeCallback = std::function<uint64()>;

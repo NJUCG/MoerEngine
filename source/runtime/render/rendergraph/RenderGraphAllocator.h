@@ -52,6 +52,23 @@ public:
         return new (Mem) T(std::forward<TArgs>(Args)...);
     }
 
+    // Allocate uninitialized POD (single element)
+    template<typename T>
+    T* AllocUninitialized() {
+        return static_cast<T*>(AllocRaw(sizeof(T), alignof(T)));
+    }
+
+    // Allocate uninitialized POD array
+    template<typename T>
+    T* AllocUninitialized(size_t Count) {
+        return static_cast<T*>(AllocRaw(sizeof(T) * Count, alignof(T)));
+    }
+
+    // Raw allocation with size and alignment (used by AllocPODArray etc.)
+    void* Alloc(size_t SizeInBytes, size_t AlignInBytes) {
+        return AllocRaw(SizeInBytes, AlignInBytes);
+    }
+
     void ReleaseAll() {
         for (int i = (int)Objects.size() - 1; i >= 0; --i) {
             Objects[i]->~FObject();
@@ -93,8 +110,8 @@ public:
 
 class FRDGAllocatorScope {
 public:
-    RENDERCORE_API FRDGAllocatorScope(FRDGAllocator& Allocator);
-    RENDERCORE_API ~FRDGAllocatorScope();
+    RENDER_API FRDGAllocatorScope(FRDGAllocator& Allocator);
+    RENDER_API ~FRDGAllocatorScope();
 
 private:
     void* AllocatorToRestore;

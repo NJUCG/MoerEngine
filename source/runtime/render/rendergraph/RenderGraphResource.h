@@ -1,5 +1,6 @@
 #pragma once
-#include "DepdencyGraph.h"
+#include <algorithm>
+
 #include "RHIAccess.h"
 #include "RenderGraphDefinitions.h"
 #include "RenderGraphFwd.h"
@@ -10,7 +11,6 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-class ShaderParametersMetadata;
 
 namespace Moer::Render::RenderGraph {
 
@@ -570,7 +570,125 @@ public:
     }
 };
 
-//TODO:Pooled Buffer
+/** A pooled buffer managed by the render graph buffer pool. Wraps an RHI Buffer with metadata
+ *  needed for pool management (descriptor matching, frame tracking, reserved resource commits).
+ *  Refcounting is handled via Countable / CountableRef<FRDGPooledBuffer>.
+ */
+class FRDGPooledBuffer final {
+public:
+    COUNTABLE_IMPLEMENTATION_AUTO_DESTROY
+
+    FRDGPooledBuffer(
+        CommandList&          InRHICmdList,
+        BufferRef             InBuffer,
+        const FRDGBufferDesc& InDesc,
+        uint32                InNumAllocatedElements,
+        const char*           InName
+    ) :
+        Desc(InDesc),
+        RHIBuffer(std::move(InBuffer)),
+        Name(InName),
+        NumAllocatedElements(InNumAllocatedElements) {
+        (void)InRHICmdList;
+    }
+
+    FRDGPooledBuffer(
+        BufferRef             InBuffer,
+        const FRDGBufferDesc& InDesc,
+        uint32                InNumAllocatedElements,
+        const char*           InName
+    ) :
+        Desc(InDesc),
+        RHIBuffer(std::move(InBuffer)),
+        Name(InName),
+        NumAllocatedElements(InNumAllocatedElements) {}
+
+    const FRDGBufferDesc Desc;
+
+    /** Returns the underlying RHI buffer. */
+    Buffer* GetRHI() const {
+        return RHIBuffer.Get();
+    }
+
+    uint32 GetSize() const {
+        return Desc.GetSize();
+    }
+
+    uint32 GetAlignedSize() const {
+        return Desc.BytesPerElement * NumAllocatedElements;
+    }
+
+    uint64 GetCommittedSize() const {
+        return std::min<uint64>(CommittedSizeInBytes, GetSize());
+    }
+
+    const char* GetName() const {
+        return Name;
+    }
+
+private:
+    BufferRef RHIBuffer;
+
+    FRDGBufferDesc GetAlignedDesc() const {
+        FRDGBufferDesc AlignedDesc = Desc;
+        AlignedDesc.NumElements    = NumAllocatedElements;
+        return AlignedDesc;
+    }
+
+    void SetDebugLabelName(CommandList& InRHICmdList, const char* InName);
+
+    /** Used internally by FRDGBuilder::QueueCommitReservedBuffer() to resize physical memory. */
+    void SetCommittedSize(uint64 InCommittedSizeInBytes) {
+        if (InCommittedSizeInBytes == UINT64_MAX) {
+            InCommittedSizeInBytes = GetSize();
+        }
+        assert(InCommittedSizeInBytes <= GetSize() && "Attempting to commit more memory than reserved");
+        CommittedSizeInBytes = InCommittedSizeInBytes;
+    }
+
+    const char* Name = nullptr;
+
+    /** Size of the GPU physical memory committed to a reserved buffer.
+     *  May be UINT64_MAX for regular (non-reserved) buffers or when the entire resource is committed. */
+    uint64 CommittedSizeInBytes = UINT64_MAX;
+
+    const uint32 NumAllocatedElements;
+    uint32       LastUsedFrame = 0;
+
+    friend FRDGBuilder;
+    friend class FRDGBufferPool;
+};
+
+class FRDGPooledTexture final {
+public:
+    COUNTABLE_IMPLEMENTATION_AUTO_DESTROY
+
+    FRDGPooledTexture(Texture* InTexture) : Texture(InTexture) {
+        Fences.Emplace();
+    }
+
+    /** Finds a UAV matching the descriptor in the cache or creates a new one and updates the cache. */
+    inline FRHIUnorderedAccessView*
+    GetOrCreateUAV(FRHICommandListBase& RHICmdList, const FRHITextureUAVCreateInfo& UAVDesc) {
+        return ViewCache.GetOrCreateUAV(RHICmdList, Texture, UAVDesc);
+    }
+
+    /** Finds a SRV matching the descriptor in the cache or creates a new one and updates the cache. */
+    inline FRHIShaderResourceView*
+    GetOrCreateSRV(FRHICommandListBase& RHICmdList, const FRHITextureSRVCreateInfo& SRVDesc) {
+        return ViewCache.GetOrCreateSRV(RHICmdList, Texture, SRVDesc);
+    }
+
+    inline Texture* GetRHI() const {
+        return Texture;
+    }
+
+private:
+    TextureRef Texture;
+
+    friend FRDGBuilder;
+    friend FRenderTargetPool;
+};
 
 /** A render graph tracked buffer. */
 class FRDGBuffer final : public FRDGViewableResource {
@@ -686,13 +804,6 @@ struct FRDGBufferDesc {
         return Desc;
     }
 
-    template<typename ParameterStruct>
-    static FRDGBufferDesc CreateByteAddressDesc(uint32 NumElements) {
-        FRDGBufferDesc Desc = CreateByteAddressDesc(sizeof(ParameterStruct) * NumElements);
-        Desc.Metadata       = ParameterStruct::TypeInfo::GetStructMetadata();
-        return Desc;
-    }
-
     static FRDGBufferDesc CreateIndirectDesc(uint32 BytesPerElement, uint32 NumElements) {
         FRDGBufferDesc Desc;
         Desc.Usage           = EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS;
@@ -731,25 +842,11 @@ struct FRDGBufferDesc {
         return Desc;
     }
 
-    template<typename ParameterStruct>
-    static FRDGBufferDesc CreateStructuredDesc(uint32 NumElements) {
-        FRDGBufferDesc Desc = CreateStructuredDesc(sizeof(ParameterStruct), NumElements);
-        Desc.Metadata       = ParameterStruct::TypeInfo::GetStructMetadata();
-        return Desc;
-    }
-
     static FRDGBufferDesc CreateBufferDesc(uint32 BytesPerElement, uint32 NumElements) {
         FRDGBufferDesc Desc;
         Desc.Usage           = EBufferUsageFlags::TEXTURE_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS;
         Desc.BytesPerElement = BytesPerElement;
         Desc.NumElements     = NumElements;
-        return Desc;
-    }
-
-    template<typename ParameterStruct>
-    static FRDGBufferDesc CreateBufferDesc(uint32 NumElements) {
-        FRDGBufferDesc Desc = CreateBufferDesc(sizeof(ParameterStruct), NumElements);
-        Desc.Metadata       = ParameterStruct::TypeInfo::GetStructMetadata();
         return Desc;
     }
 
@@ -761,25 +858,11 @@ struct FRDGBufferDesc {
         return Desc;
     }
 
-    template<typename ParameterStruct>
-    static FRDGBufferDesc CreateUploadDesc(uint32 NumElements) {
-        FRDGBufferDesc Desc = CreateUploadDesc(sizeof(ParameterStruct), NumElements);
-        Desc.Metadata       = ParameterStruct::TypeInfo::GetStructMetadata();
-        return Desc;
-    }
-
     static FRDGBufferDesc CreateStructuredUploadDesc(uint32 BytesPerElement, uint32 NumElements) {
         FRDGBufferDesc Desc;
         Desc.Usage           = EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNORDERED_ACCESS;
         Desc.BytesPerElement = BytesPerElement;
         Desc.NumElements     = NumElements;
-        return Desc;
-    }
-
-    template<typename ParameterStruct>
-    static FRDGBufferDesc CreateStructuredUploadDesc(uint32 NumElements) {
-        FRDGBufferDesc Desc = CreateStructuredUploadDesc(sizeof(ParameterStruct), NumElements);
-        Desc.Metadata       = ParameterStruct::TypeInfo::GetStructMetadata();
         return Desc;
     }
 
@@ -792,13 +875,6 @@ struct FRDGBufferDesc {
         return Desc;
     }
 
-    template<typename ParameterStruct>
-    static FRDGBufferDesc CreateByteAddressUploadDesc(uint32 NumElements) {
-        FRDGBufferDesc Desc = CreateByteAddressUploadDesc(sizeof(ParameterStruct) * NumElements);
-        Desc.Metadata       = ParameterStruct::TypeInfo::GetStructMetadata();
-        return Desc;
-    }
-
     /** Returns the total number of bytes allocated for a such buffer. */
     uint32 GetSize() const {
         return BytesPerElement * NumElements;
@@ -808,7 +884,6 @@ struct FRDGBufferDesc {
         uint32 Hash = GetHash(Desc.BytesPerElement);
         HashCombine(Hash, GetHash(Desc.NumElements));
         HashCombine(Hash, GetHash(Desc.Usage));
-        HashCombine(Hash, GetHash(reinterpret_cast<uint64>(Desc.Metadata)));
         return Hash;
     }
 
@@ -829,9 +904,6 @@ struct FRDGBufferDesc {
 
     /** Bitfields describing the uses of that buffer. */
     EBufferUsageFlags Usage = EBufferUsageFlags::NONE;
-
-    /** Meta data of the layout of the buffer for debugging purposes. */
-    const ShaderParametersMetadata* Metadata = nullptr;
 };
 
 struct FRDGBufferSRVDesc final {
@@ -915,15 +987,121 @@ struct FRDGBufferUAVDesc final {
     }
 };
 
+//=============================================================================
+// FRDGView - Lightweight RDG-layer view for dependency tracking.
+// These are NOT RHI views; they exist purely so the render graph can track
+// which passes read/write which sub-resources before any GPU object exists.
+//=============================================================================
+
+class FRDGView {
+public:
+    const char*    const Name;
+    const ERDGViewType   Type;
+    FRDGViewHandle       Handle;
+
+    /** The viewable resource this view references. */
+    FRDGViewableResource* GetResource() const { return Resource; }
+
+protected:
+    FRDGView(const char* InName, ERDGViewType InType, FRDGViewableResource* InResource)
+        : Name(InName), Type(InType), Resource(InResource) {}
+
+private:
+    FRDGViewableResource* Resource = nullptr;
+
+    friend FRDGBuilder;
+    friend FRDGViewRegistry;
+};
+
+/** RDG tracked Texture SRV. */
+class FRDGTextureSRV final : public FRDGView {
+public:
+    static constexpr ERDGViewType StaticType = ERDGViewType::TextureSRV;
+
+    const FRDGTextureSRVDesc Desc;
+
+    FRDGTexture* GetParent() const { return Desc.Texture; }
+
+private:
+    FRDGTextureSRV(const char* InName, const FRDGTextureSRVDesc& InDesc)
+        : FRDGView(InName, StaticType, InDesc.Texture), Desc(InDesc) {}
+
+    friend FRDGViewRegistry;
+    friend FRDGBuilder;
+};
+
+/** RDG tracked Texture UAV. */
+class FRDGTextureUAV final : public FRDGView {
+public:
+    static constexpr ERDGViewType StaticType = ERDGViewType::TextureUAV;
+
+    const FRDGTextureUAVDesc             Desc;
+    const ERDGUnorderedAccessViewFlags   Flags;
+
+    FRDGTexture* GetParent() const { return Desc.Texture; }
+
+private:
+    FRDGTextureUAV(
+        const char*                    InName,
+        const FRDGTextureUAVDesc&      InDesc,
+        ERDGUnorderedAccessViewFlags   InFlags = ERDGUnorderedAccessViewFlags::None)
+        : FRDGView(InName, StaticType, InDesc.Texture), Desc(InDesc), Flags(InFlags) {}
+
+    friend FRDGViewRegistry;
+    friend FRDGBuilder;
+};
+
+/** RDG tracked Buffer SRV. */
+class FRDGBufferSRV final : public FRDGView {
+public:
+    static constexpr ERDGViewType StaticType = ERDGViewType::BufferSRV;
+
+    const FRDGBufferSRVDesc Desc;
+
+    FRDGBuffer* GetParent() const { return Desc.Buffer; }
+
+private:
+    FRDGBufferSRV(const char* InName, const FRDGBufferSRVDesc& InDesc)
+        : FRDGView(InName, StaticType, InDesc.Buffer), Desc(InDesc) {}
+
+    friend FRDGViewRegistry;
+    friend FRDGBuilder;
+};
+
+/** RDG tracked Buffer UAV. */
+class FRDGBufferUAV final : public FRDGView {
+public:
+    static constexpr ERDGViewType StaticType = ERDGViewType::BufferUAV;
+
+    const FRDGBufferUAVDesc              Desc;
+    const ERDGUnorderedAccessViewFlags   Flags;
+
+    FRDGBuffer* GetParent() const { return Desc.Buffer; }
+
+private:
+    FRDGBufferUAV(
+        const char*                    InName,
+        const FRDGBufferUAVDesc&       InDesc,
+        ERDGUnorderedAccessViewFlags   InFlags = ERDGUnorderedAccessViewFlags::None)
+        : FRDGView(InName, StaticType, InDesc.Buffer), Desc(InDesc), Flags(InFlags) {}
+
+    friend FRDGViewRegistry;
+    friend FRDGBuilder;
+};
+
+//=============================================================================
+// GetAs<> helper templates
+//=============================================================================
+
 template<typename ViewableResourceType>
 inline ViewableResourceType* GetAs(FRDGViewableResource* Resource) {
-    check(ViewableResourceType::StaticType == Resource->Type);
+    assert(ViewableResourceType::StaticType == Resource->Type);
     return static_cast<ViewableResourceType*>(Resource);
 }
 
 template<typename ViewType>
 inline ViewType* GetAs(FRDGView* View) {
-    check(ViewType::StaticType == View->Type);
+    assert(ViewType::StaticType == View->Type);
     return static_cast<ViewType*>(View);
 }
 

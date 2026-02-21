@@ -3,6 +3,11 @@
 #include <cstdint>
 #include <limits>
 
+namespace Moer::Render {
+enum class ERHIPipeline : uint32;
+class FRHIViewableResource;
+} // namespace Moer::Render
+
 namespace Moer::Render::RenderGraph {
 
 enum class ERHIAccess : uint32 {
@@ -66,5 +71,32 @@ inline constexpr bool IsInvalidAccess(ERHIAccess Access) {
 inline void ValidateAccess(ERHIAccess Access) {
     assert(!IsInvalidAccess(Access) && "Detected invalid RDG resource access state!");
 }
+
+struct FRHITrackedAccess {
+    FRHITrackedAccess() = default;
+
+    explicit FRHITrackedAccess(ERHIAccess InAccess) : Access(InAccess) {}
+
+    FRHITrackedAccess(ERHIAccess InAccess, Moer::Render::ERHIPipeline InPipelines) :
+        Access(InAccess),
+        Pipelines(InPipelines) {}
+
+    ERHIAccess                 Access    = ERHIAccess::Unknown;
+    Moer::Render::ERHIPipeline Pipelines = Moer::Render::ERHIPipeline::None;
+};
+
+struct FRHITrackedAccessInfo : FRHITrackedAccess {
+    FRHITrackedAccessInfo() = default;
+
+    FRHITrackedAccessInfo(
+        Moer::Render::FRHIViewableResource* InResource,
+        ERHIAccess                          InAccess,
+        Moer::Render::ERHIPipeline          InPipelines
+    ) :
+        FRHITrackedAccess(InAccess, InPipelines),
+        Resource(InResource) {}
+
+    Moer::Render::FRHIViewableResource* Resource = nullptr;
+};
 
 } // namespace Moer::Render::RenderGraph

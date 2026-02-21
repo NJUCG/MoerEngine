@@ -28,12 +28,10 @@ using FRDGResourceRef = FRDGResource*;
 class FRDGTexture;
 using FRDGTextureRef = FRDGTexture*;
 
-class FRDGUniformBuffer;
-using FRDGUniformBufferRef = FRDGUniformBuffer*;
-
-template<typename TUniformStruct>
-class TRDGUniformBuffer;
-template<typename TUniformStruct>
-using TRDGUniformBufferRef = TRDGUniformBuffer<TUniformStruct>*;
+class FRDGView;
+class FRDGTextureSRV;
+class FRDGTextureUAV;
+class FRDGBufferSRV;
+class FRDGBufferUAV;
 
 } // namespace Moer::Render::RenderGraph

@@ -79,6 +79,10 @@ public:
         return Count;
     }
 
+    bool HasParameters() const {
+        return !Arguments.args.empty();
+    }
+
 private:
     ArrayArguments Arguments;
 };

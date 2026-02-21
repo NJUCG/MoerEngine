@@ -3,6 +3,14 @@
 #include <functional>
 #include <span>
 
+#include "taskgraph/GraphTask.h"
+
+namespace Moer::Render {
+class IRHITransientResourceAllocator;
+class FRHITransientTexture;
+class FRHITransientBuffer;
+} // namespace Moer::Render
+
 namespace Moer::Render::RenderGraph {
 class FRDGBuilder : public FRDGScopeState {
     FRDGAllocatorScope RootAllocatorScope;
@@ -18,40 +26,40 @@ public:
     RENDER_API ~FRDGBuilder();
 
     /** Finds an RDG texture associated with the external texture, or returns null if none is found. */
-    FRDGTexture* FindExternalTexture(FRHITexture* Texture) const;
+    FRDGTexture* FindExternalTexture(Texture* Texture) const;
     FRDGTexture* FindExternalTexture(IPooledRenderTarget* ExternalPooledTexture) const;
 
     /** Finds an RDG buffer associated with the external buffer, or returns null if none is found. */
-    FRDGBuffer* FindExternalBuffer(FRHIBuffer* Buffer) const;
+    FRDGBuffer* FindExternalBuffer(Buffer* Buffer) const;
     FRDGBuffer* FindExternalBuffer(FRDGPooledBuffer* ExternalPooledBuffer) const;
 
     /** Registers a external pooled render target texture to be tracked by the render graph. The name of the registered RDG texture is pulled from the pooled render target. */
     RENDER_API FRDGTextureRef RegisterExternalTexture(
-        const TRefCountPtr<IPooledRenderTarget>& ExternalPooledTexture,
+        const CountableRef<IPooledRenderTarget>& ExternalPooledTexture,
         ERDGTextureFlags                         Flags = ERDGTextureFlags::None
     );
 
     /** Register an external texture with a custom name. The name is only used if the texture has not already been registered. */
     RENDER_API FRDGTextureRef RegisterExternalTexture(
-        const TRefCountPtr<IPooledRenderTarget>& ExternalPooledTexture,
+        const CountableRef<IPooledRenderTarget>& ExternalPooledTexture,
         const TCHAR*                             NameIfNotRegistered,
         ERDGTextureFlags                         Flags = ERDGTextureFlags::None
     );
 
     /** Register a external buffer to be tracked by the render graph. */
     RENDER_API FRDGBufferRef RegisterExternalBuffer(
-        const TRefCountPtr<FRDGPooledBuffer>& ExternalPooledBuffer,
+        const CountableRef<FRDGPooledBuffer>& ExternalPooledBuffer,
         ERDGBufferFlags                       Flags = ERDGBufferFlags::None
     );
     RENDER_API FRDGBufferRef RegisterExternalBuffer(
-        const TRefCountPtr<FRDGPooledBuffer>& ExternalPooledBuffer,
+        const CountableRef<FRDGPooledBuffer>& ExternalPooledBuffer,
         ERDGBufferFlags                       Flags,
         ERHIAccess                            AccessFinal
     );
 
     /** Register an external buffer with a custom name. The name is only used if the buffer has not already been registered. */
     RENDER_API FRDGBufferRef RegisterExternalBuffer(
-        const TRefCountPtr<FRDGPooledBuffer>& ExternalPooledBuffer,
+        const CountableRef<FRDGPooledBuffer>& ExternalPooledBuffer,
         const TCHAR*                          NameIfNotRegistered,
         ERDGBufferFlags                       Flags = ERDGBufferFlags::None
     );
@@ -89,22 +97,22 @@ public:
     );
 
     /** Create graph tracked SRV for a texture from a descriptor. */
-    TextureView CreateSRV(const FRDGTextureSRVDesc& Desc);
+    FRDGTextureSRV* CreateSRV(const FRDGTextureSRVDesc& Desc);
 
     /** Create graph tracked SRV for a buffer from a descriptor. */
-    BufferView CreateSRV(const FRDGBufferSRVDesc& Desc);
+    FRDGBufferSRV* CreateSRV(const FRDGBufferSRVDesc& Desc);
 
-    inline BufferView CreateSRV(FRDGBufferRef Buffer, EPixelFormat Format) {
+    inline FRDGBufferSRV* CreateSRV(FRDGBufferRef Buffer, EPixelFormat Format) {
         return CreateSRV(FRDGBufferSRVDesc(Buffer, Format));
     }
 
     /** Create graph tracked UAV for a texture from a descriptor. */
-    TextureView CreateUAV(
+    FRDGTextureUAV* CreateUAV(
         const FRDGTextureUAVDesc&    Desc,
         ERDGUnorderedAccessViewFlags Flags = ERDGUnorderedAccessViewFlags::None
     );
 
-    inline TextureView CreateUAV(
+    inline FRDGTextureUAV* CreateUAV(
         FRDGTextureRef               Texture,
         ERDGUnorderedAccessViewFlags Flags  = ERDGUnorderedAccessViewFlags::None,
         EPixelFormat                 Format = PF_Unknown
@@ -113,12 +121,12 @@ public:
     }
 
     /** Create graph tracked UAV for a buffer from a descriptor. */
-    BufferView CreateUAV(
+    FRDGBufferUAV* CreateUAV(
         const FRDGBufferUAVDesc&     Desc,
         ERDGUnorderedAccessViewFlags Flags = ERDGUnorderedAccessViewFlags::None
     );
 
-    inline BufferView CreateUAV(
+    inline FRDGBufferUAV* CreateUAV(
         FRDGBufferRef                Buffer,
         EPixelFormat                 Format,
         ERDGUnorderedAccessViewFlags Flags = ERDGUnorderedAccessViewFlags::None
@@ -126,20 +134,18 @@ public:
         return CreateUAV(FRDGBufferUAVDesc(Buffer, Format), Flags);
     }
 
-    /** Creates a graph tracked uniform buffer which can be attached to passes. These uniform buffers require some care
-	 *  because they will bulk transition all resources. The graph will only transition resources which are not also
-	 *  bound for write access by the pass.
+    /** Creates a graph tracked constant buffer from a plain struct.
+	 *  The data is copied and uploaded prior to pass execution.
 	 */
     template<typename ParameterStructType>
     FRDGBufferRef
-    CreateUniformBuffer(const ParameterStructType* ParameterStruct, const TCHAR* Name = "RDGUniformBuffer") {
-        check(ParameterStruct);
+    CreateUniformBuffer(const ParameterStructType* ParameterStruct, const char* Name = "RDGUniformBuffer") {
+        assert(ParameterStruct);
 
         FRDGBufferDesc Desc;
         Desc.BytesPerElement = sizeof(ParameterStructType);
         Desc.NumElements     = 1;
         Desc.Usage           = EBufferUsageFlags::CONSTANT_BUFFER;
-        Desc.Metadata        = ParameterStructType::TypeInfo::GetStructMetadata();
 
         FRDGBufferRef Buffer = CreateBuffer(Desc, Name ? Name : "RDGUniformBuffer");
         QueueBufferUpload(Buffer, ParameterStruct, sizeof(ParameterStructType));
@@ -180,14 +186,7 @@ public:
     template<typename ParameterStructType>
     ParameterStructType* AllocParameters(const ParameterStructType* StructToCopy);
 
-    /** Allocates a data-driven parameter struct with a lifetime tied to graph execution. */
-    template<typename BaseParameterStructType>
-    BaseParameterStructType* AllocParameters(const FShaderParametersMetadata* ParametersMetadata);
 
-    /** Allocates an array of data-driven parameter structs with a lifetime tied to graph execution. */
-    template<typename BaseParameterStructType>
-    TStridedView<BaseParameterStructType>
-    AllocParameters(const FShaderParametersMetadata* ParametersMetadata, uint32 NumStructs);
 
     //////////////////////////////////////////////////////////////////////////
 
@@ -216,20 +215,10 @@ public:
 	 */
     template<typename ParameterStructType, typename ExecuteLambdaType>
     FRDGPassRef AddPass(
-        FRDGEventName&&            Name,
-        const ParameterStructType* ParameterStruct,
-        ERDGPassFlags              Flags,
-        ExecuteLambdaType&&        ExecuteLambda
-    );
-
-    /** Adds a lambda pass to the graph with a runtime-generated parameter struct. */
-    template<typename ExecuteLambdaType>
-    FRDGPassRef AddPass(
-        FRDGEventName&&                  Name,
-        const FShaderParametersMetadata* ParametersMetadata,
-        const void*                      ParameterStruct,
-        ERDGPassFlags                    Flags,
-        ExecuteLambdaType&&              ExecuteLambda
+        FRDGEventName&&     Name,
+        FRDGParameterStruct ParameterStruct,
+        ERDGPassFlags       Flags,
+        ExecuteLambdaType&& ExecuteLambda
     );
 
     /** Adds a lambda pass to the graph without any parameters. This useful for deferring RHI work onto the graph timeline,
@@ -324,12 +313,12 @@ public:
 	 */
     void QueueTextureExtraction(
         FRDGTextureRef                     Texture,
-        TRefCountPtr<IPooledRenderTarget>* OutPooledTexturePtr,
+        CountableRef<IPooledRenderTarget>* OutPooledTexturePtr,
         ERDGResourceExtractionFlags        Flags = ERDGResourceExtractionFlags::None
     );
     void QueueTextureExtraction(
         FRDGTextureRef                     Texture,
-        TRefCountPtr<IPooledRenderTarget>* OutPooledTexturePtr,
+        CountableRef<IPooledRenderTarget>* OutPooledTexturePtr,
         ERHIAccess                         AccessFinal,
         ERDGResourceExtractionFlags        Flags = ERDGResourceExtractionFlags::None
     );
@@ -338,10 +327,10 @@ public:
 	 *  of the GPU resource until execution, at which point the pointer is filled. If specified, the buffer is transitioned to the
 	 *  AccessFinal state, or kDefaultAccessFinal otherwise.
 	 */
-    void QueueBufferExtraction(FRDGBufferRef Buffer, TRefCountPtr<FRDGPooledBuffer>* OutPooledBufferPtr);
+    void QueueBufferExtraction(FRDGBufferRef Buffer, CountableRef<FRDGPooledBuffer>* OutPooledBufferPtr);
     void QueueBufferExtraction(
         FRDGBufferRef                   Buffer,
-        TRefCountPtr<FRDGPooledBuffer>* OutPooledBufferPtr,
+        CountableRef<FRDGPooledBuffer>* OutPooledBufferPtr,
         ERHIAccess                      AccessFinal
     );
 
@@ -349,18 +338,12 @@ public:
 	 *  to an external resource. This will increase memory pressure, but allows for querying the pooled resource with GetPooled{Texture, Buffer}.
 	 *  This is primarily used as an aid for porting code incrementally to RDG.
 	 */
-    RENDER_API const TRefCountPtr<IPooledRenderTarget>& ConvertToExternalTexture(FRDGTextureRef Texture);
-    RENDER_API const TRefCountPtr<FRDGPooledBuffer>& ConvertToExternalBuffer(FRDGBufferRef Buffer);
-    /** For a graph-created uniform buffer, this forces immediate allocation of the underlying resource, effectively promoting it
-	 *  to an external resource. This will increase memory pressure, but allows access to the RHI resource.
-	 *  Graph resources that are referenced in the buffer will be converted to external.
-	 *  This is primarily used as an aid for porting code incrementally to RDG.
-	 */
-    RENDER_API FRHIUniformBuffer* ConvertToExternalUniformBuffer(FRDGUniformBufferRef UniformBuffer);
+    RENDER_API const CountableRef<IPooledRenderTarget>& ConvertToExternalTexture(FRDGTextureRef Texture);
+    RENDER_API const CountableRef<FRDGPooledBuffer>& ConvertToExternalBuffer(FRDGBufferRef Buffer);
 
     /** Performs an immediate query for the underlying pooled resource. This is only allowed for external or extracted resources. */
-    const TRefCountPtr<IPooledRenderTarget>& GetPooledTexture(FRDGTextureRef Texture) const;
-    const TRefCountPtr<FRDGPooledBuffer>&    GetPooledBuffer(FRDGBufferRef Buffer) const;
+    const CountableRef<IPooledRenderTarget>& GetPooledTexture(FRDGTextureRef Texture) const;
+    const CountableRef<FRDGPooledBuffer>&    GetPooledBuffer(FRDGBufferRef Buffer) const;
 
     /** (External | Extracted only) Sets the access to transition to after execution at the end of the graph. Overwrites any previously set final access. */
     void SetTextureAccessFinal(FRDGTextureRef Texture, ERHIAccess Access);
@@ -462,11 +445,10 @@ private:
 
     template<typename ParameterStructType, typename ExecuteLambdaType>
     FRDGPass* AddPassInternal(
-        FRDGEventName&&                  Name,
-        const FShaderParametersMetadata* ParametersMetadata,
-        const ParameterStructType*       ParameterStruct,
-        ERDGPassFlags                    Flags,
-        ExecuteLambdaType&&              ExecuteLambda
+        FRDGEventName&&     Name,
+        FRDGParameterStruct ParameterStruct,
+        ERDGPassFlags       Flags,
+        ExecuteLambdaType&& ExecuteLambda
     );
 
     void MarkResourcesAsProduced(FRDGPass* Pass);
@@ -495,21 +477,20 @@ private:
     // Resource Registries
 
     /** Registry of graph objects. */
-    FRDGPassRegistry          Passes;
-    FRDGTextureRegistry       Textures;
-    FRDGBufferRegistry        Buffers;
-    FRDGViewRegistry          Views;
-    FRDGUniformBufferRegistry UniformBuffers;
+    FRDGPassRegistry    Passes;
+    FRDGTextureRegistry Textures;
+    FRDGBufferRegistry  Buffers;
+    FRDGViewRegistry    Views;
 
     struct FExtractedTexture {
         FExtractedTexture() = default;
 
-        FExtractedTexture(FRDGTexture* InTexture, TRefCountPtr<IPooledRenderTarget>* InPooledTexture) :
+        FExtractedTexture(FRDGTexture* InTexture, CountableRef<IPooledRenderTarget>* InPooledTexture) :
             Texture(InTexture),
             PooledTexture(InPooledTexture) {}
 
         FRDGTexture*                       Texture{};
-        TRefCountPtr<IPooledRenderTarget>* PooledTexture{};
+        CountableRef<IPooledRenderTarget>* PooledTexture{};
     };
 
     Array<FExtractedTexture, FRDGArrayAllocator> ExtractedTextures;
@@ -517,23 +498,15 @@ private:
     struct FExtractedBuffer {
         FExtractedBuffer() = default;
 
-        FExtractedBuffer(FRDGBuffer* InBuffer, TRefCountPtr<FRDGPooledBuffer>* InPooledBuffer) :
+        FExtractedBuffer(FRDGBuffer* InBuffer, CountableRef<FRDGPooledBuffer>* InPooledBuffer) :
             Buffer(InBuffer),
             PooledBuffer(InPooledBuffer) {}
 
         FRDGBuffer*                     Buffer{};
-        TRefCountPtr<FRDGPooledBuffer>* PooledBuffer{};
+        CountableRef<FRDGPooledBuffer>* PooledBuffer{};
     };
 
     Array<FExtractedBuffer, FRDGArrayAllocator> ExtractedBuffers;
-
-    /** Tracks external resources to their registered render graph counterparts for de-duplication. */
-    Experimental::
-        TRobinHoodHashMap<FRHITexture*, FRDGTexture*, DefaultKeyFuncs<FRHITexture*>, FRDGArrayAllocator>
-            ExternalTextures;
-    Experimental::
-        TRobinHoodHashMap<FRHIBuffer*, FRDGBuffer*, DefaultKeyFuncs<FRHIBuffer*>, FRDGArrayAllocator>
-            ExternalBuffers;
 
     /** Tracks buffers that have a defered num elements callback. */
     Array<FRDGBuffer*, FRDGArrayAllocator> NumElementsCallbackBuffers;
@@ -545,9 +518,19 @@ private:
     bool                            bSupportsTransientTextures = false;
     bool                            bSupportsTransientBuffers  = false;
 
-    bool IsTransient(FRDGTextureRef Texture) const;
-    bool IsTransient(FRDGBufferRef Buffer) const;
-    bool IsTransientInternal(FRDGViewableResource* Resource, bool bFastVRAM) const;
+    bool IsTransient(FRDGTextureRef Texture) const {
+        (void)Texture;
+        return false;
+    }
+    bool IsTransient(FRDGBufferRef Buffer) const {
+        (void)Buffer;
+        return false;
+    }
+    bool IsTransientInternal(FRDGViewableResource* Resource, bool bFastVRAM) const {
+        (void)Resource;
+        (void)bFastVRAM;
+        return false;
+    }
 
     struct FCollectResourceOp {
         enum class EOp : uint8 {
@@ -612,28 +595,12 @@ private:
 
     /** A temporary context used to collect resources for allocation. */
     struct FCollectResourceContext {
-        FCollectResourceOpArray                            TransientResources;
-        FCollectResourceOpArray                            PooledTextures;
-        FCollectResourceOpArray                            PooledBuffers;
-        Array<FRDGUniformBufferHandle, FRDGArrayAllocator> UniformBuffers;
-        Array<FRDGViewHandle, FRDGArrayAllocator>          Views;
-        FRDGUniformBufferBitArray                          UniformBufferMap;
-        FRDGViewBitArray                                   ViewMap;
+        FCollectResourceOpArray                   TransientResources;
+        FCollectResourceOpArray                   PooledTextures;
+        FCollectResourceOpArray                   PooledBuffers;
+        Array<FRDGViewHandle, FRDGArrayAllocator> Views;
+        FRDGViewBitArray                          ViewMap;
     };
-
-    /** Tracks the latest RDG resource to own an alias of a pooled resource (multiple RDG resources can reference the same pooled resource). */
-    Experimental::TRobinHoodHashMap<
-        FRDGPooledTexture*,
-        FRDGTexture*,
-        DefaultKeyFuncs<FRDGPooledTexture*>,
-        FConcurrentLinearArrayAllocator>
-        PooledTextureOwnershipMap;
-    Experimental::TRobinHoodHashMap<
-        FRDGPooledBuffer*,
-        FRDGBuffer*,
-        DefaultKeyFuncs<FRDGPooledBuffer*>,
-        FConcurrentLinearArrayAllocator>
-        PooledBufferOwnershipMap;
 
     /** Finalizes the resource descriptors by calling callbacks to gather resource sizes. */
     void FinalizeDescs();
@@ -671,48 +638,53 @@ private:
     );
 
     /** Allocates resources using the provided lifetime op arrays. */
-    void AllocateTransientResources(std::span<const FCollectResourceOp> Ops);
-    void AllocatePooledTextures(FRHICommandListBase& RHICmdList, std::span<const FCollectResourceOp> Ops);
-    void AllocatePooledBuffers(FRHICommandListBase& RHICmdList, std::span<const FCollectResourceOp> Ops);
+    void AllocateTransientResources(std::span<const FCollectResourceOp> Ops) {
+        (void)Ops;
+    }
+    void AllocatePooledTextures(CommandList& RHICmdList, std::span<const FCollectResourceOp> Ops);
+    void AllocatePooledBuffers(CommandList& RHICmdList, std::span<const FCollectResourceOp> Ops);
 
     /** Creates resources for the provided handles. */
-    void CreateViews(FRHICommandListBase& RHICmdList, std::span<const FRDGViewHandle> ViewsToCreate);
-    void CreateUniformBuffers(std::span<const FRDGUniformBufferHandle> UniformBuffersToCreate);
+    void CreateViews(CommandList& RHICmdList, std::span<const FRDGViewHandle> ViewsToCreate) {
+        (void)RHICmdList;
+        (void)ViewsToCreate;
+    }
 
     /** Allocates and returns a pooled resource for the RDG resource. Does not assign it. */
-    TRefCountPtr<IPooledRenderTarget>
-    AllocatePooledRenderTargetRHI(FRHICommandListBase& RHICmdList, FRDGTextureRef Texture);
-    TRefCountPtr<FRDGPooledBuffer>
-    AllocatePooledBufferRHI(FRHICommandListBase& RHICmdList, FRDGBufferRef Buffer);
+    CountableRef<IPooledRenderTarget>
+    AllocatePooledRenderTargetRHI(CommandList& RHICmdList, FRDGTextureRef Texture);
+    CountableRef<FRDGPooledBuffer> AllocatePooledBufferRHI(CommandList& RHICmdList, FRDGBufferRef Buffer);
 
     /** Assigns an underlying RHI resource to an RDG resource. */
     void SetExternalPooledRenderTargetRHI(FRDGTexture* Texture, IPooledRenderTarget* RenderTarget);
     void SetPooledTextureRHI(FRDGTexture* Texture, FRDGPooledTexture* PooledTexture);
-    void SetTransientTextureRHI(FRDGTexture* Texture, FRHITransientTexture* TransientTexture);
-    void SetDiscardPass(FRDGTexture* Texture, FRHITransientTexture* TransientTexture);
-    void SetExternalPooledBufferRHI(FRDGBuffer* Buffer, const TRefCountPtr<FRDGPooledBuffer>& PooledBuffer);
+    void SetTransientTextureRHI(FRDGTexture* Texture, FRHITransientTexture* TransientTexture) {
+        (void)Texture;
+        (void)TransientTexture;
+    }
+    void SetDiscardPass(FRDGTexture* Texture, FRHITransientTexture* TransientTexture) {
+        (void)Texture;
+        (void)TransientTexture;
+    }
+    void SetExternalPooledBufferRHI(FRDGBuffer* Buffer, const CountableRef<FRDGPooledBuffer>& PooledBuffer);
     void SetPooledBufferRHI(FRDGBuffer* Buffer, FRDGPooledBuffer* PooledBuffer);
-    void SetTransientBufferRHI(FRDGBuffer* Buffer, FRHITransientBuffer* TransientBuffer);
-
-    /** Initializes various view types. Assumes that the underlying RHI viewable resource type is assigned. */
-    void InitViewRHI(FRHICommandListBase& RHICmdList, FRDGView* View);
-    void InitBufferViewRHI(FRHICommandListBase& RHICmdList, FRDGBufferSRV* SRV);
-    void InitBufferViewRHI(FRHICommandListBase& RHICmdList, FRDGBufferUAV* UAV);
-    void InitTextureViewRHI(FRHICommandListBase& RHICmdList, FRDGTextureSRV* SRV);
-    void InitTextureViewRHI(FRHICommandListBase& RHICmdList, FRDGTextureUAV* UAV);
+    void SetTransientBufferRHI(FRDGBuffer* Buffer, FRHITransientBuffer* TransientBuffer) {
+        (void)Buffer;
+        (void)TransientBuffer;
+    }
 
     //////////////////////////////////////////////////////////////////////////////
     // Resource Transitions and State Tracking
 
     /** Map of barrier batches begun from more than one pipe. */
-    TMap<FRDGBarrierBatchBeginId, FRDGBarrierBatchBegin*, FRDGSetAllocator> BarrierBatchMap;
+    Map<FRDGBarrierBatchBeginId, FRDGBarrierBatchBegin*> BarrierBatchMap;
 
     /** Tracks the final access used on resources in order to call SetTrackedAccess. */
-    TArray<FRHITrackedAccessInfo, FRDGArrayAllocator> EpilogueResourceAccesses;
+    Array<FRHITrackedAccessInfo, FRDGArrayAllocator> EpilogueResourceAccesses;
 
     /** Array of all pooled references held during execution. */
-    TArray<TRefCountPtr<IPooledRenderTarget>, FRDGArrayAllocator> ActivePooledTextures;
-    TArray<TRefCountPtr<FRDGPooledBuffer>, FRDGArrayAllocator>    ActivePooledBuffers;
+    Array<CountableRef<IPooledRenderTarget>, FRDGArrayAllocator> ActivePooledTextures;
+    Array<CountableRef<FRDGPooledBuffer>, FRDGArrayAllocator>    ActivePooledBuffers;
 
     /** Set of all active barrier batch begin instances; used to create transitions. */
     FRDGTransitionCreateQueue TransitionCreateQueue;
@@ -785,7 +757,12 @@ private:
         FRDGPassHandle                   EndPassHandle,
         FRDGViewableResource*            Resource,
         const FRHITransientAliasingInfo& Info
-    );
+    ) {
+        (void)BeginPassHandle;
+        (void)EndPassHandle;
+        (void)Resource;
+        (void)Info;
+    }
 
     /** Prologue and Epilogue barrier passes are used to plan transitions around RHI render pass merging,
 	*  as it is illegal to issue a barrier during a render pass. If passes [A, B, C] are merged together,
@@ -843,10 +820,16 @@ private:
     }
 
     // Returns fences representing an allocation event, which can only happen on one pipeline at a time.
-    FRHITransientAllocationFences GetAllocateFences(FRDGViewableResource* Resource) const;
+    FRHITransientAllocationFences GetAllocateFences(FRDGViewableResource* Resource) const {
+        (void)Resource;
+        return {};
+    }
 
     // Returns fences representing a deallocation event, which can happen on multiple pipes.
-    FRHITransientAllocationFences GetDeallocateFences(FRDGViewableResource* Resource) const;
+    FRHITransientAllocationFences GetDeallocateFences(FRDGViewableResource* Resource) const {
+        (void)Resource;
+        return {};
+    }
 
     inline ERHIPipeline GetPassPipeline(FRDGPassHandle PassHandle) const {
         return Passes[PassHandle]->Pipeline;
@@ -874,12 +857,12 @@ private:
         return Handle.IsValid() ? ReservedBufferCommitSizes[Handle.GetIndex()] : 0;
     }
 
-    TArray<uint64, FRDGArrayAllocator> ReservedBufferCommitSizes;
+    Array<uint64, FRDGArrayAllocator> ReservedBufferCommitSizes;
 
     //////////////////////////////////////////////////////////////////////////////
     // Culling
 
-    TArray<FRDGPass*, FRDGArrayAllocator> CullPassStack;
+    Array<FRDGPass*, FRDGArrayAllocator> CullPassStack;
 
     bool AddCullingDependency(
         FRDGProducerStatesByPipeline& LastProducers,
@@ -959,18 +942,15 @@ private:
         FRDGBufferInitialDataFillCallback DataFillCallback;
     };
 
-    TArray<FUploadedBuffer, FRDGArrayAllocator> UploadedBuffers;
+    Array<FUploadedBuffer, FRDGArrayAllocator> UploadedBuffers;
 
-    void SubmitBufferUploads(
-        FRHICommandList&       InRHICmdList,
-        UE::Tasks::FTaskEvent* AllocateUploadBuffersTask = nullptr
-    );
+    void SubmitBufferUploads(CommandList& InRHICmdList);
 
     /////////////////////////////////////////////////////////////////////////////
     // External Access Queue
 
     /** Contains resources queued for either access mode change passes. */
-    TArray<FRDGViewableResource*, FRDGArrayAllocator> AccessModeQueue;
+    Array<FRDGViewableResource*, FRDGArrayAllocator> AccessModeQueue;
     TSet<FRDGViewableResource*, DefaultKeyFuncs<FRDGViewableResource*>, FRDGSetAllocator>
         ExternalAccessResources;
 
@@ -979,20 +959,16 @@ private:
     /////////////////////////////////////////////////////////////////////////////
     // Post-Execution Callbacks
 
-    TArray<std::function<void()>, FRDGArrayAllocator> PostExecuteCallbacks;
+    Array<std::function<void()>, FRDGArrayAllocator> PostExecuteCallbacks;
 
     /////////////////////////////////////////////////////////////////////////////
     // Resource Deletion Flushing
 
-    FGraphEventArray                            WaitOutstandingTasks;
-    bool                                        bFlushResourcesRHI = false;
-    FRHICommandListScopedExtendResourceLifetime ExtendResourceLifetimeScope;
+    GraphEventArray WaitOutstandingTasks;
+    bool            bFlushResourcesRHI = false;
 
     void BeginFlushResourcesRHI();
     void EndFlushResourcesRHI();
-
-    /////////////////////////////////////////////////////////////////////////////
-    // Multi-GPU
 
     /////////////////////////////////////////////////////////////////////////////
 
