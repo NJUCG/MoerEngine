@@ -326,9 +326,6 @@ public:
         target.handle = bindless_array->AllocateTexture(base_view, cfg.sampler);
     }
 
-    //方案：tex和handle的生命周期绑定
-    //TODO:理论上外部资源纹理分辨率固定，不需要释放显存，但如何管理好呢？
-    // ↑ —— 已解决，直接在外部管理：SizeChanged的时候不执行这个函数（wk看到这个注释就可以把这两行删掉了）
     template<typename T>
         requires requires(T t) {
             t.hdl;

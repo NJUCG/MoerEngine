@@ -34,4 +34,9 @@ class FRDGTextureUAV;
 class FRDGBufferSRV;
 class FRDGBufferUAV;
 
+struct FPooledRenderTargetDesc;
+struct FSceneRenderTargetItem;
+struct IPooledRenderTarget;
+struct FPooledRenderTarget;
+
 } // namespace Moer::Render::RenderGraph

@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 
+#include "PooledRenderTarget.h"
 #include "RHIAccess.h"
 #include "RenderGraphDefinitions.h"
 #include "RenderGraphFwd.h"
@@ -659,35 +660,39 @@ private:
     friend class FRDGBufferPool;
 };
 
+/** A pooled texture resource managed by the render graph texture pool.
+ *  Mirrors FRDGPooledBuffer but for textures. MoerEngine uses a viewless RHI,
+ *  so no SRV/UAV view cache is needed here — descriptors bind directly. */
 class FRDGPooledTexture final {
 public:
     COUNTABLE_IMPLEMENTATION_AUTO_DESTROY
 
-    FRDGPooledTexture(Texture* InTexture) : Texture(InTexture) {
-        Fences.Emplace();
+    FRDGPooledTexture(TextureRef InTexture, const FRDGTextureDesc& InDesc, const char* InName) :
+        Desc(InDesc),
+        RHITexture(std::move(InTexture)),
+        Name(InName) {}
+
+    /** Lightweight constructor — Desc is default-initialized. */
+    explicit FRDGPooledTexture(TextureRef InTexture) : Desc{}, RHITexture(std::move(InTexture)) {}
+
+    const FRDGTextureDesc Desc;
+
+    /** Returns the underlying RHI texture. */
+    Texture* GetRHI() const {
+        return RHITexture.Get();
     }
 
-    /** Finds a UAV matching the descriptor in the cache or creates a new one and updates the cache. */
-    inline FRHIUnorderedAccessView*
-    GetOrCreateUAV(FRHICommandListBase& RHICmdList, const FRHITextureUAVCreateInfo& UAVDesc) {
-        return ViewCache.GetOrCreateUAV(RHICmdList, Texture, UAVDesc);
-    }
-
-    /** Finds a SRV matching the descriptor in the cache or creates a new one and updates the cache. */
-    inline FRHIShaderResourceView*
-    GetOrCreateSRV(FRHICommandListBase& RHICmdList, const FRHITextureSRVCreateInfo& SRVDesc) {
-        return ViewCache.GetOrCreateSRV(RHICmdList, Texture, SRVDesc);
-    }
-
-    inline Texture* GetRHI() const {
-        return Texture;
+    const char* GetName() const {
+        return Name;
     }
 
 private:
-    TextureRef Texture;
+    TextureRef RHITexture;
+
+    const char* Name          = nullptr;
+    uint32      LastUsedFrame = 0;
 
     friend FRDGBuilder;
-    friend FRenderTargetPool;
 };
 
 /** A render graph tracked buffer. */
@@ -995,16 +1000,20 @@ struct FRDGBufferUAVDesc final {
 
 class FRDGView {
 public:
-    const char*    const Name;
-    const ERDGViewType   Type;
-    FRDGViewHandle       Handle;
+    const char* const  Name;
+    const ERDGViewType Type;
+    FRDGViewHandle     Handle;
 
     /** The viewable resource this view references. */
-    FRDGViewableResource* GetResource() const { return Resource; }
+    FRDGViewableResource* GetResource() const {
+        return Resource;
+    }
 
 protected:
-    FRDGView(const char* InName, ERDGViewType InType, FRDGViewableResource* InResource)
-        : Name(InName), Type(InType), Resource(InResource) {}
+    FRDGView(const char* InName, ERDGViewType InType, FRDGViewableResource* InResource) :
+        Name(InName),
+        Type(InType),
+        Resource(InResource) {}
 
 private:
     FRDGViewableResource* Resource = nullptr;
@@ -1020,11 +1029,14 @@ public:
 
     const FRDGTextureSRVDesc Desc;
 
-    FRDGTexture* GetParent() const { return Desc.Texture; }
+    FRDGTexture* GetParent() const {
+        return Desc.Texture;
+    }
 
 private:
-    FRDGTextureSRV(const char* InName, const FRDGTextureSRVDesc& InDesc)
-        : FRDGView(InName, StaticType, InDesc.Texture), Desc(InDesc) {}
+    FRDGTextureSRV(const char* InName, const FRDGTextureSRVDesc& InDesc) :
+        FRDGView(InName, StaticType, InDesc.Texture),
+        Desc(InDesc) {}
 
     friend FRDGViewRegistry;
     friend FRDGBuilder;
@@ -1035,17 +1047,22 @@ class FRDGTextureUAV final : public FRDGView {
 public:
     static constexpr ERDGViewType StaticType = ERDGViewType::TextureUAV;
 
-    const FRDGTextureUAVDesc             Desc;
-    const ERDGUnorderedAccessViewFlags   Flags;
+    const FRDGTextureUAVDesc           Desc;
+    const ERDGUnorderedAccessViewFlags Flags;
 
-    FRDGTexture* GetParent() const { return Desc.Texture; }
+    FRDGTexture* GetParent() const {
+        return Desc.Texture;
+    }
 
 private:
     FRDGTextureUAV(
-        const char*                    InName,
-        const FRDGTextureUAVDesc&      InDesc,
-        ERDGUnorderedAccessViewFlags   InFlags = ERDGUnorderedAccessViewFlags::None)
-        : FRDGView(InName, StaticType, InDesc.Texture), Desc(InDesc), Flags(InFlags) {}
+        const char*                  InName,
+        const FRDGTextureUAVDesc&    InDesc,
+        ERDGUnorderedAccessViewFlags InFlags = ERDGUnorderedAccessViewFlags::None
+    ) :
+        FRDGView(InName, StaticType, InDesc.Texture),
+        Desc(InDesc),
+        Flags(InFlags) {}
 
     friend FRDGViewRegistry;
     friend FRDGBuilder;
@@ -1058,11 +1075,14 @@ public:
 
     const FRDGBufferSRVDesc Desc;
 
-    FRDGBuffer* GetParent() const { return Desc.Buffer; }
+    FRDGBuffer* GetParent() const {
+        return Desc.Buffer;
+    }
 
 private:
-    FRDGBufferSRV(const char* InName, const FRDGBufferSRVDesc& InDesc)
-        : FRDGView(InName, StaticType, InDesc.Buffer), Desc(InDesc) {}
+    FRDGBufferSRV(const char* InName, const FRDGBufferSRVDesc& InDesc) :
+        FRDGView(InName, StaticType, InDesc.Buffer),
+        Desc(InDesc) {}
 
     friend FRDGViewRegistry;
     friend FRDGBuilder;
@@ -1073,17 +1093,22 @@ class FRDGBufferUAV final : public FRDGView {
 public:
     static constexpr ERDGViewType StaticType = ERDGViewType::BufferUAV;
 
-    const FRDGBufferUAVDesc              Desc;
-    const ERDGUnorderedAccessViewFlags   Flags;
+    const FRDGBufferUAVDesc            Desc;
+    const ERDGUnorderedAccessViewFlags Flags;
 
-    FRDGBuffer* GetParent() const { return Desc.Buffer; }
+    FRDGBuffer* GetParent() const {
+        return Desc.Buffer;
+    }
 
 private:
     FRDGBufferUAV(
-        const char*                    InName,
-        const FRDGBufferUAVDesc&       InDesc,
-        ERDGUnorderedAccessViewFlags   InFlags = ERDGUnorderedAccessViewFlags::None)
-        : FRDGView(InName, StaticType, InDesc.Buffer), Desc(InDesc), Flags(InFlags) {}
+        const char*                  InName,
+        const FRDGBufferUAVDesc&     InDesc,
+        ERDGUnorderedAccessViewFlags InFlags = ERDGUnorderedAccessViewFlags::None
+    ) :
+        FRDGView(InName, StaticType, InDesc.Buffer),
+        Desc(InDesc),
+        Flags(InFlags) {}
 
     friend FRDGViewRegistry;
     friend FRDGBuilder;
