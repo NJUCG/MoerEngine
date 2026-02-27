@@ -24,6 +24,7 @@ TExtensionArray VulkanInstanceExtension::GetMERequiredInstanceExtensions() {
 
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SURFACE_EXTENSION_NAME);
+    ADD_EXTENSION(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
     ADD_EXTENSION(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
     // ADD_EXTENSION(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
     // debug utils, contains debug marker and debug report
@@ -38,6 +39,29 @@ TExtensionArray VulkanInstanceExtension::GetMERequiredInstanceExtensions() {
 
     return extensions;
 }
+
+// ***** VK_EXT_swapchain_maintenance1
+class VulkanEXTSwapchainMaintenance1Extension final : public VulkanDeviceExtension {
+public:
+    VulkanEXTSwapchainMaintenance1Extension(bool _is_optional = false) :
+        VulkanDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME, _is_optional),
+        m_swapchain_maintenance1_features() {}
+
+    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+        m_swapchain_maintenance1_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
+        AddToPNext(_gpu_features2, m_swapchain_maintenance1_features);
+    }
+
+    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+        if (m_is_usable && m_is_enabled) {
+            AddToPNext(_device_create_info, m_swapchain_maintenance1_features);
+        }
+    }
+
+private:
+    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT m_swapchain_maintenance1_features;
+};
 
 // ***** VK_KHR_acceleration_structure
 class VulkanKHRAccelerationStructureExtension final : public VulkanDeviceExtension {
@@ -390,6 +414,7 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMERequiredDeviceExtensions
     extensions.emplace_back(std::make_shared<ext_class>(optional))
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
+    ADD_CUSTOM_EXTENSION(VulkanEXTSwapchainMaintenance1Extension, VULKAN_EXTENSION_REQUIRED);
     // ADD_EXTENSION(VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
 
 #if VULKAN_RHI_RAYTRACING
