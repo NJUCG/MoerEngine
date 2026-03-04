@@ -186,14 +186,12 @@ public:
     template<typename ParameterStructType>
     ParameterStructType* AllocParameters(const ParameterStructType* StructToCopy);
 
-
-
     //////////////////////////////////////////////////////////////////////////
 
     /** Adds a callback that is called after pass execution is complete. */
     void AddPostExecuteCallback(std::function<void()>&& Callback) {
         assert(Callback);
-        PostExecuteCallbacks.Emplace(std::move(Callback));
+        PostExecuteCallbacks.emplace_back(std::move(Callback));
     }
 
     /** Adds a lambda pass to the graph with an accompanied pass parameter struct.
@@ -850,7 +848,7 @@ private:
 
         if (Buffer->PendingCommitSize > 0) {
             Handle = FRDGBufferReservedCommitHandle(ReservedBufferCommitSizes.Num());
-            ReservedBufferCommitSizes.Emplace(Buffer->PendingCommitSize);
+            ReservedBufferCommitSizes.emplace_back(Buffer->PendingCommitSize);
             Buffer->PendingCommitSize = 0;
         }
 

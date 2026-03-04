@@ -11,8 +11,8 @@ namespace Moer::Render::RenderGraph {
 #endif
 
 inline FRDGTexture* FRDGBuilder::FindExternalTexture(Texture* ExternalTexture) const {
-    if (FRDGTexture* const* FoundTexturePtr = ExternalTextures.Find(ExternalTexture)) {
-        return *FoundTexturePtr;
+    if (auto FoundTextureIt = ExternalTextures.find(ExternalTexture); FoundTextureIt != ExternalTextures.end()) {
+        return FoundTextureIt->second;
     }
     return nullptr;
 }
@@ -25,8 +25,8 @@ inline FRDGTexture* FRDGBuilder::FindExternalTexture(IPooledRenderTarget* Extern
 }
 
 inline FRDGBuffer* FRDGBuilder::FindExternalBuffer(Buffer* ExternalBuffer) const {
-    if (FRDGBuffer* const* FoundBufferPtr = ExternalBuffers.Find(ExternalBuffer)) {
-        return *FoundBufferPtr;
+    if (auto FoundBufferIt = ExternalBuffers.find(ExternalBuffer); FoundBufferIt != ExternalBuffers.end()) {
+        return FoundBufferIt->second;
     }
     return nullptr;
 }
@@ -77,7 +77,7 @@ inline FRDGBufferRef FRDGBuilder::CreateBuffer(
             Allocators.Root.AllocNoDestruct<FRDGBufferNumElementsCallback>(std::move(InNumElementsCallback)) :
             nullptr;
     FRDGBufferRef Buffer = Buffers.Allocate(Allocators.Root, Name, OverrideDesc, Flags, NumElementsCallback);
-    NumElementsCallbackBuffers.Emplace(Buffer);
+    NumElementsCallbackBuffers.emplace_back(Buffer);
     return Buffer;
 }
 
@@ -223,7 +223,7 @@ inline void FRDGBuilder::QueueBufferUpload(
         InitialData = InitialDataCopy;
     }
 
-    UploadedBuffers.Emplace(Buffer, InitialData, InitialDataSize);
+    UploadedBuffers.emplace_back(Buffer, InitialData, InitialDataSize);
     Buffer->bQueuedForUpload = 1;
 }
 
@@ -238,7 +238,7 @@ inline void FRDGBuilder::QueueBufferUpload(
         return;
     }
 
-    UploadedBuffers.Emplace(Buffer, InitialData, InitialDataSize, std::move(InitialDataFreeCallback));
+    UploadedBuffers.emplace_back(Buffer, InitialData, InitialDataSize, std::move(InitialDataFreeCallback));
     Buffer->bQueuedForUpload = 1;
 }
 
@@ -247,7 +247,7 @@ inline void FRDGBuilder::QueueBufferUpload(
     FRDGBufferInitialDataFillCallback&& InitialDataFillCallback
 ) {
 
-    UploadedBuffers.Emplace(Buffer, std::move(InitialDataFillCallback));
+    UploadedBuffers.emplace_back(Buffer, std::move(InitialDataFillCallback));
     Buffer->bQueuedForUpload = 1;
 }
 
@@ -257,7 +257,7 @@ inline void FRDGBuilder::QueueBufferUpload(
     FRDGBufferInitialDataSizeCallback&& InitialDataSizeCallback
 ) {
 
-    UploadedBuffers.Emplace(Buffer, std::move(InitialDataCallback), std::move(InitialDataSizeCallback));
+    UploadedBuffers.emplace_back(Buffer, std::move(InitialDataCallback), std::move(InitialDataSizeCallback));
     Buffer->bQueuedForUpload = 1;
 }
 
@@ -268,7 +268,7 @@ inline void FRDGBuilder::QueueBufferUpload(
     FRDGBufferInitialDataFreeCallback&& InitialDataFreeCallback
 ) {
 
-    UploadedBuffers.Emplace(
+    UploadedBuffers.emplace_back(
         Buffer,
         std::move(InitialDataCallback),
         std::move(InitialDataSizeCallback),
@@ -312,7 +312,7 @@ inline void FRDGBuilder::QueueTextureExtraction(
 
     // Transient extraction is disabled (no-op).
 
-    ExtractedTextures.Emplace(Texture, OutTexturePtr);
+    ExtractedTextures.emplace_back(Texture, OutTexturePtr);
 
     if (!bWasExtracted) {
         AddCullRootTexture(Texture);
@@ -328,7 +328,7 @@ FRDGBuilder::QueueBufferExtraction(FRDGBufferRef Buffer, CountableRef<FRDGPooled
 
     Buffer->bExtracted         = true;
     Buffer->bForceNonTransient = true;
-    ExtractedBuffers.Emplace(Buffer, OutBufferPtr);
+    ExtractedBuffers.emplace_back(Buffer, OutBufferPtr);
 
     if (!bWasExtracted) {
         AddCullRootBuffer(Buffer);
