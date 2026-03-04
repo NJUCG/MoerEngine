@@ -1,7 +1,7 @@
 #pragma once
 #include <algorithm>
 
-#include "PooledRenderTarget.h"
+#include "RendererInterface.h"
 #include "RHIAccess.h"
 #include "RenderGraphDefinitions.h"
 #include "RenderGraphFwd.h"

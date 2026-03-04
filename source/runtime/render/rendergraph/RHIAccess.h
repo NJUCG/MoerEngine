@@ -3,8 +3,9 @@
 #include <cstdint>
 #include <limits>
 
+#include "rhi/RHI.h"
+
 namespace Moer::Render {
-enum class ERHIPipeline : uint8;
 class FRHIViewableResource;
 } // namespace Moer::Render
 
@@ -45,13 +46,6 @@ enum class ERHIAccess : uint32 {
 };
 
 ENUM_BIT_OP_IMPL(ERHIAccess, FLAG)
-
-inline ERHIAccess operator|(ERHIAccess A, ERHIAccess B) {
-    return (ERHIAccess)((uint32)A | (uint32)B);
-}
-inline ERHIAccess operator&(ERHIAccess A, ERHIAccess B) {
-    return (ERHIAccess)((uint32)A & (uint32)B);
-}
 
 inline constexpr bool IsWritableAccess(ERHIAccess Access) {
     return (uint32(Access) & uint32(ERHIAccess::WritableMask)) != 0;

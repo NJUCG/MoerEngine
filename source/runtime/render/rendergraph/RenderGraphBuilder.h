@@ -201,9 +201,7 @@ public:
 	 *  struct to multiple passes, so long as it is kept immutable. The lambda is deferred until execution unless the immediate debug
 	 *  mode is enabled. All lambda captures should assume deferral of execution.
 	 *
-	 *  The lambda must include a single RHI command list as its parameter. The exact type of command list depends on the workload.
-	 *  For example, use FRHIComputeCommandList& for Compute / AsyncCompute workloads. Raster passes should use FRHICommandList&.
-	 *  Prefer not to use FRHICommandListImmediate& unless actually required.
+	 *  The lambda must include a single command list as its parameter: CommandList&.
 	 *
 	 *  Declare the type of GPU workload (i.e. Copy, Compute / AsyncCompute, Graphics) to the pass via the Flags argument. This is
 	 *  used to determine async compute regions, render pass setup / merging, RHI transition accesses, etc. Other flags exist for
@@ -847,7 +845,7 @@ private:
         FRDGBufferReservedCommitHandle Handle;
 
         if (Buffer->PendingCommitSize > 0) {
-            Handle = FRDGBufferReservedCommitHandle(ReservedBufferCommitSizes.Num());
+            Handle = FRDGBufferReservedCommitHandle(ReservedBufferCommitSizes.size());
             ReservedBufferCommitSizes.emplace_back(Buffer->PendingCommitSize);
             Buffer->PendingCommitSize = 0;
         }

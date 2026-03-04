@@ -542,9 +542,13 @@ enum class ERDGPassFlags : uint16 {
 
 ENUM_BIT_OP_IMPL(ERDGPassFlags, FLAG)
 
-#region Type Definitions
+// Type Definitions
 
 class FRDGPass;
+class FRDGView;
+class FRDGTexture;
+class FRDGBuffer;
+
 using FRDGPassHandle   = TRDGHandle<FRDGPass, uint32>;
 using FRDGPassBitArray = TRDGHandleBitArray<FRDGPassHandle>;
 using FRDGPassRegistry = TRDGHandleRegistry<FRDGPassHandle>;
@@ -587,6 +591,4 @@ using TRDGBufferArrayCallback           = std::function<const ArrayType&()>;
 using FRDGBufferInitialDataFreeCallback = std::function<void(const void* InData)>;
 using FRDGBufferInitialDataFillCallback = std::function<void(void* InData, uint32 InDataSize)>;
 using FRDGDispatchGroupCountCallback    = std::function<uint3()>;
-#pragma endregion
-
 } // namespace Moer::Render::RenderGraph
