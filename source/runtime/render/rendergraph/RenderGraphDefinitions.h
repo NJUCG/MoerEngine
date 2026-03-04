@@ -544,64 +544,52 @@ ENUM_BIT_OP_IMPL(ERDGPassFlags, FLAG)
 
 class FRDGEventName {
 public:
-    FRDGEventName(const char* InName) : Name(InName) {}
-
-    const char* GetCStr() const {
-        return Name;
-    }
-
-    FRDGEventName(std::string&& InName) : OwnedName(std::move(InName)), Name(OwnedName.c_str()) {}
-
-private:
-    const char* Name;
-    std::string OwnedName;
-};
-
 #region Type Definitions
 
-class FRDGPass;
-using FRDGPassHandle   = TRDGHandle<FRDGPass, uint32>;
-using FRDGPassBitArray = TRDGHandleBitArray<FRDGPassHandle>;
-using FRDGPassRegistry = TRDGHandleRegistry<FRDGPassHandle>;
+    class FRDGPass;
+    using FRDGPassHandle   = TRDGHandle<FRDGPass, uint32>;
+    using FRDGPassBitArray = TRDGHandleBitArray<FRDGPassHandle>;
+    using FRDGPassRegistry = TRDGHandleRegistry<FRDGPassHandle>;
 
-using RDGPassHandle   = FRDGPassHandle;
-using RDGPassBitArray = FRDGPassBitArray;
+    using RDGPassHandle   = FRDGPassHandle;
+    using RDGPassBitArray = FRDGPassBitArray;
 
-using FRDGViewHandle   = TRDGHandle<FRDGView, uint32>;
-using FRDGViewRegistry = TRDGHandleRegistry<FRDGViewHandle, ERDGHandleRegistryDestructPolicy::Never>;
-using FRDGViewBitArray = TRDGHandleBitArray<FRDGViewHandle>;
+    using FRDGViewHandle   = TRDGHandle<FRDGView, uint32>;
+    using FRDGViewRegistry = TRDGHandleRegistry<FRDGViewHandle, ERDGHandleRegistryDestructPolicy::Never>;
+    using FRDGViewBitArray = TRDGHandleBitArray<FRDGViewHandle>;
 
-using FRDGTextureHandle   = TRDGHandle<FRDGTexture, uint32>;
-using FRDGTextureRegistry = TRDGHandleRegistry<FRDGTextureHandle, ERDGHandleRegistryDestructPolicy::Never>;
-using FRDGTextureBitArray = TRDGHandleBitArray<FRDGTextureHandle>;
+    using FRDGTextureHandle = TRDGHandle<FRDGTexture, uint32>;
+    using FRDGTextureRegistry =
+        TRDGHandleRegistry<FRDGTextureHandle, ERDGHandleRegistryDestructPolicy::Never>;
+    using FRDGTextureBitArray = TRDGHandleBitArray<FRDGTextureHandle>;
 
-using FRDGBufferHandle               = TRDGHandle<FRDGBuffer, uint32>;
-using FRDGBufferReservedCommitHandle = TRDGHandle<FRDGBuffer, uint16>;
-using FRDGBufferRegistry = TRDGHandleRegistry<FRDGBufferHandle, ERDGHandleRegistryDestructPolicy::Never>;
-using FRDGBufferBitArray = TRDGHandleBitArray<FRDGBufferHandle>;
+    using FRDGBufferHandle               = TRDGHandle<FRDGBuffer, uint32>;
+    using FRDGBufferReservedCommitHandle = TRDGHandle<FRDGBuffer, uint16>;
+    using FRDGBufferRegistry = TRDGHandleRegistry<FRDGBufferHandle, ERDGHandleRegistryDestructPolicy::Never>;
+    using FRDGBufferBitArray = TRDGHandleBitArray<FRDGBufferHandle>;
 
-using FRDGBufferNumElementsCallback     = std::function<uint32()>;
-using FRDGBufferInitialDataCallback     = std::function<const void*()>;
-using FRDGBufferInitialDataSizeCallback = std::function<uint64()>;
+    using FRDGBufferNumElementsCallback     = std::function<uint32()>;
+    using FRDGBufferInitialDataCallback     = std::function<const void*()>;
+    using FRDGBufferInitialDataSizeCallback = std::function<uint64()>;
 
-using FRDGPassHandlesByPipeline = TRHIPipelineArray<FRDGPassHandle>;
-using FRDGPassesByPipeline      = TRHIPipelineArray<FRDGPass*>;
+    using FRDGPassHandlesByPipeline = TRHIPipelineArray<FRDGPassHandle>;
+    using FRDGPassesByPipeline      = TRHIPipelineArray<FRDGPass*>;
 
-template<typename T>
-struct IsStdVector : std::false_type {};
-template<typename T, typename Allocator>
-struct IsStdVector<std::vector<T, Allocator>> : std::true_type {};
-template<typename T>
-inline constexpr bool is_std_vector_v = IsStdVector<T>::value;
+    template<typename T>
+    struct IsStdVector : std::false_type {};
+    template<typename T, typename Allocator>
+    struct IsStdVector<std::vector<T, Allocator>> : std::true_type {};
+    template<typename T>
+    inline constexpr bool is_std_vector_v = IsStdVector<T>::value;
 
-template<
-    typename ArrayType,
-    typename ArrayTypeNoRef = std::remove_reference_t<ArrayType>,
-    typename                = std::enable_if_t<is_std_vector_v<ArrayTypeNoRef>>>
-using TRDGBufferArrayCallback           = std::function<const ArrayType&()>;
-using FRDGBufferInitialDataFreeCallback = std::function<void(const void* InData)>;
-using FRDGBufferInitialDataFillCallback = std::function<void(void* InData, uint32 InDataSize)>;
-using FRDGDispatchGroupCountCallback    = std::function<uint3()>;
+    template<
+        typename ArrayType,
+        typename ArrayTypeNoRef = std::remove_reference_t<ArrayType>,
+        typename                = std::enable_if_t<is_std_vector_v<ArrayTypeNoRef>>>
+    using TRDGBufferArrayCallback           = std::function<const ArrayType&()>;
+    using FRDGBufferInitialDataFreeCallback = std::function<void(const void* InData)>;
+    using FRDGBufferInitialDataFillCallback = std::function<void(void* InData, uint32 InDataSize)>;
+    using FRDGDispatchGroupCountCallback    = std::function<uint3()>;
 #pragma endregion
 
 } // namespace Moer::Render::RenderGraph

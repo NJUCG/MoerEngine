@@ -1,6 +1,6 @@
 #pragma once
-#include "RendererInterface.h"
 #include "RenderGraphResource.h"
+#include "RendererInterface.h"
 #include <atomic>
 
 namespace Moer::Render::RenderGraph {
@@ -48,7 +48,10 @@ struct FPooledRenderTarget final : public IPooledRenderTarget {
     }
 
     bool IsFree() const override {
-        return NumRefs.load(std::memory_order_relaxed) == 0;
+        uint32 RefCount = GetRefCount();
+        assert(RefCount >= 1);
+        // If the only reference is from the pool's CountableRef, it's unused.
+        return RefCount == 1;
     }
 
     bool IsTracked() const override {
@@ -85,6 +88,86 @@ private:
     friend class FRDGTexture;
     friend class FRDGBuilder;
     friend class FRenderTargetPool;
+};
+
+//////////////////////////////////////////////////////////////////////////
+// FRenderTargetPool
+//////////////////////////////////////////////////////////////////////////
+
+/** Render target texture pool.
+ *
+ *  Manages a pool of FPooledRenderTarget objects for reuse across frames.
+ *  Simplified from UE:
+ *    - No transient resource support (no memory aliasing / placed resources)
+ *    - No mutex (single render-thread assumption)
+ *    - No FRenderResource base class / global resource lifecycle
+ *    - No FRHITextureCreateInfo translation; uses FPooledRenderTargetDesc directly
+ *
+ *  Lifecycle:
+ *    1. Each frame, call TickPoolElements() to age idle RTs and evict stale ones.
+ *    2. When a RT is needed, call FindFreeElement() — it returns an existing
+ *       compatible idle RT if one is found, or creates a new one via RenderDevice.
+ *    3. When the CountableRef goes out of scope (refcount → 0), the RT becomes
+ *       "free" and eligible for reuse in subsequent FindFreeElement() calls.
+ *    4. Call FreeUnusedResources() between levels or before heavy allocations
+ *       to release all idle RTs immediately.
+ *
+ *  Hash-based matching:
+ *    Each FPooledRenderTargetDesc is hashed (format, extent, mips, flags, etc.)
+ *    for O(1) candidate lookup. Compare() performs the exact field-by-field check.
+ */
+class FRenderTargetPool {
+public:
+    FRenderTargetPool() = default;
+
+    /** Find a free (refcount == 0) render target matching Desc, or create a new one.
+     *  @param Desc       Desired texture properties (format, extent, mips, flags, etc.)
+     *  @param Out        [out] Receives the pooled render target. Previous contents are released.
+     *  @param DebugName  Debug label for the texture (pointer must remain valid; typically a literal).
+     *  @return true if an existing idle RT was reused; false if a new one was allocated. */
+    RENDER_API bool FindFreeElement(
+        const FPooledRenderTargetDesc&     Desc,
+        CountableRef<IPooledRenderTarget>& Out,
+        const char*                        DebugName
+    );
+
+    /** Call once per frame (render thread) to age idle RTs.
+     *  RTs that have been free for more than kMaxUnusedFrames consecutive frames
+     *  are released to reclaim GPU memory. */
+    RENDER_API void TickPoolElements();
+
+    /** Immediately release all RTs whose refcount is 0.
+     *  Useful between levels or before memory-intensive operations. */
+    RENDER_API void FreeUnusedResources();
+
+    /** @return Number of slots in the pool (including empty / compacted-out entries). */
+    uint32 GetElementCount() const {
+        return static_cast<uint32>(PooledRenderTargets.size());
+    }
+
+private:
+    /** Number of consecutive idle frames before a free RT is evicted. */
+    static constexpr uint32 kMaxUnusedFrames = 3;
+
+    /** Compute a fast hash from a FPooledRenderTargetDesc for pool lookup. */
+    static uint32 ComputeDescHash(const FPooledRenderTargetDesc& Desc);
+
+    /** Remove nullptr entries from PooledRenderTargets / PooledRenderTargetHashes. */
+    void CompactPool();
+
+    /** Create the RHI texture described by Desc and wrap it in a new FPooledRenderTarget. */
+    FPooledRenderTarget* CreateRenderTarget(const FPooledRenderTargetDesc& Desc, const char* Name);
+
+    //////////////////////////////////////////////////////////////////////////
+    // Pool storage
+
+    /** Parallel arrays: hash[i] corresponds to PooledRenderTargets[i].
+     *  Entries may be null after eviction; CompactPool() removes them. */
+    Array<uint32>                            PooledRenderTargetHashes;
+    Array<CountableRef<FPooledRenderTarget>> PooledRenderTargets;
+
+    friend struct FPooledRenderTarget;
+    friend class FRDGBuilder;
 };
 
 } // namespace Moer::Render::RenderGraph

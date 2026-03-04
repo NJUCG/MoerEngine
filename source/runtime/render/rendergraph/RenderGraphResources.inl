@@ -10,17 +10,16 @@ inline void FRDGSubresourceState::SetPass(ERHIPipeline Pipeline, FRDGPassHandle 
 inline void FRDGSubresourceState::Validate() {
 #if RDG_ENABLE_DEBUG
     for (ERHIPipeline Pipeline : MakeFlagsRange(ERHIPipeline::All)) {
-        checkf(
-            FirstPass[Pipeline].IsValid() == LastPass[Pipeline].IsValid(),
-            TEXT("Subresource state has unset first or last pass on '%s."),
-            *GetRHIPipelineName(Pipeline)
+        assert(
+            (FirstPass[Pipeline].IsValid() == LastPass[Pipeline].IsValid()) &&
+            "Subresource state has unset first or last pass on pipeline."
         );
     }
 #endif
 }
 
 inline bool FRDGSubresourceState::IsUsedBy(ERHIPipeline Pipeline) const {
-    check(FirstPass[Pipeline].IsValid() == LastPass[Pipeline].IsValid());
+    assert(FirstPass[Pipeline].IsValid() == LastPass[Pipeline].IsValid());
     return FirstPass[Pipeline].IsValid();
 }
 
@@ -41,7 +40,7 @@ inline ERHIPipeline FRDGSubresourceState::GetPipelines() const {
 }
 
 inline FPooledRenderTargetDesc Translate(const FRHITextureDesc& InDesc) {
-    check(InDesc.IsValid());
+    assert(InDesc.IsValid());
 
     FPooledRenderTargetDesc OutDesc;
     OutDesc.ClearValue         = InDesc.ClearValue;
@@ -59,7 +58,7 @@ inline FPooledRenderTargetDesc Translate(const FRHITextureDesc& InDesc) {
     OutDesc.FastVRAMPercentage = InDesc.FastVRAMPercentage;
     OutDesc.AliasableFormats   = InDesc.AliasableFormats;
 
-    check(OutDesc.IsValid());
+    assert(OutDesc.IsValid());
     return OutDesc;
 }
 
@@ -74,14 +73,14 @@ inline FRHIBufferCreateInfo Translate(const FRDGBufferDesc& InDesc) {
         CreateInfo.Stride = InDesc.BytesPerElement;
         CreateInfo.Usage  = InDesc.Usage | BUF_StructuredBuffer;
     } else {
-        check(0);
+        assert(false);
     }
 
     return CreateInfo;
 }
 
 inline FRDGTextureDesc Translate(const FPooledRenderTargetDesc& InDesc) {
-    check(InDesc.IsValid());
+    assert(InDesc.IsValid());
 
     FRDGTextureDesc OutDesc;
     OutDesc.ClearValue = InDesc.ClearValue;
@@ -107,7 +106,7 @@ inline FRDGTextureDesc Translate(const FPooledRenderTargetDesc& InDesc) {
     //OutDesc.Flags |= ETextureCreateFlags::ForceIntoNonStreamingMemoryTracking;
     OutDesc.FastVRAMPercentage = InDesc.FastVRAMPercentage;
     OutDesc.AliasableFormats   = InDesc.AliasableFormats;
-    check(OutDesc.IsValid());
+    assert(OutDesc.IsValid());
 
     return OutDesc;
 }

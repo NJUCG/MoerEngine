@@ -434,9 +434,9 @@ private:
 
     /** Returns the graph epilogue pass handle. */
     inline FRDGPassHandle GetEpiloguePassHandle() const {
-        checkf(
-            EpiloguePass,
-            TEXT("The handle is not valid until the epilogue has been added to the graph during execution.")
+        assert(
+            EpiloguePass &&
+            "The handle is not valid until the epilogue has been added to the graph during execution."
         );
         return Passes.Last();
     }
@@ -463,16 +463,16 @@ private:
     void Compile();
     void CompilePassOps(FRDGPass* Pass);
 
-    void ExecuteSerialPass(FRHIComputeCommandList& RHICmdListPass, FRDGPass* Pass);
+    void ExecuteSerialPass(CommandList& RHICmdListPass, FRDGPass* Pass);
 
-    static void ExecutePass(FRHIComputeCommandList& RHICmdListPass, FRDGPass* Pass);
-    static void ExecutePassPrologue(FRHIComputeCommandList& RHICmdListPass, FRDGPass* Pass);
-    static void ExecutePassEpilogue(FRHIComputeCommandList& RHICmdListPass, FRDGPass* Pass);
+    static void ExecutePass(CommandList& RHICmdListPass, FRDGPass* Pass);
+    static void ExecutePassPrologue(CommandList& RHICmdListPass, FRDGPass* Pass);
+    static void ExecutePassEpilogue(CommandList& RHICmdListPass, FRDGPass* Pass);
 
-    static void PushPreScopes(FRHIComputeCommandList& RHICmdListPass, FRDGPass* FirstPass);
-    static void PushPassScopes(FRHIComputeCommandList& RHICmdListPass, FRDGPass* Pass);
-    static void PopPassScopes(FRHIComputeCommandList& RHICmdListPass, FRDGPass* Pass);
-    static void PopPreScopes(FRHIComputeCommandList& RHICmdListPass, FRDGPass* LastPass);
+    static void PushPreScopes(CommandList& RHICmdListPass, FRDGPass* FirstPass);
+    static void PushPassScopes(CommandList& RHICmdListPass, FRDGPass* Pass);
+    static void PopPassScopes(CommandList& RHICmdListPass, FRDGPass* Pass);
+    static void PopPreScopes(CommandList& RHICmdListPass, FRDGPass* LastPass);
     //////////////////////////////////////////////////////////////////////////////
     // Resource Registries
 
@@ -481,6 +481,10 @@ private:
     FRDGTextureRegistry Textures;
     FRDGBufferRegistry  Buffers;
     FRDGViewRegistry    Views;
+
+    /** Maps external RHI resources to their RDG wrapper objects. */
+    Map<Texture*, FRDGTexture*> ExternalTextures;
+    Map<Buffer*, FRDGBuffer*>   ExternalBuffers;
 
     struct FExtractedTexture {
         FExtractedTexture() = default;
@@ -577,12 +581,12 @@ private:
         }
 
         FRDGTextureHandle GetTextureHandle() const {
-            check(GetResourceType() == ERDGViewableResourceType::Texture);
+            assert(GetResourceType() == ERDGViewableResourceType::Texture);
             return FRDGTextureHandle(ResourceIndex);
         }
 
         FRDGBufferHandle GetBufferHandle() const {
-            check(GetResourceType() == ERDGViewableResourceType::Buffer);
+            assert(GetResourceType() == ERDGViewableResourceType::Buffer);
             return FRDGBufferHandle(ResourceIndex);
         }
 
@@ -890,7 +894,7 @@ private:
 
         FUploadedBuffer(FRDGBuffer* InBuffer, FRDGBufferInitialDataFillCallback&& InDataFillCallback) :
             Buffer(InBuffer),
-            DataFillCallback(MoveTemp(InDataFillCallback)) {}
+            DataFillCallback(std::move(InDataFillCallback)) {}
 
         FUploadedBuffer(
             FRDGBuffer*                         InBuffer,
@@ -902,7 +906,7 @@ private:
             Buffer(InBuffer),
             Data(InData),
             DataSize(InDataSize),
-            DataFreeCallback(MoveTemp(InDataFreeCallback)) {}
+            DataFreeCallback(std::move(InDataFreeCallback)) {}
 
         FUploadedBuffer(
             FRDGBuffer*                         InBuffer,
@@ -911,8 +915,8 @@ private:
         ) :
             bUseDataCallbacks(true),
             Buffer(InBuffer),
-            DataCallback(MoveTemp(InDataCallback)),
-            DataSizeCallback(MoveTemp(InDataSizeCallback)) {}
+            DataCallback(std::move(InDataCallback)),
+            DataSizeCallback(std::move(InDataSizeCallback)) {}
 
         FUploadedBuffer(
             FRDGBuffer*                         InBuffer,
@@ -923,9 +927,9 @@ private:
             bUseDataCallbacks(true),
             bUseFreeCallbacks(true),
             Buffer(InBuffer),
-            DataCallback(MoveTemp(InDataCallback)),
-            DataSizeCallback(MoveTemp(InDataSizeCallback)),
-            DataFreeCallback(MoveTemp(InDataFreeCallback)) {}
+            DataCallback(std::move(InDataCallback)),
+            DataSizeCallback(std::move(InDataSizeCallback)),
+            DataFreeCallback(std::move(InDataFreeCallback)) {}
 
         bool        bUseDataCallbacks = false;
         bool        bUseFreeCallbacks = false;

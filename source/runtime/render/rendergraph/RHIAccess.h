@@ -4,7 +4,7 @@
 #include <limits>
 
 namespace Moer::Render {
-enum class ERHIPipeline : uint32;
+enum class ERHIPipeline : uint8;
 class FRHIViewableResource;
 } // namespace Moer::Render
 
