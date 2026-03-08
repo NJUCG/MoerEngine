@@ -45,6 +45,16 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(pipe_test_target TestTaskPipe)
+add_executable(${pipe_test_target} "TaskPipeTest.cpp")
+target_include_directories(${pipe_test_target}
+PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+)
+target_link_libraries(${pipe_test_target}
+    PUBLIC Moer::Core
+)
+set_target_properties(${pipe_test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 # add_executable(MeshProcessTest "MeshProcessTest.cpp")
 # target_include_directories(MeshProcessTest 
 #     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
