@@ -127,6 +127,10 @@ CmdSubmit CommandList::Submit() {
     return std::move(submit);
 }
 
+bool CommandList::IsEmpty() const {
+    return commands.empty() && callbacks.empty() && cached_args.empty();
+}
+
 void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
     commands.push_back(
         MakeUnique<CopyBufferCmd>(

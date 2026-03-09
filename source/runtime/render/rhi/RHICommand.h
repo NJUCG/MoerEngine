@@ -10,7 +10,6 @@
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "scene/Scene.h"
 #include "shader/ShaderPipeline.h"
 #include <filesystem>
 #include <functional>
@@ -1202,6 +1201,8 @@ public:
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
     RENDER_API CmdSubmit Submit();
+
+    RENDER_API bool IsEmpty() const;
 
 private:
     friend DrawDispatcher;
