@@ -2,6 +2,7 @@
 
 #include "CpuScene.h"
 #include "RenderAPI.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 
 namespace Moer::Render {
@@ -54,6 +55,11 @@ public:
         RaytracingSceneRef rt_scene;
     };
 
+    struct PendingCommandList {
+        CommandList copy_queue_cmd_list;
+        CommandList gfx_queue_cmd_list;
+    };
+
     /**
      * GpuScene::Res
      * 
@@ -68,6 +74,10 @@ public:
      */
     BindlessArrayRef bindless_array() {
         return m_bindless_array;
+    }
+
+    PendingCommandList&& PopPendingCommandList() {
+        return std::move(m_pending_cmd_lists);
     }
 
     /**
@@ -101,6 +111,9 @@ private:
 
     // Raytracing Scene Cache: BLAS 按 primitive_id 顺序存储，与 CpuScene 的 primitive 顺序一致
     Array<RaytracingGeometryRef> m_primitive_id_to_blas;
+
+    // 将gfx queue的数据存下来，等待主线程执行
+    PendingCommandList m_pending_cmd_lists;
 };
 
 } // namespace Moer::Render

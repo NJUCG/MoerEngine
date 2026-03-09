@@ -33,8 +33,6 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
     auto& device = RenderDevice::Get();
     auto& bdls   = m_bindless_array;
 
-    CommandList cmd_list{};
-
     // QUESTION: 这里多线程会有问题吗？RHI如何保证线程安全
     // => RHI不做线程安全，这个应用层做的
     // => 因此，该函数执行时，需要确保没有其他线程在操作RHI资源
@@ -73,7 +71,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             uint64 offset = 0;
             for (uint i = 0; i < c_texture.mip_level_count * c_texture.array_layer_count; i++) {
                 uint mip_level_byte_size = tex_with_hdl.tex->GetMipByteSize(i);
-                cmd_list.CopyFrom(
+                m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
                     std::span<byte>((byte*)c_texture.data.data() + offset, mip_level_byte_size),
                     tex_with_hdl.tex->GetView(i, 1)
                 );
@@ -193,7 +191,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
      * 此处按照 Res 中顺序进行上传
      */
 
-    cmd_list.CopyFrom(
+    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.m_light_buf.data(), m_cpu_scene.m_light_buf.size() * sizeof(GLight)
         ),
@@ -201,7 +199,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         "CopyFrom GpuScene::LightBuffer"
     );
 
-    cmd_list.CopyFrom(
+    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.m_material_buf.data(), m_cpu_scene.m_material_buf.size() * sizeof(GMaterial)
         ),
@@ -209,7 +207,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         "CopyFrom GpuScene::MaterialBuffer"
     );
 
-    cmd_list.CopyFrom(
+    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.m_draw_cmd_buf.data(),
             m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData)
@@ -218,7 +216,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         "CopyFrom GpuScene::DrawCmdBuffer"
     );
 
-    cmd_list.CopyFrom(
+    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.m_primitive_buf.data(), m_cpu_scene.m_primitive_buf.size() * sizeof(GPrimitive)
         ),
@@ -226,7 +224,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         "CopyFrom GpuScene::PrimitiveBuffer"
     );
 
-    cmd_list.CopyFrom(
+    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.m_instance_buf.data(), m_cpu_scene.m_instance_buf.size() * sizeof(GInstance)
         ),
@@ -234,7 +232,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         "CopyFrom GpuScene::InstanceBuffer"
     );
 
-    cmd_list.CopyFrom(
+    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.mega_buf().position.data(),
             m_cpu_scene.mega_buf().position.size() * sizeof(float3)
@@ -243,7 +241,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         "CopyFrom GpuScene::PositionMegaBuffer"
     );
 
-    cmd_list.CopyFrom(
+    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.mega_buf().packed_normal.data(),
             m_cpu_scene.mega_buf().packed_normal.size() * sizeof(uint32)
@@ -252,7 +250,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         "CopyFrom GpuScene::NormalMegaBuffer"
     );
 
-    cmd_list.CopyFrom(
+    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.mega_buf().packed_tangent.data(),
             m_cpu_scene.mega_buf().packed_tangent.size() * sizeof(uint32)
@@ -261,7 +259,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         "CopyFrom GpuScene::TangentMegaBuffer"
     );
 
-    cmd_list.CopyFrom(
+    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.mega_buf().texcoord0.data(),
             m_cpu_scene.mega_buf().texcoord0.size() * sizeof(float2)
@@ -270,7 +268,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         "CopyFrom GpuScene::Texcoord0MegaBuffer"
     );
 
-    cmd_list.CopyFrom(
+    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.mega_buf().index.data(), m_cpu_scene.mega_buf().index.size() * sizeof(uint32)
         ),
@@ -347,53 +345,28 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         // FIXME：源代码import_buf这里的state是UNDEFINED。我觉得可能是bug，所以这里改为了UNORDERED_ACCESS
     }
 
-    // 从此处开始正式执行命令
+    // 1. copy queue
 
-    auto& copy_queue = device.GetCopyQueue();
-    auto& gfx_queue  = device.GetCommandQueue(EQueueType::Graphics);
+    m_pending_cmd_lists.copy_queue_cmd_list.ExportResourcesToQueue(
+        EQueueType::Graphics, std::move(export_tex), std::move(export_buf)
+    );
 
-    {
-        // 1. 拷贝Buffer等内容
+    // 2. graphics queue
+    // - 为了避免多线程抢占gfx_queue资源，导致卡死。我们规定只在主线程执行gfx_queue命令
 
-        auto evt = copy_queue.Execute(cmd_list.Submit());
-        copy_queue.Sync(evt.timeline);
-    }
+    m_pending_cmd_lists.gfx_queue_cmd_list.ImportResourcesFromQueue( // gfx_queue交给主线程执行
+        EQueueType::Copy, std::move(import_tex), std::move(import_buf)
+    );
 
-    {
-        // 2. 导出资源到Graphics Queue
-
-        cmd_list.ExportResourcesToQueue(EQueueType::Graphics, std::move(export_tex), std::move(export_buf));
-
-        auto fence = copy_queue.GetFenceHandle();
-        auto evt   = copy_queue.Execute(cmd_list.Submit().Wait(fence, fence->GetValue()));
-        copy_queue.Sync(evt.timeline);
-    }
-
-    {
-
-        cmd_list.ImportResourcesFromQueue(EQueueType::Copy, std::move(import_tex), std::move(import_buf));
-
-        gfx_queue.Execute(cmd_list.Submit());
-        gfx_queue.Sync();
-    }
-
-    InitRaytracingScene(cmd_list);
-
-    gfx_queue.Execute(cmd_list.Submit()); // 提交RaytracingScene的新操作
-    gfx_queue.Sync();
+    InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list); // gfx_queue交给主线程执行
 }
 
 void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene) {
-    CommandList cmd_list{};
-    auto&       device    = RenderDevice::Get();
-    auto&       gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
+    auto& device = RenderDevice::Get();
 
     // TODO: others
 
-    UpdateRaytracingScene(cmd_list);
-
-    gfx_queue.Execute(cmd_list.Submit()); // 提交RaytracingScene的新操作
-    gfx_queue.Sync();
+    UpdateRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list); // gfx_queue交给主线程执行
 }
 
 GpuScene::~GpuScene() noexcept {
@@ -515,8 +488,10 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
     cmd_list.BuildAccelerationStructures(std::move(build_params));
     cmd_list.UpdateRaytracingScene(m_res.rt_scene);
 
-    RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Execute(cmd_list.Submit());
-    RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Sync();
+    // 这里不应该提交命令！
+    // 这个函数会在 非主线程 被执行，在这里提交命令，会导致gfx_queue死锁
+    // RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Execute(cmd_list.Submit());
+    // RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Sync();
 }
 
 void GpuScene::UpdateRaytracingScene(CommandList& cmd_list) {

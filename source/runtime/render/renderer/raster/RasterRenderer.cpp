@@ -214,6 +214,14 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     // MARK: 3. Run Render Passes
 
     if (scene.IsReady()) {
+
+        // 处理场景加载过程中遗留的命令
+        auto&& scene_cmd_list = scene.PopPendingCommandList();
+        auto   copy_evt       = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
+        device.GetCopyQueue().Sync(copy_evt.timeline);
+        gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
+        gfx_queue.Sync();
+
         if (first_load) {
             first_load = false;
 
