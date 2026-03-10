@@ -32,15 +32,12 @@
   # Clone仓库
   # 如果没有配置SSH的话，请把 `git@xxx` 替换为 `https://github.com/NJUCG/MoerEngine.git`
   # MoerEngine新的依赖项均使用submodule形式引入，所以请添加--recursive来clone所有依赖项
-  # - 如果在clone时忘记添加 --recursive，请执行git submodule update --init --recursive
-  git clone git@github.com:NJUCG/MoerEngine.git --recursive
+  # 如果在clone时忘记添加submodule相关参数，请执行git submodule update --init --depth 1
+  git clone --recurse-submodules --shallow-submodules git@github.com:NJUCG/MoerEngine.git
   cd MoerEngine
   
   # 忽略一些特定commit对commit历史的影响（只影响开发过程，不影响编译和使用）
   git config --local blame.ignoreRevsFile .git-blame-ignore-revs
-  
-  # 下载Sponza场景文件，到此目录：`./asset/scenes/`
-  git clone --branch scene/sponza --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
   
   # 根据模板创建一份MoerEngine的配置文件
   # 配置文件中，可以设置默认的渲染器（光栅化、光追）、默认分辨率等选项
@@ -48,7 +45,7 @@
   
   # 构建
   cmake -B build
-  # 如果想要使用clang+ninja，可以替换为：cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+  # 如果使用clang+ninja，可替换为：cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
   cmake --build build -j16 # change 16 to your cpu core count
   
   # 运行

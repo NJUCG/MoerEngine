@@ -24,11 +24,8 @@
 
     ```bash
     # Clone仓库
-    git clone git@github.com:NJUCG/MoerEngine.git --recursive
+    git clone --recurse-submodules --shallow-submodules git@github.com:NJUCG/MoerEngine.git
     cd MoerEngine
-    
-    # 下载Sponza场景文件，到此目录：`./asset/scenes/`
-    git clone --branch scene/sponza --depth 1 git@github.com:NJUCG/MoerEngine.git ./asset/scenes/sponza
     
     # 根据模板创建一份MoerEngine的配置文件
     cp template.MoerEngine.toml MoerEngine.toml
