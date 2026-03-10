@@ -3,3 +3,6 @@
 
 /*/
 *.zip
+
+# sponza以submodule的形式引入，作为默认场景
+!/sponza/

@@ -4,3 +4,8 @@
 [submodule "3rdparty/gtl"]
 	path = 3rdparty/gtl
 	url = https://github.com/greg7mdp/gtl.git
+[submodule "asset/scenes/sponza"]
+	path = asset/scenes/sponza
+	url = https://github.com/NJUCG/MoerEngine.git
+	branch = scene/sponza
+	shallow = true
