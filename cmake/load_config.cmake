@@ -37,3 +37,12 @@ if (EXISTS "${CMAKE_SOURCE_DIR}/EnableRenderDoc.cmake")
 else()
     message(STATUS "EnableRenderDoc.cmake not found")
 endif()
+
+# template.EnableProfile.cmake
+set(WITH_PROFILE OFF CACHE BOOL "Enable Perfetto profiling" FORCE)
+if (EXISTS "${CMAKE_SOURCE_DIR}/EnableProfile.cmake")
+    include("${CMAKE_SOURCE_DIR}/EnableProfile.cmake")
+    message(STATUS "EnableProfile.cmake found, Perfetto profiling enabled")
+else()
+    message(STATUS "EnableProfile.cmake not found, Perfetto profiling disabled")
+endif()

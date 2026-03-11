@@ -1,6 +1,17 @@
 [submodule "3rdparty/entt"]
 	path = 3rdparty/entt
 	url = https://github.com/skypjack/entt.git
+	shallow = true
 [submodule "3rdparty/gtl"]
 	path = 3rdparty/gtl
 	url = https://github.com/greg7mdp/gtl.git
+    shallow = true
+[submodule "asset/scenes/sponza"]
+	path = asset/scenes/sponza
+	url = https://github.com/NJUCG/MoerEngine.git
+	branch = scene/sponza
+	shallow = true
+[submodule "3rdparty/minhook"]
+	path = 3rdparty/minhook
+	url = https://github.com/TsudaKageyu/minhook.git
+	shallow = true

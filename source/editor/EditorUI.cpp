@@ -15,6 +15,10 @@
 #include <nfd.hpp>
 #include <string_view>
 
+#ifdef WITH_PROFILE
+#include "profile.h"
+#endif
+
 using namespace Moer::Render;
 
 namespace Moer {
@@ -51,6 +55,94 @@ void EditorUI::InitFromConfigManager() {
     // scene path
     m_config->scene_path = config.engine.scene.scene_path;
 }
+
+#ifdef WITH_PROFILE
+void EditorUI::ShowMemoryProfiler() {
+    if (!m_b_show_memory_profiler)
+        return;
+
+    if (!ImGui::Begin("Memory Profiler", &m_b_show_memory_profiler)) {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Separator();
+    ImGui::Text("Profiler Statistics");
+
+    if (ImGui::TreeNodeEx("Live Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
+        static constexpr int HISTORY_SIZE = 300;
+        static float mem_history[HISTORY_SIZE] = {};
+        static float alloc_history[HISTORY_SIZE] = {};
+        static int history_index = 0;
+        static float refresh_timer = 0.0f;
+
+        refresh_timer += ImGui::GetIO().DeltaTime;
+        if (refresh_timer >= 0.1f) {
+            size_t live_bytes = Profile_GetLiveBytes();
+            size_t live_alloc = Profile_GetLiveAllocCount();
+            
+            mem_history[history_index] = live_bytes / (1024.0f * 1024.0f);
+            alloc_history[history_index] = static_cast<float>(live_alloc);
+            history_index = (history_index + 1) % HISTORY_SIZE;
+            refresh_timer = 0.0f;
+        }
+
+        size_t peak_bytes = Profile_GetPeakBytes();
+        float current_mem = mem_history[(history_index + HISTORY_SIZE - 1) % HISTORY_SIZE];
+
+        ImGui::Text("Current Memory: %.2f MB", current_mem);
+        ImGui::Text("Peak Memory:    %.2f MB", peak_bytes / (1024.0f * 1024.0f));
+        ImGui::Text("Alloc Count:    %.0f", alloc_history[(history_index + HISTORY_SIZE - 1) % HISTORY_SIZE]);
+
+        ImGui::PlotLines("##MemCurve", mem_history, HISTORY_SIZE, history_index,
+                        "Memory (MB)", 0.0f, (peak_bytes / (1024.0f * 1024.0f)) * 1.1f, ImVec2(0, 80));
+        
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNodeEx("Memory Hotspots", ImGuiTreeNodeFlags_DefaultOpen)) {
+        static std::vector<HotspotSnapshot> cached_hotspots;
+        static float hotspot_timer = 0.0f;
+        
+        hotspot_timer -= ImGui::GetIO().DeltaTime;
+        if (hotspot_timer <= 0.0f || cached_hotspots.empty()) {
+            cached_hotspots = GetHotspots(20); 
+            hotspot_timer = 5.0f;
+        }
+
+        if (ImGui::BeginChild("HotspotList", ImVec2(0, 300), true, ImGuiWindowFlags_HorizontalScrollbar)) {
+            for (const auto& hs : cached_hotspots) {
+                const char* full_stack = hs.stack_str.c_str();
+                const char* first_line_end = strchr(full_stack, '\n');
+                int name_len = first_line_end ? (int)(first_line_end - full_stack) : (int)strlen(full_stack);
+
+                ImGui::PushID(&hs);
+                
+                if (ImGui::TreeNode("##hs_node", "%.*s", name_len, full_stack)) {
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 1.0f, 1.0f), "Total: %.2f MB", hs.total_size / (1024.0f * 1024.0f));
+                    ImGui::Text("Count: %zu", hs.alloc_count);
+                    
+                    if (ImGui::Button("Copy Stacktrace")) {
+                        ImGui::SetClipboardText(full_stack);
+                    }
+                    
+                    ImGui::TreePop();
+                }
+
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", full_stack);
+                }
+
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+        }
+        ImGui::TreePop();
+    }
+
+    ImGui::End();
+}
+#endif
 
 void EditorUI::TickUI() {
 
@@ -124,12 +216,17 @@ void EditorUI::TickUI() {
             ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
             // ImGui::MenuItem("Inspector", nullptr, &m_m_b_show_inspector_window);
             // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
+#ifdef WITH_PROFILE
+            ImGui::MenuItem("Memory Profiler", nullptr, &m_b_show_memory_profiler);
+#endif
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
     }
     ImGui::End();
-
+#ifdef WITH_PROFILE
+    ShowMemoryProfiler();
+#endif
     ResetState();
     ShowSceneColor();
     ShowConfig();

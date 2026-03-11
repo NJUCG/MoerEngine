@@ -19,6 +19,7 @@ imgui.ini
 justfile
 EnableCuda.cmake
 EnableNrd.cmake
+EnableProfile.cmake
 EnableRenderDoc.cmake
 MoerEngine.toml
 

@@ -28,3 +28,9 @@ target_include_directories(
 # Compiler options
 # I want to remove the following line
 target_compile_options(${target_name} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/WX->")
+
+if (WITH_PROFILE)
+    target_link_libraries(${target_name}
+        PRIVATE MoerProfile
+    )
+endif()
