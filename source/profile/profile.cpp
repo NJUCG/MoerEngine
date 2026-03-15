@@ -15,6 +15,14 @@
 #include <filesystem>
 #include <mutex>
 #include <map>
+#include <string_view>
+#include <process.h>
+#include <future>
+#include <deque>
+#include "vulkan/vulkan.h"
+
+#pragma comment(lib,"psapi.lib")
+#pragma comment(lib, "dbghelp.lib")
 
 PERFETTO_TRACK_EVENT_STATIC_STORAGE();
 
@@ -61,22 +69,34 @@ static std::string get_log_path() {
     return exe_dir + "\\logs";
 }
 
+std::unique_ptr<perfetto::TracingSession> g_session;
 // 导出 trace 文件
-void StopSession(std::unique_ptr<perfetto::TracingSession>& tracing_session) {
-    if (!tracing_session)
-        return;
-    tracing_session->StopBlocking();
+void StopSession() {
+    if (!g_session) return;
 
-    auto trace_data = tracing_session->ReadTraceBlocking();
+    std::cout << "[Perfetto] Stopping session..." << std::endl;
+    auto future = std::async(std::launch::async, []() {
+        g_session->Stop();
+        return g_session->ReadTraceBlocking();
+    });
 
-    std::string pftracepath = get_log_path() + "\\trace.pftrace";
-    std::ofstream output;
-    output.open(pftracepath, std::ios::out | std::ios::binary);
-    output.write(trace_data.data(), std::streamsize(trace_data.size()));
-    output.close();
-    std::cout << "[Perfetto] Trace exported to " << pftracepath << std::endl;
-    tracing_session.reset();
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // 等 2 秒，等不到就说明后台线程死掉了
+    if (future.wait_for(std::chrono::seconds(2)) == std::future_status::ready) {
+        auto trace_data = future.get();
+
+        if (!trace_data.empty()) {
+            std::string pftracepath = get_log_path() + "\\trace.pftrace";
+            std::ofstream output(pftracepath, std::ios::out | std::ios::binary);
+            if (output.is_open()) {
+                output.write(trace_data.data(), std::streamsize(trace_data.size()));
+                output.close();
+                std::cout << "[Perfetto] Trace saved: " << pftracepath << std::endl;
+            }
+        }
+    } else {
+        std::cerr << "[Perfetto] CRITICAL: StopSession timed out, skipping save to avoid hang." << std::endl;
+        g_session.release(); 
+    }
 }
 
 
@@ -120,49 +140,80 @@ size_t getCurrentRSS( )
 MemoryCounter memorycounter;
 
 // mimalloc_profile
-static constexpr int MAX_FRAMES = 32;
-static constexpr size_t RING_CAPACITY = 1 << 16;
-static constexpr size_t LOG_BATCH_FLUSH = 128;
+static std::chrono::steady_clock::time_point g_start_time = std::chrono::steady_clock::now();
+static constexpr size_t LOG_BATCH_FLUSH = 0;
 
+struct VkTmpBufferAllocator;
 
-enum EventType : uint8_t { EVT_ALLOC = 1, EVT_FREE = 2 };
-
-struct EventRecord 
-{
-    uint64_t ts_us;                          // timestamp
-    uint8_t type;                            // EVT_ALLOC/EVT_FREE
-    USHORT frame_count;                      // number of frames captured
-    size_t size;                             // allocation size
-    void* ptr;                               // address returned
-    void* frames[MAX_FRAMES];
+enum class EVkInternalBufferUsage {
+    Upload,
+    Readback,
+    Scratch,
+    ShaderBuffer,
+    ShaderBuffer_Constant
 };
 
+static const char* GetVkUsageName(uint32_t usage) {
+    static const char* labels[] = {
+        "Upload",
+        "Readback",
+        "Scratch",
+        "ShaderBuffer",
+        "ShaderBuffer_Constant"
+    };
+
+    if (usage < 5) {
+        return labels[usage];
+    }
+    return "Unknown/ByName";
+}
+
+const char* EventTypeToString(uint8_t type) {
+    static const char* labels[] = {
+        "UNKNOWN",
+        "ALLOC",
+        "FREE",
+        "Vk_ALLOC",
+        "Vk_FREE",
+        "VkTmp_ALLOC",
+        "VkTmp_FREE"
+    };
+
+    if (type >= 0 && type <= 6) {
+        return labels[type];
+    }
+    return "INVALID";
+}
+
 struct RingBuffer {
-    std::mutex mtx;
+    std::mutex push_mtx;
     EventRecord* buffer;
     size_t capacity_mask;
+    
     std::atomic<uint64_t> head;
     std::atomic<uint64_t> tail;
     std::atomic<uint64_t> dropped;
-    RingBuffer(size_t capacity) 
-    {
+
+    RingBuffer(size_t capacity) {
         buffer = (EventRecord*)VirtualAlloc(NULL, sizeof(EventRecord) * capacity,
-                                           MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                                            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         capacity_mask = capacity - 1;
-        head.store(0);
-        tail.store(0);
-        dropped.store(0);
+        head.store(0, std::memory_order_relaxed);
+        tail.store(0, std::memory_order_relaxed);
+        dropped.store(0, std::memory_order_relaxed);
     }
+
     ~RingBuffer() {
         if (buffer) VirtualFree(buffer, 0, MEM_RELEASE);
     }
 
     bool push(const EventRecord& rec) {
-        std::lock_guard<std::mutex> lock(mtx);
-        uint64_t cur_head = head.load(std::memory_order_acquire);
+        std::lock_guard<std::mutex> lock(push_mtx);
+
+        uint64_t cur_head = head.load(std::memory_order_relaxed);
         uint64_t cur_tail = tail.load(std::memory_order_acquire);
 
-        if (cur_head >= cur_tail + (capacity_mask + 1)) {
+        if (cur_head - cur_tail >= (capacity_mask + 1)) {
             dropped.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
@@ -173,15 +224,24 @@ struct RingBuffer {
         head.store(cur_head + 1, std::memory_order_release);
         return true;
     }
-    
+
     bool pop(EventRecord& out) {
-        uint64_t cur_tail = tail.load(std::memory_order_acquire);
+        uint64_t cur_tail = tail.load(std::memory_order_relaxed);
         uint64_t cur_head = head.load(std::memory_order_acquire);
-        if (cur_tail >= cur_head) return false;
+
+        if (cur_tail >= cur_head) {
+            return false;
+        }
+
         size_t idx = cur_tail & capacity_mask;
         out = buffer[idx];
+
         tail.store(cur_tail + 1, std::memory_order_release);
         return true;
+    }
+
+    uint64_t size() const {
+        return head.load() - tail.load();
     }
 };
 
@@ -243,81 +303,201 @@ static std::string symbolicate_address(void* addr) {
     return out;
 }
 
+PROFILE_API SourceUIConfig g_UIConfigs[3] = {
+    { MemorySource::Editor,    "System Editor", ImVec4(0.4f, 0.8f, 0.4f, 1.0f) },
+    { MemorySource::Vulkan,    "Vulkan Static", ImVec4(0.2f, 0.6f, 1.0f, 1.0f) },
+    { MemorySource::VulkanTmp, "Vulkan Temp",   ImVec4(1.0f, 0.7f, 0.2f, 1.0f) }
+};
+
+std::unordered_map<void*, LiveAllocInfo> g_live_allocs; 
+std::unordered_map<StackKey, HotspotInfo, StackKeyHash> g_hotspots; 
+std::mutex g_hotspots_mtx;
+
+PROFILE_API std::deque<TimePoint> g_history_data;
+PROFILE_API std::mutex g_history_mtx;
+
+LiveMetrics g_metrics;
+
+const char* GetSourceStr(MemorySource s) {
+    static const char* sources[] = { "Editor", "Vulkan", "VulkanTmp" };
+    return sources[(int)s];
+}
+
+const char* GetActionStr(MemoryAction a) {
+    return (a == MemoryAction::Alloc) ? "ALLOC" : "FREE";
+}
+
+PROFILE_API size_t Profile_GetPeakBytesBySource(MemorySource source) {
+    return g_metrics.peaks[(size_t)source].load();
+}
+
 static void worker_thread_func() {
-    size_t batch_count = 0;
+    g_in_hook = true;
+    
     EventRecord rec;
-    uint64_t local_processed = 0;
-    while (g_worker_running.load(std::memory_order_acquire)) {
-        bool has = g_ring->pop(rec);
-        if (!has) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    size_t batch_count = 0;
+
+    while (true) {
+        if (!g_ring->pop(rec)) {
+            if (!g_worker_running.load(std::memory_order_acquire)) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
-        char header[256];
-        SYSTEMTIME st;
+
+        const uint8_t s_idx = static_cast<uint8_t>(rec.source);
+        if (s_idx >= (uint8_t)MemorySource::MAX_SOURCES) continue;
+
+        //(File Logging)
+        char header[512];
         uint64_t us = rec.ts_us;
         time_t secs = (time_t)(us / 1000000ULL);
         uint32_t usec = (uint32_t)(us % 1000000ULL);
         tm tmv;
         gmtime_s(&tmv, &secs);
-        sprintf_s(header, sizeof(header), "[%04d-%02d-%02d %02d:%02d:%02d.%06u] %s ptr=0x%p size=%zu\n",
-                  tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec,
-                  usec, (rec.type == EVT_ALLOC ? "ALLOC" : "FREE"), rec.ptr, rec.size);
+
+        int offset = sprintf_s(header, sizeof(header), 
+            "[%04d-%02d-%02d %02d:%02d:%02d.%06u] [%s:%s] ptr=0x%p size=%zu",
+            tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec,
+            usec, GetSourceStr(rec.source), GetActionStr(rec.action), rec.ptr, rec.size);
+
+        if (rec.source == MemorySource::VulkanTmp && rec.action == MemoryAction::Alloc) {
+            if (rec.usage != 0xFFFFFFFF) {
+                sprintf_s(header + offset, sizeof(header) - offset, " usage=%s\n", GetVkUsageName(rec.usage));
+            } else {
+                sprintf_s(header + offset, sizeof(header) - offset, " name=%s\n", rec.name);
+            }
+        } else {
+            sprintf_s(header + offset, sizeof(header) - offset, "\n");
+        }
+
         g_log_ofs << header;
-        // symbolicate captured frames (fast mode)
-        for (uint8_t i = 0; i < rec.frame_count; ++i) {
-            void* a = rec.frames[i];
-            std::string s = symbolicate_address(a);
-            g_log_ofs << "    #" << (int)i << " " << s << "\n";
+        for (uint16_t i = 0; i < rec.frame_count; ++i) {
+            g_log_ofs << "    #" << i << " " << rec.frames[i] << "\n";
         }
         g_log_ofs << "----------------------------------------\n";
-        ++batch_count;
-        ++local_processed;
-        if (batch_count >= LOG_BATCH_FLUSH) {
+        if (LOG_BATCH_FLUSH > 0 && ++batch_count >= LOG_BATCH_FLUSH) {
             g_log_ofs.flush();
             batch_count = 0;
         }
+
+        // (Metrics & Hotspots)
+        if (rec.action == MemoryAction::Alloc) {
+            LiveAllocInfo& live = g_live_allocs[rec.ptr];
+            live.size = rec.size;
+            live.source = rec.source;
+            live.ptr = rec.ptr;
+            live.key.frame_count = rec.frame_count;
+            memcpy(live.key.frames, rec.frames, rec.frame_count * sizeof(void*));
+            
+            StackKeyHash hasher;
+            live.key.cached_hash = hasher(live.key);
+
+            size_t current_val = g_metrics.bytes[s_idx].fetch_add(rec.size, std::memory_order_relaxed) + rec.size;
+            size_t old_peak = g_metrics.peaks[s_idx].load(std::memory_order_relaxed);
+            while (current_val > old_peak && 
+                   !g_metrics.peaks[s_idx].compare_exchange_weak(old_peak, current_val, std::memory_order_relaxed));
+
+            {
+                std::lock_guard<std::mutex> lock(g_hotspots_mtx);
+                auto& h_info = g_hotspots[live.key];
+                h_info.total_size += rec.size;
+                h_info.alloc_count++;
+                h_info.source = rec.source;
+            }
+        } 
+        else if (rec.action == MemoryAction::Free) {
+            auto it = g_live_allocs.find(rec.ptr);
+            if (it != g_live_allocs.end()) {
+                const auto& live = it->second;
+                
+                if (g_metrics.bytes[s_idx] >= live.size) {
+                    g_metrics.bytes[s_idx].fetch_sub(live.size, std::memory_order_relaxed);
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(g_hotspots_mtx);
+                    auto h_it = g_hotspots.find(live.key);
+                    if (h_it != g_hotspots.end()) {
+                        if (h_it->second.total_size >= live.size) {
+                            h_it->second.total_size -= live.size;
+                        }
+                    }
+                }
+                g_live_allocs.erase(it);
+            }
+        }
     }
-    g_log_ofs.flush();
+    
+    g_in_hook = false;
 }
 
-// UI
-std::vector<HotspotSnapshot> GetHotspots(size_t top_n) {
+// UI--------------------------------------------
+
+void Profile_TickSample() {
+    static auto last_sample = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_sample).count() < 100) {
+        return;
+    }
+    last_sample = now;
+
+    TimePoint tp;
+    tp.time = std::chrono::duration<float>(now - g_start_time).count();
+    
+    bool has_any_value = false;
+    for (int i = 0; i < SOURCE_COUNT; ++i) {
+        tp.values[i] = static_cast<float>(g_metrics.bytes[i].load(std::memory_order_relaxed));
+        if (tp.values[i] > 0) has_any_value = true;
+    }
+
+
+    std::lock_guard<std::mutex> lock(g_history_mtx);
+    g_history_data.push_back(tp);
+
+    if (g_history_data.size() > 2000) { 
+        g_history_data.pop_front();
+    }
+}
+
+size_t Profile_GetBytesBySource(MemorySource source) {
+    return g_metrics.bytes[(size_t)source].load();
+}
+
+std::vector<HotspotSnapshot> GetHotspots(size_t top_n, MemorySource filterSource) {
     std::vector<HotspotSnapshot> out;
     std::lock_guard<std::mutex> lock(g_hotspots_mtx);
 
-    for (auto& [key, info] : g_hotspots) {
+    for (auto& pair : g_hotspots) {
+        const StackKey& key = pair.first;
+        const HotspotInfo& info = pair.second;
+
+        if (info.source != filterSource || info.total_size == 0) continue;
+
         HotspotSnapshot snap;
         snap.total_size = info.total_size;
         snap.alloc_count = info.alloc_count;
+        snap.source = info.source;
 
-        for (auto f : key.frames) {
-            snap.stack_str += symbolicate_address(f) + "\n";
+        for (int i = 0; i < key.frame_count; ++i) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "0x%p\n", key.frames[i]);
+            snap.stack_str += buf;
         }
         out.push_back(std::move(snap));
     }
 
-    std::sort(out.begin(), out.end(), [](auto& a, auto& b) { return a.total_size > b.total_size; });
+    std::sort(out.begin(), out.end(), [](const HotspotSnapshot& a, const HotspotSnapshot& b) {
+        return a.total_size > b.total_size;
+    });
+
     if (out.size() > top_n) out.resize(top_n);
     return out;
 }
 
-static std::map<void*, AllocationInfo> g_allocations;
-static std::mutex g_alloc_mtx;
 
-static std::atomic<size_t> g_live_bytes{0};
-static std::atomic<size_t> g_peak_bytes{0};
-static std::atomic<size_t> g_live_alloc_count{0};
-size_t Profile_GetLiveBytes() { return g_live_bytes.load(); }
-size_t Profile_GetPeakBytes() { return g_peak_bytes.load(); }
-size_t Profile_GetLiveAllocCount() { return g_live_alloc_count.load(); }
-
-size_t Profile_GetAllocationCount()
-{
-    std::lock_guard<std::mutex> lock(g_alloc_mtx);
-    return g_allocations.size();
-}
 //---------------
+static std::mutex g_alloc_mtx;
 
 //typedef void* (*malloc_t)(size_t);
 //typedef void  (*free_t)(void*);
@@ -331,58 +511,31 @@ Malloc_t orig_Malloc = nullptr;
 Free1_t orig_Free1 = nullptr;
 Free2_t orig_Free2 = nullptr;
 
+
 void* malloc_hook(size_t size) {
     if (g_in_hook) {
-        // already in hook, do not record
         return orig_Malloc(size);
     }
     g_in_hook = true;
 
     void* p = orig_Malloc(size);
+    if (g_ring && p) { 
+        EventRecord rec;
+        rec.ts_us = now_us();
+        rec.source = MemorySource::Editor;
+        rec.action = MemoryAction::Alloc;
+        rec.size = size;
+        rec.ptr = p;
+        
+        capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
 
-    // prepare event (avoid any allocation/free)
-    EventRecord rec;
-    rec.ts_us = now_us();
-    rec.type = EVT_ALLOC;
-    rec.size = size;
-    rec.ptr = p;
-    rec.frame_count = 0;
-
-    {
-        std::lock_guard<std::mutex> lock(g_alloc_mtx);
-
-        g_allocations[p] = {
-            size,
-            std::chrono::steady_clock::now()
-        };
+        g_ring->push(rec); 
     }
-    
-    g_live_bytes.fetch_add(size, std::memory_order_relaxed);
-    g_live_alloc_count.fetch_add(1, std::memory_order_relaxed);
-    size_t current_live = g_live_bytes.load();
-    size_t peak        = g_peak_bytes.load();
-    while (current_live > peak && !g_peak_bytes.compare_exchange_weak(peak, current_live)) {
-    }
-
-    capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
-
-    // --- 更新热点统计 ---
-    StackKey key;
-    key.frames.assign(rec.frames, rec.frames + rec.frame_count);
-
-    {
-        std::lock_guard<std::mutex> lock(g_hotspots_mtx);
-        auto& info = g_hotspots[key];
-        info.total_size += size;
-        info.alloc_count += 1;
-    }
-//----------
-    if (g_ring) g_ring->push(rec);
 
     g_in_hook = false;
-    //std::cout << "[HOOK] malloc " << size << " -> " << p << "\n";
     return p;
 }
+
 void free_hook_1(void* p)
 {
     if (g_in_hook)
@@ -392,29 +545,17 @@ void free_hook_1(void* p)
     }
 
     g_in_hook = true;
-
-    size_t freed_size = 0;
-
-    {
-        std::lock_guard<std::mutex> lock(g_alloc_mtx);
-        auto it = g_allocations.find(p);
-        if (it != g_allocations.end()) {
-            freed_size = it->second.size;
-            g_allocations.erase(it);
-        }
-    }
-
-    if (freed_size > 0) {
-        g_live_bytes.fetch_sub(freed_size, std::memory_order_relaxed);
-        g_live_alloc_count.fetch_sub(1, std::memory_order_relaxed);
+    if (g_ring) { 
         EventRecord rec;
         rec.ts_us = now_us();
-        rec.type = EVT_FREE;
-        rec.size = freed_size;
+        rec.source = MemorySource::Editor;
+        rec.action = MemoryAction::Free;
+        rec.size = 0;
         rec.ptr = p;
-        rec.frame_count = 0;
+        
+        capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
 
-        if (g_ring) g_ring->push(rec);
+        g_ring->push(rec); 
     }
 
     orig_Free1(p);
@@ -431,83 +572,557 @@ void free_hook_2(void* p, size_t size)
 
     g_in_hook = true;
 
-    {
-        std::lock_guard<std::mutex> lock(g_alloc_mtx);
-        g_allocations.erase(p);
-    }
-
-    if (size > 0) {
-        g_live_bytes.fetch_sub(size, std::memory_order_relaxed);
-        g_live_alloc_count.fetch_sub(1, std::memory_order_relaxed);
+    if (g_ring) { 
         EventRecord rec;
         rec.ts_us = now_us();
-        rec.type = EVT_FREE;
+        rec.source = MemorySource::Editor;
+        rec.action = MemoryAction::Free;
+        rec.size = size;
+        rec.ptr = p;
+        
+        capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
+
+        g_ring->push(rec); 
+    }
+
+    orig_Free2(p, size);
+
+    g_in_hook = false;
+}
+
+// ----------------- VkTmp pointer -----------------
+typedef uint64_t(*PFN_VkTmpAllocate_1)(
+    VkTmpBufferAllocator* _this,
+    uint64_t _size, 
+    std::string_view _name
+);
+
+typedef uint64_t(*PFN_VkTmpAllocate_2)(
+    VkTmpBufferAllocator* _this,
+    uint64_t _size,
+    EVkInternalBufferUsage _usage
+);
+
+typedef void(*PFN_VkTmpDeAllocate)(
+    VkTmpBufferAllocator* _this,
+    uint64_t _handle
+);
+
+PFN_VkTmpAllocate_1 orig_VkTmpAllocate_1 = nullptr;
+PFN_VkTmpAllocate_2 orig_VkTmpAllocate_2 = nullptr;
+PFN_VkTmpDeAllocate orig_VkTmpDeAllocate = nullptr;
+
+
+uint64_t VkTmpAllocate_Hook_1(
+    VkTmpBufferAllocator* _this,
+    uint64_t _size, 
+    std::string_view _name
+)
+{
+    uint64_t handle = orig_VkTmpAllocate_1(_this, _size, _name);
+
+    if (!g_in_hook)
+    {
+        g_in_hook = true;
+
+        void* p = reinterpret_cast<void*>(handle);// not a address pointer
+        EventRecord rec;
+        rec.ts_us = now_us();
+        rec.source = MemorySource::VulkanTmp;
+        rec.action = MemoryAction::Alloc;
+        rec.size = _size;
+        rec.ptr = p;
+        rec.frame_count = 0;
+        rec.usage = 0xFFFFFFFF;
+        
+        size_t copy_len = (_name.size() < 31) ? _name.size() : 31;
+        memcpy(rec.name, _name.data(), copy_len);
+        rec.name[copy_len] = '\0';
+        
+
+        capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 1);
+
+        if (g_ring) g_ring->push(rec);
+
+        g_in_hook = false;
+    }
+
+    return handle;
+}
+
+uint64_t VkTmpAllocate_Hook_2(
+    VkTmpBufferAllocator* _this,
+    uint64_t _size,
+    EVkInternalBufferUsage _usage)
+{
+    uint64_t handle = orig_VkTmpAllocate_2(_this, _size, _usage);
+
+    if (!g_in_hook)
+    {
+        g_in_hook = true;
+        void* p = reinterpret_cast<void*>(handle);// not a address pointer
+        EventRecord rec;
+        rec.ts_us = now_us();
+        rec.source = MemorySource::VulkanTmp;
+        rec.action = MemoryAction::Alloc;
+        rec.size = _size;
+        rec.ptr = p; // not a address pointer
+        rec.frame_count = 0;
+        rec.usage = (uint32_t)_usage;
+        rec.name[0] = '\0';
+        
+        capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 1);
+
+        if (g_ring) g_ring->push(rec);
+
+        g_in_hook = false;
+    }
+
+    return handle;
+}
+
+
+void VkTmpDeAllocate_Hook(
+    VkTmpBufferAllocator* _this,
+    uint64_t _handle)
+{
+    if (!g_in_hook)
+    {
+        g_in_hook = true;
+
+        void* p = reinterpret_cast<void*>(_handle);
+
+        EventRecord rec;
+        rec.ts_us = now_us();
+        rec.source = MemorySource::VulkanTmp;
+        rec.action = MemoryAction::Free;
+        rec.size = 0;
+        rec.ptr = p;
+        rec.frame_count = 0;
+
+        if (g_ring)
+        {
+            g_ring->push(rec);
+        }
+        orig_VkTmpDeAllocate(_this, _handle);
+        g_in_hook = false;
+    }
+}
+//---------------Vk
+
+typedef VkResult (VKAPI_PTR* PFN_vkAllocateMemory_t)(
+    VkDevice,
+    const VkMemoryAllocateInfo*,
+    const VkAllocationCallbacks*,
+    VkDeviceMemory*);
+
+typedef void (VKAPI_PTR* PFN_vkFreeMemory_t)(
+    VkDevice,
+    VkDeviceMemory,
+    const VkAllocationCallbacks*);
+
+PFN_vkAllocateMemory_t orig_vkAllocateMemory = nullptr;
+PFN_vkFreeMemory_t     orig_vkFreeMemory = nullptr;
+
+VkResult VKAPI_PTR vkAllocateMemory_Hook(
+    VkDevice device,
+    const VkMemoryAllocateInfo* pAllocateInfo,
+    const VkAllocationCallbacks* pAllocator,
+    VkDeviceMemory* pMemory)
+{
+    VkResult result = orig_vkAllocateMemory(
+        device,
+        pAllocateInfo,
+        pAllocator,
+        pMemory);
+    if (result == VK_SUCCESS && !g_in_hook)
+    {
+        g_in_hook = true;
+
+        uint64_t size = pAllocateInfo->allocationSize;
+        void* p = reinterpret_cast<void*>(*pMemory);
+
+        EventRecord rec;
+        rec.ts_us = now_us();
+        rec.source = MemorySource::VulkanTmp;
+        rec.action = MemoryAction::Alloc;
         rec.size = size;
         rec.ptr = p;
         rec.frame_count = 0;
 
-        if (g_ring) g_ring->push(rec);
+        capture_frames_fast(
+            rec.frames,
+            MAX_FRAMES,
+            rec.frame_count,
+            1);
+
+        if (g_ring)
+        {
+            g_ring->push(rec);
+        }  
+
+        g_in_hook = false;
     }
 
-    orig_Free2(p, size);
-    //std::cout << "[HOOK] Free2 " << " -> " << p << "\n";
-    g_in_hook = false;
+    return result;
 }
-/*
-void free_hook(void* p) {
-    if (g_in_hook) {
-        orig_free(p);
-        return;
+
+void VKAPI_PTR vkFreeMemory_Hook(
+    VkDevice device,
+    VkDeviceMemory memory,
+    const VkAllocationCallbacks* pAllocator)
+{
+    if (!g_in_hook)
+    {
+        g_in_hook = true;
+
+        void* p = reinterpret_cast<void*>(memory);
+        uint64_t size = 0;
+
+
+
+        EventRecord rec;
+        rec.ts_us = now_us();
+        rec.source = MemorySource::Vulkan;
+        rec.action = MemoryAction::Free;
+        rec.size = size;
+        rec.ptr = p;
+        rec.frame_count = 0;
+
+        capture_frames_fast(
+            rec.frames,
+            MAX_FRAMES,
+            rec.frame_count,
+            1);
+
+        if (g_ring)
+        {
+            g_ring->push(rec);
+        }
+                
+        orig_vkFreeMemory(device, memory, pAllocator);
+        g_in_hook = false;
     }
-    g_in_hook = true;
-
-    // record event
-    EventRecord rec;
-    rec.ts_us = now_us();
-    rec.type = EVT_FREE;
-    rec.size = 0;
-    rec.ptr = p;
-    rec.frame_count = 0;
-
-    capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
-
-    if (g_ring) g_ring->push(rec);
-
-    orig_free(p);
-
-    g_in_hook = false;
-    //std::cout << "[HOOK] free " << p << "\n";
 }
-*/
+//--------------
 
+void SetupVulkanHooks(HMODULE hVulkan) {
+    if (orig_vkAllocateMemory) return;
 
-void install_hooks() {
-    MH_Initialize();
-    //[todo?]
-    //MH_CreateHook(&mi_malloc, &malloc_hook, reinterpret_cast<LPVOID*>(&orig_malloc));
-    //MH_CreateHook(&mi_free,   &free_hook,   reinterpret_cast<LPVOID*>(&orig_free));
-    MH_CreateHook(&Memory::Malloc, &malloc_hook, reinterpret_cast<LPVOID*>(&orig_Malloc));
-    MH_CreateHook(
-    reinterpret_cast<LPVOID>(
-        static_cast<Free1_t>(&Memory::Free)
-    ),
-    &free_hook_1,
-    reinterpret_cast<LPVOID*>(&orig_Free1)
-);
+    HMODULE vklib = GetModuleHandleA("vulkan-1.dll");
+    if (vklib) {
+        void* addr = (void*)GetProcAddress(vklib, "vkAllocateMemory");
+        MH_STATUS status = MH_CreateHook(addr, &vkAllocateMemory_Hook, (LPVOID*)&orig_vkAllocateMemory);
+        status = MH_EnableHook(addr);
+        printf("EnableHook vkAllocateMemory: %s\n", MH_StatusToString(status));
 
-MH_CreateHook(
-    reinterpret_cast<LPVOID>(
-        static_cast<Free2_t>(&Memory::Free)
-    ),
-    &free_hook_2,
-    reinterpret_cast<LPVOID*>(&orig_Free2)
-);
-    MH_EnableHook(MH_ALL_HOOKS);
+        addr = (void*)GetProcAddress(vklib, "vkFreeMemory");
+        MH_CreateHook(
+            addr,
+            vkFreeMemory_Hook,
+            reinterpret_cast<void**>(&orig_vkFreeMemory));
+
+        status = MH_EnableHook(addr);
+        printf("EnableHook vkFreeMemory: %s\n", MH_StatusToString(status));
+    }
+    else
+    {
+        printf("No vklib\n");
+    }
+}
+//LoaderHook--------------------
+typedef HMODULE(WINAPI* PFN_LoadLibraryW)(LPCWSTR);
+PFN_LoadLibraryW orig_LoadLibraryW = nullptr;
+HMODULE WINAPI Detour_LoadLibraryW(LPCWSTR lpLibFileName) {
+    HMODULE hModule = orig_LoadLibraryW(lpLibFileName);
+    
+    if (hModule && lpLibFileName) {
+        std::wstring name = lpLibFileName;
+        if (name.find(L"vulkan-1.dll") != std::wstring::npos) {
+            printf("[Profiler] Detected vulkan-1.dll loading...\n");
+            SetupVulkanHooks(hModule);
+        }
+    }
+    return hModule;
+}
+//ExitHook-----------------------
+void __cdecl ProfileExitFunc() {
+    static bool handled = false;
+    if (handled) return;
+    handled = true;
+
+    shutdown_mimalloc_profiler();
+    StopSession();
+    std::cout << "Moer Engine Perfetto Exited" << std::endl;
 }
 
+typedef void (WINAPI* PFN_Exit)(int);
+PFN_Exit orig_exit = nullptr;
+
+typedef BOOL (WINAPI* PFN_TerminateProcess)(HANDLE, UINT);
+PFN_TerminateProcess orig_TerminateProcess = nullptr;
+
+void WINAPI Detour_exit(int code) {
+    static std::atomic<bool> already_exited{false};
+    if (!already_exited.exchange(true)) {
+        printf("[Profiler] Intercepted exit(%d). Cleaning up...\n", code);
+        ProfileExitFunc(); 
+    }
+    orig_exit(code);
+}
+
+BOOL WINAPI Detour_TerminateProcess(HANDLE hProcess, UINT uExitCode) {
+    if (hProcess == GetCurrentProcess() || GetProcessId(hProcess) == GetCurrentProcessId()) {
+        static std::atomic<bool> already_terminated{false};
+        if (!already_terminated.exchange(true)) {
+            printf("[Profiler] Intercepted self-termination. Emergency dump...\n");
+            ProfileExitFunc();
+        }
+    }
+    return orig_TerminateProcess(hProcess, uExitCode);
+}
+
+typedef void (WINAPI* PFN_ExitProcess)(UINT);
+PFN_ExitProcess orig_ExitProcess = nullptr;
+
+void WINAPI Detour_ExitProcess(UINT uExitCode) {
+    static std::atomic<bool> already_run{ false };
+    if (!already_run.exchange(true)) {
+        printf("\n[Profiler] Intercepted ExitProcess(%u). Dumping leaks...\n", uExitCode);
+        ProfileExitFunc();
+    }
+    orig_ExitProcess(uExitCode);
+}
+
+// Pattern Scan
+bool MatchPattern(BYTE* addr, const BYTE* pattern, const char* mask)
+{
+    for (; *mask; ++mask, ++addr, ++pattern)
+    {
+        if (*mask == 'x' && *addr != *pattern)
+            return false;
+    }
+    return true;
+}
+
+void* PatternScan(BYTE* base, size_t size, const BYTE* pattern, const char* mask)
+{
+    size_t patternLen = strlen(mask);
+
+    for (size_t i = 0; i < size - patternLen; i++)
+    {
+        if (MatchPattern(base + i, pattern, mask))
+            return base + i;
+    }
+
+    return nullptr;
+}
+
+//------------InitSymbol
+bool InitSymbolEngine() {
+    HANDLE hProcess = GetCurrentProcess();
+    
+    SymCleanup(hProcess);
+
+    SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    std::string searchPath = exePath;
+    searchPath = searchPath.substr(0, searchPath.find_last_of("\\/"));
+
+    if (!SymInitialize(hProcess, searchPath.c_str(), TRUE)) {
+        printf("[PDB] SymInitialize Fatal Error: %lu\n", GetLastError());
+        return false;
+    }
+    return true;
+}
+
+void* GetProcAddressFromPdb(const char* mangledName, const char* readableName = nullptr) {
+    HANDLE hProcess = GetCurrentProcess();
+    char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(TCHAR)];
+    PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)buffer;
+    pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+    pSymbol->MaxNameLen = MAX_SYM_NAME;
+
+    if (SymFromName(hProcess, mangledName, pSymbol)) {
+        printf("[PDB] Found by mangledname:%s\n", mangledName);
+        return reinterpret_cast<void*>(pSymbol->Address);
+    }
+
+    if (readableName && SymFromName(hProcess, readableName, pSymbol)) {
+        printf("[PDB] Found by readable name: %s -> %p\n", readableName, (void*)pSymbol->Address);
+        return reinterpret_cast<void*>(pSymbol->Address);
+    }
+
+    return nullptr;
+}
+
+// 获取模块地址
+
+// void GetModuleRange(HMODULE module, BYTE*& base, size_t& size)
+// {
+//     MODULEINFO info{};
+//     GetModuleInformation(GetCurrentProcess(), module, &info, sizeof(info));
+
+//     base = (BYTE*)info.lpBaseOfDll;
+//     size = info.SizeOfImage;
+// }
+
+
+
+void install_hooks_static() {
+    MH_STATUS status = MH_Initialize();
+    printf("MH_Initialize: %s\n", MH_StatusToString(status));
+
+    
+    HMODULE hCore = GetModuleHandleA("moer_cored.dll"); 
+
+    if (hCore) {
+        void* pMalloc = (void*)GetProcAddress(hCore, "?Malloc@Memory@@SAPEAX_K@Z");
+            if (pMalloc) {
+            MH_CreateHook(pMalloc, &malloc_hook, (LPVOID*)&orig_Malloc);
+            status = MH_EnableHook(pMalloc);
+            printf("EnableHook Memory:Malloc: %s\n", MH_StatusToString(status));
+        }
+        void* pFree1 = (void*)GetProcAddress(hCore, "?Free@Memory@@SAXPEAX@Z");
+        if (pFree1) {
+            MH_CreateHook(pFree1, &free_hook_1, (LPVOID*)&orig_Free1);
+            status = MH_EnableHook(pFree1);
+            printf("EnableHook Memory::Free(void*) at %p\n", pFree1);
+        }
+        void* pFree2 = (void*)GetProcAddress(hCore, "?Free@Memory@@SAXPEAX_K@Z");
+        if (pFree2) {
+            MH_CreateHook(pFree2, &free_hook_2, (LPVOID*)&orig_Free2);
+            status = MH_EnableHook(pFree2);
+            printf("EnableHook Memory::Free(void*) at %p\n", pFree2);
+        }
+    }
+
+    // void* pMalloc = GetProcAddressFromPdb("?Malloc@Memory@@SAPEAX_K@Z", "Memory::Malloc");
+    // if (pMalloc) {
+    //     MH_CreateHook(pMalloc, &malloc_hook, (LPVOID*)&orig_Malloc);
+    //     status = MH_EnableHook(pMalloc);
+    //     printf("EnableHook Memory:Malloc: %s\n", MH_StatusToString(status));
+    // }
+
+    // void* pFree1 = GetProcAddressFromPdb("?Free@Memory@@SAXPEAX@Z", "Memory::Free");
+    // if (pFree1) {
+    //     MH_CreateHook(pFree1, &free_hook_1, (LPVOID*)&orig_Free1);
+    //     status = MH_EnableHook(pFree1);
+    //     printf("EnableHook Memory::Free(void*) at %p\n", pFree1);
+    // }
+
+    // void* pFree2 = GetProcAddressFromPdb("?Free@Memory@@SAXPEAX_K@Z");
+    // if (pFree2) {
+    //     MH_CreateHook(pFree2, &free_hook_2, (LPVOID*)&orig_Free2); // 确保你有对应的 hook 函数
+    //     MH_EnableHook(pFree2);
+    //     printf("[Profile] Hooked Memory::Free(void*, size_t) at %p\n", pFree2);
+    // }
+
+    // 现在有pdb直接从里面搜索符号。release版可能需要特征码匹配或者导出符号
+    //uintptr_t base = (uintptr_t)GetModuleHandleA("moer_renderd.dll");
+    // LPVOID allocAddr_1 = (LPVOID)(base + 0x360E20);
+    // LPVOID allocAddr_2 = (LPVOID)(base + 0x3612D0);
+    // LPVOID freeAddr = (LPVOID)(base + 0x361870);
+
+    //hCore = GetModuleHandleA("moer_renderd.dll"); 
+    void* allocAddr_1 = GetProcAddressFromPdb("?Allocate@VkTmpBufferAllocator@Render@Moer@@QEAA_K_KV?$basic_string_view@DU?$char_traits@D@std@@@std@@@Z");
+    //void* allocAddr_1 = (void*)GetProcAddress(hCore, "?Allocate@VkTmpBufferAllocator@Render@Moer@@QEAA_K_KV?$basic_string_view@DU?$char_traits@D@std@@@std@@@Z");
+    if (allocAddr_1) {
+        status = MH_CreateHook(
+            allocAddr_1,
+            &VkTmpAllocate_Hook_1,
+            (LPVOID*)&orig_VkTmpAllocate_1
+        );
+        status = MH_EnableHook(allocAddr_1);
+        printf("EnableHook VkTmpBufferAllocator::Allocate(uint64 _size, std::string_view _name) %s\n", MH_StatusToString(status));
+    }
+    void* allocAddr_2 = GetProcAddressFromPdb("?Allocate@VkTmpBufferAllocator@Render@Moer@@QEAA_K_KW4EVkInternalBufferUsage@23@@Z", "VkTmpBufferAllocator::Allocate");
+    //void* allocAddr_2 =(void*)GetProcAddress(hCore, "?Allocate@VkTmpBufferAllocator@Render@Moer@@QEAA_K_KW4EVkInternalBufferUsage@23@@Z");
+    if (allocAddr_2) {
+        status = MH_CreateHook(
+            allocAddr_2,
+            &VkTmpAllocate_Hook_2,
+            (LPVOID*)&orig_VkTmpAllocate_2
+        );
+        status = MH_EnableHook(allocAddr_2);
+        printf("EnableHook VkTmpBufferAllocator::Allocate(uint64 _size, EVkInternalBufferUsage _usage) %s\n", MH_StatusToString(status));
+    }
+    void* freeAddr = GetProcAddressFromPdb("?DeAllocate@VkTmpBufferAllocator@Render@Moer@@QEAAX_K@Z","VkTmpBufferAllocator::DeAllocate");
+   // void* freeAddr =(void*)GetProcAddress(hCore, "?DeAllocate@VkTmpBufferAllocator@Render@Moer@@QEAAX_K@Z");
+    if(freeAddr)
+    {
+        MH_CreateHook(
+            freeAddr,
+            &VkTmpDeAllocate_Hook,
+            (LPVOID*)&orig_VkTmpDeAllocate
+        );
+        status = MH_EnableHook(freeAddr);
+        printf("EnableHook DeAllocate(uint64 _handle) %s\n", MH_StatusToString(status));
+    }
+    //MH_EnableHook(MH_ALL_HOOKS);
+}
+void install_hooks_dynamic()
+{
+    constexpr int max_wait_ms = 3000;
+    int waited = 0;
+    while (waited < max_wait_ms)
+    {
+        if (GetModuleHandleA("vulkan-1.dll"))
+            break;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        waited += 5;
+    }
+    
+    HMODULE vklib = GetModuleHandleA("vulkan-1.dll");
+    if (vklib) {
+        void* addr = (void*)GetProcAddress(vklib, "vkAllocateMemory");
+        MH_STATUS status = MH_CreateHook(addr, &vkAllocateMemory_Hook, (LPVOID*)&orig_vkAllocateMemory);
+        status = MH_EnableHook(addr);
+        printf("EnableHook vkAllocateMemory: %s\n", MH_StatusToString(status));
+
+        addr = (void*)GetProcAddress(vklib, "vkFreeMemory");
+        MH_CreateHook(
+            addr,
+            vkFreeMemory_Hook,
+            reinterpret_cast<void**>(&orig_vkFreeMemory));
+
+        status = MH_EnableHook(addr);
+        printf("EnableHook vkFreeMemory: %s\n", MH_StatusToString(status));
+    }
+    else
+    {
+        printf("No vklib\n");
+    }
+}
 void remove_hooks() {
     MH_DisableHook(MH_ALL_HOOKS);
     MH_Uninitialize();
+}
+
+void LogModuleInfo() {
+    if (!g_log_ofs.is_open()) return;
+
+    g_log_ofs << "=== Module Map ===\n";
+    HMODULE hMods[1024];
+    HANDLE hProcess = GetCurrentProcess();
+    DWORD cbNeeded;
+
+    if (EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded)) {
+        g_log_ofs << "MODULE_NAME | BaseOfDll | SizeOfImage \n";
+        for (int i = 0; i < (cbNeeded / sizeof(HMODULE)); i++) {
+            TCHAR szModName[MAX_PATH];
+            MODULEINFO mi;
+            if (GetModuleFileNameEx(hProcess, hMods[i], szModName, sizeof(szModName) / sizeof(TCHAR))) {
+                GetModuleInformation(hProcess, hMods[i], &mi, sizeof(mi));
+                g_log_ofs << "MODULE:  " << szModName << " | " << std::hex << std::showbase << mi.lpBaseOfDll << " | " << mi.SizeOfImage << std::dec << "\n";
+            }
+        }
+    }
+    g_log_ofs << "=== End Module Map ===\n";
+    g_log_ofs.flush();
 }
 
 void initialize_mimalloc_profiler() {
@@ -519,12 +1134,9 @@ void initialize_mimalloc_profiler() {
     g_ring = new RingBuffer(RING_CAPACITY);
 
     InitializeCriticalSection(&g_sym_cs);
-    SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
-    if (!SymInitialize(GetCurrentProcess(), NULL, TRUE)) {
-        DWORD err = GetLastError();
-        std::fprintf(stderr, "SymInitialize failed: %u\n", (unsigned)err);
-    } else {
-        g_dbghelp_inited.store(true);
+
+    if (!InitSymbolEngine()) {
+        printf("Failed to initialize Symbol Engine, PDB hooks will fail.\n");
     }
 
     std::string log_path = get_log_path() + "\\mimalloc_profiler.log";
@@ -534,21 +1146,81 @@ void initialize_mimalloc_profiler() {
     } else {
         g_log_ofs << "=== mimalloc profiler log ===\n";
     }
+    LogModuleInfo();
+}
 
-    install_hooks();
+// 出入口
+
+void ProfileInitStatic()
+{
+    InitPerfetto();
+    g_session = StartSession();
+    initialize_mimalloc_profiler();
+    install_hooks_static();
+    //std::atexit(ProfileExitFunc);
+    std::cout << "Moer Engine Perfetto Starting..." << std::endl;
 
     // start worker
     g_worker_running.store(true);
     g_worker = std::thread(worker_thread_func);
+}
 
-    std::cout<<"[MINHOOK]Install"<<std::endl;
+void __cdecl ProfileInitFunc()
+{
+    ProfileInitStatic();
+
+    HMODULE hUcrt = GetModuleHandleA("ucrtbase.dll");
+    if (!hUcrt) hUcrt = GetModuleHandleA("msvcrt.dll");
+
+    if (hUcrt) {
+        void* pExit = (void*)GetProcAddress(hUcrt, "exit");
+        if (pExit) {
+            MH_CreateHook(pExit, &Detour_exit, (LPVOID*)&orig_exit);
+            MH_EnableHook(pExit);
+        }
+        printf("[Profiler] System exit() hooked. ...\n");
+    }
+
+    void* pTerminate = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "TerminateProcess");
+    if (pTerminate) {
+        MH_CreateHook(pTerminate, &Detour_TerminateProcess, (LPVOID*)&orig_TerminateProcess);
+        MH_EnableHook(pTerminate);
+    }
+    
+    void* pExitProc = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "ExitProcess");
+    if (pExitProc) {
+        MH_CreateHook(pExitProc, &Detour_ExitProcess, (LPVOID*)&orig_ExitProcess);
+        MH_EnableHook(pExitProc);
+        printf("[Profiler] ExitProcess hook installed.\n");
+    }
+
+    void* pLoadLib = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryW");
+    if (pLoadLib) {
+        MH_CreateHook(pLoadLib, &Detour_LoadLibraryW, (LPVOID*)&orig_LoadLibraryW);
+        MH_EnableHook(pLoadLib);
+        printf("[Profiler] System LoadLibraryW hooked. Waiting for Vulkan...\n");
+    }
+
+    HMODULE hVulkan = GetModuleHandleA("vulkan-1.dll");
+    if (hVulkan) {
+        SetupVulkanHooks(hVulkan);
+    }
+    //install_hooks_dynamic();
+}
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(hModule);
+        std::thread(ProfileInitFunc).detach();
+    }
+    return TRUE;
 }
 
 void DumpLeaks()
 {
     std::lock_guard<std::mutex> lock(g_alloc_mtx);
 
-    if (g_allocations.empty())
+    if (g_live_allocs.empty())
     {
         std::cout << "No leaks\n";
         return;
@@ -556,9 +1228,9 @@ void DumpLeaks()
 
     size_t total = 0;
 
-    for (auto& [ptr, info] : g_allocations)
+    for (auto& [key, info] : g_live_allocs)
     {
-        std::cout << "Leak: " << ptr
+        std::cout << "Leak at: " << info.ptr
                   << " size=" << info.size << "\n";
         total += info.size;
     }
@@ -570,7 +1242,9 @@ void shutdown_mimalloc_profiler() {
     remove_hooks();
 
     // stop worker
-    g_worker_running.store(false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+    
+    g_worker_running.store(false, std::memory_order_release);
     if (g_worker.joinable()) g_worker.join();
 
     // cleanup

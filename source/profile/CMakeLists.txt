@@ -1,19 +1,23 @@
 if(WITH_PROFILE)
     message(STATUS "CMake WITH_PROFILE == ON")
-    set(target_name MoerProfile)
+    set(target_name moer_profile)
     set(moer_profile_dir ${moer_source_dir}/profile)
+    file(GLOB PROFILE_HEADERS CONFIGURE_DEPENDS "${moer_profile_dir}/*.h")
+    file(GLOB PROFILE_SOURCES CONFIGURE_DEPENDS "${moer_profile_dir}/*.cpp")
+    list(REMOVE_ITEM PROFILE_SOURCES "${moer_profile_dir}/moer_profiler.cpp")
+    
+
+    add_library(${target_name} SHARED ${PROFILE_HEADERS} ${PROFILE_SOURCES})
+
+    set_target_properties(${target_name} PROPERTIES 
+        FOLDER "profile"
+        WINDOWS_EXPORT_ALL_SYMBOLS ON
+    )
 
     set(PERFETTO_ROOT "${moer_root_dir}/3rdparty/perfetto")
     
     add_library(perfetto STATIC 
         ${PERFETTO_ROOT}/sdk/perfetto.cc
-    )
-    file(GLOB PROFILE_HEADERS CONFIGURE_DEPENDS "${moer_profile_dir}/*.h")
-    file(GLOB PROFILE_SOURCES CONFIGURE_DEPENDS "${moer_profile_dir}/*.cpp")
-    add_library(${target_name} STATIC ${PROFILE_HEADERS} ${PROFILE_SOURCES})
-
-    set_target_properties(${target_name} PROPERTIES 
-        FOLDER "profile"
     )
 
     target_include_directories(${target_name} 
@@ -32,7 +36,9 @@ if(WITH_PROFILE)
     target_include_directories(MinHookStatic PUBLIC 
         "${MINHOOK_ROOT}/include"
     )
+
     set(MISC_ROOT "${moer_source_dir}/runtime/core/include/misc")
+    set(moer_third_party_dir "${moer_root_dir}/3rdparty")
     target_include_directories(${target_name} PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${PERFETTO_ROOT}/sdk"
@@ -40,8 +46,12 @@ if(WITH_PROFILE)
         "${MINHOOK_ROOT}/src"
         "${MINHOOK_ROOT}/src/hde"   
         "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/core/include"
+        "${moer_source_dir}/runtime/render/rhi/vulkan"
+        "${moer_source_dir}/runtime/render"
+        "${moer_root_dir}/3rdparty/VulkanSDK/include"
+        "${moer_root_dir}/3rdparty/imgui"
     )
-
+    
     target_link_libraries(${target_name}
         PRIVATE perfetto
         PRIVATE ${CMAKE_THREAD_LIBS_INIT}
@@ -49,7 +59,14 @@ if(WITH_PROFILE)
         Threads::Threads
         kernel32
         PRIVATE MinHookStatic
+        mimalloc-static
     )
+
+    set(exe_target moer_profiler)
+    add_executable(${exe_target} "${moer_profile_dir}/moer_profiler.cpp")
+    target_link_libraries(${exe_target} PRIVATE kernel32.lib)
+
+    target_compile_definitions(moer_profile PRIVATE MOER_PROFILE_EXPORTS)
 
     if (WIN32)
         target_link_libraries(perfetto PRIVATE ws2_32)

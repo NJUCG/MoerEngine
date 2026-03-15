@@ -56,7 +56,7 @@ private:
     void ShowSceneColor();
     void ShowConfig();
 #ifdef WITH_PROFILE
-    void ShowMemoryProfiler();
+    void ShowMemoryProfiler(bool* p_open);
 #endif
 
 private:

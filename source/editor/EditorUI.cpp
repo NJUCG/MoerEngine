@@ -57,87 +57,127 @@ void EditorUI::InitFromConfigManager() {
 }
 
 #ifdef WITH_PROFILE
-void EditorUI::ShowMemoryProfiler() {
-    if (!m_b_show_memory_profiler)
-        return;
+void EditorUI::ShowMemoryProfiler(bool* p_open) {
+    Profile_TickSample();
 
-    if (!ImGui::Begin("Memory Profiler", &m_b_show_memory_profiler)) {
+    if (!ImGui::Begin("Memory Profiler", p_open)) {
         ImGui::End();
         return;
     }
 
-    ImGui::Separator();
-    ImGui::Text("Profiler Statistics");
+    if (ImGui::CollapsingHeader("Real-time Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::BeginTable("MetricsTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Source");
+            ImGui::TableSetupColumn("Current (MB)");
+            ImGui::TableSetupColumn("Peak (MB)");
+            ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+            ImGui::TableHeadersRow();
 
-    if (ImGui::TreeNodeEx("Live Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
-        static constexpr int HISTORY_SIZE = 300;
-        static float mem_history[HISTORY_SIZE] = {};
-        static float alloc_history[HISTORY_SIZE] = {};
-        static int history_index = 0;
-        static float refresh_timer = 0.0f;
+            for (int i = 0; i < SOURCE_COUNT; ++i) {
+                const auto& config = g_UIConfigs[i];
+                float currentMB = Profile_GetBytesBySource(config.source) / 1048576.0f;
+                float peakMB    = Profile_GetPeakBytesBySource(config.source) / 1048576.0f;
 
-        refresh_timer += ImGui::GetIO().DeltaTime;
-        if (refresh_timer >= 0.1f) {
-            size_t live_bytes = Profile_GetLiveBytes();
-            size_t live_alloc = Profile_GetLiveAllocCount();
-            
-            mem_history[history_index] = live_bytes / (1024.0f * 1024.0f);
-            alloc_history[history_index] = static_cast<float>(live_alloc);
-            history_index = (history_index + 1) % HISTORY_SIZE;
-            refresh_timer = 0.0f;
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("%s", config.label);
+                
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%.3f", currentMB);
+                
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Text("%.3f", peakMB); 
+
+                ImGui::TableSetColumnIndex(3);
+                ImGui::ColorButton(config.label, config.color, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoInputs);
+            }
+            ImGui::EndTable();
         }
-
-        size_t peak_bytes = Profile_GetPeakBytes();
-        float current_mem = mem_history[(history_index + HISTORY_SIZE - 1) % HISTORY_SIZE];
-
-        ImGui::Text("Current Memory: %.2f MB", current_mem);
-        ImGui::Text("Peak Memory:    %.2f MB", peak_bytes / (1024.0f * 1024.0f));
-        ImGui::Text("Alloc Count:    %.0f", alloc_history[(history_index + HISTORY_SIZE - 1) % HISTORY_SIZE]);
-
-        ImGui::PlotLines("##MemCurve", mem_history, HISTORY_SIZE, history_index,
-                        "Memory (MB)", 0.0f, (peak_bytes / (1024.0f * 1024.0f)) * 1.1f, ImVec2(0, 80));
-        
-        ImGui::TreePop();
     }
 
-    if (ImGui::TreeNodeEx("Memory Hotspots", ImGuiTreeNodeFlags_DefaultOpen)) {
-        static std::vector<HotspotSnapshot> cached_hotspots;
-        static float hotspot_timer = 0.0f;
+    ImGui::Spacing();
+
+    if (ImGui::CollapsingHeader("Live Memory Graph")) {
+        static float max_y = 5.0f;
         
-        hotspot_timer -= ImGui::GetIO().DeltaTime;
-        if (hotspot_timer <= 0.0f || cached_hotspots.empty()) {
-            cached_hotspots = GetHotspots(20); 
-            hotspot_timer = 5.0f;
-        }
+        std::lock_guard<std::mutex> lock(g_history_mtx);
+        if (!g_history_data.empty()) {
+            float plot_width = ImGui::GetContentRegionAvail().x;
+            
+            for (int s = 0; s < SOURCE_COUNT; ++s) {
+                struct PlotContext { 
+                    int source_idx; 
+                    std::deque<TimePoint>* data; 
+                };
+                PlotContext ctx = { s, &g_history_data };
 
-        if (ImGui::BeginChild("HotspotList", ImVec2(0, 300), true, ImGuiWindowFlags_HorizontalScrollbar)) {
-            for (const auto& hs : cached_hotspots) {
-                const char* full_stack = hs.stack_str.c_str();
-                const char* first_line_end = strchr(full_stack, '\n');
-                int name_len = first_line_end ? (int)(first_line_end - full_stack) : (int)strlen(full_stack);
+                auto deque_getter = [](void* data, int idx) -> float {
+                    PlotContext* p = static_cast<PlotContext*>(data);
+                    return p->data->at(idx).values[p->source_idx];
+                };
 
-                ImGui::PushID(&hs);
-                
-                if (ImGui::TreeNode("##hs_node", "%.*s", name_len, full_stack)) {
-                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 1.0f, 1.0f), "Total: %.2f MB", hs.total_size / (1024.0f * 1024.0f));
-                    ImGui::Text("Count: %zu", hs.alloc_count);
-                    
-                    if (ImGui::Button("Copy Stacktrace")) {
-                        ImGui::SetClipboardText(full_stack);
-                    }
-                    
-                    ImGui::TreePop();
+                float current_max = 0.0f;
+                for (const auto& tp : g_history_data) {
+                    if (tp.values[s] > current_max) current_max = tp.values[s];
                 }
+                if (current_max * 1.2f > max_y) max_y = current_max * 1.2f;
 
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", full_stack);
-                }
+                char label[128];
+                sprintf_s(label, "%s: %.2f MB", g_UIConfigs[s].label, g_history_data.back().values[s]);
 
-                ImGui::PopID();
+                ImGui::PushStyleColor(ImGuiCol_PlotLines, g_UIConfigs[s].color);
+                ImGui::PlotLines(label, deque_getter, &ctx, (int)g_history_data.size(), 0, nullptr, 0.0f, max_y, ImVec2(plot_width, 80));
+                ImGui::PopStyleColor();
             }
-            ImGui::EndChild();
         }
-        ImGui::TreePop();
+    }
+
+    ImGui::Spacing();
+
+    if (ImGui::CollapsingHeader("Memory Hotspots (Top 20)")) {
+        static MemorySource current_filter = MemorySource::Editor;
+
+        if (ImGui::BeginTabBar("HotspotSourceTabs")) {
+            for (int i = 0; i < SOURCE_COUNT; ++i) {
+                if (ImGui::BeginTabItem(g_UIConfigs[i].label)) {
+                    current_filter = g_UIConfigs[i].source;
+                    ImGui::EndTabItem();
+                }
+            }
+            ImGui::EndTabBar();
+        }
+
+        auto hotspots = GetHotspots(20, current_filter);
+
+        if (ImGui::BeginTable("HotspotTable", 3, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0, 300))) {
+            ImGui::TableSetupColumn("Size (MB)", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+            ImGui::TableSetupColumn("CallStack");
+            ImGui::TableHeadersRow();
+
+            for (const auto& snap : hotspots) {
+                ImGui::TableNextRow();
+                
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("%.3f", snap.total_size / 1048576.0f);
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%zu", snap.alloc_count);
+
+                ImGui::TableSetColumnIndex(2);
+
+                size_t first_line = snap.stack_str.find('\n');
+                std::string preview = snap.stack_str.substr(0, first_line);
+                
+                if (ImGui::Selectable(preview.c_str(), false)) {
+                    ImGui::SetClipboardText(snap.stack_str.c_str());
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Click to copy FULL stack trace\n\n%s", snap.stack_str.c_str());
+                }
+            }
+            ImGui::EndTable();
+        }
     }
 
     ImGui::End();
@@ -225,7 +265,9 @@ void EditorUI::TickUI() {
     }
     ImGui::End();
 #ifdef WITH_PROFILE
-    ShowMemoryProfiler();
+    if (m_b_show_memory_profiler) {
+        ShowMemoryProfiler(&m_b_show_memory_profiler);
+    }
 #endif
     ResetState();
     ShowSceneColor();
