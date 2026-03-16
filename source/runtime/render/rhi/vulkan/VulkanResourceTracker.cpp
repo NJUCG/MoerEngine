@@ -4,6 +4,7 @@
 
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
+#include "VulkanRHITrace.h"
 #include "log/LogSystem.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -919,6 +920,56 @@ void VkTracker::ResolveBarriers() {
 
 void VkTracker::DispatchBarriers(VulkanCmdList& _cmdlist) {
     if (!buffer_barriers.empty() || !texture_barriers.empty() || !memory_barriers.empty()) {
+        if (RHITRACE_BARRIER_ENABLED(basic)) {
+            for (uint32 i = 0; i < buffer_barriers.size(); ++i) {
+                const auto& b = buffer_barriers[i];
+                RHITRACE_BARRIER_LOG(
+                    basic,
+                    "[RHITrace][Barrier][Buffer][{}] src_stage=0x{:x} dst_stage=0x{:x} src_access=0x{:x} dst_access=0x{:x} src_q={} dst_q={} offset={} size={}",
+                    i,
+                    uint64(b.srcStageMask),
+                    uint64(b.dstStageMask),
+                    uint64(b.srcAccessMask),
+                    uint64(b.dstAccessMask),
+                    b.srcQueueFamilyIndex,
+                    b.dstQueueFamilyIndex,
+                    b.offset,
+                    b.size
+                );
+            }
+            for (uint32 i = 0; i < texture_barriers.size(); ++i) {
+                const auto& b = texture_barriers[i];
+                RHITRACE_BARRIER_LOG(
+                    basic,
+                    "[RHITrace][Barrier][Image][{}] src_stage=0x{:x} dst_stage=0x{:x} src_access=0x{:x} dst_access=0x{:x} src_q={} dst_q={} old_layout={} new_layout={} base_mip={} mip_count={} base_layer={} layer_count={}",
+                    i,
+                    uint64(b.srcStageMask),
+                    uint64(b.dstStageMask),
+                    uint64(b.srcAccessMask),
+                    uint64(b.dstAccessMask),
+                    b.srcQueueFamilyIndex,
+                    b.dstQueueFamilyIndex,
+                    int(b.oldLayout),
+                    int(b.newLayout),
+                    b.subresourceRange.baseMipLevel,
+                    b.subresourceRange.levelCount,
+                    b.subresourceRange.baseArrayLayer,
+                    b.subresourceRange.layerCount
+                );
+            }
+            for (uint32 i = 0; i < memory_barriers.size(); ++i) {
+                const auto& b = memory_barriers[i];
+                RHITRACE_BARRIER_LOG(
+                    basic,
+                    "[RHITrace][Barrier][Memory][{}] src_stage=0x{:x} dst_stage=0x{:x} src_access=0x{:x} dst_access=0x{:x}",
+                    i,
+                    uint64(b.srcStageMask),
+                    uint64(b.dstStageMask),
+                    uint64(b.srcAccessMask),
+                    uint64(b.dstAccessMask)
+                );
+            }
+        }
         VkDependencyInfoKHR dependency_info{};
         dependency_info.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
         dependency_info.pNext                    = nullptr;

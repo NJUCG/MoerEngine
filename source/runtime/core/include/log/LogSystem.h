@@ -2,6 +2,10 @@
 #define MOERENGINE_LOG_SYSTEM_H
 
 #include "API_Macro.h"
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 #if defined(NDEBUG)
 #define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_INFO
@@ -13,6 +17,22 @@
 
 namespace Moer { namespace LogSystem {
 CORE_API void Init();
+
+struct ConsoleLogEntry {
+    uint64_t                 sequence = 0;
+    spdlog::level::level_enum level   = spdlog::level::info;
+    std::string              message;
+};
+
+// Poll log entries starting from next_sequence (inclusive).
+// next_sequence is updated to the next unread sequence after this call.
+CORE_API bool PollConsoleLogs(
+    uint64_t&                     next_sequence,
+    std::vector<ConsoleLogEntry>& out_entries,
+    size_t                        max_count = 256
+);
+
+CORE_API void ClearConsoleLogs();
 }} // namespace Moer::LogSystem
 
 // Active when in debug mode

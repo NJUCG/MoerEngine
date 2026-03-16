@@ -83,7 +83,7 @@ void VkNativeQueryPool::GetResults(
         query_pool,
         _first_query,
         _query_count,
-        _data.size(),
+        _data.size_bytes(),
         _data.data(),
         sizeof(uint64),
         VK_QUERY_RESULT_64_BIT | _flags

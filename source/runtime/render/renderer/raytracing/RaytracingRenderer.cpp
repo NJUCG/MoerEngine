@@ -15,6 +15,7 @@
 #include "scene/loader/LoaderInterface.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskGraph.h"
+#include "trace/Trace.h"
 #include "window/WindowContext.h"
 
 // Editor
@@ -106,6 +107,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     Timer timer;
     timer.Start();
     uint64 last_time = 0ull;
+    FenceRef scene_pending_fence = device.CreateFence();
+    uint64   scene_pending_sync_value = 0;
 
     bool                  b_feedback_valid               = false;
     bool                  b_export                       = false;
@@ -169,6 +172,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     };
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+        TRACE_SCOPE_CAT("Raytracing.Frame", "Frame");
 
         RaytracingConfig& ui_config = editor_config->raytracing_config;
 
@@ -217,14 +221,45 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         auto frame_time = timer.ElapsedMilliseconds();
         timer.Start();
 
+        Array<RHIExecOp> pre_frame_ops{};
+        bool             has_scene_gfx_submit   = false;
+        uint64           scene_gfx_signal_value = 0;
+
         if (scene.IsReady() && runtime_assets.IsReady()) {
 
             // 处理场景加载过程中遗留的命令
+            // Submit these through RHIExecutor and avoid blocking sync on main thread.
             auto&& scene_cmd_list = scene.PopPendingCommandList();
-            auto   copy_evt = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
-            device.GetCopyQueue().Sync(copy_evt.timeline);
-            gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
-            gfx_queue.Sync();
+            bool   has_scene_copy_submit = false;
+            uint64 scene_copy_signal_value = 0;
+            if (!scene_cmd_list.copy_queue_cmd_list.IsEmpty()) {
+                RHISubmitCmdList scene_copy_submit{};
+                scene_copy_submit.queue = EQueueType::Copy;
+                scene_copy_signal_value = ++scene_pending_sync_value;
+                scene_copy_submit.submits.emplace_back(
+                    scene_cmd_list.copy_queue_cmd_list.Submit().Signal(
+                        scene_pending_fence,
+                        scene_copy_signal_value
+                    )
+                );
+                pre_frame_ops.emplace_back(std::move(scene_copy_submit));
+                has_scene_copy_submit = true;
+            }
+            if (!scene_cmd_list.gfx_queue_cmd_list.IsEmpty()) {
+                RHISubmitCmdList scene_gfx_submit{};
+                scene_gfx_submit.queue = EQueueType::Graphics;
+                CmdSubmit scene_gfx_cmd_submit = scene_cmd_list.gfx_queue_cmd_list.Submit();
+                if (has_scene_copy_submit) {
+                    scene_gfx_cmd_submit =
+                        std::move(scene_gfx_cmd_submit).Wait(scene_pending_fence, scene_copy_signal_value);
+                }
+                scene_gfx_signal_value = ++scene_pending_sync_value;
+                scene_gfx_submit.submits.emplace_back(
+                    std::move(scene_gfx_cmd_submit).Signal(scene_pending_fence, scene_gfx_signal_value)
+                );
+                pre_frame_ops.emplace_back(std::move(scene_gfx_submit));
+                has_scene_gfx_submit = true;
+            }
 
             // load scene
             if (first_load) {
@@ -309,9 +344,13 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 }
 
                 // cmd_list.UpdateRaytracingScene(rt_scene);
-                auto copy_timeline = device.GetCopyQueue().GetFenceHandle();
-                gfx_queue.Execute(cmd_list.Submit());
-                gfx_queue.Sync();
+                if (!cmd_list.IsEmpty()) {
+                    // Keep first-load bootstrap in async submit chain.
+                    RHISubmitCmdList init_submit{};
+                    init_submit.queue = EQueueType::Graphics;
+                    init_submit.submits.emplace_back(cmd_list.Submit());
+                    pre_frame_ops.emplace_back(std::move(init_submit));
+                }
             }
 
             if (b_new_env_map) {
@@ -345,6 +384,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             // TODO: 统一update代码
             // 疑问：为什么这段 UpdateRaytracingScene 的代码必须写在这个位置，不能挪到前面去？
             if (scene.IsReady()) {
+                TRACE_SCOPE_CAT("Raytracing.BuildTLAS", "Frame");
                 for (size_t i = 0; i < rt_scene->GetInstanceCount(); i++) {
                     auto& instance = rt_scene->GetInstance(i);
                     rt_scene->MarkModified(instance.instance_id);
@@ -390,6 +430,9 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             AntialiasPass::Params   aa_params{};
             // fill ui data
             {
+
+                TRACE_SCOPE_CAT("Raytracing.Configs", "Frame");
+
                 auto        grid_cfg           = is_ctx.GetGridChangableConfig();
                 const auto& ui_cfg             = ui_config;
                 grid_cfg.cell_size             = ui_config.grid_config.cell_size;
@@ -602,34 +645,60 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);
-        Sampler    linear_sampler{SF_LINEAR, SAM_CLAMP_TO_BORDER};
         TextureRef final_color =
             b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color;
+        TextureRef present_output = final_color;
 
         if (hooks.on_ui_combine_pass) {
-            hooks.on_ui_combine_pass(ui_combine_pass.get(), cmd_list, final_color, ui_frame_buffer, output);
+            present_output =
+                hooks.on_ui_combine_pass(ui_combine_pass.get(), cmd_list, final_color, ui_frame_buffer, output);
         }
 
         if (hooks.on_render_gui) {
-            hooks.on_render_gui(cmd_list, output);
+            // Main ImGui draw data must land on the main viewport output that will be presented.
+            hooks.on_render_gui(cmd_list, present_output);
         }
 
         if (rt_scene) {
             rt_scene->AdvanceFrame();
         }
 
-        time++;
-        gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
-        if (!skip_present) {
-            gfx_queue.Present(swapchain, output);
+        const bool should_close_now = WindowContext::ShouldClose(WindowContext::GetMainWindow());
+        if (should_close_now) {
+            // Avoid extra present work in the closing frame to reduce shutdown deadlock risk.
+            skip_present = true;
+        }
 
-            if (hooks.on_present_windows) {
-                hooks.on_present_windows();
-            }
+        time++;
+        Array<RHIExecOp> frame_ops = std::move(pre_frame_ops);
+        RHISubmitCmdList submit_cmd_list;
+        submit_cmd_list.queue = EQueueType::Graphics;
+        submit_cmd_list.MarkWriteTexture(present_output);
+        CmdSubmit frame_submit = cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling();
+        if (has_scene_gfx_submit) {
+            frame_submit = std::move(frame_submit).Wait(scene_pending_fence, scene_gfx_signal_value);
+        }
+        submit_cmd_list.submits.emplace_back(std::move(frame_submit));
+        frame_ops.emplace_back(std::move(submit_cmd_list));
+        if (!skip_present) {
+            frame_ops.emplace_back(RHIPresentOp{swapchain, present_output, EQueueType::Graphics});
+        }
+        RHIExecutor::Get().Submit(std::move(frame_ops), RHIExecSubmitOptions{.flush_gpu = true, .frame_end = true});
+
+        if (!skip_present && hooks.on_present_windows) {
+            hooks.on_present_windows();
+        }
+        if (should_close_now) {
+            break;
         }
         if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {
             break;
         }
+    }
+
+    if (time > 0) {
+        timeline->Wait(time);
+        gfx_queue.Sync();
     }
 
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();

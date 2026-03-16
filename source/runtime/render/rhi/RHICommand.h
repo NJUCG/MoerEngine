@@ -11,12 +11,16 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
+#include "trace/Trace.h"
 #include <filesystem>
 #include <functional>
 #include <misc/STL.h>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <condition_variable>
+#include <mutex>
+#include <memory>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -57,6 +61,7 @@ public:
         UpdateBindlessArray,
         ClearResource,
         Scope,
+        Query,
         Custom
     };
 
@@ -65,7 +70,7 @@ public:
         "TextureToBuffer", "CopyBackTexture",     "UploadTexture",  "TextureToTexture",
         "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
         "Barrier",         "QueueTransfer",       "SetDrawState",   "SetGeometryPassDrawState",
-        "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Scope",
+        "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Scope", "Query",
         "Custom"
     };
 
@@ -92,6 +97,190 @@ struct WaitEvent {
 struct SignalEvent {
     uint64 timeline_handle;
     uint64 value;
+};
+
+enum class QueryKind : uint8_t {
+    Timestamp = 0,
+    Occlusion = 1
+};
+
+enum class QueryStatus : uint8_t {
+    Pending = 0,
+    Ready   = 1,
+    Error   = 2
+};
+
+struct TimestampQueryResult {
+    uint64_t begin_tick{0};
+    uint64_t end_tick{0};
+    double   duration_ns{0.0};
+};
+
+struct OcclusionQueryResult {
+    uint64_t sample_count{0};
+    bool     visible{false};
+};
+
+struct QueryResult {
+    QueryKind kind{QueryKind::Timestamp};
+    QueryStatus status{QueryStatus::Pending};
+    uint64_t query_id{0};
+    std::string name{};
+    std::variant<std::monostate, TimestampQueryResult, OcclusionQueryResult> payload{};
+};
+
+class QueryFuture {
+    struct SharedState;
+
+public:
+    using Callback = std::function<void(const QueryResult&)>;
+
+    QueryFuture() = default;
+
+    static QueryFuture Create() {
+        return QueryFuture(std::make_shared<SharedState>());
+    }
+
+    bool Valid() const {
+        return static_cast<bool>(state_);
+    }
+
+    bool IsReady() const {
+        if (!state_) {
+            return false;
+        }
+        std::scoped_lock lock(state_->mtx);
+        return state_->ready;
+    }
+
+    QueryStatus Status() const {
+        if (!state_) {
+            return QueryStatus::Error;
+        }
+        std::scoped_lock lock(state_->mtx);
+        return state_->result.status;
+    }
+
+    void Wait() const {
+        if (!state_) {
+            return;
+        }
+        std::unique_lock lock(state_->mtx);
+        state_->cv.wait(lock, [&]() {
+            return state_->ready;
+        });
+    }
+
+    QueryResult Get() const {
+        Wait();
+        if (!state_) {
+            QueryResult result{};
+            result.status = QueryStatus::Error;
+            return result;
+        }
+        std::scoped_lock lock(state_->mtx);
+        return state_->result;
+    }
+
+    void Then(Callback callback) const {
+        if (!state_ || !callback) {
+            return;
+        }
+        bool        ready = false;
+        QueryResult result{};
+        {
+            std::scoped_lock lock(state_->mtx);
+            if (state_->ready) {
+                ready  = true;
+                result = state_->result;
+            } else {
+                state_->callbacks.emplace_back(std::move(callback));
+            }
+        }
+        if (ready) {
+            callback(result);
+        }
+    }
+
+private:
+    struct SharedState {
+        mutable std::mutex      mtx{};
+        std::condition_variable cv{};
+        bool                    ready{false};
+        QueryResult             result{};
+        Array<Callback>         callbacks{};
+    };
+
+    explicit QueryFuture(std::shared_ptr<SharedState> _state) : state_(std::move(_state)) {}
+
+    void Resolve(QueryResult&& _result) const {
+        if (!state_) {
+            return;
+        }
+        Array<Callback> callbacks{};
+        {
+            std::scoped_lock lock(state_->mtx);
+            if (state_->ready) {
+                return;
+            }
+            state_->ready  = true;
+            state_->result = std::move(_result);
+            callbacks      = std::move(state_->callbacks);
+        }
+        state_->cv.notify_all();
+        for (auto& callback : callbacks) {
+            if (callback) {
+                callback(state_->result);
+            }
+        }
+    }
+
+    std::shared_ptr<SharedState> state_{};
+
+    friend struct QueryToken;
+};
+
+struct QueryToken {
+    uint64_t   id{0};
+    QueryKind  kind{QueryKind::Timestamp};
+    std::string name{};
+
+    QueryToken() = default;
+
+    bool Valid() const {
+        return id != 0 && future.Valid();
+    }
+
+    bool IsReady() const {
+        return future.IsReady();
+    }
+
+    QueryFuture GetFuture() const {
+        return future;
+    }
+
+    void Then(QueryFuture::Callback callback) const {
+        future.Then(std::move(callback));
+    }
+
+    // Internal completion path used by backend query runtimes.
+    void Resolve(QueryResult _result) const {
+        future.Resolve(std::move(_result));
+    }
+
+private:
+    QueryToken(uint64_t _id, QueryKind _kind, std::string _name, QueryFuture _future) :
+        id(_id),
+        kind(_kind),
+        name(std::move(_name)),
+        future(std::move(_future)) {}
+
+    QueryFuture future{};
+
+    friend class CommandList;
+    friend class QueryRuntime;
+    friend class VulkanQueryRuntime;
+    friend struct ProfilerStorage;
 };
 template<typename TRenderTarget>
 concept is_render_target = std::is_same_v<TRenderTarget, ColorAttachment>;
@@ -216,6 +405,7 @@ struct CmdSubmit {
 
     Array<WaitEvent>   wait_events;
     Array<SignalEvent> signal_events;
+    Array<QueryToken>  query_tokens;
     bool               b_sync{false}; //force sync queue timeline
     bool               b_tick_profiling{false};
     bool               b_delete_resources{false};
@@ -250,6 +440,7 @@ struct CmdSubmit {
         callbacks          = std::move(_other.callbacks);
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
+        query_tokens       = std::move(_other.query_tokens);
         cached_args        = std::move(_other.cached_args);
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
@@ -261,6 +452,7 @@ struct CmdSubmit {
         callbacks          = std::move(_other.callbacks);
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
+        query_tokens       = std::move(_other.query_tokens);
         cached_args        = std::move(_other.cached_args);
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
@@ -270,11 +462,13 @@ struct CmdSubmit {
     CmdSubmit(
         Array<UniquePtr<Command>>&&        _cmds,
         Array<std::function<void(void)>>&& _callbacks,
-        TCachedArgArray&&                  _cached_args
+        TCachedArgArray&&                  _cached_args,
+        Array<QueryToken>&&                _query_tokens
     ) :
         cmds(std::move(_cmds)),
         callbacks(std::move(_callbacks)),
-        cached_args(std::move(_cached_args)) {}
+        cached_args(std::move(_cached_args)),
+        query_tokens(std::move(_query_tokens)) {}
 
     std::string ToString() const {
         std::string str = "Commands: [";
@@ -1062,6 +1256,16 @@ public:
     RENDER_API void PushScopeWithTimeScope(std::string_view _name);
     RENDER_API void PopScopeWithTimeScope();
 
+    RENDER_API QueryToken BeginTimestampQuery(
+        std::string_view _name = Command::typenames[(uint)Command::EType::Query]
+    );
+    RENDER_API void EndTimestampQuery(const QueryToken& _token);
+
+    RENDER_API QueryToken BeginOcclusionQuery(
+        std::string_view _name = Command::typenames[(uint)Command::EType::Query]
+    );
+    RENDER_API void EndOcclusionQuery(const QueryToken& _token);
+
     template<typename T, typename... Args>
     struct CountType;
 
@@ -1272,13 +1476,126 @@ private:
     RENDER_API void TraceRayIndirect(PipelineHandle _pipeline, BufferView _buffer);
 #pragma endregion
 
+    QueryToken CreateQueryToken(QueryKind _kind, std::string_view _name);
+
     Array<UniquePtr<Command>>    commands;
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
     TCachedArgArray              cached_args;
-    Queue<std::string_view>      scope_stack;
+    Array<QueryToken>            query_tokens;
+    Stack<std::string_view>      scope_stack;
+    Stack<QueryToken>            timed_scope_query_stack;
+#if MOER_TRACE_ENABLED && MOER_TRACE_GPU_ENABLED
+    Stack<Moer::Trace::SpanToken> gpu_trace_scope_tokens;
+#endif
+};
+
+class RENDER_API GpuScopeSpan {
+public:
+    GpuScopeSpan(CommandList& _cmd_list, std::string_view _name) : cmd_list(&_cmd_list) {
+        cmd_list->PushScopeWithTimeScope(_name);
+    }
+    ~GpuScopeSpan() {
+        if (cmd_list) {
+            cmd_list->PopScopeWithTimeScope();
+        }
+    }
+
+    GpuScopeSpan(const GpuScopeSpan&)            = delete;
+    GpuScopeSpan& operator=(const GpuScopeSpan&) = delete;
+
+private:
+    CommandList* cmd_list{nullptr};
+};
+
+class RENDER_API TimestampQuerySpan {
+public:
+    TimestampQuerySpan(CommandList& _cmd_list, std::string_view _name) :
+        cmd_list(&_cmd_list),
+        token(_cmd_list.BeginTimestampQuery(_name)) {}
+
+    ~TimestampQuerySpan() {
+        if (cmd_list && token.Valid()) {
+            cmd_list->EndTimestampQuery(token);
+        }
+    }
+
+    TimestampQuerySpan(const TimestampQuerySpan&)            = delete;
+    TimestampQuerySpan& operator=(const TimestampQuerySpan&) = delete;
+
+private:
+    CommandList* cmd_list{nullptr};
+    QueryToken   token{};
+};
+
+class RENDER_API OcclusionQuerySpan {
+public:
+    OcclusionQuerySpan(CommandList& _cmd_list, std::string_view _name) :
+        cmd_list(&_cmd_list),
+        token(_cmd_list.BeginOcclusionQuery(_name)) {}
+
+    ~OcclusionQuerySpan() {
+        if (cmd_list && token.Valid()) {
+            cmd_list->EndOcclusionQuery(token);
+        }
+    }
+
+    OcclusionQuerySpan(const OcclusionQuerySpan&)            = delete;
+    OcclusionQuerySpan& operator=(const OcclusionQuerySpan&) = delete;
+
+private:
+    CommandList* cmd_list{nullptr};
+    QueryToken   token{};
 };
 class QueueCmd {};
+
+struct RHISubmitCmdList {
+    Array<CmdSubmit> submits;
+    EQueueType       queue{EQueueType::Graphics};
+    Array<TextureView> write_textures;
+
+    RHISubmitCmdList& MarkWriteTexture(TextureView _texture) {
+        if (_texture.texture) {
+            write_textures.emplace_back(_texture);
+        }
+        return *this;
+    }
+
+    RHISubmitCmdList()                                          = default;
+    RHISubmitCmdList(RHISubmitCmdList&&) noexcept              = default;
+    RHISubmitCmdList& operator=(RHISubmitCmdList&&) noexcept   = default;
+    RHISubmitCmdList(const RHISubmitCmdList&)                  = delete;
+    RHISubmitCmdList& operator=(const RHISubmitCmdList&)       = delete;
+};
+
+struct RHIPresentOp {
+    SwapchainRef swapchain;
+    TextureView  target;
+    EQueueType   queue{EQueueType::Graphics};
+};
+
+using RHIExecOp = std::variant<RHISubmitCmdList, RHIPresentOp>;
+
+struct RHIExecSubmitOptions {
+    bool flush_gpu{true};
+    bool frame_end{false};
+};
+
+class RENDER_API RHIExecutor {
+public:
+    static RHIExecutor& Get();
+
+    void Submit(
+        Array<RHISubmitCmdList>&& submit_lists,
+        RHIExecSubmitOptions      options = {}
+    );
+    void Submit(Array<RHIExecOp>&& ops, RHIExecSubmitOptions options = {});
+
+private:
+    std::mutex  submit_mutex;
+    Array<RHIExecOp> pending_ops{};
+    bool        pending_frame_end{false};
+};
 
 struct ProfileResultEntry {
     std::string name;
@@ -1353,4 +1670,17 @@ public:
     virtual void      Sync(uint64_t _time_stamp)         = 0;
 };
 } // namespace Moer::Render
+
+#if MOER_TRACE_ENABLED && MOER_TRACE_GPU_ENABLED
+#define MOER_GPU_SCOPE_SPAN_VAR_JOIN_IMPL(a, b) a##b
+#define MOER_GPU_SCOPE_SPAN_VAR_JOIN(a, b) MOER_GPU_SCOPE_SPAN_VAR_JOIN_IMPL(a, b)
+#define TRACE_GPU_SCOPE_SPAN(cmd_list_ref, scope_name)                                               \
+    ::Moer::Render::GpuScopeSpan MOER_GPU_SCOPE_SPAN_VAR_JOIN(_moer_gpu_scope_span_, __LINE__)(     \
+        (cmd_list_ref),                                                                               \
+        (scope_name)                                                                                  \
+    )
+#else
+#define TRACE_GPU_SCOPE_SPAN(cmd_list_ref, scope_name) ((void)0)
+#endif
+
 #endif

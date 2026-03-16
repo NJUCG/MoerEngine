@@ -28,6 +28,9 @@ const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
     //1 / 8.0 // VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT
 };
 namespace Moer::Render {
+namespace {
+thread_local uint64 g_tls_descriptor_offset = 0;
+}
 
 static constexpr std::string_view s_ring_desc_buffer_name = "VkDescriporHeap::RingDescriptorBuffer";
 
@@ -348,9 +351,14 @@ uint VulkanDescriptorHeap::FreeAccelDescIdx(uint _idx) {
     return 0;
 }
 
+uint64 VulkanDescriptorHeap::GetCurrentOffset() const {
+    return g_tls_descriptor_offset;
+}
+
 void VulkanDescriptorHeap::BeginPushDescriptors(uint _frame_idx) {
     _frame_idx     = _frame_idx % m_device->cmd_alloc_limits;
-    current_offset = ring_buffer_offsets[_frame_idx];
+    g_tls_descriptor_offset = ring_buffer_offsets[_frame_idx];
+    current_offset = g_tls_descriptor_offset;
 }
 void VulkanDescriptorHeap::EndPushDescriptors(uint _frame_idx) {
     _frame_idx         = _frame_idx % m_device->cmd_alloc_limits;
@@ -359,7 +367,7 @@ void VulkanDescriptorHeap::EndPushDescriptors(uint _frame_idx) {
         m_device->GetVmaAllocator(),
         ring_desc_buffer->GetAllocation(),
         base_offset,
-        current_offset - base_offset
+        g_tls_descriptor_offset - base_offset
     );
 }
 
@@ -371,33 +379,50 @@ void VulkanDescriptorHeap::EndPushDescriptors(uint _frame_idx) {
 void VulkanDescriptorHeap::PushUniformDesc(uint64 _src_offset, uint64 _set_offset) {
     std::lock_guard<std::mutex> lock(m_mutex);
     memcpy(
-        map_ptr + current_offset + _set_offset, buffer_desc_data.data() + _src_offset, uniform_desc_stride
+        map_ptr + g_tls_descriptor_offset + _set_offset,
+        buffer_desc_data.data() + _src_offset,
+        uniform_desc_stride
     );
 }
 
 void VulkanDescriptorHeap::PushStorageDesc(uint64 _src_offset, uint64 _set_offset) {
     std::lock_guard<std::mutex> lock(m_mutex);
     memcpy(
-        map_ptr + current_offset + _set_offset, buffer_desc_data.data() + _src_offset, storage_desc_stride
+        map_ptr + g_tls_descriptor_offset + _set_offset,
+        buffer_desc_data.data() + _src_offset,
+        storage_desc_stride
     );
 }
 
 void VulkanDescriptorHeap::PushImageDesc(uint64 _src_offset, uint64 _set_offset) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    memcpy(map_ptr + current_offset + _set_offset, image_desc_data.data() + _src_offset, image_desc_stride);
+    memcpy(
+        map_ptr + g_tls_descriptor_offset + _set_offset,
+        image_desc_data.data() + _src_offset,
+        image_desc_stride
+    );
 }
 
 void VulkanDescriptorHeap::PushSamplerDesc(uint64 _src_offset, uint64 _set_offset) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    memcpy(map_ptr + current_offset + _set_offset, image_desc_data.data() + _src_offset, image_desc_stride);
+    memcpy(
+        map_ptr + g_tls_descriptor_offset + _set_offset,
+        image_desc_data.data() + _src_offset,
+        image_desc_stride
+    );
 }
 
 void VulkanDescriptorHeap::PushAccelDesc(uint64 _src_offset, uint64 _set_offset) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    memcpy(map_ptr + current_offset + _set_offset, accel_desc_data.data() + _src_offset, accel_desc_stride);
+    memcpy(
+        map_ptr + g_tls_descriptor_offset + _set_offset,
+        accel_desc_data.data() + _src_offset,
+        accel_desc_stride
+    );
 }
 
 void VulkanDescriptorHeap::IncrementOffset(uint64 _size) {
-    current_offset += _size;
+    g_tls_descriptor_offset += _size;
+    current_offset = g_tls_descriptor_offset;
 }
 } // namespace Moer::Render

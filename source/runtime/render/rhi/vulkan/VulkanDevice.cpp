@@ -11,6 +11,7 @@
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
+#include "VulkanSubmissionExecutor.h"
 #include "VulkanUtil.h"
 #include "extension/VulkanNrdExtension.h"
 #include <string_view>
@@ -543,6 +544,7 @@ void VulkanDevice::DestroyDescriptorHeap() {
 }
 
 void VulkanDevice::Destroy() {
+    VulkanSubmissionExecutor::Shutdown();
     // for (auto& cmd_allocator : m_command_allocators) {
     //     CHECK_AND_DELETE(cmd_allocator);
     // }
@@ -733,6 +735,7 @@ void VulkanDevice::FlushDebugMessages() const {
 }
 
 void VulkanDevice::WaitIdle() {
+    VulkanSubmissionExecutor::Flush();
     vkDeviceWaitIdle(m_device);
 }
 

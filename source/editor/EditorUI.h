@@ -46,6 +46,8 @@ public:
 
     void RegisterUIFunc(std::string _name, std::function<void()>&& _func);
     void UnregisterUIFunc(std::string _name);
+    void RegisterOverlayFunc(std::string _name, std::function<void()>&& _func);
+    void UnregisterOverlayFunc(std::string _name);
 
 public: // Sub UI
     RasterUI     m_raster_ui;
@@ -55,6 +57,7 @@ private:
     void ResetState(); // reset m_b_need_reload, etc..
     void ShowSceneColor();
     void ShowConfig();
+    void ShowOverlay();
 
 private:
     bool   m_b_show_scene_color = true;
@@ -72,6 +75,7 @@ private:
 
     // Custom Func
     UnorderedMap<std::string, std::function<void()>> m_show_func_map;
+    UnorderedMap<std::string, std::function<void()>> m_overlay_func_map;
 };
 
 } // namespace Moer

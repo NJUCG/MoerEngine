@@ -1270,6 +1270,9 @@ struct D3D12CommandPreprocessVisitor {
             case Command::EType::ShaderDispatch:
                 Visit(static_cast<const DispatchCmd&>(*_cmd));
                 break;
+            case Command::EType::Scope:
+            case Command::EType::Query:
+                break;
 
             default:
                 FATAL("not implemented cmdtype {}", Command::typenames[uint(_cmd->Type())]);
@@ -1411,6 +1414,9 @@ struct D3D12CommandVisitor {
             case Command::EType::ShaderDispatch:
                 Visit(static_cast<const DispatchCmd&>(*_cmd));
                 break;
+            case Command::EType::Scope:
+            case Command::EType::Query:
+                break;
                 //CopyBackTexture,
                 //BuildAccel,
                 //BuildTLAS,
@@ -1480,6 +1486,19 @@ void D3D12GraphicsCommandQueue::Wait(WaitEvent _event) {
 }
 
 WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
+    if (!_submit.query_tokens.empty()) {
+        QueryResult error_result{};
+        error_result.status = QueryStatus::Error;
+        error_result.name   = "Query is not implemented on D3D12 backend";
+        for (const auto& token : _submit.query_tokens) {
+            if (!token.Valid()) {
+                continue;
+            }
+            error_result.kind     = token.kind;
+            error_result.query_id = token.id;
+            token.Resolve(error_result);
+        }
+    }
 
     auto allocator = RequestCommandResourceAllocator();
     auto cmd_list  = allocator->GetCommandList();

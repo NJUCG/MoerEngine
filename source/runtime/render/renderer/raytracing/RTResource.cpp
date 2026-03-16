@@ -199,7 +199,8 @@ void RTContext::FillFrameResources(uint2 _resolution) {
         "debug_color",
         Extent2D(_resolution),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
+        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::COLOR_ATTACHMENT
     );
     // frame_rt.final_color = device.CreateTexture("final_color", Extent2D(_resolution), PF_R8G8B8A8_SRGB, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     frame_rt.ldr_color = device.CreateTexture(

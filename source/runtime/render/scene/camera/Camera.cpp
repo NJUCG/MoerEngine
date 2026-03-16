@@ -540,6 +540,14 @@ void Camera::Tick(const SharedPtr<EditorConfig> config) {
         };
 
         if (WindowInput::Get().cursor_delta_x || WindowInput::Get().cursor_delta_y) {
+            if (WindowInput::Get().play_mode_camera_control) {
+                pure_rotate();
+                WindowInput::Get().cursor_delta_x = 0.0f;
+                WindowInput::Get().cursor_delta_y = 0.0f;
+                UpdateAllDerivedProperties();
+                elapsed_time = WindowInput::Get().delta_time;
+                return;
+            }
 
             // unreal style camera control
             if (WindowInput::Get().key_button_switch_state[KeyButtons::F]) {

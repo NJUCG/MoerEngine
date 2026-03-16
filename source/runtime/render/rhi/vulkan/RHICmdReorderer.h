@@ -1389,6 +1389,8 @@ public:
         if (_cmd->InstancesToUpdate().size() == 0 && !_cmd->ForceUpdate()) {
             return;
         }
+        const bool track_all_written_geometries =
+            _cmd->ForceUpdate() || _cmd->RelatedGeometries().empty();
         int64 layer = 0;
         auto* tlas_handle =
             static_cast<NoRangeHandle*>(GetHandle((uint64)_cmd->TlasHandle(), ResourceType::Accel));
@@ -1396,7 +1398,7 @@ public:
         layer = GetLastLayerWrite(tlas_handle);
 
         for (const uint64& handle : m_writed_geometry) {
-            if (_cmd->HasGeometry(handle)) {
+            if (track_all_written_geometries || _cmd->HasGeometry(handle)) {
                 auto* geo_handle = GetHandle((uint64)handle, ResourceType::Accel);
                 layer            = std::max(layer, GetLastLayerRead(static_cast<NoRangeHandle*>(geo_handle)));
             }
@@ -1404,7 +1406,7 @@ public:
 
         //set read and write
         for (const uint64& handle : m_writed_geometry) {
-            if (_cmd->HasGeometry(handle)) {
+            if (track_all_written_geometries || _cmd->HasGeometry(handle)) {
                 auto* geo_handle            = (NoRangeHandle*)GetHandle((uint64)handle, ResourceType::Accel);
                 geo_handle->view.read_layer = layer;
 
@@ -1418,6 +1420,11 @@ public:
     }
 
     void VisitCmd(const ScopeCmd* _cmd) {
+        layer_offset = m_cmd_lists.size();
+        AddCmd(_cmd, layer_offset);
+    }
+
+    void VisitCmd(const QueryCmd* _cmd) {
         layer_offset = m_cmd_lists.size();
         AddCmd(_cmd, layer_offset);
     }
@@ -1513,6 +1520,9 @@ public:
                 break;
             case Command::EType::Scope:
                 VisitCmd(static_cast<const ScopeCmd*>(_cmd));
+                break;
+            case Command::EType::Query:
+                VisitCmd(static_cast<const QueryCmd*>(_cmd));
                 break;
             case Command::EType::Custom:
                 VisitCmd(static_cast<const CustomCmd*>(_cmd));

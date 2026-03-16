@@ -248,6 +248,15 @@ void GLFWWindowImpl::ShutDown() {
 }
 
 void GLFWWindowImpl::TickCursorState() {
+    if (WindowInput::Get().force_cursor_visible) {
+        SetCursorNormal();
+        return;
+    }
+    if (WindowInput::Get().force_cursor_hidden) {
+        SetCursorHide();
+        return;
+    }
+
     // hide cursor when **left or right** mouse button is pressed
     bool b_should_hide = WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
                          WindowInput::Get().mouse_button_state[MouseButtons::Right] ||
@@ -383,6 +392,19 @@ static bool UpdateKeyStateWhenBoolExpression(bool& key_state, bool expression, i
 }
 
 static void UpdateCameraControlState(int key, int action, int mods) {
+    if (WindowInput::Get().block_camera_keyboard_input) {
+        WindowInput::Get().camera_forward = false;
+        WindowInput::Get().camera_backward = false;
+        WindowInput::Get().camera_left = false;
+        WindowInput::Get().camera_right = false;
+        WindowInput::Get().camera_up = false;
+        WindowInput::Get().camera_down = false;
+        WindowInput::Get().speed_up = false;
+        WindowInput::Get().speed_down = false;
+        WindowInput::Get().reset_speed = false;
+        return;
+    }
+
     if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().camera_forward, key == GLFW_KEY_W, action))
         return;
     if (UpdateKeyStateWhenBoolExpression(WindowInput::Get().camera_backward, key == GLFW_KEY_S, action))
@@ -425,6 +447,7 @@ static void UpdateAllKeyStates(int key, int action, int mods) {
         {GLFW_KEY_UP, KeyButtons::UP},         {GLFW_KEY_DOWN, KeyButtons::DOWN},
         {GLFW_KEY_LEFT, KeyButtons::LEFT},     {GLFW_KEY_RIGHT, KeyButtons::RIGHT},
         {GLFW_KEY_ESCAPE, KeyButtons::ESCAPE},
+        {GLFW_KEY_GRAVE_ACCENT, KeyButtons::GRAVE_ACCENT},
     };
     if (key_map.find(key) == key_map.end()) {
         return;

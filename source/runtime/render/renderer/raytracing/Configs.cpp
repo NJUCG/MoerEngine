@@ -126,6 +126,9 @@ void ImportanceSamplingContext::AdvanceFrameIdx(uint _frame_idx) {
 }
 
 void ImportanceSamplingContext::TickFrame(uint _frame_idx) {
+
+    TRACE_SCOPE_CAT("Raytracing.ImportanceSamplingUpdate", "Frame");
+
     AdvanceFrameIdx(_frame_idx);
 }
 

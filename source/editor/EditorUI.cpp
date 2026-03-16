@@ -9,6 +9,7 @@
 #include "EditorUIStyle.h"
 #include "scene/SceneGlobalEntry.h"
 #include "scene/scene.h"
+#include "trace/Trace.h"
 
 // 3rd party (std)
 #include <imgui.h>
@@ -60,6 +61,35 @@ void EditorUI::TickUI() {
     m_config->aspect_ratio = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
 
     m_ui_renderer->BeginGUIFrame();
+    ImGuiIO& io = ImGui::GetIO();
+
+    if (ImGui::IsKeyPressed(ImGuiKey_F5, false) && !m_config->play_mode_enabled) {
+        m_config->play_mode_enabled       = true;
+        m_config->play_mode_capture_input = true;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_F8, false) && m_config->play_mode_enabled) {
+        m_config->play_mode_capture_input = !m_config->play_mode_capture_input;
+    }
+
+    const bool play_capture = m_config->play_mode_enabled && m_config->play_mode_capture_input;
+    WindowInput::Get().force_cursor_hidden       = play_capture;
+    WindowInput::Get().play_mode_camera_control  = play_capture;
+    if (!play_capture) {
+        WindowInput::Get().force_cursor_hidden      = false;
+        WindowInput::Get().play_mode_camera_control = false;
+    }
+
+    if (play_capture) {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        m_scene_color_pos             = {0.0f, 0.0f};
+        m_scene_color_resolution      = {viewport->WorkSize.x, viewport->WorkSize.y};
+        m_config->aspect_ratio        = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
+        WindowInput::Get().is_active  = true;
+
+        ShowOverlay();
+        m_ui_renderer->EndGUIFrame();
+        return;
+    }
 
     static bool               opt_fullscreen  = true;
     static bool               opt_padding     = false;
@@ -103,7 +133,6 @@ void EditorUI::TickUI() {
         ImGui::PopStyleVar(2);
 
     // Submit the DockSpace
-    ImGuiIO& io = ImGui::GetIO();
     if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
         ImGuiID dockspace_id = ImGui::GetID("Docking Main");
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
@@ -127,6 +156,26 @@ void EditorUI::TickUI() {
             // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
             ImGui::EndMenu();
         }
+        ImGui::Separator();
+        if (!m_config->play_mode_enabled) {
+            if (ImGui::Button("Play (F5)")) {
+                m_config->play_mode_enabled       = true;
+                m_config->play_mode_capture_input = true;
+            }
+        } else {
+            if (ImGui::Button("Stop Play")) {
+                m_config->play_mode_enabled       = false;
+                m_config->play_mode_capture_input = false;
+                WindowInput::Get().force_cursor_hidden      = false;
+                WindowInput::Get().play_mode_camera_control = false;
+            }
+            ImGui::SameLine();
+            const char* toggle_label =
+                m_config->play_mode_capture_input ? "Eject (F8)" : "Possess (F8)";
+            if (ImGui::Button(toggle_label)) {
+                m_config->play_mode_capture_input = !m_config->play_mode_capture_input;
+            }
+        }
         ImGui::EndMenuBar();
     }
     ImGui::End();
@@ -134,6 +183,7 @@ void EditorUI::TickUI() {
     ResetState();
     ShowSceneColor();
     ShowConfig();
+    ShowOverlay();
 
     m_ui_renderer->EndGUIFrame();
 }
@@ -148,11 +198,17 @@ void EditorUI::PresentWindows() {
 
 bool EditorUI::IsSeperateWindow() const {
     auto* current_window = ImGui::FindWindowByName("Scene Color");
+    if (!current_window) {
+        return false;
+    }
     return current_window->ParentWindow == nullptr;
 }
 
 TextureView EditorUI::GetWindowFrameBuffer() {
     auto* current_window = ImGui::FindWindowByName("Scene Color");
+    if (!current_window) {
+        return TextureView();
+    }
     if (current_window->ParentWindow == nullptr) {
         return m_ui_renderer->GetWindowFrameBuffer(current_window->Viewport);
     }
@@ -241,6 +297,24 @@ void EditorUI::ShowConfig() {
     ImGui::PushItemWidth(120); // 设置所有组件width为120
 
     EditorUIStyle::ShowStyleSelector("Style##Default");
+    if (ImGui::TreeNode("Trace")) {
+        const Moer::Trace::Stats trace_stats = Moer::Trace::GetStats();
+        ImGui::Text("Enabled: %s", trace_stats.enabled ? "Yes" : "No");
+        ImGui::Text("Recording: %s", trace_stats.recording ? "On" : "Off");
+        if (trace_stats.recording) {
+            if (ImGui::Button("Stop Trace")) {
+                Moer::Trace::StopRecording();
+            }
+        } else {
+            if (ImGui::Button("Start Trace")) {
+                Moer::Trace::StartRecording();
+            }
+        }
+        ImGui::Text("Connected: %s", trace_stats.connected ? "Yes" : "No");
+        ImGui::Text("Queued Events: %llu", static_cast<unsigned long long>(trace_stats.queued_events));
+        ImGui::Text("Dropped Events: %llu", static_cast<unsigned long long>(trace_stats.dropped_events));
+        ImGui::TreePop();
+    }
 
     // MARK: Common Configs
 
@@ -371,6 +445,20 @@ void EditorUI::RegisterUIFunc(std::string _name, std::function<void()>&& _func) 
 
 void EditorUI::UnregisterUIFunc(std::string _name) {
     m_show_func_map.erase(_name);
+}
+
+void EditorUI::RegisterOverlayFunc(std::string _name, std::function<void()>&& _func) {
+    m_overlay_func_map[_name] = std::move(_func);
+}
+
+void EditorUI::UnregisterOverlayFunc(std::string _name) {
+    m_overlay_func_map.erase(_name);
+}
+
+void EditorUI::ShowOverlay() {
+    for (auto& [name, func] : m_overlay_func_map) {
+        func();
+    }
 }
 
 } // namespace Moer

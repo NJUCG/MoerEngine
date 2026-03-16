@@ -2,6 +2,8 @@
 #include "PixelFormat.h"
 #include "VulkanAllocator.h"
 #include "VulkanCommand.h"
+#include "VulkanQueryRuntime.h"
+#include "RHICmdReorderer.h"
 // #include "VulkanDevice.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
@@ -10,10 +12,13 @@
 #include "vulkan/vulkan_core.h"
 #include <functional>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <string_view>
 namespace Moer::Render {
 static constexpr uint s_queue_max_frame_in_flight = 3;
 static constexpr uint s_query_max_storage         = 8 * 64;
+struct QueryCmd;
 class VkNativeQueue {
 public:
     VkNativeQueue(EQueueType _type, VulkanDevice& _device);
@@ -52,20 +57,8 @@ private:
 };
 
 struct ProfilerStorage {
-    static constexpr int s_max_num_profiler_queries_per_frame =
-        s_query_max_storage * 2; // *2 is for begin&end
-    static constexpr int s_total_query_count =
-        s_max_num_profiler_queries_per_frame * s_queue_max_frame_in_flight;
-
-    ProfilerStorage(VkNativeQueryPool& _timestamp_pool);
-    void CollectProfiling(VkCommandBuffer _cmd);
-    int  GetQueryStorageIndex(std::string_view _name);
-    bool IsQueryUsed(int _idx) {
-        return queries_used[_idx / 8] & (1 << (_idx % 8));
-    }
-    void SetQueryUsed(int _idx) {
-        queries_used[_idx / 8] |= (1 << (_idx % 8));
-    }
+    ProfilerStorage(VulkanQueryRuntime& _query_runtime);
+    void CollectProfiling();
     bool IsActive() const {
         return active;
     }
@@ -81,10 +74,9 @@ struct ProfilerStorage {
         entries.reserve(name2sample.size());
         uint last_frame = (cur_frame + s_queue_max_frame_in_flight - 1) % s_queue_max_frame_in_flight;
         for (auto& [name, sample] : name2sample) {
-            if (sample.accumulated > 0)
-                entries.push_back(
-                    {name, double(sample.accumulated) / (Sample::s_range * 1e6) * timestamp_period}
-                );
+            if (sample.accumulated_ns > 0) {
+                entries.push_back({name, double(sample.accumulated_ns) / (Sample::s_range * 1e6)});
+            }
         }
         data.gpu_entries = std::move(entries);
         //cpu timestamp
@@ -97,45 +89,64 @@ struct ProfilerStorage {
 
     void BeginProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
     void EndProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
+    void VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_cmd);
 
-    bool               active = false;
-    VkNativeQueryPool& timestamp_pool;
-    float              timestamp_period = 0.0f;
-    uint64             query_pool_results[s_max_num_profiler_queries_per_frame * 2];
+    struct ResolvedGpuSample {
+        std::string name{};
+        uint64_t    begin_tick{0};
+        uint64_t    end_tick{0};
+    };
+    const Array<ResolvedGpuSample>& GetResolvedGpuSamples() const {
+        return resolved_gpu_samples;
+    }
+
+    bool active = false;
+    VulkanQueryRuntime& query_runtime;
+    float               timestamp_period = 0.0f;
     StaticArray<UnorderedMap<std::string_view, double>, s_queue_max_frame_in_flight> cpu_timestamps;
-    // each result contain two int(VK_QUERY_RESULT_WITH_AVAILABILITY_BIT)
-    // first int contains the queried timestamp
-    // next(last) int contains availability of the timestamp, available if nonzero
 
     struct Sample {
-        int                           index;
-        uint64_t                      accumulated;
+        uint64_t                      accumulated_ns;
         size_t                        next_idx_to_store;
         static constexpr int          s_range = 13;
-        std::array<uint64_t, s_range> deltas;
+        std::array<uint64_t, s_range> durations_ns;
 
-        Sample(int _idx) : index(_idx), accumulated(0), next_idx_to_store(0) {
-            std::memset(deltas.data(), 0, sizeof(deltas));
+        Sample() : accumulated_ns(0), next_idx_to_store(0) {
+            std::memset(durations_ns.data(), 0, sizeof(durations_ns));
         }
-        Sample() : Sample(0) {}
 
         void Reset() {
             next_idx_to_store = 0;
-            accumulated       = 0;
-            std::memset(deltas.data(), 0, sizeof(deltas));
+            accumulated_ns    = 0;
+            std::memset(durations_ns.data(), 0, sizeof(durations_ns));
         }
-        void Record(uint64_t _value) {
+        void Record(uint64_t _duration_ns) {
             next_idx_to_store = (next_idx_to_store + 1) % s_range;
-            accumulated -= deltas[next_idx_to_store];
-            deltas[next_idx_to_store] = _value;
-            accumulated += _value;
+            accumulated_ns -= durations_ns[next_idx_to_store];
+            durations_ns[next_idx_to_store] = _duration_ns;
+            accumulated_ns += _duration_ns;
         }
     };
 
-    UnorderedMap<std::string, Sample> name2sample;
-    ubyte                             queries_used[s_total_query_count / 8];
+    struct PendingSample {
+        std::string name{};
+        QueryToken  token{};
+    };
+
+    UnorderedMap<std::string, Sample>            name2sample;
+    UnorderedMap<std::string, Array<QueryToken>> active_scope_queries;
+    Array<PendingSample>                         pending_samples{};
+    Array<ResolvedGpuSample>                     resolved_gpu_samples{};
 
     uint64 cur_frame = 0;
+};
+
+struct VulkanRecordedSubmit {
+    std::optional<CmdSubmit>   submit{};
+    UniquePtr<VulkanAllocator> allocator{};
+    bool                       has_cmd{false};
+    double                     reorder_time_ms{0.0};
+    double                     preprocess_time_ms{0.0};
 };
 
 class VkCommandQueue : public CommandQueue {
@@ -172,12 +183,8 @@ public:
         CommandQueue(),
         vk_device(_device),
         queue(_type, _device),
-        timestamp_pool(
-            _device,
-            VK_QUERY_TYPE_TIMESTAMP,
-            s_queue_max_frame_in_flight * s_query_max_storage * 4
-        ),
-        profiler_storage(timestamp_pool) {
+        query_runtime(_device),
+        profiler_storage(query_runtime) {
         timeline = MoerNew(VulkanFence(vk_device));
         thread   = std::jthread(&VkCommandQueue::ExecuteThread, this);
         enabled  = true;
@@ -206,9 +213,17 @@ public:
         // LOG_INFO("Presentor count {}", present_count);
         MoerDelete(timeline);
     }
+    VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr);
+    WaitEvent            SubmitRecorded(VulkanRecordedSubmit&& _recorded);
+    WaitEvent            SubmitRestoreTransitions(
+                   Array<ReadBuffer>&& _read_buffers,
+                   Array<ReadTexture>&& _read_textures,
+                   std::optional<WaitEvent> _wait_evt = std::nullopt
+               );
     WaitEvent   Execute(CmdSubmit&& _submit) override;
     void        Wait(WaitEvent _event) override;
     void        Present(SwapchainRef _viewport, TextureView _view) override;
+    void        Present(SwapchainRef _viewport, TextureView _view, std::span<const WaitEvent> _wait_events);
     void        Sync() override;
     ProfileData GetProfilerEntry() override;
 
@@ -230,6 +245,10 @@ private:
     UniquePtr<VulkanPresentor> GetPresentor();
     void                       Complete(uint64 _timeline);
     void                       Signal();
+#if defined(MOER_TRACE_ENABLED) && MOER_TRACE_ENABLED && defined(MOER_TRACE_GPU_ENABLED) && \
+    MOER_TRACE_GPU_ENABLED
+    void EmitResolvedGpuTraceEvents(const Array<ProfilerStorage::ResolvedGpuSample>& _samples);
+#endif
 
 private:
     uint64                                             last_frame = 0;
@@ -241,11 +260,20 @@ private:
     bool                                               enabled{false};
     std::condition_variable                            queue_cv; // wake up execute thread from sleeping
     VkNativeQueue                                      queue;
-    VkNativeQueryPool                                  timestamp_pool;
+    VulkanQueryRuntime                                 query_runtime;
     ProfilerStorage                                    profiler_storage;
     ProfileData                                        cached_profiler_entry;
+    Array<ProfilerStorage::ResolvedGpuSample>          cached_gpu_samples;
+#if defined(MOER_TRACE_ENABLED) && MOER_TRACE_ENABLED && defined(MOER_TRACE_GPU_ENABLED) && \
+    MOER_TRACE_GPU_ENABLED
+    uint64_t gpu_trace_tick_anchor{0};
+    uint64_t gpu_trace_time_anchor_ns{0};
+    bool     gpu_trace_anchor_valid{false};
+#endif
 
     std::mutex   exec_mtx;
+    std::mutex   alloc_mtx;
+    std::atomic<uint64> record_frame{0};
     std::jthread thread;
 };
 class VkCopyQueue : public CopyQueue {
@@ -279,6 +307,8 @@ public:
     };
 
     IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
+    VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr);
+    IOWaitEvt            SubmitRecorded(VulkanRecordedSubmit&& _recorded);
     IOWaitEvt Execute(CmdSubmit&& _submit) override;
     FenceRef  GetFenceHandle() override;
     void      Sync(uint64 _timeline) override;
@@ -348,6 +378,7 @@ private:
     LockFreeQueueBase<IOCmd> commands;
 
     std::mutex                                     exec_mutex;
+    std::mutex                                     alloc_mtx;
     Array<VkSemaphore>                             pending_semaphores;
     Queue<std::pair<IOQueueCommandList&&, uint64>> io_thread_cmds;
     std::mutex                                     io_mutex;

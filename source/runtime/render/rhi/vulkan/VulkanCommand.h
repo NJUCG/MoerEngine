@@ -130,6 +130,12 @@ public:
         const VkImageSubresourceRange& _range
     );
     void ResetQueryPool(class VkNativeQueryPool& _query_pool, uint32 _first_query, uint32 _query_count);
+    void BeginQuery(
+        class VkNativeQueryPool& _query_pool,
+        uint32                   _query,
+        VkQueryControlFlags      _flags = 0
+    );
+    void EndQuery(class VkNativeQueryPool& _query_pool, uint32 _query);
     void WriteTimeStamp(VkNativeQueryPool& _query_pool, uint32 _query, VkPipelineStageFlagBits2 _stage);
 
     void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z);

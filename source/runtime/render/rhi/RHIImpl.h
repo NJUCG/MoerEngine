@@ -1530,6 +1530,10 @@ public:
         return related_geometries.find(_handle) != related_geometries.end();
     }
 
+    const auto& RelatedGeometries() const {
+        return related_geometries;
+    }
+
     bool ForceUpdate() const {
         return b_full_refit;
     }
@@ -1547,6 +1551,41 @@ private:
     bool                       b_full_refit            = false;
     uint                       instance_cnt            = 0;
     UnorderedMap<uint64, uint> related_geometries;
+};
+
+struct QueryCmd : public Command {
+public:
+    enum class EOp : uint8_t {
+        BeginTimestamp = 0,
+        EndTimestamp   = 1,
+        BeginOcclusion = 2,
+        EndOcclusion   = 3
+    };
+
+    QueryCmd(
+        QueryToken      _token,
+        EOp             _op,
+        std::string_view _name = typenames[uint(EType::Query)]
+    ) :
+        Command(EType::Query, _name),
+        token(std::move(_token)),
+        op(_op) {}
+
+    EQueueType GetQueueType() const override {
+        return EQueueType::Graphics;
+    }
+
+    const QueryToken& Token() const {
+        return token;
+    }
+
+    EOp Op() const {
+        return op;
+    }
+
+private:
+    QueryToken token{};
+    EOp        op{EOp::BeginTimestamp};
 };
 
 //command for push/pop debug scope

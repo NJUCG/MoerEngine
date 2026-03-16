@@ -4,6 +4,7 @@
 #include "VulkanCommand.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
+#include "VulkanRHITrace.h"
 #include "VulkanRHIResource.h"
 #include "misc/Alignment.h"
 #include "misc/STL.h"
@@ -13,6 +14,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIIO.h"
 #include "rhi/RHIResource.h"
+#include "trace/Trace.h"
 
 #include "VulkanCustomCommand.h"
 #include "shader/ShaderPipeline.h"
@@ -20,11 +22,35 @@
 
 #include <memory>
 #include <mutex>
+#include <atomic>
+#include <algorithm>
+#include <chrono>
 #include <thread>
+#include <limits>
 #include <variant>
 namespace Moer::Render {
 
 #pragma region[ utils ]
+
+static const char* QueueTypeName(EQueueType type) {
+    switch (type) {
+        case EQueueType::Graphics:
+            return "Graphics";
+        case EQueueType::Compute:
+            return "Compute";
+        case EQueueType::Copy:
+            return "Copy";
+        default:
+            return "Unknown";
+    }
+}
+
+static uint64_t SteadyNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()
+    )
+        .count();
+}
 
 VkRenderingAttachmentInfo FromColorAttachmentInfo(const ColorAttachment& _attachment) {
     VkRenderingAttachmentInfo attachment_info{};
@@ -376,6 +402,8 @@ struct VkCmdPreprocessor {
                 Visit(static_cast<const CustomCmd*>(_cmd));
                 break;
             case Command::EType::Scope:
+                break;
+            case Command::EType::Query:
                 break;
             default:
                 assert(false && "Invalid command type");
@@ -1267,6 +1295,9 @@ public:
                 break;
             case Command::EType::Scope:
                 Visit(static_cast<const ScopeCmd&>(*_cmd));
+                break;
+            case Command::EType::Query:
+                Visit(static_cast<const QueryCmd&>(*_cmd));
                 break;
             case Command::EType::Custom:
                 Visit(static_cast<const CustomCmd&>(*_cmd));
@@ -2325,6 +2356,13 @@ public:
         }
     }
 
+    void Visit(const QueryCmd& _cmd) {
+        if (!profiler) {
+            return;
+        }
+        profiler->VisitQueryCmd(cmd_list, _cmd);
+    }
+
     void Visit(const BuildAccelerationStructuresCmd& _cmd) {
         const Array<AccelerationStructureBuildParam>& build_params = _cmd.Params();
 
@@ -2700,296 +2738,357 @@ void VkNativeQueue::InsertLabel(std::string_view _label, float4 _color) {
 #pragma endregion
 
 #pragma region[ Profiler ]
-ProfilerStorage::ProfilerStorage(VkNativeQueryPool& _pool) : timestamp_pool(_pool) {
+namespace {
+std::atomic<uint64_t> g_profiler_internal_query_id{1};
+}
 
-    std::memset(queries_used, 0, sizeof(queries_used));
-    std::memset(query_pool_results, 0, sizeof(query_pool_results));
-    timestamp_period = timestamp_pool.GetDevice().GetCoreProperties().core_1_0.limits.timestampPeriod;
+ProfilerStorage::ProfilerStorage(VulkanQueryRuntime& _query_runtime) : query_runtime(_query_runtime) {
+    timestamp_period = query_runtime.GetTimestampPeriod();
     active           = true;
     name2sample.reserve(100);
 }
-void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
+
+void ProfilerStorage::CollectProfiling() {
     if (!active) {
         return;
     }
-    bool b_any_query_used = false;
-    //maybe should use last frame
-    for (uint idx = 0; idx < s_max_num_profiler_queries_per_frame / 8; ++idx) {
-        if (queries_used[idx + cur_frame * s_max_num_profiler_queries_per_frame / 8]) {
-            b_any_query_used = true;
-            break;
+
+    timestamp_period = query_runtime.GetTimestampPeriod();
+    resolved_gpu_samples.clear();
+    resolved_gpu_samples.reserve(name2sample.size());
+
+    Array<PendingSample> unresolved{};
+    unresolved.reserve(pending_samples.size());
+
+    for (auto& pending : pending_samples) {
+        if (!pending.token.Valid()) {
+            continue;
+        }
+        if (!pending.token.IsReady()) {
+            unresolved.emplace_back(std::move(pending));
+            continue;
+        }
+
+        QueryResult query_result = pending.token.GetFuture().Get();
+        if (query_result.status != QueryStatus::Ready ||
+            !std::holds_alternative<TimestampQueryResult>(query_result.payload)) {
+            continue;
+        }
+
+        const auto& timestamp_result = std::get<TimestampQueryResult>(query_result.payload);
+        auto        sample_iter      = name2sample.find(pending.name);
+        if (sample_iter == name2sample.end()) {
+            sample_iter = name2sample.emplace(pending.name, Sample{}).first;
+        }
+
+        uint64_t duration_ns = 0;
+        if (timestamp_result.end_tick >= timestamp_result.begin_tick) {
+            duration_ns = static_cast<uint64_t>(
+                double(timestamp_result.end_tick - timestamp_result.begin_tick) *
+                double(timestamp_period)
+            );
+        } else if (timestamp_result.duration_ns > 0.0) {
+            duration_ns = static_cast<uint64_t>(timestamp_result.duration_ns);
+        }
+
+        if (duration_ns > 0) {
+            sample_iter->second.Record(duration_ns);
+            resolved_gpu_samples.emplace_back(
+                ResolvedGpuSample{
+                    .name       = pending.name,
+                    .begin_tick = timestamp_result.begin_tick,
+                    .end_tick   = timestamp_result.end_tick
+                }
+            );
         }
     }
-    if (b_any_query_used) {
-        VkResult result = vkGetQueryPoolResults(
-            timestamp_pool.GetDevice().GetDevice(),
-            timestamp_pool.GetHandle(),
-            s_max_num_profiler_queries_per_frame * cur_frame,
-            s_max_num_profiler_queries_per_frame,
-            sizeof(query_pool_results),
-            query_pool_results,
-            sizeof(query_pool_results[0]) * 2, // each result contain two int
-            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT
-        );
 
-        if (result != VK_SUCCESS && result != VK_NOT_READY) {
-            LOG_ERROR("Failed call to vkGetQueryPoolResults, error code = {}\n", uint64(result));
-            b_any_query_used = false;
-        }
-    }
-
-    if (b_any_query_used) {
-        for (auto& [name, sample] : name2sample) {
-            // clang-format off
-                if (IsQueryUsed (sample.index * 2 + 0 + cur_frame * s_max_num_profiler_queries_per_frame)
-                    && IsQueryUsed(sample.index * 2 + 1 + cur_frame * s_max_num_profiler_queries_per_frame)
-                    && query_pool_results[sample.index * 2 * 2 + 1] != 0 // first *2 for begin/end, second *2 for query result
-                    && query_pool_results[(sample.index * 2 + 1) * 2 + 1] != 0) {
-                // clang-format on
-
-                uint64_t begin = query_pool_results[sample.index * 2 * 2 + 0];
-                uint64_t end   = query_pool_results[(sample.index * 2 + 1) * 2 + 0];
-                sample.Record(end - begin);
-            } else {
-                // not valid
-                sample.Reset();
-            }
-        }
-    } else {
-        memset(query_pool_results, 0, sizeof(query_pool_results));
-    }
-
-    vkCmdResetQueryPool(
-        _cb,
-        timestamp_pool.GetHandle(),
-        s_max_num_profiler_queries_per_frame * cur_frame,
-        s_max_num_profiler_queries_per_frame
-    );
-
-    memset(
-        queries_used + s_max_num_profiler_queries_per_frame * cur_frame / 8,
-        0,
-        s_max_num_profiler_queries_per_frame / 8
-    );
-}
-
-int ProfilerStorage::GetQueryStorageIndex(std::string_view _name) {
-    if (name2sample.find(_name.data()) == name2sample.end()) {
-        name2sample[_name.data()] = Sample(name2sample.size());
-    }
-    return name2sample[_name.data()].index;
+    pending_samples = std::move(unresolved);
 }
 
 void ProfilerStorage::BeginProfilerSession(VulkanCmdList& _cmd_list, std::string_view _name) {
     if (!active) {
         return;
     }
-    uint idx = GetQueryStorageIndex(_name) * 2 + 0 + cur_frame * s_max_num_profiler_queries_per_frame;
-    vkCmdWriteTimestamp(
-        _cmd_list.GetHandle(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestamp_pool.GetHandle(), idx
+
+    const uint64_t query_id = g_profiler_internal_query_id.fetch_add(1, std::memory_order_relaxed);
+    QueryToken     token(
+            query_id, QueryKind::Timestamp, std::string(_name), QueryFuture::Create()
     );
-    SetQueryUsed(idx);
-    assert(IsQueryUsed(idx + 1) == false && "Query already used");
+    query_runtime.BeginTimestamp(_cmd_list, token);
+    active_scope_queries[std::string(_name)].emplace_back(token);
 }
 
 void ProfilerStorage::EndProfilerSession(VulkanCmdList& _cmd_list, std::string_view _name) {
     if (!active) {
         return;
     }
-    uint idx = GetQueryStorageIndex(_name) * 2 + 1 + cur_frame * s_max_num_profiler_queries_per_frame;
-    vkCmdWriteTimestamp(
-        _cmd_list.GetHandle(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestamp_pool.GetHandle(), idx
-    );
-    SetQueryUsed(idx);
-    assert(IsQueryUsed(idx - 1) == true && "Query not used");
+
+    const std::string key{_name};
+    auto              iter = active_scope_queries.find(key);
+    if (iter == active_scope_queries.end() || iter->second.empty()) {
+        return;
+    }
+
+    QueryToken token = iter->second.back();
+    iter->second.pop_back();
+    if (iter->second.empty()) {
+        active_scope_queries.erase(iter);
+    }
+
+    query_runtime.EndTimestamp(_cmd_list, token);
+    pending_samples.emplace_back(PendingSample{.name = key, .token = token});
+}
+
+void ProfilerStorage::VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_cmd) {
+    query_runtime.HandleQueryCommand(_cmd, _query_cmd);
+    if (!active) {
+        return;
+    }
+    if (_query_cmd.Token().kind == QueryKind::Timestamp &&
+        _query_cmd.Op() == QueryCmd::EOp::EndTimestamp) {
+        pending_samples.emplace_back(
+            PendingSample{.name = _query_cmd.Token().name, .token = _query_cmd.Token()}
+        );
+    }
 }
 #pragma endregion
 
 #pragma region[ VkCommandQueue ]
-WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
-    Timer         timer{};
-    Timer         reorder_timer{};
-    FunctionTable function_table{
-        .is_resource_write       = &IsBufferTextureWrite,
-        .is_resource_read        = &IsBufferTextureRead,
-        .is_texture_sampled      = &IsTextureSampled,
-        .is_resource_in_bindless = &IsResourceInBindlessArray,
-        .lock_bdls_array         = &LockBindlessArray,
-        .unlock_bdls_array       = &UnlockBindlessArray
+VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered) {
+    TRACE_SCOPE_CAT("VkCommandQueue.Translate", "Queue");
+    struct PreparedCmdBatch {
+        CmdSubmit               submit;
+        FunctionTable           function_table;
+        UniquePtr<CmdReorderer> owned_reorderer;
+        const CmdReorderer*     reorderer{nullptr};
+        uint64                  last_time{0};
+        double                  reorder_time_ms{0.0};
+        bool                    has_cmd{false};
     };
 
-    CmdReorderer reorderer{function_table, _submit.cached_args};
-    //reorder commands base on resource read/write and manual scope
-    reorder_timer.Start();
-    for (const auto& cmd : _submit.cmds) {
-        reorderer.AcceptCmd(cmd.get());
+    PreparedCmdBatch prepared{
+        .submit = std::move(_submit),
+        .function_table =
+            FunctionTable{
+                .is_resource_write       = &IsBufferTextureWrite,
+                .is_resource_read        = &IsBufferTextureRead,
+                .is_texture_sampled      = &IsTextureSampled,
+                .is_resource_in_bindless = &IsResourceInBindlessArray,
+                .lock_bdls_array         = &LockBindlessArray,
+                .unlock_bdls_array       = &UnlockBindlessArray
+            },
+        .owned_reorderer = nullptr,
+        .reorderer = nullptr,
+        .last_time = last_frame,
+        .reorder_time_ms = 0.0,
+        .has_cmd = false
+    };
+    if (_reordered != nullptr) {
+        prepared.reorderer = _reordered;
+        prepared.has_cmd   = !prepared.reorderer->m_cmd_lists.empty();
+    } else {
+        prepared.owned_reorderer = MakeUnique<CmdReorderer>(prepared.function_table, prepared.submit.cached_args);
+        prepared.reorderer       = prepared.owned_reorderer.get();
+
+        Timer reorder_timer{};
+        reorder_timer.Start();
+        for (const auto& cmd : prepared.submit.cmds) {
+            prepared.owned_reorderer->AcceptCmd(cmd.get());
+        }
+        reorder_timer.Stop();
+        prepared.reorder_time_ms = reorder_timer.ElapsedMilliseconds();
+        prepared.has_cmd         = !prepared.reorderer->m_cmd_lists.empty();
     }
-    reorder_timer.Stop();
-    double                       reorder_time = reorder_timer.ElapsedMilliseconds();
-    std::unique_lock<std::mutex> lock(exec_mtx); //currently only one thread can execute commands at a time
 
-    //Get Allocators for buffer, texture and commandlist
-    auto  allocator_ptr = std::move(GetAllocator());
-    auto& vk_allocator  = *allocator_ptr;
+    VulkanRecordedSubmit         recorded{};
+    recorded.allocator = std::move(GetAllocator());
+    recorded.submit.emplace(std::move(prepared.submit));
+    recorded.has_cmd   = prepared.has_cmd;
+    recorded.reorder_time_ms = prepared.reorder_time_ms;
+    const uint64 descriptor_frame = ++record_frame;
 
-    //Get Resource State Tracker
-    auto& tracker = vk_allocator.GetTracker();
+    if (!recorded.has_cmd) {
+        return recorded;
+    }
 
-    //Visitor for actual command recording
+    auto& vk_allocator = *recorded.allocator;
+    auto& tracker      = vk_allocator.GetTracker();
+
     VkCmdVisitor visitor(
-        vk_device, vk_allocator, tracker, vk_allocator.GetCmdList(), _submit.cached_args, &profiler_storage
+        vk_device,
+        vk_allocator,
+        tracker,
+        vk_allocator.GetCmdList(),
+        recorded.submit->cached_args,
+        &profiler_storage
+    );
+    VkCmdPreprocessor preprocessor(
+        vk_device, tracker, vk_allocator, prepared.function_table, recorded.submit->cached_args
     );
 
-    //Visitor for barrier generation
-    VkCmdPreprocessor preprocessor(vk_device, tracker, vk_allocator, function_table, _submit.cached_args);
-
-    // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
-    const auto& cmd_lists = reorderer.m_cmd_lists;
-    bool        has_cmd   = !reorderer.m_cmd_lists.empty();
-    uint64      last_time = last_frame;
-
-    //Set Descriptor buffer ringbuffer offset and start debug region
-    double preprocess_time = 0.0;
-    if (has_cmd) {
-        vk_allocator.GetCmdList().Begin();
-        if (_submit.b_tick_profiling) {
-            profiler_storage.CollectProfiling(vk_allocator.GetCmdList().GetHandle());
-            cached_profiler_entry = profiler_storage.GetProfilerEntry();
-            profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
-            timer.Start();
-        }
-
-        if (queue.GetType() != EQueueType::Copy) {
-            vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(last_time + 1);
-        }
-
-        std::string_view queue_label = queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
-                                       queue.GetType() == EQueueType::Compute  ? "Compute Exec" :
-                                                                                 "Copy Exec";
-        vk_allocator.GetCmdList().BeginLabel(queue_label, {1.0f, 0.0f, 0.0f, 1.0f});
+    vk_allocator.GetCmdList().Begin();
+    query_runtime.BeginRecord(vk_allocator.GetCmdList(), recorded.submit->query_tokens);
+    if (recorded.submit->b_tick_profiling) {
+        profiler_storage.CollectProfiling();
+        cached_profiler_entry = profiler_storage.GetProfilerEntry();
+        cached_gpu_samples    = profiler_storage.GetResolvedGpuSamples();
+#if defined(MOER_TRACE_ENABLED) && MOER_TRACE_ENABLED && defined(MOER_TRACE_GPU_ENABLED) && \
+    MOER_TRACE_GPU_ENABLED
+        EmitResolvedGpuTraceEvents(cached_gpu_samples);
+#endif
+        profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
     }
 
-    uint layer = 0;
+    if (queue.GetType() != EQueueType::Copy) {
+        vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(static_cast<uint>(descriptor_frame));
+    }
 
-    for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
-        if (layer == 0) {
+    std::string_view queue_label = queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
+                                   queue.GetType() == EQueueType::Compute  ? "Compute Exec" :
+                                                                             "Copy Exec";
+    vk_allocator.GetCmdList().BeginLabel(queue_label, {1.0f, 0.0f, 0.0f, 1.0f});
+
+    Timer preprocess_timer{};
+    uint  layer_count = 0;
+    for (const CmdReorderer::LinkedCommandList& cmd_list : prepared.reorderer->m_cmd_lists) {
+        if (layer_count == 0) {
             vk_allocator.GetCmdList().BeginLabel("Begin Layers", {0.0f, 0.0f, 1.0f, 1.0f});
         }
         if (cmd_list.head == nullptr) {
             continue;
         }
-        reorder_timer.Start();
+        preprocess_timer.Start();
         for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+            RHITRACE_LOG(
+                verbose,
+                "[RHITrace][Preprocess][{}][Layer {}] cmd_type={} name={}",
+                QueueTypeName(queue.GetType()),
+                layer_count,
+                uint(cmdnode->cmd->Type()),
+                cmdnode->cmd->name
+            );
             preprocessor.VisitCmd(cmdnode->cmd);
         }
         tracker.ResolveBarriers();
         tracker.DispatchBarriers(vk_allocator.GetCmdList());
-        reorder_timer.Stop();
-        preprocess_time += reorder_timer.ElapsedMilliseconds();
-        vk_allocator.GetCmdList().InsertLabel(std::format("Layer {}", layer++), {0.0f, 0.0f, 1.0f, 1.0f});
+        preprocess_timer.Stop();
+        recorded.preprocess_time_ms += preprocess_timer.ElapsedMilliseconds();
+
+        vk_allocator.GetCmdList().InsertLabel(
+            std::format("Layer {}", layer_count++), {0.0f, 0.0f, 1.0f, 1.0f}
+        );
         for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-            const auto* cmd = cmdnode->cmd;
-            visitor.VisitCmd(cmd);
+            RHITRACE_LOG(
+                verbose,
+                "[RHITrace][ExecuteCmd][{}][Layer {}] cmd_type={} name={}",
+                QueueTypeName(queue.GetType()),
+                layer_count - 1,
+                uint(cmdnode->cmd->Type()),
+                cmdnode->cmd->name
+            );
+            visitor.VisitCmd(cmdnode->cmd);
         }
     }
-    if (layer > 0) {
+    if (layer_count > 0) {
         vk_allocator.GetCmdList().EndLabel();
     }
 
-    if (has_cmd) {
-        tracker.RestoreState();
-        tracker.DispatchBarriers(vk_allocator.GetCmdList());
-        if (_submit.b_tick_profiling) {
-            profiler_storage.EndProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
-        }
-        vk_allocator.GetCmdList().EndLabel();
-        vk_allocator.GetCmdList().End();
-        if (queue.GetType() != EQueueType::Copy) {
-            vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(last_time + 1);
-        }
-        tracker.Reset();
+    if (recorded.submit->b_tick_profiling) {
+        profiler_storage.EndProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
     }
+    vk_allocator.GetCmdList().EndLabel();
+    vk_allocator.GetCmdList().End();
 
-    if (has_cmd) {
-        Array<RHIResource*> deleted_resources;
-        vk_device.deferred_release_queue.PopAll(deleted_resources);
-        _submit.callbacks.emplace_back([deleted_resources(std::move(deleted_resources))]() {
-            for (auto* resource : deleted_resources) {
-                MoerDelete(resource);
-            }
-        });
+    if (queue.GetType() != EQueueType::Copy) {
+        vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(static_cast<uint>(descriptor_frame));
     }
+    tracker.Reset();
 
-    if (_submit.cmds.empty()) {
-        allocators.Push(allocator_ptr.release());
-        std::unique_lock<std::mutex> lock(event_mutex);
-        bool                         b_wake_up = false;
+    Array<RHIResource*> deleted_resources;
+    vk_device.deferred_release_queue.PopAll(deleted_resources);
+    recorded.submit->callbacks.emplace_back([deleted_resources(std::move(deleted_resources))]() {
+        for (auto* resource : deleted_resources) {
+            MoerDelete(resource);
+        }
+    });
 
-        b_wake_up = _submit.callbacks.size() != 0 || _submit.wait_events.size() != 0 ||
-                    _submit.signal_events.size() != 0;
+    return recorded;
+}
+
+WaitEvent VkCommandQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
+    TRACE_SCOPE_CAT("VkCommandQueue.SubmitRecorded", "Queue");
+    std::unique_lock<std::mutex> lock(exec_mtx);
+
+    if (!_recorded.has_cmd || !_recorded.submit.has_value() || _recorded.submit->cmds.empty()) {
+        if (_recorded.submit.has_value() && !_recorded.submit->query_tokens.empty()) {
+            query_runtime.ResolveAsError(_recorded.submit->query_tokens, "submit without commands");
+        }
+        if (_recorded.allocator) {
+            allocators.Push(_recorded.allocator.release());
+        }
+
+        std::unique_lock<std::mutex> event_lock(event_mutex);
+        const bool has_submit = _recorded.submit.has_value();
+        bool b_wake_up = has_submit && (_recorded.submit->callbacks.size() != 0 ||
+                                        _recorded.submit->wait_events.size() != 0 ||
+                                        _recorded.submit->signal_events.size() != 0);
         if (b_wake_up) {
-            auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT :
-                                                                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-
-            if (_submit.callbacks.size() > 0) {
-                event_queue.emplace_back(std::move(_submit.callbacks), last_time, true);
+            if (_recorded.submit->callbacks.size() > 0) {
+                event_queue.emplace_back(std::move(_recorded.submit->callbacks), last_frame, true);
             }
-            for (auto& evt : _submit.signal_events) {
+            for (auto& evt : _recorded.submit->signal_events) {
                 event_queue.emplace_back(WaitEvent(evt.timeline_handle, evt.value), last_frame, false);
-                event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), last_time, false);
+                event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), last_frame, false);
             }
             queue.SubmitEmpty();
-        }
-
-        if (b_wake_up) {
             queue_cv.notify_one();
         }
-        return {uint64(timeline), last_time};
-    } else {
-        auto current_timeline = ++last_frame;
-
-        auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT :
-                                                                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        queue.Signal(timeline, current_timeline, end_tag);
-        for (auto& evt : _submit.wait_events) {
-            queue.Wait(
-                reinterpret_cast<VulkanFence*>(evt.timeline_handle),
-                evt.value,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-            );
-        }
-        for (auto& evt : _submit.signal_events) {
-            queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
-        }
-        queue.Submit(vk_allocator.GetCmdList());
-
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(std::move(allocator_ptr), current_timeline, true);
-        for (auto& evt : _submit.signal_events) {
-            event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), current_timeline, false);
-        }
-        if (_submit.callbacks.size() > 0) {
-            event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, false);
-        }
-        queue_cv.notify_one();
-        executed_queue.Enqueue(current_timeline);
-        if (_submit.b_tick_profiling) {
-            timer.Stop();
-            profiler_storage.RegisterCpuTimestamp("Queue Execution", timer.ElapsedMilliseconds());
-            profiler_storage.RegisterCpuTimestamp("Command Reorder", reorder_time);
-            profiler_storage.RegisterCpuTimestamp("Command Preprocess", preprocess_time);
-            profiler_storage.RegisterCpuTimestamp(
-                "Reorder Percentage", reorder_time / timer.ElapsedMilliseconds()
-            );
-            profiler_storage.RegisterCpuTimestamp(
-                "Preprocess Percentage", preprocess_time / timer.ElapsedMilliseconds()
-            );
-            profiler_storage.AdvanceFrame();
-        }
-        // LOG_INFO("Submit time {}", timer.ElapsedMilliseconds());
-        return {uint64(timeline), current_timeline};
+        return {uint64(timeline), last_frame};
     }
-    return {uint64(timeline), 0ull};
+
+    auto& vk_allocator = *_recorded.allocator;
+
+    auto current_timeline = ++last_frame;
+    auto end_tag          = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT :
+                                                                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    queue.Signal(timeline, current_timeline, end_tag);
+    for (auto& evt : _recorded.submit->wait_events) {
+        queue.Wait(
+            reinterpret_cast<VulkanFence*>(evt.timeline_handle),
+            evt.value,
+            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+        );
+    }
+    for (auto& evt : _recorded.submit->signal_events) {
+        queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
+    }
+    queue.Submit(vk_allocator.GetCmdList());
+    query_runtime.FinalizeSubmit(current_timeline, vk_allocator.GetCmdList().GetHandle());
+
+    std::unique_lock<std::mutex> event_lock(event_mutex);
+    event_queue.emplace_back(std::move(_recorded.allocator), current_timeline, true);
+    if (_recorded.submit->callbacks.size() > 0) {
+        event_queue.emplace_back(std::move(_recorded.submit->callbacks), current_timeline, false);
+    }
+    for (auto& evt : _recorded.submit->signal_events) {
+        event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), current_timeline, false);
+    }
+    queue_cv.notify_one();
+    executed_queue.Enqueue(current_timeline);
+
+    if (_recorded.submit->b_tick_profiling) {
+        profiler_storage.RegisterCpuTimestamp("Command Reorder", _recorded.reorder_time_ms);
+        profiler_storage.RegisterCpuTimestamp("Command Preprocess", _recorded.preprocess_time_ms);
+        profiler_storage.AdvanceFrame();
+    }
+    return {uint64(timeline), current_timeline};
+}
+
+WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
+    TRACE_SCOPE_CAT("VkCommandQueue.Execute", "Queue");
+    VulkanRecordedSubmit recorded = Translate(std::move(_submit));
+    return SubmitRecorded(std::move(recorded));
 }
 
 void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
@@ -3058,11 +3157,110 @@ void VkCommandQueue::Sync() {
     Complete(last_frame);
 }
 
+WaitEvent VkCommandQueue::SubmitRestoreTransitions(
+    Array<ReadBuffer>&& _read_buffers,
+    Array<ReadTexture>&& _read_textures,
+    std::optional<WaitEvent> _wait_evt
+) {
+    if (_read_buffers.empty() && _read_textures.empty()) {
+        return {uint64(timeline), last_frame};
+    }
+    CommandList restore_cmd{};
+    if (!_read_buffers.empty()) {
+        restore_cmd.BufferBarriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Graphics,
+            std::move(_read_buffers),
+            Array<WriteBuffer>{}
+        );
+    }
+    if (!_read_textures.empty()) {
+        restore_cmd.TextureBarriers(
+            EQueueType::Graphics, EQueueType::Graphics, EPassType::Graphics, std::move(_read_textures)
+        );
+    }
+    CmdSubmit restore_submit = restore_cmd.Submit();
+    if (_wait_evt.has_value()) {
+        restore_submit.wait_events.emplace_back(_wait_evt.value());
+    }
+    return Execute(std::move(restore_submit));
+}
+
+#if defined(MOER_TRACE_ENABLED) && MOER_TRACE_ENABLED && defined(MOER_TRACE_GPU_ENABLED) && \
+    MOER_TRACE_GPU_ENABLED
+void VkCommandQueue::EmitResolvedGpuTraceEvents(const Array<ProfilerStorage::ResolvedGpuSample>& _samples) {
+    if (_samples.empty() || !Moer::Trace::IsRecording()) {
+        return;
+    }
+    const float timestamp_period = query_runtime.GetTimestampPeriod();
+    if (timestamp_period <= 0.0f) {
+        return;
+    }
+
+    uint64_t first_tick = std::numeric_limits<uint64_t>::max();
+    for (const auto& sample : _samples) {
+        if (sample.end_tick < sample.begin_tick) {
+            continue;
+        }
+        first_tick = std::min(first_tick, sample.begin_tick);
+    }
+    if (first_tick == std::numeric_limits<uint64_t>::max()) {
+        return;
+    }
+
+    if (!gpu_trace_anchor_valid || first_tick < gpu_trace_tick_anchor) {
+        gpu_trace_tick_anchor    = first_tick;
+        gpu_trace_time_anchor_ns = SteadyNowNs();
+        gpu_trace_anchor_valid   = true;
+    }
+
+    const uint64_t    track_id =
+        Moer::Trace::MakeGpuQueueTrackId(0u, static_cast<uint32_t>(queue.GetType()));
+    const std::string track_name = std::format("GPU0/Queue({})", QueueTypeName(queue.GetType()));
+
+    auto tick_to_ns = [&](uint64_t tick) -> uint64_t {
+        if (tick < gpu_trace_tick_anchor) {
+            return gpu_trace_time_anchor_ns;
+        }
+        const long double delta_ticks = static_cast<long double>(tick - gpu_trace_tick_anchor);
+        const long double delta_ns    = delta_ticks * static_cast<long double>(timestamp_period);
+        return gpu_trace_time_anchor_ns + static_cast<uint64_t>(std::max<long double>(0.0, delta_ns));
+    };
+
+    for (const auto& sample : _samples) {
+        if (sample.end_tick < sample.begin_tick) {
+            continue;
+        }
+
+        uint64_t begin_ns = tick_to_ns(sample.begin_tick);
+        uint64_t end_ns   = tick_to_ns(sample.end_tick);
+        if (end_ns < begin_ns) {
+            end_ns = begin_ns;
+        }
+
+        Moer::Trace::EmitScope(
+            Moer::Trace::EmitScopeDesc{
+                .name        = sample.name,
+                .category    = "GPU",
+                .track_type  = Moer::Trace::TrackType::GPUQueue,
+                .track_id    = track_id,
+                .depth       = 0,
+                .ts_begin_ns = begin_ns,
+                .ts_end_ns   = end_ns,
+                .track_name  = track_name
+            }
+        );
+    }
+}
+#endif
+
 ProfileData VkCommandQueue::GetProfilerEntry() {
     return profiler_storage.GetProfilerEntry();
 }
 
 UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
+    std::lock_guard<std::mutex> alloc_lock(alloc_mtx);
     if (executed_queue.Full()) {
         Complete(executed_queue.Front());
     }
@@ -3075,6 +3273,7 @@ UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
 }
 
 UniquePtr<VulkanPresentor> VkCommandQueue::GetPresentor() {
+    std::lock_guard<std::mutex> alloc_lock(alloc_mtx);
     if (presented_queue.Full()) {
         Complete(presented_queue.Front());
     }
@@ -3105,6 +3304,7 @@ void VkCommandQueue::ExecuteThread() {
                                 &allocators(this->allocators),
                                 fence(this->timeline)](UniquePtr<VulkanAllocator>& _allocator) {
             _allocator->Complete(fence, timeline);
+            query_runtime.ResolveCompleted(timeline);
             // LOG_INFO("timeline {} complete", timeline);
             _allocator->Reset();
             allocators.Push(_allocator.release());
@@ -3171,7 +3371,7 @@ void VkCommandQueue::ExecuteThread() {
                         visit_signal_event(_evt);
                     },
                     [&](WaitEvent& _evt) {
-                        // visit_wait_event(_evt);
+                        visit_wait_event(_evt);
                     },
                     [&](VulkanFence* _fence) {
                         assert(false && "Invalid event");
@@ -3295,98 +3495,148 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
 }
 
 //TODO:看看barrier
-IOWaitEvt VkCopyQueue::Execute(CmdSubmit&& _evt) {
-    Array<UniquePtr<Command>> cmds = std::move(_evt.cmds);
-
-    auto current_timeline = last_frame;
-    if (!cmds.empty()) {
-
-        FunctionTable function_table{
-            .is_resource_write       = &IsBufferTextureWrite,
-            .is_resource_read        = &IsBufferTextureRead,
-            .is_texture_sampled      = &IsTextureSampled,
-            .is_resource_in_bindless = &IsResourceInBindlessArray
-        };
-        CmdReorderer reorderer{function_table, _evt.cached_args};
-
-        std::unique_lock<std::mutex> lk(exec_mutex);
-        auto                         allocator    = GetAllocator();
-        auto&                        vk_allocator = *allocator;
-        auto&                        vk_cmd_list  = vk_allocator.GetCmdList();
-        auto&                        vk_tracker   = vk_allocator.GetTracker();
-
-        VkCmdPreprocessor preprocessor(
-            device, vk_tracker, vk_allocator, {}, _evt.cached_args, EQueueType::Copy
-        );
-        VkCmdVisitor visitor(device, vk_allocator, vk_tracker, vk_cmd_list, _evt.cached_args);
-
-        for (const auto& cmd : cmds) {
-            // preprocessor.VisitCmd(cmd.get());
-            reorderer.AcceptCmd(cmd.get());
-        }
-
-        vk_cmd_list.Begin();
-        vk_cmd_list.BeginLabel("Copy", {0.0f, 1.0f, 1.0f, 1.0f});
-        const auto& cmd_lists = reorderer.m_cmd_lists;
-
-        for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
-            if (cmd_list.head == nullptr) {
+VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer* _reordered) {
+    if (!_evt.query_tokens.empty()) {
+        QueryResult error_result{};
+        error_result.status = QueryStatus::Error;
+        error_result.name   = "Query unsupported on copy queue";
+        for (const auto& token : _evt.query_tokens) {
+            if (!token.Valid()) {
                 continue;
             }
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                preprocessor.VisitCmd(cmdnode->cmd);
-            }
-            vk_tracker.ResolveBarriers();
-            vk_tracker.DispatchBarriers(vk_cmd_list);
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                const auto* cmd = cmdnode->cmd;
-                visitor.VisitCmd(cmd);
-            }
+            error_result.kind     = token.kind;
+            error_result.query_id = token.id;
+            token.Resolve(error_result);
         }
+    }
 
-        // vk_tracker.ResolveBarriers();
-        // vk_tracker.DispatchBarriers(vk_cmd_list);
-        // for (const auto& cmd : cmds) {
-        //     visitor.VisitCmd(cmd.get());
-        // }
-        //copy
-        vk_tracker.RestoreState();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-        vk_cmd_list.EndLabel();
-        vk_cmd_list.End();
-        vk_tracker.Reset();
-        //event queue
+    VulkanRecordedSubmit recorded{};
+    recorded.submit.emplace(std::move(_evt));
+    if (recorded.submit->cmds.empty()) {
+        return recorded;
+    }
 
-        auto current_timeline = ++last_frame;
-        queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        if (current_timeline > 1) {
-            queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    FunctionTable function_table{
+        .is_resource_write       = &IsBufferTextureWrite,
+        .is_resource_read        = &IsBufferTextureRead,
+        .is_texture_sampled      = &IsTextureSampled,
+        .is_resource_in_bindless = &IsResourceInBindlessArray
+    };
+    UniquePtr<CmdReorderer> owned_reorder{};
+    const CmdReorderer*     reorder = _reordered;
+    if (reorder == nullptr) {
+        owned_reorder = MakeUnique<CmdReorderer>(function_table, recorded.submit->cached_args);
+        for (const auto& cmd : recorded.submit->cmds) {
+            owned_reorder->AcceptCmd(cmd.get());
         }
-        for (auto& evt : _evt.wait_events) {
-            queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
+        reorder = owned_reorder.get();
+    }
+    recorded.has_cmd = (reorder != nullptr) && !reorder->m_cmd_lists.empty();
+    if (!recorded.has_cmd) {
+        return recorded;
+    }
+
+    auto allocator     = GetAllocator();
+    auto& vk_allocator = *allocator;
+    auto& vk_cmd_list  = vk_allocator.GetCmdList();
+    auto& vk_tracker   = vk_allocator.GetTracker();
+
+    VkCmdPreprocessor preprocessor(
+        device, vk_tracker, vk_allocator, {}, recorded.submit->cached_args, EQueueType::Copy
+    );
+    VkCmdVisitor visitor(device, vk_allocator, vk_tracker, vk_cmd_list, recorded.submit->cached_args);
+
+    vk_cmd_list.Begin();
+    vk_cmd_list.BeginLabel("Copy", {0.0f, 1.0f, 1.0f, 1.0f});
+    const auto& cmd_lists = reorder->m_cmd_lists;
+    for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
+        if (cmd_list.head == nullptr) {
+            continue;
         }
-        for (auto& evt : _evt.signal_events) {
-            queue.Signal(
-                reinterpret_cast<VulkanFence*>(evt.timeline_handle),
-                evt.value,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+        for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+            RHITRACE_LOG(
+                verbose,
+                "[RHITrace][Preprocess][Copy] cmd_type={} name={}",
+                uint(cmdnode->cmd->Type()),
+                cmdnode->cmd->name
             );
+            preprocessor.VisitCmd(cmdnode->cmd);
         }
-        queue.Submit(vk_allocator.GetCmdList());
-        {
+        vk_tracker.ResolveBarriers();
+        vk_tracker.DispatchBarriers(vk_cmd_list);
+        for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+            RHITRACE_LOG(
+                verbose,
+                "[RHITrace][ExecuteCmd][Copy] cmd_type={} name={}",
+                uint(cmdnode->cmd->Type()),
+                cmdnode->cmd->name
+            );
+            visitor.VisitCmd(cmdnode->cmd);
+        }
+    }
+
+    vk_cmd_list.EndLabel();
+    vk_cmd_list.End();
+    vk_tracker.Reset();
+    recorded.allocator = std::move(allocator);
+    return recorded;
+}
+
+IOWaitEvt VkCopyQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
+    std::unique_lock<std::mutex> lk(exec_mutex);
+    auto current_timeline = last_frame;
+    if (!_recorded.has_cmd || !_recorded.allocator) {
+        if (_recorded.submit.has_value() &&
+            (!_recorded.submit->callbacks.empty() || !_recorded.submit->signal_events.empty())) {
+            current_timeline = ++last_frame;
+            queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            queue.SubmitEmpty();
             std::unique_lock<std::mutex> lock(event_mutex);
-            event_queue.emplace_back(std::move(allocator), current_timeline, true);
-            for (auto& evt : _evt.signal_events) {
+            if (!_recorded.submit->callbacks.empty()) {
+                event_queue.emplace_back(std::move(_recorded.submit->callbacks), current_timeline, false);
+            }
+            for (auto& evt : _recorded.submit->signal_events) {
                 event_queue.emplace_back(
                     IOSignalEvt(evt.timeline_handle, evt.value), current_timeline, false
                 );
             }
-            event_queue.emplace_back(std::move(_evt.callbacks), current_timeline, false);
             queue_cv.notify_one();
         }
         return {uint64(timeline.Get()), current_timeline};
     }
+
+    auto& vk_allocator = *_recorded.allocator;
+    current_timeline   = ++last_frame;
+    queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    if (current_timeline > 1) {
+        queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    }
+    for (auto& evt : _recorded.submit->wait_events) {
+        queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
+    }
+    for (auto& evt : _recorded.submit->signal_events) {
+        queue.Signal(
+            reinterpret_cast<VulkanFence*>(evt.timeline_handle),
+            evt.value,
+            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+        );
+    }
+    queue.Submit(vk_allocator.GetCmdList());
+    {
+        std::unique_lock<std::mutex> lock(event_mutex);
+        event_queue.emplace_back(std::move(_recorded.allocator), current_timeline, true);
+        event_queue.emplace_back(std::move(_recorded.submit->callbacks), current_timeline, false);
+        for (auto& evt : _recorded.submit->signal_events) {
+            event_queue.emplace_back(IOSignalEvt(evt.timeline_handle, evt.value), current_timeline, false);
+        }
+        queue_cv.notify_one();
+    }
     return {uint64(timeline.Get()), current_timeline};
+}
+
+IOWaitEvt VkCopyQueue::Execute(CmdSubmit&& _evt) {
+    VulkanRecordedSubmit recorded = Translate(std::move(_evt));
+    return SubmitRecorded(std::move(recorded));
 }
 
 void VkCopyQueue::Sync(uint64 _timeline) {
@@ -3471,7 +3721,7 @@ void VkCopyQueue::ExecuteThread() {
                         visit_signal_event(_evt);
                     },
                     [&](IOWaitEvt& _evt) {
-                        // visit_wait_event(_evt);
+                        visit_wait_event(_evt);
                     },
                     [&](VulkanFence* _fence) {
                         assert(false && "Invalid event");
@@ -3646,6 +3896,7 @@ void VkCopyQueue::RHIThreadLoop() {
 }
 
 UniquePtr<VulkanAllocator> VkCopyQueue::GetAllocator() {
+    std::lock_guard<std::mutex> alloc_lock(alloc_mtx);
     if (last_frame >= device.cmd_alloc_limits) {
         Complete(last_frame);
     }

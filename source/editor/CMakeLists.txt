@@ -28,3 +28,7 @@ target_include_directories(
 # Compiler options
 # I want to remove the following line
 target_compile_options(${target_name} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/WX->")
+
+target_compile_definitions(${target_name}
+    PRIVATE MOER_TRACE_ENABLED=$<IF:$<CONFIG:Release>,0,1>
+)

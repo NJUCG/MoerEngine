@@ -538,6 +538,14 @@ void VulkanCmdList::ResetQueryPool(VkNativeQueryPool& _query_pool, uint32 _first
     vkCmdResetQueryPool(command_buffer, _query_pool.GetHandle(), _first_query, _query_cnt);
 }
 
+void VulkanCmdList::BeginQuery(VkNativeQueryPool& _query_pool, uint32 _query, VkQueryControlFlags _flags) {
+    vkCmdBeginQuery(command_buffer, _query_pool.GetHandle(), _query, _flags);
+}
+
+void VulkanCmdList::EndQuery(VkNativeQueryPool& _query_pool, uint32 _query) {
+    vkCmdEndQuery(command_buffer, _query_pool.GetHandle(), _query);
+}
+
 void VulkanCmdList::WriteTimeStamp(
     VkNativeQueryPool&       _query_pool,
     uint32                   _query_idx,
@@ -577,7 +585,7 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
     VulkanPipelineParamBinder& bind_template        = *vk_pso->bind_template;
     VulkanDescriptorHeap&      descriptor_heap      = device.GetGlobalDescriptorHeap();
     auto&                      set_binders          = bind_template.set_binders;
-    uint64                     g_global_desc_offset = descriptor_heap.current_offset;
+    uint64                     g_global_desc_offset = descriptor_heap.GetCurrentOffset();
 
     for (auto& [set, binder] : set_binders) {
         std::visit(
@@ -738,7 +746,7 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
 
                     //set desc buffer offset
                     bind_template.desc_buffer_offsets[_binder.offset_idx].offset =
-                        descriptor_heap.current_offset;
+                        descriptor_heap.GetCurrentOffset();
                     descriptor_heap.IncrementOffset(_binder.size);
                     // device.vk_cmd_push_descriptor_set(command_buffer, _binder.bind_point, _binder.push_info.layout, _binder.push_info.set, _binder.writers.size(), _binder.writers.data());
                 }

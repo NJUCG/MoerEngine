@@ -120,6 +120,7 @@ public:
 
 public:
     uint64 CurrentFrameOffset(uint _frame_idx) const;
+    uint64 GetCurrentOffset() const;
     void   BeginPushDescriptors(uint _frame_idx);
 
     void EndPushDescriptors(uint _frame_idx);

@@ -17,6 +17,7 @@
 #include "debug/RenderDocApi.h"
 #include "misc/Timer.h"
 #include "scene/LogicalComponents.h"
+#include "trace/Trace.h"
 #include "window/WindowContext.h"
 
 #if WITH_CUDA
@@ -157,6 +158,7 @@ void RasterRenderer::UpdateGlobalLightingData(
 }
 
 bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
+    TRACE_SCOPE_CAT("Raster.Frame", "Frame");
     auto& raster_context = *raster_context_ptr;
 
     LogSceneLoadStatus(*editor_config);

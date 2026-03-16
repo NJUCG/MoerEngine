@@ -10,7 +10,12 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include <atomic>
 namespace Moer::Render {
+
+namespace {
+std::atomic<uint64_t> g_query_token_id{1};
+}
 
 void CommandQueue::Test() {
     ShaderManager manager = ShaderManager::Get();
@@ -121,9 +126,12 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
 }
 
 CmdSubmit CommandList::Submit() {
-    CmdSubmit submit(std::move(commands), std::move(callbacks), std::move(cached_args));
+    CmdSubmit submit(
+        std::move(commands), std::move(callbacks), std::move(cached_args), std::move(query_tokens)
+    );
     commands.clear();
     callbacks.clear();
+    query_tokens.clear();
     return std::move(submit);
 }
 
@@ -355,19 +363,94 @@ void CommandList::PushScope(std::string_view _name) {
     scope_stack.push(_name);
 }
 
+QueryToken CommandList::CreateQueryToken(QueryKind _kind, std::string_view _name) {
+    const uint64_t query_id = g_query_token_id.fetch_add(1, std::memory_order_relaxed);
+    return QueryToken(query_id, _kind, std::string(_name), QueryFuture::Create());
+}
+
+QueryToken CommandList::BeginTimestampQuery(std::string_view _name) {
+    QueryToken token = CreateQueryToken(QueryKind::Timestamp, _name);
+    query_tokens.emplace_back(token);
+    commands.push_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::BeginTimestamp, _name));
+    return token;
+}
+
+void CommandList::EndTimestampQuery(const QueryToken& _token) {
+    if (!_token.Valid()) {
+        return;
+    }
+    commands.push_back(
+        MakeUnique<QueryCmd>(
+            _token,
+            QueryCmd::EOp::EndTimestamp,
+            _token.name.empty() ? Command::typenames[(uint)Command::EType::Query] : _token.name
+        )
+    );
+}
+
+QueryToken CommandList::BeginOcclusionQuery(std::string_view _name) {
+    QueryToken token = CreateQueryToken(QueryKind::Occlusion, _name);
+    query_tokens.emplace_back(token);
+    commands.push_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::BeginOcclusion, _name));
+    return token;
+}
+
+void CommandList::EndOcclusionQuery(const QueryToken& _token) {
+    if (!_token.Valid()) {
+        return;
+    }
+    commands.push_back(
+        MakeUnique<QueryCmd>(
+            _token,
+            QueryCmd::EOp::EndOcclusion,
+            _token.name.empty() ? Command::typenames[(uint)Command::EType::Query] : _token.name
+        )
+    );
+}
+
 void CommandList::PushScopeWithTimeScope(std::string_view _name) {
-    commands.push_back(MakeUnique<ScopeCmd>(_name, true, true));
-    scope_stack.push(_name);
+    PushScope(_name);
+    timed_scope_query_stack.push(BeginTimestampQuery(_name));
+#if MOER_TRACE_ENABLED && MOER_TRACE_GPU_ENABLED
+    gpu_trace_scope_tokens.push(
+        Moer::Trace::BeginSpan(
+            Moer::Trace::SpanDesc{
+                .name      = _name,
+                .category  = "GPU.CPU.Record",
+                .track_type = Moer::Trace::TrackType::CPUThread
+            }
+        )
+    );
+#endif
 }
 
 void CommandList::PopScope() {
-    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.front(), false, false));
+    assert(!scope_stack.empty() && "PopScope called with empty scope stack");
+    if (scope_stack.empty()) {
+        return;
+    }
+    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.top(), false, false));
     scope_stack.pop();
 }
 
 void CommandList::PopScopeWithTimeScope() {
-    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.front(), false, true));
-    scope_stack.pop();
+    assert(!scope_stack.empty() && "PopScopeWithTimeScope called with empty scope stack");
+    if (scope_stack.empty()) {
+        return;
+    }
+    PopScope();
+    if (!timed_scope_query_stack.empty()) {
+        QueryToken token = timed_scope_query_stack.top();
+        timed_scope_query_stack.pop();
+        EndTimestampQuery(token);
+    }
+#if MOER_TRACE_ENABLED && MOER_TRACE_GPU_ENABLED
+    if (!gpu_trace_scope_tokens.empty()) {
+        Moer::Trace::SpanToken token = std::move(gpu_trace_scope_tokens.top());
+        gpu_trace_scope_tokens.pop();
+        Moer::Trace::EndSpan(std::move(token));
+    }
+#endif
 }
 #pragma region[ raytracing ]
 

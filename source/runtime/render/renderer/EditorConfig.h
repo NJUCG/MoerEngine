@@ -26,6 +26,10 @@ struct EditorConfig {
     RasterConfig     raster_config;
     RaytracingConfig raytracing_config;
 
+    // Play mode states
+    bool play_mode_enabled       = false;
+    bool play_mode_capture_input = false;
+
     // 为了避免数据不一致，这里对resolution进行封装。引擎中必须优先保证该struct中的resolution是正确的
 private:
     uint2 resolution;

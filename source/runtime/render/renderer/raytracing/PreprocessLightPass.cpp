@@ -282,6 +282,9 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
 }
 
 void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
+
+    TRACE_SCOPE_CAT("Raytracing.ProcessLights", "Frame");
+
     Array<PrepareLightsTask>    tasks;
     Array<PolymorphicLightInfo> prim_light_infos;
 

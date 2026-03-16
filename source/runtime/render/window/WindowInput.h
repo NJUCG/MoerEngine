@@ -48,6 +48,7 @@ typedef enum {
     LEFT,
     RIGHT,
     ESCAPE,
+    GRAVE_ACCENT,
 
     KeyButtonCount,
     KeyButtonFirst = A,
@@ -86,6 +87,7 @@ struct RENDER_API WindowInput {
     bool speed_up    = false;
     bool speed_down  = false;
     bool reset_speed = false;
+    bool block_camera_keyboard_input = false;
 
     // window size
     float width        = 1280.f;
@@ -94,6 +96,9 @@ struct RENDER_API WindowInput {
 
     // mouse button state
     bool is_cursor_hiding = false;
+    bool force_cursor_visible = false;
+    bool force_cursor_hidden  = false;
+    bool play_mode_camera_control = false;
 
     StaticArray<bool, MouseButtons::MouseButtonCount> mouse_button_state      = {false};
     StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_state        = {false}; // Press or Release

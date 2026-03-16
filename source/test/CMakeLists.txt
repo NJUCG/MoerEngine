@@ -153,6 +153,21 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+# RHI Translate MultiQueue Test (Vulkan-only runtime path)
+set(test_target TestRHITranslate)
+add_executable(${test_target} RHITest/rhi_translate_multiqueue_test.cpp)
+target_include_directories(${test_target}
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+    PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/RHITest>
+)
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+    PRIVATE glfw
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 # CUDA Test
 if (TARGET Moer::Cuda)
     set(test_target TestCuda)

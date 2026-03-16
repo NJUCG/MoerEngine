@@ -44,6 +44,15 @@ set(CMAKE_PDB_OUTPUT_DIRECTORY ${BINARY_ROOT_DIR}/bin)
 add_compile_definitions(EDITOR_MODE_ON=1)
 
 option(moer_build_test "build test unit" ON)
+option(moer_enable_trace "Enable profiler trace instrumentation" ON)
+
+if(moer_enable_trace)
+    add_compile_definitions(MOER_TRACE_ENABLED=$<IF:$<CONFIG:Release>,0,1>)
+else()
+    add_compile_definitions(MOER_TRACE_ENABLED=0)
+endif()
+add_compile_definitions(MOER_TRACE_GPU_ENABLED=1)
+add_compile_definitions(MOER_TRACE_CSV_ENABLED=1)
 
 if(${MSVC})
     add_compile_options("/Zc:preprocessor")
