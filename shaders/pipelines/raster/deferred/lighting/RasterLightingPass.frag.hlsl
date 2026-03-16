@@ -19,9 +19,9 @@ float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) 
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
-    uint material_id = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
-    ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
-    Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(material_id);
+    uint            material_id  = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
+    ArrayBuffer     material_buf = ArrayBuffer(param.material_buf_hdl);
+    Moer::GMaterial mat          = material_buf.Load<Moer::GMaterial>(material_id);
 
     // MARK: Lighting Data
     ArrayBuffer        global_params = ArrayBuffer(param.global_param_handle);
@@ -98,6 +98,8 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     if (param.enable_extra_ambient) {
         color += param.extra_ambient_intensity * param.extra_ambient_color * brdf_ctx.albedo;
     }
+
+    color = max(color, 0.0);
 
     return float4(color, 1.0);
 }
