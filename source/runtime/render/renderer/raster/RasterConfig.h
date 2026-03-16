@@ -123,7 +123,7 @@ struct RasterConfig {
 
     bool         shading_brdf_enable_multi_scatter = true; // kulla-conty approximation
     EBrdfNdfMode shading_brdf_NDF_mode             = EBrdfNdfMode::GGX;
-    EBrdfGMode   shading_brdf_G_mode               = EBrdfGMode::VIS_UE4;
+    EBrdfGMode   shading_brdf_G_mode               = EBrdfGMode::VIS_UNITY;
     bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
 
     // MARK: Tonemapping

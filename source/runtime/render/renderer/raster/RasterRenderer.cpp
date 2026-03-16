@@ -269,7 +269,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // Lighting Pass
         lighting_pass->Process(raster_context, raster_config, camera);
 
-        //Env&Atmo Pass
+        // Env&Atmo Pass
         skybox_pass->Process(raster_context, raster_config, camera);
 
         // Post Process Passes
@@ -303,7 +303,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         processing_image = upsample_pass->Process(raster_context, raster_config, processing_image);
 #endif
 
-        //Bloom Pass
+        // - Bloom Pass
         processing_image = bloom_pass->Process(raster_context, raster_config, processing_image);
 
         // - Tonemapping Pass
