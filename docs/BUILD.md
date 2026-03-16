@@ -2,27 +2,46 @@
 
 ## 目录
 
-- [构建手册](#构建手册)
-  - [目录](#目录)
-  - [1. 依赖](#1-依赖)
-  - [2. MoerEngine](#2-moerengine)
-  - [3. CUDA等AI组件支持](#3-cuda等ai组件支持)
-    - [注意事项](#注意事项)
-  - [4. NRD降噪器支持](#4-nrd降噪器支持)
+- [1. 依赖](#1-依赖)
+  - [1.1 安装依赖具体步骤](#11-安装依赖具体步骤)
+- [2. MoerEngine](#2-moerengine)
+- [3. CUDA等AI组件支持](#3-cuda等ai组件支持)
+  - [3.1 注意事项](#31-注意事项)
+- [4. NRD降噪器支持](#4-nrd降噪器支持)
 
 ## 1. 依赖
 
 * 操作系统
   * Windows 10 or 11
 * 编译器（二选一）
-  * MSVC == 19.44.*
-  * clang + ninja
+  * MSVC 版本19.38-19.44
+  * Clang ([download link](https://github.com/llvm/llvm-project/releases)) + ninja ([download link](https://github.com/ninja-build/ninja))
+    * 推荐使用Clang。原因是Clang编译速度比较快，并且对应LSP的IntelliSense比较强，支持Cursor等IDE
 * Vulkan SDK 1.3 ([download link](https://vulkan.lunarg.com/sdk/home))
-  * 推荐使用Vulkan SDK 1.3
-  * Vulkan SDK 1.4版本会导致无法使用DebugPrintfEXT（待解决）
-
+  * 推荐使用Vulkan SDK 1.3，Vulkan SDK 1.4版本会导致无法使用DebugPrintfEXT（待解决）
 * CMake >= 3.26.0 且 < 4.0.0 ([download link](https://github.com/Kitware/CMake/releases/tag/v3.31.9))
 * Git ([download link](https://git-scm.com/downloads))
+
+### 1.1 安装依赖具体步骤
+
+* 安装MSVC
+  * 下载 [Visual Studio Installer](https://visualstudio.microsoft.com/zh-hans/downloads/)
+  * 在 VS Installer 中，选择对应版本VS（推荐2022），**并勾选 使用C++的桌面开发**
+    * 如果找不到 Visual Studio 2022，可以在 [此网页](https://visualstudio.microsoft.com/zh-hans/vs/older-downloads/) 中选择2022并进行下载
+  * 安装完毕后，在开始菜单搜索 `x64 Native Tools Command Prompt for VS 2022` 并打开。在此终端中输入 `cl`，如出现类似下图内容，则安装成功
+  * ![image-20260316150018048](BUILD/image-20260316150018048.png)
+* 安装Clang
+  * 进入 [LLVM-Project Github Releases](https://github.com/llvm/llvm-project/releases)
+  * 选择 `LLVM-22.x.x-win64.exe`，下载并根据指引安装
+  * 安装完毕后，添加 `LLVM/bin` 到 `PATH` 环境变量
+  * 在终端中输入 `clang --version`，若出现类似下图内容，则安装成功
+  * ![image-20260316145302647](BUILD/image-20260316145302647.png)
+* 安装Ninja
+  * 进入 [ninja Github Releases](https://github.com/ninja-build/ninja/releases)
+  * 选择 `ninja-win.zip`，下载，并解压到对应目录
+  * 解压后，添加该目录到 `PATH` 环境变量
+  * 在终端输入 `ninja --version`，若出现类似下图内容，则安装成功
+  * ![image-20260316145516938](BUILD/image-20260316145516938.png)
 
 ## 2. MoerEngine
 
@@ -57,6 +76,8 @@
 - 方法二：Rider
   
   - TODO
+
+- 成功启动后，可以参考 [DEVELOPMENT.md](DEVELOPMENT.md) 来了解MoerEngine的开发规范等其他内容
 
 ## 3. CUDA等AI组件支持
 
@@ -98,7 +119,7 @@
    * ![image-20250920201137320](BUILD/image-20250920201137320.png)
    * ![image-20250920201248463](BUILD/image-20250920201248463.png)
 
-### 注意事项
+### 3.1 注意事项
 
 * 启用CUDA后，光栅化渲染器就不支持Stencil模板测试了。原因是CUDA不支持 `PF_D32_SFLOAT_S8_UINT`
 
