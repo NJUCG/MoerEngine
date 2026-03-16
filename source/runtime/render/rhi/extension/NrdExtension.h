@@ -22,11 +22,10 @@
 #include <Extensions/NRIHelper.h>
 // 3
 #include <Extensions/NRIWrapperVK.h>
-
 // 4
 #include <NRD.h>
 // 5
-#include <NRDIntegration.hpp>
+#include <NRDIntegration.h>
 
 #else
 // 模拟 NRI / NRD，保证 WITH_NRD=0 时无需真实头文件也能编译
