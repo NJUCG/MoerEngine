@@ -16,6 +16,7 @@
 #include <string_view>
 
 #include "log/LogSystem.h"
+// #include "misc/MacroUtils.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -214,23 +215,32 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
     VK_CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &gpu_count, gpu_list.data()))
 
     // lambda helpers
-    const auto& extensions_required              = VulkanDeviceExtension::GetMERequiredDeviceExtensions();
+    const auto& extensions_required = VulkanDeviceExtension::GetMERequiredDeviceExtensions();
+
     const auto& is_extensions_required_supported = [&](VkPhysicalDevice _gpu) {
-        // only check whether the extension is included by the GPU, not check corresponding features
+        // 只检查 GPU 是否声明支持对应扩展，不检查 feature 结构体细节
         auto gpu_extensions = VulkanDevice::GetGpuExtensions(_gpu);
 
-        // only check required extensions
         for (const auto& extension : extensions_required) {
-            if (!gpu_extensions.contains(extension->GetExtensionName().data()) && !extension->IsOptional())
+            const auto& required_name = extension->GetExtensionName();
+            const bool   is_optional  = extension->IsOptional();
+
+            if (!gpu_extensions.contains(required_name.data()) && !is_optional) {
                 return false;
+            }
         }
 
         return true;
     };
 
-    const auto& features_required          = VulkanDeviceFeatures::GetMERequiredFeatures(_api_version);
+    const auto& features_required = VulkanDeviceFeatures::GetMERequiredFeatures(_api_version);
     const auto& is_core_features_supported = [&](VkPhysicalDevice _gpu) {
-        return VulkanDeviceFeatures::GetGpuFeatures(_gpu, _api_version).Contains(features_required);
+        auto gpu_features = VulkanDeviceFeatures::GetGpuFeatures(_gpu, _api_version);
+        bool ok           = gpu_features.Contains(features_required);
+        if (!ok) {
+            LOG_ERROR("GPU does NOT satisfy required core Vulkan features.");
+        }
+        return ok;
     };
 
     // check availability
@@ -267,7 +277,37 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         }
     }
 
-    CHECK_ASSERT(gpu_priorities.size(), "No available GPU(discrete, etc.) found!");
+    if (gpu_priorities.empty()) {
+        LOG_ERROR("No available GPU. Details:");
+
+        // 仅在失败分支里输出调试信息：按 GPU 输出缺失的必需扩展
+        for (const auto& gpu : gpu_list) {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(gpu, &props);
+
+            auto gpu_extensions = VulkanDevice::GetGpuExtensions(gpu);
+
+            std::string log_msg;
+            log_msg += std::string("GPU '") + props.deviceName + "':\n";
+
+            bool has_missing = false;
+            for (const auto& extension : extensions_required) {
+                const auto& required_name = extension->GetExtensionName();
+                const bool   is_optional  = extension->IsOptional();
+
+                if (!gpu_extensions.contains(required_name.data()) && !is_optional) {
+                    has_missing = true;
+                    log_msg += std::string(required_name) + "\n";
+                }
+            }
+
+            if (has_missing) {
+                LOG_ERROR("{}", log_msg);
+            }
+        }
+
+        CHECK_ASSERT(false, "No available GPU(discrete, etc.) found!");
+    }
 
     Array<uint8>::iterator highest_priority_iter =
         std::max_element(gpu_priorities.begin(), gpu_priorities.end());
