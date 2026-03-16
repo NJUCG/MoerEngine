@@ -168,23 +168,6 @@ static const char* GetVkUsageName(uint32_t usage) {
     return "Unknown/ByName";
 }
 
-const char* EventTypeToString(uint8_t type) {
-    static const char* labels[] = {
-        "UNKNOWN",
-        "ALLOC",
-        "FREE",
-        "Vk_ALLOC",
-        "Vk_FREE",
-        "VkTmp_ALLOC",
-        "VkTmp_FREE"
-    };
-
-    if (type >= 0 && type <= 6) {
-        return labels[type];
-    }
-    return "INVALID";
-}
-
 struct RingBuffer {
     std::mutex push_mtx;
     EventRecord* buffer;
@@ -268,6 +251,7 @@ static void capture_frames_fast(void** out_frames, int max_frames, USHORT& out_c
     out_count = frames;
 }
 
+//考虑性能，不在实时运行时解析符号。可以profile结束后手动解析mimalloc_profiler.log
 static std::string symbolicate_address(void* addr) {
     std::string out;
     EnterCriticalSection(&g_sym_cs);
@@ -346,44 +330,12 @@ static void worker_thread_func() {
 
         const uint8_t s_idx = static_cast<uint8_t>(rec.source);
         if (s_idx >= (uint8_t)MemorySource::MAX_SOURCES) continue;
-
-        //(File Logging)
-        char header[512];
-        uint64_t us = rec.ts_us;
-        time_t secs = (time_t)(us / 1000000ULL);
-        uint32_t usec = (uint32_t)(us % 1000000ULL);
-        tm tmv;
-        gmtime_s(&tmv, &secs);
-
-        int offset = sprintf_s(header, sizeof(header), 
-            "[%04d-%02d-%02d %02d:%02d:%02d.%06u] [%s:%s] ptr=0x%p size=%zu",
-            tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec,
-            usec, GetSourceStr(rec.source), GetActionStr(rec.action), rec.ptr, rec.size);
-
-        if (rec.source == MemorySource::VulkanTmp && rec.action == MemoryAction::Alloc) {
-            if (rec.usage != 0xFFFFFFFF) {
-                sprintf_s(header + offset, sizeof(header) - offset, " usage=%s\n", GetVkUsageName(rec.usage));
-            } else {
-                sprintf_s(header + offset, sizeof(header) - offset, " name=%s\n", rec.name);
-            }
-        } else {
-            sprintf_s(header + offset, sizeof(header) - offset, "\n");
-        }
-
-        g_log_ofs << header;
-        for (uint16_t i = 0; i < rec.frame_count; ++i) {
-            g_log_ofs << "    #" << i << " " << rec.frames[i] << "\n";
-        }
-        g_log_ofs << "----------------------------------------\n";
-        if (LOG_BATCH_FLUSH > 0 && ++batch_count >= LOG_BATCH_FLUSH) {
-            g_log_ofs.flush();
-            batch_count = 0;
-        }
-
+        size_t live_size = 0; //rec.size for Free didn't record accuately
         // (Metrics & Hotspots)
         if (rec.action == MemoryAction::Alloc) {
             LiveAllocInfo& live = g_live_allocs[rec.ptr];
             live.size = rec.size;
+            live_size = rec.size;
             live.source = rec.source;
             live.ptr = rec.ptr;
             live.key.frame_count = rec.frame_count;
@@ -404,12 +356,21 @@ static void worker_thread_func() {
                 h_info.alloc_count++;
                 h_info.source = rec.source;
             }
+            // if(rec.source == MemorySource::Vulkan)
+            // {
+            //     printf("[vkAllocateMemory_Hook]ALLOC:%zd\n",live.size);
+            // }
         } 
         else if (rec.action == MemoryAction::Free) {
             auto it = g_live_allocs.find(rec.ptr);
             if (it != g_live_allocs.end()) {
                 const auto& live = it->second;
-                
+
+            // if(rec.source == MemorySource::Vulkan)
+            // {
+            //     printf("[vkAllocateMemory_Hook]FREE:%zd\n",live.size);
+            // }    
+            live_size = live.size;
                 if (g_metrics.bytes[s_idx] >= live.size) {
                     g_metrics.bytes[s_idx].fetch_sub(live.size, std::memory_order_relaxed);
                 }
@@ -426,13 +387,44 @@ static void worker_thread_func() {
                 g_live_allocs.erase(it);
             }
         }
+        //(File Logging)
+        char header[512];
+        uint64_t us = rec.ts_us;
+        time_t secs = (time_t)(us / 1000000ULL);
+        uint32_t usec = (uint32_t)(us % 1000000ULL);
+        tm tmv;
+        gmtime_s(&tmv, &secs);
+
+        int offset = sprintf_s(header, sizeof(header), 
+            "[%04d-%02d-%02d %02d:%02d:%02d.%06u] [%s:%s] ptr=0x%p size=%zu",
+            tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec,
+            usec, GetSourceStr(rec.source), GetActionStr(rec.action), rec.ptr, live_size);
+
+        if (rec.source == MemorySource::VulkanTmp && rec.action == MemoryAction::Alloc) {
+            if (rec.usage != 0xFFFFFFFF) {
+                sprintf_s(header + offset, sizeof(header) - offset, " usage=%s\n", GetVkUsageName(rec.usage));
+            } else {
+                sprintf_s(header + offset, sizeof(header) - offset, " name=%s\n", rec.name);
+            }
+        } else {
+            sprintf_s(header + offset, sizeof(header) - offset, "\n");
+        }
+
+        g_log_ofs << header;
+        for (uint16_t i = 0; i < rec.frame_count; ++i) {
+            g_log_ofs << "    #" << i << " " << rec.frames[i] << "\n";
+        }
+        g_log_ofs << "----------------------------------------\n";
+        if (LOG_BATCH_FLUSH > 0 && ++batch_count >= LOG_BATCH_FLUSH) {
+            g_log_ofs.flush();
+            batch_count = 0;
+        }
     }
     
     g_in_hook = false;
 }
 
 // UI--------------------------------------------
-
 void Profile_TickSample() {
     static auto last_sample = std::chrono::steady_clock::now();
     auto now = std::chrono::steady_clock::now();
@@ -708,7 +700,7 @@ void VkTmpDeAllocate_Hook(
         g_in_hook = false;
     }
 }
-//---------------Vk
+//---------------Vk--------------
 
 typedef VkResult (VKAPI_PTR* PFN_vkAllocateMemory_t)(
     VkDevice,
@@ -735,6 +727,7 @@ VkResult VKAPI_PTR vkAllocateMemory_Hook(
         pAllocateInfo,
         pAllocator,
         pMemory);
+
     if (result == VK_SUCCESS && !g_in_hook)
     {
         g_in_hook = true;
@@ -744,7 +737,7 @@ VkResult VKAPI_PTR vkAllocateMemory_Hook(
 
         EventRecord rec;
         rec.ts_us = now_us();
-        rec.source = MemorySource::VulkanTmp;
+        rec.source = MemorySource::Vulkan;
         rec.action = MemoryAction::Alloc;
         rec.size = size;
         rec.ptr = p;
@@ -779,8 +772,6 @@ void VKAPI_PTR vkFreeMemory_Hook(
         void* p = reinterpret_cast<void*>(memory);
         uint64_t size = 0;
 
-
-
         EventRecord rec;
         rec.ts_us = now_us();
         rec.source = MemorySource::Vulkan;
@@ -805,16 +796,58 @@ void VKAPI_PTR vkFreeMemory_Hook(
     }
 }
 //--------------
+typedef PFN_vkVoidFunction (VKAPI_PTR *PFN_vkGetDeviceProcAddr)(VkDevice device, const char* pName);
+PFN_vkGetDeviceProcAddr orig_vkGetDeviceProcAddr = nullptr;
 
-void SetupVulkanHooks(HMODULE hVulkan) {
+//hook vkGetDeviceProcAddr, replace vkAllocateMemory to vkAllocateMemory_Hook
+PFN_vkVoidFunction VKAPI_PTR Detour_vkGetDeviceProcAddr(VkDevice device, const char* pName) {
+    PFN_vkVoidFunction realAddr = orig_vkGetDeviceProcAddr(device, pName);
+
+    if (pName && strcmp(pName, "vkAllocateMemory") == 0) {
+        printf("[profile] Detour_vkGetDeviceProcAddr1\n");
+        orig_vkAllocateMemory = (PFN_vkAllocateMemory_t)realAddr;
+        return (PFN_vkVoidFunction)vkAllocateMemory_Hook; //hook vkAllocateMemory 第二层，通过vkGetDeviceProcAddr直接返回hook函数
+    }
+    
+    if (pName && strcmp(pName, "vkFreeMemory") == 0) {
+        orig_vkFreeMemory = (PFN_vkFreeMemory_t)realAddr;
+        return (PFN_vkVoidFunction)vkFreeMemory_Hook;
+    }
+
+    return realAddr;
+}
+
+typedef FARPROC (WINAPI* PFN_GetProcAddress)(HMODULE, LPCSTR);
+PFN_GetProcAddress orig_GetProcAddress = nullptr;
+FARPROC WINAPI Detour_GetProcAddress(HMODULE hModule, LPCSTR lpProcName) {
+    FARPROC addr = orig_GetProcAddress(hModule, lpProcName);
+
+    if (lpProcName && !HIWORD(lpProcName)) return addr;
+
+    if (lpProcName && strcmp(lpProcName, "vkGetDeviceProcAddr") == 0) {
+        orig_vkGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)addr;
+        //printf("ASDFasdfasdf\n");
+        return (FARPROC)Detour_vkGetDeviceProcAddr;
+    }
+
+    return addr;
+}
+
+
+void SetupVulkanHooks(HMODULE vklib) {
     if (orig_vkAllocateMemory) return;
+    void* gdpa = (void*)GetProcAddress(vklib, "vkGetDeviceProcAddr");
+    if (gdpa) {
+        MH_STATUS status = MH_CreateHook(gdpa, &Detour_vkGetDeviceProcAddr, (LPVOID*)&orig_vkGetDeviceProcAddr);
+        status = MH_EnableHook(gdpa);
+        printf("[Profiler] EnableHook vkGetDeviceProcAddr: %s\n", MH_StatusToString(status));
+    }
 
-    HMODULE vklib = GetModuleHandleA("vulkan-1.dll");
     if (vklib) {
         void* addr = (void*)GetProcAddress(vklib, "vkAllocateMemory");
         MH_STATUS status = MH_CreateHook(addr, &vkAllocateMemory_Hook, (LPVOID*)&orig_vkAllocateMemory);
         status = MH_EnableHook(addr);
-        printf("EnableHook vkAllocateMemory: %s\n", MH_StatusToString(status));
+        printf("[Profiler] EnableHook vkAllocateMemory: %s\n", MH_StatusToString(status));
 
         addr = (void*)GetProcAddress(vklib, "vkFreeMemory");
         MH_CreateHook(
@@ -823,28 +856,46 @@ void SetupVulkanHooks(HMODULE hVulkan) {
             reinterpret_cast<void**>(&orig_vkFreeMemory));
 
         status = MH_EnableHook(addr);
-        printf("EnableHook vkFreeMemory: %s\n", MH_StatusToString(status));
+        printf("[Profiler] EnableHook vkFreeMemory: %s\n", MH_StatusToString(status));
     }
     else
     {
-        printf("No vklib\n");
+        printf("[Profiler] No vklib\n");
     }
 }
+//vulkan-1.dll是动态加载的，先hook住loader
+//反复测试没啥卵用，太慢了
 //LoaderHook--------------------
-typedef HMODULE(WINAPI* PFN_LoadLibraryW)(LPCWSTR);
-PFN_LoadLibraryW orig_LoadLibraryW = nullptr;
-HMODULE WINAPI Detour_LoadLibraryW(LPCWSTR lpLibFileName) {
-    HMODULE hModule = orig_LoadLibraryW(lpLibFileName);
+// typedef HMODULE(WINAPI* PFN_LoadLibraryW)(LPCWSTR);
+// PFN_LoadLibraryW orig_LoadLibraryW = nullptr;
+// HMODULE WINAPI Detour_LoadLibraryW(LPCWSTR lpLibFileName) {
+//     HMODULE hModule = orig_LoadLibraryW(lpLibFileName);
     
-    if (hModule && lpLibFileName) {
-        std::wstring name = lpLibFileName;
-        if (name.find(L"vulkan-1.dll") != std::wstring::npos) {
-            printf("[Profiler] Detected vulkan-1.dll loading...\n");
-            SetupVulkanHooks(hModule);
-        }
-    }
-    return hModule;
-}
+//     if (hModule && lpLibFileName) {
+//         std::wstring name = lpLibFileName;
+//         if (name.find(L"vulkan-1.dll") != std::wstring::npos) {
+//             printf("[Profiler] Target ACQUIRED: vulkan-1.dll loaded via W\n");
+//             SetupVulkanHooks(hModule); //hook vkAllocateMemory 第一层，尝试在load时挂载
+//         }
+//     }
+//     return hModule;
+// }
+
+// typedef HMODULE (WINAPI* PFN_LoadLibraryExW)(LPCWSTR, HANDLE, DWORD);
+// PFN_LoadLibraryExW orig_LoadLibraryExW = nullptr;
+
+// HMODULE WINAPI Detour_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
+//     HMODULE hModule = orig_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
+    
+//     if (hModule && lpLibFileName) {
+//         if (wcsstr(lpLibFileName, L"vulkan-1.dll")) {
+//             printf("[Profiler] Target ACQUIRED: vulkan-1.dll loaded via ExW\n");
+//             SetupVulkanHooks(hModule);
+//         }
+//     }
+//     return hModule;
+// }
+
 //ExitHook-----------------------
 void __cdecl ProfileExitFunc() {
     static bool handled = false;
@@ -932,7 +983,7 @@ bool InitSymbolEngine() {
     searchPath = searchPath.substr(0, searchPath.find_last_of("\\/"));
 
     if (!SymInitialize(hProcess, searchPath.c_str(), TRUE)) {
-        printf("[PDB] SymInitialize Fatal Error: %lu\n", GetLastError());
+        printf("[Profiler] SymInitialize Fatal Error: %lu\n", GetLastError());
         return false;
     }
     return true;
@@ -946,12 +997,12 @@ void* GetProcAddressFromPdb(const char* mangledName, const char* readableName = 
     pSymbol->MaxNameLen = MAX_SYM_NAME;
 
     if (SymFromName(hProcess, mangledName, pSymbol)) {
-        printf("[PDB] Found by mangledname:%s\n", mangledName);
+        printf("[Profiler] Found by mangledname:%s\n", mangledName);
         return reinterpret_cast<void*>(pSymbol->Address);
     }
 
     if (readableName && SymFromName(hProcess, readableName, pSymbol)) {
-        printf("[PDB] Found by readable name: %s -> %p\n", readableName, (void*)pSymbol->Address);
+        printf("[Profiler] Found by readable name: %s -> %p\n", readableName, (void*)pSymbol->Address);
         return reinterpret_cast<void*>(pSymbol->Address);
     }
 
@@ -972,9 +1023,9 @@ void* GetProcAddressFromPdb(const char* mangledName, const char* readableName = 
 
 
 void install_hooks_static() {
-    MH_STATUS status = MH_Initialize();
-    printf("MH_Initialize: %s\n", MH_StatusToString(status));
-
+    //MH_STATUS status = MH_Initialize();
+    //printf("[Profiler] MH_Initialize: %s\n", MH_StatusToString(status));
+    MH_STATUS status;
     
     HMODULE hCore = GetModuleHandleA("moer_cored.dll"); 
 
@@ -983,44 +1034,23 @@ void install_hooks_static() {
             if (pMalloc) {
             MH_CreateHook(pMalloc, &malloc_hook, (LPVOID*)&orig_Malloc);
             status = MH_EnableHook(pMalloc);
-            printf("EnableHook Memory:Malloc: %s\n", MH_StatusToString(status));
+            printf("[Profiler] EnableHook Memory:Malloc: %s\n", MH_StatusToString(status));
         }
         void* pFree1 = (void*)GetProcAddress(hCore, "?Free@Memory@@SAXPEAX@Z");
         if (pFree1) {
             MH_CreateHook(pFree1, &free_hook_1, (LPVOID*)&orig_Free1);
             status = MH_EnableHook(pFree1);
-            printf("EnableHook Memory::Free(void*) at %p\n", pFree1);
+            printf("[Profiler] EnableHook Memory::Free(void*) at %p\n", pFree1);
         }
         void* pFree2 = (void*)GetProcAddress(hCore, "?Free@Memory@@SAXPEAX_K@Z");
         if (pFree2) {
             MH_CreateHook(pFree2, &free_hook_2, (LPVOID*)&orig_Free2);
             status = MH_EnableHook(pFree2);
-            printf("EnableHook Memory::Free(void*) at %p\n", pFree2);
+            printf("[Profiler] EnableHook Memory::Free(void*) at %p\n", pFree2);
         }
     }
 
-    // void* pMalloc = GetProcAddressFromPdb("?Malloc@Memory@@SAPEAX_K@Z", "Memory::Malloc");
-    // if (pMalloc) {
-    //     MH_CreateHook(pMalloc, &malloc_hook, (LPVOID*)&orig_Malloc);
-    //     status = MH_EnableHook(pMalloc);
-    //     printf("EnableHook Memory:Malloc: %s\n", MH_StatusToString(status));
-    // }
-
-    // void* pFree1 = GetProcAddressFromPdb("?Free@Memory@@SAXPEAX@Z", "Memory::Free");
-    // if (pFree1) {
-    //     MH_CreateHook(pFree1, &free_hook_1, (LPVOID*)&orig_Free1);
-    //     status = MH_EnableHook(pFree1);
-    //     printf("EnableHook Memory::Free(void*) at %p\n", pFree1);
-    // }
-
-    // void* pFree2 = GetProcAddressFromPdb("?Free@Memory@@SAXPEAX_K@Z");
-    // if (pFree2) {
-    //     MH_CreateHook(pFree2, &free_hook_2, (LPVOID*)&orig_Free2); // 确保你有对应的 hook 函数
-    //     MH_EnableHook(pFree2);
-    //     printf("[Profile] Hooked Memory::Free(void*, size_t) at %p\n", pFree2);
-    // }
-
-    // 现在有pdb直接从里面搜索符号。release版可能需要特征码匹配或者导出符号
+    // VkTmpAllocate没有导出符号，现在有pdb直接从里面搜索符号。release版可能需要特征码匹配或者导出符号
     //uintptr_t base = (uintptr_t)GetModuleHandleA("moer_renderd.dll");
     // LPVOID allocAddr_1 = (LPVOID)(base + 0x360E20);
     // LPVOID allocAddr_2 = (LPVOID)(base + 0x3612D0);
@@ -1036,7 +1066,7 @@ void install_hooks_static() {
             (LPVOID*)&orig_VkTmpAllocate_1
         );
         status = MH_EnableHook(allocAddr_1);
-        printf("EnableHook VkTmpBufferAllocator::Allocate(uint64 _size, std::string_view _name) %s\n", MH_StatusToString(status));
+        printf("[Profiler] EnableHook VkTmpBufferAllocator::Allocate(uint64 _size, std::string_view _name) %s\n", MH_StatusToString(status));
     }
     void* allocAddr_2 = GetProcAddressFromPdb("?Allocate@VkTmpBufferAllocator@Render@Moer@@QEAA_K_KW4EVkInternalBufferUsage@23@@Z", "VkTmpBufferAllocator::Allocate");
     //void* allocAddr_2 =(void*)GetProcAddress(hCore, "?Allocate@VkTmpBufferAllocator@Render@Moer@@QEAA_K_KW4EVkInternalBufferUsage@23@@Z");
@@ -1047,7 +1077,7 @@ void install_hooks_static() {
             (LPVOID*)&orig_VkTmpAllocate_2
         );
         status = MH_EnableHook(allocAddr_2);
-        printf("EnableHook VkTmpBufferAllocator::Allocate(uint64 _size, EVkInternalBufferUsage _usage) %s\n", MH_StatusToString(status));
+        printf("[Profiler] EnableHook VkTmpBufferAllocator::Allocate(uint64 _size, EVkInternalBufferUsage _usage) %s\n", MH_StatusToString(status));
     }
     void* freeAddr = GetProcAddressFromPdb("?DeAllocate@VkTmpBufferAllocator@Render@Moer@@QEAAX_K@Z","VkTmpBufferAllocator::DeAllocate");
    // void* freeAddr =(void*)GetProcAddress(hCore, "?DeAllocate@VkTmpBufferAllocator@Render@Moer@@QEAAX_K@Z");
@@ -1059,47 +1089,10 @@ void install_hooks_static() {
             (LPVOID*)&orig_VkTmpDeAllocate
         );
         status = MH_EnableHook(freeAddr);
-        printf("EnableHook DeAllocate(uint64 _handle) %s\n", MH_StatusToString(status));
+        printf("[Profiler] EnableHook DeAllocate(uint64 _handle) %s\n", MH_StatusToString(status));
     }
+
     //MH_EnableHook(MH_ALL_HOOKS);
-}
-void install_hooks_dynamic()
-{
-    constexpr int max_wait_ms = 3000;
-    int waited = 0;
-    while (waited < max_wait_ms)
-    {
-        if (GetModuleHandleA("vulkan-1.dll"))
-            break;
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        waited += 5;
-    }
-    
-    HMODULE vklib = GetModuleHandleA("vulkan-1.dll");
-    if (vklib) {
-        void* addr = (void*)GetProcAddress(vklib, "vkAllocateMemory");
-        MH_STATUS status = MH_CreateHook(addr, &vkAllocateMemory_Hook, (LPVOID*)&orig_vkAllocateMemory);
-        status = MH_EnableHook(addr);
-        printf("EnableHook vkAllocateMemory: %s\n", MH_StatusToString(status));
-
-        addr = (void*)GetProcAddress(vklib, "vkFreeMemory");
-        MH_CreateHook(
-            addr,
-            vkFreeMemory_Hook,
-            reinterpret_cast<void**>(&orig_vkFreeMemory));
-
-        status = MH_EnableHook(addr);
-        printf("EnableHook vkFreeMemory: %s\n", MH_StatusToString(status));
-    }
-    else
-    {
-        printf("No vklib\n");
-    }
-}
-void remove_hooks() {
-    MH_DisableHook(MH_ALL_HOOKS);
-    MH_Uninitialize();
 }
 
 void LogModuleInfo() {
@@ -1125,6 +1118,29 @@ void LogModuleInfo() {
     g_log_ofs.flush();
 }
 
+void ProfileInitDynamic()
+{
+    std::string log_path = get_log_path() + "\\mimalloc_profiler.log";
+    g_log_ofs.open(log_path, std::ios::out | std::ios::trunc);
+    if (!g_log_ofs.is_open()) {
+        std::fprintf(stderr, "Failed to open log file: %s\n", log_path.c_str());
+    } else {
+        g_log_ofs << "=== mimalloc profiler log ===\n";
+    }
+    LogModuleInfo();
+    // start worker
+    g_worker_running.store(true);
+    g_worker = std::thread(worker_thread_func);
+    
+    InitPerfetto();
+    g_session = StartSession();
+}
+
+void remove_hooks() {
+    MH_DisableHook(MH_ALL_HOOKS);
+    MH_Uninitialize();
+}
+
 void initialize_mimalloc_profiler() {
     // Prevent double init
     static bool inited = false;
@@ -1136,56 +1152,39 @@ void initialize_mimalloc_profiler() {
     InitializeCriticalSection(&g_sym_cs);
 
     if (!InitSymbolEngine()) {
-        printf("Failed to initialize Symbol Engine, PDB hooks will fail.\n");
+        printf("[Profiler] Failed to initialize Symbol Engine, PDB hooks will fail.\n");
     }
-
-    std::string log_path = get_log_path() + "\\mimalloc_profiler.log";
-    g_log_ofs.open(log_path, std::ios::out | std::ios::trunc);
-    if (!g_log_ofs.is_open()) {
-        std::fprintf(stderr, "Failed to open log file: %s\n", log_path.c_str());
-    } else {
-        g_log_ofs << "=== mimalloc profiler log ===\n";
-    }
-    LogModuleInfo();
 }
 
 // 出入口
-
 void ProfileInitStatic()
 {
-    InitPerfetto();
-    g_session = StartSession();
     initialize_mimalloc_profiler();
     install_hooks_static();
-    //std::atexit(ProfileExitFunc);
-    std::cout << "Moer Engine Perfetto Starting..." << std::endl;
-
-    // start worker
-    g_worker_running.store(true);
-    g_worker = std::thread(worker_thread_func);
+    //std::atexit(ProfileExitFunc); //退出时机改为hook ExitProcess，此时记录数据
 }
 
 void __cdecl ProfileInitFunc()
 {
     ProfileInitStatic();
 
-    HMODULE hUcrt = GetModuleHandleA("ucrtbase.dll");
-    if (!hUcrt) hUcrt = GetModuleHandleA("msvcrt.dll");
+    // HMODULE hUcrt = GetModuleHandleA("ucrtbase.dll");
+    // if (!hUcrt) hUcrt = GetModuleHandleA("msvcrt.dll");
 
-    if (hUcrt) {
-        void* pExit = (void*)GetProcAddress(hUcrt, "exit");
-        if (pExit) {
-            MH_CreateHook(pExit, &Detour_exit, (LPVOID*)&orig_exit);
-            MH_EnableHook(pExit);
-        }
-        printf("[Profiler] System exit() hooked. ...\n");
-    }
+    // if (hUcrt) {
+    //     void* pExit = (void*)GetProcAddress(hUcrt, "exit");
+    //     if (pExit) {
+    //         MH_CreateHook(pExit, &Detour_exit, (LPVOID*)&orig_exit);
+    //         MH_EnableHook(pExit);
+    //     }
+    //     printf("[Profiler] System exit() hooked. ...\n");
+    // }
 
-    void* pTerminate = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "TerminateProcess");
-    if (pTerminate) {
-        MH_CreateHook(pTerminate, &Detour_TerminateProcess, (LPVOID*)&orig_TerminateProcess);
-        MH_EnableHook(pTerminate);
-    }
+    // void* pTerminate = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "TerminateProcess");
+    // if (pTerminate) {
+    //     MH_CreateHook(pTerminate, &Detour_TerminateProcess, (LPVOID*)&orig_TerminateProcess);
+    //     MH_EnableHook(pTerminate);
+    // }
     
     void* pExitProc = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "ExitProcess");
     if (pExitProc) {
@@ -1194,24 +1193,44 @@ void __cdecl ProfileInitFunc()
         printf("[Profiler] ExitProcess hook installed.\n");
     }
 
-    void* pLoadLib = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryW");
-    if (pLoadLib) {
-        MH_CreateHook(pLoadLib, &Detour_LoadLibraryW, (LPVOID*)&orig_LoadLibraryW);
-        MH_EnableHook(pLoadLib);
-        printf("[Profiler] System LoadLibraryW hooked. Waiting for Vulkan...\n");
-    }
+    // void* pLoadLib = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryW");
+    // if (pLoadLib) {
+    //     MH_CreateHook(pLoadLib, &Detour_LoadLibraryW, (LPVOID*)&orig_LoadLibraryW);
+    //     MH_EnableHook(pLoadLib);
+    //     printf("[Profiler] System LoadLibraryW hooked. Waiting for Vulkan...\n");
+    // }
 
+    // void* pLoadLibExW = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryExW");
+    // if (pLoadLibExW) {
+    //     MH_CreateHook(pLoadLibExW, &Detour_LoadLibraryExW, (LPVOID*)&orig_LoadLibraryExW);
+    //     MH_EnableHook(pLoadLibExW);
+    //     printf("[Profiler] System LoadLibraryExW hooked. Waiting for Vulkan...\n");
+    // }
+
+    //目前挂载vk唯一入口
     HMODULE hVulkan = GetModuleHandleA("vulkan-1.dll");
     if (hVulkan) {
+        printf("[Profiler] vulkan-1.dll Loaded before ProfileInitFunc\n");
         SetupVulkanHooks(hVulkan);
     }
-    //install_hooks_dynamic();
+    else
+    {
+        printf("[Profiler] No vulkan-1.dll Loaded before ProfileInitFunc\n");
+    }
+    ProfileInitDynamic();
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
-        std::thread(ProfileInitFunc).detach();
+
+        MH_Initialize();
+        // MH_CreateHookApi(L"kernel32.dll", "GetProcAddress", &Detour_GetProcAddress, (LPVOID*)&orig_GetProcAddress);
+        // MH_EnableHook(MH_ALL_HOOKS);
+        std::thread(ProfileInitFunc).detach(); //异步玄学挂的上
+        //ProfileInitFunc();
+        //std::thread(ProfileInitDynamic).detach();//异步可能挂不上
+
     }
     return TRUE;
 }
@@ -1231,7 +1250,9 @@ void DumpLeaks()
     for (auto& [key, info] : g_live_allocs)
     {
         std::cout << "Leak at: " << info.ptr
-                  << " size=" << info.size << "\n";
+                  << " size=" << info.size 
+                  << " type=" << GetSourceStr(info.source)
+                  << "\n";
         total += info.size;
     }
 
