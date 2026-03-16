@@ -34,7 +34,9 @@ Renderer::Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, co
     {
         bindless_array = scene.bindless_array();
 
-        scene.LoadSceneFromFileAsync(_config->scene_path);
+        // FIXME: 异步版有bug，会在gfx_queue.Execute()卡死，并且会卡住整台机器一分钟
+        // scene.LoadSceneFromFileAsync(_config->scene_path);
+        scene.LoadSceneFromFile(_config->scene_path);
 
         SceneGlobalEntry::Get().BindScene(&scene);
     }

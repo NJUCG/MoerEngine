@@ -370,8 +370,8 @@ void ImGUIRenderBackend::RenderGUI(CommandList& _cmd_list, const TextureView& _f
     {
         ImGuiContext* g  = ImGui::GetCurrentContext();
         auto&         io = ImGui::GetIO();
-        if (g && (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) &&
-            g->FrameCountEnded == g->FrameCount && g->FrameCountPlatformEnded < g->FrameCount) {
+        if (g && (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) && g->FrameCountEnded == g->FrameCount &&
+            g->FrameCountPlatformEnded < g->FrameCount) {
             ImGui::UpdatePlatformWindows();
         }
         ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
@@ -695,6 +695,7 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
     if (sc->size.x == _size.x && sc->size.y == _size.y)
         return;
     rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
+    sc->Sync();
 
     Moer::WindowHandle handle{(Moer::WindowType*)(_viewport->PlatformHandle ? _viewport->PlatformHandle :
                                                                               _viewport->PlatformHandleRaw)};

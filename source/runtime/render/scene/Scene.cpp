@@ -11,30 +11,38 @@ Scene::Scene() {
     m_bindless_array = Render::RenderDevice::Get().CreateBindlessArray();
 }
 
+void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
+    // start
+    this->m_scene_load_info.StartLoading();
+
+    // 1. logical scene
+    this->m_logical_scene = MakeUnique<ecs::LogicalScene>();
+    bool result           = LoaderInterface::LoadSceneFromFile(*this->m_logical_scene, file_path);
+
+    // failed in LogicalScene loading
+    if (!result) {
+        this->m_scene_load_info.Reset();
+        return;
+    }
+
+    // 2. cpu scene
+    this->m_cpu_scene = MakeUnique<CpuScene>(*this->m_logical_scene);
+
+    // 3. gpu scene
+    this->m_gpu_scene = MakeUnique<Render::GpuScene>(*this->m_cpu_scene, this->bindless_array());
+
+    // finish
+    this->m_scene_load_info.FinishLoading();
+}
+
 void Scene::LoadSceneFromFileAsync(const std::filesystem::path& file_path) {
     LambdaTask::Dispatch([this, file_path]() {
-        // start
-        this->m_scene_load_info.StartLoading();
-
-        // 1. logical scene
-        this->m_logical_scene = MakeUnique<ecs::LogicalScene>();
-        bool result           = LoaderInterface::LoadSceneFromFile(*this->m_logical_scene, file_path);
-
-        // failed in LogicalScene loading
-        if (!result) {
-            this->m_scene_load_info.Reset();
-            return;
-        }
-
-        // 2. cpu scene
-        this->m_cpu_scene = MakeUnique<CpuScene>(*this->m_logical_scene);
-
-        // 3. gpu scene
-        this->m_gpu_scene = MakeUnique<Render::GpuScene>(*this->m_cpu_scene, this->bindless_array());
-
-        // finish
-        this->m_scene_load_info.FinishLoading();
+        this->LoadSceneInternal(file_path);
     });
+}
+
+void Scene::LoadSceneFromFile(const std::filesystem::path& file_path) {
+    this->LoadSceneInternal(file_path);
 }
 
 bool Scene::IsStartLoading() const {
@@ -43,6 +51,10 @@ bool Scene::IsStartLoading() const {
 
 bool Scene::IsReady() const {
     return m_scene_load_info.IsSceneReady();
+}
+
+Render::GpuScene::PendingCommandList&& Scene::PopPendingCommandList() {
+    return std::move(m_gpu_scene->PopPendingCommandList());
 }
 
 void Scene::Tick() {

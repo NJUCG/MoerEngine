@@ -11,6 +11,10 @@
 
 namespace Moer {
 
+namespace Render {
+class CommandList;
+}
+
 /**
  * MoerEngine场景
  * 
@@ -48,6 +52,11 @@ public:
     void LoadSceneFromFileAsync(const std::filesystem::path& file_path);
 
     /**
+     * 同步从文件加载场景，阻塞直到加载完成
+     */
+    void LoadSceneFromFile(const std::filesystem::path& file_path);
+
+    /**
      * 每帧调用，更新CpuScene和GpuScene数据
      */
     void Tick();
@@ -72,6 +81,10 @@ public:
      */
     bool IsReady() const;
 
+public:
+    // Graphics API相关接口
+    Render::GpuScene::PendingCommandList&& PopPendingCommandList();
+
 private:
     // 构造函数 初始化
     /**
@@ -88,6 +101,14 @@ private:
     UniquePtr<Render::GpuScene>  m_gpu_scene;
 
     SceneLoadInfoAsync m_scene_load_info;
+
+private:
+    /**
+     * 内部实现：从文件加载场景（同步执行）
+     * 
+     * LoadSceneFromFileAsync 和 LoadSceneFromFile 的公共实现
+     */
+    void LoadSceneInternal(const std::filesystem::path& file_path);
 
 public:
     /**

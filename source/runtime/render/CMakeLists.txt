@@ -32,7 +32,6 @@ target_include_directories(${target_name}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/imgui>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/smaa>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRI/Include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Cross>
 )
 target_link_libraries(${target_name}
@@ -45,7 +44,6 @@ target_link_libraries(${target_name}
     PUBLIC gtl
     PUBLIC EnTT::EnTT
     PUBLIC Moer::Core
-    PUBLIC NRI
     PRIVATE spirv-cross-cpp
     # dx, maybe add a option based on platform
     PRIVATE MeshProcess # for scene/meshprocess/MeshProcessor.h
@@ -83,10 +81,12 @@ endif()
 # Link NRD & 设置NRD宏
 if (WITH_NRD)
     target_include_directories(${target_name}
+        PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/NRI/Include>
         PUBLIC $<BUILD_INTERFACE:${NRD_ROOT}/Include>
         PUBLIC $<BUILD_INTERFACE:${NRD_ROOT}/Integration>
     )
     target_link_libraries(${target_name}
+        PUBLIC NRI
         PUBLIC NRD
     )
     

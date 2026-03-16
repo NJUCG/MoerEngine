@@ -1,6 +1,40 @@
 # 开发手册 与 规范
 
-## 设计思路
+## 目录
+
+- [1. 推荐使用的开发工具](#1-推荐使用的开发工具)
+  - [just](#just)
+- [2. 设计思路](#2-设计思路)
+  - [ECS框架](#ecs框架)
+- [3. 规范](#3-规范)
+  - [Git规范](#git规范)
+  - [第三方库与依赖项](#第三方库与依赖项)
+  - [C++规范](#c规范)
+  - [HLSL命名规范](#hlsl命名规范)
+  - [CMake命名规范](#cmake命名规范)
+- [4. IDE \& IntelliSence配置](#4-ide--intellisence配置)
+  - [VSCode配置相关](#vscode配置相关)
+- [5. 如何Code Review](#5-如何code-review)
+
+## 1. 推荐使用的开发工具
+
+### just
+
+`just` 可以简单理解为 **快捷命令**。
+
+在本仓库中，`template.justfile` 中预先写好了一些常用命令（例如编译、运行、格式化、打包等），你只需要记住少量入口命令，就可以避免每天和一长串 CMake / Ninja / MSVC 参数搏斗。
+
+推荐的使用方式大致如下：
+
+1. 安装 `just`  
+   - Windows：可以通过 `cargo` 安装（`cargo install just`）。  
+   - Linux / macOS：参考官方仓库 `casey/just` 的 README 即可。【安装细节请自行询问AI】
+2. 通过简短命令完成日常操作  
+   - 例如：`just build`、`just run`、`just gbr`（实际命令以 `justfile` 中为准）。
+
+总之，**把常用、复杂、容易忘的命令都写在 `justfile` 里，然后只记住几个简短的 `just xxx` 就好**，既减少心智负担，也方便团队成员共享统一的开发流程。
+
+## 2. 设计思路
 
 ### ECS框架
 
@@ -99,7 +133,7 @@ class ComponentB {
 
 【这种编码方式的优缺点，请自行询问AI】
 
-## 规范
+## 3. 规范
 
 以下命名规范均为推荐规范，非强制要求。但请尽量遵循，以保持代码风格的一致性和可读性。
 
@@ -192,7 +226,7 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
   add_library(Moer::Cuda ALIAS ${target_name})
   ```
 
-## IDE & IntelliSence配置
+## 4. IDE & IntelliSence配置
 
 *TODO*
 
@@ -201,7 +235,7 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
 - 设置中的 `C_Cpp.default.compilerPath` 字段不能使用msvc编译器，否则IntelliSense会出现假错。推荐使用clang
   - 注：和编译无关，只和 IntelliSense（IDE的智能代码高亮与补全）有关
 
-## 如何Code Review
+## 5. 如何Code Review
 
 这里贴一下Code Review时可以注意的内容：
 

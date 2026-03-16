@@ -166,10 +166,10 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         LOG_WARNING("Swapchain recreate skipped due to zero swapchain extent.");
         return;
     }
-    VkPresentModeKHR present_mode               = ChooseSwapPresentMode(details.present_modes, false);
-    format                                      = (EPixelFormat)fmt.format;
-    uint                     queue_family_index = device.GetQueueFamilyIndices().graphics.value();
-    uint32_t image_count = capabilities.minImageCount + 1;
+    VkPresentModeKHR present_mode = ChooseSwapPresentMode(details.present_modes, false);
+    format                        = (EPixelFormat)fmt.format;
+    uint     queue_family_index   = device.GetQueueFamilyIndices().graphics.value();
+    uint32_t image_count          = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount > 0 && image_count > capabilities.maxImageCount) {
         image_count = capabilities.maxImageCount;
     }
@@ -240,13 +240,17 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
             vkCreateSemaphore(device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &image_ready_fences[i]);
             device.SetResourceName(
-                uint64(image_ready_fences[i]), VK_OBJECT_TYPE_SEMAPHORE, "ImageReadySemaphore"
+                uint64(image_ready_fences[i]),
+                VK_OBJECT_TYPE_SEMAPHORE,
+                "ImageReadySemaphore_" + std::to_string(i)
             );
             vkCreateSemaphore(
                 device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &render_finished_fences[i]
             );
             device.SetResourceName(
-                uint64(render_finished_fences[i]), VK_OBJECT_TYPE_SEMAPHORE, "RenderFinishedSemaphore"
+                uint64(render_finished_fences[i]),
+                VK_OBJECT_TYPE_SEMAPHORE,
+                "RenderFinishedSemaphore_" + std::to_string(i)
             );
         }
     }
@@ -259,11 +263,10 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
         for (uint i = 0; i < max_frames_in_flight; i++) {
             vkCreateFence(device.GetDevice(), &fence_info, VK_NULL_HANDLE, &in_flight_fences[i]);
+            device.SetResourceName(
+                uint64(in_flight_fences[i]), VK_OBJECT_TYPE_FENCE, "InFlightFence_" + std::to_string(i)
+            );
         }
-    } else {
-        // 我参考VkSwapchain::WaitFrameInFlight，添加了vkWaitForFences。但我不确定这里是否应该加这句话，错误的话请删掉
-        // vkWaitForFences(device.GetDevice(), in_flight_fences.size(), in_flight_fences.data(), VK_TRUE, UINT64_MAX);
-        vkResetFences(device.GetDevice(), in_flight_fences.size(), in_flight_fences.data());
     }
     image_idx = 0;
 }
@@ -299,22 +302,29 @@ std::tuple<VkSemaphore, uint, uint> VkSwapchain::AquireNextImage() {
     VkResult result =
         vkAcquireNextImageKHR(device.GetDevice(), handle, UINT64_MAX, ready_sem, VK_NULL_HANDLE, &aquire_idx);
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        aquire_idx = INT32_MAX;
+        aquire_idx = UINT32_MAX;
     }
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
         return {ready_sem, aquire_idx, image_idx};
     }
     // assert(false && "Error acquiring next present texture.");
     LOG_WARNING("Fail to acquire next image, window may be resized.");
-    return {VK_NULL_HANDLE, INT32_MAX, image_idx};
+    return {VK_NULL_HANDLE, UINT32_MAX, image_idx};
 }
 
 void VkSwapchain::Present(VkQueue _queue, uint _index) {
-    if (_index == INT32_MAX) {
+    if (_index == UINT32_MAX) {
         return;
     }
-    VkSemaphore      finished_semaphores[] = {render_finished_fences[image_idx % image_ready_fences.size()]};
+    VkSemaphore finished_semaphores[] = {render_finished_fences[image_idx % render_finished_fences.size()]};
+    // use present fence to sync present queue, so we can return immediately after submit present command,
+    // and do the sync in a separate thread, which can reduce the stutter caused by vkQueuePresentKHR
+    VkSwapchainPresentFenceInfoEXT present_fence_info{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
+    present_fence_info.swapchainCount = 1;
+    present_fence_info.pFences        = &in_flight_fences[image_idx % in_flight_fences.size()];
+
     VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    present_info.pNext              = &present_fence_info;
     present_info.waitSemaphoreCount = 1;
     present_info.pWaitSemaphores    = finished_semaphores;
     present_info.swapchainCount     = 1;
@@ -327,7 +337,7 @@ void VkSwapchain::Present(VkQueue _queue, uint _index) {
         assert(false && "Error presenting to swapchain.");
     }
     EnqueuePresent(image_idx);
-    image_idx++;
+    ++image_idx;
 }
 
 void VkSwapchain::OnFinishPresent(uint64 _image_idx) {

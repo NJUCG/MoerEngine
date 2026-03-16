@@ -6,6 +6,7 @@
 #include "misc/STL.h"
 #include "renderer/common/RuntimeAssets.h"
 #include "rhi/RHIResource.h"
+#include "scene/Scene.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"

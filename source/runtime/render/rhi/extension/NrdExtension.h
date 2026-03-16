@@ -12,29 +12,58 @@
 
 #include "rhi/RHI.h"
 
-// NRD and NRI-based integration
+#if WITH_NRD
+
+// NRI
+
 // 1
 #include <NRI.h>
 // 2
 #include <Extensions/NRIHelper.h>
 // 3
 #include <Extensions/NRIWrapperVK.h>
-
-#if WITH_NRD
-
 // 4
 #include <NRD.h>
 // 5
 #include <NRDIntegration.h>
 
 #else
-// 模拟nrd
+// 模拟 NRI / NRD，保证 WITH_NRD=0 时无需真实头文件也能编译
+
+namespace nri {
+
+struct CoreInterface {};
+struct HelperInterface {};
+struct WrapperVKInterface {};
+
+struct Device {};
+struct CommandBuffer {};
+
+struct Texture {
+    // 占位类型，仅用于编译期
+};
+
+struct TextureBarrierDesc {
+    Texture* texture = nullptr;
+};
+
+inline void nriDestroyDevice(Device&) {}
+
+} // namespace nri
+
+// 模拟 nrd
 
 namespace nrd {
 
 enum class Denoiser : uint32_t {
     REBLUR_DIFFUSE_SPECULAR,
+    REBLUR_DIFFUSE,
+    REBLUR_SPECULAR,
     RELAX_DIFFUSE_SPECULAR,
+    RELAX_DIFFUSE,
+    RELAX_SPECULAR,
+    SIGMA_SHADOW_TRANSLUCENCY,
+    SIGMA_SHADOW,
     MAX_NUM,
 };
 

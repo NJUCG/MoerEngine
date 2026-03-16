@@ -1772,9 +1772,9 @@ public:
                                         }
 
                                         if (draw_data.indirect_draw_param.has_value()) {
-                                            VulkanBuffer* indirect_buffer = ResourceCast(
-                                                draw_data.indirect_draw_param->buffer.GetBuffer()
-                                            );
+                                            VulkanBuffer* indirect_buffer =
+                                                ResourceCast(draw_data.indirect_draw_param->buffer.GetBuffer()
+                                                );
                                             if (draw_data.indirect_draw_param->count_buffer.has_value()) {
                                                 //draw indirect with count buffer
                                                 auto* count_buffer = ResourceCast(
@@ -1813,9 +1813,9 @@ public:
 
                                         //draw indirect
                                         if (draw_data.indirect_draw_param.has_value()) {
-                                            VulkanBuffer* indirect_buffer = ResourceCast(
-                                                draw_data.indirect_draw_param->buffer.GetBuffer()
-                                            );
+                                            VulkanBuffer* indirect_buffer =
+                                                ResourceCast(draw_data.indirect_draw_param->buffer.GetBuffer()
+                                                );
                                             if (draw_data.indirect_draw_param->count_buffer.has_value()) {
                                                 //draw indirect with count buffer
                                                 auto* count_buffer = ResourceCast(
@@ -2626,50 +2626,42 @@ void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
 
 void VkNativeQueue::Wait(VulkanFence* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
     VkSemaphore sem = _fence->GetUnderlyingHandle();
-    wait_infos.push_back(
-        VkSemaphoreSubmitInfo{
-            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .pNext     = nullptr,
-            .semaphore = sem,
-            .value     = _fence_val,
-            .stageMask = _stage
-        }
-    );
+    wait_infos.push_back(VkSemaphoreSubmitInfo{
+        .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+        .pNext     = nullptr,
+        .semaphore = sem,
+        .value     = _fence_val,
+        .stageMask = _stage
+    });
 }
 
 void VkNativeQueue::Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
-    wait_infos.push_back(
-        VkSemaphoreSubmitInfo{
-            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .pNext     = nullptr,
-            .semaphore = _sem,
-            .value     = 0,
-            .stageMask = _stage
-        }
-    );
+    wait_infos.push_back(VkSemaphoreSubmitInfo{
+        .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+        .pNext     = nullptr,
+        .semaphore = _sem,
+        .value     = 0,
+        .stageMask = _stage
+    });
 }
 void VkNativeQueue::Signal(VulkanFence* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
     VkSemaphore sem = _fence->GetUnderlyingHandle();
-    signal_infos.push_back(
-        VkSemaphoreSubmitInfo{
-            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .pNext     = nullptr,
-            .semaphore = sem,
-            .value     = _fence_val,
-            .stageMask = _stage
-        }
-    );
+    signal_infos.push_back(VkSemaphoreSubmitInfo{
+        .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+        .pNext     = nullptr,
+        .semaphore = sem,
+        .value     = _fence_val,
+        .stageMask = _stage
+    });
 }
 void VkNativeQueue::Signal(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
-    signal_infos.push_back(
-        VkSemaphoreSubmitInfo{
-            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .pNext     = nullptr,
-            .semaphore = _sem,
-            .value     = 0,
-            .stageMask = _stage
-        }
-    );
+    signal_infos.push_back(VkSemaphoreSubmitInfo{
+        .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+        .pNext     = nullptr,
+        .semaphore = _sem,
+        .value     = 0,
+        .stageMask = _stage
+    });
 }
 void VkCommandQueue::Wait(WaitEvent _evt) {
     auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
@@ -3050,9 +3042,9 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
 
     auto current_timeline = ++last_frame;
     queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
-    queue.Wait(sc->GetImageReadyFence(idx), VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    queue.Wait(fence, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     queue.Signal(sc->GetRenderFinishedFence(), VK_PIPELINE_STAGE_2_COPY_BIT);
-    queue.Submit(vk_allocator.GetCmdList(), sc->GetInFlightFence(present_timeline));
+    queue.Submit(vk_allocator.GetCmdList());
     sc->Present(queue.GetHandle(), idx);
     {
         std::unique_lock<std::mutex> lock(event_mutex);
@@ -3103,8 +3095,8 @@ void VkCommandQueue::ExecuteThread() {
                 return;
             }
             uint64 prev_timeline = executed_frame;
-            while (prev_timeline < timeline &&
-                   !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
+            while (prev_timeline < timeline && !executed_frame.compare_exchange_weak(prev_timeline, timeline)
+            ) {
                 std::this_thread::yield();
             }
         };
@@ -3415,8 +3407,8 @@ void VkCopyQueue::ExecuteThread() {
                 return;
             }
             uint64 prev_timeline = executed_frame;
-            while (prev_timeline < timeline &&
-                   !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
+            while (prev_timeline < timeline && !executed_frame.compare_exchange_weak(prev_timeline, timeline)
+            ) {
                 std::this_thread::yield();
             }
         };
