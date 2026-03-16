@@ -126,10 +126,9 @@ set_target_folder(entt ${third_party_folder}/entt)
 include(gtl.cmake)
 set_target_folder(gtl ${third_party_folder}/gtl)
 
-# NRI, NRD, SPIRV-Cross
-include(NRI.cmake)
-
 if (WITH_NRD)
+    # NRI, NRD, SPIRV-Cross
+    include(NRI.cmake)
     include(NRD.cmake)
 endif()
 
