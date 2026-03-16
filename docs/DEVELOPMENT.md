@@ -228,12 +228,9 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
 
 ## 4. IDE & IntelliSence配置
 
-*TODO*
+### VSCode/Cursor
 
-### VSCode配置相关
-
-- 设置中的 `C_Cpp.default.compilerPath` 字段不能使用msvc编译器，否则IntelliSense会出现假错。推荐使用clang
-  - 注：和编译无关，只和 IntelliSense（IDE的智能代码高亮与补全）有关
+- 在插件商城，安装 `clangd` 即可
 
 ## 5. 如何Code Review
 
