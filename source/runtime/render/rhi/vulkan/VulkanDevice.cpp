@@ -755,6 +755,15 @@ VkDescriptorType METoVkDescriptorType(uint _desc_type) {
     return VK_DESCRIPTOR_TYPE_MAX_ENUM;
 }
 
+bool VulkanDevice::HasDeviceExtension(std::string_view _ext_name) const {
+    for (const auto& ext : m_device_info.enabled_extensions) {
+        if (ext && ext->GetExtensionName() == _ext_name) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info) {
     _create_info = {};
 

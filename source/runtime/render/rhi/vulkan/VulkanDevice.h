@@ -203,6 +203,8 @@ public:
     inline VkDescriptorSetLayout GetEmptyDescriptorSetLayout() const {
         return empty_descriptor_set_layout;
     }
+    // 查询当前设备是否启用了指定的 device extension（基于已启用扩展列表）
+    bool HasDeviceExtension(std::string_view _ext_name) const;
     uint GetQueueFamilyIndex(VkQueueFlags _queue_flags) {
         return GetQueueFamilyIndex(m_device_info.queue_family_props, _queue_flags);
     }

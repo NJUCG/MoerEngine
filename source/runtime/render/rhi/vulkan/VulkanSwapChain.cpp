@@ -317,14 +317,19 @@ void VkSwapchain::Present(VkQueue _queue, uint _index) {
         return;
     }
     VkSemaphore finished_semaphores[] = {render_finished_fences[image_idx % render_finished_fences.size()]};
-    // use present fence to sync present queue, so we can return immediately after submit present command,
-    // and do the sync in a separate thread, which can reduce the stutter caused by vkQueuePresentKHR
+    // 如果启用了 VK_EXT_swapchain_maintenance1，则使用 present fence 优化队列同步；
+    // 否则退回到兼容路径，不挂 VkSwapchainPresentFenceInfoEXT，避免验证层报扩展未启用。
+    const bool use_present_fence =
+        device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+
     VkSwapchainPresentFenceInfoEXT present_fence_info{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
-    present_fence_info.swapchainCount = 1;
-    present_fence_info.pFences        = &in_flight_fences[image_idx % in_flight_fences.size()];
+    if (use_present_fence) {
+        present_fence_info.swapchainCount = 1;
+        present_fence_info.pFences        = &in_flight_fences[image_idx % in_flight_fences.size()];
+    }
 
     VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-    present_info.pNext              = &present_fence_info;
+    present_info.pNext              = use_present_fence ? reinterpret_cast<void*>(&present_fence_info) : nullptr;
     present_info.waitSemaphoreCount = 1;
     present_info.pWaitSemaphores    = finished_semaphores;
     present_info.swapchainCount     = 1;
@@ -336,7 +341,10 @@ void VkSwapchain::Present(VkQueue _queue, uint _index) {
     } else if (result != VK_SUCCESS) {
         assert(false && "Error presenting to swapchain.");
     }
-    EnqueuePresent(image_idx);
+    if (use_present_fence) {
+        // 仅在使用 present fence 的情况下异步等待 in_flight_fences
+        EnqueuePresent(image_idx);
+    }
     ++image_idx;
 }
 
