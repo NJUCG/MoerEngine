@@ -31,6 +31,6 @@ target_compile_options(${target_name} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:
 
 if (WITH_PROFILE)
     target_link_libraries(${target_name}
-        PRIVATE moer_profile
+        PRIVATE Moer::Profile
     )
 endif()

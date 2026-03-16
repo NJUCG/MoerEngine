@@ -16,7 +16,7 @@
 #include <nfd.hpp>
 #include <string_view>
 
-#ifdef WITH_PROFILE
+#if WITH_PROFILE
 #include "profile.h"
 #endif
 
@@ -57,7 +57,7 @@ void EditorUI::InitFromConfigManager() {
     m_config->scene_path = config.engine.scene.scene_path;
 }
 
-#ifdef WITH_PROFILE
+#if WITH_PROFILE
 void EditorUI::ShowMemoryProfiler(bool* p_open) {
     Profile_TickSample();
 
@@ -257,7 +257,7 @@ void EditorUI::TickUI() {
             ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
             // ImGui::MenuItem("Inspector", nullptr, &m_m_b_show_inspector_window);
             // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
-#ifdef WITH_PROFILE
+#if WITH_PROFILE
             ImGui::MenuItem("Memory Profiler", nullptr, &m_b_show_memory_profiler);
 #endif
             ImGui::EndMenu();
@@ -265,7 +265,7 @@ void EditorUI::TickUI() {
         ImGui::EndMenuBar();
     }
     ImGui::End();
-#ifdef WITH_PROFILE
+#if WITH_PROFILE
     if (m_b_show_memory_profiler) {
         ShowMemoryProfiler(&m_b_show_memory_profiler);
     }

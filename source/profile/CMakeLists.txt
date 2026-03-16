@@ -1,5 +1,6 @@
 if(WITH_PROFILE)
     message(STATUS "CMake WITH_PROFILE == ON")
+    
     set(target_name moer_profile)
     set(moer_profile_dir ${moer_source_dir}/profile)
     file(GLOB PROFILE_HEADERS CONFIGURE_DEPENDS "${moer_profile_dir}/*.h")
@@ -9,6 +10,8 @@ if(WITH_PROFILE)
     
 
     add_library(${target_name} SHARED ${PROFILE_HEADERS} ${PROFILE_SOURCES})
+
+    add_library(Moer::Profile ALIAS ${target_name}) # 别名，方便其他模块引用
 
     set_target_properties(${target_name} PROPERTIES 
         FOLDER "profile"
@@ -63,11 +66,14 @@ if(WITH_PROFILE)
         mimalloc-static
     )
 
+    target_compile_definitions(${target_name} PUBLIC WITH_PROFILE=1)
+    message(STATUS "WITH_PROFILE=1 in Moer::Profile")
+
     set(exe_target moer_profiler)
     add_executable(${exe_target} "${moer_profile_dir}/moer_profiler.cpp")
     target_link_libraries(${exe_target} PRIVATE kernel32.lib)
 
-    target_compile_definitions(moer_profile PRIVATE MOER_PROFILE_EXPORTS)
+    target_compile_definitions(${target_name} PRIVATE MOER_PROFILE_EXPORTS)
 
     if (WIN32)
         target_link_libraries(perfetto PRIVATE ws2_32)

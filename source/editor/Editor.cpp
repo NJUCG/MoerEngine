@@ -8,7 +8,7 @@
 #include <cassert>
 #include <nfd.hpp>
 
-#ifdef WITH_PROFILE
+#if WITH_PROFILE
 #include "profile.h"
 #endif
 

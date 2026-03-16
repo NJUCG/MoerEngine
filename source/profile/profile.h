@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef WITH_PROFILE
+#if WITH_PROFILE
 
 #ifdef MOER_PROFILE_EXPORTS
     #define PROFILE_API __declspec(dllexport)

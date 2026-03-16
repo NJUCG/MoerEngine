@@ -55,7 +55,7 @@ private:
     void ResetState(); // reset m_b_need_reload, etc..
     void ShowSceneColor();
     void ShowConfig();
-#ifdef WITH_PROFILE
+#if WITH_PROFILE
     void ShowMemoryProfiler(bool* p_open);
 #endif
 
@@ -69,7 +69,7 @@ private:
     bool m_b_need_reload = false;
     bool m_b_show_sub_ui = true; // TODO: 【10.3 Refactor】这玩意是干什么的？
 
-#ifdef WITH_PROFILE
+#if WITH_PROFILE
     bool m_b_show_memory_profiler = false;
     float2 m_memory_profiler_pos{};
     float2 m_memory_profiler_resolution{300, 200};
