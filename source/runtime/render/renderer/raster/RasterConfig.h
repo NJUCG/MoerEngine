@@ -187,6 +187,9 @@ struct RasterConfig {
     float ssr_metallic_threshold         = 0.5;
     float ssr_step_base                  = 0.025;
 
+    // MARK: Dof
+    float dof_debug_param = 0.5f;
+
     // MARK: Denoiser
     EDenoiserMode denoiser_mode                     = EDenoiserMode::NONE;
     float         denoiser_bfd_spatial_sigma_square = 20.0f;  // [1, 200]

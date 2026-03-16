@@ -5,6 +5,7 @@
 #include "BilateralFilterDenoiserPass.h"
 #include "BloomPass.h"
 #include "DirectionalShadowMaskPass.h"
+#include "DofPass.h"
 #include "GeometryPass.h"
 #include "LightingPass.h"
 #include "RasterResource.h"
@@ -55,6 +56,7 @@ RasterRenderer::RasterRenderer(
     rtao_denoiser_pass           = MakeUnique<RtaoDenoiserPass>(raster_context);
     bfd_pass                     = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
     ssr_pass                     = MakeUnique<SsrPass>(raster_context);
+    dof_pass                     = MakeUnique<DofPass>(raster_context);
     aa_pass                      = MakeUnique<AaPass>(raster_context);
     bloom_pass                   = MakeUnique<BloomPass>(raster_context);
     tonemapping_pass             = MakeUnique<TonemappingPass>(raster_context);
@@ -294,6 +296,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // - Screen Space Reflection
         processing_image = ssr_pass->Process(raster_context, raster_config, camera, processing_image);
+
+        // - Depth of Field
+        processing_image = dof_pass->Process(raster_context, raster_config, camera, processing_image);
 
         // - Anti-aliasing
         processing_image = aa_pass->Process(raster_context, raster_config, camera, processing_image);

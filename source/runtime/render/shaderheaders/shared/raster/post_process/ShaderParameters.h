@@ -140,6 +140,13 @@ struct SsrPipelineBindlessParam {
     uint     material_buf_hdl;
 };
 
+struct DofPipelineBindlessParam {
+    float2 resolution;      // 分辨率
+    float2 resolution_inv;  // 分辨率倒数
+    uint   input_color_tex; // 输入颜色纹理
+    float  debug_param;     // 调试参数
+};
+
 struct SmaaSharedPipelineBindlessParam {
     float4x4 curr_inv_vp_and_prev_vp; // = previous_view_projection * current_inverse_view_projection
     float4   rt_metrics;              // float4(inv_resolution.xy, resolution.xy)
