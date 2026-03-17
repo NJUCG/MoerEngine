@@ -99,5 +99,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
         color += param.extra_ambient_intensity * param.extra_ambient_color * brdf_ctx.albedo;
     }
 
+    color = max(color, 0.0);
+
     return float4(color, 1.0);
 }
