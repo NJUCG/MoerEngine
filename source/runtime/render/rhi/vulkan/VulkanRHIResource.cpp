@@ -2896,7 +2896,11 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         info.semaphoreCount = 1;
         info.pValues        = &_value;
         info.pSemaphores    = &timeline;
-        vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
+        VkResult result = vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("[VulkanFence] HostWait FAILED! result={}, semaphore={:#x}, wait_value={}",
+                      (int)result, (uint64)timeline, _value);
+        }
     }
 
     void VulkanFence::SignalHost(uint64_t _value) {

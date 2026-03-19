@@ -254,6 +254,15 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
     for (auto* gpu : gpu_list) {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(gpu, &props);
+
+        // 以下代码用于Debug AMD GPU
+        // 笔记本等多 GPU 场景：名称含 "RTX" 时跳过（例如 RTX 5070 Laptop），便于强制走 A 卡等其它适配器
+        const std::string_view gpu_name(props.deviceName);
+        if (gpu_name.find("NVIDIA") != std::string_view::npos) {
+            LOG_INFO("SelectGpu: skipping '{}' (name contains '5070').", props.deviceName);
+            continue;
+        }
+
         uint8 priority = 0;
         switch (props.deviceType) {
             case VK_PHYSICAL_DEVICE_TYPE_OTHER:
@@ -441,6 +450,7 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.compute.value(), 0, &m_compute_queue);
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue);
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
+
     gfx_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
     SetResourceName(uint64(m_graphics_queue), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
     compute_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
@@ -448,6 +458,19 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     // transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
     copy_queue = MakeUnique<VkCopyQueue>(*this);
     SetResourceName(uint64(m_transfer_queue), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
+
+    if (m_graphics_queue == m_transfer_queue) {
+        LOG_WARNING("gfx and transfer share the same VkQueue handle. "
+                    "Installing shared submit mutex to avoid concurrent vkQueueSubmit2.");
+        gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
+        copy_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
+    }
+    if (m_compute_queue == m_graphics_queue) {
+        LOG_WARNING("compute and gfx share the same VkQueue handle. "
+                    "Installing shared submit mutex to avoid concurrent vkQueueSubmit2.");
+        gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
+        compute_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
+    }
 }
 
 void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_version) {
@@ -705,29 +728,45 @@ QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu) 
     QueueFamilyIndices indices;
 
     auto queue_family_props = GetQueueFamilyProperties(_gpu);
-    //todo:what's the best queue for ray tracing operation?how to tell a queue support raytracing operation?
+    // AMD GPU的DMA/Transfer队列功能受限，提交包含Barrier/LayoutTransition的命令会导致DeviceLost
+    // 所以如果检测到AMD GPU，就强制transfer队列 = graphics队列
+    VkPhysicalDeviceProperties gpu_props{};
+    vkGetPhysicalDeviceProperties(_gpu, &gpu_props);
+    const bool is_amd = (gpu_props.vendorID == 0x1002);
+
     auto graphics = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_GRAPHICS_BIT, VkQueueFlagBits(0));
     if (graphics >= 0) {
         indices.graphics   = graphics;
         indices.raytracing = graphics;
         indices.present    = graphics;
     }
-    auto transfer = GetQueueFamilyIndice(
-        queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT
-    );
-    if (transfer < 0) {
-        transfer = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT);
+    if (is_amd) {
+        indices.transfer = indices.graphics.value();
+        LOG_WARNING(
+            "AMD GPU '{}' (vendorID={:#x}) detected. "
+            "Forcing transfer queue = graphics to avoid DMA queue VK_ERROR_DEVICE_LOST.",
+            gpu_props.deviceName, gpu_props.vendorID
+        );
+    } else {
+        auto transfer = GetQueueFamilyIndice(
+            queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT
+        );
+        if (transfer < 0) {
+            transfer = GetQueueFamilyIndice(
+                queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT
+            );
+        }
+        if (transfer < 0) {
+            transfer = indices.graphics.value();
+        }
+        indices.transfer = transfer;
     }
-    if (transfer < 0) {
-        transfer = indices.graphics.value();
-    }
-    indices.transfer = transfer;
 
     auto compute = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT);
     if (compute >= 0) {
         indices.compute = compute;
     } else {
-        indices.compute = indices.transfer;
+        indices.compute = indices.graphics.value();
     }
 
     return indices;
@@ -768,6 +807,12 @@ bool VulkanDevice::HasDeviceExtension(std::string_view _ext_name) const {
         }
     }
     return false;
+}
+
+bool VulkanDevice::IsAmdGpu() const {
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(m_gpu, &props);
+    return props.vendorID == 0x1002;
 }
 
 void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info) {

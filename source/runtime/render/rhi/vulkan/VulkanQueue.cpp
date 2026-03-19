@@ -2588,6 +2588,11 @@ VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : type(_ty
 VkNativeQueue::~VkNativeQueue() {}
 
 void VkNativeQueue::SubmitEmpty(VkFence _fence) {
+    // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
+    // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
+    std::unique_lock<std::mutex> guard;
+    if (submit_mutex) guard = std::unique_lock<std::mutex>(*submit_mutex);
+
     VkSubmitInfo2 submit_info{};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
 
@@ -2604,6 +2609,9 @@ void VkNativeQueue::SubmitEmpty(VkFence _fence) {
 }
 
 void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
+    std::unique_lock<std::mutex> guard;
+    if (submit_mutex) guard = std::unique_lock<std::mutex>(*submit_mutex);
+
     VkSubmitInfo2   submit_info{};
     VkCommandBuffer cmd = _cmdlist.GetHandle();
 
@@ -2619,7 +2627,14 @@ void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
     submit_info.pSignalSemaphoreInfos    = signal_infos.data();
     submit_info.commandBufferInfoCount   = 1;
     submit_info.pCommandBufferInfos      = &cmd_info;
-    vkQueueSubmit2(queue, 1, &submit_info, _fence);
+
+    VkResult submit_result = vkQueueSubmit2(queue, 1, &submit_info, _fence);
+    if (submit_result != VK_SUCCESS) {
+        LOG_ERROR("[VkNativeQueue] vkQueueSubmit2 FAILED! result={}, queue={:#x}, type={}, "
+                  "wait_count={}, signal_count={}",
+                  (int)submit_result, (uint64)queue, (int)type,
+                  wait_infos.size(), signal_infos.size());
+    }
     wait_infos.clear();
     signal_infos.clear();
 }
@@ -3217,10 +3232,10 @@ VkCopyQueue::VkCopyQueue(VulkanDevice& _device) :
     device(_device),
     queue(EQueueType::Copy, _device) {
     timeline = MoerNew(VulkanFence)(_device);
+    enabled  = true;
     thread   = std::jthread([this]() {
         ExecuteThread();
     });
-    enabled  = true;
 }
 
 VkCopyQueue::~VkCopyQueue() {
@@ -3417,7 +3432,6 @@ void VkCopyQueue::ExecuteThread() {
                                 &allocators(this->allocators),
                                 fence(this->timeline)](UniquePtr<VulkanAllocator>& _allocator) {
             _allocator->Complete(fence, timeline);
-            // LOG_INFO("timeline {} complete", timeline);
             _allocator->Reset();
             allocators.Push(_allocator.release());
             wait_util_reach_timeline();
@@ -3485,7 +3499,6 @@ void VkCopyQueue::ExecuteThread() {
             );
         }
         {
-            //wait for queue submission
             std::unique_lock<std::mutex> lock(event_mutex);
             while (enabled && event_queue.empty()) {
                 queue_cv.wait(lock);
@@ -3658,8 +3671,19 @@ UniquePtr<VulkanAllocator> VkCopyQueue::GetAllocator() {
 }
 
 void VkCopyQueue::Complete(uint64 _timeline) {
+    uint64 spin_count = 0;
     while (executed_frame < _timeline) {
         std::this_thread::yield();
+        ++spin_count;
+        if (spin_count == 10'000'000) {
+            LOG_ERROR("[CopyQueue] Complete: STILL WAITING after 10M spins! "
+                      "_timeline={}, executed_frame={}, enabled={}",
+                      _timeline, executed_frame.load(), (bool)enabled);
+        }
+        if (spin_count % 50'000'000 == 0) {
+            LOG_ERROR("[CopyQueue] Complete: STUCK! spins={}, _timeline={}, executed_frame={}",
+                      spin_count, _timeline, executed_frame.load());
+        }
     }
 }
 #pragma endregion
