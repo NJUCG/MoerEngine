@@ -223,7 +223,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
 
         for (const auto& extension : extensions_required) {
             const auto& required_name = extension->GetExtensionName();
-            const bool   is_optional  = extension->IsOptional();
+            const bool  is_optional   = extension->IsOptional();
 
             if (!gpu_extensions.contains(required_name.data()) && !is_optional) {
                 return false;
@@ -233,7 +233,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         return true;
     };
 
-    const auto& features_required = VulkanDeviceFeatures::GetMERequiredFeatures(_api_version);
+    const auto& features_required          = VulkanDeviceFeatures::GetMERequiredFeatures(_api_version);
     const auto& is_core_features_supported = [&](VkPhysicalDevice _gpu) {
         auto gpu_features = VulkanDeviceFeatures::GetGpuFeatures(_gpu, _api_version);
         bool ok           = gpu_features.Contains(features_required);
@@ -255,13 +255,13 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(gpu, &props);
 
-        // 以下代码用于Debug AMD GPU
-        // 笔记本等多 GPU 场景：名称含 "RTX" 时跳过（例如 RTX 5070 Laptop），便于强制走 A 卡等其它适配器
-        const std::string_view gpu_name(props.deviceName);
-        if (gpu_name.find("NVIDIA") != std::string_view::npos) {
-            LOG_INFO("SelectGpu: skipping '{}' (name contains '5070').", props.deviceName);
-            continue;
-        }
+        // // 以下代码用于Debug AMD GPU
+        // // 笔记本等多 GPU 场景：名称含 "RTX" 时跳过（例如 RTX 5070 Laptop），便于强制走 A 卡等其它适配器
+        // const std::string_view gpu_name(props.deviceName);
+        // if (gpu_name.find("NVIDIA") != std::string_view::npos) {
+        //     LOG_INFO("SelectGpu: skipping '{}' (name contains '5070').", props.deviceName);
+        //     continue;
+        // }
 
         uint8 priority = 0;
         switch (props.deviceType) {
@@ -288,7 +288,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         if (indices.IsComplete() && is_extensions_required_supported(gpu) &&
             is_core_features_supported(gpu)) {
             priority += 100;
-            gpu_candidates.push_back(SelectGpuCandidate {gpu, priority});
+            gpu_candidates.push_back(SelectGpuCandidate{gpu, priority});
         }
     }
 
@@ -308,7 +308,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
             bool has_missing = false;
             for (const auto& extension : extensions_required) {
                 const auto& required_name = extension->GetExtensionName();
-                const bool   is_optional  = extension->IsOptional();
+                const bool  is_optional   = extension->IsOptional();
 
                 if (!gpu_extensions.contains(required_name.data()) && !is_optional) {
                     has_missing = true;
@@ -325,8 +325,12 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
     }
 
     const auto highest_priority_iter = std::max_element(
-        gpu_candidates.begin(), gpu_candidates.end(),
-        [](const SelectGpuCandidate& a, const SelectGpuCandidate& b) { return a.priority < b.priority; });
+        gpu_candidates.begin(),
+        gpu_candidates.end(),
+        [](const SelectGpuCandidate& a, const SelectGpuCandidate& b) {
+            return a.priority < b.priority;
+        }
+    );
 
     return highest_priority_iter->gpu;
 }
@@ -460,14 +464,18 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     SetResourceName(uint64(m_transfer_queue), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
 
     if (m_graphics_queue == m_transfer_queue) {
-        LOG_WARNING("gfx and transfer share the same VkQueue handle. "
-                    "Installing shared submit mutex to avoid concurrent vkQueueSubmit2.");
+        LOG_WARNING(
+            "gfx and transfer share the same VkQueue handle. "
+            "Installing shared submit mutex to avoid concurrent vkQueueSubmit2."
+        );
         gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
         copy_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
     }
     if (m_compute_queue == m_graphics_queue) {
-        LOG_WARNING("compute and gfx share the same VkQueue handle. "
-                    "Installing shared submit mutex to avoid concurrent vkQueueSubmit2.");
+        LOG_WARNING(
+            "compute and gfx share the same VkQueue handle. "
+            "Installing shared submit mutex to avoid concurrent vkQueueSubmit2."
+        );
         gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
         compute_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
     }
@@ -745,16 +753,15 @@ QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu) 
         LOG_WARNING(
             "AMD GPU '{}' (vendorID={:#x}) detected. "
             "Forcing transfer queue = graphics to avoid DMA queue VK_ERROR_DEVICE_LOST.",
-            gpu_props.deviceName, gpu_props.vendorID
+            gpu_props.deviceName,
+            gpu_props.vendorID
         );
     } else {
         auto transfer = GetQueueFamilyIndice(
             queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT
         );
         if (transfer < 0) {
-            transfer = GetQueueFamilyIndice(
-                queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT
-            );
+            transfer = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT);
         }
         if (transfer < 0) {
             transfer = indices.graphics.value();
