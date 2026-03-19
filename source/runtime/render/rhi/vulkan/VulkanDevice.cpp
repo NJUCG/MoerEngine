@@ -243,8 +243,14 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         return ok;
     };
 
-    // check availability
-    Array<uint8> gpu_priorities;
+    // 候选 GPU：与 priority 成对保存，避免仅部分 GPU 满足条件时 priority 下标与 gpu_list 错位
+    struct SelectGpuCandidate {
+        VkPhysicalDevice gpu;
+        uint8            priority;
+    };
+    Array<SelectGpuCandidate> gpu_candidates;
+    gpu_candidates.reserve(gpu_count);
+
     for (auto* gpu : gpu_list) {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(gpu, &props);
@@ -273,11 +279,11 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         if (indices.IsComplete() && is_extensions_required_supported(gpu) &&
             is_core_features_supported(gpu)) {
             priority += 100;
-            gpu_priorities.emplace_back(priority);
+            gpu_candidates.push_back(SelectGpuCandidate {gpu, priority});
         }
     }
 
-    if (gpu_priorities.empty()) {
+    if (gpu_candidates.empty()) {
         LOG_ERROR("No available GPU. Details:");
 
         // 仅在失败分支里输出调试信息：按 GPU 输出缺失的必需扩展
@@ -309,11 +315,11 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         CHECK_ASSERT(false, "No available GPU(discrete, etc.) found!");
     }
 
-    Array<uint8>::iterator highest_priority_iter =
-        std::max_element(gpu_priorities.begin(), gpu_priorities.end());
-    uint8 gpu_idx = std::distance(gpu_priorities.begin(), highest_priority_iter);
+    const auto highest_priority_iter = std::max_element(
+        gpu_candidates.begin(), gpu_candidates.end(),
+        [](const SelectGpuCandidate& a, const SelectGpuCandidate& b) { return a.priority < b.priority; });
 
-    return gpu_list[gpu_idx];
+    return highest_priority_iter->gpu;
 }
 
 /**
