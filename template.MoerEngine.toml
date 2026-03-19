@@ -23,11 +23,19 @@ api_version = "1.3"
 max_frame_in_flight = 3
 
 [engine.render]
-# default_render_method = "Raster"
-default_render_method = "Raytracing"
+default_render_method = "Raster"
+# default_render_method = "Raytracing"
 
 [engine.render.raster]
 enable_shadow = true
+
+# 推荐AMD GPU或低配显卡启用本设置
+# 该选项会启用光栅化低质量模式：
+# - 环境光遮蔽：RTAO => SSAO
+# - 阴影，CSM层级数量：4 => 1
+# - 阴影，ShadowMap分辨率：4096 => 2048
+# - 抗锯齿：SMAA_1X => FXAA Simplified
+low_quality_mode = false
 
 [engine.scene]
 # 注：Toml中使用单引号包裹路径，可以避免反斜杠被识别为转义符
