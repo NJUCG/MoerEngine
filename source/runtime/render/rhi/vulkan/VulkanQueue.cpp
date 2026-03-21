@@ -13,6 +13,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIIO.h"
 #include "rhi/RHIResource.h"
+#include "PixelFormat.h"
 
 #include "VulkanCustomCommand.h"
 #include "shader/ShaderPipeline.h"
@@ -2388,6 +2389,13 @@ public:
             return;
         }
         // VulkanRaytracingScene* scene   = reinterpret_cast<VulkanRaytracingScene*>(_cmd.Handle());
+        
+        // Calculate 16-byte aligned offset for TLAS instance data (Vulkan spec requirement)
+        constexpr uint64 kInstanceDataAlignment = 256;  // 256-byte for AMD GPU compatibility
+        uint64 raw_device_address = instance_buffer->DeviceAddress();
+        uint64 aligned_device_address = Moer::AlignUp(raw_device_address, kInstanceDataAlignment);
+        uint64 alignment_offset = aligned_device_address - raw_device_address;
+        
         if (to_update.size() != 0) {
             BufferView staging =
                 allocator.AllocateShaderBuffer(to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
@@ -2414,8 +2422,17 @@ public:
             arg.component_cnt = to_update.size();
             arg.stride        = sizeof(VkAccelerationStructureInstanceKHR) >> 2;
 
+            // Create buffer view with alignment offset so data is written at the aligned address
+            BufferView aligned_instance_buffer_view(
+                instance_buffer,
+                alignment_offset,
+                (instance_buffer->GetByteSize() - alignment_offset) / sizeof(VkAccelerationStructureInstanceKHR),
+                sizeof(VkAccelerationStructureInstanceKHR),
+                EPixelFormat::PF_UNDEFINED
+            );
+
             cmd_list.BindDescriptors(
-                shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, staging, instance_buffer->GetView())
+                shuffle_sd.handle, shuffle_sd.SetArgs(arg, indices, staging, aligned_instance_buffer_view)
             );
 
             cmd_list.Dispatch((to_update.size() + 63) / 64, 1, 1);
@@ -2457,7 +2474,9 @@ public:
         geometry.geometry.instances.sType =
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
         geometry.geometry.instances.arrayOfPointers    = VK_FALSE;
-        geometry.geometry.instances.data.deviceAddress = instance_buffer->DeviceAddress();
+        // Use 16-byte aligned device address for TLAS instance data (Vulkan spec requirement)
+        // Reuse the aligned address calculated earlier in this function
+        geometry.geometry.instances.data.deviceAddress = aligned_device_address;
 
         VkAccelerationStructureBuildRangeInfoKHR build_range[] = {{}};
         build_range[0].primitiveCount                          = _cmd.InstanceCount();

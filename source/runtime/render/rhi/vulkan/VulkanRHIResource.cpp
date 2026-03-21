@@ -1448,9 +1448,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                         binding_info.binding = binding.binding;
                     }
                     vkGetDescriptorSetLayoutSizeEXT(m_device->GetDevice(), descriptor_set_layouts[set], &_binder.size);
-                    //align to 16 bytes
+                    // Align descriptor set layout size for AMD GPU compatibility
                     uint64 align = m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
-                    _binder.size = Moer::AlignUp(_binder.size, align);
+                    // Add extra padding for safety
+                    _binder.size = Moer::AlignUp(_binder.size, align) + align;
                 }
             }, binder);
 
@@ -2480,8 +2481,14 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         VmaAllocation     alloc          = VK_NULL_HANDLE;
 
 
+        // TLAS instance buffer must be 16-byte aligned (Vulkan spec requirement)
+        // Add extra padding for alignment and use 256-byte alignment for AMD GPU compatibility
+        constexpr uint64 kInstanceBufferAlignment = 256;
+        const uint64 base_instance_buffer_size = sizeof(VkAccelerationStructureInstanceKHR) * 1000;
+        const uint64 aligned_instance_buffer_size = base_instance_buffer_size + kInstanceBufferAlignment;
+
         VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        buffer_ci.size = sizeof(VkAccelerationStructureInstanceKHR) * 1000;
+        buffer_ci.size = aligned_instance_buffer_size;
         buffer_ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
         buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         buffer_ci.flags = 0;
@@ -2491,13 +2498,15 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 #endif
 
         VmaAllocationCreateInfo alloc_ci{};
-        alloc_ci.flags = 0;
+        alloc_ci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         alloc_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
 
         instance_buffer = MoerNew(VulkanBuffer)(s_tlas_instance_buffer_name,BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
 
+        // Initialize aligned address for AMD GPU compatibility
+        UpdateAlignedInstanceBufferAddress();
     }
 
     VulkanRaytracingScene::~VulkanRaytracingScene(){
@@ -2693,8 +2702,15 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         VmaAllocation     alloc          = VK_NULL_HANDLE;
 
         instance_capacity *= exponent;
+
+        // TLAS instance buffer must be 16-byte aligned (Vulkan spec requirement)
+        // Add extra padding for alignment and use 256-byte alignment for AMD GPU compatibility
+        constexpr uint64 kInstanceBufferAlignment = 256;
+        const uint64 base_instance_buffer_size = sizeof(VkAccelerationStructureInstanceKHR) * instance_capacity;
+        const uint64 aligned_instance_buffer_size = base_instance_buffer_size + kInstanceBufferAlignment;
+
         VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        buffer_ci.size = sizeof(VkAccelerationStructureInstanceKHR) * instance_capacity;
+        buffer_ci.size = aligned_instance_buffer_size;
         buffer_ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
         buffer_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         buffer_ci.flags = 0;
@@ -2704,12 +2720,14 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 #endif
 
         VmaAllocationCreateInfo alloc_ci{};
-        alloc_ci.flags = 0;
+        alloc_ci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         alloc_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
         instance_buffer = MoerNew(VulkanBuffer)(s_tlas_instance_buffer_name,BufferInfo{buffer_ci.size, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}, *m_device, current_handle, alloc, true, true);
         
+        // Update aligned address after buffer recreation
+        UpdateAlignedInstanceBufferAddress();
     }
 
     RaytracingSizeInfos VulkanRaytracingScene::CalculateSizeInfos(){
@@ -2720,7 +2738,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         geometry.flags = 0;
         geometry.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
         geometry.geometry.instances.arrayOfPointers = VK_FALSE;
-        geometry.geometry.instances.data.deviceAddress = instance_buffer->DeviceAddress();
+        // Use 16-byte aligned device address for TLAS instance data (Vulkan spec requirement)
+        constexpr uint64 kInstanceDataAlignment = 256;  // 256-byte for AMD GPU compatibility
+        uint64 aligned_device_address = Moer::AlignUp(instance_buffer->DeviceAddress(), kInstanceDataAlignment);
+        geometry.geometry.instances.data.deviceAddress = aligned_device_address;
 
         build_info.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
         build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
