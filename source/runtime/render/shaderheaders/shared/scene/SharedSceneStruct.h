@@ -65,6 +65,12 @@ struct GPrimitive {
     uint packed_tangent_start_idx; // in element (uint)
     uint texcoord0_start_idx;      // in element (float2)
     uint index_start_idx;          // in uint（index buffer的元素是以uint为单位，而非uint3）
+    
+    // AABB for frustum culling (local space)
+    float3 aabb_min;
+    float  _padding0; // padding to align to 16 bytes
+    float3 aabb_max;
+    uint   _padding1; // padding to align to 16 bytes
 };
 
 /**
