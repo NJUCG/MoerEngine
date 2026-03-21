@@ -24,38 +24,6 @@
 #pragma comment(lib,"psapi.lib")
 #pragma comment(lib, "dbghelp.lib")
 
-PERFETTO_TRACK_EVENT_STATIC_STORAGE();
-
-void InitPerfetto() {
-    perfetto::TracingInitArgs args;
-    args.backends |= perfetto::kInProcessBackend;
-    perfetto::Tracing::Initialize(args);
-    perfetto::TrackEvent::Register();
-    std::cout << "[Perfetto] Initialized" << std::endl;
-}
-
-std::unique_ptr<perfetto::TracingSession> StartSession() {
-    perfetto::TraceConfig cfg;
-    cfg.add_buffers()->set_size_kb(1024);  // 1 MB
-
-    auto* ds_cfg = cfg.add_data_sources()->mutable_config();
-    ds_cfg->set_name("track_event");
-
-    perfetto::protos::gen::TrackEventConfig te_cfg;
-    te_cfg.add_enabled_categories("Rendering");  // Enable "rendering" category.
-    te_cfg.add_enabled_categories("Memory");     // Enable "rendering" category.
-    ds_cfg->set_track_event_config_raw(te_cfg.SerializeAsString());
-
-    std::unique_ptr<perfetto::TracingSession> tracing_session =
-        perfetto::Tracing::NewTrace();
-
-    tracing_session->Setup(cfg);
-    tracing_session->StartBlocking();
-
-    std::cout << "[Perfetto] Session Started" << std::endl;
-    return std::move(tracing_session);
-}
-
 static std::string get_log_path() {
     char buf[MAX_PATH];
     DWORD len = GetModuleFileNameA(NULL, buf, MAX_PATH);
@@ -68,76 +36,49 @@ static std::string get_log_path() {
     std::filesystem::create_directories(exe_dir + "\\logs");
     return exe_dir + "\\logs";
 }
-
-std::unique_ptr<perfetto::TracingSession> g_session;
-// 导出 trace 文件
-void StopSession() {
-    if (!g_session) return;
-
-    std::cout << "[Perfetto] Stopping session..." << std::endl;
-    auto future = std::async(std::launch::async, []() {
-        g_session->Stop();
-        return g_session->ReadTraceBlocking();
-    });
-
-    // 等 2 秒，等不到就说明后台线程死掉了
-    if (future.wait_for(std::chrono::seconds(2)) == std::future_status::ready) {
-        auto trace_data = future.get();
-
-        if (!trace_data.empty()) {
-            std::string pftracepath = get_log_path() + "\\trace.pftrace";
-            std::ofstream output(pftracepath, std::ios::out | std::ios::binary);
-            if (output.is_open()) {
-                output.write(trace_data.data(), std::streamsize(trace_data.size()));
-                output.close();
-                std::cout << "[Perfetto] Trace saved: " << pftracepath << std::endl;
-            }
-        }
-    } else {
-        std::cerr << "[Perfetto] CRITICAL: StopSession timed out, skipping save to avoid hang." << std::endl;
-        g_session.release(); 
-    }
+void FlameProfiler::Begin(const char* name) {
+    GetStack().push_back({name, NowUs()});
 }
 
-
-size_t getCurrentRSS( )
-{
-#if defined(_WIN32)
-    /* Windows -------------------------------------------------- */
-    PROCESS_MEMORY_COUNTERS info;
-    GetProcessMemoryInfo( GetCurrentProcess( ), &info, sizeof(info) );
-    return (size_t)info.WorkingSetSize;
-
-#elif defined(__APPLE__) && defined(__MACH__)
-    /* OSX ------------------------------------------------------ */
-    struct mach_task_basic_info info;
-    mach_msg_type_number_t infoCount = MACH_TASK_BASIC_INFO_COUNT;
-    if ( task_info( mach_task_self( ), MACH_TASK_BASIC_INFO,
-        (task_info_t)&info, &infoCount ) != KERN_SUCCESS )
-        return (size_t)0L;      /* Can't access? */
-    return (size_t)info.resident_size;
-
-#elif defined(__linux__) || defined(__linux) || defined(linux) || defined(__gnu_linux__)
-    /* Linux ---------------------------------------------------- */
-    long rss = 0L;
-    FILE* fp = NULL;
-    if ( (fp = fopen( "/proc/self/statm", "r" )) == NULL )
-        return (size_t)0L;      /* Can't open? */
-    if ( fscanf( fp, "%*s%ld", &rss ) != 1 )
+void FlameProfiler::End() {
+    auto now = NowUs();
+    auto& stack = GetStack();
+    if (stack.empty())
     {
-        fclose( fp );
-        return (size_t)0L;      /* Can't read? */
-    }
-    fclose( fp );
-    return (size_t)rss * (size_t)sysconf( _SC_PAGESIZE);
+        return;
+    } 
+    auto [name, start] = stack.back();
+    stack.pop_back();
 
-#else
-    /* AIX, BSD, Solaris, and Unknown OS ------------------------ */
-    return (size_t)0L;          /* Unsupported. */
-#endif
+    FlameEvent e;
+    e.name = name;
+    e.start_us = start;
+    e.duration_us = now - start;
+    e.thread_id = (uint32_t)std::hash<std::thread::id>{}(std::this_thread::get_id());
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_events.push_back(e);
+    //printf("[profiler] push_back m_events:%d\n", m_events.size());
 }
 
-MemoryCounter memorycounter;
+void FlameProfiler::Save(const std::string& path) {
+    //std::lock_guard<std::mutex> lock(m_mutex);
+    std::ofstream f(path);
+    f << "{\"traceEvents\":[\n";
+    printf("[profiler] m_events:%d\n", m_events.size());
+    for (size_t i = 0; i < m_events.size(); i++) {
+        auto& e = m_events[i];
+        f << "{\"name\":\"" << e.name << "\","
+            << "\"ph\":\"X\","
+            << "\"ts\":" << e.start_us << ","
+            << "\"dur\":" << e.duration_us << ","
+            << "\"pid\":0,"
+            << "\"tid\":" << e.thread_id << "}";
+        if (i + 1 < m_events.size()) f << ",";
+        f << "\n";
+    }
+    f << "]}\n";
+}
 
 // mimalloc_profile
 static std::chrono::steady_clock::time_point g_start_time = std::chrono::steady_clock::now();
@@ -236,8 +177,8 @@ static std::atomic<bool> g_dbghelp_inited(false);
 static std::thread g_worker;
 static std::atomic<bool> g_worker_running(false);
 static std::ofstream g_log_ofs;
-
-thread_local bool g_in_hook = false;
+//hook的原函数实现可能有递归嵌套，既然没有hook mimalloc，先停用
+//thread_local bool g_in_hook = false;
 
 // get microsecond timestamp
 static uint64_t now_us() {
@@ -316,7 +257,7 @@ PROFILE_API size_t Profile_GetPeakBytesBySource(MemorySource source) {
 }
 
 static void worker_thread_func() {
-    g_in_hook = true;
+    //g_in_hook = true;
     
     EventRecord rec;
     size_t batch_count = 0;
@@ -421,7 +362,7 @@ static void worker_thread_func() {
         }
     }
     
-    g_in_hook = false;
+    //g_in_hook = false;
 }
 
 // UI--------------------------------------------
@@ -505,10 +446,10 @@ Free2_t orig_Free2 = nullptr;
 
 
 void* malloc_hook(size_t size) {
-    if (g_in_hook) {
-        return orig_Malloc(size);
-    }
-    g_in_hook = true;
+    // if (g_in_hook) {
+    //     return orig_Malloc(size);
+    // }
+    // g_in_hook = true;
 
     void* p = orig_Malloc(size);
     if (g_ring && p) { 
@@ -524,19 +465,19 @@ void* malloc_hook(size_t size) {
         g_ring->push(rec); 
     }
 
-    g_in_hook = false;
+    //g_in_hook = false;
     return p;
 }
 
 void free_hook_1(void* p)
 {
-    if (g_in_hook)
-    {
-        orig_Free1(p);
-        return;
-    }
+    // if (g_in_hook)
+    // {
+    //     orig_Free1(p);
+    //     return;
+    // }
 
-    g_in_hook = true;
+    // g_in_hook = true;
     if (g_ring) { 
         EventRecord rec;
         rec.ts_us = now_us();
@@ -552,17 +493,17 @@ void free_hook_1(void* p)
 
     orig_Free1(p);
 
-    g_in_hook = false;
+    //g_in_hook = false;
 }
 void free_hook_2(void* p, size_t size)
 {
-    if (g_in_hook)
-    {
-        orig_Free2(p, size);
-        return;
-    }
+    // if (g_in_hook)
+    // {
+    //     orig_Free2(p, size);
+    //     return;
+    // }
 
-    g_in_hook = true;
+    // g_in_hook = true;
 
     if (g_ring) { 
         EventRecord rec;
@@ -579,7 +520,7 @@ void free_hook_2(void* p, size_t size)
 
     orig_Free2(p, size);
 
-    g_in_hook = false;
+    //g_in_hook = false;
 }
 
 // ----------------- VkTmp pointer -----------------
@@ -613,9 +554,9 @@ uint64_t VkTmpAllocate_Hook_1(
 {
     uint64_t handle = orig_VkTmpAllocate_1(_this, _size, _name);
 
-    if (!g_in_hook)
-    {
-        g_in_hook = true;
+    // if (!g_in_hook)
+    // {
+    //     g_in_hook = true;
 
         void* p = reinterpret_cast<void*>(handle);// not a address pointer
         EventRecord rec;
@@ -636,8 +577,8 @@ uint64_t VkTmpAllocate_Hook_1(
 
         if (g_ring) g_ring->push(rec);
 
-        g_in_hook = false;
-    }
+    //     g_in_hook = false;
+    // }
 
     return handle;
 }
@@ -649,9 +590,9 @@ uint64_t VkTmpAllocate_Hook_2(
 {
     uint64_t handle = orig_VkTmpAllocate_2(_this, _size, _usage);
 
-    if (!g_in_hook)
-    {
-        g_in_hook = true;
+    // if (!g_in_hook)
+    // {
+    //     g_in_hook = true;
         void* p = reinterpret_cast<void*>(handle);// not a address pointer
         EventRecord rec;
         rec.ts_us = now_us();
@@ -667,8 +608,8 @@ uint64_t VkTmpAllocate_Hook_2(
 
         if (g_ring) g_ring->push(rec);
 
-        g_in_hook = false;
-    }
+    //     g_in_hook = false;
+    // }
 
     return handle;
 }
@@ -678,9 +619,9 @@ void VkTmpDeAllocate_Hook(
     VkTmpBufferAllocator* _this,
     uint64_t _handle)
 {
-    if (!g_in_hook)
-    {
-        g_in_hook = true;
+    // if (!g_in_hook)
+    // {
+    //     g_in_hook = true;
 
         void* p = reinterpret_cast<void*>(_handle);
 
@@ -695,10 +636,10 @@ void VkTmpDeAllocate_Hook(
         if (g_ring)
         {
             g_ring->push(rec);
-        }
-        orig_VkTmpDeAllocate(_this, _handle);
-        g_in_hook = false;
-    }
+        }    
+    //     g_in_hook = false;
+    // }
+    orig_VkTmpDeAllocate(_this, _handle);
 }
 //---------------Vk--------------
 
@@ -728,9 +669,9 @@ VkResult VKAPI_PTR vkAllocateMemory_Hook(
         pAllocator,
         pMemory);
 
-    if (result == VK_SUCCESS && !g_in_hook)
+    if (result == VK_SUCCESS)// && !g_in_hook)
     {
-        g_in_hook = true;
+        //g_in_hook = true;
 
         uint64_t size = pAllocateInfo->allocationSize;
         void* p = reinterpret_cast<void*>(*pMemory);
@@ -754,7 +695,7 @@ VkResult VKAPI_PTR vkAllocateMemory_Hook(
             g_ring->push(rec);
         }  
 
-        g_in_hook = false;
+        //g_in_hook = false;
     }
 
     return result;
@@ -765,9 +706,9 @@ void VKAPI_PTR vkFreeMemory_Hook(
     VkDeviceMemory memory,
     const VkAllocationCallbacks* pAllocator)
 {
-    if (!g_in_hook)
-    {
-        g_in_hook = true;
+    // if (!g_in_hook)
+    // {
+    //     g_in_hook = true;
 
         void* p = reinterpret_cast<void*>(memory);
         uint64_t size = 0;
@@ -790,10 +731,10 @@ void VKAPI_PTR vkFreeMemory_Hook(
         {
             g_ring->push(rec);
         }
-                
-        orig_vkFreeMemory(device, memory, pAllocator);
-        g_in_hook = false;
-    }
+
+        //g_in_hook = false;
+    //}
+    orig_vkFreeMemory(device, memory, pAllocator);
 }
 //--------------
 typedef PFN_vkVoidFunction (VKAPI_PTR *PFN_vkGetDeviceProcAddr)(VkDevice device, const char* pName);
@@ -804,7 +745,7 @@ PFN_vkVoidFunction VKAPI_PTR Detour_vkGetDeviceProcAddr(VkDevice device, const c
     PFN_vkVoidFunction realAddr = orig_vkGetDeviceProcAddr(device, pName);
 
     if (pName && strcmp(pName, "vkAllocateMemory") == 0) {
-        printf("[profile] Detour_vkGetDeviceProcAddr1\n");
+        printf("[profiler] Detour_vkGetDeviceProcAddr1\n");
         orig_vkAllocateMemory = (PFN_vkAllocateMemory_t)realAddr;
         return (PFN_vkVoidFunction)vkAllocateMemory_Hook; //hook vkAllocateMemory 第二层，通过vkGetDeviceProcAddr直接返回hook函数
     }
@@ -863,86 +804,107 @@ void SetupVulkanHooks(HMODULE vklib) {
         printf("[Profiler] No vklib\n");
     }
 }
-//vulkan-1.dll是动态加载的，先hook住loader
-//反复测试没啥卵用，太慢了
+
 //LoaderHook--------------------
-// typedef HMODULE(WINAPI* PFN_LoadLibraryW)(LPCWSTR);
-// PFN_LoadLibraryW orig_LoadLibraryW = nullptr;
-// HMODULE WINAPI Detour_LoadLibraryW(LPCWSTR lpLibFileName) {
-//     HMODULE hModule = orig_LoadLibraryW(lpLibFileName);
-    
-//     if (hModule && lpLibFileName) {
-//         std::wstring name = lpLibFileName;
-//         if (name.find(L"vulkan-1.dll") != std::wstring::npos) {
-//             printf("[Profiler] Target ACQUIRED: vulkan-1.dll loaded via W\n");
-//             SetupVulkanHooks(hModule); //hook vkAllocateMemory 第一层，尝试在load时挂载
-//         }
-//     }
-//     return hModule;
-// }
+static HMODULE(WINAPI* orig_LoadLibraryA)(LPCSTR) = nullptr;
+static HMODULE(WINAPI* orig_LoadLibraryW)(LPCWSTR) = nullptr;
+static HMODULE(WINAPI* orig_LoadLibraryExW)(LPCWSTR, HANDLE, DWORD) = nullptr;
 
-// typedef HMODULE (WINAPI* PFN_LoadLibraryExW)(LPCWSTR, HANDLE, DWORD);
-// PFN_LoadLibraryExW orig_LoadLibraryExW = nullptr;
+HMODULE WINAPI Detour_LoadLibraryA(LPCSTR lpLibFileName) {
+    HMODULE hMod = orig_LoadLibraryA(lpLibFileName);
+    if (hMod && lpLibFileName) {
+        if (strstr(lpLibFileName, "vulkan-1")) {
+            printf("[Profiler] vulkan-1.dll loaded via LoadLibraryA\n");
+            SetupVulkanHooks(hMod);
+        }
+    }
+    return hMod;
+}
 
-// HMODULE WINAPI Detour_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
-//     HMODULE hModule = orig_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
-    
-//     if (hModule && lpLibFileName) {
-//         if (wcsstr(lpLibFileName, L"vulkan-1.dll")) {
-//             printf("[Profiler] Target ACQUIRED: vulkan-1.dll loaded via ExW\n");
-//             SetupVulkanHooks(hModule);
-//         }
-//     }
-//     return hModule;
-// }
+HMODULE WINAPI Detour_LoadLibraryW(LPCWSTR lpLibFileName) {
+    HMODULE hMod = orig_LoadLibraryW(lpLibFileName);
+    if (hMod && lpLibFileName) {
+        if (wcsstr(lpLibFileName, L"vulkan-1")) {
+            printf("[Profiler] vulkan-1.dll loaded via LoadLibraryW\n");
+            SetupVulkanHooks(hMod);
+        }
+    }
+    return hMod;
+}
+
+HMODULE WINAPI Detour_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
+    HMODULE hMod = orig_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
+    if (hMod && lpLibFileName) {
+        if (wcsstr(lpLibFileName, L"vulkan-1")) {
+            printf("[Profiler] vulkan-1.dll loaded via LoadLibraryExW\n");
+            SetupVulkanHooks(hMod);
+        }
+    }
+    return hMod;
+}
+
+void remove_hooks() {
+    MH_DisableHook(MH_ALL_HOOKS);
+    MH_Uninitialize();
+}
 
 //ExitHook-----------------------
 void __cdecl ProfileExitFunc() {
-    static bool handled = false;
-    if (handled) return;
-    handled = true;
+    static std::atomic<bool> s_saved = false;
+    if (s_saved.exchange(true)) return;
 
-    shutdown_mimalloc_profiler();
-    StopSession();
-    std::cout << "Moer Engine Perfetto Exited" << std::endl;
-}
+    remove_hooks();
 
-typedef void (WINAPI* PFN_Exit)(int);
-PFN_Exit orig_exit = nullptr;
+    // stop worker
+    //std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+    
+    g_worker_running.store(false, std::memory_order_release);
+    if (g_worker.joinable()) g_worker.join();
 
-typedef BOOL (WINAPI* PFN_TerminateProcess)(HANDLE, UINT);
-PFN_TerminateProcess orig_TerminateProcess = nullptr;
-
-void WINAPI Detour_exit(int code) {
-    static std::atomic<bool> already_exited{false};
-    if (!already_exited.exchange(true)) {
-        printf("[Profiler] Intercepted exit(%d). Cleaning up...\n", code);
-        ProfileExitFunc(); 
+    // cleanup
+    if (g_log_ofs.is_open()) {
+        g_log_ofs << "=== profiler shutdown ===\n";
+        g_log_ofs.flush();
+        g_log_ofs.close();
     }
-    orig_exit(code);
-}
-
-BOOL WINAPI Detour_TerminateProcess(HANDLE hProcess, UINT uExitCode) {
-    if (hProcess == GetCurrentProcess() || GetProcessId(hProcess) == GetCurrentProcessId()) {
-        static std::atomic<bool> already_terminated{false};
-        if (!already_terminated.exchange(true)) {
-            printf("[Profiler] Intercepted self-termination. Emergency dump...\n");
-            ProfileExitFunc();
-        }
+    if (g_dbghelp_inited.load()) {
+        SymCleanup(GetCurrentProcess());
+        g_dbghelp_inited.store(false);
     }
-    return orig_TerminateProcess(hProcess, uExitCode);
+    DeleteCriticalSection(&g_sym_cs);
+
+    if (g_ring) { delete g_ring; g_ring = nullptr; }
+    
+    FlameProfiler::Get().Save(get_log_path() + "/frame_trace.json");
+    FlameProfiler::Get().Clear();
+    
+    //DumpLeaks(); //不分析泄漏，没卵用
+    
+    std::cout<<"[profiler] Shutdown"<<std::endl;
 }
+// 写文件可以挂载exit时清理，要写文件再hook exit纯作死，改成hook editor的shutdown
 
-typedef void (WINAPI* PFN_ExitProcess)(UINT);
-PFN_ExitProcess orig_ExitProcess = nullptr;
+// typedef void (WINAPI* PFN_ExitProcess)(UINT);
+// PFN_ExitProcess orig_ExitProcess = nullptr;
 
-void WINAPI Detour_ExitProcess(UINT uExitCode) {
-    static std::atomic<bool> already_run{ false };
-    if (!already_run.exchange(true)) {
-        printf("\n[Profiler] Intercepted ExitProcess(%u). Dumping leaks...\n", uExitCode);
-        ProfileExitFunc();
-    }
-    orig_ExitProcess(uExitCode);
+// void WINAPI Detour_ExitProcess(UINT uExitCode) {
+//     static std::atomic<bool> already_run{ false };
+//     if (already_run.exchange(true))
+//     {
+//         orig_ExitProcess(uExitCode); //第一次退出
+//     }
+
+//     ProfileExitFunc();
+//     orig_ExitProcess(uExitCode); //第二次退出
+// }
+
+typedef void (*PFN_EditorShutDown)(void*);
+PFN_EditorShutDown orig_EditorShutDown = nullptr;
+
+void __fastcall Detour_EditorShutDown(void* thisPtr) {
+    orig_EditorShutDown(thisPtr);
+    ProfileExitFunc();
+    fflush(stdout);
 }
 
 // Pattern Scan
@@ -1020,12 +982,21 @@ void* GetProcAddressFromPdb(const char* mangledName, const char* readableName = 
 //     size = info.SizeOfImage;
 // }
 
-
-
 void install_hooks_static() {
-    //MH_STATUS status = MH_Initialize();
+    MH_STATUS status = MH_Initialize();
+    void* pLoadLibA = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryA");
+    MH_CreateHook(pLoadLibA, &Detour_LoadLibraryA, (LPVOID*)&orig_LoadLibraryA);
+    MH_EnableHook(pLoadLibA);
+
+    void* pLoadLibW = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryW");
+    MH_CreateHook(pLoadLibW, &Detour_LoadLibraryW, (LPVOID*)&orig_LoadLibraryW);
+    MH_EnableHook(pLoadLibW);
+
+    void* pLoadLibExW = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryExW");
+    MH_CreateHook(pLoadLibExW, &Detour_LoadLibraryExW, (LPVOID*)&orig_LoadLibraryExW);
+    MH_EnableHook(pLoadLibExW);
     //printf("[Profiler] MH_Initialize: %s\n", MH_StatusToString(status));
-    MH_STATUS status;
+    //MH_STATUS status;
     
     HMODULE hCore = GetModuleHandleA("moer_cored.dll"); 
 
@@ -1048,8 +1019,15 @@ void install_hooks_static() {
             status = MH_EnableHook(pFree2);
             printf("[Profiler] EnableHook Memory::Free(void*) at %p\n", pFree2);
         }
+        
     }
-
+    //HMODULE hEditor = GetModuleHandleA("MoerEditor.exe");
+    void* addr = GetProcAddressFromPdb("?ShutDown@Editor@Moer@@QEAAXXZ");
+    if (addr) {
+        MH_CreateHook(addr, &Detour_EditorShutDown, (LPVOID*)&orig_EditorShutDown);
+        MH_EnableHook(addr);
+        printf("[Profiler] EnableHook Editor::ShutDown %s\n", MH_StatusToString(status));
+    }
     // VkTmpAllocate没有导出符号，现在有pdb直接从里面搜索符号。release版可能需要特征码匹配或者导出符号
     //uintptr_t base = (uintptr_t)GetModuleHandleA("moer_renderd.dll");
     // LPVOID allocAddr_1 = (LPVOID)(base + 0x360E20);
@@ -1131,22 +1109,13 @@ void ProfileInitDynamic()
     // start worker
     g_worker_running.store(true);
     g_worker = std::thread(worker_thread_func);
-    
-    InitPerfetto();
-    g_session = StartSession();
 }
 
-void remove_hooks() {
-    MH_DisableHook(MH_ALL_HOOKS);
-    MH_Uninitialize();
-}
 
-void initialize_mimalloc_profiler() {
-    // Prevent double init
-    static bool inited = false;
-    if (inited) return;
-    inited = true;
 
+// 出入口
+void ProfileInitStatic()
+{
     g_ring = new RingBuffer(RING_CAPACITY);
 
     InitializeCriticalSection(&g_sym_cs);
@@ -1154,60 +1123,23 @@ void initialize_mimalloc_profiler() {
     if (!InitSymbolEngine()) {
         printf("[Profiler] Failed to initialize Symbol Engine, PDB hooks will fail.\n");
     }
-}
-
-// 出入口
-void ProfileInitStatic()
-{
-    initialize_mimalloc_profiler();
     install_hooks_static();
     //std::atexit(ProfileExitFunc); //退出时机改为hook ExitProcess，此时记录数据
 }
 
 void __cdecl ProfileInitFunc()
 {
+    static std::atomic<bool> s_init = false;
+    if (s_init.exchange(true)) return;
     ProfileInitStatic();
-
-    // HMODULE hUcrt = GetModuleHandleA("ucrtbase.dll");
-    // if (!hUcrt) hUcrt = GetModuleHandleA("msvcrt.dll");
-
-    // if (hUcrt) {
-    //     void* pExit = (void*)GetProcAddress(hUcrt, "exit");
-    //     if (pExit) {
-    //         MH_CreateHook(pExit, &Detour_exit, (LPVOID*)&orig_exit);
-    //         MH_EnableHook(pExit);
-    //     }
-    //     printf("[Profiler] System exit() hooked. ...\n");
-    // }
-
-    // void* pTerminate = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "TerminateProcess");
-    // if (pTerminate) {
-    //     MH_CreateHook(pTerminate, &Detour_TerminateProcess, (LPVOID*)&orig_TerminateProcess);
-    //     MH_EnableHook(pTerminate);
-    // }
     
-    void* pExitProc = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "ExitProcess");
-    if (pExitProc) {
-        MH_CreateHook(pExitProc, &Detour_ExitProcess, (LPVOID*)&orig_ExitProcess);
-        MH_EnableHook(pExitProc);
-        printf("[Profiler] ExitProcess hook installed.\n");
-    }
-
-    // void* pLoadLib = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryW");
-    // if (pLoadLib) {
-    //     MH_CreateHook(pLoadLib, &Detour_LoadLibraryW, (LPVOID*)&orig_LoadLibraryW);
-    //     MH_EnableHook(pLoadLib);
-    //     printf("[Profiler] System LoadLibraryW hooked. Waiting for Vulkan...\n");
+    // void* pExitProc = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "ExitProcess");
+    // if (pExitProc) {
+    //     MH_CreateHook(pExitProc, &Detour_ExitProcess, (LPVOID*)&orig_ExitProcess);
+    //     MH_EnableHook(pExitProc);
+    //     printf("[Profiler] ExitProcess hook installed.\n");
     // }
 
-    // void* pLoadLibExW = (void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryExW");
-    // if (pLoadLibExW) {
-    //     MH_CreateHook(pLoadLibExW, &Detour_LoadLibraryExW, (LPVOID*)&orig_LoadLibraryExW);
-    //     MH_EnableHook(pLoadLibExW);
-    //     printf("[Profiler] System LoadLibraryExW hooked. Waiting for Vulkan...\n");
-    // }
-
-    //目前挂载vk唯一入口
     HMODULE hVulkan = GetModuleHandleA("vulkan-1.dll");
     if (hVulkan) {
         printf("[Profiler] vulkan-1.dll Loaded before ProfileInitFunc\n");
@@ -1224,11 +1156,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
 
-        MH_Initialize();
-        // MH_CreateHookApi(L"kernel32.dll", "GetProcAddress", &Detour_GetProcAddress, (LPVOID*)&orig_GetProcAddress);
-        // MH_EnableHook(MH_ALL_HOOKS);
-        std::thread(ProfileInitFunc).detach(); //异步玄学挂的上
-        //ProfileInitFunc();
+        //std::thread(ProfileInitFunc).detach(); //异步玄学挂的上
+        ProfileInitFunc(); //同步玄学挂的上
         //std::thread(ProfileInitDynamic).detach();//异步可能挂不上
 
     }
@@ -1257,31 +1186,5 @@ void DumpLeaks()
     }
 
     std::cout << "Total leaked: " << total << " bytes\n";
-}
-
-void shutdown_mimalloc_profiler() {
-    remove_hooks();
-
-    // stop worker
-    std::this_thread::sleep_for(std::chrono::milliseconds(3000));
-    
-    g_worker_running.store(false, std::memory_order_release);
-    if (g_worker.joinable()) g_worker.join();
-
-    // cleanup
-    if (g_log_ofs.is_open()) {
-        g_log_ofs << "=== profiler shutdown ===\n";
-        g_log_ofs.flush();
-        g_log_ofs.close();
-    }
-    if (g_dbghelp_inited.load()) {
-        SymCleanup(GetCurrentProcess());
-        g_dbghelp_inited.store(false);
-    }
-    DeleteCriticalSection(&g_sym_cs);
-
-    if (g_ring) { delete g_ring; g_ring = nullptr; }
-    DumpLeaks();
-    std::cout<<"[MINHOOK]Shutdown"<<std::endl;
 }
 

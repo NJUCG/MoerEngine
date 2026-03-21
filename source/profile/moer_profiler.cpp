@@ -1,3 +1,4 @@
+//这部分先弃用，退出时会有卡死的bug，现在先不搞完全的非侵入，反正也要include "profile.h"来用火焰图
 #include <windows.h>
 #include <iostream>
 #include <filesystem>
@@ -37,7 +38,7 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "[Profiler] Waiting for hooks to settle..." << std::endl;
-    Sleep(500); 
+    Sleep(1000); 
 
     ResumeThread(pi.hThread);
     std::cout << "[Profiler] Engine resumed." << std::endl;

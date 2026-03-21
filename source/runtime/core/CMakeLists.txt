@@ -35,3 +35,9 @@ target_link_libraries(${target_name}
 )
 
 # add_dependencies(${target_name} CopyMimallocDlls )
+
+if (WITH_PROFILE)
+    target_link_libraries(${target_name}
+        PRIVATE Moer::Profile
+    )
+endif()

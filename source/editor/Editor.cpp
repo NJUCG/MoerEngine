@@ -8,10 +8,6 @@
 #include <cassert>
 #include <nfd.hpp>
 
-#if WITH_PROFILE
-#include "profile.h"
-#endif
-
 // namespace
 using namespace Moer::Render;
 

@@ -8,7 +8,6 @@
     #define PROFILE_API __declspec(dllimport)
 #endif
 
-#include "perfetto.h"
 #ifdef _WIN32
     #include <windows.h>
     #include <psapi.h>
@@ -20,33 +19,59 @@
 #include <chrono>
 #include <deque>
 #include <vector>
+#include <string>
+#include <mutex>
+#include <thread>
+#include <fstream>
 
-PERFETTO_DEFINE_CATEGORIES(
-    perfetto::Category("Rendering")
-        .SetDescription("Timestamp for editor"),
-    perfetto::Category("Memory")
-        .SetDescription("CPU memory"));
-
-void InitPerfetto();
-
-std::unique_ptr<perfetto::TracingSession> StartSession();
-
-void StopSession(std::unique_ptr<perfetto::TracingSession>& tracing_session);
-
-size_t getCurrentRSS();
-
-class MemoryCounter {
-public:
-    MemoryCounter(){
-
-    }
-
-    void Update() {
-        size_t current = getCurrentRSS();
-        TRACE_COUNTER("Memory", "Physical memory", current);
-    }
+struct FlameEvent {
+    const char* name;
+    long long start_us;
+    long long duration_us;
+    uint32_t thread_id;
 };
 
+class PROFILE_API FlameProfiler {
+public:
+    static FlameProfiler& Get() {
+        static FlameProfiler instance;
+        return instance;
+    }
+
+    void Begin(const char* name);
+
+    void End();
+
+    void Save(const std::string& path);
+
+    void Clear() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_events.clear();
+    }
+
+private:
+    static std::vector<std::pair<const char*, long long>>& GetStack() {
+        thread_local std::vector<std::pair<const char*, long long>> stack;
+        return stack;
+    }
+
+    static long long NowUs() {
+        return std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::high_resolution_clock::now().time_since_epoch()
+        ).count();
+    }
+
+    std::mutex m_mutex;
+    std::vector<FlameEvent> m_events;
+};
+
+struct FlameScope {
+    FlameScope(const char* name) { FlameProfiler::Get().Begin(name); }
+    ~FlameScope() { FlameProfiler::Get().End(); }
+};
+
+#define FLAME_SCOPE() FlameScope _flame_##__LINE__(__FUNCTION__);
+#define FLAME_FUNC(name) FlameScope _flame_##__LINE__(name);
 
 static constexpr int MAX_FRAMES = 32;
 static constexpr size_t RING_CAPACITY = 1 << 16;
@@ -58,7 +83,7 @@ enum class MemorySource : uint8_t {
     MAX_SOURCES
 };
 static constexpr int SOURCE_COUNT = (int)MemorySource::MAX_SOURCES;
-// 2. 定义动作类型
+
 enum class MemoryAction : uint8_t {
     Alloc = 0,
     Free
@@ -155,16 +180,11 @@ std::vector<HotspotSnapshot> GetHotspots(size_t top_n, MemorySource filterSource
 extern PROFILE_API std::deque<TimePoint> g_history_data;
 extern PROFILE_API std::mutex g_history_mtx;
 
-void initialize_mimalloc_profiler();
-void shutdown_mimalloc_profiler();
-
 struct SymbolResult {
     std::string name;
     uintptr_t address;
 };
 void ProfileInitStatic();
 void ProfileInitFunc();
-#define TRACE_FUNC(TAG) TRACE_EVENT(TAG, __FUNCTION__); memorycounter.Update()
-#else
-#define TRACE_FUNC(TAG) 
+PROFILE_API void ProfileExitFunc();
 #endif

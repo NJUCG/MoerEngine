@@ -57,7 +57,7 @@ if(WITH_PROFILE)
     )
     
     target_link_libraries(${target_name}
-        PRIVATE perfetto
+        PUBLIC perfetto
         PRIVATE ${CMAKE_THREAD_LIBS_INIT}
         dbghelp.lib
         Threads::Threads
@@ -69,14 +69,15 @@ if(WITH_PROFILE)
     target_compile_definitions(${target_name} PUBLIC WITH_PROFILE=1)
     message(STATUS "WITH_PROFILE=1 in Moer::Profile")
 
-    set(exe_target moer_profiler)
-    add_executable(${exe_target} "${moer_profile_dir}/moer_profiler.cpp")
-    target_link_libraries(${exe_target} PRIVATE kernel32.lib)
+    #现在先不搞完全的非侵入，反正也要include profile
+    #set(exe_target moer_profiler)
+    #add_executable(${exe_target} "${moer_profile_dir}/moer_profiler.cpp")
+    #target_link_libraries(${exe_target} PRIVATE kernel32.lib)
 
     target_compile_definitions(${target_name} PRIVATE MOER_PROFILE_EXPORTS)
 
     if (WIN32)
-        target_link_libraries(perfetto PRIVATE ws2_32)
+        target_link_libraries(perfetto PRIVATE ws2_32 advapi32 user32)
 
         # 仅在 MSVC 或 clang-cl 前端下使用 /bigobj，避免 clang++ 把它当作文件名
         if (MSVC OR (CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
