@@ -9,10 +9,20 @@
 namespace Moer {
 
 RasterUI::RasterUI(RasterConfig& config) : m_config(config) {
-    m_config.shadow_map_mode =
-        (ConfigManager::GetInstance().GetConfig().engine.render.raster.enable_shadow ?
-             m_config.shadow_map_mode :
-             EShadowMapMode::NONE);
+    if (ConfigManager::GetInstance().GetConfig().engine.render.raster.low_quality_mode) {
+        m_config.ao_mode = EAoMode::SSAO;
+
+        m_config.shadow_map_mode                     = EShadowMapMode::CSM;
+        m_config.shadow_csm_num_of_cascades          = 1;
+        m_config.shadow_csm_sm_size                  = 2048;
+        m_config.shadow_csm_cover_ratio_of_camera[0] = 0.03f;
+
+        m_config.aa_mode = EAaMode::FXAA_SIMPLIFIED;
+    }
+
+    if (ConfigManager::GetInstance().GetConfig().engine.render.raster.enable_shadow == false) {
+        m_config.shadow_map_mode = EShadowMapMode::NONE;
+    }
 }
 
 void RasterUI::ShowConfig() {

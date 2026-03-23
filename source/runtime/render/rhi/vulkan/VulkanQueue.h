@@ -40,6 +40,10 @@ public:
         return type;
     }
 
+    // 当多个 VkNativeQueue 实例共享同一个 VkQueue handle 时，
+    // 必须通过同一把 mutex 互斥 vkQueueSubmit2，否则违反 Vulkan 线程安全要求。
+    void SetSubmitMutex(std::mutex* _mutex) { submit_mutex = _mutex; }
+
     void BeginLabel(std::string_view _label, float4 _color);
     void EndLabel();
     void InsertLabel(std::string_view _label, float4 _color);
@@ -49,6 +53,10 @@ private:
     Array<VkSemaphoreSubmitInfo> signal_infos;
     VkQueue                      queue;
     EQueueType                   type;
+    
+    // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
+    // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
+    std::mutex*                  submit_mutex = nullptr;
 };
 
 struct ProfilerStorage {
@@ -179,8 +187,8 @@ public:
         ),
         profiler_storage(timestamp_pool) {
         timeline = MoerNew(VulkanFence(vk_device));
-        thread   = std::jthread(&VkCommandQueue::ExecuteThread, this);
         enabled  = true;
+        thread   = std::jthread(&VkCommandQueue::ExecuteThread, this);
     }
 
     ~VkCommandQueue() {
@@ -211,6 +219,8 @@ public:
     void        Present(SwapchainRef _viewport, TextureView _view) override;
     void        Sync() override;
     ProfileData GetProfilerEntry() override;
+
+    void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
     void                                      ExecuteThread();
     VulkanDevice&                             vk_device;
@@ -282,6 +292,8 @@ public:
     IOWaitEvt Execute(CmdSubmit&& _submit) override;
     FenceRef  GetFenceHandle() override;
     void      Sync(uint64 _timeline) override;
+
+    void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
     virtual void CopyFrom(BufferView _src, BufferView _dst) override {};
     virtual void CopyFrom(TextureView _src, TextureView _dst) override {};

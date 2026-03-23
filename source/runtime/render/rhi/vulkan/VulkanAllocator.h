@@ -15,7 +15,7 @@ private:
     VkCommandPool command_pool;
 
 public:
-    VulkanCmdAllocator(VulkanDevice* _device, VkQueueFlagBits _queue_type);
+    VulkanCmdAllocator(VulkanDevice* _device, EQueueType _queue_type);
     ~VulkanCmdAllocator();
     VkCommandPool GetHandle() const {
         return command_pool;

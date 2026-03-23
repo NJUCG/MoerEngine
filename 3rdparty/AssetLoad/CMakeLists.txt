@@ -54,18 +54,18 @@ set_target_folder(zlibstatic "${third_party_folder}/assimp")
 target_link_libraries(${third_lib_for_asset_load_target} PUBLIC assimp)
 target_include_directories(${third_lib_for_asset_load_target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/assimp)
 
-# 下面这段脚本是为了修复clang在Release下编译assimp时，不会输出assimp.dll的问题
-# Copy assimp.dll to output directory after AssetLoad is built
-# We add this to AssetLoad target instead of assimp to avoid timing issues
+# 下面这段脚本是为了修复 clang/MSVC 下 assimp 的 DLL 与可执行文件同目录的问题。
+# Assimp 默认 ASSIMP_INJECT_DEBUG_POSTFIX=ON，Debug 实际文件名为 assimpd.dll；若固定复制为
+# assimp.dll，链接仍按导入库查找 assimpd.dll，会导致 MoerEditor 启动报「找不到 assimpd.dll」。
+# 使用 $<TARGET_FILE_NAME:assimp> 保留 Debug/Release 下的真实 DLL 名。
 if(WIN32 AND BUILD_SHARED_LIBS AND TARGET assimp)
-    # Copy DLL to the same directory as AssetLoad DLL (which goes to CMAKE_RUNTIME_OUTPUT_DIRECTORY)
     add_custom_command(
         TARGET ${third_lib_for_asset_load_target}
         POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:assimp>"
-            "$<TARGET_FILE_DIR:${third_lib_for_asset_load_target}>/assimp.dll"
-        COMMENT "Copying assimp.dll to output directory"
+            "$<TARGET_FILE_DIR:${third_lib_for_asset_load_target}>/$<TARGET_FILE_NAME:assimp>"
+        COMMENT "Copying assimp DLL next to AssetLoad (assimp.dll or assimpd.dll)"
     )
 endif()
 

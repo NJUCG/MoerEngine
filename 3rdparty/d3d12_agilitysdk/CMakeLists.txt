@@ -14,20 +14,39 @@ if(MOER_AGILITYSDK_VERSION_IS_PREVIEW)
     set(MOER_AGILITYSDK_VERSION_ID "${MOER_AGILITYSDK_VERSION_ID}-preview" CACHE INTERNAL "" FORCE)
 endif()
 
-# 2. [关键修改] 从 NuGet 自动下载 SDK，而不是使用本地路径
-#    NuGet 下载链接格式通常是固定的
-message(STATUS "Preparing to fetch D3D12 Agility SDK version: ${MOER_AGILITYSDK_VERSION_ID}")
+# 2. [关键修改] 从 NuGet 自动下载 SDK，或使用本地已解压目录（下载失败时可用）
+#    下载失败时请使用本地目录：
+#    a) 打开 https://www.nuget.org/packages/Microsoft.Direct3D.D3D12 下载对应版本（如 1.715.1-preview）的 .nupkg
+#    b) 将 .nupkg 改为 .zip 后解压到某目录（解压后目录内应有 build/native/include 等）
+#    c) 配置时加 -DMOER_AGILITYSDK_SOURCE_DIR=解压后的完整路径
+#    d) 若曾配置过，建议删除 build/_deps/agilitysdk_nuget-* 或整个 build 后重新 configure
+set(MOER_AGILITYSDK_SOURCE_DIR "" CACHE PATH "Optional: path to pre-extracted Agility SDK (e.g. from manually downloaded .nupkg). If set, skip FetchContent download.")
+set(_use_local_agility_sdk FALSE)
+if(MOER_AGILITYSDK_SOURCE_DIR)
+    if(EXISTS "${MOER_AGILITYSDK_SOURCE_DIR}/build/native/include")
+        set(_use_local_agility_sdk TRUE)
+        message(STATUS "Using local D3D12 Agility SDK: ${MOER_AGILITYSDK_SOURCE_DIR}")
+    else()
+        message(WARNING "MOER_AGILITYSDK_SOURCE_DIR is set but build/native/include not found; will try FetchContent download.")
+    endif()
+endif()
 
-FetchContent_Declare(
-    AgilitySDK_Nuget
-    URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${MOER_AGILITYSDK_VERSION_ID}"
-    # NuGet 包本质是 ZIP，CMake 会自动解压
-)
-FetchContent_MakeAvailable(AgilitySDK_Nuget)
+if(_use_local_agility_sdk)
+    set(agilitysdk_nuget_SOURCE_DIR "${MOER_AGILITYSDK_SOURCE_DIR}")
+    set(MOER_AGILITYSDK_DIR "${MOER_AGILITYSDK_SOURCE_DIR}" CACHE INTERNAL "" FORCE)
+else()
+    message(STATUS "Preparing to fetch D3D12 Agility SDK version: ${MOER_AGILITYSDK_VERSION_ID}")
+    # 优先 NuGet API，失败时可尝试 CDN（部分地区 NuGet 主站较慢或不可达）
+    FetchContent_Declare(
+        AgilitySDK_Nuget
+        URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${MOER_AGILITYSDK_VERSION_ID}"
+        URL "https://globalcdn.nuget.org/packages/microsoft.direct3d.d3d12.${MOER_AGILITYSDK_VERSION_ID}.nupkg"
+    )
+    FetchContent_MakeAvailable(AgilitySDK_Nuget)
+    set(MOER_AGILITYSDK_DIR "${agilitysdk_nuget_SOURCE_DIR}" CACHE INTERNAL "" FORCE)
+endif()
 
 # 3. [关键修改] 重定向目录变量
-#    原本指向 CMAKE_CURRENT_SOURCE_DIR，现在指向下载解压后的目录
-set(MOER_AGILITYSDK_DIR "${agilitysdk_nuget_SOURCE_DIR}" CACHE INTERNAL "" FORCE)
 set(MOER_AGILITYSDK_DLL_DIR "${MOER_AGILITYSDK_DIR}/build/native/bin/x64" CACHE INTERNAL "" FORCE)
 
 # 4. 保持你的原有函数逻辑不变

@@ -6,11 +6,8 @@ function(set_target_folder target_name folder_name)
     endif()
 endfunction()
 
-if(CMAKE_GENERATOR MATCHES "Ninja" OR UNIX AND NOT APPLE) 
-    set(real_out_put_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}") 
-else() 
-    set(real_out_put_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") 
-endif()
+# 与顶层 CMakeLists 一致：CMAKE_RUNTIME_OUTPUT_DIRECTORY 已含 $<CONFIG>，MSVC/Clang 均为 target/bin/<Config>/
+set(real_out_put_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 
 # copy dll and lib from src_root to out_put_dir
 function(copy_dll target_name dll_name type src_root )
