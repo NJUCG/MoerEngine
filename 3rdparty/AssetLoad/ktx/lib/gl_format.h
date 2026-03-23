@@ -97,7 +97,9 @@ MODIFICATIONS for use in libktx
 #include <assert.h>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #ifndef __cplusplus
 #undef inline
 #define inline __inline

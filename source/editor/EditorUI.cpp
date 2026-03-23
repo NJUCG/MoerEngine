@@ -7,8 +7,9 @@
 
 // Editor
 #include "EditorUIStyle.h"
+#include "scene/Scene.h"
 #include "scene/SceneGlobalEntry.h"
-#include "scene/scene.h"
+
 
 // 3rd party (std)
 #include <imgui.h>
