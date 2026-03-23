@@ -24,7 +24,7 @@ TExtensionArray VulkanInstanceExtension::GetMERequiredInstanceExtensions() {
 
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SURFACE_EXTENSION_NAME);
-    ADD_EXTENSION(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+    // ADD_EXTENSION(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
     ADD_EXTENSION(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
     // ADD_EXTENSION(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
     // debug utils, contains debug marker and debug report
@@ -414,7 +414,7 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMERequiredDeviceExtensions
     extensions.emplace_back(std::make_shared<ext_class>(optional))
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
-    ADD_CUSTOM_EXTENSION(VulkanEXTSwapchainMaintenance1Extension, VULKAN_EXTENSION_REQUIRED);
+    // ADD_CUSTOM_EXTENSION(VulkanEXTSwapchainMaintenance1Extension, VULKAN_EXTENSION_REQUIRED);
     // ADD_EXTENSION(VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
 
 #if VULKAN_RHI_RAYTRACING
