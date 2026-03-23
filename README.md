@@ -117,9 +117,11 @@ MoerEngine源代码采用Apache-2.0 License授权。
 * [JSON for Modern C++](https://github.com/nlohmann/json): MIT License
 * [meshoptimizer](https://github.com/zeux/meshoptimizer): MIT License
 * [metis](https://github.com/KarypisLab/METIS/): Apache-2.0 License
+* [minhook](https://github.com/TsudaKageyu/minhook): BSD 2-Clause License
 * [mimalloc](https://github.com/microsoft/mimalloc): MIT License
 * [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended): Zlib License
 * [NRI](https://github.com/NVIDIA-RTX/NRI): MIT License
+* [perfetto](https://github.com/google/perfetto): Apache-2.0 license
 * [smaa](https://github.com/iryoku/smaa): MIT License
 * [spdlog](https://github.com/gabime/spdlog): MIT License
 * [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross): Apache-2.0 License

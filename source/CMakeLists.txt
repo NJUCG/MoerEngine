@@ -1,4 +1,4 @@
-
+add_subdirectory(profile)
 add_subdirectory(cuda)
 add_subdirectory(runtime)
 add_subdirectory(editor)
