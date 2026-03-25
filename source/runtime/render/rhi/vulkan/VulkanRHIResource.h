@@ -744,6 +744,10 @@ public:
     ) const;
     void DeAllocateResource(uint64 _handle);
 
+    const Array<TextureSubresourceKeyT<VulkanTexture>>& GetAllTextureViewInfos() const {
+        return texture_view_infos;
+    }
+
     //call on frame end free
     void OnFree(
         const Array<uint>& _slots_freed,

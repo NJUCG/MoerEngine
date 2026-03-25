@@ -41,324 +41,284 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
 
     const Sampler default_sampler = Sampler(ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_REPEAT);
 
+    // All CPU→GPU uploads are recorded as a CopyScope inside the gfx CommandList.
+    // The executor splits the stream at scope boundaries, routes the enclosed commands
+    // to the copy queue, and auto-generates acquire/release barriers.
     {
-        auto view = m_logical_scene.r().view<const ecs::CTexture, const ecs::CName>();
+        auto copy_scope = m_pending_cmd_lists.gfx_queue_cmd_list.BeginCopyScope();
 
-        m_res.texture_array.clear();
-        m_res.texture_array.reserve(view.size_hint());
+        {
+            auto view = m_logical_scene.r().view<const ecs::CTexture, const ecs::CName>();
 
-        m_map_texture_entity_to_bindless_handle.clear();
+            m_res.texture_array.clear();
+            m_res.texture_array.reserve(view.size_hint());
 
-        // Device创建TextureRef & 录制Copy命令
-        view.each([&](const auto entity, const ecs::CTexture& c_texture, const ecs::CName& c_name) {
-            TextureWithHandle tex_with_hdl{};
+            m_map_texture_entity_to_bindless_handle.clear();
 
-            // 下文处的实现参考了重构前的 GpuScene.cpp: BuildTexturesInBatch()
-            // TODO: 原函数中的Batch，意为分批上传数据，避免一个Command拷贝过多内容
-            //       原函数没有实现这个功能，所以此处也暂不实现
+            // Device创建TextureRef & 录制Copy命令
+            view.each([&](const auto entity, const ecs::CTexture& c_texture, const ecs::CName& c_name) {
+                TextureWithHandle tex_with_hdl{};
 
-            // 1. Create Texture
-            tex_with_hdl.tex = device.CreateTexture(
-                c_name.name,
-                Extent2D{c_texture.width, c_texture.height},
-                c_texture.format,
-                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST,
-                c_texture.mip_level_count,
-                c_texture.array_layer_count
-            );
+                // 下文处的实现参考了重构前的 GpuScene.cpp: BuildTexturesInBatch()
+                // TODO: 原函数中的Batch，意为分批上传数据，避免一个Command拷贝过多内容
+                //       原函数没有实现这个功能，所以此处也暂不实现
 
-            // 2. Copy Data
-            uint64 offset = 0;
-            for (uint i = 0; i < c_texture.mip_level_count * c_texture.array_layer_count; i++) {
-                uint mip_level_byte_size = tex_with_hdl.tex->GetMipByteSize(i);
-                m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-                    std::span<byte>((byte*)c_texture.data.data() + offset, mip_level_byte_size),
-                    tex_with_hdl.tex->GetView(i, 1)
+                // 1. Create Texture
+                tex_with_hdl.tex = device.CreateTexture(
+                    c_name.name,
+                    Extent2D{c_texture.width, c_texture.height},
+                    c_texture.format,
+                    ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST,
+                    c_texture.mip_level_count,
+                    c_texture.array_layer_count
                 );
-                offset += mip_level_byte_size;
-            }
 
-            // 3. Get Bindless Handle
-            tex_with_hdl.hdl = bdls->AllocateTexture(
-                tex_with_hdl.tex->GetView(0, tex_with_hdl.tex->GetNumMips()), default_sampler
-            );
-            m_map_texture_entity_to_bindless_handle[entity] = tex_with_hdl.hdl;
+                // 2. Copy Data (inside CopyScope — routed to copy queue by executor)
+                uint64 offset = 0;
+                for (uint i = 0; i < c_texture.mip_level_count * c_texture.array_layer_count; i++) {
+                    uint mip_level_byte_size = tex_with_hdl.tex->GetMipByteSize(i);
+                    copy_scope.CopyFrom(
+                        std::span<byte>((byte*)c_texture.data.data() + offset, mip_level_byte_size),
+                        tex_with_hdl.tex->GetView(i, 1)
+                    );
+                    offset += mip_level_byte_size;
+                }
 
-            // 4. Store
-            m_res.texture_array.emplace_back(tex_with_hdl);
-        });
-    }
+                // 3. Get Bindless Handle
+                tex_with_hdl.hdl = bdls->AllocateTexture(
+                    tex_with_hdl.tex->GetView(0, tex_with_hdl.tex->GetNumMips()), default_sampler
+                );
+                m_map_texture_entity_to_bindless_handle[entity] = tex_with_hdl.hdl;
 
-    // 填充GMaterial中空余的hdl字段
+                // 4. Store
+                m_res.texture_array.emplace_back(tex_with_hdl);
+            });
+        }
 
-    {
+        // 填充GMaterial中空余的hdl字段
 
-        auto view = m_logical_scene.r().view<const ecs::CMaterial>();
+        {
 
-        auto to_hdl = [&](const entt::entity entity) -> int64 {
-            if (entity == entt::null) {
-                return -1; // 不存在，应该使用factor
-            }
-            assert(
-                m_map_texture_entity_to_bindless_handle.contains(entity) && "Texture entity not found in map"
-            );
-            return m_map_texture_entity_to_bindless_handle.at(entity);
+            auto view = m_logical_scene.r().view<const ecs::CMaterial>();
+
+            auto to_hdl = [&](const entt::entity entity) -> int64 {
+                if (entity == entt::null) {
+                    return -1; // 不存在，应该使用factor
+                }
+                assert(
+                    m_map_texture_entity_to_bindless_handle.contains(entity) && "Texture entity not found in map"
+                );
+                return m_map_texture_entity_to_bindless_handle.at(entity);
+            };
+
+            view.each([&](const auto entity, const ecs::CMaterial& c_material) {
+                uint mat_id = m_cpu_scene.m_map_material_entity_to_id.at(entity);
+
+                GMaterial& g_material = m_cpu_scene.m_material_buf[mat_id];
+
+                g_material.normal_map_hdl             = to_hdl(c_material.normal_map_entt);
+                g_material.ao_map_hdl                 = to_hdl(c_material.ao_map_entt);
+                g_material.albedo_map_hdl             = to_hdl(c_material.albedo_map_entt);
+                g_material.emissive_map_hdl           = to_hdl(c_material.emissive_map_entt);
+                g_material.metallic_roughness_map_hdl = to_hdl(c_material.metallic_roughness_map_entt);
+            });
+        }
+
+        /**
+         * MARK: 创建所有Buffers
+         *
+         * 此处按照 Res 中顺序进行创建
+         */
+
+        m_res.light_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::LightBuffer",
+            m_cpu_scene.m_light_buf.size() * sizeof(GLight),
+            EBufferUsageFlags::UNORDERED_ACCESS
+        );
+
+        m_res.material_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::MaterialBuffer",
+            m_cpu_scene.m_material_buf.size() * sizeof(GMaterial),
+            EBufferUsageFlags::UNORDERED_ACCESS
+        );
+
+        // 这里不设置为byte，是为了GeometryPass中可以直接获取 命令的数量(cpu count)、DrawIndexedCmdData的stride
+        m_res.draw_cmd_buf.buf = device.CreateBuffer<Render::DrawIndexedCmdData>(
+            "GpuScene::DrawCmdBuffer",
+            m_cpu_scene.m_draw_cmd_buf.size(),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER
+        );
+
+        m_res.primitive_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::PrimitiveBuffer",
+            m_cpu_scene.m_primitive_buf.size() * sizeof(GPrimitive),
+            EBufferUsageFlags::UNORDERED_ACCESS
+        );
+
+        m_res.instance_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::InstanceBuffer",
+            m_cpu_scene.m_instance_buf.size() * sizeof(GInstance),
+            EBufferUsageFlags::UNORDERED_ACCESS
+        );
+
+        m_res.position_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::PositionMegaBuffer",
+            m_cpu_scene.mega_buf().position.size() * sizeof(float3),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+        );
+
+        m_res.packed_normal_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::NormalMegaBuffer",
+            m_cpu_scene.mega_buf().packed_normal.size() * sizeof(uint32),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+        );
+
+        m_res.packed_tangent_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::TangentMegaBuffer",
+            m_cpu_scene.mega_buf().packed_tangent.size() * sizeof(uint32),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+        );
+
+        m_res.texcoord0_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::Texcoord0MegaBuffer",
+            m_cpu_scene.mega_buf().texcoord0.size() * sizeof(float2),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+        );
+
+        m_res.index_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::IndexMegaBuffer",
+            m_cpu_scene.mega_buf().index.size() * sizeof(uint32),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDEX_BUFFER
+        );
+
+        /**
+         * MARK: 上传所有Buffers (inside CopyScope — routed to copy queue by executor)
+         *
+         * 此处按照 Res 中顺序进行上传
+         */
+
+        copy_scope.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.m_light_buf.data(), m_cpu_scene.m_light_buf.size() * sizeof(GLight)
+            ),
+            m_res.light_buf.buf->GetView(),
+            "CopyFrom GpuScene::LightBuffer"
+        );
+
+        copy_scope.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.m_material_buf.data(), m_cpu_scene.m_material_buf.size() * sizeof(GMaterial)
+            ),
+            m_res.material_buf.buf->GetView(),
+            "CopyFrom GpuScene::MaterialBuffer"
+        );
+
+        copy_scope.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.m_draw_cmd_buf.data(),
+                m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData)
+            ),
+            m_res.draw_cmd_buf.buf->GetView(),
+            "CopyFrom GpuScene::DrawCmdBuffer"
+        );
+
+        copy_scope.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.m_primitive_buf.data(), m_cpu_scene.m_primitive_buf.size() * sizeof(GPrimitive)
+            ),
+            m_res.primitive_buf.buf->GetView(),
+            "CopyFrom GpuScene::PrimitiveBuffer"
+        );
+
+        copy_scope.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.m_instance_buf.data(), m_cpu_scene.m_instance_buf.size() * sizeof(GInstance)
+            ),
+            m_res.instance_buf.buf->GetView(),
+            "CopyFrom GpuScene::InstanceBuffer"
+        );
+
+        copy_scope.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.mega_buf().position.data(),
+                m_cpu_scene.mega_buf().position.size() * sizeof(float3)
+            ),
+            m_res.position_buf.buf->GetView(),
+            "CopyFrom GpuScene::PositionMegaBuffer"
+        );
+
+        copy_scope.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.mega_buf().packed_normal.data(),
+                m_cpu_scene.mega_buf().packed_normal.size() * sizeof(uint32)
+            ),
+            m_res.packed_normal_buf.buf->GetView(),
+            "CopyFrom GpuScene::NormalMegaBuffer"
+        );
+
+        copy_scope.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.mega_buf().packed_tangent.data(),
+                m_cpu_scene.mega_buf().packed_tangent.size() * sizeof(uint32)
+            ),
+            m_res.packed_tangent_buf.buf->GetView(),
+            "CopyFrom GpuScene::TangentMegaBuffer"
+        );
+
+        copy_scope.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.mega_buf().texcoord0.data(),
+                m_cpu_scene.mega_buf().texcoord0.size() * sizeof(float2)
+            ),
+            m_res.texcoord0_buf.buf->GetView(),
+            "CopyFrom GpuScene::Texcoord0MegaBuffer"
+        );
+
+        copy_scope.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.mega_buf().index.data(), m_cpu_scene.mega_buf().index.size() * sizeof(uint32)
+            ),
+            m_res.index_buf.buf->GetView(),
+            "CopyFrom GpuScene::IndexMegaBuffer"
+        );
+
+        /**
+         * MARK: Bindless所有buffer
+         *
+         * 绑定所有buffer到Bindless Array
+         *
+         * 此处，我们默认所有buffer都被绑定到Bindless中。如果需要手动绑定，也不影响。
+         * 理论上，一个资源同时被bindless绑定和正常绑定，是不会有 任何性能和资源浪费 或者 错误。
+         */
+
+        Array<BufferWithHandle*> buffers = {
+            &m_res.light_buf,
+            &m_res.material_buf,
+            &m_res.draw_cmd_buf,
+            &m_res.primitive_buf,
+            &m_res.instance_buf,
+            &m_res.position_buf,
+            &m_res.packed_normal_buf,
+            &m_res.packed_tangent_buf,
+            &m_res.texcoord0_buf,
+            &m_res.index_buf,
         };
 
-        view.each([&](const auto entity, const ecs::CMaterial& c_material) {
-            uint mat_id = m_cpu_scene.m_map_material_entity_to_id.at(entity);
+        for (auto& buf_with_hdl_ptr : buffers) {
+            BufferWithHandle& buf_with_hdl = *buf_with_hdl_ptr;
 
-            GMaterial& g_material = m_cpu_scene.m_material_buf[mat_id];
+            buf_with_hdl.hdl = bdls->AllocateBuffer(buf_with_hdl.buf->GetView());
+        }
 
-            g_material.normal_map_hdl             = to_hdl(c_material.normal_map_entt);
-            g_material.ao_map_hdl                 = to_hdl(c_material.ao_map_entt);
-            g_material.albedo_map_hdl             = to_hdl(c_material.albedo_map_entt);
-            g_material.emissive_map_hdl           = to_hdl(c_material.emissive_map_entt);
-            g_material.metallic_roughness_map_hdl = to_hdl(c_material.metallic_roughness_map_entt);
-        });
-    }
+        // NOTE: UpdateBindlessArray 需要在 Graphics/Compute Queue 中执行，不能在 Copy Queue 中执行
+        // 这里只分配了 handle，实际的 bindless array 更新应该在后续的 Graphics Queue 命令中完成
+        // cmd_list.UpdateBindlessArray(bdls);
 
-    /**
-     * MARK: 创建所有Buffers
-     * 
-     * 此处按照 Res 中顺序进行创建
-     */
+    } // ~CopyCommandScope() — executor auto-generates copy→gfx acquire barrier here
 
-    m_res.light_buf.buf = device.CreateBuffer<byte>(
-        "GpuScene::LightBuffer",
-        m_cpu_scene.m_light_buf.size() * sizeof(GLight),
-        EBufferUsageFlags::UNORDERED_ACCESS
-    );
-
-    m_res.material_buf.buf = device.CreateBuffer<byte>(
-        "GpuScene::MaterialBuffer",
-        m_cpu_scene.m_material_buf.size() * sizeof(GMaterial),
-        EBufferUsageFlags::UNORDERED_ACCESS
-    );
-
-    // 这里不设置为byte，是为了GeometryPass中可以直接获取 命令的数量(cpu count)、DrawIndexedCmdData的stride
-    m_res.draw_cmd_buf.buf = device.CreateBuffer<Render::DrawIndexedCmdData>(
-        "GpuScene::DrawCmdBuffer",
-        m_cpu_scene.m_draw_cmd_buf.size(),
-        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER
-    );
-
-    m_res.primitive_buf.buf = device.CreateBuffer<byte>(
-        "GpuScene::PrimitiveBuffer",
-        m_cpu_scene.m_primitive_buf.size() * sizeof(GPrimitive),
-        EBufferUsageFlags::UNORDERED_ACCESS
-    );
-
-    m_res.instance_buf.buf = device.CreateBuffer<byte>(
-        "GpuScene::InstanceBuffer",
-        m_cpu_scene.m_instance_buf.size() * sizeof(GInstance),
-        EBufferUsageFlags::UNORDERED_ACCESS
-    );
-
-    m_res.position_buf.buf = device.CreateBuffer<byte>(
-        "GpuScene::PositionMegaBuffer",
-        m_cpu_scene.mega_buf().position.size() * sizeof(float3),
-        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
-    );
-
-    m_res.packed_normal_buf.buf = device.CreateBuffer<byte>(
-        "GpuScene::NormalMegaBuffer",
-        m_cpu_scene.mega_buf().packed_normal.size() * sizeof(uint32),
-        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
-    );
-
-    m_res.packed_tangent_buf.buf = device.CreateBuffer<byte>(
-        "GpuScene::TangentMegaBuffer",
-        m_cpu_scene.mega_buf().packed_tangent.size() * sizeof(uint32),
-        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
-    );
-
-    m_res.texcoord0_buf.buf = device.CreateBuffer<byte>(
-        "GpuScene::Texcoord0MegaBuffer",
-        m_cpu_scene.mega_buf().texcoord0.size() * sizeof(float2),
-        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
-    );
-
-    m_res.index_buf.buf = device.CreateBuffer<byte>(
-        "GpuScene::IndexMegaBuffer",
-        m_cpu_scene.mega_buf().index.size() * sizeof(uint32),
-        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDEX_BUFFER
-    );
-
-    /**
-     * MARK: 上传所有Buffers
-     * 
-     * 此处按照 Res 中顺序进行上传
-     */
-
-    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-        std::span<byte>(
-            (byte*)m_cpu_scene.m_light_buf.data(), m_cpu_scene.m_light_buf.size() * sizeof(GLight)
-        ),
-        m_res.light_buf.buf->GetView(),
-        "CopyFrom GpuScene::LightBuffer"
-    );
-
-    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-        std::span<byte>(
-            (byte*)m_cpu_scene.m_material_buf.data(), m_cpu_scene.m_material_buf.size() * sizeof(GMaterial)
-        ),
-        m_res.material_buf.buf->GetView(),
-        "CopyFrom GpuScene::MaterialBuffer"
-    );
-
-    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-        std::span<byte>(
-            (byte*)m_cpu_scene.m_draw_cmd_buf.data(),
-            m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData)
-        ),
-        m_res.draw_cmd_buf.buf->GetView(),
-        "CopyFrom GpuScene::DrawCmdBuffer"
-    );
-
-    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-        std::span<byte>(
-            (byte*)m_cpu_scene.m_primitive_buf.data(), m_cpu_scene.m_primitive_buf.size() * sizeof(GPrimitive)
-        ),
-        m_res.primitive_buf.buf->GetView(),
-        "CopyFrom GpuScene::PrimitiveBuffer"
-    );
-
-    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-        std::span<byte>(
-            (byte*)m_cpu_scene.m_instance_buf.data(), m_cpu_scene.m_instance_buf.size() * sizeof(GInstance)
-        ),
-        m_res.instance_buf.buf->GetView(),
-        "CopyFrom GpuScene::InstanceBuffer"
-    );
-
-    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-        std::span<byte>(
-            (byte*)m_cpu_scene.mega_buf().position.data(),
-            m_cpu_scene.mega_buf().position.size() * sizeof(float3)
-        ),
-        m_res.position_buf.buf->GetView(),
-        "CopyFrom GpuScene::PositionMegaBuffer"
-    );
-
-    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-        std::span<byte>(
-            (byte*)m_cpu_scene.mega_buf().packed_normal.data(),
-            m_cpu_scene.mega_buf().packed_normal.size() * sizeof(uint32)
-        ),
-        m_res.packed_normal_buf.buf->GetView(),
-        "CopyFrom GpuScene::NormalMegaBuffer"
-    );
-
-    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-        std::span<byte>(
-            (byte*)m_cpu_scene.mega_buf().packed_tangent.data(),
-            m_cpu_scene.mega_buf().packed_tangent.size() * sizeof(uint32)
-        ),
-        m_res.packed_tangent_buf.buf->GetView(),
-        "CopyFrom GpuScene::TangentMegaBuffer"
-    );
-
-    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-        std::span<byte>(
-            (byte*)m_cpu_scene.mega_buf().texcoord0.data(),
-            m_cpu_scene.mega_buf().texcoord0.size() * sizeof(float2)
-        ),
-        m_res.texcoord0_buf.buf->GetView(),
-        "CopyFrom GpuScene::Texcoord0MegaBuffer"
-    );
-
-    m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
-        std::span<byte>(
-            (byte*)m_cpu_scene.mega_buf().index.data(), m_cpu_scene.mega_buf().index.size() * sizeof(uint32)
-        ),
-        m_res.index_buf.buf->GetView(),
-        "CopyFrom GpuScene::IndexMegaBuffer"
-    );
-
-    /**
-     * MARK: Bindless所有buffer
-     * 
-     * 绑定所有buffer到Bindless Array
-     * 
-     * 此处，我们默认所有buffer都被绑定到Bindless中。如果需要手动绑定，也不影响。
-     * 理论上，一个资源同时被bindless绑定和正常绑定，是不会有 任何性能和资源浪费 或者 错误。
-     */
-
-    Array<BufferWithHandle*> buffers = {
-        &m_res.light_buf,
-        &m_res.material_buf,
-        &m_res.draw_cmd_buf,
-        &m_res.primitive_buf,
-        &m_res.instance_buf,
-        &m_res.position_buf,
-        &m_res.packed_normal_buf,
-        &m_res.packed_tangent_buf,
-        &m_res.texcoord0_buf,
-        &m_res.index_buf,
-    };
-
-    for (auto& buf_with_hdl_ptr : buffers) {
-        BufferWithHandle& buf_with_hdl = *buf_with_hdl_ptr;
-
-        buf_with_hdl.hdl = bdls->AllocateBuffer(buf_with_hdl.buf->GetView());
-    }
-
-    // NOTE: UpdateBindlessArray 需要在 Graphics/Compute Queue 中执行，不能在 Copy Queue 中执行
-    // 这里只分配了 handle，实际的 bindless array 更新应该在后续的 Graphics Queue 命令中完成
-    // cmd_list.UpdateBindlessArray(bdls);
-
-    /**
-     * MARK: Upload & Execute
-     * 
-     * 这里这段代码我不理解，我对GraphicsAPI底层的各种queue和barrier不够熟悉
-     * 这部分代码是从旧的SceneCache.cpp中抄过来的
-     */
-
-    // 注意，此处不能在这两个数组中添加空资源，否则会触发RHI崩溃
-    Array<ExportTexture> export_tex;
-    Array<ExportBuffer>  export_buf;
-    Array<ImportTexture> import_tex;
-    Array<ImportBuffer>  import_buf;
-
-    export_tex.reserve(m_res.texture_array.size());
-    export_buf.reserve(buffers.size());
-    import_tex.reserve(m_res.texture_array.size());
-    import_buf.reserve(buffers.size());
-
-    for (const auto& tex_with_hdl : m_res.texture_array) {
-
-        auto mip_level_count = tex_with_hdl.tex->GetNumMips();
-
-        // FIXME: 这里的GetView是否要指定mip范围？
-        export_tex.emplace_back(ExportTexture{tex_with_hdl.tex->GetView(), ETextureState::SAMPLE});
-        import_tex.emplace_back(
-            ImportTexture{tex_with_hdl.tex->GetView(0, mip_level_count), ETextureState::SAMPLE}
-        );
-    }
-
-    for (const auto& buf_with_hdl_ptr : buffers) {
-        const BufferWithHandle& buf_with_hdl = *buf_with_hdl_ptr;
-
-        export_buf.emplace_back(ExportBuffer{buf_with_hdl.buf->GetView(), EBufferState::UNORDERED_ACCESS});
-        import_buf.emplace_back(ImportBuffer{buf_with_hdl.buf->GetView(), EBufferState::UNORDERED_ACCESS});
-        // FIXME：源代码import_buf这里的state是UNDEFINED。我觉得可能是bug，所以这里改为了UNORDERED_ACCESS
-    }
-
-    // 1. copy queue
-
-    m_pending_cmd_lists.copy_queue_cmd_list.ExportResourcesToQueue(
-        EQueueType::Graphics, std::move(export_tex), std::move(export_buf)
-    );
-
-    // 2. graphics queue
-    // - 为了避免多线程抢占gfx_queue资源，导致卡死。我们规定只在主线程执行gfx_queue命令
-
-    m_pending_cmd_lists.gfx_queue_cmd_list.ImportResourcesFromQueue( // gfx_queue交给主线程执行
-        EQueueType::Copy, std::move(import_tex), std::move(import_buf)
-    );
-
-    InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list); // gfx_queue交给主线程执行
+    // InitRaytracingScene runs on the gfx queue (after copy scope, ownership returned)
+    // gfx_queue交给主线程执行
+    InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list);
 }
 
 void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene) {

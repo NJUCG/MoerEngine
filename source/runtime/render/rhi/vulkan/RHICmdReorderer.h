@@ -1527,6 +1527,11 @@ public:
             case Command::EType::Custom:
                 VisitCmd(static_cast<const CustomCmd*>(_cmd));
                 break;
+            case Command::EType::CopyScopeMarker:
+                // §13.3: CopyScope boundary is a hard reorder barrier
+                layer_offset = m_cmd_lists.size();
+                AddCmd(_cmd, layer_offset);
+                break;
             default:
                 assert(false && "Command Type Not Supported for Reorder");
         }

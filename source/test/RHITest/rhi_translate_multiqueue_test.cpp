@@ -77,6 +77,39 @@ bool ValidateResult(
     return false;
 }
 
+bool ValidateUniformValue(uint32_t iter, uint32_t expected, const std::vector<uint32_t>& got) {
+    for (uint32_t i = 0; i < got.size(); ++i) {
+        if (got[i] != expected) {
+            LOG_ERROR(
+                "Uniform mismatch at iter={}, index={}, expected={}, got={}",
+                iter,
+                i,
+                expected,
+                got[i]
+            );
+            return false;
+        }
+    }
+    return true;
+}
+
+int RunCommandListQueueBindingTest() {
+    CommandList graphics_cmd(EQueueType::Graphics);
+    CommandList compute_cmd(EQueueType::Compute);
+
+    if (graphics_cmd.GetQueueType() != EQueueType::Graphics) {
+        LOG_ERROR("Graphics command list queue binding mismatch");
+        return 1;
+    }
+    if (compute_cmd.GetQueueType() != EQueueType::Compute) {
+        LOG_ERROR("Compute command list queue binding mismatch");
+        return 1;
+    }
+
+    LOG_INFO("CommandList queue binding test passed");
+    return 0;
+}
+
 int RunRHITranslateMultiQueueReadbackTest() {
     auto& device = RenderDevice::Get();
 
@@ -108,7 +141,6 @@ int RunRHITranslateMultiQueueReadbackTest() {
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
             EBufferUsageFlags::TRANSFER_SRC
     );
-    auto completion_fence = device.CreateFence();
 
     auto shuffle_pipeline =
         ShaderManager::Get().Compute<ComponentShuffleShader>("core/utils/ShuffleBufferIndices.hlsl");
@@ -129,7 +161,7 @@ int RunRHITranslateMultiQueueReadbackTest() {
         ApplyShuffle(src_data, perm0, stage0_expected);
         ApplyShuffle(stage0_expected, perm1, final_expected);
 
-        CommandList upload_cmd;
+        CommandList upload_cmd(EQueueType::Graphics);
         upload_cmd.CopyFrom(ToByteSpan(src_data), src->GetView());
         upload_cmd.CopyFrom(ToByteSpan(perm0), indices_stage0->GetView());
         upload_cmd.CopyFrom(ToByteSpan(perm1), indices_stage1->GetView());
@@ -139,10 +171,10 @@ int RunRHITranslateMultiQueueReadbackTest() {
             .component_cnt = kElementCount,
         };
 
-        CommandList compute_stage0_cmd;
+        CommandList compute_stage0_cmd(EQueueType::Compute);
         compute_stage0_cmd.Barriers(
-            EQueueType::Copy,
             EQueueType::Graphics,
+            EQueueType::Compute,
             EPassType::Compute,
             ReadBuffer{indices_stage0->GetView(), EBufferState::SHADER_RESOURCE},
             ReadBuffer{src->GetView(), EBufferState::SHADER_RESOURCE},
@@ -152,10 +184,10 @@ int RunRHITranslateMultiQueueReadbackTest() {
             .Compute(shuffle_pipeline, shuffle_args, indices_stage0->GetView(), src->GetView(), mid->GetView())
             .Dispatch((kElementCount + 63u) / 64u, "TranslateStage0Dispatch");
 
-        CommandList compute_stage1_cmd;
+        CommandList compute_stage1_cmd(EQueueType::Compute);
         compute_stage1_cmd.Barriers(
-            EQueueType::Graphics,
-            EQueueType::Graphics,
+            EQueueType::Compute,
+            EQueueType::Compute,
             EPassType::Compute,
             ReadBuffer{indices_stage1->GetView(), EBufferState::SHADER_RESOURCE},
             ReadBuffer{mid->GetView(), EBufferState::SHADER_RESOURCE},
@@ -166,39 +198,24 @@ int RunRHITranslateMultiQueueReadbackTest() {
             .Dispatch((kElementCount + 63u) / 64u, "TranslateStage1Dispatch");
 
         std::fill(readback_data.begin(), readback_data.end(), 0u);
-        CommandList readback_cmd;
+        CommandList readback_cmd(EQueueType::Graphics);
         readback_cmd.BufferBarriers(
+            EQueueType::Compute,
             EQueueType::Graphics,
-            EQueueType::Copy,
             EPassType::Copy,
             Array<ReadBuffer>{ReadBuffer{dst->GetView(), EBufferState::TRANSFER}},
             Array<WriteBuffer>{}
         );
         readback_cmd.CopyFrom(dst->GetView(), ToByteSpan(readback_data));
 
-        Array<RHIExecOp> frame_ops;
+        Array<CommandList> frame_cmds{};
+        frame_cmds.emplace_back(std::move(upload_cmd));
+        frame_cmds.emplace_back(std::move(compute_stage0_cmd));
+        frame_cmds.emplace_back(std::move(compute_stage1_cmd));
+        frame_cmds.emplace_back(std::move(readback_cmd));
 
-        RHISubmitCmdList copy_upload_submit{};
-        copy_upload_submit.queue = EQueueType::Copy;
-        copy_upload_submit.submits.emplace_back(upload_cmd.Submit());
-        frame_ops.emplace_back(std::move(copy_upload_submit));
-
-        RHISubmitCmdList compute_submit{};
-        compute_submit.queue = EQueueType::Graphics;
-        compute_submit.submits.emplace_back(compute_stage0_cmd.Submit());
-        compute_submit.submits.emplace_back(compute_stage1_cmd.Submit());
-        frame_ops.emplace_back(std::move(compute_submit));
-
-        RHISubmitCmdList copy_readback_submit{};
-        copy_readback_submit.queue = EQueueType::Copy;
-        const uint64_t signal_value = static_cast<uint64_t>(iter) + 1ull;
-        copy_readback_submit.submits.emplace_back(
-            readback_cmd.Submit().Signal(completion_fence.Get(), signal_value)
-        );
-        frame_ops.emplace_back(std::move(copy_readback_submit));
-
-        RHIExecutor::Get().Submit(std::move(frame_ops));
-        completion_fence->Wait(signal_value);
+        RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
+        device.WaitIdle();
 
         if (!ValidateResult(iter, final_expected, readback_data)) {
             return 1;
@@ -231,12 +248,8 @@ int RunPresentTests() {
         "translate_present_output",
         Extent2D(kWidth, kHeight),
         swapchain->format,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC |
-            ETextureUsageFlags::TRANSFER_DST
+        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
     );
-
-    auto frame_fence = device.CreateFence();
-    auto copy_fence  = device.CreateFence();
 
     auto compute_buffer = device.CreateBuffer<uint32_t>(
         "translate_present_compute_buf",
@@ -249,71 +262,54 @@ int RunPresentTests() {
         kElementCount,
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
     );
-    auto readback_buffer = device.CreateBuffer<uint32_t>(
-        "translate_present_readback_buf",
-        kElementCount,
-        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
-    );
-    std::vector<uint32_t> upload_values(kElementCount);
     std::vector<uint32_t> readback_values(kElementCount, 0u);
+    std::vector<uint32_t> output_values(kWidth * kHeight, 0u);
 
-    uint64_t frame_id = 0;
-    uint64_t copy_id  = 0;
     for (uint32_t iter = 0; iter < kPresentIterations; ++iter) {
         WindowContext::Tick();
 
         for (uint32_t i = 0; i < kElementCount; ++i) {
-            upload_values[i] = iter * 1000u + i;
             readback_values[i] = 0u;
         }
+        std::fill(output_values.begin(), output_values.end(), 0xFF000000u | (iter * 97u + 17u));
 
-        CommandList compute_cmd;
+        CommandList compute_cmd(EQueueType::Compute);
         compute_cmd.ClearResource(compute_buffer->GetView(), iter + 1u);
 
-        CommandList graphics_cmd;
+        CommandList graphics_cmd(EQueueType::Graphics);
+        graphics_cmd.BufferBarriers(
+            EQueueType::Compute,
+            EQueueType::Graphics,
+            EPassType::Copy,
+            Array<ReadBuffer>{ReadBuffer{compute_buffer->GetView(), EBufferState::TRANSFER}},
+            Array<WriteBuffer>{WriteBuffer{graphics_buffer->GetView(), EBufferState::TRANSFER}}
+        );
         graphics_cmd.CopyFrom(compute_buffer->GetView(), graphics_buffer->GetView(), "ComputeToGraphics");
-        graphics_cmd.ClearResource(output->GetView(), 0xFF000000u | (iter * 97u + 17u));
-
-        CommandList copy_upload_cmd;
-        copy_upload_cmd.CopyFrom(ToByteSpan(upload_values), readback_buffer->GetView());
-
-        CommandList copy_readback_cmd;
-        copy_readback_cmd.CopyFrom(readback_buffer->GetView(), ToByteSpan(readback_values));
-
-        Array<RHIExecOp> frame_ops{};
-
-        RHISubmitCmdList copy_upload_submit{};
-        copy_upload_submit.queue = EQueueType::Copy;
-        copy_upload_submit.submits.emplace_back(copy_upload_cmd.Submit());
-        frame_ops.emplace_back(std::move(copy_upload_submit));
-
-        RHISubmitCmdList compute_submit{};
-        compute_submit.queue = EQueueType::Compute;
-        compute_submit.submits.emplace_back(compute_cmd.Submit());
-        frame_ops.emplace_back(std::move(compute_submit));
-
-        RHISubmitCmdList graphics_submit{};
-        graphics_submit.queue = EQueueType::Graphics;
-        graphics_submit.MarkWriteTexture(output->GetView());
-        ++frame_id;
-        graphics_submit.submits.emplace_back(
-            graphics_cmd.Submit().Signal(frame_fence.Get(), frame_id)
+        graphics_cmd.BufferBarriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Copy,
+            Array<ReadBuffer>{ReadBuffer{graphics_buffer->GetView(), EBufferState::TRANSFER}},
+            Array<WriteBuffer>{}
         );
-        frame_ops.emplace_back(std::move(graphics_submit));
+        graphics_cmd.CopyFrom(graphics_buffer->GetView(), ToByteSpan(readback_values));
+        graphics_cmd.CopyFrom(ToByteSpan(output_values), output->GetView());
 
-        RHISubmitCmdList copy_readback_submit{};
-        copy_readback_submit.queue = EQueueType::Copy;
-        ++copy_id;
-        copy_readback_submit.submits.emplace_back(
-            copy_readback_cmd.Submit().Signal(copy_fence.Get(), copy_id)
+        Array<CommandList> frame_cmds{};
+        frame_cmds.emplace_back(std::move(compute_cmd));
+        frame_cmds.emplace_back(std::move(graphics_cmd));
+
+        RHIPresentRequest present_request{swapchain, output->GetView()};
+        RHIExecutor::Get().Submit(
+            std::move(frame_cmds),
+            ERHIExecSubmitFlags::FlushGPU | ERHIExecSubmitFlags::FrameEnd,
+            &present_request
         );
-        frame_ops.emplace_back(std::move(copy_readback_submit));
+        device.WaitIdle();
 
-        frame_ops.emplace_back(RHIPresentOp{swapchain, output->GetView(), EQueueType::Graphics});
-
-        RHIExecutor::Get().Submit(std::move(frame_ops));
-        frame_fence->Wait(frame_id);
-        copy_fence->Wait(copy_id);
+        if (!ValidateUniformValue(iter, iter + 1u, readback_values)) {
+            return 1;
+        }
     }
 
     swapchain->Sync();
@@ -349,6 +345,14 @@ int main(int argc, char** argv) {
     try {
         RenderDevice::Init(std::move(info));
         ShaderCompiler::Init();
+
+        const int queue_ret = RunCommandListQueueBindingTest();
+        if (queue_ret != 0) {
+            ShaderManager::ShutDown();
+            RenderDevice::Dispose();
+            Moer::TaskSystem::ShutDown();
+            return queue_ret;
+        }
 
         const int readback_ret = RunRHITranslateMultiQueueReadbackTest();
         if (readback_ret != 0) {

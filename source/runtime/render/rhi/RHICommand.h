@@ -62,7 +62,8 @@ public:
         ClearResource,
         Scope,
         Query,
-        Custom
+        Custom,
+        CopyScopeMarker
     };
 
     static constexpr std::string_view typenames[] = {
@@ -71,7 +72,7 @@ public:
         "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
         "Barrier",         "QueueTransfer",       "SetDrawState",   "SetGeometryPassDrawState",
         "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Scope", "Query",
-        "Custom"
+        "Custom",          "CopyScopeMarker"
     };
 
 private:
@@ -282,6 +283,22 @@ private:
     friend class VulkanQueryRuntime;
     friend struct ProfilerStorage;
 };
+
+struct GPUEvent {
+    enum class EType {
+        BeginCommandList,
+        EndCommandList,
+        BeginEvent,
+        EndEvent,
+        FrameBound
+    };
+
+    EType       type;
+    std::string name;
+    QueryToken  query;
+    uint32      depth{0};
+    uint64      cpu_time_ns{0};
+};
 template<typename TRenderTarget>
 concept is_render_target = std::is_same_v<TRenderTarget, ColorAttachment>;
 
@@ -406,6 +423,7 @@ struct CmdSubmit {
     Array<WaitEvent>   wait_events;
     Array<SignalEvent> signal_events;
     Array<QueryToken>  query_tokens;
+    Array<GPUEvent>    gpu_events;
     bool               b_sync{false}; //force sync queue timeline
     bool               b_tick_profiling{false};
     bool               b_delete_resources{false};
@@ -441,6 +459,7 @@ struct CmdSubmit {
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
         query_tokens       = std::move(_other.query_tokens);
+        gpu_events         = std::move(_other.gpu_events);
         cached_args        = std::move(_other.cached_args);
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
@@ -453,6 +472,7 @@ struct CmdSubmit {
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
         query_tokens       = std::move(_other.query_tokens);
+        gpu_events         = std::move(_other.gpu_events);
         cached_args        = std::move(_other.cached_args);
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
@@ -463,12 +483,14 @@ struct CmdSubmit {
         Array<UniquePtr<Command>>&&        _cmds,
         Array<std::function<void(void)>>&& _callbacks,
         TCachedArgArray&&                  _cached_args,
-        Array<QueryToken>&&                _query_tokens
+        Array<QueryToken>&&                _query_tokens,
+        Array<GPUEvent>&&                  _gpu_events = {}
     ) :
         cmds(std::move(_cmds)),
         callbacks(std::move(_callbacks)),
         cached_args(std::move(_cached_args)),
-        query_tokens(std::move(_query_tokens)) {}
+        query_tokens(std::move(_query_tokens)),
+        gpu_events(std::move(_gpu_events)) {}
 
     std::string ToString() const {
         std::string str = "Commands: [";
@@ -581,6 +603,91 @@ concept is_arg = std::is_same_v<std::remove_reference_t<TInArg>(), BufferView> |
                  std::is_same_v<std::remove_reference_t<TInArg>(), TextureView> ||
                  std::is_same_v<std::remove_reference_t<TInArg>(), Buffer*> ||
                  std::is_same_v<std::remove_reference_t<TInArg>(), Texture*>;
+
+// Forward declaration
+class CommandList;
+
+/**
+ * §2.3 CopyCommandScope
+ *
+ * RAII object returned by CommandList::BeginCopyScope().
+ * Copy commands recorded through this scope are embedded in the parent Graphics/Compute
+ * CommandList as a tagged section. The executor splits the command list at submit time:
+ *   gfx section → copy queue section → gfx section
+ * and auto-generates acquire/release barriers at scope boundaries.
+ *
+ * Constraints:
+ * - Only Graphics / Compute CommandList can call BeginCopyScope()
+ * - Only copy / upload / readback commands allowed inside a scope
+ * - Multiple scopes per CommandList are allowed; nesting is not
+ */
+class RENDER_API CopyCommandScope {
+public:
+    ~CopyCommandScope();
+
+    CopyCommandScope(CopyCommandScope&&) noexcept;
+    CopyCommandScope& operator=(CopyCommandScope&&) = delete;
+    CopyCommandScope(const CopyCommandScope&)        = delete;
+    CopyCommandScope& operator=(const CopyCommandScope&) = delete;
+
+    void CopyFrom(
+        BufferView       _src,
+        BufferView       _dst,
+        std::string_view _name = Command::typenames[(uint)Command::EType::BufferToBuffer]
+    );
+    void CopyFrom(
+        TextureView      _src,
+        TextureView      _dst,
+        std::string_view _name = Command::typenames[(uint)Command::EType::TextureToTexture]
+    );
+    void CopyFrom(
+        TextureView      _src,
+        BufferView       _dst,
+        std::string_view _name = Command::typenames[(uint)Command::EType::TextureToBuffer]
+    );
+    void CopyFrom(
+        BufferView       _src,
+        TextureView      _dst,
+        std::string_view _name = Command::typenames[(uint)Command::EType::BufferToTexture]
+    );
+    void CopyFrom(
+        std::span<byte>  _data,
+        BufferView       _dst,
+        std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+    );
+    void CopyFrom(
+        std::span<byte>  _data,
+        TextureView      _dst,
+        std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+    );
+    void CopyFrom(
+        Array<byte>&&    _data,
+        BufferView       _dst,
+        std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+    );
+    void CopyFrom(
+        Array<byte>&&    _data,
+        TextureView      _dst,
+        std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+    );
+    void CopyFrom(
+        BufferView       _src,
+        std::span<byte>  _data,
+        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+    );
+    void CopyFrom(
+        TextureView      _src,
+        std::span<byte>  _data,
+        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+    );
+
+private:
+    explicit CopyCommandScope(CommandList& _cmd_list);
+    CommandList* cmd_list{nullptr};
+
+    friend class CommandList;
+};
+
 class CommandList {
 
 public:
@@ -1140,6 +1247,12 @@ public:
 
 public:
     RENDER_API CommandList();
+    RENDER_API explicit CommandList(EQueueType _queue_type);
+
+    EQueueType GetQueueType() const {
+        return queue_type;
+    }
+
     class Impl;
 
     template<is_shader_pipeline TGfxPso, typename... TArgs>
@@ -1408,10 +1521,25 @@ public:
 
     RENDER_API bool IsEmpty() const;
 
+    /**
+     * §2.3 BeginCopyScope
+     *
+     * Creates a CopyCommandScope that embeds copy operations in this Graphics/Compute
+     * CommandList as a tagged section. The executor splits the command list at submit
+     * time and automatically generates acquire/release barriers at scope boundaries.
+     * Unknown resources (first use inside CopyScope) skip the gfx→copy release barrier.
+     *
+     * Only callable on Graphics or Compute queue CommandLists.
+     * Multiple scopes per CommandList are allowed; nesting is not.
+     */
+    RENDER_API CopyCommandScope BeginCopyScope();
+
 private:
     friend DrawDispatcher;
     friend ComputeDispatcher;
     friend class CommandQueue;
+    friend class GPUEventScope;
+    friend class CopyCommandScope;
     RENDER_API void SetRenderCmds(
         PipelineHandle&  _handle,
         ArrayArguments&& _args,
@@ -1478,16 +1606,22 @@ private:
 
     QueryToken CreateQueryToken(QueryKind _kind, std::string_view _name);
 
+    RENDER_API void PushGPUEvent(GPUEvent&& event);
+    RENDER_API Array<GPUEvent> StealGPUEvents();
+
     Array<UniquePtr<Command>>    commands;
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
     TCachedArgArray              cached_args;
     Array<QueryToken>            query_tokens;
+    EQueueType                   queue_type{EQueueType::Graphics};
     Stack<std::string_view>      scope_stack;
     Stack<QueryToken>            timed_scope_query_stack;
 #if MOER_TRACE_ENABLED && MOER_TRACE_GPU_ENABLED
     Stack<Moer::Trace::SpanToken> gpu_trace_scope_tokens;
 #endif
+    Array<GPUEvent>              gpu_events;
+    uint32                       event_depth{0};
 };
 
 class RENDER_API GpuScopeSpan {
@@ -1547,6 +1681,58 @@ private:
     CommandList* cmd_list{nullptr};
     QueryToken   token{};
 };
+
+class RENDER_API GPUEventScope {
+public:
+    GPUEventScope(CommandList& _cmd_list, std::string_view _name) : cmd_list(&_cmd_list) {
+        cmd_list->PushGPUEvent(GPUEvent{
+            .type = GPUEvent::EType::BeginEvent,
+            .name = std::string(_name),
+            .query = cmd_list->BeginTimestampQuery(),
+            .depth = ++cmd_list->event_depth,
+            .cpu_time_ns = 0
+        });
+    }
+
+    ~GPUEventScope() {
+        if (cmd_list) {
+            cmd_list->PushGPUEvent(GPUEvent{
+                .type = GPUEvent::EType::EndEvent,
+                .name = "",
+                .query = cmd_list->BeginTimestampQuery(),
+                .depth = cmd_list->event_depth--,
+                .cpu_time_ns = 0
+            });
+        }
+    }
+
+    GPUEventScope(const GPUEventScope&)            = delete;
+    GPUEventScope& operator=(const GPUEventScope&) = delete;
+
+private:
+    CommandList* cmd_list{nullptr};
+};
+
+#define GPU_PROFILE_EVENT_BEGIN(cmd_list, name) \
+    (cmd_list).PushGPUEvent(GPUEvent{ \
+        .type = GPUEvent::EType::BeginEvent, \
+        .name = std::string(name), \
+        .query = (cmd_list).BeginTimestampQuery(), \
+        .depth = ++(cmd_list).event_depth, \
+        .cpu_time_ns = 0 \
+    })
+
+#define GPU_PROFILE_EVENT_END(cmd_list) \
+    (cmd_list).PushGPUEvent(GPUEvent{ \
+        .type = GPUEvent::EType::EndEvent, \
+        .name = "", \
+        .query = (cmd_list).BeginTimestampQuery(), \
+        .depth = (cmd_list).event_depth--, \
+        .cpu_time_ns = 0 \
+    })
+
+#define GPU_PROFILE_EVENT_SCOPE(cmd_list, name) \
+    GPUEventScope _gpu_event_scope(cmd_list, name)
 class QueueCmd {};
 
 struct RHISubmitCmdList {
@@ -1576,6 +1762,19 @@ struct RHIPresentOp {
 
 using RHIExecOp = std::variant<RHISubmitCmdList, RHIPresentOp>;
 
+enum class ERHIExecSubmitFlags : uint8 {
+    None     = 0,
+    FlushGPU = 1 << 0,
+    FrameEnd = 1 << 1,
+};
+
+ENUM_BIT_OP_IMPL(ERHIExecSubmitFlags, FLAG)
+
+struct RHIPresentRequest {
+    SwapchainRef swapchain;
+    TextureView  source;
+};
+
 struct RHIExecSubmitOptions {
     bool flush_gpu{true};
     bool frame_end{false};
@@ -1585,6 +1784,11 @@ class RENDER_API RHIExecutor {
 public:
     static RHIExecutor& Get();
 
+    void Submit(
+        Array<CommandList>&& command_lists,
+        ERHIExecSubmitFlags  flags   = ERHIExecSubmitFlags::FlushGPU,
+        RHIPresentRequest*   present = nullptr
+    );
     void Submit(
         Array<RHISubmitCmdList>&& submit_lists,
         RHIExecSubmitOptions      options = {}

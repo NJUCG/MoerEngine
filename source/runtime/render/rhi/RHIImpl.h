@@ -1680,6 +1680,31 @@ public:
     }
 };
 
+/**
+ * §2.3 CopyScope marker command
+ *
+ * A single lightweight command that marks the begin (b_begin=true) or end (b_begin=false)
+ * of a CopyCommandScope inside a Graphics or Compute CommandList. The executor translator
+ * splits the command stream at these markers and routes enclosed copy commands to the
+ * Copy queue command buffer, automatically generating acquire/release barriers at the
+ * scope boundaries.
+ *
+ * Use Command::EType::CopyScopeMarker for both begin and end;
+ * distinguish them via the b_begin field.
+ */
+struct CopyScopeMarkerCmd : public Command {
+    bool b_begin; // true = scope begin, false = scope end
+
+    explicit CopyScopeMarkerCmd(bool _b_begin) :
+        Command(
+            EType::CopyScopeMarker,
+            _b_begin ? "CopyScopeBegin" : "CopyScopeEnd"
+        ),
+        b_begin(_b_begin) {}
+
+    EQueueType GetQueueType() const override { return EQueueType::Ignore; }
+};
+
 class RenderDevice::Impl {
 public:
     Impl() {}

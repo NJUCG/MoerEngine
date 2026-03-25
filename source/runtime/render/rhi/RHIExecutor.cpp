@@ -7,44 +7,11 @@
 namespace Moer::Render {
 namespace {
 
-void SubmitFallback(Array<RHIExecOp>&& ops) {
-    bool seen_present = false;
-    for (auto& op : ops) {
-        std::visit(
-            [&seen_present](auto& op_value) {
-                using TOp = std::decay_t<decltype(op_value)>;
-                if constexpr (std::is_same_v<TOp, RHISubmitCmdList>) {
-                    if (seen_present) {
-                        LOG_ERROR("RHIExecutor ordering validation failed: RHISubmitCmdList appears after Present");
-                        return;
-                    }
-                    if (op_value.queue == EQueueType::Copy) {
-                        auto& copy_queue = RenderDevice::Get().GetCopyQueue();
-                        for (auto& submit : op_value.submits) {
-                            copy_queue.Execute(std::move(submit));
-                        }
-                        return;
-                    }
-
-                    auto& queue = RenderDevice::Get().GetCommandQueue(op_value.queue);
-                    for (auto& submit : op_value.submits) {
-                        queue.Execute(std::move(submit));
-                    }
-                } else {
-                    seen_present = true;
-                    if (!op_value.swapchain || !op_value.target.texture) {
-                        return;
-                    }
-                    if (op_value.queue == EQueueType::Copy || op_value.queue == EQueueType::Ignore) {
-                        return;
-                    }
-                    auto& queue = RenderDevice::Get().GetCommandQueue(op_value.queue);
-                    queue.Present(op_value.swapchain, op_value.target);
-                }
-            },
-            op
-        );
-    }
+RHIExecSubmitOptions ToLegacySubmitOptions(ERHIExecSubmitFlags flags) {
+    return RHIExecSubmitOptions{
+        .flush_gpu = EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FlushGPU),
+        .frame_end = EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FrameEnd),
+    };
 }
 
 } // namespace
@@ -52,6 +19,63 @@ void SubmitFallback(Array<RHIExecOp>&& ops) {
 RHIExecutor& RHIExecutor::Get() {
     static RHIExecutor executor;
     return executor;
+}
+
+void RHIExecutor::Submit(
+    Array<CommandList>&& command_lists,
+    ERHIExecSubmitFlags  flags,
+    RHIPresentRequest*   present
+) {
+    if (EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FrameEnd) &&
+        !EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FlushGPU)) {
+        LOG_ERROR("RHIExecutor::Submit requires FrameEnd to be submitted together with FlushGPU");
+        assert(false && "FrameEnd requires FlushGPU");
+        return;
+    }
+
+    if (present != nullptr && !present->swapchain) {
+        LOG_ERROR("RHIExecutor::Submit got a null swapchain in RHIPresentRequest");
+        assert(false && "Present request swapchain must be valid");
+        return;
+    }
+
+    Array<RHIExecOp> ops;
+    ops.reserve(command_lists.size() + (present != nullptr ? 1u : 0u));
+    std::optional<EQueueType> last_non_empty_queue{};
+
+    for (size_t cmd_index = 0; cmd_index < command_lists.size(); ++cmd_index) {
+        auto&            command_list = command_lists[cmd_index];
+        const EQueueType queue_type   = command_list.GetQueueType();
+        if (queue_type != EQueueType::Graphics && queue_type != EQueueType::Compute) {
+            LOG_ERROR(
+                "RHIExecutor::Submit only accepts Graphics or Compute command lists, got={}",
+                static_cast<uint32>(queue_type)
+            );
+            assert(false && "RHIExecutor only accepts Graphics or Compute command lists");
+            return;
+        }
+
+        if (command_list.IsEmpty()) {
+            continue;
+        }
+        last_non_empty_queue = queue_type;
+
+        RHISubmitCmdList submit_list{};
+        submit_list.queue = queue_type;
+        submit_list.submits.emplace_back(command_list.Submit());
+        ops.emplace_back(std::move(submit_list));
+    }
+
+    if (present != nullptr && present->source.texture != nullptr) {
+        if (last_non_empty_queue.has_value() && last_non_empty_queue.value() != EQueueType::Graphics) {
+            LOG_ERROR("RHIExecutor::Submit requires the last command list before present to be Graphics");
+            assert(false && "Present requires the last command list to run on the Graphics queue");
+            return;
+        }
+        ops.emplace_back(RHIPresentOp{present->swapchain, present->source, EQueueType::Graphics});
+    }
+
+    Submit(std::move(ops), ToLegacySubmitOptions(flags));
 }
 
 void RHIExecutor::Submit(
@@ -90,11 +114,7 @@ void RHIExecutor::Submit(Array<RHIExecOp>&& ops, RHIExecSubmitOptions options) {
         return;
     }
 
-    if (RenderDevice::Get().GetRHIType() == ERHIType::Vulkan) {
-        VulkanSubmissionExecutor::Execute(std::move(flushed_ops), options);
-        return;
-    }
-    SubmitFallback(std::move(flushed_ops));
+    VulkanSubmissionExecutor::Execute(std::move(flushed_ops), options);
 }
 
 } // namespace Moer::Render

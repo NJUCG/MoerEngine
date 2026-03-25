@@ -228,34 +228,17 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         if (scene.IsReady() && runtime_assets.IsReady()) {
 
             // 处理场景加载过程中遗留的命令
-            // Submit these through RHIExecutor and avoid blocking sync on main thread.
+            // The gfx CommandList contains a CopyScope for all CPU→GPU uploads.
+            // The executor splits the stream at scope boundaries, routes the enclosed
+            // commands to the copy queue, and auto-generates acquire/release barriers.
             auto&& scene_cmd_list = scene.PopPendingCommandList();
-            bool   has_scene_copy_submit = false;
-            uint64 scene_copy_signal_value = 0;
-            if (!scene_cmd_list.copy_queue_cmd_list.IsEmpty()) {
-                RHISubmitCmdList scene_copy_submit{};
-                scene_copy_submit.queue = EQueueType::Copy;
-                scene_copy_signal_value = ++scene_pending_sync_value;
-                scene_copy_submit.submits.emplace_back(
-                    scene_cmd_list.copy_queue_cmd_list.Submit().Signal(
-                        scene_pending_fence,
-                        scene_copy_signal_value
-                    )
-                );
-                pre_frame_ops.emplace_back(std::move(scene_copy_submit));
-                has_scene_copy_submit = true;
-            }
             if (!scene_cmd_list.gfx_queue_cmd_list.IsEmpty()) {
                 RHISubmitCmdList scene_gfx_submit{};
                 scene_gfx_submit.queue = EQueueType::Graphics;
-                CmdSubmit scene_gfx_cmd_submit = scene_cmd_list.gfx_queue_cmd_list.Submit();
-                if (has_scene_copy_submit) {
-                    scene_gfx_cmd_submit =
-                        std::move(scene_gfx_cmd_submit).Wait(scene_pending_fence, scene_copy_signal_value);
-                }
                 scene_gfx_signal_value = ++scene_pending_sync_value;
                 scene_gfx_submit.submits.emplace_back(
-                    std::move(scene_gfx_cmd_submit).Signal(scene_pending_fence, scene_gfx_signal_value)
+                    scene_cmd_list.gfx_queue_cmd_list.Submit()
+                        .Signal(scene_pending_fence, scene_gfx_signal_value)
                 );
                 pre_frame_ops.emplace_back(std::move(scene_gfx_submit));
                 has_scene_gfx_submit = true;

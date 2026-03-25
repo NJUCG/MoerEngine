@@ -9,6 +9,36 @@
 #include "rhi/RHIResource.h"
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
+
+// §7.2 / §9.3: Seed data for VkTracker::InitFromSeed.
+// Preprocess builds this; translate reads it (no shared mutable state).
+struct TrackerSeedEntry {
+    bool          known{false};
+    bool          has_writer{false};
+    EQueueType    owner_queue{EQueueType::Ignore};
+    EBufferState  buffer_state{EBufferState::UNDEFINED};
+    ETextureState texture_state{ETextureState::UNDEFINED};
+};
+
+// Key: raw pointer cast to uint64. Bit 0 unused — textures and buffers
+// are distinguished by a separate flag in the entry stored above.
+struct TrackerSeedTextureEntry : TrackerSeedEntry {
+    VulkanTexture* texture{nullptr};
+    uint8_t        mip_level{0};
+    uint8_t        mip_count{1};
+    uint8_t        array_layer{0};
+    uint8_t        array_count{1};
+};
+
+struct TrackerSeedBufferEntry : TrackerSeedEntry {
+    VulkanBuffer* buffer{nullptr};
+};
+
+struct TrackerSeed {
+    Array<TrackerSeedTextureEntry> textures;
+    Array<TrackerSeedBufferEntry>  buffers;
+};
+
 class VkTracker {
 private:
     struct BufferRange {
@@ -103,6 +133,17 @@ public:
         VkPipelineStageFlagBits2 _stage
     );
 
+    /// Create tracker entries with the given src state for every subresource
+    /// of _texture, but only if no entry exists yet.  Used by the present
+    /// path to seed a transient tracker with the prior rendering state so
+    /// that the layout transition barrier carries the correct srcAccess/Stage.
+    void SeedSrcState(
+        VulkanTexture*           _texture,
+        VkAccessFlagBits2        _access,
+        VkImageLayout            _layout,
+        VkPipelineStageFlagBits2 _stage
+    );
+
     void RecordState(
         VulkanBuffer* _texture,
         std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&&,
@@ -151,6 +192,9 @@ public:
     const Set<VulkanBuffer*>& GetWritedStateBuffers() const {
         return writed_state_buffers;
     }
+
+    // §9.3: Initialize tracker src states from preprocess seed (no global state access).
+    void InitFromSeed(const TrackerSeed& seed);
 
     void ResolveBarriers();
 

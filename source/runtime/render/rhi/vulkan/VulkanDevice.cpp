@@ -619,8 +619,7 @@ int32_t VulkanDevice::GetQueueFamilyIndex(
     if ((_queue_flags & VK_QUEUE_COMPUTE_BIT) == _queue_flags) {
         for (uint32_t i = 0; i < queue_family_props.size(); ++i) {
             if ((queue_family_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
-                (queue_family_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0 &&
-                (queue_family_props[i].queueFlags & VK_QUEUE_TRANSFER_BIT) == 0) {
+                (queue_family_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
                 return i;
             }
         }

@@ -473,6 +473,31 @@ void VkTracker::FlushSrcState(
     }
 }
 
+void VkTracker::SeedSrcState(
+    VulkanTexture*           _texture,
+    VkAccessFlagBits2        _access,
+    VkImageLayout            _layout,
+    VkPipelineStageFlagBits2 _stage
+) {
+    uint8 num_mips   = _texture->GetNumMips();
+    uint8 num_arrays = _texture->GetNumArray();
+    for (uint8 mip = 0; mip < num_mips; ++mip) {
+        auto key = MakeTextureStateKey(_texture, mip, 1, 0, num_arrays);
+        if (texture_states.find(key) == texture_states.end()) {
+            texture_states[key] = TextureState{
+                _access,
+                _layout,
+                _stage,
+                VK_ACCESS_2_NONE,
+                VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_PIPELINE_STAGE_2_NONE,
+                VK_QUEUE_FAMILY_IGNORED,
+                VK_QUEUE_FAMILY_IGNORED
+            };
+        }
+    }
+}
+
 void VkTracker::RecordState(
     VulkanBuffer*                                       _buffer,
     std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&& _state,
@@ -550,6 +575,87 @@ void VkTracker::RecordState(
         _src_queue_family,
         _dst_queue_family
     );
+}
+
+// §9.3: Initialize tracker src states from preprocess seed_tracker.
+// For each known resource, sets the src layout/access/stage from the preprocess end-state.
+// For unknown resources (known==false), sets UNDEFINED / NONE per §3.2.
+void VkTracker::InitFromSeed(const TrackerSeed& seed) {
+    // Texture entries — decompose per-mip (matching RecordState's key convention)
+    for (const auto& entry : seed.textures) {
+        if (!entry.texture) continue;
+
+        VkImageLayout            src_layout;
+        VkAccessFlagBits2        src_access;
+        VkPipelineStageFlagBits2 src_stage;
+
+        if (!entry.known || entry.texture_state == ETextureState::UNDEFINED) {
+            // §3.2: unknown → UNDEFINED, srcAccessMask = 0
+            src_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            src_access = VK_ACCESS_2_NONE;
+            src_stage  = VK_PIPELINE_STAGE_2_NONE;
+        } else if (entry.texture->b_present) {
+            src_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            src_access = VK_ACCESS_2_NONE;
+            src_stage  = VK_PIPELINE_STAGE_2_NONE;
+        } else {
+            // Use WriteTexture for write end-states, ReadTexture for read end-states.
+            // has_writer records whether the last access in the previous submit was a write.
+            std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> result;
+            if (entry.has_writer) {
+                result = WriteTexture(entry.texture, entry.texture_state, EPassType::Graphics);
+            } else {
+                result = ReadTexture(entry.texture, entry.texture_state, EPassType::Graphics);
+            }
+            src_access = static_cast<VkAccessFlagBits2>(std::get<0>(result));
+            src_layout = std::get<1>(result);
+            src_stage  = static_cast<VkPipelineStageFlagBits2>(std::get<2>(result));
+        }
+
+        // Decompose to per-mip entries (same convention as RecordState)
+        const uint8_t resolved_mip_count =
+            entry.mip_count == kRemainingSubresource
+                ? uint8_t(entry.texture->GetNumMips() - entry.mip_level)
+                : entry.mip_count;
+        for (uint8_t mip = 0; mip < resolved_mip_count; ++mip) {
+            auto key = MakeTextureStateKey(
+                entry.texture, entry.mip_level + mip, 1, entry.array_layer, entry.array_count
+            );
+            TextureState state{};
+            state.src_layout       = src_layout;
+            state.src_access       = src_access;
+            state.src_stage        = src_stage;
+            state.dst_access       = VK_ACCESS_2_NONE;
+            state.dst_layout       = VK_IMAGE_LAYOUT_UNDEFINED;
+            state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
+            state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
+            state.dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
+            texture_states.emplace(key, state);
+        }
+    }
+    // Buffer entries
+    for (const auto& entry : seed.buffers) {
+        if (!entry.buffer) continue;
+        BufferState state{};
+        state.dst_access       = VK_ACCESS_2_NONE;
+        state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
+        state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
+        state.dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
+        if (!entry.known || entry.buffer_state == EBufferState::UNDEFINED) {
+            state.src_access = VK_ACCESS_2_NONE;
+            state.src_stage  = VK_PIPELINE_STAGE_2_NONE;
+        } else {
+            std::tuple<VkAccessFlags2, VkPipelineStageFlags2> result;
+            if (entry.has_writer) {
+                result = WriteBuffer(entry.buffer, entry.buffer_state, EPassType::Graphics);
+            } else {
+                result = ReadBuffer(entry.buffer, entry.buffer_state, EPassType::Graphics);
+            }
+            state.src_access = static_cast<VkAccessFlagBits2>(std::get<0>(result));
+            state.src_stage  = static_cast<VkPipelineStageFlagBits2>(std::get<1>(result));
+        }
+        buffer_states.emplace(entry.buffer, state);
+    }
 }
 
 void GetInitImageLayoutAndAccess(

@@ -405,6 +405,10 @@ struct VkCmdPreprocessor {
                 break;
             case Command::EType::Query:
                 break;
+            case Command::EType::CopyScopeMarker:
+                // CopyScope markers are only present in gfx/compute command lists;
+                // the preprocessing visitor skips them gracefully.
+                break;
             default:
                 assert(false && "Invalid command type");
         }
@@ -1301,6 +1305,11 @@ public:
                 break;
             case Command::EType::Custom:
                 Visit(static_cast<const CustomCmd&>(*_cmd));
+                break;
+            case Command::EType::CopyScopeMarker:
+                // CopyScope markers: handled by the higher-level Translate split logic.
+                // Until the executor splitting is implemented the gfx queue handles
+                // copy commands directly (it supports all copy ops), so these are no-ops.
                 break;
         }
     };
@@ -2855,7 +2864,7 @@ void ProfilerStorage::VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_
 #pragma endregion
 
 #pragma region[ VkCommandQueue ]
-VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered) {
+VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered, TrackerSeed seed) {
     TRACE_SCOPE_CAT("VkCommandQueue.Translate", "Queue");
     struct PreparedCmdBatch {
         CmdSubmit               submit;
@@ -2914,6 +2923,11 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
 
     auto& vk_allocator = *recorded.allocator;
     auto& tracker      = vk_allocator.GetTracker();
+
+    // §9.3: Initialize tracker src states from preprocess seed (§7.2 seed_tracker).
+    if (!seed.textures.empty() || !seed.buffers.empty()) {
+        tracker.InitFromSeed(seed);
+    }
 
     VkCmdVisitor visitor(
         vk_device,
@@ -3129,9 +3143,6 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
             swaphchain_tex, VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COPY_BIT
         );
         vk_tracker.ResolveBarriers();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-
-        vk_tracker.RestoreState();
         vk_tracker.DispatchBarriers(vk_cmd_list);
         vk_cmd_list.EndLabel();
         vk_cmd_list.End();
@@ -3873,7 +3884,7 @@ void VkCopyQueue::RHIThreadLoop() {
         for (const auto& cmd : submission.cmds) {
             visitor.VisitCmd(cmd.get());
         }
-        vk_tracker.RestoreState();
+        vk_tracker.ResolveBarriers();
         vk_tracker.DispatchBarriers(vk_cmd_list);
         vk_cmd_list.EndLabel();
         vk_cmd_list.End();

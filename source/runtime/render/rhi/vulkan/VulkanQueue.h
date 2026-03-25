@@ -4,6 +4,7 @@
 #include "VulkanCommand.h"
 #include "VulkanQueryRuntime.h"
 #include "RHICmdReorderer.h"
+#include "VulkanResourceTracker.h"
 // #include "VulkanDevice.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
@@ -213,7 +214,7 @@ public:
         // LOG_INFO("Presentor count {}", present_count);
         MoerDelete(timeline);
     }
-    VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr);
+    VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr, TrackerSeed seed = {});
     WaitEvent            SubmitRecorded(VulkanRecordedSubmit&& _recorded);
     WaitEvent            SubmitRestoreTransitions(
                    Array<ReadBuffer>&& _read_buffers,

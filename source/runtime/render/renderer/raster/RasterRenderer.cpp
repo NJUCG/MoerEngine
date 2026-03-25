@@ -44,8 +44,14 @@ RasterRenderer::RasterRenderer(
     raster_context.UploadExternalFrameBuffers();
     raster_context.AllocateFrameBuffers();
 
-    gfx_queue.Execute(cmd_list.Submit());
-    gfx_queue.Sync();
+    {
+        RHISubmitCmdList init_submit{};
+        init_submit.queue = EQueueType::Graphics;
+        init_submit.submits.emplace_back(cmd_list.Submit());
+        Array<RHIExecOp> init_ops;
+        init_ops.emplace_back(std::move(init_submit));
+        RHIExecutor::Get().Submit(std::move(init_ops), RHIExecSubmitOptions{.flush_gpu = true});
+    }
 
     shadow_depth_pass            = MakeUnique<ShadowDepthPass>(raster_context);
     directional_shadow_mask_pass = MakeUnique<DirectionalShadowMaskPass>(raster_context);
@@ -76,8 +82,14 @@ RasterRenderer::RasterRenderer(
 #endif
 
     cmd_list.UpdateBindlessArray(bindless_array);
-    gfx_queue.Execute(cmd_list.Submit());
-    gfx_queue.Sync();
+    {
+        RHISubmitCmdList init_submit{};
+        init_submit.queue = EQueueType::Graphics;
+        init_submit.submits.emplace_back(cmd_list.Submit());
+        Array<RHIExecOp> init_ops;
+        init_ops.emplace_back(std::move(init_submit));
+        RHIExecutor::Get().Submit(std::move(init_ops), RHIExecSubmitOptions{.flush_gpu = true});
+    }
 
     // Other vars
 }
@@ -218,11 +230,20 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     if (scene.IsReady()) {
 
         // 处理场景加载过程中遗留的命令
+        // The gfx CommandList contains a CopyScope for all CPU→GPU uploads.
+        // The executor splits the stream at scope boundaries, routes the enclosed
+        // commands to the copy queue, and auto-generates acquire/release barriers.
         auto&& scene_cmd_list = scene.PopPendingCommandList();
-        auto   copy_evt       = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
-        device.GetCopyQueue().Sync(copy_evt.timeline);
-        gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
-        gfx_queue.Sync();
+        if (!scene_cmd_list.gfx_queue_cmd_list.IsEmpty()) {
+            RHISubmitCmdList scene_gfx_submit{};
+            scene_gfx_submit.queue = EQueueType::Graphics;
+            scene_gfx_submit.submits.emplace_back(
+                scene_cmd_list.gfx_queue_cmd_list.Submit()
+            );
+            Array<RHIExecOp> scene_ops;
+            scene_ops.emplace_back(std::move(scene_gfx_submit));
+            RHIExecutor::Get().Submit(std::move(scene_ops), RHIExecSubmitOptions{.flush_gpu = true});
+        }
 
         if (first_load) {
             first_load = false;
@@ -230,8 +251,12 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             // 随手加一句，避免出错（重构完毕后可以尝试去除）
             cmd_list.UpdateBindlessArray(bindless_array);
 
-            gfx_queue.Execute(cmd_list.Submit());
-            gfx_queue.Sync();
+            RHISubmitCmdList first_load_submit{};
+            first_load_submit.queue = EQueueType::Graphics;
+            first_load_submit.submits.emplace_back(cmd_list.Submit());
+            Array<RHIExecOp> first_load_ops;
+            first_load_ops.emplace_back(std::move(first_load_submit));
+            RHIExecutor::Get().Submit(std::move(first_load_ops), RHIExecSubmitOptions{.flush_gpu = true});
         }
 
         const auto& raster_config = editor_config->raster_config;
@@ -342,17 +367,19 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     }
 
     time++;
-    /***
-        currently using a phony timeline (any timeline signaled by copy queue) to remove error message from validation layer caused by host synced copy operations
-        we're not waiting for the copy queue to finish, because operations we wanted are synced on host side, we use this timeline just to notifiy the validation layer
-        that we've done flushing copy queue resources
-        */
-    gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources());
+    Array<RHIExecOp> frame_ops;
+    RHISubmitCmdList submit_cmd_list;
+    submit_cmd_list.queue = EQueueType::Graphics;
+    submit_cmd_list.MarkWriteTexture(default_output_texture);
+    submit_cmd_list.submits.emplace_back(cmd_list.Submit().Signal(timeline, time).DeleteResources());
+    frame_ops.emplace_back(std::move(submit_cmd_list));
     if (!skip_present) {
-        gfx_queue.Present(swapchain, default_output_texture);
-        if (hooks.on_present_windows) {
-            hooks.on_present_windows();
-        }
+        frame_ops.emplace_back(RHIPresentOp{swapchain, default_output_texture, EQueueType::Graphics});
+    }
+    RHIExecutor::Get().Submit(std::move(frame_ops), RHIExecSubmitOptions{.flush_gpu = true, .frame_end = true});
+
+    if (!skip_present && hooks.on_present_windows) {
+        hooks.on_present_windows();
     }
 
     if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {

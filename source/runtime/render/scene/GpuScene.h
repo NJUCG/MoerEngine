@@ -56,7 +56,6 @@ public:
     };
 
     struct PendingCommandList {
-        CommandList copy_queue_cmd_list;
         CommandList gfx_queue_cmd_list;
     };
 

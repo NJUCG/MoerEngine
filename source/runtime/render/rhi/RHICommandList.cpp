@@ -15,6 +15,10 @@ namespace Moer::Render {
 
 namespace {
 std::atomic<uint64_t> g_query_token_id{1};
+
+bool IsValidPrimaryQueueType(EQueueType queue_type) {
+    return queue_type == EQueueType::Graphics || queue_type == EQueueType::Compute;
+}
 }
 
 void CommandQueue::Test() {
@@ -35,7 +39,18 @@ void CommandQueue::Test() {
     draw_dispatcher.Draw(Rect2D{}, std::move(draw_data), ColorAttachment{nullptr});
 }
 
-CommandList::CommandList() {}
+CommandList::CommandList() : CommandList(EQueueType::Graphics) {}
+
+CommandList::CommandList(EQueueType _queue_type) : queue_type(_queue_type) {
+    if (!IsValidPrimaryQueueType(_queue_type)) {
+        LOG_ERROR(
+            "CommandList only supports Graphics or Compute queue types, got={}",
+            static_cast<uint32>(_queue_type)
+        );
+        assert(false && "CommandList only supports Graphics or Compute queue types");
+        queue_type = EQueueType::Graphics;
+    }
+}
 // void CommandList::ArgSetter::SetBuffer(uint64 _index, BufferView _buffer) {
 //     auto idx          = handle.GetBindingIdx(_index);
 //     temp_args[_index] = _buffer;
@@ -127,11 +142,16 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
 
 CmdSubmit CommandList::Submit() {
     CmdSubmit submit(
-        std::move(commands), std::move(callbacks), std::move(cached_args), std::move(query_tokens)
+        std::move(commands),
+        std::move(callbacks),
+        std::move(cached_args),
+        std::move(query_tokens),
+        std::move(gpu_events)
     );
     commands.clear();
     callbacks.clear();
     query_tokens.clear();
+    gpu_events.clear();
     return std::move(submit);
 }
 
@@ -603,4 +623,81 @@ ArrayArgReference CommandList::RegisterArgs(ArrayArguments&& _args) {
     return ArrayArgReference(cached_args.size() - 1);
 }
 
+void CommandList::PushGPUEvent(GPUEvent&& event) {
+    gpu_events.push_back(std::move(event));
+}
+
+Array<GPUEvent> CommandList::StealGPUEvents() {
+    Array<GPUEvent> result = std::move(gpu_events);
+    gpu_events.clear();
+    return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §2.3  CopyCommandScope
+// ─────────────────────────────────────────────────────────────────────────────
+
+CopyCommandScope CommandList::BeginCopyScope() {
+    assert(
+        (queue_type == EQueueType::Graphics || queue_type == EQueueType::Compute) &&
+        "BeginCopyScope is only valid on Graphics or Compute CommandLists"
+    );
+    // Insert the scope-begin marker into the parent command stream
+    commands.push_back(MakeUnique<CopyScopeMarkerCmd>(/*b_begin=*/true));
+    return CopyCommandScope(*this);
+}
+
+// CopyCommandScope private constructor — called only by CommandList::BeginCopyScope
+CopyCommandScope::CopyCommandScope(CommandList& _cmd_list) : cmd_list(&_cmd_list) {}
+
+// Move constructor — transfers ownership (the moved-from object becomes a no-op sentinel)
+CopyCommandScope::CopyCommandScope(CopyCommandScope&& other) noexcept : cmd_list(other.cmd_list) {
+    other.cmd_list = nullptr;
+}
+
+// Destructor — inserts the scope-end marker and closes the scope
+CopyCommandScope::~CopyCommandScope() {
+    if (cmd_list) {
+        cmd_list->commands.push_back(MakeUnique<CopyScopeMarkerCmd>(/*b_begin=*/false));
+        cmd_list = nullptr;
+    }
+}
+
+// All CopyFrom overloads simply forward to the parent CommandList.
+// The CopyScopeBegin/End markers bracket these commands in the stream; the
+// executor translator detects them and routes the enclosed commands to the
+// copy queue command buffer with auto-generated acquire/release barriers.
+
+void CopyCommandScope::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
+    cmd_list->CopyFrom(_src, _dst, _name);
+}
+void CopyCommandScope::CopyFrom(TextureView _src, TextureView _dst, std::string_view _name) {
+    cmd_list->CopyFrom(_src, _dst, _name);
+}
+void CopyCommandScope::CopyFrom(TextureView _src, BufferView _dst, std::string_view _name) {
+    cmd_list->CopyFrom(_src, _dst, _name);
+}
+void CopyCommandScope::CopyFrom(BufferView _src, TextureView _dst, std::string_view _name) {
+    cmd_list->CopyFrom(_src, _dst, _name);
+}
+void CopyCommandScope::CopyFrom(std::span<byte> _data, BufferView _dst, std::string_view _name) {
+    cmd_list->CopyFrom(_data, _dst, _name);
+}
+void CopyCommandScope::CopyFrom(std::span<byte> _data, TextureView _dst, std::string_view _name) {
+    cmd_list->CopyFrom(_data, _dst, _name);
+}
+void CopyCommandScope::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name) {
+    cmd_list->CopyFrom(std::move(_data), _dst, _name);
+}
+void CopyCommandScope::CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_view _name) {
+    cmd_list->CopyFrom(std::move(_data), _dst, _name);
+}
+void CopyCommandScope::CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name) {
+    cmd_list->CopyFrom(_src, _data, _name);
+}
+void CopyCommandScope::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
+    cmd_list->CopyFrom(_src, _data, _name);
+}
+
 } // namespace Moer::Render
+
