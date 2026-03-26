@@ -11,6 +11,7 @@
 #include "render/rhi/RHIImpl.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "render/rhi/vulkan/VulkanSubmissionExecutor.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
@@ -24,6 +25,7 @@ using namespace Moer::Render;
 constexpr uint32_t kElementCount      = 256;
 constexpr uint32_t kIterations        = 64;
 constexpr uint32_t kPresentIterations = 8;
+constexpr uint32_t kCopyScopeIterations = 8;
 
 struct IndicePair {
     uint32_t src;
@@ -54,6 +56,12 @@ std::vector<IndicePair> BuildPermutationPairs(uint32_t multiplier, uint32_t bias
     return pairs;
 }
 
+void SubmitAndWait(Array<CommandList>&& command_lists) {
+    RHIExecutor::Get().Submit(std::move(command_lists), ERHIExecSubmitFlags::FlushGPU);
+    VulkanSubmissionExecutor::Flush();
+    RenderDevice::Get().WaitIdle();
+}
+
 bool ValidateResult(
     uint32_t iter,
     const std::vector<uint32_t>& expected,
@@ -62,6 +70,7 @@ bool ValidateResult(
     if (expected == got) {
         return true;
     }
+    uint32_t mismatch_count = 0;
     for (uint32_t i = 0; i < kElementCount; ++i) {
         if (expected[i] != got[i]) {
             LOG_ERROR(
@@ -71,7 +80,10 @@ bool ValidateResult(
                 expected[i],
                 got[i]
             );
-            break;
+            ++mismatch_count;
+            if (mismatch_count >= 8) {
+                break;
+            }
         }
     }
     return false;
@@ -172,40 +184,17 @@ int RunRHITranslateMultiQueueReadbackTest() {
         };
 
         CommandList compute_stage0_cmd(EQueueType::Compute);
-        compute_stage0_cmd.Barriers(
-            EQueueType::Graphics,
-            EQueueType::Compute,
-            EPassType::Compute,
-            ReadBuffer{indices_stage0->GetView(), EBufferState::SHADER_RESOURCE},
-            ReadBuffer{src->GetView(), EBufferState::SHADER_RESOURCE},
-            WriteBuffer{mid->GetView(), EBufferState::UNORDERED_ACCESS}
-        );
         compute_stage0_cmd
             .Compute(shuffle_pipeline, shuffle_args, indices_stage0->GetView(), src->GetView(), mid->GetView())
             .Dispatch((kElementCount + 63u) / 64u, "TranslateStage0Dispatch");
 
         CommandList compute_stage1_cmd(EQueueType::Compute);
-        compute_stage1_cmd.Barriers(
-            EQueueType::Compute,
-            EQueueType::Compute,
-            EPassType::Compute,
-            ReadBuffer{indices_stage1->GetView(), EBufferState::SHADER_RESOURCE},
-            ReadBuffer{mid->GetView(), EBufferState::SHADER_RESOURCE},
-            WriteBuffer{dst->GetView(), EBufferState::UNORDERED_ACCESS}
-        );
         compute_stage1_cmd
             .Compute(shuffle_pipeline, shuffle_args, indices_stage1->GetView(), mid->GetView(), dst->GetView())
             .Dispatch((kElementCount + 63u) / 64u, "TranslateStage1Dispatch");
 
         std::fill(readback_data.begin(), readback_data.end(), 0u);
         CommandList readback_cmd(EQueueType::Graphics);
-        readback_cmd.BufferBarriers(
-            EQueueType::Compute,
-            EQueueType::Graphics,
-            EPassType::Copy,
-            Array<ReadBuffer>{ReadBuffer{dst->GetView(), EBufferState::TRANSFER}},
-            Array<WriteBuffer>{}
-        );
         readback_cmd.CopyFrom(dst->GetView(), ToByteSpan(readback_data));
 
         Array<CommandList> frame_cmds{};
@@ -215,6 +204,7 @@ int RunRHITranslateMultiQueueReadbackTest() {
         frame_cmds.emplace_back(std::move(readback_cmd));
 
         RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
+        VulkanSubmissionExecutor::Flush();
         device.WaitIdle();
 
         if (!ValidateResult(iter, final_expected, readback_data)) {
@@ -223,6 +213,278 @@ int RunRHITranslateMultiQueueReadbackTest() {
     }
 
     LOG_INFO("RHI translate multiqueue readback test passed, iterations={}", kIterations);
+    return 0;
+}
+
+int RunGraphicsCopyScopeRoundTripTest() {
+    auto& device = RenderDevice::Get();
+    auto scratch_buffer = device.CreateBuffer<uint32_t>(
+        "copyscope_graphics_roundtrip_scratch",
+        kElementCount,
+        EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::UNORDERED_ACCESS
+    );
+    auto transfer_buffer = device.CreateBuffer<uint32_t>(
+        "copyscope_graphics_roundtrip",
+        kElementCount,
+        EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::UNORDERED_ACCESS
+    );
+
+    std::vector<uint32_t> upload_values(kElementCount);
+    std::vector<uint32_t> readback_values(kElementCount, 0u);
+
+    for (uint32_t iter = 0; iter < kCopyScopeIterations; ++iter) {
+        for (uint32_t i = 0; i < kElementCount; ++i) {
+            upload_values[i] = iter * 2048u + i * 5u + 9u;
+        }
+        std::fill(readback_values.begin(), readback_values.end(), 0u);
+
+        CommandList graphics_cmd(EQueueType::Graphics);
+        graphics_cmd.ClearResource(scratch_buffer->GetView(), 0u);
+        {
+            auto copy_scope = graphics_cmd.BeginCopyScope();
+            copy_scope.CopyFrom(ToByteSpan(upload_values), transfer_buffer->GetView());
+        }
+        graphics_cmd.CopyFrom(transfer_buffer->GetView(), ToByteSpan(readback_values));
+
+        Array<CommandList> frame_cmds{};
+        frame_cmds.emplace_back(std::move(graphics_cmd));
+        SubmitAndWait(std::move(frame_cmds));
+
+        if (!ValidateResult(iter, upload_values, readback_values)) {
+            return 1;
+        }
+    }
+
+    LOG_INFO("Graphics -> CopyScope -> Graphics test passed, iterations={}", kCopyScopeIterations);
+    return 0;
+}
+
+int RunComputeCopyScopeRoundTripTest() {
+    auto& device = RenderDevice::Get();
+
+    auto src = device.CreateBuffer<uint32_t>(
+        "copyscope_compute_src",
+        kElementCount,
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    auto mid = device.CreateBuffer<uint32_t>(
+        "copyscope_compute_mid",
+        kElementCount,
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    auto dst = device.CreateBuffer<uint32_t>(
+        "copyscope_compute_dst",
+        kElementCount,
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    auto indices = device.CreateBuffer<IndicePair>(
+        "copyscope_compute_indices",
+        kElementCount,
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
+            EBufferUsageFlags::TRANSFER_SRC
+    );
+
+    auto shuffle_pipeline =
+        ShaderManager::Get().Compute<ComponentShuffleShader>("core/utils/ShuffleBufferIndices.hlsl");
+
+    auto identity_pairs = BuildPermutationPairs(1u, 0u);
+    {
+        CommandList upload_cmd(EQueueType::Graphics);
+        upload_cmd.CopyFrom(ToByteSpan(identity_pairs), indices->GetView());
+
+        Array<CommandList> frame_cmds{};
+        frame_cmds.emplace_back(std::move(upload_cmd));
+        SubmitAndWait(std::move(frame_cmds));
+    }
+
+    ComponentShuffleShader::Arg shuffle_args{
+        .stride = 1u,
+        .component_cnt = kElementCount,
+    };
+
+    std::vector<uint32_t> readback_values(kElementCount, 0u);
+    for (uint32_t iter = 0; iter < kCopyScopeIterations; ++iter) {
+        std::fill(readback_values.begin(), readback_values.end(), 0u);
+
+        CommandList compute_cmd(EQueueType::Compute);
+        compute_cmd.ClearResource(src->GetView(), iter + 3u);
+        {
+            auto copy_scope = compute_cmd.BeginCopyScope();
+            copy_scope.CopyFrom(src->GetView(), mid->GetView(), "ComputeScopeCopyToMid");
+        }
+        compute_cmd
+            .Compute(shuffle_pipeline, shuffle_args, indices->GetView(), mid->GetView(), dst->GetView())
+            .Dispatch((kElementCount + 63u) / 64u, "ComputeScopeShuffle");
+
+        CommandList readback_cmd(EQueueType::Graphics);
+        readback_cmd.CopyFrom(dst->GetView(), ToByteSpan(readback_values));
+
+        Array<CommandList> frame_cmds{};
+        frame_cmds.emplace_back(std::move(compute_cmd));
+        frame_cmds.emplace_back(std::move(readback_cmd));
+        SubmitAndWait(std::move(frame_cmds));
+
+        if (!ValidateUniformValue(iter, iter + 3u, readback_values)) {
+            return 1;
+        }
+    }
+
+    LOG_INFO("Compute -> CopyScope -> Compute test passed, iterations={}", kCopyScopeIterations);
+    return 0;
+}
+
+int RunMultiCopyScopeOrderingTest() {
+    auto& device = RenderDevice::Get();
+    auto buffer_a = device.CreateBuffer<uint32_t>(
+        "copyscope_multi_scope_a",
+        kElementCount,
+        EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::UNORDERED_ACCESS
+    );
+    auto buffer_b = device.CreateBuffer<uint32_t>(
+        "copyscope_multi_scope_b",
+        kElementCount,
+        EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::UNORDERED_ACCESS
+    );
+
+    std::vector<uint32_t> values_a(kElementCount);
+    std::vector<uint32_t> values_b(kElementCount);
+    std::vector<uint32_t> readback_a(kElementCount, 0u);
+    std::vector<uint32_t> readback_b(kElementCount, 0u);
+
+    for (uint32_t i = 0; i < kElementCount; ++i) {
+        values_a[i] = i * 7u + 1u;
+        values_b[i] = i * 11u + 5u;
+    }
+
+    CommandList graphics_cmd(EQueueType::Graphics);
+    {
+        auto copy_scope = graphics_cmd.BeginCopyScope();
+        copy_scope.CopyFrom(ToByteSpan(values_a), buffer_a->GetView());
+    }
+    graphics_cmd.CopyFrom(buffer_a->GetView(), ToByteSpan(readback_a));
+    {
+        auto copy_scope = graphics_cmd.BeginCopyScope();
+        copy_scope.CopyFrom(ToByteSpan(values_b), buffer_b->GetView());
+    }
+    graphics_cmd.CopyFrom(buffer_b->GetView(), ToByteSpan(readback_b));
+
+    Array<CommandList> frame_cmds{};
+    frame_cmds.emplace_back(std::move(graphics_cmd));
+    SubmitAndWait(std::move(frame_cmds));
+
+    if (!ValidateResult(0u, values_a, readback_a)) {
+        return 1;
+    }
+    if (!ValidateResult(1u, values_b, readback_b)) {
+        return 1;
+    }
+
+    LOG_INFO("Multi-CopyScope ordering test passed");
+    return 0;
+}
+
+int RunCopyScopeUnknownFirstUseTest() {
+    auto& device = RenderDevice::Get();
+    auto buffer = device.CreateBuffer<uint32_t>(
+        "copyscope_unknown_first_use",
+        kElementCount,
+        EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC
+    );
+
+    std::vector<uint32_t> upload_values(kElementCount);
+    std::vector<uint32_t> readback_values(kElementCount, 0u);
+    for (uint32_t i = 0; i < kElementCount; ++i) {
+        upload_values[i] = 0xABC000u + i;
+    }
+
+    CommandList graphics_cmd(EQueueType::Graphics);
+    {
+        auto copy_scope = graphics_cmd.BeginCopyScope();
+        copy_scope.CopyFrom(ToByteSpan(upload_values), buffer->GetView());
+    }
+    graphics_cmd.CopyFrom(buffer->GetView(), ToByteSpan(readback_values));
+
+    Array<CommandList> frame_cmds{};
+    frame_cmds.emplace_back(std::move(graphics_cmd));
+    SubmitAndWait(std::move(frame_cmds));
+
+    if (!ValidateResult(0u, upload_values, readback_values)) {
+        return 1;
+    }
+
+    LOG_INFO("CopyScope unknown-first-use test passed");
+    return 0;
+}
+
+int RunPresentWithCopyScopeTests() {
+    auto& device = RenderDevice::Get();
+    auto* window = WindowContext::GetMainWindow();
+    if (window == nullptr) {
+        LOG_ERROR("CopyScope present test window is null.");
+        return 1;
+    }
+
+    constexpr uint32_t kWidth  = 640;
+    constexpr uint32_t kHeight = 360;
+
+    SwapchainCreateInfo swapchain_ci{
+        .window_handle = reinterpret_cast<uintptr_t>(window),
+        .size = {kWidth, kHeight},
+        .back_buffer_sz = 2,
+        .preferred_format = PF_R8G8B8A8_SRGB
+    };
+    SwapchainRef swapchain = device.CreateSwapchain(swapchain_ci);
+    TextureRef   output    = device.CreateTexture(
+        "translate_present_copyscope_output",
+        Extent2D(kWidth, kHeight),
+        swapchain->format,
+        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
+    );
+
+    std::vector<uint32_t> upload_values(kWidth * kHeight, 0u);
+    std::vector<uint32_t> readback_values(kWidth * kHeight, 0u);
+
+    for (uint32_t iter = 0; iter < kPresentIterations; ++iter) {
+        WindowContext::Tick();
+
+        std::fill(readback_values.begin(), readback_values.end(), 0u);
+        std::fill(upload_values.begin(), upload_values.end(), 0xFF000000u | (iter * 131u + 23u));
+
+        CommandList graphics_cmd(EQueueType::Graphics);
+        {
+            auto copy_scope = graphics_cmd.BeginCopyScope();
+            copy_scope.CopyFrom(ToByteSpan(upload_values), output->GetView());
+        }
+        graphics_cmd.CopyFrom(output->GetView(), ToByteSpan(readback_values));
+
+        Array<CommandList> frame_cmds{};
+        frame_cmds.emplace_back(std::move(graphics_cmd));
+
+        RHIPresentRequest present_request{swapchain, output->GetView()};
+        RHIExecutor::Get().Submit(
+            std::move(frame_cmds),
+            ERHIExecSubmitFlags::FlushGPU | ERHIExecSubmitFlags::FrameEnd,
+            &present_request
+        );
+        VulkanSubmissionExecutor::Flush();
+        device.WaitIdle();
+
+        if (upload_values != readback_values) {
+            LOG_ERROR("CopyScope present readback mismatch at iter={}", iter);
+            return 1;
+        }
+    }
+
+    swapchain->Sync();
+    device.WaitIdle();
+    LOG_INFO("Present + CopyScope test passed, iterations={}", kPresentIterations);
     return 0;
 }
 
@@ -277,21 +539,7 @@ int RunPresentTests() {
         compute_cmd.ClearResource(compute_buffer->GetView(), iter + 1u);
 
         CommandList graphics_cmd(EQueueType::Graphics);
-        graphics_cmd.BufferBarriers(
-            EQueueType::Compute,
-            EQueueType::Graphics,
-            EPassType::Copy,
-            Array<ReadBuffer>{ReadBuffer{compute_buffer->GetView(), EBufferState::TRANSFER}},
-            Array<WriteBuffer>{WriteBuffer{graphics_buffer->GetView(), EBufferState::TRANSFER}}
-        );
         graphics_cmd.CopyFrom(compute_buffer->GetView(), graphics_buffer->GetView(), "ComputeToGraphics");
-        graphics_cmd.BufferBarriers(
-            EQueueType::Graphics,
-            EQueueType::Graphics,
-            EPassType::Copy,
-            Array<ReadBuffer>{ReadBuffer{graphics_buffer->GetView(), EBufferState::TRANSFER}},
-            Array<WriteBuffer>{}
-        );
         graphics_cmd.CopyFrom(graphics_buffer->GetView(), ToByteSpan(readback_values));
         graphics_cmd.CopyFrom(ToByteSpan(output_values), output->GetView());
 
@@ -305,6 +553,7 @@ int RunPresentTests() {
             ERHIExecSubmitFlags::FlushGPU | ERHIExecSubmitFlags::FrameEnd,
             &present_request
         );
+        VulkanSubmissionExecutor::Flush();
         device.WaitIdle();
 
         if (!ValidateUniformValue(iter, iter + 1u, readback_values)) {
@@ -354,18 +603,51 @@ int main(int argc, char** argv) {
             return queue_ret;
         }
 
-        const int readback_ret = RunRHITranslateMultiQueueReadbackTest();
-        if (readback_ret != 0) {
+        const int graphics_copyscope_ret = RunGraphicsCopyScopeRoundTripTest();
+        if (graphics_copyscope_ret != 0) {
             ShaderManager::ShutDown();
             RenderDevice::Dispose();
             Moer::TaskSystem::ShutDown();
-            return readback_ret;
+            return graphics_copyscope_ret;
+        }
+
+        const int compute_copyscope_ret = RunComputeCopyScopeRoundTripTest();
+        if (compute_copyscope_ret != 0) {
+            ShaderManager::ShutDown();
+            RenderDevice::Dispose();
+            Moer::TaskSystem::ShutDown();
+            return compute_copyscope_ret;
+        }
+
+        const int multi_scope_ret = RunMultiCopyScopeOrderingTest();
+        if (multi_scope_ret != 0) {
+            ShaderManager::ShutDown();
+            RenderDevice::Dispose();
+            Moer::TaskSystem::ShutDown();
+            return multi_scope_ret;
+        }
+
+        const int unknown_first_use_ret = RunCopyScopeUnknownFirstUseTest();
+        if (unknown_first_use_ret != 0) {
+            ShaderManager::ShutDown();
+            RenderDevice::Dispose();
+            Moer::TaskSystem::ShutDown();
+            return unknown_first_use_ret;
         }
 
         WindowContext::Init(SurfaceInitInfo(ERHIType::Vulkan, 640, 360, "TestRHITranslatePresent", false));
         window_inited = true;
-        const int present_ret = RunPresentTests();
-
+        const int present_copyscope_ret = RunPresentWithCopyScopeTests();
+        if (present_copyscope_ret != 0) {
+            if (window_inited) {
+                WindowContext::ShutDown();
+                window_inited = false;
+            }
+            ShaderManager::ShutDown();
+            RenderDevice::Dispose();
+            Moer::TaskSystem::ShutDown();
+            return present_copyscope_ret;
+        }
         if (window_inited) {
             WindowContext::ShutDown();
             window_inited = false;
@@ -373,7 +655,7 @@ int main(int argc, char** argv) {
         ShaderManager::ShutDown();
         RenderDevice::Dispose();
         Moer::TaskSystem::ShutDown();
-        return present_ret;
+        return 0;
     } catch (const std::exception& e) {
         LOG_ERROR("TestRHITranslate failed: {}", e.what());
         if (window_inited) {

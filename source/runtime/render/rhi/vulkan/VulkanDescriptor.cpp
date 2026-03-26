@@ -327,7 +327,7 @@ uint VulkanDescriptorHeap::GetAccelDescIdx(VulkanAccelerationStructure* _as) {
     }
     VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
     desc_info.type                       = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    desc_info.data.accelerationStructure = _as->underlying_buffer->DeviceAddress();
+    desc_info.data.accelerationStructure =  _as->tlas_device_address;
     uint                        idx      = 0;
     std::lock_guard<std::mutex> lock(m_mutex);
     if (accel_free_list.empty()) {

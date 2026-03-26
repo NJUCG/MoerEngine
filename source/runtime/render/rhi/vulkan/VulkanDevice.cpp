@@ -736,6 +736,19 @@ void VulkanDevice::FlushDebugMessages() const {
 void VulkanDevice::WaitIdle() {
     VulkanSubmissionExecutor::Flush();
     vkDeviceWaitIdle(m_device);
+
+    if (gfx_queue) {
+        gfx_queue->Sync();
+    }
+    if (compute_queue) {
+        compute_queue->Sync();
+    }
+    if (copy_queue) {
+        auto* copy_timeline = ResourceCast(copy_queue->GetFenceHandle().Get());
+        if (copy_timeline != nullptr) {
+            copy_queue->Sync(copy_timeline->GetDeviceValue());
+        }
+    }
 }
 
 void VulkanDevice::SetupDebugUtilsMessengerEXT() {

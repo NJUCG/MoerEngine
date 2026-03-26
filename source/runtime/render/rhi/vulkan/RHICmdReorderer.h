@@ -2,6 +2,7 @@
 #define MOER_RHI_CMD_REORDERER_H
 
 #include "../RHIImpl.h"
+#include "VulkanRHITrace.h"
 #include "misc/Hash.h"
 #include "misc/MMemory.h"
 #include "misc/STL.h"
@@ -216,8 +217,8 @@ public:
 
     //command layer resource view
     struct ResourceView {
-        int64 read_layer;
-        int64 write_layer;
+        int64 read_layer{-1};
+        int64 write_layer{-1};
     };
 
     struct RangeHandle : public ResourceHandle {
@@ -229,7 +230,7 @@ public:
             ArenaAllocatorWrapper<std::pair<const Range, ResourceView>>>;
 
     private:
-        ResourceView          max_view;
+        ResourceView          max_view{-1, -1};
         Range                 read_range;
         Range                 write_range;
         Map                   range2view;
@@ -418,6 +419,49 @@ public:
         return std::max(_layer, (int64)layer_offset);
     }
 
+    static const char* ResourceTypeName(ResourceType _type) {
+        switch (_type) {
+            case ResourceType::Texture_Buffer:
+                return "TextureBuffer";
+            case ResourceType::Mesh:
+                return "Mesh";
+            case ResourceType::Bindless:
+                return "Bindless";
+            case ResourceType::Accel:
+                return "Accel";
+            default:
+                return "Unknown";
+        }
+    }
+
+    static std::string_view ResourceName(const ResourceHandle* _handle) {
+        if (_handle == nullptr) {
+            return "<null>";
+        }
+        return _handle->type == ResourceType::Texture_Buffer ? "<texture-or-buffer>" : "<non-resource>";
+    }
+
+    void TraceResourceLayer(
+        std::string_view _op,
+        const ResourceHandle* _handle,
+        const Range& _range,
+        int64 _layer
+    ) const {
+        RHITRACE_LOG(
+            verbose,
+            "[RHITrace][Reorder][{}] resource_type={} name={} handle=0x{:x} layer={} range=({},{}) layer_range=({},{})",
+            _op,
+            ResourceTypeName(_handle != nullptr ? _handle->type : ResourceType::Texture_Buffer),
+            ResourceName(_handle),
+            _handle != nullptr ? _handle->handle : 0ull,
+            _layer,
+            _range.primary_min,
+            _range.primary_max,
+            _range.layer_min,
+            _range.layer_max
+        );
+    }
+
     int64 GetLastLayerWrite(RangeHandle* _handle, const Range& _range) {
         int64 layer = _handle->GetMaxReadLayer(_range);
         if (m_max_bdls_layer >= layer) {
@@ -471,6 +515,13 @@ public:
             last.tail->next = ptr;
         }
         m_cmd_lists[_layer].tail = ptr;
+        RHITRACE_LOG(
+            verbose,
+            "[RHITrace][Reorder][AssignCmd] layer={} cmd_type={} name={}",
+            _layer,
+            uint(_cmd->Type()),
+            _cmd->name
+        );
     }
 
     int64 SetRead(ResourceHandle* _handle, const Range& _range) {
@@ -495,6 +546,7 @@ public:
                 range_handle->EmplaceReadLayer(_range, layer);
             }
         }
+        TraceResourceLayer("Read", _handle, _range, layer);
         return layer;
     }
 
@@ -523,6 +575,7 @@ public:
                 range_handle->EmplaceReadLayer(_range, _layer);
             }
         }
+        TraceResourceLayer("RecordRead", _handle, _range, _layer);
     }
 
     void RecordWrite(ResourceHandle* _handle, Range _range, int64 _layer) {
@@ -545,6 +598,7 @@ public:
                 range_handle->EmplaceWriteLayer(_range, _layer);
             }
         }
+        TraceResourceLayer("RecordWrite", _handle, _range, _layer);
     }
 
     int64 SetWrite(ResourceHandle* _handle, const Range& _range) {
@@ -572,6 +626,7 @@ public:
                 m_write_resources.emplace(_handle->handle);
             }
         }
+        TraceResourceLayer("Write", _handle, _range, layer);
         return layer;
     }
 
@@ -892,7 +947,8 @@ public:
             barrier_resources.reserve(_cmd->ImportTextures().size());
             barrier_ranges.reserve(_cmd->ImportTextures().size());
 
-            for (const auto& [handle, state] : _cmd->ImportTextures()) {
+            for (const auto& barrier : _cmd->ImportTextures()) {
+                const auto& handle = barrier.texture;
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
@@ -909,7 +965,8 @@ public:
                 );
             }
 
-            for (const auto& [handle, state] : _cmd->ImportBuffers()) {
+            for (const auto& barrier : _cmd->ImportBuffers()) {
+                const auto& handle = barrier.buffer;
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer)
                 );
@@ -921,7 +978,8 @@ public:
                 );
             }
 
-            for (const auto& [handle, state] : _cmd->ImportTextures()) {
+            for (const auto& barrier : _cmd->ImportTextures()) {
+                const auto& handle = barrier.texture;
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
@@ -930,7 +988,8 @@ public:
                 );
             }
 
-            for (const auto& [handle, state] : _cmd->ImportBuffers()) {
+            for (const auto& barrier : _cmd->ImportBuffers()) {
+                const auto& handle = barrier.buffer;
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer)
                 );
@@ -957,6 +1016,8 @@ public:
                 );
                 layer = GetLastLayerWrite(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()));
             }
+
+            ++layer;
 
             for (const auto& [handle, state] : _cmd->ExportTextures()) {
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
@@ -1527,10 +1588,8 @@ public:
             case Command::EType::Custom:
                 VisitCmd(static_cast<const CustomCmd*>(_cmd));
                 break;
-            case Command::EType::CopyScopeMarker:
-                // §13.3: CopyScope boundary is a hard reorder barrier
-                layer_offset = m_cmd_lists.size();
-                AddCmd(_cmd, layer_offset);
+            case Command::EType::CopyScope:
+                assert(false && "CopyScope must be split before command reorder");
                 break;
             default:
                 assert(false && "Command Type Not Supported for Reorder");

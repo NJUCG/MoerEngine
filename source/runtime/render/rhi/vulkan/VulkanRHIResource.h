@@ -727,6 +727,20 @@ public:
         }
     };
 
+    struct PendingInitResource {
+        enum class EType : uint8 {
+            Texture,
+            Buffer
+        };
+
+        EType  type{EType::Buffer};
+        uint64 resource{0};
+        uint8  mip_level{0};
+        uint8  mip_count{0};
+        uint8  array_layer{0};
+        uint8  array_count{0};
+    };
+
     VulkanBindlessArray(VulkanDevice* _device, uint32 _max_size);
     ~VulkanBindlessArray() override;
 
@@ -743,6 +757,7 @@ public:
         uint8  _array_count
     ) const;
     void DeAllocateResource(uint64 _handle);
+    Array<PendingInitResource> GetPendingInitResources() const;
 
     const Array<TextureSubresourceKeyT<VulkanTexture>>& GetAllTextureViewInfos() const {
         return texture_view_infos;
@@ -775,9 +790,12 @@ public:
     Array<Handle> handles;
 
 private:
-    std::mutex mtx;
+    mutable std::mutex mtx;
     void       TrackTextureView(uint _array_idx, const TextureView& _view);
     void       UntrackTextureView(uint _array_idx);
+    void       TrackPendingInit(uint _array_idx, const TextureView& _view);
+    void       TrackPendingInit(uint _array_idx, const BufferView& _view);
+    void       ClearPendingInit(uint _array_idx);
 
 protected:
     UniquePtr<Command>          CreateUpdateCommand() override;
@@ -805,6 +823,7 @@ protected:
     UnorderedMap<uint64, UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>>
         texture_view_map;
     Array<TextureSubresourceKeyT<VulkanTexture>>                           texture_view_infos;
+    mutable UnorderedMap<uint, PendingInitResource>                        pending_init_resources;
 };
 
 #pragma endregion
@@ -823,6 +842,7 @@ struct VulkanAccelerationStructure : public RaytracingTlas {
     void Destroy() override;
 
     VkAccelerationStructureKHR handle            = VK_NULL_HANDLE;
+    VkDeviceAddress tlas_device_address = 0;
     VulkanBufferRef            underlying_buffer = nullptr;
     int                        m_descriptor_idx  = -1;
     VulkanDevice&              device;

@@ -10,7 +10,54 @@
 #include "rhi/RHICommon.h"
 #include "vulkan/vulkan_core.h"
 
+#include <string_view>
+
 namespace Moer::Render {
+namespace {
+
+static const char* QueueTypeName(EQueueType queue_type) {
+    switch (queue_type) {
+        case EQueueType::Graphics:
+            return "Graphics";
+        case EQueueType::Compute:
+            return "Compute";
+        case EQueueType::Copy:
+            return "Copy";
+        case EQueueType::Ignore:
+            return "Ignore";
+        case EQueueType::Num:
+        default:
+            return "Unknown";
+    }
+}
+
+static std::string_view BufferName(const VulkanBuffer* buffer) {
+    return buffer != nullptr ? buffer->GetName() : "<null>";
+}
+
+static std::string_view TextureName(const VulkanTexture* texture) {
+    return texture != nullptr ? texture->GetName() : "<null>";
+}
+
+static const char* VkLayoutStr(VkImageLayout layout) {
+    switch (layout) {
+        case VK_IMAGE_LAYOUT_UNDEFINED:                        return "UNDEFINED";
+        case VK_IMAGE_LAYOUT_GENERAL:                          return "GENERAL";
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:         return "COLOR_ATTACHMENT";
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return "DEPTH_STENCIL_ATTACHMENT";
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL: return "DEPTH_STENCIL_READ_ONLY";
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:        return "SHADER_READ_ONLY";
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:             return "TRANSFER_SRC";
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:             return "TRANSFER_DST";
+        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:                  return "PRESENT_SRC";
+        case VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL:                return "READ_ONLY";
+        case VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL:               return "ATTACHMENT";
+        default:                                               return "UNKNOWN";
+    }
+}
+
+} // namespace
+
 /**
      * @brief 
     enum class EBufferState : uint32{
@@ -479,6 +526,15 @@ void VkTracker::SeedSrcState(
     VkImageLayout            _layout,
     VkPipelineStageFlagBits2 _stage
 ) {
+    RHITRACE_RESOURCE_LOG(
+        TextureName(_texture),
+        "[ResourceTrace][Seed][{}] {} layout={} access=0x{:x} stage=0x{:x}",
+        QueueTypeName(queue_type),
+        TextureName(_texture),
+        VkLayoutStr(_layout),
+        uint64(_access),
+        uint64(_stage)
+    );
     uint8 num_mips   = _texture->GetNumMips();
     uint8 num_arrays = _texture->GetNumArray();
     for (uint8 mip = 0; mip < num_mips; ++mip) {
@@ -581,6 +637,19 @@ void VkTracker::RecordState(
 // For each known resource, sets the src layout/access/stage from the preprocess end-state.
 // For unknown resources (known==false), sets UNDEFINED / NONE per §3.2.
 void VkTracker::InitFromSeed(const TrackerSeed& seed) {
+    auto queue_to_pass_type = [](EQueueType queue) {
+        switch (queue) {
+            case EQueueType::Compute:
+                return EPassType::Compute;
+            case EQueueType::Graphics:
+            case EQueueType::Copy:
+            case EQueueType::Ignore:
+            case EQueueType::Num:
+            default:
+                return EPassType::Graphics;
+        }
+    };
+
     // Texture entries — decompose per-mip (matching RecordState's key convention)
     for (const auto& entry : seed.textures) {
         if (!entry.texture) continue;
@@ -601,11 +670,12 @@ void VkTracker::InitFromSeed(const TrackerSeed& seed) {
         } else {
             // Use WriteTexture for write end-states, ReadTexture for read end-states.
             // has_writer records whether the last access in the previous submit was a write.
+            const EPassType pass_type = queue_to_pass_type(entry.owner_queue);
             std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> result;
             if (entry.has_writer) {
-                result = WriteTexture(entry.texture, entry.texture_state, EPassType::Graphics);
+                result = WriteTexture(entry.texture, entry.texture_state, pass_type);
             } else {
-                result = ReadTexture(entry.texture, entry.texture_state, EPassType::Graphics);
+                result = ReadTexture(entry.texture, entry.texture_state, pass_type);
             }
             src_access = static_cast<VkAccessFlagBits2>(std::get<0>(result));
             src_layout = std::get<1>(result);
@@ -631,6 +701,23 @@ void VkTracker::InitFromSeed(const TrackerSeed& seed) {
             state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
             state.dst_queue_family = VK_QUEUE_FAMILY_IGNORED;
             texture_states.emplace(key, state);
+            RHITRACE_BARRIER_LOG(
+                verbose,
+                "[RHITrace][Seed][{}][Texture] name={} handle=0x{:x} known={} owner={} has_writer={} mip={} mip_count={} layer={} layer_count={} src_stage=0x{:x} src_access=0x{:x} src_layout={}",
+                QueueTypeName(queue_type),
+                TextureName(entry.texture),
+                uint64(entry.texture),
+                entry.known,
+                QueueTypeName(entry.owner_queue),
+                entry.has_writer,
+                key.mip_level,
+                key.mip_count,
+                key.array_layer,
+                key.array_count,
+                uint64(state.src_stage),
+                uint64(state.src_access),
+                int(state.src_layout)
+            );
         }
     }
     // Buffer entries
@@ -645,16 +732,29 @@ void VkTracker::InitFromSeed(const TrackerSeed& seed) {
             state.src_access = VK_ACCESS_2_NONE;
             state.src_stage  = VK_PIPELINE_STAGE_2_NONE;
         } else {
+            const EPassType pass_type = queue_to_pass_type(entry.owner_queue);
             std::tuple<VkAccessFlags2, VkPipelineStageFlags2> result;
             if (entry.has_writer) {
-                result = WriteBuffer(entry.buffer, entry.buffer_state, EPassType::Graphics);
+                result = WriteBuffer(entry.buffer, entry.buffer_state, pass_type);
             } else {
-                result = ReadBuffer(entry.buffer, entry.buffer_state, EPassType::Graphics);
+                result = ReadBuffer(entry.buffer, entry.buffer_state, pass_type);
             }
             state.src_access = static_cast<VkAccessFlagBits2>(std::get<0>(result));
             state.src_stage  = static_cast<VkPipelineStageFlagBits2>(std::get<1>(result));
         }
         buffer_states.emplace(entry.buffer, state);
+        RHITRACE_BARRIER_LOG(
+            verbose,
+            "[RHITrace][Seed][{}][Buffer] name={} handle=0x{:x} known={} owner={} has_writer={} src_stage=0x{:x} src_access=0x{:x}",
+            QueueTypeName(queue_type),
+            BufferName(entry.buffer),
+            uint64(entry.buffer),
+            entry.known,
+            QueueTypeName(entry.owner_queue),
+            entry.has_writer,
+            uint64(state.src_stage),
+            uint64(state.src_access)
+        );
     }
 }
 
@@ -694,23 +794,35 @@ void VkTracker::QueueTransferReleaseResource(
         pending_textures.insert(key);
         if (auto it = texture_states.find(key); it != texture_states.end()) {
             auto& state            = it->second;
+            if (state.dst_stage != VK_PIPELINE_STAGE_2_NONE ||
+                state.dst_layout != VK_IMAGE_LAYOUT_UNDEFINED) {
+                state.src_access = state.dst_access;
+                state.src_stage  = state.dst_stage;
+                state.src_layout = state.dst_layout;
+            }
             state.src_queue_family = _src_queue;
             state.dst_queue_family = _dst_queue;
-            state.src_layout       = _src_layout;
             state.dst_layout       = _dst_layout;
-            state.dst_stage        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            state.dst_access       = VK_ACCESS_2_NONE;
+            state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
+            if (state.src_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+                state.src_layout = _src_layout;
+            }
         } else {
             TextureState state{
                 VK_ACCESS_2_NONE,
-                VK_IMAGE_LAYOUT_UNDEFINED,
+                _src_layout,
                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                 VK_ACCESS_2_NONE,
                 _dst_layout,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_2_NONE,
                 _src_queue,
                 _dst_queue
             };
             GetInitImageLayoutAndAccess(_texture, state.src_layout, state.src_access, queue_type);
+            if (state.src_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+                state.src_layout = _src_layout;
+            }
             texture_states.emplace(key, state);
         }
     }
@@ -722,15 +834,20 @@ void VkTracker::QueueTransferReleaseResource(VulkanBuffer* _buffer, uint _src_qu
     pending_buffers.insert(_buffer);
     if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
         auto& state            = it->second;
+        if (state.dst_stage != VK_PIPELINE_STAGE_2_NONE) {
+            state.src_access = state.dst_access;
+            state.src_stage  = state.dst_stage;
+        }
         state.src_queue_family = _src_queue;
         state.dst_queue_family = _dst_queue;
-        state.dst_stage        = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        state.dst_access       = VK_ACCESS_2_NONE;
+        state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
     } else {
         buffer_states[_buffer] = {
             VK_ACCESS_2_NONE,
             VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
             VK_ACCESS_2_NONE,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_2_NONE,
             _src_queue,
             _dst_queue
         };
@@ -748,6 +865,8 @@ void VkTracker::QueueTransferAcquireResource(
     pending_buffers.insert(_buffer);
     if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
         auto& state            = it->second;
+        state.src_access       = VK_ACCESS_2_NONE;
+        state.src_stage        = VK_PIPELINE_STAGE_2_NONE;
         state.src_queue_family = _src_queue;
         state.dst_queue_family = _dst_queue;
         state.dst_access       = _dst_access;
@@ -755,7 +874,7 @@ void VkTracker::QueueTransferAcquireResource(
     } else {
         buffer_states[_buffer] = {
             VK_ACCESS_2_NONE,
-            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_2_NONE,
             _dst_access,
             _dst_stage,
             _src_queue,
@@ -780,6 +899,8 @@ void VkTracker::QueueTransferAcquireResource(
         pending_textures.insert(key);
         if (auto it = texture_states.find(key); it != texture_states.end()) {
             auto& state            = it->second;
+            state.src_access       = VK_ACCESS_2_NONE;
+            state.src_stage        = VK_PIPELINE_STAGE_2_NONE;
             state.src_queue_family = _src_queue;
             state.dst_queue_family = _dst_queue;
             state.src_layout       = _src_layout;
@@ -790,8 +911,8 @@ void VkTracker::QueueTransferAcquireResource(
             TextureState state{
                 VK_ACCESS_2_NONE,
                 _src_layout,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                VK_ACCESS_2_NONE,
+                VK_PIPELINE_STAGE_2_NONE,
+                _dst_access,
                 _dst_layout,
                 _dst_stage,
                 _src_queue,
@@ -829,6 +950,7 @@ bool VkTracker::ContainsWriteBLAS(uint64 _blas_buf) {
     return write_blas_states.find(_blas_buf) != write_blas_states.end();
 }
 
+//TODO: support all subresource range tracking (currently only per-mip, full array)
 void VkTracker::RecordState(
     VulkanTexture*           _texture,
     VkAccessFlagBits2        _access,
@@ -946,6 +1068,21 @@ void VkTracker::ResolveBarriers() {
             barrier.buffer                  = buffer->GetHandle();
             barrier.offset                  = 0;
             barrier.size                    = VK_WHOLE_SIZE;
+            RHITRACE_BARRIER_LOG(
+                verbose,
+                "[RHITrace][BarrierPlan][{}][Buffer] name={} handle=0x{:x} src_stage=0x{:x} dst_stage=0x{:x} src_access=0x{:x} dst_access=0x{:x} src_q={} dst_q={} offset={} size={}",
+                QueueTypeName(queue_type),
+                BufferName(buffer),
+                uint64(buffer),
+                uint64(barrier.srcStageMask),
+                uint64(barrier.dstStageMask),
+                uint64(barrier.srcAccessMask),
+                uint64(barrier.dstAccessMask),
+                barrier.srcQueueFamilyIndex,
+                barrier.dstQueueFamilyIndex,
+                barrier.offset,
+                barrier.size
+            );
 
             state.src_access       = state.dst_access;
             state.src_stage        = state.dst_stage;
@@ -971,6 +1108,19 @@ void VkTracker::ResolveBarriers() {
             barrier.buffer                  = buffer->GetHandle();
             barrier.offset                  = it->second.min;
             barrier.size                    = it->second.max - it->second.min;
+            RHITRACE_BARRIER_LOG(
+                verbose,
+                "[RHITrace][BarrierPlan][{}][FlushBuffer] name={} handle=0x{:x} src_stage=0x{:x} dst_stage=0x{:x} src_access=0x{:x} dst_access=0x{:x} offset={} size={}",
+                QueueTypeName(queue_type),
+                BufferName(buffer),
+                uint64(buffer),
+                uint64(barrier.srcStageMask),
+                uint64(barrier.dstStageMask),
+                uint64(barrier.srcAccessMask),
+                uint64(barrier.dstAccessMask),
+                barrier.offset,
+                barrier.size
+            );
         }
     }
 
@@ -1007,6 +1157,39 @@ void VkTracker::ResolveBarriers() {
             barrier.subresourceRange.levelCount     = key.mip_count;
             barrier.oldLayout                       = state.src_layout;
             barrier.newLayout                       = state.dst_layout;
+            RHITRACE_BARRIER_LOG(
+                verbose,
+                "[RHITrace][BarrierPlan][{}][Texture] name={} handle=0x{:x} src_stage=0x{:x} dst_stage=0x{:x} src_access=0x{:x} dst_access=0x{:x} src_q={} dst_q={} old_layout={} new_layout={} mip={} mip_count={} layer={} layer_count={}",
+                QueueTypeName(queue_type),
+                TextureName(texture),
+                uint64(texture),
+                uint64(barrier.srcStageMask),
+                uint64(barrier.dstStageMask),
+                uint64(barrier.srcAccessMask),
+                uint64(barrier.dstAccessMask),
+                barrier.srcQueueFamilyIndex,
+                barrier.dstQueueFamilyIndex,
+                int(barrier.oldLayout),
+                int(barrier.newLayout),
+                barrier.subresourceRange.baseMipLevel,
+                barrier.subresourceRange.levelCount,
+                barrier.subresourceRange.baseArrayLayer,
+                barrier.subresourceRange.layerCount
+            );
+            RHITRACE_RESOURCE_LOG(
+                TextureName(texture),
+                "[ResourceTrace][Barrier][{}] {} : {} -> {} (mip={} layer={} access=0x{:x}->0x{:x} stage=0x{:x}->0x{:x})",
+                QueueTypeName(queue_type),
+                TextureName(texture),
+                VkLayoutStr(barrier.oldLayout),
+                VkLayoutStr(barrier.newLayout),
+                barrier.subresourceRange.baseMipLevel,
+                barrier.subresourceRange.baseArrayLayer,
+                uint64(barrier.srcAccessMask),
+                uint64(barrier.dstAccessMask),
+                uint64(barrier.srcStageMask),
+                uint64(barrier.dstStageMask)
+            );
 
             state.src_access = state.dst_access;
             state.src_stage  = state.dst_stage;
@@ -1027,54 +1210,14 @@ void VkTracker::ResolveBarriers() {
 void VkTracker::DispatchBarriers(VulkanCmdList& _cmdlist) {
     if (!buffer_barriers.empty() || !texture_barriers.empty() || !memory_barriers.empty()) {
         if (RHITRACE_BARRIER_ENABLED(basic)) {
-            for (uint32 i = 0; i < buffer_barriers.size(); ++i) {
-                const auto& b = buffer_barriers[i];
-                RHITRACE_BARRIER_LOG(
-                    basic,
-                    "[RHITrace][Barrier][Buffer][{}] src_stage=0x{:x} dst_stage=0x{:x} src_access=0x{:x} dst_access=0x{:x} src_q={} dst_q={} offset={} size={}",
-                    i,
-                    uint64(b.srcStageMask),
-                    uint64(b.dstStageMask),
-                    uint64(b.srcAccessMask),
-                    uint64(b.dstAccessMask),
-                    b.srcQueueFamilyIndex,
-                    b.dstQueueFamilyIndex,
-                    b.offset,
-                    b.size
-                );
-            }
-            for (uint32 i = 0; i < texture_barriers.size(); ++i) {
-                const auto& b = texture_barriers[i];
-                RHITRACE_BARRIER_LOG(
-                    basic,
-                    "[RHITrace][Barrier][Image][{}] src_stage=0x{:x} dst_stage=0x{:x} src_access=0x{:x} dst_access=0x{:x} src_q={} dst_q={} old_layout={} new_layout={} base_mip={} mip_count={} base_layer={} layer_count={}",
-                    i,
-                    uint64(b.srcStageMask),
-                    uint64(b.dstStageMask),
-                    uint64(b.srcAccessMask),
-                    uint64(b.dstAccessMask),
-                    b.srcQueueFamilyIndex,
-                    b.dstQueueFamilyIndex,
-                    int(b.oldLayout),
-                    int(b.newLayout),
-                    b.subresourceRange.baseMipLevel,
-                    b.subresourceRange.levelCount,
-                    b.subresourceRange.baseArrayLayer,
-                    b.subresourceRange.layerCount
-                );
-            }
-            for (uint32 i = 0; i < memory_barriers.size(); ++i) {
-                const auto& b = memory_barriers[i];
-                RHITRACE_BARRIER_LOG(
-                    basic,
-                    "[RHITrace][Barrier][Memory][{}] src_stage=0x{:x} dst_stage=0x{:x} src_access=0x{:x} dst_access=0x{:x}",
-                    i,
-                    uint64(b.srcStageMask),
-                    uint64(b.dstStageMask),
-                    uint64(b.srcAccessMask),
-                    uint64(b.dstAccessMask)
-                );
-            }
+            RHITRACE_BARRIER_LOG(
+                basic,
+                "[RHITrace][BarrierDispatch][{}] buffer_count={} texture_count={} memory_count={}",
+                QueueTypeName(queue_type),
+                buffer_barriers.size(),
+                texture_barriers.size(),
+                memory_barriers.size()
+            );
         }
         VkDependencyInfoKHR dependency_info{};
         dependency_info.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
@@ -1119,6 +1262,16 @@ void VkTracker::RestoreState() {
         barrier.subresourceRange.levelCount     = key.mip_count;
         barrier.oldLayout                       = state.src_layout;
         barrier.newLayout                       = layout;
+        RHITRACE_RESOURCE_LOG(
+            TextureName(texture),
+            "[ResourceTrace][Restore][{}] {} : {} -> {} (mip={} layer={})",
+            QueueTypeName(queue_type),
+            TextureName(texture),
+            VkLayoutStr(state.src_layout),
+            VkLayoutStr(layout),
+            key.mip_level,
+            key.array_layer
+        );
 
         state.dst_stage  = VK_PIPELINE_STAGE_2_NONE;
         state.dst_access = VK_ACCESS_2_NONE;

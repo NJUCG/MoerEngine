@@ -665,6 +665,15 @@ VkBufferUsageFlags VulkanEnumTranslator::METoVKBufferUsageFlags(EBufferUsageFlag
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
     );
 
+    // Non-AS buffers that are shader-accessible must carry STORAGE_BUFFER_BIT and UNIFORM_TEXEL_BUFFER_BIT
+    // so vkGetDescriptorEXT can write valid descriptors regardless of the shader reflection type
+    // (VUID-VkDescriptorGetInfoEXT-type-12221/12222).
+    const bool is_as_only = (_me_flags & EBufferUsageFlags::ACCELERATION_STRUCTURE) == EBufferUsageFlags::ACCELERATION_STRUCTURE;
+    if (!is_as_only) {
+        vk_flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+                  | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+    }
+
     return vk_flags;
 }
 
@@ -1931,6 +1940,16 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         return _a_start < b_end && _b_start < a_end;
     }
 
+    static bool IsTextureStillUnknown(uint64 resource) {
+        auto* texture = reinterpret_cast<Texture*>(resource);
+        return texture != nullptr && !texture->GetPersistentState().known;
+    }
+
+    static bool IsBufferStillUnknown(uint64 resource) {
+        auto* buffer = reinterpret_cast<Buffer*>(resource);
+        return buffer != nullptr && !buffer->GetPersistentState().known;
+    }
+
     void VulkanBindlessArray::TrackTextureView(uint _array_idx, const TextureView& _view) {
         UntrackTextureView(_array_idx);
         auto*  vk_texture  = ResourceCast(_view.texture);
@@ -1964,6 +1983,72 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         texture_view_infos[_array_idx] = {};
     }
 
+    void VulkanBindlessArray::TrackPendingInit(uint _array_idx, const TextureView& _view) {
+        if (_view.texture == nullptr) {
+            pending_init_resources.erase(_array_idx);
+            return;
+        }
+
+        auto* texture = _view.texture;
+        if (texture->GetPersistentState().known) {
+            pending_init_resources.erase(_array_idx);
+            return;
+        }
+
+        pending_init_resources[_array_idx] = PendingInitResource{
+            .type = PendingInitResource::EType::Texture,
+            .resource = uint64(texture),
+            .mip_level = _view.mip_level,
+            .mip_count = _view.num_mips,
+            .array_layer = _view.array_layer,
+            .array_count = _view.num_array
+        };
+    }
+
+    void VulkanBindlessArray::TrackPendingInit(uint _array_idx, const BufferView& _view) {
+        if (_view.buffer == nullptr) {
+            pending_init_resources.erase(_array_idx);
+            return;
+        }
+
+        auto* buffer = _view.buffer;
+        if (buffer->GetPersistentState().known) {
+            pending_init_resources.erase(_array_idx);
+            return;
+        }
+
+        pending_init_resources[_array_idx] = PendingInitResource{
+            .type = PendingInitResource::EType::Buffer,
+            .resource = uint64(buffer)
+        };
+    }
+
+    void VulkanBindlessArray::ClearPendingInit(uint _array_idx) {
+        pending_init_resources.erase(_array_idx);
+    }
+
+    Array<VulkanBindlessArray::PendingInitResource> VulkanBindlessArray::GetPendingInitResources() const {
+        std::unique_lock<std::mutex> lk(mtx);
+        Array<PendingInitResource> pending_resources{};
+        pending_resources.reserve(pending_init_resources.size());
+
+        for (auto iter = pending_init_resources.begin(); iter != pending_init_resources.end();) {
+            const auto& pending = iter->second;
+            const bool still_unknown =
+                pending.type == PendingInitResource::EType::Texture ? IsTextureStillUnknown(pending.resource) :
+                                                                      IsBufferStillUnknown(pending.resource);
+            if (!still_unknown) {
+                iter = pending_init_resources.erase(iter);
+                continue;
+            }
+
+            pending_resources.emplace_back(pending);
+            ++iter;
+        }
+
+        return pending_resources;
+    }
+
     UniquePtr<Command> VulkanBindlessArray::CreateUpdateCommand(){
         std::unique_lock<std::mutex> lk(mtx);
 
@@ -1994,6 +2079,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                                 free_texture_slots.Push(_cmd.slot);
                                 resource_allocated_set.erase(handle.Ptr());
                                 UntrackTextureView(_cmd.array_idx);
+                                ClearPendingInit(_cmd.array_idx);
 
                                 handle = Handle(0ull, 0, 0, 0);
     
@@ -2010,6 +2096,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                                 free_slots.Push(_cmd.array_idx);
                                 free_buffer_slots.Push(_cmd.slot);
                                 resource_allocated_set.erase(handle.Ptr());
+                                ClearPendingInit(_cmd.array_idx);
 
                                 handle = Handle(0ull, 0, 0, 0);
     
@@ -2142,6 +2229,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         // textures_allocated.emplace_back(_texture.texture, _sampler, _texture.format, slot_idx, texture_slot, _texture.mip_level, _texture.num_mips);
         resource_allocated_set.insert(uint64(_texture.texture));
         TrackTextureView(slot_idx, _texture);
+        TrackPendingInit(slot_idx, _texture);
         return slot_idx;
     }
 
@@ -2161,6 +2249,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         temp_slot_to_cmd[slot_idx] = update_cmds.size() - 1;
         // buffers_allocated.emplace_back(_buffer.buffer, slot_idx, buffer_slot);
         resource_allocated_set.insert(uint64(_buffer.buffer));
+        TrackPendingInit(slot_idx, _buffer);
         return slot_idx;
     }
     static const Sampler s_spl = {ESamplerFilter::SF_LINEAR, SAM_CLAMP_TO_BORDER};
@@ -2181,6 +2270,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                             LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
                             resource_allocated_set.erase((uint64)_cmd.texture.Get());
                             UntrackTextureView(_array_idx);
+                            ClearPendingInit(_array_idx);
 
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
                         }
@@ -2192,6 +2282,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                         LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
                         resource_allocated_set.erase((uint64)_cmd.buffer.Get());
                         UntrackTextureView(_array_idx);
+                        ClearPendingInit(_array_idx);
                         update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
                     }
                 } else if constexpr (std::is_same_v<TCmd, InvalidUpdateInfo>){
@@ -2209,8 +2300,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, 0, 0, true}
             );
             UntrackTextureView(_array_idx);
+            ClearPendingInit(_array_idx);
         }else if (handle.type == Buffer){
             update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, PF_UNDEFINED, true});
+            ClearPendingInit(_array_idx);
         }
     }
 
@@ -2231,6 +2324,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                             LOG_WARNING("You are releasing a bindless buffer that's pending updating, array index: {}", _array_idx);
 
                             resource_allocated_set.erase((uint64)_cmd.texture.Get());
+                            ClearPendingInit(_array_idx);
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
                         }
                     } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>){
@@ -2241,6 +2335,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                             LOG_WARNING("You are releasing a bindless buffer that's pending updating, array index: {}", _array_idx);
 
                             resource_allocated_set.erase((uint64)_cmd.buffer.Get());
+                            ClearPendingInit(_array_idx);
                             update_cmds[iter->second] = InvalidUpdateInfo{_array_idx};
                         }
                     } else if constexpr (std::is_same_v<TCmd, InvalidUpdateInfo>){
@@ -2257,9 +2352,11 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             update_cmds.emplace_back(
                 TextureUpdateInfo{nullptr, s_spl, PF_UNDEFINED, _array_idx, handle.slot, 0, 0, 0, 0, true}
             );
+            ClearPendingInit(_array_idx);
         }else if (handle.type == Buffer){
             // buffers_freed.push_back(handle.slot);
             update_cmds.emplace_back(BufferUpdateInfo{nullptr, _array_idx, handle.slot, PF_UNDEFINED, true});
+            ClearPendingInit(_array_idx);
         }
         // resource_allocated_set.erase((uint64)(buffers_allocated[handle.slot].buffer.Get()));
     }
@@ -2801,7 +2898,8 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 create_info.offset = 0;
                 create_info.size = tlas->underlying_buffer->GetByteSize();
                 VK_CHECK_RESULT(vkCreateAccelerationStructureKHR(m_device->GetDevice(), &create_info, nullptr, &tlas->handle));
-                
+                VkAccelerationStructureDeviceAddressInfoKHR tlas_address_info{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR, nullptr, tlas->handle};
+                tlas->tlas_device_address = vkGetAccelerationStructureDeviceAddressKHR(m_device->GetDevice(), &tlas_address_info);
                 // //create previous tlas
                 // if(prev_size_infos.result_size == 0){
                     

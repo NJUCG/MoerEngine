@@ -63,7 +63,7 @@ public:
         Scope,
         Query,
         Custom,
-        CopyScopeMarker
+        CopyScope
     };
 
     static constexpr std::string_view typenames[] = {
@@ -72,7 +72,7 @@ public:
         "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
         "Barrier",         "QueueTransfer",       "SetDrawState",   "SetGeometryPassDrawState",
         "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Scope", "Query",
-        "Custom",          "CopyScopeMarker"
+        "Custom",          "CopyScope"
     };
 
 private:
@@ -683,7 +683,9 @@ public:
 
 private:
     explicit CopyCommandScope(CommandList& _cmd_list);
+    void PushCopyCommand(UniquePtr<Command>&& _cmd);
     CommandList* cmd_list{nullptr};
+    Array<UniquePtr<Command>> copy_commands{};
 
     friend class CommandList;
 };
@@ -1605,6 +1607,8 @@ private:
 #pragma endregion
 
     QueryToken CreateQueryToken(QueryKind _kind, std::string_view _name);
+    void       EnsureNoActiveCopyScope(std::string_view _api_name) const;
+    void       FinalizeCopyScope(Array<UniquePtr<Command>>&& _commands);
 
     RENDER_API void PushGPUEvent(GPUEvent&& event);
     RENDER_API Array<GPUEvent> StealGPUEvents();
@@ -1622,6 +1626,7 @@ private:
 #endif
     Array<GPUEvent>              gpu_events;
     uint32                       event_depth{0};
+    bool                         b_copy_scope_active{false};
 };
 
 class RENDER_API GpuScopeSpan {
@@ -1738,8 +1743,11 @@ class QueueCmd {};
 struct RHISubmitCmdList {
     Array<CmdSubmit> submits;
     EQueueType       queue{EQueueType::Graphics};
+
+    //TODO: remove this because preprocess do all useful in digest
     Array<TextureView> write_textures;
 
+    //TODO: remove this because preprocess do all useful in digest
     RHISubmitCmdList& MarkWriteTexture(TextureView _texture) {
         if (_texture.texture) {
             write_textures.emplace_back(_texture);

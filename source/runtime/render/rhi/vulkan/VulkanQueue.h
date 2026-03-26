@@ -227,6 +227,9 @@ public:
     void        Present(SwapchainRef _viewport, TextureView _view, std::span<const WaitEvent> _wait_events);
     void        Sync() override;
     ProfileData GetProfilerEntry() override;
+    std::mutex& GetSubmitMutex() {
+        return exec_mtx;
+    }
 
     void                                      ExecuteThread();
     VulkanDevice&                             vk_device;

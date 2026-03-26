@@ -295,7 +295,7 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
         uint32_t       upload_pitch = Moer::AlignUp(width * 4, alignment);
         uint32_t       upload_size  = height * upload_pitch;
         TextureRef     font_tex =
-            rd_device.CreateTexture(Extent2D(width, height), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED);
+            rd_device.CreateTexture("ImGUI::FontTexture", Extent2D(width, height), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED);
 
         CommandList cmd_list;
         cmd_list.CopyFrom(std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
@@ -661,6 +661,7 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
     }
     viewport_data->sc          = rd_device.CreateSwapchain(swapchain_info);
     viewport_data->framebuffer = rd_device.CreateTexture(
+        std::format("ImGui Window {}", viewport_data->viewport_index),
         Extent2D(_viewport->Size.x, _viewport->Size.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
@@ -711,6 +712,7 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         return;
     viewport_data->sc->Recreate(swapchain_info);
     viewport_data->framebuffer = rd_device.CreateTexture(
+        std::format("ImGui Window {}", viewport_data->viewport_index),
         Extent2D(_viewport->Size.x, _viewport->Size.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED

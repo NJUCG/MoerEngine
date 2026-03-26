@@ -218,6 +218,34 @@ struct VkCmdPreprocessor {
                 tracker.RecordState(i, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages);
             }
         }
+
+        // New bindless resources start with UNKNOWN/UNDEFINED state. We only
+        // touch the incremental pending-init set here instead of scanning the
+        // whole bindless array every use.
+        for (const auto& pending : vk_bindless_array->GetPendingInitResources()) {
+            if (pending.resource == 0) {
+                continue;
+            }
+
+            if (pending.type == VulkanBindlessArray::PendingInitResource::EType::Texture) {
+                auto* vk_texture = reinterpret_cast<VulkanTexture*>(pending.resource);
+                auto  access     = tracker.ReadTexture(vk_texture, ETextureState::SAMPLE, pass_type);
+                tracker.RecordState(
+                    vk_texture,
+                    std::get<0>(access),
+                    std::get<1>(access),
+                    std::get<2>(access),
+                    pending.mip_level,
+                    pending.mip_count,
+                    pending.array_layer,
+                    pending.array_count
+                );
+            } else {
+                auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(pending.resource);
+                tracker.RecordState(vk_buffer, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages);
+            }
+        }
+
         tracker.RecordState(
             vk_bindless_array->bindless_texture_descs,
             VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT,
@@ -405,9 +433,8 @@ struct VkCmdPreprocessor {
                 break;
             case Command::EType::Query:
                 break;
-            case Command::EType::CopyScopeMarker:
-                // CopyScope markers are only present in gfx/compute command lists;
-                // the preprocessing visitor skips them gracefully.
+            case Command::EType::CopyScope:
+                assert(false && "CopyScope must be split before VkCommandQueue preprocessing");
                 break;
             default:
                 assert(false && "Invalid command type");
@@ -816,32 +843,40 @@ struct VkCmdPreprocessor {
     void Visit(const QueueTransferCmd* _cmd) {
         // EQueueType current_queue = this->allocator.
         EQueueType temp_queue = this->current_queue;
+        EPassType  pass_type  = EPassType::Graphics;
+        if (temp_queue == EQueueType::Compute) {
+            pass_type = EPassType::Compute;
+        }
         if (_cmd->IsImport()) {
             _cmd->dst_queue = temp_queue;
 
             for (auto& barrier : _cmd->ImportTextures()) {
                 auto* vk_texture = ResourceCast(barrier.texture.GetTexture());
-                auto  access     = tracker.ReadTexture(vk_texture, barrier.state);
+                auto  access     = barrier.access_write ?
+                                       tracker.WriteTexture(vk_texture, barrier.state, pass_type) :
+                                       tracker.ReadTexture(vk_texture, barrier.state, pass_type);
                 tracker.QueueTransferAcquireResource(
                     vk_texture,
                     device.GetQueueFamilyIndex(_cmd->src_queue),
                     device.GetQueueFamilyIndex(_cmd->dst_queue),
                     vk_texture->GetQueuePreferredLayout(_cmd->src_queue),
                     std::get<1>(access),
-                    VK_ACCESS_2_NONE,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+                    static_cast<VkAccessFlagBits2>(std::get<0>(access)),
+                    static_cast<VkPipelineStageFlagBits2>(std::get<2>(access))
                 );
             }
 
             for (auto& barrier : _cmd->ImportBuffers()) {
                 auto* vk_buffer = ResourceCast(barrier.buffer.GetBuffer());
-                auto  access    = tracker.ReadBuffer(vk_buffer, barrier.state);
+                auto  access    = barrier.access_write ?
+                                      tracker.WriteBuffer(vk_buffer, barrier.state, pass_type) :
+                                      tracker.ReadBuffer(vk_buffer, barrier.state, pass_type);
                 tracker.QueueTransferAcquireResource(
                     vk_buffer,
                     device.GetQueueFamilyIndex(_cmd->src_queue),
                     device.GetQueueFamilyIndex(_cmd->dst_queue),
-                    VK_ACCESS_2_NONE,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+                    static_cast<VkAccessFlagBits2>(std::get<0>(access)),
+                    static_cast<VkPipelineStageFlagBits2>(std::get<1>(access))
                 );
             }
 
@@ -1221,6 +1256,7 @@ class VkCmdVisitor : VulkanDeviceObject {
     VkTracker&             tracker;
     const TCachedArgArray& cached_args;
     ProfilerStorage*       profiler = nullptr;
+    EQueueType             current_queue{EQueueType::Graphics};
 
 public:
     VkCmdVisitor(
@@ -1229,14 +1265,16 @@ public:
         VkTracker&             _tracker,
         VulkanCmdList&         _cmd_list,
         const TCachedArgArray& _cached_args,
-        ProfilerStorage*       _profiler = nullptr
+        ProfilerStorage*       _profiler = nullptr,
+        EQueueType             _queue = EQueueType::Graphics
     ) :
         VulkanDeviceObject(&_device),
         allocator(_allocator),
         tracker(_tracker),
         cmd_list(_cmd_list),
         cached_args(_cached_args),
-        profiler(_profiler) {}
+        profiler(_profiler),
+        current_queue(_queue) {}
 
     void VisitCmd(const Command* _cmd) {
         switch (_cmd->Type()) {
@@ -1277,7 +1315,7 @@ public:
                 Visit(static_cast<const BarrierCmd&>(*_cmd));
                 break;
             case Command::EType::QueueTransfer:
-                // Visit(static_cast<const QueueTransferCmd&>(*_cmd));
+                Visit(static_cast<const QueueTransferCmd&>(*_cmd));
                 break;
             case Command::EType::SetDrawState:
                 Visit(static_cast<const SetDrawStateCmd&>(*_cmd));
@@ -1306,10 +1344,8 @@ public:
             case Command::EType::Custom:
                 Visit(static_cast<const CustomCmd&>(*_cmd));
                 break;
-            case Command::EType::CopyScopeMarker:
-                // CopyScope markers: handled by the higher-level Translate split logic.
-                // Until the executor splitting is implemented the gfx queue handles
-                // copy commands directly (it supports all copy ops), so these are no-ops.
+            case Command::EType::CopyScope:
+                assert(false && "CopyScope must be split before VkCmdVisitor recording");
                 break;
         }
     };
@@ -2083,6 +2119,12 @@ public:
             },
             _cmd.Resource()
         );
+    }
+
+    void Visit(const QueueTransferCmd& _cmd) {
+        (void)_cmd;
+        // QueueTransferCmd only emits barriers in VkCmdPreprocessor. Recording
+        // it again here duplicates ownership acquire/release in the same cmd buffer.
     }
 
     void Visit(const UpdateBindlessArrayCmd& _cmd) {
@@ -2935,10 +2977,16 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
         tracker,
         vk_allocator.GetCmdList(),
         recorded.submit->cached_args,
-        &profiler_storage
+        &profiler_storage,
+        queue.GetType()
     );
     VkCmdPreprocessor preprocessor(
-        vk_device, tracker, vk_allocator, prepared.function_table, recorded.submit->cached_args
+        vk_device,
+        tracker,
+        vk_allocator,
+        prepared.function_table,
+        recorded.submit->cached_args,
+        queue.GetType()
     );
 
     vk_allocator.GetCmdList().Begin();
@@ -3555,7 +3603,15 @@ VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer
     VkCmdPreprocessor preprocessor(
         device, vk_tracker, vk_allocator, {}, recorded.submit->cached_args, EQueueType::Copy
     );
-    VkCmdVisitor visitor(device, vk_allocator, vk_tracker, vk_cmd_list, recorded.submit->cached_args);
+    VkCmdVisitor visitor(
+        device,
+        vk_allocator,
+        vk_tracker,
+        vk_cmd_list,
+        recorded.submit->cached_args,
+        nullptr,
+        EQueueType::Copy
+    );
 
     vk_cmd_list.Begin();
     vk_cmd_list.BeginLabel("Copy", {0.0f, 1.0f, 1.0f, 1.0f});

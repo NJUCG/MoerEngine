@@ -11,6 +11,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 #include "rhi/extension/NrdExtension.h"
+#include "rhi/vulkan/VulkanRHITrace.h"
 #include "scene/GpuScene.h"
 #include "scene/loader/LoaderInterface.h"
 #include "shader/ShaderResourceManager.h"
@@ -78,6 +79,12 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     float elapsed_time = 0.0f;
 
     TextureRef output = device.CreateTexture(
+        "output",
+        Extent2D(resolution.x, resolution.y), swapchain->format, ETextureUsageFlags::COLOR_ATTACHMENT
+    );
+
+    TextureRef combine_output = device.CreateTexture(
+        "combine_output",
         Extent2D(resolution.x, resolution.y), swapchain->format, ETextureUsageFlags::COLOR_ATTACHMENT
     );
 
@@ -91,6 +98,13 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     auto create_frame_buffers = [&](uint2 _new_extent) {
         output = device.CreateTexture(
             "output",
+            Extent2D(_new_extent.x, _new_extent.y),
+            swapchain->format,
+            ETextureUsageFlags::COLOR_ATTACHMENT
+        );
+
+        combine_output = device.CreateTexture(
+            "combine_output",
             Extent2D(_new_extent.x, _new_extent.y),
             swapchain->format,
             ETextureUsageFlags::COLOR_ATTACHMENT
@@ -111,6 +125,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     uint64   scene_pending_sync_value = 0;
 
     bool                  b_feedback_valid               = false;
+    bool                  b_trace_capture_started        = false;
+    bool                  b_trace_capture_armed          = false;
     bool                  b_export                       = false;
     std::string           selected_material_texture_name = "";
     bool                  b_final_show_texture           = false;
@@ -123,6 +139,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     //////////////////////////////////////////////////////////////////////////
     // passes
     //////////////////////////////////////////////////////////////////////////
+    SetRHITraceRuntimeEnabled(false);
     UniquePtr<PrepareLightPass> prepare_light_pass = MakeUnique<PrepareLightPass>(device, manager, scene);
     UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager, scene);
     UniquePtr<LightingPass>     lighting_pass      = MakeUnique<LightingPass>(manager, scene);
@@ -626,6 +643,20 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             }
         }
 
+        const bool ready_for_history_trace =
+            scene.IsReady() && runtime_assets.IsReady() && !first_load && !b_new_env_map && b_feedback_valid;
+        if (ready_for_history_trace && !b_trace_capture_started) {
+            if (!b_trace_capture_armed) {
+                b_trace_capture_armed = true;
+            } else {
+                ResetRHITraceFrameIndex();
+                b_trace_capture_started = true;
+            }
+        } else if (!ready_for_history_trace) {
+            b_trace_capture_armed = false;
+        }
+        SetRHITraceRuntimeEnabled(b_trace_capture_started);
+
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);
         TextureRef final_color =
@@ -634,7 +665,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         if (hooks.on_ui_combine_pass) {
             present_output =
-                hooks.on_ui_combine_pass(ui_combine_pass.get(), cmd_list, final_color, ui_frame_buffer, output);
+                hooks.on_ui_combine_pass(ui_combine_pass.get(), cmd_list, final_color, ui_frame_buffer, combine_output);
         }
 
         if (hooks.on_render_gui) {
@@ -683,6 +714,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         timeline->Wait(time);
         gfx_queue.Sync();
     }
+
+    SetRHITraceRuntimeEnabled(true);
 
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
     for (auto& buf : allocated_buf) {

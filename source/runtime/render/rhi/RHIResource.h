@@ -17,6 +17,7 @@
 #include <cassert>
 #include <initializer_list>
 #include <optional>
+#include <mutex>
 #include <span>
 #include <stdint.h>
 #include <string>
@@ -150,6 +151,26 @@ using BindlessArrayRef      = CountableRef<BindlessArray>;
 using RaytracingGeometryRef = CountableRef<RaytracingGeometry>;
 using RaytracingSceneRef    = CountableRef<RaytracingScene>;
 using RaytracingTlasRef     = CountableRef<RaytracingTlas>;
+
+enum class ERHIResourceLastAccessKind : uint8_t {
+    Unknown = 0,
+    Read,
+    Write,
+};
+
+struct BufferPersistentState {
+    bool                        known{false};
+    EQueueType                  owner_queue{EQueueType::Ignore};
+    EBufferState                state{EBufferState::UNDEFINED};
+    ERHIResourceLastAccessKind  last_access_kind{ERHIResourceLastAccessKind::Unknown};
+};
+
+struct TexturePersistentState {
+    bool                        known{false};
+    EQueueType                  owner_queue{EQueueType::Ignore};
+    ETextureState               state{ETextureState::UNDEFINED};
+    ERHIResourceLastAccessKind  last_access_kind{ERHIResourceLastAccessKind::Unknown};
+};
 
 struct TextureWithHandle {
     TextureRef  tex;
@@ -486,6 +507,14 @@ public:
     const std::string_view GetName() const {
         return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data());
     }
+    BufferPersistentState GetPersistentState() const {
+        std::lock_guard<std::mutex> lock(persistent_state_mutex);
+        return persistent_state;
+    }
+    void SetPersistentState(const BufferPersistentState& state) {
+        std::lock_guard<std::mutex> lock(persistent_state_mutex);
+        persistent_state = state;
+    }
 
     RENDER_API BufferView GetView(uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
     RENDER_API BufferView GetView(EPixelFormat _fmt, uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
@@ -498,6 +527,8 @@ protected:
 	 */
     Buffer() : RHIResource(RRT_BUFFER) {}
     std::optional<std::string> debug_name;
+    mutable std::mutex         persistent_state_mutex{};
+    BufferPersistentState      persistent_state{};
 
 protected:
     BufferInfo info;
@@ -671,12 +702,22 @@ public:
     const std::string_view GetName() const {
         return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data());
     }
+    TexturePersistentState GetPersistentState() const {
+        std::lock_guard<std::mutex> lock(persistent_state_mutex);
+        return persistent_state;
+    }
+    void SetPersistentState(const TexturePersistentState& state) {
+        std::lock_guard<std::mutex> lock(persistent_state_mutex);
+        persistent_state = state;
+    }
     RENDER_API TextureView  GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
     RENDER_API TextureView  GetView(EPixelFormat _format, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
     virtual RENDER_API void SetName(const std::string_view _name) = 0;
 
 protected:
     std::optional<std::string> debug_name;
+    mutable std::mutex         persistent_state_mutex{};
+    TexturePersistentState     persistent_state{};
 
 private:
     friend DepthBuffer;
@@ -770,6 +811,7 @@ struct IndexBuffer {
 struct ImportTexture {
     TextureView   texture;
     ETextureState state;
+    bool          access_write{false};
 };
 
 struct ExportTexture {
@@ -780,6 +822,7 @@ struct ExportTexture {
 struct ImportBuffer {
     BufferView   buffer;
     EBufferState state;
+    bool         access_write{false};
 };
 
 struct ExportBuffer {

@@ -695,8 +695,8 @@ public:
     EQueueType GetQueueType() const override {
         return EQueueType::Ignore;
     }
-    mutable EQueueType src_queue;
-    mutable EQueueType dst_queue;
+    mutable EQueueType src_queue{EQueueType::Ignore};
+    mutable EQueueType dst_queue{EQueueType::Ignore};
     const auto&        ImportTextures() const {
         return import_textures;
     }
@@ -1692,17 +1692,29 @@ public:
  * Use Command::EType::CopyScopeMarker for both begin and end;
  * distinguish them via the b_begin field.
  */
-struct CopyScopeMarkerCmd : public Command {
-    bool b_begin; // true = scope begin, false = scope end
+struct CopyScopeCmd : public Command {
+    explicit CopyScopeCmd(Array<UniquePtr<Command>>&& _commands) :
+        Command(EType::CopyScope, "CopyScope"),
+        commands(std::move(_commands)) {}
 
-    explicit CopyScopeMarkerCmd(bool _b_begin) :
-        Command(
-            EType::CopyScopeMarker,
-            _b_begin ? "CopyScopeBegin" : "CopyScopeEnd"
-        ),
-        b_begin(_b_begin) {}
+    EQueueType GetQueueType() const override {
+        return EQueueType::Ignore;
+    }
 
-    EQueueType GetQueueType() const override { return EQueueType::Ignore; }
+    bool Empty() const {
+        return commands.empty();
+    }
+
+    const Array<UniquePtr<Command>>& Commands() const {
+        return commands;
+    }
+
+    Array<UniquePtr<Command>>&& StealCommands() {
+        return std::move(commands);
+    }
+
+private:
+    Array<UniquePtr<Command>> commands;
 };
 
 class RenderDevice::Impl {

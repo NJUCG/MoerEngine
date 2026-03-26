@@ -5,7 +5,7 @@
 
 namespace Moer::Render {
 
-class VulkanSubmissionExecutor {
+class RENDER_API VulkanSubmissionExecutor {
 public:
     static void Execute(Array<RHIExecOp>&& ops, const RHIExecSubmitOptions& options = {});
     static void Flush();
