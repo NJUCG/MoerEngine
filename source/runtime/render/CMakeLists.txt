@@ -186,3 +186,9 @@ add_custom_target(
 )
 
 add_dependencies(${target_name} CopyResources)
+
+if (WITH_PROFILE) # 由render模块扩散出去
+    target_link_libraries(${target_name}
+        PUBLIC Moer::Profile
+    )
+endif()
