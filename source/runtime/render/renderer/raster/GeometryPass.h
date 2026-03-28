@@ -11,6 +11,7 @@
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 
+#include "CullingPass.h"
 #include "RasterConfig.h"
 #include "RasterResource.h"
 
@@ -29,7 +30,7 @@ public:
 
 class GeometryPass {
 public:
-    GeometryPass(RasterContext& context) {
+    GeometryPass(RasterContext& context) : m_culling_pass(context), m_culling_last_enabled(false) {
 
         // 1. PSO
 
@@ -70,14 +71,37 @@ public:
         );
     }
 
-    void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
+    void Process(RasterContext& context, RasterConfig& ui_config, const Camera& camera) {
+        const auto& gpu_scene_res = context.scene.gpu_scene_res();
 
-        // 1. Params
+        // 1. Frustum Culling (if enabled)
+        if (ui_config.enable_frustum_culling) {
+            // 每帧恢复原始 draw commands（因为 culling 会修改 instance_cnt）
+            context.scene.RestoreDrawCommands(context.cmd_list);
 
+            CullingPass::CullStatistics stats;
+            m_culling_pass.Process(context, camera, gpu_scene_res, &stats);
+
+            // 更新 UI 统计信息
+            ui_config.culling_stats.total_instances_before = stats.total_instances_before;
+            ui_config.culling_stats.total_instances_after  = stats.total_instances_after;
+            ui_config.culling_stats.visible_draws          = stats.visible_draws;
+            ui_config.culling_stats.total_draws            = stats.total_draws;
+            m_culling_last_enabled                         = true;
+        } else {
+            // 重置统计
+            ui_config.culling_stats = RasterConfig::CullingStats{};
+            // 恢复原始 draw commands（如果之前启用了 culling）
+            if (m_culling_last_enabled) {
+                context.scene.RestoreDrawCommands(context.cmd_list);
+                m_culling_last_enabled = false;
+            }
+        }
+
+        // 2. Params
         GeometryPassBindlessParam param;
         param.world2clip = Transpose(camera.GetViewProjectionMatrix());
 
-        const auto& gpu_scene_res    = context.scene.gpu_scene_res();
         param.instance_buf_hdl       = gpu_scene_res.instance_buf.hdl;
         param.primitive_buf_hdl      = gpu_scene_res.primitive_buf.hdl;
         param.position_buf_hdl       = gpu_scene_res.position_buf.hdl;
@@ -89,7 +113,7 @@ public:
         param.enable_alpha_test             = ui_config.geometry_enable_alpha_test ? 1 : 0;
         param.alpha_test_blend_pixel_cutoff = ui_config.geometry_alpha_test_blend_pixel_cutoff;
 
-        // 2. Draw
+        // 3. Draw
         auto rect2d = context.textures.position.GetRect2D();
         assert(
             rect2d == context.textures.vbuffer.GetRect2D() && rect2d == context.textures.normal.GetRect2D() &&
@@ -116,6 +140,8 @@ public:
 
 private:
     GeometryPassPipeline m_pso;
+    CullingPass          m_culling_pass;
+    bool                 m_culling_last_enabled;
 };
 
 } // namespace Moer::Render::Raster

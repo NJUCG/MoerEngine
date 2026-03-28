@@ -58,6 +58,33 @@ void RasterUI::ShowConfig() {
     // MARK: Geometry & Culling
     if (ImGui::TreeNode("Geometry & Culling")) {
 
+        ImGui::Checkbox("Enable GPU Frustum Culling", &m_config.enable_frustum_culling);
+
+        // Culling Statistics
+        if (m_config.enable_frustum_culling) {
+            ImGui::Separator();
+            ImGui::Text("Culling Statistics:");
+            ImGui::Indent();
+
+            if (m_config.culling_stats.total_instances_before == 0) {
+                ImGui::TextDisabled("  Waiting for data...");
+            } else {
+                const auto& stats      = m_config.culling_stats;
+                uint32_t    culled     = stats.total_instances_before - stats.total_instances_after;
+                float       culled_pct = 100.0f * float(culled) / float(stats.total_instances_before);
+                ImGui::Text(
+                    "Instances: %u / %u visible (%u culled, %.1f%%)",
+                    stats.total_instances_after,
+                    stats.total_instances_before,
+                    culled,
+                    culled_pct
+                );
+                ImGui::ProgressBar(culled_pct / 100.0f, ImVec2(150, 0));
+            }
+            ImGui::Unindent();
+            ImGui::Separator();
+        }
+
         ImGui::Checkbox("Enable Alpha Test", &m_config.geometry_enable_alpha_test);
         ImGui::SliderFloat("Alpha Cutoff", &m_config.geometry_alpha_test_blend_pixel_cutoff, 0.0f, 1.0f);
 

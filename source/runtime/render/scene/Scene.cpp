@@ -125,6 +125,11 @@ const CpuScene& Scene::GetCpuScene() const {
     return cpu_scene();
 }
 
+void Scene::RestoreDrawCommands(Render::CommandList& cmd_list) {
+    assert(m_gpu_scene && "Scene is not ready");
+    m_gpu_scene->RestoreDrawCommands(cmd_list);
+}
+
 Render::BindlessArrayRef Scene::bindless_array() {
     if (!m_bindless_array) {
         m_bindless_array = Render::RenderDevice::Get().CreateBindlessArray();
