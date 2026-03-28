@@ -232,7 +232,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             gfx_queue.Sync();
         }
 
-        const auto& raster_config = editor_config->raster_config;
+        auto& raster_config = editor_config->raster_config;
         auto&       camera        = scene.GetMainCamera().camera;
 
         {
