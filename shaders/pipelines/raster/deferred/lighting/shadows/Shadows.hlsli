@@ -116,17 +116,19 @@ float calculate_csm_shadow(
     float3 main_light_dir = lighting_data.main_light_direction;
 
     if (lighting_data.is_csm_blend_enabled == 1) {
+        float cascade_blend_ratio = get_cascade_blend_ratio(lighting_data, world_pos, cascade_index);
         float shadow_current =
             get_single_shadow(lighting_data, world_pos, cascade_index, screen_uv, normal, main_light_dir);
-        float shadow_next =
-            (cascade_index + 1 < lighting_data.shadow_csm_num_of_cascades) ?
+
+        // Only sample the next cascade when actually in the blend region
+        if (cascade_blend_ratio > 0.0 && cascade_index + 1 < lighting_data.shadow_csm_num_of_cascades) {
+            float shadow_next =
                 get_single_shadow(
                     lighting_data, world_pos, cascade_index + 1, screen_uv, normal, main_light_dir
-                ) :
-                1.0;
-
-        float cascade_blend_ratio = get_cascade_blend_ratio(lighting_data, world_pos, cascade_index);
-        return lerp(shadow_current, shadow_next, cascade_blend_ratio);
+                );
+            return lerp(shadow_current, shadow_next, cascade_blend_ratio);
+        }
+        return shadow_current;
     } else {
         return get_single_shadow(lighting_data, world_pos, cascade_index, screen_uv, normal, main_light_dir);
     }

@@ -26,11 +26,11 @@
 #define PCSS_ENABLE_POST_PCF_SHARPENING 1
 
 // Blocker search samples
-#define PCSS_SEARCH_BITS    5
+#define PCSS_SEARCH_BITS    4
 #define PCSS_SEARCH_SAMPLES (1 << PCSS_SEARCH_BITS)
 
 // Shadow filtering samples
-#define PCSS_SAMPLE_BITS 5
+#define PCSS_SAMPLE_BITS 4
 #define PCSS_SAMPLES     (1 << PCSS_SAMPLE_BITS)
 
 //必须先定义宏，再包含头文件
