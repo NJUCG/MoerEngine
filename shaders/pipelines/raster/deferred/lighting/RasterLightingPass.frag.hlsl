@@ -9,6 +9,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "shared/raster/ShaderParameters.h"
 
+[[vk::binding(0, 0)]] ConstantBuffer<Moer::LightingData> lighting_data;
 [[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
@@ -16,10 +17,6 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     uint material_id = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
     ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
     Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(material_id);
-
-    // MARK: Lighting Data
-    ArrayBuffer        global_params = ArrayBuffer(param.global_param_handle);
-    Moer::LightingData lighting_data = global_params.Load<Moer::LightingData>(0);
 
     // MARK: GBuffer
     float2 uv     = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);

@@ -35,7 +35,6 @@ struct MaterialPassBindlessParam {
     uint   gbuffer_uv;
     uint   gbuffer_depth;
     uint   gbuffer_position;
-    uint   global_param_handle;
     uint   shading_mode;
     uint   cubemap_handle;
     uint   shadow_mask_handle;
