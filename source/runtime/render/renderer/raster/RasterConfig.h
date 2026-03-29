@@ -229,8 +229,7 @@ struct RasterConfig {
     bool  shadow_pcss_enabled          = true;
     float shadow_pcss_light_size_world = 0.01f;
 
-    StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
-        {0.005, 0.02, 0.1, 0.25, 0.32, 1.0};
+    StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera = {0.005, 0.02, 0.1, 0.25};
 
     // MARK: Skybox
     bool  skybox_exposure_correct_enabled      = true;         // 启用的话，就会找到第一个平行光，乘上它的颜色

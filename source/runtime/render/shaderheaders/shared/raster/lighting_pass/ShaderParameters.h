@@ -11,7 +11,7 @@
 #undef CONST
 #endif
 
-#define MAX_CSM_CASCADES 8
+#define MAX_CSM_CASCADES 4
 
 #ifdef __cplusplus
 //#define CONST constexpr

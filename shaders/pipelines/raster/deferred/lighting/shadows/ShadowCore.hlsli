@@ -99,7 +99,9 @@ float2 QuadAverage(float2 val) {
 // 参考 UE: 基于斜率的 Bias 计算
 float GetSlopeScaledBias(float3 normal, float3 lightDir) {
     float cosTheta = saturate(dot(normal, -lightDir));
-    float bias = 0.005 * tan(acos(cosTheta)); // 简单近似
+    // tan(acos(x)) == sqrt(1 - x*x) / x，避免两个超越函数
+    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+    float bias = 0.005 * sinTheta / max(cosTheta, 1e-4);
     return clamp(bias, 0.0001, 0.01);
 }
 

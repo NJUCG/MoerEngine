@@ -37,14 +37,11 @@ float get_single_shadow(
     ctx.normal          = normal;
     ctx.lightDir        = lightDir;
 
-    float occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(shadow_uv).x;
-    float fragment_depth = shadow_ndc_pos.z;
-
     if (lighting_data.pcss_enabled == 1) {
         return CalculatePcssDir(ctx);
     } else {
-        occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(ctx.shadowUV).x;
-        return IsShadowedDir(occluder_depth, fragment_depth, SHADOW_BIAS) ? 0.0 : 1.0;
+        float occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(shadow_uv).x;
+        return IsShadowedDir(occluder_depth, shadow_ndc_pos.z, SHADOW_BIAS) ? 0.0 : 1.0;
     }
 }
 
@@ -110,13 +107,14 @@ float calculate_csm_shadow(
     float2             screen_uv,
     float3             normal
 ) {
-    int cascade_index = get_cascade_index(lighting_data, world_pos);
+    float pixel_view_z;
+    int cascade_index = get_cascade_index(lighting_data, world_pos, pixel_view_z);
     if (cascade_index == -1)
         return 1.0;
     float3 main_light_dir = lighting_data.main_light_direction;
 
     if (lighting_data.is_csm_blend_enabled == 1) {
-        float cascade_blend_ratio = get_cascade_blend_ratio(lighting_data, world_pos, cascade_index);
+        float cascade_blend_ratio = get_cascade_blend_ratio(lighting_data, pixel_view_z, cascade_index);
         float shadow_current =
             get_single_shadow(lighting_data, world_pos, cascade_index, screen_uv, normal, main_light_dir);
 
