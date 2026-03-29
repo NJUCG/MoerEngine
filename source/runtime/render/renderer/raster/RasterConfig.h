@@ -114,16 +114,17 @@ struct RasterConfig {
     bool  geometry_enable_alpha_test             = true;
     float geometry_alpha_test_blend_pixel_cutoff = 0.5f; // 当AlphaMode为BLEND时，低于该值的像素会被丢弃
     bool  enable_frustum_culling                 = true; // GPU视锥剔除
-    
+
     // MARK: Culling Statistics (只读，由GPU更新)
     struct CullingStats {
         uint total_instances_before = 0;
         uint total_instances_after  = 0;
         uint visible_draws          = 0;
         uint total_draws            = 0;
-        
+
         float GetCullingRatio() const {
-            if (total_instances_before == 0) return 0.0f;
+            if (total_instances_before == 0)
+                return 0.0f;
             return 1.0f - (float)total_instances_after / (float)total_instances_before;
         }
     } culling_stats;
@@ -172,8 +173,8 @@ struct RasterConfig {
     EAoMode ao_mode            = EAoMode::RTAO;
     float   ssao_intensity     = 1.0f;
     int     ssao_spp           = 16;
-    int     ssao_sample_radius = 2;
-    float   ssao_max_distance  = 0.5f;
+    int     ssao_sample_radius = 16;
+    float   ssao_max_distance  = 1.0f;
 
     ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
     float           rtao_intensity          = 1.0f;

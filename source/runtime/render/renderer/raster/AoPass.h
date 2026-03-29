@@ -149,7 +149,7 @@ public:
         param.ao_mode           = static_cast<uint32>(ui_config.ao_mode);
         param.input_image       = context.textures.lighting_output.hdl;
         param.normal_tex        = context.textures.normal.hdl;
-        param.depth_tex         = context.textures.depth_nearest_sampler.hdl;
+        param.depth_tex         = context.textures.depth_linear_sampler.hdl;
         param.noise_tex         = context.textures.noise_tex.hdl;
 
         UpdateMotionVectorData(context, camera);

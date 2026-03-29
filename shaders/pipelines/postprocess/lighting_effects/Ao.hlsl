@@ -16,9 +16,13 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
 
-// uv in [0, 1]; output in [0, 1]
-float2 random_2to2(float2 uv) {
-    return TextureHandle(param.noise_tex).Sample2D<float4>(uv).rg;
+// Per-pixel hash: 以整数像素坐标为输入，保证相邻像素得到不同的随机值，
+// 不依赖 noise texture，彻底避免 UV 采样粒度导致的 screen-fixed pattern。
+float2 hash22(float2 pixel, uint sample_idx) {
+    float2 p = pixel + float2(float(sample_idx) * 17.0, float(sample_idx) * 31.0);
+    p = frac(p * float2(443.8975, 397.2973));
+    p += dot(p.xy, p.yx + 19.19);
+    return frac(float2(p.x * p.y, p.x + p.y));
 }
 
 // reference: games202 & https://www.shadertoy.com/view/Ms33WB
@@ -30,11 +34,12 @@ float ssao_games202(float2 uv) {
     //     printf("uv: %f, %f; pos: %f, %f, %f\n", uv.x, uv.y, position.x, position.y, position.z);
     // }
 
-    float  ao   = 0.0;
-    float2 tmp1 = param.ssao_radius * param.inv_resolution;
+    float  ao    = 0.0;
+    float2 tmp1  = param.ssao_radius * param.inv_resolution;
+    float2 pixel = floor(uv / param.inv_resolution); // 整数像素坐标
 
     for (uint i = 0; i < param.ssao_sample_count; i++) {
-        float2 offset          = random_2to2(uv + 0.093 * float2(i, i)) * 2.0 - 1.0;
+        float2 offset          = hash22(pixel, i) * 2.0 - 1.0;
         float3 sample_position = WorldPosFromDepthTexture(param.depth_tex, uv + offset * tmp1, param.clip2world);
 
         float3 vec      = sample_position - position;
