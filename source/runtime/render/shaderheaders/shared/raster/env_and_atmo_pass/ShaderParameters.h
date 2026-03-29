@@ -11,8 +11,6 @@
 #undef CONST
 #endif
 
-#define MAX_CSM_CASCADES 8
-
 #ifdef __cplusplus
 //#define CONST constexpr
 #include "misc/Traits.h"

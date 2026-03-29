@@ -165,7 +165,9 @@ public:
 
         //GPU Side
         lighting_data_buffer.buf = device.CreateBuffer<byte>(
-            "Raster::LightData", sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS
+            "Raster::LightData",
+            sizeof(LightingData),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::CONSTANT_BUFFER
         );
         lighting_data_buffer.hdl = bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
     }

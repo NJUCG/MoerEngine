@@ -5,13 +5,10 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "pipelines/raster/deferred/lighting/shadows/Shadows.hlsli"
 #include "shared/raster/ShaderParameters.h"
 
+[[vk::binding(0, 0)]] ConstantBuffer<Moer::LightingData> lighting_data;
 [[vk::push_constant]] ConstantBuffer<Moer::DirectionalShadowMaskPassBindlessParam> param;
 
 float main(float2 in_uv : TEXCOORD0) : SV_TARGET {
-    // MARK: Lighting Data
-    ArrayBuffer        global_params = ArrayBuffer(param.global_param_hdl);
-    Moer::LightingData lighting_data = global_params.Load<Moer::LightingData>(0);
-
     // MARK: GBuffer
     float  depth  = TextureHandle(param.depth_hdl).Sample2D<float>(in_uv);
 
