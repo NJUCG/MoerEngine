@@ -6,11 +6,12 @@
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
+#include "pipelines/RasterCommon.hlsli"
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::AoPipelineBindlessParam> param;
 
-// 定义了AoOutput、CameraMotionVector等函�?
+// 定义了AoOutput、CameraMotionVector等函�?
 #include "pipelines/postprocess/lighting_effects/AoCommon.hlsl"
 
 static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
@@ -23,7 +24,7 @@ float2 random_2to2(float2 uv) {
 // reference: games202 & https://www.shadertoy.com/view/Ms33WB
 float ssao_games202(float2 uv) {
     float3 normal   = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
-    float3 position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
+    float3 position = WorldPosFromDepthTexture(param.depth_tex, uv, param.clip2world);
 
     // if (uv.x < param.inv_resolution.x && uv.y < param.inv_resolution.y) {
     //     printf("uv: %f, %f; pos: %f, %f, %f\n", uv.x, uv.y, position.x, position.y, position.z);
@@ -34,7 +35,7 @@ float ssao_games202(float2 uv) {
 
     for (uint i = 0; i < param.ssao_sample_count; i++) {
         float2 offset          = random_2to2(uv + 0.093 * float2(i, i)) * 2.0 - 1.0;
-        float3 sample_position = TextureHandle(param.position_tex).Sample2D<float4>(uv + offset * tmp1).rgb;
+        float3 sample_position = WorldPosFromDepthTexture(param.depth_tex, uv + offset * tmp1, param.clip2world);
 
         float3 vec      = sample_position - position;
         float3 len      = length(vec);

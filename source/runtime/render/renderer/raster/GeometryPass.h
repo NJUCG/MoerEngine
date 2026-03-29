@@ -49,8 +49,7 @@ public:
                 RHIColorAttachmentInfo::Preset(PF_R32_UINT),                 // vbuffer
                 RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32), // normal
                 RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32), // tangent
-                RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT),            // uv
-                RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)       // position
+                RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT)             // uv
             },
             ds_info, // depth buf
             context.textures.depth_linear_sampler.tex->GetFormat()
@@ -133,8 +132,7 @@ public:
                 ColorAttachment(context.textures.vbuffer.tex),
                 ColorAttachment(context.textures.normal.tex),
                 ColorAttachment(context.textures.tangent.tex),
-                ColorAttachment(context.textures.uv.tex),
-                ColorAttachment(context.textures.position.tex)
+                ColorAttachment(context.textures.uv.tex)
             );
     }
 

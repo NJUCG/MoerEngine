@@ -27,7 +27,6 @@ struct VsContext {
     Moer::GPrimitive primitive;
 
     // derived 2
-    float3 out_world_pos;
     float4 out_clip_pos;
 
 #if !SHADOW_DEPTH_PASS
@@ -68,8 +67,8 @@ struct VsContext {
             ArrayBuffer position_buf = ArrayBuffer(param.position_buf_hdl);
             vertex_pos               = position_buf.Load<float3>(primitive.position_start_idx + vertex_id);
         }
-        out_world_pos = mul(model2world, float4(vertex_pos, 1.0)).xyz;
-        out_clip_pos  = mul(param.world2clip, float4(out_world_pos, 1.0));
+        float3 world_pos = mul(model2world, float4(vertex_pos, 1.0)).xyz;
+        out_clip_pos  = mul(param.world2clip, float4(world_pos, 1.0));
 
 #if !SHADOW_DEPTH_PASS
 
@@ -125,7 +124,6 @@ VsOutput main(
 #if !SHADOW_DEPTH_PASS
 
     output.position       = context.out_clip_pos;
-    output.world_position = context.out_world_pos;
     output.normal         = context.out_normal;
     output.tangent        = context.out_tangent;
     output.texcoord0      = context.out_texcoord0;

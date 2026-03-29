@@ -28,7 +28,7 @@ struct SkyboxPassBindlessParam {
     uint     cubemap_handle;
     float3   exposure_factor;
     float3   camera_pos;
-    float4x4 inv_view_proj;
+    float4x4 clip2world;
 };
 
 // MARK: Main Content End

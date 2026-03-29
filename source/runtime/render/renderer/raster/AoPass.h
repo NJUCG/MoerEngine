@@ -140,6 +140,7 @@ public:
     ) {
         AoPipelineBindlessParam param;
 
+        param.clip2world        = Transpose(camera.GetViewProjectionMatrixInv());
         param.inv_resolution    = float2(1.0f) / float2(context.textures.ao_output.GetSize());
         param.ssao_intensity    = ui_config.ssao_intensity;
         param.ssao_max_distance = ui_config.ssao_max_distance;
@@ -148,7 +149,6 @@ public:
         param.ao_mode           = static_cast<uint32>(ui_config.ao_mode);
         param.input_image       = context.textures.lighting_output.hdl;
         param.normal_tex        = context.textures.normal.hdl;
-        param.position_tex      = context.textures.position.hdl;
         param.depth_tex         = context.textures.depth_nearest_sampler.hdl;
         param.noise_tex         = context.textures.noise_tex.hdl;
 
@@ -183,7 +183,6 @@ public:
         param.inv_resolution     = float2(1.0) / float2(context.textures.ao_output.GetSize());
         param.input_image        = context.textures.lighting_output.hdl;
         param.normal_tex         = context.textures.normal.hdl;
-        param.position_tex       = context.textures.position.hdl;
         param.depth_tex          = context.textures.depth_nearest_sampler.hdl;
         param.ao_mode            = static_cast<uint>(ui_config.ao_mode);
         param.sample_mode        = static_cast<uint>(ui_config.rtao_sample_mode);
@@ -214,6 +213,7 @@ public:
     ) {
         SsdoPipelineBindlessParam param;
 
+        param.clip2world              = Transpose(camera.GetViewProjectionMatrixInv());
         param.inv_resolution          = float2(1.0f) / float2(context.textures.ao_output.GetSize());
         param.ssdo_sample_count       = ui_config.ssao_spp;
         param.ssdo_radius             = ui_config.ssdo_sample_radius;
@@ -222,13 +222,12 @@ public:
         param.ssdo_indirect_intensity = ui_config.ssdo_indirect_intensity;
         param.normal_tex              = context.textures.normal.hdl;
         param.depth_tex               = context.textures.depth_nearest_sampler.hdl;
-        param.position_tex            = context.textures.position.hdl;
         param.noise_tex               = context.textures.noise_tex.hdl;
         param.ao_mode                 = static_cast<uint32>(ui_config.ao_mode);
         param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
         param.input_image             = context.textures.lighting_output.hdl;
-        param.view_projection_matrix  = Transpose(camera.GetViewProjectionMatrix());
-        param.view_matrix             = Transpose(camera.GetViewMatrix());
+        param.world2clip              = Transpose(camera.GetViewProjectionMatrix());
+        param.world2view              = Transpose(camera.GetViewMatrix());
         param.camera_position         = camera.GetPosition();
 
         UpdateMotionVectorData(context, camera);

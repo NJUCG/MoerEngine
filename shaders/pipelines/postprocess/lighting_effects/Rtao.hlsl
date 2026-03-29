@@ -14,7 +14,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 [[vk::binding(0, DI_BINDING_SLOT)]] RaytracingAccelerationStructure tlas;
 
-// 定义了AoOutput、CameraMotionVector等函�?
+// 定义了AoOutput、CameraMotionVector等函�?
 #include "pipelines/postprocess/lighting_effects/AoCommon.hlsl"
 
 // TODO: 代码整理
@@ -39,7 +39,7 @@ float4 SampleCosineHemisphere(float2 u) {
     return float4(r * cos(theta), y, r * sin(theta), /* pdf */ y / PI);
 }
 
-// 将一个半球坐标系中的vector转换到以某个特定normal�?z的半球上 (Written by AI)
+// 将一个半球坐标系中的vector转换到以某个特定normal�?z的半球上 (Written by AI)
 float3 LocalVectorToWorld(float3 local_vector, float3 normal) {
     float3 up = abs(normal.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0);
     float3 tangent = normalize(cross(up, normal));
@@ -50,7 +50,7 @@ float3 LocalVectorToWorld(float3 local_vector, float3 normal) {
            + local_vector.z * bitangent;
 }
 
-// TODO: 和RT那边的函数合�?
+// TODO: 和RT那边的函数合�?
 bool CastVisibilityRay(float3 origin, float3 direction, float tmin, float tmax,
                        RaytracingAccelerationStructure accel,
                        uint instance_mask, uint ray_flags) {
@@ -95,7 +95,7 @@ AoOutput get_rtao(float2 uv) {
 
     Moer::RandomState rng = Moer::RandomState::Create(uv * param.resolution, param.frame_idx);
 
-    float3 frag_position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
+    float3 frag_position = WorldPosFromDepthTexture(param.depth_tex, uv, param.clip2world);
 
     // Raytraced AO
     float total_ray_contrib = 0.0;

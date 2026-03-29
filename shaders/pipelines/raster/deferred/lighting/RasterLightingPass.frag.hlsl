@@ -1,6 +1,7 @@
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
+#include "pipelines/RasterCommon.hlsli"
 
 #include "materials/Brdf.hlsli"
 #include "materials/Material.hlsli"
@@ -9,13 +10,6 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
-
-float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) {
-    float4 clip    = float4(screen_uv.x * 2.f - 1.f, 1.f - screen_uv.y * 2.f, depth, 1.0);
-    float4 world_w = mul(inv_view_proj, clip);
-    float3 pos     = world_w.xyz / world_w.w;
-    return pos;
-}
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
@@ -35,7 +29,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     ); // 因为法线mipmap不满足线性关系，所以这里需要normalize
     float3 tangent =
         normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv))); // 同上
-    float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
+    float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.clip2world);
 
     // - Lights
     ArrayBuffer light_buf = ArrayBuffer(param.light_buf_hdl);

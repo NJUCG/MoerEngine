@@ -53,20 +53,17 @@ struct PsOutput {
     float4 normal : SV_TARGET1;
     float4 tangent : SV_TARGET2;
     float2 texcoord0 : SV_TARGET3;
-    float4 position : SV_TARGET4;
 };
 
 PsOutput main(VsOutput input) : SV_TARGET {
 
     DiscardByAlphaTest(input.material_id, input.texcoord0); // 此处有可能触发discard，直接终止shader
     
-
     PsOutput output;
     output.vbuffer   = input.material_id;
     output.normal    = float4(Raster::PackNormal(normalize(input.normal)), 1.0);
     output.tangent   = float4(Raster::PackNormal(normalize(input.tangent)), 1.0);
     output.texcoord0 = input.texcoord0;
-    output.position  = float4(input.world_position, 1.0);
 
     return output;
 }

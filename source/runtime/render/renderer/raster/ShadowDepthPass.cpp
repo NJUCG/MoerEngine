@@ -464,7 +464,7 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             (cascade_index == 0) ? 0.0f : context.lighting_data.cascade_blend_start_ratios[cascade_index - 1];
         const float frustum_far_ratio = context.lighting_data.cascade_split_ratios[cascade_index];
 
-        context.lighting_data.world_to_shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
+        context.lighting_data.world2shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
             context.lighting_data.main_light_direction,
             camera,
             ui_config,
@@ -476,7 +476,7 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         RenderShadow(
             context,
             ui_config,
-            context.lighting_data.world_to_shadow_clip[cascade_index],
+            context.lighting_data.world2shadow_clip[cascade_index],
             Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
             context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
             std::format("Shadow Depth Pass - {}", cascade_index)

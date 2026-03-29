@@ -1,4 +1,5 @@
 #include "core/math/Math.hlsli"
+#include "pipelines/RasterCommon.hlsli"
 
 struct AoOutput {
     float4 color_with_ao : SV_Target0;
@@ -11,8 +12,6 @@ float2 GetCameraMotionVector(float2 uv) {
     // camera_mv.world2clip
     // camera_mv.world2clip_prev
     // param.depth_tex
-    // param.position_tex
-
     
     // MARK: Lighting Data
     ArrayBuffer camera_mv_data = ArrayBuffer(param.camera_mv_data_handle);
@@ -23,7 +22,7 @@ float2 GetCameraMotionVector(float2 uv) {
         return float2(0.0, 0.0);
     }
     
-    float3 world_pos_vec3 = TextureHandle(param.position_tex).Sample2D<float3>(uv);
+    float3 world_pos_vec3 = WorldPosFromDepthTexture(param.depth_tex, uv, param.clip2world);
     float4 world_pos = float4(world_pos_vec3, 1.0);
 
     float4 clip_pos = mul(camera_mv.world2clip, world_pos);

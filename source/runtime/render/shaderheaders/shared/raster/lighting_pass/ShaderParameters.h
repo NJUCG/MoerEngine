@@ -43,9 +43,9 @@ struct MaterialPassBindlessParam {
     uint   shadow_mask_handle;
 };
 struct LightingData {
-    float4x4 world_to_shadow_clip[MAX_CSM_CASCADES];
+    float4x4 world2shadow_clip[MAX_CSM_CASCADES];
 
-    float4x4 inv_view_proj;
+    float4x4 clip2world;
     float3   camera_position;
     // uint     padding;// FIXME: need or not?
     uint   light_count;
@@ -69,7 +69,7 @@ struct LightingData {
     float  light_size_world; //assumed light size for soft shadow calculation
     float4 scale_data[MAX_CSM_CASCADES];
 
-    float4x4 view_matrix;
+    float4x4 world2view;
     float    near_clip;
     float    far_clip;
     float    cascade_split_ratios[MAX_CSM_CASCADES];

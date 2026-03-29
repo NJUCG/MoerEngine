@@ -64,7 +64,7 @@ public:
     struct CSMData {
         float3                                                      light_dir;
         StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
-        StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
+        StaticArray<float4x4, CSM_MAX_CASCADES>                     world2shadow_clip;
     } csm_data;
 
     struct PointShadowData {

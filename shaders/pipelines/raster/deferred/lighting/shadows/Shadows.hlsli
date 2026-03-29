@@ -16,7 +16,7 @@ float get_single_shadow(
     float3             normal,
     float3             lightDir
 ) {
-    float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[cascade_index], float4(world_pos, 1.0));
+    float4 shadow_clip_pos = mul(lighting_data.world2shadow_clip[cascade_index], float4(world_pos, 1.0));
     float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
     float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
     bool   in_bounds = shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 &&

@@ -105,7 +105,7 @@ void RasterRenderer::UpdateGlobalLightingData(
     uint          csm_layers    = ui_config.shadow_csm_num_of_cascades;
     LightingData* lighting_data = &context.lighting_data;
 
-    lighting_data->inv_view_proj   = Transpose(camera.GetViewProjectionMatrixInv());
+    lighting_data->clip2world      = Transpose(camera.GetViewProjectionMatrixInv());
     lighting_data->light_count     = context.scene.cpu_scene().GetLightCount();
     lighting_data->camera_position = camera.GetPosition();
 
@@ -126,11 +126,11 @@ void RasterRenderer::UpdateGlobalLightingData(
 
     // Shadow Transform
     for (uint i = 0; i < csm_layers; i++) {
-        lighting_data->world_to_shadow_clip[i] = Transpose(lighting_data->world_to_shadow_clip[i]);
+        lighting_data->world2shadow_clip[i] = Transpose(lighting_data->world2shadow_clip[i]);
     }
-    lighting_data->view_matrix = Transpose(camera.GetViewMatrix());
-    lighting_data->near_clip   = camera.GetNearClip();
-    lighting_data->far_clip    = camera.GetFarClip();
+    lighting_data->world2view = Transpose(camera.GetViewMatrix());
+    lighting_data->near_clip  = camera.GetNearClip();
+    lighting_data->far_clip   = camera.GetFarClip();
 
     lighting_data->is_csm_blend_enabled = ui_config.shadow_csm_blend_option ? 1 : 0;
     // 注：此处不一定使用所有CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
@@ -233,7 +233,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }
 
         auto& raster_config = editor_config->raster_config;
-        auto&       camera        = scene.GetMainCamera().camera;
+        auto& camera        = scene.GetMainCamera().camera;
 
         {
             // Jitter Camera for SMAA T2x
