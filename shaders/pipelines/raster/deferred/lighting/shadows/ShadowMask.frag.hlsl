@@ -20,6 +20,11 @@ float main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     // MARK: GBuffer
     float  depth  = TextureHandle(param.depth_hdl).Sample2D<float>(in_uv);
+
+    // 天空/背景像素在 Reverse-Z 下 depth == 0，无需 PCSS，直接返回全亮
+    if (depth < 1e-6)
+        return 1.0;
+
     float3 normal = normalize(Raster::UnpackNormal(TextureHandle(param.normal_hdl).Sample2D<float3>(in_uv)));
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.clip2world);
 

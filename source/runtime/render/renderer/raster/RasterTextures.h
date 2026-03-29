@@ -40,10 +40,6 @@ namespace Moer::Render::Raster {
       TexConfig::Default(PF_A2R10G10B10_UNORM_PACK32).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                \
     X(TexHandle, uv, Tex2DTag, TexConfig::Default(PF_R32G32_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))  \
     X(TexHandle,                                                                                             \
-      position,                                                                                              \
-      Tex2DTag,                                                                                              \
-      TexConfig::Default(PF_R32G32B32A32_SFLOAT).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                     \
-    X(TexHandle,                                                                                             \
       shadow_mask,                                                                                           \
       Tex2DTag,                                                                                              \
       TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR).SR(SR_TAG_true))                                \

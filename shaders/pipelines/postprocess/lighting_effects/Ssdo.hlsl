@@ -66,7 +66,9 @@ float3 GetVplIndirectLight(float3 vpl_pos, float3 vpl_normal, float3 shading_pos
     float  attenuation  = 1.0 / (VPL_distance * VPL_distance + 1.0); // 稳定衰减
 
     // 面积�?
-    float vpl_linear_depth = abs(mul(param.world2view, float4(vpl_pos, 1.0)).z);
+    // vpl_linear_depth ≈ abs(view_z), 透视投影下 clip.w == view_z
+    float4 vpl_clip        = mul(param.world2clip, float4(vpl_pos, 1.0));
+    float  vpl_linear_depth = abs(vpl_clip.w);
     float area_weight      = vpl_linear_depth * vpl_linear_depth + 0.0001;
     area_weight            = min(2, area_weight); //防止过大
 

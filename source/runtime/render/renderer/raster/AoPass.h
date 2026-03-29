@@ -227,7 +227,6 @@ public:
         param.ssdo_depth_bias         = ui_config.ssdo_depth_bias;
         param.input_image             = context.textures.lighting_output.hdl;
         param.world2clip              = Transpose(camera.GetViewProjectionMatrix());
-        param.world2view              = Transpose(camera.GetViewMatrix());
         param.camera_position         = camera.GetPosition();
 
         UpdateMotionVectorData(context, camera);

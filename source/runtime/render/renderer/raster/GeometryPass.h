@@ -113,10 +113,10 @@ public:
         param.alpha_test_blend_pixel_cutoff = ui_config.geometry_alpha_test_blend_pixel_cutoff;
 
         // 3. Draw
-        auto rect2d = context.textures.position.GetRect2D();
+        auto rect2d = context.textures.vbuffer.GetRect2D();
         assert(
-            rect2d == context.textures.vbuffer.GetRect2D() && rect2d == context.textures.normal.GetRect2D() &&
-            rect2d == context.textures.tangent.GetRect2D() && rect2d == context.textures.uv.GetRect2D()
+            rect2d == context.textures.normal.GetRect2D() && rect2d == context.textures.tangent.GetRect2D() &&
+            rect2d == context.textures.uv.GetRect2D()
         );
 
         context.cmd_list.Gfx(m_pso, context.bdls, param)

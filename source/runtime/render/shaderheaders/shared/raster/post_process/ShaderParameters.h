@@ -48,7 +48,6 @@ struct AoPipelineBindlessParam {
 struct SsdoPipelineBindlessParam {
     float4x4 clip2world;
     float4x4 world2clip;
-    float4x4 world2view;
 
     float3 camera_position;
     float  ssdo_depth_bias;
