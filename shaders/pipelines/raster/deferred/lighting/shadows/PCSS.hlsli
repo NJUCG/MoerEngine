@@ -66,7 +66,7 @@ bool IsDirectionalLight_Dir() {
             }                                                                                                \
         }                                                                                                    \
                                                                                                              \
-        [unroll] for (int i = 0; i < PCSS_SEARCH_SAMPLES; ++i) {                                             \
+        [loop] for (int i = 0; i < PCSS_SEARCH_SAMPLES; ++i) {                                             \
             float2 raw_offset = mul(rotation, POISSON_DISK[i]);                                              \
                                                                                                              \
             float3 sample_pos            = GetShadowSamplingPos##SUFFIX(ctx, raw_offset * search_radius_uv); \
