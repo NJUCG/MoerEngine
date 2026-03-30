@@ -2,7 +2,7 @@
 
 实时渲染引擎
 
-**| 简体中文 | [English](README.en.md) |**
+**| 简体中文 | [English](./docs/README.en.md) |**
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NJUCG/MoerEngine)
 
@@ -10,13 +10,10 @@
 
 ## 目录
 
+- [目录](#目录)
 - [1. 如何构建](#1-如何构建)
 - [2. 如何使用](#2-如何使用)
-  - [2.1 如何渲染场景](#21-如何渲染场景)
-  - [2.2 如何移动摄像机](#22-如何移动摄像机)
 - [3. 效果图](#3-效果图)
-  - [RayTracing Renderer](#raytracing-renderer)
-  - [Raster Renderer](#raster-renderer)
 - [4. 如何贡献](#4-如何贡献)
 - [开源协议](#开源协议)
 
