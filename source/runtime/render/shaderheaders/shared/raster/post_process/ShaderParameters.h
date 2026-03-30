@@ -37,9 +37,8 @@ struct AoPipelineBindlessParam {
     uint ssao_sample_count;
     uint ssao_radius;
     uint ao_mode;
-    uint input_image;
-
     uint normal_tex;
+
     uint depth_tex;
     uint noise_tex;             // linear & repeat sampler
     uint camera_mv_data_handle; // for camera motion vector
@@ -71,43 +70,44 @@ struct SsdoPipelineBindlessParam {
 
 struct RtaoPipelineBindlessParam {
     float4x4 clip2world;
-    float3   camera_pos;
     uint     frame_idx;
+    uint     normal_tex;
+    uint     depth_tex;
+    uint     spp;
 
     float2 resolution;
     float2 inv_resolution;
 
-    uint input_image;
-    uint normal_tex;
-    uint depth_tex;
-    uint ao_mode;
-
-    uint  sample_mode;
-    uint  spp;
     float ray_trace_distance;
     float intensity;
+    uint  camera_mv_data_handle;
+    uint  noise_tex;
 
-    uint camera_mv_data_handle; // for camera motion vector
-    uint noise_tex;             // blue noise texture for spatially coherent sampling
-    uint padding0;
-    uint padding1;
+    float2 depth_tex_resolution;
 };
 
 struct RtaoDenoiserPassBindlessParam {
     uint history_ao_tex;
     uint curr_ao_tex;
-    uint color_tex;
     uint motion_vector_tex;
-
-    uint depth_tex;
-    uint normal_tex;
-    uint is_rtao_ao_only;
     uint is_reprojection_enable;
 
+    uint  depth_tex;
+    uint  normal_tex;
     uint  is_validation_enable;
     float history_ratio;
+
     float valid_depth_threshold;
     float valid_normal_threshold;
+};
+
+struct AoCompositeParam {
+    uint   ao_tex;
+    uint   color_tex;
+    uint   ao_mode;
+    uint   padding0;
+    float2 full_resolution;
+    float2 inv_full_resolution;
 };
 
 struct BilateralFilterDenoiserPipelineBindlessParam {

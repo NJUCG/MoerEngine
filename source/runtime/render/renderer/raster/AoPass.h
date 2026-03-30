@@ -19,15 +19,17 @@ public:
     DEFINE_SHADER_ARGS(bdls, param);
 };
 
-class RtaoPipeline : public RasterPipeline {
+class RtaoPipeline : public ComputePipeline {
 public:
-    DEFINE_RASTER_PIPELINE_CLASS(RtaoPipeline);
+    DEFINE_COMPUTE_PIPELINE_CLASS(RtaoPipeline);
 
-    DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(RtaoPipelineBindlessParam, param);
+    DEFINE_SHADER_TEX(rw_ao_only);
+    DEFINE_SHADER_TEX(rw_camera_mv);
+    DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
 
-    DEFINE_SHADER_ARGS(tlas, bdls, param);
+    DEFINE_SHADER_ARGS(param, rw_ao_only, rw_camera_mv, tlas, bdls);
 
     MUTATION_BOOL(RTAO_COSINE_WEIGHTED);
 };
@@ -42,20 +44,32 @@ public:
     DEFINE_SHADER_ARGS(bdls, param);
 };
 
+class AoCompositePipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(AoCompositePipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(AoCompositeParam, param);
+    DEFINE_SHADER_TEX(rw_output);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(param, rw_output, bdls);
+};
+
 /**
  * MARK: AO Pass
  * 
  * AO Pass will calculate CameraMotionVector simultaneously.
- * 
- * TODO: SSDO Support
+ * When ao_half_resolution is enabled, all AO computation and denoising runs
+ * at half resolution, and the result is bilinear-upsampled back to full res.
  */
 class AoPass {
 public:
     struct AoPassOutput {
-        TextureWithHandle ao_with_color;
-        uint              ao_only;
-        uint              ao_only_idx; // 0 or 1 表示ao_only的顺序
-        uint              camera_motion_vector;
+        uint ao_only;     // bindless hdl, for composite
+        uint ao_only_idx; // 0 or 1, for denoiser double-buffering
+    };
+
+    struct AoTextureSet {
+        TextureWithHandle ao_only;
+        TextureWithHandle camera_mv;
     };
 
     AoPass(RasterContext& context) {
@@ -63,8 +77,7 @@ public:
             GfxPsoCreateInfo pso_full_screen_info(
                 RHIRasterizeInfo::Preset(),
                 {},
-                {RHIColorAttachmentInfo::Preset(context.textures.ao_output.tex->GetFormat()),
-                 RHIColorAttachmentInfo::Preset(context.textures.ao_output_ambient_only.tex->GetFormat()),
+                {RHIColorAttachmentInfo::Preset(context.textures.ao_output_ambient_only.tex->GetFormat()),
                  RHIColorAttachmentInfo::Preset(context.textures.camera_motion_vector.tex->GetFormat())}
             );
             return pso_full_screen_info;
@@ -78,23 +91,25 @@ public:
         {
             RtaoSampleModeMacros uniform_macros{};
             uniform_macros.SetMutation<RtaoPipeline::RTAO_COSINE_WEIGHTED>(false);
-            rtao_pipeline_uniform = context.manager.Raster()
-                                       .Vertex("core/utils/FullScreenQuad.hlsl")
-                                       .Pixel("pipelines/postprocess/lighting_effects/Rtao.hlsl", "main", uniform_macros)
-                                       .Build<RtaoPipeline>(create_pso_func());
+            rtao_pipeline_uniform = context.manager.Compute<RtaoPipeline>(
+                "pipelines/postprocess/lighting_effects/Rtao.hlsl", uniform_macros
+            );
 
             RtaoSampleModeMacros cosine_macros{};
             cosine_macros.SetMutation<RtaoPipeline::RTAO_COSINE_WEIGHTED>(true);
-            rtao_pipeline_cosine = context.manager.Raster()
-                                      .Vertex("core/utils/FullScreenQuad.hlsl")
-                                      .Pixel("pipelines/postprocess/lighting_effects/Rtao.hlsl", "main", cosine_macros)
-                                      .Build<RtaoPipeline>(create_pso_func());
+            rtao_pipeline_cosine = context.manager.Compute<RtaoPipeline>(
+                "pipelines/postprocess/lighting_effects/Rtao.hlsl", cosine_macros
+            );
         }
 
         ssdo_pipeline = context.manager.Raster()
                             .Vertex("core/utils/FullScreenQuad.hlsl")
                             .Pixel("pipelines/postprocess/lighting_effects/Ssdo.hlsl")
                             .Build<SsdoPipeline>(std::move(create_pso_func()));
+
+        ao_composite_pipeline = context.manager.Compute<AoCompositePipeline>(
+            "pipelines/postprocess/lighting_effects/AoComposite.hlsl"
+        );
 
         CreateMotionVectorData(context);
     }
@@ -123,27 +138,51 @@ public:
 
     AoPassOutput
     Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera, uint64 frame_idx) {
-        TextureWithHandle ao_only     = context.textures.ao_output_ambient_only;
-        static uint       ao_only_idx = 0;
+        const bool half_res = ui_config.ao_half_resolution;
+
+        TextureWithHandle ao_only_full = context.textures.ao_output_ambient_only;
+        TextureWithHandle ao_only_half = context.textures.ao_output_ambient_only_half;
+        static uint       ao_only_idx  = 0;
         ao_only_idx ^= 1;
         if (ao_only_idx) {
-            ao_only = context.textures.ao_output_ambient_only_1;
+            ao_only_full = context.textures.ao_output_ambient_only_1;
+            ao_only_half = context.textures.ao_output_ambient_only_1_half;
+        }
+
+        AoTextureSet tex_set;
+        if (half_res) {
+            tex_set.ao_only   = ao_only_half;
+            tex_set.camera_mv = context.textures.camera_motion_vector_half;
+        } else {
+            tex_set.ao_only   = ao_only_full;
+            tex_set.camera_mv = context.textures.camera_motion_vector;
         }
 
         if (ui_config.ao_mode == EAoMode::RTAO || ui_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
-            ProcessRtao(context, ui_config, camera, frame_idx, ao_only);
+            ProcessRtao(context, ui_config, camera, frame_idx, tex_set);
         } else if (ui_config.ao_mode == EAoMode::SSDO || ui_config.ao_mode == EAoMode::SSDO_AO_ONLY) {
-            ProcessSsdo(context, ui_config, camera, frame_idx, ao_only);
+            ProcessSsdo(context, ui_config, camera, frame_idx, tex_set);
         } else {
-            ProcessAo(context, ui_config, camera, frame_idx, ao_only);
+            ProcessAo(context, ui_config, camera, frame_idx, tex_set);
         }
 
         return AoPassOutput{
-            .ao_with_color        = context.textures.ao_output,                //
-            .ao_only              = ao_only.hdl,                               //
-            .ao_only_idx          = ao_only_idx,                               //
-            .camera_motion_vector = context.textures.camera_motion_vector.hdl, //
+            .ao_only     = (half_res ? ao_only_half : ao_only_full).hdl,
+            .ao_only_idx = ao_only_idx,
         };
+    }
+
+    void CompositeAo(RasterContext& context, const RasterConfig& ui_config, uint ao_only_hdl) {
+        AoCompositeParam param;
+        param.ao_tex              = ao_only_hdl;
+        param.color_tex           = context.textures.lighting_output.hdl;
+        param.ao_mode             = static_cast<uint>(ui_config.ao_mode);
+        param.full_resolution     = float2(context.textures.ao_output.GetSize());
+        param.inv_full_resolution = float2(1.0f) / param.full_resolution;
+
+        uint2 res = uint2(context.textures.ao_output.GetSize());
+        context.cmd_list.Compute(ao_composite_pipeline, param, context.textures.ao_output.tex, context.bdls)
+            .Dispatch(uint3((res.x + 7u) / 8u, (res.y + 7u) / 8u, 1), "AO Composite Pass");
     }
 
     void ProcessAo(
@@ -151,18 +190,17 @@ public:
         const RasterConfig& ui_config,
         const Camera&       camera,
         uint64              frame_idx,
-        TextureWithHandle   ao_only
+        AoTextureSet        tex_set
     ) {
         AoPipelineBindlessParam param;
 
         param.clip2world        = Transpose(camera.GetViewProjectionMatrixInv());
-        param.inv_resolution    = float2(1.0f) / float2(context.textures.ao_output.GetSize());
+        param.inv_resolution    = float2(1.0f) / float2(tex_set.ao_only.GetSize());
         param.ssao_intensity    = ui_config.ssao_intensity;
         param.ssao_max_distance = ui_config.ssao_max_distance;
         param.ssao_sample_count = ui_config.ssao_spp;
         param.ssao_radius       = ui_config.ssao_sample_radius;
         param.ao_mode           = static_cast<uint32>(ui_config.ao_mode);
-        param.input_image       = context.textures.lighting_output.hdl;
         param.normal_tex        = context.textures.normal.hdl;
         param.depth_tex         = context.textures.depth_linear_sampler.hdl;
         param.noise_tex         = context.textures.noise_tex.hdl;
@@ -173,11 +211,10 @@ public:
         context.cmd_list.Gfx(ao_pipeline, context.bdls, param)
             .Draw(
                 "AO Pass",
-                context.textures.ao_output.GetRect2D(),
+                tex_set.ao_only.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(context.textures.ao_output.tex),
-                ColorAttachment(ao_only.tex),
-                ColorAttachment(context.textures.camera_motion_vector.tex)
+                ColorAttachment(tex_set.ao_only.tex),
+                ColorAttachment(tex_set.camera_mv.tex)
             );
     }
 
@@ -186,42 +223,40 @@ public:
         const RasterConfig& ui_config,
         const Camera&       camera,
         uint64              frame_idx,
-        TextureWithHandle   ao_only
+        AoTextureSet        tex_set
     ) {
-
         RtaoPipelineBindlessParam param;
 
         param.clip2world         = Transpose(camera.GetViewProjectionMatrixInv());
-        param.camera_pos         = camera.GetPosition();
         param.frame_idx          = frame_idx;
-        param.resolution         = float2(context.textures.ao_output.GetSize());
-        param.inv_resolution     = float2(1.0) / float2(context.textures.ao_output.GetSize());
-        param.input_image        = context.textures.lighting_output.hdl;
         param.normal_tex         = context.textures.normal.hdl;
         param.depth_tex          = context.textures.depth_nearest_sampler.hdl;
-        param.ao_mode            = static_cast<uint>(ui_config.ao_mode);
-        param.sample_mode        = static_cast<uint>(ui_config.rtao_sample_mode);
         param.spp                = ui_config.rtao_spp;
+        param.resolution         = float2(tex_set.ao_only.GetSize());
+        param.inv_resolution     = float2(1.0) / param.resolution;
         param.ray_trace_distance = ui_config.rtao_ray_trace_distance;
         param.intensity          = ui_config.rtao_intensity;
 
         UpdateMotionVectorData(context, camera);
         param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
         param.noise_tex             = context.textures.noise_tex.hdl;
+        param.depth_tex_resolution  = float2(context.textures.depth_nearest_sampler.GetSize());
 
-        auto& active_rtao_pipeline = (ui_config.rtao_sample_mode == ERtaoSampleMode::COSINE_WEIGHTED)
-                                         ? rtao_pipeline_cosine
-                                         : rtao_pipeline_uniform;
+        auto& active_rtao_pipeline = (ui_config.rtao_sample_mode == ERtaoSampleMode::COSINE_WEIGHTED) ?
+                                         rtao_pipeline_cosine :
+                                         rtao_pipeline_uniform;
 
-        context.cmd_list.Gfx(active_rtao_pipeline, context.rt_scene()->GetTlas(), context.bdls, param)
-            .Draw(
-                "RTAO Pass",
-                context.textures.ao_output.GetRect2D(),
-                std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(context.textures.ao_output.tex),
-                ColorAttachment(ao_only.tex),
-                ColorAttachment(context.textures.camera_motion_vector.tex)
-            );
+        uint2 res = uint2(tex_set.ao_only.GetSize());
+        context.cmd_list
+            .Compute(
+                active_rtao_pipeline,
+                param,
+                tex_set.ao_only.tex,
+                tex_set.camera_mv.tex,
+                context.rt_scene()->GetTlas(),
+                context.bdls
+            )
+            .Dispatch(uint3((res.x + 7u) / 8u, (res.y + 7u) / 8u, 1), "RTAO Compute Pass");
     }
 
     void ProcessSsdo(
@@ -229,12 +264,12 @@ public:
         const RasterConfig& ui_config,
         const Camera&       camera,
         uint64              frame_idx,
-        TextureWithHandle   ao_only
+        AoTextureSet        tex_set
     ) {
         SsdoPipelineBindlessParam param;
 
         param.clip2world              = Transpose(camera.GetViewProjectionMatrixInv());
-        param.inv_resolution          = float2(1.0f) / float2(context.textures.ao_output.GetSize());
+        param.inv_resolution          = float2(1.0f) / float2(tex_set.ao_only.GetSize());
         param.ssdo_sample_count       = ui_config.ssao_spp;
         param.ssdo_radius             = ui_config.ssdo_sample_radius;
         param.ssdo_max_distance       = ui_config.ssdo_max_distance;
@@ -255,19 +290,19 @@ public:
         context.cmd_list.Gfx(ssdo_pipeline, context.bdls, param)
             .Draw(
                 "SSDO Pass",
-                context.textures.ao_output.GetRect2D(),
+                tex_set.ao_only.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(context.textures.ao_output.tex),
-                ColorAttachment(ao_only.tex),
-                ColorAttachment(context.textures.camera_motion_vector.tex)
+                ColorAttachment(tex_set.ao_only.tex),
+                ColorAttachment(tex_set.camera_mv.tex)
             );
     }
 
 private:
-    AoPipeline   ao_pipeline;
-    RtaoPipeline rtao_pipeline_uniform;
-    RtaoPipeline rtao_pipeline_cosine;
-    SsdoPipeline ssdo_pipeline;
+    AoPipeline          ao_pipeline;
+    RtaoPipeline        rtao_pipeline_uniform;
+    RtaoPipeline        rtao_pipeline_cosine;
+    SsdoPipeline        ssdo_pipeline;
+    AoCompositePipeline ao_composite_pipeline;
 
     CameraMotionVectorData camera_mv_data_in_cpu; // mv: motion vector
     BufferWithHandle       camera_mv_data_in_gpu; // mv: motion vector

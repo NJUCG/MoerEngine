@@ -36,7 +36,7 @@ struct TexConfig {
     void*       alias_ptr          = nullptr;
     bool        is_asset           = false;
     bool        b_create_mip_views = false;
-    bool        b_super_resolution = false;
+    bool        b_downsampled      = false;
 
     //为Depth设计，共用一张纹理
     template<typename T>
@@ -107,8 +107,8 @@ struct TexConfig {
         return *this;
     }
 
-    TexConfig& SR(bool b) {
-        b_super_resolution = b;
+    TexConfig& DownSampled(bool b = true) {
+        b_downsampled = b;
         return *this;
     }
 
@@ -237,11 +237,7 @@ public:
                 cfg.dim  = ETextureDimension::TEX_2D;
 
                 target.tex = device.CreateDepthBuffer(
-                    name,
-                    (cfg.b_super_resolution ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)),
-                    cfg.format,
-                    1,
-                    cfg.usage
+                    name, Extent2D(size.x, size.y), cfg.format, 1, cfg.usage
                 );
             } else if constexpr (std::is_same_v<IntentTag, TexCubeTag>) {
                 cfg.type = TexType::TEX_TYPE_CUBE;
@@ -249,34 +245,21 @@ public:
                 cfg.size = {0, 0, 6};
 
                 target.tex = device.CreateCubeMap(
-                    name,
-                    (cfg.b_super_resolution ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)),
-                    cfg.format,
-                    cfg.usage,
-                    cfg.mip_cnt
+                    name, Extent2D(size.x, size.y), cfg.format, cfg.usage, cfg.mip_cnt
                 );
             } else if constexpr (std::is_same_v<IntentTag, Tex2DTag>) {
                 cfg.type = TexType::TEX_TYPE_2D;
                 cfg.dim  = ETextureDimension::TEX_2D;
 
                 target.tex = device.CreateTexture(
-                    name,
-                    (cfg.b_super_resolution ? Extent2D(size.x / 2, size.y / 2) : Extent2D(size.x, size.y)),
-                    cfg.format,
-                    cfg.usage,
-                    cfg.mip_cnt
+                    name, Extent2D(size.x, size.y), cfg.format, cfg.usage, cfg.mip_cnt
                 );
             } else {
                 static_assert(always_false<T_Holder>, "Unsupported Tex IntentTag");
             }
 
             if (is_verbose) {
-                LOG_DEBUG(
-                    "tex {}, size {} x {}",
-                    name,
-                    (cfg.b_super_resolution ? size.x / 2 : size.x),
-                    (cfg.b_super_resolution ? size.y / 2 : size.y)
-                );
+                LOG_DEBUG("tex {}, size {} x {}", name, size.x, size.y);
             }
         }
     }

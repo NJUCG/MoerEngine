@@ -22,7 +22,6 @@
 #if WITH_CUDA
 #include "CudaPass.h"
 #include "TensorRTPass.h"
-#include "UpsamplePass.h"
 #endif
 
 namespace Moer::Render::Raster {
@@ -71,7 +70,6 @@ RasterRenderer::RasterRenderer(
         raster_context.textures.camera_motion_vector.tex,
         raster_context.textures.ao_output_ambient_only_1.tex
     );
-    upsample_pass = MakeUnique<UpsamplePass>(raster_context);
 #endif
 
     cmd_list.UpdateBindlessArray(bindless_array);
@@ -274,18 +272,17 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // Post Process Passes
         // - Ambient Occlusion
-        auto              ao_result        = ao_pass->Process(raster_context, raster_config, camera, time);
-        TextureWithHandle processing_image = ao_result.ao_with_color;
-        uint              ao_only_idx      = ao_result.ao_only_idx;
+        auto ao_result = ao_pass->Process(raster_context, raster_config, camera, time);
 
-        rtao_denoiser_pass->ProcessInPlace(raster_context, raster_config, ao_only_idx);
+        rtao_denoiser_pass->ProcessInPlace(raster_context, raster_config, ao_result.ao_only_idx);
+        ao_pass->CompositeAo(raster_context, raster_config, ao_result.ao_only);
+
+        TextureWithHandle processing_image = raster_context.textures.ao_output;
 
         // - CUDA Pass
 #if WITH_CUDA
         if (raster_config.ai_is_cuda_enabled) {
-            processing_image = tensor_rt_pass->Process(
-                raster_context, raster_config, ao_only_idx
-            ); //如果开启了该Pass，Ao结果会被替换成TensorRT的结果（在纹理context.textures.lighting_output上执行），后续在该纹理上处理。否则，在纹理ao_with_color上处理
+            processing_image = tensor_rt_pass->Process(raster_context, raster_config, ao_result.ao_only_idx);
         }
 #endif
 
@@ -298,12 +295,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // - Anti-aliasing
         processing_image = aa_pass->Process(raster_context, raster_config, camera, processing_image);
 
-#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
-        // - Upsample Pass
-        processing_image = upsample_pass->Process(raster_context, raster_config, processing_image);
-#endif
-
-        //Bloom Pass
+        // - Bloom Pass
         processing_image = bloom_pass->Process(raster_context, raster_config, processing_image);
 
         // - Tonemapping Pass

@@ -42,16 +42,7 @@ public:
 
     float frame_time;
 
-    // 超分Pass前的分辨率
-    uint2 GetResolutionBeforeSR() {
-#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
-        return uint2(resolution.x / 2.0f, resolution.y / 2.0f);
-#else
-        return uint2(resolution.x, resolution.y);
-#endif
-    }
-    // 超分Pass后的分辨率（原始分辨率）
-    uint2 GetResolutionOriginal() {
+    uint2 GetResolution() {
         return uint2(resolution.x, resolution.y);
     }
 

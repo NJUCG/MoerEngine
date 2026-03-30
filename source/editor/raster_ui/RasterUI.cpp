@@ -285,6 +285,9 @@ void RasterUI::ShowConfig() {
             draw_border();
         }
 
+        ImGui::Separator();
+        ImGui::Checkbox("Half Resolution AO", &m_config.ao_half_resolution);
+
         if (m_config.ao_mode == EAoMode::SSAO || m_config.ao_mode == EAoMode::SSAO_AO_ONLY) {
             ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
             ImGui::SliderFloat("Ray Trace Radius", &m_config.ssao_max_distance, 0.0f, 5.0f);

@@ -171,10 +171,12 @@ struct RasterConfig {
 
     // MARK: AO
     EAoMode ao_mode            = EAoMode::RTAO;
-    float   ssao_intensity     = 1.0f;
-    int     ssao_spp           = 16;
-    int     ssao_sample_radius = 16;
-    float   ssao_max_distance  = 1.0f;
+    bool    ao_half_resolution = true;
+
+    float ssao_intensity     = 1.0f;
+    int   ssao_spp           = 16;
+    int   ssao_sample_radius = 16;
+    float ssao_max_distance  = 1.0f;
 
     ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
     float           rtao_intensity          = 1.0f;
