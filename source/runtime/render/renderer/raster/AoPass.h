@@ -28,7 +28,11 @@ public:
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
 
     DEFINE_SHADER_ARGS(tlas, bdls, param);
+
+    MUTATION_BOOL(RTAO_COSINE_WEIGHTED);
 };
+
+MUTATION_SET(RtaoSampleModeMacros, RtaoPipeline::RTAO_COSINE_WEIGHTED);
 
 class SsdoPipeline : public RasterPipeline {
 public:
@@ -71,10 +75,21 @@ public:
                           .Pixel("pipelines/postprocess/lighting_effects/Ao.hlsl")
                           .Build<AoPipeline>(std::move(create_pso_func()));
 
-        rtao_pipeline = context.manager.Raster()
-                            .Vertex("core/utils/FullScreenQuad.hlsl")
-                            .Pixel("pipelines/postprocess/lighting_effects/Rtao.hlsl")
-                            .Build<RtaoPipeline>(std::move(create_pso_func()));
+        {
+            RtaoSampleModeMacros uniform_macros{};
+            uniform_macros.SetMutation<RtaoPipeline::RTAO_COSINE_WEIGHTED>(false);
+            rtao_pipeline_uniform = context.manager.Raster()
+                                       .Vertex("core/utils/FullScreenQuad.hlsl")
+                                       .Pixel("pipelines/postprocess/lighting_effects/Rtao.hlsl", "main", uniform_macros)
+                                       .Build<RtaoPipeline>(create_pso_func());
+
+            RtaoSampleModeMacros cosine_macros{};
+            cosine_macros.SetMutation<RtaoPipeline::RTAO_COSINE_WEIGHTED>(true);
+            rtao_pipeline_cosine = context.manager.Raster()
+                                      .Vertex("core/utils/FullScreenQuad.hlsl")
+                                      .Pixel("pipelines/postprocess/lighting_effects/Rtao.hlsl", "main", cosine_macros)
+                                      .Build<RtaoPipeline>(create_pso_func());
+        }
 
         ssdo_pipeline = context.manager.Raster()
                             .Vertex("core/utils/FullScreenQuad.hlsl")
@@ -192,8 +207,13 @@ public:
 
         UpdateMotionVectorData(context, camera);
         param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
+        param.noise_tex             = context.textures.noise_tex.hdl;
 
-        context.cmd_list.Gfx(rtao_pipeline, context.rt_scene()->GetTlas(), context.bdls, param)
+        auto& active_rtao_pipeline = (ui_config.rtao_sample_mode == ERtaoSampleMode::COSINE_WEIGHTED)
+                                         ? rtao_pipeline_cosine
+                                         : rtao_pipeline_uniform;
+
+        context.cmd_list.Gfx(active_rtao_pipeline, context.rt_scene()->GetTlas(), context.bdls, param)
             .Draw(
                 "RTAO Pass",
                 context.textures.ao_output.GetRect2D(),
@@ -245,7 +265,8 @@ public:
 
 private:
     AoPipeline   ao_pipeline;
-    RtaoPipeline rtao_pipeline;
+    RtaoPipeline rtao_pipeline_uniform;
+    RtaoPipeline rtao_pipeline_cosine;
     SsdoPipeline ssdo_pipeline;
 
     CameraMotionVectorData camera_mv_data_in_cpu; // mv: motion vector

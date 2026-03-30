@@ -88,6 +88,9 @@ struct RtaoPipelineBindlessParam {
     float intensity;
 
     uint camera_mv_data_handle; // for camera motion vector
+    uint noise_tex;             // blue noise texture for spatially coherent sampling
+    uint padding0;
+    uint padding1;
 };
 
 struct RtaoDenoiserPassBindlessParam {

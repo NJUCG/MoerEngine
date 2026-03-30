@@ -17,10 +17,9 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 // 定义了AoOutput、CameraMotionVector等函�?
 #include "pipelines/postprocess/lighting_effects/AoCommon.hlsl"
 
-// TODO: 代码整理
-namespace Moer {
-typedef Math::Rng::Hash RandomState;
-}
+// R2 quasi-random sequence offsets (generalized golden ratio for 2D)
+// phi_2 = 1.32471795724..., alpha1 = 1/phi_2, alpha2 = 1/phi_2^2
+static const float2 R2_ALPHA = float2(0.7548776662466927, 0.5698402909980532);
 
 // y>=0半球上均匀采样
 float4 SampleHemisphere(float2 u) { // uv in [0, 1)^2
@@ -50,10 +49,8 @@ float3 LocalVectorToWorld(float3 local_vector, float3 normal) {
            + local_vector.z * bitangent;
 }
 
-// TODO: 和RT那边的函数合�?
 bool CastVisibilityRay(float3 origin, float3 direction, float tmin, float tmax,
-                       RaytracingAccelerationStructure accel,
-                       uint instance_mask, uint ray_flags) {
+                       RaytracingAccelerationStructure accel) {
   RayDesc ray_desc;
   ray_desc.Origin = origin;
   ray_desc.Direction = direction;
@@ -61,18 +58,11 @@ bool CastVisibilityRay(float3 origin, float3 direction, float tmin, float tmax,
   ray_desc.TMax = tmax;
 
   RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES |
-           RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
+           RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+           RAY_FLAG_FORCE_OPAQUE>
       ray_query;
-  ray_query.TraceRayInline(accel, ray_flags, instance_mask, ray_desc);
-
-  while (ray_query.Proceed()) {
-    if (ray_query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
-      ray_query.CommitNonOpaqueTriangleHit();
-    } else {
-      ray_query.Abort();
-      break;
-    }
-  }
+  ray_query.TraceRayInline(accel, RAY_FLAG_NONE, Moer::RTVM_ALL, ray_desc);
+  ray_query.Proceed();
 
   return ray_query.CommittedStatus() == COMMITTED_NOTHING;
 }
@@ -93,59 +83,38 @@ AoOutput get_rtao(float2 uv) {
     }
     frag_normal = Raster::UnpackNormal(frag_normal);
 
-    Moer::RandomState rng = Moer::RandomState::Create(uv * param.resolution, param.frame_idx);
-
     float3 frag_position = WorldPosFromDepthTexture(param.depth_tex, uv, param.clip2world);
+
+    // Blue noise base value — spatially coherent across neighboring pixels
+    float2 noise_uv = uv * param.resolution / 256.0;
+    float2 blue_noise_base = TextureHandle(param.noise_tex).Sample2D<float2>(noise_uv);
 
     // Raytraced AO
     float total_ray_contrib = 0.0;
     float visible_ray_contrib = 0.0;
     for (uint i = 0; i < param.spp; i++) {
-        float2 rand_value = rng.GetFloat2();
-        float4 rand_vec;
-        if (param.sample_mode == 0) {
-            rand_vec = SampleHemisphere(rand_value);
-        } else {
-            rand_vec = SampleCosineHemisphere(rand_value);
-        }
+        // Cranley-Patterson rotation with R2 quasi-random sequence for temporal + per-sample variation
+        float2 rand_value = frac(blue_noise_base + R2_ALPHA * float(param.frame_idx * param.spp + i));
+#if RTAO_COSINE_WEIGHTED
+        float4 rand_vec = SampleCosineHemisphere(rand_value);
+#else
+        float4 rand_vec = SampleHemisphere(rand_value);
+#endif
         float3 direction = LocalVectorToWorld(rand_vec.xyz, frag_normal);
+        float ray_weight = max(dot(frag_normal, direction), 0.05f) / max(/* pdf */ rand_vec.w, 0.05f);
+
         bool is_miss = CastVisibilityRay(
             frag_position + frag_normal * 0.01,
             direction,
             0.f,
             param.ray_trace_distance,
-            tlas,
-            Moer::RTVM_ALL, // instance_mask
-            RAY_FLAG_NONE   // ray_flags
+            tlas
         );
-
-        float ray_weight = max(dot(frag_normal, direction), 0.05f) / max(/* pdf */ rand_vec.w, 0.05f);
 
         total_ray_contrib += ray_weight;
         visible_ray_contrib += ray_weight * (is_miss ? 1.0 : (1.0 - param.intensity));
     }
 
-    // if (uv.x <= param.inv_resolution.x && uv.y <= param.inv_resolution.y) {
-    //     printf(
-    //         "FragPos (%.2f %.2f %.2f); FragNormal (%.2f %.2f %.2f); RandVa (%.4f %.4f); RandVector (%.4f %.4f %.4f); Direction (%.4f %.4f %.4f); is_sky: %d\n",
-    //         frag_position.x,
-    //         frag_position.y,
-    //         frag_position.z,
-    //         frag_normal.x,
-    //         frag_normal.y,
-    //         frag_normal.z,
-    //         rand_value.x,
-    //         rand_value.y,
-    //         rand_vec.x,
-    //         rand_vec.y,
-    //         rand_vec.z,
-    //         direction.x,
-    //         direction.y,
-    //         direction.z,
-    //         int(is_sky)
-    //     );
-    // }
-    
     float ao = visible_ray_contrib / total_ray_contrib;
 
     AoOutput output;
