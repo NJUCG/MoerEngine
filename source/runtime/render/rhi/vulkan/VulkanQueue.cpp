@@ -219,33 +219,6 @@ struct VkCmdPreprocessor {
             }
         }
 
-        // New bindless resources start with UNKNOWN/UNDEFINED state. We only
-        // touch the incremental pending-init set here instead of scanning the
-        // whole bindless array every use.
-        for (const auto& pending : vk_bindless_array->GetPendingInitResources()) {
-            if (pending.resource == 0) {
-                continue;
-            }
-
-            if (pending.type == VulkanBindlessArray::PendingInitResource::EType::Texture) {
-                auto* vk_texture = reinterpret_cast<VulkanTexture*>(pending.resource);
-                auto  access     = tracker.ReadTexture(vk_texture, ETextureState::SAMPLE, pass_type);
-                tracker.RecordState(
-                    vk_texture,
-                    std::get<0>(access),
-                    std::get<1>(access),
-                    std::get<2>(access),
-                    pending.mip_level,
-                    pending.mip_count,
-                    pending.array_layer,
-                    pending.array_count
-                );
-            } else {
-                auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(pending.resource);
-                tracker.RecordState(vk_buffer, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages);
-            }
-        }
-
         tracker.RecordState(
             vk_bindless_array->bindless_texture_descs,
             VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT,
@@ -738,8 +711,8 @@ struct VkCmdPreprocessor {
                     std::get<2>(access),
                     static_cast<uint8>(barrier.mip_level),
                     static_cast<uint8>(barrier.mip_cnt),
-                    0,
-                    kRemainingSubresource
+                    static_cast<uint8>(barrier.array_layer),
+                    static_cast<uint8>(barrier.array_count)
                 );
             }
             for (auto& barrier : _cmd->WriteTextures()) {
@@ -752,8 +725,8 @@ struct VkCmdPreprocessor {
                     std::get<2>(access),
                     static_cast<uint8>(barrier.mip_level),
                     static_cast<uint8>(barrier.mip_cnt),
-                    0,
-                    kRemainingSubresource
+                    static_cast<uint8>(barrier.array_layer),
+                    static_cast<uint8>(barrier.array_count)
                 );
             }
 
@@ -814,8 +787,8 @@ struct VkCmdPreprocessor {
                 std::get<2>(access),
                 static_cast<uint8>(barrier.mip_level),
                 static_cast<uint8>(barrier.mip_cnt),
-                0,
-                kRemainingSubresource,
+                static_cast<uint8>(barrier.array_layer),
+                static_cast<uint8>(barrier.array_count),
                 src_queue_family,
                 dst_queue_family
             );
@@ -830,8 +803,8 @@ struct VkCmdPreprocessor {
                 std::get<2>(access),
                 static_cast<uint8>(barrier.mip_level),
                 static_cast<uint8>(barrier.mip_cnt),
-                0,
-                kRemainingSubresource,
+                static_cast<uint8>(barrier.array_layer),
+                static_cast<uint8>(barrier.array_count),
                 src_queue_family,
                 dst_queue_family
             );

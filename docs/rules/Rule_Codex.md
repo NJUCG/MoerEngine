@@ -1,0 +1,5 @@
+- 不要兜底/兼容实现
+- 不要过度设计
+- 基于Test验证
+- 过滤validation,只关注error
+- windows下运行脚本使用powershell

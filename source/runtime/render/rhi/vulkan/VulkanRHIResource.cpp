@@ -1940,9 +1940,16 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         return _a_start < b_end && _b_start < a_end;
     }
 
-    static bool IsTextureStillUnknown(uint64 resource) {
+    static bool IsTextureStillUnknown(
+        uint64 resource,
+        uint8  mip_level,
+        uint8  mip_count,
+        uint8  array_layer,
+        uint8  array_count
+    ) {
         auto* texture = reinterpret_cast<Texture*>(resource);
-        return texture != nullptr && !texture->GetPersistentState().known;
+        return texture != nullptr &&
+               !texture->AreSubresourceStatesKnown(mip_level, mip_count, array_layer, array_count);
     }
 
     static bool IsBufferStillUnknown(uint64 resource) {
@@ -1990,7 +1997,12 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         }
 
         auto* texture = _view.texture;
-        if (texture->GetPersistentState().known) {
+        if (texture->AreSubresourceStatesKnown(
+                _view.mip_level,
+                _view.num_mips,
+                _view.array_layer,
+                _view.num_array
+            )) {
             pending_init_resources.erase(_array_idx);
             return;
         }
@@ -2035,7 +2047,14 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         for (auto iter = pending_init_resources.begin(); iter != pending_init_resources.end();) {
             const auto& pending = iter->second;
             const bool still_unknown =
-                pending.type == PendingInitResource::EType::Texture ? IsTextureStillUnknown(pending.resource) :
+                pending.type == PendingInitResource::EType::Texture ?
+                    IsTextureStillUnknown(
+                        pending.resource,
+                        pending.mip_level,
+                        pending.mip_count,
+                        pending.array_layer,
+                        pending.array_count
+                    ) :
                                                                       IsBufferStillUnknown(pending.resource);
             if (!still_unknown) {
                 iter = pending_init_resources.erase(iter);

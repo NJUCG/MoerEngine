@@ -907,7 +907,7 @@ public:
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
             layer = GetLastLayerRead(range_handle, Range(offset, size));
         }
-        for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->ReadTextures()) {
+        for (const auto& [handle, state, pass_type, mip_level, mip_cnt, array_layer, array_count] : _cmd->ReadTextures()) {
             RangeHandle* range_handle =
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
             layer = GetLastLayerRead(range_handle, Range(mip_level, mip_cnt));
@@ -921,7 +921,7 @@ public:
             barrier_ranges.emplace_back(Range(offset, size));
         }
 
-        for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->WriteTextures()) {
+        for (const auto& [handle, state, pass_type, mip_level, mip_cnt, array_layer, array_count] : _cmd->WriteTextures()) {
             RangeHandle* range_handle =
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
             layer = GetLastLayerRead(range_handle, Range(mip_level, mip_cnt));

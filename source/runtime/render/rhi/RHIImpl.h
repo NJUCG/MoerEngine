@@ -545,6 +545,8 @@ struct TextureBarrier {
     EPassType     pass_type;
     uint          mip_level : 8;
     uint          mip_cnt : 8;
+    uint          array_layer : 8;
+    uint          array_count : 8;
 };
 
 struct BufferBarrier {
@@ -573,7 +575,9 @@ public:
                 _dst_state,
                 _pass_type,
                 _view.mip_level,
-                _view.num_mips
+                _view.num_mips,
+                _view.array_layer,
+                _view.num_array
             }
         );
         return *this;
@@ -585,7 +589,9 @@ public:
                 _dst_state,
                 _pass_type,
                 _view.mip_level,
-                _view.num_mips
+                _view.num_mips,
+                _view.array_layer,
+                _view.num_array
             }
         );
         return *this;
@@ -780,7 +786,7 @@ public:
     }
 
     bool HasUpdates() const {
-        return !array_indices_dat.empty();
+        return !array_indices_dat.empty() || !buffer_indices_dat.empty() || !texture_indices_dat.empty();
     }
     bool HasBufferUpdates() const {
         return !buffer_indices_dat.empty();

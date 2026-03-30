@@ -666,7 +666,10 @@ struct TextureInfo {
 
 class Texture : public RHIResource {
 public:
-    Texture(const TextureInfo& _info) : RHIResource(RRT_TEXTURE), info(_info) {}
+    Texture(const TextureInfo& _info) :
+        RHIResource(RRT_TEXTURE),
+        persistent_subresource_states(size_t(_info.num_mips) * size_t(_info.array_size)),
+        info(_info) {}
 
     uint32_t GetNumMips() const {
         return info.num_mips;
@@ -702,13 +705,44 @@ public:
     const std::string_view GetName() const {
         return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data());
     }
-    TexturePersistentState GetPersistentState() const {
+    TexturePersistentState GetPersistentState(uint8 _mip_level, uint8 _array_layer) const {
         std::lock_guard<std::mutex> lock(persistent_state_mutex);
-        return persistent_state;
+        return persistent_subresource_states[GetPersistentStateIndex(_mip_level, _array_layer)];
     }
-    void SetPersistentState(const TexturePersistentState& state) {
+    void SetPersistentState(uint8 _mip_level, uint8 _array_layer, const TexturePersistentState& state) {
         std::lock_guard<std::mutex> lock(persistent_state_mutex);
-        persistent_state = state;
+        persistent_subresource_states[GetPersistentStateIndex(_mip_level, _array_layer)] = state;
+    }
+    bool AreSubresourceStatesKnown(
+        uint8 _mip_level,
+        uint8 _mip_count,
+        uint8 _array_layer,
+        uint8 _array_count
+    ) const {
+        std::lock_guard<std::mutex> lock(persistent_state_mutex);
+        uint8 mip_count =
+            _mip_count == kRemainingSubresource ? uint8(GetNumMips() - _mip_level) : _mip_count;
+        uint8 array_count =
+            _array_count == kRemainingSubresource ? uint8(GetNumArray() - _array_layer) : _array_count;
+        assert(_mip_level < GetNumMips() && "mip_level out of range");
+        assert(_array_layer < GetNumArray() && "array_layer out of range");
+        assert(mip_count >= 1 && "mip_count must be >= 1");
+        assert(array_count >= 1 && "array_count must be >= 1");
+        assert(_mip_level + mip_count <= GetNumMips() && "mip range out of range");
+        assert(_array_layer + array_count <= GetNumArray() && "array range out of range");
+
+        for (uint8 mip = 0; mip < mip_count; ++mip) {
+            for (uint8 layer = 0; layer < array_count; ++layer) {
+                if (!persistent_subresource_states[GetPersistentStateIndex(
+                         uint8(_mip_level + mip),
+                         uint8(_array_layer + layer)
+                     )]
+                         .known) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
     RENDER_API TextureView  GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
     RENDER_API TextureView  GetView(EPixelFormat _format, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
@@ -717,9 +751,14 @@ public:
 protected:
     std::optional<std::string> debug_name;
     mutable std::mutex         persistent_state_mutex{};
-    TexturePersistentState     persistent_state{};
+    Array<TexturePersistentState> persistent_subresource_states{};
 
 private:
+    size_t GetPersistentStateIndex(uint8 _mip_level, uint8 _array_layer) const {
+        assert(_mip_level < GetNumMips() && "mip_level out of range");
+        assert(_array_layer < GetNumArray() && "array_layer out of range");
+        return size_t(_array_layer) * size_t(GetNumMips()) + size_t(_mip_level);
+    }
     friend DepthBuffer;
     TextureInfo info;
 };
