@@ -113,7 +113,7 @@ struct RasterConfig {
 
     bool  geometry_enable_alpha_test             = true;
     float geometry_alpha_test_blend_pixel_cutoff = 0.5f; // 当AlphaMode为BLEND时，低于该值的像素会被丢弃
-    bool  enable_frustum_culling                 = true; // GPU视锥剔除
+    bool  enable_frustum_culling                 = false; // GPU视锥剔除
 
     // MARK: Culling Statistics (只读，由GPU更新)
     struct CullingStats {

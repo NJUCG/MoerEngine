@@ -252,6 +252,12 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // FIXME: 统一update scene
         // scene.GetGpuScene().UpdateRaytracingScene(cmd_list);
 
+        // 当启用视锥剔除时，先恢复完整的 draw commands，
+        // 确保 ShadowDepthPass 使用未被上一帧剔除的完整场景数据
+        if (raster_config.enable_frustum_culling) {
+            raster_context.scene.RestoreDrawCommands(raster_context.cmd_list);
+        }
+
         // Shadow Depth Pass
         shadow_depth_pass->Process(raster_context, raster_config, camera);
 
