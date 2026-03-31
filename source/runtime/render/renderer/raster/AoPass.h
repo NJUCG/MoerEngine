@@ -177,8 +177,18 @@ public:
         param.ao_tex              = ao_only_hdl;
         param.color_tex           = context.textures.lighting_output.hdl;
         param.ao_mode             = static_cast<uint>(ui_config.ao_mode);
+        param.is_half_resolution  = ui_config.ao_half_resolution ? 1u : 0u;
         param.full_resolution     = float2(context.textures.ao_output.GetSize());
         param.inv_full_resolution = float2(1.0f) / param.full_resolution;
+        param.depth_tex           = context.textures.depth_nearest_sampler.hdl;
+        param.normal_tex          = context.textures.normal.hdl;
+
+        if (ui_config.ao_half_resolution) {
+            uint2 full = uint2(context.textures.ao_output.GetSize());
+            param.ao_resolution = float2(std::max(1u, full.x / 2), std::max(1u, full.y / 2));
+        } else {
+            param.ao_resolution = param.full_resolution;
+        }
 
         uint2 res = uint2(context.textures.ao_output.GetSize());
         context.cmd_list.Compute(ao_composite_pipeline, param, context.textures.ao_output.tex, context.bdls)

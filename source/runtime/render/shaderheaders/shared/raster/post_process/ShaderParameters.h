@@ -102,12 +102,15 @@ struct RtaoDenoiserPassBindlessParam {
 };
 
 struct AoCompositeParam {
+    float2 full_resolution;
+    float2 inv_full_resolution;
+    float2 ao_resolution;
     uint   ao_tex;
     uint   color_tex;
     uint   ao_mode;
-    uint   padding0;
-    float2 full_resolution;
-    float2 inv_full_resolution;
+    uint   is_half_resolution;
+    uint   depth_tex;
+    uint   normal_tex;
 };
 
 struct BilateralFilterDenoiserPipelineBindlessParam {

@@ -181,7 +181,7 @@ struct RasterConfig {
     ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
     float           rtao_intensity          = 1.0f;
     float           rtao_ray_trace_distance = 1.0f;
-    int             rtao_spp                = 4;
+    int             rtao_spp                = 8;
 
     bool  rtao_denoiser_enable                 = true;
     bool  rtao_denoiser_reprojection_enable    = true;
