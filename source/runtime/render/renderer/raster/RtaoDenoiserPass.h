@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "math/Function.h"
 #include "scene/camera/Camera.h"
@@ -31,8 +31,8 @@ public:
 /**
  * MARK: RtaoDenoiser Pass
  * 
- * 这个Pass主要是为了解决TensorRT Pass网络产生的噪点；
- * 注意，这个pass重用了ao_output作为输出
+ * 时序降噪：读取当前帧 ao_only 和历史 accumulate，
+ * 输出降噪后的 accumulate，再通过 Copy Pass 写回 ao_only。
  */
 class RtaoDenoiserPass {
 public:
@@ -43,8 +43,7 @@ public:
             GfxPsoCreateInfo pso_full_screen_info(
                 RHIRasterizeInfo::Preset(),
                 {},
-                {RHIColorAttachmentInfo::Preset(img_denoiser_history_write.tex->GetFormat()),
-                 RHIColorAttachmentInfo::Preset(context.textures.ao_output.tex->GetFormat())}
+                {RHIColorAttachmentInfo::Preset(img_denoiser_history_write.tex->GetFormat())}
             );
 
             rtao_denoiser_pso = context.manager.Raster()
@@ -72,24 +71,36 @@ public:
         if (!ui_config.rtao_denoiser_enable)
             return ao_only_idx;
 
+        const bool half_res = ui_config.ao_half_resolution;
+
         if (ao_only_idx == 0) {
-            img_denoiser_history_read  = context.textures.ao_denoiser_accumulate_1;
-            img_denoiser_history_write = context.textures.ao_denoiser_accumulate;
-            img_ao_only                = context.textures.ao_output_ambient_only;
-            img_ao_only_prev           = context.textures.ao_output_ambient_only_1;
+            img_denoiser_history_read  = half_res ? context.textures.ao_denoiser_accumulate_1_half :
+                                                    context.textures.ao_denoiser_accumulate_1;
+            img_denoiser_history_write = half_res ? context.textures.ao_denoiser_accumulate_half :
+                                                    context.textures.ao_denoiser_accumulate;
+            img_ao_only                = half_res ? context.textures.ao_output_ambient_only_half :
+                                                    context.textures.ao_output_ambient_only;
+            img_ao_only_prev           = half_res ? context.textures.ao_output_ambient_only_1_half :
+                                                    context.textures.ao_output_ambient_only_1;
         } else {
-            img_denoiser_history_read  = context.textures.ao_denoiser_accumulate;
-            img_denoiser_history_write = context.textures.ao_denoiser_accumulate_1;
-            img_ao_only                = context.textures.ao_output_ambient_only_1;
-            img_ao_only_prev           = context.textures.ao_output_ambient_only;
+            img_denoiser_history_read  = half_res ? context.textures.ao_denoiser_accumulate_half :
+                                                    context.textures.ao_denoiser_accumulate;
+            img_denoiser_history_write = half_res ? context.textures.ao_denoiser_accumulate_1_half :
+                                                    context.textures.ao_denoiser_accumulate_1;
+            img_ao_only                = half_res ? context.textures.ao_output_ambient_only_1_half :
+                                                    context.textures.ao_output_ambient_only_1;
+            img_ao_only_prev           = half_res ? context.textures.ao_output_ambient_only_half :
+                                                    context.textures.ao_output_ambient_only;
         }
 
-        // Pass 1
+        TextureWithHandle camera_mv_target =
+            half_res ? context.textures.camera_motion_vector_half : context.textures.camera_motion_vector;
+
+        // Pass 1: temporal accumulation
         RtaoDenoiserPassBindlessParam param;
         param.history_ao_tex    = img_denoiser_history_read.hdl;
         param.curr_ao_tex       = img_ao_only.hdl;
-        param.color_tex         = context.textures.lighting_output.hdl;
-        param.motion_vector_tex = context.textures.camera_motion_vector.hdl;
+        param.motion_vector_tex = camera_mv_target.hdl;
         param.depth_tex         = context.textures.depth_nearest_sampler.hdl;
         param.normal_tex        = context.textures.normal.hdl;
 
@@ -97,7 +108,6 @@ public:
         param.valid_depth_threshold  = ui_config.rtao_denoiser_valid_depth_threshold;
         param.valid_normal_threshold = ui_config.rtao_denoiser_valid_normal_threshold;
 
-        param.is_rtao_ao_only        = (ui_config.ao_mode == EAoMode::RTAO_AO_ONLY) ? 1 : 0;
         param.is_reprojection_enable = ui_config.rtao_denoiser_reprojection_enable;
         param.is_validation_enable   = ui_config.rtao_denoiser_validation_enable;
 
@@ -106,8 +116,7 @@ public:
                 "RtaoDenoiser Pass",
                 img_denoiser_history_write.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(img_denoiser_history_write.tex),
-                ColorAttachment(context.textures.ao_output.tex)
+                ColorAttachment(img_denoiser_history_write.tex)
             );
 
         // Pass 2
@@ -122,7 +131,6 @@ public:
                 ColorAttachment(img_ao_only.tex)
             );
 
-        // return output_image.hdl;
         return ao_only_idx ^ 1; // 0 <-> 1
     }
 

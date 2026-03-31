@@ -128,6 +128,11 @@ public:
     const Render::GpuScene::Res& gpu_scene_res() const;
     const Render::GpuScene::Res& GetGpuSceneRes() const;
 
+    /**
+     * 恢复 Draw Commands 到原始状态（用于关闭 GPU Culling 时）
+     */
+    void RestoreDrawCommands(Render::CommandList& cmd_list);
+
     const CpuScene& cpu_scene() const;
     const CpuScene& GetCpuScene() const;
 

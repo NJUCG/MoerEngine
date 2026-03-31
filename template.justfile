@@ -79,4 +79,6 @@ generate-build-run config="Debug" exe="MoerEditor" threads=default_threads: (gen
 
 alias gbr := generate-build-run
 alias br := build-run
+alias g := generate
+alias b := build
 alias r := run

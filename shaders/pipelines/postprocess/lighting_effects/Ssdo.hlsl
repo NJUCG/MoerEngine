@@ -8,16 +8,10 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "pipelines/postprocess/lighting_effects/AoCommon.hlsl"
 
-static const float3 ABNORMAL_COLOR = float3(0.0, 0.0, 1.0);
 static const float3 DIFFUSE_ALBEDO = float3(0.5, 0.5, 0.5);
 
-// uv in [0, 1]; output in [0, 1]
-// float2 random_2to2(float2 uv) {
-//     return TextureHandle(param.noise_tex).Sample2D<float4>(uv).rg;
-// }
-
 float random_1to1(float2 seed) {
-    // 使用 sin 和一个大数的小数部分来产生伪随机�?
+    // 使用 sin 和一个大数的小数部分来产生伪随机�?
     return frac(sin(dot(seed, float2(12.9898, 78.233))) * 43758.5453123);
 }
 
@@ -45,7 +39,7 @@ float3 SampleHemisphere_Cosine(float3 N, float2 randomValues) {
 }
 
 float3 apply_view_projection(float3 position) {
-    float4 p = mul(param.view_projection_matrix, float4(position, 1.0));
+    float4 p = mul(param.world2clip, float4(position, 1.0));
     p /= p.w;
     return float3(p.x * 0.5 + 0.5, -p.y * 0.5 + 0.5, p.z);
 }
@@ -55,7 +49,7 @@ bool isUvdValid(float3 uv) {
 }
 
 float GetDepthFromWorldPos(float3 worldPos) {
-    float4 clipPos = mul(param.view_projection_matrix, float4(worldPos, 1.0));
+    float4 clipPos = mul(param.world2clip, float4(worldPos, 1.0));
     return clipPos.z / clipPos.w;
 }
 
@@ -65,30 +59,32 @@ float3 GetVplIndirectLight(float3 vpl_pos, float3 vpl_normal, float3 shading_pos
     float  VPL_distance = length(vpl_pos - shading_pos);
     float  attenuation  = 1.0 / (VPL_distance * VPL_distance + 1.0); // 稳定衰减
 
-    // 面积�?
-    float vpl_linear_depth = abs(mul(param.view_matrix, float4(vpl_pos, 1.0)).z);
-    float area_weight      = vpl_linear_depth * vpl_linear_depth + 0.0001;
-    area_weight            = min(2, area_weight); //防止过大
+    // 面积�?
+    // vpl_linear_depth ≈ abs(view_z), 透视投影下 clip.w == view_z
+    float4 vpl_clip         = mul(param.world2clip, float4(vpl_pos, 1.0));
+    float  vpl_linear_depth = abs(vpl_clip.w);
+    float  area_weight      = vpl_linear_depth * vpl_linear_depth + 0.0001;
+    area_weight             = min(2, area_weight); //防止过大
 
     // 简单的漫反射间接光
-    //由于采用了余弦加权采样，这里不用再乘�?shadingCosine �?
+    //由于采用了余弦加权采样，这里不用再乘�?shadingCosine �?
     float3 indirect_light = vplCosine * pixel_color * attenuation * area_weight;
 
     return indirect_light;
 }
 
 float3 GetVplContribution(float2 vpl_uv, float2 shading_uv) {
-    float3 vpl_pos = TextureHandle(param.position_tex).Sample2D<float3>(vpl_uv);
+    float3 vpl_pos = WorldPosFromDepthTexture(param.depth_tex, vpl_uv, param.clip2world);
     float3 vpl_normal =
         normalize(Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(vpl_uv)));
-    float3 shading_pos = TextureHandle(param.position_tex).Sample2D<float3>(shading_uv);
+    float3 shading_pos = WorldPosFromDepthTexture(param.depth_tex, shading_uv, param.clip2world);
     float3 pixel_color = TextureHandle(param.input_image).Sample2D<float3>(vpl_uv);
     return GetVplIndirectLight(vpl_pos, vpl_normal, shading_pos, pixel_color);
 }
 
 float4 GetSsdo(float2 uv) {
     float3 normal   = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
-    float3 position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
+    float3 position = WorldPosFromDepthTexture(param.depth_tex, uv, param.clip2world);
 
     float  occlusion           = 0.0;
     float3 indirect_light      = float3(0.0, 0.0, 0.0);
@@ -111,7 +107,7 @@ float4 GetSsdo(float2 uv) {
         }
 
         float  sceneDepthOfUV = TextureHandle(param.depth_tex).Sample2D<float>(sampleUVD.xy);
-        float3 scenePosOfUV   = TextureHandle(param.position_tex).Sample2D<float4>(sampleUVD.xy).rgb;
+        float3 scenePosOfUV   = WorldPosFromDepthTexture(param.depth_tex, sampleUVD.xy, param.clip2world);
         float  distFromVplToShadingPoint = length(scenePosOfUV - position);
 
         if ((sampleUVD.z + param.ssdo_depth_bias) < sceneDepthOfUV) { //reversed z!
@@ -138,96 +134,12 @@ float4 GetSsdo(float2 uv) {
 
 AoOutput main(float2 uv : TEXCOORD0) {
     AoOutput output;
-    float3   color = TextureHandle(param.input_image).Sample2D<float3>(uv);
 
     output.camera_motion_vector = GetCameraMotionVector(uv);
 
-    output.camera_motion_vector = output.camera_motion_vector * 0.5f + output.color_with_ao.xy * 0.5f;
-
-    float4 ssdo_result = GetSsdo(uv);
-
-    if (param.ao_mode == Moer::EAoMode::NONE) {
-        output.color_with_ao = float4(color, 1.0);
-        output.ambient_only  = 1.0;
-    } else if (param.ao_mode == Moer::EAoMode::SSDO) {
-        output.ambient_only  = ssdo_result.w;
-        output.color_with_ao = float4(ssdo_result.xyz, 1.0) + float4(ssdo_result.w * color, 1.0);
-    } else if (param.ao_mode == Moer::EAoMode::SSDO_AO_ONLY) {
-        output.ambient_only  = ssdo_result.w;
-        output.color_with_ao = float4(ssdo_result.w, ssdo_result.w, ssdo_result.w, 1.0);
-    }
+    // FIXME: 目前AO输出结果只有AO值，SSDO坏掉了，需要重构
+    float4 ssdo_result  = GetSsdo(uv);
+    output.ambient_only = ssdo_result.w;
 
     return output;
 }
-
-//===================magic ssao-based ssdo code===================
-
-// float3 get_ssdo_ao_test(float2 uv) {
-//     float3 normal   = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
-//     float3 position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
-
-//     float  ao   = 0.0;
-//     float2 tmp1 = param.ssdo_radius * param.inv_resolution;
-
-//     for (uint i = 0; i < param.ssdo_sample_count; i++) {
-//         float2 offset          = random_2to2(uv + 0.093 * float2(i, i)) * 2.0 - 1.0;
-//         float3 sample_position = TextureHandle(param.position_tex).Sample2D<float4>(uv + offset * tmp1).rgb;
-
-//         float3 vec      = sample_position - position;
-//         float3 len      = length(vec);
-//         float3 norm_vec = vec / len;
-
-//         ao += max(0.0, dot(normal, norm_vec) - 0.05) *
-//               smoothstep(param.ssdo_max_distance, param.ssdo_max_distance * 0.5, len);
-//     }
-//     ao = clamp(1.0 - ao / param.ssdo_sample_count * param.ssdo_intensity, 0.0, 1.0);
-
-//     return ao;
-// }
-
-// float3 get_ssdo_indirect_test(float2 uv) {
-//     float3 normal   = Raster::UnpackNormal(TextureHandle(param.normal_tex).Sample2D<float3>(uv));
-//     float3 position = TextureHandle(param.position_tex).Sample2D<float3>(uv);
-
-//     float3 indirect_light = float3(0.0, 0.0, 0.0);
-//     float2 tmp1           = param.ssdo_radius * param.inv_resolution;
-
-//     for (uint i = 0; i < param.ssdo_sample_count; i++) {
-//         float2 offset          = random_2to2(uv + 0.093 * float2(i, i)) * 2.0 - 1.0;
-//         float3 sample_position = TextureHandle(param.position_tex).Sample2D<float4>(uv + offset * tmp1).rgb;
-
-//         float3 vec      = sample_position - position;
-//         float3 len      = length(vec);
-//         float3 norm_vec = vec / len;
-
-//         float ao_to_add = max(0.0, dot(normal, norm_vec) - 0.05) *
-//                           smoothstep(param.ssdo_max_distance, param.ssdo_max_distance * 0.5, len);
-//         indirect_light += ao_to_add * GetVplContribution(uv + offset * tmp1, uv);
-//     }
-
-//     return indirect_light / (float)param.ssdo_sample_count * 0.01;
-// }
-
-// AoOutput main(float2 uv : TEXCOORD0) {
-//     AoOutput output;
-//     float3   color = TextureHandle(param.input_image).Sample2D<float3>(uv);
-
-//     output.camera_motion_vector = GetCameraMotionVector(uv);
-
-//     output.camera_motion_vector = output.camera_motion_vector * 0.5f + output.color_with_ao.xy * 0.5f;
-
-//     float ao = get_ssdo_ao_test(uv);
-
-//     if (param.ao_mode == Moer::EAoMode::NONE) {
-//         output.color_with_ao = float4(color, 1.0);
-//         output.ambient_only  = 1.0;
-//     } else if (param.ao_mode == Moer::EAoMode::SSDO) {
-//         output.ambient_only  = ao;
-//         output.color_with_ao = float4(get_ssdo_indirect_test(uv) * ao, 1.0) + float4(ao * color, 1.0);
-//     } else if (param.ao_mode == Moer::EAoMode::SSDO_AO_ONLY) {
-//         output.ambient_only  = ao;
-//         output.color_with_ao = float4(ao, ao, ao, 1.0);
-//     }
-
-//     return output;
-// }

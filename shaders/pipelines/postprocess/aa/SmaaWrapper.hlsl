@@ -3,6 +3,7 @@
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
+#include "pipelines/RasterCommon.hlsli"
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::SmaaSharedPipelineBindlessParam> param;
@@ -131,8 +132,10 @@ SMAAResolveVS_Output SMAAResolveVS_Wrapper(uint VertexIndex : SV_VertexID) {
 
 // according to SMAARepo: Demo/DX10/Shaders/Simple.fx
 float2 SMAAGetVelocity(float2 uv) {
-    float4 c_pos = SMAAGetTexture2D(param.position_tex).Sample(LinearSampler, uv);
-    float4 p_pos = mul(param.curr_inv_vp_and_prev_vp, float4(c_pos.xyz, 1.0));
+    float depth = SMAAGetTexture2D(param.depth_tex).Sample(LinearSampler, uv).r;
+    float4 c_pos = float4(WorldPosFromDepth(depth, uv, param.clip2world), 1.0);
+
+    float4 p_pos = mul(param.clip2prev_clip, float4(c_pos.xyz, 1.0));
     float2 c_pos2 = (c_pos.xy / c_pos.w) * float2(0.5, -0.5);
     float2 p_pos2 = (p_pos.xy / p_pos.w) * float2(0.5, -0.5);
     
