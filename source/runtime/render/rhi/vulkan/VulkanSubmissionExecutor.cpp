@@ -201,6 +201,12 @@ struct SourceSubmitPlan {
     Array<SourceSubmitSegmentPlan> segments{};
 };
 
+struct PresentPreprocessResult {
+    uint64             op_seq{0};
+    bool               has_source_texture_state{false};
+    ResourceStateValue source_texture_state{};
+};
+
 struct CommandSegmentInfo {
     ESegmentType type{ESegmentType::Graphics};
     size_t             begin{0};
@@ -221,12 +227,16 @@ struct ExecutePreprocessStore {
     UnorderedMap<SubmissionKey, uint32, SubmissionKeyHash> lookup{};
     UnorderedMap<SourceSubmitKey, uint32, SourceSubmitKeyHash> source_lookup{};
     Array<SourceSubmitPlan>                                    source_plans{};
+    Array<PresentPreprocessResult>                             present_results{};
+    UnorderedMap<uint64, uint32>                               present_lookup{};
 
     void Reserve(uint32 count) {
         results.reserve(count);
         lookup.reserve(count);
         source_plans.reserve(count);
         source_lookup.reserve(count);
+        present_results.reserve(count);
+        present_lookup.reserve(count);
     }
 
     void Add(CmdSubmitPreprocessResult&& result) {
@@ -257,6 +267,21 @@ struct ExecutePreprocessStore {
         const uint32          index = static_cast<uint32>(source_plans.size());
         source_plans.emplace_back(std::move(plan));
         source_lookup.emplace(key, index);
+    }
+
+    void AddPresent(PresentPreprocessResult&& result) {
+        const uint64 op_seq = result.op_seq;
+        const uint32 index  = static_cast<uint32>(present_results.size());
+        present_results.emplace_back(std::move(result));
+        present_lookup.emplace(op_seq, index);
+    }
+
+    const PresentPreprocessResult* FindPresent(uint64 op_seq) const {
+        const auto iter = present_lookup.find(op_seq);
+        if (iter == present_lookup.end()) {
+            return nullptr;
+        }
+        return &present_results[iter->second];
     }
 
     const SourceSubmitPlan* FindSourcePlan(const SourceSubmitKey& key) const {
@@ -300,6 +325,8 @@ struct PresentInfo {
     uint64       op_seq{0};
     RHIPresentOp present{};
     Array<SubmissionKey> wait_submission_keys{};
+    bool         has_source_texture_state{false};
+    ResourceStateValue source_texture_state{};
     bool         valid{true};
     std::string  error{};
 
@@ -425,6 +452,50 @@ static const char* QueueTypeName(EQueueType queue) {
         default:
             return "Num";
     }
+}
+
+static EPassType QueueToPassType(EQueueType queue) {
+    switch (queue) {
+        case EQueueType::Compute:
+            return EPassType::Compute;
+        case EQueueType::Graphics:
+        case EQueueType::Copy:
+        case EQueueType::Ignore:
+        case EQueueType::Num:
+        default:
+            return EPassType::Graphics;
+    }
+}
+
+static std::tuple<VkAccessFlagBits2, VkImageLayout, VkPipelineStageFlagBits2>
+ResolveTextureSeedState(VulkanTexture* texture, const ResourceStateValue& state) {
+    if (!state.known || state.texture_state == ETextureState::UNDEFINED) {
+        return {
+            VK_ACCESS_2_NONE,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_PIPELINE_STAGE_2_NONE
+        };
+    }
+
+    if (texture != nullptr && texture->b_present) {
+        return {
+            VK_ACCESS_2_NONE,
+            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            VK_PIPELINE_STAGE_2_NONE
+        };
+    }
+
+    const EQueueType owner_queue =
+        state.owner_queue == EQueueType::Ignore ? EQueueType::Graphics : state.owner_queue;
+    VkTracker seed_tracker(owner_queue);
+    auto result = state.has_writer ?
+                      seed_tracker.WriteTexture(texture, state.texture_state, QueueToPassType(owner_queue)) :
+                      seed_tracker.ReadTexture(texture, state.texture_state, QueueToPassType(owner_queue));
+    return {
+        static_cast<VkAccessFlagBits2>(std::get<0>(result)),
+        std::get<1>(result),
+        static_cast<VkPipelineStageFlagBits2>(std::get<2>(result))
+    };
 }
 
 static const char* SegmentKindName(ESegmentType kind) {
@@ -1851,7 +1922,11 @@ public:
     SubmissionPresentContext(SubmissionPresentContext&&) noexcept            = delete;
     SubmissionPresentContext& operator=(SubmissionPresentContext&&) noexcept = delete;
 
-    bool Present(const RHIPresentOp& present_op, std::span<const WaitEvent> wait_events) {
+    bool Present(
+        const RHIPresentOp&         present_op,
+        std::span<const WaitEvent>  wait_events,
+        const ResourceStateValue*   source_texture_state
+    ) {
         if (!present_op.swapchain || !present_op.target.texture) {
             return false;
         }
@@ -1883,18 +1958,17 @@ public:
         cmd_list.BeginLabel("Submission Present", {0.0f, 1.0f, 1.0f, 1.0f});
         tracker.SetPassType(EPassType::Graphics);
 
-        //TODO: should load from a snapshot from preprocess
-        ResourceStateValue src_state{};
-        src_state.known = true;
-        if (src_state.known) {
+        if (source_texture_state != nullptr && source_texture_state->known) {
             auto [src_access, src_layout, src_stage] =
-                std::make_tuple(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+                ResolveTextureSeedState(src_texture, *source_texture_state);
             tracker.SeedSrcState(src_texture, src_access, src_layout, src_stage);
             RHITRACE_RESOURCE_LOG(
                 src_texture->GetName(),
-                "[ResourceTrace][Present][SeedSrc] {} : persistent known={} layout={} access=0x{:x}",
+                "[ResourceTrace][Present][SeedSrc] {} : known={} owner_queue={} state={} layout={} access=0x{:x}",
                 src_texture->GetName(),
-                src_state.known,
+                source_texture_state->known,
+                QueueTypeName(source_texture_state->owner_queue),
+                int(source_texture_state->texture_state),
                 VkLayoutStr(src_layout),
                 uint64(src_access)
             );
@@ -1974,16 +2048,18 @@ public:
         persistent_state.owner_queue      = queue_type;
         persistent_state.state            = ETextureState::TRANSFER;
         persistent_state.last_access_kind = ERHIResourceLastAccessKind::Read;
-        for (uint8 mip = 0; mip < present_op.target.texture->GetNumMips(); ++mip) {
-            for (uint8 layer = 0; layer < present_op.target.texture->GetNumArray(); ++layer) {
-                present_op.target.texture->SetPersistentState(mip, layer, persistent_state);
-            }
-        }
+        present_op.target.texture->SetPersistentState(
+            present_op.target.mip_level,
+            present_op.target.array_layer,
+            persistent_state
+        );
         RHITRACE_RESOURCE_LOG(
             src_texture->GetName(),
-            "[ResourceTrace][Present][SetPersistent] {} : state=TRANSFER owner_queue={} access=Read",
+            "[ResourceTrace][Present][SetPersistent] {} : state=TRANSFER owner_queue={} access=Read mip={} layer={}",
             src_texture->GetName(),
-            int(queue_type)
+            int(queue_type),
+            int(present_op.target.mip_level),
+            int(present_op.target.array_layer)
         );
         return true;
     }
@@ -2424,7 +2500,11 @@ private:
             wait_events.size()
         );
         return GetSubmissionPresentContextManager().Get(present_info.present.queue)
-            .Present(present_info.present, wait_events);
+            .Present(
+                present_info.present,
+                wait_events,
+                present_info.has_source_texture_state ? &present_info.source_texture_state : nullptr
+            );
     }
 
     void RunSubmissionEventThread() {
@@ -2836,15 +2916,23 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                 preprocess_store.AddSourcePlan(std::move(source_plan));
             }
         } else if (const auto* present_op = std::get_if<RHIPresentOp>(&op)) {
+            PresentPreprocessResult present_result{.op_seq = op_seq};
             // §present: Record present target as TRANSFER read so the next frame's tracker seed
             // knows the image is in TRANSFER_SRC_OPTIMAL after the blit (VUID-09592).
             // The target texture's actual persistent state is read via LoadPersistentState (called
             // by EnsureDigestStateLoaded) — no hardcoded state here.
             if (present_op->target.texture) {
+                const ResourceKey present_source_key = MakeTextureKeyWithRange(
+                    uint64(present_op->target.texture),
+                    present_op->target.mip_level,
+                    1,
+                    present_op->target.array_layer,
+                    1
+                );
                 ResourceAccessDigest present_digest;
                 MergeDigestEntry(
                     present_digest,
-                    MakeTextureKey(uint64(present_op->target.texture)),
+                    present_source_key,
                     true,
                     false,
                     std::nullopt,
@@ -2852,6 +2940,11 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                 );
                 ResourceStateSnapshot present_snapshot{};
                 EnsureDigestStateLoaded(present_snapshot, present_digest);
+                if (const auto it = present_snapshot.find(present_source_key);
+                    it != present_snapshot.end()) {
+                    present_result.has_source_texture_state = true;
+                    present_result.source_texture_state     = it->second;
+                }
                 ApplyDigestToState(
                     present_digest,
                     present_op->queue,
@@ -2862,11 +2955,14 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                 ApplyDigestToDirtyWrittenResources(dirty_written_resources, present_digest);
                 RHITRACE_RESOURCE_LOG(
                     static_cast<VulkanTexture*>(present_op->target.texture)->GetName(),
-                    "[ResourceTrace][Preprocess][Present] {} : recorded TRANSFER read, committed to persistent state (queue={})",
+                    "[ResourceTrace][Preprocess][Present] {} : recorded TRANSFER read, committed to persistent state (queue={} mip={} layer={})",
                     static_cast<VulkanTexture*>(present_op->target.texture)->GetName(),
-                    QueueTypeName(present_op->queue)
+                    QueueTypeName(present_op->queue),
+                    int(present_op->target.mip_level),
+                    int(present_op->target.array_layer)
                 );
             }
+            preprocess_store.AddPresent(std::move(present_result));
         }
         ++op_seq;
     }
@@ -3040,6 +3136,13 @@ AssemblePlatformOps(Array<RHIExecOp>&& ops, const ExecutePreprocessStore& prepro
                 },
                 [&](RHIPresentOp& present_op) {
                     PresentInfo present_info{op_seq, std::move(present_op)};
+                    if (const auto* present_preprocess = preprocess_store.FindPresent(op_seq);
+                        present_preprocess != nullptr) {
+                        present_info.has_source_texture_state =
+                            present_preprocess->has_source_texture_state;
+                        present_info.source_texture_state =
+                            present_preprocess->source_texture_state;
+                    }
                     if (!last_submit_key.has_value() || last_submit_queue != EQueueType::Graphics) {
                         present_info.valid = false;
                         present_info.error =
