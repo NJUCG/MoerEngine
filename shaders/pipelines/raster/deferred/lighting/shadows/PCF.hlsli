@@ -18,7 +18,7 @@
             }                                                                                         \
         }                                                                                             \
                                                                                                       \
-        [unroll] for (int i = 0; i < PCSS_SAMPLES; ++i) {                                             \
+        [loop] for (int i = 0; i < PCSS_SAMPLES; ++i) {                                             \
             float2 disk_sample = mul(rotation, POISSON_DISK[i]);                                      \
             /* 应用椭圆变换 */                                                                        \
             float2 offset_uv             = mul(pcf_transform_matrix, disk_sample) * penumbra_uv;      \

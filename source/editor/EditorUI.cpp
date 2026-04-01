@@ -7,8 +7,9 @@
 
 // Editor
 #include "EditorUIStyle.h"
+#include "scene/Scene.h"
 #include "scene/SceneGlobalEntry.h"
-#include "scene/scene.h"
+
 #include "trace/Trace.h"
 
 // 3rd party (std)
@@ -16,6 +17,10 @@
 #include <imgui_internal.h>
 #include <nfd.hpp>
 #include <string_view>
+
+#if WITH_PROFILE
+#include "profile.h"
+#endif
 
 using namespace Moer::Render;
 
@@ -53,6 +58,154 @@ void EditorUI::InitFromConfigManager() {
     // scene path
     m_config->scene_path = config.engine.scene.scene_path;
 }
+
+#if WITH_PROFILE
+void EditorUI::ShowMemoryProfiler(bool* p_open) {
+    Profile_TickSample();
+
+    if (!ImGui::Begin("Memory Profiler", p_open)) {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::CollapsingHeader("Real-time Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::BeginTable("MetricsTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Source");
+            ImGui::TableSetupColumn("Current (MB)");
+            ImGui::TableSetupColumn("Peak (MB)");
+            ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+            ImGui::TableHeadersRow();
+
+            for (int i = 0; i < SOURCE_COUNT; ++i) {
+                const auto& config    = g_UIConfigs[i];
+                float       currentMB = Profile_GetBytesBySource(config.source) / 1048576.0f;
+                float       peakMB    = Profile_GetPeakBytesBySource(config.source) / 1048576.0f;
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("%s", config.label);
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%.3f", currentMB);
+
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Text("%.3f", peakMB);
+
+                ImGui::TableSetColumnIndex(3);
+                ImGui::ColorButton(
+                    config.label, config.color, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoInputs
+                );
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    ImGui::Spacing();
+
+    if (ImGui::CollapsingHeader("Live Memory Graph")) {
+        static float max_y = 5.0f;
+
+        std::lock_guard<std::mutex> lock(g_history_mtx);
+        if (!g_history_data.empty()) {
+            float plot_width = ImGui::GetContentRegionAvail().x;
+
+            for (int s = 0; s < SOURCE_COUNT; ++s) {
+                struct PlotContext {
+                    int                    source_idx;
+                    std::deque<TimePoint>* data;
+                };
+                PlotContext ctx = {s, &g_history_data};
+
+                auto deque_getter = [](void* data, int idx) -> float {
+                    PlotContext* p = static_cast<PlotContext*>(data);
+                    return p->data->at(idx).values[p->source_idx];
+                };
+
+                float current_max = 0.0f;
+                for (const auto& tp : g_history_data) {
+                    if (tp.values[s] > current_max)
+                        current_max = tp.values[s];
+                }
+                if (current_max * 1.2f > max_y)
+                    max_y = current_max * 1.2f;
+
+                char label[128];
+                sprintf_s(label, "%s: %.2f MB", g_UIConfigs[s].label, g_history_data.back().values[s]);
+
+                ImGui::PushStyleColor(ImGuiCol_PlotLines, g_UIConfigs[s].color);
+                ImGui::PlotLines(
+                    label,
+                    deque_getter,
+                    &ctx,
+                    (int)g_history_data.size(),
+                    0,
+                    nullptr,
+                    0.0f,
+                    max_y,
+                    ImVec2(plot_width, 80)
+                );
+                ImGui::PopStyleColor();
+            }
+        }
+    }
+
+    ImGui::Spacing();
+
+    if (ImGui::CollapsingHeader("Memory Hotspots (Top 20)")) {
+        static MemorySource current_filter = MemorySource::Editor;
+
+        if (ImGui::BeginTabBar("HotspotSourceTabs")) {
+            for (int i = 0; i < SOURCE_COUNT; ++i) {
+                if (ImGui::BeginTabItem(g_UIConfigs[i].label)) {
+                    current_filter = g_UIConfigs[i].source;
+                    ImGui::EndTabItem();
+                }
+            }
+            ImGui::EndTabBar();
+        }
+
+        auto hotspots = GetHotspots(20, current_filter);
+
+        if (ImGui::BeginTable(
+                "HotspotTable",
+                3,
+                ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_ScrollY,
+                ImVec2(0, 300)
+            )) {
+            ImGui::TableSetupColumn("Size (MB)", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+            ImGui::TableSetupColumn("CallStack");
+            ImGui::TableHeadersRow();
+
+            for (const auto& snap : hotspots) {
+                ImGui::TableNextRow();
+
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("%.3f", snap.total_size / 1048576.0f);
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%zu", snap.alloc_count);
+
+                ImGui::TableSetColumnIndex(2);
+
+                size_t      first_line = snap.stack_str.find('\n');
+                std::string preview    = snap.stack_str.substr(0, first_line);
+
+                if (ImGui::Selectable(preview.c_str(), false)) {
+                    ImGui::SetClipboardText(snap.stack_str.c_str());
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Click to copy FULL stack trace\n\n%s", snap.stack_str.c_str());
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    ImGui::End();
+}
+#endif
 
 void EditorUI::TickUI() {
 
@@ -154,6 +307,9 @@ void EditorUI::TickUI() {
             ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
             // ImGui::MenuItem("Inspector", nullptr, &m_m_b_show_inspector_window);
             // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
+#if WITH_PROFILE
+            ImGui::MenuItem("Memory Profiler", nullptr, &m_b_show_memory_profiler);
+#endif
             ImGui::EndMenu();
         }
         ImGui::Separator();
@@ -179,7 +335,11 @@ void EditorUI::TickUI() {
         ImGui::EndMenuBar();
     }
     ImGui::End();
-
+#if WITH_PROFILE
+    if (m_b_show_memory_profiler) {
+        ShowMemoryProfiler(&m_b_show_memory_profiler);
+    }
+#endif
     ResetState();
     ShowSceneColor();
     ShowConfig();

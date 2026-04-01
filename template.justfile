@@ -42,6 +42,7 @@ _rm_exe config="Debug" exe="MoerEditor":
 
 _generate:
     cmake -B build
+    # cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 
 _build config="Debug" threads="30" target="MoerEditor":
     cmake --build build -j{{threads}} --config {{config}} --target {{target}}
@@ -78,4 +79,6 @@ generate-build-run config="Debug" exe="MoerEditor" threads=default_threads: (gen
 
 alias gbr := generate-build-run
 alias br := build-run
+alias g := generate
+alias b := build
 alias r := run

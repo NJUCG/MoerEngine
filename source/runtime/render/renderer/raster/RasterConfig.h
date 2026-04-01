@@ -113,6 +113,21 @@ struct RasterConfig {
 
     bool  geometry_enable_alpha_test             = true;
     float geometry_alpha_test_blend_pixel_cutoff = 0.5f; // 当AlphaMode为BLEND时，低于该值的像素会被丢弃
+    bool  enable_frustum_culling                 = false; // GPU视锥剔除
+
+    // MARK: Culling Statistics (只读，由GPU更新)
+    struct CullingStats {
+        uint total_instances_before = 0;
+        uint total_instances_after  = 0;
+        uint visible_draws          = 0;
+        uint total_draws            = 0;
+
+        float GetCullingRatio() const {
+            if (total_instances_before == 0)
+                return 0.0f;
+            return 1.0f - (float)total_instances_after / (float)total_instances_before;
+        }
+    } culling_stats;
 
     // MARK: Shading
     EShadingMode shading_mode = EShadingMode::DEFAULT_PBR;
@@ -156,15 +171,17 @@ struct RasterConfig {
 
     // MARK: AO
     EAoMode ao_mode            = EAoMode::RTAO;
-    float   ssao_intensity     = 1.0f;
-    int     ssao_spp           = 16;
-    int     ssao_sample_radius = 2;
-    float   ssao_max_distance  = 0.5f;
+    bool    ao_half_resolution = true;
+
+    float ssao_intensity     = 1.0f;
+    int   ssao_spp           = 16;
+    int   ssao_sample_radius = 16;
+    float ssao_max_distance  = 1.0f;
 
     ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
     float           rtao_intensity          = 1.0f;
     float           rtao_ray_trace_distance = 1.0f;
-    int             rtao_spp                = 4;
+    int             rtao_spp                = 8;
 
     bool  rtao_denoiser_enable                 = true;
     bool  rtao_denoiser_reprojection_enable    = true;
@@ -214,8 +231,7 @@ struct RasterConfig {
     bool  shadow_pcss_enabled          = true;
     float shadow_pcss_light_size_world = 0.01f;
 
-    StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
-        {0.005, 0.02, 0.1, 0.25, 0.32, 1.0};
+    StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera = {0.005, 0.02, 0.1, 0.25};
 
     // MARK: Skybox
     bool  skybox_exposure_correct_enabled      = true;         // 启用的话，就会找到第一个平行光，乘上它的颜色

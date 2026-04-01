@@ -16,7 +16,7 @@ float get_single_shadow(
     float3             normal,
     float3             lightDir
 ) {
-    float4 shadow_clip_pos = mul(lighting_data.world_to_shadow_clip[cascade_index], float4(world_pos, 1.0));
+    float4 shadow_clip_pos = mul(lighting_data.world2shadow_clip[cascade_index], float4(world_pos, 1.0));
     float3 shadow_ndc_pos  = shadow_clip_pos.xyz / shadow_clip_pos.w;
     float2 shadow_uv       = float2(shadow_ndc_pos.x * 0.5 + 0.5, 1.0 - (shadow_ndc_pos.y * 0.5 + 0.5));
     bool   in_bounds = shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 &&
@@ -37,14 +37,11 @@ float get_single_shadow(
     ctx.normal          = normal;
     ctx.lightDir        = lightDir;
 
-    float occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(shadow_uv).x;
-    float fragment_depth = shadow_ndc_pos.z;
-
     if (lighting_data.pcss_enabled == 1) {
         return CalculatePcssDir(ctx);
     } else {
-        occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(ctx.shadowUV).x;
-        return IsShadowedDir(occluder_depth, fragment_depth, SHADOW_BIAS) ? 0.0 : 1.0;
+        float occluder_depth = TextureHandle(ctx.shadowMapHandle).Sample2D<float>(shadow_uv).x;
+        return IsShadowedDir(occluder_depth, shadow_ndc_pos.z, SHADOW_BIAS) ? 0.0 : 1.0;
     }
 }
 
@@ -110,23 +107,26 @@ float calculate_csm_shadow(
     float2             screen_uv,
     float3             normal
 ) {
-    int cascade_index = get_cascade_index(lighting_data, world_pos);
+    float pixel_view_z;
+    int cascade_index = get_cascade_index(lighting_data, world_pos, pixel_view_z);
     if (cascade_index == -1)
         return 1.0;
     float3 main_light_dir = lighting_data.main_light_direction;
 
     if (lighting_data.is_csm_blend_enabled == 1) {
+        float cascade_blend_ratio = get_cascade_blend_ratio(lighting_data, pixel_view_z, cascade_index);
         float shadow_current =
             get_single_shadow(lighting_data, world_pos, cascade_index, screen_uv, normal, main_light_dir);
-        float shadow_next =
-            (cascade_index + 1 < lighting_data.shadow_csm_num_of_cascades) ?
+
+        // Only sample the next cascade when actually in the blend region
+        if (cascade_blend_ratio > 0.0 && cascade_index + 1 < lighting_data.shadow_csm_num_of_cascades) {
+            float shadow_next =
                 get_single_shadow(
                     lighting_data, world_pos, cascade_index + 1, screen_uv, normal, main_light_dir
-                ) :
-                1.0;
-
-        float cascade_blend_ratio = get_cascade_blend_ratio(lighting_data, world_pos, cascade_index);
-        return lerp(shadow_current, shadow_next, cascade_blend_ratio);
+                );
+            return lerp(shadow_current, shadow_next, cascade_blend_ratio);
+        }
+        return shadow_current;
     } else {
         return get_single_shadow(lighting_data, world_pos, cascade_index, screen_uv, normal, main_light_dir);
     }

@@ -124,20 +124,6 @@ set_target_properties(${pipe_test_target} PROPERTIES FOLDER ${moer_test_folder})
 # )
 # set_target_properties(NRDTest PROPERTIES FOLDER ${moer_test_folder})
 
-# VertexFactoryTest
-set(test_target TestVertexFactory)
-add_executable(${test_target} VertexFactoryTest.cpp)
-target_include_directories(${test_target}
-    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
-    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
-    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-)
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-    PRIVATE glfw
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-
 # DX RHI Test
 set(test_target TestDxRhi)
 add_executable(${test_target} RHITest/dxrhitest.cpp)

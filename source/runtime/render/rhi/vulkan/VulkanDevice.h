@@ -118,6 +118,9 @@ public:
     void FlushDebugMessages() const override;
     void WaitIdle() override;
 
+    // 判断当前物理设备是否为 AMD（基于 vendorID）
+    bool IsAmdGpu() const;
+
 public:
     void           EnqueueDeferredRelease(RHIResource* _object);
     void           FlushDeferredReleases();
@@ -203,6 +206,8 @@ public:
     inline VkDescriptorSetLayout GetEmptyDescriptorSetLayout() const {
         return empty_descriptor_set_layout;
     }
+    // 查询当前设备是否启用了指定的 device extension（基于已启用扩展列表）
+    bool HasDeviceExtension(std::string_view _ext_name) const;
     uint GetQueueFamilyIndex(VkQueueFlags _queue_flags) {
         return GetQueueFamilyIndex(m_device_info.queue_family_props, _queue_flags);
     }
@@ -246,6 +251,9 @@ private:
     UniquePtr<VkCommandQueue>                 gfx_queue{}; // VkCommandQueue是MoerEngine的封装！
     UniquePtr<VkCommandQueue>                 compute_queue{};
     UniquePtr<VkCopyQueue>                    copy_queue{};
+    // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
+    // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
+    std::mutex                                m_shared_queue_submit_mutex;
     LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};
     static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
     StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};

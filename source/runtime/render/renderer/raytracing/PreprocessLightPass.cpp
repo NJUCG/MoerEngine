@@ -142,10 +142,10 @@ static void PackPolyLightColor(float3 _color, PolymorphicLightInfo& _info) {
     if (max_radiance < 0.f)
         return;
 
-    float log_radiance = (std::log2f(max_radiance) - g_poly_morphic_light_min_log2_radiance) /
-                         (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance);
-    log_radiance           = std::clamp(log_radiance, 0.f, 1.f);
-    uint packed_radiance   = std::min(uint(ceilf(log_radiance * 65534.f)) + 1, 0xffffu);
+    float log_radiance   = (std::log2f(max_radiance) - g_poly_morphic_light_min_log2_radiance) /
+                           (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance);
+    log_radiance         = std::clamp(log_radiance, 0.f, 1.f);
+    uint packed_radiance = std::min(uint(ceilf(log_radiance * 65534.f)) + 1, 0xffffu);
     uint unpacked_radiance = std::exp2f(
         (float(packed_radiance - 1) / 65534.f) *
             (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance) +
@@ -618,10 +618,40 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         }
     }
 
+    // 处理环境光（直接从 RTContext 获取数据，绕过 ECS）
+    // 注意：rt_ctx.env_map 未被赋值（是 renderer 局部变量），用 env_pdf_tex 获取尺寸
+    if (_rt_ctx.scene_params.enable_env_map && _rt_ctx.env_pdf_tex) {
+        PolymorphicLightInfo light_info{};
+        light_info.color_type_flags = (uint)EPolyLightType::ELEnv << g_poly_morphic_light_type_shift;
+
+        float3 color_scale = float3(_rt_ctx.scene_params.env_map_scale);
+        PackPolyLightColor(color_scale, light_info);
+
+        light_info.direction1 = _rt_ctx.scene_params.env_map_handle;
+        uint3 env_extent      = _rt_ctx.env_pdf_tex->GetExtent(); // env_pdf_tex 与 env_map 同尺寸
+        light_info.direction2 = env_extent.x | (env_extent.y << 16);
+        light_info.scalars    = Fp32ToFp16(_rt_ctx.scene_params.env_map_rotation);
+        light_info.scalars |= g_poly_morphic_light_env_is_scalar_bit;
+
+        constexpr uint64 env_light_key = ~0ull; // 固定 key，用于跨帧追踪
+        auto             pre_iter      = primitive_light_buffer_offsets.find(env_light_key);
+
+        PrepareLightsTask task{};
+        task.primitive_id      = prim_light_infos.size() | g_task_prim_light_bit;
+        task.light_offset      = light_buf_offset;
+        task.num_triangles     = 1;
+        task.prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
+
+        primitive_light_buffer_offsets[env_light_key] = light_buf_offset;
+        light_buf_offset += task.num_triangles;
+        tasks.emplace_back(task);
+        prim_light_infos.emplace_back(light_info);
+
+        num_is_env_lights++;
+    }
+
     timer.Stop();
     auto time = timer.ElapsedMilliseconds();
-    // LOG_INFO("PrepareLightPass::Process, convert time:{}",
-    // timer.ElapsedMilliseconds());
 
     // 4. 上传数据到 GPU
 

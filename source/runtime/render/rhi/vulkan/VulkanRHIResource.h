@@ -916,6 +916,29 @@ private:
 
     VulkanBufferRef instance_buffer = nullptr;
 
+    // TLAS instance buffer device address must be 16-byte aligned (Vulkan spec)
+    // Store the aligned address to avoid recomputing
+    uint64 aligned_instance_buffer_address = 0;
+
+public:
+    // Get 16-byte aligned device address for TLAS instance data
+    uint64 GetAlignedInstanceBufferAddress() const {
+        constexpr uint64 kAlignment = 256;  // Use 256-byte alignment for AMD GPU compatibility
+        if (aligned_instance_buffer_address != 0) {
+            return aligned_instance_buffer_address;
+        }
+        if (!instance_buffer) return 0;
+        uint64 addr = instance_buffer->DeviceAddress();
+        return Moer::AlignUp(addr, kAlignment);
+    }
+
+    void UpdateAlignedInstanceBufferAddress() {
+        constexpr uint64 kAlignment = 256;
+        if (instance_buffer) {
+            aligned_instance_buffer_address = Moer::AlignUp(instance_buffer->DeviceAddress(), kAlignment);
+        }
+    }
+
     Array<VkAccelerationStructureInstanceKHR> vk_instances;
 
     Array<uint> free_instance_slots;

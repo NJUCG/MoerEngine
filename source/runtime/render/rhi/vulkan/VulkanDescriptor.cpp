@@ -126,7 +126,9 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     VkBuffer           desc_buffer            = VK_NULL_HANDLE;
     VmaAllocation      desc_buffer_allocation = VK_NULL_HANDLE;
     VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    buffer_ci.size  = s_queue_max_frame_in_flight * 256 * 16 * 100;
+    // Increase descriptor buffer size to accommodate larger descriptor sets
+    // Each frame gets enough space for all possible descriptors
+    buffer_ci.size  = s_queue_max_frame_in_flight * 1024 * 1024; // 1MB per frame
     buffer_ci.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
                       VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
@@ -154,11 +156,15 @@ VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) :
     //fill offsets
     ring_buffer_offsets.resize(m_device->cmd_alloc_limits);
 
+    // Use descriptorBufferOffsetAlignment for ring buffer offset alignment
     uint64 alignment =
         m_device->GetOptionalProperties().descriptor_buffer_properties.descriptorBufferOffsetAlignment;
 
+    // Calculate per-frame size conservatively to ensure each frame has enough space
+    uint64 per_frame_size = (buffer_ci.size / m_device->cmd_alloc_limits / alignment) * alignment;
+
     for (uint32_t i = 0; i < m_device->cmd_alloc_limits; ++i) {
-        ring_buffer_offsets[i] = Moer::AlignUp(buffer_ci.size / m_device->cmd_alloc_limits * i, alignment);
+        ring_buffer_offsets[i] = Moer::AlignUp(per_frame_size * i, alignment);
     }
     current_offset = 0;
     vmaMapMemory(m_device->GetVmaAllocator(), ring_desc_buffer->GetAllocation(), (void**)&map_ptr);

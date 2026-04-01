@@ -1,6 +1,7 @@
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
+#include "pipelines/RasterCommon.hlsli"
 
 #include "materials/Brdf.hlsli"
 #include "materials/Material.hlsli"
@@ -8,24 +9,14 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "shared/raster/ShaderParameters.h"
 
+[[vk::binding(0, 0)]] ConstantBuffer<Moer::LightingData> lighting_data;
 [[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
-
-float3 WorldPosFromDepth(float depth, float2 screen_uv, float4x4 inv_view_proj) {
-    float4 clip    = float4(screen_uv.x * 2.f - 1.f, 1.f - screen_uv.y * 2.f, depth, 1.0);
-    float4 world_w = mul(inv_view_proj, clip);
-    float3 pos     = world_w.xyz / world_w.w;
-    return pos;
-}
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     // MARK: Textures
     uint material_id = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
     ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
     Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(material_id);
-
-    // MARK: Lighting Data
-    ArrayBuffer        global_params = ArrayBuffer(param.global_param_handle);
-    Moer::LightingData lighting_data = global_params.Load<Moer::LightingData>(0);
 
     // MARK: GBuffer
     float2 uv     = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
@@ -35,7 +26,7 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     ); // 因为法线mipmap不满足线性关系，所以这里需要normalize
     float3 tangent =
         normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv))); // 同上
-    float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.inv_view_proj);
+    float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.clip2world);
 
     // - Lights
     ArrayBuffer light_buf = ArrayBuffer(param.light_buf_hdl);
@@ -98,6 +89,8 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     if (param.enable_extra_ambient) {
         color += param.extra_ambient_intensity * param.extra_ambient_color * brdf_ctx.albedo;
     }
+
+    color = max(color, 0.0);
 
     return float4(color, 1.0);
 }

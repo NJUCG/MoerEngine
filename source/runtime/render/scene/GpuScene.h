@@ -98,6 +98,12 @@ public:
         return m_res.rt_scene;
     }
 
+    /**
+     * 恢复 Draw Commands 到原始状态（从 CPU 数据重新上传）
+     * 用于 GPU Culling 关闭时恢复原始 instance_cnt
+     */
+    void RestoreDrawCommands(CommandList& cmd_list);
+
 private:
     ecs::LogicalScene& m_logical_scene;
     CpuScene&          m_cpu_scene;

@@ -164,11 +164,8 @@ if(WIN32)
     )
 endif()
 
-if(CMAKE_GENERATOR MATCHES "Ninja" OR UNIX AND NOT APPLE) 
-    set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}") 
-else()
-    set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>") # 这是什么？
-endif()
+# 与顶层 CMakeLists 一致：CMAKE_RUNTIME_OUTPUT_DIRECTORY 已含 $<CONFIG>，MSVC/Clang 均为 target/bin/<Config>/
+set(output_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 
 # 检查MoerEngine.toml是否存在
 set(MOER_ENGINE_CONFIG_FILE "${moer_root_dir}/MoerEngine.toml")
@@ -189,3 +186,9 @@ add_custom_target(
 )
 
 add_dependencies(${target_name} CopyResources)
+
+if (WITH_PROFILE) # 由render模块扩散出去
+    target_link_libraries(${target_name}
+        PUBLIC Moer::Profile
+    )
+endif()

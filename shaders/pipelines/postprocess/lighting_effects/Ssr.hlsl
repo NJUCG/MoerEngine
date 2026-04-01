@@ -6,6 +6,7 @@
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
+#include "pipelines/RasterCommon.hlsli"
 #include "materials/Material.hlsli"
 #include "shared/raster/ShaderParameters.h"
 
@@ -44,7 +45,7 @@ bool should_apply_ssr(float2 uv) { // the performance cost is so high
 }
 
 float3 apply_view_projection(float3 position) {
-    float4 p = mul(param.view_projection_matrix, float4(position, 1.0));
+    float4 p = mul(param.world2clip, float4(position, 1.0));
     p /= p.w;
     // 两个究极大坑�?
     // p.z is not needed to apply f(x) = x * 0.5 + 0.5;
@@ -123,7 +124,7 @@ float3 ssr_ray_tracing(float3 color, float3 test_point, float3 direction, float 
 
 float3 ssr(float3 color, float2 uv) {
     float3 normal = TextureHandle(param.normal_tex).Sample2D<float4>(uv).rgb * 2.0 - 1.0;
-    float3 position = TextureHandle(param.position_tex).Sample2D<float4>(uv).rgb;
+    float3 position = WorldPosFromDepthTexture(param.depth_tex, uv, param.clip2world);
 
     float3 camera_to_pixel = normalize(position - param.camera_position);
     float3 reflect_dir = normalize(reflect(camera_to_pixel, normal));

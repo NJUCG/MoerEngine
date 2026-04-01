@@ -862,6 +862,23 @@ void VkTracker::QueueTransferAcquireResource(
     VkAccessFlagBits2        _dst_access,
     VkPipelineStageFlagBits2 _dst_stage
 ) {
+    
+    // 下列判断主要针对AMD GPU
+    // - AMD GPU没有TransferQueue，RHI会把TransferQueue的命令当做GraphicsQueue来执行
+    // - 因此，此处会受到RHI发出的GraphicsQueue->GraphicsQueue的指令
+    // - 我们要对这种情况做出处理
+    if (_src_queue == _dst_queue) {
+        buffer_states[_buffer] = {
+            VK_ACCESS_2_NONE,
+            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            VK_ACCESS_2_NONE,
+            VK_PIPELINE_STAGE_2_NONE,
+            VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED
+        };
+        return;
+    }
+
     pending_buffers.insert(_buffer);
     if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
         auto& state            = it->second;
@@ -894,6 +911,28 @@ void VkTracker::QueueTransferAcquireResource(
 ) {
     uint8 num_mips   = _texture->GetNumMips();
     uint8 num_arrays = _texture->GetNumArray();
+
+    // 下列判断主要针对AMD GPU
+    // - AMD GPU没有TransferQueue，RHI会把TransferQueue的命令当做GraphicsQueue来执行
+    // - 因此，此处会受到RHI发出的GraphicsQueue->GraphicsQueue的指令
+    // - 我们要对这种情况做出处理
+    if (_src_queue == _dst_queue) {
+        for (uint8 mip = 0; mip < num_mips; ++mip) {
+            auto key = MakeTextureStateKey(_texture, mip, 1, 0, num_arrays);
+            texture_states[key] = TextureState{
+                VK_ACCESS_2_NONE,
+                _dst_layout,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_NONE,
+                _dst_layout,
+                VK_PIPELINE_STAGE_2_NONE,
+                VK_QUEUE_FAMILY_IGNORED,
+                VK_QUEUE_FAMILY_IGNORED
+            };
+        }
+        return;
+    }
+
     for (uint8 mip = 0; mip < num_mips; ++mip) {
         auto key = MakeTextureStateKey(_texture, mip, 1, 0, num_arrays);
         pending_textures.insert(key);

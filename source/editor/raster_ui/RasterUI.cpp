@@ -9,10 +9,20 @@
 namespace Moer {
 
 RasterUI::RasterUI(RasterConfig& config) : m_config(config) {
-    m_config.shadow_map_mode =
-        (ConfigManager::GetInstance().GetConfig().engine.render.raster.enable_shadow ?
-             m_config.shadow_map_mode :
-             EShadowMapMode::NONE);
+    if (ConfigManager::GetInstance().GetConfig().engine.render.raster.low_quality_mode) {
+        m_config.ao_mode = EAoMode::SSAO;
+
+        m_config.shadow_map_mode                     = EShadowMapMode::CSM;
+        m_config.shadow_csm_num_of_cascades          = 1;
+        m_config.shadow_csm_sm_size                  = 2048;
+        m_config.shadow_csm_cover_ratio_of_camera[0] = 0.03f;
+
+        m_config.aa_mode = EAaMode::FXAA_SIMPLIFIED;
+    }
+
+    if (ConfigManager::GetInstance().GetConfig().engine.render.raster.enable_shadow == false) {
+        m_config.shadow_map_mode = EShadowMapMode::NONE;
+    }
 }
 
 void RasterUI::ShowConfig() {
@@ -47,6 +57,33 @@ void RasterUI::ShowConfig() {
 
     // MARK: Geometry & Culling
     if (ImGui::TreeNode("Geometry & Culling")) {
+
+        ImGui::Checkbox("Enable GPU Frustum Culling", &m_config.enable_frustum_culling);
+
+        // Culling Statistics
+        if (m_config.enable_frustum_culling) {
+            ImGui::Separator();
+            ImGui::Text("Culling Statistics:");
+            ImGui::Indent();
+
+            if (m_config.culling_stats.total_instances_before == 0) {
+                ImGui::TextDisabled("  Waiting for data...");
+            } else {
+                const auto& stats      = m_config.culling_stats;
+                uint32_t    culled     = stats.total_instances_before - stats.total_instances_after;
+                float       culled_pct = 100.0f * float(culled) / float(stats.total_instances_before);
+                ImGui::Text(
+                    "Instances: %u / %u visible (%u culled, %.1f%%)",
+                    stats.total_instances_after,
+                    stats.total_instances_before,
+                    culled,
+                    culled_pct
+                );
+                ImGui::ProgressBar(culled_pct / 100.0f, ImVec2(150, 0));
+            }
+            ImGui::Unindent();
+            ImGui::Separator();
+        }
 
         ImGui::Checkbox("Enable Alpha Test", &m_config.geometry_enable_alpha_test);
         ImGui::SliderFloat("Alpha Cutoff", &m_config.geometry_alpha_test_blend_pixel_cutoff, 0.0f, 1.0f);
@@ -248,11 +285,14 @@ void RasterUI::ShowConfig() {
             draw_border();
         }
 
+        ImGui::Separator();
+        ImGui::Checkbox("Half Resolution AO", &m_config.ao_half_resolution);
+
         if (m_config.ao_mode == EAoMode::SSAO || m_config.ao_mode == EAoMode::SSAO_AO_ONLY) {
             ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
-            ImGui::SliderFloat("Ray Trace Radius", &m_config.ssao_max_distance, 0.0f, 2.0f);
-            ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 16);
-            ImGui::SliderInt("Sample Radius", &m_config.ssao_sample_radius, 1, 8);
+            ImGui::SliderFloat("Ray Trace Radius", &m_config.ssao_max_distance, 0.0f, 5.0f);
+            ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 32);
+            ImGui::SliderInt("Sample Radius", &m_config.ssao_sample_radius, 1, 32);
 
         } else if (m_config.ao_mode == EAoMode::RTAO || m_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
             ImGui::SliderFloat("Intensity", &m_config.rtao_intensity, 0.0f, 1.0f);

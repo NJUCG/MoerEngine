@@ -11,3 +11,7 @@
 	url = https://github.com/NJUCG/MoerEngine.git
 	branch = scene/sponza
 	shallow = true
+[submodule "3rdparty/minhook"]
+	path = 3rdparty/minhook
+	url = https://github.com/TsudaKageyu/minhook.git
+	shallow = true

@@ -2,7 +2,7 @@
 
 实时渲染引擎
 
-**| 简体中文 | [English](README.en.md) |**
+**| 简体中文 | [English](./docs/README.en.md) |**
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NJUCG/MoerEngine)
 
@@ -10,13 +10,10 @@
 
 ## 目录
 
+- [目录](#目录)
 - [1. 如何构建](#1-如何构建)
 - [2. 如何使用](#2-如何使用)
-  - [2.1 如何渲染场景](#21-如何渲染场景)
-  - [2.2 如何移动摄像机](#22-如何移动摄像机)
 - [3. 效果图](#3-效果图)
-  - [RayTracing Renderer](#raytracing-renderer)
-  - [Raster Renderer](#raster-renderer)
 - [4. 如何贡献](#4-如何贡献)
 - [开源协议](#开源协议)
 
@@ -117,9 +114,11 @@ MoerEngine源代码采用Apache-2.0 License授权。
 * [JSON for Modern C++](https://github.com/nlohmann/json): MIT License
 * [meshoptimizer](https://github.com/zeux/meshoptimizer): MIT License
 * [metis](https://github.com/KarypisLab/METIS/): Apache-2.0 License
+* [minhook](https://github.com/TsudaKageyu/minhook): BSD 2-Clause License
 * [mimalloc](https://github.com/microsoft/mimalloc): MIT License
 * [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended): Zlib License
 * [NRI](https://github.com/NVIDIA-RTX/NRI): MIT License
+* [perfetto](https://github.com/google/perfetto): Apache-2.0 license
 * [smaa](https://github.com/iryoku/smaa): MIT License
 * [spdlog](https://github.com/gabime/spdlog): MIT License
 * [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross): Apache-2.0 License

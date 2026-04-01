@@ -11,8 +11,7 @@ namespace Moer::Render {
 VulkanAllocatorBase::VulkanAllocatorBase(VulkanDevice* _device, EQueueType _type) :
     VulkanDeviceObject(_device),
     tracker(_type) {
-    VkQueueFlagBits queue_type = VulkanEnumTranslator::METoVKQueueFlagBits(_type);
-    cmd_allocator.emplace(_device, queue_type);
+    cmd_allocator.emplace(_device, _type);
     cmd_list.emplace(&cmd_allocator.value(), *_device);
 }
 
@@ -436,14 +435,19 @@ BufferView VulkanAllocator::AllocateShaderBuffer(uint64 _size) {
     return {buffer, 0, buffer->GetNumElement(), 1u};
 }
 
-VulkanCmdAllocator::VulkanCmdAllocator(VulkanDevice* _device, VkQueueFlagBits _queue_type) :
+VulkanCmdAllocator::VulkanCmdAllocator(VulkanDevice* _device, EQueueType _queue_type) :
     VulkanDeviceObject(_device),
-    queue_type(_queue_type) {
+    queue_type(VulkanEnumTranslator::METoVKQueueFlagBits(_queue_type)) {
+    // 必须使用 GetQueueFamilyIndex(EQueueType) 而非 GetQueueFamilyIndex(VkQueueFlags)。
+    // 后者根据硬件能力搜索，可能返回不同的 family（如 AMD 上返回 compute family），
+    // 而前者使用引擎已确定的、可能经过 override 的 family index。
+    uint32_t family_index = m_device->GetQueueFamilyIndex(_queue_type);
+
     VkCommandPoolCreateInfo pool_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .pNext            = nullptr,
         .flags            = 0,
-        .queueFamilyIndex = m_device->GetQueueFamilyIndex(queue_type)
+        .queueFamilyIndex = family_index
     };
 
     VK_CHECK_RESULT(vkCreateCommandPool(_device->GetDevice(), &pool_info, nullptr, &command_pool));

@@ -49,6 +49,7 @@ struct CORE_API GlobalConfig {
 
             struct Raster {
                 bool enable_shadow;
+                bool low_quality_mode;
             } raster;
 
         } render;

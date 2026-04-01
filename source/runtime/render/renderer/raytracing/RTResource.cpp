@@ -285,13 +285,17 @@ void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _
     uint2         extent = _env_tex.tex->GetExtent().xy;
     RenderDevice& device = RenderDevice::Get();
 
+    // env_pdf_tex 需要完整的 mip 链（SamplePdfMip 从最高 mip 向下采样），
+    // 不能使用原始 env map 的 mip 数量（通常只有 1 级）
+    uint full_mip_count = uint(std::floor(std::log2(float(std::max(extent.x, extent.y))))) + 1;
+
     env_pdf_mips.clear();
     env_pdf_tex = device.CreateTexture(
         "env_pdf_tex",
         Extent2D(extent.x, extent.y),
         PF_R16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
-        _env_tex.tex->GetNumMips()
+        full_mip_count
     );
 
     for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) {

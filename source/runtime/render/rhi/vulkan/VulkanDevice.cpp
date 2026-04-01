@@ -17,6 +17,7 @@
 #include <string_view>
 
 #include "log/LogSystem.h"
+// #include "misc/MacroUtils.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -215,15 +216,19 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
     VK_CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &gpu_count, gpu_list.data()))
 
     // lambda helpers
-    const auto& extensions_required              = VulkanDeviceExtension::GetMERequiredDeviceExtensions();
+    const auto& extensions_required = VulkanDeviceExtension::GetMERequiredDeviceExtensions();
+
     const auto& is_extensions_required_supported = [&](VkPhysicalDevice _gpu) {
-        // only check whether the extension is included by the GPU, not check corresponding features
+        // 只检查 GPU 是否声明支持对应扩展，不检查 feature 结构体细节
         auto gpu_extensions = VulkanDevice::GetGpuExtensions(_gpu);
 
-        // only check required extensions
         for (const auto& extension : extensions_required) {
-            if (!gpu_extensions.contains(extension->GetExtensionName().data()) && !extension->IsOptional())
+            const auto& required_name = extension->GetExtensionName();
+            const bool  is_optional   = extension->IsOptional();
+
+            if (!gpu_extensions.contains(required_name.data()) && !is_optional) {
                 return false;
+            }
         }
 
         return true;
@@ -231,14 +236,34 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
 
     const auto& features_required          = VulkanDeviceFeatures::GetMERequiredFeatures(_api_version);
     const auto& is_core_features_supported = [&](VkPhysicalDevice _gpu) {
-        return VulkanDeviceFeatures::GetGpuFeatures(_gpu, _api_version).Contains(features_required);
+        auto gpu_features = VulkanDeviceFeatures::GetGpuFeatures(_gpu, _api_version);
+        bool ok           = gpu_features.Contains(features_required);
+        if (!ok) {
+            LOG_ERROR("GPU does NOT satisfy required core Vulkan features.");
+        }
+        return ok;
     };
 
-    // check availability
-    Array<uint8> gpu_priorities;
+    // 候选 GPU：与 priority 成对保存，避免仅部分 GPU 满足条件时 priority 下标与 gpu_list 错位
+    struct SelectGpuCandidate {
+        VkPhysicalDevice gpu;
+        uint8            priority;
+    };
+    Array<SelectGpuCandidate> gpu_candidates;
+    gpu_candidates.reserve(gpu_count);
+
     for (auto* gpu : gpu_list) {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(gpu, &props);
+
+        // // 以下代码用于Debug AMD GPU
+        // // 笔记本等多 GPU 场景：名称含 "RTX" 时跳过（例如 RTX 5070 Laptop），便于强制走 A 卡等其它适配器
+        // const std::string_view gpu_name(props.deviceName);
+        // if (gpu_name.find("NVIDIA") != std::string_view::npos) {
+        //     LOG_INFO("SelectGpu: skipping '{}' (name contains '5070').", props.deviceName);
+        //     continue;
+        // }
+
         uint8 priority = 0;
         switch (props.deviceType) {
             case VK_PHYSICAL_DEVICE_TYPE_OTHER:
@@ -264,17 +289,51 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         if (indices.IsComplete() && is_extensions_required_supported(gpu) &&
             is_core_features_supported(gpu)) {
             priority += 100;
-            gpu_priorities.emplace_back(priority);
+            gpu_candidates.push_back(SelectGpuCandidate{gpu, priority});
         }
     }
 
-    CHECK_ASSERT(gpu_priorities.size(), "No available GPU(discrete, etc.) found!");
+    if (gpu_candidates.empty()) {
+        LOG_ERROR("No available GPU. Details:");
 
-    Array<uint8>::iterator highest_priority_iter =
-        std::max_element(gpu_priorities.begin(), gpu_priorities.end());
-    uint8 gpu_idx = std::distance(gpu_priorities.begin(), highest_priority_iter);
+        // 仅在失败分支里输出调试信息：按 GPU 输出缺失的必需扩展
+        for (const auto& gpu : gpu_list) {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(gpu, &props);
 
-    return gpu_list[gpu_idx];
+            auto gpu_extensions = VulkanDevice::GetGpuExtensions(gpu);
+
+            std::string log_msg;
+            log_msg += std::string("GPU '") + props.deviceName + "':\n";
+
+            bool has_missing = false;
+            for (const auto& extension : extensions_required) {
+                const auto& required_name = extension->GetExtensionName();
+                const bool  is_optional   = extension->IsOptional();
+
+                if (!gpu_extensions.contains(required_name.data()) && !is_optional) {
+                    has_missing = true;
+                    log_msg += std::string(required_name) + "\n";
+                }
+            }
+
+            if (has_missing) {
+                LOG_ERROR("{}", log_msg);
+            }
+        }
+
+        CHECK_ASSERT(false, "No available GPU(discrete, etc.) found!");
+    }
+
+    const auto highest_priority_iter = std::max_element(
+        gpu_candidates.begin(),
+        gpu_candidates.end(),
+        [](const SelectGpuCandidate& a, const SelectGpuCandidate& b) {
+            return a.priority < b.priority;
+        }
+    );
+
+    return highest_priority_iter->gpu;
 }
 
 /**
@@ -396,6 +455,7 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.compute.value(), 0, &m_compute_queue);
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue);
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
+
     gfx_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
     SetResourceName(uint64(m_graphics_queue), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
     compute_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
@@ -403,6 +463,23 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     // transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
     copy_queue = MakeUnique<VkCopyQueue>(*this);
     SetResourceName(uint64(m_transfer_queue), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
+
+    if (m_graphics_queue == m_transfer_queue) {
+        LOG_WARNING(
+            "gfx and transfer share the same VkQueue handle. "
+            "Installing shared submit mutex to avoid concurrent vkQueueSubmit2."
+        );
+        gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
+        copy_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
+    }
+    if (m_compute_queue == m_graphics_queue) {
+        LOG_WARNING(
+            "compute and gfx share the same VkQueue handle. "
+            "Installing shared submit mutex to avoid concurrent vkQueueSubmit2."
+        );
+        gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
+        compute_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
+    }
 }
 
 void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_version) {
@@ -660,29 +737,44 @@ QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu) 
     QueueFamilyIndices indices;
 
     auto queue_family_props = GetQueueFamilyProperties(_gpu);
-    //todo:what's the best queue for ray tracing operation?how to tell a queue support raytracing operation?
+    // AMD GPU的DMA/Transfer队列功能受限，提交包含Barrier/LayoutTransition的命令会导致DeviceLost
+    // 所以如果检测到AMD GPU，就强制transfer队列 = graphics队列
+    VkPhysicalDeviceProperties gpu_props{};
+    vkGetPhysicalDeviceProperties(_gpu, &gpu_props);
+    const bool is_amd = (gpu_props.vendorID == 0x1002);
+
     auto graphics = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_GRAPHICS_BIT, VkQueueFlagBits(0));
     if (graphics >= 0) {
         indices.graphics   = graphics;
         indices.raytracing = graphics;
         indices.present    = graphics;
     }
-    auto transfer = GetQueueFamilyIndice(
-        queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT
-    );
-    if (transfer < 0) {
-        transfer = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT);
+    if (is_amd) {
+        indices.transfer = indices.graphics.value();
+        LOG_WARNING(
+            "AMD GPU '{}' (vendorID={:#x}) detected. "
+            "Forcing transfer queue = graphics to avoid DMA queue VK_ERROR_DEVICE_LOST.",
+            gpu_props.deviceName,
+            gpu_props.vendorID
+        );
+    } else {
+        auto transfer = GetQueueFamilyIndice(
+            queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT
+        );
+        if (transfer < 0) {
+            transfer = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT);
+        }
+        if (transfer < 0) {
+            transfer = indices.graphics.value();
+        }
+        indices.transfer = transfer;
     }
-    if (transfer < 0) {
-        transfer = indices.graphics.value();
-    }
-    indices.transfer = transfer;
 
     auto compute = GetQueueFamilyIndice(queue_family_props, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT);
     if (compute >= 0) {
         indices.compute = compute;
     } else {
-        indices.compute = indices.transfer;
+        indices.compute = indices.graphics.value();
     }
 
     return indices;
@@ -716,6 +808,21 @@ VkDescriptorType METoVkDescriptorType(uint _desc_type) {
     return VK_DESCRIPTOR_TYPE_MAX_ENUM;
 }
 
+bool VulkanDevice::HasDeviceExtension(std::string_view _ext_name) const {
+    for (const auto& ext : m_device_info.enabled_extensions) {
+        if (ext && ext->GetExtensionName() == _ext_name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool VulkanDevice::IsAmdGpu() const {
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(m_gpu, &props);
+    return props.vendorID == 0x1002;
+}
+
 void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info) {
     _create_info = {};
 
@@ -723,9 +830,9 @@ void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateI
     _create_info.messageSeverity =
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-    _create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    _create_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                                   VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                                   VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
     _create_info.pfnUserCallback = DebugCallback;
 }
 
@@ -1004,12 +1111,16 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
     rendering_create_info.depthAttachmentFormat =
         VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format);
-#if WITH_CUDA
-    rendering_create_info.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
-#else
+
+    // Only set stencil format if the depth format actually has a stencil aspect
+    bool depth_has_stencil =
+        (_create_info.depth_stencil_format == PF_D32_SFLOAT_S8_UINT ||
+         _create_info.depth_stencil_format == PF_D24_UNORM_S8_UINT ||
+         _create_info.depth_stencil_format == PF_D16_UNORM_S8_UINT ||
+         _create_info.depth_stencil_format == PF_S8_UINT);
     rendering_create_info.stencilAttachmentFormat =
-        VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format);
-#endif
+        depth_has_stencil ? VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format) :
+                            VK_FORMAT_UNDEFINED;
 
     auto to_vk_blend_attachment = [](const RHIBlendAttachmentInfo& _info) {
         VkPipelineColorBlendAttachmentState state{};

@@ -405,12 +405,12 @@ void Camera::UpdateViewProjectionMatrix() {
 }
 
 void Camera::UpdatePlanesAndFrustum() {
-    // FIXME: m_planes是怎么算的？没看懂，不知道是否有错
-    auto vp     = GetProjectionMatrix();
+    // Gribb/Hartmann method: 从 ViewProjection 矩阵提取 world space 视锥体平面
+    auto vp     = GetViewProjectionMatrix();
     m_planes[0] = vp.r3 + vp.r0; //left
     m_planes[1] = vp.r3 - vp.r0; //right
-    m_planes[2] = vp.r3 + vp.r1; //top
-    m_planes[3] = vp.r3 - vp.r1; //bottom
+    m_planes[2] = vp.r3 + vp.r1; //bottom
+    m_planes[3] = vp.r3 - vp.r1; //top
     m_planes[4] = vp.r2;         //near
     m_planes[5] = vp.r3 - vp.r2; //far
 
@@ -552,8 +552,10 @@ void Camera::Tick(const SharedPtr<EditorConfig> config) {
             // unreal style camera control
             if (WindowInput::Get().key_button_switch_state[KeyButtons::F]) {
                 pure_rotate();
-            } else if (WindowInput::Get().mouse_button_state[MouseButtons::Left] &&
-                       WindowInput::Get().mouse_button_state[MouseButtons::Right]) {
+            } else if (
+                WindowInput::Get().mouse_button_state[MouseButtons::Left] &&
+                WindowInput::Get().mouse_button_state[MouseButtons::Right]
+            ) {
                 pure_move();
             } else if (WindowInput::Get().mouse_button_state[MouseButtons::Middle]) {
                 pure_move();

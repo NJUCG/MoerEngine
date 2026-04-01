@@ -13,9 +13,10 @@ namespace Moer::Render::Raster {
 class PbrMaterialShadingPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(PbrMaterialShadingPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(MaterialPassBindlessParam, param);
+    DEFINE_SHADER_BUFFER(lighting_data);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_ARGS(bdls, param);
+    DEFINE_SHADER_CONSTANT_STRUCT(MaterialPassBindlessParam, param);
+    DEFINE_SHADER_ARGS(lighting_data, bdls, param);
 };
 
 class LightingPass {
@@ -52,14 +53,12 @@ public:
         material_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
         material_param.shading_mode            = static_cast<uint>(ui_config.shading_mode);
 
-        material_param.material_buf_hdl    = context.scene.GetGpuSceneRes().material_buf.hdl;
-        material_param.vbuffer             = context.textures.vbuffer.hdl;
-        material_param.gbuffer_normal      = context.textures.normal.hdl;
-        material_param.gbuffer_tangent     = context.textures.tangent.hdl;
-        material_param.gbuffer_uv          = context.textures.uv.hdl;
-        material_param.gbuffer_depth       = context.textures.depth_nearest_sampler.hdl;
-        material_param.gbuffer_position    = context.textures.position.hdl;
-        material_param.global_param_handle = context.lighting_data_buffer.hdl;
+        material_param.material_buf_hdl = context.scene.GetGpuSceneRes().material_buf.hdl;
+        material_param.vbuffer          = context.textures.vbuffer.hdl;
+        material_param.gbuffer_normal   = context.textures.normal.hdl;
+        material_param.gbuffer_tangent  = context.textures.tangent.hdl;
+        material_param.gbuffer_uv       = context.textures.uv.hdl;
+        material_param.gbuffer_depth    = context.textures.depth_nearest_sampler.hdl;
 
         material_param.light_buf_hdl      = context.scene.GetGpuSceneRes().light_buf.hdl;
         material_param.cubemap_handle     = context.textures.cubemap_tex.hdl;
@@ -72,7 +71,7 @@ public:
             DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture());
         depth_attachment.action = AC_DS_LOAD_STORE;
 
-        context.cmd_list.Gfx(pbr_pipeline, context.bdls, material_param)
+        context.cmd_list.Gfx(pbr_pipeline, context.lighting_data_buffer.buf, context.bdls, material_param)
             .Draw(
                 "Lighting Pass",
                 context.textures.lighting_output.GetRect2D(),

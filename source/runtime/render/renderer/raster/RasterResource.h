@@ -42,16 +42,7 @@ public:
 
     float frame_time;
 
-    // 超分Pass前的分辨率
-    uint2 GetResolutionBeforeSR() {
-#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
-        return uint2(resolution.x / 2.0f, resolution.y / 2.0f);
-#else
-        return uint2(resolution.x, resolution.y);
-#endif
-    }
-    // 超分Pass后的分辨率（原始分辨率）
-    uint2 GetResolutionOriginal() {
+    uint2 GetResolution() {
         return uint2(resolution.x, resolution.y);
     }
 
@@ -64,7 +55,7 @@ public:
     struct CSMData {
         float3                                                      light_dir;
         StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
-        StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
+        StaticArray<float4x4, CSM_MAX_CASCADES>                     world2shadow_clip;
     } csm_data;
 
     struct PointShadowData {
@@ -165,7 +156,9 @@ public:
 
         //GPU Side
         lighting_data_buffer.buf = device.CreateBuffer<byte>(
-            "Raster::LightData", sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS
+            "Raster::LightData",
+            sizeof(LightingData),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::CONSTANT_BUFFER
         );
         lighting_data_buffer.hdl = bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
     }
