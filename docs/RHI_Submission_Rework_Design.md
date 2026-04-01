@@ -4,12 +4,14 @@
 
 本次重构目标是把 RHI 提交流程收敛为一条清晰的主链路：
 
-- 调用侧只通过 `RHIExecutor::Get().Submit(...)` 提交 `RHICommandList`
-- `RHIExecutor` 统一负责同步推导与实际 submit
-- `CopyScope` 由 Graphics / Compute `CommandList` 创建，负责录制 copy 指令；Copy queue 对调用方完全隐式，executor 内部自动处理 copy queue 的 command buffer 录制、barrier 生成与 signal/wait
+- 调用侧只通过 `RHIExecutor::Get().Submit(...)` / `RHIExecutor::Get().Sync(...)` 与 executor 交互
+- `RHIExecutor` 统一负责 preprocess、translate task、submit runtime、interrupt runtime
+- `CopyScope` 由 Graphics / Compute `CommandList` 创建；Copy queue 对调用方完全隐式
 - `Transition` 显式描述资源在 command list 内部以及跨队列之间的状态切换
+- `SubmitInfo` 只服务 submit runtime，不承担 translate 过程语义
+- `wait/signal` 的物理 timeline value 延迟到 submit runtime 解析
 - 整体执行链固定为：
-  - `preprocess -> parallel translate -> ordered submit -> interrupt`
+  - `preprocess -> translate task -> submit assemble -> submission runtime -> interrupt runtime`
 
 约束遵循 [Rule_Codex.md](/f:/Github_Data/MoerEngine/docs/Rule_Codex.md)：
 
@@ -20,7 +22,7 @@
 
 ## 2. 外部接口
 
-### 2.1 `RHIExecutor::Submit`
+### 2.1 `RHIExecutor::Submit` / `Sync`
 
 新的提交入口：
 
@@ -36,14 +38,18 @@ struct RHIPresentRequest {
     TextureView  source;
 };
 
-struct GPUEventRecord;  // 前向声明，见 §16.2
-
 void Submit(
-    Array<CommandList&&>         command_lists,
-    ERHIExecSubmitFlags          flags       = ERHIExecSubmitFlags::FlushGPU,
-    RHIPresentRequest*           present     = nullptr,
-    Array<GPUEventRecord>&&      gpu_events  = {}  // GPU profiler 支持，见 §16
+    Array<CommandList&&> command_lists,
+    ERHIExecSubmitFlags  flags   = ERHIExecSubmitFlags::FlushGPU,
+    RHIPresentRequest*   present = nullptr
 );
+
+enum class ERHISyncDepth : uint8 {
+    RHI     = 0,
+    Present = 1,
+};
+
+GraphEventRef Sync(ERHISyncDepth depth = ERHISyncDepth::RHI);
 ```
 
 语义：
@@ -56,7 +62,14 @@ void Submit(
   - 标记本次 batch 为 frame tail，触发 interrupt 线程执行帧末回调（帧内资源刷新 / defrag 等）
   - `FrameEnd` 必须与 `FlushGPU` 同时使用，单独使用 `FrameEnd` 是非法的
 - `present`
-  - 与 command list 同级，不作为 command list 内部命令，由 executor 在最后一个 command list 提交后统一处理
+  - 与 command list 同级，由 executor 挂到最后一个 graphics `SubmitInfo` 的尾部阶段处理
+- `Sync(RHI)`
+  - 返回一个 `GraphEventRef`
+  - 表示调用前所有已进入 `RHIExecutor` 的 RHI submit 在 interrupt runtime 中已退休完成
+  - 不包含 present completion
+- `Sync(Present)`
+  - 返回一个 `GraphEventRef`
+  - 表示调用前所有已进入 `RHIExecutor` 的 RHI submit 与 present 都已在 interrupt runtime 中退休完成
 - 所有提交入口统一经过 `RHIExecutor`，不再允许直接调用 `gfx_queue.Execute` / `gfx_queue.Present`
 
 ### 2.2 `CommandList`
@@ -66,6 +79,8 @@ void Submit(
 ```cpp
 explicit CommandList(EQueueType queue_type);
 EQueueType GetQueueType() const;
+GraphEventRef ReadbackCopy(BufferView src, std::span<byte> dst);
+GraphEventRef ReadbackCopy(TextureView src, std::span<byte> dst);
 ```
 
 `EQueueType` 对调用方可见的合法值：
@@ -84,6 +99,7 @@ enum class EQueueType : uint8 {
 - Copy queue 对调用方完全隐式：调用方通过 `BeginCopyScope()` 嵌入 copy 操作，executor 在 preprocess / translate / submit 阶段自动处理 copy queue 的 command buffer 录制、allocator 分配和 signal/wait（见 §2.3、§5）
 - 提交时 executor 按 `GetQueueType()` 决定主 native queue，不再需要外部 wrapper 指定
 - Graphics / Compute 的普通命令在对应 queue 上 translate 和 submit
+- 显式 readback API 返回 `GraphEventRef`，该事件表示 interrupt runtime 已完成 staging 数据回填
 
 ### 2.3 `CopyScope`
 
@@ -96,8 +112,8 @@ public:
     void UploadTexture(...);
     void CopyBuffer(...);
     void CopyTexture(...);
-    void ReadbackBuffer(...);
-    void ReadbackTexture(...);
+    GraphEventRef ReadbackBuffer(...);
+    GraphEventRef ReadbackTexture(...);
     // ~CopyCommandScope() 隐式结束 scope
 };
 
@@ -112,6 +128,7 @@ CopyCommandScope BeginCopyScope();
 - 一个 `CommandList` 内可以有多个 `CopyCommandScope`，不允许嵌套
 - `CopyScope` 是 executor 内部派生 copy queue submit 的唯一结构化来源
 - executor 在 preprocess 阶段从 `CopyScope` 构造 copy queue 的 handoff plan；在 translate 阶段为 `CopyScope` 独立分配 copy queue allocator 并录制 copy queue command buffer；在 submit 阶段自动插入父 queue 和 copy queue 之间的 signal/wait
+- readback API 返回的 `GraphEventRef` 在 interrupt runtime 中、且 staging 数据回填到 CPU 目标地址之后才触发
 
 典型 pattern：
 
@@ -275,20 +292,26 @@ void EndBufferOverlap(BufferView view);
 
 ## 4. 同步来源
 
-最终 wait/signal 只来源于三类信息：
+逻辑同步只来源于四类信息：
 
 1. 用户显式录制的 wait/signal intent
-2. `Transition(Acquire/Release)` 生成的跨队列 handoff 计划
-3. `CopyScope` 生成的跨队列 handoff 计划
+2. `Transition(Acquire/Release)` 生成的跨队列 handoff plan
+3. `CopyScope` 生成的跨队列 handoff plan
+4. `FlushGPU` batch 对前序所有未退休 RHI submits 的 tail 依赖
+
+本次设计引入 `SyncPoint`：
+
+- 每个 `SubmitInfo` 默认导出一个 completion `SyncPoint`
+- 后继 `SubmitInfo` 只记录“等待哪个 `SyncPointId`”，不记录具体 `{fence, value}`
+- submit runtime 在真正提交时，才把 `SyncPointId` 解析成物理 `WaitEvent`
 
 本次设计不再保留独立的 `ResolveDependencies` 阶段。
 
 原因：
 
 - 全局 hazard resolve 会阻塞 translate 并行
-- 这次只保留实现必须的同步来源
-- 跨队列 handoff 在 preprocess 形成 plan 即可
-- 真实 fence/timeline 数值到 submit 阶段再绑定
+- preprocess 只需要保留逻辑依赖
+- 真实 fence/timeline value 只有 submit runtime 才知道
 
 ## 5. `CopyScope` 规则
 
@@ -407,12 +430,10 @@ RHIExecutor::Submit(cmdlists, flags, present):
     batch = MoveOut(pending)
     unlock
 
-    plan = Preprocess(batch)
-    translated = ParallelTranslate(plan)
-    SubmitAndPresent(plan, translated)
-
-    if (HasFlag(batch.flags, FrameEnd)):
-        interrupt.Enqueue(FrameEndMarker)
+    translate_infos   = Preprocess(batch)
+    translate_results = DispatchTranslateTasks(translate_infos)
+    submit_infos      = AssembleSubmitInfos(translate_results, batch)
+    SubmitRuntime.Enqueue(std::move(submit_infos), batch.frame_end)
 ```
 
 ### 7.2 Preprocess
@@ -420,175 +441,157 @@ RHIExecutor::Submit(cmdlists, flags, present):
 职责：
 
 - 单线程
-- 读取各资源长期 `SubresourceStates`，构建每个 command list 的 `seed_tracker`（独立拷贝，供 translate 并行只读使用）
-- 构建 `Transition(Acquire/Release)` plan
-- 构建 `CopyScope` handoff plan
+- 读取各资源长期 `SubresourceStates`
+- 构建 `TranslateInfo`
+- 构建 `Transition(Acquire/Release)` 与 `CopyScope` 的逻辑 handoff plan
 - 收集用户 wait/signal intent
-- 推导 `end_state_snapshot`
-- 回写资源状态到长期存储
+- 推导并回写 `end_state_snapshot`
+- 记录逻辑依赖，不生成物理 `WaitEvent`
 
 伪代码：
 
 ```cpp
 Preprocess(batch):
     for cmdlist in batch order:
-        result.start = ReadSubresourceStates(cmdlist.resources)
-        result.seed_tracker = result.start  // 独立拷贝，translate 阶段只读
+        translate_info.seed_tracker = ReadSubresourceStates(cmdlist.resources)
 
         for command in cmdlist:
             if Transition:
                 ValidateSrcDstRange(command)
 
                 if flags == None:
-                    result.local_barriers += command
+                    translate_info.local_barriers += command
                     ApplyLocalState(command)
 
                 else if flags == Release:
-                    RecordReleasePlan(command, cmdlist.index)
+                    RecordReleasePlan(command)
                     ApplyReleaseState(command)
 
                 else if flags == Acquire:
                     MatchAcquireWithRelease(command)
-                    RecordAcquirePlan(command, cmdlist.index)
+                    RecordAcquirePlan(command)
                     ApplyAcquireState(command)
 
             else if CopyScope:
-                RecordCopyScopeHandoffPlan(command, cmdlist.index)
+                RecordCopyScopeHandoffPlan(command)
                 ApplyCopyScopeState(command)
 
             else if UserWait/UserSignal:
-                RecordUserSyncIntent(command)
+                RecordUserSyncIntent(command)  // 只记录 intent，不绑定 timeline
 
             else if BufferOverlap:
-                ApplyOverlapState(command)  // 标记该 buffer 在 overlap 范围内跳过 write-after-write
+                ApplyOverlapState(command)
 
             else:
                 ApplyRegularResourceAccess(command)
 
-        result.end = result.local_state
-        WriteBackSubresourceStates(result.end)
+        WriteBackSubresourceStates(local_state)
 
         if (batch.flags & FrameEnd && IsLastCmdList):
-            ValidateAllResourcesOwnedByGraphics(result.end)  // 见 §3.4
+            ValidateAllResourcesOwnedByGraphics(local_state)
 
-        outputs += result
+        outputs += translate_info
 
     if (batch.present):
-        // source ownership 已由上方 preprocess 写好，直接查长期状态
-        present_plan = BuildPresentPlan(batch.present, GetLastStateOf(batch.present.source))
+        RecordPresentCandidate(batch.present)
 
-    return {cmd_results, present_plan}
+    return translate_infos
 ```
 
-### 7.3 Parallel Translate
+### 7.3 TranslateTask
 
 职责：
 
-- 每个 command list 独立录制
-- 每个 translate task 从对应 queue 的 allocator pool 获取独立 allocator（pool 需支持并发 pop，见下）
-- 每个 translate task 使用 preprocess 写好的 `seed_tracker` 拷贝初始化本地 tracker，不共享可变状态
-- translate 只读 preprocess 输出
-- 不写共享资源状态
+- 每个 `TranslateInfo` 对应一个 `TranslateTask`
+- `TranslateTask.Dispatch()` 返回 `GraphEventRef`
+- 任务内部录制 native cmd buffer / recorded submit payload
+- 当前可同步执行，但接口保持 task 形状
+- translate 只读 preprocess 输出，不修改全局资源状态
 
 关于 `VulkanAllocator` 并发 pop：
 
 - `LockFreeQueueBase<VulkanAllocator>` 的模板参数控制的是存储值类型（值 vs 指针），与线程安全无关
-- ParallelTranslate 阶段需要多个 translate task 并发从同一 queue 的 pool 中 pop allocator，包括 copy queue 的 allocator pool（由 executor 内部持有，调用方不可见）
+- translate task 需要并发从同一 queue 的 pool 中 pop allocator，包括 copy queue 的 allocator pool（由 executor 内部持有，调用方不可见）
 - pool 实现必须支持并发 pop（lock-free 或加锁），translate 任务之间不得共用同一 allocator
 
 伪代码：
 
 ```cpp
-ParallelTranslate(plan):
-    parallel_for each cmd_result:
-        // 从 per-queue pool 并发 pop 父 queue allocator
-        allocator = AcquireConcurrentAllocator(cmd_result.queue)  // Graphics 或 Compute
-
-        // 用 preprocess 的 seed_tracker 拷贝初始化本地 tracker（只读，无共享）
-        tracker.InitFromSeed(cmd_result.seed_tracker)
-
-        BeginCmdBuffer()
-        EmitHeadAcquireBarriers(cmd_result.acquire_plan)
-
-        for segmented block in cmd_result:
-            EmitLocalTransitions(block.local_barriers)
-            EmitRegularCommands(block.commands)
-
-            // CopyScope 内的 copy 命令独立录制到 copy queue cmd buffer
-            // copy queue 对调用方不可见，allocator 由 executor 内部 pool 分配
-            for copy_scope in block.copy_scopes:
-                copy_allocator = AcquireConcurrentAllocator(InternalCopyQueue)
-                BeginCopyCmdBuffer()
-                EmitCopyScopeAcquireBarriers(copy_scope)
-                EmitCopyScopeCommands(copy_scope)
-                EmitCopyScopeReleaseBarriers(copy_scope)
-                EndCopyCmdBuffer()
-
-        EmitTailReleaseBarriers(cmd_result.release_plan)
-        EndCmdBuffer()
-
-        // RecordedSubmit 同时携带父 queue cmd buffer 和所有嵌套 CopyScope 的 copy queue cmd buffer
-        return RecordedSubmit{cmd_id, queue, native_cmd_buffer, copy_cmd_buffers, user_sync_intents}
+DispatchTranslateTasks(translate_infos):
+    for translate_info in translate_infos:
+        event = TranslateTask::Dispatch(translate_info)
+        results += {translate_info.key, event, queue, recorded_submit_payload, metadata}
+    return results
 ```
 
-### 7.4 Ordered Submit
+### 7.4 Submit 组装
 
 职责：
 
-- 按 batch 原始顺序提交
-- 不做 DAG-ready submit
-- 在这里绑定真实 wait/signal timeline value
+- 只消费 `TranslateResult`
+- 组装 submit runtime 真正需要的 `SubmitInfo`
+- 在这里做同 queue 合包
+- 在这里建立 `SubmitInfo` 之间的 `SyncPoint` 逻辑依赖
+- `SubmitInfo` 不携带 translate-only 状态
 
-Timeline value 策略（见 §12）：
+伪代码：
 
-- 每个 native queue 维护独立的单调递增计数器
-- 每次 `NativeSubmit` 时取当前计数器值作为 signal value，计数器自增
-- `completion_by_cmd` 以 `(queue, value)` 对记录每个 submit 的完成 event
+```cpp
+AssembleSubmitInfos(translate_results, batch):
+    submit_infos = MergeByQueueSubmissionSemantic(translate_results)
+
+    for submit_info in submit_infos:
+        submit_info.completion_syncpoint = AllocateSyncPointId()
+        submit_info.logical_waits = BuildLogicalSyncWaits(submit_info)
+
+    AttachBatchRootPrerequisites(submit_infos, previous_flush_rhi_tails)
+    AttachPresentToLastGraphicsSubmitInfo(submit_infos, batch.present)
+
+    return submit_infos
+```
+
+### 7.5 Submission Runtime
+
+职责：
+
+- 只消费 `SubmitInfo`
+- 按稳定顺序提交，不做激进 DAG-ready submit
+- 只在这里解析真实 `wait/signal` timeline value
+- 保证每个 queue 的 signal value 连续递增
+- resolve `SyncPoint`
 
 原因：
 
 - 先以稳定可跑通 validation 为目标
+- `SyncPoint` 的物理值只有 submit runtime 才知道
 - translate 已经并行化，submit 再激进并行收益有限但排障成本高
 
 伪代码：
 
 ```cpp
-SubmitAndPresent(plan, translated):
-    completion_by_cmd = {}
+SubmissionThreadLoop():
+    while (running):
+        submit_info = PopNextReadySubmitInfo()
+        physical_waits = ResolveSyncPoints(submit_info.logical_waits)
+        signal_value   = AllocateTimelineSignal(submit_info.queue)
+        completion     = NativeSubmit(submit_info, physical_waits, signal_value)
+        ResolveSyncPoint(submit_info.completion_syncpoint, completion)
 
-    for cmd_id in original batch order:
-        // 处理 CopyScope 嵌入的 copy submit（先于父 cmd submit）
-        for copy_submit in translated[cmd_id].copy_submits:
-            copy_waits   = ResolveCopyScopeWaits(copy_submit, completion_by_cmd)
-            copy_signals = AllocateTimelineSignal(CopyQueue)  // per-queue 递增
-            completion_by_cmd[copy_submit.id] = NativeSubmit(copy_submit, copy_waits, copy_signals)
+        if (submit_info.present):
+            present_completion = ExecutePresent(submit_info.present, completion)
 
-        packet.waits =
-            ResolveUserWaits(translated[cmd_id].user_waits) +
-            ResolveAutoWaits(plan.cmd_results[cmd_id], completion_by_cmd)
-
-        packet.signals =
-            ResolveUserSignals(translated[cmd_id].user_signals) +
-            AllocateTimelineSignal(cmd_result.queue)  // per-queue 递增
-
-        completion_by_cmd[cmd_id] = NativeSubmit(translated[cmd_id], packet)
-
-    if (plan.present_plan):
-        // present source 的最后写入 completion 已在 completion_by_cmd 中
-        waits = ResolvePresentWaits(plan.present_plan, completion_by_cmd)
-        ExecutePresent(plan.present_plan, waits)
-
-    interrupt.Enqueue(CallbacksAndHostWaitsFromThisBatch)
+        interrupt.Enqueue(RetireTaskFrom(submit_info, completion, present_completion))
 ```
 
-### 7.5 Interrupt
+### 7.6 Interrupt Runtime
 
 职责：
 
-- 不阻塞 submit
-- 处理 host wait（等待已提交 batch 的 GPU completion）
-- 执行 GPU completion 后的回调（帧内资源刷新 / defrag 等 frame-end 逻辑在此触发）
+- 处理 host wait
 - 回收 allocator / presentor
+- 执行 callback / signal
+- 触发 readback `GraphEventRef`
+- 触发 `RHIExecutor::Sync(depth)` 返回的 `GraphEventRef`
 - 处理 frame-end marker
 
 伪代码：
@@ -598,31 +601,29 @@ InterruptThreadLoop():
     while (running):
         task = PopInterruptTask()
 
-        if task is HostWait:
-            WaitFenceValues(task.waits)
+        WaitFenceValues(task.waits)
+        RecycleAllocatorOrPresentor()
+        RunCallbacks()
+        NotifySignals()
+        TriggerReadbackEvents()
+        TriggerSyncEvents()
 
-        else if task is Callback:
-            RunCallbacks()
-
-        else if task is Recycle:
-            RecycleAllocatorOrPresentor()
-
-        else if task is FrameEndMarker:
+        if task is FrameEndMarker:
             TriggerFrameEndCallbacks()  // 资源刷新、defrag 等
             EmitFrameEndStats()
 ```
 
 ## 8. Present 规则
 
-`Present` 与 command list 同级，不属于 command list 内部命令，由 `RHIExecutor` 统一处理。
+`Present` 与 command list 同级，但内部实现上挂到最后一个 graphics `SubmitInfo` 的尾部阶段。
 
 不再允许调用方直接调用 `gfx_queue.Present(...)` / `gfx_queue.Execute(...)`。
 
 ### 8.1 Present 提交流程
 
 ```cpp
-ExecutePresentTask(present_task, wait_events):
-    assert(present_task.queue == Graphics)
+ExecutePresentTask(present_stage, rhi_completion):
+    assert(present_stage.queue == Graphics)
 
     swapchain.WaitReusableSlot()
     acquire = swapchain.AcquireNextImage()
@@ -632,8 +633,8 @@ ExecutePresentTask(present_task, wait_events):
     begin present cmd buffer
     tracker.ResetTransient()
 
-    // source 的 ownership 此时必须已在 Graphics（见 §3.4 帧结束约束）
-    tracker.RecordRead(present_task.source, TRANSFER)
+    // source 的 ownership 此时必须已在 Graphics
+    tracker.RecordRead(present_stage.source, TRANSFER)
     tracker.RecordWrite(acquire.swapchain_image, TRANSFER)
     EmitBarriers()
 
@@ -643,12 +644,18 @@ ExecutePresentTask(present_task, wait_events):
     EmitBarriers()
     end cmd buffer
 
-    native_queue.WaitAll(wait_events)           // 等待上游 timeline completion
+    native_queue.WaitAll(rhi_completion)        // 只等待本 SubmitInfo 的 RHI completion
     native_queue.Wait(acquire.ready_semaphore)  // binary semaphore（见 §8.2）
     native_queue.Signal(swapchain.render_finished_binary_semaphore)
     native_queue.Submit(present_cmd_buffer)
     vkQueuePresentKHR(...)
 ```
+
+约束：
+
+- `SubmitInfo` 的 completion `SyncPoint` 表示 RHI submit 完成，不包含 present retirement
+- present completion 只参与 `Sync(Present)`，不参与 `Sync(RHI)`
+- flush 间自动依赖只覆盖前序 RHI submits，不隐式覆盖 present
 
 ### 8.2 Vulkan Present 特殊约束
 
@@ -698,9 +705,13 @@ ExecutePresentTask(present_task, wait_events):
 - 重写 `RHIExecutor` 的 pending batch 模型，接口改为 `Array<CommandList&&>`（只接收 Graphics / Compute command list）
 - executor 内部维护 copy queue 的 allocator pool 和 timeline，对外不暴露
 - `VulkanSubmissionExecutor` 收敛成三块核心结构：
-  - `PreprocessResult`（含从 CopyScope 派生出的 copy queue submit plan）
-  - `RecordedSubmit`（含父 queue cmd buffer 和对应 CopyScope 的 copy queue cmd buffer）
-  - `InterruptTask`
+  - `TranslateInfo` / `TranslateResult`
+  - `SubmitInfo`
+  - `SyncPoint` / `InterruptTask`
+- 增加 `RHIExecutor::Sync(ERHISyncDepth)`，返回 executor 级退休完成事件
+- flush batch 自动等待前序所有未退休的 RHI submits
+- readback API 返回的 `GraphEventRef` 在 interrupt runtime 中触发
+- 不再以 `QueueSubmissionInfo` / `PresentInfo` 作为长期内部平台单元
 - 废弃 `VkCommandQueue::ExecuteThread()` 后台线程；其承担的 allocator 回收、callback 执行、fence wait 职责全部迁移至 `RHIExecutor` 的 interrupt 线程
 - 废弃 `VkCopyQueue` 的独立 IO 线程（`IOThreadLoop` / `RHIThreadLoop`）；copy queue 的提交统一纳入 `RHIExecutor` 的 preprocess / translate / submit 流水线
 
@@ -808,6 +819,10 @@ RHIExecutor::Get().SetValidation(bool enabled);
 
 - `CopyScope` upload -> Compute read
 - `CopyScope` upload -> Graphics sample -> Present
+- readback copy 返回 `GraphEventRef`，不依赖 `Flush()` + `WaitIdle()`
+- `Sync(RHI)` 只等待 RHI submit retirement，不等待 present
+- `Sync(Present)` 等待 RHI submit 与 present retirement
+- 后一个 `FlushGPU` 自动等待前面所有未退休的 RHI submits
 - Graphics release -> Compute acquire（显式 Transition）
 - Compute release -> Graphics acquire（显式 Transition）
 - 同队列 transition with subresource range
@@ -846,6 +861,7 @@ warning / info：
 - preprocess 是整批次单线程
 - translate 只读 preprocess 结果（通过 `seed_tracker` 拷贝，并发安全）
 - submit 保持全局顺序
+- flush batch 的 root submits 自动等待前序所有未退休的 RHI submits
 - Copy queue 对调用方完全隐式，只能通过 `CopyScope` 间接使用
 - Buffer v1 不做 offset/size range tracking
 - Texture 默认 range = all mips / all layers
@@ -853,6 +869,7 @@ warning / info：
 - Vulkan 是唯一行为验收目标
 - `FrameEnd` 必须与 `FlushGPU` 同时使用
 - 帧开始和帧结束（present 前）必须是 Graphics queue
+- `Sync(RHI)` 不包含 present，`Sync(Present)` 包含 present
 - Validation 开关：Debug 默认开，Release 可关
 
 ## 12. Timeline Value 策略
@@ -869,21 +886,22 @@ struct PerQueueTimeline {
 分配规则：
 
 - 每次 `NativeSubmit` 调用 `AllocateTimelineSignal(queue)` 时，取 `next_value` 作为本次 signal value，然后 `next_value++`
-- `completion_by_cmd[cmd_id]` 存储 `{queue_timeline_fence, signal_value}`
-- 后续 submit 通过 `ResolveAutoWaits` 查 `completion_by_cmd` 获取依赖的 wait value
+- 每个 queue 的 signal 必须连续
+- 每个 `SubmitInfo` 的 completion `SyncPoint` 在 submit 成功后解析成 `{queue_timeline_fence, signal_value}`
+- 后继 `SubmitInfo` 只保存逻辑 `SyncPointId`，submit runtime 再把它解析成真实 wait value
 
 跨队列依赖解析：
 
 ```
-gfx submit  → signal gfx_timeline @ value N
-copy submit → wait   gfx_timeline @ value N   (通过 completion_by_cmd 查到)
-            → signal copy_timeline @ value M
-gfx submit  → wait   copy_timeline @ value M  (CopyScope 结束后的 gfx 依赖)
+gfx submit  → resolve SP0 = {gfx_timeline, N}
+copy submit → wait SP0 -> {gfx_timeline, N}
+            → resolve SP1 = {copy_timeline, M}
+gfx submit  → wait SP1 -> {copy_timeline, M}
 ```
 
-Present 不使用 timeline semaphore（见 §8.2），只在 present cmd buffer submit 前等待上游 completion 对应的 timeline value，然后切换到 binary semaphore 路径。
+Present 不使用 timeline semaphore（见 §8.2），只在 present cmd buffer submit 前等待所属 `SubmitInfo` 的 RHI completion，然后切换到 binary semaphore 路径。
 
-Interrupt 线程在 host wait 时等待 `{fence, value}` 对，完成后触发回收和回调。
+interrupt runtime 在 host wait 时等待 `{fence, value}` 对，完成后触发回收、callback、readback event 与 `Sync(depth)` 事件。
 
 ## 13. Reorder 策略
 
@@ -1477,19 +1495,19 @@ Backend（Vulkan）在 translate 时：
 
 #### Submit 阶段
 
-每个 CommandList 的 gpu_events 与其自己的 timeline completion 绑定：
+每个 `TranslateResult` 的 gpu_events 在组装成 `SubmitInfo` 后，与其所属 queue submit 的 RHI completion 绑定：
 
 ```cpp
-SubmitAndPresent(plan, translated):
-    for cmd_id in original batch order:
-        completion = NativeSubmit(translated[cmd_id], packet)
+SubmissionThreadLoop():
+    submit_info = PopNextReadySubmitInfo()
+    completion  = NativeSubmit(submit_info, ...)
 
-        // 从 CommandList 提取 gpu_events 并注册
-        Array<GPUEvent> events = translated[cmd_id].StealGPUEvents();
+    for translated in submit_info.translated_payloads:
+        events = translated.StealGPUEvents()
         if (!events.empty()):
             GPUEventStream::Get().RegisterSubmit(
                 std::move(events),
-                translated[cmd_id].queue_type,
+                translated.queue,
                 completion
             )
 ```
