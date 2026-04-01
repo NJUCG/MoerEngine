@@ -44,12 +44,10 @@ RasterRenderer::RasterRenderer(
     raster_context.AllocateFrameBuffers();
 
     {
-        RHISubmitCmdList init_submit{};
-        init_submit.queue = EQueueType::Graphics;
-        init_submit.submits.emplace_back(cmd_list.Submit());
-        Array<RHIExecOp> init_ops;
-        init_ops.emplace_back(std::move(init_submit));
-        RHIExecutor::Get().Submit(std::move(init_ops), RHIExecSubmitOptions{.flush_gpu = true});
+        Array<CommandList> init_cmd_lists{};
+        init_cmd_lists.emplace_back(std::move(cmd_list));
+        RHIExecutor::Get().Submit(std::move(init_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
+        cmd_list = CommandList(EQueueType::Graphics);
     }
 
     shadow_depth_pass            = MakeUnique<ShadowDepthPass>(raster_context);
@@ -81,12 +79,10 @@ RasterRenderer::RasterRenderer(
 
     cmd_list.UpdateBindlessArray(bindless_array);
     {
-        RHISubmitCmdList init_submit{};
-        init_submit.queue = EQueueType::Graphics;
-        init_submit.submits.emplace_back(cmd_list.Submit());
-        Array<RHIExecOp> init_ops;
-        init_ops.emplace_back(std::move(init_submit));
-        RHIExecutor::Get().Submit(std::move(init_ops), RHIExecSubmitOptions{.flush_gpu = true});
+        Array<CommandList> init_cmd_lists{};
+        init_cmd_lists.emplace_back(std::move(cmd_list));
+        RHIExecutor::Get().Submit(std::move(init_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
+        cmd_list = CommandList(EQueueType::Graphics);
     }
 
     // Other vars
@@ -233,14 +229,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // commands to the copy queue, and auto-generates acquire/release barriers.
         auto&& scene_cmd_list = scene.PopPendingCommandList();
         if (!scene_cmd_list.gfx_queue_cmd_list.IsEmpty()) {
-            RHISubmitCmdList scene_gfx_submit{};
-            scene_gfx_submit.queue = EQueueType::Graphics;
-            scene_gfx_submit.submits.emplace_back(
-                scene_cmd_list.gfx_queue_cmd_list.Submit()
-            );
-            Array<RHIExecOp> scene_ops;
-            scene_ops.emplace_back(std::move(scene_gfx_submit));
-            RHIExecutor::Get().Submit(std::move(scene_ops), RHIExecSubmitOptions{.flush_gpu = true});
+            Array<CommandList> scene_cmd_lists{};
+            scene_cmd_lists.emplace_back(std::move(scene_cmd_list.gfx_queue_cmd_list));
+            RHIExecutor::Get().Submit(std::move(scene_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
         }
 
         if (first_load) {
@@ -249,12 +240,10 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             // 随手加一句，避免出错（重构完毕后可以尝试去除）
             cmd_list.UpdateBindlessArray(bindless_array);
 
-            RHISubmitCmdList first_load_submit{};
-            first_load_submit.queue = EQueueType::Graphics;
-            first_load_submit.submits.emplace_back(cmd_list.Submit());
-            Array<RHIExecOp> first_load_ops;
-            first_load_ops.emplace_back(std::move(first_load_submit));
-            RHIExecutor::Get().Submit(std::move(first_load_ops), RHIExecSubmitOptions{.flush_gpu = true});
+            Array<CommandList> first_load_cmd_lists{};
+            first_load_cmd_lists.emplace_back(std::move(cmd_list));
+            RHIExecutor::Get().Submit(std::move(first_load_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
+            cmd_list = CommandList(EQueueType::Graphics);
         }
 
         auto& raster_config = editor_config->raster_config;
@@ -365,16 +354,16 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     }
 
     time++;
-    Array<RHIExecOp> frame_ops;
-    RHISubmitCmdList submit_cmd_list;
-    submit_cmd_list.queue = EQueueType::Graphics;
-    submit_cmd_list.MarkWriteTexture(default_output_texture);
-    submit_cmd_list.submits.emplace_back(cmd_list.Submit().Signal(timeline, time).DeleteResources());
-    frame_ops.emplace_back(std::move(submit_cmd_list));
-    if (!skip_present) {
-        frame_ops.emplace_back(RHIPresentOp{swapchain, default_output_texture, EQueueType::Graphics});
-    }
-    RHIExecutor::Get().Submit(std::move(frame_ops), RHIExecSubmitOptions{.flush_gpu = true, .frame_end = true});
+    RHIPresentRequest present_request{swapchain, default_output_texture};
+    cmd_list.Signal(timeline, time).DeleteResources();
+    Array<CommandList> frame_cmd_lists{};
+    frame_cmd_lists.emplace_back(std::move(cmd_list));
+    RHIExecutor::Get().Submit(
+        std::move(frame_cmd_lists),
+        ERHIExecSubmitFlags::FlushGPU | ERHIExecSubmitFlags::FrameEnd,
+        skip_present ? nullptr : &present_request
+    );
+    cmd_list = CommandList(EQueueType::Graphics);
 
     if (!skip_present && hooks.on_present_windows) {
         hooks.on_present_windows();

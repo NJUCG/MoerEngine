@@ -2,7 +2,8 @@
   "project": "MoerEngine RHI Submission Rework",
   "doc_refs": [
     "docs/RHI_Submission_Rework_Design.md",
-    "docs/Rule_Codex.md"
+    "docs/proposal.json",
+    "docs/rules/Rule_Codex.md"
   ],
   "source_analyzed": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
   "checkpoints": [
@@ -12,13 +13,13 @@
       "priority": "critical",
       "status": "done",
       "category": "preprocess",
-      "problem": "当前 preprocess 使用 FrameStateStore::global_last_state (一个帧内的全局 snapshot) 传递状态，而不是直接读写资源对象本身的持久状态。TODO L2273 明确说明要去掉 global_last_state 的链式传递，改为从资源内存中直接存取。同时 Texture 的 persistent state 目前仍是 whole-resource 单状态，不符合设计中的长期 SubresourceStates；这会让 preprocess 已经得到的 per-range tracking 在回写长期状态时重新退化成整资源粒度。L2490 的 TODO 也指出 present 的 target texture state 应从 Texture class 的 persistent state 读取。",
-      "what_design_says": "§3.1: 每个 Buffer/Texture 持有长期 SubresourceStates。§3.3: 资源状态只允许在 preprocess 阶段写入，回写到资源的长期存储。Texture 不应再依赖 whole-resource 单状态，而应直接持有完整 subresource array。",
+      "problem": "当前 preprocess 使用 FrameStateStore::global_last_state 做帧内状态链式传递，而不是直接读写资源对象的持久状态。Texture 的长期状态仍然是 whole-resource 粒度，会让 preprocess 已经得到的 per-range tracking 在回写时退化。present 路径也不能继续依赖硬编码状态，而应读取资源长期状态。",
+      "what_design_says": "资源长期状态必须是单一真相来源。Texture 按完整 subresource array 持久化，Buffer v1 保持整资源粒度。preprocess 只从资源对象读取初始状态，只向资源对象回写结束状态。",
       "tasks": [
-        "Texture 直接持有 Array<TexturePersistentState> subresource_states，大小固定为 num_mips * array_size；Buffer 继续保持单一 persistent state",
-        "preprocess 阶段从各资源的持久状态读取 initial state；Texture 按 subresource range 从 subresource_states 取值，不再从 global_last_state 或 whole-resource texture state 读取",
-        "preprocess 阶段结束后按实际 touched range 将 last_state_snapshot 回写到 Texture::subresource_states / Buffer persistent state，并让 present 路径读取对应 range 的 persistent state",
-        "删除 FrameStateStore::global_last_state 和旧的 whole-resource texture persistent-state 路径，并用 local_light_pdf_tex / GenerateMips 场景验证不会再被整资源状态覆盖"
+        "Texture 直接持有完整 subresource persistent state array，大小为 num_mips * array_size",
+        "preprocess 从资源对象读取初始状态，不再从 frame-snapshot 链读取",
+        "preprocess 按 touched range 回写 Texture/Buffer 的长期状态",
+        "present 路径读取对应 texture range 的 persistent state 作为源状态"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
@@ -32,33 +33,13 @@
       "priority": "medium",
       "status": "done",
       "category": "preprocess",
-      "problem": "ResourceAccessDigest 和 ResourceAccessCollector 均有 //TODO: handle subresource state digest（L90, L572）。当前 digest 以整资源为 key，对 Texture 的 mip/layer 范围没有细粒度追踪。",
-      "what_design_says": "§3.1: Texture 按 SubresourceRange 跟踪；Buffer v1 按整资源跟踪（不做 offset/size range）。§2.4: Transition 携带 RHISubresourceRange。§11: Texture 默认 range = all mips / all layers。",
+      "problem": "当前 digest 和 snapshot 若仍以 whole-resource texture key 追踪，会让 mip/layer 粒度的 barrier、长期状态回写、后续 bindless 传播全部失真。",
+      "what_design_says": "Texture 状态跟踪必须按 SubresourceRange 建 key。Buffer v1 不做 offset/size range 跟踪，保持整资源粒度。",
       "tasks": [
-        "ResourceAccessDigestEntry 增加可选的 subresource range 字段（mip_level, mip_count, array_layer, array_count）",
-        "ResourceKey 或 digest 的 key 改为包含 subresource range，支持同一 texture 不同 range 独立追踪",
-        "ResourceAccessCollector 在收集 Transition 命令时提取 subresource range 并记录到 digest",
-        "preprocess 的 state snapshot 中 Texture entry 支持多个 subresource range 的不同状态",
-        "Barrier 生成时按实际 range 生成（不必为整张 texture 发一个粗粒度 barrier）"
-      ],
-      "note": "按设计 §11，Buffer v1 不做 range tracking，可跳过 Buffer 部分，只处理 Texture。",
-      "files_likely_affected": [
-        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp"
-      ]
-    },
-    {
-      "id": "CP-02b",
-      "title": "CollectShaderArg 对 TextureView 使用 per-range key（修复 texture array 与 bindless tracking 冲突）",
-      "priority": "high",
-      "status": "done",
-      "category": "preprocess",
-      "problem": "根因概括：CollectShaderArg 对 TextureView 和 span<TextureView> 路径均调用 MakeTextureKey（whole-resource key），未使用 TextureView 携带的 mip_level/num_mips/array_layer/num_array 信息。这导致同一帧内两类访问产生 key 冲突：\n1. GenerateMips 将 per-mip TextureView（UAV）传入 span<TextureView> 路径，所有 mip view 全部折叠到同一 whole-resource key，state 被最后写入的 UNORDERED_ACCESS 覆盖。\n2. 同一 texture 随后通过 bindless array 以 SRV 方式访问（MarkReadTexture，whole-resource key，state = SAMPLE）。\n两者在 MergeDigestEntry 中竞争同一 key，最终 committed persistent state 可能是 SAMPLE 而非 UNORDERED_ACCESS。下一帧 GenerateMips 再次以 UAV 访问时，seed state 是 SHADER_READ_ONLY_OPTIMAL，translate 层无法生成正确的 SHADER_READ_ONLY_OPTIMAL→GENERAL barrier，导致 Vulkan Validation Error（VUID-vkCmdDraw-None-09600）。\n\n与 CP-01 的关系：CP-01 解决的是 persistent state 存储路径（用资源对象本身替代 global_last_state 链式传递，并让 Texture 直接持有完整 subresource array）。CP-02b 是 CP-02 的补完：CP-02 已给 ResourceKey 加入 subresource range 字段，但 CollectShaderArg 的 TextureView/span<TextureView> 路径还没使用这些 range 信息——相当于 CP-02 只修了 BarrierCmd 路径，shader arg 路径仍然用 whole-resource key。CP-02b 只负责 shader arg 的 per-range key 闭环，不负责 Texture 长期 persistent state 的 subresource array 存储；后者仍属于 CP-01 范围。",
-      "what_design_says": "§3.1: Texture 按 SubresourceRange 跟踪。CP-02 已将 ResourceKey 扩展为包含 subresource range，MakeTextureKeyWithRange 已实现。CollectShaderArg 应对 TextureView 提取其 mip_level/num_mips/array_layer/num_array 调用 MarkReadTextureWithRange/MarkWriteTextureWithRange，而非折叠到 whole-resource key。",
-      "tasks": [
-        "CollectShaderArg 的 TextureView 分支：改用 MarkReadTextureWithRange/MarkWriteTextureWithRange，从 view.mip_level, view.num_mips, view.array_layer, view.num_array 提取 range",
-        "CollectShaderArg 的 span<TextureView> 分支：同上，对每个 view 按其实际 range 建 key",
-        "确认 CollectRenderPassInfo 中 depth/color attachment 路径是否需要同样处理（通常是单 mip/layer view，range 已确定）",
-        "运行 test_editor.ps1，确认 local_light_pdf_tex 相关的 VUID-vkCmdDraw-None-09600 validation error 消失"
+        "ResourceKey 扩展包含 texture subresource range",
+        "ResourceAccessCollector 记录 texture range 到 digest",
+        "state snapshot 支持同一 texture 不同 range 的不同状态",
+        "barrier 生成按实际 range 下发，不做整资源粗粒度回退"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp"
@@ -66,21 +47,22 @@
     },
     {
       "id": "CP-03",
-      "title": "CopyScope 的 Preprocess 简化（接口层）",
-      "priority": "high",
+      "title": "Preprocess 只输出 TranslateInfo 与逻辑依赖",
+      "priority": "critical",
       "status": "todo",
       "category": "preprocess",
-      "problem": "L2361-2376 有两个相邻 TODO：\n1. 'its not that complicated, we simply treat Copy scope as a special segment' — 当前 preprocess 对 CopyScope 的 cross-queue 资源转移逻辑过于重，转移队列之间的依赖是在 preprocess 里即时计算的，但设计要求只记录 plan，等到 submit 时绑定真实 timeline。\n2. 'current implementation is too heavy' — 当前强制 gfx→copy→gfx 串行执行，没有存依赖关系供 submit 阶段绑定。",
-      "what_design_says": "§5: CopyScope enter/exit 时 preprocess 只记录 handoff plan（release/acquire plan）；真实 fence/timeline 数值到 submit 阶段再绑定。§7.2: preprocess 构建 CopyScope handoff plan，不在 preprocess 里绑定 timeline。§7.4: submit 阶段调用 ResolveCopyScopeWaits(copy_submit, completion_by_cmd) 绑定真实 timeline。",
+      "problem": "当前 VulkanSubmissionExecutor.cpp 在 preprocess 中同时做了 segment split、跨队列依赖、真实 wait 绑定、后续 submit 组织等多种职责。这样会把逻辑依赖与物理 timeline value 绑定在一起，和 proposal 中“简洁、解耦实现”的目标冲突。",
+      "what_design_says": "preprocess 的职责必须被压缩为：读取 CommandList batch，分析资源状态与依赖关系，生成 TranslateInfo 与逻辑依赖图。preprocess 不允许生成 SubmitInfo，不允许决定 queue signal value，不允许产出物理 WaitEvent。",
       "tasks": [
-        "定义 CopyScopeHandoffPlan 结构（记录：资源列表、src_queue、dst_queue、segment key）",
-        "preprocess 处理 CopyScopeCmd 时只构建 handoff plan，不立即计算 wait/signal timeline",
-        "将 handoff plan 存入 CmdSubmitPreprocessResult",
-        "submit 阶段（SubmitAndPresent）读取 handoff plan，用 completion_by_cmd 绑定真实 timeline value",
-        "确认 SplitCommandSegment 和段的 queue 分配逻辑与简化后的 plan 一致"
+        "定义 TranslateInfo，字段覆盖 queue、source submit ordering、segment 描述、initial_state_snapshot、local barrier plan、CopyScope/Transition handoff plan、外部 wait/signal 声明、present candidate metadata",
+        "将 SplitCommandSegment 从“后续直接 submit 的平台单元切分”改为“仅服务 TranslateInfo 生成的逻辑分段”",
+        "将 CmdSubmitPreprocessResult 逐步替换为 TranslateInfo 导向的数据结构，保留资源状态与依赖分析结果，不保留物理 wait value",
+        "让 preprocess 只记录逻辑依赖边，例如 segment/submit 间的 producer-consumer 关系，不再记录 completion_by_cmd 这类运行期解析结果",
+        "保留当前实现同步行为，但接口层必须为后续 TranslateTask.Dispatch() 预留异步 shape"
       ],
       "files_likely_affected": [
-        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp"
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+        "source/runtime/render/rhi/RHIExecutor.cpp"
       ]
     },
     {
@@ -89,11 +71,11 @@
       "priority": "low",
       "status": "done",
       "category": "perf",
-      "problem": "L1098 TODO: get CopyScopeIndex directly from CmdSubmit（which comes from commandlist during recording）instead of iterating again here。SplitCommandSegment 每次都遍历所有命令找 CopyScopeCmd，性能上有优化空间。",
-      "what_design_says": "Rule_Codex: 不要过度设计。这是性能优化，在核心逻辑稳定后处理。",
+      "problem": "CopyScope 索引若每次都通过再次遍历 CmdSubmit 来查找，会让后续 preprocess / translate 多次重复做无关工作。",
+      "what_design_says": "这是建立在架构稳定后的低风险性能项，不应阻塞主链。",
       "tasks": [
-        "在 CmdSubmit 中增加 copy_scope_indices: Array<size_t> 字段，recording 时自动填充",
-        "SplitCommandSegment 直接使用 copy_scope_indices 而不是遍历"
+        "在 CmdSubmit 中缓存 copy_scope_indices",
+        "SplitCommandSegment 直接消费 copy_scope_indices"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/RHI.h",
@@ -102,33 +84,33 @@
     },
     {
       "id": "CP-05",
-      "title": "GetSegmentCommandPointers 改为 span（避免拷贝）",
+      "title": "GetSegmentCommandPointers 改为 span（避免额外拷贝）",
       "priority": "low",
       "status": "todo",
       "category": "perf",
-      "problem": "L1149 TODO: optimize, we only need span here, no need to create a new array。GetSegmentCommandPointers 目前返回 Array<const Command*>，实际只需要一个 span 即可。",
-      "what_design_says": "Rule_Codex: 不要过度设计，但这是简单的性能改进。",
+      "problem": "当前 GetSegmentCommandPointers 返回临时 Array<const Command*>，这在架构主链稳定后仍是一个可直接清理的小额性能损耗。",
+      "what_design_says": "这是简单性能项，不应在主架构未稳定时提前扩散。",
       "tasks": [
-        "将 GetSegmentCommandPointers 的返回类型改为 std::span<const Command* const>",
-        "调整 CmdSubmit::cmds 的布局使 Graphics segment 的命令连续，从而支持直接 span"
+        "将 Graphics segment 路径改为直接返回 span",
+        "CopyScope segment 保持单独路径，避免为了统一 span 做过度改造",
+        "确认 TranslateInfo 生成阶段可以直接消费 span 而不是再复制一份指针数组"
       ],
-      "note": "Copy segment 内的命令存在 CopyScopeCmd 内部，不在 submit.cmds 的连续区域，需要分开处理。如果改动成本高，可延后。",
       "files_likely_affected": [
         "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp"
       ]
     },
     {
       "id": "CP-06",
-      "title": "去掉 MergeWriteTexturesIntoDigest 调用",
+      "title": "移除 write_textures 遗留路径",
       "priority": "medium",
       "status": "todo",
       "category": "cleanup",
-      "problem": "L2333 有 TODO: it is not needed。MergeWriteTexturesIntoDigest 把 submit_op->write_textures 合并进 digest，但这个机制在新设计（显式 Transition 取代隐式 write_textures 声明）中已不需要。",
-      "what_design_says": "§9.1: 删除旧 RHISubmitCmdList / RHIPresentOp / RHIExecOp。§2.4: 资源状态变迁通过显式 Transition 描述，不再依赖外部声明的 write_textures 列表。",
+      "problem": "write_textures 属于旧的显式外部声明机制，和当前以 digest、Transition、TranslateInfo 表达资源访问的设计冲突。继续保留会让新旧路径并存。",
+      "what_design_says": "不做兼容双轨。确认调用点迁移后，直接删除旧路径。",
       "tasks": [
-        "确认 submit_op->write_textures 的所有使用方是否都已迁移到显式 Transition",
-        "删除 MergeWriteTexturesIntoDigest 调用（L2334）",
-        "如果 RHISubmitCmdList::write_textures 字段在其他地方也无人依赖，同时删除该字段"
+        "确认 RHISubmitCmdList::write_textures 无剩余有效使用场景",
+        "删除 MergeWriteTexturesIntoDigest 调用",
+        "删除 RHISubmitCmdList::write_textures 及相关辅助 API"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
@@ -137,105 +119,99 @@
     },
     {
       "id": "CP-07",
-      "title": "显式 Transition（Acquire/Release）的 Preprocess 支持",
+      "title": "SyncPoint：submitinfo 粒度逻辑依赖与延迟 wait/signal 解析",
       "priority": "critical",
       "status": "todo",
-      "category": "new_feature",
-      "problem": "当前代码没有实现 Transition(Acquire/Release) 命令的 preprocess 逻辑。设计文档要求的跨队列 handoff 通过显式 Transition 表达，但现阶段 preprocess 只有 ResourceAccessCollector 收集访问摘要，没有识别和记录 Acquire/Release plan 的路径。",
-      "what_design_says": "§6.2/6.3: preprocess 处理 Release 时记录 release plan；处理 Acquire 时配对并记录 acquire plan。§6.4: 非法情况（不配对、range 冲突等）preprocess log error + assert。§7.2 Preprocess 伪代码中 Transition 是核心处理路径之一。",
+      "category": "architecture",
+      "problem": "当前 wait/signal 的推导过早发生在 preprocess 中，导致逻辑依赖与物理 timeline value 耦合。跨队列 handoff 实际上是 submitinfo 粒度的依赖，但当前代码仍以 segment 级 completion_by_cmd 去解析物理等待，和新的 submit 组装模型不匹配。",
+      "what_design_says": "需要引入 SyncPoint。每个 SubmitInfo 导出一个 completion SyncPoint，后继 SubmitInfo 只引用逻辑 SyncPointId。submission thread 在实际提交时，才把 SyncPoint 解析成 WaitEvent{timeline_handle, value}。每个 queue 的 signal 必须连续递增。",
       "tasks": [
-        "定义 TransitionReleasePlan / TransitionAcquirePlan 结构（resource, subresource_range, src_queue, dst_queue, segment_key）",
-        "在 CmdSubmitPreprocessResult 中添加 release_plan 和 acquire_plan 字段",
-        "ResourceAccessCollector 或新的 TransitionCollector 识别 TransitionCmd（携带 ERHITransitionFlags::Release/Acquire）",
-        "preprocess 处理 Release 时：校验 owner_queue、记录 release plan、更新资源状态为 'pending acquire'",
-        "preprocess 处理 Acquire 时：配对 release plan（按 resource+range+src_queue+dst_queue 配对）、记录 acquire plan、报告非法情况",
-        "translate 阶段：在 cmd buffer 头部 emit acquire barrier，尾部 emit release barrier",
-        "submit 阶段：release 时 AllocateTimelineSignal，acquire 时通过 completion_by_cmd 解析对应 wait"
+        "定义 SyncPointId、ResolvedSyncPoint、SubmitSyncWait 等 submit 级同步结构",
+        "定义轻量级 SyncPointRegistry，仅服务当前 flush batch 的 producer-consumer 依赖与 resolved value 查询，不扩成额外通用框架",
+        "将 CopyScope、显式 Transition、flush-batch 级依赖统一表达为 SubmitInfo 级逻辑等待，不在 preprocess 中生成物理 WaitEvent",
+        "让 submission thread 负责为每个 queue 分配连续 signal value，并在提交成功后 resolve 当前 SubmitInfo 的 completion SyncPoint",
+        "前驱 SubmitInfo resolve 自己的 SyncPoint 后，通知依赖它的 SubmitInfo 变为 ready 或减少 unresolved wait 计数"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
-        "source/runtime/render/rhi/RHI.h",
-        "source/runtime/render/rhi/vulkan/VulkanTracker.h",
-        "source/runtime/render/rhi/vulkan/VulkanTracker.cpp"
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanQueue.cpp"
       ]
     },
     {
       "id": "CP-08",
-      "title": "新 Submit 接口：RHIExecutor::Submit(Array<CommandList&&>, flags, present)",
+      "title": "RHIExecutor 外部接口收敛与内部 legacy 路径删除",
       "priority": "critical",
       "status": "todo",
       "category": "interface",
-      "problem": "当前入口是 VkCommandQueue::Execute(Array<RHIExecOp>)，仍然暴露旧的 RHISubmitCmdList / RHIPresentOp 结构。设计要求统一入口为 RHIExecutor::Get().Submit()，调用方不再直接调用 gfx_queue.Execute / gfx_queue.Present。",
-      "what_design_says": "§2.1: 新入口 RHIExecutor::Submit(Array<CommandList&&>, ERHIExecSubmitFlags, RHIPresentRequest*)。§9.4: 废弃 gfx_queue.Execute / gfx_queue.Present 直接调用路径。§9.5: 迁移指导给出了旧→新的转换示例。",
+      "problem": "外部虽然已经有 RHIExecutor::Submit(Array<CommandList&&>, flags, present) 入口，但内部仍通过 RHISubmitCmdList / RHIPresentOp / RHIExecOp 这套 legacy 结构驱动 VulkanSubmissionExecutor。proposal 要求新的内部阶段边界围绕 TranslateInfo / TranslateResult / SubmitInfo，而不是继续围绕旧结构演化。",
+      "what_design_says": "外部保留 RHIExecutor::Submit(Array<CommandList&&>, flags, present) 作为唯一公共入口。内部逐步删除 RHIExecOp 平台拼装路径，不做长期兼容双轨。",
       "tasks": [
-        "在 RHIExecutor 上实现 Submit(Array<CommandList&&>, ERHIExecSubmitFlags, RHIPresentRequest*)",
-        "实现 pending batch 缓存逻辑：None flag 时只 append，FlushGPU flag 时触发 preprocess/translate/submit",
-        "FrameEnd 必须与 FlushGPU 同时使用，违反时 assert",
-        "接口调用方（RasterRenderer 等）迁移到新接口",
-        "废弃 RHISubmitCmdList / RHIPresentOp / RHIExecOp 旧结构（在确认所有调用方迁移后删除）"
+        "保留 RHIExecutor::Submit(Array<CommandList&&>, flags, present) 作为唯一长期公共接口",
+        "将 pending batch 从 RHIExecOp 导向逐步迁移为面向新流水线的 batch 输入",
+        "在确认新流水线稳定后删除 RHISubmitCmdList / RHIPresentOp / RHIExecOp 的内部主路径地位",
+        "保留 FrameEnd 必须与 FlushGPU 同时使用的校验"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/RHIExecutor.h",
         "source/runtime/render/rhi/RHIExecutor.cpp",
-        "source/runtime/render/renderer/RasterRenderer.cpp",
         "source/runtime/render/rhi/RHI.h"
       ]
     },
     {
       "id": "CP-09",
-      "title": "Interrupt 线程：统一回收/回调/帧末逻辑",
-      "priority": "high",
+      "title": "Submission runtime / Interrupt runtime 职责收敛",
+      "priority": "critical",
       "status": "todo",
       "category": "architecture",
-      "problem": "当前 allocator 回收、callback 执行、fence wait 职责分散在 VkCommandQueue::ExecuteThread() 后台线程和 VulkanPresentor 的 completion_thread 中。设计要求统一迁移到 RHIExecutor 的 interrupt 线程。",
-      "what_design_says": "§7.5: interrupt 线程处理 host wait、completion 回调、allocator 回收、FrameEndMarker。§9.2: 废弃 VkCommandQueue::ExecuteThread() 后台线程；废弃 VkCopyQueue 的独立 IO 线程。",
+      "problem": "当前 VulkanSubmissionExecutor.cpp 已有 submission thread 与 interrupt thread 雏形，但其平台单元仍是 QueueSubmissionInfo / PresentInfo，且 HostWait、回收、callback、present completion、GraphEvent 触发等职责尚未按最终语义收敛。readback 测试仍需 Flush + WaitIdle，说明 interrupt retirement 链没有完整打通。",
+      "what_design_says": "submission runtime 只消费 SubmitInfo，负责 SyncPoint 解析、queue signal 分配、GPU submit / optional present。interrupt runtime 只负责 host wait 后的退休处理，包括 allocator/presentor recycle、callback、signal、GraphEvent trigger、frame-end marker。",
       "tasks": [
-        "在 RHIExecutor 内实现 interrupt 线程（task queue + 消费循环）",
-        "定义 InterruptTask variant（HostWait, Callback, Recycle, FrameEndMarker）",
-        "submit 阶段结束时向 interrupt 线程 enqueue HostWait 和对应的 Callback/Recycle 任务",
-        "FrameEnd 时 enqueue FrameEndMarker，interrupt 线程触发帧末回调",
-        "废弃 VkCommandQueue::ExecuteThread()",
-        "废弃 VkCopyQueue 的独立 IO 线程（IOThreadLoop / RHIThreadLoop）"
+        "将 runtime 输入从 QueueSubmissionInfo / PresentInfo 收敛为 SubmitInfo",
+        "将 HostWait、allocator recycle、callback 执行、用户 signal、present completion、GraphEvent trigger 统一放到 interrupt runtime",
+        "清晰区分 submit 可见完成与 interrupt retirement 完成，前者给 SyncPoint，后者给 GraphEventRef",
+        "让 submission runtime 只发布物理 completion 给 interrupt runtime，不直接触发 host-visible 完成事件",
+        "重构现有 EnqueueQueueCompletion / EnqueueCopyQueueCompletion / PresentCompletion 路径，使其服务统一的退休语义"
       ],
       "files_likely_affected": [
-        "source/runtime/render/rhi/RHIExecutor.h",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
         "source/runtime/render/rhi/RHIExecutor.cpp",
-        "source/runtime/render/rhi/vulkan/VulkanQueue.h",
-        "source/runtime/render/rhi/vulkan/VulkanQueue.cpp"
+        "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanQueue.h"
       ]
     },
     {
       "id": "CP-10",
-      "title": "Present 状态从 Preprocess Snapshot 加载",
+      "title": "Present 作为尾部 Graphics SubmitInfo 阶段，并区分 RHI / Present completion",
       "priority": "high",
       "status": "todo",
       "category": "present",
-      "problem": "L1521-1527: //TODO: should load from a snapshot from preprocess。当前 present executor 里 src_state 是硬编码为 COLOR_ATTACHMENT_OPTIMAL，没有真正从 preprocess 的结果读取 present source texture 的实际状态。这会导致在 texture 处于其他布局时 barrier 错误。",
-      "what_design_says": "§8.1: present 时 source 的 ownership 此时必须已在 Graphics（§3.4 帧结束约束）。preprocess 已经处理过 present target，present executor 应从 preprocess 结果查询该 texture 的 last known state 并用于 SeedSrcState。§7.4 ExecutePresentTask 的 wait_events 由 ResolvePresentWaits(present_plan, completion_by_cmd) 解析。",
+      "problem": "当前 present 仍以独立 PresentInfo 风格穿过执行链，且 source state 读取仍与 preprocess snapshot 耦合不完整。proposal 以及新增 Sync(depth) 需求要求 present 只作为尾部 graphics submit 的附加阶段，并且不能污染普通 RHI completion 语义。",
+      "what_design_says": "present 应挂在最后一个 graphics SubmitInfo 上。SubmitInfo 的 SyncPoint 表示 RHI submit 完成，不包含 present retirement。present completion 只影响 Present-depth 的 Sync 与 present 相关退休逻辑。",
       "tasks": [
-        "preprocess 阶段为 present target texture 生成 PresentPreprocessResult（含 last_state_snapshot 的 source texture 状态）",
-        "present executor 接收 preprocess 的 source texture state，用于 tracker.SeedSrcState",
-        "移除 L1524-1527 的硬编码 src_access/src_layout/src_stage",
-        "按设计 §8.2 确认 present 路径使用 binary semaphore（现有代码看起来已正确使用，验证即可）"
+        "将 present 元数据从独立平台 op 改为尾部 graphics SubmitInfo 的 optional present stage",
+        "present source texture state 继续来自 preprocess snapshot，不允许硬编码布局和 access",
+        "区分 RHI completion 与 present completion：前者用于 SyncPoint，后者用于 Present-depth 的同步与退休",
+        "确认 present runtime 仍使用正确的 binary semaphore 路径，不引入新的兜底同步"
       ],
       "files_likely_affected": [
-        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp"
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+        "source/runtime/render/rhi/RHIExecutor.cpp"
       ]
     },
     {
       "id": "CP-11",
-      "title": "Parallel Translate：per-queue allocator pool 并发 pop",
+      "title": "Parallel Translate 基于 TranslateTask",
       "priority": "high",
       "status": "todo",
       "category": "translate",
-      "problem": "设计要求 ParallelTranslate 阶段每个 translate task 从 per-queue allocator pool 并发 pop allocator。当前代码的 allocator 分配路径需要确认是否支持并发 pop。",
-      "what_design_says": "§7.3: pool 实现必须支持并发 pop（lock-free 或加锁）；translate 任务之间不得共用同一 allocator。包括 copy queue 的 allocator pool（由 executor 内部持有）。",
+      "problem": "并行 translate 的真正并行单位应该是 TranslateTask，而不是旧的 PlatformExecOp。若不先重构输入输出，继续做旧路径 parallelize 只会把错误边界并发化。",
+      "what_design_says": "每个 TranslateInfo 对应一个 TranslateTask。TranslateTask.Dispatch() 返回 GraphEventRef，当前可以同步执行，但接口必须是异步友好的。allocator pool 按 queue 并发 pop，任务之间不得共用 allocator。",
       "tasks": [
-        "确认 LockFreeQueueBase<VulkanAllocator> 的并发 pop 是否线程安全",
-        "如果不是 lock-free，为 allocator pool 的 pop/push 加锁",
-        "translate 阶段改为 parallel_for（使用 std::async 或线程池）并发处理各 cmd_result",
-        "每个 translate task 使用独立的 allocator（从 pool pop，完成后 push 回）",
-        "copy queue 的 allocator pool 也实现并发 pop 支持"
+        "将 translate 输入改为 TranslateInfo，输出改为 TranslateResult",
+        "为 Graphics / Compute / Copy 分别提供 per-queue allocator pool 并确认并发 pop 安全性",
+        "TranslateTask.Dispatch() 返回 GraphEventRef；当前实现可在 dispatch 后立即等待，但不改变接口形状",
+        "TranslateTask 内使用独立 allocator、独立 tracker，不共享可变状态"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/vulkan/VulkanAllocator.h",
@@ -248,14 +224,12 @@
       "priority": "high",
       "status": "done",
       "category": "preprocess",
-      "problem": "当前 preprocess 对 bindless 只处理 pending-init 资源和 bindless array 自身的三个内部 buffer，无法覆盖“资源在本帧前面的 command list 中被写入、后面的 command list 通过 bindless 以 SRV 读取”的场景。只做 command list 局部写收集会在中间穿插其他 command list 时丢失写历史，因此需要单帧级 dirty_written_resources；并且在资源被 bindless 以 SRV-compatible 状态消费后应及时从 dirty 集合移除，避免重复传播和陈旧状态。",
-      "what_design_says": "§14.2: validation 开启时 preprocess 检查被 bindless 使用的资源最后状态是否为 SRV-compatible。§14.3: 三个内部 buffer 初始 known=false，首次 UpdateBindlessArray 时从 Unknown 推导。§14.4: HasUpdates() 语义统一为 HasUpdates() || HasBufferUpdates() || HasTextureUpdates()。结合 Rule_Codex，这里不做兜底/兼容实现，而是直接建立单帧 dirty_written_resources 机制来驱动 bindless 的 SRV 读传播。",
+      "problem": "bindless 传播若没有单帧 dirty_written_resources，就无法覆盖“前面写、后面 bindless SRV 读”的真实路径。",
+      "what_design_says": "不做兜底。直接建立单帧 dirty_written_resources 机制，在 preprocess 中驱动 bindless 读传播。",
       "tasks": [
-        "在 preprocess 的 frame-store / op-store 层增加单帧 dirty_written_resources 集合；Texture 按 subresource range 记录，Buffer 按整资源记录",
-        "所有写访问在 preprocess 中统一写入 dirty_written_resources，包括 UAV、RenderTarget、Depth、Transfer、QueueTransfer 等会影响后续 SRV 可见性的路径",
-        "遇到 BindlessArrayRef 的 SRV 读取时只遍历 dirty_written_resources；命中当前 bindless array 中已注册资源后补记 read-compatible state，并在成功消费后从 dirty 集合移除",
-        "UpdateBindlessArray 继续只跟踪三个内部 buffer；validation 仅检查被 bindless 使用的资源最后状态是否为 SRV-compatible，不增加任何兜底或手动补救机制",
-        "统一 HasUpdates() 语义（§14.4）"
+        "在 preprocess 中维护单帧 dirty_written_resources",
+        "所有会影响 SRV 可见性的写访问统一写入 dirty_written_resources",
+        "bindless SRV 消费时命中 dirty 资源则补记 read-compatible 状态，并在消费后从 dirty 集合移除"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
@@ -269,14 +243,13 @@
       "priority": "medium",
       "status": "todo",
       "category": "raytracing",
-      "problem": "§15 描述了 BLAS/TLAS 的长期状态跟踪设计。当前 write_blas_states 在 VkTracker 内维护（translate 阶段），需要迁移到 preprocess 阶段的 per-commandlist written_blas_handles。",
-      "what_design_says": "§15.2: BLAS/TLAS buffer 纳入正常长期 SubresourceStates。§15.3: written_blas_handles 在 preprocess 的 PreprocessCmdResult 中跨命令传递，UpdateRaytracingSceneCmd 的 preprocess 读取此集合决定 BLAS→TLAS barrier。§15.5: validation 检查 UpdateRaytracingSceneCmd 的 owner_queue 和 BLAS write 前置条件。",
+      "problem": "BLAS/TLAS barrier 仍放在 translate 层隐式维护会违背“preprocess 负责状态推导、translate 只负责录制”的边界。",
+      "what_design_says": "BLAS/TLAS 相关写历史、owner_queue、AS_WRITE -> AS_READ 依赖必须在 preprocess 中推导，translate 只消费现成的 plan。",
       "tasks": [
-        "PreprocessCmdResult 增加 written_blas_handles: UnorderedSet<uint64> 字段",
-        "preprocess 处理 BuildAccelerationStructuresCmd 时：更新 BLAS buffer 长期状态；填充 written_blas_handles",
-        "preprocess 处理 UpdateRaytracingSceneCmd 时：从 written_blas_handles 查找匹配 BLAS；记录 AS_WRITE→AS_READ 的局部 transition plan",
-        "迁移后从 VkTracker::write_blas_states 中删除相关逻辑",
-        "validation：检查 UpdateRaytracingSceneCmd 的 owner_queue == Compute 和 BLAS write 前置条件（§15.5）"
+        "在 preprocess 结果中增加 written_blas_handles",
+        "BuildAccelerationStructuresCmd 在 preprocess 中更新 BLAS 长期状态并写入 written_blas_handles",
+        "UpdateRaytracingSceneCmd 在 preprocess 中查找 BLAS 写历史并生成局部 transition plan",
+        "从 VkTracker::write_blas_states 移除对应职责"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
@@ -286,16 +259,16 @@
     },
     {
       "id": "CP-14",
-      "title": "帧结束约束校验：所有资源 owner_queue 必须是 Graphics",
+      "title": "帧结束约束校验：所有资源 owner_queue 必须回到 Graphics/Unknown",
       "priority": "high",
       "status": "todo",
       "category": "validation",
-      "problem": "§3.4 要求帧结束时所有资源的 owner_queue 必须是 Graphics（或 Unknown）。当前代码没有这个帧末校验逻辑。",
-      "what_design_says": "§3.4: 帧结束时，所有资源的 owner_queue 必须是 Graphics（或 Unknown）。违反时 preprocess 报错（§6.4 格式：LOG_ERROR + MOER_ASSERT(false)）。§7.2 伪代码：ValidateAllResourcesOwnedByGraphics(result.end)。",
+      "problem": "FrameEnd 约束若不落地，跨 queue ownership 留在 Compute/Copy 将在下一帧引入隐式同步漏洞。",
+      "what_design_says": "FrameEnd 时所有资源 owner_queue 必须是 Graphics 或 Unknown。违反时统一 LOG_ERROR + assert。",
       "tasks": [
-        "在 preprocess 的 FrameEnd 处理路径中，遍历长期状态存储，检查 owner_queue 不为 Compute/Copy",
-        "违反时 LOG_ERROR + assert（§6.4 格式）",
-        "同时检查 FrameEnd 必须与 FlushGPU 同时使用（L57 设计约束）"
+        "在 FrameEnd preprocess 路径检查所有长期状态的 owner_queue",
+        "发现 Compute/Copy 遗留 ownership 时直接报错",
+        "保持 FrameEnd 必须与 FlushGPU 同时使用的校验"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp"
@@ -307,14 +280,13 @@
       "priority": "low",
       "status": "todo",
       "category": "new_feature",
-      "problem": "设计 §2.5 定义了 BeginBufferOverlap/EndBufferOverlap，用于跳过 write-after-write barrier。当前代码没有实现这个机制。",
-      "what_design_says": "§2.5: BeginBufferOverlap 到 EndBufferOverlap 之间，translate 阶段对该 buffer 的 write-after-write 访问跳过发 barrier。read-after-write 和 write-after-read 仍然正常。overlap 范围不跨 command list 边界。嵌套 BeginBufferOverlap 是非法的。",
+      "problem": "BufferOverlap 仍未实现，属于明确文档化但未落地的能力点。",
+      "what_design_says": "BeginBufferOverlap / EndBufferOverlap 只影响 write-after-write barrier 推导，范围不跨 command list，不允许嵌套。",
       "tasks": [
-        "在 CommandList 中实现 BeginBufferOverlap / EndBufferOverlap 方法",
-        "定义 BufferOverlapCmd 命令类型（或在 CmdSubmit 中标记 overlap 范围）",
-        "preprocess 处理 BufferOverlap 时：在本地状态中标记该 buffer 处于 overlap 范围",
-        "translate 阶段：在 overlap 范围内跳过该 buffer 的 write-after-write barrier",
-        "validation：嵌套 BeginBufferOverlap 时 assert"
+        "增加 BufferOverlapCmd 或等效范围标记",
+        "preprocess 记录 overlap 范围",
+        "translate 在 overlap 范围内跳过对应 buffer 的 WAW barrier",
+        "嵌套 BeginBufferOverlap 直接 assert"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/RHI.h",
@@ -324,42 +296,38 @@
     },
     {
       "id": "CP-16",
-      "title": "GPU Profiler：GPUEventStream 与 interrupt 线程集成",
+      "title": "GPU Profiler：GPUEventStream 与 interrupt runtime 集成",
       "priority": "medium",
       "status": "todo",
       "category": "profiler",
-      "problem": "§16 设计了完整的 GPU Profiler 系统（GPUEvent、GPUEventStream、Backend 自动插入、interrupt 线程解析），当前代码尚未实现。",
-      "what_design_says": "§16.2-16.15: 完整设计见文档。关键点：CommandList 本地存储 gpu_events；Backend translate 时自动插入 BeginCommandList/EndCommandList/FrameBound；events 在 interrupt 线程解析；结果通过 Moer::Trace::EmitScope/EmitInstant 发送。",
+      "problem": "GPU profiler 依赖 interrupt retirement 才能安全解析 query 结果，因此它必须跟最终 interrupt 设计对齐，而不能继续挂在旧 completion 流程上。",
+      "what_design_says": "CommandList 本地存储 gpu_events；translate 自动插入 Begin/End/FrameBound；submit 将事件与 submit completion 绑定；interrupt runtime 完成 host wait 后解析 query 并发到 profiler。",
       "tasks": [
-        "实现 GPUEvent 结构和 GPUEventStream 单例",
-        "CommandList 增加 gpu_events 存储和 StealGPUEvents() 方法",
-        "Backend translate 阶段自动插入 BeginCommandList/EndCommandList/FrameBound event + timestamp query",
-        "Submit 阶段将 gpu_events 注册到 GPUEventStream，绑定 timeline completion",
-        "interrupt 线程完成 HostWait 后调用 ResolveCompleted + FlushToProfiler",
-        "实现 GPU_PROFILE_EVENT_SCOPE / BEGIN / END 宏",
-        "废弃 VkCommandQueue::profiler_storage 的 GPU sample 存储部分，保留 CPU timing"
+        "实现 GPUEvent / GPUEventStream",
+        "translate 自动注入 BeginCommandList / EndCommandList / FrameBound 事件",
+        "submit 阶段注册 gpu_events 与 queue completion 的绑定关系",
+        "interrupt runtime 完成 host wait 后调用 ResolveCompleted + FlushToProfiler"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/RHI.h",
-        "source/runtime/render/rhi/RHIExecutor.h",
         "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
         "source/runtime/render/rhi/vulkan/VulkanQueue.h"
       ]
     },
     {
       "id": "CP-17",
-      "title": "VkTracker 扩展：InitFromSeed / EmitLocalTransition / EmitAcquirePlan / EmitReleasePlan",
+      "title": "VkTracker 面向 TranslateInfo：InitFromSeed / EmitLocalTransition / EmitAcquirePlan / EmitReleasePlan",
       "priority": "high",
       "status": "todo",
       "category": "translate",
-      "problem": "§9.3 要求 VkTracker 增加四个新方法以支持新 translate 流程。当前 VkTracker 没有这些接口。",
-      "what_design_says": "§9.3: InitFromSeed(const TrackerSnapshot&) — 用 preprocess 生成的 seed 初始化本地 tracker；EmitLocalTransition(...) — 录制同队列 transition barrier；EmitAcquirePlan(...) — 录制 acquire barrier（submit 头部）；EmitReleasePlan(...) — 录制 release barrier（submit 尾部）。",
+      "problem": "VkTracker 目前仍以旧 translate 路径和直接 RecordState 调用为主，没有与 TranslateInfo 的职责边界对齐。",
+      "what_design_says": "VkTracker 属于 translate 层。它只消费 TranslateInfo 提供的 seed 和 barrier plan，不推导 submit-time SyncPoint，不理解 interrupt/runtime 语义。",
       "tasks": [
-        "VkTracker 增加 InitFromSeed(const ResourceStateSnapshot&) 方法",
-        "VkTracker 增加 EmitLocalTransition(resource, src_state, dst_state, range) 方法",
-        "VkTracker 增加 EmitAcquirePlan(const AcquirePlan&) 方法（在 cmd buffer 头部生成 barrier）",
-        "VkTracker 增加 EmitReleasePlan(const ReleasePlan&) 方法（在 cmd buffer 尾部生成 barrier）",
-        "translate 阶段使用新方法替换当前的 SeedSrcState / RecordState 直接调用"
+        "实现 InitFromSeed(const ResourceStateSnapshot&)",
+        "实现 EmitLocalTransition(...)",
+        "实现 EmitAcquirePlan(...)",
+        "实现 EmitReleasePlan(...)",
+        "TranslateTask 使用新接口替换旧的直接 SeedSrcState / RecordState 组合路径"
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/vulkan/VulkanTracker.h",
@@ -370,46 +338,174 @@
     {
       "id": "CP-18",
       "title": "Test 覆盖（RHITest）",
-      "priority": "high",
+      "priority": "critical",
       "status": "todo",
       "category": "test",
-      "problem": "§10.2 列出了 20+ 个需要覆盖的测试场景，当前不确定已有多少覆盖。",
-      "what_design_says": "§10.2 测试场景列表（见设计文档）。§10.3 Editor 验收：Vulkan validation 开启，加载默认场景，只关注 validation error。Rule_Codex: 基于 Test 验证。测试脚本调用前必须先用 cmake 编译对应 target，禁止直接跑可能复用旧产物的脚本。",
+      "problem": "当前测试覆盖了多队列 translate、CopyScope、present 场景，但 readback completion、Sync(depth)、跨 flush 依赖仍未落地，测试仍依赖 Flush + WaitIdle，这和目标设计冲突。",
+      "what_design_says": "必须基于测试验证。readback 与 Sync 不允许继续通过全局 WaitIdle 验证，而要通过 GraphEventRef 语义验证。validation 只关注 error。",
       "tasks": [
-        "所有 testscripts 在调用前先执行 cmake --build 编译对应 target，确保脚本运行的是最新产物",
-        "核心路径测试：CopyScope upload → Compute read；CopyScope upload → Graphics sample → Present",
-        "跨队列 Transition 测试：Graphics release → Compute acquire；Compute release → Graphics acquire",
-        "Unknown 初始状态首次使用（Vulkan UNDEFINED layout 路径）",
-        "Validation 报错测试：acquire/release 不匹配；range 冲突；帧末 owner_queue != Graphics",
-        "Parallel translate 测试：多 cmdlist 并行时 allocator/tracker 不串扰",
-        "BufferOverlap 测试",
-        "Bindless 状态校验测试",
-        "Raytracing：BLAS→TLAS barrier 正确插入；BLAS/TLAS 帧末 ownership 验证",
-        "GPU Profiler：Begin/End 配对验证"
+        "所有测试脚本执行前先 cmake --build 对应 target，保证跑的是最新产物",
+        "多队列 readback 测试改为等待 ReadbackCopy 返回的 GraphEventRef，不再使用 Flush + WaitIdle",
+        "新增 flush 间依赖测试：后一个 FlushGPU 自动等待前面所有未退休的 RHI submits",
+        "新增 Sync(RHI) 与 Sync(Present) 语义差异测试",
+        "新增单 submit 多个 readback completion 顺序测试",
+        "保留并扩展现有 CopyScope、Transition、Unknown 首次使用、FrameEnd ownership、GPU profiler 等覆盖"
       ],
       "files_likely_affected": [
-        "source/test/rhi/",
+        "source/test/RHITest/",
         "testscripts/"
+      ]
+    },
+    {
+      "id": "CP-19",
+      "title": "TranslateTask / TranslateResult：translate 与 submit 解耦",
+      "priority": "critical",
+      "status": "todo",
+      "category": "translate",
+      "problem": "proposal 明确要求 submitinfo 不能承担 translate 语义。当前若直接把 segment 结果推到 submit runtime，会把 tracker seed、recorded payload、后续依赖解析混在一起，违反分层目标。",
+      "what_design_says": "每个 TranslateInfo 对应一个 TranslateTask。TranslateTask.Dispatch() 返回 GraphEventRef。TranslateResult 只承载 translate 输出：queue、recorded submit payload、ordering metadata、translate_complete、可向后转移的 runtime payload。当前实现可以同步执行，但类型边界必须一次建对。",
+      "tasks": [
+        "定义 TranslateTask 与 TranslateResult",
+        "TranslateResult 中加入 GraphEventRef translate_complete",
+        "将 recorded submit payload、callbacks/signals/runtime flags 从旧路径移动到 TranslateResult",
+        "当前阶段可同步执行 TranslateTask，但必须通过 Dispatch() 接口返回 completion event"
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+        "source/runtime/render/rhi/RHIExecutor.cpp"
+      ]
+    },
+    {
+      "id": "CP-20",
+      "title": "TranslateResult -> SubmitInfo assembler",
+      "priority": "critical",
+      "status": "todo",
+      "category": "architecture",
+      "problem": "当前平台执行单元是 QueueSubmissionInfo / PresentInfo，无法表达“submitinfo 只服务 submission thread”这个目标。proposal 要求在 translate 结束后，再组装 submit runtime 需要的数据。",
+      "what_design_says": "SubmitInfo 是 submission thread 的唯一输入。它只持有 translated payload、逻辑 sync waits、external waits/signals、callbacks、completion GraphEventRefs、completion SyncPoint、optional present stage。它不包含 tracker seed、raw segment 规划等 translate-only 字段。",
+      "tasks": [
+        "定义 SubmitInfo",
+        "实现 TranslateResult -> SubmitInfo 组装逻辑",
+        "在此阶段完成同 queue translated payload 的合包，不把 submit 合包塞回 preprocess 或 translate",
+        "将 present attach 到最后一个 graphics SubmitInfo，而不是独立平台 op",
+        "把旧的 QueueSubmissionInfo / PresentInfo 逐步迁出主路径"
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+        "source/runtime/render/rhi/RHIExecutor.cpp"
+      ]
+    },
+    {
+      "id": "CP-21",
+      "title": "FlushBatch 依赖前序所有 RHI submits",
+      "priority": "high",
+      "status": "todo",
+      "category": "architecture",
+      "problem": "你新增的需求要求“当前提交一个 flush，能等待前面所有的 submit”。如果只保留 batch 内依赖，不建立 flush 间 tail 依赖，新的 FlushGPU 仍可能和旧提交并行穿插，破坏用户期望。",
+      "what_design_says": "每次 FlushGPU 形成一个 FlushBatch。batch 构建时抓取此前所有未退休的 RHI tail SyncPoints，作为当前 batch 的 root prerequisites。当前 batch 中所有没有批内前驱的 root SubmitInfo 自动等待这些 tail SyncPoints。这里的依赖只覆盖 RHI submits，不包含 present，present 由 Sync(Present) 单独表达。",
+      "tasks": [
+        "定义 FlushBatch 及其 root prerequisite SyncPoint 集合",
+        "executor 在 FlushGPU 时抓取当前所有未退休的 RHI tail SyncPoints",
+        "将这些 prerequisite 挂到当前 batch 的 root SubmitInfo 上",
+        "保证后一个 flush 自动等待前面所有 RHI submits，即使两者没有显式资源依赖"
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp"
+      ]
+    },
+    {
+      "id": "CP-22",
+      "title": "ReadbackCopy 返回 GraphEventRef，并在 interrupt retirement 后触发",
+      "priority": "critical",
+      "status": "todo",
+      "category": "interface",
+      "problem": "当前 readback 测试依赖 Submit + Flush + WaitIdle。根因是 CopyBackBufferCmd / CopyBackTextureCmd 的 staging -> CPU 回填虽然已经挂在 allocator.AddOnComplete 上，但没有一个从 CommandList 录制一直传递到 interrupt 退休完成的 GraphEventRef。继续沿用现有 CopyFrom(..., span<byte>) 的 void API 也无法表达 completion。",
+      "what_design_says": "新增显式 readback API，而不是修改现有 CopyFrom 返回值。ReadbackGraphEvent 必须在 interrupt runtime 中、且晚于 staging 数据 memcpy 回 CPU 目标地址之后触发。",
+      "tasks": [
+        "新增显式 readback API，例如 ReadbackCopy(BufferView, span<byte>) -> GraphEventRef 和 ReadbackCopy(TextureView, span<byte>) -> GraphEventRef",
+        "在 CopyBackBufferCmd / CopyBackTextureCmd 上挂接 readback completion GraphEventRef",
+        "translate 只透传该 event，不提前触发",
+        "interrupt runtime 在 allocator on-complete 执行完 staging -> CPU memcpy 后，再触发 readback GraphEventRef",
+        "将 RHITest readback 路径切换为等待 readback event，而不是 Flush + WaitIdle"
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/RHICommand.h",
+        "source/runtime/render/rhi/RHICommandList.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp"
+      ]
+    },
+    {
+      "id": "CP-23",
+      "title": "RHIExecutor::Sync(depth) 返回 GraphEventRef",
+      "priority": "critical",
+      "status": "todo",
+      "category": "interface",
+      "problem": "当前用户只能通过 VulkanSubmissionExecutor::Flush() + RenderDevice::WaitIdle() 粗暴等待，这既不符合最终接口，也会把全局 idle 和 executor retirement 语义混在一起。你新增的需求要求 RHIExecutor::Get().Sync() 返回 GraphEventRef，并且它要表示“调用前所有进入 RHIExecutor 的工作在 interrupt 完成后已退休完成”。",
+      "what_design_says": "Sync(depth) 是 executor 级 completion 请求，不是新的 GPU 渲染命令。它必须依赖当前 executor 已有 tail，并在 interrupt runtime 中触发完成事件。",
+      "tasks": [
+        "在 RHIExecutor 上新增 Sync(depth) -> GraphEventRef",
+        "Sync 调用时先 flush 当前 pending batch，使当前同步请求覆盖调用前所有已进入 executor 的工作",
+        "定义 ExecutorSyncRequest，并将其接入 submission/interrupt 流水线，而不是直接做全局 WaitIdle",
+        "只有当请求依赖的 submit/present retirement 都完成后，interrupt runtime 才触发 Sync() 返回的 GraphEventRef"
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/RHIExecutor.h",
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp"
+      ]
+    },
+    {
+      "id": "CP-24",
+      "title": "SyncDepth 语义：RHI 与 Present",
+      "priority": "high",
+      "status": "todo",
+      "category": "interface",
+      "problem": "你新增的 Sync 需求还要求带 flag，并区分“只等不包含 present 的所有 GPU execution”和“包含 present 的完成”。如果不单独定义 SyncDepth，后续接口与测试会一直对 Sync 究竟等什么产生歧义。",
+      "what_design_says": "SyncDepth 需要至少包含两种深度：RHI 与 Present。RHI 只等待调用前所有 RHI submits 的 interrupt retirement，不包含 present。Present 等待调用前所有 RHI submits 以及 present retirement。present completion 不允许污染普通 RHI SyncPoint 语义。",
+      "tasks": [
+        "定义 ERHISyncDepth，例如 RHI / Present",
+        "executor 维护 RHI tail 与 present tail 的完成集合",
+        "Sync(RHI) 只依赖当前所有 RHI tails",
+        "Sync(Present) 依赖当前所有 RHI tails 与 present tails",
+        "在测试中验证 Sync(RHI) 与 Sync(Present) 的差异语义"
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/RHIExecutor.h",
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp"
       ]
     }
   ],
   "execution_order": [
-    "CP-01 (Texture 完整 subresource array 持久状态) → CP-02 (subresource key/range tracking) → CP-02b (shader arg per-range key) → CP-12 (bindless 单帧 dirty_written_resources) — 先闭环状态粒度与 bindless 传播",
-    "CP-03 (CopyScope preprocess 简化) → CP-07 (显式 Transition) → CP-10 (present snapshot) — 核心 preprocess 链路",
-    "CP-08 (新 Submit 接口) → CP-09 (interrupt 线程) — executor 架构",
-    "CP-11 (parallel translate) → CP-17 (VkTracker 扩展) — translate 层",
-    "CP-06 (cleanup) → CP-04/05 (perf) — 渐进式改进",
-    "CP-13/14 (validation) → CP-15 (BufferOverlap) → CP-16 (GPU profiler) — 完善层",
-    "CP-18 (tests) — 贯穿全程，每个 CP 完成后补对应测试"
+    "CP-01 -> CP-02 -> CP-12：先稳定资源长期状态、subresource 粒度和 bindless 单帧传播",
+    "CP-03 -> CP-19 -> CP-17：先把 preprocess 与 translate 重新按 TranslateInfo / TranslateTask / TranslateResult 切开，再让 VkTracker 对齐新的 translate 边界",
+    "CP-20 -> CP-07 -> CP-09：再把 TranslateResult 组装成 SubmitInfo，引入 SyncPoint，并收敛 submission runtime / interrupt runtime",
+    "CP-21：在 SubmitInfo + SyncPoint 稳定后补 flush batch 自动等待前序所有 RHI submits",
+    "CP-10 -> CP-24 -> CP-23：把 present 并入尾部 graphics submit，再定义 SyncDepth 和 executor 级 Sync(depth) completion",
+    "CP-22：在 interrupt retirement 语义稳定后接入 readback GraphEventRef",
+    "CP-08 -> CP-06：最后清理 legacy 路径与旧 write_textures 机制",
+    "CP-13 -> CP-14 -> CP-15 -> CP-16：补完 raytracing、frame-end validation、buffer overlap、GPU profiler",
+    "CP-05：最后做无行为变更的小额性能整理",
+    "CP-18：测试贯穿全程，每个关键 checkpoint 完成后补对应用例，不允许依赖旧的 Flush + WaitIdle 作为最终验证方式"
   ],
   "analysis_notes": {
-    "current_state_summary": "VulkanSubmissionExecutor.cpp 已实现了 preprocess 的基本框架（SplitCommandSegment、ResourceAccessCollector、ExecutePreprocessStore），但仍使用 FrameStateStore::global_last_state 做帧内全局状态链式传递，这是设计要删除的模式。CopyScope 的跨队列同步已有基础但过重（TODO 自注）。Transition(Acquire/Release) 的显式 plan 机制尚未实现。Present executor 有硬编码 src_state。Interrupt 线程职责分散。CP-02 已完成 ResourceKey subresource range 扩展，CP-02b 已补上 CollectShaderArg 的 TextureView per-range key；但 Texture 长期 persistent state 仍是 whole-resource 存储，bindless 也仍缺少单帧 dirty_written_resources 传播，因此 local_light_pdf_tex 这类“写后跨 command list bindless 读”的场景还没有真正闭环。",
+    "current_state_summary": "当前 VulkanSubmissionExecutor.cpp 已有 preprocess 基础、split segment、resource digest、TranslateRHI、submission runtime、interrupt runtime 雏形，但核心边界仍不对：preprocess 过早绑定 wait/signal；内部平台单元仍偏向 QueueSubmissionInfo / PresentInfo；translate 与 submit 没有通过 TranslateResult / SubmitInfo 真正解耦；readback 和 Sync 仍没有 GraphEventRef 级完成链路，所以 RHITest 还在依赖 Flush + WaitIdle。",
+    "resolved_conflicts_vs_proposal": [
+      "SubmitInfo 不再承担 translate 语义，只服务 submission runtime",
+      "SyncPoint 与 GraphEventRef 分离：SyncPoint 表示 submit 可见完成，GraphEventRef 表示 interrupt retirement 完成",
+      "present 不并入普通 RHI completion，只在 Present-depth 的 Sync 中体现",
+      "flush 间依赖明确为 RHI tails，不把 present 隐式塞入普通 flush 依赖"
+    ],
     "biggest_risks": [
-      "CP-01 若不把 Texture 改成完整 subresource array，preprocess 的 per-range tracking 会在长期状态回写时重新退化成 whole-resource",
-      "CP-12 若只做 command list 局部写收集，遇到中间穿插其他 command list 时会丢失 bindless 所需的写历史",
-      "CP-02b 虽已完成 shader arg 的 per-range key，但必须与 CP-01/CP-12 一起闭环，否则 local_light_pdf_tex 这类 validation 场景仍可能残留",
-      "CP-08 新接口涉及调用方迁移，需要确认 RasterRenderer 等的实际依赖情况",
-      "CP-11 并行 translate 需要先确认 allocator pool 的线程安全性"
+      "若 CP-03 / CP-19 / CP-20 没有一次性把阶段边界切干净，后续 CP-07 / CP-09 / CP-22 / CP-23 会继续在 monolithic executor 上叠复杂度",
+      "若 CP-07 仍在 preprocess 中生成物理 WaitEvent，SyncPoint 设计会名存实亡",
+      "若 CP-09 不能明确区分 submit completion 与 interrupt retirement completion，readback event 和 Sync(depth) 都会语义错误",
+      "若 CP-22 继续复用现有 CopyFrom(..., span<byte>) 的 void API，而不是新增显式 readback API，接口会非常别扭且难以表达 completion",
+      "若 CP-21 没有建立 flush batch 等待前序所有 RHI submits 的规则，不同 flush 间仍会出现用户不期望的并行穿插"
     ]
   }
 }

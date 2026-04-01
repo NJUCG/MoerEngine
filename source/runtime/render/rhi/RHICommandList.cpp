@@ -186,15 +186,25 @@ CmdSubmit CommandList::Submit() {
         std::move(query_tokens),
         std::move(gpu_events)
     );
+    submit.wait_events        = std::move(submit_wait_events);
+    submit.signal_events      = std::move(submit_signal_events);
+    submit.b_tick_profiling   = submit_tick_profiling;
+    submit.b_delete_resources = submit_delete_resources;
     commands.clear();
     callbacks.clear();
+    submit_wait_events.clear();
+    submit_signal_events.clear();
     query_tokens.clear();
     gpu_events.clear();
+    submit_tick_profiling   = false;
+    submit_delete_resources = false;
     return std::move(submit);
 }
 
 bool CommandList::IsEmpty() const {
-    return commands.empty() && callbacks.empty() && cached_args.empty();
+    return commands.empty() && callbacks.empty() && cached_args.empty() &&
+           submit_wait_events.empty() && submit_signal_events.empty() &&
+           !submit_tick_profiling && !submit_delete_resources;
 }
 
 void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
@@ -565,6 +575,36 @@ void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _
 void CommandList::AddCallback(std::function<void()>&& _callback) {
     EnsureNoActiveCopyScope("CommandList::AddCallback");
     callbacks.emplace_back(std::move(_callback));
+}
+
+CommandList& CommandList::Wait(Fence* _fence, uint64 _wait_value) {
+    EnsureNoActiveCopyScope("CommandList::Wait");
+    submit_wait_events.emplace_back(uint64(_fence), _wait_value);
+    return *this;
+}
+
+CommandList& CommandList::Wait(WaitEvent _event) {
+    EnsureNoActiveCopyScope("CommandList::Wait");
+    submit_wait_events.emplace_back(_event);
+    return *this;
+}
+
+CommandList& CommandList::Signal(Fence* _fence, uint64 _signal_value) {
+    EnsureNoActiveCopyScope("CommandList::Signal");
+    submit_signal_events.emplace_back(uint64(_fence), _signal_value);
+    return *this;
+}
+
+CommandList& CommandList::DeleteResources() {
+    EnsureNoActiveCopyScope("CommandList::DeleteResources");
+    submit_delete_resources = true;
+    return *this;
+}
+
+CommandList& CommandList::TickProfiling() {
+    EnsureNoActiveCopyScope("CommandList::TickProfiling");
+    submit_tick_profiling = true;
+    return *this;
 }
 
 void CommandList::BeginBarriers(

@@ -6,6 +6,7 @@
 #include "VulkanRHITrace.h"
 #include "VulkanRHIResource.h"
 #include "VulkanAllocator.h"
+#include "VulkanTranslateTask.h"
 #include "RHICmdReorderer.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
@@ -169,11 +170,14 @@ enum class ESegmentType : uint8 {
     Copy
 };
 
-struct CmdSubmitPreprocessResult {
+struct TranslateInfo {
     SubmissionKey key{};
     SourceSubmitKey source_key{};
     EQueueType    queue{EQueueType::Ignore};
     ESegmentType segment_type{ESegmentType::Graphics};
+    size_t             segment_begin{0};
+    size_t             segment_end{0};
+    size_t             segment_copy_scope_index{0};
     bool include{false};
 
     ResourceStateSnapshot initial_state_snapshot{};
@@ -185,13 +189,15 @@ struct CmdSubmitPreprocessResult {
     Array<ImportBuffer>  prefix_import_buffers{};
     Array<ExportTexture> suffix_export_textures{};
     Array<ExportBuffer>  suffix_export_buffers{};
-    Array<SubmissionKey> wait_submission_keys{};
 };
 
 struct SourceSubmitSegmentPlan {
     SubmissionKey key{};
     EQueueType    queue{EQueueType::Ignore};
     ESegmentType kind{ESegmentType::Graphics};
+    bool          inherit_source_wait_events{false};
+    bool          inherit_source_signal_events_and_callbacks{false};
+    bool          inherit_source_runtime_payload{false};
     bool          include{false};
 };
 
@@ -201,7 +207,7 @@ struct SourceSubmitPlan {
     Array<SourceSubmitSegmentPlan> segments{};
 };
 
-struct PresentPreprocessResult {
+struct PresentCandidateMetadata {
     uint64             op_seq{0};
     bool               has_source_texture_state{false};
     ResourceStateValue source_texture_state{};
@@ -222,44 +228,87 @@ struct CommandSegmentInfo {
     }
 };
 
-struct ExecutePreprocessStore {
-    Array<CmdSubmitPreprocessResult>                        results{};
+struct LogicalDependencyGraph {
+    UnorderedMap<SubmissionKey, Array<SubmissionKey>, SubmissionKeyHash> producer_keys_by_consumer{};
+    UnorderedMap<SubmissionKey, UnorderedSet<SubmissionKey, SubmissionKeyHash>, SubmissionKeyHash>
+        dedup_keys_by_consumer{};
+
+    void Reserve(uint32 count) {
+        producer_keys_by_consumer.reserve(count);
+        dedup_keys_by_consumer.reserve(count);
+    }
+
+    void AddEdge(const SubmissionKey& consumer_key, const SubmissionKey& producer_key) {
+        auto& dedup_keys = dedup_keys_by_consumer[consumer_key];
+        if (!dedup_keys.emplace(producer_key).second) {
+            return;
+        }
+        producer_keys_by_consumer[consumer_key].emplace_back(producer_key);
+    }
+
+    void SortEdges() {
+        for (auto& [_, producer_keys] : producer_keys_by_consumer) {
+            std::sort(producer_keys.begin(), producer_keys.end(), SubmissionKeyLess);
+        }
+    }
+
+    const Array<SubmissionKey>* FindProducers(const SubmissionKey& consumer_key) const {
+        const auto iter = producer_keys_by_consumer.find(consumer_key);
+        if (iter == producer_keys_by_consumer.end()) {
+            return nullptr;
+        }
+        return &iter->second;
+    }
+
+    uint32 Count(const SubmissionKey& consumer_key) const {
+        const auto iter = producer_keys_by_consumer.find(consumer_key);
+        if (iter == producer_keys_by_consumer.end()) {
+            return 0;
+        }
+        return static_cast<uint32>(iter->second.size());
+    }
+};
+
+struct PreprocessTranslateStore {
+    Array<TranslateInfo>                        translate_infos{};
     UnorderedMap<SubmissionKey, uint32, SubmissionKeyHash> lookup{};
     UnorderedMap<SourceSubmitKey, uint32, SourceSubmitKeyHash> source_lookup{};
     Array<SourceSubmitPlan>                                    source_plans{};
-    Array<PresentPreprocessResult>                             present_results{};
+    Array<PresentCandidateMetadata>                            present_candidates{};
     UnorderedMap<uint64, uint32>                               present_lookup{};
+    LogicalDependencyGraph                                     dependency_graph{};
 
     void Reserve(uint32 count) {
-        results.reserve(count);
+        translate_infos.reserve(count);
         lookup.reserve(count);
         source_plans.reserve(count);
         source_lookup.reserve(count);
-        present_results.reserve(count);
+        present_candidates.reserve(count);
         present_lookup.reserve(count);
+        dependency_graph.Reserve(count);
     }
 
-    void Add(CmdSubmitPreprocessResult&& result) {
+    void Add(TranslateInfo&& result) {
         const SubmissionKey key   = result.key;
-        const uint32        index = static_cast<uint32>(results.size());
-        results.emplace_back(std::move(result));
+        const uint32        index = static_cast<uint32>(translate_infos.size());
+        translate_infos.emplace_back(std::move(result));
         lookup.emplace(key, index);
     }
 
-    const CmdSubmitPreprocessResult* Find(const SubmissionKey& key) const {
+    const TranslateInfo* Find(const SubmissionKey& key) const {
         const auto iter = lookup.find(key);
         if (iter == lookup.end()) {
             return nullptr;
         }
-        return &results[iter->second];
+        return &translate_infos[iter->second];
     }
 
-    CmdSubmitPreprocessResult* FindMutable(const SubmissionKey& key) {
+    TranslateInfo* FindMutable(const SubmissionKey& key) {
         const auto iter = lookup.find(key);
         if (iter == lookup.end()) {
             return nullptr;
         }
-        return &results[iter->second];
+        return &translate_infos[iter->second];
     }
 
     void AddSourcePlan(SourceSubmitPlan&& plan) {
@@ -269,19 +318,19 @@ struct ExecutePreprocessStore {
         source_lookup.emplace(key, index);
     }
 
-    void AddPresent(PresentPreprocessResult&& result) {
+    void AddPresent(PresentCandidateMetadata&& result) {
         const uint64 op_seq = result.op_seq;
-        const uint32 index  = static_cast<uint32>(present_results.size());
-        present_results.emplace_back(std::move(result));
+        const uint32 index  = static_cast<uint32>(present_candidates.size());
+        present_candidates.emplace_back(std::move(result));
         present_lookup.emplace(op_seq, index);
     }
 
-    const PresentPreprocessResult* FindPresent(uint64 op_seq) const {
+    const PresentCandidateMetadata* FindPresent(uint64 op_seq) const {
         const auto iter = present_lookup.find(op_seq);
         if (iter == present_lookup.end()) {
             return nullptr;
         }
-        return &present_results[iter->second];
+        return &present_candidates[iter->second];
     }
 
     const SourceSubmitPlan* FindSourcePlan(const SourceSubmitKey& key) const {
@@ -293,27 +342,57 @@ struct ExecutePreprocessStore {
     }
 };
 
-struct QueueSubmissionInfo {
+struct QueueTranslateInfo {
     SubmissionKey key{};
     uint64        op_seq{0};
     EQueueType    queue{EQueueType::Ignore};
     CmdSubmit     submit;
+    TrackerSeed  initial_seed{};
+    Array<SubmissionKey> logical_wait_submission_keys{};
+    bool         valid{true};
+    std::string  error{};
+
+    QueueTranslateInfo(
+        SubmissionKey in_key,
+        uint64        in_op_seq,
+        EQueueType    in_queue,
+        CmdSubmit&&   in_submit,
+        TrackerSeed&& in_seed
+    ) :
+        key(in_key),
+        op_seq(in_op_seq),
+        queue(in_queue),
+        submit(std::move(in_submit)),
+        initial_seed(std::move(in_seed)) {}
+
+    QueueTranslateInfo(QueueTranslateInfo&&) noexcept            = default;
+    QueueTranslateInfo& operator=(QueueTranslateInfo&&) noexcept = default;
+    QueueTranslateInfo(const QueueTranslateInfo&)                = delete;
+    QueueTranslateInfo& operator=(const QueueTranslateInfo&)     = delete;
+};
+
+struct QueueSubmissionInfo {
+    SubmissionKey key{};
+    uint64        op_seq{0};
+    EQueueType    queue{EQueueType::Ignore};
     std::optional<VulkanRecordedSubmit> recorded_submit{};
-    ResourceAccessDigest digest{};
-    ResourceStateSnapshot initial_state_snapshot{};  // §7.2: seed_tracker for translate
-    Array<SubmissionKey>             wait_submission_keys{};
-    bool                             valid{true};
+    Array<SubmissionKey> wait_submission_keys{};
+    GraphEventRef translate_complete{nullptr};
+    bool          valid{true};
+    std::string   error{};
 
     QueueSubmissionInfo(
         SubmissionKey in_key,
         uint64        in_op_seq,
         EQueueType    in_queue,
-        CmdSubmit&&   in_submit
+        std::optional<VulkanRecordedSubmit>&& in_recorded_submit,
+        GraphEventRef in_translate_complete
     ) :
         key(in_key),
         op_seq(in_op_seq),
         queue(in_queue),
-        submit(std::move(in_submit)) {}
+        recorded_submit(std::move(in_recorded_submit)),
+        translate_complete(std::move(in_translate_complete)) {}
 
     QueueSubmissionInfo(QueueSubmissionInfo&&) noexcept            = default;
     QueueSubmissionInfo& operator=(QueueSubmissionInfo&&) noexcept = default;
@@ -341,6 +420,9 @@ struct PresentInfo {
 };
 
 using PlatformExecOp = std::variant<QueueSubmissionInfo, PresentInfo>;
+using TranslatePipelineOp = std::variant<QueueTranslateInfo, PresentInfo>;
+
+static TrackerSeed BuildTrackerSeed(const ResourceStateSnapshot& snapshot);
 
 struct ResourceHazardState {
     std::optional<SubmissionKey> last_writer{};
@@ -1474,11 +1556,9 @@ static size_t EstimatePlatformOpCount(const Array<RHIExecOp>& ops) {
     return op_count;
 }
 
-// Single CommandList can be submitted to different queues with QueueTransferCmd in between, 
-// so we need to split the submit into segments based on CopyScopeCmd.
-// TODO: get CopyScopeIndex directly from CmdSubmit(which comes from commandlist during recording) instead of iterating again here
-// need to make sure neighbor segment with same queue are merged together to avoid unnecessary split
-static Array<CommandSegmentInfo> SplitCommandSegment(const CmdSubmit& submit) {
+// Split one source submit into logical translate segments. This split is preprocess-owned,
+// and downstream stages should consume the generated segment metadata directly.
+static Array<CommandSegmentInfo> SplitIntoLogicalSegments(const CmdSubmit& submit) {
     Array<CommandSegmentInfo> segments{};
     size_t parent_begin = 0;
 
@@ -1604,18 +1684,19 @@ static void ApplyDigestToDirtyWrittenResources(
     }
 }
 
-static void AddWaitDependency(
-    Array<SubmissionKey>&                          wait_keys,
-    UnorderedSet<SubmissionKey, SubmissionKeyHash>& dedup,
-    const SubmissionKey&                           dependency
+static void AddLogicalDependency(
+    LogicalDependencyGraph&                        dependency_graph,
+    const SubmissionKey&                           consumer_key,
+    UnorderedSet<SubmissionKey, SubmissionKeyHash>& local_dedup,
+    const SubmissionKey&                           producer_key
 ) {
-    if (dedup.emplace(dependency).second) {
-        wait_keys.emplace_back(dependency);
+    if (local_dedup.emplace(producer_key).second) {
+        dependency_graph.AddEdge(consumer_key, producer_key);
     }
 }
 
 static bool AppendPrefixImport(
-    CmdSubmitPreprocessResult&                    result,
+    TranslateInfo&                                result,
     UnorderedSet<ResourceKey, ResourceKeyHash>&   imported_resources,
     const ResourceKey&                            resource_key,
     const ResourceStateValue&                     current_state,
@@ -1691,7 +1772,7 @@ static bool AppendPrefixImport(
 }
 
 static bool AppendSuffixExport(
-    CmdSubmitPreprocessResult&                    result,
+    TranslateInfo&                                result,
     UnorderedSet<ResourceKey, ResourceKeyHash>&   exported_resources,
     const ResourceKey&                            resource_key,
     const ResourceStateValue&                     current_state,
@@ -1837,12 +1918,6 @@ struct SubmissionBatch {
     std::shared_ptr<std::promise<void>> completion{};
 };
 
-struct PendingPresentCompletion {
-    UniquePtr<VulkanPresentor> presentor{};
-    uint64 timeline_value{0};
-};
-
-
 static EPassType QueueTypeToPassType(EQueueType queue) {
     switch (queue) {
         case EQueueType::Graphics:
@@ -1885,16 +1960,61 @@ static std::tuple<VkAccessFlags2, VkPipelineStageFlags2> GetTrackedBufferState(
 }
 
 struct SubmissionHostWaitTask {
+    uint64 serial{0};
     uint64 op_seq{0};
     Array<WaitEvent> wait_events{};
-    std::promise<void> completion{};
 };
 
-struct SubmissionPayloadTask {
-    std::function<void()> callback{};
+struct SubmissionQueueCompletionTask {
+    uint64                    serial{0};
+    VkCommandQueue*           queue{nullptr};
+    uint64                    timeline_value{0};
+    UniquePtr<VulkanAllocator> allocator{};
+    Array<std::function<void()>> callbacks{};
+    Array<SignalEvent>        signal_events{};
 };
 
-using SubmissionEventTask = std::variant<SubmissionHostWaitTask, SubmissionPayloadTask>;
+struct SubmissionCopyQueueCompletionTask {
+    uint64                    serial{0};
+    VkCopyQueue*              queue{nullptr};
+    uint64                    timeline_value{0};
+    UniquePtr<VulkanAllocator> allocator{};
+    Array<std::function<void()>> callbacks{};
+    Array<IOSignalEvt>        signal_events{};
+};
+
+class SubmissionPresentContext;
+
+struct SubmissionPresentCompletionTask {
+    uint64                     serial{0};
+    SubmissionPresentContext*  context{nullptr};
+    uint64                     timeline_value{0};
+    UniquePtr<VulkanPresentor> presentor{};
+};
+
+struct SubmissionFrameEndMarkerTask {
+    uint64 serial{0};
+    uint64 batch_id{0};
+    uint32 submission_count{0};
+    uint32 present_count{0};
+};
+
+using SubmissionEventTask = std::variant<
+    SubmissionHostWaitTask,
+    SubmissionQueueCompletionTask,
+    SubmissionCopyQueueCompletionTask,
+    SubmissionPresentCompletionTask,
+    SubmissionFrameEndMarkerTask>;
+
+class SubmissionPlanRuntime;
+static SubmissionPlanRuntime& GetSubmissionPlanRuntime();
+void EnqueueSubmissionPresentCompletion(
+    uint64                      op_seq,
+    Array<WaitEvent>&&          wait_events,
+    SubmissionPresentContext*   context,
+    uint64                      timeline_value,
+    UniquePtr<VulkanPresentor>&& presentor
+);
 
 class SubmissionPresentContext {
 public:
@@ -1902,14 +2022,9 @@ public:
         queue_type(in_queue_type),
         command_queue(static_cast<VkCommandQueue&>(RenderDevice::Get().GetCommandQueue(in_queue_type))),
         native_queue(in_queue_type, command_queue.vk_device),
-        timeline(MoerNew(VulkanFence(command_queue.vk_device))) {
-        completion_thread = std::jthread([this]() {
-            CompletionThreadMain();
-        });
-    }
+        timeline(MoerNew(VulkanFence(command_queue.vk_device))) {}
 
     ~SubmissionPresentContext() {
-        Shutdown();
         Array<VulkanPresentor*> cached_presentors{};
         presentors.PopAll(cached_presentors);
         for (auto* presentor : cached_presentors) {
@@ -2037,11 +2152,14 @@ public:
         }
         ++swapchain->image_idx;
 
-        EnqueueCompletion(
-            PendingPresentCompletion{
-                .presentor = std::move(presentor),
-                .timeline_value = completion_value
-            }
+        Array<WaitEvent> completion_waits{};
+        completion_waits.emplace_back(uint64(timeline.Get()), completion_value);
+        EnqueueSubmissionPresentCompletion(
+            present_op.target.texture ? uint64(present_op.target.texture) : completion_value,
+            std::move(completion_waits),
+            this,
+            completion_value,
+            std::move(presentor)
         );
         TexturePersistentState persistent_state{};
         persistent_state.known            = true;
@@ -2064,20 +2182,18 @@ public:
         return true;
     }
 
-    void Flush() {
-        Complete(last_submitted_timeline.load(std::memory_order_acquire));
-    }
+    void Flush() {}
 
-    void Shutdown() {
-        Flush();
-        bool expected = true;
-        if (!running.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
+    void Shutdown() {}
+
+    void ResolvePresentCompletion(UniquePtr<VulkanPresentor>&& presentor, uint64 timeline_value) {
+        if (!presentor) {
             return;
         }
-        completion_cv.notify_all();
-        if (completion_thread.joinable()) {
-            completion_thread.join();
-        }
+        presentor->VulkanAllocatorBase::Complete(timeline.Get(), timeline_value);
+        presentor->Reset();
+        std::lock_guard<std::mutex> lock(presentor_mutex);
+        presentors.Push(presentor.release());
     }
 
 private:
@@ -2088,73 +2204,6 @@ private:
             return presentor;
         }
         return MakeUnique<VulkanPresentor>(&command_queue.vk_device, queue_type);
-    }
-
-    void EnqueueCompletion(PendingPresentCompletion&& completion) {
-        {
-            std::lock_guard<std::mutex> lock(completion_mutex);
-            pending_presentors.emplace_back(std::move(completion));
-        }
-        completion_cv.notify_one();
-    }
-
-    void Complete(uint64 target_timeline) {
-        while (completed_timeline.load(std::memory_order_acquire) < target_timeline) {
-            PumpCompletions(false);
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-        }
-    }
-
-    void CompletionThreadMain() {
-        Platform::SetCurrentThreadName("SubmissionPresentThread");
-        while (running.load(std::memory_order_acquire)) {
-            PumpCompletions(true);
-        }
-        PumpCompletions(false);
-    }
-
-    void PumpCompletions(bool wait_for_work) {
-        while (true) {
-            PendingPresentCompletion completion{};
-            {
-                std::unique_lock<std::mutex> lock(completion_mutex);
-                if (pending_presentors.empty()) {
-                    if (wait_for_work) {
-                        completion_cv.wait_for(lock, std::chrono::milliseconds(1), [this]() {
-                            return !running.load(std::memory_order_acquire) ||
-                                   !pending_presentors.empty();
-                        });
-                    }
-                    if (pending_presentors.empty()) {
-                        return;
-                    }
-                }
-
-                const uint64 device_value = timeline->GetDeviceValue();
-                if (device_value < pending_presentors.front().timeline_value) {
-                    if (!wait_for_work) {
-                        return;
-                    }
-                    lock.unlock();
-                    std::this_thread::sleep_for(std::chrono::microseconds(100));
-                    continue;
-                }
-
-                timeline->Notify(device_value);
-                completion = std::move(pending_presentors.front());
-                pending_presentors.pop_front();
-                completed_timeline.store(
-                    std::max(completed_timeline.load(std::memory_order_relaxed), completion.timeline_value),
-                    std::memory_order_release
-                );
-            }
-
-            completion.presentor->VulkanAllocatorBase::Complete(
-                timeline.Get(), completion.timeline_value
-            );
-            completion.presentor->Reset();
-            presentors.Push(completion.presentor.release());
-        }
     }
 
     void WaitForReusablePresentSlot(VkSwapchain& swapchain) {
@@ -2187,19 +2236,11 @@ private:
     VkCommandQueue& command_queue;
     VkNativeQueue   native_queue;
     VulkanFenceRef  timeline = nullptr;
-
-    std::atomic_bool   running{true};
     std::atomic_uint64_t last_submitted_timeline{0};
-    std::atomic_uint64_t completed_timeline{0};
 
     std::mutex submit_mutex{};
     std::mutex presentor_mutex{};
     LockFreeQueueBase<VulkanPresentor, false> presentors{};
-
-    std::mutex completion_mutex{};
-    std::condition_variable completion_cv{};
-    std::deque<PendingPresentCompletion> pending_presentors{};
-    std::jthread completion_thread{};
 };
 
 class SubmissionPresentContextManager {
@@ -2280,6 +2321,7 @@ public:
         }
         submission_cv.notify_one();
         future.wait();
+        WaitForInterruptSerial(enqueued_interrupt_serial.load(std::memory_order_acquire));
     }
 
     void Shutdown() {
@@ -2291,6 +2333,83 @@ public:
         if (submission_event_thread.joinable()) {
             submission_event_thread.join();
         }
+    }
+
+    void EnqueueQueueCompletion(
+        uint64                        op_seq,
+        Array<WaitEvent>&&            wait_events,
+        VkCommandQueue*               queue,
+        uint64                        timeline_value,
+        UniquePtr<VulkanAllocator>&&  allocator,
+        Array<std::function<void()>>&& callbacks,
+        Array<SignalEvent>&&          signal_events
+    ) {
+        if (queue == nullptr) {
+            return;
+        }
+        EnqueueInterruptTask(SubmissionHostWaitTask{
+            .serial = NextInterruptSerial(),
+            .op_seq = op_seq,
+            .wait_events = std::move(wait_events)
+        });
+        EnqueueInterruptTask(SubmissionQueueCompletionTask{
+            .serial = NextInterruptSerial(),
+            .queue = queue,
+            .timeline_value = timeline_value,
+            .allocator = std::move(allocator),
+            .callbacks = std::move(callbacks),
+            .signal_events = std::move(signal_events)
+        });
+    }
+
+    void EnqueueCopyQueueCompletion(
+        uint64                        op_seq,
+        Array<WaitEvent>&&            wait_events,
+        VkCopyQueue*                  queue,
+        uint64                        timeline_value,
+        UniquePtr<VulkanAllocator>&&  allocator,
+        Array<std::function<void()>>&& callbacks,
+        Array<IOSignalEvt>&&          signal_events
+    ) {
+        if (queue == nullptr) {
+            return;
+        }
+        EnqueueInterruptTask(SubmissionHostWaitTask{
+            .serial = NextInterruptSerial(),
+            .op_seq = op_seq,
+            .wait_events = std::move(wait_events)
+        });
+        EnqueueInterruptTask(SubmissionCopyQueueCompletionTask{
+            .serial = NextInterruptSerial(),
+            .queue = queue,
+            .timeline_value = timeline_value,
+            .allocator = std::move(allocator),
+            .callbacks = std::move(callbacks),
+            .signal_events = std::move(signal_events)
+        });
+    }
+
+    void EnqueuePresentCompletion(
+        uint64                      op_seq,
+        Array<WaitEvent>&&          wait_events,
+        SubmissionPresentContext*   context,
+        uint64                      timeline_value,
+        UniquePtr<VulkanPresentor>&& presentor
+    ) {
+        if (context == nullptr) {
+            return;
+        }
+        EnqueueInterruptTask(SubmissionHostWaitTask{
+            .serial = NextInterruptSerial(),
+            .op_seq = op_seq,
+            .wait_events = std::move(wait_events)
+        });
+        EnqueueInterruptTask(SubmissionPresentCompletionTask{
+            .serial = NextInterruptSerial(),
+            .context = context,
+            .timeline_value = timeline_value,
+            .presentor = std::move(presentor)
+        });
     }
 
 private:
@@ -2313,15 +2432,11 @@ private:
         }
         {
             std::lock_guard<std::mutex> lock(submission_event_mutex);
-            for (auto& task : submission_event_queue) {
-                if (auto* wait_task = std::get_if<SubmissionHostWaitTask>(&task)) {
-                    SafeResolveWaitTask(*wait_task);
-                }
-            }
             submission_event_queue.clear();
         }
         submission_cv.notify_all();
         submission_event_cv.notify_all();
+        interrupt_cv.notify_all();
     }
 
     void RunSubmissionThread() {
@@ -2363,14 +2478,11 @@ private:
             }
 
             if (batch.frame_end) {
-                QueuePayloadTask([batch_id = batch.batch_id, submission_count, present_count]() {
-                    RHITRACE_LOG(
-                        basic,
-                        "[RHITrace][FrameEnd] batch={} submits={} presents={}",
-                        batch_id,
-                        submission_count,
-                        present_count
-                    );
+                EnqueueInterruptTask(SubmissionFrameEndMarkerTask{
+                    .serial = NextInterruptSerial(),
+                    .batch_id = batch.batch_id,
+                    .submission_count = submission_count,
+                    .present_count = present_count
                 });
             }
             if (batch.completion) {
@@ -2387,6 +2499,16 @@ private:
         UnorderedMap<SubmissionKey, WaitEvent, SubmissionKeyHash>& completion_by_submit
     ) {
         if (!submit_info.valid) {
+            return false;
+        }
+
+        if (submit_info.translate_complete && !submit_info.translate_complete->IsComplete()) {
+            LOG_ERROR(
+                "Translate completion is not resolved before submit ({}, {})",
+                submit_info.key.op_seq,
+                submit_info.key.submit_idx
+            );
+            submit_info.valid = false;
             return false;
         }
 
@@ -2528,44 +2650,54 @@ private:
                     [this](SubmissionHostWaitTask& wait_task) {
                         ExecuteHostWaitTask(wait_task);
                     },
-                    [](SubmissionPayloadTask& payload_task) {
-                        if (payload_task.callback) {
-                            payload_task.callback();
+                    [](SubmissionQueueCompletionTask& completion_task) {
+                        completion_task.queue->ResolveAllocatorCompletion(
+                            std::move(completion_task.allocator), completion_task.timeline_value
+                        );
+                        for (auto& callback : completion_task.callbacks) {
+                            callback();
                         }
+                        for (const auto& evt : completion_task.signal_events) {
+                            auto* fence = reinterpret_cast<VulkanFence*>(evt.timeline_handle);
+                            if (fence != nullptr) {
+                                fence->Notify(evt.value);
+                            }
+                        }
+                        completion_task.queue->MarkExecutionComplete(completion_task.timeline_value);
+                    },
+                    [](SubmissionCopyQueueCompletionTask& completion_task) {
+                        completion_task.queue->ResolveAllocatorCompletion(
+                            std::move(completion_task.allocator), completion_task.timeline_value
+                        );
+                        for (auto& callback : completion_task.callbacks) {
+                            callback();
+                        }
+                        for (const auto& evt : completion_task.signal_events) {
+                            auto* fence = reinterpret_cast<VulkanFence*>(evt.handle);
+                            if (fence != nullptr) {
+                                fence->Notify(evt.timeline);
+                            }
+                        }
+                        completion_task.queue->MarkExecutionComplete(completion_task.timeline_value);
+                    },
+                    [](SubmissionPresentCompletionTask& completion_task) {
+                        completion_task.context->ResolvePresentCompletion(
+                            std::move(completion_task.presentor), completion_task.timeline_value
+                        );
+                    },
+                    [](SubmissionFrameEndMarkerTask& frame_end_task) {
+                        RHITRACE_LOG(
+                            basic,
+                            "[RHITrace][FrameEnd] batch={} submits={} presents={}",
+                            frame_end_task.batch_id,
+                            frame_end_task.submission_count,
+                            frame_end_task.present_count
+                        );
                     }
                 },
                 task
             );
-        }
-    }
-
-    void EnqueueHostWaitAndWait(uint64 op_seq, Array<WaitEvent>&& wait_events) {
-        SubmissionHostWaitTask task{};
-        task.op_seq      = op_seq;
-        task.wait_events = std::move(wait_events);
-        auto completion_future = task.completion.get_future();
-        {
-            std::lock_guard<std::mutex> lock(submission_event_mutex);
-            submission_event_queue.emplace_back(std::move(task));
-        }
-        submission_event_cv.notify_one();
-        completion_future.wait();
-    }
-
-    void QueuePayloadTask(std::function<void()>&& callback) {
-        SubmissionPayloadTask task{};
-        task.callback = std::move(callback);
-        {
-            std::lock_guard<std::mutex> lock(submission_event_mutex);
-            submission_event_queue.emplace_back(std::move(task));
-        }
-        submission_event_cv.notify_one();
-    }
-
-    static void SafeResolveWaitTask(SubmissionHostWaitTask& wait_task) {
-        try {
-            wait_task.completion.set_value();
-        } catch (const std::future_error&) {
+            MarkInterruptSerialCompleted(GetTaskSerial(task));
         }
     }
 
@@ -2610,12 +2742,42 @@ private:
                 wait_evt.value
             );
         }
-        SafeResolveWaitTask(task);
+    }
+
+    static uint64 GetTaskSerial(const SubmissionEventTask& task) {
+        return std::visit([](const auto& typed_task) { return typed_task.serial; }, task);
+    }
+
+    void EnqueueInterruptTask(SubmissionEventTask&& task) {
+        {
+            std::lock_guard<std::mutex> lock(submission_event_mutex);
+            submission_event_queue.emplace_back(std::move(task));
+        }
+        submission_event_cv.notify_one();
+    }
+
+    uint64 NextInterruptSerial() {
+        return enqueued_interrupt_serial.fetch_add(1, std::memory_order_acq_rel) + 1;
+    }
+
+    void MarkInterruptSerialCompleted(uint64 serial) {
+        completed_interrupt_serial.store(serial, std::memory_order_release);
+        interrupt_cv.notify_all();
+    }
+
+    void WaitForInterruptSerial(uint64 serial) {
+        std::unique_lock<std::mutex> lock(interrupt_mutex);
+        interrupt_cv.wait(lock, [this, serial]() {
+            return !running.load(std::memory_order_acquire) ||
+                   completed_interrupt_serial.load(std::memory_order_acquire) >= serial;
+        });
     }
 
 private:
     std::atomic_bool running{true};
     std::atomic_uint64_t next_batch_id{1};
+    std::atomic_uint64_t enqueued_interrupt_serial{0};
+    std::atomic_uint64_t completed_interrupt_serial{0};
 
     std::mutex submission_mutex{};
     std::condition_variable submission_cv{};
@@ -2626,18 +2788,90 @@ private:
     std::condition_variable submission_event_cv{};
     std::deque<SubmissionEventTask> submission_event_queue{};
     std::jthread submission_event_thread{};
+    std::mutex interrupt_mutex{};
+    std::condition_variable interrupt_cv{};
 };
 
 static std::mutex g_submission_runtime_mutex{};
 static std::unique_ptr<SubmissionPlanRuntime> g_submission_runtime{};
+static std::atomic<SubmissionPlanRuntime*> g_submission_runtime_ptr{nullptr};
 static std::mutex g_present_context_mutex{};
 static std::unique_ptr<SubmissionPresentContextManager> g_present_context_manager{};
 static SubmissionPlanRuntime& GetSubmissionPlanRuntime() {
     std::lock_guard<std::mutex> lock(g_submission_runtime_mutex);
     if (!g_submission_runtime) {
         g_submission_runtime = std::make_unique<SubmissionPlanRuntime>();
+        g_submission_runtime_ptr.store(g_submission_runtime.get(), std::memory_order_release);
     }
     return *g_submission_runtime;
+}
+
+void EnqueueSubmissionQueueCompletion(
+    uint64                        op_seq,
+    Array<WaitEvent>&&            wait_events,
+    VkCommandQueue*               queue,
+    uint64                        timeline_value,
+    UniquePtr<VulkanAllocator>&&  allocator,
+    Array<std::function<void()>>&& callbacks,
+    Array<SignalEvent>&&          signal_events
+) {
+    SubmissionPlanRuntime* runtime = g_submission_runtime_ptr.load(std::memory_order_acquire);
+    if (runtime == nullptr) {
+        runtime = &GetSubmissionPlanRuntime();
+    }
+    runtime->EnqueueQueueCompletion(
+        op_seq,
+        std::move(wait_events),
+        queue,
+        timeline_value,
+        std::move(allocator),
+        std::move(callbacks),
+        std::move(signal_events)
+    );
+}
+
+void EnqueueSubmissionCopyQueueCompletion(
+    uint64                        op_seq,
+    Array<WaitEvent>&&            wait_events,
+    VkCopyQueue*                  queue,
+    uint64                        timeline_value,
+    UniquePtr<VulkanAllocator>&&  allocator,
+    Array<std::function<void()>>&& callbacks,
+    Array<IOSignalEvt>&&          signal_events
+) {
+    SubmissionPlanRuntime* runtime = g_submission_runtime_ptr.load(std::memory_order_acquire);
+    if (runtime == nullptr) {
+        runtime = &GetSubmissionPlanRuntime();
+    }
+    runtime->EnqueueCopyQueueCompletion(
+        op_seq,
+        std::move(wait_events),
+        queue,
+        timeline_value,
+        std::move(allocator),
+        std::move(callbacks),
+        std::move(signal_events)
+    );
+}
+
+void EnqueueSubmissionPresentCompletion(
+    uint64                      op_seq,
+    Array<WaitEvent>&&          wait_events,
+    SubmissionPresentContext*   context,
+    uint64                      timeline_value,
+    UniquePtr<VulkanPresentor>&& presentor
+) {
+    SubmissionPlanRuntime* runtime = g_submission_runtime_ptr.load(std::memory_order_acquire);
+    if (runtime == nullptr) {
+        runtime = &GetSubmissionPlanRuntime();
+    }
+    runtime->EnqueuePresentCompletion(
+        op_seq,
+        std::move(wait_events),
+        context,
+        timeline_value,
+        std::move(presentor)
+    );
 }
 
 static SubmissionPresentContextManager& GetSubmissionPresentContextManager() {
@@ -2667,6 +2901,7 @@ static void ShutdownSubmissionPlanRuntime() {
     {
         std::lock_guard<std::mutex> lock(g_submission_runtime_mutex);
         runtime = std::move(g_submission_runtime);
+        g_submission_runtime_ptr.store(nullptr, std::memory_order_release);
     }
     if (runtime) {
         runtime->Shutdown();
@@ -2688,10 +2923,10 @@ void SubmissionPlanExecutor::Execute(Array<PlatformExecOp>&& ops, bool frame_end
     GetSubmissionPlanRuntime().Enqueue(std::move(ops), frame_end);
 }
 
-static ExecutePreprocessStore
+static PreprocessTranslateStore
 PreprocessFrameOps(const Array<RHIExecOp>& ops) {
     TRACE_SCOPE_CAT("Vulkan.PreprocessFrameOps", "RHI");
-    ExecutePreprocessStore preprocess_store{};
+    PreprocessTranslateStore preprocess_store{};
     preprocess_store.Reserve(static_cast<uint32>(EstimateSubmitCount(ops) * 3 + 1));
     DirtyWrittenResources dirty_written_resources{};
 
@@ -2705,7 +2940,7 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
             for (uint32 submit_idx = 0; submit_idx < submit_op->submits.size(); ++submit_idx) {
                 const CmdSubmit& submit = submit_op->submits[submit_idx];
                 const SourceSubmitKey source_key{op_seq, submit_idx};
-                const auto segments = SplitCommandSegment(submit);
+                const auto segments = SplitIntoLogicalSegments(submit);
                 const bool has_side_effects = HasSubmitSideEffects(submit);
 
                 SourceSubmitPlan source_plan{};
@@ -2726,52 +2961,56 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                         continue;
                     }
 
-                    CmdSubmitPreprocessResult preprocess_result{};
-                    preprocess_result.key          = SubmissionKey{op_seq, next_segment_submit_idx++};
-                    preprocess_result.source_key   = source_key;
-                    preprocess_result.queue        =
+                    TranslateInfo translate_info{};
+                    translate_info.key          = SubmissionKey{op_seq, next_segment_submit_idx++};
+                    translate_info.source_key   = source_key;
+                    translate_info.queue        =
                         segment.type == ESegmentType::Copy ? EQueueType::Copy :
                                                                       submit_op->queue;
-                    preprocess_result.segment_type = segment.type;
-                    preprocess_result.include      = true;
+                    translate_info.segment_type = segment.type;
+                    translate_info.segment_begin = segment.begin;
+                    translate_info.segment_end = segment.end;
+                    translate_info.segment_copy_scope_index = segment.copy_scope_index;
+                    translate_info.include      = true;
 
                     ResourceAccessCollector collector(
-                        preprocess_result.queue,
+                        translate_info.queue,
                         submit.cached_args,
                         &dirty_written_resources
                     );
                     Array<const Command*> command_ptrs = GetSegmentCommandPointers(submit, segment);
-                    preprocess_result.digest = collector.Collect(
+                    translate_info.digest = collector.Collect(
                         std::span<const Command* const>(command_ptrs.data(), command_ptrs.size())
                     );
                     TraceDigest(
-                        preprocess_result.key,
-                        preprocess_result.queue,
-                        preprocess_result.segment_type,
-                        preprocess_result.digest
+                        translate_info.key,
+                        translate_info.queue,
+                        translate_info.segment_type,
+                        translate_info.digest
                     );
 
                     // §3.3: Load initial state for this segment's resources directly from each
                     // resource's persistent storage (committed by the previous segment).
                     ResourceStateSnapshot segment_state{};
-                    EnsureDigestStateLoaded(segment_state, preprocess_result.digest);
-                    preprocess_result.initial_state_snapshot = segment_state;
+                    EnsureDigestStateLoaded(segment_state, translate_info.digest);
+                    translate_info.initial_state_snapshot = segment_state;
 
                     //hint: begin handle cross queue wait/signal
                     if (previous_segment_key.has_value() &&
-                        previous_segment_queue != preprocess_result.queue) {
+                        previous_segment_queue != translate_info.queue) {
                         UnorderedSet<SubmissionKey, SubmissionKeyHash> local_waits{};
-                        AddWaitDependency(
-                            preprocess_result.wait_submission_keys,
+                        AddLogicalDependency(
+                            preprocess_store.dependency_graph,
+                            translate_info.key,
                             local_waits,
                             previous_segment_key.value()
                         );
                         RHITRACE_LOG(
                             verbose,
                             "[RHITrace][PreprocessWait] submit=({}, {}) queue={} depends_on=({}, {}) reason=segment_queue_change from={}",
-                            preprocess_result.key.op_seq,
-                            preprocess_result.key.submit_idx,
-                            QueueTypeName(preprocess_result.queue),
+                            translate_info.key.op_seq,
+                            translate_info.key.submit_idx,
+                            QueueTypeName(translate_info.queue),
                             previous_segment_key->op_seq,
                             previous_segment_key->submit_idx,
                             QueueTypeName(previous_segment_queue)
@@ -2784,9 +3023,6 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                     // after copy scope, we cross transfer from copy -> gfx for (a, b, c, d)
                     UnorderedSet<ResourceKey, ResourceKeyHash> imported_resources{};
                     UnorderedSet<SubmissionKey, SubmissionKeyHash> dependency_keys{};
-                    for (const auto& existing_wait_key : preprocess_result.wait_submission_keys) {
-                        dependency_keys.emplace(existing_wait_key);
-                    }
 
                     //TODO: current implementation is too heavy
                     // we currently make sure that gfx and copy are executed subsequently and resources are immediatelytransferred to graphics queue
@@ -2794,7 +3030,7 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                     // wait signal are quite simple, we make sure this -> gfx_1 -> copy_1 -> gfx_2
                     // so we only need to make dependency copy_1 depends on gfx_1, and gfx_2 depends on copy_1, and we transfer resources from gfx_1 to copy_1, and then from copy_1 to gfx_2,
                     // can store dependency in preprocess result for each segment, and resolve timeline value in submission time, which will be much more efficient, and also much more flexible for future when we have async compute and async copy
-                    for (const auto& [resource_key, access] : preprocess_result.digest) {
+                    for (const auto& [resource_key, access] : translate_info.digest) {
                         if (!access.read && !access.write) {
                             continue;
                         }
@@ -2802,26 +3038,27 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                         auto process_cross_queue_resource =
                             [&](const ResourceKey& canonical_key) {
                                 const auto state_it =
-                                    preprocess_result.initial_state_snapshot.find(canonical_key);
-                                if (state_it == preprocess_result.initial_state_snapshot.end()) {
+                                    translate_info.initial_state_snapshot.find(canonical_key);
+                                if (state_it == translate_info.initial_state_snapshot.end()) {
                                     return;
                                 }
 
                                 const auto& resource_state = state_it->second;
                                 if (!resource_state.known ||
                                     resource_state.owner_queue == EQueueType::Ignore ||
-                                    resource_state.owner_queue == preprocess_result.queue ||
+                                    resource_state.owner_queue == translate_info.queue ||
                                     !resource_state.last_submission.has_value()) {
                                     return;
                                 }
 
-                                AddWaitDependency(
-                                    preprocess_result.wait_submission_keys,
+                                AddLogicalDependency(
+                                    preprocess_store.dependency_graph,
+                                    translate_info.key,
                                     dependency_keys,
                                     resource_state.last_submission.value()
                                 );
                                 const bool imported = AppendPrefixImport(
-                                    preprocess_result,
+                                    translate_info,
                                     imported_resources,
                                     canonical_key,
                                     resource_state,
@@ -2830,7 +3067,7 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                                 );
                                 if (imported) {
                                     auto& seed_state =
-                                        preprocess_result.initial_state_snapshot[canonical_key];
+                                        translate_info.initial_state_snapshot[canonical_key];
                                     seed_state.known       = false;
                                     seed_state.has_writer  = false;
                                     seed_state.owner_queue = EQueueType::Ignore;
@@ -2852,7 +3089,7 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                                         exported_resources,
                                         canonical_key,
                                         resource_state,
-                                        preprocess_result.queue
+                                        translate_info.queue
                                     );
                                 }
                             };
@@ -2864,59 +3101,68 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                         }
                     }
 
-                    std::sort(
-                        preprocess_result.wait_submission_keys.begin(),
-                        preprocess_result.wait_submission_keys.end(),
-                        SubmissionKeyLess
-                    );
-
                     ApplyDigestToState(
-                        preprocess_result.digest,
-                        preprocess_result.queue,
-                        preprocess_result.key,
+                        translate_info.digest,
+                        translate_info.queue,
+                        translate_info.key,
                         segment_state
                     );
-                    preprocess_result.last_state_snapshot = segment_state;
+                    translate_info.last_state_snapshot = segment_state;
                     RHITRACE_LOG(
                         basic,
                         "[RHITrace][PreprocessSegment] submit=({}, {}) source=({}, {}) queue={} segment={} digest_count={} wait_count={} import_tex={} import_buf={} export_tex={} export_buf={}",
-                        preprocess_result.key.op_seq,
-                        preprocess_result.key.submit_idx,
-                        preprocess_result.source_key.op_seq,
-                        preprocess_result.source_key.submit_idx,
-                        QueueTypeName(preprocess_result.queue),
-                        SegmentKindName(preprocess_result.segment_type),
-                        preprocess_result.digest.size(),
-                        preprocess_result.wait_submission_keys.size(),
-                        preprocess_result.prefix_import_textures.size(),
-                        preprocess_result.prefix_import_buffers.size(),
-                        preprocess_result.suffix_export_textures.size(),
-                        preprocess_result.suffix_export_buffers.size()
+                        translate_info.key.op_seq,
+                        translate_info.key.submit_idx,
+                        translate_info.source_key.op_seq,
+                        translate_info.source_key.submit_idx,
+                        QueueTypeName(translate_info.queue),
+                        SegmentKindName(translate_info.segment_type),
+                        translate_info.digest.size(),
+                        preprocess_store.dependency_graph.Count(translate_info.key),
+                        translate_info.prefix_import_textures.size(),
+                        translate_info.prefix_import_buffers.size(),
+                        translate_info.suffix_export_textures.size(),
+                        translate_info.suffix_export_buffers.size()
                     );
 
                     source_plan.segments.emplace_back(SourceSubmitSegmentPlan{
-                        .key = preprocess_result.key,
-                        .queue = preprocess_result.queue,
-                        .kind = preprocess_result.segment_type,
+                        .key = translate_info.key,
+                        .queue = translate_info.queue,
+                        .kind = translate_info.segment_type,
+                        .inherit_source_wait_events = false,
+                        .inherit_source_signal_events_and_callbacks = false,
+                        .inherit_source_runtime_payload = false,
                         .include = true
                     });
-                    previous_segment_key   = preprocess_result.key;
-                    previous_segment_queue = preprocess_result.queue;
+                    previous_segment_key   = translate_info.key;
+                    previous_segment_queue = translate_info.queue;
                     // §3.3: Commit each segment's final state back to resource persistent storage so
                     // subsequent segments (and future frames) read the latest state from the resource
                     // objects themselves, not from a frame-level chained snapshot.
-                    CommitPersistentResourceStates(preprocess_result.last_state_snapshot);
+                    CommitPersistentResourceStates(translate_info.last_state_snapshot);
                     ApplyDigestToDirtyWrittenResources(
                         dirty_written_resources,
-                        preprocess_result.digest
+                        translate_info.digest
                     );
-                    preprocess_store.Add(std::move(preprocess_result));
+                    preprocess_store.Add(std::move(translate_info));
                 }
 
+                if (!source_plan.segments.empty()) {
+                    source_plan.segments.front().inherit_source_wait_events = true;
+                    source_plan.segments.back().inherit_source_signal_events_and_callbacks = true;
+                    for (auto segment_iter = source_plan.segments.rbegin();
+                         segment_iter != source_plan.segments.rend();
+                         ++segment_iter) {
+                        if (segment_iter->kind == ESegmentType::Graphics) {
+                            segment_iter->inherit_source_runtime_payload = true;
+                            break;
+                        }
+                    }
+                }
                 preprocess_store.AddSourcePlan(std::move(source_plan));
             }
         } else if (const auto* present_op = std::get_if<RHIPresentOp>(&op)) {
-            PresentPreprocessResult present_result{.op_seq = op_seq};
+            PresentCandidateMetadata present_result{.op_seq = op_seq};
             // §present: Record present target as TRANSFER read so the next frame's tracker seed
             // knows the image is in TRANSFER_SRC_OPTIMAL after the blit (VUID-09592).
             // The target texture's actual persistent state is read via LoadPersistentState (called
@@ -2967,14 +3213,15 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
         ++op_seq;
     }
 
+    preprocess_store.dependency_graph.SortEdges();
     return preprocess_store;
 }
 
-static Array<PlatformExecOp>
-AssemblePlatformOps(Array<RHIExecOp>&& ops, const ExecutePreprocessStore& preprocess_store) {
-    TRACE_SCOPE_CAT("Vulkan.AssemblePlatformOps", "RHI");
-    Array<PlatformExecOp> platform_ops{};
-    platform_ops.reserve(EstimatePlatformOpCount(ops) * 3 + 1);
+static Array<TranslatePipelineOp>
+AssembleTranslatePipelineOps(Array<RHIExecOp>&& ops, const PreprocessTranslateStore& preprocess_store) {
+    TRACE_SCOPE_CAT("Vulkan.AssembleTranslatePipelineOps", "RHI");
+    Array<TranslatePipelineOp> translate_ops{};
+    translate_ops.reserve(EstimatePlatformOpCount(ops) * 3 + 1);
 
     auto build_segment_submit =
         [](CmdSubmit& source_submit,
@@ -3030,28 +3277,28 @@ AssemblePlatformOps(Array<RHIExecOp>&& ops, const ExecutePreprocessStore& prepro
     };
 
     auto inject_queue_transfer_commands =
-        [](CmdSubmit& segment_submit, const CmdSubmitPreprocessResult& preprocess_result) {
-        if ((preprocess_result.prefix_import_textures.size() > 0 ||
-             preprocess_result.prefix_import_buffers.size() > 0) &&
-            preprocess_result.prefix_transfer_queue.has_value()) {
+        [](CmdSubmit& segment_submit, const TranslateInfo& translate_info) {
+        if ((translate_info.prefix_import_textures.size() > 0 ||
+             translate_info.prefix_import_buffers.size() > 0) &&
+            translate_info.prefix_transfer_queue.has_value()) {
             segment_submit.cmds.insert(
                 segment_submit.cmds.begin(),
                 MakeUnique<QueueTransferCmd>(
-                    preprocess_result.prefix_transfer_queue.value(),
-                    Array<ImportTexture>(preprocess_result.prefix_import_textures),
-                    Array<ImportBuffer>(preprocess_result.prefix_import_buffers)
+                    translate_info.prefix_transfer_queue.value(),
+                    Array<ImportTexture>(translate_info.prefix_import_textures),
+                    Array<ImportBuffer>(translate_info.prefix_import_buffers)
                 )
             );
         }
 
-        if ((preprocess_result.suffix_export_textures.size() > 0 ||
-             preprocess_result.suffix_export_buffers.size() > 0) &&
-            preprocess_result.suffix_transfer_queue.has_value()) {
+        if ((translate_info.suffix_export_textures.size() > 0 ||
+             translate_info.suffix_export_buffers.size() > 0) &&
+            translate_info.suffix_transfer_queue.has_value()) {
             segment_submit.cmds.emplace_back(
                 MakeUnique<QueueTransferCmd>(
-                    preprocess_result.suffix_transfer_queue.value(),
-                    Array<ExportTexture>(preprocess_result.suffix_export_textures),
-                    Array<ExportBuffer>(preprocess_result.suffix_export_buffers)
+                    translate_info.suffix_transfer_queue.value(),
+                    Array<ExportTexture>(translate_info.suffix_export_textures),
+                    Array<ExportBuffer>(translate_info.suffix_export_buffers)
                 )
             );
         }
@@ -3073,64 +3320,47 @@ AssemblePlatformOps(Array<RHIExecOp>&& ops, const ExecutePreprocessStore& prepro
                             continue;
                         }
 
-                        const auto descriptors = SplitCommandSegment(submit);
-                        std::optional<size_t> last_parent_segment_plan_index{};
-                        for (size_t segment_plan_index = source_plan->segments.size();
-                             segment_plan_index > 0;
-                             --segment_plan_index) {
-                            if (source_plan->segments[segment_plan_index - 1].kind ==
-                                ESegmentType::Graphics) {
-                                last_parent_segment_plan_index = segment_plan_index - 1;
-                                break;
-                            }
-                        }
-
-                        size_t segment_plan_cursor = 0;
-                        for (const auto& descriptor : descriptors) {
-                            const bool include =
-                                !descriptor.IsEmpty(submit) ||
-                                (descriptors.size() == 1 && descriptor.type == ESegmentType::Graphics &&
-                                 HasSubmitSideEffects(submit));
-                            if (!include) {
+                        for (size_t segment_plan_index = 0;
+                             segment_plan_index < source_plan->segments.size();
+                             ++segment_plan_index) {
+                            const auto& segment_plan = source_plan->segments[segment_plan_index];
+                            const auto* translate_info = preprocess_store.Find(segment_plan.key);
+                            if (translate_info == nullptr) {
                                 continue;
                             }
 
-                            const auto& segment_plan = source_plan->segments[segment_plan_cursor++];
-                            const auto* preprocess_result = preprocess_store.Find(segment_plan.key);
-                            if (preprocess_result == nullptr) {
-                                continue;
-                            }
-
-                            const bool attach_waits = segment_plan_cursor == 1;
-                            const bool attach_signals_and_callbacks =
-                                segment_plan_cursor == source_plan->segments.size();
-                            const bool attach_parent_runtime_payload =
-                                descriptor.type == ESegmentType::Graphics &&
-                                last_parent_segment_plan_index.has_value() &&
-                                (segment_plan_cursor - 1) == last_parent_segment_plan_index.value();
+                            const CommandSegmentInfo descriptor{
+                                .type = translate_info->segment_type,
+                                .begin = translate_info->segment_begin,
+                                .end = translate_info->segment_end,
+                                .copy_scope_index = translate_info->segment_copy_scope_index
+                            };
 
                             CmdSubmit segment_submit = build_segment_submit(
                                 submit,
                                 descriptor,
-                                attach_waits,
-                                attach_signals_and_callbacks,
-                                attach_parent_runtime_payload
+                                segment_plan.inherit_source_wait_events,
+                                segment_plan.inherit_source_signal_events_and_callbacks,
+                                segment_plan.inherit_source_runtime_payload
                             );
-                            inject_queue_transfer_commands(segment_submit, *preprocess_result);
+                            inject_queue_transfer_commands(segment_submit, *translate_info);
 
-                            QueueSubmissionInfo submit_info{
+                            QueueTranslateInfo translate_task{
                                 segment_plan.key,
                                 op_seq,
-                                preprocess_result->queue,
-                                std::move(segment_submit)
+                                translate_info->queue,
+                                std::move(segment_submit),
+                                BuildTrackerSeed(translate_info->initial_state_snapshot)
                             };
-                            submit_info.digest                  = preprocess_result->digest;
-                            submit_info.initial_state_snapshot  = preprocess_result->initial_state_snapshot;
-                            submit_info.wait_submission_keys    = preprocess_result->wait_submission_keys;
-                            platform_ops.emplace_back(std::move(submit_info));
+                            if (const auto* logical_waits =
+                                    preprocess_store.dependency_graph.FindProducers(translate_info->key);
+                                logical_waits != nullptr) {
+                                translate_task.logical_wait_submission_keys = *logical_waits;
+                            }
+                            translate_ops.emplace_back(std::move(translate_task));
 
                             last_submit_key   = segment_plan.key;
-                            last_submit_queue = preprocess_result->queue;
+                            last_submit_queue = translate_info->queue;
                         }
                     }
                 },
@@ -3151,7 +3381,7 @@ AssemblePlatformOps(Array<RHIExecOp>&& ops, const ExecutePreprocessStore& prepro
                     } else {
                         present_info.wait_submission_keys.emplace_back(last_submit_key.value());
                     }
-                    platform_ops.emplace_back(std::move(present_info));
+                    translate_ops.emplace_back(std::move(present_info));
                 }
             },
             op
@@ -3159,7 +3389,7 @@ AssemblePlatformOps(Array<RHIExecOp>&& ops, const ExecutePreprocessStore& prepro
         ++op_seq;
     }
 
-    return platform_ops;
+    return translate_ops;
 }
 
 // §7.2 / §9.3: Convert ResourceStateSnapshot to TrackerSeed for VkTracker::InitFromSeed.
@@ -3211,38 +3441,58 @@ static TrackerSeed BuildTrackerSeed(const ResourceStateSnapshot& snapshot) {
     return seed;
 }
 
-static Array<PlatformExecOp> TranslateRHI(Array<PlatformExecOp>&& ops) {
-    TRACE_SCOPE_CAT("Vulkan.TranslateRHI", "RHI");
-    for (size_t op_index = 0; op_index < ops.size(); ++op_index) {
-        auto* submit_info = std::get_if<QueueSubmissionInfo>(&ops[op_index]);
-        if (submit_info == nullptr || !submit_info->valid) {
-            continue;
-        }
+static Array<PlatformExecOp> DispatchTranslateTasks(Array<TranslatePipelineOp>&& translate_ops) {
+    TRACE_SCOPE_CAT("Vulkan.DispatchTranslateTasks", "RHI");
+    Array<PlatformExecOp> platform_ops{};
+    platform_ops.reserve(translate_ops.size());
+    for (auto& op : translate_ops) {
+        std::visit(
+            Overload{
+                [&](QueueTranslateInfo& translate_info) {
+                    if (!translate_info.valid) {
+                        QueueSubmissionInfo submit_info{
+                            translate_info.key,
+                            translate_info.op_seq,
+                            translate_info.queue,
+                            std::optional<VulkanRecordedSubmit>{},
+                            nullptr
+                        };
+                        submit_info.valid = false;
+                        submit_info.error = translate_info.error;
+                        submit_info.wait_submission_keys =
+                            std::move(translate_info.logical_wait_submission_keys);
+                        platform_ops.emplace_back(std::move(submit_info));
+                        return;
+                    }
 
-        const EQueueType queue_type = submit_info->queue;
-        CmdSubmit        submit     = std::move(submit_info->submit);
-        TrackerSeed seed = BuildTrackerSeed(submit_info->initial_state_snapshot);
-        switch (queue_type) {
-            case EQueueType::Graphics:
-            case EQueueType::Compute: {
-                auto& queue = static_cast<VkCommandQueue&>(
-                    RenderDevice::Get().GetCommandQueue(queue_type)
-                );
-                submit_info->recorded_submit = queue.Translate(std::move(submit), nullptr, std::move(seed));
-                break;
-            }
-            case EQueueType::Copy: {
-                auto& queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-                submit_info->recorded_submit = queue.Translate(std::move(submit), nullptr);
-                break;
-            }
-            default:
-                submit_info->valid = false;
-                break;
-        }
+                    TranslateResult translate_output =
+                        VulkanTranslateTask::Dispatch(TranslateTaskInput{
+                            translate_info.queue,
+                            std::move(translate_info.submit),
+                            std::move(translate_info.initial_seed)
+                        });
+
+                    QueueSubmissionInfo submit_info{
+                        translate_info.key,
+                        translate_info.op_seq,
+                        translate_info.queue,
+                        std::move(translate_output.recorded_submit),
+                        std::move(translate_output.translate_complete)
+                    };
+                    submit_info.wait_submission_keys =
+                        std::move(translate_info.logical_wait_submission_keys);
+                    submit_info.valid = translate_output.valid;
+                    submit_info.error = std::move(translate_output.error);
+                    platform_ops.emplace_back(std::move(submit_info));
+                },
+                [&](PresentInfo& present_info) {
+                    platform_ops.emplace_back(std::move(present_info));
+                }
+            },
+            op
+        );
     }
-
-    return ops;
+    return platform_ops;
 }
 
 static bool ValidateFrameEndState(const ResourceStateSnapshot& snapshot) {
@@ -3291,7 +3541,7 @@ void VulkanSubmissionExecutor::Execute(
         return;
     }
 
-    ExecutePreprocessStore preprocess_store{};
+    PreprocessTranslateStore preprocess_store{};
     {
         TRACE_SCOPE_CAT("Vulkan.Preprocess", "RHI");
         preprocess_store = PreprocessFrameOps(ops);
@@ -3299,7 +3549,7 @@ void VulkanSubmissionExecutor::Execute(
     if (options.frame_end) {
         // Collect all resource keys seen during preprocess and validate their persistent state.
         UnorderedSet<ResourceKey, ResourceKeyHash> seen_resources{};
-        for (const auto& result : preprocess_store.results) {
+        for (const auto& result : preprocess_store.translate_infos) {
             for (const auto& [key, _] : result.last_state_snapshot) {
                 seen_resources.emplace(key);
             }
@@ -3316,14 +3566,15 @@ void VulkanSubmissionExecutor::Execute(
     // All persistent state has been committed incrementally during preprocess (per segment).
     // No additional CommitPersistentResourceStates call needed here.
 
-    Array<PlatformExecOp> platform_ops{};
+    Array<TranslatePipelineOp> translate_ops{};
     {
         TRACE_SCOPE_CAT("Vulkan.Assemble", "RHI");
-        platform_ops = AssemblePlatformOps(std::move(ops), preprocess_store);
+        translate_ops = AssembleTranslatePipelineOps(std::move(ops), preprocess_store);
     }
+    Array<PlatformExecOp> platform_ops{};
     {
-        TRACE_SCOPE_CAT("Vulkan.Translate", "RHI");
-        platform_ops = TranslateRHI(std::move(platform_ops));
+        TRACE_SCOPE_CAT("Vulkan.TranslateTaskDispatch", "RHI");
+        platform_ops = DispatchTranslateTasks(std::move(translate_ops));
     }
 
     SubmissionPlanExecutor executor{};
@@ -3331,6 +3582,46 @@ void VulkanSubmissionExecutor::Execute(
         TRACE_SCOPE_CAT("Vulkan.ExecuteSubmissionPlan", "RHI");
         executor.Execute(std::move(platform_ops), options.frame_end);
     }
+}
+
+void VulkanSubmissionExecutor::EnqueueQueueCompletion(
+    uint64                        op_seq,
+    Array<WaitEvent>&&            wait_events,
+    VkCommandQueue*               queue,
+    uint64                        timeline_value,
+    UniquePtr<VulkanAllocator>&&  allocator,
+    Array<std::function<void()>>&& callbacks,
+    Array<SignalEvent>&&          signal_events
+) {
+    EnqueueSubmissionQueueCompletion(
+        op_seq,
+        std::move(wait_events),
+        queue,
+        timeline_value,
+        std::move(allocator),
+        std::move(callbacks),
+        std::move(signal_events)
+    );
+}
+
+void VulkanSubmissionExecutor::EnqueueCopyQueueCompletion(
+    uint64                        op_seq,
+    Array<WaitEvent>&&            wait_events,
+    VkCopyQueue*                  queue,
+    uint64                        timeline_value,
+    UniquePtr<VulkanAllocator>&&  allocator,
+    Array<std::function<void()>>&& callbacks,
+    Array<IOSignalEvt>&&          signal_events
+) {
+    EnqueueSubmissionCopyQueueCompletion(
+        op_seq,
+        std::move(wait_events),
+        queue,
+        timeline_value,
+        std::move(allocator),
+        std::move(callbacks),
+        std::move(signal_events)
+    );
 }
 
 void VulkanSubmissionExecutor::Flush() {

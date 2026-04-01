@@ -1516,6 +1516,11 @@ public:
 #pragma endregion
 
     RENDER_API void AddCallback(std::function<void()>&& _callback);
+    RENDER_API CommandList& Wait(Fence* _fence, uint64 _wait_value);
+    RENDER_API CommandList& Wait(WaitEvent _event);
+    RENDER_API CommandList& Signal(Fence* _fence, uint64 _signal_value);
+    RENDER_API CommandList& DeleteResources();
+    RENDER_API CommandList& TickProfiling();
 
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
@@ -1616,8 +1621,12 @@ private:
     Array<UniquePtr<Command>>    commands;
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
+    Array<WaitEvent>             submit_wait_events;
+    Array<SignalEvent>           submit_signal_events;
     TCachedArgArray              cached_args;
     Array<QueryToken>            query_tokens;
+    bool                         submit_tick_profiling{false};
+    bool                         submit_delete_resources{false};
     EQueueType                   queue_type{EQueueType::Graphics};
     Stack<std::string_view>      scope_stack;
     Stack<QueryToken>            timed_scope_query_stack;
@@ -1797,13 +1806,12 @@ public:
         ERHIExecSubmitFlags  flags   = ERHIExecSubmitFlags::FlushGPU,
         RHIPresentRequest*   present = nullptr
     );
+private:
     void Submit(
         Array<RHISubmitCmdList>&& submit_lists,
         RHIExecSubmitOptions      options = {}
     );
     void Submit(Array<RHIExecOp>&& ops, RHIExecSubmitOptions options = {});
-
-private:
     std::mutex  submit_mutex;
     Array<RHIExecOp> pending_ops{};
     bool        pending_frame_end{false};

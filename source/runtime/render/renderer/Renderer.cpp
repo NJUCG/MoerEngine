@@ -71,7 +71,13 @@ void Renderer::ReleaseResources() {
     device.WaitIdle();
 
     cmd_list.UpdateBindlessArray(bindless_array);
-    gfx_queue.Execute(cmd_list.Submit().DeleteResources());
+    const uint64 cleanup_signal_value = ++time;
+    cmd_list.DeleteResources().Signal(timeline, cleanup_signal_value);
+    Array<CommandList> cleanup_cmd_lists{};
+    cleanup_cmd_lists.emplace_back(std::move(cmd_list));
+    RHIExecutor::Get().Submit(std::move(cleanup_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
+    cmd_list = CommandList(EQueueType::Graphics);
+    timeline->Wait(cleanup_signal_value);
     gfx_queue.Sync();
 
     scene.Reset();

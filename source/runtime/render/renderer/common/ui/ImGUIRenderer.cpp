@@ -296,11 +296,16 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
         uint32_t       upload_size  = height * upload_pitch;
         TextureRef     font_tex =
             rd_device.CreateTexture("ImGUI::FontTexture", Extent2D(width, height), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED);
+        FenceRef       upload_fence = rd_device.CreateFence();
 
         CommandList cmd_list;
         cmd_list.CopyFrom(std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
+        cmd_list.Signal(upload_fence, 1);
 
-        rd_device.GetCommandQueue(EQueueType::Graphics).Execute(std::move(cmd_list.Submit()));
+        Array<CommandList> upload_cmd_lists{};
+        upload_cmd_lists.emplace_back(std::move(cmd_list));
+        RHIExecutor::Get().Submit(std::move(upload_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
+        upload_fence->Wait(1);
         rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
         render_backend_data->font_texture = font_tex;
         uint handle = bindless_array->AllocateTexture(font_tex, Sampler(SF_CUBIC, SAM_REPEAT));
@@ -735,6 +740,9 @@ void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {
 void GuiSwapbuffer(ImGuiViewport* _viewport, void*) {
     ImGUIData&       backend_data  = *GetGUIBackendData();
     GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData;
-    backend_data.render_backend->device.GetCommandQueue(Moer::Render::EQueueType::Graphics)
-        .Present(viewport_data->sc, viewport_data->framebuffer);
+    RHIPresentRequest present_request{viewport_data->sc, viewport_data->framebuffer};
+    Array<CommandList> present_cmd_lists{};
+    RHIExecutor::Get().Submit(
+        std::move(present_cmd_lists), ERHIExecSubmitFlags::FlushGPU, &present_request
+    );
 }

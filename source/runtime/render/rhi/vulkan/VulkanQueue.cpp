@@ -7,6 +7,7 @@
 #include "VulkanDevice.h"
 #include "VulkanRHITrace.h"
 #include "VulkanRHIResource.h"
+#include "VulkanSubmissionExecutor.h"
 #include "misc/Alignment.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
@@ -2782,11 +2783,8 @@ void VkNativeQueue::Signal(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
 }
 void VkCommandQueue::Wait(WaitEvent _evt) {
     auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
-    {
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(_evt, _evt.value, false);
-
-        queue_cv.notify_one();
+    if (fence != nullptr) {
+        fence->HostWait(_evt.value);
     }
 }
 
@@ -3118,21 +3116,23 @@ WaitEvent VkCommandQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
             allocators.Push(_recorded.allocator.release());
         }
 
-        std::unique_lock<std::mutex> event_lock(event_mutex);
         const bool has_submit = _recorded.submit.has_value();
-        bool b_wake_up = has_submit && (_recorded.submit->callbacks.size() != 0 ||
-                                        _recorded.submit->wait_events.size() != 0 ||
-                                        _recorded.submit->signal_events.size() != 0);
-        if (b_wake_up) {
-            if (_recorded.submit->callbacks.size() > 0) {
-                event_queue.emplace_back(std::move(_recorded.submit->callbacks), last_frame, true);
-            }
-            for (auto& evt : _recorded.submit->signal_events) {
-                event_queue.emplace_back(WaitEvent(evt.timeline_handle, evt.value), last_frame, false);
-                event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), last_frame, false);
-            }
+        if (has_submit && (!_recorded.submit->callbacks.empty() || !_recorded.submit->signal_events.empty())) {
+            const uint64 current_timeline = ++last_frame;
+            queue.Signal(timeline, current_timeline);
             queue.SubmitEmpty();
-            queue_cv.notify_one();
+            Array<WaitEvent> completion_waits{};
+            completion_waits.emplace_back(uint64(timeline), current_timeline);
+            VulkanSubmissionExecutor::EnqueueQueueCompletion(
+                current_timeline,
+                std::move(completion_waits),
+                this,
+                current_timeline,
+                UniquePtr<VulkanAllocator>{},
+                std::move(_recorded.submit->callbacks),
+                std::move(_recorded.submit->signal_events)
+            );
+            return {uint64(timeline), current_timeline};
         }
         return {uint64(timeline), last_frame};
     }
@@ -3155,17 +3155,18 @@ WaitEvent VkCommandQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
     }
     queue.Submit(vk_allocator.GetCmdList());
     query_runtime.FinalizeSubmit(current_timeline, vk_allocator.GetCmdList().GetHandle());
-
-    std::unique_lock<std::mutex> event_lock(event_mutex);
-    event_queue.emplace_back(std::move(_recorded.allocator), current_timeline, true);
-    if (_recorded.submit->callbacks.size() > 0) {
-        event_queue.emplace_back(std::move(_recorded.submit->callbacks), current_timeline, false);
-    }
-    for (auto& evt : _recorded.submit->signal_events) {
-        event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), current_timeline, false);
-    }
-    queue_cv.notify_one();
     executed_queue.Enqueue(current_timeline);
+    Array<WaitEvent> completion_waits{};
+    completion_waits.emplace_back(uint64(timeline), current_timeline);
+    VulkanSubmissionExecutor::EnqueueQueueCompletion(
+        current_timeline,
+        std::move(completion_waits),
+        this,
+        current_timeline,
+        std::move(_recorded.allocator),
+        std::move(_recorded.submit->callbacks),
+        std::move(_recorded.submit->signal_events)
+    );
 
     if (_recorded.submit->b_tick_profiling) {
         profiler_storage.RegisterCpuTimestamp("Command Reorder", _recorded.reorder_time_ms);
@@ -3182,62 +3183,10 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
 }
 
 void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
-    VkSwapchain* sc = ResourceCast(_sc.Get());
-    // auto         allocator    = std::move(GetAllocator());
-    std::unique_lock<std::mutex> lock(exec_mtx); //currently only one thread can execute commands at a time
-    auto                         presentor = std::move(GetPresentor());
-    // auto& vk_allocator = *allocator;
-    auto& vk_allocator = *presentor;
-    auto& vk_cmd_list  = vk_allocator.GetCmdList();
-    auto& vk_tracker   = vk_allocator.GetTracker();
-    sc->WaitFrameInFlight();
-    auto [fence, idx, present_timeline] = sc->AquireNextImage();
-    if (idx == UINT32_MAX) {
-        //present null
-        presentor->Reset();
-        presentors.Push(presentor.release());
-        return;
-    }
-    //copy
-    auto* vk_src_tex     = static_cast<VulkanTexture*>(_view.texture);
-    auto* swaphchain_tex = ResourceCast(sc->GetSwapchainImage(idx).texture);
-    {
-        vk_cmd_list.Begin();
-        vk_cmd_list.BeginLabel("Present", {0.0f, 1.0f, 1.0f, 1.0f});
-        vk_tracker.SetPassType(EPassType::Graphics);
-        vk_tracker.RecordState(vk_src_tex, vk_tracker.ReadTexture(vk_src_tex, ETextureState::TRANSFER));
-        vk_tracker.RecordState(
-            swaphchain_tex, vk_tracker.WriteTexture(swaphchain_tex, ETextureState::TRANSFER)
-        );
-        vk_tracker.ResolveBarriers();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-        //copy
-        //todo: need transaction
-        vk_cmd_list.InsertLabel("Copy Present Image", {0.0f, 0.0f, 0.0f, 1.0f});
-        vk_cmd_list.CopyTexture(vk_src_tex, swaphchain_tex, _view.extent, {0, 0, 0}, {0, 0, 0}, 0, 0);
-        vk_tracker.RecordState(
-            swaphchain_tex, VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COPY_BIT
-        );
-        vk_tracker.ResolveBarriers();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-        vk_cmd_list.EndLabel();
-        vk_cmd_list.End();
-        vk_tracker.Reset();
-        // vk_tracker.PropagateState();
-    }
-
-    auto current_timeline = ++last_frame;
-    queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
-    queue.Wait(fence, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-    queue.Signal(sc->GetRenderFinishedFence(), VK_PIPELINE_STAGE_2_COPY_BIT);
-    queue.Submit(vk_allocator.GetCmdList());
-    sc->Present(queue.GetHandle(), idx);
-    {
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(std::move(presentor), current_timeline, true);
-        queue_cv.notify_one();
-        presented_queue.Enqueue(current_timeline);
-    }
+    (void)_sc;
+    (void)_view;
+    LOG_ERROR("VkCommandQueue::Present is deprecated; use RHIExecutor::Submit(..., present) instead");
+    assert(false && "VkCommandQueue::Present is unsupported after the submission executor rework");
 }
 
 void VkCommandQueue::Sync() {
@@ -3359,139 +3308,29 @@ UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
     return MakeUnique<VulkanAllocator>(&vk_device, queue.GetType());
 }
 
-UniquePtr<VulkanPresentor> VkCommandQueue::GetPresentor() {
-    std::lock_guard<std::mutex> alloc_lock(alloc_mtx);
-    if (presented_queue.Full()) {
-        Complete(presented_queue.Front());
-    }
-    auto presentor = std::move(UniquePtr<VulkanPresentor>(presentors.Pop()));
-    if (presentor) {
-        return std::move(presentor);
-    }
-    return MakeUnique<VulkanPresentor>(&vk_device, queue.GetType());
-}
-
-void VkCommandQueue::ExecuteThread() {
-    while (enabled) {
-        uint64 timeline;
-        bool   b_wake_up = false;
-
-        auto wait_util_reach_timeline = [&timeline, &b_wake_up, this]() {
-            if (!b_wake_up) {
-                return;
-            }
-            uint64 prev_timeline = executed_frame;
-            while (prev_timeline < timeline &&
-                   !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
-                std::this_thread::yield();
-            }
-        };
-
-        auto visit_allocator = [&,
-                                &allocators(this->allocators),
-                                fence(this->timeline)](UniquePtr<VulkanAllocator>& _allocator) {
-            _allocator->Complete(fence, timeline);
-            query_runtime.ResolveCompleted(timeline);
-            // LOG_INFO("timeline {} complete", timeline);
-            _allocator->Reset();
-            allocators.Push(_allocator.release());
-            wait_util_reach_timeline();
-        };
-        auto visit_presentor = [&,
-                                &presentors(this->presentors),
-                                fence(this->timeline)](UniquePtr<VulkanPresentor>& _presentor) {
-            _presentor->Complete(fence, timeline);
-            _presentor->Reset();
-            presentors.Push(_presentor.release());
-            wait_util_reach_timeline();
-        };
-        auto visit_fence = [&](FencePlaceHoler& _fence) {
-            this->timeline->HostWait(timeline);
-            wait_util_reach_timeline();
-        };
-        auto visit_funcs = [&](Array<std::function<void()>>& _funcs) {
-            for (auto& func : _funcs) {
-                func();
-            }
-            wait_util_reach_timeline();
-        };
-
-        auto visit_signal_event = [&](SignalEvent& _evt) {
-            auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
-            fence->Notify(_evt.value);
-        };
-        auto visit_wait_event = [&](WaitEvent& _evt) {
-            auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
-            fence->Wait(_evt.value);
-        };
-        while (true) {
-            std::optional<QueueEvent> evt;
-            {
-                std::unique_lock<std::mutex> lock(event_mutex);
-                if (!event_queue.empty()) {
-                    auto& event = event_queue.front();
-                    evt.emplace(std::move(event));
-                    event_queue.pop_front();
-                }
-            }
-            if (!evt.has_value()) {
-                break;
-            }
-            timeline  = evt->timeline;
-            b_wake_up = evt->wake_thread;
-
-            std::visit(
-                Overload{
-                    [&](UniquePtr<VulkanAllocator>& _allocator) {
-                        visit_allocator(_allocator);
-                    },
-                    [&](UniquePtr<VulkanPresentor>& _presentor) {
-                        visit_presentor(_presentor);
-                    },
-                    [&](FencePlaceHoler& _fence) {
-                        visit_fence(_fence);
-                    },
-                    [&](Array<std::function<void()>>& _funcs) {
-                        visit_funcs(_funcs);
-                    },
-                    [&](SignalEvent& _evt) {
-                        visit_signal_event(_evt);
-                    },
-                    [&](WaitEvent& _evt) {
-                        visit_wait_event(_evt);
-                    },
-                    [&](VulkanFence* _fence) {
-                        assert(false && "Invalid event");
-                    }
-                },
-
-                evt->event
-            );
-        }
-        {
-            //wait for queue submission
-            std::unique_lock<std::mutex> lock(event_mutex);
-            while (enabled && event_queue.empty()) {
-                queue_cv.wait(lock);
-            }
-        }
-    }
-}
-
 void VkCommandQueue::Complete(uint64 _timeline) {
     while (executed_frame < _timeline) {
+        timeline->HostWait(_timeline);
         std::this_thread::yield();
     }
-    // vk_device.FlushDeferredReleases();
 }
 
-void VkCommandQueue::Signal() {
-    auto current_timeline = ++last_frame;
-    queue.Signal(timeline, current_timeline);
-    {
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.push_back({FencePlaceHoler{}, current_timeline, true});
-        queue_cv.notify_one();
+void VkCommandQueue::MarkExecutionComplete(uint64 _timeline) {
+    timeline->Notify(_timeline);
+    uint64 prev_timeline = executed_frame.load(std::memory_order_acquire);
+    while (prev_timeline < _timeline &&
+           !executed_frame.compare_exchange_weak(prev_timeline, _timeline, std::memory_order_acq_rel)
+    ) {
+        std::this_thread::yield();
+    }
+}
+
+void VkCommandQueue::ResolveAllocatorCompletion(UniquePtr<VulkanAllocator>&& _allocator, uint64 _timeline) {
+    if (_allocator) {
+        _allocator->Complete(timeline, _timeline);
+        query_runtime.ResolveCompleted(_timeline);
+        _allocator->Reset();
+        allocators.Push(_allocator.release());
     }
 }
 
@@ -3504,16 +3343,9 @@ VkCopyQueue::VkCopyQueue(VulkanDevice& _device) :
     device(_device),
     queue(EQueueType::Copy, _device) {
     timeline = MoerNew(VulkanFence)(_device);
-    enabled  = true;
-    thread   = std::jthread([this]() {
-        ExecuteThread();
-    });
 }
 
 VkCopyQueue::~VkCopyQueue() {
-    enabled = false;
-    queue_cv.notify_all();
-    thread.join();
     //clear allocators
     Array<VulkanAllocator*> allocs;
     allocators.PopAll(allocs);
@@ -3686,16 +3518,22 @@ IOWaitEvt VkCopyQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
             current_timeline = ++last_frame;
             queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
             queue.SubmitEmpty();
-            std::unique_lock<std::mutex> lock(event_mutex);
-            if (!_recorded.submit->callbacks.empty()) {
-                event_queue.emplace_back(std::move(_recorded.submit->callbacks), current_timeline, false);
+            Array<WaitEvent> completion_waits{};
+            completion_waits.emplace_back(uint64(timeline.Get()), current_timeline);
+            Array<IOSignalEvt> signal_events{};
+            signal_events.reserve(_recorded.submit->signal_events.size());
+            for (const auto& evt : _recorded.submit->signal_events) {
+                signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
             }
-            for (auto& evt : _recorded.submit->signal_events) {
-                event_queue.emplace_back(
-                    IOSignalEvt(evt.timeline_handle, evt.value), current_timeline, false
-                );
-            }
-            queue_cv.notify_one();
+            VulkanSubmissionExecutor::EnqueueCopyQueueCompletion(
+                current_timeline,
+                std::move(completion_waits),
+                this,
+                current_timeline,
+                UniquePtr<VulkanAllocator>{},
+                std::move(_recorded.submit->callbacks),
+                std::move(signal_events)
+            );
         }
         return {uint64(timeline.Get()), current_timeline};
     }
@@ -3717,15 +3555,22 @@ IOWaitEvt VkCopyQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
         );
     }
     queue.Submit(vk_allocator.GetCmdList());
-    {
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(std::move(_recorded.allocator), current_timeline, true);
-        event_queue.emplace_back(std::move(_recorded.submit->callbacks), current_timeline, false);
-        for (auto& evt : _recorded.submit->signal_events) {
-            event_queue.emplace_back(IOSignalEvt(evt.timeline_handle, evt.value), current_timeline, false);
-        }
-        queue_cv.notify_one();
+    Array<WaitEvent> completion_waits{};
+    completion_waits.emplace_back(uint64(timeline.Get()), current_timeline);
+    Array<IOSignalEvt> signal_events{};
+    signal_events.reserve(_recorded.submit->signal_events.size());
+    for (const auto& evt : _recorded.submit->signal_events) {
+        signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
     }
+    VulkanSubmissionExecutor::EnqueueCopyQueueCompletion(
+        current_timeline,
+        std::move(completion_waits),
+        this,
+        current_timeline,
+        std::move(_recorded.allocator),
+        std::move(_recorded.submit->callbacks),
+        std::move(signal_events)
+    );
     return {uint64(timeline.Get()), current_timeline};
 }
 
@@ -3742,256 +3587,10 @@ FenceRef VkCopyQueue::GetFenceHandle() {
     return FenceRef(timeline);
 }
 
-void VkCopyQueue::ExecuteThread() {
-    while (enabled) {
-        uint64 timeline;
-        bool   b_wake_up = false;
-
-        auto wait_util_reach_timeline = [&timeline, &b_wake_up, this]() {
-            if (!b_wake_up) {
-                return;
-            }
-            uint64 prev_timeline = executed_frame;
-            while (prev_timeline < timeline &&
-                   !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
-                std::this_thread::yield();
-            }
-        };
-
-        auto visit_allocator = [&,
-                                &allocators(this->allocators),
-                                fence(this->timeline)](UniquePtr<VulkanAllocator>& _allocator) {
-            _allocator->Complete(fence, timeline);
-            _allocator->Reset();
-            allocators.Push(_allocator.release());
-            wait_util_reach_timeline();
-        };
-        auto visit_fence = [&](Placeholder& _fence) {
-            this->timeline->HostWait(timeline);
-            wait_util_reach_timeline();
-        };
-        auto visit_funcs = [&](Array<std::function<void()>>& _funcs) {
-            for (auto& func : _funcs) {
-                func();
-            }
-            wait_util_reach_timeline();
-        };
-
-        auto visit_signal_event = [&](IOSignalEvt& _evt) {
-            auto* fence = reinterpret_cast<VulkanFence*>(_evt.handle);
-            fence->Notify(_evt.timeline);
-        };
-        auto visit_wait_event = [&](IOWaitEvt& _evt) {
-            auto* fence = reinterpret_cast<VulkanFence*>(_evt.handle);
-            fence->HostWait(_evt.timeline);
-        };
-        while (true) {
-            std::optional<IOEvent> evt;
-            {
-                std::unique_lock<std::mutex> lock(event_mutex);
-                if (!event_queue.empty()) {
-                    auto& event = event_queue.front();
-                    evt.emplace(std::move(event));
-                    event_queue.pop_front();
-                }
-            }
-            if (!evt.has_value()) {
-                break;
-            }
-            timeline  = evt->timeline;
-            b_wake_up = evt->wake_thread;
-            std::visit(
-                Overload{
-                    [&](UniquePtr<VulkanAllocator>& _evt) {
-                        visit_allocator(_evt);
-                    },
-                    [&](Placeholder& _evt) {
-                        visit_fence(_evt);
-                    },
-                    [&](Array<std::function<void()>>& _evt) {
-                        visit_funcs(_evt);
-                    },
-                    [&](IOSignalEvt& _evt) {
-                        visit_signal_event(_evt);
-                    },
-                    [&](IOWaitEvt& _evt) {
-                        visit_wait_event(_evt);
-                    },
-                    [&](VulkanFence* _fence) {
-                        assert(false && "Invalid event");
-                    },
-                    [&](UniquePtr<VulkanPresentor>& _evt) {
-                        assert(false && "Invalid event");
-                    }
-
-                },
-                evt->event
-            );
-        }
-        {
-            std::unique_lock<std::mutex> lock(event_mutex);
-            while (enabled && event_queue.empty()) {
-                queue_cv.wait(lock);
-            }
-        }
-    }
-}
-
-void VkCopyQueue::ExecuteIOThread(IOQueueCommandList&& _cmd_list, uint64_t _timeline) {
-
-    IOQueueCommandList&& cmd_list = std::move(_cmd_list);
-
-    CommandList rhi_cmd_list{};
-    //prepare sizes
-    uint64 temp_size = 0;
-    for (auto& cmd : cmd_list.file_to_buffer) {
-        const auto& src = std::get<FileDesc>(cmd.src);
-        temp_size += cmd.SizeByte();
-    }
-
-    for (auto& cmd : cmd_list.file_to_texture) {
-        const auto& src = std::get<FileDesc>(cmd.src);
-        temp_size += cmd.SizeByte();
-    }
-
-    Array<ubyte> temp_buffer(temp_size);
-    temp_size = 0;
-
-    auto copy_file_to_mem = [&](const FileDesc& _src, size_t _file_offset, std::span<ubyte> _dst) {
-        FILE* result_handle = nullptr;
-        fopen_s(&result_handle, (const char*)_src.handle.file, "r");
-        if (!result_handle) {
-            SPDLOG_ERROR("Failed to open file {}", (const char*)_src.handle.file);
-            assert(false && "Failed to open file");
-        }
-        std::fseek(result_handle, _file_offset, SEEK_SET);
-        std::fread(_dst.data(), sizeof(ubyte), _dst.size_bytes(), result_handle);
-        std::fclose(result_handle);
-    };
-
-    //direct copy to mem
-    for (auto& cmd : cmd_list.file_to_mem) {
-        const auto& src = std::get<FileDesc>(cmd.src);
-        auto        dst = std::get<RawDataDesc>(cmd.dst);
-        copy_file_to_mem(src, cmd.file_offset, dst.data);
-    }
-
-    //copy file to buffer
-    for (auto& cmd : cmd_list.file_to_buffer) {
-        const auto& src = std::get<FileDesc>(cmd.src);
-        copy_file_to_mem(
-            src, cmd.file_offset, std::span<ubyte>(temp_buffer.data() + temp_size, cmd.SizeByte())
-        );
-        const auto&   dst    = std::get<BufferViewDesc>(cmd.dst);
-        VulkanBuffer* vk_dst = reinterpret_cast<VulkanBuffer*>(dst.handle);
-        rhi_cmd_list.CopyFrom(
-            std::span<byte>((byte*)temp_buffer.data() + temp_size, cmd.SizeByte()),
-            vk_dst->GetView(dst.offset, dst.size)
-        );
-        temp_size += cmd.SizeByte();
-    }
-
-    //copy file to texture
-    for (auto& cmd : cmd_list.file_to_texture) {
-        const auto& src = std::get<FileDesc>(cmd.src);
-        copy_file_to_mem(
-            src, cmd.file_offset, std::span<ubyte>(temp_buffer.data() + temp_size, cmd.SizeByte())
-        );
-        const auto&    dst    = std::get<TextureViewDesc>(cmd.dst);
-        VulkanTexture* vk_dst = reinterpret_cast<VulkanTexture*>(dst.handle);
-        TextureView    view(vk_dst, dst.pixel_fmt, dst.mip_offset, dst.mip_cnt);
-        view.offset = dst.offset;
-        view.extent = dst.size;
-        rhi_cmd_list.CopyFrom(std::span<byte>((byte*)temp_buffer.data() + temp_size, cmd.SizeByte()), view);
-        temp_size += cmd.SizeByte();
-    }
-    rhi_cmd_list.AddCallback([temp_data(std::move(temp_buffer))]() {});
-
-    std::unique_lock<std::mutex> rhi_lock(rhi_mutex);
-    io_rhi_cmdlists.emplace(std::move(rhi_cmd_list), _timeline);
-}
-
-void VkCopyQueue::IOThreadLoop() {
-    while (enabled) {
-        IOQueueCommandList cmdlist;
-        uint64             timeline;
-        {
-            std::unique_lock<std::mutex> io_lock(io_mutex);
-            if (io_thread_cmds.empty()) {
-                std::this_thread::yield();
-                continue;
-            }
-            auto pair = std::move(io_thread_cmds.front());
-            io_thread_cmds.pop();
-            cmdlist  = std::move(pair.first);
-            timeline = pair.second;
-        }
-
-        ExecuteIOThread(std::move(cmdlist), timeline);
-    }
-}
-
-void VkCopyQueue::RHIThreadLoop() {
-    while (enabled) {
-        CommandList cmdlist;
-        uint64      timeline;
-        {
-            std::unique_lock<std::mutex> io_lock(rhi_mutex);
-            if (io_rhi_cmdlists.empty()) {
-                std::this_thread::yield();
-                continue;
-            }
-            auto pair = std::move(io_rhi_cmdlists.front());
-
-            cmdlist  = std::move(pair.first);
-            timeline = pair.second;
-        }
-
-        auto  allocator    = std::move(GetAllocator());
-        auto& vk_allocator = *allocator;
-        auto& vk_cmd_list  = vk_allocator.GetCmdList();
-        auto& vk_tracker   = vk_allocator.GetTracker();
-        vk_cmd_list.Begin();
-        vk_cmd_list.BeginLabel("IO Copy", {0.0f, 1.0f, 1.0f, 1.0f});
-
-        VkCmdPreprocessor preprocessor(device, vk_tracker, vk_allocator, {}, {}, EQueueType::Copy);
-        VkCmdVisitor      visitor(device, vk_allocator, vk_tracker, vk_cmd_list, {});
-
-        auto&& submission = cmdlist.Submit();
-        for (const auto& cmd : submission.cmds) {
-            preprocessor.VisitCmd(cmd.get());
-        }
-        vk_tracker.ResolveBarriers();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-        for (const auto& cmd : submission.cmds) {
-            visitor.VisitCmd(cmd.get());
-        }
-        vk_tracker.ResolveBarriers();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-        vk_cmd_list.EndLabel();
-        vk_cmd_list.End();
-        vk_tracker.Reset();
-        //event queue
-        auto current_timeline = ++last_frame;
-        queue.Signal(this->timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        queue.Wait(this->timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        queue.Submit(vk_allocator.GetCmdList());
-        {
-            std::unique_lock<std::mutex> lock(event_mutex);
-            event_queue.emplace_back(std::move(allocator), current_timeline, true);
-            queue_cv.notify_one();
-        }
-        {
-            std::unique_lock<std::mutex> io_lock(rhi_mutex);
-            io_rhi_cmdlists.pop();
-        }
-    }
-}
-
 UniquePtr<VulkanAllocator> VkCopyQueue::GetAllocator() {
     std::lock_guard<std::mutex> alloc_lock(alloc_mtx);
-    if (last_frame >= device.cmd_alloc_limits) {
-        Complete(last_frame);
+    if (last_frame >= VulkanDevice::cmd_alloc_limits) {
+        Complete(last_frame - VulkanDevice::cmd_alloc_limits + 1);
     }
     auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
     if (allocator) {
@@ -4004,15 +3603,15 @@ UniquePtr<VulkanAllocator> VkCopyQueue::GetAllocator() {
 void VkCopyQueue::Complete(uint64 _timeline) {
     uint64 spin_count = 0;
     while (executed_frame < _timeline) {
+        timeline->HostWait(_timeline);
         std::this_thread::yield();
         ++spin_count;
         if (spin_count == 10'000'000) {
             LOG_ERROR(
                 "[CopyQueue] Complete: STILL WAITING after 10M spins! "
-                "_timeline={}, executed_frame={}, enabled={}",
+                "_timeline={}, executed_frame={}",
                 _timeline,
-                executed_frame.load(),
-                (bool)enabled
+                executed_frame.load()
             );
         }
         if (spin_count % 50'000'000 == 0) {
@@ -4023,6 +3622,24 @@ void VkCopyQueue::Complete(uint64 _timeline) {
                 executed_frame.load()
             );
         }
+    }
+}
+
+void VkCopyQueue::MarkExecutionComplete(uint64 _timeline) {
+    timeline->Notify(_timeline);
+    uint64 prev_timeline = executed_frame.load(std::memory_order_acquire);
+    while (prev_timeline < _timeline &&
+           !executed_frame.compare_exchange_weak(prev_timeline, _timeline, std::memory_order_acq_rel)
+    ) {
+        std::this_thread::yield();
+    }
+}
+
+void VkCopyQueue::ResolveAllocatorCompletion(UniquePtr<VulkanAllocator>&& _allocator, uint64 _timeline) {
+    if (_allocator) {
+        _allocator->Complete(timeline.Get(), _timeline);
+        _allocator->Reset();
+        allocators.Push(_allocator.release());
     }
 }
 #pragma endregion

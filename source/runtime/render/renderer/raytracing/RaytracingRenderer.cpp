@@ -121,9 +121,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     Timer timer;
     timer.Start();
     uint64 last_time = 0ull;
-    FenceRef scene_pending_fence = device.CreateFence();
-    uint64   scene_pending_sync_value = 0;
-
     bool                  b_feedback_valid               = false;
     bool                  b_trace_capture_started        = false;
     bool                  b_trace_capture_armed          = false;
@@ -238,9 +235,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         auto frame_time = timer.ElapsedMilliseconds();
         timer.Start();
 
-        Array<RHIExecOp> pre_frame_ops{};
-        bool             has_scene_gfx_submit   = false;
-        uint64           scene_gfx_signal_value = 0;
+        Array<CommandList> pre_frame_cmd_lists{};
 
         if (scene.IsReady() && runtime_assets.IsReady()) {
 
@@ -250,15 +245,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             // commands to the copy queue, and auto-generates acquire/release barriers.
             auto&& scene_cmd_list = scene.PopPendingCommandList();
             if (!scene_cmd_list.gfx_queue_cmd_list.IsEmpty()) {
-                RHISubmitCmdList scene_gfx_submit{};
-                scene_gfx_submit.queue = EQueueType::Graphics;
-                scene_gfx_signal_value = ++scene_pending_sync_value;
-                scene_gfx_submit.submits.emplace_back(
-                    scene_cmd_list.gfx_queue_cmd_list.Submit()
-                        .Signal(scene_pending_fence, scene_gfx_signal_value)
-                );
-                pre_frame_ops.emplace_back(std::move(scene_gfx_submit));
-                has_scene_gfx_submit = true;
+                pre_frame_cmd_lists.emplace_back(std::move(scene_cmd_list.gfx_queue_cmd_list));
             }
 
             // load scene
@@ -346,10 +333,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 // cmd_list.UpdateRaytracingScene(rt_scene);
                 if (!cmd_list.IsEmpty()) {
                     // Keep first-load bootstrap in async submit chain.
-                    RHISubmitCmdList init_submit{};
-                    init_submit.queue = EQueueType::Graphics;
-                    init_submit.submits.emplace_back(cmd_list.Submit());
-                    pre_frame_ops.emplace_back(std::move(init_submit));
+                    pre_frame_cmd_lists.emplace_back(std::move(cmd_list));
+                    cmd_list = CommandList(EQueueType::Graphics);
                 }
             }
 
@@ -629,7 +614,13 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             //////////////////////////////////////////////////////////////////////////
 
             if (b_export) {
-                gfx_queue.Execute(cmd_list.Submit().TickProfiling());
+                FenceRef export_fence = device.CreateFence();
+                cmd_list.TickProfiling().Signal(export_fence, 1);
+                Array<CommandList> export_cmd_lists{};
+                export_cmd_lists.emplace_back(std::move(cmd_list));
+                RHIExecutor::Get().Submit(std::move(export_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
+                cmd_list = CommandList(EQueueType::Graphics);
+                export_fence->Wait(1);
                 gfx_queue.Sync();
                 DumpTextureToFile(
                     ui_config.export_cfg,
@@ -684,20 +675,16 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         }
 
         time++;
-        Array<RHIExecOp> frame_ops = std::move(pre_frame_ops);
-        RHISubmitCmdList submit_cmd_list;
-        submit_cmd_list.queue = EQueueType::Graphics;
-        submit_cmd_list.MarkWriteTexture(present_output);
-        CmdSubmit frame_submit = cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling();
-        if (has_scene_gfx_submit) {
-            frame_submit = std::move(frame_submit).Wait(scene_pending_fence, scene_gfx_signal_value);
-        }
-        submit_cmd_list.submits.emplace_back(std::move(frame_submit));
-        frame_ops.emplace_back(std::move(submit_cmd_list));
-        if (!skip_present) {
-            frame_ops.emplace_back(RHIPresentOp{swapchain, present_output, EQueueType::Graphics});
-        }
-        RHIExecutor::Get().Submit(std::move(frame_ops), RHIExecSubmitOptions{.flush_gpu = true, .frame_end = true});
+        RHIPresentRequest present_request{swapchain, present_output};
+        cmd_list.Signal(timeline, time).DeleteResources().TickProfiling();
+        Array<CommandList> frame_cmd_lists = std::move(pre_frame_cmd_lists);
+        frame_cmd_lists.emplace_back(std::move(cmd_list));
+        RHIExecutor::Get().Submit(
+            std::move(frame_cmd_lists),
+            ERHIExecSubmitFlags::FlushGPU | ERHIExecSubmitFlags::FrameEnd,
+            skip_present ? nullptr : &present_request
+        );
+        cmd_list = CommandList(EQueueType::Graphics);
 
         if (!skip_present && hooks.on_present_windows) {
             hooks.on_present_windows();
@@ -809,7 +796,12 @@ void RaytracingRenderer::DumpTextureToFile(
             size = 0;
     }
     if (size != 0) {
-        _gfx_queue.Execute(cmd_list.Submit().TickProfiling());
+        FenceRef export_fence = _device.CreateFence();
+        cmd_list.TickProfiling().Signal(export_fence, 1);
+        Array<CommandList> export_cmd_lists{};
+        export_cmd_lists.emplace_back(std::move(cmd_list));
+        RHIExecutor::Get().Submit(std::move(export_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
+        export_fence->Wait(1);
         _gfx_queue.Sync();
         if (hdr) {
             // export to exr

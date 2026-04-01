@@ -8,6 +8,7 @@
 #include "VulkanExtension.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPlatform.h"
+#include <vulkan/vulkan_core.h>
 
 template<typename ExistingChainType, typename NewStructType>
 static void AddToPNext(ExistingChainType& _existing, NewStructType& _added) {
@@ -44,7 +45,7 @@ TExtensionArray VulkanInstanceExtension::GetMERequiredInstanceExtensions() {
 class VulkanEXTSwapchainMaintenance1Extension final : public VulkanDeviceExtension {
 public:
     VulkanEXTSwapchainMaintenance1Extension(bool _is_optional = false) :
-        VulkanDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME, _is_optional),
+        VulkanDeviceExtension(VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME, _is_optional),
         m_swapchain_maintenance1_features() {}
 
     void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
@@ -414,7 +415,7 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMERequiredDeviceExtensions
     extensions.emplace_back(std::make_shared<ext_class>(optional))
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
-    // ADD_CUSTOM_EXTENSION(VulkanEXTSwapchainMaintenance1Extension, VULKAN_EXTENSION_REQUIRED);
+    ADD_CUSTOM_EXTENSION(VulkanEXTSwapchainMaintenance1Extension, VULKAN_EXTENSION_REQUIRED);
     // ADD_EXTENSION(VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
 
 #if VULKAN_RHI_RAYTRACING

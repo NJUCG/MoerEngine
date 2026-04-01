@@ -1841,6 +1841,18 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
         CommandList cmd_list{};
         auto& gfx_queue = m_device->GetCommandQueue(EQueueType::Graphics);
+        FenceRef init_fence = m_device->CreateFence();
+        uint64   init_submit_value = 0;
+        auto submit_init_cmd_list = [&](CommandList&& submit_cmd_list) {
+            const uint64 signal_value = ++init_submit_value;
+            submit_cmd_list.Signal(init_fence, signal_value);
+
+            Array<CommandList> init_cmd_lists{};
+            init_cmd_lists.emplace_back(std::move(submit_cmd_list));
+            RHIExecutor::Get().Submit(std::move(init_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
+            init_fence->Wait(signal_value);
+            gfx_queue.Sync();
+        };
         //fill sampler data to descriptor buffer
         {
             uint sampler_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize;
@@ -1861,8 +1873,8 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             // vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
             // vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), 0, VulkanDevice::bindless_sampler_cnt * sampler_stride);
             cmd_list.CopyFrom(std::span<byte>(data_array.data(), data_array.size()), bindless_texture_descs->GetView(0, data_array.size()));
-            gfx_queue.Execute(cmd_list.Submit());
-            gfx_queue.Sync();
+            submit_init_cmd_list(std::move(cmd_list));
+            cmd_list = CommandList{};
         }
 
 
@@ -1920,8 +1932,8 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             // vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
             // vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), 0, m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
             cmd_list.CopyFrom(std::span<byte>(buffer_data.data(), buffer_data.size()), bindless_buffer_descs->GetView(0, buffer_data.size()));
-            gfx_queue.Execute(cmd_list.Submit());
-            gfx_queue.Sync();
+            submit_init_cmd_list(std::move(cmd_list));
+            cmd_list = CommandList{};
         }
 
         vkDestroyDescriptorSetLayout(m_device->GetDevice(), buffer_desc_layout, VK_NULL_HANDLE);

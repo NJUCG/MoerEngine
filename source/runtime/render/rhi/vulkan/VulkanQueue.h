@@ -160,34 +160,6 @@ struct VulkanRecordedSubmit {
 
 class VkCommandQueue : public CommandQueue {
 public:
-    struct FencePlaceHoler {};
-
-    using EventType = std::variant<
-        UniquePtr<VulkanAllocator>,
-        UniquePtr<VulkanPresentor>,
-        Array<std::function<void()>>,
-        VulkanFence*,
-        SignalEvent,
-        WaitEvent,
-        FencePlaceHoler>;
-
-    struct QueueEvent {
-        EventType event;
-        uint64    timeline;
-        bool      wake_thread;
-        template<typename Arg>
-            requires std::is_constructible_v<EventType, Arg&&>
-        QueueEvent(Arg&& _event, uint64 _timeline, bool _wake_thread) :
-            event(std::forward<Arg>(_event)),
-            timeline(_timeline),
-            wake_thread(_wake_thread) {}
-
-        QueueEvent(QueueEvent&& _other) noexcept :
-            event(std::move(_other.event)),
-            timeline(_other.timeline),
-            wake_thread(_other.wake_thread) {}
-    };
-
     VkCommandQueue(VulkanDevice& _device, EQueueType _type) :
         CommandQueue(),
         vk_device(_device),
@@ -195,14 +167,9 @@ public:
         query_runtime(_device),
         profiler_storage(query_runtime) {
         timeline = MoerNew(VulkanFence(vk_device));
-        enabled  = true;
-        thread   = std::jthread(&VkCommandQueue::ExecuteThread, this);
     }
 
     ~VkCommandQueue() {
-        enabled = false;
-        queue_cv.notify_all();
-        thread.join();
         //clear allocators
         Array<VulkanAllocator*> allocs;
         allocators.PopAll(allocs);
@@ -212,14 +179,6 @@ public:
             // ++alloc_count
         }
         // LOG_INFO("Allocator count {}", alloc_count);
-        Array<VulkanPresentor*> presents;
-        presentors.PopAll(presents);
-        // uint32 present_count = 0;
-        for (auto& presentor : presents) {
-            MoerDelete(presentor);
-            // present_count++;
-        }
-        // LOG_INFO("Presentor count {}", present_count);
         MoerDelete(timeline);
     }
     VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr, TrackerSeed seed = {});
@@ -232,20 +191,20 @@ public:
     WaitEvent   Execute(CmdSubmit&& _submit) override;
     void        Wait(WaitEvent _event) override;
     void        Present(SwapchainRef _viewport, TextureView _view) override;
-    void        Present(SwapchainRef _viewport, TextureView _view, std::span<const WaitEvent> _wait_events);
     void        Sync() override;
     ProfileData GetProfilerEntry() override;
     std::mutex& GetSubmitMutex() {
         return exec_mtx;
     }
-
+    void MarkExecutionComplete(uint64 _timeline);
     void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
-    void                                      ExecuteThread();
+    void ResolveAllocatorCompletion(
+        UniquePtr<VulkanAllocator>&& _allocator,
+        uint64                        _timeline
+    );
     VulkanDevice&                             vk_device;
     LockFreeQueueBase<VulkanAllocator, false> allocators;
-    LockFreeQueueBase<VulkanPresentor, false> presentors;
-    DEQueue<QueueEvent>                       event_queue;
 
 #if WITH_CUDA
 public:
@@ -256,9 +215,7 @@ public:
 
 private:
     UniquePtr<VulkanAllocator> GetAllocator();
-    UniquePtr<VulkanPresentor> GetPresentor();
     void                       Complete(uint64 _timeline);
-    void                       Signal();
 #if defined(MOER_TRACE_ENABLED) && MOER_TRACE_ENABLED && defined(MOER_TRACE_GPU_ENABLED) && \
     MOER_TRACE_GPU_ENABLED
     void EmitResolvedGpuTraceEvents(const Array<ProfilerStorage::ResolvedGpuSample>& _samples);
@@ -268,11 +225,7 @@ private:
     uint64                                             last_frame = 0;
     CircularQueue<uint64, s_queue_max_frame_in_flight> executed_queue;
     std::atomic<uint64>                                executed_frame = 0;
-    CircularQueue<uint64, s_queue_max_frame_in_flight> presented_queue;
     VulkanFence*                                       timeline = nullptr;
-    std::mutex                                         event_mutex;
-    bool                                               enabled{false};
-    std::condition_variable                            queue_cv; // wake up execute thread from sleeping
     VkNativeQueue                                      queue;
     VulkanQueryRuntime                                 query_runtime;
     ProfilerStorage                                    profiler_storage;
@@ -288,37 +241,12 @@ private:
     std::mutex   exec_mtx;
     std::mutex   alloc_mtx;
     std::atomic<uint64> record_frame{0};
-    std::jthread thread;
 };
 class VkCopyQueue : public CopyQueue {
 public:
     friend VulkanDevice;
     VkCopyQueue(VulkanDevice& _device);
     ~VkCopyQueue();
-    struct Placeholder {};
-    using EventType = std::variant<
-        UniquePtr<VulkanAllocator>,
-        UniquePtr<VulkanPresentor>,
-        Array<std::function<void()>>,
-        IOSignalEvt,
-        IOWaitEvt,
-        Placeholder>;
-    struct IOEvent {
-        EventType event;
-        uint64    timeline;
-        bool      wake_thread;
-        template<typename Arg>
-            requires std::is_constructible_v<EventType, Arg&&>
-        IOEvent(Arg&& _event, uint64 _timeline, bool _wake_thread) :
-            event(std::forward<Arg>(_event)),
-            timeline(_timeline),
-            wake_thread(_wake_thread) {}
-
-        IOEvent(IOEvent&& _other) noexcept :
-            event(std::move(_other.event)),
-            timeline(_other.timeline),
-            wake_thread(_other.wake_thread) {}
-    };
 
     IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
     VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr);
@@ -326,6 +254,11 @@ public:
     IOWaitEvt Execute(CmdSubmit&& _submit) override;
     FenceRef  GetFenceHandle() override;
     void      Sync(uint64 _timeline) override;
+    void      MarkExecutionComplete(uint64 _timeline);
+    void      ResolveAllocatorCompletion(
+               UniquePtr<VulkanAllocator>&& _allocator,
+               uint64                        _timeline
+           );
 
     void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
@@ -361,22 +294,10 @@ public:
     void EnqueueSignal(FenceRef _fence, uint64_t _timeline);
     void Execute();
 
-    void ExecuteThread();
-    void Submit(IOQueueCommandList&& _cmd_list);
-    void SubmitSignal(FenceRef _fence, uint64_t _timeline);
-    void SubmitWait(FenceRef _fence, uint64_t _timeline);
-
-private:
-    void ExecuteIOThread(IOQueueCommandList&& _cmd_list, uint64_t _timeline);
-
-    void IOThreadLoop();
-    void RHIThreadLoop();
-
 private:
     UniquePtr<VulkanAllocator>                GetAllocator();
     void                                      Complete(uint64 _timeline);
     LockFreeQueueBase<VulkanAllocator, false> allocators;
-    DEQueue<IOEvent>                          event_queue;
 
 private:
     VulkanDevice& device;
@@ -384,21 +305,9 @@ private:
     uint                    last_frame     = 0;
     std::atomic<uint64>     executed_frame = 0;
     VulkanFenceRef          timeline       = nullptr;
-    std::mutex              event_mutex;
-    bool                    enabled{false};
-    std::condition_variable queue_cv; // wake up execute thread from sleeping
     VkNativeQueue           queue;
-    std::jthread            thread;
-
-    //tmp
-    LockFreeQueueBase<IOCmd> commands;
 
     std::mutex                                     exec_mutex;
     std::mutex                                     alloc_mtx;
-    Array<VkSemaphore>                             pending_semaphores;
-    Queue<std::pair<IOQueueCommandList&&, uint64>> io_thread_cmds;
-    std::mutex                                     io_mutex;
-    Queue<std::pair<CommandList&&, uint64>>        io_rhi_cmdlists;
-    std::mutex                                     rhi_mutex;
 };
 } // namespace Moer::Render
