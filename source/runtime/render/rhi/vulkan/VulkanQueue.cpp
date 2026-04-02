@@ -769,7 +769,7 @@ struct VkCmdPreprocessor {
 
         for (auto& barrier : _cmd->ReadBuffers()) {
             auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
-            tracker.RecordState(
+            tracker.EmitLocalTransition(
                 vk_buffer,
                 tracker.ReadBuffer(vk_buffer, barrier.state, barrier.pass_type),
                 src_queue_family,
@@ -778,7 +778,7 @@ struct VkCmdPreprocessor {
         }
         for (auto& barrier : _cmd->WriteBuffers()) {
             auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
-            tracker.RecordState(
+            tracker.EmitLocalTransition(
                 vk_buffer,
                 tracker.WriteBuffer(vk_buffer, barrier.state, barrier.pass_type),
                 src_queue_family,
@@ -789,7 +789,7 @@ struct VkCmdPreprocessor {
         for (auto& barrier : _cmd->ReadTextures()) {
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
             auto  access     = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
-            tracker.RecordState(
+            tracker.EmitLocalTransition(
                 vk_texture,
                 std::get<0>(access),
                 std::get<1>(access),
@@ -805,7 +805,7 @@ struct VkCmdPreprocessor {
         for (auto& barrier : _cmd->WriteTextures()) {
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
             auto  access     = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
-            tracker.RecordState(
+            tracker.EmitLocalTransition(
                 vk_texture,
                 std::get<0>(access),
                 std::get<1>(access),
@@ -837,7 +837,7 @@ struct VkCmdPreprocessor {
                 auto  access     = barrier.access_write ?
                                        tracker.WriteTexture(vk_texture, barrier.state, pass_type) :
                                        tracker.ReadTexture(vk_texture, barrier.state, pass_type);
-                tracker.QueueTransferAcquireResource(
+                tracker.EmitAcquirePlan(
                     vk_texture,
                     device.GetQueueFamilyIndex(_cmd->src_queue),
                     device.GetQueueFamilyIndex(_cmd->dst_queue),
@@ -853,7 +853,7 @@ struct VkCmdPreprocessor {
                 auto  access    = barrier.access_write ?
                                       tracker.WriteBuffer(vk_buffer, barrier.state, pass_type) :
                                       tracker.ReadBuffer(vk_buffer, barrier.state, pass_type);
-                tracker.QueueTransferAcquireResource(
+                tracker.EmitAcquirePlan(
                     vk_buffer,
                     device.GetQueueFamilyIndex(_cmd->src_queue),
                     device.GetQueueFamilyIndex(_cmd->dst_queue),
@@ -868,7 +868,7 @@ struct VkCmdPreprocessor {
             for (auto& barrier : _cmd->ExportTextures()) {
                 auto* vk_texture = ResourceCast(barrier.texture.GetTexture());
                 auto  access     = tracker.ReadTexture(vk_texture, barrier.state);
-                tracker.QueueTransferReleaseResource(
+                tracker.EmitReleasePlan(
                     vk_texture,
                     device.GetQueueFamilyIndex(_cmd->src_queue),
                     device.GetQueueFamilyIndex(_cmd->dst_queue),
@@ -880,7 +880,7 @@ struct VkCmdPreprocessor {
             for (auto& barrier : _cmd->ExportBuffers()) {
                 auto* vk_buffer = ResourceCast(barrier.buffer.GetBuffer());
                 auto  access    = tracker.ReadBuffer(vk_buffer, barrier.state);
-                tracker.QueueTransferReleaseResource(
+                tracker.EmitReleasePlan(
                     vk_buffer,
                     device.GetQueueFamilyIndex(_cmd->src_queue),
                     device.GetQueueFamilyIndex(_cmd->dst_queue)

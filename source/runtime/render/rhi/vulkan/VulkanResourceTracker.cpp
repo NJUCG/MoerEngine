@@ -520,38 +520,58 @@ void VkTracker::FlushSrcState(
     }
 }
 
-void VkTracker::SeedSrcState(
+void VkTracker::EmitLocalTransition(
+    VulkanBuffer*            _buffer,
+    VkAccessFlagBits2        _access,
+    VkPipelineStageFlagBits2 _stage,
+    uint32_t                 _src_queue_family,
+    uint32_t                 _dst_queue_family
+) {
+    RecordState(_buffer, _access, _stage, _src_queue_family, _dst_queue_family);
+}
+
+void VkTracker::EmitLocalTransition(
+    VulkanBuffer*                                       _buffer,
+    std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&& _state,
+    uint32_t                                            _src_queue_family,
+    uint32_t                                            _dst_queue_family
+) {
+    RecordState(_buffer, std::move(_state), _src_queue_family, _dst_queue_family);
+}
+
+void VkTracker::EmitLocalTransition(
     VulkanTexture*           _texture,
     VkAccessFlagBits2        _access,
     VkImageLayout            _layout,
-    VkPipelineStageFlagBits2 _stage
+    VkPipelineStageFlagBits2 _stage,
+    uint8_t                  _mip_level,
+    uint8_t                  _mip_count,
+    uint8_t                  _array_layer,
+    uint8_t                  _array_count,
+    uint32_t                 _src_queue_family,
+    uint32_t                 _dst_queue_family
 ) {
-    RHITRACE_RESOURCE_LOG(
-        TextureName(_texture),
-        "[ResourceTrace][Seed][{}] {} layout={} access=0x{:x} stage=0x{:x}",
-        QueueTypeName(queue_type),
-        TextureName(_texture),
-        VkLayoutStr(_layout),
-        uint64(_access),
-        uint64(_stage)
+    RecordState(
+        _texture,
+        _access,
+        _layout,
+        _stage,
+        _mip_level,
+        _mip_count,
+        _array_layer,
+        _array_count,
+        _src_queue_family,
+        _dst_queue_family
     );
-    uint8 num_mips   = _texture->GetNumMips();
-    uint8 num_arrays = _texture->GetNumArray();
-    for (uint8 mip = 0; mip < num_mips; ++mip) {
-        auto key = MakeTextureStateKey(_texture, mip, 1, 0, num_arrays);
-        if (texture_states.find(key) == texture_states.end()) {
-            texture_states[key] = TextureState{
-                _access,
-                _layout,
-                _stage,
-                VK_ACCESS_2_NONE,
-                VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_PIPELINE_STAGE_2_NONE,
-                VK_QUEUE_FAMILY_IGNORED,
-                VK_QUEUE_FAMILY_IGNORED
-            };
-        }
-    }
+}
+
+void VkTracker::EmitLocalTransition(
+    VulkanTexture*                                                     _texture,
+    std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&& _state,
+    uint32_t                                                           _src_queue_family,
+    uint32_t                                                           _dst_queue_family
+) {
+    RecordState(_texture, std::move(_state), _src_queue_family, _dst_queue_family);
 }
 
 void VkTracker::RecordState(
@@ -780,7 +800,7 @@ void GetInitImageLayoutAndAccess(
         return;
     }
 }
-void VkTracker::QueueTransferReleaseResource(
+void VkTracker::EmitReleasePlan(
     VulkanTexture* _texture,
     uint           _src_queue,
     uint           _dst_queue,
@@ -829,7 +849,7 @@ void VkTracker::QueueTransferReleaseResource(
     exported_textures.insert(_texture);
 }
 
-void VkTracker::QueueTransferReleaseResource(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue) {
+void VkTracker::EmitReleasePlan(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue) {
 
     pending_buffers.insert(_buffer);
     if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
@@ -855,7 +875,7 @@ void VkTracker::QueueTransferReleaseResource(VulkanBuffer* _buffer, uint _src_qu
     exported_buffers.insert(_buffer);
 }
 
-void VkTracker::QueueTransferAcquireResource(
+void VkTracker::EmitAcquirePlan(
     VulkanBuffer*            _buffer,
     uint                     _src_queue,
     uint                     _dst_queue,
@@ -900,7 +920,7 @@ void VkTracker::QueueTransferAcquireResource(
     }
 }
 
-void VkTracker::QueueTransferAcquireResource(
+void VkTracker::EmitAcquirePlan(
     VulkanTexture*           _texture,
     uint                     _src_queue,
     uint                     _dst_queue,

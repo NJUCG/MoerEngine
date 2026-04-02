@@ -36,6 +36,7 @@ struct TranslateResult {
 class VulkanTranslateTask {
 public:
     static TranslateResult Dispatch(TranslateTaskInput&& input);
+    static TranslateResult MakeFailed(EQueueType queue, std::string error);
 };
 
 } // namespace Moer::Render

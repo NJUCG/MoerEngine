@@ -91,8 +91,8 @@ public:
     };
     ~VkTracker() = default;
 
-    void QueueTransferReleaseResource(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue);
-    void QueueTransferReleaseResource(
+    void EmitReleasePlan(VulkanBuffer* _buffer, uint _src_queue, uint _dst_queue);
+    void EmitReleasePlan(
         VulkanTexture* _texture,
         uint           _src_queue,
         uint           _dst_queue,
@@ -100,14 +100,14 @@ public:
         VkImageLayout  _dst_layout
     );
 
-    void QueueTransferAcquireResource(
+    void EmitAcquirePlan(
         VulkanBuffer*            _buffer,
         uint                     _src_queue,
         uint                     _dst_queue,
         VkAccessFlagBits2        _dst_access,
         VkPipelineStageFlagBits2 _dst_stage
     );
-    void QueueTransferAcquireResource(
+    void EmitAcquirePlan(
         VulkanTexture*           _texture,
         uint                     _src_queue,
         uint                     _dst_queue,
@@ -115,6 +115,38 @@ public:
         VkImageLayout            _dst_layout,
         VkAccessFlagBits2        _dst_access,
         VkPipelineStageFlagBits2 _dst_stage
+    );
+
+    void EmitLocalTransition(
+        VulkanBuffer*            _buffer,
+        VkAccessFlagBits2        _access,
+        VkPipelineStageFlagBits2 _stage,
+        uint32_t                 _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+        uint32_t                 _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
+    );
+    void EmitLocalTransition(
+        VulkanBuffer* _buffer,
+        std::tuple<VkAccessFlags2, VkPipelineStageFlags2>&& _state,
+        uint32_t _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+        uint32_t _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
+    );
+    void EmitLocalTransition(
+        VulkanTexture*           _texture,
+        VkAccessFlagBits2        _access,
+        VkImageLayout            _layout,
+        VkPipelineStageFlagBits2 _stage,
+        uint8_t                  _mip_level        = 0,
+        uint8_t                  _mip_count        = 1,
+        uint8_t                  _array_layer      = 0,
+        uint8_t                  _array_count      = 1,
+        uint32_t                 _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+        uint32_t                 _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
+    );
+    void EmitLocalTransition(
+        VulkanTexture* _texture,
+        std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>&& _state,
+        uint32_t _src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+        uint32_t _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
     );
 
     void RecordState(
@@ -127,17 +159,6 @@ public:
 
     void FlushSrcState(VulkanBuffer* _buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage);
     void FlushSrcState(
-        VulkanTexture*           _texture,
-        VkAccessFlagBits2        _access,
-        VkImageLayout            _layout,
-        VkPipelineStageFlagBits2 _stage
-    );
-
-    /// Create tracker entries with the given src state for every subresource
-    /// of _texture, but only if no entry exists yet.  Used by the present
-    /// path to seed a transient tracker with the prior rendering state so
-    /// that the layout transition barrier carries the correct srcAccess/Stage.
-    void SeedSrcState(
         VulkanTexture*           _texture,
         VkAccessFlagBits2        _access,
         VkImageLayout            _layout,

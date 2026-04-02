@@ -344,7 +344,6 @@ struct PreprocessTranslateStore {
 
 struct QueueTranslateInfo {
     SubmissionKey key{};
-    uint64        op_seq{0};
     EQueueType    queue{EQueueType::Ignore};
     CmdSubmit     submit;
     TrackerSeed  initial_seed{};
@@ -354,13 +353,11 @@ struct QueueTranslateInfo {
 
     QueueTranslateInfo(
         SubmissionKey in_key,
-        uint64        in_op_seq,
         EQueueType    in_queue,
         CmdSubmit&&   in_submit,
         TrackerSeed&& in_seed
     ) :
         key(in_key),
-        op_seq(in_op_seq),
         queue(in_queue),
         submit(std::move(in_submit)),
         initial_seed(std::move(in_seed)) {}
@@ -371,56 +368,52 @@ struct QueueTranslateInfo {
     QueueTranslateInfo& operator=(const QueueTranslateInfo&)     = delete;
 };
 
-struct QueueSubmissionInfo {
-    SubmissionKey key{};
-    uint64        op_seq{0};
-    EQueueType    queue{EQueueType::Ignore};
-    std::optional<VulkanRecordedSubmit> recorded_submit{};
-    Array<SubmissionKey> wait_submission_keys{};
-    GraphEventRef translate_complete{nullptr};
-    bool          valid{true};
-    std::string   error{};
-
-    QueueSubmissionInfo(
-        SubmissionKey in_key,
-        uint64        in_op_seq,
-        EQueueType    in_queue,
-        std::optional<VulkanRecordedSubmit>&& in_recorded_submit,
-        GraphEventRef in_translate_complete
-    ) :
-        key(in_key),
-        op_seq(in_op_seq),
-        queue(in_queue),
-        recorded_submit(std::move(in_recorded_submit)),
-        translate_complete(std::move(in_translate_complete)) {}
-
-    QueueSubmissionInfo(QueueSubmissionInfo&&) noexcept            = default;
-    QueueSubmissionInfo& operator=(QueueSubmissionInfo&&) noexcept = default;
-    QueueSubmissionInfo(const QueueSubmissionInfo&)                = delete;
-    QueueSubmissionInfo& operator=(const QueueSubmissionInfo&)     = delete;
-};
-
-struct PresentInfo {
+struct SubmitPresentStage {
     uint64       op_seq{0};
     RHIPresentOp present{};
-    Array<SubmissionKey> wait_submission_keys{};
     bool         has_source_texture_state{false};
     ResourceStateValue source_texture_state{};
     bool         valid{true};
     std::string  error{};
 
-    PresentInfo(uint64 in_op_seq, RHIPresentOp&& in_present) :
+    SubmitPresentStage(uint64 in_op_seq, RHIPresentOp&& in_present) :
         op_seq(in_op_seq),
         present(std::move(in_present)) {}
 
-    PresentInfo(PresentInfo&&) noexcept            = default;
-    PresentInfo& operator=(PresentInfo&&) noexcept = default;
-    PresentInfo(const PresentInfo&)                = delete;
-    PresentInfo& operator=(const PresentInfo&)     = delete;
+    SubmitPresentStage(SubmitPresentStage&&) noexcept            = default;
+    SubmitPresentStage& operator=(SubmitPresentStage&&) noexcept = default;
+    SubmitPresentStage(const SubmitPresentStage&)                = delete;
+    SubmitPresentStage& operator=(const SubmitPresentStage&)     = delete;
 };
 
-using PlatformExecOp = std::variant<QueueSubmissionInfo, PresentInfo>;
-using TranslatePipelineOp = std::variant<QueueTranslateInfo, PresentInfo>;
+struct PendingPresentAttachment {
+    std::optional<SubmissionKey> parent_submission_key{};
+    std::optional<SubmitPresentStage> present_stage{};
+};
+
+struct SubmitInfo {
+    SubmissionKey key{};
+    Array<SubmissionKey> wait_submission_keys{};
+    TranslateResult translate_result{};
+    std::optional<SubmitPresentStage> present_stage{};
+
+    SubmitInfo(
+        SubmissionKey in_key,
+        TranslateResult&& in_translate_result
+    ) :
+        key(in_key),
+        translate_result(std::move(in_translate_result)) {}
+
+    SubmitInfo(SubmitInfo&&) noexcept            = default;
+    SubmitInfo& operator=(SubmitInfo&&) noexcept = default;
+    SubmitInfo(const SubmitInfo&)                = delete;
+    SubmitInfo& operator=(const SubmitInfo&)     = delete;
+};
+
+struct TranslatePipelineBatch {
+    Array<QueueTranslateInfo>    translate_ops{};
+    Array<PendingPresentAttachment> pending_presents{};
+};
 
 static TrackerSeed BuildTrackerSeed(const ResourceStateSnapshot& snapshot);
 
@@ -1908,11 +1901,11 @@ static void ApplyDigestToState(
 
 class SubmissionPlanExecutor {
 public:
-    void Execute(Array<PlatformExecOp>&& ops, bool frame_end) const;
+    void Execute(Array<SubmitInfo>&& submits, bool frame_end) const;
 };
 
 struct SubmissionBatch {
-    Array<PlatformExecOp> ops{};
+    Array<SubmitInfo> submits{};
     bool frame_end{false};
     uint64 batch_id{0};
     std::shared_ptr<std::promise<void>> completion{};
@@ -2073,10 +2066,25 @@ public:
         cmd_list.BeginLabel("Submission Present", {0.0f, 1.0f, 1.0f, 1.0f});
         tracker.SetPassType(EPassType::Graphics);
 
+        TrackerSeed present_seed{};
+        TrackerSeedTextureEntry source_seed{};
+        source_seed.texture     = src_texture;
+        source_seed.mip_level   = static_cast<uint8_t>(present_op.target.mip_level);
+        source_seed.mip_count   = 1;
+        source_seed.array_layer = static_cast<uint8_t>(present_op.target.array_layer);
+        source_seed.array_count = 1;
+        if (source_texture_state != nullptr) {
+            source_seed.known         = source_texture_state->known;
+            source_seed.has_writer    = source_texture_state->has_writer;
+            source_seed.owner_queue   = source_texture_state->owner_queue;
+            source_seed.texture_state = source_texture_state->texture_state;
+        }
+        present_seed.textures.emplace_back(source_seed);
+        tracker.InitFromSeed(present_seed);
+
         if (source_texture_state != nullptr && source_texture_state->known) {
             auto [src_access, src_layout, src_stage] =
                 ResolveTextureSeedState(src_texture, *source_texture_state);
-            tracker.SeedSrcState(src_texture, src_access, src_layout, src_stage);
             RHITRACE_RESOURCE_LOG(
                 src_texture->GetName(),
                 "[ResourceTrace][Present][SeedSrc] {} : known={} owner_queue={} state={} layout={} access=0x{:x}",
@@ -2094,9 +2102,20 @@ public:
                 src_texture->GetName()
             );
         }
-        tracker.RecordState(src_texture, tracker.ReadTexture(src_texture, ETextureState::TRANSFER));
-        tracker.RecordState(
-            swapchain_texture, tracker.WriteTexture(swapchain_texture, ETextureState::TRANSFER)
+        auto src_to_transfer = tracker.ReadTexture(src_texture, ETextureState::TRANSFER);
+        tracker.EmitLocalTransition(
+            src_texture,
+            static_cast<VkAccessFlagBits2>(std::get<0>(src_to_transfer)),
+            std::get<1>(src_to_transfer),
+            static_cast<VkPipelineStageFlagBits2>(std::get<2>(src_to_transfer)),
+            static_cast<uint8_t>(present_op.target.mip_level),
+            1,
+            static_cast<uint8_t>(present_op.target.array_layer),
+            1
+        );
+        tracker.EmitLocalTransition(
+            swapchain_texture,
+            tracker.WriteTexture(swapchain_texture, ETextureState::TRANSFER)
         );
         tracker.ResolveBarriers();
         tracker.DispatchBarriers(cmd_list);
@@ -2105,7 +2124,7 @@ public:
         cmd_list.CopyTexture(
             src_texture, swapchain_texture, present_op.target.extent, {0, 0, 0}, {0, 0, 0}, 0, 0
         );
-        tracker.RecordState(
+        tracker.EmitLocalTransition(
             swapchain_texture,
             VK_ACCESS_2_NONE,
             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -2290,12 +2309,12 @@ public:
         Stop();
     }
 
-    void Enqueue(Array<PlatformExecOp>&& ops, bool frame_end) {
-        if (ops.empty() && !frame_end) {
+    void Enqueue(Array<SubmitInfo>&& submits, bool frame_end) {
+        if (submits.empty() && !frame_end) {
             return;
         }
         SubmissionBatch batch{};
-        batch.ops = std::move(ops);
+        batch.submits = std::move(submits);
         batch.frame_end = frame_end;
         batch.batch_id = next_batch_id.fetch_add(1, std::memory_order_relaxed);
         {
@@ -2456,25 +2475,18 @@ private:
             }
 
             UnorderedMap<SubmissionKey, WaitEvent, SubmissionKeyHash> completion_by_submit{};
-            completion_by_submit.reserve(static_cast<uint32>(batch.ops.size()));
+            completion_by_submit.reserve(static_cast<uint32>(batch.submits.size()));
             uint32 submission_count = 0;
             uint32 present_count    = 0;
-            for (auto& op : batch.ops) {
-                std::visit(
-                    Overload{
-                        [&](QueueSubmissionInfo& submit_info) {
-                            if (ExecuteSubmit(submit_info, completion_by_submit)) {
-                                ++submission_count;
-                            }
-                        },
-                        [&](PresentInfo& present_info) {
-                            if (ExecutePresentTask(present_info, completion_by_submit)) {
-                                ++present_count;
-                            }
-                        }
-                    },
-                    op
-                );
+            for (auto& submit_info : batch.submits) {
+                const bool submitted = ExecuteSubmit(submit_info, completion_by_submit);
+                if (submitted) {
+                    ++submission_count;
+                    if (submit_info.present_stage.has_value() &&
+                        ExecutePresentStage(submit_info, completion_by_submit)) {
+                        ++present_count;
+                    }
+                }
             }
 
             if (batch.frame_end) {
@@ -2495,20 +2507,29 @@ private:
     }
 
     bool ExecuteSubmit(
-        QueueSubmissionInfo& submit_info,
+        SubmitInfo& submit_info,
         UnorderedMap<SubmissionKey, WaitEvent, SubmissionKeyHash>& completion_by_submit
     ) {
-        if (!submit_info.valid) {
+        if (!submit_info.translate_result.valid) {
+            if (!submit_info.translate_result.error.empty()) {
+                LOG_ERROR(
+                    "Translate failed for submit ({}, {}): {}",
+                    submit_info.key.op_seq,
+                    submit_info.key.submit_idx,
+                    submit_info.translate_result.error
+                );
+            }
             return false;
         }
 
-        if (submit_info.translate_complete && !submit_info.translate_complete->IsComplete()) {
+        if (submit_info.translate_result.translate_complete &&
+            !submit_info.translate_result.translate_complete->IsComplete()) {
             LOG_ERROR(
                 "Translate completion is not resolved before submit ({}, {})",
                 submit_info.key.op_seq,
                 submit_info.key.submit_idx
             );
-            submit_info.valid = false;
+            submit_info.translate_result.valid = false;
             return false;
         }
 
@@ -2522,14 +2543,17 @@ private:
                 );
                 continue;
             }
-            if (submit_info.recorded_submit.has_value() && submit_info.recorded_submit->submit.has_value()) {
-                submit_info.recorded_submit->submit->wait_events.emplace_back(completion_it->second);
+            if (submit_info.translate_result.recorded_submit.has_value() &&
+                submit_info.translate_result.recorded_submit->submit.has_value()) {
+                submit_info.translate_result.recorded_submit->submit->wait_events.emplace_back(
+                    completion_it->second
+                );
                 RHITRACE_LOG(
                     verbose,
                     "[RHITrace][SubmitPlan] submit=({}, {}) queue={} append_wait fence={} value={}",
                     submit_info.key.op_seq,
                     submit_info.key.submit_idx,
-                    QueueTypeName(submit_info.queue),
+                    QueueTypeName(submit_info.translate_result.queue),
                     completion_it->second.timeline_handle,
                     completion_it->second.value
                 );
@@ -2537,7 +2561,7 @@ private:
         }
 
         WaitEvent completion_event{};
-        if (!submit_info.recorded_submit.has_value()) {
+        if (!submit_info.translate_result.recorded_submit.has_value()) {
             LOG_ERROR(
                 "Missing recorded submit packet for ({}, {})",
                 submit_info.key.op_seq,
@@ -2545,22 +2569,31 @@ private:
             );
             return false;
         }
-        switch (submit_info.queue) {
+        switch (submit_info.translate_result.queue) {
             case EQueueType::Graphics:
             case EQueueType::Compute: {
                 auto& queue =
-                    static_cast<VkCommandQueue&>(RenderDevice::Get().GetCommandQueue(submit_info.queue));
-                completion_event = queue.SubmitRecorded(std::move(submit_info.recorded_submit.value()));
+                    static_cast<VkCommandQueue&>(
+                        RenderDevice::Get().GetCommandQueue(submit_info.translate_result.queue)
+                    );
+                completion_event = queue.SubmitRecorded(
+                    std::move(submit_info.translate_result.recorded_submit.value())
+                );
                 break;
             }
             case EQueueType::Copy: {
                 auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-                IOWaitEvt io_completion = copy_queue.SubmitRecorded(std::move(submit_info.recorded_submit.value()));
+                IOWaitEvt io_completion = copy_queue.SubmitRecorded(
+                    std::move(submit_info.translate_result.recorded_submit.value())
+                );
                 completion_event = WaitEvent{io_completion.handle, io_completion.timeline};
                 break;
             }
             default:
-                LOG_ERROR("Invalid queue type in submission plan: {}", QueueTypeName(submit_info.queue));
+                LOG_ERROR(
+                    "Invalid queue type in submission plan: {}",
+                    QueueTypeName(submit_info.translate_result.queue)
+                );
                 return false;
         }
         RHITRACE_LOG(
@@ -2568,7 +2601,7 @@ private:
             "[RHITrace][SubmitPlan] submitted=({}, {}) queue={} completion fence={} value={}",
             submit_info.key.op_seq,
             submit_info.key.submit_idx,
-            QueueTypeName(submit_info.queue),
+            QueueTypeName(submit_info.translate_result.queue),
             completion_event.timeline_handle,
             completion_event.value
         );
@@ -2577,55 +2610,49 @@ private:
         return true;
     }
 
-    bool ExecutePresentTask(
-        PresentInfo& present_info,
+    bool ExecutePresentStage(
+        const SubmitInfo& submit_info,
         const UnorderedMap<SubmissionKey, WaitEvent, SubmissionKeyHash>& completion_by_submit
     ) {
-        if (!present_info.valid || !present_info.present.swapchain || !present_info.present.target.texture) {
+        if (!submit_info.present_stage.has_value()) {
+            return false;
+        }
+        const SubmitPresentStage& present_stage = submit_info.present_stage.value();
+        if (!present_stage.valid || !present_stage.present.swapchain || !present_stage.present.target.texture) {
+            return false;
+        }
+
+        const auto submit_completion_it = completion_by_submit.find(submit_info.key);
+        if (submit_completion_it == completion_by_submit.end()) {
+            LOG_ERROR(
+                "Missing completion for present-attached submit ({}, {})",
+                submit_info.key.op_seq,
+                submit_info.key.submit_idx
+            );
             return false;
         }
 
         Array<WaitEvent> wait_events{};
-        wait_events.reserve(present_info.wait_submission_keys.size());
-        for (const auto& dependency : present_info.wait_submission_keys) {
-            const auto completion_it = completion_by_submit.find(dependency);
-            if (completion_it == completion_by_submit.end()) {
-                LOG_ERROR(
-                    "Missing dependency completion for present dependency ({}, {})",
-                    dependency.op_seq,
-                    dependency.submit_idx
-                );
-                present_info.valid = false;
-                return false;
-            }
-            wait_events.emplace_back(completion_it->second);
-            RHITRACE_LOG(
-                basic,
-                "[RHITrace][PresentPlan] op_seq={} wait_dep=({}, {}) fence={} value={}",
-                present_info.op_seq,
-                dependency.op_seq,
-                dependency.submit_idx,
-                completion_it->second.timeline_handle,
-                completion_it->second.value
-            );
-        }
+        wait_events.emplace_back(submit_completion_it->second);
 
-        if (present_info.present.queue == EQueueType::Copy || present_info.present.queue == EQueueType::Ignore) {
-            LOG_ERROR("Invalid present queue type: {}", QueueTypeName(present_info.present.queue));
+        if (present_stage.present.queue == EQueueType::Copy ||
+            present_stage.present.queue == EQueueType::Ignore) {
+            LOG_ERROR("Invalid present queue type: {}", QueueTypeName(present_stage.present.queue));
             return false;
         }
         RHITRACE_LOG(
             basic,
-            "[RHITrace][PresentPlan] presenting op_seq={} queue={} wait_count={}",
-            present_info.op_seq,
-            QueueTypeName(present_info.present.queue),
+            "[RHITrace][PresentPlan] presenting submit=({}, {}) queue={} wait_count={}",
+            submit_info.key.op_seq,
+            submit_info.key.submit_idx,
+            QueueTypeName(present_stage.present.queue),
             wait_events.size()
         );
-        return GetSubmissionPresentContextManager().Get(present_info.present.queue)
+        return GetSubmissionPresentContextManager().Get(present_stage.present.queue)
             .Present(
-                present_info.present,
+                present_stage.present,
                 wait_events,
-                present_info.has_source_texture_state ? &present_info.source_texture_state : nullptr
+                present_stage.has_source_texture_state ? &present_stage.source_texture_state : nullptr
             );
     }
 
@@ -2919,8 +2946,8 @@ static void ShutdownSubmissionPresentContexts() {
     }
 }
 
-void SubmissionPlanExecutor::Execute(Array<PlatformExecOp>&& ops, bool frame_end) const {
-    GetSubmissionPlanRuntime().Enqueue(std::move(ops), frame_end);
+void SubmissionPlanExecutor::Execute(Array<SubmitInfo>&& submits, bool frame_end) const {
+    GetSubmissionPlanRuntime().Enqueue(std::move(submits), frame_end);
 }
 
 static PreprocessTranslateStore
@@ -3217,11 +3244,12 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
     return preprocess_store;
 }
 
-static Array<TranslatePipelineOp>
+static TranslatePipelineBatch
 AssembleTranslatePipelineOps(Array<RHIExecOp>&& ops, const PreprocessTranslateStore& preprocess_store) {
     TRACE_SCOPE_CAT("Vulkan.AssembleTranslatePipelineOps", "RHI");
-    Array<TranslatePipelineOp> translate_ops{};
-    translate_ops.reserve(EstimatePlatformOpCount(ops) * 3 + 1);
+    TranslatePipelineBatch pipeline_batch{};
+    pipeline_batch.translate_ops.reserve(EstimateSubmitCount(ops) * 3 + 1);
+    pipeline_batch.pending_presents.reserve(EstimatePlatformOpCount(ops));
 
     auto build_segment_submit =
         [](CmdSubmit& source_submit,
@@ -3347,7 +3375,6 @@ AssembleTranslatePipelineOps(Array<RHIExecOp>&& ops, const PreprocessTranslateSt
 
                             QueueTranslateInfo translate_task{
                                 segment_plan.key,
-                                op_seq,
                                 translate_info->queue,
                                 std::move(segment_submit),
                                 BuildTrackerSeed(translate_info->initial_state_snapshot)
@@ -3357,7 +3384,7 @@ AssembleTranslatePipelineOps(Array<RHIExecOp>&& ops, const PreprocessTranslateSt
                                 logical_waits != nullptr) {
                                 translate_task.logical_wait_submission_keys = *logical_waits;
                             }
-                            translate_ops.emplace_back(std::move(translate_task));
+                            pipeline_batch.translate_ops.emplace_back(std::move(translate_task));
 
                             last_submit_key   = segment_plan.key;
                             last_submit_queue = translate_info->queue;
@@ -3365,23 +3392,25 @@ AssembleTranslatePipelineOps(Array<RHIExecOp>&& ops, const PreprocessTranslateSt
                     }
                 },
                 [&](RHIPresentOp& present_op) {
-                    PresentInfo present_info{op_seq, std::move(present_op)};
+                    PendingPresentAttachment pending_present{};
+                    pending_present.present_stage.emplace(op_seq, std::move(present_op));
+                    auto& present_stage = pending_present.present_stage.value();
                     if (const auto* present_preprocess = preprocess_store.FindPresent(op_seq);
                         present_preprocess != nullptr) {
-                        present_info.has_source_texture_state =
+                        present_stage.has_source_texture_state =
                             present_preprocess->has_source_texture_state;
-                        present_info.source_texture_state =
+                        present_stage.source_texture_state =
                             present_preprocess->source_texture_state;
                     }
                     if (!last_submit_key.has_value() || last_submit_queue != EQueueType::Graphics) {
-                        present_info.valid = false;
-                        present_info.error =
+                        present_stage.valid = false;
+                        present_stage.error =
                             "Present requires the last translated submission to be Graphics";
-                        LOG_ERROR("{}", present_info.error);
+                        LOG_ERROR("{}", present_stage.error);
                     } else {
-                        present_info.wait_submission_keys.emplace_back(last_submit_key.value());
+                        pending_present.parent_submission_key = last_submit_key.value();
                     }
-                    translate_ops.emplace_back(std::move(present_info));
+                    pipeline_batch.pending_presents.emplace_back(std::move(pending_present));
                 }
             },
             op
@@ -3389,7 +3418,7 @@ AssembleTranslatePipelineOps(Array<RHIExecOp>&& ops, const PreprocessTranslateSt
         ++op_seq;
     }
 
-    return translate_ops;
+    return pipeline_batch;
 }
 
 // §7.2 / §9.3: Convert ResourceStateSnapshot to TrackerSeed for VkTracker::InitFromSeed.
@@ -3441,58 +3470,91 @@ static TrackerSeed BuildTrackerSeed(const ResourceStateSnapshot& snapshot) {
     return seed;
 }
 
-static Array<PlatformExecOp> DispatchTranslateTasks(Array<TranslatePipelineOp>&& translate_ops) {
-    TRACE_SCOPE_CAT("Vulkan.DispatchTranslateTasks", "RHI");
-    Array<PlatformExecOp> platform_ops{};
-    platform_ops.reserve(translate_ops.size());
-    for (auto& op : translate_ops) {
-        std::visit(
-            Overload{
-                [&](QueueTranslateInfo& translate_info) {
-                    if (!translate_info.valid) {
-                        QueueSubmissionInfo submit_info{
-                            translate_info.key,
-                            translate_info.op_seq,
-                            translate_info.queue,
-                            std::optional<VulkanRecordedSubmit>{},
-                            nullptr
-                        };
-                        submit_info.valid = false;
-                        submit_info.error = translate_info.error;
-                        submit_info.wait_submission_keys =
-                            std::move(translate_info.logical_wait_submission_keys);
-                        platform_ops.emplace_back(std::move(submit_info));
-                        return;
-                    }
+static Array<SubmitInfo> AssembleSubmitInfos(TranslatePipelineBatch&& pipeline_batch) {
+    TRACE_SCOPE_CAT("Vulkan.AssembleSubmitInfos", "RHI");
+    Array<SubmitInfo> submit_infos{};
+    submit_infos.reserve(pipeline_batch.translate_ops.size());
+    UnorderedMap<SubmissionKey, uint32, SubmissionKeyHash> submit_lookup{};
+    submit_lookup.reserve(static_cast<uint32>(pipeline_batch.translate_ops.size()));
 
-                    TranslateResult translate_output =
-                        VulkanTranslateTask::Dispatch(TranslateTaskInput{
-                            translate_info.queue,
-                            std::move(translate_info.submit),
-                            std::move(translate_info.initial_seed)
-                        });
+    for (auto& translate_info : pipeline_batch.translate_ops) {
+        TranslateResult translate_output{};
+        if (!translate_info.valid) {
+            translate_output = VulkanTranslateTask::MakeFailed(
+                translate_info.queue,
+                std::move(translate_info.error)
+            );
+        } else {
+            translate_output = VulkanTranslateTask::Dispatch(TranslateTaskInput{
+                translate_info.queue,
+                std::move(translate_info.submit),
+                std::move(translate_info.initial_seed)
+            });
+        }
 
-                    QueueSubmissionInfo submit_info{
-                        translate_info.key,
-                        translate_info.op_seq,
-                        translate_info.queue,
-                        std::move(translate_output.recorded_submit),
-                        std::move(translate_output.translate_complete)
-                    };
-                    submit_info.wait_submission_keys =
-                        std::move(translate_info.logical_wait_submission_keys);
-                    submit_info.valid = translate_output.valid;
-                    submit_info.error = std::move(translate_output.error);
-                    platform_ops.emplace_back(std::move(submit_info));
-                },
-                [&](PresentInfo& present_info) {
-                    platform_ops.emplace_back(std::move(present_info));
-                }
-            },
-            op
-        );
+        SubmitInfo submit_info{
+            translate_info.key,
+            std::move(translate_output)
+        };
+        submit_info.wait_submission_keys =
+            std::move(translate_info.logical_wait_submission_keys);
+
+        const uint32 submit_index = static_cast<uint32>(submit_infos.size());
+        submit_lookup.emplace(submit_info.key, submit_index);
+        submit_infos.emplace_back(std::move(submit_info));
     }
-    return platform_ops;
+
+    for (auto& pending_present : pipeline_batch.pending_presents) {
+        if (!pending_present.present_stage.has_value()) {
+            continue;
+        }
+        auto& present_stage = pending_present.present_stage.value();
+        if (!present_stage.valid) {
+            LOG_ERROR("{}", present_stage.error);
+            continue;
+        }
+        if (!pending_present.parent_submission_key.has_value()) {
+            LOG_ERROR(
+                "Present op_seq={} missing parent submission key",
+                present_stage.op_seq
+            );
+            continue;
+        }
+
+        const SubmissionKey parent_key = pending_present.parent_submission_key.value();
+        const auto parent_it = submit_lookup.find(parent_key);
+        if (parent_it == submit_lookup.end()) {
+            LOG_ERROR(
+                "Present op_seq={} missing parent submit ({}, {}) in submit assembly",
+                present_stage.op_seq,
+                parent_key.op_seq,
+                parent_key.submit_idx
+            );
+            continue;
+        }
+
+        SubmitInfo& parent_submit = submit_infos[parent_it->second];
+        if (parent_submit.translate_result.queue != EQueueType::Graphics) {
+            LOG_ERROR(
+                "Present op_seq={} parent submit ({}, {}) queue is not Graphics",
+                present_stage.op_seq,
+                parent_submit.key.op_seq,
+                parent_submit.key.submit_idx
+            );
+            continue;
+        }
+        if (parent_submit.present_stage.has_value()) {
+            LOG_ERROR(
+                "Parent submit ({}, {}) already has present stage attached",
+                parent_submit.key.op_seq,
+                parent_submit.key.submit_idx
+            );
+            continue;
+        }
+
+        parent_submit.present_stage = std::move(present_stage);
+    }
+    return submit_infos;
 }
 
 static bool ValidateFrameEndState(const ResourceStateSnapshot& snapshot) {
@@ -3566,21 +3628,21 @@ void VulkanSubmissionExecutor::Execute(
     // All persistent state has been committed incrementally during preprocess (per segment).
     // No additional CommitPersistentResourceStates call needed here.
 
-    Array<TranslatePipelineOp> translate_ops{};
+    TranslatePipelineBatch translate_pipeline{};
     {
         TRACE_SCOPE_CAT("Vulkan.Assemble", "RHI");
-        translate_ops = AssembleTranslatePipelineOps(std::move(ops), preprocess_store);
+        translate_pipeline = AssembleTranslatePipelineOps(std::move(ops), preprocess_store);
     }
-    Array<PlatformExecOp> platform_ops{};
+    Array<SubmitInfo> submit_infos{};
     {
-        TRACE_SCOPE_CAT("Vulkan.TranslateTaskDispatch", "RHI");
-        platform_ops = DispatchTranslateTasks(std::move(translate_ops));
+        TRACE_SCOPE_CAT("Vulkan.SubmitAssemble", "RHI");
+        submit_infos = AssembleSubmitInfos(std::move(translate_pipeline));
     }
 
     SubmissionPlanExecutor executor{};
     {
         TRACE_SCOPE_CAT("Vulkan.ExecuteSubmissionPlan", "RHI");
-        executor.Execute(std::move(platform_ops), options.frame_end);
+        executor.Execute(std::move(submit_infos), options.frame_end);
     }
 }
 

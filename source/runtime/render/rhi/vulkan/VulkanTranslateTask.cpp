@@ -7,6 +7,16 @@
 
 namespace Moer::Render {
 
+TranslateResult VulkanTranslateTask::MakeFailed(EQueueType queue, std::string error) {
+    TranslateResult result{};
+    result.queue              = queue;
+    result.translate_complete = GraphEvent::CreateGraphEvent();
+    result.valid              = false;
+    result.error              = std::move(error);
+    result.translate_complete->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+    return result;
+}
+
 TranslateResult VulkanTranslateTask::Dispatch(TranslateTaskInput&& input) {
     TranslateResult result{};
     result.queue              = input.queue;
@@ -27,17 +37,22 @@ TranslateResult VulkanTranslateTask::Dispatch(TranslateTaskInput&& input) {
             break;
         }
         default: {
-            result.valid = false;
-            result.error = std::format(
-                "VulkanTranslateTask::Dispatch invalid queue: {}",
-                static_cast<uint32>(input.queue)
+            result = MakeFailed(
+                input.queue,
+                std::format(
+                    "VulkanTranslateTask::Dispatch invalid queue: {}",
+                    static_cast<uint32>(input.queue)
+                )
             );
-            LOG_ERROR("{}", result.error);
             break;
         }
     }
 
-    result.translate_complete->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+    if (result.valid) {
+        result.translate_complete->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+    } else if (!result.error.empty()) {
+        LOG_ERROR("{}", result.error);
+    }
     return result;
 }
 
