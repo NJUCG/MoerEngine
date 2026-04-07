@@ -343,7 +343,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         that we've done flushing copy queue resources
         */
     gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
-    RasterTool::TickAndLogProfiling(gfx_queue, editor_config->raster_config);
+    // RasterTool::TickAndLogProfiling(gfx_queue, editor_config->raster_config);
 
     if (!skip_present) {
         gfx_queue.Present(swapchain, default_output_texture);

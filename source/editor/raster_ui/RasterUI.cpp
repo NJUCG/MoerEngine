@@ -247,6 +247,32 @@ void RasterUI::ShowConfig() {
             }
         };
 
+        auto csm_shadow_cache_param = [&]() {
+            ImGui::Separator();
+            ImGui::Checkbox("Enable Shadow Cache", &m_config.shadow_cache_enabled);
+            ImGui::TextWrapped(
+                "First N cascades always refresh. Later cascades may reuse cached shadow maps when camera "
+                "motion stays below threshold."
+            );
+            ImGui::SliderInt(
+                "Disable Cache For First N Cascades",
+                &m_config.shadow_cache_disable_first_n_cascades,
+                0,
+                m_config.shadow_csm_num_of_cascades
+            );
+            m_config.shadow_cache_disable_first_n_cascades =
+                Max(0,
+                    Min(m_config.shadow_cache_disable_first_n_cascades, m_config.shadow_csm_num_of_cascades));
+            for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {
+                ImGui::SliderFloat(
+                    std::format("Cascade {} Cache Move Threshold (Texels)", i).c_str(),
+                    &m_config.shadow_cache_camera_move_threshold_in_texels[i],
+                    0.0f,
+                    128.0f
+                );
+            }
+        };
+
         if (m_config.shadow_map_mode == EShadowMapMode::POINT_CUBE) { // Point Cube
             ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
         } else if (m_config.shadow_map_mode == EShadowMapMode::CSM) { // CSM
@@ -263,9 +289,11 @@ void RasterUI::ShowConfig() {
                     Max(m_config.shadow_csm_cover_ratio_of_camera[i], mx);
                 mx = m_config.shadow_csm_cover_ratio_of_camera[i];
             }
+            csm_shadow_cache_param();
         } else if (m_config.shadow_map_mode == EShadowMapMode::CSM_AUTO) { // CSM_Auto
             csm_common_param();
             ImGui::SliderFloat("Lerp Factor", &m_config.shadow_csm_lerp_factor, 0, 1);
+            csm_shadow_cache_param();
         }
 
         ImGui::TreePop();

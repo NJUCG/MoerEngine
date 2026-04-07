@@ -4,6 +4,7 @@
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
+#include "misc/Timer.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "scene/LogicalComponents.h"
@@ -14,10 +15,21 @@
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 
+#include <sstream>
+
 namespace {
 
 using namespace Moer;
-constexpr float DEG2RAD = PI / 180.0f;
+constexpr float DEG2RAD         = PI / 180.0f;
+using ShadowCacheConfigSnapshot = Moer::Render::Raster::RasterContext::CSMData::ShadowCacheConfigSnapshot;
+using ShadowCacheEntry          = Moer::Render::Raster::RasterContext::CSMData::ShadowCacheEntry;
+
+struct CSMCascadeCandidate {
+    float4x4 world2shadow_clip{};
+    float4   scale_data{};
+    float3   snapped_light_space_center = float3(0.f, 0.f, 0.f);
+    float    world_units_per_texel      = 0.0f;
+};
 
 StaticArray<float, CSM_MAX_CASCADES> get_csm_blend(
     const StaticArray<float, CSM_MAX_CASCADES> split_point_raw,
@@ -74,14 +86,143 @@ StaticArray<float, CSM_MAX_CASCADES> transform_split_ratios_to_points(
     return split_points;
 }
 
-float4x4 get_world_to_shadow_clip_matrix(
+ShadowCacheConfigSnapshot build_shadow_cache_config_snapshot(const RasterConfig& ui_config) {
+    ShadowCacheConfigSnapshot snapshot{};
+    snapshot.shadow_map_mode                       = static_cast<int>(ui_config.shadow_map_mode);
+    snapshot.shadow_sampling_mode                  = ui_config.shadow_sampling_mode;
+    snapshot.shadow_csm_num_of_cascades            = ui_config.shadow_csm_num_of_cascades;
+    snapshot.shadow_csm_sm_size                    = ui_config.shadow_csm_sm_size;
+    snapshot.shadow_csm_lerp_factor                = ui_config.shadow_csm_lerp_factor;
+    snapshot.shadow_csm_blend_percentage           = ui_config.shadow_csm_blend_percentage;
+    snapshot.shadow_csm_blend_option               = ui_config.shadow_csm_blend_option;
+    snapshot.shadow_pcss_enabled                   = ui_config.shadow_pcss_enabled;
+    snapshot.shadow_pcss_light_size_world          = ui_config.shadow_pcss_light_size_world;
+    snapshot.shadow_cache_enabled                  = ui_config.shadow_cache_enabled;
+    snapshot.shadow_cache_disable_first_n_cascades = ui_config.shadow_cache_disable_first_n_cascades;
+    snapshot.shadow_csm_cover_ratio_of_camera      = ui_config.shadow_csm_cover_ratio_of_camera;
+    snapshot.shadow_cache_camera_move_threshold_in_texels =
+        ui_config.shadow_cache_camera_move_threshold_in_texels;
+    return snapshot;
+}
+
+bool is_shadow_cache_config_equal(
+    const ShadowCacheConfigSnapshot& lhs,
+    const ShadowCacheConfigSnapshot& rhs
+) {
+    if (lhs.shadow_map_mode != rhs.shadow_map_mode || lhs.shadow_sampling_mode != rhs.shadow_sampling_mode ||
+        lhs.shadow_csm_num_of_cascades != rhs.shadow_csm_num_of_cascades ||
+        lhs.shadow_csm_sm_size != rhs.shadow_csm_sm_size ||
+        lhs.shadow_csm_lerp_factor != rhs.shadow_csm_lerp_factor ||
+        lhs.shadow_csm_blend_percentage != rhs.shadow_csm_blend_percentage ||
+        lhs.shadow_csm_blend_option != rhs.shadow_csm_blend_option ||
+        lhs.shadow_pcss_enabled != rhs.shadow_pcss_enabled ||
+        lhs.shadow_pcss_light_size_world != rhs.shadow_pcss_light_size_world ||
+        lhs.shadow_cache_enabled != rhs.shadow_cache_enabled ||
+        lhs.shadow_cache_disable_first_n_cascades != rhs.shadow_cache_disable_first_n_cascades) {
+        return false;
+    }
+
+    for (uint i = 0; i < CSM_MAX_CASCADES; i++) {
+        if (lhs.shadow_csm_cover_ratio_of_camera[i] != rhs.shadow_csm_cover_ratio_of_camera[i] ||
+            lhs.shadow_cache_camera_move_threshold_in_texels[i] !=
+                rhs.shadow_cache_camera_move_threshold_in_texels[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void invalidate_shadow_cache_entries(Moer::Render::Raster::RasterContext::CSMData& csm_data) {
+    for (auto& shadow_cache_entry : csm_data.shadow_cache_entries) {
+        shadow_cache_entry.valid = false;
+    }
+}
+
+void store_shadow_cache_entry(
+    ShadowCacheEntry&          shadow_cache_entry,
+    const CSMCascadeCandidate& candidate,
+    const uint64_t             frame_index
+) {
+    shadow_cache_entry.valid                      = true;
+    shadow_cache_entry.world2shadow_clip          = candidate.world2shadow_clip;
+    shadow_cache_entry.scale_data                 = candidate.scale_data;
+    shadow_cache_entry.snapped_light_space_center = candidate.snapped_light_space_center;
+    shadow_cache_entry.world_units_per_texel      = candidate.world_units_per_texel;
+    shadow_cache_entry.last_update_frame          = frame_index;
+}
+
+float get_shadow_cache_move_in_texels(
+    const CSMCascadeCandidate& candidate,
+    const ShadowCacheEntry&    shadow_cache_entry
+) {
+    const float  texel_size = Max(candidate.world_units_per_texel, 1e-6f);
+    const float2 delta      = float2(
+        candidate.snapped_light_space_center.x - shadow_cache_entry.snapped_light_space_center.x,
+        candidate.snapped_light_space_center.y - shadow_cache_entry.snapped_light_space_center.y
+    );
+    return Lengthf(delta) / texel_size;
+}
+
+void tick_and_log_shadow_cache(
+    const RasterConfig&                         ui_config,
+    const bool                                  shadow_cache_settings_changed,
+    const uint                                  enabled_cascade_layers,
+    const StaticArray<bool, CSM_MAX_CASCADES>&  shadow_cache_eligible_flags,
+    const StaticArray<bool, CSM_MAX_CASCADES>&  shadow_cache_reuse_flags,
+    const StaticArray<float, CSM_MAX_CASCADES>& shadow_cache_move_in_texels,
+    const StaticArray<float, CSM_MAX_CASCADES>& shadow_cache_thresholds_in_texels
+) {
+    static LoopedTimer s_shadow_cache_log_timer(2.0, false);
+    if (!s_shadow_cache_log_timer.Tick()) {
+        return;
+    }
+
+    uint eligible_cascade_count = 0;
+    uint reused_cascade_count   = 0;
+    for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
+        eligible_cascade_count += shadow_cache_eligible_flags[cascade_index] ? 1u : 0u;
+        reused_cascade_count += shadow_cache_reuse_flags[cascade_index] ? 1u : 0u;
+    }
+
+    std::ostringstream stream;
+    stream.setf(std::ios::fixed);
+    stream.precision(2);
+    stream << "[ShadowCache] enabled=" << (ui_config.shadow_cache_enabled ? 1 : 0)
+           << " invalidated=" << (shadow_cache_settings_changed ? 1 : 0)
+           << " cascades=" << enabled_cascade_layers << " eligible=" << eligible_cascade_count
+           << " reused=" << reused_cascade_count
+           << " refreshed=" << (enabled_cascade_layers - reused_cascade_count);
+
+    for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
+        stream << " | c" << cascade_index << '=';
+        if (!shadow_cache_eligible_flags[cascade_index]) {
+            stream << "refresh(force)";
+            continue;
+        }
+
+        if (shadow_cache_reuse_flags[cascade_index]) {
+            stream << "reuse(";
+        } else {
+            stream << "refresh(";
+        }
+
+        stream << shadow_cache_move_in_texels[cascade_index] << '/'
+               << shadow_cache_thresholds_in_texels[cascade_index] << ')';
+    }
+
+    LOG_INFO("{}", stream.str());
+}
+
+CSMCascadeCandidate build_csm_cascade_candidate(
     const float3&       light_direction,
     const Camera&       camera,
     const RasterConfig& ui_config,
     const float         frustum_near_ratio,
-    const float         frustum_far_ratio,
-    float4&             out_scale_data
+    const float         frustum_far_ratio
 ) {
+    CSMCascadeCandidate candidate{};
+
     const float3 normalized_light_dir = Normalizef(light_direction);
     const float3 light_right          = Normalizef(Cross(normalized_light_dir, float3(0.f, 1.f, 0.f)));
     const float3 light_up             = Normalizef(Cross(light_right, normalized_light_dir));
@@ -150,18 +291,19 @@ float4x4 get_world_to_shadow_clip_matrix(
 
     // 最小跳跃单位，避免shadow swimming
     // Reference: https://zhuanlan.zhihu.com/p/116731971
-    const float world_units_per_texel = max_cross_distance / ui_config.shadow_csm_sm_size;
-    auto        get_fixed_coord       = [&](float x) {
-        return floorf(x / world_units_per_texel) * world_units_per_texel;
+    candidate.world_units_per_texel = max_cross_distance / ui_config.shadow_csm_sm_size;
+    auto get_fixed_coord            = [&](float x) {
+        return floorf(x / candidate.world_units_per_texel) * candidate.world_units_per_texel;
     };
 
+    candidate.snapped_light_space_center = float3(
+        get_fixed_coord((min.x + max.x) * 0.5f),
+        get_fixed_coord((min.y + max.y) * 0.5f),
+        get_fixed_coord(min.z - 0.01f)
+    );
+
     //虚拟光源位置
-    const float3 light_pos =
-        world_to_light_view_rotate_only_inverse * Vector3f(
-                                                      get_fixed_coord((min.x + max.x) * 0.5f),
-                                                      get_fixed_coord((min.y + max.y) * 0.5f),
-                                                      get_fixed_coord(min.z - 0.01f)
-                                                  );
+    const float3 light_pos = world_to_light_view_rotate_only_inverse * candidate.snapped_light_space_center;
 
     // Get new z min & max in Light View Space
     float light_z_offset            = Dot(light_pos, light_direction);
@@ -198,9 +340,10 @@ float4x4 get_world_to_shadow_clip_matrix(
     float z_range     = z_far_val - z_near_val;
 
     // x: Width, y: Height, z: ZRange, w: NearPlane
-    out_scale_data = float4(ortho_width, ortho_width, z_range, z_near_val);
+    candidate.scale_data        = float4(ortho_width, ortho_width, z_range, z_near_val);
+    candidate.world2shadow_clip = world_to_light_orth_matrix;
 
-    return world_to_light_orth_matrix; // RVO
+    return candidate; // RVO
 }
 }; // namespace
 
@@ -419,6 +562,21 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
     const auto& c_transform = r.get<ecs::CTransform>(light_entity);
     context.lighting_data.main_light_direction =
         Normalizef(c_transform.rotation.Rotate(float3(0.f, 0.f, -1.f)));
+    context.csm_data.light_dir = context.lighting_data.main_light_direction;
+
+    const uint disabled_cache_cascade_count = static_cast<uint>(
+        Max(0, Min(ui_config.shadow_cache_disable_first_n_cascades, static_cast<int>(enabled_cascade_layers)))
+    );
+    const auto shadow_cache_snapshot = build_shadow_cache_config_snapshot(ui_config);
+    const bool shadow_cache_settings_changed =
+        !context.csm_data.shadow_cache_config_snapshot_valid ||
+        !is_shadow_cache_config_equal(context.csm_data.shadow_cache_config_snapshot, shadow_cache_snapshot);
+    if (shadow_cache_settings_changed) {
+        invalidate_shadow_cache_entries(context.csm_data);
+    }
+    context.csm_data.shadow_cache_config_snapshot       = shadow_cache_snapshot;
+    context.csm_data.shadow_cache_config_snapshot_valid = true;
+    const uint64_t shadow_cache_frame_index             = ++context.csm_data.shadow_cache_frame_counter;
 
     //lerp csm ratios
     StaticArray<float, CSM_MAX_CASCADES>
@@ -460,6 +618,11 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         context.lighting_data.cascade_blend_start_ratios[i] = local_cascade_blend_start_ratios[i];
     }
 
+    StaticArray<bool, CSM_MAX_CASCADES>  shadow_cache_eligible_flags{};
+    StaticArray<bool, CSM_MAX_CASCADES>  shadow_cache_reuse_flags{};
+    StaticArray<float, CSM_MAX_CASCADES> shadow_cache_move_in_texels{};
+    StaticArray<float, CSM_MAX_CASCADES> shadow_cache_thresholds_in_texels{};
+
     for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
 
         // World to Shadow Clip Matrix
@@ -467,14 +630,41 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             (cascade_index == 0) ? 0.0f : context.lighting_data.cascade_blend_start_ratios[cascade_index - 1];
         const float frustum_far_ratio = context.lighting_data.cascade_split_ratios[cascade_index];
 
-        context.lighting_data.world2shadow_clip[cascade_index] = get_world_to_shadow_clip_matrix(
+        const auto shadow_candidate = build_csm_cascade_candidate(
             context.lighting_data.main_light_direction,
             camera,
             ui_config,
             frustum_near_ratio,
-            frustum_far_ratio,
-            context.lighting_data.scale_data[cascade_index]
+            frustum_far_ratio
         );
+        auto&      shadow_cache_entry = context.csm_data.shadow_cache_entries[cascade_index];
+        const bool shadow_cache_eligible =
+            ui_config.shadow_cache_enabled && cascade_index >= disabled_cache_cascade_count;
+        const float shadow_cache_threshold_in_texels =
+            Max(0.0f, ui_config.shadow_cache_camera_move_threshold_in_texels[cascade_index]);
+        const float shadow_cache_move_distance_in_texels =
+            shadow_cache_entry.valid ? get_shadow_cache_move_in_texels(shadow_candidate, shadow_cache_entry) :
+                                       0.0f;
+        const bool shadow_cache_dirty = shadow_cache_settings_changed || !shadow_cache_entry.valid ||
+                                        (shadow_cache_eligible && shadow_cache_move_distance_in_texels >
+                                                                      shadow_cache_threshold_in_texels);
+        const bool reuse_shadow_cache = shadow_cache_eligible && !shadow_cache_dirty;
+
+        shadow_cache_eligible_flags[cascade_index]       = shadow_cache_eligible;
+        shadow_cache_reuse_flags[cascade_index]          = reuse_shadow_cache;
+        shadow_cache_move_in_texels[cascade_index]       = shadow_cache_move_distance_in_texels;
+        shadow_cache_thresholds_in_texels[cascade_index] = shadow_cache_threshold_in_texels;
+
+        if (reuse_shadow_cache) {
+            context.lighting_data.world2shadow_clip[cascade_index] = shadow_cache_entry.world2shadow_clip;
+            context.lighting_data.scale_data[cascade_index]        = shadow_cache_entry.scale_data;
+            context.csm_data.world2shadow_clip[cascade_index]      = shadow_cache_entry.world2shadow_clip;
+            continue;
+        }
+
+        context.lighting_data.world2shadow_clip[cascade_index] = shadow_candidate.world2shadow_clip;
+        context.lighting_data.scale_data[cascade_index]        = shadow_candidate.scale_data;
+        context.csm_data.world2shadow_clip[cascade_index]      = shadow_candidate.world2shadow_clip;
 
         if (use_gpu_culling) {
             m_culling_pass.Process(
@@ -497,10 +687,28 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             std::format("Shadow Depth Pass - {}", cascade_index),
             cascade_index
         );
+
+        store_shadow_cache_entry(shadow_cache_entry, shadow_candidate, shadow_cache_frame_index);
     }
+
+    tick_and_log_shadow_cache(
+        ui_config,
+        shadow_cache_settings_changed,
+        enabled_cascade_layers,
+        shadow_cache_eligible_flags,
+        shadow_cache_reuse_flags,
+        shadow_cache_move_in_texels,
+        shadow_cache_thresholds_in_texels
+    );
 }
 
 void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
+    if (ui_config.shadow_map_mode != EShadowMapMode::CSM &&
+        ui_config.shadow_map_mode != EShadowMapMode::CSM_AUTO) {
+        invalidate_shadow_cache_entries(context.csm_data);
+        context.csm_data.shadow_cache_config_snapshot_valid = false;
+    }
+
     switch (ui_config.shadow_map_mode) {
         case EShadowMapMode::NONE:
             break;

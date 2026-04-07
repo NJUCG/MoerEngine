@@ -218,20 +218,24 @@ struct RasterConfig {
     bool ai_trt_force_ldr = true;
 
     // MARK: Shadow
-    EShadowMapMode shadow_map_mode              = EShadowMapMode::CSM;
-    int            shadow_sampling_mode         = 0;
-    int            shadow_csm_num_of_cascades   = 4;
-    float          shadow_csm_lerp_factor       = 0.015f;
-    float          shadow_csm_blend_percentage  = 0.3f;
-    bool           shadow_csm_blend_option      = true;
-    int            shadow_csm_sm_size           = 4096;
-    bool           shadow_csm_visualize_cascade = false;
+    EShadowMapMode shadow_map_mode                       = EShadowMapMode::CSM;
+    int            shadow_sampling_mode                  = 0;
+    int            shadow_csm_num_of_cascades            = 4;
+    float          shadow_csm_lerp_factor                = 0.015f;
+    float          shadow_csm_blend_percentage           = 0.3f;
+    bool           shadow_csm_blend_option               = true;
+    int            shadow_csm_sm_size                    = 4096;
+    bool           shadow_csm_visualize_cascade          = false;
+    bool           shadow_cache_enabled                  = true; // 开启后允许远级联复用上一帧阴影图
+    int            shadow_cache_disable_first_n_cascades = 0;    // 前N层级联始终全量刷新
 
     // MARK: Shadow - PCSS
     bool  shadow_pcss_enabled          = true;
     float shadow_pcss_light_size_world = 0.01f;
 
     StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera = {0.005, 0.02, 0.1, 0.25};
+    StaticArray<float, CSM_MAX_CASCADES> shadow_cache_camera_move_threshold_in_texels =
+        {1.0f, 8.0f, 32.0f, 128.0f}; // 级联中心移动超过该阈值后刷新
 
     // MARK: Skybox
     bool  skybox_exposure_correct_enabled      = true;         // 启用的话，就会找到第一个平行光，乘上它的颜色
