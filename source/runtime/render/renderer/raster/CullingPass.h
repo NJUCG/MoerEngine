@@ -169,17 +169,6 @@ private:
             return;
         }
 
-        context.cmd_list.Barriers(
-            EQueueType::Graphics,
-            EQueueType::Graphics,
-            EPassType::Compute,
-            WriteBuffer{
-                visibility_set.visible_instance_id_buf.buf->GetView(), EBufferState::UNORDERED_ACCESS
-            },
-            WriteBuffer{visibility_set.draw_cmd_buf->GetView(), EBufferState::UNORDERED_ACCESS},
-            WriteBuffer{visibility_set.counter_buf->GetView(), EBufferState::UNORDERED_ACCESS}
-        );
-
         const uint dispatch_count = (params.draw_count + 63) / 64;
 
         if (!profile_scope_name.empty()) {
@@ -202,15 +191,6 @@ private:
         if (!profile_scope_name.empty()) {
             context.cmd_list.PopScopeWithTimeScope();
         }
-
-        context.cmd_list.Barriers(
-            EQueueType::Graphics,
-            EQueueType::Graphics,
-            EPassType::Graphics,
-            ReadBuffer{visibility_set.visible_instance_id_buf.buf->GetView(), EBufferState::SHADER_RESOURCE},
-            ReadBuffer{visibility_set.draw_cmd_buf->GetView(), EBufferState::INDIRECT},
-            ReadBuffer{visibility_set.counter_buf->GetView(), EBufferState::INDIRECT}
-        );
 
         context.cmd_list.CopyFrom(
             visibility_set.counter_buf->GetView(),
