@@ -691,15 +691,16 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         store_shadow_cache_entry(shadow_cache_entry, shadow_candidate, shadow_cache_frame_index);
     }
 
-    tick_and_log_shadow_cache(
-        ui_config,
-        shadow_cache_settings_changed,
-        enabled_cascade_layers,
-        shadow_cache_eligible_flags,
-        shadow_cache_reuse_flags,
-        shadow_cache_move_in_texels,
-        shadow_cache_thresholds_in_texels
-    );
+    // // 取消注释本段代码，可以在每帧渲染时，输出 Shadow Cache 的状态日志，便于调试和观察 Shadow Cache 的行为
+    // tick_and_log_shadow_cache(
+    //     ui_config,
+    //     shadow_cache_settings_changed,
+    //     enabled_cascade_layers,
+    //     shadow_cache_eligible_flags,
+    //     shadow_cache_reuse_flags,
+    //     shadow_cache_move_in_texels,
+    //     shadow_cache_thresholds_in_texels
+    // );
 }
 
 void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {

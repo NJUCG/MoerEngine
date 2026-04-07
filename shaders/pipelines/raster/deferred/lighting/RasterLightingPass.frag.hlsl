@@ -6,6 +6,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "materials/Brdf.hlsli"
 #include "materials/Material.hlsli"
 #include "pipelines/raster/deferred/lighting/Lighting.hlsli"
+#include "pipelines/raster/deferred/lighting/shadows/CSM.hlsli"
 
 #include "shared/raster/ShaderParameters.h"
 
@@ -91,6 +92,14 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     }
 
     color = max(color, 0.0);
+
+    if (
+        lighting_data.shadow_csm_visualize_cascade != 0
+        && (lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM
+            || lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM_AUTO)
+    ) {
+        color = get_cascade_visualize_color(lighting_data, position);
+    }
 
     return float4(color, 1.0);
 }

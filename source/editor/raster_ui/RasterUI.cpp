@@ -241,6 +241,25 @@ void RasterUI::ShowConfig() {
             ImGui::SliderInt("Num of Cascades", &m_config.shadow_csm_num_of_cascades, 1, CSM_MAX_CASCADES);
             ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
             ImGui::Checkbox("Visualize CSM Cascade", &m_config.shadow_csm_visualize_cascade);
+            if (m_config.shadow_csm_visualize_cascade) {
+                ImGui::TextDisabled("Cascade Colors:");
+
+                static const ImVec4 s_cascade_visualize_colors[CSM_MAX_CASCADES] = {
+                    ImVec4(0.96f, 0.24f, 0.24f, 1.0f),
+                    ImVec4(0.96f, 0.58f, 0.18f, 1.0f),
+                    ImVec4(0.25f, 0.78f, 0.32f, 1.0f),
+                    ImVec4(0.20f, 0.45f, 0.96f, 1.0f)
+                };
+                static const char* s_cascade_visualize_color_names[CSM_MAX_CASCADES] = {
+                    "Cascade 0: Red", "Cascade 1: Orange", "Cascade 2: Green", "Cascade 3: Blue"
+                };
+
+                for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {
+                    ImGui::TextColored(
+                        s_cascade_visualize_colors[i], "%s", s_cascade_visualize_color_names[i]
+                    );
+                }
+            }
             ImGui::Checkbox("Enable CSM Blend", &m_config.shadow_csm_blend_option);
             if (m_config.shadow_csm_blend_option) {
                 ImGui::SliderFloat("Blend Percentage", &m_config.shadow_csm_blend_percentage, 0, 1);
