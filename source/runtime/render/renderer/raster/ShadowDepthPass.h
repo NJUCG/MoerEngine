@@ -54,11 +54,14 @@ private:
         const float4x4&     view_proj,
         const Rect2D&       rect,
         TextureView         depth_view,
-        std::string_view    pass_name
+        bool                use_gpu_culling,
+        std::string_view    pass_name,
+        std::optional<uint> csm_profile_layer = std::nullopt
     );
 
 private:
     uint                    enabled_cascade_layers;
     ShadowDepthPassPipeline m_pso;
+    CullingPass             m_culling_pass;
 };
 } // namespace Moer::Render::Raster

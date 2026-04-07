@@ -9,6 +9,7 @@
 #include "LightingPass.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
+#include "RasterTool.h"
 #include "RtaoDenoiserPass.h"
 #include "ShadowDepthPass.h"
 #include "SkyboxPass.h"
@@ -252,20 +253,18 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // FIXME: 统一update scene
         // scene.GetGpuScene().UpdateRaytracingScene(cmd_list);
 
-        // 当启用视锥剔除时，先恢复完整的 draw commands，
-        // 确保 ShadowDepthPass 使用未被上一帧剔除的完整场景数据
-        if (raster_config.enable_frustum_culling) {
-            raster_context.scene.RestoreDrawCommands(raster_context.cmd_list);
-        }
-
         // Shadow Depth Pass
+        cmd_list.PushScopeWithTimeScope(RasterTool::GetShadowDepthPassProfileScopeName());
         shadow_depth_pass->Process(raster_context, raster_config, camera);
+        cmd_list.PopScopeWithTimeScope();
 
         // Update Global Lighting Data
         UpdateGlobalLightingData(raster_context, raster_config, camera);
 
         // Geometry Pass
+        cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryPassProfileScopeName());
         geometry_pass->Process(raster_context, raster_config, camera);
+        cmd_list.PopScopeWithTimeScope();
 
         // Directional Shadow Mask Pass
         directional_shadow_mask_pass->Process(raster_context, raster_config, camera);
@@ -343,7 +342,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         we're not waiting for the copy queue to finish, because operations we wanted are synced on host side, we use this timeline just to notifiy the validation layer
         that we've done flushing copy queue resources
         */
-    gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources());
+    gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
+    RasterTool::TickAndLogProfiling(gfx_queue, editor_config->raster_config);
+
     if (!skip_present) {
         gfx_queue.Present(swapchain, default_output_texture);
         if (hooks.on_present_windows) {

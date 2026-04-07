@@ -46,8 +46,14 @@ struct VsContext {
         instance_id = _instance_id;
 
         // 1. GInstance
+        uint scene_instance_id = instance_id;
+        if (param.use_visible_instance_id_remap != 0) {
+            ArrayBuffer visible_instance_id_buf = ArrayBuffer(param.visible_instance_id_buf_hdl);
+            scene_instance_id                   = visible_instance_id_buf.Load<uint>(instance_id);
+        }
+
         ArrayBuffer     instance_buf = ArrayBuffer(param.instance_buf_hdl);
-        Moer::GInstance instance     = instance_buf.Load<Moer::GInstance>(instance_id);
+        Moer::GInstance instance     = instance_buf.Load<Moer::GInstance>(scene_instance_id);
         primitive_id                 = instance.primitive_id; // primitive_id == draw_id
         model2world                  = instance.world_transform;
 

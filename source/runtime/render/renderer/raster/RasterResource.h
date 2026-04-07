@@ -11,6 +11,7 @@
 #include <stb_image.h>
 
 #include "RasterCompileTimeConstants.h"
+#include "RasterGpuCullingResource.h"
 #include "RasterTextures.h"
 
 namespace Moer::Render::Raster {
@@ -77,6 +78,8 @@ public:
 
         uint active_count = 1;
     } point_shadow_data;
+
+    GpuCullingBuffers gpu_culling_buffers;
 
     // RayTracing
     RaytracingSceneRef rt_scene() {
