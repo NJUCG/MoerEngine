@@ -974,6 +974,8 @@ public:
     uint64_t GetValue() const override;
 
     uint64 GetDeviceValue() const;
+    bool   TryGetDeviceValue(uint64& value) const;
+    bool   IsDeviceComplete(uint64 value) const;
 
     void Wait(uint64_t _value) override;
     // can be called on any thread to block current thread

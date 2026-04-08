@@ -3,36 +3,46 @@
 
 #include "rhi/RHICommand.h"
 #include "rhi/RHIIO.h"
+#include <optional>
+#include <utility>
 
 namespace Moer::Render {
 
 class VkCommandQueue;
 class VkCopyQueue;
-class VulkanAllocator;
+
+struct VulkanSubmissionBatchSubmit {
+    EQueueType queue{EQueueType::Ignore};
+    CmdSubmit  submit;
+
+    VulkanSubmissionBatchSubmit(EQueueType in_queue, CmdSubmit&& in_submit) :
+        queue(in_queue),
+        submit(std::move(in_submit)) {}
+
+    VulkanSubmissionBatchSubmit(VulkanSubmissionBatchSubmit&&) noexcept            = default;
+    VulkanSubmissionBatchSubmit& operator=(VulkanSubmissionBatchSubmit&&) noexcept = default;
+    VulkanSubmissionBatchSubmit(const VulkanSubmissionBatchSubmit&)                = delete;
+    VulkanSubmissionBatchSubmit& operator=(const VulkanSubmissionBatchSubmit&)     = delete;
+};
+
+struct VulkanSubmissionBatch {
+    Array<VulkanSubmissionBatchSubmit> submits{};
+    std::optional<RHIPresentRequest>   present{};
+};
+
+struct VulkanSubmissionExecuteOptions {
+    bool frame_end{false};
+};
 
 class RENDER_API VulkanSubmissionExecutor {
 public:
-    static void Execute(Array<RHIExecOp>&& ops, const RHIExecSubmitOptions& options = {});
+    static void Execute(
+        VulkanSubmissionBatch&&                batch,
+        const VulkanSubmissionExecuteOptions& options = {}
+    );
+    static GraphEventRef Sync(ERHISyncDepth depth = ERHISyncDepth::RHI);
     static void Flush();
     static void Shutdown();
-    static void EnqueueQueueCompletion(
-        uint64                        op_seq,
-        Array<WaitEvent>&&            wait_events,
-        VkCommandQueue*               queue,
-        uint64                        timeline_value,
-        UniquePtr<VulkanAllocator>&&  allocator,
-        Array<std::function<void()>>&& callbacks,
-        Array<SignalEvent>&&          signal_events
-    );
-    static void EnqueueCopyQueueCompletion(
-        uint64                        op_seq,
-        Array<WaitEvent>&&            wait_events,
-        VkCopyQueue*                  queue,
-        uint64                        timeline_value,
-        UniquePtr<VulkanAllocator>&&  allocator,
-        Array<std::function<void()>>&& callbacks,
-        Array<IOSignalEvt>&&          signal_events
-    );
 };
 
 } // namespace Moer::Render

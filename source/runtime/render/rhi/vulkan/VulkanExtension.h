@@ -59,7 +59,10 @@ public:
     virtual ~VulkanDeviceExtension() = default;
 
     static TVulkanDeviceExtensionArray GetMERequiredDeviceExtensions();
-    static TVulkanDeviceExtensionArray GetMEEnabledDeviceExtensions(const Set<std::string>& _gpu_extensions);
+    static TVulkanDeviceExtensionArray GetMEEnabledDeviceExtensions(
+        const Set<std::string>& _gpu_extensions,
+        bool                    has_surface_maintenance_instance
+    );
 
     virtual bool IsOptional() const final {
         return m_is_optional;
@@ -82,18 +85,19 @@ public:
     }
 
     // optional extensions
-    bool m_has_ext_descriptor_buffer;
-    bool m_has_khr_acceleration_structure;
-    bool m_has_khr_ray_tracing_pipeline;
-    bool m_has_khr_ray_query;
-    bool m_has_ext_mesh_shader;
-    bool m_allow_mesh_primitive_shading;
+    bool m_has_ext_descriptor_buffer{false};
+    bool m_has_khr_acceleration_structure{false};
+    bool m_has_khr_ray_tracing_pipeline{false};
+    bool m_has_khr_ray_query{false};
+    bool m_has_khr_swapchain_maintenance1{false};
+    bool m_has_ext_mesh_shader{false};
+    bool m_allow_mesh_primitive_shading{false};
 
-    bool m_has_memory_priority;
-    bool m_has_pageable_device_local_memory;
+    bool m_has_memory_priority{false};
+    bool m_has_pageable_device_local_memory{false};
     // nvidia
-    bool m_has_nv_memory_decompression;
-    bool m_has_nv_copy_memory_indirect;
+    bool m_has_nv_memory_decompression{false};
+    bool m_has_nv_copy_memory_indirect{false};
 };
 } // namespace Moer::Render
 

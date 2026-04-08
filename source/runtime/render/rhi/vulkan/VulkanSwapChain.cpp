@@ -320,7 +320,7 @@ void VkSwapchain::Present(VkQueue _queue, uint _index) {
     // 如果启用了 VK_EXT_swapchain_maintenance1，则使用 present fence 优化队列同步；
     // 否则退回到兼容路径，不挂 VkSwapchainPresentFenceInfoEXT，避免验证层报扩展未启用。
     const bool use_present_fence =
-        device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+        device.GetOptionalExtensions().m_has_khr_swapchain_maintenance1;
 
     VkSwapchainPresentFenceInfoEXT present_fence_info{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
     if (use_present_fence) {

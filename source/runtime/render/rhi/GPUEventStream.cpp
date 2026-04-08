@@ -18,7 +18,7 @@ void GPUEventStream::RegisterSubmit(Array<GPUEvent>&& events, EQueueType queue, 
     });
 }
 
-void GPUEventStream::ResolveCompleted(uint64 timeline_value) {
+void GPUEventStream::ResolveCompleted(WaitEvent completion) {
     std::lock_guard lock(stream_mutex);
 
     Array<PendingSubmit> completed;
@@ -26,7 +26,8 @@ void GPUEventStream::ResolveCompleted(uint64 timeline_value) {
 
     while (!pending_submits.empty()) {
         PendingSubmit& submit = pending_submits.front();
-        if (submit.completion.value <= timeline_value) {
+        if (submit.completion.timeline_handle == completion.timeline_handle &&
+            submit.completion.value <= completion.value) {
             completed.push_back(std::move(submit));
         } else {
             remaining.push(std::move(submit));
@@ -106,4 +107,3 @@ void GPUEventStream::FlushToProfiler() {
 }
 
 }  // namespace Moer::Render
-

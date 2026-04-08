@@ -1,16 +1,19 @@
-﻿#include "VulkanSubmissionExecutor.h"
+#include "VulkanSubmissionExecutor.h"
 
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanQueue.h"
 #include "VulkanRHITrace.h"
 #include "VulkanRHIResource.h"
+#include "VulkanInterruptRuntime.h"
 #include "VulkanAllocator.h"
+#include "VulkanSubmissionRuntime.h"
 #include "VulkanTranslateTask.h"
 #include "RHICmdReorderer.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
+#include "rhi/GPUEventStream.h"
 #include "rhi/RHIImpl.h"
 #include "trace/Trace.h"
 
@@ -37,6 +40,15 @@
 #include <vulkan/vulkan_core.h>
 
 namespace Moer::Render {
+
+struct AutoGpuEventTokenFactory {
+    static QueryToken CreateTimestampToken(std::string_view name) {
+        static std::atomic<uint64_t> next_auto_query_id{1ull << 62u};
+        const uint64_t token_id = next_auto_query_id.fetch_add(1, std::memory_order_relaxed);
+        return QueryToken(token_id, QueryKind::Timestamp, std::string(name), QueryFuture::Create());
+    }
+};
+
 namespace {
 
 static const char* VkLayoutStr(VkImageLayout layout) {
@@ -66,7 +78,7 @@ enum class ETrackedResourceType : uint8 {
 struct ResourceKey {
     ETrackedResourceType type{ETrackedResourceType::Buffer};
     uint64               handle{0};
-    // Subresource range — only meaningful for Texture type.
+    // Subresource range �?only meaningful for Texture type.
     // 0xFF (kRemainingSubresource) means "all remaining" (whole-resource default).
     uint8                mip_level{0};
     uint8                mip_count{kRemainingSubresource};
@@ -111,22 +123,8 @@ struct ResourceAccessDigestEntry {
 // allowing independent tracking of different mip/layer ranges of the same texture.
 using ResourceAccessDigest = UnorderedMap<ResourceKey, ResourceAccessDigestEntry, ResourceKeyHash>;
 
-struct SubmissionKey {
-    uint64 op_seq{0};
-    uint32 submit_idx{0};
-
-    bool operator==(const SubmissionKey& other) const {
-        return op_seq == other.op_seq && submit_idx == other.submit_idx;
-    }
-};
-
-struct SubmissionKeyHash {
-    size_t operator()(const SubmissionKey& key) const {
-        size_t hash = std::hash<uint64>{}(key.op_seq);
-        hash ^= std::hash<uint32>{}(key.submit_idx) + 0x9e3779b9 + (hash << 6u) + (hash >> 2u);
-        return hash;
-    }
-};
+using SubmissionKey     = Moer::Render::SubmissionKey;
+using SubmissionKeyHash = Moer::Render::SubmissionKeyHash;
 
 static bool SubmissionKeyLess(const SubmissionKey& lhs, const SubmissionKey& rhs) {
     if (lhs.op_seq != rhs.op_seq) {
@@ -135,15 +133,7 @@ static bool SubmissionKeyLess(const SubmissionKey& lhs, const SubmissionKey& rhs
     return lhs.submit_idx < rhs.submit_idx;
 }
 
-struct ResourceStateValue {
-    bool       known{false};
-    bool       has_writer{false};
-    EQueueType owner_queue{EQueueType::Ignore};
-    std::optional<SubmissionKey> last_submission{};
-
-    EBufferState  buffer_state{EBufferState::UNDEFINED};
-    ETextureState texture_state{ETextureState::UNDEFINED};
-};
+using ResourceStateValue = Moer::Render::ResourceStateValue;
 
 using ResourceStateSnapshot = UnorderedMap<ResourceKey, ResourceStateValue, ResourceKeyHash>;
 using DirtyWrittenResources = UnorderedSet<ResourceKey, ResourceKeyHash>;
@@ -169,6 +159,21 @@ enum class ESegmentType : uint8 {
     Graphics,
     Copy
 };
+
+struct ExecutorSubmitOp {
+    Array<CmdSubmit> submits;
+    EQueueType       queue{EQueueType::Graphics};
+
+    ExecutorSubmitOp() = default;
+    ExecutorSubmitOp(ExecutorSubmitOp&&) noexcept            = default;
+    ExecutorSubmitOp& operator=(ExecutorSubmitOp&&) noexcept = default;
+    ExecutorSubmitOp(const ExecutorSubmitOp&)                = delete;
+    ExecutorSubmitOp& operator=(const ExecutorSubmitOp&)     = delete;
+};
+
+using ExecutorPresentOp = Moer::Render::ExecutorPresentOp;
+
+using ExecutorOp = std::variant<ExecutorSubmitOp, ExecutorPresentOp>;
 
 struct TranslateInfo {
     SubmissionKey key{};
@@ -368,52 +373,150 @@ struct QueueTranslateInfo {
     QueueTranslateInfo& operator=(const QueueTranslateInfo&)     = delete;
 };
 
-struct SubmitPresentStage {
-    uint64       op_seq{0};
-    RHIPresentOp present{};
-    bool         has_source_texture_state{false};
-    ResourceStateValue source_texture_state{};
-    bool         valid{true};
-    std::string  error{};
-
-    SubmitPresentStage(uint64 in_op_seq, RHIPresentOp&& in_present) :
-        op_seq(in_op_seq),
-        present(std::move(in_present)) {}
-
-    SubmitPresentStage(SubmitPresentStage&&) noexcept            = default;
-    SubmitPresentStage& operator=(SubmitPresentStage&&) noexcept = default;
-    SubmitPresentStage(const SubmitPresentStage&)                = delete;
-    SubmitPresentStage& operator=(const SubmitPresentStage&)     = delete;
-};
+using SubmitPresentStage = Moer::Render::SubmitPresentStage;
 
 struct PendingPresentAttachment {
     std::optional<SubmissionKey> parent_submission_key{};
     std::optional<SubmitPresentStage> present_stage{};
 };
 
-struct SubmitInfo {
-    SubmissionKey key{};
-    Array<SubmissionKey> wait_submission_keys{};
-    TranslateResult translate_result{};
-    std::optional<SubmitPresentStage> present_stage{};
-
-    SubmitInfo(
-        SubmissionKey in_key,
-        TranslateResult&& in_translate_result
-    ) :
-        key(in_key),
-        translate_result(std::move(in_translate_result)) {}
-
-    SubmitInfo(SubmitInfo&&) noexcept            = default;
-    SubmitInfo& operator=(SubmitInfo&&) noexcept = default;
-    SubmitInfo(const SubmitInfo&)                = delete;
-    SubmitInfo& operator=(const SubmitInfo&)     = delete;
-};
+using SubmitInfo = Moer::Render::SubmitInfo;
 
 struct TranslatePipelineBatch {
     Array<QueueTranslateInfo>    translate_ops{};
     Array<PendingPresentAttachment> pending_presents{};
 };
+
+static bool HasGpuEventType(const CmdSubmit& submit, GPUEvent::EType type) {
+    return std::any_of(submit.gpu_events.begin(), submit.gpu_events.end(), [type](const GPUEvent& event) {
+        return event.type == type;
+    });
+}
+
+static void AppendTimestampPair(
+    Array<UniquePtr<Command>>& commands,
+    const QueryToken&          token,
+    std::string_view           name
+) {
+    commands.emplace_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::BeginTimestamp, name));
+    commands.emplace_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::EndTimestamp, name));
+}
+
+static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
+    if (submit.cmds.empty()) {
+        return;
+    }
+
+    const bool has_begin_command_list =
+        HasGpuEventType(submit, GPUEvent::EType::BeginCommandList);
+    const bool has_end_command_list =
+        HasGpuEventType(submit, GPUEvent::EType::EndCommandList);
+    const bool has_frame_bound = HasGpuEventType(submit, GPUEvent::EType::FrameBound);
+
+    const bool inject_command_list_span = !(has_begin_command_list && has_end_command_list);
+    const bool inject_frame_bound       = submit.b_tick_profiling && !has_frame_bound;
+    if (!inject_command_list_span && !inject_frame_bound) {
+        return;
+    }
+
+    QueryToken begin_token{};
+    QueryToken end_token{};
+    QueryToken frame_bound_token{};
+
+    if (inject_command_list_span) {
+        begin_token = AutoGpuEventTokenFactory::CreateTimestampToken("AutoBeginCommandList");
+        end_token   = AutoGpuEventTokenFactory::CreateTimestampToken("AutoEndCommandList");
+        submit.query_tokens.emplace_back(begin_token);
+        submit.query_tokens.emplace_back(end_token);
+    }
+    if (inject_frame_bound) {
+        frame_bound_token = AutoGpuEventTokenFactory::CreateTimestampToken("AutoFrameBound");
+        submit.query_tokens.emplace_back(frame_bound_token);
+    }
+
+    Array<UniquePtr<Command>> rebuilt_commands{};
+    rebuilt_commands.reserve(
+        submit.cmds.size() +
+        (inject_command_list_span ? 4u : 0u) +
+        (inject_frame_bound ? 2u : 0u)
+    );
+
+    size_t body_begin = 0;
+    while (body_begin < submit.cmds.size()) {
+        const auto* queue_transfer =
+            dynamic_cast<const QueueTransferCmd*>(submit.cmds[body_begin].get());
+        if (queue_transfer == nullptr || !queue_transfer->IsImport()) {
+            break;
+        }
+        rebuilt_commands.emplace_back(std::move(submit.cmds[body_begin]));
+        ++body_begin;
+    }
+
+    size_t body_end = submit.cmds.size();
+    while (body_end > body_begin) {
+        const auto* queue_transfer =
+            dynamic_cast<const QueueTransferCmd*>(submit.cmds[body_end - 1].get());
+        if (queue_transfer == nullptr || queue_transfer->IsImport()) {
+            break;
+        }
+        --body_end;
+    }
+
+    if (inject_command_list_span) {
+        AppendTimestampPair(rebuilt_commands, begin_token, "AutoBeginCommandList");
+    }
+    for (size_t cmd_index = body_begin; cmd_index < body_end; ++cmd_index) {
+        rebuilt_commands.emplace_back(std::move(submit.cmds[cmd_index]));
+    }
+    if (inject_command_list_span) {
+        AppendTimestampPair(rebuilt_commands, end_token, "AutoEndCommandList");
+    }
+    if (inject_frame_bound) {
+        AppendTimestampPair(rebuilt_commands, frame_bound_token, "AutoFrameBound");
+    }
+    for (size_t cmd_index = body_end; cmd_index < submit.cmds.size(); ++cmd_index) {
+        rebuilt_commands.emplace_back(std::move(submit.cmds[cmd_index]));
+    }
+    submit.cmds = std::move(rebuilt_commands);
+
+    Array<GPUEvent> rebuilt_events{};
+    rebuilt_events.reserve(
+        submit.gpu_events.size() +
+        (inject_command_list_span ? 2u : 0u) +
+        (inject_frame_bound ? 1u : 0u)
+    );
+    if (inject_command_list_span) {
+        rebuilt_events.emplace_back(GPUEvent{
+            .type = GPUEvent::EType::BeginCommandList,
+            .name = "CommandList",
+            .query = begin_token,
+            .depth = 0,
+            .cpu_time_ns = 0
+        });
+    }
+    for (auto& event : submit.gpu_events) {
+        rebuilt_events.emplace_back(std::move(event));
+    }
+    if (inject_command_list_span) {
+        rebuilt_events.emplace_back(GPUEvent{
+            .type = GPUEvent::EType::EndCommandList,
+            .name = "",
+            .query = end_token,
+            .depth = 0,
+            .cpu_time_ns = 0
+        });
+    }
+    if (inject_frame_bound) {
+        rebuilt_events.emplace_back(GPUEvent{
+            .type = GPUEvent::EType::FrameBound,
+            .name = "FrameBound",
+            .query = frame_bound_token,
+            .depth = 0,
+            .cpu_time_ns = 0
+        });
+    }
+    submit.gpu_events = std::move(rebuilt_events);
+}
 
 static TrackerSeed BuildTrackerSeed(const ResourceStateSnapshot& snapshot);
 
@@ -891,6 +994,29 @@ public:
             visible_dirty_written_resources = *dirty_written_resources;
         }
         for (const Command* cmd : commands) {
+            if (cmd == nullptr) {
+                continue;
+            }
+            ResourceAccessDigest command_digest{};
+            VisitCommand(*cmd, command_digest, visible_dirty_written_resources);
+            MergeDigest(digest, command_digest);
+            ApplyDigestToDirtyWrittenResources(visible_dirty_written_resources, command_digest);
+        }
+        return digest;
+    }
+
+    ResourceAccessDigest CollectGraphicsSegment(
+        const CmdSubmit& submit,
+        size_t           begin,
+        size_t           end
+    ) const {
+        ResourceAccessDigest digest{};
+        DirtyWrittenResources visible_dirty_written_resources{};
+        if (dirty_written_resources != nullptr) {
+            visible_dirty_written_resources = *dirty_written_resources;
+        }
+        for (size_t cmd_index = begin; cmd_index < end; ++cmd_index) {
+            const Command* cmd = submit.cmds[cmd_index].get();
             if (cmd == nullptr) {
                 continue;
             }
@@ -1515,6 +1641,7 @@ private:
             }
             case Command::EType::Scope:
             case Command::EType::Query:
+            case Command::EType::BufferOverlap:
                 break;
             default:
                 break;
@@ -1527,20 +1654,20 @@ private:
     DirtyWrittenResources*  dirty_written_resources{nullptr};
 };
 
-static size_t EstimateSubmitCount(const Array<RHIExecOp>& ops) {
+static size_t EstimateSubmitCount(const Array<ExecutorOp>& ops) {
     size_t submit_count = 0;
     for (const auto& op : ops) {
-        if (const auto* submit_op = std::get_if<RHISubmitCmdList>(&op)) {
+        if (const auto* submit_op = std::get_if<ExecutorSubmitOp>(&op)) {
             submit_count += submit_op->submits.size();
         }
     }
     return submit_count;
 }
 
-static size_t EstimatePlatformOpCount(const Array<RHIExecOp>& ops) {
+static size_t EstimatePlatformOpCount(const Array<ExecutorOp>& ops) {
     size_t op_count = 0;
     for (const auto& op : ops) {
-        if (const auto* submit_op = std::get_if<RHISubmitCmdList>(&op)) {
+        if (const auto* submit_op = std::get_if<ExecutorSubmitOp>(&op)) {
             op_count += submit_op->submits.size();
         } else {
             op_count += 1;
@@ -1600,24 +1727,18 @@ static Array<CommandSegmentInfo> SplitIntoLogicalSegments(const CmdSubmit& submi
     return segments;
 }
 
-//TODO: optimize, we only need span here, no need to create a new array
 static Array<const Command*> GetSegmentCommandPointers(
     const CmdSubmit&                    submit,
     const CommandSegmentInfo& segment_info
 ) {
     Array<const Command*> commands{};
-    if (segment_info.type == ESegmentType::Copy) {
-        const auto* copy_scope = static_cast<const CopyScopeCmd*>(submit.cmds[segment_info.copy_scope_index].get());
-        commands.reserve(copy_scope->Commands().size());
-        for (const auto& cmd : copy_scope->Commands()) {
-            commands.emplace_back(cmd.get());
-        }
+    if (segment_info.type != ESegmentType::Copy) {
         return commands;
     }
-
-    commands.reserve(segment_info.end - segment_info.begin);
-    for (size_t cmd_index = segment_info.begin; cmd_index < segment_info.end; ++cmd_index) {
-        commands.emplace_back(submit.cmds[cmd_index].get());
+    const auto* copy_scope = static_cast<const CopyScopeCmd*>(submit.cmds[segment_info.copy_scope_index].get());
+    commands.reserve(copy_scope->Commands().size());
+    for (const auto& cmd : copy_scope->Commands()) {
+        commands.emplace_back(cmd.get());
     }
     return commands;
 }
@@ -1899,1059 +2020,48 @@ static void ApplyDigestToState(
     }
 }
 
-class SubmissionPlanExecutor {
+class VulkanSubmissionExecutorState {
 public:
-    void Execute(Array<SubmitInfo>&& submits, bool frame_end) const;
-};
+    VulkanSubmissionExecutorState() :
+        interrupt_runtime(),
+        submission_runtime(interrupt_runtime) {}
 
-struct SubmissionBatch {
-    Array<SubmitInfo> submits{};
-    bool frame_end{false};
-    uint64 batch_id{0};
-    std::shared_ptr<std::promise<void>> completion{};
-};
-
-static EPassType QueueTypeToPassType(EQueueType queue) {
-    switch (queue) {
-        case EQueueType::Graphics:
-            return EPassType::Graphics;
-        case EQueueType::Compute:
-            return EPassType::Compute;
-        case EQueueType::Copy:
-            return EPassType::Copy;
-        case EQueueType::Ignore:
-        case EQueueType::Num:
-        default:
-            return EPassType::Graphics;
-    }
-}
-
-static std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> GetTrackedTextureState(
-    VulkanTexture*            texture,
-    const ResourceStateValue& state,
-    EQueueType                queue
-) {
-    VkTracker tracker(queue);
-    const EPassType pass_type = QueueTypeToPassType(queue);
-    if (state.has_writer) {
-        return tracker.WriteTexture(texture, state.texture_state, pass_type);
-    }
-    return tracker.ReadTexture(texture, state.texture_state, pass_type);
-}
-
-static std::tuple<VkAccessFlags2, VkPipelineStageFlags2> GetTrackedBufferState(
-    VulkanBuffer*             buffer,
-    const ResourceStateValue& state,
-    EQueueType                queue
-) {
-    VkTracker tracker(queue);
-    const EPassType pass_type = QueueTypeToPassType(queue);
-    if (state.has_writer) {
-        return tracker.WriteBuffer(buffer, state.buffer_state, pass_type);
-    }
-    return tracker.ReadBuffer(buffer, state.buffer_state, pass_type);
-}
-
-struct SubmissionHostWaitTask {
-    uint64 serial{0};
-    uint64 op_seq{0};
-    Array<WaitEvent> wait_events{};
-};
-
-struct SubmissionQueueCompletionTask {
-    uint64                    serial{0};
-    VkCommandQueue*           queue{nullptr};
-    uint64                    timeline_value{0};
-    UniquePtr<VulkanAllocator> allocator{};
-    Array<std::function<void()>> callbacks{};
-    Array<SignalEvent>        signal_events{};
-};
-
-struct SubmissionCopyQueueCompletionTask {
-    uint64                    serial{0};
-    VkCopyQueue*              queue{nullptr};
-    uint64                    timeline_value{0};
-    UniquePtr<VulkanAllocator> allocator{};
-    Array<std::function<void()>> callbacks{};
-    Array<IOSignalEvt>        signal_events{};
-};
-
-class SubmissionPresentContext;
-
-struct SubmissionPresentCompletionTask {
-    uint64                     serial{0};
-    SubmissionPresentContext*  context{nullptr};
-    uint64                     timeline_value{0};
-    UniquePtr<VulkanPresentor> presentor{};
-};
-
-struct SubmissionFrameEndMarkerTask {
-    uint64 serial{0};
-    uint64 batch_id{0};
-    uint32 submission_count{0};
-    uint32 present_count{0};
-};
-
-using SubmissionEventTask = std::variant<
-    SubmissionHostWaitTask,
-    SubmissionQueueCompletionTask,
-    SubmissionCopyQueueCompletionTask,
-    SubmissionPresentCompletionTask,
-    SubmissionFrameEndMarkerTask>;
-
-class SubmissionPlanRuntime;
-static SubmissionPlanRuntime& GetSubmissionPlanRuntime();
-void EnqueueSubmissionPresentCompletion(
-    uint64                      op_seq,
-    Array<WaitEvent>&&          wait_events,
-    SubmissionPresentContext*   context,
-    uint64                      timeline_value,
-    UniquePtr<VulkanPresentor>&& presentor
-);
-
-class SubmissionPresentContext {
-public:
-    explicit SubmissionPresentContext(EQueueType in_queue_type) :
-        queue_type(in_queue_type),
-        command_queue(static_cast<VkCommandQueue&>(RenderDevice::Get().GetCommandQueue(in_queue_type))),
-        native_queue(in_queue_type, command_queue.vk_device),
-        timeline(MoerNew(VulkanFence(command_queue.vk_device))) {}
-
-    ~SubmissionPresentContext() {
-        Array<VulkanPresentor*> cached_presentors{};
-        presentors.PopAll(cached_presentors);
-        for (auto* presentor : cached_presentors) {
-            MoerDelete(presentor);
-        }
+    void Execute(Array<SubmitInfo>&& submits, bool frame_end) {
+        submission_runtime.Enqueue(std::move(submits), frame_end);
     }
 
-    SubmissionPresentContext(const SubmissionPresentContext&)                = delete;
-    SubmissionPresentContext& operator=(const SubmissionPresentContext&)     = delete;
-    SubmissionPresentContext(SubmissionPresentContext&&) noexcept            = delete;
-    SubmissionPresentContext& operator=(SubmissionPresentContext&&) noexcept = delete;
-
-    bool Present(
-        const RHIPresentOp&         present_op,
-        std::span<const WaitEvent>  wait_events,
-        const ResourceStateValue*   source_texture_state
-    ) {
-        if (!present_op.swapchain || !present_op.target.texture) {
-            return false;
-        }
-
-        auto* swapchain = ResourceCast(present_op.swapchain.Get());
-        if (swapchain == nullptr) {
-            return false;
-        }
-
-        std::unique_lock<std::mutex> queue_submit_lock(command_queue.GetSubmitMutex());
-        std::unique_lock<std::mutex> lock(submit_mutex);
-        WaitForReusablePresentSlot(*swapchain);
-
-        auto presentor = AcquirePresentor();
-        auto& cmd_list = presentor->GetCmdList();
-        auto& tracker  = presentor->GetTracker();
-
-        auto [ready_semaphore, image_index, present_index] = swapchain->AquireNextImage();
-        if (image_index == UINT32_MAX) {
-            presentor->Reset();
-            presentors.Push(presentor.release());
-            return false;
-        }
-
-        auto* src_texture       = static_cast<VulkanTexture*>(present_op.target.texture);
-        auto* swapchain_texture = ResourceCast(swapchain->GetSwapchainImage(image_index).texture);
-
-        cmd_list.Begin();
-        cmd_list.BeginLabel("Submission Present", {0.0f, 1.0f, 1.0f, 1.0f});
-        tracker.SetPassType(EPassType::Graphics);
-
-        TrackerSeed present_seed{};
-        TrackerSeedTextureEntry source_seed{};
-        source_seed.texture     = src_texture;
-        source_seed.mip_level   = static_cast<uint8_t>(present_op.target.mip_level);
-        source_seed.mip_count   = 1;
-        source_seed.array_layer = static_cast<uint8_t>(present_op.target.array_layer);
-        source_seed.array_count = 1;
-        if (source_texture_state != nullptr) {
-            source_seed.known         = source_texture_state->known;
-            source_seed.has_writer    = source_texture_state->has_writer;
-            source_seed.owner_queue   = source_texture_state->owner_queue;
-            source_seed.texture_state = source_texture_state->texture_state;
-        }
-        present_seed.textures.emplace_back(source_seed);
-        tracker.InitFromSeed(present_seed);
-
-        if (source_texture_state != nullptr && source_texture_state->known) {
-            auto [src_access, src_layout, src_stage] =
-                ResolveTextureSeedState(src_texture, *source_texture_state);
-            RHITRACE_RESOURCE_LOG(
-                src_texture->GetName(),
-                "[ResourceTrace][Present][SeedSrc] {} : known={} owner_queue={} state={} layout={} access=0x{:x}",
-                src_texture->GetName(),
-                source_texture_state->known,
-                QueueTypeName(source_texture_state->owner_queue),
-                int(source_texture_state->texture_state),
-                VkLayoutStr(src_layout),
-                uint64(src_access)
-            );
-        } else {
-            RHITRACE_RESOURCE_LOG(
-                src_texture->GetName(),
-                "[ResourceTrace][Present][SeedSrc] {} : persistent state UNKNOWN",
-                src_texture->GetName()
-            );
-        }
-        auto src_to_transfer = tracker.ReadTexture(src_texture, ETextureState::TRANSFER);
-        tracker.EmitLocalTransition(
-            src_texture,
-            static_cast<VkAccessFlagBits2>(std::get<0>(src_to_transfer)),
-            std::get<1>(src_to_transfer),
-            static_cast<VkPipelineStageFlagBits2>(std::get<2>(src_to_transfer)),
-            static_cast<uint8_t>(present_op.target.mip_level),
-            1,
-            static_cast<uint8_t>(present_op.target.array_layer),
-            1
-        );
-        tracker.EmitLocalTransition(
-            swapchain_texture,
-            tracker.WriteTexture(swapchain_texture, ETextureState::TRANSFER)
-        );
-        tracker.ResolveBarriers();
-        tracker.DispatchBarriers(cmd_list);
-
-        cmd_list.InsertLabel("Copy Present Image", {0.0f, 0.0f, 0.0f, 1.0f});
-        cmd_list.CopyTexture(
-            src_texture, swapchain_texture, present_op.target.extent, {0, 0, 0}, {0, 0, 0}, 0, 0
-        );
-        tracker.EmitLocalTransition(
-            swapchain_texture,
-            VK_ACCESS_2_NONE,
-            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            VK_PIPELINE_STAGE_2_COPY_BIT
-        );
-        tracker.ResolveBarriers();
-        tracker.DispatchBarriers(cmd_list);
-        cmd_list.EndLabel();
-        cmd_list.End();
-        tracker.Reset();
-
-        const uint64 completion_value = ++last_submitted_timeline;
-        native_queue.Signal(timeline.Get(), completion_value, VK_PIPELINE_STAGE_2_COPY_BIT);
-        for (const auto& wait_event : wait_events) {
-            auto* fence = reinterpret_cast<VulkanFence*>(wait_event.timeline_handle);
-            if (fence == nullptr) {
-                continue;
-            }
-            native_queue.Wait(fence, wait_event.value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        }
-        native_queue.Wait(ready_semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        native_queue.Signal(swapchain->GetRenderFinishedFence(), VK_PIPELINE_STAGE_2_COPY_BIT);
-        native_queue.Submit(cmd_list);
-
-        VkSemaphore render_finished_semaphore = swapchain->GetRenderFinishedFence();
-        VkFence     in_flight_fence           = swapchain->GetInFlightFence(present_index);
-        VkSwapchainPresentFenceInfoEXT present_fence_info{
-            VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT
-        };
-        present_fence_info.swapchainCount = 1;
-        present_fence_info.pFences        = &in_flight_fence;
-
-        VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-        present_info.pNext              = &present_fence_info;
-        present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores    = &render_finished_semaphore;
-        present_info.swapchainCount     = 1;
-        present_info.pSwapchains        = &swapchain->handle;
-        present_info.pImageIndices      = &image_index;
-
-        VkResult result = vkQueuePresentKHR(command_queue.vk_device.GetPresentQueue(), &present_info);
-        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR && result != VK_ERROR_OUT_OF_DATE_KHR) {
-            LOG_ERROR("vkQueuePresentKHR failed with result {}", int(result));
-        }
-        ++swapchain->image_idx;
-
-        Array<WaitEvent> completion_waits{};
-        completion_waits.emplace_back(uint64(timeline.Get()), completion_value);
-        EnqueueSubmissionPresentCompletion(
-            present_op.target.texture ? uint64(present_op.target.texture) : completion_value,
-            std::move(completion_waits),
-            this,
-            completion_value,
-            std::move(presentor)
-        );
-        TexturePersistentState persistent_state{};
-        persistent_state.known            = true;
-        persistent_state.owner_queue      = queue_type;
-        persistent_state.state            = ETextureState::TRANSFER;
-        persistent_state.last_access_kind = ERHIResourceLastAccessKind::Read;
-        present_op.target.texture->SetPersistentState(
-            present_op.target.mip_level,
-            present_op.target.array_layer,
-            persistent_state
-        );
-        RHITRACE_RESOURCE_LOG(
-            src_texture->GetName(),
-            "[ResourceTrace][Present][SetPersistent] {} : state=TRANSFER owner_queue={} access=Read mip={} layer={}",
-            src_texture->GetName(),
-            int(queue_type),
-            int(present_op.target.mip_level),
-            int(present_op.target.array_layer)
-        );
-        return true;
-    }
-
-    void Flush() {}
-
-    void Shutdown() {}
-
-    void ResolvePresentCompletion(UniquePtr<VulkanPresentor>&& presentor, uint64 timeline_value) {
-        if (!presentor) {
-            return;
-        }
-        presentor->VulkanAllocatorBase::Complete(timeline.Get(), timeline_value);
-        presentor->Reset();
-        std::lock_guard<std::mutex> lock(presentor_mutex);
-        presentors.Push(presentor.release());
-    }
-
-private:
-    UniquePtr<VulkanPresentor> AcquirePresentor() {
-        std::lock_guard<std::mutex> lock(presentor_mutex);
-        auto presentor = UniquePtr<VulkanPresentor>(presentors.Pop());
-        if (presentor) {
-            return presentor;
-        }
-        return MakeUnique<VulkanPresentor>(&command_queue.vk_device, queue_type);
-    }
-
-    void WaitForReusablePresentSlot(VkSwapchain& swapchain) {
-        const uint64 present_index = swapchain.image_idx;
-        if (present_index < swapchain.max_frames_in_flight) {
-            return;
-        }
-
-        VkFence fence = swapchain.GetInFlightFence(present_index);
-        while (true) {
-            const VkResult result = vkGetFenceStatus(command_queue.vk_device.GetDevice(), fence);
-            if (result == VK_SUCCESS) {
-                vkResetFences(command_queue.vk_device.GetDevice(), 1, &fence);
-                return;
-            }
-            if (result != VK_NOT_READY) {
-                LOG_ERROR(
-                    "vkGetFenceStatus failed on present fence slot {} with result {}",
-                    present_index % swapchain.max_frames_in_flight,
-                    int(result)
-                );
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-        }
-    }
-
-private:
-    EQueueType     queue_type{EQueueType::Graphics};
-    VkCommandQueue& command_queue;
-    VkNativeQueue   native_queue;
-    VulkanFenceRef  timeline = nullptr;
-    std::atomic_uint64_t last_submitted_timeline{0};
-
-    std::mutex submit_mutex{};
-    std::mutex presentor_mutex{};
-    LockFreeQueueBase<VulkanPresentor, false> presentors{};
-};
-
-class SubmissionPresentContextManager {
-public:
-    SubmissionPresentContext& Get(EQueueType queue_type) {
-        std::lock_guard<std::mutex> lock(context_mutex);
-        auto& context = contexts[static_cast<size_t>(queue_type)];
-        if (!context) {
-            context = std::make_unique<SubmissionPresentContext>(queue_type);
-        }
-        return *context;
+    GraphEventRef Sync(ERHISyncDepth depth) {
+        return submission_runtime.Sync(depth);
     }
 
     void Flush() {
-        std::lock_guard<std::mutex> lock(context_mutex);
-        for (auto& context : contexts) {
-            if (context) {
-                context->Flush();
-            }
-        }
+        submission_runtime.Flush();
     }
 
     void Shutdown() {
-        std::lock_guard<std::mutex> lock(context_mutex);
-        for (auto& context : contexts) {
-            if (context) {
-                context->Shutdown();
-                context.reset();
-            }
-        }
+        submission_runtime.Shutdown();
+        interrupt_runtime.Shutdown();
     }
 
 private:
-    std::mutex context_mutex{};
-    std::array<std::unique_ptr<SubmissionPresentContext>, static_cast<size_t>(EQueueType::Num)> contexts{};
+    VulkanInterruptRuntime  interrupt_runtime;
+    VulkanSubmissionRuntime submission_runtime;
 };
 
-static SubmissionPresentContextManager& GetSubmissionPresentContextManager();
+static std::mutex g_executor_state_mutex{};
+static std::unique_ptr<VulkanSubmissionExecutorState> g_executor_state{};
+static std::atomic_uint64_t g_executor_op_seq_base{0};
 
-class SubmissionPlanRuntime {
-public:
-    SubmissionPlanRuntime() :
-        submission_thread([this]() { RunSubmissionThread(); }),
-        submission_event_thread([this]() { RunSubmissionEventThread(); }) {}
-
-    ~SubmissionPlanRuntime() {
-        Stop();
+static VulkanSubmissionExecutorState& GetExecutorState() {
+    std::lock_guard<std::mutex> lock(g_executor_state_mutex);
+    if (!g_executor_state) {
+        g_executor_state = std::make_unique<VulkanSubmissionExecutorState>();
     }
-
-    void Enqueue(Array<SubmitInfo>&& submits, bool frame_end) {
-        if (submits.empty() && !frame_end) {
-            return;
-        }
-        SubmissionBatch batch{};
-        batch.submits = std::move(submits);
-        batch.frame_end = frame_end;
-        batch.batch_id = next_batch_id.fetch_add(1, std::memory_order_relaxed);
-        {
-            std::lock_guard<std::mutex> lock(submission_mutex);
-            submission_queue.emplace_back(std::move(batch));
-        }
-        submission_cv.notify_one();
-    }
-
-    void Flush() {
-        if (!running.load(std::memory_order_acquire)) {
-            return;
-        }
-        auto completion = std::make_shared<std::promise<void>>();
-        auto future     = completion->get_future();
-
-        SubmissionBatch batch{};
-        batch.batch_id   = next_batch_id.fetch_add(1, std::memory_order_relaxed);
-        batch.completion = completion;
-        {
-            std::lock_guard<std::mutex> lock(submission_mutex);
-            submission_queue.emplace_back(std::move(batch));
-        }
-        submission_cv.notify_one();
-        future.wait();
-        WaitForInterruptSerial(enqueued_interrupt_serial.load(std::memory_order_acquire));
-    }
-
-    void Shutdown() {
-        Flush();
-        Stop();
-        if (submission_thread.joinable()) {
-            submission_thread.join();
-        }
-        if (submission_event_thread.joinable()) {
-            submission_event_thread.join();
-        }
-    }
-
-    void EnqueueQueueCompletion(
-        uint64                        op_seq,
-        Array<WaitEvent>&&            wait_events,
-        VkCommandQueue*               queue,
-        uint64                        timeline_value,
-        UniquePtr<VulkanAllocator>&&  allocator,
-        Array<std::function<void()>>&& callbacks,
-        Array<SignalEvent>&&          signal_events
-    ) {
-        if (queue == nullptr) {
-            return;
-        }
-        EnqueueInterruptTask(SubmissionHostWaitTask{
-            .serial = NextInterruptSerial(),
-            .op_seq = op_seq,
-            .wait_events = std::move(wait_events)
-        });
-        EnqueueInterruptTask(SubmissionQueueCompletionTask{
-            .serial = NextInterruptSerial(),
-            .queue = queue,
-            .timeline_value = timeline_value,
-            .allocator = std::move(allocator),
-            .callbacks = std::move(callbacks),
-            .signal_events = std::move(signal_events)
-        });
-    }
-
-    void EnqueueCopyQueueCompletion(
-        uint64                        op_seq,
-        Array<WaitEvent>&&            wait_events,
-        VkCopyQueue*                  queue,
-        uint64                        timeline_value,
-        UniquePtr<VulkanAllocator>&&  allocator,
-        Array<std::function<void()>>&& callbacks,
-        Array<IOSignalEvt>&&          signal_events
-    ) {
-        if (queue == nullptr) {
-            return;
-        }
-        EnqueueInterruptTask(SubmissionHostWaitTask{
-            .serial = NextInterruptSerial(),
-            .op_seq = op_seq,
-            .wait_events = std::move(wait_events)
-        });
-        EnqueueInterruptTask(SubmissionCopyQueueCompletionTask{
-            .serial = NextInterruptSerial(),
-            .queue = queue,
-            .timeline_value = timeline_value,
-            .allocator = std::move(allocator),
-            .callbacks = std::move(callbacks),
-            .signal_events = std::move(signal_events)
-        });
-    }
-
-    void EnqueuePresentCompletion(
-        uint64                      op_seq,
-        Array<WaitEvent>&&          wait_events,
-        SubmissionPresentContext*   context,
-        uint64                      timeline_value,
-        UniquePtr<VulkanPresentor>&& presentor
-    ) {
-        if (context == nullptr) {
-            return;
-        }
-        EnqueueInterruptTask(SubmissionHostWaitTask{
-            .serial = NextInterruptSerial(),
-            .op_seq = op_seq,
-            .wait_events = std::move(wait_events)
-        });
-        EnqueueInterruptTask(SubmissionPresentCompletionTask{
-            .serial = NextInterruptSerial(),
-            .context = context,
-            .timeline_value = timeline_value,
-            .presentor = std::move(presentor)
-        });
-    }
-
-private:
-    void Stop() {
-        bool expected_running = true;
-        if (!running.compare_exchange_strong(expected_running, false)) {
-            return;
-        }
-        {
-            std::lock_guard<std::mutex> lock(submission_mutex);
-            for (auto& batch : submission_queue) {
-                if (batch.completion) {
-                    try {
-                        batch.completion->set_value();
-                    } catch (const std::future_error&) {
-                    }
-                }
-            }
-            submission_queue.clear();
-        }
-        {
-            std::lock_guard<std::mutex> lock(submission_event_mutex);
-            submission_event_queue.clear();
-        }
-        submission_cv.notify_all();
-        submission_event_cv.notify_all();
-        interrupt_cv.notify_all();
-    }
-
-    void RunSubmissionThread() {
-        Platform::SetCurrentThreadName("SubmissionThread");
-        while (true) {
-            SubmissionBatch batch{};
-            {
-                std::unique_lock<std::mutex> lock(submission_mutex);
-                submission_cv.wait(lock, [this]() {
-                    return !running.load(std::memory_order_acquire) || !submission_queue.empty();
-                });
-                if (!running.load(std::memory_order_acquire) && submission_queue.empty()) {
-                    return;
-                }
-                batch = std::move(submission_queue.front());
-                submission_queue.pop_front();
-            }
-
-            UnorderedMap<SubmissionKey, WaitEvent, SubmissionKeyHash> completion_by_submit{};
-            completion_by_submit.reserve(static_cast<uint32>(batch.submits.size()));
-            uint32 submission_count = 0;
-            uint32 present_count    = 0;
-            for (auto& submit_info : batch.submits) {
-                const bool submitted = ExecuteSubmit(submit_info, completion_by_submit);
-                if (submitted) {
-                    ++submission_count;
-                    if (submit_info.present_stage.has_value() &&
-                        ExecutePresentStage(submit_info, completion_by_submit)) {
-                        ++present_count;
-                    }
-                }
-            }
-
-            if (batch.frame_end) {
-                EnqueueInterruptTask(SubmissionFrameEndMarkerTask{
-                    .serial = NextInterruptSerial(),
-                    .batch_id = batch.batch_id,
-                    .submission_count = submission_count,
-                    .present_count = present_count
-                });
-            }
-            if (batch.completion) {
-                try {
-                    batch.completion->set_value();
-                } catch (const std::future_error&) {
-                }
-            }
-        }
-    }
-
-    bool ExecuteSubmit(
-        SubmitInfo& submit_info,
-        UnorderedMap<SubmissionKey, WaitEvent, SubmissionKeyHash>& completion_by_submit
-    ) {
-        if (!submit_info.translate_result.valid) {
-            if (!submit_info.translate_result.error.empty()) {
-                LOG_ERROR(
-                    "Translate failed for submit ({}, {}): {}",
-                    submit_info.key.op_seq,
-                    submit_info.key.submit_idx,
-                    submit_info.translate_result.error
-                );
-            }
-            return false;
-        }
-
-        if (submit_info.translate_result.translate_complete &&
-            !submit_info.translate_result.translate_complete->IsComplete()) {
-            LOG_ERROR(
-                "Translate completion is not resolved before submit ({}, {})",
-                submit_info.key.op_seq,
-                submit_info.key.submit_idx
-            );
-            submit_info.translate_result.valid = false;
-            return false;
-        }
-
-        for (const auto& dependency : submit_info.wait_submission_keys) {
-            const auto completion_it = completion_by_submit.find(dependency);
-            if (completion_it == completion_by_submit.end()) {
-                LOG_ERROR(
-                    "Missing dependency completion for submit ({}, {})",
-                    dependency.op_seq,
-                    dependency.submit_idx
-                );
-                continue;
-            }
-            if (submit_info.translate_result.recorded_submit.has_value() &&
-                submit_info.translate_result.recorded_submit->submit.has_value()) {
-                submit_info.translate_result.recorded_submit->submit->wait_events.emplace_back(
-                    completion_it->second
-                );
-                RHITRACE_LOG(
-                    verbose,
-                    "[RHITrace][SubmitPlan] submit=({}, {}) queue={} append_wait fence={} value={}",
-                    submit_info.key.op_seq,
-                    submit_info.key.submit_idx,
-                    QueueTypeName(submit_info.translate_result.queue),
-                    completion_it->second.timeline_handle,
-                    completion_it->second.value
-                );
-            }
-        }
-
-        WaitEvent completion_event{};
-        if (!submit_info.translate_result.recorded_submit.has_value()) {
-            LOG_ERROR(
-                "Missing recorded submit packet for ({}, {})",
-                submit_info.key.op_seq,
-                submit_info.key.submit_idx
-            );
-            return false;
-        }
-        switch (submit_info.translate_result.queue) {
-            case EQueueType::Graphics:
-            case EQueueType::Compute: {
-                auto& queue =
-                    static_cast<VkCommandQueue&>(
-                        RenderDevice::Get().GetCommandQueue(submit_info.translate_result.queue)
-                    );
-                completion_event = queue.SubmitRecorded(
-                    std::move(submit_info.translate_result.recorded_submit.value())
-                );
-                break;
-            }
-            case EQueueType::Copy: {
-                auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-                IOWaitEvt io_completion = copy_queue.SubmitRecorded(
-                    std::move(submit_info.translate_result.recorded_submit.value())
-                );
-                completion_event = WaitEvent{io_completion.handle, io_completion.timeline};
-                break;
-            }
-            default:
-                LOG_ERROR(
-                    "Invalid queue type in submission plan: {}",
-                    QueueTypeName(submit_info.translate_result.queue)
-                );
-                return false;
-        }
-        RHITRACE_LOG(
-            basic,
-            "[RHITrace][SubmitPlan] submitted=({}, {}) queue={} completion fence={} value={}",
-            submit_info.key.op_seq,
-            submit_info.key.submit_idx,
-            QueueTypeName(submit_info.translate_result.queue),
-            completion_event.timeline_handle,
-            completion_event.value
-        );
-
-        completion_by_submit.emplace(submit_info.key, completion_event);
-        return true;
-    }
-
-    bool ExecutePresentStage(
-        const SubmitInfo& submit_info,
-        const UnorderedMap<SubmissionKey, WaitEvent, SubmissionKeyHash>& completion_by_submit
-    ) {
-        if (!submit_info.present_stage.has_value()) {
-            return false;
-        }
-        const SubmitPresentStage& present_stage = submit_info.present_stage.value();
-        if (!present_stage.valid || !present_stage.present.swapchain || !present_stage.present.target.texture) {
-            return false;
-        }
-
-        const auto submit_completion_it = completion_by_submit.find(submit_info.key);
-        if (submit_completion_it == completion_by_submit.end()) {
-            LOG_ERROR(
-                "Missing completion for present-attached submit ({}, {})",
-                submit_info.key.op_seq,
-                submit_info.key.submit_idx
-            );
-            return false;
-        }
-
-        Array<WaitEvent> wait_events{};
-        wait_events.emplace_back(submit_completion_it->second);
-
-        if (present_stage.present.queue == EQueueType::Copy ||
-            present_stage.present.queue == EQueueType::Ignore) {
-            LOG_ERROR("Invalid present queue type: {}", QueueTypeName(present_stage.present.queue));
-            return false;
-        }
-        RHITRACE_LOG(
-            basic,
-            "[RHITrace][PresentPlan] presenting submit=({}, {}) queue={} wait_count={}",
-            submit_info.key.op_seq,
-            submit_info.key.submit_idx,
-            QueueTypeName(present_stage.present.queue),
-            wait_events.size()
-        );
-        return GetSubmissionPresentContextManager().Get(present_stage.present.queue)
-            .Present(
-                present_stage.present,
-                wait_events,
-                present_stage.has_source_texture_state ? &present_stage.source_texture_state : nullptr
-            );
-    }
-
-    void RunSubmissionEventThread() {
-        Platform::SetCurrentThreadName("SubmissionEventThread");
-        while (true) {
-            SubmissionEventTask task{};
-            {
-                std::unique_lock<std::mutex> lock(submission_event_mutex);
-                submission_event_cv.wait(lock, [this]() {
-                    return !running.load(std::memory_order_acquire) ||
-                           !submission_event_queue.empty();
-                });
-                if (!running.load(std::memory_order_acquire) && submission_event_queue.empty()) {
-                    return;
-                }
-                task = std::move(submission_event_queue.front());
-                submission_event_queue.pop_front();
-            }
-            std::visit(
-                Overload{
-                    [this](SubmissionHostWaitTask& wait_task) {
-                        ExecuteHostWaitTask(wait_task);
-                    },
-                    [](SubmissionQueueCompletionTask& completion_task) {
-                        completion_task.queue->ResolveAllocatorCompletion(
-                            std::move(completion_task.allocator), completion_task.timeline_value
-                        );
-                        for (auto& callback : completion_task.callbacks) {
-                            callback();
-                        }
-                        for (const auto& evt : completion_task.signal_events) {
-                            auto* fence = reinterpret_cast<VulkanFence*>(evt.timeline_handle);
-                            if (fence != nullptr) {
-                                fence->Notify(evt.value);
-                            }
-                        }
-                        completion_task.queue->MarkExecutionComplete(completion_task.timeline_value);
-                    },
-                    [](SubmissionCopyQueueCompletionTask& completion_task) {
-                        completion_task.queue->ResolveAllocatorCompletion(
-                            std::move(completion_task.allocator), completion_task.timeline_value
-                        );
-                        for (auto& callback : completion_task.callbacks) {
-                            callback();
-                        }
-                        for (const auto& evt : completion_task.signal_events) {
-                            auto* fence = reinterpret_cast<VulkanFence*>(evt.handle);
-                            if (fence != nullptr) {
-                                fence->Notify(evt.timeline);
-                            }
-                        }
-                        completion_task.queue->MarkExecutionComplete(completion_task.timeline_value);
-                    },
-                    [](SubmissionPresentCompletionTask& completion_task) {
-                        completion_task.context->ResolvePresentCompletion(
-                            std::move(completion_task.presentor), completion_task.timeline_value
-                        );
-                    },
-                    [](SubmissionFrameEndMarkerTask& frame_end_task) {
-                        RHITRACE_LOG(
-                            basic,
-                            "[RHITrace][FrameEnd] batch={} submits={} presents={}",
-                            frame_end_task.batch_id,
-                            frame_end_task.submission_count,
-                            frame_end_task.present_count
-                        );
-                    }
-                },
-                task
-            );
-            MarkInterruptSerialCompleted(GetTaskSerial(task));
-        }
-    }
-
-    static bool IsWaitEventCompleted(const WaitEvent& wait_evt) {
-        auto* fence = reinterpret_cast<VulkanFence*>(wait_evt.timeline_handle);
-        if (fence == nullptr) {
-            return true;
-        }
-        return fence->GetDeviceValue() >= wait_evt.value;
-    }
-
-    static void ExecuteHostWaitTask(SubmissionHostWaitTask& task) {
-        for (const auto& wait_evt : task.wait_events) {
-            auto* fence = reinterpret_cast<VulkanFence*>(wait_evt.timeline_handle);
-            if (fence == nullptr) {
-                continue;
-            }
-            const auto wait_begin = std::chrono::steady_clock::now();
-            const auto warn_step  = std::chrono::seconds(2);
-            uint32     warn_count = 0;
-            while (!IsWaitEventCompleted(wait_evt)) {
-                const auto now     = std::chrono::steady_clock::now();
-                const auto elapsed = now - wait_begin;
-                if (elapsed >= warn_step * (warn_count + 1)) {
-                    LOG_WARNING(
-                        "Host wait pending op_seq={} fence={} target={} current={} elapsed_ms={}",
-                        task.op_seq,
-                        wait_evt.timeline_handle,
-                        wait_evt.value,
-                        fence->GetDeviceValue(),
-                        std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
-                    );
-                    ++warn_count;
-                }
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-            }
-            RHITRACE_LOG(
-                verbose,
-                "[RHITrace][SubmissionEvent] host_wait done op_seq={} fence={} value={}",
-                task.op_seq,
-                wait_evt.timeline_handle,
-                wait_evt.value
-            );
-        }
-    }
-
-    static uint64 GetTaskSerial(const SubmissionEventTask& task) {
-        return std::visit([](const auto& typed_task) { return typed_task.serial; }, task);
-    }
-
-    void EnqueueInterruptTask(SubmissionEventTask&& task) {
-        {
-            std::lock_guard<std::mutex> lock(submission_event_mutex);
-            submission_event_queue.emplace_back(std::move(task));
-        }
-        submission_event_cv.notify_one();
-    }
-
-    uint64 NextInterruptSerial() {
-        return enqueued_interrupt_serial.fetch_add(1, std::memory_order_acq_rel) + 1;
-    }
-
-    void MarkInterruptSerialCompleted(uint64 serial) {
-        completed_interrupt_serial.store(serial, std::memory_order_release);
-        interrupt_cv.notify_all();
-    }
-
-    void WaitForInterruptSerial(uint64 serial) {
-        std::unique_lock<std::mutex> lock(interrupt_mutex);
-        interrupt_cv.wait(lock, [this, serial]() {
-            return !running.load(std::memory_order_acquire) ||
-                   completed_interrupt_serial.load(std::memory_order_acquire) >= serial;
-        });
-    }
-
-private:
-    std::atomic_bool running{true};
-    std::atomic_uint64_t next_batch_id{1};
-    std::atomic_uint64_t enqueued_interrupt_serial{0};
-    std::atomic_uint64_t completed_interrupt_serial{0};
-
-    std::mutex submission_mutex{};
-    std::condition_variable submission_cv{};
-    std::deque<SubmissionBatch> submission_queue{};
-    std::jthread submission_thread{};
-
-    std::mutex submission_event_mutex{};
-    std::condition_variable submission_event_cv{};
-    std::deque<SubmissionEventTask> submission_event_queue{};
-    std::jthread submission_event_thread{};
-    std::mutex interrupt_mutex{};
-    std::condition_variable interrupt_cv{};
-};
-
-static std::mutex g_submission_runtime_mutex{};
-static std::unique_ptr<SubmissionPlanRuntime> g_submission_runtime{};
-static std::atomic<SubmissionPlanRuntime*> g_submission_runtime_ptr{nullptr};
-static std::mutex g_present_context_mutex{};
-static std::unique_ptr<SubmissionPresentContextManager> g_present_context_manager{};
-static SubmissionPlanRuntime& GetSubmissionPlanRuntime() {
-    std::lock_guard<std::mutex> lock(g_submission_runtime_mutex);
-    if (!g_submission_runtime) {
-        g_submission_runtime = std::make_unique<SubmissionPlanRuntime>();
-        g_submission_runtime_ptr.store(g_submission_runtime.get(), std::memory_order_release);
-    }
-    return *g_submission_runtime;
-}
-
-void EnqueueSubmissionQueueCompletion(
-    uint64                        op_seq,
-    Array<WaitEvent>&&            wait_events,
-    VkCommandQueue*               queue,
-    uint64                        timeline_value,
-    UniquePtr<VulkanAllocator>&&  allocator,
-    Array<std::function<void()>>&& callbacks,
-    Array<SignalEvent>&&          signal_events
-) {
-    SubmissionPlanRuntime* runtime = g_submission_runtime_ptr.load(std::memory_order_acquire);
-    if (runtime == nullptr) {
-        runtime = &GetSubmissionPlanRuntime();
-    }
-    runtime->EnqueueQueueCompletion(
-        op_seq,
-        std::move(wait_events),
-        queue,
-        timeline_value,
-        std::move(allocator),
-        std::move(callbacks),
-        std::move(signal_events)
-    );
-}
-
-void EnqueueSubmissionCopyQueueCompletion(
-    uint64                        op_seq,
-    Array<WaitEvent>&&            wait_events,
-    VkCopyQueue*                  queue,
-    uint64                        timeline_value,
-    UniquePtr<VulkanAllocator>&&  allocator,
-    Array<std::function<void()>>&& callbacks,
-    Array<IOSignalEvt>&&          signal_events
-) {
-    SubmissionPlanRuntime* runtime = g_submission_runtime_ptr.load(std::memory_order_acquire);
-    if (runtime == nullptr) {
-        runtime = &GetSubmissionPlanRuntime();
-    }
-    runtime->EnqueueCopyQueueCompletion(
-        op_seq,
-        std::move(wait_events),
-        queue,
-        timeline_value,
-        std::move(allocator),
-        std::move(callbacks),
-        std::move(signal_events)
-    );
-}
-
-void EnqueueSubmissionPresentCompletion(
-    uint64                      op_seq,
-    Array<WaitEvent>&&          wait_events,
-    SubmissionPresentContext*   context,
-    uint64                      timeline_value,
-    UniquePtr<VulkanPresentor>&& presentor
-) {
-    SubmissionPlanRuntime* runtime = g_submission_runtime_ptr.load(std::memory_order_acquire);
-    if (runtime == nullptr) {
-        runtime = &GetSubmissionPlanRuntime();
-    }
-    runtime->EnqueuePresentCompletion(
-        op_seq,
-        std::move(wait_events),
-        context,
-        timeline_value,
-        std::move(presentor)
-    );
-}
-
-static SubmissionPresentContextManager& GetSubmissionPresentContextManager() {
-    std::lock_guard<std::mutex> lock(g_present_context_mutex);
-    if (!g_present_context_manager) {
-        g_present_context_manager = std::make_unique<SubmissionPresentContextManager>();
-    }
-    return *g_present_context_manager;
-}
-
-static void FlushSubmissionPlanRuntime() {
-    std::lock_guard<std::mutex> lock(g_submission_runtime_mutex);
-    if (g_submission_runtime) {
-        g_submission_runtime->Flush();
-    }
-}
-
-static void FlushSubmissionPresentContexts() {
-    std::lock_guard<std::mutex> lock(g_present_context_mutex);
-    if (g_present_context_manager) {
-        g_present_context_manager->Flush();
-    }
-}
-
-static void ShutdownSubmissionPlanRuntime() {
-    std::unique_ptr<SubmissionPlanRuntime> runtime{};
-    {
-        std::lock_guard<std::mutex> lock(g_submission_runtime_mutex);
-        runtime = std::move(g_submission_runtime);
-        g_submission_runtime_ptr.store(nullptr, std::memory_order_release);
-    }
-    if (runtime) {
-        runtime->Shutdown();
-    }
-}
-
-static void ShutdownSubmissionPresentContexts() {
-    std::unique_ptr<SubmissionPresentContextManager> manager{};
-    {
-        std::lock_guard<std::mutex> lock(g_present_context_mutex);
-        manager = std::move(g_present_context_manager);
-    }
-    if (manager) {
-        manager->Shutdown();
-    }
-}
-
-void SubmissionPlanExecutor::Execute(Array<SubmitInfo>&& submits, bool frame_end) const {
-    GetSubmissionPlanRuntime().Enqueue(std::move(submits), frame_end);
+    return *g_executor_state;
 }
 
 static PreprocessTranslateStore
-PreprocessFrameOps(const Array<RHIExecOp>& ops) {
+PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
     TRACE_SCOPE_CAT("Vulkan.PreprocessFrameOps", "RHI");
     PreprocessTranslateStore preprocess_store{};
     preprocess_store.Reserve(static_cast<uint32>(EstimateSubmitCount(ops) * 3 + 1));
@@ -2960,9 +2070,9 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
     UnorderedMap<SubmissionKey, UnorderedSet<ResourceKey, ResourceKeyHash>, SubmissionKeyHash>
         exported_resources_by_submit{};
 
-    uint64 op_seq = 0;
+    uint64 op_seq = op_seq_base;
     for (const auto& op : ops) {
-        if (const auto* submit_op = std::get_if<RHISubmitCmdList>(&op)) {
+        if (const auto* submit_op = std::get_if<ExecutorSubmitOp>(&op)) {
             uint32 next_segment_submit_idx = 0;
             for (uint32 submit_idx = 0; submit_idx < submit_op->submits.size(); ++submit_idx) {
                 const CmdSubmit& submit = submit_op->submits[submit_idx];
@@ -3005,10 +2115,18 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                         submit.cached_args,
                         &dirty_written_resources
                     );
-                    Array<const Command*> command_ptrs = GetSegmentCommandPointers(submit, segment);
-                    translate_info.digest = collector.Collect(
-                        std::span<const Command* const>(command_ptrs.data(), command_ptrs.size())
-                    );
+                    if (segment.type == ESegmentType::Graphics) {
+                        translate_info.digest = collector.CollectGraphicsSegment(
+                            submit,
+                            segment.begin,
+                            segment.end
+                        );
+                    } else {
+                        Array<const Command*> command_ptrs = GetSegmentCommandPointers(submit, segment);
+                        translate_info.digest = collector.Collect(
+                            std::span<const Command* const>(command_ptrs.data(), command_ptrs.size())
+                        );
+                    }
                     TraceDigest(
                         translate_info.key,
                         translate_info.queue,
@@ -3188,12 +2306,10 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
                 }
                 preprocess_store.AddSourcePlan(std::move(source_plan));
             }
-        } else if (const auto* present_op = std::get_if<RHIPresentOp>(&op)) {
+        } else if (const auto* present_op = std::get_if<ExecutorPresentOp>(&op)) {
             PresentCandidateMetadata present_result{.op_seq = op_seq};
-            // §present: Record present target as TRANSFER read so the next frame's tracker seed
-            // knows the image is in TRANSFER_SRC_OPTIMAL after the blit (VUID-09592).
-            // The target texture's actual persistent state is read via LoadPersistentState (called
-            // by EnsureDigestStateLoaded) — no hardcoded state here.
+            // Present preprocess snapshots source state for present seed, and then advances
+            // persistent state to the post-present TRANSFER read state for subsequent seeds.
             if (present_op->target.texture) {
                 const ResourceKey present_source_key = MakeTextureKeyWithRange(
                     uint64(present_op->target.texture),
@@ -3245,7 +2361,11 @@ PreprocessFrameOps(const Array<RHIExecOp>& ops) {
 }
 
 static TranslatePipelineBatch
-AssembleTranslatePipelineOps(Array<RHIExecOp>&& ops, const PreprocessTranslateStore& preprocess_store) {
+AssembleTranslatePipelineOps(
+    Array<ExecutorOp>&&             ops,
+    const PreprocessTranslateStore& preprocess_store,
+    uint64                          op_seq_base
+) {
     TRACE_SCOPE_CAT("Vulkan.AssembleTranslatePipelineOps", "RHI");
     TranslatePipelineBatch pipeline_batch{};
     pipeline_batch.translate_ops.reserve(EstimateSubmitCount(ops) * 3 + 1);
@@ -3335,11 +2455,11 @@ AssembleTranslatePipelineOps(Array<RHIExecOp>&& ops, const PreprocessTranslateSt
     std::optional<SubmissionKey> last_submit_key{};
     EQueueType                   last_submit_queue = EQueueType::Ignore;
 
-    uint64 op_seq = 0;
+    uint64 op_seq = op_seq_base;
     for (auto& op : ops) {
         std::visit(
             Overload{
-                [&](RHISubmitCmdList& submit_op) {
+                [&](ExecutorSubmitOp& submit_op) {
                     for (uint32 submit_idx = 0; submit_idx < submit_op.submits.size(); ++submit_idx) {
                         auto& submit = submit_op.submits[submit_idx];
                         const SourceSubmitKey source_key{op_seq, submit_idx};
@@ -3372,6 +2492,7 @@ AssembleTranslatePipelineOps(Array<RHIExecOp>&& ops, const PreprocessTranslateSt
                                 segment_plan.inherit_source_runtime_payload
                             );
                             inject_queue_transfer_commands(segment_submit, *translate_info);
+                            InjectAutoCommandListGpuEvents(segment_submit);
 
                             QueueTranslateInfo translate_task{
                                 segment_plan.key,
@@ -3391,7 +2512,7 @@ AssembleTranslatePipelineOps(Array<RHIExecOp>&& ops, const PreprocessTranslateSt
                         }
                     }
                 },
-                [&](RHIPresentOp& present_op) {
+                [&](ExecutorPresentOp& present_op) {
                     PendingPresentAttachment pending_present{};
                     pending_present.present_stage.emplace(op_seq, std::move(present_op));
                     auto& present_stage = pending_present.present_stage.value();
@@ -3470,6 +2591,40 @@ static TrackerSeed BuildTrackerSeed(const ResourceStateSnapshot& snapshot) {
     return seed;
 }
 
+static Array<GraphEventRef> CollectInterruptCompletionEvents(const TranslateResult& translate_result) {
+    Array<GraphEventRef> completion_events{};
+    if (!translate_result.recorded_submit.has_value() ||
+        !translate_result.recorded_submit->submit.has_value()) {
+        return completion_events;
+    }
+
+    const auto& commands = translate_result.recorded_submit->submit->cmds;
+    for (const auto& command : commands) {
+        if (!command) {
+            continue;
+        }
+        switch (command->Type()) {
+            case Command::EType::CopyBackBuffer: {
+                const auto* readback_cmd = static_cast<const CopyBackBufferCmd*>(command.get());
+                if (readback_cmd->CompletionEvent()) {
+                    completion_events.emplace_back(readback_cmd->CompletionEvent());
+                }
+                break;
+            }
+            case Command::EType::CopyBackTexture: {
+                const auto* readback_cmd = static_cast<const CopyBackTextureCmd*>(command.get());
+                if (readback_cmd->CompletionEvent()) {
+                    completion_events.emplace_back(readback_cmd->CompletionEvent());
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    return completion_events;
+}
+
 static Array<SubmitInfo> AssembleSubmitInfos(TranslatePipelineBatch&& pipeline_batch) {
     TRACE_SCOPE_CAT("Vulkan.AssembleSubmitInfos", "RHI");
     Array<SubmitInfo> submit_infos{};
@@ -3498,6 +2653,9 @@ static Array<SubmitInfo> AssembleSubmitInfos(TranslatePipelineBatch&& pipeline_b
         };
         submit_info.wait_submission_keys =
             std::move(translate_info.logical_wait_submission_keys);
+        submit_info.is_root_submit = submit_info.wait_submission_keys.empty();
+        submit_info.interrupt_completion_events =
+            CollectInterruptCompletionEvents(submit_info.translate_result);
 
         const uint32 submit_index = static_cast<uint32>(submit_infos.size());
         submit_lookup.emplace(submit_info.key, submit_index);
@@ -3578,12 +2736,34 @@ static bool ValidateFrameEndState(const ResourceStateSnapshot& snapshot) {
     return true;
 }
 
+static Array<ExecutorOp> BuildExecutorOps(VulkanSubmissionBatch&& batch) {
+    Array<ExecutorOp> ops{};
+    ops.reserve(batch.submits.size() + (batch.present.has_value() ? 1u : 0u));
+
+    for (auto& submit_entry : batch.submits) {
+        ExecutorSubmitOp submit_op{};
+        submit_op.queue = submit_entry.queue;
+        submit_op.submits.emplace_back(std::move(submit_entry.submit));
+        ops.emplace_back(std::move(submit_op));
+    }
+
+    if (batch.present.has_value()) {
+        ops.emplace_back(ExecutorPresentOp{
+            .swapchain = batch.present->swapchain,
+            .target = batch.present->source,
+            .queue = EQueueType::Graphics
+        });
+    }
+    return ops;
+}
+
 } // namespace
 
 void VulkanSubmissionExecutor::Execute(
-    Array<RHIExecOp>&&             ops,
-    const RHIExecSubmitOptions& options
+    VulkanSubmissionBatch&&                batch,
+    const VulkanSubmissionExecuteOptions& options
 ) {
+    Array<ExecutorOp> ops = BuildExecutorOps(std::move(batch));
     TRACE_SCOPE_CAT("VulkanSubmissionExecutor.Execute", "RHI");
     const uint64 trace_frame = NextRHITraceFrameIndex();
     ScopedRHITraceFrame trace_scope(trace_frame);
@@ -3596,17 +2776,21 @@ void VulkanSubmissionExecutor::Execute(
     );
     if (ops.empty()) {
         if (options.frame_end) {
-            SubmissionPlanExecutor executor{};
             TRACE_SCOPE_CAT("Vulkan.ExecuteSubmissionPlan", "RHI");
-            executor.Execute({}, true);
+            GetExecutorState().Execute({}, true);
         }
         return;
     }
 
+    const uint64 op_seq_base = g_executor_op_seq_base.fetch_add(
+        EstimatePlatformOpCount(ops),
+        std::memory_order_relaxed
+    );
+
     PreprocessTranslateStore preprocess_store{};
     {
         TRACE_SCOPE_CAT("Vulkan.Preprocess", "RHI");
-        preprocess_store = PreprocessFrameOps(ops);
+        preprocess_store = PreprocessFrameOps(ops, op_seq_base);
     }
     if (options.frame_end) {
         // Collect all resource keys seen during preprocess and validate their persistent state.
@@ -3620,9 +2804,9 @@ void VulkanSubmissionExecutor::Execute(
         for (const auto& key : seen_resources) {
             frame_end_state.emplace(key, LoadPersistentState(key));
         }
-        // if (!ValidateFrameEndState(frame_end_state)) {
-        //     return;
-        // }
+        if (!ValidateFrameEndState(frame_end_state)) {
+            return;
+        }
     }
 
     // All persistent state has been committed incrementally during preprocess (per segment).
@@ -3631,7 +2815,8 @@ void VulkanSubmissionExecutor::Execute(
     TranslatePipelineBatch translate_pipeline{};
     {
         TRACE_SCOPE_CAT("Vulkan.Assemble", "RHI");
-        translate_pipeline = AssembleTranslatePipelineOps(std::move(ops), preprocess_store);
+        translate_pipeline =
+            AssembleTranslatePipelineOps(std::move(ops), preprocess_store, op_seq_base);
     }
     Array<SubmitInfo> submit_infos{};
     {
@@ -3639,61 +2824,31 @@ void VulkanSubmissionExecutor::Execute(
         submit_infos = AssembleSubmitInfos(std::move(translate_pipeline));
     }
 
-    SubmissionPlanExecutor executor{};
     {
         TRACE_SCOPE_CAT("Vulkan.ExecuteSubmissionPlan", "RHI");
-        executor.Execute(std::move(submit_infos), options.frame_end);
+        GetExecutorState().Execute(std::move(submit_infos), options.frame_end);
     }
 }
 
-void VulkanSubmissionExecutor::EnqueueQueueCompletion(
-    uint64                        op_seq,
-    Array<WaitEvent>&&            wait_events,
-    VkCommandQueue*               queue,
-    uint64                        timeline_value,
-    UniquePtr<VulkanAllocator>&&  allocator,
-    Array<std::function<void()>>&& callbacks,
-    Array<SignalEvent>&&          signal_events
-) {
-    EnqueueSubmissionQueueCompletion(
-        op_seq,
-        std::move(wait_events),
-        queue,
-        timeline_value,
-        std::move(allocator),
-        std::move(callbacks),
-        std::move(signal_events)
-    );
-}
-
-void VulkanSubmissionExecutor::EnqueueCopyQueueCompletion(
-    uint64                        op_seq,
-    Array<WaitEvent>&&            wait_events,
-    VkCopyQueue*                  queue,
-    uint64                        timeline_value,
-    UniquePtr<VulkanAllocator>&&  allocator,
-    Array<std::function<void()>>&& callbacks,
-    Array<IOSignalEvt>&&          signal_events
-) {
-    EnqueueSubmissionCopyQueueCompletion(
-        op_seq,
-        std::move(wait_events),
-        queue,
-        timeline_value,
-        std::move(allocator),
-        std::move(callbacks),
-        std::move(signal_events)
-    );
+GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth depth) {
+    return GetExecutorState().Sync(depth);
 }
 
 void VulkanSubmissionExecutor::Flush() {
-    FlushSubmissionPlanRuntime();
-    FlushSubmissionPresentContexts();
+    GetExecutorState().Flush();
 }
 
 void VulkanSubmissionExecutor::Shutdown() {
-    ShutdownSubmissionPlanRuntime();
-    ShutdownSubmissionPresentContexts();
+    std::unique_ptr<VulkanSubmissionExecutorState> state{};
+    {
+        std::lock_guard<std::mutex> lock(g_executor_state_mutex);
+        state = std::move(g_executor_state);
+    }
+    if (state) {
+        state->Shutdown();
+    }
 }
 
 } // namespace Moer::Render
+
+

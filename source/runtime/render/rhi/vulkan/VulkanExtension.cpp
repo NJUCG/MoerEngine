@@ -60,6 +60,14 @@ public:
         }
     }
 
+    void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+        m_is_usable = (m_swapchain_maintenance1_features.swapchainMaintenance1 == VK_TRUE);
+        _gpu_extensions.m_has_khr_swapchain_maintenance1 = m_is_usable;
+        if (!m_is_usable) {
+            Disable();
+        }
+    }
+
 private:
     VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT m_swapchain_maintenance1_features;
 };
@@ -415,7 +423,10 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMERequiredDeviceExtensions
     extensions.emplace_back(std::make_shared<ext_class>(optional))
     // generic simple extensions
     ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
-    ADD_CUSTOM_EXTENSION(VulkanEXTSwapchainMaintenance1Extension, VULKAN_EXTENSION_REQUIRED);
+    // swapchain maintenance is a device extension, but its dependency
+    // VK_KHR_surface_maintenance1 is an instance extension and must not
+    // be listed or queried as a device extension here.
+    ADD_CUSTOM_EXTENSION(VulkanEXTSwapchainMaintenance1Extension, VULKAN_EXTENSION_OPTIONAL);
     // ADD_EXTENSION(VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
 
 #if VULKAN_RHI_RAYTRACING
@@ -449,17 +460,32 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMERequiredDeviceExtensions
     return extensions;
 }
 
-TVulkanDeviceExtensionArray
-VulkanDeviceExtension::GetMEEnabledDeviceExtensions(const Set<std::string>& _gpu_extensions) {
+TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMEEnabledDeviceExtensions(
+    const Set<std::string>& _gpu_extensions,
+    bool                    has_surface_maintenance_instance
+) {
     auto extensions = GetMERequiredDeviceExtensions();
 
     TVulkanDeviceExtensionArray extensions_enabled;
 
     for (const auto& ext : extensions) {
-        if (_gpu_extensions.contains(ext->GetExtensionName().data())) {
-            ext->Enable();
-            extensions_enabled.emplace_back(ext);
+        const std::string_view ext_name = ext->GetExtensionName();
+        if (!_gpu_extensions.contains(ext_name.data())) {
+            continue;
         }
+
+        if (ext_name == VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME &&
+            !has_surface_maintenance_instance) {
+            LOG_WARNING(
+                "Skip {} because required instance dependency {} is not enabled",
+                VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME,
+                VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME
+            );
+            continue;
+        }
+
+        ext->Enable();
+        extensions_enabled.emplace_back(ext);
     }
 
     return extensions_enabled;

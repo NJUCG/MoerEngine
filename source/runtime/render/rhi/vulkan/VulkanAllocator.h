@@ -41,6 +41,10 @@ struct VkTmpBufferAllocator : VulkanDeviceObject {
     void   DeAllocate(uint64 _handle);
 };
 
+//TODO: need refactor
+// All allocator should be managed by device
+// this VulkanAllocator should only have reference to some manager owned by device
+// like stagingbuffer manager, querypool manager, command pool manager, etc
 class VulkanAllocatorBase : public VulkanDeviceObject {
 public:
     VulkanAllocatorBase(VulkanDevice* _device, EQueueType _queue_type);
@@ -56,6 +60,11 @@ public:
     void AddOnComplete(std::function<void()>&& _func) {
         on_complete.push_back(std::move(_func));
     }
+    void AddCompletionEvent(GraphEventRef _event) {
+        if (_event) {
+            completion_events.push_back(std::move(_event));
+        }
+    }
 
     virtual void Complete(VulkanFence* _fence, uint64 _timeline);
     virtual void Reset();
@@ -65,6 +74,7 @@ protected:
     std::optional<VulkanCmdList>      cmd_list;
 
     Array<std::function<void()>> on_complete;
+    Array<GraphEventRef>         completion_events;
 
     VkTracker tracker;
 };

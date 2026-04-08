@@ -445,6 +445,17 @@ void VkTracker::MarkWriteable(VulkanBuffer* _buffer, bool _writeable) {
     }
 }
 
+void VkTracker::SetBufferOverlap(VulkanBuffer* _buffer, bool _enabled) {
+    if (_buffer == nullptr) {
+        return;
+    }
+    if (_enabled) {
+        buffer_overlap_states.insert(_buffer);
+    } else {
+        buffer_overlap_states.erase(_buffer);
+    }
+}
+
 void VkTracker::RecordState(
     VulkanBuffer*            _buffer,
     VkAccessFlagBits2        _access,
@@ -452,11 +463,18 @@ void VkTracker::RecordState(
     uint32_t                 _src_queue_family,
     uint32_t                 _dst_queue_family
 ) {
-    MarkWriteable(_buffer, IsWriteState(_access));
+    const bool is_write = IsWriteState(_access);
+    MarkWriteable(_buffer, is_write);
     pending_buffers.insert(_buffer);
 
     if (auto it = buffer_states.find(_buffer); it != buffer_states.end()) {
         auto& state = it->second;
+        // BufferOverlap only relaxes write-after-write ordering for the tagged buffer
+        // inside the current command list segment.
+        if (is_write && buffer_overlap_states.contains(_buffer) && IsWriteState(state.src_access)) {
+            state.src_access = VK_ACCESS_2_NONE;
+            state.src_stage  = VK_PIPELINE_STAGE_2_NONE;
+        }
         // if (state.dst_access != _access || state.dst_stage != _stage) {
         //     state.src_access = state.dst_access;
         //     state.src_stage  = state.dst_stage;
@@ -1001,14 +1019,6 @@ TextureSubresourceKeyT<VulkanTexture> VkTracker::MakeTextureStateKey(
     return {_texture, _mip_level, mip_count, _array_layer, array_count};
 }
 
-void VkTracker::EmplaceWriteBLAS(uint64 _blas_buf) {
-    write_blas_states.insert(_blas_buf);
-}
-
-bool VkTracker::ContainsWriteBLAS(uint64 _blas_buf) {
-    return write_blas_states.find(_blas_buf) != write_blas_states.end();
-}
-
 //TODO: support all subresource range tracking (currently only per-mip, full array)
 void VkTracker::RecordState(
     VulkanTexture*           _texture,
@@ -1402,8 +1412,8 @@ void VkTracker::Reset() {
     texture_states.clear();
     writed_state_textures.clear();
     writed_state_buffers.clear();
-    write_blas_states.clear();
     flush_buffer_states.clear();
+    buffer_overlap_states.clear();
     exported_buffers.clear();
     exported_textures.clear();
 }

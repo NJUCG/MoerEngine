@@ -3015,10 +3015,28 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     }
 
     uint64 VulkanFence::GetDeviceValue() const{
-        uint64_t value;
-        vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
-        // vkGetSemaphoreCounterValue(m_device->GetDevice(), m_fence.timeline, &value);
+        uint64 value = 0;
+        TryGetDeviceValue(value);
         return value;
+    }
+
+    bool VulkanFence::TryGetDeviceValue(uint64& value) const {
+        value = 0;
+        const VkResult result = vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR(
+                "[VulkanFence] vkGetSemaphoreCounterValue FAILED! result={}, semaphore={:#x}",
+                int(result),
+                uint64(timeline)
+            );
+            return false;
+        }
+        return true;
+    }
+
+    bool VulkanFence::IsDeviceComplete(uint64 value) const {
+        uint64 device_value = 0;
+        return TryGetDeviceValue(device_value) && device_value >= value;
     }
 
     void VulkanFence::Wait(uint64_t _value) {

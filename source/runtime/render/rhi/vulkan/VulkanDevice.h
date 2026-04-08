@@ -65,6 +65,7 @@ struct VulkanRHIConfig {
 struct VulkanDeviceInfo {
     TVulkanDeviceExtensionArray      enabled_extensions{};
     VulkanOptionalDeviceExtensions   optional_extensions{};
+    bool                             has_surface_maintenance1_instance{false};
     VulkanDeviceFeatures             core_features{};
     VulkanCoreDeviceProperties       core_properties{};
     VulkanOptionalDeviceProperties   optional_properties{};

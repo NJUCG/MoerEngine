@@ -179,6 +179,10 @@ CmdSubmit CommandList::Submit() {
         LOG_ERROR("CommandList::Submit called while a CopyCommandScope is still active");
         assert(false && "CommandList::Submit called while a CopyCommandScope is still active");
     }
+    if (b_buffer_overlap_active) {
+        LOG_ERROR("CommandList::Submit called while a BufferOverlap scope is still active");
+        assert(false && "CommandList::Submit called while a BufferOverlap scope is still active");
+    }
     CmdSubmit submit(
         std::move(commands),
         std::move(callbacks),
@@ -198,6 +202,8 @@ CmdSubmit CommandList::Submit() {
     gpu_events.clear();
     submit_tick_profiling   = false;
     submit_delete_resources = false;
+    b_buffer_overlap_active = false;
+    buffer_overlap_handle   = 0;
     return std::move(submit);
 }
 
@@ -309,28 +315,55 @@ void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::strin
 }
 
 void CommandList::CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name) {
+    (void)ReadbackCopy(_src, _data, _name);
+}
+
+void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
+    (void)ReadbackCopy(_src, _data, _name);
+}
+
+GraphEventRef CommandList::ReadbackCopy(
+    BufferView       _src,
+    std::span<byte>  _data,
+    std::string_view _name
+) {
     EnsureNoActiveCopyScope("CommandList::CopyFrom");
+    if (_src.GetBuffer() == nullptr || _data.empty()) {
+        GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
+        empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+        return empty_event;
+    }
+    GraphEventRef completion_event = GraphEvent::CreateGraphEvent();
     commands.push_back(
         MakeUnique<CopyBackBufferCmd>(
             reinterpret_cast<uint64>(_src.GetBuffer()),
             _src.GetByteOffset(),
             _src.GetByteSize(),
             _data.data(),
+            completion_event,
             _name
         )
     );
+    return completion_event;
 }
 
-void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
+GraphEventRef CommandList::ReadbackCopy(
+    TextureView      _src,
+    std::span<byte>  _data,
+    std::string_view _name
+) {
     EnsureNoActiveCopyScope("CommandList::CopyFrom");
     bool b_valid_size = _data.size() > 0 && _src.GetTexture();
     if (!b_valid_size) {
-        return;
+        GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
+        empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+        return empty_event;
     }
     uint mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
     b_valid_size &= mip_size <= _data.size();
 
     assert(b_valid_size && "Fatal: Copy back data size is less than texture mip size");
+    GraphEventRef completion_event = GraphEvent::CreateGraphEvent();
     commands.push_back(
         MakeUnique<CopyBackTextureCmd>(
             reinterpret_cast<uint64>(_src.texture),
@@ -338,9 +371,11 @@ void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_
             _src.offset,
             _src.extent,
             std::span<byte>(_data.data(), mip_size),
+            completion_event,
             _name
         )
     );
+    return completion_event;
 }
 
 void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name) {
@@ -771,6 +806,41 @@ CopyCommandScope CommandList::BeginCopyScope() {
     return CopyCommandScope(*this);
 }
 
+void CommandList::BeginBufferOverlap(BufferView _buffer) {
+    EnsureNoActiveCopyScope("CommandList::BeginBufferOverlap");
+    if (_buffer.GetBuffer() == nullptr) {
+        LOG_ERROR("BeginBufferOverlap requires a valid buffer");
+        assert(false && "BeginBufferOverlap requires a valid buffer");
+        return;
+    }
+    if (b_buffer_overlap_active) {
+        LOG_ERROR("Nested BeginBufferOverlap is not allowed");
+        assert(false && "Nested BeginBufferOverlap is not allowed");
+        return;
+    }
+    b_buffer_overlap_active = true;
+    buffer_overlap_handle   = reinterpret_cast<uint64>(_buffer.GetBuffer());
+    commands.emplace_back(MakeUnique<BufferOverlapCmd>(buffer_overlap_handle, true));
+}
+
+void CommandList::EndBufferOverlap(BufferView _buffer) {
+    EnsureNoActiveCopyScope("CommandList::EndBufferOverlap");
+    if (!b_buffer_overlap_active) {
+        LOG_ERROR("EndBufferOverlap called without matching BeginBufferOverlap");
+        assert(false && "EndBufferOverlap called without matching BeginBufferOverlap");
+        return;
+    }
+    const uint64 handle = reinterpret_cast<uint64>(_buffer.GetBuffer());
+    if (handle != buffer_overlap_handle) {
+        LOG_ERROR("EndBufferOverlap buffer mismatch");
+        assert(false && "EndBufferOverlap buffer mismatch");
+        return;
+    }
+    commands.emplace_back(MakeUnique<BufferOverlapCmd>(buffer_overlap_handle, false));
+    b_buffer_overlap_active = false;
+    buffer_overlap_handle   = 0;
+}
+
 // CopyCommandScope private constructor — called only by CommandList::BeginCopyScope
 CopyCommandScope::CopyCommandScope(CommandList& _cmd_list) : cmd_list(&_cmd_list) {}
 
@@ -917,28 +987,57 @@ void CopyCommandScope::CopyFrom(Array<byte>&& _data, TextureView _dst, std::stri
     ));
 }
 void CopyCommandScope::CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name) {
+    (void)ReadbackCopy(_src, _data, _name);
+}
+void CopyCommandScope::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
+    (void)ReadbackCopy(_src, _data, _name);
+}
+
+GraphEventRef CopyCommandScope::ReadbackCopy(
+    BufferView       _src,
+    std::span<byte>  _data,
+    std::string_view _name
+) {
+    if (_src.GetBuffer() == nullptr || _data.empty()) {
+        GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
+        empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+        return empty_event;
+    }
+    GraphEventRef completion_event = GraphEvent::CreateGraphEvent();
     PushCopyCommand(MakeUnique<CopyBackBufferCmd>(
         reinterpret_cast<uint64>(_src.GetBuffer()),
         _src.GetByteOffset(),
         _src.GetByteSize(),
         _data.data(),
+        completion_event,
         _name
     ));
+    return completion_event;
 }
-void CopyCommandScope::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
+
+GraphEventRef CopyCommandScope::ReadbackCopy(
+    TextureView      _src,
+    std::span<byte>  _data,
+    std::string_view _name
+) {
     if (_data.empty() || !_src.GetTexture()) {
-        return;
+        GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
+        empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+        return empty_event;
     }
     uint mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
     assert(mip_size <= _data.size() && "Fatal: Copy back data size is less than texture mip size");
+    GraphEventRef completion_event = GraphEvent::CreateGraphEvent();
     PushCopyCommand(MakeUnique<CopyBackTextureCmd>(
         reinterpret_cast<uint64>(_src.texture),
         _src.mip_level,
         _src.offset,
         _src.extent,
         std::span<byte>(_data.data(), mip_size),
+        completion_event,
         _name
     ));
+    return completion_event;
 }
 
 } // namespace Moer::Render

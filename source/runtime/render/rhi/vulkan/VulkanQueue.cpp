@@ -7,15 +7,17 @@
 #include "VulkanDevice.h"
 #include "VulkanRHITrace.h"
 #include "VulkanRHIResource.h"
-#include "VulkanSubmissionExecutor.h"
 #include "misc/Alignment.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
 #include "misc/Traits.h"
+#include "rhi/GPUEventStream.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIIO.h"
+#include "rhi/RHIImpl.h"
 #include "rhi/RHIResource.h"
+#include "taskgraph/TaskGraph.h"
 #include "trace/Trace.h"
 
 #include "VulkanCustomCommand.h"
@@ -52,6 +54,15 @@ static uint64_t SteadyNowNs() {
                std::chrono::steady_clock::now().time_since_epoch()
     )
         .count();
+}
+
+static void UnlockGraphEventOnTaskGraph(const GraphEventRef& event) {
+    if (!event) {
+        return;
+    }
+    GraphTask<EmptyGraphTask>::Create(EThread::AnyThread_NormalPri)
+        .Next(event)
+        .Dispatch(EThread::AnyThread_NormalPri);
 }
 
 VkRenderingAttachmentInfo FromColorAttachmentInfo(const ColorAttachment& _attachment) {
@@ -418,6 +429,13 @@ struct VkCmdPreprocessor {
             case Command::EType::CopyScope:
                 assert(false && "CopyScope must be split before VkCommandQueue preprocessing");
                 break;
+            case Command::EType::BufferOverlap:
+                {
+                    const auto* overlap_cmd = static_cast<const BufferOverlapCmd*>(_cmd);
+                    auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(overlap_cmd->BufferHandle());
+                    tracker.SetBufferOverlap(vk_buffer, overlap_cmd->IsBegin());
+                }
+                break;
             default:
                 assert(false && "Invalid command type");
         }
@@ -626,8 +644,6 @@ struct VkCmdPreprocessor {
                 {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
             );
-
-            tracker.EmplaceWriteBLAS(uint64(vk_geo));
         }
 
         for (auto& vtx : _cmd->VtxBuffers()) {
@@ -681,16 +697,17 @@ struct VkCmdPreprocessor {
              VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
         );
 
-        for (const uint64& handle : tracker.GetWriteBLASStates()) {
-            if (_cmd->HasGeometry(handle)) {
-                VulkanRaytracingGeometry* vk_geo = reinterpret_cast<VulkanRaytracingGeometry*>(handle);
-
-                tracker.RecordState(
-                    vk_geo->GetUnderlyingBuffer(),
-                    {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
-                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
-                );
+        for (const auto& [handle, count] : _cmd->RelatedGeometries()) {
+            (void)count;
+            auto* vk_geo = reinterpret_cast<VulkanRaytracingGeometry*>(handle);
+            if (vk_geo == nullptr) {
+                continue;
             }
+            tracker.RecordState(
+                vk_geo->GetUnderlyingBuffer(),
+                {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
+            );
         }
     }
 
@@ -1329,6 +1346,9 @@ public:
             case Command::EType::CopyScope:
                 assert(false && "CopyScope must be split before VkCmdVisitor recording");
                 break;
+            case Command::EType::BufferOverlap:
+                // BufferOverlap is a scheduling marker only.
+                break;
         }
     };
     void Visit(const UploadBufferCmd& _cmd) {
@@ -1382,6 +1402,9 @@ public:
         // LOG_INFO("copyback temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
 
         // tracker.RegisterFlushBuffer(VulkanBuffer *_buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage)
+        if (auto completion_event = _cmd.CompletionEvent()) {
+            allocator.AddCompletionEvent(completion_event);
+        }
         allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), src_data(_cmd.Data())]() {
             cmd_list.CopyData(src_data, tmp_buffer, tmp_buffer.GetByteSize());
         });
@@ -1405,6 +1428,9 @@ public:
 
         // LOG_INFO("copyback temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
 
+        if (auto completion_event = _cmd.CompletionEvent()) {
+            allocator.AddCompletionEvent(completion_event);
+        }
         allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), src_data(_cmd.Data())]() {
             cmd_list.CopyData(src_data.data(), tmp_buffer, tmp_buffer.GetByteSize());
         });
@@ -3104,8 +3130,10 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
     return recorded;
 }
 
-WaitEvent VkCommandQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
+VulkanQueueRuntimeSubmitResult
+VkCommandQueue::SubmitRecordedForRuntime(VulkanRecordedSubmit&& _recorded, VkFence _submit_fence) {
     TRACE_SCOPE_CAT("VkCommandQueue.SubmitRecorded", "Queue");
+    VulkanQueueRuntimeSubmitResult result{};
     std::unique_lock<std::mutex> lock(exec_mtx);
 
     if (!_recorded.has_cmd || !_recorded.submit.has_value() || _recorded.submit->cmds.empty()) {
@@ -3119,22 +3147,27 @@ WaitEvent VkCommandQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
         const bool has_submit = _recorded.submit.has_value();
         if (has_submit && (!_recorded.submit->callbacks.empty() || !_recorded.submit->signal_events.empty())) {
             const uint64 current_timeline = ++last_frame;
-            queue.Signal(timeline, current_timeline);
-            queue.SubmitEmpty();
-            Array<WaitEvent> completion_waits{};
-            completion_waits.emplace_back(uint64(timeline), current_timeline);
-            VulkanSubmissionExecutor::EnqueueQueueCompletion(
-                current_timeline,
-                std::move(completion_waits),
-                this,
-                current_timeline,
-                UniquePtr<VulkanAllocator>{},
-                std::move(_recorded.submit->callbacks),
-                std::move(_recorded.submit->signal_events)
-            );
-            return {uint64(timeline), current_timeline};
+            queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            if (current_timeline > 1) {
+                queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            }
+            queue.SubmitEmpty(_submit_fence);
+            result.completion           = WaitEvent{uint64(timeline), current_timeline};
+            result.timeline_value       = current_timeline;
+            result.callbacks            = std::move(_recorded.submit->callbacks);
+            result.signal_events        = std::move(_recorded.submit->signal_events);
+            result.scheduled_completion = true;
+            if (!_recorded.submit->gpu_events.empty()) {
+                GPUEventStream::Get().RegisterSubmit(
+                    std::move(_recorded.submit->gpu_events),
+                    queue.GetType(),
+                    result.completion
+                );
+            }
+            return result;
         }
-        return {uint64(timeline), last_frame};
+        result.completion = WaitEvent{uint64(timeline), last_frame};
+        return result;
     }
 
     auto& vk_allocator = *_recorded.allocator;
@@ -3143,6 +3176,9 @@ WaitEvent VkCommandQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
     auto end_tag          = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT :
                                                                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     queue.Signal(timeline, current_timeline, end_tag);
+    if (current_timeline > 1) {
+        queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    }
     for (auto& evt : _recorded.submit->wait_events) {
         queue.Wait(
             reinterpret_cast<VulkanFence*>(evt.timeline_handle),
@@ -3153,33 +3189,36 @@ WaitEvent VkCommandQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
     for (auto& evt : _recorded.submit->signal_events) {
         queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
     }
-    queue.Submit(vk_allocator.GetCmdList());
+    queue.Submit(vk_allocator.GetCmdList(), _submit_fence);
     query_runtime.FinalizeSubmit(current_timeline, vk_allocator.GetCmdList().GetHandle());
     executed_queue.Enqueue(current_timeline);
-    Array<WaitEvent> completion_waits{};
-    completion_waits.emplace_back(uint64(timeline), current_timeline);
-    VulkanSubmissionExecutor::EnqueueQueueCompletion(
-        current_timeline,
-        std::move(completion_waits),
-        this,
-        current_timeline,
-        std::move(_recorded.allocator),
-        std::move(_recorded.submit->callbacks),
-        std::move(_recorded.submit->signal_events)
-    );
+    result.completion           = WaitEvent{uint64(timeline), current_timeline};
+    result.timeline_value       = current_timeline;
+    result.allocator            = std::move(_recorded.allocator);
+    result.callbacks            = std::move(_recorded.submit->callbacks);
+    result.signal_events        = std::move(_recorded.submit->signal_events);
+    result.scheduled_completion = true;
+    if (!_recorded.submit->gpu_events.empty()) {
+        GPUEventStream::Get().RegisterSubmit(
+            std::move(_recorded.submit->gpu_events),
+            queue.GetType(),
+            result.completion
+        );
+    }
 
     if (_recorded.submit->b_tick_profiling) {
         profiler_storage.RegisterCpuTimestamp("Command Reorder", _recorded.reorder_time_ms);
         profiler_storage.RegisterCpuTimestamp("Command Preprocess", _recorded.preprocess_time_ms);
         profiler_storage.AdvanceFrame();
     }
-    return {uint64(timeline), current_timeline};
+    return result;
 }
 
 WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
-    TRACE_SCOPE_CAT("VkCommandQueue.Execute", "Queue");
-    VulkanRecordedSubmit recorded = Translate(std::move(_submit));
-    return SubmitRecorded(std::move(recorded));
+    (void)_submit;
+    LOG_ERROR("VkCommandQueue::Execute is unsupported after the submission runtime split");
+    assert(false && "VkCommandQueue::Execute must not be used after the submission runtime split");
+    return {};
 }
 
 void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
@@ -3191,36 +3230,6 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
 
 void VkCommandQueue::Sync() {
     Complete(last_frame);
-}
-
-WaitEvent VkCommandQueue::SubmitRestoreTransitions(
-    Array<ReadBuffer>&& _read_buffers,
-    Array<ReadTexture>&& _read_textures,
-    std::optional<WaitEvent> _wait_evt
-) {
-    if (_read_buffers.empty() && _read_textures.empty()) {
-        return {uint64(timeline), last_frame};
-    }
-    CommandList restore_cmd{};
-    if (!_read_buffers.empty()) {
-        restore_cmd.BufferBarriers(
-            EQueueType::Graphics,
-            EQueueType::Graphics,
-            EPassType::Graphics,
-            std::move(_read_buffers),
-            Array<WriteBuffer>{}
-        );
-    }
-    if (!_read_textures.empty()) {
-        restore_cmd.TextureBarriers(
-            EQueueType::Graphics, EQueueType::Graphics, EPassType::Graphics, std::move(_read_textures)
-        );
-    }
-    CmdSubmit restore_submit = restore_cmd.Submit();
-    if (_wait_evt.has_value()) {
-        restore_submit.wait_events.emplace_back(_wait_evt.value());
-    }
-    return Execute(std::move(restore_submit));
 }
 
 #if defined(MOER_TRACE_ENABLED) && MOER_TRACE_ENABLED && defined(MOER_TRACE_GPU_ENABLED) && \
@@ -3509,7 +3518,9 @@ VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer
     return recorded;
 }
 
-IOWaitEvt VkCopyQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
+VulkanCopyQueueRuntimeSubmitResult
+VkCopyQueue::SubmitRecordedForRuntime(VulkanRecordedSubmit&& _recorded, VkFence _submit_fence) {
+    VulkanCopyQueueRuntimeSubmitResult result{};
     std::unique_lock<std::mutex> lk(exec_mutex);
     auto current_timeline = last_frame;
     if (!_recorded.has_cmd || !_recorded.allocator) {
@@ -3517,25 +3528,18 @@ IOWaitEvt VkCopyQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
             (!_recorded.submit->callbacks.empty() || !_recorded.submit->signal_events.empty())) {
             current_timeline = ++last_frame;
             queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-            queue.SubmitEmpty();
-            Array<WaitEvent> completion_waits{};
-            completion_waits.emplace_back(uint64(timeline.Get()), current_timeline);
-            Array<IOSignalEvt> signal_events{};
-            signal_events.reserve(_recorded.submit->signal_events.size());
+            queue.SubmitEmpty(_submit_fence);
+            result.completion           = IOWaitEvt{uint64(timeline.Get()), current_timeline};
+            result.timeline_value       = current_timeline;
+            result.scheduled_completion = true;
+            result.signal_events.reserve(_recorded.submit->signal_events.size());
             for (const auto& evt : _recorded.submit->signal_events) {
-                signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
+                result.signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
             }
-            VulkanSubmissionExecutor::EnqueueCopyQueueCompletion(
-                current_timeline,
-                std::move(completion_waits),
-                this,
-                current_timeline,
-                UniquePtr<VulkanAllocator>{},
-                std::move(_recorded.submit->callbacks),
-                std::move(signal_events)
-            );
+            result.callbacks = std::move(_recorded.submit->callbacks);
         }
-        return {uint64(timeline.Get()), current_timeline};
+        result.completion = IOWaitEvt{uint64(timeline.Get()), current_timeline};
+        return result;
     }
 
     auto& vk_allocator = *_recorded.allocator;
@@ -3554,29 +3558,24 @@ IOWaitEvt VkCopyQueue::SubmitRecorded(VulkanRecordedSubmit&& _recorded) {
             VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
         );
     }
-    queue.Submit(vk_allocator.GetCmdList());
-    Array<WaitEvent> completion_waits{};
-    completion_waits.emplace_back(uint64(timeline.Get()), current_timeline);
-    Array<IOSignalEvt> signal_events{};
-    signal_events.reserve(_recorded.submit->signal_events.size());
+    queue.Submit(vk_allocator.GetCmdList(), _submit_fence);
+    result.completion           = IOWaitEvt{uint64(timeline.Get()), current_timeline};
+    result.timeline_value       = current_timeline;
+    result.allocator            = std::move(_recorded.allocator);
+    result.callbacks            = std::move(_recorded.submit->callbacks);
+    result.scheduled_completion = true;
+    result.signal_events.reserve(_recorded.submit->signal_events.size());
     for (const auto& evt : _recorded.submit->signal_events) {
-        signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
+        result.signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
     }
-    VulkanSubmissionExecutor::EnqueueCopyQueueCompletion(
-        current_timeline,
-        std::move(completion_waits),
-        this,
-        current_timeline,
-        std::move(_recorded.allocator),
-        std::move(_recorded.submit->callbacks),
-        std::move(signal_events)
-    );
-    return {uint64(timeline.Get()), current_timeline};
+    return result;
 }
 
 IOWaitEvt VkCopyQueue::Execute(CmdSubmit&& _evt) {
-    VulkanRecordedSubmit recorded = Translate(std::move(_evt));
-    return SubmitRecorded(std::move(recorded));
+    (void)_evt;
+    LOG_ERROR("VkCopyQueue::Execute(CmdSubmit) is unsupported after the submission runtime split");
+    assert(false && "VkCopyQueue::Execute(CmdSubmit) must not be used after the submission runtime split");
+    return {};
 }
 
 void VkCopyQueue::Sync(uint64 _timeline) {

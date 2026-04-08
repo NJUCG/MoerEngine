@@ -95,7 +95,7 @@ do {
         Write-Host "[$Label] Errors/validation issues detected:" -ForegroundColor Red
         $errorLines | ForEach-Object { Write-Host "  $($_.Line)" }
         $errorLines | ForEach-Object { $_.Line } | Out-File $CrashLog -Encoding UTF8
-        Write-Summary "[$Label] Errors/validation issues detected ($($errorLines.Count) lines)."
+        Write-Summary "[$Label] Errors/validation issues detected ($(@($errorLines).Count) lines)."
         $failed = $true
     }
     Save-Minidumps -BinDir $BinDir

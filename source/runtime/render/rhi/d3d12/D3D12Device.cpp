@@ -1272,6 +1272,7 @@ struct D3D12CommandPreprocessVisitor {
                 break;
             case Command::EType::Scope:
             case Command::EType::Query:
+            case Command::EType::BufferOverlap:
                 break;
 
             default:
@@ -1416,6 +1417,7 @@ struct D3D12CommandVisitor {
                 break;
             case Command::EType::Scope:
             case Command::EType::Query:
+            case Command::EType::BufferOverlap:
                 break;
                 //CopyBackTexture,
                 //BuildAccel,

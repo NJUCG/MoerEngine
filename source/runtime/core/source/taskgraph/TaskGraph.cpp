@@ -117,8 +117,10 @@ EThread::Type TaskGraph::GetCurrentThread(bool localQueue) {
             (localQueue ? EThread::LOCAL_QUEUE : EThread::MAIN_QUEUE)
         );
     }
-    assert(false);
-    return EThread::UNKNOWN_THREAD;
+    return EThread::SetPriority(
+        EThread::UNKNOWN_THREAD,
+        EThread::NORMAL_PRI
+    );
 }
 bool TaskGraph::IsThreadProcessingTask(EThread::Type index) {
     return m_workers[EThread::GetThreadIndex(index)].task_thread->IsProcessingTask(

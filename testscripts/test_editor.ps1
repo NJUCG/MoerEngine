@@ -40,6 +40,7 @@ $Label  = "Editor"
 Write-Host "--- MoerEditor Test ($TimeoutSec s) ---" -ForegroundColor Yellow
 
 do {
+    if (-not (Build-Target -Target "MoerEditor")) { break }
     if (-not (Assert-Exe $Exe)) { break }
 
     $Log      = Join-Path $script:RunDir "moereditor.log"
@@ -69,7 +70,7 @@ do {
         Write-Host "[$Label] Errors/validation issues detected:" -ForegroundColor Red
         $errorLines | ForEach-Object { Write-Host "  $($_.Line)" }
         $errorLines | ForEach-Object { $_.Line } | Out-File $CrashLog -Encoding UTF8
-        Write-Summary "[$Label] Errors/validation issues detected ($($errorLines.Count) lines)."
+        Write-Summary "[$Label] Errors/validation issues detected ($(@($errorLines).Count) lines)."
         $failed = $true
     }
 

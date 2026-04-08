@@ -22,7 +22,7 @@ public:
     static GPUEventStream& Get();
 
     void RegisterSubmit(Array<GPUEvent>&& events, EQueueType queue, WaitEvent completion);
-    void ResolveCompleted(uint64 timeline_value);
+    void ResolveCompleted(WaitEvent completion);
     void FlushToProfiler();
 
 private:

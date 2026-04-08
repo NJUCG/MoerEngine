@@ -137,9 +137,6 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
     for (const auto& layer : instance_layers_required) {
         if (is_layer_valid(layer)) {
             if (layer == "VK_LAYER_KHRONOS_validation") {
-                PopulateDebugMessengerCreateInfo(debug_create_info);
-                debug_create_info.pNext    = instance_create_info.pNext;
-                instance_create_info.pNext = &debug_create_info;
                 b_validation_layer_enabled = true;
             }
             instance_layers_loaded.emplace_back(layer.data());
@@ -178,6 +175,12 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
     };
 
     const auto instance_extensions_required = VulkanInstanceExtension::GetMERequiredInstanceExtensions();
+    static constexpr std::string_view optional_instance_extensions[] = {
+        VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME,
+        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+        VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
+        VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME
+    };
 
     Array<const char*> instance_extensions_loaded;
     bool               b_instance_extensions_fully_supported = true;
@@ -187,17 +190,52 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
         else
             b_instance_extensions_fully_supported = false;
     }
+    for (const auto optional_ext : optional_instance_extensions) {
+        if (instance_extensions.contains(optional_ext.data())) {
+            instance_extensions_loaded.emplace_back(optional_ext.data());
+        } else {
+            LOG_WARNING("Optional instance extension '{}' is not supported", optional_ext);
+        }
+    }
     CHECK_ASSERT(
         b_instance_extensions_fully_supported, "Not all required instance extensions are supported."
     );
 
+    const bool b_debug_utils_extension_enabled = std::find_if(
+        instance_extensions_loaded.begin(),
+        instance_extensions_loaded.end(),
+        [](const char* ext_name) {
+            return ext_name != nullptr &&
+                   std::string_view(ext_name) == VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        }
+    ) != instance_extensions_loaded.end();
+
+    if (b_validation_layer_enabled && b_debug_utils_extension_enabled) {
+        PopulateDebugMessengerCreateInfo(debug_create_info);
+        debug_create_info.pNext    = instance_create_info.pNext;
+        instance_create_info.pNext = &debug_create_info;
+    }
+
     instance_create_info.enabledExtensionCount   = instance_extensions_loaded.size();
     instance_create_info.ppEnabledExtensionNames = instance_extensions_loaded.data();
+    m_device_info.has_surface_maintenance1_instance =
+        std::find_if(
+            instance_extensions_loaded.begin(),
+            instance_extensions_loaded.end(),
+            [](const char* ext_name) {
+                return ext_name != nullptr &&
+                       std::string_view(ext_name) == VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
+            }
+        ) != instance_extensions_loaded.end();
+
+    if (m_device_info.has_surface_maintenance1_instance) {
+        LOG_INFO("Loading VulkanInstanceExtension: {}", VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+    }
 
     VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
     volkLoadInstance(m_instance);
 
-    if (b_validation_layer_enabled)
+    if (b_validation_layer_enabled && b_debug_utils_extension_enabled)
         SetupDebugUtilsMessengerEXT();
 }
 
@@ -342,8 +380,11 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
      */
 void VulkanDevice::InitGpu(uint32 _api_version) {
     // Enable extensions
-    auto gpu_extensions              = VulkanDevice::GetGpuExtensions(m_gpu);
-    m_device_info.enabled_extensions = VulkanDeviceExtension::GetMEEnabledDeviceExtensions(gpu_extensions);
+    auto gpu_extensions = VulkanDevice::GetGpuExtensions(m_gpu);
+    m_device_info.enabled_extensions = VulkanDeviceExtension::GetMEEnabledDeviceExtensions(
+        gpu_extensions,
+        m_device_info.has_surface_maintenance1_instance
+    );
 
     // Query core features
     m_device_info.core_features = VulkanDeviceFeatures::GetGpuFeatures(m_gpu, _api_version);
@@ -429,6 +470,9 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     // setup extension and feature info
     Moer::Array<const char*> extensions_loaded;
     for (const auto& extension : m_device_info.enabled_extensions) {
+        if (!extension || !extension->IsEnabled()) {
+            continue;
+        }
         extensions_loaded.emplace_back(extension->GetExtensionName().data());
         extension->PreCreateDevice(device_create_info);
         LOG_INFO("Loading VulkanDeviceExtension: {}", extension->GetExtensionName());
@@ -810,7 +854,7 @@ VkDescriptorType METoVkDescriptorType(uint _desc_type) {
 
 bool VulkanDevice::HasDeviceExtension(std::string_view _ext_name) const {
     for (const auto& ext : m_device_info.enabled_extensions) {
-        if (ext && ext->GetExtensionName() == _ext_name) {
+        if (ext && ext->IsEnabled() && ext->GetExtensionName() == _ext_name) {
             return true;
         }
     }

@@ -103,6 +103,7 @@ private:
     uint64      offset{};
     uint64      byte_size{};
     void* const data{};
+    GraphEventRef completion_event{nullptr};
     CopyBackBufferCmd() : Command(EType::CopyBackBuffer) {}
 
 public:
@@ -111,13 +112,15 @@ public:
         uint64           _offset,
         uint64           _byte_size,
         void* const      _data,
+        GraphEventRef    _completion_event = nullptr,
         std::string_view _name = typenames[uint(EType::CopyBackBuffer)]
     ) :
         Command(EType::CopyBackBuffer, _name),
         handle(_handle),
         offset(_offset),
         byte_size(_byte_size),
-        data(_data) {}
+        data(_data),
+        completion_event(std::move(_completion_event)) {}
 
     //generate getters
     EQueueType GetQueueType() const override {
@@ -135,6 +138,9 @@ public:
     auto Data() const {
         return data;
     }
+    const GraphEventRef& CompletionEvent() const {
+        return completion_event;
+    }
 
     mutable BufferView staging_buffer;
 };
@@ -146,6 +152,7 @@ private:
     uint3           offset{};
     uint3           size{};
     std::span<byte> data;
+    GraphEventRef   completion_event{nullptr};
     CopyBackTextureCmd() : Command(EType::CopyBackTexture) {}
 
 public:
@@ -155,6 +162,7 @@ public:
         uint3            _offset,
         uint3            _size,
         std::span<byte>  _data,
+        GraphEventRef    _completion_event = nullptr,
         std::string_view _name = typenames[uint(EType::CopyBackTexture)]
     ) :
         Command(EType::CopyBackTexture, _name),
@@ -162,7 +170,8 @@ public:
         mip_level(_mip_level),
         offset{_offset.x, _offset.y, _offset.z},
         size{_size.x, _size.y, _size.z},
-        data(_data) {}
+        data(_data),
+        completion_event(std::move(_completion_event)) {}
 
     EQueueType GetQueueType() const override {
         return EQueueType::Copy;
@@ -182,6 +191,9 @@ public:
     }
     auto Data() const {
         return data;
+    }
+    const GraphEventRef& CompletionEvent() const {
+        return completion_event;
     }
 
     mutable BufferView staging_buffer;
@@ -1721,6 +1733,29 @@ struct CopyScopeCmd : public Command {
 
 private:
     Array<UniquePtr<Command>> commands;
+};
+
+struct BufferOverlapCmd : public Command {
+    BufferOverlapCmd(uint64 _buffer_handle, bool _begin) :
+        Command(EType::BufferOverlap, _begin ? "BeginBufferOverlap" : "EndBufferOverlap"),
+        buffer_handle(_buffer_handle),
+        begin(_begin) {}
+
+    EQueueType GetQueueType() const override {
+        return EQueueType::Ignore;
+    }
+
+    uint64 BufferHandle() const {
+        return buffer_handle;
+    }
+
+    bool IsBegin() const {
+        return begin;
+    }
+
+private:
+    uint64 buffer_handle{0};
+    bool   begin{false};
 };
 
 class RenderDevice::Impl {

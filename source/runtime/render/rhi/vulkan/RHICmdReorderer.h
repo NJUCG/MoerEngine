@@ -1591,6 +1591,9 @@ public:
             case Command::EType::CopyScope:
                 assert(false && "CopyScope must be split before command reorder");
                 break;
+            case Command::EType::BufferOverlap:
+                AddCmd(_cmd, layer_offset);
+                break;
             default:
                 assert(false && "Command Type Not Supported for Reorder");
         }

@@ -15,7 +15,6 @@
 namespace Moer::Render {
 void VulkanWindowsPlatform::GetInstanceExtensions(TExtensionArray& _extensions) {
     _extensions.emplace_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-    _extensions.emplace_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
 }
 
 void VulkanWindowsPlatform::GetInstanceLayers(TLayerArray& _layers) {

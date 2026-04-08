@@ -158,6 +158,24 @@ struct VulkanRecordedSubmit {
     double                     preprocess_time_ms{0.0};
 };
 
+struct VulkanQueueRuntimeSubmitResult {
+    WaitEvent                   completion{};
+    UniquePtr<VulkanAllocator>  allocator{};
+    Array<std::function<void()>> callbacks{};
+    Array<SignalEvent>          signal_events{};
+    uint64                      timeline_value{0};
+    bool                        scheduled_completion{false};
+};
+
+struct VulkanCopyQueueRuntimeSubmitResult {
+    IOWaitEvt                   completion{};
+    UniquePtr<VulkanAllocator>  allocator{};
+    Array<std::function<void()>> callbacks{};
+    Array<IOSignalEvt>          signal_events{};
+    uint64                      timeline_value{0};
+    bool                        scheduled_completion{false};
+};
+
 class VkCommandQueue : public CommandQueue {
 public:
     VkCommandQueue(VulkanDevice& _device, EQueueType _type) :
@@ -182,12 +200,11 @@ public:
         MoerDelete(timeline);
     }
     VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr, TrackerSeed seed = {});
-    WaitEvent            SubmitRecorded(VulkanRecordedSubmit&& _recorded);
-    WaitEvent            SubmitRestoreTransitions(
-                   Array<ReadBuffer>&& _read_buffers,
-                   Array<ReadTexture>&& _read_textures,
-                   std::optional<WaitEvent> _wait_evt = std::nullopt
-               );
+    VulkanQueueRuntimeSubmitResult SubmitRecordedForRuntime(
+        VulkanRecordedSubmit&& _recorded,
+        VkFence                _submit_fence = VK_NULL_HANDLE
+    );
+
     WaitEvent   Execute(CmdSubmit&& _submit) override;
     void        Wait(WaitEvent _event) override;
     void        Present(SwapchainRef _viewport, TextureView _view) override;
@@ -250,7 +267,10 @@ public:
 
     IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
     VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr);
-    IOWaitEvt            SubmitRecorded(VulkanRecordedSubmit&& _recorded);
+    VulkanCopyQueueRuntimeSubmitResult SubmitRecordedForRuntime(
+        VulkanRecordedSubmit&& _recorded,
+        VkFence                _submit_fence = VK_NULL_HANDLE
+    );
     IOWaitEvt Execute(CmdSubmit&& _submit) override;
     FenceRef  GetFenceHandle() override;
     void      Sync(uint64 _timeline) override;

@@ -7,6 +7,26 @@
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
 
+namespace {
+
+void UnlockGraphEventOnTaskGraph(const GraphEventRef& event) {
+    if (!event) {
+        return;
+    }
+    GraphTask<EmptyGraphTask>::Create(EThread::AnyThread_NormalPri)
+        .Next(event)
+        .Dispatch(EThread::AnyThread_NormalPri);
+}
+
+void ExecuteCompletionEvents(Array<GraphEventRef>& completion_events) {
+    for (const auto& event : completion_events) {
+        UnlockGraphEventOnTaskGraph(event);
+    }
+    completion_events.clear();
+}
+
+} // namespace
+
 // VulkanAllocatorBase
 VulkanAllocatorBase::VulkanAllocatorBase(VulkanDevice* _device, EQueueType _type) :
     VulkanDeviceObject(_device),
@@ -19,6 +39,7 @@ VulkanAllocatorBase::~VulkanAllocatorBase() {
     cmd_list.reset();
     cmd_allocator.reset();
     on_complete.clear();
+    completion_events.clear();
     tracker.Reset();
 }
 
@@ -33,6 +54,7 @@ void VulkanAllocatorBase::Complete(VulkanFence* _fence, uint64 _wait_val) {
         func();
     }
     on_complete.clear();
+    ExecuteCompletionEvents(completion_events);
 }
 
 void VulkanAllocatorBase::Reset() {
@@ -53,6 +75,7 @@ void VulkanPresentor::Complete(VulkanFence* _fence, uint64 _wait_val) {
         func();
     }
     on_complete.clear();
+    ExecuteCompletionEvents(completion_events);
 }
 
 #pragma region[ Query Pool ]
@@ -158,6 +181,7 @@ void VulkanAllocator::Complete(VulkanFence* _fence, uint64 _wait_val) {
         func();
     }
     on_complete.clear();
+    ExecuteCompletionEvents(completion_events);
 }
 
 void VulkanAllocator::Reset() {

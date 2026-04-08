@@ -4,6 +4,8 @@
 #include "misc/Timer.h"
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
+#include "rhi/vulkan/VulkanSubmissionExecutor.h"
 #include "trace/Trace.h"
 #include "window/WindowContext.h"
 
@@ -1102,15 +1104,17 @@ int RunProfilerMain(int argc, const char** argv) {
         ui_renderer->RenderGUI(cmd_list, output->GetView());
 
         ++frame_time;
-        gfx_queue.Execute(cmd_list.Submit().Signal(timeline, frame_time).DeleteResources());
-        gfx_queue.Present(swapchain, output->GetView());
+        cmd_list.Signal(timeline, frame_time).DeleteResources();
+        Array<CommandList> frame_cmd_lists;
+        frame_cmd_lists.emplace_back(std::move(cmd_list));
+        RHIPresentRequest present_request{swapchain, output};
+        RHIExecutor::Get().Submit(std::move(frame_cmd_lists), ERHIExecSubmitFlags::FlushGPU | ERHIExecSubmitFlags::FrameEnd,
+                                  &present_request);
         ui_renderer->PresentWindows();
     }
 
     ingest.Stop();
-    gfx_queue.Sync();
-    swapchain->Sync();
-    device.WaitIdle();
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     ui_renderer.reset();
     output = {};
     swapchain = {};

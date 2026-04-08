@@ -1,20 +1,9 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHI.h"
+#include "taskgraph/GraphTask.h"
 #include "vulkan/VulkanSubmissionExecutor.h"
 
-#include <iterator>
-
 namespace Moer::Render {
-namespace {
-
-RHIExecSubmitOptions ToLegacySubmitOptions(ERHIExecSubmitFlags flags) {
-    return RHIExecSubmitOptions{
-        .flush_gpu = EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FlushGPU),
-        .frame_end = EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FrameEnd),
-    };
-}
-
-} // namespace
 
 RHIExecutor& RHIExecutor::Get() {
     static RHIExecutor executor;
@@ -39,9 +28,7 @@ void RHIExecutor::Submit(
         return;
     }
 
-    Array<RHIExecOp> ops;
-    ops.reserve(command_lists.size() + (present != nullptr ? 1u : 0u));
-    std::optional<EQueueType> last_non_empty_queue{};
+    std::lock_guard<std::mutex> lock(submit_mutex);
 
     for (size_t cmd_index = 0; cmd_index < command_lists.size(); ++cmd_index) {
         auto&            command_list = command_lists[cmd_index];
@@ -54,67 +41,78 @@ void RHIExecutor::Submit(
             assert(false && "RHIExecutor only accepts Graphics or Compute command lists");
             return;
         }
-
         if (command_list.IsEmpty()) {
             continue;
         }
-        last_non_empty_queue = queue_type;
-
-        RHISubmitCmdList submit_list{};
-        submit_list.queue = queue_type;
-        submit_list.submits.emplace_back(command_list.Submit());
-        ops.emplace_back(std::move(submit_list));
+        pending_command_lists.emplace_back(std::move(command_list));
     }
 
     if (present != nullptr && present->source.texture != nullptr) {
+        pending_present = *present;
+    }
+    pending_frame_end = pending_frame_end || EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FrameEnd);
+
+    if (!EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FlushGPU)) {
+        return;
+    }
+    FlushPendingLocked(pending_frame_end);
+}
+
+void RHIExecutor::Sync(ERHISyncDepth depth) {
+    {
+        std::lock_guard<std::mutex> lock(submit_mutex);
+        FlushPendingLocked(pending_frame_end);
+    }
+    GraphEventRef event = VulkanSubmissionExecutor::Sync(depth);
+    if (event) {
+        event->Wait();
+    }
+}
+
+void RHIExecutor::FlushPendingLocked(bool frame_end) {
+    VulkanSubmissionBatch batch{};
+    batch.submits.reserve(pending_command_lists.size());
+
+    std::optional<EQueueType> last_non_empty_queue{};
+    for (auto& command_list : pending_command_lists) {
+        if (command_list.IsEmpty()) {
+            continue;
+        }
+        const EQueueType queue = command_list.GetQueueType();
+        last_non_empty_queue   = queue;
+        batch.submits.emplace_back(queue, command_list.Submit());
+    }
+    pending_command_lists.clear();
+
+    if (pending_present.has_value()) {
+        if (!last_non_empty_queue.has_value()) {
+            LOG_ERROR("RHIExecutor::Submit present request requires at least one Graphics command list");
+            assert(false && "Present requires a preceding Graphics command list");
+            pending_present.reset();
+            pending_frame_end = false;
+            return;
+        }
         if (last_non_empty_queue.has_value() && last_non_empty_queue.value() != EQueueType::Graphics) {
             LOG_ERROR("RHIExecutor::Submit requires the last command list before present to be Graphics");
             assert(false && "Present requires the last command list to run on the Graphics queue");
+            pending_present.reset();
+            pending_frame_end = false;
             return;
         }
-        ops.emplace_back(RHIPresentOp{present->swapchain, present->source, EQueueType::Graphics});
+        batch.present = pending_present.value();
+        pending_present.reset();
     }
 
-    Submit(std::move(ops), ToLegacySubmitOptions(flags));
-}
-
-void RHIExecutor::Submit(
-    Array<RHISubmitCmdList>&& submit_lists,
-    RHIExecSubmitOptions      options
-) {
-    Array<RHIExecOp> ops;
-    ops.reserve(submit_lists.size());
-    for (auto& submit_list : submit_lists) {
-        ops.emplace_back(std::move(submit_list));
-    }
-    Submit(std::move(ops), options);
-}
-
-void RHIExecutor::Submit(Array<RHIExecOp>&& ops, RHIExecSubmitOptions options) {
-    std::lock_guard<std::mutex> lock(submit_mutex);
-    if (!ops.empty()) {
-        pending_ops.insert(
-            pending_ops.end(),
-            std::make_move_iterator(ops.begin()),
-            std::make_move_iterator(ops.end())
-        );
-    }
-    pending_frame_end = pending_frame_end || options.frame_end;
-
-    if (!options.flush_gpu) {
+    const bool has_work = !batch.submits.empty() || batch.present.has_value() || frame_end;
+    pending_frame_end   = false;
+    if (!has_work) {
         return;
     }
 
-    Array<RHIExecOp> flushed_ops = std::move(pending_ops);
-    pending_ops.clear();
-    options.frame_end = pending_frame_end;
-    pending_frame_end = false;
-
-    if (flushed_ops.empty() && !options.frame_end) {
-        return;
-    }
-
-    VulkanSubmissionExecutor::Execute(std::move(flushed_ops), options);
+    VulkanSubmissionExecutor::Execute(
+        std::move(batch),
+        VulkanSubmissionExecuteOptions{.frame_end = frame_end}
+    );
 }
 
 } // namespace Moer::Render

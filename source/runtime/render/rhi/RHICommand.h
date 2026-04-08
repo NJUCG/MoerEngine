@@ -11,6 +11,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
+#include "taskgraph/GraphTask.h"
 #include "trace/Trace.h"
 #include <filesystem>
 #include <functional>
@@ -63,16 +64,17 @@ public:
         Scope,
         Query,
         Custom,
-        CopyScope
+        CopyScope,
+        BufferOverlap
     };
 
     static constexpr std::string_view typenames[] = {
         "UploadBuffer",    "CopyBackBuffer",      "BufferToBuffer", "BufferToTexture",
-        "TextureToBuffer", "CopyBackTexture",     "UploadTexture",  "TextureToTexture",
+        "TextureToBuffer", "UploadTexture",       "TextureToTexture", "CopyBackTexture",
         "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
         "Barrier",         "QueueTransfer",       "SetDrawState",   "SetGeometryPassDrawState",
-        "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Scope", "Query",
-        "Custom",          "CopyScope"
+        "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Scope",
+        "Query",           "Custom",              "CopyScope",      "BufferOverlap"
     };
 
 private:
@@ -282,6 +284,7 @@ private:
     friend class QueryRuntime;
     friend class VulkanQueryRuntime;
     friend struct ProfilerStorage;
+    friend struct AutoGpuEventTokenFactory;
 };
 
 struct GPUEvent {
@@ -678,7 +681,17 @@ public:
     void CopyFrom(
         TextureView      _src,
         std::span<byte>  _data,
+        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+    );
+    GraphEventRef ReadbackCopy(
+        BufferView       _src,
+        std::span<byte>  _data,
         std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+    );
+    GraphEventRef ReadbackCopy(
+        TextureView      _src,
+        std::span<byte>  _data,
+        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
 
 private:
@@ -1356,7 +1369,17 @@ public:
     RENDER_API void CopyFrom(
         TextureView      _src,
         std::span<byte>  _data,
+        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+    );
+    RENDER_API GraphEventRef ReadbackCopy(
+        BufferView       _src,
+        std::span<byte>  _data,
         std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+    );
+    RENDER_API GraphEventRef ReadbackCopy(
+        TextureView      _src,
+        std::span<byte>  _data,
+        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
 
     RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
@@ -1540,6 +1563,8 @@ public:
      * Multiple scopes per CommandList are allowed; nesting is not.
      */
     RENDER_API CopyCommandScope BeginCopyScope();
+    RENDER_API void             BeginBufferOverlap(BufferView _buffer);
+    RENDER_API void             EndBufferOverlap(BufferView _buffer);
 
 private:
     friend DrawDispatcher;
@@ -1636,6 +1661,8 @@ private:
     Array<GPUEvent>              gpu_events;
     uint32                       event_depth{0};
     bool                         b_copy_scope_active{false};
+    bool                         b_buffer_overlap_active{false};
+    uint64                       buffer_overlap_handle{0};
 };
 
 class RENDER_API GpuScopeSpan {
@@ -1749,36 +1776,6 @@ private:
     GPUEventScope _gpu_event_scope(cmd_list, name)
 class QueueCmd {};
 
-struct RHISubmitCmdList {
-    Array<CmdSubmit> submits;
-    EQueueType       queue{EQueueType::Graphics};
-
-    //TODO: remove this because preprocess do all useful in digest
-    Array<TextureView> write_textures;
-
-    //TODO: remove this because preprocess do all useful in digest
-    RHISubmitCmdList& MarkWriteTexture(TextureView _texture) {
-        if (_texture.texture) {
-            write_textures.emplace_back(_texture);
-        }
-        return *this;
-    }
-
-    RHISubmitCmdList()                                          = default;
-    RHISubmitCmdList(RHISubmitCmdList&&) noexcept              = default;
-    RHISubmitCmdList& operator=(RHISubmitCmdList&&) noexcept   = default;
-    RHISubmitCmdList(const RHISubmitCmdList&)                  = delete;
-    RHISubmitCmdList& operator=(const RHISubmitCmdList&)       = delete;
-};
-
-struct RHIPresentOp {
-    SwapchainRef swapchain;
-    TextureView  target;
-    EQueueType   queue{EQueueType::Graphics};
-};
-
-using RHIExecOp = std::variant<RHISubmitCmdList, RHIPresentOp>;
-
 enum class ERHIExecSubmitFlags : uint8 {
     None     = 0,
     FlushGPU = 1 << 0,
@@ -1792,9 +1789,9 @@ struct RHIPresentRequest {
     TextureView  source;
 };
 
-struct RHIExecSubmitOptions {
-    bool flush_gpu{true};
-    bool frame_end{false};
+enum class ERHISyncDepth : uint8 {
+    RHI = 0,
+    Present = 1,
 };
 
 class RENDER_API RHIExecutor {
@@ -1806,15 +1803,13 @@ public:
         ERHIExecSubmitFlags  flags   = ERHIExecSubmitFlags::FlushGPU,
         RHIPresentRequest*   present = nullptr
     );
+    void Sync(ERHISyncDepth depth = ERHISyncDepth::RHI);
 private:
-    void Submit(
-        Array<RHISubmitCmdList>&& submit_lists,
-        RHIExecSubmitOptions      options = {}
-    );
-    void Submit(Array<RHIExecOp>&& ops, RHIExecSubmitOptions options = {});
-    std::mutex  submit_mutex;
-    Array<RHIExecOp> pending_ops{};
-    bool        pending_frame_end{false};
+    void FlushPendingLocked(bool frame_end);
+    std::mutex              submit_mutex;
+    Array<CommandList>      pending_command_lists{};
+    std::optional<RHIPresentRequest> pending_present{};
+    bool                    pending_frame_end{false};
 };
 
 struct ProfileResultEntry {

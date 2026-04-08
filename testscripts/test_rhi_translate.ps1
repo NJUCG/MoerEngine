@@ -35,6 +35,7 @@ $Label  = "RHI"
 Write-Host "--- RHI Translate Multi-Queue Test ---" -ForegroundColor Yellow
 
 do {
+    if (-not (Build-Target -Target "TestRHITranslate")) { break }
     if (-not (Assert-Exe $Exe)) { break }
 
     $Log = Join-Path $script:RunDir "rhi_translate.log"

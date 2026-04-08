@@ -233,15 +233,9 @@ public:
     auto WriteTexture(VulkanTexture*, ETextureState, EPassType _type = EPassType::Graphics)
         -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
 
-    void EmplaceWriteBLAS(uint64 _blas_buf);
-    bool ContainsWriteBLAS(uint64 _blas_buf);
-
-    const Set<uint64>& GetWriteBLASStates() const {
-        return write_blas_states;
-    }
-
     void MarkWriteable(const TextureSubresourceKeyT<VulkanTexture>& _key, bool _writeable = true);
     void MarkWriteable(VulkanBuffer* _buffer, bool _writeable = true);
+    void SetBufferOverlap(VulkanBuffer* _buffer, bool _enabled);
 
 private:
     TextureSubresourceKeyT<VulkanTexture> MakeTextureStateKey(
@@ -273,13 +267,13 @@ private:
     UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
         pending_textures;
 
-    Set<uint64> write_blas_states;
     UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>
                        writed_state_textures;
     Set<VulkanBuffer*> writed_state_buffers;
 
     UnorderedMap<VulkanBuffer*, BufferState> flush_buffer_states;
     UnorderedMap<VulkanBuffer*, BufferRange> flush_buffer_ranges;
+    Set<VulkanBuffer*>                        buffer_overlap_states;
 };
 } // namespace Moer::Render
 #endif

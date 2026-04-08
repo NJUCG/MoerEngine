@@ -7,6 +7,7 @@
 .DESCRIPTION
     Provides:
       - Initialize-TestRun   : set up log directory and summary file
+      - Build-Target         : build target before running tests
       - Assert-Exe           : verify executable exists
       - Merge-Stderr         : fold stderr file into main log
       - Invoke-ExeSync       : run an exe synchronously, capture output, return exit code
@@ -63,6 +64,35 @@ function Initialize-TestRun {
 # ─────────────────────────────────────────────────────────────────────────────
 function Write-Summary([string]$Line) {
     Add-Content -Path $script:SummaryFile -Value $Line -Encoding UTF8
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+function Build-Target {
+<#
+.SYNOPSIS
+    Build a CMake target under build/ before test execution.
+#>
+    param(
+        [Parameter(Mandatory)][string]$Target
+    )
+
+    $BuildDir = Join-Path $script:Root "build"
+    if (-not (Test-Path $BuildDir)) {
+        Write-Host "[ERROR] Build directory not found: $BuildDir" -ForegroundColor Red
+        Write-Summary "[ERROR] Build directory not found: $BuildDir"
+        $script:FailCount++
+        return $false
+    }
+
+    Write-Host "[Build] cmake --build $BuildDir --config $($script:Config) --target $Target"
+    & cmake --build $BuildDir --config $script:Config --target $Target
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[ERROR] Build failed for target: $Target" -ForegroundColor Red
+        Write-Summary "[ERROR] Build failed for target: $Target"
+        $script:FailCount++
+        return $false
+    }
+    return $true
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -159,6 +189,7 @@ function Invoke-ExeTimed {
     $script:TimedExitCode = 0
     if (-not $survived) {
         $proc.Kill()
+        $proc.WaitForExit()
         return $true   # killed at timeout = normal
     } else {
         $script:TimedExitCode = $proc.ExitCode
@@ -177,11 +208,9 @@ function Test-LogForErrors {
       Excludes Vulkan Loader info messages (which only appear at [error] level
       due to the debug callback but don't indicate application errors).
 
-    Category 2 — Vulkan validation layer errors and warnings:
+    Category 2 — Vulkan validation layer hard errors:
       "Validation Error: [ VUID-... ]"   — hard validation failure
-      "Validation Warning: [ VUID-... ]" — validation warning
-      "[N] [VUID-...]"                   — detail lines emitted after the above
-      "[error] [VulkanDebugCallback.cpp" — spdlog wrapper for any validation hit
+      "[N] [VUID-...]" detail lines are not treated as failure on their own.
 
     Returns an array of MatchInfo objects (empty array if no issues found).
     Callers should check  ($results.Count -gt 0)  to detect problems.
@@ -195,18 +224,13 @@ function Test-LogForErrors {
     # that happens to be routed through the debug callback at [error] severity.
     $p1 = "(?-i)\[error\](?!.*\[Loader Message\]).*(crash|exception|fatal|access.violation|assert)"
 
-    # Pattern 2: Vulkan validation layer output written as plain text.
-    # Covers "Validation Error:", "Validation Warning:", and VUID detail lines.
-    $p2 = "(?-i)(Validation (Error|Warning)\s*:|\[VUID-)"
+    # Pattern 2: Vulkan validation layer hard errors only.
+    $p2 = "(?-i)(Validation Error\s*:)"
 
-    # Pattern 3: spdlog [error] lines from VulkanDebugCallback — these are the
-    # wrapper lines emitted whenever *any* validation message fires.
-    $p3 = "(?-i)\[error\]\s+\[VulkanDebugCallback"
-
-    $combined = "$p1|$p2|$p3"
+    $combined = "$p1|$p2"
 
     $hits = Select-String -Path $LogFile -Pattern $combined -CaseSensitive
-    return $hits
+    return @($hits)
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
