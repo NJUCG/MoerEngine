@@ -183,12 +183,14 @@ struct RasterConfig {
     float           rtao_ray_trace_distance = 1.0f;
     int             rtao_spp                = 8;
 
-    bool  rtao_denoiser_enable                 = true;
-    bool  rtao_denoiser_reprojection_enable    = true;
-    bool  rtao_denoiser_validation_enable      = true;
-    float rtao_denoiser_history_ratio          = 0.8f;
-    float rtao_denoiser_valid_depth_threshold  = 0.01f;
-    float rtao_denoiser_valid_normal_threshold = 0.8f;
+    bool  rtao_denoiser_enable                  = true;
+    bool  rtao_denoiser_reprojection_enable     = true;
+    bool  rtao_denoiser_validation_enable       = true;
+    bool  rtao_denoiser_history_clamp_enable    = true;
+    bool  rtao_denoiser_motion_weighting_enable = true;
+    float rtao_denoiser_history_ratio           = 0.9f;
+    float rtao_denoiser_valid_depth_threshold   = 0.01f;
+    float rtao_denoiser_valid_normal_threshold  = 0.8f;
 
     float ssdo_depth_bias         = 0.001f;
     float ssdo_sample_radius      = 0.16f;

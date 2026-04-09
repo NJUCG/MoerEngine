@@ -377,6 +377,10 @@ void RasterUI::ShowConfig() {
             // 启用 Reprojection 后才能启用 Validation
             if (m_config.rtao_denoiser_reprojection_enable) {
                 ImGui::Checkbox("Enable RTAO Validation", &m_config.rtao_denoiser_validation_enable);
+                ImGui::Checkbox("Enable RTAO History Clamp", &m_config.rtao_denoiser_history_clamp_enable);
+                ImGui::Checkbox(
+                    "Enable RTAO Motion Weighting", &m_config.rtao_denoiser_motion_weighting_enable
+                );
             } else {
                 // m_config.rtao_denoiser_validation_enable = false;
             }

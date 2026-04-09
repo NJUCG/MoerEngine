@@ -87,18 +87,22 @@ struct RtaoPipelineBindlessParam {
 };
 
 struct RtaoDenoiserPassBindlessParam {
-    uint history_ao_tex;
-    uint curr_ao_tex;
+    float2 inv_resolution;
+    uint   history_ao_tex;
+    uint   curr_ao_tex;
+
     uint motion_vector_tex;
     uint is_reprojection_enable;
+    uint depth_tex;
+    uint normal_tex;
 
-    uint  depth_tex;
-    uint  normal_tex;
     uint  is_validation_enable;
+    uint  is_history_clamp_enable;
     float history_ratio;
-
     float valid_depth_threshold;
+
     float valid_normal_threshold;
+    uint  is_motion_weighting_enable;
 };
 
 struct AoCompositeParam {
