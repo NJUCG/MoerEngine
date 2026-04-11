@@ -47,10 +47,9 @@ public:
             RHIRasterizeInfo::Preset(),
             {},
             {
-                RHIColorAttachmentInfo::Preset(PF_R32_UINT),                 // vbuffer
+                RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM),           // base_color
                 RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32), // normal
-                RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32), // tangent
-                RHIColorAttachmentInfo::Preset(PF_R32G32_SFLOAT)             // uv
+                RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)            // metal_rough_ao
             },
             ds_info, // depth buf
             context.textures.depth_linear_sampler.tex->GetFormat()
@@ -116,10 +115,10 @@ public:
             param.use_visible_instance_id_remap = 1;
         }
 
-        auto rect2d = context.textures.vbuffer.GetRect2D();
+        auto rect2d = context.textures.base_color.GetRect2D();
         assert(
-            rect2d == context.textures.normal.GetRect2D() && rect2d == context.textures.tangent.GetRect2D() &&
-            rect2d == context.textures.uv.GetRect2D()
+            rect2d == context.textures.normal.GetRect2D() &&
+            rect2d == context.textures.metal_rough_ao.GetRect2D()
         );
 
         context.cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryDrawProfileScopeName());
@@ -138,10 +137,9 @@ public:
                 visibility.draw_cmd_buf->GetStride(),
                 visibility.max_draw_count,
                 DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture()),
-                ColorAttachment(context.textures.vbuffer.tex),
+                ColorAttachment(context.textures.base_color.tex),
                 ColorAttachment(context.textures.normal.tex),
-                ColorAttachment(context.textures.tangent.tex),
-                ColorAttachment(context.textures.uv.tex)
+                ColorAttachment(context.textures.metal_rough_ao.tex)
             );
             context.cmd_list.PopScopeWithTimeScope();
             return;
@@ -156,10 +154,9 @@ public:
             gpu_scene_res.draw_cmd_buf.buf->GetNumElement(),
             gpu_scene_res.draw_cmd_buf.buf->GetStride(),
             DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture()),
-            ColorAttachment(context.textures.vbuffer.tex),
+            ColorAttachment(context.textures.base_color.tex),
             ColorAttachment(context.textures.normal.tex),
-            ColorAttachment(context.textures.tangent.tex),
-            ColorAttachment(context.textures.uv.tex)
+            ColorAttachment(context.textures.metal_rough_ao.tex)
         );
         context.cmd_list.PopScopeWithTimeScope();
     }
