@@ -1706,7 +1706,7 @@ public:
     CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) = 0; //gfx
     virtual PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders)        = 0; //compute
 
-    virtual DeviceExtension* LoadExtension(std::string_view _name) {
+    virtual RuntimePlugin* LoadPlugin(std::string_view _name) {
         return nullptr;
     }
 

@@ -12,7 +12,7 @@
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanUtil.h"
-#include "extension/VulkanNrdExtension.h"
+#include "extension/VulkanNrdPlugin.h"
 #include <string_view>
 
 #include "log/LogSystem.h"
@@ -1696,7 +1696,7 @@ void VulkanDevice::SetResourceName(uint64 _handle, VkObjectType _type, const std
     vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
 }
 
-DeviceExtension* VulkanDevice::LoadExtension(std::string_view _name) {
+RuntimePlugin* VulkanDevice::LoadPlugin(std::string_view _name) {
     auto ite = exts.find(_name.data());
     if (ite == exts.end())
         return nullptr;
@@ -1727,12 +1727,12 @@ void VulkanDevice::LoadDefaultExtensions() {
 
 #if WITH_NRD
     exts.try_emplace(
-        Moer::Render::Ext::NRDExtension::name.data(),
-        [](VulkanDevice* _device) -> DeviceExtension* {
-            return MoerNew(Moer::Render::Ext::VkNRDExtension(_device));
+        Moer::Render::Ext::NRDPlugin::name.data(),
+        [](VulkanDevice* _device) -> RuntimePlugin* {
+            return MoerNew(Moer::Render::Ext::VkNRDPlugin(_device));
         },
-        [](DeviceExtension* _ext) {
-            MoerDelete(static_cast<Moer::Render::Ext::VkNRDExtension*>(_ext));
+        [](RuntimePlugin* _ext) {
+            MoerDelete(static_cast<Moer::Render::Ext::VkNRDPlugin*>(_ext));
         }
     );
 #endif

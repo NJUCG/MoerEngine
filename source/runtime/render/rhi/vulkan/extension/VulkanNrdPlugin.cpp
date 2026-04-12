@@ -1,4 +1,4 @@
-#include "VulkanNrdExtension.h"
+#include "VulkanNrdPlugin.h"
 
 #if WITH_NRD
 
@@ -339,12 +339,12 @@ private:
 };
 
 UniquePtr<NRDInterface>
-VkNRDExtension::CreateInterface(uint8 _max_frame_in_flight, uint16 _frame_width, uint16 _frame_height) {
+VkNRDPlugin::CreateInterface(uint8 _max_frame_in_flight, uint16 _frame_width, uint16 _frame_height) {
 
     return MakeUnique<VkNRDInterface>(m_device, _max_frame_in_flight, _frame_width, _frame_height);
 }
 
-UniquePtr<NRDInterface> VkNRDExtension::RecreateInterface(
+UniquePtr<NRDInterface> VkNRDPlugin::RecreateInterface(
     UniquePtr<NRDInterface> _interface,
     uint16                  _frame_width,
     uint16                  _frame_height

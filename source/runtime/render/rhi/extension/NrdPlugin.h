@@ -1,5 +1,5 @@
-#ifndef MOER_NRD_EXTENSION_H
-#define MOER_NRD_EXTENSION_H
+#ifndef MOER_NRD_PLUGIN_H
+#define MOER_NRD_PLUGIN_H
 
 /**
  * 因为NVIDIA的NRD为闭源协议，所以MoerEngine无法直接引入NRD相关头文件和库文件，只能以插件的形式提供NRD支持。
@@ -172,10 +172,10 @@ protected:
     UnorderedMap<uint64, nri::CommandBuffer*> cmd_lists_on_use = {};
 };
 
-class NRDExtension : public DeviceExtension {
+class NRDPlugin : public RuntimePlugin {
 public:
-    ~NRDExtension()                        = default;
-    static constexpr std::string_view name = "NRDExt";
+    ~NRDPlugin()                        = default;
+    static constexpr std::string_view name = "NRDPlugin";
 
     virtual UniquePtr<NRDInterface>
     CreateInterface(uint8 _max_frame_in_flight = 0, uint16 _frame_width = 0, uint16 _frame_height = 0) = 0;

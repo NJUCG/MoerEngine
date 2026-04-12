@@ -5,7 +5,7 @@
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 
-#include "rhi/extension/NrdExtension.h"
+#include "rhi/extension/NrdPlugin.h"
 namespace Moer::Render {
 PipelineHandle RenderDevice::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
     return impl->CreatePipeline(std::move(_pso_info), std::move(_shaders));
@@ -123,8 +123,8 @@ RaytracingSceneRef RenderDevice::CreateRaytracingScene() {
 }
 
 template<DeviceExt Ext>
-Ext* RenderDevice::LoadExtension() const {
-    return static_cast<Ext*>(impl->LoadExtension(Ext::name));
+Ext* RenderDevice::LoadPlugin() const {
+    return static_cast<Ext*>(impl->LoadPlugin(Ext::name));
 }
 
 void RenderDevice::FlushDebugMessages() const {
@@ -135,6 +135,6 @@ void RenderDevice::WaitIdle() {
     impl->WaitIdle();
 }
 
-template RENDER_API Ext::NRDExtension* RenderDevice::LoadExtension<Ext::NRDExtension>() const;
+template RENDER_API Ext::NRDPlugin* RenderDevice::LoadPlugin<Ext::NRDPlugin>() const;
 
 } // namespace Moer::Render
