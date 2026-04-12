@@ -17,6 +17,7 @@
 #define CONST constexpr
 #include "misc/Traits.h"
 #include "shaderheaders/shared/raster/ShaderParametersUtils.h"
+#include "shaderheaders/shared/raster/culling/ShaderParameters.h"
 #include "shaderheaders/shared/raster/SharedEnum.h"
 #include "shaderheaders/shared/raster/env_and_atmo_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
@@ -28,6 +29,7 @@ namespace Moer::Render {
 #else
 #define CONST const
 #include "shared/raster/ShaderParametersUtils.h"
+#include "shared/raster/culling/ShaderParameters.h"
 #include "shared/raster/SharedEnum.h"
 #include "shared/raster/env_and_atmo_pass/ShaderParameters.h"
 #include "shared/raster/geometry_pass/ShaderParameters.h"

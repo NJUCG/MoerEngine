@@ -15,10 +15,9 @@ namespace Moer::Render::Raster {
 
 // Full-resolution only textures
 #define RASTER_TEXTURES_TABLE                                                                                   \
-    X(TexHandle, vbuffer, Tex2DTag, TexConfig::Default(PF_R32_UINT).Usage(E_SAMPLED_COLOR))                     \
+    X(TexHandle, base_color, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))           \
     X(TexHandle, normal, Tex2DTag, TexConfig::Default(PF_A2R10G10B10_UNORM_PACK32).Usage(E_SAMPLED_COLOR))      \
-    X(TexHandle, tangent, Tex2DTag, TexConfig::Default(PF_A2R10G10B10_UNORM_PACK32).Usage(E_SAMPLED_COLOR))     \
-    X(TexHandle, uv, Tex2DTag, TexConfig::Default(PF_R32G32_SFLOAT).Usage(E_SAMPLED_COLOR))                     \
+    X(TexHandle, metal_rough_ao, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))       \
     X(TexHandle, shadow_mask, Tex2DTag, TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR))                 \
     X(TexHandle, lighting_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))  \
     X(TexHandle,                                                                                                \
