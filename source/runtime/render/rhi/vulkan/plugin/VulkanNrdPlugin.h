@@ -1,7 +1,7 @@
 #ifndef VULKAN_NRD_PLUGIN_H
 #define VULKAN_NRD_PLUGIN_H
 
-#include "rhi/extension/NrdPlugin.h"
+#include "rhi/plugin/NrdPlugin.h"
 
 #include "../VulkanRHIResource.h"
 

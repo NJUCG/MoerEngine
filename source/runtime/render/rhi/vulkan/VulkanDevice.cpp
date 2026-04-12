@@ -12,7 +12,7 @@
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanUtil.h"
-#include "extension/VulkanNrdPlugin.h"
+#include "plugin/VulkanNrdPlugin.h"
 #include <string_view>
 
 #include "log/LogSystem.h"

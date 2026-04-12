@@ -5,7 +5,7 @@
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 
-#include "rhi/extension/NrdPlugin.h"
+#include "rhi/plugin/NrdPlugin.h"
 namespace Moer::Render {
 PipelineHandle RenderDevice::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
     return impl->CreatePipeline(std::move(_pso_info), std::move(_shaders));

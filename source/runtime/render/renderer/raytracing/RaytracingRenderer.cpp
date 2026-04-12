@@ -10,7 +10,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
-#include "rhi/extension/NrdPlugin.h"
+#include "rhi/plugin/NrdPlugin.h"
 #include "scene/GpuScene.h"
 #include "scene/loader/LoaderInterface.h"
 #include "shader/ShaderResourceManager.h"

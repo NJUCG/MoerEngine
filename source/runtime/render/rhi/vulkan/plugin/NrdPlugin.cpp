@@ -1,4 +1,4 @@
-#include "rhi/extension/NrdPlugin.h"
+#include "rhi/plugin/NrdPlugin.h"
 
 #if WITH_NRD
 
