@@ -127,6 +127,10 @@ Ext* RenderDevice::LoadPlugin() const {
     return static_cast<Ext*>(impl->LoadPlugin(Ext::name));
 }
 
+bool RenderDevice::IsExtensionCooperativeEnabled() const {
+    return impl && impl->IsExtensionCooperativeEnabled();
+}
+
 void RenderDevice::FlushDebugMessages() const {
     impl->FlushDebugMessages();
 }

@@ -91,10 +91,18 @@ public:
     virtual bool IsOptional() const final {
         return m_is_optional;
     }
+    inline bool IsUsable() const {
+        return m_is_usable;
+    }
+    inline bool ShouldEnableDeviceCreate() const {
+        return m_is_enabled && m_is_usable;
+    }
     virtual void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) {}
     virtual void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) {}
     virtual void
     PreGpuProperties(const VulkanDevice* _device, VkPhysicalDeviceProperties2& _gpu_properties2) {}
+    // 给需要额外 property 枚举命令的扩展一个收尾阶段，比如 cooperative。
+    virtual void PostGpuProperties(const VulkanDevice* _device) {}
     virtual void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) {}
 
 protected:
@@ -108,19 +116,85 @@ public:
         return m_has_khr_acceleration_structure && (m_has_khr_ray_tracing_pipeline || m_has_khr_ray_query);
     }
 
-    // optional extensions
-    bool m_has_ext_descriptor_buffer;
-    bool m_has_khr_acceleration_structure;
-    bool m_has_khr_ray_tracing_pipeline;
-    bool m_has_khr_ray_query;
-    bool m_has_ext_mesh_shader;
-    bool m_allow_mesh_primitive_shading;
+    // cooperative 扩展与 feature bit 的原始支持状态。
+    inline bool SupportsCooperativeMatrix() const {
+        return m_has_khr_cooperative_matrix;
+    }
 
-    bool m_has_memory_priority;
-    bool m_has_pageable_device_local_memory;
+    inline bool SupportsCooperativeMatrixRobustBufferAccess() const {
+        return m_has_khr_cooperative_matrix_robust_buffer_access;
+    }
+
+    inline bool SupportsCooperativeVector() const {
+        return m_has_nv_cooperative_vector;
+    }
+
+    inline bool SupportsCooperativeVectorTraining() const {
+        return m_has_nv_cooperative_vector_training;
+    }
+
+    inline bool HasCooperativeMatrixEnabled() const {
+        return SupportsCooperativeMatrix();
+    }
+
+    inline bool HasCooperativeVectorEnabled() const {
+        return SupportsCooperativeVector();
+    }
+
+    inline bool HasCooperativeVectorTrainingEnabled() const {
+        return SupportsCooperativeVectorTraining();
+    }
+
+    // cooperative bundle 依赖的 core feature 前置条件。
+    inline bool HasCooperativeLowPrecisionSupport() const {
+        return m_has_shader_float16 || m_has_shader_int8;
+    }
+
+    inline bool HasCooperativeStorageSupport() const {
+        return m_has_storage_buffer_16bit_access || m_has_uniform_and_storage_buffer_16bit_access ||
+               m_has_storage_buffer_8bit_access || m_has_uniform_and_storage_buffer_8bit_access;
+    }
+
+    inline bool HasCooperativeInferenceSupport() const {
+        return SupportsCooperativeMatrix() && SupportsCooperativeVector() && m_has_vulkan_memory_model &&
+               HasCooperativeLowPrecisionSupport() && HasCooperativeStorageSupport();
+    }
+
+    inline bool HasCooperativeInferenceEnabled() const {
+        return HasCooperativeMatrixEnabled() && HasCooperativeVectorEnabled() && m_has_vulkan_memory_model &&
+               HasCooperativeLowPrecisionSupport() && HasCooperativeStorageSupport();
+    }
+
+    inline bool IsExtensionCooperativeEnabled() const {
+        return HasCooperativeInferenceEnabled();
+    }
+
+    // optional extensions
+    bool m_has_ext_descriptor_buffer                       = false;
+    bool m_has_khr_acceleration_structure                  = false;
+    bool m_has_khr_ray_tracing_pipeline                    = false;
+    bool m_has_khr_ray_query                               = false;
+    bool m_has_ext_mesh_shader                             = false;
+    bool m_allow_mesh_primitive_shading                    = false;
+    bool m_has_khr_cooperative_matrix                      = false;
+    bool m_has_khr_cooperative_matrix_robust_buffer_access = false;
+    bool m_has_nv_cooperative_vector                       = false;
+    bool m_has_nv_cooperative_vector_training              = false;
+
+    bool m_has_memory_priority              = false;
+    bool m_has_pageable_device_local_memory = false;
     // nvidia
-    bool m_has_nv_memory_decompression;
-    bool m_has_nv_copy_memory_indirect;
+    bool m_has_nv_memory_decompression = false;
+    bool m_has_nv_copy_memory_indirect = false;
+
+    // cooperative bundle 依赖的 core feature 前置条件。
+    bool m_has_shader_float16                          = false;
+    bool m_has_shader_int8                             = false;
+    bool m_has_vulkan_memory_model                     = false;
+    bool m_has_storage_buffer_16bit_access             = false;
+    bool m_has_uniform_and_storage_buffer_16bit_access = false;
+    bool m_has_storage_buffer_8bit_access              = false;
+    bool m_has_uniform_and_storage_buffer_8bit_access  = false;
 };
 } // namespace Moer::Render
 

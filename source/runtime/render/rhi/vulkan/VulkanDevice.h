@@ -15,11 +15,11 @@
 #include "VulkanDescriptor.h"
 #include "VulkanDeviceFeature.h"
 #include "VulkanDeviceProperty.h"
-#include "vulkanextension/VulkanExtension.h"
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanTypeDefs.h"
 #include "vulkan/vulkan_core.h"
+#include "vulkanextension/VulkanExtension.h"
 
 // #include <vk_mem_alloc.h>
 #include "VulkanMemoryAllocator.h"
@@ -116,6 +116,7 @@ public:
     IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;
 
     void FlushDebugMessages() const override;
+    bool IsExtensionCooperativeEnabled() const override;
     void WaitIdle() override;
 
     // 判断当前物理设备是否为 AMD（基于 vendorID）
@@ -149,8 +150,8 @@ public:
         using Ctor = std::function<RuntimePlugin*(VulkanDevice*)>;
         using Dtor = std::function<void(RuntimePlugin*)>;
         RuntimePlugin* ext;
-        Ctor             ctor;
-        Dtor             dtor;
+        Ctor           ctor;
+        Dtor           dtor;
         Ext(Ctor ctor, Dtor dtor) : ext{nullptr}, ctor{ctor}, dtor{dtor} {}
         Ext(Ext const&) = delete;
         Ext(Ext&& rhs) : ext{rhs.ext}, ctor{rhs.ctor}, dtor{rhs.dtor} {
@@ -286,7 +287,7 @@ private:
 
     void Destroy();
 
-    static Set<std::string>            GetGpuExtensions(VkPhysicalDevice _gpu);
+    static Set<std::string> GetGpuExtensions(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
     static TQueueFamilyPropertiesArray GetQueueFamilyProperties(VkPhysicalDevice _gpu);
 
     int32_t GetQueueFamilyIndex(

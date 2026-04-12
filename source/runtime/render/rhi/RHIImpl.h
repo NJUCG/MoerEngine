@@ -1718,6 +1718,10 @@ public:
         ; // do nothing by default
     }
 
+    virtual bool IsExtensionCooperativeEnabled() const {
+        return false;
+    }
+
     virtual void WaitIdle() {};
 };
 

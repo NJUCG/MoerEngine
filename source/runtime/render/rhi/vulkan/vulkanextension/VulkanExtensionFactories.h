@@ -16,6 +16,8 @@ std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTCopyMemoryIndirectExtensio
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTMemoryPriorityAllocateInfoExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTPageableDeviceLocalMemoryExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTMeshShaderExtension(bool _optional);
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRCooperativeMatrixExtension(bool _optional);
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanNVCooperativeVectorExtension(bool _optional);
 
 } // namespace Moer::Render
 

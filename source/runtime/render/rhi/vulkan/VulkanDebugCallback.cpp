@@ -3,11 +3,12 @@
 
 #include "log/LogSystem.h"
 #include "vulkan/vulkan_core.h"
-#include <cctype>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace Moer::Render {
@@ -22,6 +23,69 @@ struct BufEntry {
 };
 static std::mutex                                s_debugbuf_mutex;
 static std::unordered_map<std::string, BufEntry> s_debugbuf;
+static std::atomic_bool                          s_logged_unknown_coop_matrix_layer{false};
+static std::atomic_bool                          s_logged_unknown_coop_vector_layer{false};
+
+void LogUnknownCooperativeLayerInfo(std::atomic_bool& _once_flag, const char* _extension_name) {
+    bool expected = false;
+    if (_once_flag.compare_exchange_strong(expected, true)) {
+        LOG_INFO(
+            "VulkanRHI: Validation layer does not recognize {}. Consider updating VulkanSDK to 1.4 or newer "
+            "for accurate validation results.",
+            _extension_name
+        );
+    }
+}
+
+bool TryHandleKnownCooperativeLayerWarning(const VkDebugUtilsMessengerCallbackDataEXT* _callback_data) {
+    if (_callback_data == nullptr || _callback_data->pMessage == nullptr) {
+        return false;
+    }
+
+    const std::string_view message(_callback_data->pMessage);
+    const std::string_view message_id_name(
+        _callback_data->pMessageIdName != nullptr ? _callback_data->pMessageIdName : ""
+    );
+    if (message.find("is not supported by this layer") == std::string_view::npos) {
+        const bool is_unknown_pnext_struct =
+            message.find("unknown VkStructureType") != std::string_view::npos;
+        if (is_unknown_pnext_struct && message_id_name == "VUID-VkDeviceCreateInfo-pNext-pNext" &&
+            message.find("vkCreateDevice()") != std::string_view::npos &&
+            message.find("VkStructureType (1000491000)") != std::string_view::npos) {
+            LogUnknownCooperativeLayerInfo(
+                s_logged_unknown_coop_vector_layer, VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME
+            );
+            return true;
+        }
+
+        if (is_unknown_pnext_struct && message_id_name == "VUID-VkPhysicalDeviceProperties2-pNext-pNext" &&
+            message.find("vkGetPhysicalDeviceProperties2()") != std::string_view::npos &&
+            message.find("VkStructureType (1000491001)") != std::string_view::npos) {
+            LogUnknownCooperativeLayerInfo(
+                s_logged_unknown_coop_vector_layer, VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME
+            );
+            return true;
+        }
+
+        return false;
+    }
+
+    if (message.find(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME) != std::string_view::npos) {
+        LogUnknownCooperativeLayerInfo(
+            s_logged_unknown_coop_matrix_layer, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME
+        );
+        return true;
+    }
+
+    if (message.find(VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME) != std::string_view::npos) {
+        LogUnknownCooperativeLayerInfo(
+            s_logged_unknown_coop_vector_layer, VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME
+        );
+        return true;
+    }
+
+    return false;
+}
 
 } // namespace
 
@@ -58,6 +122,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
 ) {
     if (p_callback_data == nullptr)
         return VK_FALSE;
+
+    if (TryHandleKnownCooperativeLayerWarning(p_callback_data)) {
+        return VK_FALSE;
+    }
 
     // preserve original formatting: normalize CRLF -> LF, trim leading/trailing whitespace/newlines
     auto flatten_message = [](const std::string& s) {
@@ -97,7 +165,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
         sev_val = 0;
 
     const auto     now          = std::chrono::steady_clock::now();
-    constexpr auto kMergeWindow = std::chrono::milliseconds(8);
+    constexpr auto merge_window = std::chrono::milliseconds(8);
 
     std::string key = std::to_string(p_callback_data->messageIdNumber) + ":" +
                       (p_callback_data->pMessageIdName ? p_callback_data->pMessageIdName : "");
@@ -113,7 +181,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
             s_debugbuf.emplace(key, BufEntry{part, now, sev_val});
         } else {
             // existing entry
-            if (now - it->second.ts <= kMergeWindow) {
+            if (now - it->second.ts <= merge_window) {
                 // within merge window: append (with newline) preserving internal newlines
                 if (!it->second.text.empty() && it->second.text.back() != '\n')
                     it->second.text.push_back('\n');

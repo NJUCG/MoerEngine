@@ -200,6 +200,8 @@ public:
     template<DeviceExt Ext>
     RENDER_API Ext* LoadPlugin() const;
 
+    RENDER_API bool IsExtensionCooperativeEnabled() const;
+
     RENDER_API void FlushDebugMessages() const;
     RENDER_API void WaitIdle();
 

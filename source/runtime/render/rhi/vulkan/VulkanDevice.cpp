@@ -6,13 +6,14 @@
 #include "PixelFormat.h"
 #include "VulkanCommand.h"
 #include "VulkanDebugCallback.h"
-#include "vulkanextension/VulkanExtension.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanUtil.h"
 #include "plugin/VulkanNrdPlugin.h"
+#include "vulkanextension/VulkanCooperativeSupport.h"
+#include "vulkanextension/VulkanExtension.h"
 #include <string_view>
 
 #include "log/LogSystem.h"
@@ -341,11 +342,14 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
      */
 void VulkanDevice::InitGpu(uint32 _api_version) {
     // Enable extensions
-    auto gpu_extensions              = VulkanDevice::GetGpuExtensions(m_gpu);
+    auto gpu_extensions = VulkanDevice::GetGpuExtensions(m_gpu);
+
     m_device_info.enabled_extensions = VulkanDeviceExtension::GetMEEnabledDeviceExtensions(gpu_extensions);
 
     // Query core features
     m_device_info.core_features = VulkanDeviceFeatures::GetGpuFeatures(m_gpu, _api_version);
+    // 先从 core feature 中提取 cooperative bundle 需要的前置能力。
+    UpdateCooperativePrerequisites(m_device_info.core_features, m_device_info.optional_extensions);
     // Query advanced features, use advanced features as GPU supported, and developers cannot specify them.
     {
         VkPhysicalDeviceFeatures2 features2{};
@@ -369,6 +373,9 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
             extension->PreGpuProperties(this, props2);
         }
         vkGetPhysicalDeviceProperties2(m_gpu, &props2);
+        for (const auto& extension : m_device_info.enabled_extensions) {
+            extension->PostGpuProperties(this);
+        }
     }
 
     // Query core memory properties
@@ -396,6 +403,8 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
         m_device_info.core_properties.core_1_0.limits.maxBoundDescriptorSets,
         m_device_info.core_properties.core_1_0.limits.timestampComputeAndGraphics
     );
+    // 启动时输出 cooperative 支持摘要，便于后续调试 shader/toolchain 问题。
+    LogCooperativeSupportSummary(m_device_info.optional_extensions, m_device_info.optional_properties);
 }
 
 void VulkanDevice::CreateDevice(uint32 _api_version) {
@@ -428,6 +437,10 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     // setup extension and feature info
     Moer::Array<const char*> extensions_loaded;
     for (const auto& extension : m_device_info.enabled_extensions) {
+        if (!extension || !extension->ShouldEnableDeviceCreate()) {
+            // 如果拓展不启用或者不可用，则跳过
+            continue;
+        }
         extensions_loaded.emplace_back(extension->GetExtensionName().data());
         extension->PreCreateDevice(device_create_info);
         LOG_INFO("Loading VulkanDeviceExtension: {}", extension->GetExtensionName());
@@ -638,12 +651,19 @@ void VulkanDevice::Destroy() {
     // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
 }
 
-Set<std::string> VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu) {
-    uint32 gpu_extension_count;
-    // check extensions
-    vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, nullptr);
+Set<std::string> VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu, const char* _layer_name) {
+    uint32_t gpu_extension_count = 0;
+    VkResult result = vkEnumerateDeviceExtensionProperties(_gpu, _layer_name, &gpu_extension_count, nullptr);
+    if (result != VK_SUCCESS || gpu_extension_count == 0) {
+        return {};
+    }
+
     Array<VkExtensionProperties> gpu_extensions(gpu_extension_count);
-    vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, gpu_extensions.data());
+    result =
+        vkEnumerateDeviceExtensionProperties(_gpu, _layer_name, &gpu_extension_count, gpu_extensions.data());
+    if (result != VK_SUCCESS) {
+        return {};
+    }
 
     Set<std::string> ret;
     for (const auto& extension : gpu_extensions)
@@ -809,11 +829,15 @@ VkDescriptorType METoVkDescriptorType(uint _desc_type) {
 
 bool VulkanDevice::HasDeviceExtension(std::string_view _ext_name) const {
     for (const auto& ext : m_device_info.enabled_extensions) {
-        if (ext && ext->GetExtensionName() == _ext_name) {
+        if (ext && ext->ShouldEnableDeviceCreate() && ext->GetExtensionName() == _ext_name) {
             return true;
         }
     }
     return false;
+}
+
+bool VulkanDevice::IsExtensionCooperativeEnabled() const {
+    return m_device_info.optional_extensions.IsExtensionCooperativeEnabled();
 }
 
 bool VulkanDevice::IsAmdGpu() const {

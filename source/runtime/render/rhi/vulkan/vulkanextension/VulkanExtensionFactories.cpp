@@ -355,6 +355,164 @@ private:
     VkPhysicalDeviceMeshShaderFeaturesEXT m_mesh_shader_features;
 };
 
+// cooperative matrix 扩展：负责 feature、property 和支持表枚举的完整生命周期。
+class VulkanKHRCooperativeMatrixExtension final : public VulkanDeviceExtension {
+public:
+    VulkanKHRCooperativeMatrixExtension(bool _is_optional = true) :
+        VulkanDeviceExtension(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, _is_optional),
+        m_cooperative_matrix_features() {}
+
+    // 把 cooperative matrix feature struct 挂到 feature 查询链上。
+    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+        m_cooperative_matrix_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+        AddToPNext(_gpu_features2, m_cooperative_matrix_features);
+    }
+
+    // 根据驱动返回的 feature bit 判定这个扩展在当前 GPU 上是否可用。
+    void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+        m_is_usable = (m_cooperative_matrix_features.cooperativeMatrix == VK_TRUE);
+        _gpu_extensions.m_has_khr_cooperative_matrix = m_is_usable;
+        _gpu_extensions.m_has_khr_cooperative_matrix_robust_buffer_access =
+            m_is_usable && (m_cooperative_matrix_features.cooperativeMatrixRobustBufferAccess == VK_TRUE);
+    }
+
+    // 把 cooperative matrix 的基础 property struct 挂到 property 查询链上。
+    void
+    PreGpuProperties(const VulkanDevice* _device, VkPhysicalDeviceProperties2& _gpu_properties2) override {
+        auto& cooperative_matrix_props =
+            const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties())
+                .cooperative_matrix_properties;
+        cooperative_matrix_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_PROPERTIES_KHR;
+        AddToPNext(_gpu_properties2, cooperative_matrix_props);
+    }
+
+    // 额外枚举驱动支持的 matrix 组合列表，这一步不能只靠 pNext property 拿到。
+    void PostGpuProperties(const VulkanDevice* _device) override {
+        if (!m_is_usable || vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR == nullptr) {
+            return;
+        }
+
+        auto& cooperative_matrix_supports =
+            const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties())
+                .cooperative_matrix_supports;
+
+        uint32_t property_count = 0;
+        VkResult result =
+            vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(_device->GetGpu(), &property_count, nullptr);
+        if ((result != VK_SUCCESS && result != VK_INCOMPLETE) || property_count == 0) {
+            cooperative_matrix_supports.clear();
+            return;
+        }
+
+        cooperative_matrix_supports.resize(property_count);
+        for (auto& cooperative_matrix_support : cooperative_matrix_supports) {
+            cooperative_matrix_support       = {};
+            cooperative_matrix_support.sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR;
+        }
+
+        result = vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(
+            _device->GetGpu(), &property_count, cooperative_matrix_supports.data()
+        );
+        if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
+            cooperative_matrix_supports.clear();
+            return;
+        }
+
+        if (property_count < cooperative_matrix_supports.size()) {
+            cooperative_matrix_supports.resize(property_count);
+        }
+    }
+
+    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+        if (m_is_usable && m_is_enabled) {
+            AddToPNext(_device_create_info, m_cooperative_matrix_features);
+        }
+    }
+
+private:
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR m_cooperative_matrix_features;
+};
+
+// cooperative vector 扩展：负责 feature、property 和支持表枚举的完整生命周期。
+class VulkanNVCooperativeVectorExtension final : public VulkanDeviceExtension {
+public:
+    VulkanNVCooperativeVectorExtension(bool _is_optional = true) :
+        VulkanDeviceExtension(VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME, _is_optional),
+        m_cooperative_vector_features() {}
+
+    // 把 cooperative vector feature struct 挂到 feature 查询链上。
+    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+        m_cooperative_vector_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_VECTOR_FEATURES_NV;
+        AddToPNext(_gpu_features2, m_cooperative_vector_features);
+    }
+
+    // 根据驱动返回的 feature bit 判定这个扩展在当前 GPU 上是否可用。
+    void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+        m_is_usable = (m_cooperative_vector_features.cooperativeVector == VK_TRUE);
+        _gpu_extensions.m_has_nv_cooperative_vector = m_is_usable;
+        _gpu_extensions.m_has_nv_cooperative_vector_training =
+            m_is_usable && (m_cooperative_vector_features.cooperativeVectorTraining == VK_TRUE);
+    }
+
+    // 把 cooperative vector 的基础 property struct 挂到 property 查询链上。
+    void
+    PreGpuProperties(const VulkanDevice* _device, VkPhysicalDeviceProperties2& _gpu_properties2) override {
+        auto& cooperative_vector_props =
+            const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties())
+                .cooperative_vector_properties;
+        cooperative_vector_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_VECTOR_PROPERTIES_NV;
+        AddToPNext(_gpu_properties2, cooperative_vector_props);
+    }
+
+    // 额外枚举驱动支持的 vector 组合列表，这一步不能只靠 pNext property 拿到。
+    void PostGpuProperties(const VulkanDevice* _device) override {
+        if (!m_is_usable || vkGetPhysicalDeviceCooperativeVectorPropertiesNV == nullptr) {
+            return;
+        }
+
+        auto& cooperative_vector_supports =
+            const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties())
+                .cooperative_vector_supports;
+
+        uint32_t property_count = 0;
+        VkResult result =
+            vkGetPhysicalDeviceCooperativeVectorPropertiesNV(_device->GetGpu(), &property_count, nullptr);
+        if ((result != VK_SUCCESS && result != VK_INCOMPLETE) || property_count == 0) {
+            cooperative_vector_supports.clear();
+            return;
+        }
+
+        cooperative_vector_supports.resize(property_count);
+        for (auto& cooperative_vector_support : cooperative_vector_supports) {
+            cooperative_vector_support       = {};
+            cooperative_vector_support.sType = VK_STRUCTURE_TYPE_COOPERATIVE_VECTOR_PROPERTIES_NV;
+        }
+
+        result = vkGetPhysicalDeviceCooperativeVectorPropertiesNV(
+            _device->GetGpu(), &property_count, cooperative_vector_supports.data()
+        );
+        if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
+            cooperative_vector_supports.clear();
+            return;
+        }
+
+        if (property_count < cooperative_vector_supports.size()) {
+            cooperative_vector_supports.resize(property_count);
+        }
+    }
+
+    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+        if (m_is_usable && m_is_enabled) {
+            AddToPNext(_device_create_info, m_cooperative_vector_features);
+        }
+    }
+
+private:
+    VkPhysicalDeviceCooperativeVectorFeaturesNV m_cooperative_vector_features;
+};
+
 } // namespace
 
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTSwapchainMaintenance1Extension(bool _optional) {
@@ -399,6 +557,14 @@ std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTPageableDeviceLocalMemoryE
 
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTMeshShaderExtension(bool _optional) {
     return std::make_shared<VulkanEXTMeshShaderExtension>(_optional);
+}
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRCooperativeMatrixExtension(bool _optional) {
+    return std::make_shared<VulkanKHRCooperativeMatrixExtension>(_optional);
+}
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanNVCooperativeVectorExtension(bool _optional) {
+    return std::make_shared<VulkanNVCooperativeVectorExtension>(_optional);
 }
 
 } // namespace Moer::Render

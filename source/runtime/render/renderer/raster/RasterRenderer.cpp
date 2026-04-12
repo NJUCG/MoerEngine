@@ -78,6 +78,11 @@ RasterRenderer::RasterRenderer(
     gfx_queue.Sync();
 
     // Other vars
+
+    LOG_INFO(
+        "Cooperative Matrix & Vector Extensions is Enabled: {}",
+        device.IsExtensionCooperativeEnabled() ? "Yes" : "No"
+    );
 }
 
 RasterRenderer::~RasterRenderer() {

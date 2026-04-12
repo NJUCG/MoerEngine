@@ -75,6 +75,18 @@ static constexpr VulkanExtensionDesc vulkan_extension_descs[] = {
         .optional = true,
         .factory  = &CreateVulkanEXTCopyMemoryIndirectExtension,
     },
+    {
+        .kind     = EVulkanExtensionKind::Device,
+        .name     = VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME,
+        .optional = true,
+        .factory  = &CreateVulkanKHRCooperativeMatrixExtension,
+    },
+    {
+        .kind     = EVulkanExtensionKind::Device,
+        .name     = VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME,
+        .optional = true,
+        .factory  = &CreateVulkanNVCooperativeVectorExtension,
+    },
 #if VULKAN_RHI_RAYTRACING
     {
         .kind     = EVulkanExtensionKind::Device,
