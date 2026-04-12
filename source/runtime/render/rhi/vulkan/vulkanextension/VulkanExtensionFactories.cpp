@@ -1,13 +1,5 @@
-//
-// Created by 74535 on 2023/10/11.
-//
-
-#include "rhi/RHI.h"
-
-#include "VulkanDevice.h"
-#include "VulkanExtension.h"
-#include "VulkanMacroUtils.h"
-#include "VulkanPlatform.h"
+#include "VulkanExtensionFactories.h"
+#include "../VulkanDevice.h"
 
 template<typename ExistingChainType, typename NewStructType>
 static void AddToPNext(ExistingChainType& _existing, NewStructType& _added) {
@@ -16,31 +8,8 @@ static void AddToPNext(ExistingChainType& _existing, NewStructType& _added) {
 }
 
 namespace Moer::Render {
+namespace {
 
-TExtensionArray VulkanInstanceExtension::GetMERequiredInstanceExtensions() {
-    TExtensionArray extensions;
-
-#define ADD_EXTENSION(ext_name) extensions.push_back(ext_name)
-
-    // generic simple extensions
-    ADD_EXTENSION(VK_KHR_SURFACE_EXTENSION_NAME);
-    // ADD_EXTENSION(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
-    ADD_EXTENSION(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
-    // ADD_EXTENSION(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-    // debug utils, contains debug marker and debug report
-    ADD_EXTENSION(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-
-    // platform specific extensions
-    VulkanPlatform::GetInstanceExtensions(extensions);
-
-    // custom extensions
-
-#undef ADD_EXTENSION
-
-    return extensions;
-}
-
-// ***** VK_EXT_swapchain_maintenance1
 class VulkanEXTSwapchainMaintenance1Extension final : public VulkanDeviceExtension {
 public:
     VulkanEXTSwapchainMaintenance1Extension(bool _is_optional = false) :
@@ -63,7 +32,6 @@ private:
     VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT m_swapchain_maintenance1_features;
 };
 
-// ***** VK_KHR_acceleration_structure
 class VulkanKHRAccelerationStructureExtension final : public VulkanDeviceExtension {
 public:
     VulkanKHRAccelerationStructureExtension(bool _is_optional = false) :
@@ -104,7 +72,6 @@ private:
     VkPhysicalDeviceAccelerationStructureFeaturesKHR m_acceleration_structure_features;
 };
 
-// ***** VK_KHR_ray_tracing_pipeline
 class VulkanKHRRayTracingPipelineExtension final : public VulkanDeviceExtension {
 public:
     VulkanKHRRayTracingPipelineExtension(bool _is_optional = false) :
@@ -120,7 +87,6 @@ public:
     void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
         m_is_usable = (m_ray_tracing_pipeline_features.rayTracingPipeline == VK_TRUE) &&
                       (m_ray_tracing_pipeline_features.rayTraversalPrimitiveCulling == VK_TRUE);
-
         _gpu_extensions.m_has_khr_ray_tracing_pipeline = m_is_usable;
     }
 
@@ -144,7 +110,6 @@ private:
     VkPhysicalDeviceRayTracingPipelineFeaturesKHR m_ray_tracing_pipeline_features;
 };
 
-// ***** VK_KHR_ray_query
 class VulkanKHRRayQueryExtension final : public VulkanDeviceExtension {
 public:
     VulkanKHRRayQueryExtension(bool _is_optional = false) :
@@ -157,8 +122,7 @@ public:
     }
 
     void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
-        m_is_usable = (m_ray_query_features.rayQuery == VK_TRUE);
-
+        m_is_usable                         = (m_ray_query_features.rayQuery == VK_TRUE);
         _gpu_extensions.m_has_khr_ray_query = m_is_usable;
     }
 
@@ -172,7 +136,6 @@ private:
     VkPhysicalDeviceRayQueryFeaturesKHR m_ray_query_features;
 };
 
-// ***** VK_EXT_descriptor_buffer
 class VulkanEXTDescriptorBufferExtension final : public VulkanDeviceExtension {
 public:
     VulkanEXTDescriptorBufferExtension(bool _is_optional = false) :
@@ -188,7 +151,6 @@ public:
         m_is_usable =
             (m_descriptor_buffer_features.descriptorBuffer == VK_TRUE &&
              m_descriptor_buffer_features.descriptorBufferPushDescriptors == VK_TRUE);
-
         _gpu_extensions.m_has_ext_descriptor_buffer = m_is_usable;
     }
 
@@ -211,14 +173,12 @@ private:
     VkPhysicalDeviceDescriptorBufferFeaturesEXT m_descriptor_buffer_features;
 };
 
-//***** VK_KHR_push_descriptor */
 class VulkanKHRPushDescriptorExtension final : public VulkanDeviceExtension {
 public:
     VulkanKHRPushDescriptorExtension(bool _is_optional = false) :
         VulkanDeviceExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, _is_optional) {}
 
     void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {}
-
     void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {}
 
     void
@@ -231,8 +191,6 @@ public:
     }
 
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {}
-
-private:
 };
 
 class VulkanEXTMemoryDecompressionExtension final : public VulkanDeviceExtension {
@@ -249,7 +207,6 @@ public:
 
     void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
         m_is_usable = (m_memory_decompression_features.memoryDecompression == VK_TRUE);
-
         _gpu_extensions.m_has_nv_memory_decompression = m_is_usable;
     }
 
@@ -286,7 +243,6 @@ public:
 
     void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
         m_is_usable = (m_copy_memory_indirect_features.indirectCopy == VK_TRUE);
-
         _gpu_extensions.m_has_nv_copy_memory_indirect = m_is_usable;
     }
 
@@ -321,8 +277,7 @@ public:
     }
 
     void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
-        m_is_usable = (m_memory_priority_features.memoryPriority == VK_TRUE);
-
+        m_is_usable                           = (m_memory_priority_features.memoryPriority == VK_TRUE);
         _gpu_extensions.m_has_memory_priority = m_is_usable;
     }
 
@@ -350,7 +305,6 @@ public:
 
     void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
         m_is_usable = (m_pageable_device_local_memory_features.pageableDeviceLocalMemory == VK_TRUE);
-
         _gpu_extensions.m_has_pageable_device_local_memory = m_is_usable;
     }
 
@@ -376,8 +330,7 @@ public:
     }
 
     void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
-        m_is_usable = (m_mesh_shader_features.meshShader == VK_TRUE);
-
+        m_is_usable                           = (m_mesh_shader_features.meshShader == VK_TRUE);
         _gpu_extensions.m_has_ext_mesh_shader = m_is_usable;
         _gpu_extensions.m_allow_mesh_primitive_shading =
             (m_mesh_shader_features.primitiveFragmentShadingRateMeshShader == VK_TRUE);
@@ -402,65 +355,50 @@ private:
     VkPhysicalDeviceMeshShaderFeaturesEXT m_mesh_shader_features;
 };
 
-TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMERequiredDeviceExtensions() {
-    // LOG_INFO("VulkanDeviceExtension: raytracing support, {}", _rhi_info.ray_tracing);
+} // namespace
 
-    TVulkanDeviceExtensionArray extensions;
-
-#define ADD_EXTENSION(ext_name, optional) \
-    extensions.emplace_back(std::make_shared<VulkanDeviceExtension>(ext_name, optional))
-
-#define ADD_CUSTOM_EXTENSION(ext_class, optional) \
-    extensions.emplace_back(std::make_shared<ext_class>(optional))
-    // generic simple extensions
-    ADD_EXTENSION(VK_KHR_SWAPCHAIN_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
-    // ADD_CUSTOM_EXTENSION(VulkanEXTSwapchainMaintenance1Extension, VULKAN_EXTENSION_REQUIRED);
-    // ADD_EXTENSION(VK_KHR_INDEX_TYPE_UINT8_EXTENSION_NAME, VULKAN_EXTENSION_REQUIRED);
-
-#if VULKAN_RHI_RAYTRACING
-    // raytracing extensions
-    ADD_EXTENSION(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, VULKAN_EXTENSION_OPTIONAL);
-    ADD_CUSTOM_EXTENSION(VulkanKHRAccelerationStructureExtension, VULKAN_EXTENSION_OPTIONAL);
-    ADD_CUSTOM_EXTENSION(VulkanKHRRayTracingPipelineExtension, VULKAN_EXTENSION_OPTIONAL);
-    ADD_CUSTOM_EXTENSION(VulkanKHRRayQueryExtension, VULKAN_EXTENSION_OPTIONAL);
-#endif
-    // bindless extensions
-    ADD_CUSTOM_EXTENSION(VulkanEXTDescriptorBufferExtension, VULKAN_EXTENSION_OPTIONAL);
-    ADD_CUSTOM_EXTENSION(VulkanKHRPushDescriptorExtension, VULKAN_EXTENSION_REQUIRED);
-    // vendor extensions
-
-    // debug extensions
-
-    // platform specific extensions
-
-    VulkanPlatform::GetDeviceExtensions(extensions);
-
-    // VulkanPlatform::GetDeviceExtensions(extensions);//MARK...
-    ADD_CUSTOM_EXTENSION(VulkanEXTMemoryPriorityAllocateInfoExtension, VULKAN_EXTENSION_OPTIONAL);
-    ADD_CUSTOM_EXTENSION(VulkanEXTPageableDeviceLocalMemoryExtension, VULKAN_EXTENSION_OPTIONAL);
-    // nvidia extensions
-    ADD_CUSTOM_EXTENSION(VulkanEXTMemoryDecompressionExtension, VULKAN_EXTENSION_OPTIONAL);
-    ADD_CUSTOM_EXTENSION(VulkanEXTCopyMemoryIndirectExtension, VULKAN_EXTENSION_OPTIONAL);
-
-#undef ADD_EXTENSION
-#undef ADD_CUSTOM_EXTENSION
-
-    return extensions;
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTSwapchainMaintenance1Extension(bool _optional) {
+    return std::make_shared<VulkanEXTSwapchainMaintenance1Extension>(_optional);
 }
 
-TVulkanDeviceExtensionArray
-VulkanDeviceExtension::GetMEEnabledDeviceExtensions(const Set<std::string>& _gpu_extensions) {
-    auto extensions = GetMERequiredDeviceExtensions();
-
-    TVulkanDeviceExtensionArray extensions_enabled;
-
-    for (const auto& ext : extensions) {
-        if (_gpu_extensions.contains(ext->GetExtensionName().data())) {
-            ext->Enable();
-            extensions_enabled.emplace_back(ext);
-        }
-    }
-
-    return extensions_enabled;
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRAccelerationStructureExtension(bool _optional) {
+    return std::make_shared<VulkanKHRAccelerationStructureExtension>(_optional);
 }
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRRayTracingPipelineExtension(bool _optional) {
+    return std::make_shared<VulkanKHRRayTracingPipelineExtension>(_optional);
+}
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRRayQueryExtension(bool _optional) {
+    return std::make_shared<VulkanKHRRayQueryExtension>(_optional);
+}
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTDescriptorBufferExtension(bool _optional) {
+    return std::make_shared<VulkanEXTDescriptorBufferExtension>(_optional);
+}
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRPushDescriptorExtension(bool _optional) {
+    return std::make_shared<VulkanKHRPushDescriptorExtension>(_optional);
+}
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTMemoryDecompressionExtension(bool _optional) {
+    return std::make_shared<VulkanEXTMemoryDecompressionExtension>(_optional);
+}
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTCopyMemoryIndirectExtension(bool _optional) {
+    return std::make_shared<VulkanEXTCopyMemoryIndirectExtension>(_optional);
+}
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTMemoryPriorityAllocateInfoExtension(bool _optional) {
+    return std::make_shared<VulkanEXTMemoryPriorityAllocateInfoExtension>(_optional);
+}
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTPageableDeviceLocalMemoryExtension(bool _optional) {
+    return std::make_shared<VulkanEXTPageableDeviceLocalMemoryExtension>(_optional);
+}
+
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTMeshShaderExtension(bool _optional) {
+    return std::make_shared<VulkanEXTMeshShaderExtension>(_optional);
+}
+
 } // namespace Moer::Render

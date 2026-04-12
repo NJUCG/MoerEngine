@@ -18,11 +18,7 @@ class VulkanDeviceFeatures;
 
 class VulkanGenericPlatform {
 public:
-    // Array of required extensions for the platform (Required!)
-    static void GetInstanceExtensions(Moer::Array<std::string>& _extensions);
     static void GetInstanceLayers(Moer::Array<std::string>& _layers) {}
-    static void
-    GetDeviceExtensions(const Moer::Render::VulkanDevice* _device, Moer::Array<std::string>& _extensions);
     static void GetDeviceLayers(Moer::Array<std::string>& _layers) {}
     // create the platform-specific surface object - required
     static VkSurfaceKHR CreateSurface();

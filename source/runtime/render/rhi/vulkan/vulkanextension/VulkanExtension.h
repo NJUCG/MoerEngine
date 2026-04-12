@@ -1,22 +1,49 @@
-//
-// Created by 74535 on 2023/10/11.
-//
+/*
+Vulkan extension 架构
+
+1. 架构
+- VulkanExtensionRegistry.cpp：维护所有 extension 描述表，是唯一登记入口。
+- VulkanExtension.cpp：读取描述表，生成 instance/device extension 列表。
+- VulkanExtensionFactories.cpp：放复杂 extension 的具体实现。
+- 简单 extension 只写在 Registry 里；复杂 extension 再额外走 Factory。
+
+2. 添加 extension
+- 先判断它是 Instance 还是 Device，是 required 还是 optional。
+- 如果是简单 extension：直接在 VulkanExtensionRegistry.cpp 加一条 descriptor。
+- 如果是复杂 extension：
+  在 VulkanExtensionFactories.cpp 里实现类和 factory，
+  然后在 VulkanExtensionRegistry.cpp 里把 descriptor 指到这个 factory。
+- 如果它会影响 capability 或 pNext/feature/property，记得在复杂 extension 实现里补齐对应逻辑。
+*/
 
 #ifndef VULKAN_EXTENSION_H
 #define VULKAN_EXTENSION_H
 
+#include <cstdint>
 #include <string_view>
-#define VULKAN_EXTENSION_OPTIONAL 1
-#define VULKAN_EXTENSION_REQUIRED 0
 
-#include "VulkanTypeDefs.h"
-#include "log/LogSystem.h"
+#include "../VulkanTypeDefs.h"
 
 struct RHIInfo;
 namespace Moer::Render {
 
 class VulkanDevice;
 class VulkanOptionalDeviceExtensions;
+class VulkanDeviceExtension;
+
+enum class EVulkanExtensionKind : uint8_t {
+    Instance,
+    Device
+};
+
+using TVulkanDeviceExtensionFactory = std::shared_ptr<VulkanDeviceExtension> (*)(bool);
+
+struct VulkanExtensionDesc {
+    EVulkanExtensionKind          kind     = EVulkanExtensionKind::Device;
+    std::string_view              name     = {};
+    bool                          optional = false;
+    TVulkanDeviceExtensionFactory factory  = nullptr;
+};
 
 class VulkanExtensionBase {
 public:
