@@ -18,7 +18,7 @@
 #include <string_view>
 
 #if WITH_PROFILE
-#include "profile.h"
+#include "Profile.h"
 #endif
 
 using namespace Moer::Render;
@@ -59,6 +59,45 @@ void EditorUI::InitFromConfigManager() {
 }
 
 #if WITH_PROFILE
+void EditorUI::DrawPassAndChildren(const char* parent_name, int depth) {
+    for (int i = 0; i < g_pass_history_count; i++) {
+        auto& h = g_pass_history[i];
+        if (!h.active) continue;
+        if (strcmp(h.parent_name, parent_name) != 0) continue;
+        if (h.avg_ms < 0.001f && h.max_ms < 0.001f) continue;
+
+        ImGui::TableNextRow();
+
+        ImGui::TableSetColumnIndex(0);
+        ImGui::Indent((1 + depth) * 20.0f);
+        ImGui::Text("%s", h.name);
+        ImGui::Unindent((1 + depth) * 20.0f);
+
+        ImGui::TableSetColumnIndex(1);
+        if (h.avg_ms > 5.0f)
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%.4f", h.avg_ms);
+        else if (h.avg_ms > 2.0f)
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "%.4f", h.avg_ms);
+        else
+            ImGui::Text("%.4f", h.avg_ms);
+
+        ImGui::TableSetColumnIndex(2);
+        ImGui::Text("%.4f", h.max_ms);
+
+        ImGui::TableSetColumnIndex(3);
+        float ordered[60];
+        for (int j = 0; j < 60; j++) {
+            ordered[j] = h.samples[(h.write_idx + j) % 60];
+        }
+        char plot_label[64];
+        snprintf(plot_label, sizeof(plot_label), "##pass_%d", i);
+        float plot_max = h.max_ms > 0.0f ? h.max_ms * 1.2f : 1.0f;
+        ImGui::PlotLines(plot_label, ordered, 60, 0, nullptr, 0.0f, plot_max, ImVec2(-1, 28));
+
+        DrawPassAndChildren(h.name, depth + 1);
+    }
+}
+
 void EditorUI::ShowMemoryProfiler(bool* p_open) {
     Profile_TickSample();
 
@@ -102,106 +141,81 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
     ImGui::Spacing();
 
     if (ImGui::CollapsingHeader("Live Memory Graph")) {
-        static float max_y = 5.0f;
+        static float view_max_y = 5.0f;
+        
+        std::vector<TimePoint> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(g_history_mtx);
+            if (g_history_data.empty()) return;
+            snapshot.assign(g_history_data.begin(), g_history_data.end());
+        }
 
-        std::lock_guard<std::mutex> lock(g_history_mtx);
-        if (!g_history_data.empty()) {
-            float plot_width = ImGui::GetContentRegionAvail().x;
+        float plot_width = ImGui::GetContentRegionAvail().x;
+        for (int s = 0; s < SOURCE_COUNT; ++s) {
+            struct PlotContext { int s_idx; std::vector<TimePoint>* d; };
+            PlotContext ctx = { s, &snapshot };
 
-            for (int s = 0; s < SOURCE_COUNT; ++s) {
-                struct PlotContext {
-                    int                    source_idx;
-                    std::deque<TimePoint>* data;
-                };
-                PlotContext ctx = {s, &g_history_data};
+            auto getter = [](void* data, int idx) -> float {
+                auto* p = (PlotContext*)data;
+                return p->d->operator[](idx).values[p->s_idx];
+            };
 
-                auto deque_getter = [](void* data, int idx) -> float {
-                    PlotContext* p = static_cast<PlotContext*>(data);
-                    return p->data->at(idx).values[p->source_idx];
-                };
+            float last_val = snapshot.back().values[s];
+            if (last_val * 1.2f > view_max_y) view_max_y = last_val * 1.2f;
 
-                float current_max = 0.0f;
-                for (const auto& tp : g_history_data) {
-                    if (tp.values[s] > current_max)
-                        current_max = tp.values[s];
-                }
-                if (current_max * 1.2f > max_y)
-                    max_y = current_max * 1.2f;
-
-                char label[128];
-                sprintf_s(label, "%s: %.2f MB", g_UIConfigs[s].label, g_history_data.back().values[s]);
-
-                ImGui::PushStyleColor(ImGuiCol_PlotLines, g_UIConfigs[s].color);
-                ImGui::PlotLines(
-                    label,
-                    deque_getter,
-                    &ctx,
-                    (int)g_history_data.size(),
-                    0,
-                    nullptr,
-                    0.0f,
-                    max_y,
-                    ImVec2(plot_width, 80)
-                );
-                ImGui::PopStyleColor();
-            }
+            ImGui::PushStyleColor(ImGuiCol_PlotLines, g_UIConfigs[s].color);
+            ImGui::PlotLines("##", getter, &ctx, (int)snapshot.size(), 0, 
+                            nullptr, 0.0f, view_max_y, ImVec2(plot_width, 80));
+            ImGui::PopStyleColor();
+            
+            ImGui::SameLine(); 
+            ImGui::Text("%s: %.2f MB", g_UIConfigs[s].label, last_val);
         }
     }
 
     ImGui::Spacing();
 
-    if (ImGui::CollapsingHeader("Memory Hotspots (Top 20)")) {
-        static MemorySource current_filter = MemorySource::Editor;
+    if (ImGui::CollapsingHeader("GPU Pass Timing", ImGuiTreeNodeFlags_DefaultOpen)) {
+        std::lock_guard<std::mutex> lock(g_pass_history_mtx);
 
-        if (ImGui::BeginTabBar("HotspotSourceTabs")) {
-            for (int i = 0; i < SOURCE_COUNT; ++i) {
-                if (ImGui::BeginTabItem(g_UIConfigs[i].label)) {
-                    current_filter = g_UIConfigs[i].source;
-                    ImGui::EndTabItem();
-                }
-            }
-            ImGui::EndTabBar();
-        }
-
-        auto hotspots = GetHotspots(20, current_filter);
-
-        if (ImGui::BeginTable(
-                "HotspotTable",
-                3,
-                ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                    ImGuiTableFlags_ScrollY,
+        if (g_pass_history_count == 0) {
+            ImGui::TextDisabled("No GPU data yet...");
+        } else {
+            ImGui::BeginTable("PassTable", 4, 
+                ImGuiTableFlags_Borders | 
+                ImGuiTableFlags_RowBg | 
+                ImGuiTableFlags_ScrollY,
                 ImVec2(0, 300)
-            )) {
-            ImGui::TableSetupColumn("Size (MB)", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-            ImGui::TableSetupColumn("CallStack");
+            );
+            ImGui::TableSetupColumn("Pass",           ImGuiTableColumnFlags_WidthFixed, 260);
+            ImGui::TableSetupColumn("Avg ms",         ImGuiTableColumnFlags_WidthFixed, 70);
+            ImGui::TableSetupColumn("Max ms",         ImGuiTableColumnFlags_WidthFixed, 70);
+            ImGui::TableSetupColumn("Last 60 frames", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableHeadersRow();
 
-            for (const auto& snap : hotspots) {
-                ImGui::TableNextRow();
-
-                ImGui::TableSetColumnIndex(0);
-                ImGui::Text("%.3f", snap.total_size / 1048576.0f);
-
-                ImGui::TableSetColumnIndex(1);
-                ImGui::Text("%zu", snap.alloc_count);
-
-                ImGui::TableSetColumnIndex(2);
-
-                size_t      first_line = snap.stack_str.find('\n');
-                std::string preview    = snap.stack_str.substr(0, first_line);
-
-                if (ImGui::Selectable(preview.c_str(), false)) {
-                    ImGui::SetClipboardText(snap.stack_str.c_str());
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Click to copy FULL stack trace\n\n%s", snap.stack_str.c_str());
-                }
-            }
+            DrawPassAndChildren("", 0);
+            
             ImGui::EndTable();
         }
     }
 
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Text("Memory Hotspots Export:");
+    
+    if (ImGui::Button("Quick Dump (Hex Only)")) {
+        WriteHotspots(false);
+    }
+    
+    ImGui::SameLine();
+
+    if (ImGui::Button("Full Dump (With Symbols)")) {
+        WriteHotspots(true);
+    }
+
+    ImGui::Spacing();
     ImGui::End();
 }
 #endif

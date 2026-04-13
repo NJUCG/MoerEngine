@@ -15,3 +15,7 @@
 	path = 3rdparty/minhook
 	url = https://github.com/TsudaKageyu/minhook.git
 	shallow = true
+[submodule "3rdparty/concurrentqueue"]
+	path = 3rdparty/concurrentqueue
+	url = git@github.com:cameron314/concurrentqueue.git
+	shallow = true

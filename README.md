@@ -102,6 +102,7 @@ MoerEngine源代码采用Apache-2.0 License授权。
 
 * [assimp](https://github.com/assimp/assimp)： BSD-3-Clause License
 * [astc-encoder](https://github.com/ARM-software/astc-encoder): Apache 2.0 License
+* [concurrentqueue](https://github.com/cameron314/concurrentqueue/): BSD 2-Clause License
 * [dds_image](https://github.com/spnda/dds_image): MIT License
 * [tinyexr](https://github.com/syoyo/tinyexr): BSD-3-Clause License
 * ktx: Apache-2.0 License
