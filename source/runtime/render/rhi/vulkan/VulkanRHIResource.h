@@ -781,6 +781,12 @@ public:
         mtx.unlock();
     }
 
+    // Record one-shot init commands into the given CommandList.
+    // Must be called exactly once before any command reads bindless descriptor buffers.
+    // Returns true if init commands were recorded, false if already initialized.
+    bool RecordInitCommands(class CommandList& cmd_list);
+    bool NeedsInit() const { return !b_gpu_initialized.load(std::memory_order_acquire); }
+
 public:
     VulkanBuffer* bindless_array_buffer;
     VulkanBuffer* bindless_buffer_descs;
@@ -824,6 +830,11 @@ protected:
         texture_view_map;
     Array<TextureSubresourceKeyT<VulkanTexture>>                           texture_view_infos;
     mutable UnorderedMap<uint, PendingInitResource>                        pending_init_resources;
+
+    // Deferred GPU initialization data (populated in constructor, consumed by RecordInitCommands)
+    std::atomic_bool b_gpu_initialized{false};
+    Array<byte>      deferred_sampler_data;
+    Array<byte>      deferred_buffer_desc_data;
 };
 
 #pragma endregion

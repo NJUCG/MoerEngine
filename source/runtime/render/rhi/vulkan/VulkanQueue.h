@@ -220,6 +220,9 @@ public:
         UniquePtr<VulkanAllocator>&& _allocator,
         uint64                        _timeline
     );
+    void AppendCompletionBoundary(const GraphEventRef& completion_event);
+    void ResetCompletionBoundary() { completion_boundary = nullptr; }
+    const GraphEventRef& GetCompletionBoundary() const { return completion_boundary; }
     VulkanDevice&                             vk_device;
     LockFreeQueueBase<VulkanAllocator, false> allocators;
 
@@ -258,6 +261,7 @@ private:
     std::mutex   exec_mtx;
     std::mutex   alloc_mtx;
     std::atomic<uint64> record_frame{0};
+    GraphEventRef completion_boundary{nullptr};
 };
 class VkCopyQueue : public CopyQueue {
 public:
@@ -279,6 +283,9 @@ public:
                UniquePtr<VulkanAllocator>&& _allocator,
                uint64                        _timeline
            );
+    void      AppendCompletionBoundary(const GraphEventRef& completion_event);
+    void      ResetCompletionBoundary() { completion_boundary = nullptr; }
+    const GraphEventRef& GetCompletionBoundary() const { return completion_boundary; }
 
     void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
@@ -329,5 +336,6 @@ private:
 
     std::mutex                                     exec_mutex;
     std::mutex                                     alloc_mtx;
+    GraphEventRef                                  completion_boundary{nullptr};
 };
 } // namespace Moer::Render

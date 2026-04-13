@@ -71,10 +71,15 @@ struct SubmitPresentStage {
     SubmitPresentStage& operator=(const SubmitPresentStage&)     = delete;
 };
 
+struct RootRhiBoundary {
+    GraphEventRef   host_event{nullptr};
+    Array<WaitEvent> gpu_waits{};
+};
+
 struct SubmitInfo {
     SubmissionKey                    key{};
     Array<SubmissionKey>             wait_submission_keys{};
-    Array<WaitEvent>                 root_prerequisite_waits{};
+    RootRhiBoundary                  root_rhi_boundary{};
     Array<GraphEventRef>             interrupt_completion_events{};
     bool                             is_root_submit{false};
     SubmissionHostFence              host_fence{};

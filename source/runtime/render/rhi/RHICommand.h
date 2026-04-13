@@ -1804,6 +1804,7 @@ public:
         RHIPresentRequest*   present = nullptr
     );
     void Sync(ERHISyncDepth depth = ERHISyncDepth::RHI);
+    static void ShutDown();
 private:
     void FlushPendingLocked(bool frame_end);
     std::mutex              submit_mutex;

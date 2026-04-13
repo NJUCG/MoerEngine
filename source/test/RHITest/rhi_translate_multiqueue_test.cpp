@@ -21,6 +21,11 @@ namespace {
 using namespace Moer;
 using namespace Moer::Render;
 
+void ShutdownRHIForTest() {
+    RHIExecutor::ShutDown();
+    RenderDevice::Dispose();
+}
+
 constexpr uint32_t kElementCount      = 256;
 constexpr uint32_t kIterations        = 64;
 constexpr uint32_t kPresentIterations = 8;
@@ -521,7 +526,7 @@ int main(int argc, char** argv) {
         const int queue_ret = RunCommandListQueueBindingTest();
         if (queue_ret != 0) {
             ShaderManager::ShutDown();
-            RenderDevice::Dispose();
+            ShutdownRHIForTest();
             Moer::TaskSystem::ShutDown();
             return queue_ret;
         }
@@ -529,7 +534,7 @@ int main(int argc, char** argv) {
         const int translate_readback_ret = RunRHITranslateMultiQueueReadbackTest();
         if (translate_readback_ret != 0) {
             ShaderManager::ShutDown();
-            RenderDevice::Dispose();
+            ShutdownRHIForTest();
             Moer::TaskSystem::ShutDown();
             return translate_readback_ret;
         }
@@ -537,7 +542,7 @@ int main(int argc, char** argv) {
         const int graphics_copyscope_ret = RunGraphicsCopyScopeRoundTripTest();
         if (graphics_copyscope_ret != 0) {
             ShaderManager::ShutDown();
-            RenderDevice::Dispose();
+            ShutdownRHIForTest();
             Moer::TaskSystem::ShutDown();
             return graphics_copyscope_ret;
         }
@@ -545,7 +550,7 @@ int main(int argc, char** argv) {
         const int multi_scope_ret = RunMultiCopyScopeOrderingTest();
         if (multi_scope_ret != 0) {
             ShaderManager::ShutDown();
-            RenderDevice::Dispose();
+            ShutdownRHIForTest();
             Moer::TaskSystem::ShutDown();
             return multi_scope_ret;
         }
@@ -553,7 +558,7 @@ int main(int argc, char** argv) {
         const int unknown_first_use_ret = RunCopyScopeUnknownFirstUseTest();
         if (unknown_first_use_ret != 0) {
             ShaderManager::ShutDown();
-            RenderDevice::Dispose();
+            ShutdownRHIForTest();
             Moer::TaskSystem::ShutDown();
             return unknown_first_use_ret;
         }
@@ -567,7 +572,7 @@ int main(int argc, char** argv) {
                 window_inited = false;
             }
             ShaderManager::ShutDown();
-            RenderDevice::Dispose();
+            ShutdownRHIForTest();
             Moer::TaskSystem::ShutDown();
             return present_copyscope_ret;
         }
@@ -578,7 +583,7 @@ int main(int argc, char** argv) {
                 window_inited = false;
             }
             ShaderManager::ShutDown();
-            RenderDevice::Dispose();
+            ShutdownRHIForTest();
             Moer::TaskSystem::ShutDown();
             return present_ret;
         }
@@ -587,7 +592,7 @@ int main(int argc, char** argv) {
             window_inited = false;
         }
         ShaderManager::ShutDown();
-        RenderDevice::Dispose();
+        ShutdownRHIForTest();
         Moer::TaskSystem::ShutDown();
         return 0;
     } catch (const std::exception& e) {
@@ -596,7 +601,7 @@ int main(int argc, char** argv) {
             WindowContext::ShutDown();
         }
         ShaderManager::ShutDown();
-        RenderDevice::Dispose();
+        ShutdownRHIForTest();
         Moer::TaskSystem::ShutDown();
         return 1;
     }

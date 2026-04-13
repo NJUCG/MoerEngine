@@ -5,7 +5,6 @@
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/vulkan/VulkanSubmissionExecutor.h"
 #include "trace/Trace.h"
 #include "window/WindowContext.h"
 
@@ -1120,6 +1119,7 @@ int RunProfilerMain(int argc, const char** argv) {
     swapchain = {};
     timeline = {};
     WindowContext::ShutDown();
+    RHIExecutor::ShutDown();
     RenderDevice::Dispose();
     TaskSystem::ShutDown();
     return 0;

@@ -9,69 +9,96 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <variant>
 
 namespace Moer::Render {
 
 class SubmissionPresentContext;
+struct SubmissionPresentResult;
+struct VulkanQueueRuntimeSubmitResult;
+struct VulkanCopyQueueRuntimeSubmitResult;
 
-struct SubmissionQueueCompletionTask {
+struct SubmissionCompletionCommon {
     using Clock = std::chrono::steady_clock;
 
-    uint64                     op_seq{0};
+    uint64            op_seq{0};
+    GraphEventRef     completion_event{nullptr};
+    Clock::time_point pending_since{};
+    uint32            pending_warn_count{0};
+
+    SubmissionCompletionCommon() = default;
+    SubmissionCompletionCommon(uint64 in_op_seq, GraphEventRef in_completion_event);
+};
+
+struct SubmissionQueueCompletionPayload {
     VkCommandQueue*            queue{nullptr};
-    GraphEventRef              completion_event{nullptr};
     WaitEvent                  completion{};
     uint64                     timeline_value{0};
     UniquePtr<VulkanAllocator> allocator{};
     Array<std::function<void()>> callbacks{};
     Array<SignalEvent>         signal_events{};
-    Clock::time_point          pending_since{};
-    uint32                     pending_warn_count{0};
+
+    SubmissionQueueCompletionPayload() = default;
+    SubmissionQueueCompletionPayload(
+        VkCommandQueue&                 in_queue,
+        VulkanQueueRuntimeSubmitResult&& in_result
+    );
 };
 
-struct SubmissionCopyQueueCompletionTask {
-    using Clock = std::chrono::steady_clock;
-
-    uint64                     op_seq{0};
+struct SubmissionCopyQueueCompletionPayload {
     VkCopyQueue*               queue{nullptr};
-    GraphEventRef              completion_event{nullptr};
     IOWaitEvt                  completion{};
     uint64                     timeline_value{0};
     UniquePtr<VulkanAllocator> allocator{};
     Array<std::function<void()>> callbacks{};
     Array<IOSignalEvt>         signal_events{};
-    Clock::time_point          pending_since{};
-    uint32                     pending_warn_count{0};
+
+    SubmissionCopyQueueCompletionPayload() = default;
+    SubmissionCopyQueueCompletionPayload(
+        VkCopyQueue&                     in_queue,
+        VulkanCopyQueueRuntimeSubmitResult&& in_result
+    );
 };
 
-struct SubmissionPresentCompletionTask {
-    using Clock = std::chrono::steady_clock;
-
-    uint64                      op_seq{0};
+struct SubmissionPresentCompletionPayload {
     SubmissionPresentContext*   context{nullptr};
-    GraphEventRef               completion_event{nullptr};
     VkDevice                    host_fence_device{VK_NULL_HANDLE};
     VkFence                     host_fence{VK_NULL_HANDLE};
     bool                        owns_host_fence{false};
     bool                        host_fence_failed{false};
     uint64                      timeline_value{0};
     UniquePtr<VulkanPresentor>  presentor{};
-    Clock::time_point           pending_since{};
-    uint32                      pending_warn_count{0};
+
+    SubmissionPresentCompletionPayload() = default;
+    SubmissionPresentCompletionPayload(
+        SubmissionPresentContext& in_context,
+        SubmissionHostFence       in_host_fence,
+        SubmissionPresentResult&& in_result
+    );
 };
 
-struct SubmissionFrameEndMarkerTask {
-    uint64 batch_id{0};
-    uint32 submission_count{0};
-    uint32 present_count{0};
-};
+using SubmissionCompletionPayload = std::variant<
+    SubmissionQueueCompletionPayload,
+    SubmissionCopyQueueCompletionPayload,
+    SubmissionPresentCompletionPayload>;
 
-using SubmissionEventTask = std::variant<
-    SubmissionQueueCompletionTask,
-    SubmissionCopyQueueCompletionTask,
-    SubmissionPresentCompletionTask,
-    SubmissionFrameEndMarkerTask>;
+struct SubmissionCompletionTask {
+    SubmissionCompletionCommon  common{};
+    SubmissionCompletionPayload payload{};
+
+    template<typename TPayload>
+    static SubmissionCompletionTask Create(
+        uint64        op_seq,
+        GraphEventRef completion_event,
+        TPayload&&    in_payload
+    ) {
+        SubmissionCompletionTask task{};
+        task.common  = SubmissionCompletionCommon(op_seq, std::move(completion_event));
+        task.payload = SubmissionCompletionPayload(std::forward<TPayload>(in_payload));
+        return task;
+    }
+};
 
 class VulkanInterruptRuntime {
 public:
@@ -83,48 +110,14 @@ public:
     VulkanInterruptRuntime(VulkanInterruptRuntime&&) noexcept            = delete;
     VulkanInterruptRuntime& operator=(VulkanInterruptRuntime&&) noexcept = delete;
 
-    void          EnqueueQueueCompletion(
-                 uint64                        op_seq,
-                 VkCommandQueue*               queue,
-                 GraphEventRef                 completion_event,
-                 WaitEvent                     completion,
-                 uint64                        timeline_value,
-                 UniquePtr<VulkanAllocator>&&  allocator,
-                 Array<std::function<void()>>&& callbacks,
-                 Array<SignalEvent>&&          signal_events
-             );
-    void          EnqueueCopyQueueCompletion(
-                 uint64                        op_seq,
-                 VkCopyQueue*                  queue,
-                 GraphEventRef                 completion_event,
-                 IOWaitEvt                     completion,
-                 uint64                        timeline_value,
-                 UniquePtr<VulkanAllocator>&&  allocator,
-                 Array<std::function<void()>>&& callbacks,
-                 Array<IOSignalEvt>&&          signal_events
-             );
-    void          EnqueuePresentCompletion(
-                 uint64                       op_seq,
-                 SubmissionPresentContext*    context,
-                 GraphEventRef                completion_event,
-                 VkDevice                     host_fence_device,
-                 VkFence                      host_fence,
-                 bool                         owns_host_fence,
-                 uint64                       timeline_value,
-                 UniquePtr<VulkanPresentor>&& presentor
-             );
-    void          EnqueueFrameEndMarker(uint64 batch_id, uint32 submission_count, uint32 present_count);
+    void          EnqueueTask(SubmissionCompletionTask&& task);
     void          Shutdown();
 
 private:
     void   Stop();
     void   RunInterruptThread();
-    bool   TryAcquireReadyTask(SubmissionEventTask& task);
-    bool   IsTaskReady(SubmissionEventTask& task);
-    bool   IsTaskReady(SubmissionQueueCompletionTask& task);
-    bool   IsTaskReady(SubmissionCopyQueueCompletionTask& task);
-    bool   IsTaskReady(SubmissionPresentCompletionTask& task);
-    bool   IsTaskReady(SubmissionFrameEndMarkerTask& task);
+    bool   TryAcquireReadyTask(SubmissionCompletionTask& task);
+    bool   IsTaskReady(SubmissionCompletionTask& task);
     bool   PollTimelineCompletion(
                uint64                                     timeline_handle,
                uint64                                     timeline_value,
@@ -133,26 +126,18 @@ private:
                std::chrono::steady_clock::time_point      pending_since,
                uint32&                                    pending_warn_count
            );
-    bool   PollPresentFence(SubmissionPresentCompletionTask& task);
-    void   ProcessTask(SubmissionEventTask& task);
-    void   ProcessTask(SubmissionQueueCompletionTask& task);
-    void   ProcessTask(SubmissionCopyQueueCompletionTask& task);
-    void   ProcessTask(SubmissionPresentCompletionTask& task);
-    void   ProcessTask(SubmissionFrameEndMarkerTask& task);
-    void   UnlockTaskCompletion(SubmissionEventTask& task);
-    void   UnlockTaskCompletion(SubmissionQueueCompletionTask& task);
-    void   UnlockTaskCompletion(SubmissionCopyQueueCompletionTask& task);
-    void   UnlockTaskCompletion(SubmissionPresentCompletionTask& task);
-    void   UnlockTaskCompletion(SubmissionFrameEndMarkerTask& task);
+    bool   PollPresentFence(SubmissionCompletionTask& task, SubmissionPresentCompletionPayload& payload);
+    void   ProcessTask(SubmissionCompletionTask& task);
+    void   UnlockTaskCompletion(SubmissionCompletionTask& task);
 
 private:
     std::atomic_bool     running{true};
 
-    std::mutex                    queue_mutex{};
-    std::condition_variable       queue_cv{};
-    std::deque<SubmissionEventTask> task_queue{};
-    std::jthread                  interrupt_thread{};
-    std::chrono::microseconds     idle_poll_interval{100};
+    std::mutex                       queue_mutex{};
+    std::condition_variable          queue_cv{};
+    std::deque<SubmissionCompletionTask> task_queue{};
+    std::jthread                     interrupt_thread{};
+    std::chrono::microseconds        idle_poll_interval{100};
 };
 
 } // namespace Moer::Render

@@ -5,6 +5,7 @@
 #include "misc/MMemory.h"
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
 #include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
@@ -119,6 +120,10 @@ void Engine::Init(int argc, const char** argv) {
 
 void Engine::Run(const EngineHooks& hooks) {
 
+    // Ensure runtime asset uploads are submitted from the main thread
+    m_runtime_assets->WaitUntilReady();
+    m_runtime_assets->SubmitPendingUploads();
+
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         LOG_INFO(
             "Selecting Render Method : {}",
@@ -153,6 +158,8 @@ void Engine::ShutDown() {
 
     WindowContext::ShutDown();
     ShaderManager::ShutDown();
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    RHIExecutor::ShutDown();
     RenderDevice::Dispose();
     TaskSystem::ShutDown();
 

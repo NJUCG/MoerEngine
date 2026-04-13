@@ -1839,45 +1839,23 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         buffer_info.stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
         bindless_texture_descs = MoerNew(VulkanBuffer)(s_bdls_array_image_name, buffer_info, *m_device, current_handle, alloc, false, true);
 
-        CommandList cmd_list{};
-        auto& gfx_queue = m_device->GetCommandQueue(EQueueType::Graphics);
-        FenceRef init_fence = m_device->CreateFence();
-        uint64   init_submit_value = 0;
-        auto submit_init_cmd_list = [&](CommandList&& submit_cmd_list) {
-            const uint64 signal_value = ++init_submit_value;
-            submit_cmd_list.Signal(init_fence, signal_value);
-
-            Array<CommandList> init_cmd_lists{};
-            init_cmd_lists.emplace_back(std::move(submit_cmd_list));
-            RHIExecutor::Get().Submit(std::move(init_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
-            init_fence->Wait(signal_value);
-            gfx_queue.Sync();
-        };
-        //fill sampler data to descriptor buffer
+        // Prepare deferred init data (CPU-only, no GPU submission).
+        // Sampler descriptor data
         {
             uint sampler_stride = m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize;
-            // void* mapped_data;
-            Array<byte> data_array(m_device->GetOptionalProperties().descriptor_buffer_properties.samplerDescriptorSize * VulkanDevice::bindless_sampler_cnt);
-            // vmaMapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), &mapped_data);
+            deferred_sampler_data.resize(sampler_stride * VulkanDevice::bindless_sampler_cnt);
             const auto* samplers = m_device->GetImmutableSamplers();
-            // byte* mapped_data_byte = reinterpret_cast<byte*>(mapped_data);
             VkDescriptorGetInfoEXT descriptor_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
             descriptor_info.type = VK_DESCRIPTOR_TYPE_SAMPLER;
 
             VkDescriptorDataEXT& descriptor_data = descriptor_info.data;
             for(uint i = 0; i < VulkanDevice::bindless_sampler_cnt; i++){
                 descriptor_data.pSampler = i >= m_device->ImmutableSamplerCount() ? &samplers[0] : &samplers[i];
-                vkGetDescriptorEXT( m_device->GetDevice(), &descriptor_info, sampler_stride, data_array.data() + i * sampler_stride);
+                vkGetDescriptorEXT( m_device->GetDevice(), &descriptor_info, sampler_stride, deferred_sampler_data.data() + i * sampler_stride);
             }
-            // std::memcpy(mapped_data_byte, data_array.data(), data_array.size());
-            // vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation());
-            // vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_texture_descs->GetAllocation(), 0, VulkanDevice::bindless_sampler_cnt * sampler_stride);
-            cmd_list.CopyFrom(std::span<byte>(data_array.data(), data_array.size()), bindless_texture_descs->GetView(0, data_array.size()));
-            submit_init_cmd_list(std::move(cmd_list));
-            cmd_list = CommandList{};
         }
 
-
+        // Descriptor set layout query for buffer offset
         const VkDescriptorBindingFlags flags[2] = {0,
             VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
             VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
@@ -1909,35 +1887,52 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         buffer_desc_info.pNext = &binding_flags;
 
         VkDescriptorSetLayout buffer_desc_layout = VK_NULL_HANDLE;
-        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_device->GetDevice(), &buffer_desc_info, VK_NULL_HANDLE, &buffer_desc_layout));        uint64 buffers_offset;
+        VK_CHECK_RESULT(vkCreateDescriptorSetLayout(m_device->GetDevice(), &buffer_desc_info, VK_NULL_HANDLE, &buffer_desc_layout));
         vkGetDescriptorSetLayoutBindingOffsetEXT(m_device->GetDevice(), buffer_desc_layout, 1, &buffers_offset_in_set);
 
-        VkDescriptorGetInfoEXT descriptor_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
-        VkDescriptorAddressInfoEXT address_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
-        address_info.address = bindless_array_buffer->DeviceAddress();
-        address_info.range = bindless_array_buffer->GetByteSize();
-        descriptor_info.data.pStorageBuffer = &address_info;
-        descriptor_info.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        // Initial storage buffer descriptor data (array handle buffer descriptor)
         {
-            Array<byte> buffer_data(m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
+            VkDescriptorGetInfoEXT descriptor_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+            VkDescriptorAddressInfoEXT address_info{VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
+            address_info.address = bindless_array_buffer->DeviceAddress();
+            address_info.range = bindless_array_buffer->GetByteSize();
+            descriptor_info.data.pStorageBuffer = &address_info;
+            descriptor_info.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 
-            // byte* mapped_data;
-            // vmaMapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), (void**)&mapped_data);
+            deferred_buffer_desc_data.resize(m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
             vkGetDescriptorEXT(
                 m_device->GetDevice(),
                 &descriptor_info,
                 m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize,
-                buffer_data.data());
-            // std::memcpy(mapped_data, buffer_data.data(), buffer_data.size());
-            // vmaUnmapMemory(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation());
-            // vmaFlushAllocation(m_device->GetVmaAllocator(), bindless_buffer_descs->GetAllocation(), 0, m_device->GetOptionalProperties().descriptor_buffer_properties.storageBufferDescriptorSize);
-            cmd_list.CopyFrom(std::span<byte>(buffer_data.data(), buffer_data.size()), bindless_buffer_descs->GetView(0, buffer_data.size()));
-            submit_init_cmd_list(std::move(cmd_list));
-            cmd_list = CommandList{};
+                deferred_buffer_desc_data.data());
         }
 
         vkDestroyDescriptorSetLayout(m_device->GetDevice(), buffer_desc_layout, VK_NULL_HANDLE);
 
+    }
+
+    bool VulkanBindlessArray::RecordInitCommands(CommandList& cmd_list) {
+        bool expected = false;
+        if (!b_gpu_initialized.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return false;
+        }
+
+        auto sampler_size    = deferred_sampler_data.size();
+        auto buffer_desc_size = deferred_buffer_desc_data.size();
+
+        // Upload sampler descriptor data to texture descriptor buffer (move ownership)
+        cmd_list.CopyFrom(
+            std::move(deferred_sampler_data),
+            bindless_texture_descs->GetView(0, sampler_size)
+        );
+
+        // Upload initial storage buffer descriptor to buffer descriptor buffer (move ownership)
+        cmd_list.CopyFrom(
+            std::move(deferred_buffer_desc_data),
+            bindless_buffer_descs->GetView(0, buffer_desc_size)
+        );
+
+        return true;
     }
 
     static uint SamplerToIndex(const Sampler& _samp) {

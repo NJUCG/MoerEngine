@@ -36,6 +36,24 @@ namespace Moer::Render {
 
 #pragma region[ utils ]
 
+static GraphEventRef ChainCompletionBoundary(
+    const GraphEventRef& previous_boundary,
+    const GraphEventRef& completion_event
+) {
+    if (!completion_event) {
+        return previous_boundary;
+    }
+    if (!previous_boundary) {
+        return completion_event;
+    }
+
+    GraphEventRef chained_boundary = GraphEvent::CreateGraphEvent();
+    chained_boundary->WaitUntil(previous_boundary);
+    chained_boundary->WaitUntil(completion_event);
+    chained_boundary->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+    return chained_boundary;
+}
+
 static const char* QueueTypeName(EQueueType type) {
     switch (type) {
         case EQueueType::Graphics:
@@ -3343,6 +3361,10 @@ void VkCommandQueue::ResolveAllocatorCompletion(UniquePtr<VulkanAllocator>&& _al
     }
 }
 
+void VkCommandQueue::AppendCompletionBoundary(const GraphEventRef& completion_event) {
+    completion_boundary = ChainCompletionBoundary(completion_boundary, completion_event);
+}
+
 #pragma endregion
 
 #pragma region[ copy queue ]
@@ -3640,6 +3662,10 @@ void VkCopyQueue::ResolveAllocatorCompletion(UniquePtr<VulkanAllocator>&& _alloc
         _allocator->Reset();
         allocators.Push(_allocator.release());
     }
+}
+
+void VkCopyQueue::AppendCompletionBoundary(const GraphEventRef& completion_event) {
+    completion_boundary = ChainCompletionBoundary(completion_boundary, completion_event);
 }
 #pragma endregion
 } // namespace Moer::Render

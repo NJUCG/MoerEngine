@@ -911,6 +911,12 @@ public:
 
     virtual uint64 ArrayHandle() const = 0;
 
+    // Returns true if deferred GPU initialization is still pending.
+    virtual bool NeedsInit() const = 0;
+
+    // Record one-shot init commands into cmd_list. Returns true if commands were recorded.
+    virtual bool RecordInitCommands(class CommandList& cmd_list) = 0;
+
 protected:
     friend class CommandList;
     friend class UpdateBindlessArrayCmd;

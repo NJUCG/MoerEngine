@@ -1,4 +1,5 @@
 #include "RuntimeAssets.h"
+#include "Core.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
@@ -22,13 +23,10 @@ RuntimeAssets::RuntimeAssets(std::filesystem::path _assets_path, Render::RenderD
     device(_device) {
     assert(std::filesystem::exists(assets_path) && "RuntimeAssets path not exists");
 
-    GraphEventRef evt = LambdaTask::Create([this]() {
-                            LoadTextures();
-                        }).Dispatch();
-    load_event        = LambdaTask::Create([this, evt]() {
-                     TaskGraph::GetInterface().WaitUntilTaskComplete(evt, EThread::UNKNOWN_THREAD);
-                     CompleteAndImportResources();
-                 }).Dispatch();
+    // Worker thread: decode files and record upload commands (no GPU submission)
+    record_event = LambdaTask::Create([this]() {
+                       RecordTextureUploads();
+                   }).Dispatch();
 }
 
 Render::TextureRef RuntimeAssets::GetTexture(std::string_view _name) const {
@@ -47,8 +45,8 @@ Render::TextureRef RuntimeAssets::GetDefaultEnvMap() const {
     return GetTexture(default_env_map_name);
 }
 
-void RuntimeAssets::LoadTextures() {
-    // Load textures
+void RuntimeAssets::RecordTextureUploads() {
+    // Record-only: decode files and build upload command list. No GPU submission.
     using namespace Render;
     {
         auto texture_path = assets_path / "textures";
@@ -128,24 +126,48 @@ void RuntimeAssets::LoadTextures() {
             }
         }
         if (!cmd_list.IsEmpty()) {
-            Array<CommandList> uploads{};
-            uploads.emplace_back(std::move(cmd_list));
-            RHIExecutor::Get().Submit(std::move(uploads), ERHIExecSubmitFlags::FlushGPU);
-            RenderDevice::Get().WaitIdle();
+            {
+                std::lock_guard<std::mutex> lock(payload_mutex);
+                pending_payload.command_lists.emplace_back(std::move(cmd_list));
+            }
         }
     }
+    b_recorded.store(true, std::memory_order_release);
 }
 
-void RuntimeAssets::CompleteAndImportResources() {
-    b_loaded.store(true, std::memory_order_seq_cst);
+bool RuntimeAssets::SubmitPendingUploads() {
+    assert(Moer::IsCurrentlyGameThread());
+
+    if (!b_recorded.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    AsyncRecordedSubmitPayload payload;
+    {
+        std::lock_guard<std::mutex> lock(payload_mutex);
+        payload = std::move(pending_payload);
+    }
+
+    if (!payload.command_lists.empty()) {
+        Render::RHIExecutor::Get().Submit(
+            std::move(payload.command_lists), Render::ERHIExecSubmitFlags::FlushGPU
+        );
+    }
+
+    for (auto& cb : payload.post_submit_callbacks) {
+        cb();
+    }
+
+    b_loaded.store(true, std::memory_order_release);
+    return true;
 }
 
 bool RuntimeAssets::IsReady() const {
-    return b_loaded.load(std::memory_order_relaxed);
+    return b_loaded.load(std::memory_order_acquire);
 }
 void RuntimeAssets::WaitUntilReady() const {
-    if (!IsReady()) {
-        load_event->Wait();
+    if (!b_recorded.load(std::memory_order_acquire)) {
+        record_event->Wait();
     }
 }
 } // namespace Moer

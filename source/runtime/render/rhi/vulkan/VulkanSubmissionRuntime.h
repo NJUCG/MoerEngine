@@ -6,7 +6,6 @@
 #include <array>
 #include <condition_variable>
 #include <deque>
-#include <future>
 #include <mutex>
 #include <span>
 #include <thread>
@@ -14,6 +13,8 @@
 namespace Moer::Render {
 
 class VulkanInterruptRuntime;
+class VkCommandQueue;
+class VkCopyQueue;
 
 struct SubmissionPresentResult {
     bool                       submitted{false};
@@ -41,6 +42,9 @@ public:
     void Flush();
     void Shutdown();
     void ResolvePresentCompletion(UniquePtr<VulkanPresentor>&& presentor, uint64 timeline_value);
+    void AppendCompletionBoundary(const GraphEventRef& completion_event);
+    void ResetCompletionBoundary();
+    const GraphEventRef& GetCompletionBoundary() const;
 
 private:
     struct Impl;
@@ -57,12 +61,9 @@ struct SubmissionBatch {
 
     EKind                              kind{EKind::Submit};
     Array<SubmitInfo>                  submits{};
-    Array<WaitEvent>                   root_rhi_prerequisites{};
-    bool                               frame_end{false};
-    uint64                             batch_id{0};
+    RootRhiBoundary                    root_rhi_boundary{};
     ERHISyncDepth                      sync_depth{ERHISyncDepth::RHI};
-    std::shared_ptr<std::promise<void>> completion{};
-    std::shared_ptr<std::promise<GraphEventRef>> sync_completion{};
+    GraphEventRef                      completion_event{nullptr};
 };
 
 class VulkanSubmissionRuntime {
@@ -82,26 +83,28 @@ public:
     void Shutdown();
 
 private:
-    void             Stop();
+    void             JoinSubmissionThread();
     void             RunSubmissionThread();
     SubmissionPresentContext& GetOrCreatePresentContext(EQueueType queue_type);
     void             FlushPresentContexts();
     void             ShutdownPresentContexts();
+    void             ResetOwnerCompletionBoundaries();
     GraphEventRef    EnqueueOrderedSyncRequest(ERHISyncDepth depth, SubmissionBatch::EKind kind);
-    Array<WaitEvent> SnapshotPendingRHITails();
-    void             StorePendingRHITails(Array<WaitEvent>&& tails);
+    GraphEventRef    EnqueueOrderedSyncRequestUnchecked(ERHISyncDepth depth, SubmissionBatch::EKind kind);
+    GraphEventRef    EnqueueDrainRequestUnchecked();
+    void             AttachSyncDependencies(SubmissionBatch& batch);
+    RootRhiBoundary  SnapshotPendingRhiBoundary();
+    void             StorePendingRhiBoundary(RootRhiBoundary&& boundary);
     static GraphEventRef CreateCompletedEvent();
-    static GraphEventRef CreateFrozenSyncEvent(
-                    ERHISyncDepth      depth,
-                    const GraphEventRef& rhi_tail,
-                    const GraphEventRef& present_tail
-                );
-    static void FoldSemanticTail(GraphEventRef& tail, const GraphEventRef& completion_event);
+    static GraphEventRef CreateCompletionWaitEvent(const GraphEventRef& completion_event);
+    static void      FinishBatchCompletion(SubmissionBatch& batch);
 
 private:
     VulkanInterruptRuntime& interrupt_runtime;
-    std::atomic_bool        running{true};
-    std::atomic_uint64_t    next_batch_id{1};
+    VkCommandQueue&         graphics_queue_owner;
+    VkCommandQueue&         compute_queue_owner;
+    VkCopyQueue&            copy_queue_owner;
+    std::atomic_bool        b_enable{true};
 
     std::mutex              submission_mutex{};
     std::condition_variable submission_cv{};
@@ -109,9 +112,7 @@ private:
     std::jthread            submission_thread{};
 
     std::mutex              tail_mutex{};
-    Array<WaitEvent>        pending_rhi_tails{};
-    GraphEventRef           rhi_tail{nullptr};
-    GraphEventRef           present_tail{nullptr};
+    RootRhiBoundary         pending_rhi_boundary{};
     std::mutex              present_context_mutex{};
     std::array<std::unique_ptr<SubmissionPresentContext>, static_cast<size_t>(EQueueType::Num)>
         present_contexts{};

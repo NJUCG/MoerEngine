@@ -458,6 +458,11 @@ void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
     EnsureNoActiveCopyScope("CommandList::UpdateBindlessArray");
     assert(_array && "Bindless array is null");
 
+    // One-shot deferred GPU initialization on first use
+    if (_array->NeedsInit()) {
+        _array->RecordInitCommands(*this);
+    }
+
     commands.push_back(_array->CreateUpdateCommand());
 }
 

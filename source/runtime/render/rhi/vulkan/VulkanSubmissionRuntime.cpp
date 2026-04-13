@@ -7,6 +7,7 @@
 #include "platform/Platform.h"
 #include "rhi/RHIImpl.h"
 
+#include <cassert>
 #include <algorithm>
 #include <chrono>
 #include <thread>
@@ -79,6 +80,89 @@ ResolveTextureSeedState(VulkanTexture* texture, const ResourceStateValue& state)
     };
 }
 
+bool RootRhiBoundaryHasGpuWaits(const RootRhiBoundary& boundary) {
+    return !boundary.gpu_waits.empty();
+}
+
+bool RootRhiBoundaryHasHostEvent(const RootRhiBoundary& boundary) {
+    return boundary.host_event != nullptr;
+}
+
+GraphEventRef ChainCompletionBoundary(
+    const GraphEventRef& previous_boundary,
+    const GraphEventRef& completion_event
+) {
+    if (!completion_event) {
+        return previous_boundary;
+    }
+    if (!previous_boundary) {
+        return completion_event;
+    }
+
+    GraphEventRef chained_boundary = GraphEvent::CreateGraphEvent();
+    chained_boundary->WaitUntil(previous_boundary);
+    chained_boundary->WaitUntil(completion_event);
+    chained_boundary->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+    return chained_boundary;
+}
+
+bool BatchKindRequiresCompletionEvent(SubmissionBatch::EKind kind) {
+    return kind == SubmissionBatch::EKind::Drain || kind == SubmissionBatch::EKind::Sync ||
+           kind == SubmissionBatch::EKind::Flush;
+}
+
+ERHISyncDepth ResolveBatchSyncDepth(const SubmissionBatch& batch) {
+    return batch.kind == SubmissionBatch::EKind::Flush ? ERHISyncDepth::Present : batch.sync_depth;
+}
+
+void AttachRootBoundary(SubmitInfo& submit_info, const RootRhiBoundary& boundary) {
+    if (!submit_info.is_root_submit) {
+        return;
+    }
+    submit_info.root_rhi_boundary = boundary;
+}
+
+void InjectRootBoundaryGpuWaits(SubmitInfo& submit_info) {
+    if (!RootRhiBoundaryHasGpuWaits(submit_info.root_rhi_boundary)) {
+        return;
+    }
+    if (!submit_info.translate_result.recorded_submit.has_value() ||
+        !submit_info.translate_result.recorded_submit->submit.has_value()) {
+        return;
+    }
+
+    auto& wait_events = submit_info.translate_result.recorded_submit->submit->wait_events;
+    wait_events.insert(
+        wait_events.end(),
+        submit_info.root_rhi_boundary.gpu_waits.begin(),
+        submit_info.root_rhi_boundary.gpu_waits.end()
+    );
+}
+
+template<typename TCompletionMap>
+void AttachLogicalSubmissionDependencies(
+    SubmitInfo&            submit_info,
+    const TCompletionMap&  completion_by_submit
+) {
+    if (!submit_info.translate_result.recorded_submit.has_value() ||
+        !submit_info.translate_result.recorded_submit->submit.has_value()) {
+        return;
+    }
+
+    for (const auto& dependency : submit_info.wait_submission_keys) {
+        const auto completion_it = completion_by_submit.find(dependency);
+        if (completion_it == completion_by_submit.end()) {
+            LOG_ERROR(
+                "Missing dependency completion for submit ({}, {})",
+                dependency.op_seq,
+                dependency.submit_idx
+            );
+            continue;
+        }
+        submit_info.translate_result.recorded_submit->submit->wait_events.emplace_back(completion_it->second);
+    }
+}
+
 } // namespace
 
 struct SubmissionPresentContext::Impl {
@@ -137,6 +221,7 @@ struct SubmissionPresentContext::Impl {
     std::atomic_uint64_t               last_submitted_timeline{0};
     std::mutex                         submit_mutex{};
     std::mutex                         presentor_mutex{};
+    GraphEventRef                      completion_boundary{nullptr};
     LockFreeQueueBase<VulkanPresentor, false> presentors{};
 };
 
@@ -332,24 +417,46 @@ void SubmissionPresentContext::ResolvePresentCompletion(
     impl->presentors.Push(presentor.release());
 }
 
+void SubmissionPresentContext::AppendCompletionBoundary(const GraphEventRef& completion_event) {
+    impl->completion_boundary = ChainCompletionBoundary(impl->completion_boundary, completion_event);
+}
+
+void SubmissionPresentContext::ResetCompletionBoundary() {
+    impl->completion_boundary = nullptr;
+}
+
+const GraphEventRef& SubmissionPresentContext::GetCompletionBoundary() const {
+    return impl->completion_boundary;
+}
+
 VulkanSubmissionRuntime::VulkanSubmissionRuntime(VulkanInterruptRuntime& in_interrupt_runtime) :
     interrupt_runtime(in_interrupt_runtime),
+    graphics_queue_owner(
+        static_cast<VkCommandQueue&>(RenderDevice::Get().GetCommandQueue(EQueueType::Graphics))
+    ),
+    compute_queue_owner(
+        static_cast<VkCommandQueue&>(RenderDevice::Get().GetCommandQueue(EQueueType::Compute))
+    ),
+    copy_queue_owner(static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue())),
     submission_thread([this]() { RunSubmissionThread(); }) {}
 
 VulkanSubmissionRuntime::~VulkanSubmissionRuntime() {
-    Stop();
+    Shutdown();
 }
 
 void VulkanSubmissionRuntime::Enqueue(Array<SubmitInfo>&& submits, bool frame_end) {
-    if (submits.empty() && !frame_end) {
+    (void)frame_end;
+    if (submits.empty()) {
+        return;
+    }
+    assert(b_enable.load(std::memory_order_acquire) && "Enqueue is not allowed after shutdown begins");
+    if (!b_enable.load(std::memory_order_acquire)) {
         return;
     }
     SubmissionBatch batch{};
-    batch.kind                  = SubmissionBatch::EKind::Submit;
-    batch.submits                = std::move(submits);
-    batch.root_rhi_prerequisites = SnapshotPendingRHITails();
-    batch.frame_end              = frame_end;
-    batch.batch_id               = next_batch_id.fetch_add(1, std::memory_order_relaxed);
+    batch.kind             = SubmissionBatch::EKind::Submit;
+    batch.submits          = std::move(submits);
+    batch.root_rhi_boundary = SnapshotPendingRhiBoundary();
     {
         std::lock_guard<std::mutex> lock(submission_mutex);
         submission_queue.emplace_back(std::move(batch));
@@ -362,7 +469,8 @@ GraphEventRef VulkanSubmissionRuntime::Sync(ERHISyncDepth depth) {
 }
 
 void VulkanSubmissionRuntime::Flush() {
-    GraphEventRef completion = EnqueueOrderedSyncRequest(ERHISyncDepth::Present, SubmissionBatch::EKind::Flush);
+    GraphEventRef completion =
+        EnqueueOrderedSyncRequest(ERHISyncDepth::Present, SubmissionBatch::EKind::Flush);
     if (completion) {
         completion->Wait();
     }
@@ -370,83 +478,89 @@ void VulkanSubmissionRuntime::Flush() {
 }
 
 void VulkanSubmissionRuntime::Drain() {
-    if (!running.load(std::memory_order_acquire)) {
+    assert(b_enable.load(std::memory_order_acquire) && "Drain is not allowed after shutdown begins");
+    if (!b_enable.load(std::memory_order_acquire)) {
         return;
     }
 
-    auto completion = std::make_shared<std::promise<void>>();
-    auto future     = completion->get_future();
-
-    SubmissionBatch batch{};
-    batch.kind       = SubmissionBatch::EKind::Drain;
-    batch.batch_id   = next_batch_id.fetch_add(1, std::memory_order_relaxed);
-    batch.completion = completion;
-    {
-        std::lock_guard<std::mutex> lock(submission_mutex);
-        submission_queue.emplace_back(std::move(batch));
-    }
-    submission_cv.notify_one();
-    future.wait();
+    GraphEventRef wait_event = EnqueueDrainRequestUnchecked();
+    wait_event->Wait();
 }
 
 GraphEventRef VulkanSubmissionRuntime::EnqueueOrderedSyncRequest(
     ERHISyncDepth           depth,
     SubmissionBatch::EKind  kind
 ) {
-    if (!running.load(std::memory_order_acquire)) {
+    assert(
+        b_enable.load(std::memory_order_acquire) &&
+        "Sync/Flush request is not allowed after shutdown begins"
+    );
+    if (!b_enable.load(std::memory_order_acquire)) {
         return CreateCompletedEvent();
     }
+    return EnqueueOrderedSyncRequestUnchecked(depth, kind);
+}
 
-    auto completion = std::make_shared<std::promise<GraphEventRef>>();
-    auto future     = completion->get_future();
+GraphEventRef VulkanSubmissionRuntime::EnqueueOrderedSyncRequestUnchecked(
+    ERHISyncDepth           depth,
+    SubmissionBatch::EKind  kind
+) {
+    assert(
+        (kind == SubmissionBatch::EKind::Sync || kind == SubmissionBatch::EKind::Flush) &&
+        "ordered sync request only supports Sync or Flush batches"
+    );
 
+    GraphEventRef batch_completion = GraphEvent::CreateGraphEvent();
+    GraphEventRef wait_event       = CreateCompletionWaitEvent(batch_completion);
     SubmissionBatch batch{};
-    batch.kind            = kind;
-    batch.batch_id        = next_batch_id.fetch_add(1, std::memory_order_relaxed);
-    batch.sync_depth      = depth;
-    batch.sync_completion = completion;
+    batch.kind             = kind;
+    batch.sync_depth       = depth;
+    batch.completion_event = batch_completion;
     {
         std::lock_guard<std::mutex> lock(submission_mutex);
         submission_queue.emplace_back(std::move(batch));
     }
     submission_cv.notify_one();
-    GraphEventRef snapshot = future.get();
-    return snapshot ? snapshot : CreateCompletedEvent();
+    return wait_event;
+}
+
+GraphEventRef VulkanSubmissionRuntime::EnqueueDrainRequestUnchecked() {
+    GraphEventRef batch_completion = GraphEvent::CreateGraphEvent();
+    GraphEventRef wait_event       = CreateCompletionWaitEvent(batch_completion);
+    SubmissionBatch batch{};
+    batch.kind             = SubmissionBatch::EKind::Drain;
+    batch.completion_event = batch_completion;
+    {
+        std::lock_guard<std::mutex> lock(submission_mutex);
+        submission_queue.emplace_back(std::move(batch));
+    }
+    submission_cv.notify_one();
+    return wait_event;
 }
 
 void VulkanSubmissionRuntime::Shutdown() {
-    Flush();
-    Stop();
+    bool expected_enabled = true;
+    if (!b_enable.compare_exchange_strong(expected_enabled, false, std::memory_order_acq_rel)) {
+        JoinSubmissionThread();
+        return;
+    }
+
+    GraphEventRef completion =
+        EnqueueOrderedSyncRequestUnchecked(ERHISyncDepth::Present, SubmissionBatch::EKind::Flush);
+    if (completion) {
+        completion->Wait();
+    }
+    FlushPresentContexts();
+    JoinSubmissionThread();
+    ShutdownPresentContexts();
+    ResetOwnerCompletionBoundaries();
+}
+
+void VulkanSubmissionRuntime::JoinSubmissionThread() {
+    submission_cv.notify_all();
     if (submission_thread.joinable()) {
         submission_thread.join();
     }
-    ShutdownPresentContexts();
-}
-
-void VulkanSubmissionRuntime::Stop() {
-    bool expected_running = true;
-    if (!running.compare_exchange_strong(expected_running, false)) {
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(submission_mutex);
-        for (auto& batch : submission_queue) {
-            if (batch.sync_completion) {
-                try {
-                    batch.sync_completion->set_value(CreateCompletedEvent());
-                } catch (const std::future_error&) {
-                }
-            }
-            if (batch.completion) {
-                try {
-                    batch.completion->set_value();
-                } catch (const std::future_error&) {
-                }
-            }
-        }
-        submission_queue.clear();
-    }
-    submission_cv.notify_all();
 }
 
 void VulkanSubmissionRuntime::RunSubmissionThread() {
@@ -456,22 +570,22 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
         {
             std::unique_lock<std::mutex> lock(submission_mutex);
             submission_cv.wait(lock, [this]() {
-                return !running.load(std::memory_order_acquire) || !submission_queue.empty();
+                return !b_enable.load(std::memory_order_acquire) || !submission_queue.empty();
             });
-            if (!running.load(std::memory_order_acquire) && submission_queue.empty()) {
+            if (!b_enable.load(std::memory_order_acquire) && submission_queue.empty()) {
                 return;
             }
             batch = std::move(submission_queue.front());
             submission_queue.pop_front();
         }
-
         UnorderedMap<SubmissionKey, WaitEvent, SubmissionKeyHash> completion_by_submit{};
         completion_by_submit.reserve(static_cast<uint32>(batch.submits.size()));
-        uint32 submission_count = 0;
-        uint32 present_count    = 0;
+        assert(!BatchKindRequiresCompletionEvent(batch.kind) || batch.completion_event != nullptr);
         for (auto& submit_info : batch.submits) {
-            if (submit_info.is_root_submit && !batch.root_rhi_prerequisites.empty()) {
-                submit_info.root_prerequisite_waits = batch.root_rhi_prerequisites;
+            if (submit_info.is_root_submit &&
+                (RootRhiBoundaryHasGpuWaits(batch.root_rhi_boundary) ||
+                 RootRhiBoundaryHasHostEvent(batch.root_rhi_boundary))) {
+                AttachRootBoundary(submit_info, batch.root_rhi_boundary);
             }
 
             bool submitted = false;
@@ -493,35 +607,6 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
                 );
                 submit_info.translate_result.valid = false;
             } else {
-                if (!submit_info.root_prerequisite_waits.empty() &&
-                    submit_info.translate_result.recorded_submit.has_value() &&
-                    submit_info.translate_result.recorded_submit->submit.has_value()) {
-                    auto& wait_events = submit_info.translate_result.recorded_submit->submit->wait_events;
-                    wait_events.insert(
-                        wait_events.end(),
-                        submit_info.root_prerequisite_waits.begin(),
-                        submit_info.root_prerequisite_waits.end()
-                    );
-                }
-
-                for (const auto& dependency : submit_info.wait_submission_keys) {
-                    const auto completion_it = completion_by_submit.find(dependency);
-                    if (completion_it == completion_by_submit.end()) {
-                        LOG_ERROR(
-                            "Missing dependency completion for submit ({}, {})",
-                            dependency.op_seq,
-                            dependency.submit_idx
-                        );
-                        continue;
-                    }
-                    if (submit_info.translate_result.recorded_submit.has_value() &&
-                        submit_info.translate_result.recorded_submit->submit.has_value()) {
-                        submit_info.translate_result.recorded_submit->submit->wait_events.emplace_back(
-                            completion_it->second
-                        );
-                    }
-                }
-
                 if (!submit_info.translate_result.recorded_submit.has_value()) {
                     LOG_ERROR(
                         "Missing recorded submit packet for ({}, {})",
@@ -529,6 +614,9 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
                         submit_info.key.submit_idx
                     );
                 } else {
+                    InjectRootBoundaryGpuWaits(submit_info);
+                    AttachLogicalSubmissionDependencies(submit_info, completion_by_submit);
+
                     WaitEvent completion_event{};
                     switch (submit_info.translate_result.queue) {
                         case EQueueType::Graphics:
@@ -547,17 +635,12 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
                             );
                             completion_event = result.completion;
                             if (result.scheduled_completion) {
-                                interrupt_runtime.EnqueueQueueCompletion(
+                                interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
                                     submit_info.key.op_seq,
-                                    &queue,
                                     task_completion_event,
-                                    result.completion,
-                                    result.timeline_value,
-                                    std::move(result.allocator),
-                                    std::move(result.callbacks),
-                                    std::move(result.signal_events)
-                                );
-                                FoldSemanticTail(rhi_tail, task_completion_event);
+                                    SubmissionQueueCompletionPayload(queue, std::move(result))
+                                ));
+                                queue.AppendCompletionBoundary(task_completion_event);
                             } else if (task_completion_event) {
                                 task_completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
                             }
@@ -577,17 +660,12 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
                             );
                             completion_event = WaitEvent{result.completion.handle, result.completion.timeline};
                             if (result.scheduled_completion) {
-                                interrupt_runtime.EnqueueCopyQueueCompletion(
+                                interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
                                     submit_info.key.op_seq,
-                                    &copy_queue,
                                     task_completion_event,
-                                    result.completion,
-                                    result.timeline_value,
-                                    std::move(result.allocator),
-                                    std::move(result.callbacks),
-                                    std::move(result.signal_events)
-                                );
-                                FoldSemanticTail(rhi_tail, task_completion_event);
+                                    SubmissionCopyQueueCompletionPayload(copy_queue, std::move(result))
+                                ));
+                                copy_queue.AppendCompletionBoundary(task_completion_event);
                             } else if (task_completion_event) {
                                 task_completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
                             }
@@ -604,7 +682,6 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
 
                     if (submitted) {
                         completion_by_submit.emplace(submit_info.key, completion_event);
-                        ++submission_count;
                     }
                 }
             }
@@ -637,25 +714,23 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
             submit_info.host_fence.Reset();
             SubmissionPresentContext& context = GetOrCreatePresentContext(present_stage.present.queue);
             SubmissionPresentResult present_result = context.Present(
-                    present_stage.present,
-                    wait_events,
-                    present_stage.has_source_texture_state ? &present_stage.source_texture_state : nullptr,
-                    submit_info.host_fence
-                );
+                present_stage.present,
+                wait_events,
+                present_stage.has_source_texture_state ? &present_stage.source_texture_state : nullptr,
+                submit_info.host_fence
+            );
             if (present_result.submitted) {
                 GraphEventRef task_completion_event = GraphEvent::CreateGraphEvent();
-                interrupt_runtime.EnqueuePresentCompletion(
+                interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
                     present_stage.op_seq,
-                    &context,
                     task_completion_event,
-                    submit_info.host_fence.device,
-                    submit_info.host_fence.handle,
-                    submit_info.host_fence.owned,
-                    present_result.timeline_value,
-                    std::move(present_result.presentor)
-                );
-                FoldSemanticTail(present_tail, task_completion_event);
-                ++present_count;
+                    SubmissionPresentCompletionPayload(
+                        context,
+                        submit_info.host_fence,
+                        std::move(present_result)
+                    )
+                ));
+                context.AppendCompletionBoundary(task_completion_event);
             }
         }
 
@@ -665,29 +740,14 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
             for (const auto& [_, completion] : completion_by_submit) {
                 batch_rhi_tails.emplace_back(completion);
             }
-            StorePendingRHITails(std::move(batch_rhi_tails));
+            StorePendingRhiBoundary(RootRhiBoundary{
+                .host_event = nullptr,
+                .gpu_waits  = std::move(batch_rhi_tails),
+            });
         }
 
-        if (batch.frame_end) {
-            interrupt_runtime.EnqueueFrameEndMarker(batch.batch_id, submission_count, present_count);
-        }
-        if (batch.sync_completion) {
-            GraphEventRef sync_event = CreateFrozenSyncEvent(
-                batch.kind == SubmissionBatch::EKind::Flush ? ERHISyncDepth::Present : batch.sync_depth,
-                rhi_tail,
-                present_tail
-            );
-            try {
-                batch.sync_completion->set_value(std::move(sync_event));
-            } catch (const std::future_error&) {
-            }
-        }
-        if (batch.completion) {
-            try {
-                batch.completion->set_value();
-            } catch (const std::future_error&) {
-            }
-        }
+        AttachSyncDependencies(batch);
+        FinishBatchCompletion(batch);
     }
 }
 
@@ -719,55 +779,74 @@ void VulkanSubmissionRuntime::ShutdownPresentContexts() {
     }
 }
 
+void VulkanSubmissionRuntime::ResetOwnerCompletionBoundaries() {
+    graphics_queue_owner.ResetCompletionBoundary();
+    compute_queue_owner.ResetCompletionBoundary();
+    copy_queue_owner.ResetCompletionBoundary();
+}
+
+void VulkanSubmissionRuntime::AttachSyncDependencies(SubmissionBatch& batch) {
+    if (batch.kind != SubmissionBatch::EKind::Sync && batch.kind != SubmissionBatch::EKind::Flush) {
+        return;
+    }
+    assert(batch.completion_event != nullptr && "sync-like batch must have a completion event");
+
+    if (const GraphEventRef& boundary = graphics_queue_owner.GetCompletionBoundary(); boundary) {
+        batch.completion_event->WaitUntil(boundary);
+    }
+    if (const GraphEventRef& boundary = compute_queue_owner.GetCompletionBoundary(); boundary) {
+        batch.completion_event->WaitUntil(boundary);
+    }
+    if (const GraphEventRef& boundary = copy_queue_owner.GetCompletionBoundary(); boundary) {
+        batch.completion_event->WaitUntil(boundary);
+    }
+
+    if (ResolveBatchSyncDepth(batch) != ERHISyncDepth::Present) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(present_context_mutex);
+    for (const auto& context : present_contexts) {
+        if (context == nullptr) {
+            continue;
+        }
+        if (const GraphEventRef& boundary = context->GetCompletionBoundary(); boundary) {
+            batch.completion_event->WaitUntil(boundary);
+        }
+    }
+}
+
 GraphEventRef VulkanSubmissionRuntime::CreateCompletedEvent() {
     GraphEventRef completed = GraphEvent::CreateGraphEvent();
     completed->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
     return completed;
 }
 
-GraphEventRef VulkanSubmissionRuntime::CreateFrozenSyncEvent(
-    ERHISyncDepth       depth,
-    const GraphEventRef& rhi_tail_event,
-    const GraphEventRef& present_tail_event
-) {
-    GraphEventRef frozen_sync_event = GraphEvent::CreateGraphEvent();
-    if (rhi_tail_event) {
-        frozen_sync_event->WaitUntil(rhi_tail_event);
+GraphEventRef VulkanSubmissionRuntime::CreateCompletionWaitEvent(const GraphEventRef& completion_event) {
+    GraphEventRef wait_event = GraphEvent::CreateGraphEvent();
+    if (completion_event) {
+        wait_event->WaitUntil(completion_event);
     }
-    if (depth == ERHISyncDepth::Present && present_tail_event) {
-        frozen_sync_event->WaitUntil(present_tail_event);
-    }
-    frozen_sync_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-    return frozen_sync_event;
+    wait_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+    return wait_event;
 }
 
-void VulkanSubmissionRuntime::FoldSemanticTail(
-    GraphEventRef&       tail,
-    const GraphEventRef& completion_event
-) {
-    if (!completion_event) {
+void VulkanSubmissionRuntime::FinishBatchCompletion(SubmissionBatch& batch) {
+    if (!batch.completion_event) {
+        assert(!BatchKindRequiresCompletionEvent(batch.kind) && "blocking batch must have a completion event");
         return;
     }
-    if (!tail) {
-        tail = completion_event;
-        return;
-    }
-
-    GraphEventRef folded = GraphEvent::CreateGraphEvent();
-    folded->WaitUntil(tail);
-    folded->WaitUntil(completion_event);
-    folded->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-    tail = folded;
+    batch.completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
 }
 
-Array<WaitEvent> VulkanSubmissionRuntime::SnapshotPendingRHITails() {
+RootRhiBoundary VulkanSubmissionRuntime::SnapshotPendingRhiBoundary() {
     std::lock_guard<std::mutex> lock(tail_mutex);
-    return pending_rhi_tails;
+    return pending_rhi_boundary;
 }
 
-void VulkanSubmissionRuntime::StorePendingRHITails(Array<WaitEvent>&& tails) {
+void VulkanSubmissionRuntime::StorePendingRhiBoundary(RootRhiBoundary&& boundary) {
     std::lock_guard<std::mutex> lock(tail_mutex);
-    pending_rhi_tails = std::move(tails);
+    pending_rhi_boundary = std::move(boundary);
 }
 
 } // namespace Moer::Render

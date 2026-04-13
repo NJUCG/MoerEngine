@@ -1,5 +1,6 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHI.h"
+#include "Core.h"
 #include "taskgraph/GraphTask.h"
 #include "vulkan/VulkanSubmissionExecutor.h"
 
@@ -15,6 +16,8 @@ void RHIExecutor::Submit(
     ERHIExecSubmitFlags  flags,
     RHIPresentRequest*   present
 ) {
+    assert(Moer::IsCurrentlyGameThread() && "RHIExecutor::Submit must only be called from the main thread");
+
     if (EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FrameEnd) &&
         !EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FlushGPU)) {
         LOG_ERROR("RHIExecutor::Submit requires FrameEnd to be submitted together with FlushGPU");
@@ -59,6 +62,8 @@ void RHIExecutor::Submit(
 }
 
 void RHIExecutor::Sync(ERHISyncDepth depth) {
+    assert(Moer::IsCurrentlyGameThread() && "RHIExecutor::Sync must only be called from the main thread");
+
     {
         std::lock_guard<std::mutex> lock(submit_mutex);
         FlushPendingLocked(pending_frame_end);
@@ -66,6 +71,25 @@ void RHIExecutor::Sync(ERHISyncDepth depth) {
     GraphEventRef event = VulkanSubmissionExecutor::Sync(depth);
     if (event) {
         event->Wait();
+    }
+}
+
+void RHIExecutor::ShutDown() {
+    auto& executor = Get();
+    {
+        std::lock_guard<std::mutex> lock(executor.submit_mutex);
+        executor.FlushPendingLocked(executor.pending_frame_end);
+    }
+
+    switch (RenderDevice::Get().GetRHIType()) {
+        case ERHIType::Vulkan:
+            VulkanSubmissionExecutor::Shutdown();
+            break;
+        case ERHIType::D3D12:
+            break;
+        default:
+            assert(false && "Unsupported RHI type in RHIExecutor::ShutDown");
+            break;
     }
 }
 

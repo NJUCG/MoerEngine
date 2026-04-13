@@ -1,4 +1,4 @@
-#include "VulkanSubmissionExecutor.h"
+﻿#include "VulkanSubmissionExecutor.h"
 
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
@@ -78,7 +78,7 @@ enum class ETrackedResourceType : uint8 {
 struct ResourceKey {
     ETrackedResourceType type{ETrackedResourceType::Buffer};
     uint64               handle{0};
-    // Subresource range �?only meaningful for Texture type.
+    // Subresource range 鈥?only meaningful for Texture type.
     // 0xFF (kRemainingSubresource) means "all remaining" (whole-resource default).
     uint8                mip_level{0};
     uint8                mip_count{kRemainingSubresource};
@@ -2027,25 +2027,61 @@ public:
         submission_runtime(interrupt_runtime) {}
 
     void Execute(Array<SubmitInfo>&& submits, bool frame_end) {
+        BindProducerThread();
+        assert(b_enable && "Execute is not allowed after shutdown begins");
+        if (!b_enable) {
+            return;
+        }
         submission_runtime.Enqueue(std::move(submits), frame_end);
     }
 
     GraphEventRef Sync(ERHISyncDepth depth) {
+        BindProducerThread();
+        assert(b_enable && "Sync is not allowed after shutdown begins");
+        if (!b_enable) {
+            GraphEventRef completed = GraphEvent::CreateGraphEvent();
+            completed->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+            return completed;
+        }
         return submission_runtime.Sync(depth);
     }
 
     void Flush() {
+        BindProducerThread();
+        assert(b_enable && "Flush is not allowed after shutdown begins");
+        if (!b_enable) {
+            return;
+        }
         submission_runtime.Flush();
     }
 
     void Shutdown() {
+        BindProducerThread();
+        b_enable = false;
         submission_runtime.Shutdown();
         interrupt_runtime.Shutdown();
     }
 
 private:
+    void BindProducerThread() {
+        const std::thread::id current_thread = std::this_thread::get_id();
+        std::lock_guard<std::mutex> lock(producer_thread_mutex);
+        if (producer_thread_id == std::thread::id{}) {
+            producer_thread_id = current_thread;
+            return;
+        }
+        assert(
+            producer_thread_id == current_thread &&
+            "Submission executor methods must run on the same producer thread"
+        );
+    }
+
+private:
     VulkanInterruptRuntime  interrupt_runtime;
     VulkanSubmissionRuntime submission_runtime;
+    bool                    b_enable{true};
+    std::mutex              producer_thread_mutex{};
+    std::thread::id         producer_thread_id{};
 };
 
 static std::mutex g_executor_state_mutex{};
@@ -2134,7 +2170,7 @@ PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
                         translate_info.digest
                     );
 
-                    // §3.3: Load initial state for this segment's resources directly from each
+                    // 搂3.3: Load initial state for this segment's resources directly from each
                     // resource's persistent storage (committed by the previous segment).
                     ResourceStateSnapshot segment_state{};
                     EnsureDigestStateLoaded(segment_state, translate_info.digest);
@@ -2281,7 +2317,7 @@ PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
                     });
                     previous_segment_key   = translate_info.key;
                     previous_segment_queue = translate_info.queue;
-                    // §3.3: Commit each segment's final state back to resource persistent storage so
+                    // 搂3.3: Commit each segment's final state back to resource persistent storage so
                     // subsequent segments (and future frames) read the latest state from the resource
                     // objects themselves, not from a frame-level chained snapshot.
                     CommitPersistentResourceStates(translate_info.last_state_snapshot);
@@ -2542,7 +2578,7 @@ AssembleTranslatePipelineOps(
     return pipeline_batch;
 }
 
-// §7.2 / §9.3: Convert ResourceStateSnapshot to TrackerSeed for VkTracker::InitFromSeed.
+// 搂7.2 / 搂9.3: Convert ResourceStateSnapshot to TrackerSeed for VkTracker::InitFromSeed.
 static TrackerSeed BuildTrackerSeed(const ResourceStateSnapshot& snapshot) {
     TrackerSeed seed;
     seed.textures.reserve(snapshot.size());
@@ -2736,34 +2772,28 @@ static bool ValidateFrameEndState(const ResourceStateSnapshot& snapshot) {
     return true;
 }
 
-static Array<ExecutorOp> BuildExecutorOps(VulkanSubmissionBatch&& batch) {
-    Array<ExecutorOp> ops{};
-    ops.reserve(batch.submits.size() + (batch.present.has_value() ? 1u : 0u));
-
-    for (auto& submit_entry : batch.submits) {
-        ExecutorSubmitOp submit_op{};
-        submit_op.queue = submit_entry.queue;
-        submit_op.submits.emplace_back(std::move(submit_entry.submit));
-        ops.emplace_back(std::move(submit_op));
-    }
-
-    if (batch.present.has_value()) {
-        ops.emplace_back(ExecutorPresentOp{
-            .swapchain = batch.present->swapchain,
-            .target = batch.present->source,
-            .queue = EQueueType::Graphics
-        });
-    }
-    return ops;
-}
-
 } // namespace
 
 void VulkanSubmissionExecutor::Execute(
     VulkanSubmissionBatch&&                batch,
     const VulkanSubmissionExecuteOptions& options
 ) {
-    Array<ExecutorOp> ops = BuildExecutorOps(std::move(batch));
+    Array<ExecutorOp> ops{};
+    ops.reserve(batch.submits.size() + (batch.present.has_value() ? 1u : 0u));
+    for (auto& submit_entry : batch.submits) {
+        ExecutorSubmitOp submit_op{};
+        submit_op.queue = submit_entry.queue;
+        submit_op.submits.emplace_back(std::move(submit_entry.submit));
+        ops.emplace_back(std::move(submit_op));
+    }
+    if (batch.present.has_value()) {
+        ops.emplace_back(ExecutorPresentOp{
+            .swapchain = batch.present->swapchain,
+            .target    = batch.present->source,
+            .queue     = EQueueType::Graphics
+        });
+    }
+
     TRACE_SCOPE_CAT("VulkanSubmissionExecutor.Execute", "RHI");
     const uint64 trace_frame = NextRHITraceFrameIndex();
     ScopedRHITraceFrame trace_scope(trace_frame);
@@ -2850,5 +2880,6 @@ void VulkanSubmissionExecutor::Shutdown() {
 }
 
 } // namespace Moer::Render
+
 
 

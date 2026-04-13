@@ -665,7 +665,6 @@ void VulkanDevice::DestroyDescriptorHeap() {
 }
 
 void VulkanDevice::Destroy() {
-    VulkanSubmissionExecutor::Shutdown();
     // for (auto& cmd_allocator : m_command_allocators) {
     //     CHECK_AND_DELETE(cmd_allocator);
     // }
