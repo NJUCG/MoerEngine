@@ -4,11 +4,13 @@
 #include "PixelFormat.h"
 #include "RenderAPI.h"
 #include "rhi/RHICommon.h"
+#include "rhi/plugin/RHICooperative.h"
 #include "rhi/RHIResource.h"
 #include "taskgraph/ThreadManager.h"
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <type_traits>
 
 // Forward declarations to break circular dependency
@@ -201,6 +203,12 @@ public:
     RENDER_API Ext* LoadPlugin() const;
 
     RENDER_API bool IsExtensionCooperativeEnabled() const;
+    RENDER_API const CooperativeExtensionInfo& GetCooperativeExtensionInfo() const;
+    RENDER_API bool TryConvertCooperativeVectorMatrix(
+        const CooperativeVectorConversionDesc& _desc,
+        std::span<const byte>                  _src_data,
+        std::span<byte>                        _dst_data
+    ) const;
 
     RENDER_API void FlushDebugMessages() const;
     RENDER_API void WaitIdle();

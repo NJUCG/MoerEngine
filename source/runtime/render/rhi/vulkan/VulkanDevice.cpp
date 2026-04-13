@@ -11,8 +11,8 @@
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanUtil.h"
+#include "plugin/VulkanCooperativeSupport.h"
 #include "plugin/VulkanNrdPlugin.h"
-#include "vulkanextension/VulkanCooperativeSupport.h"
 #include "vulkanextension/VulkanExtension.h"
 #include <string_view>
 
@@ -405,6 +405,8 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
     );
     // 启动时输出 cooperative 支持摘要，便于后续调试 shader/toolchain 问题。
     LogCooperativeSupportSummary(m_device_info.optional_extensions, m_device_info.optional_properties);
+    m_cooperative_extension_info =
+        BuildCooperativeExtensionInfo(m_device_info.optional_extensions, m_device_info.optional_properties);
 }
 
 void VulkanDevice::CreateDevice(uint32 _api_version) {
@@ -838,6 +840,67 @@ bool VulkanDevice::HasDeviceExtension(std::string_view _ext_name) const {
 
 bool VulkanDevice::IsExtensionCooperativeEnabled() const {
     return m_device_info.optional_extensions.IsExtensionCooperativeEnabled();
+}
+
+const CooperativeExtensionInfo& VulkanDevice::GetCooperativeExtensionInfo() const {
+    return m_cooperative_extension_info;
+}
+
+bool VulkanDevice::TryConvertCooperativeVectorMatrix(
+    const CooperativeVectorConversionDesc& _desc,
+    std::span<const byte>                  _src_data,
+    std::span<byte>                        _dst_data
+) const {
+    const auto log_error = [&](std::string_view _message) {
+        LOG_ERROR("VulkanRHI: TryConvertCooperativeVectorMatrix failed: {}", _message);
+    };
+
+    if (!m_device_info.optional_extensions.SupportsCooperativeVector()) {
+        log_error("VK_NV_cooperative_vector is not enabled on the current device.");
+        return false;
+    }
+    if (vkConvertCooperativeVectorMatrixNV == nullptr) {
+        log_error("vkConvertCooperativeVectorMatrixNV is unavailable.");
+        return false;
+    }
+    if (_src_data.empty() || _dst_data.empty()) {
+        log_error("Source and destination buffers must be non-empty.");
+        return false;
+    }
+
+    size_t required_dst_size = _dst_data.size_bytes();
+
+    VkConvertCooperativeVectorMatrixInfoNV info{};
+    info.sType               = VK_STRUCTURE_TYPE_CONVERT_COOPERATIVE_VECTOR_MATRIX_INFO_NV;
+    info.srcSize             = _src_data.size_bytes();
+    info.srcData.hostAddress = _src_data.data();
+    info.pDstSize            = &required_dst_size;
+    info.dstData.hostAddress = _dst_data.data();
+    info.srcComponentType    = static_cast<VkComponentTypeKHR>(_desc.src_component_type);
+    info.dstComponentType    = static_cast<VkComponentTypeKHR>(_desc.dst_component_type);
+    info.numRows             = _desc.num_rows;
+    info.numColumns          = _desc.num_columns;
+    info.srcLayout           = static_cast<VkCooperativeVectorMatrixLayoutNV>(_desc.src_layout);
+    info.srcStride           = _desc.src_stride;
+    info.dstLayout           = static_cast<VkCooperativeVectorMatrixLayoutNV>(_desc.dst_layout);
+    info.dstStride           = _desc.dst_stride;
+
+    const VkResult result = vkConvertCooperativeVectorMatrixNV(m_device, &info);
+    if (result != VK_SUCCESS) {
+        log_error(string_VkResult(result));
+        return false;
+    }
+    if (required_dst_size > _dst_data.size_bytes()) {
+        LOG_ERROR(
+            "VulkanRHI: TryConvertCooperativeVectorMatrix failed: destination buffer is too small "
+            "(required={} bytes, actual={} bytes).",
+            required_dst_size,
+            _dst_data.size_bytes()
+        );
+        return false;
+    }
+
+    return true;
 }
 
 bool VulkanDevice::IsAmdGpu() const {

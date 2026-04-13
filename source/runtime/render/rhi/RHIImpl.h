@@ -1722,6 +1722,19 @@ public:
         return false;
     }
 
+    virtual const CooperativeExtensionInfo& GetCooperativeExtensionInfo() const {
+        static const CooperativeExtensionInfo s_empty_info{};
+        return s_empty_info;
+    }
+
+    virtual bool TryConvertCooperativeVectorMatrix(
+        const CooperativeVectorConversionDesc&,
+        std::span<const byte>,
+        std::span<byte>
+    ) const {
+        return false;
+    }
+
     virtual void WaitIdle() {};
 };
 

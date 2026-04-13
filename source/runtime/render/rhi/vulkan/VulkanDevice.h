@@ -116,7 +116,17 @@ public:
     IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;
 
     void FlushDebugMessages() const override;
-    bool IsExtensionCooperativeEnabled() const override;
+
+    // Cooperative support related
+    bool                            IsExtensionCooperativeEnabled() const override;
+    const CooperativeExtensionInfo& GetCooperativeExtensionInfo() const override;
+    bool                            TryConvertCooperativeVectorMatrix(
+        const CooperativeVectorConversionDesc& _desc,
+        std::span<const byte>                  _src_data,
+        std::span<byte>                        _dst_data
+    ) const override;
+
+    // wait idle
     void WaitIdle() override;
 
     // 判断当前物理设备是否为 AMD（基于 vendorID）
@@ -167,6 +177,7 @@ public:
 private:
     std::mutex                     ext_mutex;
     UnorderedMap<std::string, Ext> exts;
+    CooperativeExtensionInfo       m_cooperative_extension_info{};
 
     void LoadDefaultExtensions();
 

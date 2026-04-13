@@ -131,6 +131,19 @@ bool RenderDevice::IsExtensionCooperativeEnabled() const {
     return impl && impl->IsExtensionCooperativeEnabled();
 }
 
+const CooperativeExtensionInfo& RenderDevice::GetCooperativeExtensionInfo() const {
+    static const CooperativeExtensionInfo s_empty_info{};
+    return impl ? impl->GetCooperativeExtensionInfo() : s_empty_info;
+}
+
+bool RenderDevice::TryConvertCooperativeVectorMatrix(
+    const CooperativeVectorConversionDesc& _desc,
+    std::span<const byte>                  _src_data,
+    std::span<byte>                        _dst_data
+) const {
+    return impl && impl->TryConvertCooperativeVectorMatrix(_desc, _src_data, _dst_data);
+}
+
 void RenderDevice::FlushDebugMessages() const {
     impl->FlushDebugMessages();
 }

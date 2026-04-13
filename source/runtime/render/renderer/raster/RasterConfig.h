@@ -107,6 +107,31 @@ static const Array<std::string> s_ai_trt_visualize_buffer_array = {
     "Engine2 out_final_output",   "Engine2 out_denoised_ao",
 }; // namespace Moer
 
+struct CooperativeOpsStatus {
+    bool extension_enabled                     = false;
+    bool inference_ready                       = false;
+    bool matrix_supported                      = false;
+    bool matrix_robust_buffer_access_supported = false;
+    bool vector_supported                      = false;
+    bool vector_training_supported             = false;
+    bool low_precision_supported               = false;
+    bool storage_supported                     = false;
+    bool vulkan_memory_model_supported         = false;
+
+    uint matrix_mode_count       = 0;
+    uint vector_mode_count       = 0;
+    uint matrix_supported_stages = 0;
+    uint vector_supported_stages = 0;
+    uint max_vector_components   = 0;
+    uint frames_evaluated        = 0;
+
+    std::string overview              = "Waiting for cooperative snapshot...";
+    std::string matrix_summary        = "Waiting for cooperative snapshot...";
+    std::string matrix_runtime_status = "Idle";
+    std::string vector_summary        = "Waiting for cooperative snapshot...";
+    std::string vector_runtime_status = "Idle";
+};
+
 struct RasterConfig {
 
     // MARK: Geometry
@@ -205,6 +230,10 @@ struct RasterConfig {
     float ssr_roughness_threshold        = 0.5;
     float ssr_metallic_threshold         = 0.5;
     float ssr_step_base                  = 0.025;
+
+    // MARK: Cooperative Ops
+    bool                 cooperative_ops_enabled = false;
+    CooperativeOpsStatus cooperative_ops_status{};
 
     // MARK: Denoiser
     EDenoiserMode denoiser_mode                     = EDenoiserMode::NONE;
