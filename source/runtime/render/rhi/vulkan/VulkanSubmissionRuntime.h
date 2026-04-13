@@ -66,6 +66,38 @@ struct SubmissionBatch {
     GraphEventRef                      completion_event{nullptr};
 };
 
+struct QueueRuntimeState {
+    uint64 timeline_handle{0};
+    uint64 next_signal_value{1};
+};
+
+class SubmissionQueueStateSet {
+public:
+    QueueRuntimeState& Get(EQueueType queue);
+    const QueueRuntimeState& Get(EQueueType queue) const;
+
+private:
+    std::array<QueueRuntimeState, static_cast<size_t>(EQueueType::Num)> states{};
+};
+
+struct SubmitRuntimeCache {
+    bool             ready{false};
+    bool             submitted{false};
+    Array<WaitEvent> resolved_waits{};
+};
+
+struct OrderedBatchRuntimeState {
+    Array<SubmitInfo>         submits{};
+    Array<SubmitRuntimeCache> cache{};
+    RootRhiBoundary           root_rhi_boundary{};
+    uint32                    next_submit_index{0};
+};
+
+struct SubmissionSchedulerState {
+    UnorderedMap<SyncPointId, ResolvedSyncPoint> resolved_syncpoints{};
+    SubmissionQueueStateSet                      queue_states{};
+};
+
 class VulkanSubmissionRuntime {
 public:
     explicit VulkanSubmissionRuntime(VulkanInterruptRuntime& interrupt_runtime);
@@ -83,6 +115,26 @@ public:
     void Shutdown();
 
 private:
+    OrderedBatchRuntimeState InitOrderedBatchRuntimeState(SubmissionBatch& batch);
+    void             RunOrderedSubmitBatch(SubmissionBatch& batch);
+    void             ScanBatchReadiness(OrderedBatchRuntimeState& state);
+    uint32           FlushPendingReady(OrderedBatchRuntimeState& state);
+    bool             TryResolveWaitSyncPoints(
+                         std::span<const SyncPointId> wait_syncpoints,
+                         Array<ResolvedSyncPoint>&    out_resolved_waits
+                     ) const;
+    static Array<WaitEvent> CollapseWaitsByTimelineMax(std::span<const ResolvedSyncPoint> resolved_waits);
+    static Array<WaitEvent> CollapseWaitEventsByTimelineMax(std::span<const WaitEvent> wait_events);
+    Array<WaitEvent> BuildResolvedWaits(
+        const OrderedBatchRuntimeState& state,
+        const SubmitInfo&               submit,
+        std::span<const ResolvedSyncPoint> resolved_waits
+    ) const;
+    void             PublishResolvedSyncPoint(
+                         SyncPointId             syncpoint_id,
+                         const ResolvedSyncPoint& resolved_syncpoint
+                     );
+    RootRhiBoundary  BuildBatchTailBoundary(const OrderedBatchRuntimeState& state) const;
     void             JoinSubmissionThread();
     void             RunSubmissionThread();
     SubmissionPresentContext& GetOrCreatePresentContext(EQueueType queue_type);
@@ -104,6 +156,7 @@ private:
     VkCommandQueue&         graphics_queue_owner;
     VkCommandQueue&         compute_queue_owner;
     VkCopyQueue&            copy_queue_owner;
+    SubmissionSchedulerState scheduler_state{};
     std::atomic_bool        b_enable{true};
 
     std::mutex              submission_mutex{};

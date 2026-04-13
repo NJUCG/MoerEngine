@@ -8,6 +8,8 @@
 
 namespace Moer::Render {
 
+using SyncPointId = uint64;
+
 struct SubmissionKey {
     uint64 op_seq{0};
     uint32 submit_idx{0};
@@ -76,21 +78,34 @@ struct RootRhiBoundary {
     Array<WaitEvent> gpu_waits{};
 };
 
+struct ResolvedSyncPoint {
+    EQueueType queue{EQueueType::Ignore};
+    uint64     timeline_handle{0};
+    uint64     value{0};
+};
+
 struct SubmitInfo {
     SubmissionKey                    key{};
-    Array<SubmissionKey>             wait_submission_keys{};
-    RootRhiBoundary                  root_rhi_boundary{};
+    uint64                           submit_seq{0};
+    EQueueType                       queue{EQueueType::Ignore};
+    SyncPointId                      signal_syncpoint{0};
+    Array<SyncPointId>               wait_syncpoints{};
     Array<GraphEventRef>             interrupt_completion_events{};
-    bool                             is_root_submit{false};
     SubmissionHostFence              host_fence{};
     TranslateResult                  translate_result{};
     std::optional<SubmitPresentStage> present_stage{};
 
     SubmitInfo(
-        SubmissionKey  in_key,
+        SubmissionKey   in_key,
+        uint64          in_submit_seq,
+        EQueueType      in_queue,
+        SyncPointId     in_signal_syncpoint,
         TranslateResult&& in_translate_result
     ) :
         key(in_key),
+        submit_seq(in_submit_seq),
+        queue(in_queue),
+        signal_syncpoint(in_signal_syncpoint),
         translate_result(std::move(in_translate_result)) {}
 
     SubmitInfo() = default;

@@ -352,7 +352,7 @@ struct QueueTranslateInfo {
     EQueueType    queue{EQueueType::Ignore};
     CmdSubmit     submit;
     TrackerSeed  initial_seed{};
-    Array<SubmissionKey> logical_wait_submission_keys{};
+    Array<SubmissionKey> logical_wait_keys{};
     bool         valid{true};
     std::string  error{};
 
@@ -2087,6 +2087,7 @@ private:
 static std::mutex g_executor_state_mutex{};
 static std::unique_ptr<VulkanSubmissionExecutorState> g_executor_state{};
 static std::atomic_uint64_t g_executor_op_seq_base{0};
+static std::atomic_uint64_t g_executor_syncpoint_id{1};
 
 static VulkanSubmissionExecutorState& GetExecutorState() {
     std::lock_guard<std::mutex> lock(g_executor_state_mutex);
@@ -2539,7 +2540,7 @@ AssembleTranslatePipelineOps(
                             if (const auto* logical_waits =
                                     preprocess_store.dependency_graph.FindProducers(translate_info->key);
                                 logical_waits != nullptr) {
-                                translate_task.logical_wait_submission_keys = *logical_waits;
+                                translate_task.logical_wait_keys = *logical_waits;
                             }
                             pipeline_batch.translate_ops.emplace_back(std::move(translate_task));
 
@@ -2667,6 +2668,8 @@ static Array<SubmitInfo> AssembleSubmitInfos(TranslatePipelineBatch&& pipeline_b
     submit_infos.reserve(pipeline_batch.translate_ops.size());
     UnorderedMap<SubmissionKey, uint32, SubmissionKeyHash> submit_lookup{};
     submit_lookup.reserve(static_cast<uint32>(pipeline_batch.translate_ops.size()));
+    Array<Array<SubmissionKey>> logical_wait_keys_by_submit{};
+    logical_wait_keys_by_submit.reserve(pipeline_batch.translate_ops.size());
 
     for (auto& translate_info : pipeline_batch.translate_ops) {
         TranslateResult translate_output{};
@@ -2685,17 +2688,49 @@ static Array<SubmitInfo> AssembleSubmitInfos(TranslatePipelineBatch&& pipeline_b
 
         SubmitInfo submit_info{
             translate_info.key,
+            static_cast<uint64>(submit_infos.size()),
+            translate_info.queue,
+            g_executor_syncpoint_id.fetch_add(1, std::memory_order_relaxed),
             std::move(translate_output)
         };
-        submit_info.wait_submission_keys =
-            std::move(translate_info.logical_wait_submission_keys);
-        submit_info.is_root_submit = submit_info.wait_submission_keys.empty();
         submit_info.interrupt_completion_events =
             CollectInterruptCompletionEvents(submit_info.translate_result);
 
         const uint32 submit_index = static_cast<uint32>(submit_infos.size());
         submit_lookup.emplace(submit_info.key, submit_index);
+        logical_wait_keys_by_submit.emplace_back(std::move(translate_info.logical_wait_keys));
         submit_infos.emplace_back(std::move(submit_info));
+    }
+
+    for (uint32 submit_index = 0; submit_index < submit_infos.size(); ++submit_index) {
+        auto& submit_info = submit_infos[submit_index];
+        auto& logical_wait_keys = logical_wait_keys_by_submit[submit_index];
+        submit_info.wait_syncpoints.reserve(logical_wait_keys.size());
+        for (const SubmissionKey& dependency_key : logical_wait_keys) {
+            const auto dependency_it = submit_lookup.find(dependency_key);
+            if (dependency_it == submit_lookup.end()) {
+                LOG_ERROR(
+                    "Submit ({}, {}) missing dependency submit ({}, {}) during syncpoint assembly",
+                    submit_info.key.op_seq,
+                    submit_info.key.submit_idx,
+                    dependency_key.op_seq,
+                    dependency_key.submit_idx
+                );
+                assert(false && "logical wait dependency must resolve to an assembled submit");
+                continue;
+            }
+            submit_info.wait_syncpoints.emplace_back(
+                submit_infos[dependency_it->second].signal_syncpoint
+            );
+        }
+        assert(
+            submit_info.submit_seq == submit_index &&
+            "submit_seq must match final ordered assembly index"
+        );
+        assert(
+            submit_info.signal_syncpoint != 0 &&
+            "every submit must export exactly one signal syncpoint"
+        );
     }
 
     for (auto& pending_present : pipeline_batch.pending_presents) {

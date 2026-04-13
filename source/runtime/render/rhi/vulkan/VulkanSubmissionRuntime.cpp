@@ -115,52 +115,10 @@ ERHISyncDepth ResolveBatchSyncDepth(const SubmissionBatch& batch) {
     return batch.kind == SubmissionBatch::EKind::Flush ? ERHISyncDepth::Present : batch.sync_depth;
 }
 
-void AttachRootBoundary(SubmitInfo& submit_info, const RootRhiBoundary& boundary) {
-    if (!submit_info.is_root_submit) {
-        return;
-    }
-    submit_info.root_rhi_boundary = boundary;
-}
-
-void InjectRootBoundaryGpuWaits(SubmitInfo& submit_info) {
-    if (!RootRhiBoundaryHasGpuWaits(submit_info.root_rhi_boundary)) {
-        return;
-    }
-    if (!submit_info.translate_result.recorded_submit.has_value() ||
-        !submit_info.translate_result.recorded_submit->submit.has_value()) {
-        return;
-    }
-
-    auto& wait_events = submit_info.translate_result.recorded_submit->submit->wait_events;
-    wait_events.insert(
-        wait_events.end(),
-        submit_info.root_rhi_boundary.gpu_waits.begin(),
-        submit_info.root_rhi_boundary.gpu_waits.end()
-    );
-}
-
-template<typename TCompletionMap>
-void AttachLogicalSubmissionDependencies(
-    SubmitInfo&            submit_info,
-    const TCompletionMap&  completion_by_submit
-) {
-    if (!submit_info.translate_result.recorded_submit.has_value() ||
-        !submit_info.translate_result.recorded_submit->submit.has_value()) {
-        return;
-    }
-
-    for (const auto& dependency : submit_info.wait_submission_keys) {
-        const auto completion_it = completion_by_submit.find(dependency);
-        if (completion_it == completion_by_submit.end()) {
-            LOG_ERROR(
-                "Missing dependency completion for submit ({}, {})",
-                dependency.op_seq,
-                dependency.submit_idx
-            );
-            continue;
-        }
-        submit_info.translate_result.recorded_submit->submit->wait_events.emplace_back(completion_it->second);
-    }
+size_t QueueTypeIndex(EQueueType queue) {
+    const size_t index = static_cast<size_t>(queue);
+    assert(index < static_cast<size_t>(EQueueType::Num) && "invalid queue type index");
+    return index;
 }
 
 } // namespace
@@ -429,6 +387,14 @@ const GraphEventRef& SubmissionPresentContext::GetCompletionBoundary() const {
     return impl->completion_boundary;
 }
 
+QueueRuntimeState& SubmissionQueueStateSet::Get(EQueueType queue) {
+    return states[QueueTypeIndex(queue)];
+}
+
+const QueueRuntimeState& SubmissionQueueStateSet::Get(EQueueType queue) const {
+    return states[QueueTypeIndex(queue)];
+}
+
 VulkanSubmissionRuntime::VulkanSubmissionRuntime(VulkanInterruptRuntime& in_interrupt_runtime) :
     interrupt_runtime(in_interrupt_runtime),
     graphics_queue_owner(
@@ -438,7 +404,14 @@ VulkanSubmissionRuntime::VulkanSubmissionRuntime(VulkanInterruptRuntime& in_inte
         static_cast<VkCommandQueue&>(RenderDevice::Get().GetCommandQueue(EQueueType::Compute))
     ),
     copy_queue_owner(static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue())),
-    submission_thread([this]() { RunSubmissionThread(); }) {}
+    submission_thread([this]() { RunSubmissionThread(); }) {
+    scheduler_state.queue_states.Get(EQueueType::Graphics).timeline_handle =
+        graphics_queue_owner.GetTimelineHandle();
+    scheduler_state.queue_states.Get(EQueueType::Compute).timeline_handle =
+        compute_queue_owner.GetTimelineHandle();
+    scheduler_state.queue_states.Get(EQueueType::Copy).timeline_handle =
+        copy_queue_owner.GetTimelineHandle();
+}
 
 VulkanSubmissionRuntime::~VulkanSubmissionRuntime() {
     Shutdown();
@@ -563,6 +536,341 @@ void VulkanSubmissionRuntime::JoinSubmissionThread() {
     }
 }
 
+OrderedBatchRuntimeState VulkanSubmissionRuntime::InitOrderedBatchRuntimeState(SubmissionBatch& batch) {
+    OrderedBatchRuntimeState state{};
+    state.submits            = std::move(batch.submits);
+    state.root_rhi_boundary  = std::move(batch.root_rhi_boundary);
+    state.cache.resize(state.submits.size());
+    return state;
+}
+
+void VulkanSubmissionRuntime::RunOrderedSubmitBatch(SubmissionBatch& batch) {
+    OrderedBatchRuntimeState state = InitOrderedBatchRuntimeState(batch);
+    while (state.next_submit_index < state.submits.size()) {
+        ScanBatchReadiness(state);
+        const uint32 old_submit_index = state.next_submit_index;
+        const uint32 flushed_count    = FlushPendingReady(state);
+        if (state.next_submit_index == old_submit_index && flushed_count == 0) {
+            LOG_ERROR(
+                "Submission runtime made no ordered progress at submit index {} of {}",
+                state.next_submit_index,
+                state.submits.size()
+            );
+            assert(false && "ordered submission batch must make forward progress");
+            return;
+        }
+    }
+
+    if (!state.submits.empty()) {
+        StorePendingRhiBoundary(BuildBatchTailBoundary(state));
+    }
+}
+
+void VulkanSubmissionRuntime::ScanBatchReadiness(OrderedBatchRuntimeState& state) {
+    for (uint32 submit_index = state.next_submit_index; submit_index < state.submits.size(); ++submit_index) {
+        auto& cache = state.cache[submit_index];
+        if (cache.submitted || cache.ready) {
+            continue;
+        }
+
+        auto& submit = state.submits[submit_index];
+        if (!submit.translate_result.valid) {
+            LOG_ERROR(
+                "Translate failed for ordered submit seq={} ({}, {}): {}",
+                submit.submit_seq,
+                submit.key.op_seq,
+                submit.key.submit_idx,
+                submit.translate_result.error
+            );
+            assert(false && "ordered submit must have a valid translate result");
+            return;
+        }
+        if (submit.translate_result.translate_complete &&
+            !submit.translate_result.translate_complete->IsComplete()) {
+            LOG_ERROR(
+                "Translate completion is not resolved before ordered submit seq={} ({}, {})",
+                submit.submit_seq,
+                submit.key.op_seq,
+                submit.key.submit_idx
+            );
+            assert(false && "translate work must complete before submission runtime");
+            return;
+        }
+        if (!submit.translate_result.recorded_submit.has_value()) {
+            LOG_ERROR(
+                "Missing recorded submit packet for ordered submit seq={} ({}, {})",
+                submit.submit_seq,
+                submit.key.op_seq,
+                submit.key.submit_idx
+            );
+            assert(false && "ordered submit must carry recorded submit payload");
+            return;
+        }
+
+        if (submit.wait_syncpoints.empty() &&
+            state.root_rhi_boundary.host_event != nullptr &&
+            !state.root_rhi_boundary.host_event->IsComplete()) {
+            continue;
+        }
+
+        Array<ResolvedSyncPoint> resolved_syncpoints{};
+        if (!TryResolveWaitSyncPoints(submit.wait_syncpoints, resolved_syncpoints)) {
+            continue;
+        }
+
+        cache.resolved_waits = BuildResolvedWaits(state, submit, resolved_syncpoints);
+        cache.ready          = true;
+    }
+}
+
+uint32 VulkanSubmissionRuntime::FlushPendingReady(OrderedBatchRuntimeState& state) {
+    uint32 flushed_count = 0;
+    while (state.next_submit_index < state.submits.size()) {
+        const uint32 submit_index = state.next_submit_index;
+        auto&        cache        = state.cache[submit_index];
+        if (!cache.ready) {
+            break;
+        }
+
+        auto& submit = state.submits[submit_index];
+        auto& queue_state = scheduler_state.queue_states.Get(submit.queue);
+        if (queue_state.timeline_handle == 0) {
+            LOG_ERROR(
+                "Queue runtime state is missing timeline handle for queue {}",
+                QueueTypeName(submit.queue)
+            );
+            assert(false && "queue runtime state must be initialized before submit");
+            return flushed_count;
+        }
+
+        const uint64 signal_value = queue_state.next_signal_value;
+        GraphEventRef task_completion_event = GraphEvent::CreateGraphEvent();
+        for (const auto& event : submit.interrupt_completion_events) {
+            if (event) {
+                event->WaitUntil(task_completion_event);
+            }
+        }
+
+        bool submitted = false;
+        switch (submit.queue) {
+            case EQueueType::Graphics:
+            case EQueueType::Compute: {
+                auto& queue = static_cast<VkCommandQueue&>(
+                    RenderDevice::Get().GetCommandQueue(submit.queue)
+                );
+                auto result = queue.SubmitRecordedForRuntime(
+                    std::move(submit.translate_result.recorded_submit.value()),
+                    cache.resolved_waits,
+                    signal_value
+                );
+                if (result.scheduled_completion) {
+                    interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
+                        submit.key.op_seq,
+                        task_completion_event,
+                        SubmissionQueueCompletionPayload(queue, std::move(result))
+                    ));
+                    queue.AppendCompletionBoundary(task_completion_event);
+                } else if (task_completion_event) {
+                    task_completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+                }
+                submitted = true;
+                break;
+            }
+            case EQueueType::Copy: {
+                auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
+                auto result = copy_queue.SubmitRecordedForRuntime(
+                    std::move(submit.translate_result.recorded_submit.value()),
+                    cache.resolved_waits,
+                    signal_value
+                );
+                if (result.scheduled_completion) {
+                    interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
+                        submit.key.op_seq,
+                        task_completion_event,
+                        SubmissionCopyQueueCompletionPayload(copy_queue, std::move(result))
+                    ));
+                    copy_queue.AppendCompletionBoundary(task_completion_event);
+                } else if (task_completion_event) {
+                    task_completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+                }
+                submitted = true;
+                break;
+            }
+            case EQueueType::Ignore:
+            case EQueueType::Num:
+            default:
+                LOG_ERROR(
+                    "Invalid queue type in ordered submit runtime: {}",
+                    QueueTypeName(submit.queue)
+                );
+                assert(false && "ordered submit must target a concrete queue");
+                return flushed_count;
+        }
+
+        if (!submitted) {
+            break;
+        }
+
+        queue_state.next_signal_value += 1;
+        PublishResolvedSyncPoint(
+            submit.signal_syncpoint,
+            ResolvedSyncPoint{
+                .queue = submit.queue,
+                .timeline_handle = queue_state.timeline_handle,
+                .value = signal_value,
+            }
+        );
+
+        if (submit.present_stage.has_value()) {
+            const SubmitPresentStage& present_stage = submit.present_stage.value();
+            if (present_stage.valid && present_stage.present.swapchain && present_stage.present.target.texture) {
+                if (present_stage.present.queue == EQueueType::Copy ||
+                    present_stage.present.queue == EQueueType::Ignore) {
+                    LOG_ERROR("Invalid present queue type: {}", QueueTypeName(present_stage.present.queue));
+                    assert(false && "present must execute on a graphics-capable queue");
+                    return flushed_count;
+                }
+
+                Array<WaitEvent> wait_events{};
+                wait_events.emplace_back(WaitEvent{queue_state.timeline_handle, signal_value});
+                submit.host_fence.Reset();
+                SubmissionPresentContext& context = GetOrCreatePresentContext(present_stage.present.queue);
+                SubmissionPresentResult present_result = context.Present(
+                    present_stage.present,
+                    wait_events,
+                    present_stage.has_source_texture_state ? &present_stage.source_texture_state : nullptr,
+                    submit.host_fence
+                );
+                if (present_result.submitted) {
+                    GraphEventRef present_completion_event = GraphEvent::CreateGraphEvent();
+                    interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
+                        present_stage.op_seq,
+                        present_completion_event,
+                        SubmissionPresentCompletionPayload(
+                            context,
+                            submit.host_fence,
+                            std::move(present_result)
+                        )
+                    ));
+                    context.AppendCompletionBoundary(present_completion_event);
+                }
+            }
+        }
+
+        cache.submitted = true;
+        state.next_submit_index += 1;
+        ++flushed_count;
+    }
+    return flushed_count;
+}
+
+bool VulkanSubmissionRuntime::TryResolveWaitSyncPoints(
+    std::span<const SyncPointId> wait_syncpoints,
+    Array<ResolvedSyncPoint>&    out_resolved_waits
+) const {
+    out_resolved_waits.clear();
+    out_resolved_waits.reserve(wait_syncpoints.size());
+    for (const SyncPointId syncpoint_id : wait_syncpoints) {
+        const auto iter = scheduler_state.resolved_syncpoints.find(syncpoint_id);
+        if (iter == scheduler_state.resolved_syncpoints.end()) {
+            return false;
+        }
+        out_resolved_waits.emplace_back(iter->second);
+    }
+    return true;
+}
+
+Array<WaitEvent> VulkanSubmissionRuntime::CollapseWaitsByTimelineMax(
+    std::span<const ResolvedSyncPoint> resolved_waits
+) {
+    UnorderedMap<uint64, uint64> max_value_by_handle{};
+    max_value_by_handle.reserve(resolved_waits.size());
+    for (const ResolvedSyncPoint& wait : resolved_waits) {
+        auto& max_value = max_value_by_handle[wait.timeline_handle];
+        max_value       = std::max(max_value, wait.value);
+    }
+
+    Array<WaitEvent> final_waits{};
+    final_waits.reserve(max_value_by_handle.size());
+    for (const auto& [timeline_handle, value] : max_value_by_handle) {
+        final_waits.emplace_back(WaitEvent{timeline_handle, value});
+    }
+    return final_waits;
+}
+
+Array<WaitEvent> VulkanSubmissionRuntime::CollapseWaitEventsByTimelineMax(
+    std::span<const WaitEvent> wait_events
+) {
+    UnorderedMap<uint64, uint64> max_value_by_handle{};
+    max_value_by_handle.reserve(wait_events.size());
+    for (const WaitEvent& wait : wait_events) {
+        auto& max_value = max_value_by_handle[wait.timeline_handle];
+        max_value       = std::max(max_value, wait.value);
+    }
+
+    Array<WaitEvent> final_waits{};
+    final_waits.reserve(max_value_by_handle.size());
+    for (const auto& [timeline_handle, value] : max_value_by_handle) {
+        final_waits.emplace_back(WaitEvent{timeline_handle, value});
+    }
+    return final_waits;
+}
+
+Array<WaitEvent> VulkanSubmissionRuntime::BuildResolvedWaits(
+    const OrderedBatchRuntimeState&  state,
+    const SubmitInfo&                submit,
+    std::span<const ResolvedSyncPoint> resolved_waits
+) const {
+    Array<WaitEvent> wait_events = CollapseWaitsByTimelineMax(resolved_waits);
+    if (submit.wait_syncpoints.empty() && RootRhiBoundaryHasGpuWaits(state.root_rhi_boundary)) {
+        wait_events.insert(
+            wait_events.end(),
+            state.root_rhi_boundary.gpu_waits.begin(),
+            state.root_rhi_boundary.gpu_waits.end()
+        );
+        wait_events = CollapseWaitEventsByTimelineMax(wait_events);
+    }
+    return wait_events;
+}
+
+void VulkanSubmissionRuntime::PublishResolvedSyncPoint(
+    SyncPointId              syncpoint_id,
+    const ResolvedSyncPoint& resolved_syncpoint
+) {
+    const auto [_, inserted] =
+        scheduler_state.resolved_syncpoints.emplace(syncpoint_id, resolved_syncpoint);
+    if (!inserted) {
+        LOG_ERROR("SyncPoint {} was published more than once", syncpoint_id);
+        assert(false && "syncpoint must only be published once");
+    }
+}
+
+RootRhiBoundary VulkanSubmissionRuntime::BuildBatchTailBoundary(
+    const OrderedBatchRuntimeState& state
+) const {
+    Array<WaitEvent> batch_tail_waits{};
+    batch_tail_waits.reserve(state.submits.size());
+    for (const SubmitInfo& submit : state.submits) {
+        const auto syncpoint_iter = scheduler_state.resolved_syncpoints.find(submit.signal_syncpoint);
+        if (syncpoint_iter == scheduler_state.resolved_syncpoints.end()) {
+            LOG_ERROR(
+                "Batch tail is missing published syncpoint for ordered submit seq={} ({}, {})",
+                submit.submit_seq,
+                submit.key.op_seq,
+                submit.key.submit_idx
+            );
+            assert(false && "submitted work must publish its exported syncpoint");
+            continue;
+        }
+        const ResolvedSyncPoint& resolved = syncpoint_iter->second;
+        batch_tail_waits.emplace_back(WaitEvent{resolved.timeline_handle, resolved.value});
+    }
+
+    RootRhiBoundary boundary{};
+    boundary.gpu_waits = CollapseWaitEventsByTimelineMax(batch_tail_waits);
+    return boundary;
+}
+
 void VulkanSubmissionRuntime::RunSubmissionThread() {
     Platform::SetCurrentThreadName("SubmissionThread");
     while (true) {
@@ -578,172 +886,9 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
             batch = std::move(submission_queue.front());
             submission_queue.pop_front();
         }
-        UnorderedMap<SubmissionKey, WaitEvent, SubmissionKeyHash> completion_by_submit{};
-        completion_by_submit.reserve(static_cast<uint32>(batch.submits.size()));
         assert(!BatchKindRequiresCompletionEvent(batch.kind) || batch.completion_event != nullptr);
-        for (auto& submit_info : batch.submits) {
-            if (submit_info.is_root_submit &&
-                (RootRhiBoundaryHasGpuWaits(batch.root_rhi_boundary) ||
-                 RootRhiBoundaryHasHostEvent(batch.root_rhi_boundary))) {
-                AttachRootBoundary(submit_info, batch.root_rhi_boundary);
-            }
-
-            bool submitted = false;
-            if (!submit_info.translate_result.valid) {
-                if (!submit_info.translate_result.error.empty()) {
-                    LOG_ERROR(
-                        "Translate failed for submit ({}, {}): {}",
-                        submit_info.key.op_seq,
-                        submit_info.key.submit_idx,
-                        submit_info.translate_result.error
-                    );
-                }
-            } else if (submit_info.translate_result.translate_complete &&
-                       !submit_info.translate_result.translate_complete->IsComplete()) {
-                LOG_ERROR(
-                    "Translate completion is not resolved before submit ({}, {})",
-                    submit_info.key.op_seq,
-                    submit_info.key.submit_idx
-                );
-                submit_info.translate_result.valid = false;
-            } else {
-                if (!submit_info.translate_result.recorded_submit.has_value()) {
-                    LOG_ERROR(
-                        "Missing recorded submit packet for ({}, {})",
-                        submit_info.key.op_seq,
-                        submit_info.key.submit_idx
-                    );
-                } else {
-                    InjectRootBoundaryGpuWaits(submit_info);
-                    AttachLogicalSubmissionDependencies(submit_info, completion_by_submit);
-
-                    WaitEvent completion_event{};
-                    switch (submit_info.translate_result.queue) {
-                        case EQueueType::Graphics:
-                        case EQueueType::Compute: {
-                            auto& queue = static_cast<VkCommandQueue&>(
-                                RenderDevice::Get().GetCommandQueue(submit_info.translate_result.queue)
-                            );
-                            GraphEventRef task_completion_event = GraphEvent::CreateGraphEvent();
-                            for (const auto& event : submit_info.interrupt_completion_events) {
-                                if (event) {
-                                    event->WaitUntil(task_completion_event);
-                                }
-                            }
-                            auto result = queue.SubmitRecordedForRuntime(
-                                std::move(submit_info.translate_result.recorded_submit.value())
-                            );
-                            completion_event = result.completion;
-                            if (result.scheduled_completion) {
-                                interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
-                                    submit_info.key.op_seq,
-                                    task_completion_event,
-                                    SubmissionQueueCompletionPayload(queue, std::move(result))
-                                ));
-                                queue.AppendCompletionBoundary(task_completion_event);
-                            } else if (task_completion_event) {
-                                task_completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-                            }
-                            submitted = true;
-                            break;
-                        }
-                        case EQueueType::Copy: {
-                            auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-                            GraphEventRef task_completion_event = GraphEvent::CreateGraphEvent();
-                            for (const auto& event : submit_info.interrupt_completion_events) {
-                                if (event) {
-                                    event->WaitUntil(task_completion_event);
-                                }
-                            }
-                            auto result = copy_queue.SubmitRecordedForRuntime(
-                                std::move(submit_info.translate_result.recorded_submit.value())
-                            );
-                            completion_event = WaitEvent{result.completion.handle, result.completion.timeline};
-                            if (result.scheduled_completion) {
-                                interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
-                                    submit_info.key.op_seq,
-                                    task_completion_event,
-                                    SubmissionCopyQueueCompletionPayload(copy_queue, std::move(result))
-                                ));
-                                copy_queue.AppendCompletionBoundary(task_completion_event);
-                            } else if (task_completion_event) {
-                                task_completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-                            }
-                            submitted = true;
-                            break;
-                        }
-                        default:
-                            LOG_ERROR(
-                                "Invalid queue type in submission plan: {}",
-                                QueueTypeName(submit_info.translate_result.queue)
-                            );
-                            break;
-                    }
-
-                    if (submitted) {
-                        completion_by_submit.emplace(submit_info.key, completion_event);
-                    }
-                }
-            }
-
-            if (!submitted || !submit_info.present_stage.has_value()) {
-                continue;
-            }
-
-            const SubmitPresentStage& present_stage = submit_info.present_stage.value();
-            if (!present_stage.valid || !present_stage.present.swapchain || !present_stage.present.target.texture) {
-                continue;
-            }
-            const auto submit_completion_it = completion_by_submit.find(submit_info.key);
-            if (submit_completion_it == completion_by_submit.end()) {
-                LOG_ERROR(
-                    "Missing completion for present-attached submit ({}, {})",
-                    submit_info.key.op_seq,
-                    submit_info.key.submit_idx
-                );
-                continue;
-            }
-            if (present_stage.present.queue == EQueueType::Copy ||
-                present_stage.present.queue == EQueueType::Ignore) {
-                LOG_ERROR("Invalid present queue type: {}", QueueTypeName(present_stage.present.queue));
-                continue;
-            }
-
-            Array<WaitEvent> wait_events{};
-            wait_events.emplace_back(submit_completion_it->second);
-            submit_info.host_fence.Reset();
-            SubmissionPresentContext& context = GetOrCreatePresentContext(present_stage.present.queue);
-            SubmissionPresentResult present_result = context.Present(
-                present_stage.present,
-                wait_events,
-                present_stage.has_source_texture_state ? &present_stage.source_texture_state : nullptr,
-                submit_info.host_fence
-            );
-            if (present_result.submitted) {
-                GraphEventRef task_completion_event = GraphEvent::CreateGraphEvent();
-                interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
-                    present_stage.op_seq,
-                    task_completion_event,
-                    SubmissionPresentCompletionPayload(
-                        context,
-                        submit_info.host_fence,
-                        std::move(present_result)
-                    )
-                ));
-                context.AppendCompletionBoundary(task_completion_event);
-            }
-        }
-
-        if (!completion_by_submit.empty()) {
-            Array<WaitEvent> batch_rhi_tails{};
-            batch_rhi_tails.reserve(completion_by_submit.size());
-            for (const auto& [_, completion] : completion_by_submit) {
-                batch_rhi_tails.emplace_back(completion);
-            }
-            StorePendingRhiBoundary(RootRhiBoundary{
-                .host_event = nullptr,
-                .gpu_waits  = std::move(batch_rhi_tails),
-            });
+        if (batch.kind == SubmissionBatch::EKind::Submit) {
+            RunOrderedSubmitBatch(batch);
         }
 
         AttachSyncDependencies(batch);

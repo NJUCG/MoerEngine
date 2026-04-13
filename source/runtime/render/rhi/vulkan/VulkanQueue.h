@@ -202,6 +202,8 @@ public:
     VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr, TrackerSeed seed = {});
     VulkanQueueRuntimeSubmitResult SubmitRecordedForRuntime(
         VulkanRecordedSubmit&& _recorded,
+        std::span<const WaitEvent> runtime_waits,
+        uint64                 signal_value,
         VkFence                _submit_fence = VK_NULL_HANDLE
     );
 
@@ -213,6 +215,7 @@ public:
     std::mutex& GetSubmitMutex() {
         return exec_mtx;
     }
+    uint64 GetTimelineHandle() const { return uint64(timeline); }
     void MarkExecutionComplete(uint64 _timeline);
     void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
@@ -273,10 +276,13 @@ public:
     VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr);
     VulkanCopyQueueRuntimeSubmitResult SubmitRecordedForRuntime(
         VulkanRecordedSubmit&& _recorded,
+        std::span<const WaitEvent> runtime_waits,
+        uint64                 signal_value,
         VkFence                _submit_fence = VK_NULL_HANDLE
     );
     IOWaitEvt Execute(CmdSubmit&& _submit) override;
     FenceRef  GetFenceHandle() override;
+    uint64    GetTimelineHandle() const { return uint64(timeline.Get()); }
     void      Sync(uint64 _timeline) override;
     void      MarkExecutionComplete(uint64 _timeline);
     void      ResolveAllocatorCompletion(

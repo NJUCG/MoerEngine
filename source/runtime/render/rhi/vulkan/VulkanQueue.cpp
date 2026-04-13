@@ -3149,10 +3149,20 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
 }
 
 VulkanQueueRuntimeSubmitResult
-VkCommandQueue::SubmitRecordedForRuntime(VulkanRecordedSubmit&& _recorded, VkFence _submit_fence) {
+VkCommandQueue::SubmitRecordedForRuntime(
+    VulkanRecordedSubmit&&    _recorded,
+    std::span<const WaitEvent> runtime_waits,
+    uint64                    signal_value,
+    VkFence                   _submit_fence
+) {
     TRACE_SCOPE_CAT("VkCommandQueue.SubmitRecorded", "Queue");
     VulkanQueueRuntimeSubmitResult result{};
     std::unique_lock<std::mutex> lock(exec_mtx);
+    assert(signal_value > 0 && "runtime signal value must be positive");
+    assert(signal_value > last_frame && "runtime signal value must be monotonic per queue");
+
+    auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT :
+                                                             VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
     if (!_recorded.has_cmd || !_recorded.submit.has_value() || _recorded.submit->cmds.empty()) {
         if (_recorded.submit.has_value() && !_recorded.submit->query_tokens.empty()) {
@@ -3162,19 +3172,40 @@ VkCommandQueue::SubmitRecordedForRuntime(VulkanRecordedSubmit&& _recorded, VkFen
             allocators.Push(_recorded.allocator.release());
         }
 
-        const bool has_submit = _recorded.submit.has_value();
-        if (has_submit && (!_recorded.submit->callbacks.empty() || !_recorded.submit->signal_events.empty())) {
-            const uint64 current_timeline = ++last_frame;
-            queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-            if (current_timeline > 1) {
-                queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        if (signal_value > 1) {
+            queue.Wait(timeline, signal_value - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        }
+        for (const WaitEvent& evt : runtime_waits) {
+            queue.Wait(
+                reinterpret_cast<VulkanFence*>(evt.timeline_handle),
+                evt.value,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+            );
+        }
+        if (_recorded.submit.has_value()) {
+            for (auto& evt : _recorded.submit->wait_events) {
+                queue.Wait(
+                    reinterpret_cast<VulkanFence*>(evt.timeline_handle),
+                    evt.value,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+                );
             }
-            queue.SubmitEmpty(_submit_fence);
-            result.completion           = WaitEvent{uint64(timeline), current_timeline};
-            result.timeline_value       = current_timeline;
+            for (auto& evt : _recorded.submit->signal_events) {
+                queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
+            }
+        }
+        queue.Signal(timeline, signal_value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        queue.SubmitEmpty(_submit_fence);
+        last_frame = signal_value;
+        result.completion     = WaitEvent{uint64(timeline), signal_value};
+        result.timeline_value = signal_value;
+
+        const bool has_submit = _recorded.submit.has_value();
+        if (has_submit) {
             result.callbacks            = std::move(_recorded.submit->callbacks);
             result.signal_events        = std::move(_recorded.submit->signal_events);
-            result.scheduled_completion = true;
+            result.scheduled_completion =
+                !result.callbacks.empty() || !result.signal_events.empty();
             if (!_recorded.submit->gpu_events.empty()) {
                 GPUEventStream::Get().RegisterSubmit(
                     std::move(_recorded.submit->gpu_events),
@@ -3182,20 +3213,20 @@ VkCommandQueue::SubmitRecordedForRuntime(VulkanRecordedSubmit&& _recorded, VkFen
                     result.completion
                 );
             }
-            return result;
         }
-        result.completion = WaitEvent{uint64(timeline), last_frame};
         return result;
     }
 
     auto& vk_allocator = *_recorded.allocator;
-
-    auto current_timeline = ++last_frame;
-    auto end_tag          = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT :
-                                                                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    queue.Signal(timeline, current_timeline, end_tag);
-    if (current_timeline > 1) {
-        queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    if (signal_value > 1) {
+        queue.Wait(timeline, signal_value - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    }
+    for (const WaitEvent& evt : runtime_waits) {
+        queue.Wait(
+            reinterpret_cast<VulkanFence*>(evt.timeline_handle),
+            evt.value,
+            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+        );
     }
     for (auto& evt : _recorded.submit->wait_events) {
         queue.Wait(
@@ -3204,14 +3235,16 @@ VkCommandQueue::SubmitRecordedForRuntime(VulkanRecordedSubmit&& _recorded, VkFen
             VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
         );
     }
+    queue.Signal(timeline, signal_value, end_tag);
     for (auto& evt : _recorded.submit->signal_events) {
         queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
     }
     queue.Submit(vk_allocator.GetCmdList(), _submit_fence);
-    query_runtime.FinalizeSubmit(current_timeline, vk_allocator.GetCmdList().GetHandle());
-    executed_queue.Enqueue(current_timeline);
-    result.completion           = WaitEvent{uint64(timeline), current_timeline};
-    result.timeline_value       = current_timeline;
+    query_runtime.FinalizeSubmit(signal_value, vk_allocator.GetCmdList().GetHandle());
+    executed_queue.Enqueue(signal_value);
+    last_frame                  = signal_value;
+    result.completion           = WaitEvent{uint64(timeline), signal_value};
+    result.timeline_value       = signal_value;
     result.allocator            = std::move(_recorded.allocator);
     result.callbacks            = std::move(_recorded.submit->callbacks);
     result.signal_events        = std::move(_recorded.submit->signal_events);
@@ -3541,38 +3574,63 @@ VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer
 }
 
 VulkanCopyQueueRuntimeSubmitResult
-VkCopyQueue::SubmitRecordedForRuntime(VulkanRecordedSubmit&& _recorded, VkFence _submit_fence) {
+VkCopyQueue::SubmitRecordedForRuntime(
+    VulkanRecordedSubmit&&    _recorded,
+    std::span<const WaitEvent> runtime_waits,
+    uint64                    signal_value,
+    VkFence                   _submit_fence
+) {
     VulkanCopyQueueRuntimeSubmitResult result{};
     std::unique_lock<std::mutex> lk(exec_mutex);
-    auto current_timeline = last_frame;
+    assert(signal_value > 0 && "runtime signal value must be positive");
+    assert(signal_value > last_frame && "runtime signal value must be monotonic per queue");
     if (!_recorded.has_cmd || !_recorded.allocator) {
-        if (_recorded.submit.has_value() &&
-            (!_recorded.submit->callbacks.empty() || !_recorded.submit->signal_events.empty())) {
-            current_timeline = ++last_frame;
-            queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-            queue.SubmitEmpty(_submit_fence);
-            result.completion           = IOWaitEvt{uint64(timeline.Get()), current_timeline};
-            result.timeline_value       = current_timeline;
-            result.scheduled_completion = true;
+        if (signal_value > 1) {
+            queue.Wait(timeline, signal_value - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        }
+        for (const WaitEvent& evt : runtime_waits) {
+            queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
+        }
+        if (_recorded.submit.has_value()) {
+            for (auto& evt : _recorded.submit->wait_events) {
+                queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
+            }
+            for (auto& evt : _recorded.submit->signal_events) {
+                queue.Signal(
+                    reinterpret_cast<VulkanFence*>(evt.timeline_handle),
+                    evt.value,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+                );
+            }
+        }
+        queue.Signal(timeline, signal_value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        queue.SubmitEmpty(_submit_fence);
+        last_frame                  = signal_value;
+        result.completion           = IOWaitEvt{uint64(timeline.Get()), signal_value};
+        result.timeline_value       = signal_value;
+        if (_recorded.submit.has_value()) {
             result.signal_events.reserve(_recorded.submit->signal_events.size());
             for (const auto& evt : _recorded.submit->signal_events) {
                 result.signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
             }
             result.callbacks = std::move(_recorded.submit->callbacks);
+            result.scheduled_completion =
+                !result.callbacks.empty() || !result.signal_events.empty();
         }
-        result.completion = IOWaitEvt{uint64(timeline.Get()), current_timeline};
         return result;
     }
 
     auto& vk_allocator = *_recorded.allocator;
-    current_timeline   = ++last_frame;
-    queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-    if (current_timeline > 1) {
-        queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    if (signal_value > 1) {
+        queue.Wait(timeline, signal_value - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    }
+    for (const WaitEvent& evt : runtime_waits) {
+        queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
     }
     for (auto& evt : _recorded.submit->wait_events) {
         queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
     }
+    queue.Signal(timeline, signal_value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     for (auto& evt : _recorded.submit->signal_events) {
         queue.Signal(
             reinterpret_cast<VulkanFence*>(evt.timeline_handle),
@@ -3581,8 +3639,9 @@ VkCopyQueue::SubmitRecordedForRuntime(VulkanRecordedSubmit&& _recorded, VkFence 
         );
     }
     queue.Submit(vk_allocator.GetCmdList(), _submit_fence);
-    result.completion           = IOWaitEvt{uint64(timeline.Get()), current_timeline};
-    result.timeline_value       = current_timeline;
+    last_frame                  = signal_value;
+    result.completion           = IOWaitEvt{uint64(timeline.Get()), signal_value};
+    result.timeline_value       = signal_value;
     result.allocator            = std::move(_recorded.allocator);
     result.callbacks            = std::move(_recorded.submit->callbacks);
     result.scheduled_completion = true;
