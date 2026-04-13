@@ -25,6 +25,7 @@ static std::mutex                                s_debugbuf_mutex;
 static std::unordered_map<std::string, BufEntry> s_debugbuf;
 static std::atomic_bool                          s_logged_unknown_coop_matrix_layer{false};
 static std::atomic_bool                          s_logged_unknown_coop_vector_layer{false};
+static std::atomic_bool                          s_suppress_device_loader_callstack{false};
 
 void LogUnknownCooperativeLayerInfo(std::atomic_bool& _once_flag, const char* _extension_name) {
     bool expected = false;
@@ -87,6 +88,41 @@ bool TryHandleKnownCooperativeLayerWarning(const VkDebugUtilsMessengerCallbackDa
     return false;
 }
 
+bool TryHandleRedundantLoaderMessage(const VkDebugUtilsMessengerCallbackDataEXT* _callback_data) {
+    if (_callback_data == nullptr || _callback_data->pMessage == nullptr) {
+        return false;
+    }
+
+    const std::string_view message(_callback_data->pMessage);
+    const std::string_view message_id_name(
+        _callback_data->pMessageIdName != nullptr ? _callback_data->pMessageIdName : ""
+    );
+    if (message_id_name != "Loader Message") {
+        return false;
+    }
+
+    if (message.find("Inserted device layer \"") != std::string_view::npos) {
+        return true;
+    }
+
+    if (message.find("vkCreateDevice layer callstack setup to:") != std::string_view::npos) {
+        s_suppress_device_loader_callstack.store(true);
+        return true;
+    }
+
+    if (!s_suppress_device_loader_callstack.load()) {
+        return false;
+    }
+
+    if (message.find("Using \"") != std::string_view::npos &&
+        message.find("\" with driver: \"") != std::string_view::npos) {
+        s_suppress_device_loader_callstack.store(false);
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace
 
 static void OutputMessage(int sev, const std::string& msg) {
@@ -124,6 +160,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
         return VK_FALSE;
 
     if (TryHandleKnownCooperativeLayerWarning(p_callback_data)) {
+        return VK_FALSE;
+    }
+
+    if (TryHandleRedundantLoaderMessage(p_callback_data)) {
         return VK_FALSE;
     }
 
