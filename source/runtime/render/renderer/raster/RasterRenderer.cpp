@@ -9,6 +9,7 @@
 #include "LightingPass.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
+#include "RasterTool.h"
 #include "RtaoDenoiserPass.h"
 #include "ShadowDepthPass.h"
 #include "SkyboxPass.h"
@@ -275,13 +276,17 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }
 
         // Shadow Depth Pass
+        cmd_list.PushScopeWithTimeScope(RasterTool::GetShadowDepthPassProfileScopeName());
         shadow_depth_pass->Process(raster_context, raster_config, camera);
+        cmd_list.PopScopeWithTimeScope();
 
         // Update Global Lighting Data
         UpdateGlobalLightingData(raster_context, raster_config, camera);
 
         // Geometry Pass
+        cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryPassProfileScopeName());
         geometry_pass->Process(raster_context, raster_config, camera);
+        cmd_list.PopScopeWithTimeScope();
 
         // Directional Shadow Mask Pass
         directional_shadow_mask_pass->Process(raster_context, raster_config, camera);
@@ -355,7 +360,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
     time++;
     RHIPresentRequest present_request{swapchain, default_output_texture};
-    cmd_list.Signal(timeline, time).DeleteResources();
+    cmd_list.Signal(timeline, time).DeleteResources().TickProfiling();
     Array<CommandList> frame_cmd_lists{};
     frame_cmd_lists.emplace_back(std::move(cmd_list));
     RHIExecutor::Get().Submit(

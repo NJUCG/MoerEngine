@@ -15,6 +15,11 @@ just clean          # Remove build/ and target/
 - Shader compiler: **DXC** with `-O3 -spirv -fspv-target-env=vulkan1.3 -fvk-use-dx-layout -all-resources-bound`, target `ps_6_0` / `cs_6_0`
 - Shaders are compiled at runtime, cached in `asset/shader_cache/{platform}.sdc`
 - Output: `target/bin/{Config}/MoerEditor.exe`
+- When an agent is debugging, it should validate the result immediately after making the change. Run `just b` first; if `just` is unavailable, use the equivalent build command such as `cmake --build build`.
+- If the build succeeds and the change affects runtime behavior, run `just r` next; if `just` is unavailable, launch `target/bin/{Config}/MoerEditor.exe` directly.
+- Before building or running, check the root `MoerEngine.toml`. This file is copied to the executable directory on every build and controls the default scene path and the default renderer.
+- Set `default_render_method = "Raster"` when working on the raster pipeline, and set `default_render_method = "Raytracing"` when working on the ray tracing pipeline.
+- After starting the editor with `just r`, allow up to one minute for the engine to finish loading so startup errors, validation errors, and obvious runtime regressions have time to surface.
 
 ## Architecture Overview
 

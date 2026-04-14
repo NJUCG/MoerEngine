@@ -103,13 +103,16 @@ public:
         param.motion_vector_tex = camera_mv_target.hdl;
         param.depth_tex         = context.textures.depth_nearest_sampler.hdl;
         param.normal_tex        = context.textures.normal.hdl;
+        param.inv_resolution    = float2(1.0f) / float2(img_ao_only.GetSize());
 
         param.history_ratio          = ui_config.rtao_denoiser_history_ratio;
         param.valid_depth_threshold  = ui_config.rtao_denoiser_valid_depth_threshold;
         param.valid_normal_threshold = ui_config.rtao_denoiser_valid_normal_threshold;
 
-        param.is_reprojection_enable = ui_config.rtao_denoiser_reprojection_enable;
-        param.is_validation_enable   = ui_config.rtao_denoiser_validation_enable;
+        param.is_reprojection_enable     = ui_config.rtao_denoiser_reprojection_enable;
+        param.is_validation_enable       = ui_config.rtao_denoiser_validation_enable;
+        param.is_history_clamp_enable    = ui_config.rtao_denoiser_history_clamp_enable;
+        param.is_motion_weighting_enable = ui_config.rtao_denoiser_motion_weighting_enable;
 
         context.cmd_list.Gfx(rtao_denoiser_pso, context.bdls, param)
             .Draw(

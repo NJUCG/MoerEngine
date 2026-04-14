@@ -1,28 +1,15 @@
 /**
  * Frustum Culling Compute Shader
  * 
- * 每个线程处理一个 Draw Command (对应一个 Primitive 的所有 Instances)
- * 将不可见的 draw command 的 instance_cnt 设为 0
+ * 每个线程处理一个 Primitive 对应的源 Draw Command，
+ * 为当前 pass 生成紧凑的可见实例索引和新的间接绘制命令。
  */
 
+#include "shared/raster/culling/ShaderParameters.h"
+#include "shared/rhi/CommandDrawData.h"
 #include "shared/scene/SharedSceneStruct.h"
 
-struct DrawIndexedCmdData {
-    uint index_cnt;
-    uint instance_cnt;
-    uint first_index;
-    uint vertex_offset;
-    uint first_instance;
-};
-
-// Culling 统计结构
-struct CullStatistics {
-    uint total_instances_before;  // 剔除前的总 instance 数
-    uint total_instances_after;   // 剔除后的总 instance 数
-    uint visible_draws;           // 可见的 draw call 数量
-    uint total_draws;             // 总 draw call 数量
-};
-
+// Packs the normalized frustum planes and draw count for one culling dispatch.
 struct CullParams {
     float4 frustum_planes[6];  // World space frustum planes (nx, ny, nz, d)
     uint   draw_count;
@@ -31,16 +18,14 @@ struct CullParams {
 
 [[vk::push_constant]] ConstantBuffer<CullParams> cull_params;
 
-[[vk::binding(0, 0)]] RWStructuredBuffer<DrawIndexedCmdData> draw_commands;
+[[vk::binding(0, 0)]] StructuredBuffer<Moer::DrawIndexedCmdData> source_draw_commands;
 [[vk::binding(1, 0)]] StructuredBuffer<Moer::GPrimitive>     primitives;
 [[vk::binding(2, 0)]] StructuredBuffer<Moer::GInstance>      instances;
-[[vk::binding(3, 0)]] RWStructuredBuffer<CullStatistics>     statistics;  // 统计结果
+[[vk::binding(3, 0)]] RWStructuredBuffer<uint>               visible_instance_ids;
+[[vk::binding(4, 0)]] RWStructuredBuffer<Moer::DrawIndexedCmdData> draw_commands;
+[[vk::binding(5, 0)]] RWStructuredBuffer<Moer::GpuCullingCounterData> counters;
 
-/**
- * AABB-Frustum 测试
- * 使用分离轴定理（SAT）的简化版本
- * 如果 AABB 完全在某个平面的负半空间，则判定为不可见
- */
+// Tests whether a world-space AABB intersects the current frustum conservatively.
 bool AABBInsideFrustum(float3 aabb_min, float3 aabb_max, float4 planes[6]) {
     float3 center = (aabb_min + aabb_max) * 0.5;
     float3 extent = (aabb_max - aabb_min) * 0.5;
@@ -62,9 +47,7 @@ bool AABBInsideFrustum(float3 aabb_min, float3 aabb_max, float4 planes[6]) {
     return true;
 }
 
-/**
- * 将 local AABB 变换到 world space
- */
+// Transforms a local-space AABB into a conservative world-space AABB.
 void TransformAABB(float4x4 transform, float3 local_min, float3 local_max, 
                    out float3 out_min, out float3 out_max) {
     float3 corners[8];
@@ -88,13 +71,14 @@ void TransformAABB(float4x4 transform, float3 local_min, float3 local_max,
     }
 }
 
+// Culls each source draw and emits compact visible-instance and indirect-draw buffers.
 [numthreads(64, 1, 1)]
 void main(uint tid : SV_DispatchThreadID) {
     if (tid >= cull_params.draw_count) return;
     
-    DrawIndexedCmdData cmd = draw_commands[tid];
-    uint first_inst = cmd.first_instance;
-    uint inst_count = cmd.instance_cnt;
+    Moer::DrawIndexedCmdData src_cmd = source_draw_commands[tid];
+    uint first_inst = src_cmd.first_instance;
+    uint inst_count = src_cmd.instance_cnt;
     
     // 获取 primitive 的 local AABB
     Moer::GPrimitive prim = primitives[tid];
@@ -114,15 +98,36 @@ void main(uint tid : SV_DispatchThreadID) {
         }
     }
     
-    // 写入剔除后的 instance 数量
-    // 如果 visible_count == 0，GPU 会跳过这个 draw
-    draw_commands[tid].instance_cnt = visible_count;
-    
-    // 统计
-    InterlockedAdd(statistics[0].total_draws, 1);
-    InterlockedAdd(statistics[0].total_instances_before, inst_count);
-    InterlockedAdd(statistics[0].total_instances_after, visible_count);
-    if (visible_count > 0) {
-        InterlockedAdd(statistics[0].visible_draws, 1);
+    InterlockedAdd(counters[0].total_draws, 1);
+    InterlockedAdd(counters[0].total_instances_before, inst_count);
+    InterlockedAdd(counters[0].total_instances_after, visible_count);
+
+    if (visible_count == 0) {
+        return;
     }
+
+    uint visible_instance_offset;
+    InterlockedAdd(counters[0].visible_instance_count, visible_count, visible_instance_offset);
+
+    uint draw_index;
+    InterlockedAdd(counters[0].draw_count, 1, draw_index);
+    InterlockedAdd(counters[0].visible_draws, 1);
+
+    uint write_offset = 0;
+    for (uint i = 0; i < inst_count; i++) {
+        Moer::GInstance inst = instances[first_inst + i];
+
+        float3 world_min, world_max;
+        TransformAABB(inst.world_transform, prim.aabb_min, prim.aabb_max, world_min, world_max);
+
+        if (AABBInsideFrustum(world_min, world_max, cull_params.frustum_planes)) {
+            visible_instance_ids[visible_instance_offset + write_offset] = first_inst + i;
+            write_offset++;
+        }
+    }
+
+    Moer::DrawIndexedCmdData dst_cmd = src_cmd;
+    dst_cmd.first_instance = visible_instance_offset;
+    dst_cmd.instance_cnt   = visible_count;
+    draw_commands[draw_index] = dst_cmd;
 }

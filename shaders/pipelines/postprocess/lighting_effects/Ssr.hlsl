@@ -7,7 +7,6 @@
 #include "core/common/Common.hlsl"
 BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "pipelines/RasterCommon.hlsli"
-#include "materials/Material.hlsli"
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::SsrPipelineBindlessParam> param;
@@ -27,17 +26,7 @@ bool should_apply_ssr(float2 uv) { // the performance cost is so high
         if (normal.y + 0.001 >= 1.0) return true;
     }
 
-    // reference PBRMaterialFrag.hlsl
-    uint material_id = TextureHandle(param.vbuffer).Sample2D<uint>(uv);
-    ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
-    Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(material_id);
-    
-    float2 metallic_roughness = GetTextureData<float2>(
-        mat.metallic_roughness_map_hdl,
-        TextureHandle(param.gbuffer_uv).Sample2D<float2>(uv),
-        float2(mat.metallic_factor, mat.roughness_factor),
-        float2(mat.metallic_factor, mat.roughness_factor)
-    );
+    float2 metallic_roughness = TextureHandle(param.gbuffer_metal_rough_ao).Sample2D<float2>(uv);
 
     if (metallic_roughness.x < param.ssr_metallic_threshold) return false;
     if (metallic_roughness.y > param.ssr_roughness_threshold) return false;

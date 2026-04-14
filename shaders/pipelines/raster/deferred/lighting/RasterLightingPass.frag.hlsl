@@ -4,8 +4,8 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "pipelines/RasterCommon.hlsli"
 
 #include "materials/Brdf.hlsli"
-#include "materials/Material.hlsli"
 #include "pipelines/raster/deferred/lighting/Lighting.hlsli"
+#include "pipelines/raster/deferred/lighting/shadows/CSM.hlsli"
 
 #include "shared/raster/ShaderParameters.h"
 
@@ -13,20 +13,16 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 [[vk::push_constant]] ConstantBuffer<Moer::MaterialPassBindlessParam> param;
 
 float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
-    // MARK: Textures
-    uint material_id = TextureHandle(param.vbuffer).Sample2D<uint>(in_uv);
-    ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
-    Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(material_id);
-
     // MARK: GBuffer
-    float2 uv     = TextureHandle(param.gbuffer_uv).Sample2D<float2>(in_uv);
-    float  depth  = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
-    float3 normal = normalize(
+    float3 albedo = TextureHandle(param.gbuffer_base_color).Sample2D<float3>(in_uv);
+    float3 metal_rough_ao = TextureHandle(param.gbuffer_metal_rough_ao).Sample2D<float3>(in_uv);
+    float  depth = TextureHandle(param.gbuffer_depth).Sample2D<float>(in_uv);
+    float3 N = normalize(
         Raster::UnpackNormal(TextureHandle(param.gbuffer_normal).Sample2D<float3>(in_uv))
     ); // 因为法线mipmap不满足线性关系，所以这里需要normalize
-    float3 tangent =
-        normalize(Raster::UnpackNormal(TextureHandle(param.gbuffer_tangent).Sample2D<float3>(in_uv))); // 同上
     float3 position = WorldPosFromDepth(depth, in_uv, lighting_data.clip2world);
+    float metallic = metal_rough_ao.x;
+    float roughness = metal_rough_ao.y;
 
     // - Lights
     ArrayBuffer light_buf = ArrayBuffer(param.light_buf_hdl);
@@ -35,21 +31,6 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     if (depth == 0.0) {
         return float4(1.0, 0.0, 0.0, 1.0);
     }
-
-    // MARK: PBR
-    float3 albedo =
-        GetTextureData<float3>(mat.albedo_map_hdl, uv, mat.albedo_factor.xyz, MISSING_TEXTURE_COLOR);
-
-    float2 metallic_roughness = GetTextureData<float2>(
-        mat.metallic_roughness_map_hdl,
-        uv,
-        float2(mat.metallic_factor, mat.roughness_factor),
-        float2(mat.metallic_factor, mat.roughness_factor)
-    );
-    float metallic  = metallic_roughness.x;
-    float roughness = metallic_roughness.y;
-
-    float3 N   = GetNormalFromNormalMap(mat.normal_map_hdl, uv, normal, tangent);
     float3 V   = normalize(lighting_data.camera_position - position.xyz);
     float  NoV = saturate(dot(N, V));
 
@@ -91,6 +72,14 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
     }
 
     color = max(color, 0.0);
+
+    if (
+        lighting_data.shadow_csm_visualize_cascade != 0
+        && (lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM
+            || lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM_AUTO)
+    ) {
+        color = get_cascade_visualize_color(lighting_data, position);
+    }
 
     return float4(color, 1.0);
 }
