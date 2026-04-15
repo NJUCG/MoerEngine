@@ -232,7 +232,7 @@ struct RasterConfig {
     float ssr_step_base                  = 0.025;
 
     // MARK: Cooperative Ops
-    bool                 cooperative_ops_enabled = false;
+    bool                 cooperative_ops_enabled = true;
     CooperativeOpsStatus cooperative_ops_status{};
 
     // MARK: Denoiser
