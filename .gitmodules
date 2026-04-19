@@ -15,3 +15,7 @@
 	path = 3rdparty/minhook
 	url = https://github.com/TsudaKageyu/minhook.git
 	shallow = true
+[submodule "3rdparty/SPIRV-Cross"]
+	path = 3rdparty/SPIRV-Cross
+	url = https://github.com/KhronosGroup/SPIRV-Cross.git
+	shallow = true
