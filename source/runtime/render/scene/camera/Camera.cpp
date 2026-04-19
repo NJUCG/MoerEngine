@@ -549,11 +549,16 @@ void Camera::Tick(const SharedPtr<EditorConfig> config) {
                 return;
             }
 
+            if (!WindowInput::Get().is_active) {
+                WindowInput::Get().cursor_delta_x = 0.0f;
+                WindowInput::Get().cursor_delta_y = 0.0f;
+                UpdateAllDerivedProperties();
+                elapsed_time = WindowInput::Get().delta_time;
+                return;
+            }
+
             // unreal style camera control
-            if (WindowInput::Get().key_button_switch_state[KeyButtons::F]) {
-                pure_rotate();
-            } else if (
-                WindowInput::Get().mouse_button_state[MouseButtons::Left] &&
+            if (WindowInput::Get().mouse_button_state[MouseButtons::Left] &&
                 WindowInput::Get().mouse_button_state[MouseButtons::Right]
             ) {
                 pure_move();

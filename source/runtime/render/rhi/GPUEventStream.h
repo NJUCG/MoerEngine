@@ -4,37 +4,66 @@
 #include "RHICommand.h"
 #include "RHICommon.h"
 #include "misc/STL.h"
+#include <array>
 #include <mutex>
+#include <optional>
 
 namespace Moer::Render {
 
-struct ResolvedGPUEvent {
+struct GPUEventNode {
     std::string name;
     EQueueType  queue;
     uint32      depth;
-    uint64      timestamp_ns;
-    uint64      duration_ns;
-    bool        is_frame_bound;
+    uint64      start_ns;
+    uint64      end_ns;
+    uint64      total_busy_ns;
+    uint64      exclusive_ns;
+    Array<GPUEventNode> children;
 };
 
-class GPUEventStream {
+struct ResolvedGPUFrame {
+    uint64 frame_index;
+    uint64 boundary_timestamp_ns;
+    std::array<Array<GPUEventNode>, static_cast<size_t>(EQueueType::Num)> queue_roots;
+};
+
+class RENDER_API GPUEventStream {
 public:
     static GPUEventStream& Get();
 
-    void RegisterSubmit(Array<GPUEvent>&& events, EQueueType queue, WaitEvent completion);
+    void EnqueueSubmit(Array<GPUEvent>&& events, EQueueType queue, WaitEvent completion);
     void ResolveCompleted(WaitEvent completion);
+    void EndFrame();
     void FlushToProfiler();
+    std::string FormatLastResolvedFrame() const;
+    void ResetForTesting();
 
 private:
     struct PendingSubmit {
+        uint64          enqueue_order;
         Array<GPUEvent> events;
         EQueueType      queue;
         WaitEvent       completion;
+        bool            resolved;
     };
 
-    Queue<PendingSubmit>    pending_submits;
-    Array<ResolvedGPUEvent> resolved_events;
-    std::mutex              stream_mutex;
+    struct CompletedGPUEvent {
+        GPUEvent::EType type;
+        std::string     name;
+        EQueueType      queue;
+        uint32          depth;
+        uint64          timestamp_ns;
+    };
+
+    void TryResolveReadyFramesLocked();
+
+    Array<PendingSubmit>               pending_submits;
+    Array<CompletedGPUEvent>           current_frame_events;
+    Array<ResolvedGPUFrame>            ready_frames;
+    std::optional<ResolvedGPUFrame>    last_resolved_frame;
+    uint64                             next_enqueue_order{0};
+    uint64                             next_frame_index{0};
+    mutable std::mutex                 stream_mutex;
 };
 
 }  // namespace Moer::Render

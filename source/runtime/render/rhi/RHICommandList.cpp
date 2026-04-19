@@ -785,6 +785,7 @@ CommandList& CommandList::TickFrame() {
         return *this;
     }
     commands.emplace_back(MakeUnique<FrameTickCmd>());
+    submit_tick_profiling = true;
     translate_execution_class = ERHITranslateExecutionClass::SerialControl;
     return *this;
 }

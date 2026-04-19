@@ -174,10 +174,16 @@ if(NOT EXISTS "${MOER_ENGINE_CONFIG_FILE}")
     message(FATAL_ERROR "\nConfig file not found at path: ${MOER_ENGINE_CONFIG_FILE}.\nPlease generate MoerEngine.toml based on the template.MoerEngine.toml. 请根据模板文件template.MoerEngine.toml生成MoerEngine.toml配置文件。")
 endif()
 
+set(MOER_ENGINE_CONSOLE_VARIABLE_FILE "${moer_root_dir}/ConsoleVariable.ini")
+if(NOT EXISTS "${MOER_ENGINE_CONSOLE_VARIABLE_FILE}")
+    message(FATAL_ERROR "\nConsole variable file not found at path: ${MOER_ENGINE_CONSOLE_VARIABLE_FILE}.")
+endif()
+
 # 设置输出目录
 add_custom_target(
 	CopyResources
     COMMAND ${CMAKE_COMMAND} -E copy "${moer_root_dir}/MoerEngine.toml"                    "${output_dir}/MoerEngine.toml"
+    COMMAND ${CMAKE_COMMAND} -E copy "${moer_root_dir}/ConsoleVariable.ini"               "${output_dir}/ConsoleVariable.ini"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}/asset"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/asset"                    "${output_dir}/asset"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/shaders"                  "${output_dir}/asset/shaders"

@@ -207,6 +207,7 @@ public:
     void CmdBindSamplerHeap(VkCommandBuffer _command_buffer, const VkBindHeapInfoEXT* _bind_info) const;
     void CmdPushData(VkCommandBuffer _command_buffer, const VkPushDataInfoEXT* _push_info) const;
     uint64 GetPhysicalDescriptorSize(VkDescriptorType _type) const;
+    bool SupportsTimestampQueries(EQueueType _type) const;
     inline const VulkanDeviceFeatures& GetCoreFeatures() const {
         return m_device_info.core_features;
     }

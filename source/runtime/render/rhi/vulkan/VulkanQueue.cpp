@@ -74,6 +74,61 @@ static uint64_t SteadyNowNs() {
         .count();
 }
 
+bool IsTimestampQueryOp(QueryCmd::EOp op) {
+    return op == QueryCmd::EOp::BeginTimestamp || op == QueryCmd::EOp::EndTimestamp;
+}
+
+template<typename T, typename Pred>
+void EraseIf(Array<T>& values, Pred&& pred) {
+    values.erase(
+        std::remove_if(values.begin(), values.end(), std::forward<Pred>(pred)),
+        values.end()
+    );
+}
+
+void ResolveQueryTokensAsError(std::span<const QueryToken> tokens, std::string_view reason) {
+    QueryResult error_result{};
+    error_result.status = QueryStatus::Error;
+    error_result.name   = std::string(reason);
+
+    for (const QueryToken& token : tokens) {
+        if (!token.Valid()) {
+            continue;
+        }
+        error_result.kind     = token.kind;
+        error_result.query_id = token.id;
+        token.Resolve(error_result);
+    }
+}
+
+void StripUnsupportedTimestampQueries(CmdSubmit& submit, std::string_view reason) {
+    Array<QueryToken> rejected_tokens{};
+    rejected_tokens.reserve(submit.query_tokens.size());
+    EraseIf(submit.query_tokens, [&](const QueryToken& token) {
+        if (token.kind != QueryKind::Timestamp) {
+            return false;
+        }
+        rejected_tokens.emplace_back(token);
+        return true;
+    });
+
+    if (!rejected_tokens.empty()) {
+        ResolveQueryTokensAsError(rejected_tokens, reason);
+    }
+
+    EraseIf(submit.gpu_events, [](const GPUEvent& event) {
+        return event.query.kind == QueryKind::Timestamp;
+    });
+    EraseIf(submit.cmds, [](const UniquePtr<Command>& command) {
+        if (command->Type() != Command::EType::Query) {
+            return false;
+        }
+        const auto* query_cmd = static_cast<const QueryCmd*>(command.get());
+        return IsTimestampQueryOp(query_cmd->Op());
+    });
+    submit.b_tick_profiling = false;
+}
+
 static void UnlockGraphEventOnTaskGraph(const GraphEventRef& event) {
     if (!event) {
         return;
@@ -2739,6 +2794,7 @@ VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : type(_ty
         default:
             assert(false && "Invalid queue type");
     }
+    supports_timestamp_queries = _device.SupportsTimestampQueries(_type);
     assert(queue != VK_NULL_HANDLE && "Invalid queue type!");
 }
 
@@ -3004,6 +3060,9 @@ void ProfilerStorage::VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_
 VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered, TrackerSeed seed) {
     TRACE_SCOPE_CAT("VkCommandQueue.Translate", "Queue");
     std::unique_lock<std::mutex> translate_lock(translate_state_mtx);
+    if (!queue.SupportsTimestampQueries()) {
+        StripUnsupportedTimestampQueries(_submit, "timestamp query unsupported on queue");
+    }
     struct PreparedCmdBatch {
         CmdSubmit               submit;
         FunctionTable           function_table;
@@ -3069,7 +3128,7 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
         tracker,
         vk_allocator.GetCmdList(),
         recorded.submit->cached_args,
-        &profiler_storage,
+        queue.SupportsTimestampQueries() ? &profiler_storage : nullptr,
         queue.GetType()
     );
     VkCmdPreprocessor preprocessor(
@@ -3083,7 +3142,7 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
 
     vk_allocator.GetCmdList().Begin();
     query_runtime.BeginRecord(vk_allocator.GetCmdList(), recorded.submit->query_tokens);
-    if (recorded.submit->b_tick_profiling) {
+    if (recorded.submit->b_tick_profiling && queue.SupportsTimestampQueries()) {
         profiler_storage.CollectProfiling();
         cached_profiler_entry = profiler_storage.GetProfilerEntry();
         cached_gpu_samples    = profiler_storage.GetResolvedGpuSamples();
@@ -3149,7 +3208,7 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
         vk_allocator.GetCmdList().EndLabel();
     }
 
-    if (recorded.submit->b_tick_profiling) {
+    if (recorded.submit->b_tick_profiling && queue.SupportsTimestampQueries()) {
         profiler_storage.EndProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
     }
     vk_allocator.GetCmdList().EndLabel();
@@ -3201,6 +3260,7 @@ VkCommandQueue::SubmitRecordedForRuntime(
     if (!_recorded.has_cmd || !_recorded.submit.has_value() || _recorded.submit->cmds.empty()) {
         if (_recorded.submit.has_value() && !_recorded.submit->query_tokens.empty()) {
             query_runtime.ResolveAsError(_recorded.submit->query_tokens, "submit without commands");
+            _recorded.submit->gpu_events.clear();
         }
         if (_recorded.allocator) {
             allocators.Push(_recorded.allocator.release());
@@ -3238,15 +3298,9 @@ VkCommandQueue::SubmitRecordedForRuntime(
         if (has_submit) {
             result.callbacks            = std::move(_recorded.submit->callbacks);
             result.signal_events        = std::move(_recorded.submit->signal_events);
+            result.gpu_events           = std::move(_recorded.submit->gpu_events);
             result.scheduled_completion =
-                !result.callbacks.empty() || !result.signal_events.empty();
-            if (!_recorded.submit->gpu_events.empty()) {
-                GPUEventStream::Get().RegisterSubmit(
-                    std::move(_recorded.submit->gpu_events),
-                    queue.GetType(),
-                    result.completion
-                );
-            }
+                !result.callbacks.empty() || !result.signal_events.empty() || !result.gpu_events.empty();
         }
         return result;
     }
@@ -3282,14 +3336,8 @@ VkCommandQueue::SubmitRecordedForRuntime(
     result.allocator            = std::move(_recorded.allocator);
     result.callbacks            = std::move(_recorded.submit->callbacks);
     result.signal_events        = std::move(_recorded.submit->signal_events);
+    result.gpu_events           = std::move(_recorded.submit->gpu_events);
     result.scheduled_completion = true;
-    if (!_recorded.submit->gpu_events.empty()) {
-        GPUEventStream::Get().RegisterSubmit(
-            std::move(_recorded.submit->gpu_events),
-            queue.GetType(),
-            result.completion
-        );
-    }
 
     if (_recorded.submit->b_tick_profiling) {
         std::lock_guard<std::mutex> translate_lock(translate_state_mtx);
@@ -3516,18 +3564,8 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
 //TODO:看看barrier
 VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer* _reordered) {
     std::unique_lock<std::mutex> translate_lock(translate_mutex);
-    if (!_evt.query_tokens.empty()) {
-        QueryResult error_result{};
-        error_result.status = QueryStatus::Error;
-        error_result.name   = "Query unsupported on copy queue";
-        for (const auto& token : _evt.query_tokens) {
-            if (!token.Valid()) {
-                continue;
-            }
-            error_result.kind     = token.kind;
-            error_result.query_id = token.id;
-            token.Resolve(error_result);
-        }
+    if (!queue.SupportsTimestampQueries()) {
+        StripUnsupportedTimestampQueries(_evt, "timestamp query unsupported on queue");
     }
 
     VulkanRecordedSubmit recorded{};
@@ -3622,6 +3660,10 @@ VkCopyQueue::SubmitRecordedForRuntime(
     assert(signal_value > 0 && "runtime signal value must be positive");
     assert(signal_value > last_frame && "runtime signal value must be monotonic per queue");
     if (!_recorded.has_cmd || !_recorded.allocator) {
+        if (_recorded.submit.has_value() && !_recorded.submit->query_tokens.empty()) {
+            ResolveQueryTokensAsError(_recorded.submit->query_tokens, "submit without commands");
+            _recorded.submit->gpu_events.clear();
+        }
         if (signal_value > 1) {
             queue.Wait(timeline, signal_value - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
         }
@@ -3651,8 +3693,9 @@ VkCopyQueue::SubmitRecordedForRuntime(
                 result.signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
             }
             result.callbacks = std::move(_recorded.submit->callbacks);
+            result.gpu_events = std::move(_recorded.submit->gpu_events);
             result.scheduled_completion =
-                !result.callbacks.empty() || !result.signal_events.empty();
+                !result.callbacks.empty() || !result.signal_events.empty() || !result.gpu_events.empty();
         }
         return result;
     }
@@ -3681,6 +3724,7 @@ VkCopyQueue::SubmitRecordedForRuntime(
     result.timeline_value       = signal_value;
     result.allocator            = std::move(_recorded.allocator);
     result.callbacks            = std::move(_recorded.submit->callbacks);
+    result.gpu_events           = std::move(_recorded.submit->gpu_events);
     result.scheduled_completion = true;
     result.signal_events.reserve(_recorded.submit->signal_events.size());
     for (const auto& evt : _recorded.submit->signal_events) {

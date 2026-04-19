@@ -5,6 +5,7 @@
 #include "VulkanRHITrace.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
+#include "rhi/GPUEventStream.h"
 #include "rhi/RHIImpl.h"
 
 #include <cassert>
@@ -119,6 +120,12 @@ size_t QueueTypeIndex(EQueueType queue) {
     const size_t index = static_cast<size_t>(queue);
     assert(index < static_cast<size_t>(EQueueType::Num) && "invalid queue type index");
     return index;
+}
+
+bool HasFrameBoundaryEvent(std::span<const GPUEvent> gpu_events) {
+    return std::any_of(gpu_events.begin(), gpu_events.end(), [](const GPUEvent& event) {
+        return event.type == GPUEvent::EType::FrameBoundary;
+    });
 }
 
 } // namespace
@@ -662,6 +669,17 @@ uint32 VulkanSubmissionRuntime::FlushPendingReady(OrderedBatchRuntimeState& stat
                     cache.resolved_waits,
                     signal_value
                 );
+                if (!result.gpu_events.empty()) {
+                    const bool has_frame_boundary = HasFrameBoundaryEvent(result.gpu_events);
+                    GPUEventStream::Get().EnqueueSubmit(
+                        std::move(result.gpu_events),
+                        submit.queue,
+                        result.completion
+                    );
+                    if (has_frame_boundary) {
+                        GPUEventStream::Get().EndFrame();
+                    }
+                }
                 if (result.scheduled_completion) {
                     interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
                         submit.key.op_seq,
@@ -682,6 +700,17 @@ uint32 VulkanSubmissionRuntime::FlushPendingReady(OrderedBatchRuntimeState& stat
                     cache.resolved_waits,
                     signal_value
                 );
+                if (!result.gpu_events.empty()) {
+                    const bool has_frame_boundary = HasFrameBoundaryEvent(result.gpu_events);
+                    GPUEventStream::Get().EnqueueSubmit(
+                        std::move(result.gpu_events),
+                        submit.queue,
+                        WaitEvent{result.completion.handle, result.completion.timeline}
+                    );
+                    if (has_frame_boundary) {
+                        GPUEventStream::Get().EndFrame();
+                    }
+                }
                 if (result.scheduled_completion) {
                     interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
                         submit.key.op_seq,

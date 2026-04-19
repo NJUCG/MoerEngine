@@ -32,11 +32,14 @@ private:
     void PumpRuntimeLogs();
     void HandleHotkeys();
     void CycleMode();
-    bool IsVisible() const;
+    void ToggleEditorConsolePage();
+    bool IsRenderWindowActive() const;
+    bool IsRenderConsoleVisible() const;
 
     void AppendOutput(std::string line);
-    void DrawInlineConsole();
-    void DrawWindowedConsole();
+    void DrawEditorConsolePanel();
+    void DrawRenderInlineConsole();
+    void DrawRenderWindowedConsole();
     void DrawOutputPanel(const char* id, float input_height);
     void DrawInputLine(const char* id);
     void UpdateAutocompleteCandidates();
@@ -48,6 +51,7 @@ private:
     void SetInputBuffer(std::string_view text);
     float GetAutocompletePanelHeight() const;
     int  OnInputTextCallback(ImGuiInputTextCallbackData* data);
+    bool IsEditorConsoleInteracting() const;
 
     SharedPtr<EditorConfig> m_editor_config;
 
@@ -57,6 +61,9 @@ private:
     std::array<char, 512> m_input_buffer{};
 
     EDisplayMode m_mode = EDisplayMode::Hidden;
+
+    bool m_editor_console_page_open = true;
+    bool m_editor_console_input_active   = false;
 
     bool m_last_grave_switch_state = false;
     bool m_last_escape_down        = false;

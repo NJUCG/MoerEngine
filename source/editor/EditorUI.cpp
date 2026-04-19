@@ -446,7 +446,7 @@ void EditorUI::ShowSceneColor() {
 
     WindowInput::Get().is_active = mouse_pos.x > m_scene_color_pos.x + border &&
                                    mouse_pos.x < m_scene_color_pos.x + m_scene_color_resolution.x - border &&
-                                   mouse_pos.y > m_scene_color_pos.x + border &&
+                                   mouse_pos.y > m_scene_color_pos.y + border &&
                                    mouse_pos.y < m_scene_color_pos.y + m_scene_color_resolution.y - border;
 
     ImGui::End();

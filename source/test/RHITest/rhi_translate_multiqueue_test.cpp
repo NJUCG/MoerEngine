@@ -16,6 +16,7 @@
 #include "render/rhi/RHIImpl.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/GPUEventStream.h"
 #include "rhi/vulkan/VulkanDescriptor.h"
 #include "rhi/vulkan/VulkanDevice.h"
 #include "shader/ShaderCompiler.h"
@@ -1099,6 +1100,76 @@ int RunCopyScopeUnknownFirstUseTest() {
     return 0;
 }
 
+int RunGpuEventStreamHierarchyTest() {
+    auto& device = RenderDevice::Get();
+    GPUEventStream::Get().ResetForTesting();
+
+    auto buffer = device.CreateBuffer<uint32_t>(
+        "gpu_event_stream_buffer",
+        kElementCount,
+        EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC
+    );
+
+    std::vector<uint32_t> readback_values(kElementCount, 0u);
+    GraphEventRef readback_event{nullptr};
+
+    CommandList graphics_cmd(EQueueType::Graphics);
+    {
+        GPU_PROFILE_EVENT_SCOPE(graphics_cmd, "FrameOuter");
+        graphics_cmd.ClearResource(buffer->GetView(), 0x11u);
+        {
+            GPU_PROFILE_EVENT_SCOPE(graphics_cmd, "FrameInner");
+            graphics_cmd.ClearResource(buffer->GetView(), 0x55u);
+        }
+    }
+    readback_event =
+        graphics_cmd.ReadbackCopy(buffer->GetView(), ToByteSpan(readback_values));
+    graphics_cmd.TickFrame();
+
+    Array<CommandList> frame_cmds{};
+    frame_cmds.emplace_back(std::move(graphics_cmd));
+    RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
+    if (readback_event) {
+        readback_event->Wait();
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (!ValidateUniformValue(0u, 0x55u, readback_values)) {
+        return 1;
+    }
+
+    const std::string frame_text = GPUEventStream::Get().FormatLastResolvedFrame();
+    if (frame_text.empty()) {
+        LOG_ERROR("GPUEventStream did not resolve any frame profile text");
+        return 1;
+    }
+
+    const std::array<std::string_view, 6> required_tokens{
+        "Frame ",
+        "Queue Graphics",
+        "GPU [queue=Graphics",
+        "FrameOuter",
+        "FrameInner",
+        "exclusive_ns=",
+    };
+    for (std::string_view token : required_tokens) {
+        if (frame_text.find(token) == std::string::npos) {
+            LOG_ERROR("GPUEventStream frame text missing token '{}':\n{}", token, frame_text);
+            return 1;
+        }
+    }
+
+    const size_t outer_pos = frame_text.find("FrameOuter");
+    const size_t inner_pos = frame_text.find("FrameInner");
+    if (outer_pos == std::string::npos || inner_pos == std::string::npos || outer_pos >= inner_pos) {
+        LOG_ERROR("GPUEventStream frame hierarchy order is invalid:\n{}", frame_text);
+        return 1;
+    }
+
+    LOG_INFO("GPUEventStream frame debug:\n{}", frame_text);
+    return 0;
+}
+
 int RunPresentWithCopyScopeTests() {
     auto& device = RenderDevice::Get();
     auto* window = WindowContext::GetMainWindow();
@@ -1358,6 +1429,12 @@ int main(int argc, char** argv) {
             RunNamedTestCase("CopyScopeUnknownFirstUse", RunCopyScopeUnknownFirstUseTest);
         if (unknown_first_use_ret != 0) {
             return shutdown_and_return(unknown_first_use_ret);
+        }
+
+        const int gpu_event_stream_ret =
+            RunNamedTestCase("GPUEventStreamHierarchy", RunGpuEventStreamHierarchyTest);
+        if (gpu_event_stream_ret != 0) {
+            return shutdown_and_return(gpu_event_stream_ret);
         }
 
         WindowContext::Init(SurfaceInitInfo(ERHIType::Vulkan, 640, 360, "TestRHITranslatePresent", false));

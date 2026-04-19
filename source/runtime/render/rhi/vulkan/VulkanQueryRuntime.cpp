@@ -382,11 +382,15 @@ void VulkanQueryRuntime::ResolveCompleted(uint64 _timeline) {
             result.status   = QueryStatus::Ready;
 
             if (record.kind == QueryKind::Timestamp) {
-                if (!record.begin_slot.has_value() || !record.end_slot.has_value()) {
+                    if (!record.begin_slot.has_value() && !record.end_slot.has_value()) {
                     result.status = QueryStatus::Error;
                 } else {
-                    const uint64 begin_tick = ResolveTimestampTick(record.begin_slot.value());
-                    const uint64 end_tick   = ResolveTimestampTick(record.end_slot.value());
+                        const uint64 begin_tick = record.begin_slot.has_value()
+                                                      ? ResolveTimestampTick(record.begin_slot.value())
+                                                      : ResolveTimestampTick(record.end_slot.value());
+                        const uint64 end_tick   = record.end_slot.has_value()
+                                                    ? ResolveTimestampTick(record.end_slot.value())
+                                                    : begin_tick;
                     if (end_tick < begin_tick) {
                         result.status = QueryStatus::Error;
                     } else {

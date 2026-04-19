@@ -1,109 +1,399 @@
 #include "GPUEventStream.h"
+#include "log/LogSystem.h"
 #include "trace/Trace.h"
 #include <algorithm>
+#include <cassert>
+#include <sstream>
 
 namespace Moer::Render {
+
+namespace {
+
+constexpr size_t kQueueCount = static_cast<size_t>(EQueueType::Num);
+
+const char* QueueTypeName(EQueueType queue) {
+    switch (queue) {
+        case EQueueType::Graphics: return "Graphics";
+        case EQueueType::Compute:  return "Compute";
+        case EQueueType::Copy:     return "Copy";
+        case EQueueType::Ignore:   return "Ignore";
+        case EQueueType::Num:
+        default:                   return "Num";
+    }
+}
+
+uint32 QueueTrackIndex(EQueueType queue) {
+    switch (queue) {
+        case EQueueType::Graphics: return 0u;
+        case EQueueType::Compute:  return 1u;
+        case EQueueType::Copy:     return 2u;
+        case EQueueType::Ignore:
+        case EQueueType::Num:
+        default:                   return 3u;
+    }
+}
+
+bool IsBeginEvent(GPUEvent::EType type) {
+    return type == GPUEvent::EType::BeginGPU || type == GPUEvent::EType::BeginEvent;
+}
+
+bool IsEndEvent(GPUEvent::EType type) {
+    return type == GPUEvent::EType::EndGPU || type == GPUEvent::EType::EndEvent;
+}
+
+bool IsMatchingEndEvent(GPUEvent::EType begin_type, GPUEvent::EType end_type) {
+    return (begin_type == GPUEvent::EType::BeginGPU && end_type == GPUEvent::EType::EndGPU) ||
+           (begin_type == GPUEvent::EType::BeginEvent && end_type == GPUEvent::EType::EndEvent);
+}
+
+struct BuildNode {
+    GPUEventNode      node{};
+    GPUEvent::EType   begin_type{GPUEvent::EType::BeginGPU};
+    Array<size_t>     child_indices{};
+};
+
+template<typename Visitor>
+void VisitNodes(const Array<GPUEventNode>& nodes, Visitor&& visitor) {
+    for (const GPUEventNode& node : nodes) {
+        visitor(node);
+        VisitNodes(node.children, visitor);
+    }
+}
+
+template<typename Fn>
+void ForEachQueueRoot(
+    const std::array<Array<GPUEventNode>, kQueueCount>& queue_roots,
+    Fn&&                                                fn
+) {
+    for (size_t queue_index = 0; queue_index < queue_roots.size(); ++queue_index) {
+        if (queue_roots[queue_index].empty()) {
+            continue;
+        }
+        fn(static_cast<EQueueType>(queue_index), queue_roots[queue_index]);
+    }
+}
+
+GPUEventNode MaterializeNode(const Array<BuildNode>& arena, size_t node_index) {
+    GPUEventNode node = arena[node_index].node;
+    node.children.reserve(arena[node_index].child_indices.size());
+    for (size_t child_index : arena[node_index].child_indices) {
+        node.children.emplace_back(MaterializeNode(arena, child_index));
+    }
+
+    uint64 child_total_busy_ns = 0;
+    for (const GPUEventNode& child : node.children) {
+        child_total_busy_ns += child.total_busy_ns;
+    }
+    node.total_busy_ns = node.end_ns >= node.start_ns ? node.end_ns - node.start_ns : 0;
+    node.exclusive_ns =
+        node.total_busy_ns >= child_total_busy_ns ? node.total_busy_ns - child_total_busy_ns : 0;
+    return node;
+}
+
+ResolvedGPUFrame BuildResolvedFrame(
+    const auto& frame_events,
+    uint64      frame_index,
+    uint64      boundary_timestamp_ns
+) {
+    std::array<Array<BuildNode>, kQueueCount> build_arenas{};
+    std::array<Array<size_t>, kQueueCount> open_stacks{};
+    std::array<Array<size_t>, kQueueCount> root_indices{};
+    bool frame_valid = true;
+
+    for (const auto& event : frame_events) {
+        if (event.queue == EQueueType::Ignore || event.queue == EQueueType::Num) {
+            LOG_ERROR("GPUEventStream got invalid queue type {} while building frame {}", int(event.queue), frame_index);
+            frame_valid = false;
+            continue;
+        }
+
+        const size_t queue_index = static_cast<size_t>(event.queue);
+        auto& arena = build_arenas[queue_index];
+        auto& stack = open_stacks[queue_index];
+        auto& roots = root_indices[queue_index];
+
+        if (IsBeginEvent(event.type)) {
+            const uint32 expected_depth = static_cast<uint32>(stack.size());
+            if (event.depth != expected_depth) {
+                LOG_ERROR(
+                    "GPUEventStream begin depth mismatch in frame {} on queue {}: event depth={}, expected={}",
+                    frame_index,
+                    QueueTypeName(event.queue),
+                    event.depth,
+                    expected_depth
+                );
+                frame_valid = false;
+                continue;
+            }
+
+            BuildNode build_node{};
+            build_node.begin_type = event.type;
+            build_node.node.name = event.name;
+            build_node.node.queue = event.queue;
+            build_node.node.depth = event.depth;
+            build_node.node.start_ns = event.timestamp_ns;
+            build_node.node.end_ns = event.timestamp_ns;
+            build_node.node.total_busy_ns = 0;
+            build_node.node.exclusive_ns = 0;
+
+            const size_t node_index = arena.size();
+            arena.emplace_back(std::move(build_node));
+            if (stack.empty()) {
+                roots.emplace_back(node_index);
+            } else {
+                arena[stack.back()].child_indices.emplace_back(node_index);
+            }
+            stack.emplace_back(node_index);
+            continue;
+        }
+
+        if (!IsEndEvent(event.type)) {
+            LOG_ERROR("GPUEventStream encountered non-scope event inside frame {}", frame_index);
+            frame_valid = false;
+            continue;
+        }
+
+        if (stack.empty()) {
+            LOG_ERROR(
+                "GPUEventStream end event underflow in frame {} on queue {}",
+                frame_index,
+                QueueTypeName(event.queue)
+            );
+            frame_valid = false;
+            continue;
+        }
+
+        const size_t node_index = stack.back();
+        BuildNode& node = arena[node_index];
+        if (!IsMatchingEndEvent(node.begin_type, event.type)) {
+            LOG_ERROR(
+                "GPUEventStream mismatched begin/end type in frame {} on queue {}",
+                frame_index,
+                QueueTypeName(event.queue)
+            );
+            frame_valid = false;
+            continue;
+        }
+        if (event.depth != node.node.depth) {
+            LOG_ERROR(
+                "GPUEventStream end depth mismatch in frame {} on queue {}: event depth={}, begin depth={}",
+                frame_index,
+                QueueTypeName(event.queue),
+                event.depth,
+                node.node.depth
+            );
+                frame_valid = false;
+                continue;
+        }
+        node.node.end_ns = event.timestamp_ns;
+        stack.pop_back();
+    }
+
+    for (size_t queue_index = 0; queue_index < open_stacks.size(); ++queue_index) {
+        if (!open_stacks[queue_index].empty()) {
+            LOG_ERROR(
+                "GPUEventStream frame boundary crossed active scopes in frame {} on queue {}",
+                frame_index,
+                QueueTypeName(static_cast<EQueueType>(queue_index))
+            );
+            frame_valid = false;
+        }
+    }
+
+    ResolvedGPUFrame frame{};
+    frame.frame_index = frame_index;
+    frame.boundary_timestamp_ns = boundary_timestamp_ns;
+    if (!frame_valid) {
+        return frame;
+    }
+    for (size_t queue_index = 0; queue_index < build_arenas.size(); ++queue_index) {
+        auto& roots = frame.queue_roots[queue_index];
+        roots.reserve(root_indices[queue_index].size());
+        for (size_t root_index : root_indices[queue_index]) {
+            roots.emplace_back(MaterializeNode(build_arenas[queue_index], root_index));
+        }
+    }
+    return frame;
+}
+
+void EmitFrameToTrace(const ResolvedGPUFrame& frame) {
+    ForEachQueueRoot(frame.queue_roots, [](EQueueType queue, const Array<GPUEventNode>& roots) {
+        const uint64 track_id = Moer::Trace::MakeGpuQueueTrackId(0u, QueueTrackIndex(queue));
+        std::string track_name = std::string("GPU0/Queue(") + QueueTypeName(queue) + ")";
+        VisitNodes(roots, [&](const GPUEventNode& node) {
+            Moer::Trace::EmitScope(Moer::Trace::EmitScopeDesc{
+                .name        = node.name,
+                .category    = "GPU",
+                .track_type  = Moer::Trace::TrackType::GPUQueue,
+                .track_id    = track_id,
+                .depth       = node.depth,
+                .ts_begin_ns = node.start_ns,
+                .ts_end_ns   = node.end_ns,
+                .track_name  = track_name,
+            });
+        });
+    });
+}
+
+void AppendFrameText(std::ostringstream& stream, const GPUEventNode& node) {
+    for (uint32 indent = 0; indent < node.depth + 1; ++indent) {
+        stream << "  ";
+    }
+    stream << node.name
+           << " [queue=" << QueueTypeName(node.queue)
+           << ", start_ns=" << node.start_ns
+           << ", end_ns=" << node.end_ns
+           << ", total_busy_ns=" << node.total_busy_ns
+           << ", exclusive_ns=" << node.exclusive_ns
+           << "]\n";
+    for (const GPUEventNode& child : node.children) {
+        AppendFrameText(stream, child);
+    }
+}
+
+std::string BuildFrameDebugText(const ResolvedGPUFrame& frame) {
+    std::ostringstream stream{};
+    stream << "Frame " << frame.frame_index
+           << " boundary_ns=" << frame.boundary_timestamp_ns << "\n";
+    ForEachQueueRoot(frame.queue_roots, [&](EQueueType queue, const Array<GPUEventNode>& roots) {
+        stream << "Queue " << QueueTypeName(queue) << "\n";
+        for (const GPUEventNode& node : roots) {
+            AppendFrameText(stream, node);
+        }
+    });
+    return stream.str();
+}
+
+} // namespace
 
 GPUEventStream& GPUEventStream::Get() {
     static GPUEventStream instance;
     return instance;
 }
 
-void GPUEventStream::RegisterSubmit(Array<GPUEvent>&& events, EQueueType queue, WaitEvent completion) {
+void GPUEventStream::EnqueueSubmit(Array<GPUEvent>&& events, EQueueType queue, WaitEvent completion) {
+    if (events.empty()) {
+        return;
+    }
+
     std::lock_guard lock(stream_mutex);
-    pending_submits.push(PendingSubmit{
+    pending_submits.emplace_back(PendingSubmit{
+        .enqueue_order = next_enqueue_order++,
         .events = std::move(events),
         .queue = queue,
-        .completion = completion
+        .completion = completion,
+        .resolved = false,
     });
 }
 
 void GPUEventStream::ResolveCompleted(WaitEvent completion) {
     std::lock_guard lock(stream_mutex);
 
-    Array<PendingSubmit> completed;
-    Queue<PendingSubmit> remaining;
-
-    while (!pending_submits.empty()) {
-        PendingSubmit& submit = pending_submits.front();
-        if (submit.completion.timeline_handle == completion.timeline_handle &&
-            submit.completion.value <= completion.value) {
-            completed.push_back(std::move(submit));
-        } else {
-            remaining.push(std::move(submit));
+    for (PendingSubmit& submit : pending_submits) {
+        if (submit.resolved) {
+            continue;
         }
-        pending_submits.pop();
-    }
-
-    pending_submits = std::move(remaining);
-
-    for (PendingSubmit& submit : completed) {
-        Stack<GPUEvent*> begin_stack;
+        if (submit.completion.timeline_handle != completion.timeline_handle ||
+            submit.completion.value > completion.value) {
+            continue;
+        }
 
         for (GPUEvent& event : submit.events) {
-            QueryResult query_result = event.query.GetFuture().Get();
-            auto ts_result = std::get<TimestampQueryResult>(query_result.payload);
-            uint64 timestamp_ns = ts_result.begin_tick;
-
-            if (event.type == GPUEvent::EType::BeginCommandList || event.type == GPUEvent::EType::BeginEvent) {
-                begin_stack.push(&event);
-                event.cpu_time_ns = timestamp_ns;
-
-            } else if (event.type == GPUEvent::EType::EndCommandList || event.type == GPUEvent::EType::EndEvent) {
-                GPUEvent* begin_event = begin_stack.top();
-                begin_stack.pop();
-
-                uint64 begin_ns = begin_event->cpu_time_ns;
-                uint64 end_ns = timestamp_ns;
-
-                resolved_events.push_back(ResolvedGPUEvent{
-                    .name = begin_event->name,
-                    .queue = submit.queue,
-                    .depth = begin_event->depth,
-                    .timestamp_ns = begin_ns,
-                    .duration_ns = end_ns - begin_ns,
-                    .is_frame_bound = false
-                });
-
-            } else if (event.type == GPUEvent::EType::FrameBound) {
-                resolved_events.push_back(ResolvedGPUEvent{
-                    .name = "FrameBound",
-                    .queue = submit.queue,
-                    .depth = 0,
-                    .timestamp_ns = timestamp_ns,
-                    .duration_ns = 0,
-                    .is_frame_bound = true
-                });
+            if (!event.query.IsReady()) {
+                LOG_ERROR(
+                    "GPUEventStream saw unresolved query future for event '{}' on queue {}",
+                    event.name,
+                    int(submit.queue)
+                );
+                continue;
             }
+            QueryResult query_result = event.query.GetFuture().Get();
+            if (query_result.status != QueryStatus::Ready ||
+                !std::holds_alternative<TimestampQueryResult>(query_result.payload)) {
+                LOG_ERROR(
+                    "GPUEventStream failed to resolve timestamp query for event '{}' on queue {}",
+                    event.name,
+                    int(submit.queue)
+                );
+                submit.resolved = true;
+                continue;
+            }
+            auto ts_result = std::get<TimestampQueryResult>(query_result.payload);
+            event.timestamp_ns = ts_result.begin_tick;
         }
+        submit.resolved = true;
     }
+
+    TryResolveReadyFramesLocked();
+}
+
+void GPUEventStream::EndFrame() {
+    std::lock_guard lock(stream_mutex);
+    TryResolveReadyFramesLocked();
 }
 
 void GPUEventStream::FlushToProfiler() {
     std::lock_guard lock(stream_mutex);
 
-    for (const ResolvedGPUEvent& evt : resolved_events) {
-        uint32 queue_type_idx = (evt.queue == EQueueType::Graphics) ? 0u : 1u;
-        uint64 track_id = Moer::Trace::MakeGpuQueueTrackId(0u, queue_type_idx);
-        std::string track_name = evt.queue == EQueueType::Graphics ? "GPU0/Queue(Graphics)" : "GPU0/Queue(Compute)";
-
-        if (evt.is_frame_bound) {
-            Moer::Trace::EmitInstant("FrameBound", "GPU", {});
-        } else {
-            Moer::Trace::EmitScope(Moer::Trace::EmitScopeDesc{
-                .name        = evt.name,
-                .category    = "GPU",
-                .track_type  = Moer::Trace::TrackType::GPUQueue,
-                .track_id    = track_id,
-                .depth       = evt.depth,
-                .ts_begin_ns = evt.timestamp_ns,
-                .ts_end_ns   = evt.timestamp_ns + evt.duration_ns,
-                .track_name  = track_name,
-            });
-        }
+    for (const ResolvedGPUFrame& frame : ready_frames) {
+        EmitFrameToTrace(frame);
     }
 
-    resolved_events.clear();
+    ready_frames.clear();
+}
+
+std::string GPUEventStream::FormatLastResolvedFrame() const {
+    std::lock_guard lock(stream_mutex);
+    if (!last_resolved_frame.has_value()) {
+        return {};
+    }
+    return BuildFrameDebugText(last_resolved_frame.value());
+}
+
+void GPUEventStream::ResetForTesting() {
+    std::lock_guard lock(stream_mutex);
+    pending_submits.clear();
+    current_frame_events.clear();
+    ready_frames.clear();
+    last_resolved_frame.reset();
+    next_enqueue_order = 0;
+    next_frame_index = 0;
+}
+
+void GPUEventStream::TryResolveReadyFramesLocked() {
+    size_t ready_prefix_count = 0;
+    while (ready_prefix_count < pending_submits.size() && pending_submits[ready_prefix_count].resolved) {
+        PendingSubmit& submit = pending_submits[ready_prefix_count];
+        for (const GPUEvent& event : submit.events) {
+            if (event.type == GPUEvent::EType::FrameBoundary) {
+                ResolvedGPUFrame frame = BuildResolvedFrame(
+                    current_frame_events,
+                    next_frame_index++,
+                    event.timestamp_ns
+                );
+                last_resolved_frame = frame;
+                ready_frames.emplace_back(std::move(frame));
+                current_frame_events.clear();
+                continue;
+            }
+
+            current_frame_events.emplace_back(CompletedGPUEvent{
+                .type = event.type,
+                .name = event.name,
+                .queue = submit.queue,
+                .depth = event.depth,
+                .timestamp_ns = event.timestamp_ns,
+            });
+        }
+        ++ready_prefix_count;
+    }
+
+    if (ready_prefix_count > 0) {
+        pending_submits.erase(
+            pending_submits.begin(),
+            pending_submits.begin() + static_cast<std::ptrdiff_t>(ready_prefix_count)
+        );
+    }
 }
 
 }  // namespace Moer::Render

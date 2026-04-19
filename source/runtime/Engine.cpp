@@ -13,6 +13,7 @@
 
 // Editor
 #include "renderer/common/RuntimeAssets.h"
+#include "renderer/EditorConsoleVariables.h"
 #include "renderer/raster/RasterRenderer.h"
 #include "renderer/raytracing/RaytracingRenderer.h"
 
@@ -92,6 +93,7 @@ void Engine::Init(int argc, const char** argv) {
     ShaderManager::Get(); // Explicit Init ShaderManager
 
     m_editor_config = MakeShared<EditorConfig>();
+    Render::EditorConsoleVariables::ApplyToEditorConfig(*m_editor_config);
 
     // Init WindowContext
     m_editor_config->SetResolution(

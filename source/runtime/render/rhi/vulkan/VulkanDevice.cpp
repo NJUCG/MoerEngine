@@ -933,6 +933,28 @@ uint VulkanDevice::GetQueueFamilyIndex(EQueueType _type) const {
     return VK_QUEUE_FAMILY_IGNORED;
 }
 
+bool VulkanDevice::SupportsTimestampQueries(EQueueType _type) const {
+    if (_type == EQueueType::Ignore || _type == EQueueType::Num) {
+        return false;
+    }
+
+    const uint32 family_index = GetQueueFamilyIndex(_type);
+    if (family_index >= m_device_info.queue_family_props.size()) {
+        return false;
+    }
+
+    const VkQueueFamilyProperties& family_props = m_device_info.queue_family_props[family_index];
+    if (family_props.timestampValidBits == 0) {
+        return false;
+    }
+
+    if (_type == EQueueType::Graphics || _type == EQueueType::Compute) {
+        return m_device_info.core_properties.core_1_0.limits.timestampComputeAndGraphics == VK_TRUE;
+    }
+
+    return true;
+}
+
 QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu) const {
     QueueFamilyIndices indices;
 

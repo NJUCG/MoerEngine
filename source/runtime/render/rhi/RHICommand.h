@@ -323,18 +323,18 @@ private:
 
 struct GPUEvent {
     enum class EType {
-        BeginCommandList,
-        EndCommandList,
+        BeginGPU,
+        EndGPU,
         BeginEvent,
         EndEvent,
-        FrameBound
+        FrameBoundary
     };
 
     EType       type;
     std::string name;
     QueryToken  query;
     uint32      depth{0};
-    uint64      cpu_time_ns{0};
+    uint64      timestamp_ns{0};
 };
 template<typename TRenderTarget>
 concept is_render_target = std::is_same_v<TRenderTarget, ColorAttachment>;
@@ -1786,7 +1786,7 @@ public:
             .name = std::string(_name),
             .query = cmd_list->BeginTimestampQuery(),
             .depth = ++cmd_list->event_depth,
-            .cpu_time_ns = 0
+            .timestamp_ns = 0
         });
     }
 
@@ -1797,7 +1797,7 @@ public:
                 .name = "",
                 .query = cmd_list->BeginTimestampQuery(),
                 .depth = cmd_list->event_depth--,
-                .cpu_time_ns = 0
+                .timestamp_ns = 0
             });
         }
     }
@@ -1815,7 +1815,7 @@ private:
         .name = std::string(name), \
         .query = (cmd_list).BeginTimestampQuery(), \
         .depth = ++(cmd_list).event_depth, \
-        .cpu_time_ns = 0 \
+        .timestamp_ns = 0 \
     })
 
 #define GPU_PROFILE_EVENT_END(cmd_list) \
@@ -1824,7 +1824,7 @@ private:
         .name = "", \
         .query = (cmd_list).BeginTimestampQuery(), \
         .depth = (cmd_list).event_depth--, \
-        .cpu_time_ns = 0 \
+        .timestamp_ns = 0 \
     })
 
 #define GPU_PROFILE_EVENT_SCOPE(cmd_list, name) \

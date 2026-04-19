@@ -5,6 +5,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <cwchar>
+#include <cstring>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -47,24 +49,24 @@ public:
         m_type(type) {}
     virtual ~ICVar() = default;
 
-    const std::string& GetName() const {
+    std::string_view GetName() const {
         return m_name;
     }
-    const std::string& GetHelper() const {
+    std::string_view GetHelper() const {
         return m_helper;
     }
-    const std::string& GetTrueHelper() const {
+    std::string_view GetTrueHelper() const {
         return m_true_helper;
     }
-    const std::string& GetFalseHelper() const {
+    std::string_view GetFalseHelper() const {
         return m_false_helper;
     }
     EType GetType() const {
         return m_type;
     }
 
-    virtual std::string GetValueAsString() const                         = 0;
-    virtual bool        SetValueFromString(std::string_view text, std::string& error) = 0;
+    virtual void        CopyValueString(char* buffer, size_t buffer_size) const = 0;
+    virtual const char* SetValueFromString(std::string_view text) = 0;
 
 private:
     std::string m_name;
@@ -76,7 +78,9 @@ private:
 
 CORE_API bool        Register(ICVar* cvar);
 CORE_API ICVar*      Find(std::string_view name);
-CORE_API Array<ICVar*> GetAll();
+using ICVarVisitor = void (*)(ICVar* cvar, void* user_data);
+CORE_API void        VisitAll(ICVarVisitor visitor, void* user_data);
+CORE_API bool        ApplyIniFile(const std::filesystem::path& file_path);
 
 namespace Detail {
 
@@ -154,7 +158,7 @@ struct ValueTraits<bool> {
     static std::string     ToString(bool value) {
         return value ? "1" : "0";
     }
-    static bool Parse(std::string_view text, bool& out_value, std::string& error) {
+    static const char* Parse(std::string_view text, bool& out_value) {
         std::string lower;
         lower.reserve(text.size());
         for (char c : text) {
@@ -162,14 +166,13 @@ struct ValueTraits<bool> {
         }
         if (lower == "1" || lower == "true" || lower == "on") {
             out_value = true;
-            return true;
+            return nullptr;
         }
         if (lower == "0" || lower == "false" || lower == "off") {
             out_value = false;
-            return true;
+            return nullptr;
         }
-        error = "Type mismatch: expected bool (0/1, true/false, on/off).";
-        return false;
+        return "Type mismatch: expected bool (0/1, true/false, on/off).";
     }
 };
 
@@ -179,20 +182,18 @@ struct ValueTraits<int> {
     static std::string     ToString(int value) {
         return std::to_string(value);
     }
-    static bool Parse(std::string_view text, int& out_value, std::string& error) {
+    static const char* Parse(std::string_view text, int& out_value) {
         const std::string t(text);
         if (t.empty()) {
-            error = "Type mismatch: expected int.";
-            return false;
+            return "Type mismatch: expected int.";
         }
         const char* begin = t.data();
         const char* end   = t.data() + t.size();
         auto [ptr, ec]    = std::from_chars(begin, end, out_value);
         if (ec != std::errc() || ptr != end) {
-            error = "Type mismatch: expected int.";
-            return false;
+            return "Type mismatch: expected int.";
         }
-        return true;
+        return nullptr;
     }
 };
 
@@ -202,19 +203,17 @@ struct ValueTraits<float> {
     static std::string     ToString(float value) {
         return std::to_string(value);
     }
-    static bool Parse(std::string_view text, float& out_value, std::string& error) {
+    static const char* Parse(std::string_view text, float& out_value) {
         const std::string t(text);
         if (t.empty()) {
-            error = "Type mismatch: expected float.";
-            return false;
+            return "Type mismatch: expected float.";
         }
         char* parsed_end = nullptr;
         out_value        = std::strtof(t.c_str(), &parsed_end);
         if (parsed_end == nullptr || parsed_end != t.c_str() + t.size() || !std::isfinite(out_value)) {
-            error = "Type mismatch: expected float.";
-            return false;
+            return "Type mismatch: expected float.";
         }
-        return true;
+        return nullptr;
     }
 };
 
@@ -224,12 +223,23 @@ struct ValueTraits<std::string> {
     static std::string     ToString(const std::string& value) {
         return value;
     }
-    static bool Parse(std::string_view text, std::string& out_value, std::string& error) {
-        (void)error;
+    static const char* Parse(std::string_view text, std::string& out_value) {
         out_value = std::string(text);
-        return true;
+        return nullptr;
     }
 };
+
+inline void CopyTextToBuffer(std::string_view text, char* buffer, size_t buffer_size) {
+    if (!buffer || buffer_size == 0) {
+        return;
+    }
+
+    const size_t copy_len = (std::min)(text.size(), buffer_size - 1);
+    if (copy_len > 0) {
+        std::memcpy(buffer, text.data(), copy_len);
+    }
+    buffer[copy_len] = '\0';
+}
 
 template<typename T>
 concept SupportedValue =
@@ -307,17 +317,18 @@ public:
         }
     }
 
-    std::string GetValueAsString() const override {
-        return Detail::ValueTraits<T>::ToString(*m_value_ptr);
+    void CopyValueString(char* buffer, size_t buffer_size) const override {
+        const std::string value = Detail::ValueTraits<T>::ToString(*m_value_ptr);
+        Detail::CopyTextToBuffer(value, buffer, buffer_size);
     }
 
-    bool SetValueFromString(std::string_view text, std::string& error) override {
+    const char* SetValueFromString(std::string_view text) override {
         T parsed_value{};
-        if (!Detail::ValueTraits<T>::Parse(text, parsed_value, error)) {
-            return false;
+        if (const char* error = Detail::ValueTraits<T>::Parse(text, parsed_value)) {
+            return error;
         }
         Set(parsed_value);
-        return true;
+        return nullptr;
     }
 
 private:

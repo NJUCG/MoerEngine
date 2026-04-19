@@ -45,6 +45,9 @@ public:
     EQueueType GetType() const {
         return type;
     }
+    bool SupportsTimestampQueries() const {
+        return supports_timestamp_queries;
+    }
 
     // 当多个 VkNativeQueue 实例共享同一个 VkQueue handle 时，
     // 必须通过同一把 mutex 互斥 vkQueueSubmit2，否则违反 Vulkan 线程安全要求。
@@ -59,6 +62,7 @@ private:
     Array<VkSemaphoreSubmitInfo> signal_infos;
     VkQueue                      queue;
     EQueueType                   type;
+    bool                         supports_timestamp_queries{false};
     
     // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
     // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
@@ -163,6 +167,7 @@ struct VulkanQueueRuntimeSubmitResult {
     UniquePtr<VulkanAllocator>  allocator{};
     Array<std::function<void()>> callbacks{};
     Array<SignalEvent>          signal_events{};
+    Array<GPUEvent>             gpu_events{};
     uint64                      timeline_value{0};
     bool                        scheduled_completion{false};
 };
@@ -172,6 +177,7 @@ struct VulkanCopyQueueRuntimeSubmitResult {
     UniquePtr<VulkanAllocator>  allocator{};
     Array<std::function<void()>> callbacks{};
     Array<IOSignalEvt>          signal_events{};
+    Array<GPUEvent>             gpu_events{};
     uint64                      timeline_value{0};
     bool                        scheduled_completion{false};
 };

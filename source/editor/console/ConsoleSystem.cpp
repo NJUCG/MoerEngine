@@ -5,9 +5,11 @@
 #include <cstring>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include "config/CVarSystem.h"
 #include "log/LogSystem.h"
+#include "renderer/EditorConsoleVariables.h"
 #include "window/WindowInput.h"
 
 namespace Moer {
@@ -16,39 +18,21 @@ struct InputCallbackUserData {
     ConsoleSystem* console = nullptr;
 };
 
-SharedPtr<EditorConfig> g_console_editor_config;
+struct PumpLogsContext {
+    std::vector<std::string>* lines = nullptr;
+};
 
-void ApplyParallelTranslateToConfig(const bool& old_value, const bool& new_value) {
-    (void)old_value;
-    if (g_console_editor_config) {
-        g_console_editor_config->raytracing_config.process_light_cfg.parallel_mode = new_value;
-    }
-}
+struct CollectCVarListContext {
+    std::vector<std::string>* lines      = nullptr;
+    std::string_view prefix;
+    bool              use_prefix = false;
+    int               count      = 0;
+};
 
-void ApplyNumThreadsToConfig(const int& old_value, const int& new_value) {
-    (void)old_value;
-    if (g_console_editor_config) {
-        g_console_editor_config->raytracing_config.process_light_cfg.num_threads = std::max(1, new_value);
-    }
-}
-
-CVar::TCVar<bool> s_cvar_rhi_parallel_translate_enable(
-    TEXT("RHI.Translate.Parallel"),
-    true,
-    TEXT("Enable parallel translate mode for RHI command translation."),
-    TEXT("true: use parallel translate."),
-    TEXT("false: force single-thread translate."),
-    ApplyParallelTranslateToConfig
-);
-
-CVar::TCVar<int> s_cvar_rhi_parallel_translate_num_threads(
-    TEXT("RHI.Translate.NumThreads"),
-    4,
-    TEXT("Worker thread count used by RHI parallel translate."),
-    TEXT(">=1 to increase parallel workers."),
-    TEXT("invalid values are clamped to 1."),
-    ApplyNumThreadsToConfig
-);
+struct CollectAutocompleteContext {
+    std::vector<std::string>* candidates = nullptr;
+    std::string_view          token;
+};
 
 std::string Trim(std::string_view in) {
     size_t begin = 0;
@@ -118,16 +102,59 @@ std::string CVarTypeName(CVar::EType type) {
     }
 }
 
+std::string GetCVarValueText(const CVar::ICVar* cvar) {
+    if (!cvar) {
+        return {};
+    }
+
+    char buffer[512]{};
+    cvar->CopyValueString(buffer, sizeof(buffer));
+    return buffer;
+}
+
+void AppendRuntimeLogEntry(const LogSystem::ConsoleLogEntryView& entry, void* user_data) {
+    auto* context = static_cast<PumpLogsContext*>(user_data);
+    if (!context || !context->lines) {
+        return;
+    }
+    context->lines->push_back(LevelPrefix(entry.level) + std::string(entry.message));
+}
+
+void AppendCVarListEntry(CVar::ICVar* cvar, void* user_data) {
+    auto* context = static_cast<CollectCVarListContext*>(user_data);
+    if (!context || !context->lines || !cvar) {
+        return;
+    }
+
+    const std::string name(cvar->GetName());
+    if (context->use_prefix && !StartsWithInsensitive(name, context->prefix)) {
+        return;
+    }
+
+    context->lines->push_back(
+        name + " (" + CVarTypeName(cvar->GetType()) + ") = " + GetCVarValueText(cvar)
+    );
+    ++context->count;
+}
+
+void AppendAutocompleteCandidate(CVar::ICVar* cvar, void* user_data) {
+    auto* context = static_cast<CollectAutocompleteContext*>(user_data);
+    if (!context || !context->candidates || !cvar) {
+        return;
+    }
+
+    const std::string name(cvar->GetName());
+    if (StartsWithInsensitive(name, context->token)) {
+        context->candidates->push_back(name);
+    }
+}
+
 } // namespace
 
 ConsoleSystem::ConsoleSystem(const SharedPtr<EditorConfig>& editor_config) : m_editor_config(editor_config) {
-    g_console_editor_config = editor_config;
-    s_cvar_rhi_parallel_translate_enable.Set(
-        editor_config->raytracing_config.process_light_cfg.parallel_mode
-    );
-    s_cvar_rhi_parallel_translate_num_threads.Set(
-        std::max(1, editor_config->raytracing_config.process_light_cfg.num_threads)
-    );
+    if (m_editor_config) {
+        Render::EditorConsoleVariables::ApplyToEditorConfig(*m_editor_config);
+    }
 }
 
 void ConsoleSystem::ExecuteCommand(std::string_view line) {
@@ -155,19 +182,18 @@ void ConsoleSystem::ExecuteCommand(std::string_view line) {
         if (trimmed.size() > 9) {
             prefix = Trim(trimmed.substr(9));
         }
-        const bool use_prefix = !prefix.empty();
-        int        count      = 0;
-        for (CVar::ICVar* cvar : CVar::GetAll()) {
-            if (!cvar) {
-                continue;
-            }
-            const std::string& name = cvar->GetName();
-            if (!use_prefix || StartsWithInsensitive(name, prefix)) {
-                AppendOutput(name + " (" + CVarTypeName(cvar->GetType()) + ") = " + cvar->GetValueAsString());
-                ++count;
-            }
+        std::vector<std::string> lines;
+        CollectCVarListContext context{
+            .lines      = &lines,
+            .prefix     = prefix,
+            .use_prefix = !prefix.empty(),
+            .count      = 0,
+        };
+        CVar::VisitAll(&AppendCVarListEntry, &context);
+        for (const std::string& line_text : lines) {
+            AppendOutput(line_text);
         }
-        if (count == 0) {
+        if (context.count == 0) {
             AppendOutput("No cvar matches prefix: " + prefix);
         }
         return;
@@ -193,67 +219,78 @@ void ConsoleSystem::ExecuteCommand(std::string_view line) {
     }
 
     if (arg == "?") {
-        AppendOutput(path + " = " + cvar->GetValueAsString());
+        AppendOutput(path + " = " + GetCVarValueText(cvar));
         if (!cvar->GetHelper().empty()) {
-            AppendOutput("  help: " + cvar->GetHelper());
+            AppendOutput("  help: " + std::string(cvar->GetHelper()));
         }
         if (cvar->GetType() == CVar::EType::Bool) {
             if (!cvar->GetTrueHelper().empty()) {
-                AppendOutput("  true: " + cvar->GetTrueHelper());
+                AppendOutput("  true: " + std::string(cvar->GetTrueHelper()));
             }
             if (!cvar->GetFalseHelper().empty()) {
-                AppendOutput("  false: " + cvar->GetFalseHelper());
+                AppendOutput("  false: " + std::string(cvar->GetFalseHelper()));
             }
         }
         return;
     }
 
-    std::string error;
-    if (!cvar->SetValueFromString(arg, error)) {
-        AppendOutput("Error: " + error);
+    if (const char* error = cvar->SetValueFromString(arg)) {
+        AppendOutput(std::string("Error: ") + error);
         return;
     }
 
-    AppendOutput(path + " = " + cvar->GetValueAsString());
+    AppendOutput(path + " = " + GetCVarValueText(cvar));
 }
 
 void ConsoleSystem::TickUI() {
+    m_editor_console_input_active   = false;
+
     if (m_editor_config) {
-        m_editor_config->raytracing_config.process_light_cfg.parallel_mode =
-            s_cvar_rhi_parallel_translate_enable.Get();
-        m_editor_config->raytracing_config.process_light_cfg.num_threads =
-            std::max(1, s_cvar_rhi_parallel_translate_num_threads.Get());
+        Render::EditorConsoleVariables::CaptureFromEditorConfig(*m_editor_config);
     }
 
     PumpRuntimeLogs();
     HandleHotkeys();
 
-    if (!IsVisible()) {
-        WindowInput::Get().force_cursor_visible = false;
-        WindowInput::Get().block_camera_keyboard_input = false;
-        return;
+    if (IsRenderConsoleVisible()) {
+        if (m_mode == EDisplayMode::Inline) {
+            DrawRenderInlineConsole();
+        } else {
+            DrawRenderWindowedConsole();
+        }
     }
+
+    if (m_editor_console_page_open) {
+        DrawEditorConsolePanel();
+    }
+
+    if (m_editor_config) {
+        Render::EditorConsoleVariables::ApplyToEditorConfig(*m_editor_config);
+    }
+
     const bool play_capture = m_editor_config && m_editor_config->play_mode_enabled &&
                               m_editor_config->play_mode_capture_input;
-    WindowInput::Get().force_cursor_visible = !play_capture;
-
-    if (m_mode == EDisplayMode::Inline) {
-        DrawInlineConsole();
-    } else {
-        DrawWindowedConsole();
-    }
-
+    const bool editor_console_interacting = IsEditorConsoleInteracting();
+    const bool console_requests_cursor = editor_console_interacting || IsRenderConsoleVisible();
+    WindowInput::Get().force_cursor_visible = console_requests_cursor;
     WindowInput::Get().block_camera_keyboard_input =
-        IsVisible() && (ImGui::GetIO().WantCaptureKeyboard || m_focus_input_next_frame);
+        (editor_console_interacting || IsRenderConsoleVisible()) &&
+        (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantTextInput || m_focus_input_next_frame);
+
+    if (!play_capture) {
+        WindowInput::Get().force_cursor_visible = false;
+        WindowInput::Get().block_camera_keyboard_input = editor_console_interacting;
+    }
 }
 
 void ConsoleSystem::PumpRuntimeLogs() {
-    std::vector<LogSystem::ConsoleLogEntry> logs;
-    if (!LogSystem::PollConsoleLogs(m_next_log_sequence, logs, 256)) {
+    std::vector<std::string> lines;
+    PumpLogsContext context{.lines = &lines};
+    if (!LogSystem::PollConsoleLogs(m_next_log_sequence, &AppendRuntimeLogEntry, &context, 256)) {
         return;
     }
-    for (const auto& entry : logs) {
-        AppendOutput(LevelPrefix(entry.level) + entry.message);
+    for (const std::string& line_text : lines) {
+        AppendOutput(line_text);
     }
 }
 
@@ -261,12 +298,22 @@ void ConsoleSystem::HandleHotkeys() {
     const bool grave_switch = WindowInput::Get().key_button_switch_state[KeyButtons::GRAVE_ACCENT];
     if (grave_switch != m_last_grave_switch_state) {
         m_last_grave_switch_state = grave_switch;
-        CycleMode();
+        if (IsRenderWindowActive()) {
+            CycleMode();
+        } else {
+            ToggleEditorConsolePage();
+        }
     }
 
     const bool escape_down = WindowInput::Get().key_button_state[KeyButtons::ESCAPE];
-    if (escape_down && !m_last_escape_down && IsVisible()) {
-        m_mode = EDisplayMode::Hidden;
+    if (escape_down && !m_last_escape_down) {
+        if (m_editor_console_page_open) {
+            m_editor_console_page_open = false;
+            m_focus_window_next_frame  = false;
+        } else if (m_mode != EDisplayMode::Hidden) {
+            m_mode = EDisplayMode::Hidden;
+            m_focus_window_next_frame = false;
+        }
     }
     m_last_escape_down = escape_down;
 }
@@ -283,13 +330,24 @@ void ConsoleSystem::CycleMode() {
             m_mode = EDisplayMode::Hidden;
             break;
     }
-    m_focus_input_next_frame = IsVisible();
-    m_focus_window_next_frame = IsVisible();
-    m_focus_input_frames     = IsVisible() ? 3 : 0;
+    m_focus_input_next_frame  = IsRenderConsoleVisible();
+    m_focus_window_next_frame = IsRenderConsoleVisible();
+    m_focus_input_frames      = IsRenderConsoleVisible() ? 3 : 0;
 }
 
-bool ConsoleSystem::IsVisible() const {
-    return m_mode != EDisplayMode::Hidden;
+void ConsoleSystem::ToggleEditorConsolePage() {
+    m_editor_console_page_open = !m_editor_console_page_open;
+    m_focus_input_next_frame   = m_editor_console_page_open;
+    m_focus_window_next_frame  = m_editor_console_page_open;
+    m_focus_input_frames       = m_editor_console_page_open ? 3 : 0;
+}
+
+bool ConsoleSystem::IsRenderWindowActive() const {
+    return WindowInput::Get().is_active;
+}
+
+bool ConsoleSystem::IsRenderConsoleVisible() const {
+    return IsRenderWindowActive() && m_mode != EDisplayMode::Hidden;
 }
 
 void ConsoleSystem::AppendOutput(std::string line) {
@@ -325,7 +383,6 @@ void ConsoleSystem::DrawInputLine(const char* id) {
 
     UpdateAutocompleteCandidates();
 
-    ImGui::PushItemWidth(-85.0f);
     if (m_focus_input_next_frame || m_focus_input_frames > 0) {
         ImGui::SetKeyboardFocusHere();
         m_focus_input_next_frame = false;
@@ -335,8 +392,10 @@ void ConsoleSystem::DrawInputLine(const char* id) {
     }
 
     InputCallbackUserData cb_user_data{.console = this};
-    bool submit_by_enter = ImGui::InputText(
+    ImGui::SetNextItemWidth(std::max(ImGui::GetContentRegionAvail().x - 78.0f, 120.0f));
+    bool submit_by_enter = ImGui::InputTextWithHint(
         id,
+        "Enter console command",
         m_input_buffer.data(),
         m_input_buffer.size(),
         ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory |
@@ -347,7 +406,8 @@ void ConsoleSystem::DrawInputLine(const char* id) {
         },
         &cb_user_data
     );
-    ImGui::PopItemWidth();
+    m_editor_console_input_active =
+        m_editor_console_input_active || ImGui::IsItemActive() || ImGui::IsItemFocused();
     ImGui::SameLine();
     bool submit_by_button = ImGui::Button(run_button_id.c_str(), ImVec2(70.0f, 0.0f));
 
@@ -363,14 +423,72 @@ void ConsoleSystem::DrawInputLine(const char* id) {
     }
 }
 
-void ConsoleSystem::DrawInlineConsole() {
+void ConsoleSystem::DrawEditorConsolePanel() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float          width    = viewport->WorkSize.x - 16.0f;
-    const float          height   = 180.0f;
-    const ImVec2         pos      = ImVec2(viewport->WorkPos.x + 8.0f, viewport->WorkPos.y + viewport->WorkSize.y - height - 8.0f);
+    const float width = std::min(viewport->WorkSize.x - 16.0f, 640.0f);
+    const float height = 260.0f;
+    const ImVec2 pos = ImVec2(
+        viewport->WorkPos.x + 8.0f,
+        viewport->WorkPos.y + viewport->WorkSize.y - height - 8.0f
+    );
 
+    ImGui::SetNextWindowPos(pos, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_FirstUseEver);
+    if (m_focus_window_next_frame) {
+        ImGui::SetNextWindowFocus();
+    }
+
+    bool open = m_editor_console_page_open;
+    if (ImGui::Begin("Console", &open)) {
+        if (m_focus_window_next_frame) {
+            ImGui::SetWindowFocus();
+            m_focus_window_next_frame = false;
+        }
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            m_focus_input_next_frame = true;
+            m_focus_input_frames = std::max(m_focus_input_frames, 2);
+        }
+
+        ImGui::TextUnformatted("Usage: <path> ?   or   <path> <value>");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear")) {
+            m_output_lines.clear();
+            LogSystem::ClearConsoleLogs();
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("AutoScroll", &m_auto_scroll);
+
+        DrawOutputPanel("##EditorConsoleResidentOutput", 34.0f + GetAutocompletePanelHeight());
+        DrawInputLine("##EditorConsoleResidentInput");
+    }
+    ImGui::End();
+
+    if (!open) {
+        m_editor_console_page_open = false;
+        m_focus_window_next_frame = false;
+    }
+}
+
+bool ConsoleSystem::IsEditorConsoleInteracting() const {
+    return m_editor_console_page_open &&
+           (m_editor_console_input_active || m_focus_input_next_frame || m_focus_input_frames > 0);
+}
+
+void ConsoleSystem::DrawRenderInlineConsole() {
+    ImGuiWindow* scene_window = ImGui::FindWindowByName("Scene Color");
+    if (!scene_window || !scene_window->WasActive) {
+        return;
+    }
+
+    const ImRect bounds = scene_window->InnerRect;
+    const float width = std::min(bounds.GetWidth() - 16.0f, 680.0f);
+    const float height = std::min(bounds.GetHeight() * 0.45f, 220.0f);
+    const ImVec2 pos = ImVec2(bounds.Min.x + 8.0f, bounds.Max.y - height - 8.0f);
+
+    ImGui::SetNextWindowViewport(scene_window->ViewportId);
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(std::max(width, 320.0f), std::max(height, 120.0f)), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.9f);
     if (m_focus_window_next_frame) {
         ImGui::SetNextWindowFocus();
@@ -380,23 +498,36 @@ void ConsoleSystem::DrawInlineConsole() {
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoDocking;
 
-    if (ImGui::Begin("##ConsoleInlineWindow", nullptr, flags)) {
+    if (ImGui::Begin("##RenderConsoleInlineWindow", nullptr, flags)) {
         if (m_focus_window_next_frame) {
             ImGui::SetWindowFocus();
             m_focus_window_next_frame = false;
         }
-        DrawOutputPanel("##ConsoleInlineOutput", 34.0f + GetAutocompletePanelHeight());
-        DrawInputLine("##ConsoleInlineInput");
+        DrawOutputPanel("##RenderConsoleInlineOutput", 34.0f + GetAutocompletePanelHeight());
+        DrawInputLine("##RenderConsoleInlineInput");
     }
     ImGui::End();
 }
 
-void ConsoleSystem::DrawWindowedConsole() {
-    bool open = true;
+void ConsoleSystem::DrawRenderWindowedConsole() {
+    ImGuiWindow* scene_window = ImGui::FindWindowByName("Scene Color");
+    if (!scene_window || !scene_window->WasActive) {
+        return;
+    }
+
+    const ImRect bounds = scene_window->InnerRect;
+    ImGui::SetNextWindowViewport(scene_window->ViewportId);
+    ImGui::SetNextWindowPos(ImVec2(bounds.Min.x + 24.0f, bounds.Min.y + 24.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(
+        ImVec2(std::min(bounds.GetWidth() - 48.0f, 720.0f), std::min(bounds.GetHeight() - 48.0f, 420.0f)),
+        ImGuiCond_Always
+    );
     if (m_focus_window_next_frame) {
         ImGui::SetNextWindowFocus();
     }
-    if (!ImGui::Begin("Console", &open, ImGuiWindowFlags_NoDocking)) {
+
+    bool open = true;
+    if (!ImGui::Begin("Render Console", &open, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings)) {
         ImGui::End();
         if (!open) {
             m_mode = EDisplayMode::Hidden;
@@ -404,6 +535,7 @@ void ConsoleSystem::DrawWindowedConsole() {
         }
         return;
     }
+
     if (m_focus_window_next_frame) {
         ImGui::SetWindowFocus();
         m_focus_window_next_frame = false;
@@ -413,18 +545,21 @@ void ConsoleSystem::DrawWindowedConsole() {
         m_focus_window_next_frame = false;
     }
 
-    ImGui::TextUnformatted("Usage: <path> ?   or   <path> <value>");
+    ImGui::TextUnformatted("Render-scoped console sub display.");
     ImGui::SameLine();
-    if (ImGui::Button("Clear")) {
+    if (ImGui::Button("Hide")) {
+        m_mode = EDisplayMode::Hidden;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clear##RenderConsole")) {
         m_output_lines.clear();
         LogSystem::ClearConsoleLogs();
     }
     ImGui::SameLine();
-    ImGui::Checkbox("AutoScroll", &m_auto_scroll);
+    ImGui::Checkbox("AutoScroll##RenderConsole", &m_auto_scroll);
 
-    DrawOutputPanel("##ConsoleWindowedOutput", 34.0f + GetAutocompletePanelHeight());
-    DrawInputLine("##ConsoleWindowedInput");
-
+    DrawOutputPanel("##RenderConsoleWindowedOutput", 34.0f + GetAutocompletePanelHeight());
+    DrawInputLine("##RenderConsoleWindowedInput");
     ImGui::End();
 }
 
@@ -457,15 +592,11 @@ void ConsoleSystem::UpdateAutocompleteCandidatesForInput(std::string_view raw_in
     if (StartsWithInsensitive("cvar", token)) {
         m_autocomplete_candidates.push_back("cvar list");
     }
-    for (CVar::ICVar* cvar : CVar::GetAll()) {
-        if (!cvar) {
-            continue;
-        }
-        const std::string& name = cvar->GetName();
-        if (StartsWithInsensitive(name, token)) {
-            m_autocomplete_candidates.push_back(name);
-        }
-    }
+    CollectAutocompleteContext context{
+        .candidates = &m_autocomplete_candidates,
+        .token      = token,
+    };
+    CVar::VisitAll(&AppendAutocompleteCandidate, &context);
 
     std::sort(m_autocomplete_candidates.begin(), m_autocomplete_candidates.end());
     m_autocomplete_candidates.erase(

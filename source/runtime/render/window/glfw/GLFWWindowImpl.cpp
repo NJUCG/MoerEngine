@@ -260,8 +260,7 @@ void GLFWWindowImpl::TickCursorState() {
     // hide cursor when **left or right** mouse button is pressed
     bool b_should_hide = WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
                          WindowInput::Get().mouse_button_state[MouseButtons::Right] ||
-                         WindowInput::Get().mouse_button_state[MouseButtons::Middle] ||
-                         WindowInput::Get().key_button_switch_state[KeyButtons::F];
+                         WindowInput::Get().mouse_button_state[MouseButtons::Middle];
 
     // is_active <=> cursor is hovering on the SceneColor window
     if (WindowInput::Get().is_active && b_should_hide) {

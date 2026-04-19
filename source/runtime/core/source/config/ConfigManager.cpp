@@ -1,5 +1,6 @@
 #include "config/ConfigManager.h"
 
+#include "config/CVarSystem.h"
 #include "config/ini.h"
 #include "log/LogSystem.h"
 #include "misc/MacroUtils.h"
@@ -49,6 +50,13 @@ void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
     m_config   = Config::GlobalConfig::LoadConfigFromTomlFile(config_path.generic_string());
     scene_path = m_config.engine.scene.scene_path;
     cache_path = _workspace_path / "cache";
+
+    const std::filesystem::path console_variable_path = _workspace_path / "ConsoleVariable.ini";
+    if (std::filesystem::exists(console_variable_path)) {
+        CVar::ApplyIniFile(console_variable_path);
+    } else {
+        LOG_INFO("Console variable override file not found, skip: {}", console_variable_path.generic_string());
+    }
 }
 
 const std::filesystem::path& ConfigManager::GetWorkspacePath() const {
