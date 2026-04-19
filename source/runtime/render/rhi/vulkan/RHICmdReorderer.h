@@ -1498,6 +1498,12 @@ public:
             case CustomCmd::CustomCmdId::CUSTOM_DISPATCH:
                 VisitCmd(static_cast<const CustomDispatchCmd*>(_cmd));
                 break;
+            case CustomCmd::CustomCmdId::CUSTOM_TRANSLATE_FENCE:
+            case CustomCmd::CustomCmdId::CUSTOM_TRANSLATE_LAMBDA:
+            case CustomCmd::CustomCmdId::CUSTOM_FRAME_TICK:
+                layer_offset = m_cmd_lists.size();
+                AddCmd(_cmd, layer_offset);
+                break;
             default:
                 assert(false && "Custom Command Not Supported for Reorder");
         }

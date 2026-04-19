@@ -26,6 +26,17 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(MOER_USING_MSVC_ABI OFF)
+if (MSVC)
+    set(MOER_USING_MSVC_ABI ON)
+elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    set(MOER_USING_MSVC_ABI ON)
+endif()
+
+if (MOER_USING_MSVC_ABI AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
 # 统一输出路径：MSVC 与 Clang(Ninja) 均使用 target/bin/<Config>/ 与 target/lib/<Config>/
 # $<CONFIG> 在 multi-config(MSVC) 下为构建时选择的配置，在 single-config(Ninja) 下为 CMAKE_BUILD_TYPE
 set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target")
@@ -60,6 +71,13 @@ if(${MSVC})
     # Support Chinese Comments
     add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
     add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+endif()
+
+if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    add_compile_options(
+        "$<$<COMPILE_LANGUAGE:CXX>:-Xclang>"
+        "$<$<COMPILE_LANGUAGE:CXX>:--dependent-lib=$<IF:$<CONFIG:Debug>,msvcprtd,msvcprt>>"
+    )
 endif()
 
 # 子目录：3rdparty

@@ -101,14 +101,14 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
 
             auto view = m_logical_scene.r().view<const ecs::CMaterial>();
 
-            auto to_hdl = [&](const entt::entity entity) -> int64 {
+            auto to_hdl = [&](const entt::entity entity) -> int {
                 if (entity == entt::null) {
                     return -1; // 不存在，应该使用factor
                 }
                 assert(
                     m_map_texture_entity_to_bindless_handle.contains(entity) && "Texture entity not found in map"
                 );
-                return m_map_texture_entity_to_bindless_handle.at(entity);
+                return static_cast<int>(m_map_texture_entity_to_bindless_handle.at(entity));
             };
 
             view.each([&](const auto entity, const ecs::CMaterial& c_material) {

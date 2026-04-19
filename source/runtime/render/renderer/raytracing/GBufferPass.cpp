@@ -7,10 +7,9 @@
 
 namespace Moer::Render::Raytracing {
 
-GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager, Scene& _scene) :
+GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager) :
     device(_device),
-    manager(_manager),
-    scene(_scene) {
+    manager(_manager) {
 
     gbuffer_constants = device.CreateBuffer<Moer::byte>(
         "Raytracing::gbuffer_constants", sizeof(GBufferConstants), EBufferUsageFlags::CONSTANT_BUFFER
@@ -72,7 +71,7 @@ void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             frame_rt.motion,
             frame_rt.clip_depth,
             _rt_ctx.rt_scene->GetTlas(),
-            scene.GetBindlessArray()
+            _rt_ctx.GetBindlessArray()
         )
         .Dispatch(
             uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1),

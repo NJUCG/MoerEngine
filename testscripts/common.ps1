@@ -13,9 +13,12 @@
       - Invoke-ExeSync       : run an exe synchronously, capture output, return exit code
       - Invoke-ExeTimed      : run an exe, kill after N seconds, return $true if survived
       - Write-Summary        : append a line to summary.txt
-      - Test-LogForErrors    : scan log for crashes AND Vulkan validation errors/warnings
+    - Test-LogForErrors    : scan log for crashes AND Vulkan validation errors
+    - Get-DescriptorHeapCapabilityState : classify descriptor-heap capability from runtime log
+        - Get-StructuredTestCaseResults : parse standardized [TESTCASE][PASS|FAIL|SKIP] markers
       - Save-Minidumps       : copy *.dmp / *.mdmp into run dir
-      - Register-Pass/Fail   : record test result
+    - Register-Pass/Fail/Skip : record test result
+    - Register-Subtest     : record grouped subtest result without affecting top-level exit code
       - Finish-TestRun       : print final PASSED/FAILED banner and exit
 
     Each script must call Initialize-TestRun before anything else.
@@ -27,6 +30,10 @@ $script:RunDir      = $null
 $script:SummaryFile = $null
 $script:PassCount   = 0
 $script:FailCount   = 0
+$script:SkipCount   = 0
+$script:SubPassCount = 0
+$script:SubFailCount = 0
+$script:SubSkipCount = 0
 $script:Config      = "Debug"
 $script:Root        = $null
 
@@ -51,6 +58,10 @@ function Initialize-TestRun {
     $script:SummaryFile = Join-Path $script:RunDir "summary.txt"
     $script:PassCount   = 0
     $script:FailCount   = 0
+    $script:SkipCount   = 0
+    $script:SubPassCount = 0
+    $script:SubFailCount = 0
+    $script:SubSkipCount = 0
 
     New-Item -ItemType Directory -Path $script:RunDir -Force | Out-Null
 
@@ -64,6 +75,22 @@ function Initialize-TestRun {
 # ─────────────────────────────────────────────────────────────────────────────
 function Write-Summary([string]$Line) {
     Add-Content -Path $script:SummaryFile -Value $Line -Encoding UTF8
+}
+
+function Write-ResultLine(
+    [Parameter(Mandatory)][string]$Scope,
+    [Parameter(Mandatory)][string]$Label,
+    [Parameter(Mandatory)][ValidateSet("PASSED","FAILED","SKIPPED")][string]$Status,
+    [string]$Reason = ""
+) {
+    $msg = if ($Reason) { "[$Scope][$Label] $Status  ($Reason)" } else { "[$Scope][$Label] $Status" }
+    $color = switch ($Status) {
+        "PASSED" { "Green" }
+        "FAILED" { "Red" }
+        default { "DarkYellow" }
+    }
+    Write-Host $msg -ForegroundColor $color
+    Write-Summary $msg
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -85,8 +112,12 @@ function Build-Target {
     }
 
     Write-Host "[Build] cmake --build $BuildDir --config $($script:Config) --target $Target"
-    & cmake --build $BuildDir --config $script:Config --target $Target
-    if ($LASTEXITCODE -ne 0) {
+    & cmake --build $BuildDir --config $script:Config --target $Target | Out-Host
+    $buildExitCode = $LASTEXITCODE
+    if ($null -eq $buildExitCode) {
+        $buildExitCode = 0
+    }
+    if ($buildExitCode -ne 0) {
         Write-Host "[ERROR] Build failed for target: $Target" -ForegroundColor Red
         Write-Summary "[ERROR] Build failed for target: $Target"
         $script:FailCount++
@@ -122,6 +153,27 @@ function Merge-Stderr([string]$MainLog, [string]$ErrLog) {
         }
         Remove-Item $ErrLog -ErrorAction SilentlyContinue
     }
+}
+
+function Stop-ProcessTree {
+<#
+.SYNOPSIS
+    Force-kills a process and its child process tree.
+#>
+    param([Parameter(Mandatory)][int]$ProcessId)
+
+    $taskkill = Start-Process -FilePath "taskkill.exe" -ArgumentList @("/PID", "$ProcessId", "/T", "/F") -NoNewWindow -PassThru -Wait
+    return $taskkill.ExitCode -eq 0 -or $taskkill.ExitCode -eq 128 -or $taskkill.ExitCode -eq 255
+}
+
+function Test-ProcessExited {
+<#
+.SYNOPSIS
+    Returns $true when a process id no longer exists.
+#>
+    param([Parameter(Mandatory)][int]$ProcessId)
+
+    return $null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -188,8 +240,16 @@ function Invoke-ExeTimed {
 
     $script:TimedExitCode = 0
     if (-not $survived) {
-        $proc.Kill()
+        $killOk = Stop-ProcessTree -ProcessId $proc.Id
+        if (-not $killOk) {
+            Write-Host "[ERROR] Failed to kill process tree for PID $($proc.Id)" -ForegroundColor Red
+        }
         $proc.WaitForExit()
+        if (-not (Test-ProcessExited -ProcessId $proc.Id)) {
+            Write-Host "[ERROR] Process tree still running for PID $($proc.Id)" -ForegroundColor Red
+            $script:TimedExitCode = -1
+            return $false
+        }
         return $true   # killed at timeout = normal
     } else {
         $script:TimedExitCode = $proc.ExitCode
@@ -233,6 +293,65 @@ function Test-LogForErrors {
     return @($hits)
 }
 
+function Get-DescriptorHeapCapabilityState {
+<#
+.SYNOPSIS
+    Parses a runtime log and returns one of: Enabled, Skipped, Unknown.
+#>
+    param([Parameter(Mandatory)][string]$LogFile)
+
+    if (-not (Test-Path $LogFile)) {
+        return [PSCustomObject]@{ State = "Unknown"; Reason = "log missing" }
+    }
+
+    $enabled = Select-String -Path $LogFile -Pattern "Descriptor Heap initialized" -CaseSensitive:$false
+    if ($enabled) {
+        return [PSCustomObject]@{ State = "Enabled"; Reason = "runtime reported descriptor heap initialization" }
+    }
+
+    $skipped = Select-String -Path $LogFile -Pattern "descriptor heap.*(unsupported|disabled|skip|not supported)" -CaseSensitive:$false
+    if ($skipped) {
+        return [PSCustomObject]@{ State = "Skipped"; Reason = ($skipped | Select-Object -First 1).Line }
+    }
+
+    return [PSCustomObject]@{ State = "Unknown"; Reason = "runtime did not report descriptor heap capability state" }
+}
+
+function Get-StructuredTestCaseResults {
+<#
+.SYNOPSIS
+    Parses standardized per-case markers from a runtime log.
+
+.DESCRIPTION
+    Expected lines:
+      [TESTCASE][PASS] CaseName
+      [TESTCASE][FAIL] CaseName :: reason
+      [TESTCASE][SKIP] CaseName :: reason
+#>
+    param([Parameter(Mandatory)][string]$LogFile)
+
+    if (-not (Test-Path $LogFile)) { return @() }
+
+    $results = @()
+    $pattern = '\[TESTCASE\]\[(PASS|FAIL|SKIP)\]\s+([A-Za-z0-9_.-]+)(?:\s*::\s*(.*))?'
+    foreach ($line in Get-Content $LogFile) {
+        if ($line -match $pattern) {
+            $status = switch ($matches[1]) {
+                "PASS" { "PASSED" }
+                "FAIL" { "FAILED" }
+                default { "SKIPPED" }
+            }
+            $results += [PSCustomObject]@{
+                Name   = $matches[2]
+                Status = $status
+                Reason = $matches[3]
+            }
+        }
+    }
+
+    return @($results)
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 function Save-Minidumps([string]$BinDir) {
 <#
@@ -250,16 +369,32 @@ function Save-Minidumps([string]$BinDir) {
 
 # ─────────────────────────────────────────────────────────────────────────────
 function Register-Pass([string]$Label) {
-    Write-Host "[$Label] PASSED" -ForegroundColor Green
-    Write-Summary "[$Label] PASSED"
+    Write-ResultLine -Scope "Test" -Label $Label -Status "PASSED"
     $script:PassCount++
 }
 
 function Register-Fail([string]$Label, [string]$Reason = "") {
-    $msg = if ($Reason) { "[$Label] FAILED  ($Reason)" } else { "[$Label] FAILED" }
-    Write-Host $msg -ForegroundColor Red
-    Write-Summary $msg
+    Write-ResultLine -Scope "Test" -Label $Label -Status "FAILED" -Reason $Reason
     $script:FailCount++
+}
+
+function Register-Skip([string]$Label, [string]$Reason = "") {
+    Write-ResultLine -Scope "Test" -Label $Label -Status "SKIPPED" -Reason $Reason
+    $script:SkipCount++
+}
+
+function Register-Subtest(
+    [Parameter(Mandatory)][string]$Group,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][ValidateSet("PASSED","FAILED","SKIPPED")][string]$Status,
+    [string]$Reason = ""
+) {
+    Write-ResultLine -Scope "$Group/$Name" -Label "Result" -Status $Status -Reason $Reason
+    switch ($Status) {
+        "PASSED" { $script:SubPassCount++ }
+        "FAILED" { $script:SubFailCount++ }
+        "SKIPPED" { $script:SubSkipCount++ }
+    }
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -268,12 +403,14 @@ function Finish-TestRun {
 .SYNOPSIS  Print final banner, write summary footer, and exit with correct code.
 #>
     Write-Summary "============================================================"
-    Write-Summary " PASSED: $($script:PassCount)   FAILED: $($script:FailCount)"
+    Write-Summary " TESTS   : PASSED=$($script:PassCount)   FAILED=$($script:FailCount)   SKIPPED=$($script:SkipCount)"
+    Write-Summary " SUBTEST : PASSED=$($script:SubPassCount)   FAILED=$($script:SubFailCount)   SKIPPED=$($script:SubSkipCount)"
     Write-Summary "============================================================"
 
     $color = if ($script:FailCount -gt 0) { "Red" } else { "Green" }
     Write-Host "============================================================" -ForegroundColor $color
-    Write-Host " RESULT :  PASSED=$($script:PassCount)   FAILED=$($script:FailCount)" -ForegroundColor $color
+    Write-Host " TESTS   : PASSED=$($script:PassCount)   FAILED=$($script:FailCount)   SKIPPED=$($script:SkipCount)" -ForegroundColor $color
+    Write-Host " SUBTEST : PASSED=$($script:SubPassCount)   FAILED=$($script:SubFailCount)   SKIPPED=$($script:SubSkipCount)" -ForegroundColor $color
     Write-Host " Logs   :  $($script:RunDir)"
     Write-Host "============================================================"
     Write-Host ""

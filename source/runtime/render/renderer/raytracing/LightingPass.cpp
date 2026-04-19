@@ -10,7 +10,7 @@
 
 namespace Moer::Render::Raytracing {
 
-LightingPass::LightingPass(ShaderManager& _manager, Scene& _scene) : scene(_scene) {
+LightingPass::LightingPass(ShaderManager& _manager) {
 
     presample_light_pipeline =
         std::move(_manager.Compute<PresampleLightPipeline>("pipelines/raytracing/lighting/precompute/PresampleLight.hlsl"));
@@ -98,7 +98,7 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         ctx.frame_rt.specular_lighting, ctx.frame_rt.temporal_sample_pos, ctx.frame_rt.gradients,         \
         b_current_frame ? ctx.frame_rt.restir_luminance : ctx.frame_rt.prev_luminance,                    \
         ctx.frame_rt.prev_diffuse_lighting, ctx.ris_buf, ctx.ris_light_data_buf, ctx.neighbor_offset_buf, \
-        scene.GetBindlessArray()
+        ctx.GetBindlessArray()
 
     auto div_ceil = [](uint _a, uint _b) -> uint {
         return (_a + _b - 1) / _b;

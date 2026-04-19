@@ -33,7 +33,7 @@
 [[vk::binding(11, DI_BINDING_SLOT)]] RWBuffer<uint4> rw_ris_light_data_buffer;
 [[vk::binding(12, DI_BINDING_SLOT)]] Buffer<float2>  neighbor_offset_buf;
 
-BINDLESS_BINDINGS(3, 2, 4, 5)
+ BINDLESS_BINDINGS(3)
 #include <materials/Material.hlsli>
 #include <pipelines/raytracing/lighting/common/PolymorphicLight.hlsli>
 

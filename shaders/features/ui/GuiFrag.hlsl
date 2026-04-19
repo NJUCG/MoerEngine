@@ -16,7 +16,8 @@ float4 main(PS_INPUT input) : SV_Target {
     return 0.f;
   }
   TextureHandle tex = TextureHandle(draw_param.image_handle);
-  float4 out_col = input.col * tex.Sample2D<float4>(input.uv);
+  float4 sampled_color = tex.Sample2D<float4>(input.uv);
+  float4 out_col = input.col * sampled_color;
   // out_col.a = 0.5f;
   return out_col;
 }

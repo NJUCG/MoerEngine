@@ -5,8 +5,9 @@
 #include <pipelines/raytracing/lighting/lib/restir/GridCommon.hlsli>
 #include <core/math/Math.hlsli>
 #include <shared/utils/Packing.h>
+#include <shared/nrd/NRDDefinition.h>
 
-BINDLESS_BINDINGS(1, 2, 3, 4);
+BINDLESS_BINDINGS(1);
 
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::VisualizeParams> param;
 [[vk::binding(1, 0)]] Texture2D<float3> direct_lighting : register(t0);
@@ -15,6 +16,19 @@ BINDLESS_BINDINGS(1, 2, 3, 4);
 [[vk::binding(5, 0)]] Texture2D<float> view_depth : register(t3);
 [[vk::binding(6, 0)]] Texture2D<float4> emission : register(t4);
 [[vk::binding(7, 0)]] RWTexture2D<float4> output : register(u0);
+
+float3 SafeNormalize(float3 v) {
+  return v * rsqrt(dot(v, v) + 1e-9f);
+}
+
+float4 UnpackDenoiserNormalAndRoughness(float4 packed_normal_roughness) {
+  float4 decoded = packed_normal_roughness;
+
+  // Current project NRD config uses RGBA8_UNORM normals and linear roughness.
+  decoded.xyz = decoded.xyz * 2.0f - 1.0f;
+  decoded.xyz = SafeNormalize(decoded.xyz);
+  return decoded;
+}
 
 float3 ViewdepthToWorldPos(Moer::ViewParam _view, int2 _pixel_pos,
                            float _view_depth) {
@@ -55,38 +69,36 @@ float GetPrevDepth(Moer::ViewParam _view, int2 _pixel_pos) {
   return tex_handle.SampleLevel<float>(uv, 0);
 }
 
-float3 GetMotion(Moer::ViewParam _view, int2 _pixel_pos) {
+float4 GetViewDepthColor(Moer::ViewParam _view, int2 _pixel_pos) {
+  float depth = GetDepth(_view, _pixel_pos);
+  if (depth <= 0.0f || depth >= NRD_FP16_MAX * 0.5f) {
+    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+  }
+
+  float depth_vis = 1.0f - saturate(log2(depth + 1.0f) / 16.0f);
+  return float4(depth_vis.xxx, 1.0f);
+}
+
+float4 GetMotionColor(Moer::ViewParam _view, int2 _pixel_pos) {
   float2 uv = GetUV(_pixel_pos, _view);
   TextureHandle tex_handle = (TextureHandle)param.bindless_handles.motion;
 
   float3 motion = tex_handle.SampleLevel<float3>(uv, 0);
-  float2 cur_pixel_pos = float2(_pixel_pos) + motion.xy;
-  float2 cur_uv = GetUV(int2(cur_pixel_pos + 0.5f), _view);
+  float2 encoded_xy = saturate(0.5f + motion.xy / 64.0f);
+  float encoded_z = saturate(abs(motion.z) / 64.0f);
+  return float4(encoded_xy, encoded_z, 1.0f);
+}
 
-  TextureHandle prev_normal_handle =
-      (TextureHandle)param.bindless_handles.gbuffer_prev_normal;
+float4 GetNormalRoughnessColor(Moer::ViewParam _view, int2 _pixel_pos) {
+  float2 uv = GetUV(_pixel_pos, _view);
+  TextureHandle tex_handle =
+      (TextureHandle)param.bindless_handles.denoiser_normal_roughness;
 
-  float prev_depth = GetPrevDepth(_view, int2(round(cur_pixel_pos)));
-  float expected_depth_linear = GetDepth(_view, _pixel_pos) + motion.z;
-  float3 prev_normal =
-      Math::OctToNdirUnorm32(prev_normal_handle.SampleLevel<uint>(cur_uv, 0));
-  float3 normal = GetNormal(_view, _pixel_pos);
+  float4 packed_normal_roughness = tex_handle.SampleLevel<float4>(uv, 0);
+    float4 normal_roughness =
+      UnpackDenoiserNormalAndRoughness(packed_normal_roughness);
 
-  {
-    // check normal and depth difference
-    if (!Math::IsValidNeighbor(normal, prev_normal, expected_depth_linear,
-                               prev_depth, 0.4f, 2.f)) {
-
-      return float3(1, 0, 0);
-    }
-    // if(dot(normal, prev_normal) < 0.5f){
-    //   return float3(1, 0, 0);
-    // }
-  }
-  // printf("prev_albedo handle %d albedo handle %d
-  // \n",param.bindless_handles.gbuffer_prev_diffuse_albedo,
-  // param.bindless_handles.gbuffer_diffuse_albedo);
-  return dot(normal, prev_normal);
+  return float4(normal_roughness.xyz * 0.5f + 0.5f, 1.0f);
 }
 
 void VisualizeGrid(uint2 _pixel_pos, out float4 _final_color) {
@@ -153,11 +165,17 @@ float4 GetMaterialColor(Moer::ViewParam _view, uint2 _pixel_pos) {
   case Moer::EFC_NORMAL:
     final_color = float4(GetNormal(param.main_view, pixel_pos), 1.f);
     break;
+  case Moer::EFC_VIEW_DEPTH:
+    final_color = GetViewDepthColor(param.main_view, pixel_pos);
+    break;
   case Moer::EFC_MATERIAL:
     final_color = GetMaterialColor(param.main_view, pixel_pos);
     break;
   case Moer::EFC_MOTION:
-    final_color = float4(GetMotion(param.main_view, pixel_pos), 1.f);
+    final_color = GetMotionColor(param.main_view, pixel_pos);
+    break;
+  case Moer::EFC_CUSTOM:
+    final_color = GetNormalRoughnessColor(param.main_view, pixel_pos);
     break;
   }
 

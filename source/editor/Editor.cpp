@@ -125,13 +125,14 @@ void Editor::Run() {
                     TextureView    input_ui_texture, // TODO: is this necessary?
                     TextureView    default_output_texture
                 ) {
+                    auto scene_window_target = editor_ui->GetSceneWindowTarget();
                     return ui_combine_pass->Process(
                         cmd_list,
-                        editor_ui->IsSeperateWindow(),
+                        scene_window_target.is_separate_window,
                         editor_ui->GetConfig()->GetResolution(),
                         editor_ui->GetSceneColorPos(),
                         editor_ui->GetSceneColorResolution(),
-                        editor_ui->GetWindowFrameBuffer(),
+                        scene_window_target.frame_buffer,
                         input_color_texture,
                         input_ui_texture,
                         default_output_texture

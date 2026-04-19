@@ -1277,7 +1277,10 @@ struct ReflectParamInfo {
         uint        padded_size;
         CustomFlags custom_flag;
     };
-    static constexpr std::string_view bdls_name = "bdls_114514";
+    static constexpr std::string_view bdls_name = "bindless";
+    static constexpr std::string_view bdls_indirection_symbol = "g__array_bindless";
+    static constexpr std::string_view bdls_resource_heap_symbol = "ResourceDescriptorHeap";
+    static constexpr std::string_view bdls_sampler_heap_symbol  = "SamplerDescriptorHeap";
     struct Bindless {
         uint        set;
         uint        binding;
@@ -1289,10 +1292,8 @@ struct ReflectParamInfo {
     };
     struct BindlessArray {
         std::optional<Bindless> array;
-        std::optional<Bindless> buffer;
-        std::optional<Bindless> image;
-        std::optional<Bindless> sampler;
-        std::optional<Bindless> acceleration_structure;
+        std::optional<Bindless> resource_heap;
+        std::optional<Bindless> sampler_heap;
     };
     struct Resources {
         std::variant<Resource, Constant> data;

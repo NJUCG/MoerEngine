@@ -52,8 +52,7 @@ RaytracingRenderer::RaytracingRenderer(
     const EngineHooks&            _hooks,
     RuntimeAssets&                _runtime_assets
 ) :
-    Renderer(_resolution, _config, _hooks),
-    runtime_assets(_runtime_assets) {}
+    Renderer(_resolution, _config, _hooks, _runtime_assets) {}
 
 void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     bool b_new_env_map = false;
@@ -80,12 +79,16 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     TextureRef output = device.CreateTexture(
         "output",
-        Extent2D(resolution.x, resolution.y), swapchain->format, ETextureUsageFlags::COLOR_ATTACHMENT
+        Extent2D(resolution.x, resolution.y),
+        swapchain->format,
+        ETextureUsageFlags::COLOR_ATTACHMENT
     );
 
     TextureRef combine_output = device.CreateTexture(
         "combine_output",
-        Extent2D(resolution.x, resolution.y), swapchain->format, ETextureUsageFlags::COLOR_ATTACHMENT
+        Extent2D(resolution.x, resolution.y),
+        swapchain->format,
+        ETextureUsageFlags::COLOR_ATTACHMENT
     );
 
     TextureRef ui_frame_buffer = device.CreateTexture(
@@ -138,9 +141,9 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     //////////////////////////////////////////////////////////////////////////
     SetRHITraceRuntimeEnabled(false);
     UniquePtr<PrepareLightPass> prepare_light_pass = MakeUnique<PrepareLightPass>(device, manager, scene);
-    UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager, scene);
-    UniquePtr<LightingPass>     lighting_pass      = MakeUnique<LightingPass>(manager, scene);
-    UniquePtr<CompositionPass>  composition_pass   = MakeUnique<CompositionPass>(device, manager, scene);
+    UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager);
+    UniquePtr<LightingPass>     lighting_pass      = MakeUnique<LightingPass>(manager);
+    UniquePtr<CompositionPass>  composition_pass   = MakeUnique<CompositionPass>(device, manager);
     UniquePtr<VisualizePass>    visualize_pass     = MakeUnique<VisualizePass>(device, manager);
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
     UniquePtr<ToneMappingPass>  tone_mapping_pass;
@@ -187,6 +190,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         TRACE_SCOPE_CAT("Raytracing.Frame", "Frame");
+
+        PumpAsyncLoads();
 
         RaytracingConfig& ui_config = editor_config->raytracing_config;
 
@@ -655,12 +660,16 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         TextureRef present_output = final_color;
 
         if (hooks.on_ui_combine_pass) {
-            present_output =
-                hooks.on_ui_combine_pass(ui_combine_pass.get(), cmd_list, final_color, ui_frame_buffer, combine_output);
+            present_output = hooks.on_ui_combine_pass(
+                ui_combine_pass.get(),
+                cmd_list,
+                final_color,
+                ui_frame_buffer,
+                combine_output
+            );
         }
 
         if (hooks.on_render_gui) {
-            // Main ImGui draw data must land on the main viewport output that will be presented.
             hooks.on_render_gui(cmd_list, present_output);
         }
 
@@ -676,12 +685,12 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         time++;
         RHIPresentRequest present_request{swapchain, present_output};
-        cmd_list.Signal(timeline, time).DeleteResources().TickProfiling();
+        cmd_list.Signal(timeline, time).DeleteResources().TickProfiling().TickFrame();
         Array<CommandList> frame_cmd_lists = std::move(pre_frame_cmd_lists);
         frame_cmd_lists.emplace_back(std::move(cmd_list));
         RHIExecutor::Get().Submit(
             std::move(frame_cmd_lists),
-            ERHIExecSubmitFlags::FlushGPU | ERHIExecSubmitFlags::FrameEnd,
+            ERHIExecSubmitFlags::FlushGPU,
             skip_present ? nullptr : &present_request
         );
         cmd_list = CommandList(EQueueType::Graphics);

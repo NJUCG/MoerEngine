@@ -154,6 +154,18 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(test_target TestShaderDXC)
+add_executable(${test_target} ShaderDXCTest.cpp)
+target_include_directories(${test_target}
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+)
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 # CUDA Test
 if (TARGET Moer::Cuda)
     set(test_target TestCuda)

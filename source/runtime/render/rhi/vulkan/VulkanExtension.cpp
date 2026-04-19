@@ -220,6 +220,71 @@ private:
     VkPhysicalDeviceDescriptorBufferFeaturesEXT m_descriptor_buffer_features;
 };
 
+// ***** VK_KHR_shader_untyped_pointers
+class VulkanKHRShaderUntypedPointersExtension final : public VulkanDeviceExtension {
+public:
+    VulkanKHRShaderUntypedPointersExtension(bool _is_optional = false) :
+        VulkanDeviceExtension(VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME, _is_optional),
+        m_shader_untyped_pointers_features() {}
+
+    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+        m_shader_untyped_pointers_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNTYPED_POINTERS_FEATURES_KHR;
+        AddToPNext(_gpu_features2, m_shader_untyped_pointers_features);
+    }
+
+    void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+        m_is_usable = (m_shader_untyped_pointers_features.shaderUntypedPointers == VK_TRUE);
+        _gpu_extensions.m_has_khr_shader_untyped_pointers = m_is_usable;
+    }
+
+    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+        if (m_is_usable && m_is_enabled) {
+            AddToPNext(_device_create_info, m_shader_untyped_pointers_features);
+        }
+    }
+
+private:
+    VkPhysicalDeviceShaderUntypedPointersFeaturesKHR m_shader_untyped_pointers_features;
+};
+
+// ***** VK_EXT_descriptor_heap
+class VulkanEXTDescriptorHeapExtension final : public VulkanDeviceExtension {
+public:
+    VulkanEXTDescriptorHeapExtension(bool _is_optional = false) :
+        VulkanDeviceExtension(VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME, _is_optional),
+        m_descriptor_heap_features() {}
+
+    void PreGpuFeatures(VkPhysicalDeviceFeatures2& _gpu_features2) override {
+        m_descriptor_heap_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT;
+        AddToPNext(_gpu_features2, m_descriptor_heap_features);
+    }
+
+    void PostGpuFeatures(VulkanOptionalDeviceExtensions& _gpu_extensions) override {
+        m_is_usable = (m_descriptor_heap_features.descriptorHeap == VK_TRUE);
+
+        _gpu_extensions.m_has_ext_descriptor_heap = m_is_usable;
+    }
+
+    void
+    PreGpuProperties(const VulkanDevice* _device, VkPhysicalDeviceProperties2& _gpu_properties2) override {
+        auto& descriptor_heap_props =
+            const_cast<VulkanOptionalDeviceProperties&>(_device->GetOptionalProperties())
+                .descriptor_heap_properties;
+        descriptor_heap_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT;
+        AddToPNext(_gpu_properties2, descriptor_heap_props);
+    }
+
+    void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
+        if (m_is_usable && m_is_enabled) {
+            AddToPNext(_device_create_info, m_descriptor_heap_features);
+        }
+    }
+
+private:
+    VkPhysicalDeviceDescriptorHeapFeaturesEXT m_descriptor_heap_features;
+};
+
 //***** VK_KHR_push_descriptor */
 class VulkanKHRPushDescriptorExtension final : public VulkanDeviceExtension {
 public:
@@ -437,6 +502,9 @@ TVulkanDeviceExtensionArray VulkanDeviceExtension::GetMERequiredDeviceExtensions
     ADD_CUSTOM_EXTENSION(VulkanKHRRayQueryExtension, VULKAN_EXTENSION_OPTIONAL);
 #endif
     // bindless extensions
+    ADD_EXTENSION(VK_KHR_MAINTENANCE_5_EXTENSION_NAME, VULKAN_EXTENSION_OPTIONAL);
+    ADD_CUSTOM_EXTENSION(VulkanKHRShaderUntypedPointersExtension, VULKAN_EXTENSION_OPTIONAL);
+    ADD_CUSTOM_EXTENSION(VulkanEXTDescriptorHeapExtension, VULKAN_EXTENSION_OPTIONAL);
     ADD_CUSTOM_EXTENSION(VulkanEXTDescriptorBufferExtension, VULKAN_EXTENSION_OPTIONAL);
     ADD_CUSTOM_EXTENSION(VulkanKHRPushDescriptorExtension, VULKAN_EXTENSION_REQUIRED);
     // vendor extensions

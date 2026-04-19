@@ -8,6 +8,10 @@
 
 #include "common/UiCombinePass.h"
 
+namespace Moer {
+class RuntimeAssets;
+}
+
 namespace Moer::Render {
 
 struct EngineHooks {
@@ -40,7 +44,12 @@ public:
         Num,
     };
 
-    Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks);
+    Renderer(
+        uint2&                 _resolution,
+        const SharedPtr<EditorConfig> _config,
+        const EngineHooks&     hooks,
+        ::Moer::RuntimeAssets& _runtime_assets
+    );
 
     virtual ~Renderer();
 
@@ -48,6 +57,7 @@ public:
 
     EWindowState TickWindowContext(const EngineHooks& hooks);
     void         LogSceneLoadStatus(const EditorConfig& config) const;
+    void         PumpAsyncLoads();
 
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
@@ -63,6 +73,7 @@ protected:
     ShaderManager& manager;
     CommandQueue&  gfx_queue;
     uint2&         resolution; // 数据源位于EditorConfig中
+    ::Moer::RuntimeAssets& runtime_assets;
 
     SwapchainRef     swapchain;
     BindlessArrayRef bindless_array;

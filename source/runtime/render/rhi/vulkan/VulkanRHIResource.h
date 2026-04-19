@@ -361,14 +361,7 @@ struct VulkanDescriptorInfo {
     /** index in descinfo arrays */
     uint info_idx;
 };
-struct DescBufferOffsetInfo {
-    uint                set;
-    VkPipelineBindPoint bind_point;
-    VkPipelineLayout    layout;
-    uint                buf_idx;
-    uint64              offset;
-};
-struct VulkanDescriptorSetBinder {
+struct VulkanDescriptorSetBinderImpl {
     Array<VkWriteDescriptorSet>                        writers;
     Array<VulkanDescriptorInfo>                        bind_infos;
     Array<VkDescriptorImageInfo>                       image_infos;
@@ -379,50 +372,45 @@ struct VulkanDescriptorSetBinder {
     VkPipelineBindPoint        bind_point;
 
     struct BindingInfo {
-        uint64 offset;     //set offset in descriptor buffer
-        uint64 src_handle; //cpu handle in global buffer
-
+        uint64 offset;
+        uint64 descriptor_stride;
+        uint32 push_data_offset;
         uint binding;
     };
     Array<BindingInfo> binding_infos;
-    uint64             size; //size in descriptor buffer
-    uint64             pipeline_offset;
-    uint               desc_idx;
-    uint               offset_idx;
+    uint64             size;
+    uint32             resource_push_data_offset{UINT32_MAX};
 };
 
 struct VulkanBindlessSetArray {
     //index in ArrayArguments
     uint param_idx;
-    //descriptor buffer index
-    uint desc_idx;
+    uint32 push_data_offset;
 };
 
-struct VulkanBindlessSetImage {
-    //index in ArrayArguments
-    uint param_idx;
-    //descriptor buffer index
-    uint desc_idx;
+using VulkanDescriptorSetBinder = std::variant<
+    VulkanDescriptorSetBinderImpl,
+    VulkanBindlessSetArray
+>;
+
+struct VulkanDirectHeapBuiltins {
+    std::optional<ReflectParamInfo::Bindless> resource_heap;
+    std::optional<ReflectParamInfo::Bindless> sampler_heap;
 };
 
-struct VulkanBindlessSetSampler {
-    //index in ArrayArguments
-    uint param_idx;
-    //descriptor buffer index
-    uint desc_idx;
-};
-using TBinder = std::variant<
-    VulkanDescriptorSetBinder,
-    VulkanBindlessSetArray,
-    VulkanBindlessSetImage,
-    VulkanBindlessSetSampler>;
 struct VulkanPipelineParamBinder {
-    UnorderedMap<uint, TBinder> set_binders;
-    VkPushConstantsInfoKHR      push_constants_info;
-    //descriptor buffer bind template
-    Array<VkDescriptorBufferBindingInfoEXT> desc_buffers;
-    //set offsets in descriptor buffers
-    Array<DescBufferOffsetInfo> desc_buffer_offsets;
+    UnorderedMap<uint, VulkanDescriptorSetBinder> set_binders;
+
+    struct VulkanPushConstantsInfo {
+        VkShaderStageFlags stageFlags{0};
+        uint32             offset{0};
+        uint32             size{0};
+    } push_constants_info;
+
+    Array<VkDescriptorSetAndBindingMappingEXT> descriptor_mappings;
+    uint32                                     push_data_size{0};
+    bool                                       needs_resource_heap{false};
+    bool                                       needs_sampler_heap{false};
 };
 
 class VulkanEnumTranslator final {
@@ -539,7 +527,8 @@ public:
     }
     void InitPipelineLayout(
         UnorderedMap<uint, struct VulkanDescriptorSetLayoutCreateInfo>&&,
-        std::optional<VkPushConstantRange> _push_constant_range = std::nullopt
+        std::optional<VkPushConstantRange> _push_constant_range = std::nullopt,
+        VulkanDirectHeapBuiltins _direct_heap_builtins = {}
     );
 
 public:
@@ -613,21 +602,30 @@ struct VkTextureDescKey {
     VkImageLayout layout;
     uint8         mip_level;
     uint8         mip_cnt;
+    uint8         array_layer;
+    uint8         array_count;
 
     bool operator==(const VkTextureDescKey& _other) const {
-        return layout == _other.layout && mip_level == _other.mip_level && mip_cnt == _other.mip_cnt;
+        return layout == _other.layout && mip_level == _other.mip_level && mip_cnt == _other.mip_cnt &&
+               array_layer == _other.array_layer && array_count == _other.array_count;
     }
 
     struct Hasher {
         size_t operator()(const VkTextureDescKey& _key) const {
-            return std::hash<uint32_t>()(uint32_t(_key.layout)) ^
-                   std::hash<uint32_t>()(uint32_t(_key.mip_level)) ^
-                   std::hash<uint32_t>()(uint32_t(_key.mip_cnt));
+            uint64 packed = uint64(uint32_t(_key.layout)) | (uint64(_key.mip_level) << 32) |
+                            (uint64(_key.mip_cnt) << 40) | (uint64(_key.array_layer) << 48) |
+                            (uint64(_key.array_count) << 56);
+            return std::hash<uint64>()(packed);
         }
     };
 };
 class VulkanTexture final : public Texture, public VulkanDeviceObject {
 public:
+    struct CachedImageView {
+        VkImageView           view{VK_NULL_HANDLE};
+        VkImageViewCreateInfo create_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    };
+
     VulkanTexture() = delete;
     ~VulkanTexture();
     //for inner usage only
@@ -655,6 +653,18 @@ public:
         uint _base_layer = 0,
         uint _layer_cnt  = VK_REMAINING_ARRAY_LAYERS
     );
+    const CachedImageView* FindCachedView(
+        uint _mip_level  = 0,
+        uint _mip_cnt    = 1,
+        uint _base_layer = 0,
+        uint _layer_cnt  = VK_REMAINING_ARRAY_LAYERS
+    ) const;
+    void BuildNativeImageDescriptorInfo(
+        const TextureView&         _view,
+        VkImageLayout              _layout,
+        VkImageDescriptorInfoEXT&  _out_image_info,
+        VkResourceDescriptorInfoEXT& _out_resource_info
+    );
 
     void          SetName(const std::string_view _name) override;
     bool          b_has_preferred_state : 1 = false;
@@ -676,8 +686,20 @@ public:
         }
     }
 
-    int32 GetDescriptorIndex(uint _mip_level, uint _mip_idx, VkImageLayout _layout) {
-        VkTextureDescKey key = {_layout, uint8(_mip_level), uint8(_mip_idx)};
+    int32 GetDescriptorIndex(
+        uint          _mip_level,
+        uint          _mip_idx,
+        VkImageLayout _layout,
+        uint          _array_layer = 0,
+        uint          _array_count = 1
+    ) {
+        VkTextureDescKey key = {
+            _layout,
+            uint8(_mip_level),
+            uint8(_mip_idx),
+            uint8(_array_layer),
+            uint8(_array_count)
+        };
         auto             it  = m_descriptor_indices.find(key);
         if (it != m_descriptor_indices.end()) {
             return it->second;
@@ -692,8 +714,8 @@ private:
         VkImage       image;
         VmaAllocation alloc;
     } m_alloc;
-    UnorderedMap<uint64, VkImageView> m_views;
-    VkImageLayout                     m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
+    UnorderedMap<uint64, CachedImageView> m_views;
+    VkImageLayout                         m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
 };
 
 class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
@@ -784,8 +806,14 @@ public:
     // Record one-shot init commands into the given CommandList.
     // Must be called exactly once before any command reads bindless descriptor buffers.
     // Returns true if init commands were recorded, false if already initialized.
-    bool RecordInitCommands(class CommandList& cmd_list);
-    bool NeedsInit() const { return !b_gpu_initialized.load(std::memory_order_acquire); }
+    bool RecordInitCommands(class CommandList& cmd_list) override;
+    bool NeedsInit() const override { return !b_gpu_initialized.load(std::memory_order_acquire); }
+    uint64 GetDescriptorVersion() const { return descriptor_version.load(std::memory_order_acquire); }
+    const Array<byte>& GetBufferDescriptorBytes() const { return bindless_buffer_desc_data; }
+    const Array<byte>& GetTextureDescriptorBytes() const { return bindless_texture_desc_data; }
+    const Array<uint64>& GetOfflineResourceDescriptorOffsets() const { return offline_resource_desc_offsets; }
+    const Array<uint32>& GetOfflineSamplerIndices() const { return offline_sampler_indices; }
+    uint32 GetMaxSize() const { return uint32(handles.size()); }
 
 public:
     VulkanBuffer* bindless_array_buffer;
@@ -823,6 +851,10 @@ protected:
     Array<byte>                  texture_dat;
     Array<std::pair<uint, uint>> buffer_indices_dat;
     Array<byte>                  buffer_dat;
+    Array<byte>                  bindless_buffer_desc_data;
+    Array<byte>                  bindless_texture_desc_data;
+    Array<uint64>                offline_resource_desc_offsets;
+    Array<uint32>                offline_sampler_indices;
     UnorderedMap<uint, uint>     temp_slot_to_cmd;
 
     UnorderedSet<uint64>                                                   resource_allocated_set;
@@ -833,6 +865,7 @@ protected:
 
     // Deferred GPU initialization data (populated in constructor, consumed by RecordInitCommands)
     std::atomic_bool b_gpu_initialized{false};
+    std::atomic_uint64_t descriptor_version{1};
     Array<byte>      deferred_sampler_data;
     Array<byte>      deferred_buffer_desc_data;
 };

@@ -92,7 +92,6 @@ public:
         TextureView  default_output_texture
     ) {
         if (is_seperate_window && input_window_frame_buffer.GetTexture()) {
-            // assert(false && "Has some bug here");
             assert(
                 sample_texture_pipelines.contains(input_window_frame_buffer.format) &&
                 "Unsupported format for SampleTexturePipeline"
@@ -117,6 +116,27 @@ public:
                     {SingleDrawParam(3, 1, 0, 0, 0)},
                     ColorAttachment(frame_buffer.GetTexture())
                 );
+            if (default_output_texture.GetTexture()) {
+                assert(
+                    sample_texture_pipelines.contains(default_output_texture.format) &&
+                    "Unsupported format for SampleTexturePipeline"
+                );
+                cmd_list
+                    .Gfx(
+                        sample_texture_pipelines[default_output_texture.format],
+                        input_ui_texture,
+                        Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
+                    )
+                    .Draw(
+                        "CopyMainGUI",
+                        Rect2D(0, 0, resolution.x, resolution.y),
+                        {},
+                        3,
+                        {SingleDrawParam(3, 1, 0, 0, 0)},
+                        ColorAttachment(default_output_texture.GetTexture())
+                    );
+                return default_output_texture.GetTexture();
+            }
             return frame_buffer.GetTexture();
         } else {
             assert(

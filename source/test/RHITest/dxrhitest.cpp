@@ -247,9 +247,9 @@ int main(int argc, char** argv) {
     };
     ConstantBuffer<PushConstantStruct> constants;
 
-    auto       packed_real_tex_and_sampler_idx_in_heap = g__array_114514_bdls[constants.tex_handle];
-    Texture2D  tex              = gTexture2D_114514_bdls[packed_real_tex_and_sampler_idx_in_heap.tex];
-    SamplerState sampler              = gTexture2D_114514_bdls[packed_real_tex_and_sampler_idx_in_heap.sampler];
+    auto         packed_real_tex_and_sampler_idx_in_heap = g__array_bindless[constants.tex_handle];
+    Texture2D    tex                                     = gTexture2D_bindless[packed_real_tex_and_sampler_idx_in_heap.tex];
+    SamplerState sampler                                 = gsampler_bindless[packed_real_tex_and_sampler_idx_in_heap.sampler];
     tex.Sample(sampler,...);
 
     */

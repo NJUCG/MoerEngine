@@ -16,59 +16,74 @@ void RHIExecutor::Submit(
     ERHIExecSubmitFlags  flags,
     RHIPresentRequest*   present
 ) {
-    assert(Moer::IsCurrentlyGameThread() && "RHIExecutor::Submit must only be called from the main thread");
-
-    if (EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FrameEnd) &&
-        !EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FlushGPU)) {
-        LOG_ERROR("RHIExecutor::Submit requires FrameEnd to be submitted together with FlushGPU");
-        assert(false && "FrameEnd requires FlushGPU");
-        return;
-    }
-
     if (present != nullptr && !present->swapchain) {
         LOG_ERROR("RHIExecutor::Submit got a null swapchain in RHIPresentRequest");
         assert(false && "Present request swapchain must be valid");
         return;
     }
 
-    std::lock_guard<std::mutex> lock(submit_mutex);
+    {
+        std::lock_guard<std::mutex> lock(submit_mutex);
 
-    for (size_t cmd_index = 0; cmd_index < command_lists.size(); ++cmd_index) {
-        auto&            command_list = command_lists[cmd_index];
-        const EQueueType queue_type   = command_list.GetQueueType();
-        if (queue_type != EQueueType::Graphics && queue_type != EQueueType::Compute) {
-            LOG_ERROR(
-                "RHIExecutor::Submit only accepts Graphics or Compute command lists, got={}",
-                static_cast<uint32>(queue_type)
-            );
-            assert(false && "RHIExecutor only accepts Graphics or Compute command lists");
-            return;
+        for (size_t cmd_index = 0; cmd_index < command_lists.size(); ++cmd_index) {
+            auto&            command_list = command_lists[cmd_index];
+            const EQueueType queue_type   = command_list.GetQueueType();
+            if (queue_type != EQueueType::Graphics && queue_type != EQueueType::Compute) {
+                LOG_ERROR(
+                    "RHIExecutor::Submit only accepts Graphics or Compute command lists, got={}",
+                    static_cast<uint32>(queue_type)
+                );
+                assert(false && "RHIExecutor only accepts Graphics or Compute command lists");
+                return;
+            }
+            if (command_list.IsEmpty()) {
+                continue;
+            }
+            pending_command_lists.emplace_back(std::move(command_list));
         }
-        if (command_list.IsEmpty()) {
-            continue;
+
+        if (present != nullptr && present->source.texture != nullptr) {
+            pending_present = *present;
         }
-        pending_command_lists.emplace_back(std::move(command_list));
     }
 
-    if (present != nullptr && present->source.texture != nullptr) {
-        pending_present = *present;
+    if (EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FlushGPU)) {
+        Flush(ERHIFlushDepth::SubmitGPU);
     }
-    pending_frame_end = pending_frame_end || EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FrameEnd);
+}
 
-    if (!EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FlushGPU)) {
-        return;
+void RHIExecutor::Flush(ERHIFlushDepth depth) {
+    {
+        std::lock_guard<std::mutex> lock(submit_mutex);
+        EnqueuePendingLocked();
     }
-    FlushPendingLocked(pending_frame_end);
+
+    switch (RenderDevice::Get().GetRHIType()) {
+        case ERHIType::Vulkan:
+            VulkanSubmissionExecutor::Flush(depth);
+            break;
+        case ERHIType::D3D12:
+            break;
+        default:
+            assert(false && "Unsupported RHI type in RHIExecutor::Flush");
+            break;
+    }
 }
 
 void RHIExecutor::Sync(ERHISyncDepth depth) {
-    assert(Moer::IsCurrentlyGameThread() && "RHIExecutor::Sync must only be called from the main thread");
+    Flush(ERHIFlushDepth::SubmitGPU);
 
-    {
-        std::lock_guard<std::mutex> lock(submit_mutex);
-        FlushPendingLocked(pending_frame_end);
+    GraphEventRef event = nullptr;
+    switch (RenderDevice::Get().GetRHIType()) {
+        case ERHIType::Vulkan:
+            event = VulkanSubmissionExecutor::Sync(depth);
+            break;
+        case ERHIType::D3D12:
+            break;
+        default:
+            assert(false && "Unsupported RHI type in RHIExecutor::Sync");
+            break;
     }
-    GraphEventRef event = VulkanSubmissionExecutor::Sync(depth);
     if (event) {
         event->Wait();
     }
@@ -78,7 +93,7 @@ void RHIExecutor::ShutDown() {
     auto& executor = Get();
     {
         std::lock_guard<std::mutex> lock(executor.submit_mutex);
-        executor.FlushPendingLocked(executor.pending_frame_end);
+        executor.EnqueuePendingLocked();
     }
 
     switch (RenderDevice::Get().GetRHIType()) {
@@ -93,9 +108,10 @@ void RHIExecutor::ShutDown() {
     }
 }
 
-void RHIExecutor::FlushPendingLocked(bool frame_end) {
+void RHIExecutor::EnqueuePendingLocked() {
     VulkanSubmissionBatch batch{};
     batch.submits.reserve(pending_command_lists.size());
+    bool require_present_sync_fallback = false;
 
     std::optional<EQueueType> last_non_empty_queue{};
     for (auto& command_list : pending_command_lists) {
@@ -110,33 +126,34 @@ void RHIExecutor::FlushPendingLocked(bool frame_end) {
 
     if (pending_present.has_value()) {
         if (!last_non_empty_queue.has_value()) {
-            LOG_ERROR("RHIExecutor::Submit present request requires at least one Graphics command list");
-            assert(false && "Present requires a preceding Graphics command list");
-            pending_present.reset();
-            pending_frame_end = false;
-            return;
+            LOG_WARNING(
+                "RHIExecutor::Submit got a present-only flush; using ERHISyncDepth::Present as a fallback"
+            );
+            require_present_sync_fallback = true;
         }
         if (last_non_empty_queue.has_value() && last_non_empty_queue.value() != EQueueType::Graphics) {
             LOG_ERROR("RHIExecutor::Submit requires the last command list before present to be Graphics");
             assert(false && "Present requires the last command list to run on the Graphics queue");
             pending_present.reset();
-            pending_frame_end = false;
             return;
         }
         batch.present = pending_present.value();
         pending_present.reset();
     }
 
-    const bool has_work = !batch.submits.empty() || batch.present.has_value() || frame_end;
-    pending_frame_end   = false;
+    const bool has_work = !batch.submits.empty() || batch.present.has_value();
     if (!has_work) {
         return;
     }
 
-    VulkanSubmissionExecutor::Execute(
-        std::move(batch),
-        VulkanSubmissionExecuteOptions{.frame_end = frame_end}
-    );
+    if (require_present_sync_fallback) {
+        GraphEventRef event = VulkanSubmissionExecutor::Sync(ERHISyncDepth::Present);
+        if (event) {
+            event->Wait();
+        }
+    }
+
+    VulkanSubmissionExecutor::Enqueue(std::move(batch));
 }
 
 } // namespace Moer::Render

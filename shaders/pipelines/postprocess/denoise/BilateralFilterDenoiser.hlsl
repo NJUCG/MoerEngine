@@ -1,6 +1,6 @@
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
-BINDLESS_BINDINGS(3, 2, 4, 5)
+BINDLESS_BINDINGS(3)
 #include "shared/raster/ShaderParameters.h"
 
 [[vk::push_constant]] ConstantBuffer<Moer::BilateralFilterDenoiserPipelineBindlessParam> param;
@@ -26,15 +26,15 @@ float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
             float3 sampleColor = TextureHandle(param.input_image).Sample2D<float3>(uv1);
             float  sampleLuminance = dot(sampleColor, LUMINANCE_WEIGHT);
 
-            // 空间域权�?(高斯分布)
+            // 空间域权�?(高斯分布)
             float distSq = (float)(x * x + y * y);
             float spatialWeight = exp(-distSq / param.spatial_sigma_square);
 
-            // 强度域权�?(高斯分布)
-            // 使用亮度差异，你也可以使用颜色差异（例如 RGB 各自的差异平方和�?
+            // 强度域权�?(高斯分布)
+            // 使用亮度差异，你也可以使用颜色差异（例如 RGB 各自的差异平方和�?
             float colorDiffSq = (sampleLuminance - centerLuminance) * (sampleLuminance - centerLuminance);
             // float3 colorDiff = sampleColor - color;
-            // float colorDiffSq = dot(colorDiff, colorDiff); // 如果想使用RGB颜色�?
+            // float colorDiffSq = dot(colorDiff, colorDiff); // 如果想使用RGB颜色�?
 
             float rangeWeight = exp(-colorDiffSq / param.range_sigma_square);
 

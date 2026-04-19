@@ -1,535 +1,38 @@
-﻿#include "VulkanSubmissionExecutor.h"
+#include "VulkanSubmissionExecutorPrivate.h"
 
-#include "VulkanDescriptor.h"
-#include "VulkanDevice.h"
-#include "VulkanQueue.h"
-#include "VulkanRHITrace.h"
-#include "VulkanRHIResource.h"
-#include "VulkanInterruptRuntime.h"
-#include "VulkanAllocator.h"
-#include "VulkanSubmissionRuntime.h"
-#include "VulkanTranslateTask.h"
-#include "RHICmdReorderer.h"
-#include "log/LogSystem.h"
-#include "platform/Platform.h"
-#include "rhi/RHI.h"
-#include "rhi/GPUEventStream.h"
-#include "rhi/RHIImpl.h"
-#include "trace/Trace.h"
-
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <deque>
-#include <format>
-#include <functional>
-#include <future>
-#include <memory>
-#include <mutex>
-#include <optional>
-#include <string>
-#include <thread>
-#include <tuple>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-#include <variant>
-#include <limits>
-#include <vulkan/vulkan_core.h>
+#include <span>
+#include <type_traits>
 
 namespace Moer::Render {
 
-struct AutoGpuEventTokenFactory {
-    static QueryToken CreateTimestampToken(std::string_view name) {
-        static std::atomic<uint64_t> next_auto_query_id{1ull << 62u};
-        const uint64_t token_id = next_auto_query_id.fetch_add(1, std::memory_order_relaxed);
-        return QueryToken(token_id, QueryKind::Timestamp, std::string(name), QueryFuture::Create());
-    }
-};
-
 namespace {
 
-static const char* VkLayoutStr(VkImageLayout layout) {
-    switch (layout) {
-        case VK_IMAGE_LAYOUT_UNDEFINED:                        return "UNDEFINED";
-        case VK_IMAGE_LAYOUT_GENERAL:                          return "GENERAL";
-        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:         return "COLOR_ATTACHMENT";
-        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return "DEPTH_STENCIL_ATTACHMENT";
-        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL: return "DEPTH_STENCIL_READ_ONLY";
-        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:        return "SHADER_READ_ONLY";
-        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:             return "TRANSFER_SRC";
-        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:             return "TRANSFER_DST";
-        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:                  return "PRESENT_SRC";
-        case VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL:                return "READ_ONLY";
-        case VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL:               return "ATTACHMENT";
-        default:                                               return "UNKNOWN";
+static const TranslateFenceCmd* TryGetTranslateFenceCmd(const Command* cmd) {
+    if (cmd == nullptr || cmd->Type() != Command::EType::Custom) {
+        return nullptr;
     }
+    const auto* custom_cmd = static_cast<const CustomCmd*>(cmd);
+    if (custom_cmd->CustomId() != CustomCmd::CustomCmdId::CUSTOM_TRANSLATE_FENCE) {
+        return nullptr;
+    }
+    return static_cast<const TranslateFenceCmd*>(custom_cmd);
 }
 
-enum class ETrackedResourceType : uint8 {
-    Buffer,
-    Texture,
-    Bindless,
-    Accel
-};
-
-struct ResourceKey {
-    ETrackedResourceType type{ETrackedResourceType::Buffer};
-    uint64               handle{0};
-    // Subresource range 鈥?only meaningful for Texture type.
-    // 0xFF (kRemainingSubresource) means "all remaining" (whole-resource default).
-    uint8                mip_level{0};
-    uint8                mip_count{kRemainingSubresource};
-    uint8                array_layer{0};
-    uint8                array_count{kRemainingSubresource};
-
-    bool operator==(const ResourceKey& other) const {
-        if (type != other.type || handle != other.handle) {
-            return false;
-        }
-        if (type != ETrackedResourceType::Texture) {
-            return true;
-        }
-        return mip_level == other.mip_level && mip_count == other.mip_count &&
-               array_layer == other.array_layer && array_count == other.array_count;
+static const FrameTickCmd* TryGetFrameTickCmd(const Command* cmd) {
+    if (cmd == nullptr || cmd->Type() != Command::EType::Custom) {
+        return nullptr;
     }
-};
-
-struct ResourceKeyHash {
-    size_t operator()(const ResourceKey& key) const {
-        size_t hash = std::hash<uint64>{}(key.handle);
-        hash ^= static_cast<size_t>(key.type) + 0x9e3779b9 + (hash << 6u) + (hash >> 2u);
-        if (key.type == ETrackedResourceType::Texture) {
-            const uint32 range_bits =
-                (uint32(key.mip_level) << 24) | (uint32(key.mip_count) << 16) |
-                (uint32(key.array_layer) << 8) | uint32(key.array_count);
-            hash ^= std::hash<uint32>{}(range_bits) + 0x9e3779b9 + (hash << 6u) + (hash >> 2u);
-        }
-        return hash;
+    const auto* custom_cmd = static_cast<const CustomCmd*>(cmd);
+    if (custom_cmd->CustomId() != CustomCmd::CustomCmdId::CUSTOM_FRAME_TICK) {
+        return nullptr;
     }
-};
-
-struct ResourceAccessDigestEntry {
-    bool read{false};
-    bool write{false};
-    bool last_access_write{false};
-    std::optional<EBufferState>  buffer_state{};
-    std::optional<ETextureState> texture_state{};
-};
-
-//NOTE: ResourceKey encodes subresource range in the map key for Texture type,
-// allowing independent tracking of different mip/layer ranges of the same texture.
-using ResourceAccessDigest = UnorderedMap<ResourceKey, ResourceAccessDigestEntry, ResourceKeyHash>;
-
-using SubmissionKey     = Moer::Render::SubmissionKey;
-using SubmissionKeyHash = Moer::Render::SubmissionKeyHash;
-
-static bool SubmissionKeyLess(const SubmissionKey& lhs, const SubmissionKey& rhs) {
-    if (lhs.op_seq != rhs.op_seq) {
-        return lhs.op_seq < rhs.op_seq;
-    }
-    return lhs.submit_idx < rhs.submit_idx;
+    return static_cast<const FrameTickCmd*>(custom_cmd);
 }
-
-using ResourceStateValue = Moer::Render::ResourceStateValue;
-
-using ResourceStateSnapshot = UnorderedMap<ResourceKey, ResourceStateValue, ResourceKeyHash>;
-using DirtyWrittenResources = UnorderedSet<ResourceKey, ResourceKeyHash>;
-
-struct SourceSubmitKey {
-    uint64 op_seq{0};
-    uint32 submit_idx{0};
-
-    bool operator==(const SourceSubmitKey& other) const {
-        return op_seq == other.op_seq && submit_idx == other.submit_idx;
-    }
-};
-
-struct SourceSubmitKeyHash {
-    size_t operator()(const SourceSubmitKey& key) const {
-        size_t hash = std::hash<uint64>{}(key.op_seq);
-        hash ^= std::hash<uint32>{}(key.submit_idx) + 0x9e3779b9 + (hash << 6u) + (hash >> 2u);
-        return hash;
-    }
-};
-
-enum class ESegmentType : uint8 {
-    Graphics,
-    Copy
-};
-
-struct ExecutorSubmitOp {
-    Array<CmdSubmit> submits;
-    EQueueType       queue{EQueueType::Graphics};
-
-    ExecutorSubmitOp() = default;
-    ExecutorSubmitOp(ExecutorSubmitOp&&) noexcept            = default;
-    ExecutorSubmitOp& operator=(ExecutorSubmitOp&&) noexcept = default;
-    ExecutorSubmitOp(const ExecutorSubmitOp&)                = delete;
-    ExecutorSubmitOp& operator=(const ExecutorSubmitOp&)     = delete;
-};
-
-using ExecutorPresentOp = Moer::Render::ExecutorPresentOp;
-
-using ExecutorOp = std::variant<ExecutorSubmitOp, ExecutorPresentOp>;
-
-struct TranslateInfo {
-    SubmissionKey key{};
-    SourceSubmitKey source_key{};
-    EQueueType    queue{EQueueType::Ignore};
-    ESegmentType segment_type{ESegmentType::Graphics};
-    size_t             segment_begin{0};
-    size_t             segment_end{0};
-    size_t             segment_copy_scope_index{0};
-    bool include{false};
-
-    ResourceStateSnapshot initial_state_snapshot{};
-    ResourceStateSnapshot last_state_snapshot{};
-    ResourceAccessDigest  digest{};
-    std::optional<EQueueType> prefix_transfer_queue{};
-    std::optional<EQueueType> suffix_transfer_queue{};
-    Array<ImportTexture> prefix_import_textures{};
-    Array<ImportBuffer>  prefix_import_buffers{};
-    Array<ExportTexture> suffix_export_textures{};
-    Array<ExportBuffer>  suffix_export_buffers{};
-};
-
-struct SourceSubmitSegmentPlan {
-    SubmissionKey key{};
-    EQueueType    queue{EQueueType::Ignore};
-    ESegmentType kind{ESegmentType::Graphics};
-    bool          inherit_source_wait_events{false};
-    bool          inherit_source_signal_events_and_callbacks{false};
-    bool          inherit_source_runtime_payload{false};
-    bool          include{false};
-};
-
-struct SourceSubmitPlan {
-    SourceSubmitKey source_key{};
-    EQueueType      parent_queue{EQueueType::Ignore};
-    Array<SourceSubmitSegmentPlan> segments{};
-};
-
-struct PresentCandidateMetadata {
-    uint64             op_seq{0};
-    bool               has_source_texture_state{false};
-    ResourceStateValue source_texture_state{};
-};
-
-struct CommandSegmentInfo {
-    ESegmentType type{ESegmentType::Graphics};
-    size_t             begin{0};
-    size_t             end{0};
-    size_t             copy_scope_index{0};
-
-    bool IsEmpty(const CmdSubmit& submit) const {
-        if (type == ESegmentType::Copy) {
-            const auto* copy_scope = static_cast<const CopyScopeCmd*>(submit.cmds[copy_scope_index].get());
-            return copy_scope->Empty();
-        }
-        return begin == end;
-    }
-};
-
-struct LogicalDependencyGraph {
-    UnorderedMap<SubmissionKey, Array<SubmissionKey>, SubmissionKeyHash> producer_keys_by_consumer{};
-    UnorderedMap<SubmissionKey, UnorderedSet<SubmissionKey, SubmissionKeyHash>, SubmissionKeyHash>
-        dedup_keys_by_consumer{};
-
-    void Reserve(uint32 count) {
-        producer_keys_by_consumer.reserve(count);
-        dedup_keys_by_consumer.reserve(count);
-    }
-
-    void AddEdge(const SubmissionKey& consumer_key, const SubmissionKey& producer_key) {
-        auto& dedup_keys = dedup_keys_by_consumer[consumer_key];
-        if (!dedup_keys.emplace(producer_key).second) {
-            return;
-        }
-        producer_keys_by_consumer[consumer_key].emplace_back(producer_key);
-    }
-
-    void SortEdges() {
-        for (auto& [_, producer_keys] : producer_keys_by_consumer) {
-            std::sort(producer_keys.begin(), producer_keys.end(), SubmissionKeyLess);
-        }
-    }
-
-    const Array<SubmissionKey>* FindProducers(const SubmissionKey& consumer_key) const {
-        const auto iter = producer_keys_by_consumer.find(consumer_key);
-        if (iter == producer_keys_by_consumer.end()) {
-            return nullptr;
-        }
-        return &iter->second;
-    }
-
-    uint32 Count(const SubmissionKey& consumer_key) const {
-        const auto iter = producer_keys_by_consumer.find(consumer_key);
-        if (iter == producer_keys_by_consumer.end()) {
-            return 0;
-        }
-        return static_cast<uint32>(iter->second.size());
-    }
-};
-
-struct PreprocessTranslateStore {
-    Array<TranslateInfo>                        translate_infos{};
-    UnorderedMap<SubmissionKey, uint32, SubmissionKeyHash> lookup{};
-    UnorderedMap<SourceSubmitKey, uint32, SourceSubmitKeyHash> source_lookup{};
-    Array<SourceSubmitPlan>                                    source_plans{};
-    Array<PresentCandidateMetadata>                            present_candidates{};
-    UnorderedMap<uint64, uint32>                               present_lookup{};
-    LogicalDependencyGraph                                     dependency_graph{};
-
-    void Reserve(uint32 count) {
-        translate_infos.reserve(count);
-        lookup.reserve(count);
-        source_plans.reserve(count);
-        source_lookup.reserve(count);
-        present_candidates.reserve(count);
-        present_lookup.reserve(count);
-        dependency_graph.Reserve(count);
-    }
-
-    void Add(TranslateInfo&& result) {
-        const SubmissionKey key   = result.key;
-        const uint32        index = static_cast<uint32>(translate_infos.size());
-        translate_infos.emplace_back(std::move(result));
-        lookup.emplace(key, index);
-    }
-
-    const TranslateInfo* Find(const SubmissionKey& key) const {
-        const auto iter = lookup.find(key);
-        if (iter == lookup.end()) {
-            return nullptr;
-        }
-        return &translate_infos[iter->second];
-    }
-
-    TranslateInfo* FindMutable(const SubmissionKey& key) {
-        const auto iter = lookup.find(key);
-        if (iter == lookup.end()) {
-            return nullptr;
-        }
-        return &translate_infos[iter->second];
-    }
-
-    void AddSourcePlan(SourceSubmitPlan&& plan) {
-        const SourceSubmitKey key   = plan.source_key;
-        const uint32          index = static_cast<uint32>(source_plans.size());
-        source_plans.emplace_back(std::move(plan));
-        source_lookup.emplace(key, index);
-    }
-
-    void AddPresent(PresentCandidateMetadata&& result) {
-        const uint64 op_seq = result.op_seq;
-        const uint32 index  = static_cast<uint32>(present_candidates.size());
-        present_candidates.emplace_back(std::move(result));
-        present_lookup.emplace(op_seq, index);
-    }
-
-    const PresentCandidateMetadata* FindPresent(uint64 op_seq) const {
-        const auto iter = present_lookup.find(op_seq);
-        if (iter == present_lookup.end()) {
-            return nullptr;
-        }
-        return &present_candidates[iter->second];
-    }
-
-    const SourceSubmitPlan* FindSourcePlan(const SourceSubmitKey& key) const {
-        const auto iter = source_lookup.find(key);
-        if (iter == source_lookup.end()) {
-            return nullptr;
-        }
-        return &source_plans[iter->second];
-    }
-};
-
-struct QueueTranslateInfo {
-    SubmissionKey key{};
-    EQueueType    queue{EQueueType::Ignore};
-    CmdSubmit     submit;
-    TrackerSeed  initial_seed{};
-    Array<SubmissionKey> logical_wait_keys{};
-    bool         valid{true};
-    std::string  error{};
-
-    QueueTranslateInfo(
-        SubmissionKey in_key,
-        EQueueType    in_queue,
-        CmdSubmit&&   in_submit,
-        TrackerSeed&& in_seed
-    ) :
-        key(in_key),
-        queue(in_queue),
-        submit(std::move(in_submit)),
-        initial_seed(std::move(in_seed)) {}
-
-    QueueTranslateInfo(QueueTranslateInfo&&) noexcept            = default;
-    QueueTranslateInfo& operator=(QueueTranslateInfo&&) noexcept = default;
-    QueueTranslateInfo(const QueueTranslateInfo&)                = delete;
-    QueueTranslateInfo& operator=(const QueueTranslateInfo&)     = delete;
-};
-
-using SubmitPresentStage = Moer::Render::SubmitPresentStage;
-
-struct PendingPresentAttachment {
-    std::optional<SubmissionKey> parent_submission_key{};
-    std::optional<SubmitPresentStage> present_stage{};
-};
-
-using SubmitInfo = Moer::Render::SubmitInfo;
-
-struct TranslatePipelineBatch {
-    Array<QueueTranslateInfo>    translate_ops{};
-    Array<PendingPresentAttachment> pending_presents{};
-};
-
-static bool HasGpuEventType(const CmdSubmit& submit, GPUEvent::EType type) {
-    return std::any_of(submit.gpu_events.begin(), submit.gpu_events.end(), [type](const GPUEvent& event) {
-        return event.type == type;
-    });
-}
-
-static void AppendTimestampPair(
-    Array<UniquePtr<Command>>& commands,
-    const QueryToken&          token,
-    std::string_view           name
-) {
-    commands.emplace_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::BeginTimestamp, name));
-    commands.emplace_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::EndTimestamp, name));
-}
-
-static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
-    if (submit.cmds.empty()) {
-        return;
-    }
-
-    const bool has_begin_command_list =
-        HasGpuEventType(submit, GPUEvent::EType::BeginCommandList);
-    const bool has_end_command_list =
-        HasGpuEventType(submit, GPUEvent::EType::EndCommandList);
-    const bool has_frame_bound = HasGpuEventType(submit, GPUEvent::EType::FrameBound);
-
-    const bool inject_command_list_span = !(has_begin_command_list && has_end_command_list);
-    const bool inject_frame_bound       = submit.b_tick_profiling && !has_frame_bound;
-    if (!inject_command_list_span && !inject_frame_bound) {
-        return;
-    }
-
-    QueryToken begin_token{};
-    QueryToken end_token{};
-    QueryToken frame_bound_token{};
-
-    if (inject_command_list_span) {
-        begin_token = AutoGpuEventTokenFactory::CreateTimestampToken("AutoBeginCommandList");
-        end_token   = AutoGpuEventTokenFactory::CreateTimestampToken("AutoEndCommandList");
-        submit.query_tokens.emplace_back(begin_token);
-        submit.query_tokens.emplace_back(end_token);
-    }
-    if (inject_frame_bound) {
-        frame_bound_token = AutoGpuEventTokenFactory::CreateTimestampToken("AutoFrameBound");
-        submit.query_tokens.emplace_back(frame_bound_token);
-    }
-
-    Array<UniquePtr<Command>> rebuilt_commands{};
-    rebuilt_commands.reserve(
-        submit.cmds.size() +
-        (inject_command_list_span ? 4u : 0u) +
-        (inject_frame_bound ? 2u : 0u)
-    );
-
-    size_t body_begin = 0;
-    while (body_begin < submit.cmds.size()) {
-        const auto* queue_transfer =
-            dynamic_cast<const QueueTransferCmd*>(submit.cmds[body_begin].get());
-        if (queue_transfer == nullptr || !queue_transfer->IsImport()) {
-            break;
-        }
-        rebuilt_commands.emplace_back(std::move(submit.cmds[body_begin]));
-        ++body_begin;
-    }
-
-    size_t body_end = submit.cmds.size();
-    while (body_end > body_begin) {
-        const auto* queue_transfer =
-            dynamic_cast<const QueueTransferCmd*>(submit.cmds[body_end - 1].get());
-        if (queue_transfer == nullptr || queue_transfer->IsImport()) {
-            break;
-        }
-        --body_end;
-    }
-
-    if (inject_command_list_span) {
-        AppendTimestampPair(rebuilt_commands, begin_token, "AutoBeginCommandList");
-    }
-    for (size_t cmd_index = body_begin; cmd_index < body_end; ++cmd_index) {
-        rebuilt_commands.emplace_back(std::move(submit.cmds[cmd_index]));
-    }
-    if (inject_command_list_span) {
-        AppendTimestampPair(rebuilt_commands, end_token, "AutoEndCommandList");
-    }
-    if (inject_frame_bound) {
-        AppendTimestampPair(rebuilt_commands, frame_bound_token, "AutoFrameBound");
-    }
-    for (size_t cmd_index = body_end; cmd_index < submit.cmds.size(); ++cmd_index) {
-        rebuilt_commands.emplace_back(std::move(submit.cmds[cmd_index]));
-    }
-    submit.cmds = std::move(rebuilt_commands);
-
-    Array<GPUEvent> rebuilt_events{};
-    rebuilt_events.reserve(
-        submit.gpu_events.size() +
-        (inject_command_list_span ? 2u : 0u) +
-        (inject_frame_bound ? 1u : 0u)
-    );
-    if (inject_command_list_span) {
-        rebuilt_events.emplace_back(GPUEvent{
-            .type = GPUEvent::EType::BeginCommandList,
-            .name = "CommandList",
-            .query = begin_token,
-            .depth = 0,
-            .cpu_time_ns = 0
-        });
-    }
-    for (auto& event : submit.gpu_events) {
-        rebuilt_events.emplace_back(std::move(event));
-    }
-    if (inject_command_list_span) {
-        rebuilt_events.emplace_back(GPUEvent{
-            .type = GPUEvent::EType::EndCommandList,
-            .name = "",
-            .query = end_token,
-            .depth = 0,
-            .cpu_time_ns = 0
-        });
-    }
-    if (inject_frame_bound) {
-        rebuilt_events.emplace_back(GPUEvent{
-            .type = GPUEvent::EType::FrameBound,
-            .name = "FrameBound",
-            .query = frame_bound_token,
-            .depth = 0,
-            .cpu_time_ns = 0
-        });
-    }
-    submit.gpu_events = std::move(rebuilt_events);
-}
-
-static TrackerSeed BuildTrackerSeed(const ResourceStateSnapshot& snapshot);
-
-struct ResourceHazardState {
-    std::optional<SubmissionKey> last_writer{};
-    Array<SubmissionKey>         last_readers{};
-};
 
 static ResourceKey MakeBufferKey(uint64 handle) {
     return ResourceKey{ETrackedResourceType::Buffer, handle};
 }
 
-// Whole-resource texture key (default: all mips, all array layers).
 static ResourceKey MakeTextureKey(uint64 handle) {
     return ResourceKey{
         ETrackedResourceType::Texture, handle,
@@ -537,7 +40,6 @@ static ResourceKey MakeTextureKey(uint64 handle) {
     };
 }
 
-// Subresource-range texture key for per-range tracking.
 static ResourceKey MakeTextureKeyWithRange(
     uint64 handle,
     uint8  mip_level,
@@ -557,18 +59,6 @@ static bool IsTextureKey(const ResourceKey& key) {
 
 static bool IsSingleTextureSubresourceKey(const ResourceKey& key) {
     return IsTextureKey(key) && key.mip_count == 1 && key.array_count == 1;
-}
-
-static uint8 ResolveTextureMipCount(Texture* texture, const ResourceKey& key) {
-    assert(texture != nullptr && "ResolveTextureMipCount requires a texture");
-    return key.mip_count == kRemainingSubresource ? uint8(texture->GetNumMips() - key.mip_level) :
-                                                    key.mip_count;
-}
-
-static uint8 ResolveTextureArrayCount(Texture* texture, const ResourceKey& key) {
-    assert(texture != nullptr && "ResolveTextureArrayCount requires a texture");
-    return key.array_count == kRemainingSubresource ? uint8(texture->GetNumArray() - key.array_layer) :
-                                                      key.array_count;
 }
 
 template<typename Fn>
@@ -616,75 +106,8 @@ static ResourceKey MakeAccelKey(uint64 handle) {
 
 static constexpr uint64 kGlobalAccelBuildSyncHandle = std::numeric_limits<uint64>::max();
 
-static const char* QueueTypeName(EQueueType queue) {
-    switch (queue) {
-        case EQueueType::Graphics:
-            return "Graphics";
-        case EQueueType::Compute:
-            return "Compute";
-        case EQueueType::Copy:
-            return "Copy";
-        case EQueueType::Ignore:
-            return "Ignore";
-        case EQueueType::Num:
-        default:
-            return "Num";
-    }
-}
-
-static EPassType QueueToPassType(EQueueType queue) {
-    switch (queue) {
-        case EQueueType::Compute:
-            return EPassType::Compute;
-        case EQueueType::Graphics:
-        case EQueueType::Copy:
-        case EQueueType::Ignore:
-        case EQueueType::Num:
-        default:
-            return EPassType::Graphics;
-    }
-}
-
-static std::tuple<VkAccessFlagBits2, VkImageLayout, VkPipelineStageFlagBits2>
-ResolveTextureSeedState(VulkanTexture* texture, const ResourceStateValue& state) {
-    if (!state.known || state.texture_state == ETextureState::UNDEFINED) {
-        return {
-            VK_ACCESS_2_NONE,
-            VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_PIPELINE_STAGE_2_NONE
-        };
-    }
-
-    if (texture != nullptr && texture->b_present) {
-        return {
-            VK_ACCESS_2_NONE,
-            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            VK_PIPELINE_STAGE_2_NONE
-        };
-    }
-
-    const EQueueType owner_queue =
-        state.owner_queue == EQueueType::Ignore ? EQueueType::Graphics : state.owner_queue;
-    VkTracker seed_tracker(owner_queue);
-    auto result = state.has_writer ?
-                      seed_tracker.WriteTexture(texture, state.texture_state, QueueToPassType(owner_queue)) :
-                      seed_tracker.ReadTexture(texture, state.texture_state, QueueToPassType(owner_queue));
-    return {
-        static_cast<VkAccessFlagBits2>(std::get<0>(result)),
-        std::get<1>(result),
-        static_cast<VkPipelineStageFlagBits2>(std::get<2>(result))
-    };
-}
-
-static const char* SegmentKindName(ESegmentType kind) {
-    switch (kind) {
-        case ESegmentType::Graphics:
-            return "Parent";
-        case ESegmentType::Copy:
-            return "Copy";
-        default:
-            return "Unknown";
-    }
+static const char* SegmentOriginName(const RHISubmitSegment& segment) {
+    return segment.UsesCopyScope() ? "CopyScope" : "Inline";
 }
 
 static const char* ResourceTypeName(ETrackedResourceType type) {
@@ -718,9 +141,9 @@ static std::string_view ResourceName(const ResourceKey& key) {
 }
 
 static void TraceDigest(
-    const SubmissionKey& key,
-    EQueueType queue,
-    ESegmentType segment_kind,
+    const SubmissionKey&       key,
+    EQueueType                 queue,
+    const RHISubmitSegment&    segment,
     const ResourceAccessDigest& digest
 ) {
     for (const auto& [resource_key, access] : digest) {
@@ -730,7 +153,7 @@ static void TraceDigest(
             key.op_seq,
             key.submit_idx,
             QueueTypeName(queue),
-            SegmentKindName(segment_kind),
+            SegmentOriginName(segment),
             ResourceTypeName(resource_key.type),
             ResourceName(resource_key),
             resource_key.handle,
@@ -891,16 +314,6 @@ static bool IsBufferTextureRead(uint64 flags) {
     return state.resource_type == SRT_SRV || state.resource_type == SRT_CBV;
 }
 
-static void LockBindlessArray(uint64 handle) {
-    auto* bindless_array = reinterpret_cast<VulkanBindlessArray*>(handle);
-    bindless_array->Lock();
-}
-
-static void UnlockBindlessArray(uint64 handle) {
-    auto* bindless_array = reinterpret_cast<VulkanBindlessArray*>(handle);
-    bindless_array->Unlock();
-}
-
 static uint64 GetHandle(const BufferView& view) {
     return uint64(view.GetBuffer());
 }
@@ -910,17 +323,17 @@ static uint64 GetHandle(const TextureView& view) {
 }
 
 static void MergeDigestEntry(
-    ResourceAccessDigest&         digest,
-    const ResourceKey&            key,
-    bool                          read,
-    bool                          write,
-    std::optional<EBufferState>   buffer_state,
-    std::optional<ETextureState>  texture_state
+    ResourceAccessDigest&        digest,
+    const ResourceKey&           key,
+    bool                         read,
+    bool                         write,
+    std::optional<EBufferState>  buffer_state,
+    std::optional<ETextureState> texture_state
 ) {
     if (key.handle == 0) {
         return;
     }
-    auto& entry  = digest[key];
+    auto& entry = digest[key];
     entry.read |= read;
     entry.write |= write;
     entry.last_access_write = write;
@@ -961,9 +374,9 @@ static void ApplyDigestToDirtyWrittenResources(
 class ResourceAccessCollector {
 public:
     ResourceAccessCollector(
-        EQueueType              in_queue,
-        const TCachedArgArray&  in_cached_args,
-        DirtyWrittenResources*  in_dirty_written_resources = nullptr
+        EQueueType             in_queue,
+        const TCachedArgArray& in_cached_args,
+        DirtyWrittenResources* in_dirty_written_resources = nullptr
     ) :
         queue(in_queue),
         cached_args(in_cached_args),
@@ -1147,9 +560,9 @@ private:
     }
 
     void CollectBindlessReads(
-        ResourceAccessDigest&   digest,
-        uint64                  bindless_handle,
-        DirtyWrittenResources&  visible_dirty_written_resources
+        ResourceAccessDigest&  digest,
+        uint64                 bindless_handle,
+        DirtyWrittenResources& visible_dirty_written_resources
     ) const {
         if (visible_dirty_written_resources.empty()) {
             return;
@@ -1252,16 +665,16 @@ private:
         }
 
         const bool write = shader_state.resource_type == SRT_UAV;
-        const bool read  = shader_state.resource_type == SRT_CBV || shader_state.resource_type == SRT_SRV ||
+        const bool read = shader_state.resource_type == SRT_CBV || shader_state.resource_type == SRT_SRV ||
                           shader_state.resource_type == SRT_UAV;
         if (!read && !write) {
             return;
         }
 
-        const EBufferState  buffer_read_state  = EBufferState::SHADER_RESOURCE;
+        const EBufferState  buffer_read_state = EBufferState::SHADER_RESOURCE;
         const EBufferState  buffer_write_state = EBufferState::UNORDERED_ACCESS;
         const ETextureState texture_read_state = shader_state.b_sampled ? ETextureState::SAMPLE :
-                                                                       ETextureState::SHADER_RESOURCE;
+                                                                         ETextureState::SHADER_RESOURCE;
         const ETextureState texture_write_state = ETextureState::UNORDERED_ACCESS;
 
         std::visit(
@@ -1345,9 +758,9 @@ private:
     }
 
     void CollectPipelineArgs(
-        const PipelineHandle& pipeline,
-        const ArrayArguments& args,
-        ResourceAccessDigest& digest,
+        const PipelineHandle&  pipeline,
+        const ArrayArguments&  args,
+        ResourceAccessDigest&  digest,
         DirtyWrittenResources& visible_dirty_written_resources
     ) const {
         const uint32 arg_count = static_cast<uint32>(std::min(args.args.size(), pipeline.binding_infos.size()));
@@ -1563,7 +976,6 @@ private:
                         );
                     }
                 }
-                // Conservative cross-submit/cross-queue sync anchor for AS build/update chain.
                 MarkWriteAccel(digest, kGlobalAccelBuildSyncHandle, EBufferState::UNORDERED_ACCESS);
                 for (auto* vtx : build_cmd->VtxBuffers()) {
                     MarkReadBuffer(digest, uint64(vtx), EBufferState::VERTEX);
@@ -1649,90 +1061,17 @@ private:
     }
 
 private:
-    EQueueType              queue{EQueueType::Ignore};
-    const TCachedArgArray&  cached_args;
-    DirtyWrittenResources*  dirty_written_resources{nullptr};
+    EQueueType             queue{EQueueType::Ignore};
+    const TCachedArgArray& cached_args;
+    DirtyWrittenResources* dirty_written_resources{nullptr};
 };
 
-static size_t EstimateSubmitCount(const Array<ExecutorOp>& ops) {
-    size_t submit_count = 0;
-    for (const auto& op : ops) {
-        if (const auto* submit_op = std::get_if<ExecutorSubmitOp>(&op)) {
-            submit_count += submit_op->submits.size();
-        }
-    }
-    return submit_count;
-}
-
-static size_t EstimatePlatformOpCount(const Array<ExecutorOp>& ops) {
-    size_t op_count = 0;
-    for (const auto& op : ops) {
-        if (const auto* submit_op = std::get_if<ExecutorSubmitOp>(&op)) {
-            op_count += submit_op->submits.size();
-        } else {
-            op_count += 1;
-        }
-    }
-    return op_count;
-}
-
-// Split one source submit into logical translate segments. This split is preprocess-owned,
-// and downstream stages should consume the generated segment metadata directly.
-static Array<CommandSegmentInfo> SplitIntoLogicalSegments(const CmdSubmit& submit) {
-    Array<CommandSegmentInfo> segments{};
-    size_t parent_begin = 0;
-
-    for (size_t cmd_index = 0; cmd_index < submit.cmds.size(); ++cmd_index) {
-        const auto* cmd = submit.cmds[cmd_index].get();
-        if (cmd == nullptr || cmd->Type() != Command::EType::CopyScope) {
-            continue;
-        }
-
-        if (parent_begin != cmd_index) {
-            segments.emplace_back(CommandSegmentInfo{
-                .type = ESegmentType::Graphics,
-                .begin = parent_begin,
-                .end = cmd_index,
-                .copy_scope_index = 0
-            });
-        }
-
-        segments.emplace_back(CommandSegmentInfo{
-            .type = ESegmentType::Copy,
-            .begin = 0,
-            .end = 0,
-            .copy_scope_index = cmd_index
-        });
-        parent_begin = cmd_index + 1;
-    }
-
-    if (parent_begin != submit.cmds.size()) {
-        segments.emplace_back(CommandSegmentInfo{
-            .type = ESegmentType::Graphics,
-            .begin = parent_begin,
-            .end = submit.cmds.size(),
-            .copy_scope_index = 0
-        });
-    }
-
-    if (segments.empty()) {
-        segments.emplace_back(CommandSegmentInfo{
-            .type = ESegmentType::Graphics,
-            .begin = 0,
-            .end = 0,
-            .copy_scope_index = 0
-        });
-    }
-
-    return segments;
-}
-
 static Array<const Command*> GetSegmentCommandPointers(
-    const CmdSubmit&                    submit,
-    const CommandSegmentInfo& segment_info
+    const CmdSubmit&        submit,
+    const RHISubmitSegment& segment_info
 ) {
     Array<const Command*> commands{};
-    if (segment_info.type != ESegmentType::Copy) {
+    if (!segment_info.UsesCopyScope()) {
         return commands;
     }
     const auto* copy_scope = static_cast<const CopyScopeCmd*>(submit.cmds[segment_info.copy_scope_index].get());
@@ -1741,6 +1080,43 @@ static Array<const Command*> GetSegmentCommandPointers(
         commands.emplace_back(cmd.get());
     }
     return commands;
+}
+
+static Array<GraphEventRef> CollectSegmentFenceEvents(
+    const CmdSubmit&        submit,
+    const RHISubmitSegment& segment
+) {
+    Array<GraphEventRef> fence_events{};
+    auto append_fence_event = [&](const Command* cmd) {
+        if (const auto* fence_cmd = TryGetTranslateFenceCmd(cmd); fence_cmd != nullptr && fence_cmd->Fence().event) {
+            fence_events.emplace_back(fence_cmd->Fence().event);
+        }
+    };
+
+    if (segment.UsesCopyScope()) {
+        const auto* copy_scope = static_cast<const CopyScopeCmd*>(submit.cmds[segment.copy_scope_index].get());
+        for (const auto& cmd : copy_scope->Commands()) {
+            append_fence_event(cmd.get());
+        }
+        return fence_events;
+    }
+
+    for (size_t cmd_index = segment.begin; cmd_index < segment.end; ++cmd_index) {
+        append_fence_event(submit.cmds[cmd_index].get());
+    }
+    return fence_events;
+}
+
+static bool SegmentContainsFrameTick(const CmdSubmit& submit, const RHISubmitSegment& segment) {
+    if (segment.UsesCopyScope()) {
+        return false;
+    }
+    for (size_t cmd_index = segment.begin; cmd_index < segment.end; ++cmd_index) {
+        if (TryGetFrameTickCmd(submit.cmds[cmd_index].get()) != nullptr) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static TextureView MakeTextureTransferView(const ResourceKey& key) {
@@ -1764,8 +1140,8 @@ static BufferView MakeBufferTransferView(uint64 handle) {
 }
 
 static void ApplyDigestToDirtyWrittenResources(
-    DirtyWrittenResources&       dirty_written_resources,
-    const ResourceAccessDigest&  digest
+    DirtyWrittenResources&      dirty_written_resources,
+    const ResourceAccessDigest& digest
 ) {
     for (const auto& [resource_key, access] : digest) {
         if (!access.read && !access.write) {
@@ -1799,10 +1175,10 @@ static void ApplyDigestToDirtyWrittenResources(
 }
 
 static void AddLogicalDependency(
-    LogicalDependencyGraph&                        dependency_graph,
-    const SubmissionKey&                           consumer_key,
+    LogicalDependencyGraph&                         dependency_graph,
+    const SubmissionKey&                            consumer_key,
     UnorderedSet<SubmissionKey, SubmissionKeyHash>& local_dedup,
-    const SubmissionKey&                           producer_key
+    const SubmissionKey&                            producer_key
 ) {
     if (local_dedup.emplace(producer_key).second) {
         dependency_graph.AddEdge(consumer_key, producer_key);
@@ -1810,12 +1186,12 @@ static void AddLogicalDependency(
 }
 
 static bool AppendPrefixImport(
-    TranslateInfo&                                result,
-    UnorderedSet<ResourceKey, ResourceKeyHash>&   imported_resources,
-    const ResourceKey&                            resource_key,
-    const ResourceStateValue&                     current_state,
-    const ResourceAccessDigestEntry&              desired_access,
-    EQueueType                                    src_queue
+    TranslateInfo&                               result,
+    UnorderedSet<ResourceKey, ResourceKeyHash>&  imported_resources,
+    const ResourceKey&                           resource_key,
+    const ResourceStateValue&                    current_state,
+    const ResourceAccessDigestEntry&             desired_access,
+    EQueueType                                   src_queue
 ) {
     if (!imported_resources.emplace(resource_key).second) {
         return false;
@@ -1886,11 +1262,11 @@ static bool AppendPrefixImport(
 }
 
 static bool AppendSuffixExport(
-    TranslateInfo&                                result,
-    UnorderedSet<ResourceKey, ResourceKeyHash>&   exported_resources,
-    const ResourceKey&                            resource_key,
-    const ResourceStateValue&                     current_state,
-    EQueueType                                    dst_queue
+    TranslateInfo&                               result,
+    UnorderedSet<ResourceKey, ResourceKeyHash>&  exported_resources,
+    const ResourceKey&                           resource_key,
+    const ResourceStateValue&                    current_state,
+    EQueueType                                   dst_queue
 ) {
     if (!exported_resources.emplace(resource_key).second) {
         return false;
@@ -1988,7 +1364,7 @@ static void ApplyDigestToState(
             }
 
             if (materialize_unknown_state && (access.read || access.write)) {
-                resource_state.owner_queue    = queue;
+                resource_state.owner_queue = queue;
                 resource_state.last_submission = submit_key;
             }
 
@@ -2020,85 +1396,11 @@ static void ApplyDigestToState(
     }
 }
 
-class VulkanSubmissionExecutorState {
-public:
-    VulkanSubmissionExecutorState() :
-        interrupt_runtime(),
-        submission_runtime(interrupt_runtime) {}
-
-    void Execute(Array<SubmitInfo>&& submits, bool frame_end) {
-        BindProducerThread();
-        assert(b_enable && "Execute is not allowed after shutdown begins");
-        if (!b_enable) {
-            return;
-        }
-        submission_runtime.Enqueue(std::move(submits), frame_end);
-    }
-
-    GraphEventRef Sync(ERHISyncDepth depth) {
-        BindProducerThread();
-        assert(b_enable && "Sync is not allowed after shutdown begins");
-        if (!b_enable) {
-            GraphEventRef completed = GraphEvent::CreateGraphEvent();
-            completed->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-            return completed;
-        }
-        return submission_runtime.Sync(depth);
-    }
-
-    void Flush() {
-        BindProducerThread();
-        assert(b_enable && "Flush is not allowed after shutdown begins");
-        if (!b_enable) {
-            return;
-        }
-        submission_runtime.Flush();
-    }
-
-    void Shutdown() {
-        BindProducerThread();
-        b_enable = false;
-        submission_runtime.Shutdown();
-        interrupt_runtime.Shutdown();
-    }
-
-private:
-    void BindProducerThread() {
-        const std::thread::id current_thread = std::this_thread::get_id();
-        std::lock_guard<std::mutex> lock(producer_thread_mutex);
-        if (producer_thread_id == std::thread::id{}) {
-            producer_thread_id = current_thread;
-            return;
-        }
-        assert(
-            producer_thread_id == current_thread &&
-            "Submission executor methods must run on the same producer thread"
-        );
-    }
-
-private:
-    VulkanInterruptRuntime  interrupt_runtime;
-    VulkanSubmissionRuntime submission_runtime;
-    bool                    b_enable{true};
-    std::mutex              producer_thread_mutex{};
-    std::thread::id         producer_thread_id{};
-};
-
-static std::mutex g_executor_state_mutex{};
-static std::unique_ptr<VulkanSubmissionExecutorState> g_executor_state{};
-static std::atomic_uint64_t g_executor_op_seq_base{0};
-static std::atomic_uint64_t g_executor_syncpoint_id{1};
-
-static VulkanSubmissionExecutorState& GetExecutorState() {
-    std::lock_guard<std::mutex> lock(g_executor_state_mutex);
-    if (!g_executor_state) {
-        g_executor_state = std::make_unique<VulkanSubmissionExecutorState>();
-    }
-    return *g_executor_state;
-}
-
-static PreprocessTranslateStore
-PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
+static PreprocessTranslateStore PreprocessFrameOps(
+    const Array<ExecutorOp>& ops,
+    uint64                   op_seq_base,
+    PreprocessDependencyState& dependency_state
+) {
     TRACE_SCOPE_CAT("Vulkan.PreprocessFrameOps", "RHI");
     PreprocessTranslateStore preprocess_store{};
     preprocess_store.Reserve(static_cast<uint32>(EstimateSubmitCount(ops) * 3 + 1));
@@ -2114,45 +1416,51 @@ PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
             for (uint32 submit_idx = 0; submit_idx < submit_op->submits.size(); ++submit_idx) {
                 const CmdSubmit& submit = submit_op->submits[submit_idx];
                 const SourceSubmitKey source_key{op_seq, submit_idx};
-                const auto segments = SplitIntoLogicalSegments(submit);
+                const auto& segments = submit.segments;
                 const bool has_side_effects = HasSubmitSideEffects(submit);
 
                 SourceSubmitPlan source_plan{};
                 source_plan.source_key   = source_key;
                 source_plan.parent_queue = submit_op->queue;
 
-                std::optional<SubmissionKey> previous_segment_key{};
-                EQueueType previous_segment_queue = EQueueType::Ignore;
+                std::optional<SubmissionKey> previous_gpu_segment_key{};
+                EQueueType previous_gpu_segment_queue = EQueueType::Ignore;
+                GraphEventRef source_last_translate_event{nullptr};
 
                 for (size_t segment_index = 0; segment_index < segments.size(); ++segment_index) {
                     const auto& segment = segments[segment_index];
                     const bool include =
-                        !segment.IsEmpty(submit) ||
-                        (segments.size() == 1 && segment.type == ESegmentType::Graphics &&
-                         has_side_effects);
+                        !segment.IsEmpty() || (segments.size() == 1 && has_side_effects);
 
                     if (!include) {
                         continue;
                     }
 
                     TranslateInfo translate_info{};
-                    translate_info.key          = SubmissionKey{op_seq, next_segment_submit_idx++};
-                    translate_info.source_key   = source_key;
-                    translate_info.queue        =
-                        segment.type == ESegmentType::Copy ? EQueueType::Copy :
-                                                                      submit_op->queue;
-                    translate_info.segment_type = segment.type;
-                    translate_info.segment_begin = segment.begin;
-                    translate_info.segment_end = segment.end;
-                    translate_info.segment_copy_scope_index = segment.copy_scope_index;
-                    translate_info.include      = true;
+                    translate_info.key = SubmissionKey{op_seq, next_segment_submit_idx++};
+                    translate_info.source_key = source_key;
+                    translate_info.queue = segment.queue;
+                    translate_info.segment = segment;
+                    translate_info.include = true;
+                    translate_info.completion_event = GraphEvent::CreateGraphEvent();
+
+                    AppendUniqueDependency(
+                        translate_info.task_dependencies,
+                        dependency_state.last_fence_event
+                    );
+                    if (submit.translate_execution_class != ERHITranslateExecutionClass::Parallel) {
+                        AppendUniqueDependency(
+                            translate_info.task_dependencies,
+                            dependency_state.last_translate_event
+                        );
+                    }
 
                     ResourceAccessCollector collector(
                         translate_info.queue,
                         submit.cached_args,
                         &dirty_written_resources
                     );
-                    if (segment.type == ESegmentType::Graphics) {
+                    if (!segment.UsesCopyScope()) {
                         translate_info.digest = collector.CollectGraphicsSegment(
                             submit,
                             segment.begin,
@@ -2167,25 +1475,22 @@ PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
                     TraceDigest(
                         translate_info.key,
                         translate_info.queue,
-                        translate_info.segment_type,
+                        translate_info.segment,
                         translate_info.digest
                     );
 
-                    // 搂3.3: Load initial state for this segment's resources directly from each
-                    // resource's persistent storage (committed by the previous segment).
                     ResourceStateSnapshot segment_state{};
                     EnsureDigestStateLoaded(segment_state, translate_info.digest);
                     translate_info.initial_state_snapshot = segment_state;
 
-                    //hint: begin handle cross queue wait/signal
-                    if (previous_segment_key.has_value() &&
-                        previous_segment_queue != translate_info.queue) {
+                    if (previous_gpu_segment_key.has_value() &&
+                        previous_gpu_segment_queue != translate_info.queue) {
                         UnorderedSet<SubmissionKey, SubmissionKeyHash> local_waits{};
                         AddLogicalDependency(
                             preprocess_store.dependency_graph,
                             translate_info.key,
                             local_waits,
-                            previous_segment_key.value()
+                            previous_gpu_segment_key.value()
                         );
                         RHITRACE_LOG(
                             verbose,
@@ -2193,25 +1498,14 @@ PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
                             translate_info.key.op_seq,
                             translate_info.key.submit_idx,
                             QueueTypeName(translate_info.queue),
-                            previous_segment_key->op_seq,
-                            previous_segment_key->submit_idx,
-                            QueueTypeName(previous_segment_queue)
+                            previous_gpu_segment_key->op_seq,
+                            previous_gpu_segment_key->submit_idx,
+                            QueueTypeName(previous_gpu_segment_queue)
                         );
                     }
 
-                    //TODO: its not that complicated, we simply treat Copy scope as a special segment
-                    // if copy scope has (a, b, c, d) as copy target
-                    // we cross tranfer from gfx -> copy (a, b, c, d) and skip those has unknown state in gfx
-                    // after copy scope, we cross transfer from copy -> gfx for (a, b, c, d)
                     UnorderedSet<ResourceKey, ResourceKeyHash> imported_resources{};
                     UnorderedSet<SubmissionKey, SubmissionKeyHash> dependency_keys{};
-
-                    //TODO: current implementation is too heavy
-                    // we currently make sure that gfx and copy are executed subsequently and resources are immediatelytransferred to graphics queue
-                    // after each copy scope(done aquire on copyscope's next segment, which has to be graphics segment, do as prefix aquire)
-                    // wait signal are quite simple, we make sure this -> gfx_1 -> copy_1 -> gfx_2
-                    // so we only need to make dependency copy_1 depends on gfx_1, and gfx_2 depends on copy_1, and we transfer resources from gfx_1 to copy_1, and then from copy_1 to gfx_2,
-                    // can store dependency in preprocess result for each segment, and resolve timeline value in submission time, which will be much more efficient, and also much more flexible for future when we have async compute and async copy
                     for (const auto& [resource_key, access] : translate_info.digest) {
                         if (!access.read && !access.write) {
                             continue;
@@ -2298,7 +1592,7 @@ PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
                         translate_info.source_key.op_seq,
                         translate_info.source_key.submit_idx,
                         QueueTypeName(translate_info.queue),
-                        SegmentKindName(translate_info.segment_type),
+                        SegmentOriginName(translate_info.segment),
                         translate_info.digest.size(),
                         preprocess_store.dependency_graph.Count(translate_info.key),
                         translate_info.prefix_import_textures.size(),
@@ -2310,32 +1604,58 @@ PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
                     source_plan.segments.emplace_back(SourceSubmitSegmentPlan{
                         .key = translate_info.key,
                         .queue = translate_info.queue,
-                        .kind = translate_info.segment_type,
                         .inherit_source_wait_events = false,
                         .inherit_source_signal_events_and_callbacks = false,
                         .inherit_source_runtime_payload = false,
                         .include = true
                     });
-                    previous_segment_key   = translate_info.key;
-                    previous_segment_queue = translate_info.queue;
-                    // 搂3.3: Commit each segment's final state back to resource persistent storage so
-                    // subsequent segments (and future frames) read the latest state from the resource
-                    // objects themselves, not from a frame-level chained snapshot.
+                    source_last_translate_event = ChainGraphEvents(
+                        source_last_translate_event,
+                        translate_info.completion_event
+                    );
+                    dependency_state.last_translate_event = ChainGraphEvents(
+                        dependency_state.last_translate_event,
+                        translate_info.completion_event
+                    );
+                    previous_gpu_segment_key = translate_info.key;
+                    previous_gpu_segment_queue = translate_info.queue;
                     CommitPersistentResourceStates(translate_info.last_state_snapshot);
                     ApplyDigestToDirtyWrittenResources(
                         dirty_written_resources,
                         translate_info.digest
                     );
+
+                    for (const GraphEventRef& fence_event : CollectSegmentFenceEvents(submit, segment)) {
+                        dependency_state.last_fence_event = ChainGraphEvents(
+                            dependency_state.last_fence_event,
+                            fence_event
+                        );
+                    }
+                    if (SegmentContainsFrameTick(submit, segment)) {
+                        if (segment_index + 1 != segments.size()) {
+                            LOG_ERROR("FrameTick must terminate the recorded CommandList segment sequence");
+                            assert(false && "FrameTick must terminate the segment sequence");
+                        }
+                        dependency_state = {};
+                    }
                     preprocess_store.Add(std::move(translate_info));
                 }
 
                 if (!source_plan.segments.empty()) {
-                    source_plan.segments.front().inherit_source_wait_events = true;
-                    source_plan.segments.back().inherit_source_signal_events_and_callbacks = true;
+                    for (auto& segment_plan : source_plan.segments) {
+                        segment_plan.inherit_source_wait_events = true;
+                        break;
+                    }
                     for (auto segment_iter = source_plan.segments.rbegin();
                          segment_iter != source_plan.segments.rend();
                          ++segment_iter) {
-                        if (segment_iter->kind == ESegmentType::Graphics) {
+                        segment_iter->inherit_source_signal_events_and_callbacks = true;
+                        break;
+                    }
+                    for (auto segment_iter = source_plan.segments.rbegin();
+                         segment_iter != source_plan.segments.rend();
+                         ++segment_iter) {
+                        if (segment_iter->queue != EQueueType::Copy) {
                             segment_iter->inherit_source_runtime_payload = true;
                             break;
                         }
@@ -2345,8 +1665,6 @@ PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
             }
         } else if (const auto* present_op = std::get_if<ExecutorPresentOp>(&op)) {
             PresentCandidateMetadata present_result{.op_seq = op_seq};
-            // Present preprocess snapshots source state for present seed, and then advances
-            // persistent state to the post-present TRANSFER read state for subsequent seeds.
             if (present_op->target.texture) {
                 const ResourceKey present_source_key = MakeTextureKeyWithRange(
                     uint64(present_op->target.texture),
@@ -2397,524 +1715,19 @@ PreprocessFrameOps(const Array<ExecutorOp>& ops, uint64 op_seq_base) {
     return preprocess_store;
 }
 
-static TranslatePipelineBatch
-AssembleTranslatePipelineOps(
-    Array<ExecutorOp>&&             ops,
-    const PreprocessTranslateStore& preprocess_store,
-    uint64                          op_seq_base
-) {
-    TRACE_SCOPE_CAT("Vulkan.AssembleTranslatePipelineOps", "RHI");
-    TranslatePipelineBatch pipeline_batch{};
-    pipeline_batch.translate_ops.reserve(EstimateSubmitCount(ops) * 3 + 1);
-    pipeline_batch.pending_presents.reserve(EstimatePlatformOpCount(ops));
-
-    auto build_segment_submit =
-        [](CmdSubmit& source_submit,
-           const CommandSegmentInfo& descriptor,
-           bool attach_waits,
-           bool attach_signals_and_callbacks,
-           bool attach_parent_runtime_payload) -> CmdSubmit {
-        Array<UniquePtr<Command>> commands{};
-        if (descriptor.type == ESegmentType::Copy) {
-            UniquePtr<Command> copy_scope_holder = std::move(source_submit.cmds[descriptor.copy_scope_index]);
-            auto* copy_scope = static_cast<CopyScopeCmd*>(copy_scope_holder.get());
-            commands = copy_scope->StealCommands();
-        } else {
-            commands.reserve(descriptor.end - descriptor.begin);
-            for (size_t cmd_index = descriptor.begin; cmd_index < descriptor.end; ++cmd_index) {
-                commands.emplace_back(std::move(source_submit.cmds[cmd_index]));
-            }
-        }
-
-        Array<std::function<void(void)>> callbacks{};
-        Array<QueryToken>                query_tokens{};
-        Array<GPUEvent>                  gpu_events{};
-        Array<WaitEvent>                 wait_events{};
-        Array<SignalEvent>               signal_events{};
-
-        if (attach_waits) {
-            wait_events = std::move(source_submit.wait_events);
-        }
-        if (attach_signals_and_callbacks) {
-            callbacks     = std::move(source_submit.callbacks);
-            signal_events = std::move(source_submit.signal_events);
-        }
-        if (attach_parent_runtime_payload) {
-            query_tokens = source_submit.query_tokens;
-            gpu_events   = source_submit.gpu_events;
-        }
-
-        CmdSubmit segment_submit{
-            std::move(commands),
-            std::move(callbacks),
-            TCachedArgArray(source_submit.cached_args),
-            std::move(query_tokens),
-            std::move(gpu_events)
-        };
-        segment_submit.wait_events   = std::move(wait_events);
-        segment_submit.signal_events = std::move(signal_events);
-        if (attach_signals_and_callbacks) {
-            segment_submit.b_sync             = source_submit.b_sync;
-            segment_submit.b_tick_profiling   = source_submit.b_tick_profiling && descriptor.type != ESegmentType::Copy;
-            segment_submit.b_delete_resources = source_submit.b_delete_resources;
-        }
-        return segment_submit;
-    };
-
-    auto inject_queue_transfer_commands =
-        [](CmdSubmit& segment_submit, const TranslateInfo& translate_info) {
-        if ((translate_info.prefix_import_textures.size() > 0 ||
-             translate_info.prefix_import_buffers.size() > 0) &&
-            translate_info.prefix_transfer_queue.has_value()) {
-            segment_submit.cmds.insert(
-                segment_submit.cmds.begin(),
-                MakeUnique<QueueTransferCmd>(
-                    translate_info.prefix_transfer_queue.value(),
-                    Array<ImportTexture>(translate_info.prefix_import_textures),
-                    Array<ImportBuffer>(translate_info.prefix_import_buffers)
-                )
-            );
-        }
-
-        if ((translate_info.suffix_export_textures.size() > 0 ||
-             translate_info.suffix_export_buffers.size() > 0) &&
-            translate_info.suffix_transfer_queue.has_value()) {
-            segment_submit.cmds.emplace_back(
-                MakeUnique<QueueTransferCmd>(
-                    translate_info.suffix_transfer_queue.value(),
-                    Array<ExportTexture>(translate_info.suffix_export_textures),
-                    Array<ExportBuffer>(translate_info.suffix_export_buffers)
-                )
-            );
-        }
-    };
-
-    std::optional<SubmissionKey> last_submit_key{};
-    EQueueType                   last_submit_queue = EQueueType::Ignore;
-
-    uint64 op_seq = op_seq_base;
-    for (auto& op : ops) {
-        std::visit(
-            Overload{
-                [&](ExecutorSubmitOp& submit_op) {
-                    for (uint32 submit_idx = 0; submit_idx < submit_op.submits.size(); ++submit_idx) {
-                        auto& submit = submit_op.submits[submit_idx];
-                        const SourceSubmitKey source_key{op_seq, submit_idx};
-                        const auto* source_plan = preprocess_store.FindSourcePlan(source_key);
-                        if (source_plan == nullptr) {
-                            continue;
-                        }
-
-                        for (size_t segment_plan_index = 0;
-                             segment_plan_index < source_plan->segments.size();
-                             ++segment_plan_index) {
-                            const auto& segment_plan = source_plan->segments[segment_plan_index];
-                            const auto* translate_info = preprocess_store.Find(segment_plan.key);
-                            if (translate_info == nullptr) {
-                                continue;
-                            }
-
-                            const CommandSegmentInfo descriptor{
-                                .type = translate_info->segment_type,
-                                .begin = translate_info->segment_begin,
-                                .end = translate_info->segment_end,
-                                .copy_scope_index = translate_info->segment_copy_scope_index
-                            };
-
-                            CmdSubmit segment_submit = build_segment_submit(
-                                submit,
-                                descriptor,
-                                segment_plan.inherit_source_wait_events,
-                                segment_plan.inherit_source_signal_events_and_callbacks,
-                                segment_plan.inherit_source_runtime_payload
-                            );
-                            inject_queue_transfer_commands(segment_submit, *translate_info);
-                            InjectAutoCommandListGpuEvents(segment_submit);
-
-                            QueueTranslateInfo translate_task{
-                                segment_plan.key,
-                                translate_info->queue,
-                                std::move(segment_submit),
-                                BuildTrackerSeed(translate_info->initial_state_snapshot)
-                            };
-                            if (const auto* logical_waits =
-                                    preprocess_store.dependency_graph.FindProducers(translate_info->key);
-                                logical_waits != nullptr) {
-                                translate_task.logical_wait_keys = *logical_waits;
-                            }
-                            pipeline_batch.translate_ops.emplace_back(std::move(translate_task));
-
-                            last_submit_key   = segment_plan.key;
-                            last_submit_queue = translate_info->queue;
-                        }
-                    }
-                },
-                [&](ExecutorPresentOp& present_op) {
-                    PendingPresentAttachment pending_present{};
-                    pending_present.present_stage.emplace(op_seq, std::move(present_op));
-                    auto& present_stage = pending_present.present_stage.value();
-                    if (const auto* present_preprocess = preprocess_store.FindPresent(op_seq);
-                        present_preprocess != nullptr) {
-                        present_stage.has_source_texture_state =
-                            present_preprocess->has_source_texture_state;
-                        present_stage.source_texture_state =
-                            present_preprocess->source_texture_state;
-                    }
-                    if (!last_submit_key.has_value() || last_submit_queue != EQueueType::Graphics) {
-                        present_stage.valid = false;
-                        present_stage.error =
-                            "Present requires the last translated submission to be Graphics";
-                        LOG_ERROR("{}", present_stage.error);
-                    } else {
-                        pending_present.parent_submission_key = last_submit_key.value();
-                    }
-                    pipeline_batch.pending_presents.emplace_back(std::move(pending_present));
-                }
-            },
-            op
-        );
-        ++op_seq;
-    }
-
-    return pipeline_batch;
-}
-
-// 搂7.2 / 搂9.3: Convert ResourceStateSnapshot to TrackerSeed for VkTracker::InitFromSeed.
-static TrackerSeed BuildTrackerSeed(const ResourceStateSnapshot& snapshot) {
-    TrackerSeed seed;
-    seed.textures.reserve(snapshot.size());
-    seed.buffers.reserve(snapshot.size());
-    for (const auto& [key, value] : snapshot) {
-        if (key.type == ETrackedResourceType::Texture) {
-            auto* texture = reinterpret_cast<VulkanTexture*>(key.handle);
-            TrackerSeedTextureEntry entry{};
-            entry.known         = value.known;
-            entry.has_writer    = value.has_writer;
-            entry.owner_queue   = value.owner_queue;
-            entry.texture_state = value.texture_state;
-            entry.texture       = texture;
-            // Use the subresource range from the ResourceKey directly so that per-range
-            // digest entries (e.g. individual mip views from GenerateMips) seed only their
-            // specific mip/layer range, not the whole resource.
-            entry.mip_level   = key.mip_level;
-            entry.mip_count   = key.mip_count;
-            entry.array_layer = key.array_layer;
-            entry.array_count = key.array_count;
-            seed.textures.push_back(entry);
-            RHITRACE_RESOURCE_LOG(
-                texture->GetName(),
-                "[ResourceTrace][BuildSeed] {} : known={} state={} has_writer={} owner_queue={} mip={}/{} layer={}/{}",
-                texture->GetName(),
-                entry.known,
-                int(entry.texture_state),
-                entry.has_writer,
-                int(entry.owner_queue),
-                entry.mip_level,
-                entry.mip_count,
-                entry.array_layer,
-                entry.array_count
-            );
-        } else if (key.type == ETrackedResourceType::Buffer) {
-            auto* buffer = reinterpret_cast<VulkanBuffer*>(key.handle);
-            TrackerSeedBufferEntry entry{};
-            entry.known         = value.known;
-            entry.has_writer    = value.has_writer;
-            entry.owner_queue   = value.owner_queue;
-            entry.buffer_state  = value.buffer_state;
-            entry.buffer        = buffer;
-            seed.buffers.push_back(entry);
-        }
-    }
-    return seed;
-}
-
-static Array<GraphEventRef> CollectInterruptCompletionEvents(const TranslateResult& translate_result) {
-    Array<GraphEventRef> completion_events{};
-    if (!translate_result.recorded_submit.has_value() ||
-        !translate_result.recorded_submit->submit.has_value()) {
-        return completion_events;
-    }
-
-    const auto& commands = translate_result.recorded_submit->submit->cmds;
-    for (const auto& command : commands) {
-        if (!command) {
-            continue;
-        }
-        switch (command->Type()) {
-            case Command::EType::CopyBackBuffer: {
-                const auto* readback_cmd = static_cast<const CopyBackBufferCmd*>(command.get());
-                if (readback_cmd->CompletionEvent()) {
-                    completion_events.emplace_back(readback_cmd->CompletionEvent());
-                }
-                break;
-            }
-            case Command::EType::CopyBackTexture: {
-                const auto* readback_cmd = static_cast<const CopyBackTextureCmd*>(command.get());
-                if (readback_cmd->CompletionEvent()) {
-                    completion_events.emplace_back(readback_cmd->CompletionEvent());
-                }
-                break;
-            }
-            default:
-                break;
-        }
-    }
-    return completion_events;
-}
-
-static Array<SubmitInfo> AssembleSubmitInfos(TranslatePipelineBatch&& pipeline_batch) {
-    TRACE_SCOPE_CAT("Vulkan.AssembleSubmitInfos", "RHI");
-    Array<SubmitInfo> submit_infos{};
-    submit_infos.reserve(pipeline_batch.translate_ops.size());
-    UnorderedMap<SubmissionKey, uint32, SubmissionKeyHash> submit_lookup{};
-    submit_lookup.reserve(static_cast<uint32>(pipeline_batch.translate_ops.size()));
-    Array<Array<SubmissionKey>> logical_wait_keys_by_submit{};
-    logical_wait_keys_by_submit.reserve(pipeline_batch.translate_ops.size());
-
-    for (auto& translate_info : pipeline_batch.translate_ops) {
-        TranslateResult translate_output{};
-        if (!translate_info.valid) {
-            translate_output = VulkanTranslateTask::MakeFailed(
-                translate_info.queue,
-                std::move(translate_info.error)
-            );
-        } else {
-            translate_output = VulkanTranslateTask::Dispatch(TranslateTaskInput{
-                translate_info.queue,
-                std::move(translate_info.submit),
-                std::move(translate_info.initial_seed)
-            });
-        }
-
-        SubmitInfo submit_info{
-            translate_info.key,
-            static_cast<uint64>(submit_infos.size()),
-            translate_info.queue,
-            g_executor_syncpoint_id.fetch_add(1, std::memory_order_relaxed),
-            std::move(translate_output)
-        };
-        submit_info.interrupt_completion_events =
-            CollectInterruptCompletionEvents(submit_info.translate_result);
-
-        const uint32 submit_index = static_cast<uint32>(submit_infos.size());
-        submit_lookup.emplace(submit_info.key, submit_index);
-        logical_wait_keys_by_submit.emplace_back(std::move(translate_info.logical_wait_keys));
-        submit_infos.emplace_back(std::move(submit_info));
-    }
-
-    for (uint32 submit_index = 0; submit_index < submit_infos.size(); ++submit_index) {
-        auto& submit_info = submit_infos[submit_index];
-        auto& logical_wait_keys = logical_wait_keys_by_submit[submit_index];
-        submit_info.wait_syncpoints.reserve(logical_wait_keys.size());
-        for (const SubmissionKey& dependency_key : logical_wait_keys) {
-            const auto dependency_it = submit_lookup.find(dependency_key);
-            if (dependency_it == submit_lookup.end()) {
-                LOG_ERROR(
-                    "Submit ({}, {}) missing dependency submit ({}, {}) during syncpoint assembly",
-                    submit_info.key.op_seq,
-                    submit_info.key.submit_idx,
-                    dependency_key.op_seq,
-                    dependency_key.submit_idx
-                );
-                assert(false && "logical wait dependency must resolve to an assembled submit");
-                continue;
-            }
-            submit_info.wait_syncpoints.emplace_back(
-                submit_infos[dependency_it->second].signal_syncpoint
-            );
-        }
-        assert(
-            submit_info.submit_seq == submit_index &&
-            "submit_seq must match final ordered assembly index"
-        );
-        assert(
-            submit_info.signal_syncpoint != 0 &&
-            "every submit must export exactly one signal syncpoint"
-        );
-    }
-
-    for (auto& pending_present : pipeline_batch.pending_presents) {
-        if (!pending_present.present_stage.has_value()) {
-            continue;
-        }
-        auto& present_stage = pending_present.present_stage.value();
-        if (!present_stage.valid) {
-            LOG_ERROR("{}", present_stage.error);
-            continue;
-        }
-        if (!pending_present.parent_submission_key.has_value()) {
-            LOG_ERROR(
-                "Present op_seq={} missing parent submission key",
-                present_stage.op_seq
-            );
-            continue;
-        }
-
-        const SubmissionKey parent_key = pending_present.parent_submission_key.value();
-        const auto parent_it = submit_lookup.find(parent_key);
-        if (parent_it == submit_lookup.end()) {
-            LOG_ERROR(
-                "Present op_seq={} missing parent submit ({}, {}) in submit assembly",
-                present_stage.op_seq,
-                parent_key.op_seq,
-                parent_key.submit_idx
-            );
-            continue;
-        }
-
-        SubmitInfo& parent_submit = submit_infos[parent_it->second];
-        if (parent_submit.translate_result.queue != EQueueType::Graphics) {
-            LOG_ERROR(
-                "Present op_seq={} parent submit ({}, {}) queue is not Graphics",
-                present_stage.op_seq,
-                parent_submit.key.op_seq,
-                parent_submit.key.submit_idx
-            );
-            continue;
-        }
-        if (parent_submit.present_stage.has_value()) {
-            LOG_ERROR(
-                "Parent submit ({}, {}) already has present stage attached",
-                parent_submit.key.op_seq,
-                parent_submit.key.submit_idx
-            );
-            continue;
-        }
-
-        parent_submit.present_stage = std::move(present_stage);
-    }
-    return submit_infos;
-}
-
-static bool ValidateFrameEndState(const ResourceStateSnapshot& snapshot) {
-    for (const auto& [resource_key, state] : snapshot) {
-        if (!state.known) {
-            continue;
-        }
-        if (state.owner_queue == EQueueType::Graphics || state.owner_queue == EQueueType::Ignore) {
-            continue;
-        }
-
-        LOG_ERROR(
-            "FrameEnd validation failed: resource handle={} type={} is still owned by {}",
-            resource_key.handle,
-            static_cast<uint32>(resource_key.type),
-            QueueTypeName(state.owner_queue)
-        );
-        assert(false && "FrameEnd requires resources to be returned to Graphics or Ignore");
-        return false;
-    }
-    return true;
-}
-
 } // namespace
 
-void VulkanSubmissionExecutor::Execute(
-    VulkanSubmissionBatch&&                batch,
-    const VulkanSubmissionExecuteOptions& options
+void LogicalDependencyGraph::SortEdges() {
+    for (auto& [_, producer_keys] : producer_keys_by_consumer) {
+        std::sort(producer_keys.begin(), producer_keys.end(), SubmissionKeyLess);
+    }
+}
+
+PreprocessTranslateStore SubmissionPreprocessor::Process(
+    const Array<ExecutorOp>& ops,
+    uint64                   op_seq_base
 ) {
-    Array<ExecutorOp> ops{};
-    ops.reserve(batch.submits.size() + (batch.present.has_value() ? 1u : 0u));
-    for (auto& submit_entry : batch.submits) {
-        ExecutorSubmitOp submit_op{};
-        submit_op.queue = submit_entry.queue;
-        submit_op.submits.emplace_back(std::move(submit_entry.submit));
-        ops.emplace_back(std::move(submit_op));
-    }
-    if (batch.present.has_value()) {
-        ops.emplace_back(ExecutorPresentOp{
-            .swapchain = batch.present->swapchain,
-            .target    = batch.present->source,
-            .queue     = EQueueType::Graphics
-        });
-    }
-
-    TRACE_SCOPE_CAT("VulkanSubmissionExecutor.Execute", "RHI");
-    const uint64 trace_frame = NextRHITraceFrameIndex();
-    ScopedRHITraceFrame trace_scope(trace_frame);
-    RHITRACE_LOG(
-        basic,
-        "[RHITrace][Frame] frame={} op_count={} frame_end={}",
-        trace_frame,
-        ops.size(),
-        options.frame_end
-    );
-    if (ops.empty()) {
-        if (options.frame_end) {
-            TRACE_SCOPE_CAT("Vulkan.ExecuteSubmissionPlan", "RHI");
-            GetExecutorState().Execute({}, true);
-        }
-        return;
-    }
-
-    const uint64 op_seq_base = g_executor_op_seq_base.fetch_add(
-        EstimatePlatformOpCount(ops),
-        std::memory_order_relaxed
-    );
-
-    PreprocessTranslateStore preprocess_store{};
-    {
-        TRACE_SCOPE_CAT("Vulkan.Preprocess", "RHI");
-        preprocess_store = PreprocessFrameOps(ops, op_seq_base);
-    }
-    if (options.frame_end) {
-        // Collect all resource keys seen during preprocess and validate their persistent state.
-        UnorderedSet<ResourceKey, ResourceKeyHash> seen_resources{};
-        for (const auto& result : preprocess_store.translate_infos) {
-            for (const auto& [key, _] : result.last_state_snapshot) {
-                seen_resources.emplace(key);
-            }
-        }
-        ResourceStateSnapshot frame_end_state{};
-        for (const auto& key : seen_resources) {
-            frame_end_state.emplace(key, LoadPersistentState(key));
-        }
-        if (!ValidateFrameEndState(frame_end_state)) {
-            return;
-        }
-    }
-
-    // All persistent state has been committed incrementally during preprocess (per segment).
-    // No additional CommitPersistentResourceStates call needed here.
-
-    TranslatePipelineBatch translate_pipeline{};
-    {
-        TRACE_SCOPE_CAT("Vulkan.Assemble", "RHI");
-        translate_pipeline =
-            AssembleTranslatePipelineOps(std::move(ops), preprocess_store, op_seq_base);
-    }
-    Array<SubmitInfo> submit_infos{};
-    {
-        TRACE_SCOPE_CAT("Vulkan.SubmitAssemble", "RHI");
-        submit_infos = AssembleSubmitInfos(std::move(translate_pipeline));
-    }
-
-    {
-        TRACE_SCOPE_CAT("Vulkan.ExecuteSubmissionPlan", "RHI");
-        GetExecutorState().Execute(std::move(submit_infos), options.frame_end);
-    }
-}
-
-GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth depth) {
-    return GetExecutorState().Sync(depth);
-}
-
-void VulkanSubmissionExecutor::Flush() {
-    GetExecutorState().Flush();
-}
-
-void VulkanSubmissionExecutor::Shutdown() {
-    std::unique_ptr<VulkanSubmissionExecutorState> state{};
-    {
-        std::lock_guard<std::mutex> lock(g_executor_state_mutex);
-        state = std::move(g_executor_state);
-    }
-    if (state) {
-        state->Shutdown();
-    }
+    return PreprocessFrameOps(ops, op_seq_base, dependency_state);
 }
 
 } // namespace Moer::Render
-
-
-

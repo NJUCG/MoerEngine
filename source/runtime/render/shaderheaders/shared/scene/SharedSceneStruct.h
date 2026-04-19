@@ -95,11 +95,11 @@ struct GMaterial {
     float  metallic_factor;
     float  roughness_factor;
 
-    uint normal_map_hdl;
-    uint ao_map_hdl;
-    uint albedo_map_hdl;
-    uint emissive_map_hdl;
-    uint metallic_roughness_map_hdl;
+    int normal_map_hdl;
+    int ao_map_hdl;
+    int albedo_map_hdl;
+    int emissive_map_hdl;
+    int metallic_roughness_map_hdl;
 
     uint  alpha_mode;
     float alpha_cutoff;

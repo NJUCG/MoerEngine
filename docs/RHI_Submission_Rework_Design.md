@@ -313,6 +313,68 @@ void EndBufferOverlap(BufferView view);
 - preprocess 只需要保留逻辑依赖
 - 真实 fence/timeline value 只有 submit runtime 才知道
 
+### 4.1 Streaming SyncPoint Resolution
+
+The runtime must not require full batch-wide submission context to resolve waits and signals.
+Wait or signal resolution is a streaming operation owned by `SubmissionRuntime`.
+
+Minimal model:
+
+```cpp
+using SyncPointId = uint64;
+
+struct SubmitInfo {
+    SubmissionKey key;
+    EQueueType    queue;
+    SyncPointId   signal_syncpoint;
+    Array<SyncPointId> wait_syncpoints;
+};
+
+struct ResolvedSyncPoint {
+    EQueueType    queue;
+    uint64        timeline_handle;
+    uint64        value;
+};
+
+struct QueueStreamState {
+    EQueueType queue;
+    uint64     next_signal_value;
+    uint32     cursor;
+};
+```
+
+Rules:
+
+- Each `SubmitInfo` exports exactly one `signal_syncpoint`.
+- A consumer submit stores only `wait_syncpoints`.
+- `SubmissionRuntime` owns the only mutable `SyncPointId -> ResolvedSyncPoint` table.
+- A syncpoint becomes resolved only after the producer submit has been emitted successfully.
+- Signal values are allocated per queue and remain strictly monotonic.
+
+Streaming resolve algorithm:
+
+1. Build per-queue ordered submit streams.
+2. Keep one cursor per queue stream.
+3. Run a round-robin scheduler over queue heads.
+4. For the current queue head, try to resolve every `wait_syncpoint` from the runtime table.
+5. If any required syncpoint is still unresolved, skip this submit for now and poll the next queue head.
+6. If all waits are resolved, normalize physical waits, allocate one new signal value on the target queue, emit the native submit, publish the resolved `signal_syncpoint`, and advance only that queue cursor.
+7. If one full scheduler pass makes no progress while pending submits still remain, treat it as an internal dependency bug or cycle and fail fast.
+
+Wait normalization:
+
+- If multiple logical waits resolve to the same upstream queue timeline, keep only the maximum value.
+- This preserves correctness because one queue timeline is linear, and waiting on the latest required value dominates earlier values on the same timeline.
+- Cross-queue ordering is guaranteed only by explicit logical syncpoint dependencies. The runtime must not introduce extra global serialization across unrelated queues.
+
+This model removes the need for a full pre-resolved dependency context at submit time. The runtime only needs:
+
+- the current per-queue stream heads
+- the resolved syncpoint table
+- the per-queue next signal counter
+
+It does not need a batch-global resolved wait map.
+
 ## 5. `CopyScope` 规则
 
 `CopyScope` 是 executor 内部派生 copy queue submit 的唯一结构化来源。Copy queue 的全部生命周期（allocator、command buffer、timeline、barrier）均由 executor 内部管理，不对调用方暴露。
@@ -541,8 +603,8 @@ AssembleSubmitInfos(translate_results, batch):
     submit_infos = MergeByQueueSubmissionSemantic(translate_results)
 
     for submit_info in submit_infos:
-        submit_info.completion_syncpoint = AllocateSyncPointId()
-        submit_info.logical_waits = BuildLogicalSyncWaits(submit_info)
+        submit_info.signal_syncpoint = AllocateSyncPointId()
+        submit_info.wait_syncpoints = BuildLogicalSyncWaits(submit_info)
 
     AttachBatchRootPrerequisites(submit_infos, previous_flush_rhi_tails)
     AttachPresentToLastGraphicsSubmitInfo(submit_infos, batch.present)
@@ -555,10 +617,10 @@ AssembleSubmitInfos(translate_results, batch):
 职责：
 
 - 只消费 `SubmitInfo`
-- 按稳定顺序提交，不做激进 DAG-ready submit
+- 按 queue stream 流式提交，不做全量 submission context resolve
 - 只在这里解析真实 `wait/signal` timeline value
 - 保证每个 queue 的 signal value 连续递增
-- resolve `SyncPoint`
+- 以 streaming 方式 resolve `SyncPoint`
 
 原因：
 
@@ -571,16 +633,34 @@ AssembleSubmitInfos(translate_results, batch):
 ```cpp
 SubmissionThreadLoop():
     while (running):
-        submit_info = PopNextReadySubmitInfo()
-        physical_waits = ResolveSyncPoints(submit_info.logical_waits)
-        signal_value   = AllocateTimelineSignal(submit_info.queue)
-        completion     = NativeSubmit(submit_info, physical_waits, signal_value)
-        ResolveSyncPoint(submit_info.completion_syncpoint, completion)
+        made_progress = false
 
-        if (submit_info.present):
-            present_completion = ExecutePresent(submit_info.present, completion)
+        for queue in RoundRobinQueues():
+            submit_info = PeekQueueHead(queue)
+            if (!submit_info):
+                continue
 
-        interrupt.Enqueue(RetireTaskFrom(submit_info, completion, present_completion))
+            physical_waits = TryResolveSyncPoints(submit_info.wait_syncpoints)
+            if (!physical_waits.ready):
+                continue
+
+            physical_waits = CollapseWaitsByTimelineMax(physical_waits)
+            signal_value   = AllocateTimelineSignal(submit_info.queue)
+            completion     = NativeSubmit(submit_info, physical_waits.values, signal_value)
+            PublishResolvedSyncPoint(
+                submit_info.signal_syncpoint,
+                {submit_info.queue, QueueTimeline(submit_info.queue), signal_value}
+            )
+            PopQueueHead(queue)
+            made_progress = true
+
+            if (submit_info.present):
+                present_completion = ExecutePresent(submit_info.present, completion)
+
+            interrupt.Enqueue(RetireTaskFrom(submit_info, completion, present_completion))
+
+        if (!made_progress && HasPendingSubmits()):
+            FailFastOnBrokenSyncpointGraph()
 ```
 
 ### 7.6 Interrupt Runtime

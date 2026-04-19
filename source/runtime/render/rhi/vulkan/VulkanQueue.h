@@ -262,8 +262,8 @@ private:
 #endif
 
     std::mutex   exec_mtx;
+    std::mutex   translate_state_mtx;
     std::mutex   alloc_mtx;
-    std::atomic<uint64> record_frame{0};
     GraphEventRef completion_boundary{nullptr};
 };
 class VkCopyQueue : public CopyQueue {
@@ -341,6 +341,7 @@ private:
     VkNativeQueue           queue;
 
     std::mutex                                     exec_mutex;
+    std::mutex                                     translate_mutex;
     std::mutex                                     alloc_mtx;
     GraphEventRef                                  completion_boundary{nullptr};
 };

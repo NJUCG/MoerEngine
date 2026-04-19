@@ -47,7 +47,12 @@ class TensorRTPass;
 class RENDER_API RasterRenderer : public Renderer {
 
 public:
-    RasterRenderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& _hooks);
+    RasterRenderer(
+        uint2&                        _resolution,
+        const SharedPtr<EditorConfig> _config,
+        const EngineHooks&            _hooks,
+        ::Moer::RuntimeAssets&        _runtime_assets
+    );
 
     virtual ~RasterRenderer() override;
 

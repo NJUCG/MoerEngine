@@ -356,23 +356,32 @@ void EditorUI::PresentWindows() {
     m_ui_renderer->PresentWindows();
 }
 
+EditorUI::SceneWindowTarget EditorUI::GetSceneWindowTarget() {
+    auto* current_window = ImGui::FindWindowByName("Scene Color");
+    if (!current_window || current_window->ParentWindow != nullptr) {
+        return {};
+    }
+
+    ImGuiViewport* viewport = current_window->Viewport;
+    if (!viewport) {
+        return {};
+    }
+
+    Render::TextureView frame_buffer = m_ui_renderer->GetWindowFrameBuffer(viewport);
+    if (!frame_buffer.GetTexture()) {
+        return {};
+    }
+
+    return SceneWindowTarget{.is_separate_window = true, .frame_buffer = frame_buffer};
+}
+
 bool EditorUI::IsSeperateWindow() const {
     auto* current_window = ImGui::FindWindowByName("Scene Color");
-    if (!current_window) {
-        return false;
-    }
-    return current_window->ParentWindow == nullptr;
+    return current_window && current_window->ParentWindow == nullptr && current_window->Viewport != nullptr;
 }
 
 TextureView EditorUI::GetWindowFrameBuffer() {
-    auto* current_window = ImGui::FindWindowByName("Scene Color");
-    if (!current_window) {
-        return TextureView();
-    }
-    if (current_window->ParentWindow == nullptr) {
-        return m_ui_renderer->GetWindowFrameBuffer(current_window->Viewport);
-    }
-    return TextureView();
+    return GetSceneWindowTarget().frame_buffer;
 }
 
 void EditorUI::ShowSceneColor() {

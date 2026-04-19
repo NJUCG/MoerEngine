@@ -1,5 +1,6 @@
 #include "Scene.h"
 
+#include "Core.h"
 #include "loader/LoaderInterface.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
@@ -7,38 +8,75 @@
 
 namespace Moer {
 
+namespace {
+
+bool BuildSceneState(
+    const std::filesystem::path&     file_path,
+    Render::BindlessArrayRef         bindless_array,
+    UniquePtr<ecs::LogicalScene>&    logical_scene,
+    UniquePtr<CpuScene>&             cpu_scene,
+    UniquePtr<Render::GpuScene>&     gpu_scene
+) {
+    logical_scene = MakeUnique<ecs::LogicalScene>();
+    if (!LoaderInterface::LoadSceneFromFile(*logical_scene, file_path)) {
+        logical_scene.reset();
+        return false;
+    }
+
+    cpu_scene = MakeUnique<CpuScene>(*logical_scene);
+    gpu_scene = MakeUnique<Render::GpuScene>(*cpu_scene, std::move(bindless_array));
+    return true;
+}
+
+} // namespace
+
 Scene::Scene() {
     m_bindless_array = Render::RenderDevice::Get().CreateBindlessArray();
 }
 
 void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
-    // start
     this->m_scene_load_info.StartLoading();
 
-    // 1. logical scene
-    this->m_logical_scene = MakeUnique<ecs::LogicalScene>();
-    bool result           = LoaderInterface::LoadSceneFromFile(*this->m_logical_scene, file_path);
-
-    // failed in LogicalScene loading
-    if (!result) {
+    UniquePtr<ecs::LogicalScene> logical_scene;
+    UniquePtr<CpuScene>          cpu_scene;
+    UniquePtr<Render::GpuScene>  gpu_scene;
+    if (!BuildSceneState(file_path, this->bindless_array(), logical_scene, cpu_scene, gpu_scene)) {
         this->m_scene_load_info.Reset();
         return;
     }
 
-    // 2. cpu scene
-    this->m_cpu_scene = MakeUnique<CpuScene>(*this->m_logical_scene);
-
-    // 3. gpu scene
-    this->m_gpu_scene = MakeUnique<Render::GpuScene>(*this->m_cpu_scene, this->bindless_array());
-
-    // finish
+    this->m_logical_scene = std::move(logical_scene);
+    this->m_cpu_scene     = std::move(cpu_scene);
+    this->m_gpu_scene     = std::move(gpu_scene);
     this->m_scene_load_info.FinishLoading();
 }
 
 void Scene::LoadSceneFromFileAsync(const std::filesystem::path& file_path) {
-    LambdaTask::Dispatch([this, file_path]() {
-        this->LoadSceneInternal(file_path);
-    });
+    this->m_scene_load_info.StartLoading();
+    {
+        std::lock_guard<std::mutex> lock(m_async_payload_mutex);
+        m_pending_async_payload = AsyncLoadPayload{};
+    }
+    m_has_pending_async_payload.store(false, std::memory_order_release);
+
+    Render::BindlessArrayRef bindless_array = this->bindless_array();
+    m_load_event = LambdaTask::Create([this, file_path, bindless_array]() mutable {
+                       UniquePtr<ecs::LogicalScene> logical_scene;
+                       UniquePtr<CpuScene>          cpu_scene;
+                       UniquePtr<Render::GpuScene>  gpu_scene;
+                       if (!BuildSceneState(file_path, std::move(bindless_array), logical_scene, cpu_scene, gpu_scene)) {
+                           this->m_scene_load_info.Reset();
+                           return;
+                       }
+
+                       {
+                           std::lock_guard<std::mutex> lock(this->m_async_payload_mutex);
+                           this->m_pending_async_payload.logical_scene = std::move(logical_scene);
+                           this->m_pending_async_payload.cpu_scene     = std::move(cpu_scene);
+                           this->m_pending_async_payload.gpu_scene     = std::move(gpu_scene);
+                       }
+                       this->m_has_pending_async_payload.store(true, std::memory_order_release);
+                   }).Dispatch();
 }
 
 void Scene::LoadSceneFromFile(const std::filesystem::path& file_path) {
@@ -57,16 +95,49 @@ Render::GpuScene::PendingCommandList&& Scene::PopPendingCommandList() {
     return std::move(m_gpu_scene->PopPendingCommandList());
 }
 
+bool Scene::AdoptPendingAsyncLoad() {
+    assert(Moer::IsCurrentlyGameThread());
+
+    if (!m_has_pending_async_payload.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    AsyncLoadPayload payload;
+    {
+        std::lock_guard<std::mutex> lock(m_async_payload_mutex);
+        payload = std::move(m_pending_async_payload);
+        m_pending_async_payload = AsyncLoadPayload{};
+    }
+    m_has_pending_async_payload.store(false, std::memory_order_release);
+
+    m_logical_scene = std::move(payload.logical_scene);
+    m_cpu_scene     = std::move(payload.cpu_scene);
+    m_gpu_scene     = std::move(payload.gpu_scene);
+    m_scene_load_info.FinishLoading();
+    return true;
+}
+
 void Scene::Tick() {
     // TODO
 }
 
 void Scene::Reset() {
+    if (m_load_event) {
+        m_load_event->Wait();
+        m_load_event = nullptr;
+    }
+
     m_bindless_array = nullptr;
 
     m_logical_scene.reset();
     m_cpu_scene.reset();
     m_gpu_scene.reset();
+
+    {
+        std::lock_guard<std::mutex> lock(m_async_payload_mutex);
+        m_pending_async_payload = AsyncLoadPayload{};
+    }
+    m_has_pending_async_payload.store(false, std::memory_order_release);
 
     m_scene_load_info.Reset();
 }

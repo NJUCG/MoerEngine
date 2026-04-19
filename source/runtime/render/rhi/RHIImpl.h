@@ -737,6 +737,9 @@ private:
     UpdateBindlessArrayCmd() : Command(EType::UpdateBindlessArray) {}
     mutable BindlessArrayRef        array;
     Array<BindlessArray::UpdateCmd> update_cmds;
+    Array<uint>                     freed_array_slots;
+    Array<uint>                     freed_texture_slots;
+    Array<uint>                     freed_buffer_slots;
     Array<byte>                     array_data;
     Array<std::pair<uint, uint>>    array_indices_dat;
     Array<byte>                     buffer_data;
@@ -748,6 +751,9 @@ public:
     UpdateBindlessArrayCmd(
         BindlessArrayRef                  _array,
         Array<BindlessArray::UpdateCmd>&& _update_cmds,
+        Array<uint>&&                     _freed_array_slots,
+        Array<uint>&&                     _freed_texture_slots,
+        Array<uint>&&                     _freed_buffer_slots,
         Array<byte>&&                     _array_data,
         Array<std::pair<uint, uint>>&&    _array_indices_dat,
         Array<byte>&&                     _buffer_data,
@@ -759,6 +765,9 @@ public:
         Command(EType::UpdateBindlessArray, _name),
         array(_array),
         update_cmds(_update_cmds),
+        freed_array_slots(std::move(_freed_array_slots)),
+        freed_texture_slots(std::move(_freed_texture_slots)),
+        freed_buffer_slots(std::move(_freed_buffer_slots)),
         array_data(std::move(_array_data)),
         array_indices_dat(std::move(_array_indices_dat)),
         buffer_data(std::move(_buffer_data)),
@@ -771,11 +780,24 @@ public:
     auto* Handle() const {
         return array.Get();
     }
+    BindlessArrayRef ArrayRef() const {
+        return array;
+    }
     EQueueType GetQueueType() const override {
         return EQueueType::Graphics;
     }
     const auto& UpdateCommands() const {
         return update_cmds;
+    }
+
+    auto StealFreedArraySlots() const {
+        return std::move(freed_array_slots);
+    }
+    auto StealFreedTextureSlots() const {
+        return std::move(freed_texture_slots);
+    }
+    auto StealFreedBufferSlots() const {
+        return std::move(freed_buffer_slots);
     }
 
     auto StealArrayData() const {
@@ -1644,6 +1666,9 @@ public:
         CUSTOM_CMD_NONE = 0u,
         CUSTOM_RASTER,
         CUSTOM_DISPATCH,
+        CUSTOM_TRANSLATE_FENCE,
+        CUSTOM_TRANSLATE_LAMBDA,
+        CUSTOM_FRAME_TICK,
         // ...
         CUSTOM_CMD_END = 0xffu,
     };
@@ -1652,6 +1677,9 @@ public:
         "CUSTOM_CMD_NONE",
         "CUSTOM_RASTER",
         "CUSTOM_DISPATCH",
+        "CUSTOM_TRANSLATE_FENCE",
+        "CUSTOM_TRANSLATE_LAMBDA",
+        "CUSTOM_FRAME_TICK",
     };
 
 private:
@@ -1696,6 +1724,53 @@ public:
             _func(usage.resource, usage.state_flags);
         }
     }
+};
+
+struct TranslateFenceCmd : public CustomCmd {
+    explicit TranslateFenceCmd(RHITranslateFence _fence) :
+        CustomCmd(CustomCmdId::CUSTOM_TRANSLATE_FENCE, "TranslateFence"),
+        fence(std::move(_fence)) {}
+
+    EQueueType GetQueueType() const override {
+        return EQueueType::Ignore;
+    }
+
+    const RHITranslateFence& Fence() const {
+        return fence;
+    }
+
+private:
+    RHITranslateFence fence{};
+};
+
+struct TranslateLambdaCmd : public CustomCmd {
+    explicit TranslateLambdaCmd(
+        std::function<void()>&& _callback,
+        std::string_view        _name = "LambdaCommand"
+    ) :
+        CustomCmd(CustomCmdId::CUSTOM_TRANSLATE_LAMBDA, _name),
+        callback(std::move(_callback)) {}
+
+    EQueueType GetQueueType() const override {
+        return EQueueType::Ignore;
+    }
+
+    void Execute() const {
+        callback();
+    }
+
+private:
+    std::function<void()> callback;
+};
+
+struct FrameTickCmd : public CustomCmd {
+    FrameTickCmd() : CustomCmd(CustomCmdId::CUSTOM_FRAME_TICK, "FrameTick") {}
+
+    EQueueType GetQueueType() const override {
+        return EQueueType::Ignore;
+    }
+
+    void Execute() const {}
 };
 
 /**

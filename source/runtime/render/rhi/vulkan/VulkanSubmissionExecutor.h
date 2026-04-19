@@ -30,18 +30,11 @@ struct VulkanSubmissionBatch {
     std::optional<RHIPresentRequest>   present{};
 };
 
-struct VulkanSubmissionExecuteOptions {
-    bool frame_end{false};
-};
-
 class RENDER_API VulkanSubmissionExecutor {
 public:
-    static void Execute(
-        VulkanSubmissionBatch&&                batch,
-        const VulkanSubmissionExecuteOptions& options = {}
-    );
+    static void Enqueue(VulkanSubmissionBatch&& batch);
     static GraphEventRef Sync(ERHISyncDepth depth = ERHISyncDepth::RHI);
-    static void Flush();
+    static void Flush(ERHIFlushDepth depth = ERHIFlushDepth::SubmitGPU);
     static void Shutdown();
 };
 

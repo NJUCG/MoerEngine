@@ -181,7 +181,8 @@ public:
         return m_device;
     }
     VulkanDescriptorHeap& GetGlobalDescriptorHeap() {
-        return m_global_descriptor_heap;
+        assert(m_global_descriptor_heap != nullptr && "Global descriptor heap is not initialized");
+        return *m_global_descriptor_heap;
     }
     inline VmaAllocator GetVmaAllocator() const {
         return m_allocator;
@@ -189,6 +190,23 @@ public:
     inline const VulkanOptionalDeviceExtensions& GetOptionalExtensions() const {
         return m_device_info.optional_extensions;
     }
+    inline bool HasDescriptorHeapRuntime() const {
+        return m_device_info.optional_extensions.m_has_descriptor_heap_runtime;
+    }
+    VkResult WriteResourceDescriptors(
+        uint32                             _descriptor_count,
+        const VkResourceDescriptorInfoEXT* _descriptor_infos,
+        const VkHostAddressRangeEXT*       _dst_ranges
+    ) const;
+    VkResult WriteSamplerDescriptors(
+        uint32                       _descriptor_count,
+        const VkSamplerCreateInfo*   _sampler_infos,
+        const VkHostAddressRangeEXT* _dst_ranges
+    ) const;
+    void CmdBindResourceHeap(VkCommandBuffer _command_buffer, const VkBindHeapInfoEXT* _bind_info) const;
+    void CmdBindSamplerHeap(VkCommandBuffer _command_buffer, const VkBindHeapInfoEXT* _bind_info) const;
+    void CmdPushData(VkCommandBuffer _command_buffer, const VkPushDataInfoEXT* _push_info) const;
+    uint64 GetPhysicalDescriptorSize(VkDescriptorType _type) const;
     inline const VulkanDeviceFeatures& GetCoreFeatures() const {
         return m_device_info.core_features;
     }
@@ -248,7 +266,7 @@ private:
     VkDebugUtilsMessengerEXT m_debug_utils_messenger = VK_NULL_HANDLE;
 
     VmaAllocator                              m_allocator = VK_NULL_HANDLE;
-    VulkanDescriptorHeap                      m_global_descriptor_heap{};
+    UniquePtr<VulkanDescriptorHeap>           m_global_descriptor_heap{};
     UniquePtr<VkCommandQueue>                 gfx_queue{}; // VkCommandQueue是MoerEngine的封装！
     UniquePtr<VkCommandQueue>                 compute_queue{};
     UniquePtr<VkCopyQueue>                    copy_queue{};
@@ -258,6 +276,11 @@ private:
     LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};
     static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
     StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
+    PFN_vkCmdBindResourceHeapEXT               m_vk_cmd_bind_resource_heap{nullptr};
+    PFN_vkCmdBindSamplerHeapEXT                m_vk_cmd_bind_sampler_heap{nullptr};
+    PFN_vkWriteResourceDescriptorsEXT          m_vk_write_resource_descriptors{nullptr};
+    PFN_vkWriteSamplerDescriptorsEXT           m_vk_write_sampler_descriptors{nullptr};
+    PFN_vkCmdPushDataEXT                       m_vk_cmd_push_data{nullptr};
 
 public:
     static constexpr uint            bindless_sampler_cnt = 256;
@@ -274,6 +297,9 @@ private:
     void             InitGpu(uint32 _api_version);
     void             CreateDevice(uint32 _api_version);
     void             CreateMemoryAllocator(VkInstance _instance, uint32 _api_version);
+    void             FinalizeDescriptorHeapRuntimeCapability();
+    void             LoadDescriptorHeapRuntimeCommands();
+    bool             ValidateDescriptorHeapRuntimeCommands() const;
     void             CreateDescriptorHeap();
     void             DestroyDescriptorHeap();
     void             CreateInternalResources();

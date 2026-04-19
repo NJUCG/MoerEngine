@@ -1,6 +1,6 @@
 #include <core/common/Bindless.hlsl>
 #include <core/common/Common.hlsl>
-BINDLESS_BINDINGS(2, 1, 3, 4);
+BINDLESS_BINDINGS(2);
 
 #include <materials/Material.hlsli>
 

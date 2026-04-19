@@ -12,7 +12,7 @@ Each script is self-contained, targeting one executable, and shares logic via `c
 
 | Script | Executable | Description |
 |--------|-----------|-------------|
-| `test_rhi_translate.ps1` | `TestRHITranslate.exe` | RHI multi-queue translate tests (synchronous, exit-code checked) |
+| `test_rhi_translate.ps1` | `TestRHITranslate.exe` | RHI multi-queue translate tests with descriptor-heap capability probe and validation blocker parsing |
 | `test_editor.ps1` | `MoerEditor.exe` | Launch editor, run for N seconds, then kill and inspect log |
 | `test_all.ps1` | both | Run all tests in sequence, single summary |
 | `common.ps1` | — | Shared library, dot-sourced by all scripts above |
@@ -53,14 +53,14 @@ Each run creates a timestamped folder under `logs/`:
 ```
 logs/
 └── run_YYYYMMDD_HHMMSS/
-    ├── summary.txt                 ← PASSED/FAILED overview for the run
+    ├── summary.txt                 ← PASSED/FAILED/SKIPPED overview for the run
     ├── rhi_translate.log           ← Full stdout+stderr of TestRHITranslate
     ├── moereditor.log              ← Full stdout+stderr of MoerEditor
     ├── moereditor_crash.txt        ← Lines that triggered error detection (if any)
     └── *.dmp / *.mdmp              ← Minidumps copied from bin dir (if any)
 ```
 
-`summary.txt` always exists after a run and contains the final PASSED/FAILED counts.
+`summary.txt` always exists after a run and contains both top-level test counts and grouped subtest counts with PASSED/FAILED/SKIPPED states.
 
 ## Error Detection
 
@@ -76,14 +76,14 @@ The editor test (`test_editor.ps1`, `test_all.ps1`) reports **FAILED** when any 
 
 Vulkan Loader info messages (layer discovery, driver enumeration) are **excluded** — they appear at `[error]` severity in the spdlog output due to the debug callback routing, but do not indicate real errors.
 
-The RHI test (`test_rhi_translate.ps1`) relies on the executable's exit code (0 = all pass).
+The RHI test (`test_rhi_translate.ps1`) now also treats Vulkan validation errors as blockers and records descriptor-heap capability as a grouped subtest.
 
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | All tests passed |
-| `1` | One or more tests failed |
+| `0` | All top-level tests passed |
+| `1` | One or more top-level tests failed |
 
 ## Adding a New Test
 
@@ -94,6 +94,6 @@ The RHI test (`test_rhi_translate.ps1`) relies on the executable's exit code (0 
    Initialize-TestRun -Config $Config -ScriptDir $PSScriptRoot
    ```
 3. Use `Invoke-ExeSync` or `Invoke-ExeTimed` to run your executable.
-4. Use `Test-LogForErrors` to scan the log, `Register-Pass`/`Register-Fail` to record the result.
+4. Use `Test-LogForErrors` to scan the log, `Register-Pass`/`Register-Fail`/`Register-Skip` to record the result, and `Register-Subtest` when the script needs grouped detail.
 5. Call `Finish-TestRun` at the end.
 6. Add the new test block to `test_all.ps1`.

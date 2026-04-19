@@ -585,31 +585,43 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
     VulkanPipelineParamBinder& bind_template        = *vk_pso->bind_template;
     VulkanDescriptorHeap&      descriptor_heap      = device.GetGlobalDescriptorHeap();
     auto&                      set_binders          = bind_template.set_binders;
-    uint64                     g_global_desc_offset = descriptor_heap.GetCurrentOffset();
+    Array<byte>                push_data;
+    push_data.resize(bind_template.push_data_size);
+    if (!push_data.empty()) {
+        memset(push_data.data(), 0, push_data.size());
+    }
+
+    auto write_push_offset = [&](uint32_t _push_offset, uint64 _value) {
+        assert(_push_offset + sizeof(uint32_t) <= push_data.size());
+        const uint32_t encoded_value = uint32_t(_value);
+        memcpy(push_data.data() + _push_offset, &encoded_value, sizeof(encoded_value));
+    };
 
     for (auto& [set, binder] : set_binders) {
         std::visit(
             Overload{
                 [&](const VulkanBindlessSetArray& _binder) {
-                    BindlessArrayRef     array = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
+                    const auto* bindless_arg = std::get_if<BindlessArrayRef>(&_args[_binder.param_idx]);
+                    if (bindless_arg == nullptr) {
+                        LOG_ERROR(
+                            "Bindless binder expected BindlessArrayRef at arg {}, but variant index was {}.",
+                            _binder.param_idx,
+                            _args[_binder.param_idx].index()
+                        );
+                        assert(false && "bindless binder arg type mismatch");
+                    }
+                    BindlessArrayRef     array = *bindless_arg;
                     VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    bind_template.desc_buffers[_binder.desc_idx].address =
-                        bindless_array->bindless_buffer_descs->DeviceAddress();
+                    const auto cache = descriptor_heap.CacheBindlessArray(*bindless_array);
+                    write_push_offset(_binder.push_data_offset, cache.array_offset);
                 },
-                [&](const VulkanBindlessSetSampler& _binder) {
-                    BindlessArrayRef     array = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
-                    VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    bind_template.desc_buffers[_binder.desc_idx].address =
-                        bindless_array->bindless_texture_descs->DeviceAddress();
-                },
-                [&](const VulkanBindlessSetImage& _binder) {
-                    BindlessArrayRef     array = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
-                    VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    bind_template.desc_buffers[_binder.desc_idx].address =
-                        bindless_array->bindless_texture_descs->DeviceAddress();
-                },
-                [&](const VulkanDescriptorSetBinder& _binder) {
-                    //normal resources
+                [&](const VulkanDescriptorSetBinderImpl& _binder) {
+                    uint64 set_base_offset = 0;
+                    if (_binder.size > 0) {
+                        set_base_offset = descriptor_heap.AllocateOnlineDescriptorRange(_binder.size);
+                        write_push_offset(_binder.resource_push_data_offset, set_base_offset);
+                    }
+
                     for (uint i = 0; i < _binder.writers.size(); ++i) {
                         auto& writer = _binder.writers[i];
                         if (writer.descriptorCount < 1)
@@ -625,12 +637,19 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                                      )
                                                          .format]
                                 .format;
+                        const auto& binding_info = _binder.binding_infos[i];
                         switch (writer.descriptorType) {
                             case VK_DESCRIPTOR_TYPE_SAMPLER: {
+                                assert(writer.descriptorCount == 1 && "Sampler arrays are not supported on descriptor heap path");
                                 uint64 src_handle = descriptor_heap.GetSamplerDescIdx(
                                     std::get<Sampler>(_args[set_info.param_idx])
                                 );
-                                descriptor_heap.PushSamplerDesc(src_handle, _binder.binding_infos[i].offset);
+                                write_push_offset(
+                                    binding_info.push_data_offset,
+                                    descriptor_heap.GetBindlessSamplerDescriptorOffset(
+                                        uint32(src_handle / descriptor_heap.GetOfflineSamplerDescriptorStride())
+                                    )
+                                );
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
@@ -645,10 +664,7 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                             descriptor_heap.GetImageDescIdx(&textures[j], layout);
                                         descriptor_heap.PushImageDesc(
                                             src_handle,
-                                            _binder.binding_infos[i].offset +
-                                                j * device.GetOptionalProperties()
-                                                        .descriptor_buffer_properties
-                                                        .sampledImageDescriptorSize
+                                            set_base_offset + binding_info.offset + j * binding_info.descriptor_stride
                                         );
                                     }
                                     break;
@@ -659,7 +675,9 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                 uint64 src_handle = descriptor_heap.GetImageDescIdx(
                                     &std::get<TextureView>(_args[set_info.param_idx]), layout
                                 );
-                                descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
+                                descriptor_heap.PushImageDesc(
+                                    src_handle, set_base_offset + binding_info.offset
+                                );
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
@@ -673,10 +691,7 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                         );
                                         descriptor_heap.PushImageDesc(
                                             src_handle,
-                                            _binder.binding_infos[i].offset +
-                                                j * device.GetOptionalProperties()
-                                                        .descriptor_buffer_properties
-                                                        .storageImageDescriptorSize
+                                            set_base_offset + binding_info.offset + j * binding_info.descriptor_stride
                                         );
                                     }
                                     break;
@@ -684,17 +699,20 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                 uint64 src_handle = descriptor_heap.GetImageDescIdx(
                                     &std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_GENERAL
                                 );
-                                descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
+                                descriptor_heap.PushImageDesc(
+                                    src_handle, set_base_offset + binding_info.offset
+                                );
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
-                                // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
                                 uint64 src_handle = descriptor_heap.GetBufferDescIdx(
                                     std::get<BufferView>(_args[set_info.param_idx]),
                                     writer.descriptorType,
                                     format
                                 );
-                                descriptor_heap.PushUniformDesc(src_handle, _binder.binding_infos[i].offset);
+                                descriptor_heap.PushUniformDesc(
+                                    src_handle, set_base_offset + binding_info.offset
+                                );
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
@@ -709,21 +727,19 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                         );
                                         descriptor_heap.PushStorageDesc(
                                             src_handle,
-                                            _binder.binding_infos[i].offset +
-                                                j * device.GetOptionalProperties()
-                                                        .descriptor_buffer_properties
-                                                        .storageBufferDescriptorSize
+                                            set_base_offset + binding_info.offset + j * binding_info.descriptor_stride
                                         );
                                     }
                                     break;
                                 }
-                                // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
                                 uint64 src_handle = descriptor_heap.GetBufferDescIdx(
                                     std::get<BufferView>(_args[set_info.param_idx]),
                                     writer.descriptorType,
                                     format
                                 );
-                                descriptor_heap.PushStorageDesc(src_handle, _binder.binding_infos[i].offset);
+                                descriptor_heap.PushStorageDesc(
+                                    src_handle, set_base_offset + binding_info.offset
+                                );
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
@@ -731,7 +747,9 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                     std::get<RaytracingTlasRef>(_args[set_info.param_idx]).Get()
                                 );
                                 uint64 src_handle = descriptor_heap.GetAccelDescIdx(as);
-                                descriptor_heap.PushAccelDesc(src_handle, _binder.binding_infos[i].offset);
+                                descriptor_heap.PushAccelDesc(
+                                    src_handle, set_base_offset + binding_info.offset
+                                );
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_MAX_ENUM: {
@@ -743,42 +761,43 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                             }
                         }
                     }
-
-                    //set desc buffer offset
-                    bind_template.desc_buffer_offsets[_binder.offset_idx].offset =
-                        descriptor_heap.GetCurrentOffset();
-                    descriptor_heap.IncrementOffset(_binder.size);
-                    // device.vk_cmd_push_descriptor_set(command_buffer, _binder.bind_point, _binder.push_info.layout, _binder.push_info.set, _binder.writers.size(), _binder.writers.data());
                 }
             },
             binder
         );
     }
-    if (!bind_template.desc_buffers.empty()) {
-        vkCmdBindDescriptorBuffersEXT(
-            command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data()
-        );
+
+    if (bind_template.needs_resource_heap) {
+        const VkBindHeapInfoEXT resource_heap_info = descriptor_heap.GetResourceHeapBindInfo();
+        device.CmdBindResourceHeap(command_buffer, &resource_heap_info);
     }
 
-    for (const auto& desc_info : bind_template.desc_buffer_offsets) {
-        uint   buffer_idx = desc_info.buf_idx;
-        uint64 offset     = desc_info.offset;
-        vkCmdSetDescriptorBufferOffsetsEXT(
-            command_buffer, desc_info.bind_point, desc_info.layout, desc_info.set, 1, &buffer_idx, &offset
-        );
+    if (bind_template.needs_sampler_heap) {
+        const VkBindHeapInfoEXT sampler_heap_info = descriptor_heap.GetSamplerHeapBindInfo();
+        device.CmdBindSamplerHeap(command_buffer, &sampler_heap_info);
     }
 
     if (bind_template.push_constants_info.size > 0) {
-        bind_template.push_constants_info.pValues = _args.constants.data();
-        const auto& push_info                     = &bind_template.push_constants_info;
-        vkCmdPushConstants(
-            command_buffer,
-            push_info->layout,
-            push_info->stageFlags,
-            push_info->offset,
-            push_info->size,
-            push_info->pValues
-        );
+        const uint32_t constants_offset = bind_template.push_constants_info.offset;
+        const uint32_t constants_size = bind_template.push_constants_info.size;
+        const uint32_t available_size = uint32_t(_args.constants.size() * sizeof(uint));
+        assert(constants_size <= available_size && "Push constant byte size exceeds recorded constant payload");
+        if (push_data.size() < constants_offset + constants_size) {
+            const size_t old_size = push_data.size();
+            push_data.resize(constants_offset + constants_size);
+            memset(push_data.data() + old_size, 0, push_data.size() - old_size);
+        }
+        memcpy(push_data.data() + constants_offset, _args.constants.data(), constants_size);
+    }
+
+    if (!push_data.empty()) {
+        VkPushDataInfoEXT push_info{VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT};
+        push_info.offset = 0;
+        push_info.data = {
+            .address = push_data.data(),
+            .size = push_data.size()
+        };
+        device.CmdPushData(command_buffer, &push_info);
     }
 }
 

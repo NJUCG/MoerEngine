@@ -4,7 +4,7 @@
 #include <shared/lighting/ShaderParameters.h>
 #include <shared/utils/MoerMath.hlsli>
 
-BINDLESS_BINDINGS(3, 2, 4, 5)
+BINDLESS_BINDINGS(3)
 #include "shared/scene/SharedSceneStruct.h"
 #include <materials/Material.hlsli>
 #include <pipelines/raytracing/lighting/common/PolymorphicLight.hlsli>

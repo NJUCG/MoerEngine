@@ -1,8 +1,7 @@
 #pragma once
 
-#include "VulkanTranslateTask.h"
+#include "VulkanQueue.h"
 
-#include <future>
 #include <optional>
 #include <string>
 
@@ -25,6 +24,66 @@ struct SubmissionKeyHash {
         hash ^= std::hash<uint32>{}(key.submit_idx) + 0x9e3779b9 + (hash << 6u) + (hash >> 2u);
         return hash;
     }
+};
+
+struct SourceSubmitKey {
+    uint64 op_seq{0};
+    uint32 submit_idx{0};
+
+    bool operator==(const SourceSubmitKey& other) const {
+        return op_seq == other.op_seq && submit_idx == other.submit_idx;
+    }
+};
+
+struct SourceSubmitKeyHash {
+    size_t operator()(const SourceSubmitKey& key) const {
+        size_t hash = std::hash<uint64>{}(key.op_seq);
+        hash ^= std::hash<uint32>{}(key.submit_idx) + 0x9e3779b9 + (hash << 6u) + (hash >> 2u);
+        return hash;
+    }
+};
+
+struct TranslateResult {
+    EQueueType queue{EQueueType::Ignore};
+    std::optional<VulkanRecordedSubmit> recorded_submit{};
+    GraphEventRef translate_complete{nullptr};
+    bool          valid{true};
+    std::string   error{};
+};
+
+struct QueueTranslateInfo {
+    SubmissionKey key{};
+    SourceSubmitKey source_key{};
+    uint32 source_segment_index{0};
+    EQueueType queue{EQueueType::Ignore};
+    CmdSubmit submit;
+    TrackerSeed initial_seed{};
+    GraphEventArray task_dependencies{};
+    GraphEventRef   completion_event{nullptr};
+    ERHITranslateExecutionClass execution_class{ERHITranslateExecutionClass::Parallel};
+    bool         valid{true};
+    std::string  error{};
+
+    QueueTranslateInfo(
+        SubmissionKey in_key,
+        SourceSubmitKey in_source_key,
+        uint32 in_source_segment_index,
+        EQueueType in_queue,
+        CmdSubmit&& in_submit,
+        TrackerSeed&& in_seed
+    ) :
+        key(in_key),
+        source_key(in_source_key),
+        source_segment_index(in_source_segment_index),
+        queue(in_queue),
+        submit(std::move(in_submit)),
+        initial_seed(std::move(in_seed)),
+        execution_class(submit.translate_execution_class) {}
+
+    QueueTranslateInfo(QueueTranslateInfo&&) noexcept            = default;
+    QueueTranslateInfo& operator=(QueueTranslateInfo&&) noexcept = default;
+    QueueTranslateInfo(const QueueTranslateInfo&)                = delete;
+    QueueTranslateInfo& operator=(const QueueTranslateInfo&)     = delete;
 };
 
 struct ResourceStateValue {

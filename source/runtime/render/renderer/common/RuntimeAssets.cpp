@@ -29,6 +29,12 @@ RuntimeAssets::RuntimeAssets(std::filesystem::path _assets_path, Render::RenderD
                    }).Dispatch();
 }
 
+RuntimeAssets::~RuntimeAssets() {
+    if (record_event) {
+        record_event->Wait();
+    }
+}
+
 Render::TextureRef RuntimeAssets::GetTexture(std::string_view _name) const {
     auto it = textures.find(std::string(_name));
     if (it != textures.end()) {
@@ -138,6 +144,10 @@ void RuntimeAssets::RecordTextureUploads() {
 bool RuntimeAssets::SubmitPendingUploads() {
     assert(Moer::IsCurrentlyGameThread());
 
+    if (b_loaded.load(std::memory_order_acquire)) {
+        return false;
+    }
+
     if (!b_recorded.load(std::memory_order_acquire)) {
         return false;
     }
@@ -164,10 +174,5 @@ bool RuntimeAssets::SubmitPendingUploads() {
 
 bool RuntimeAssets::IsReady() const {
     return b_loaded.load(std::memory_order_acquire);
-}
-void RuntimeAssets::WaitUntilReady() const {
-    if (!b_recorded.load(std::memory_order_acquire)) {
-        record_event->Wait();
-    }
 }
 } // namespace Moer

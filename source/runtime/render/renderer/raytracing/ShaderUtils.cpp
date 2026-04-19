@@ -21,7 +21,9 @@ static constexpr EPixelFormat s_supported_formats[] = {
     PF_R16G16B16A16_SNORM,
     PF_R8G8B8A8_SNORM,
     PF_R8G8B8A8_UNORM,
-    PF_R8G8B8A8_SRGB
+    PF_R8G8B8A8_SRGB,
+    PF_B8G8R8A8_UNORM,
+    PF_B8G8R8A8_SRGB
 };
 
 ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
@@ -34,24 +36,24 @@ ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
     ));
     generate_mips_pipeline    = std::move(manager.Compute<GenerateMipsPipeline>("core/utils/BuildMips.hlsl"));
 
-    GfxPsoCreateInfo show_texture_pso_info(
-        RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)}
-    );
-    show_texture_pipeline = std::move(manager.Raster()
-                                          .Vertex("core/utils/FullScreenQuad.hlsl")
-                                          .Pixel("core/utils/ShowTexture.frag.hlsl")
-                                          .Build<ShowTexturePipeline>(std::move(show_texture_pso_info)));
+    for (auto format : s_supported_formats) {
+        GfxPsoCreateInfo show_texture_pso_info(
+            RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
+        );
+        show_texture_pipeline_map[format] = std::move(manager.Raster()
+                                                          .Vertex("core/utils/FullScreenQuad.hlsl")
+                                                          .Pixel("core/utils/ShowTexture.frag.hlsl")
+                                                          .Build<ShowTexturePipeline>(std::move(show_texture_pso_info)));
 
-    // for (auto format : s_supported_formats) {
-    //     GfxPsoCreateInfo sample_tex_pso_info(
-    //         RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-    //     );
-    //     sample_texture_pipeline_map[format] =
-    //         std::move(manager.Raster()
-    //                       .Vertex("core/utils/FullScreenQuad.hlsl")
-    //                       .Pixel("core/utils/CopyTexture.frag.hlsl")
-    //                       .Build<UtilsSampleTexturePipeline>(std::move(sample_tex_pso_info)));
-    // }
+        // GfxPsoCreateInfo sample_tex_pso_info(
+        //     RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
+        // );
+        // sample_texture_pipeline_map[format] =
+        //     std::move(manager.Raster()
+        //                   .Vertex("core/utils/FullScreenQuad.hlsl")
+        //                   .Pixel("core/utils/CopyTexture.frag.hlsl")
+        //                   .Build<UtilsSampleTexturePipeline>(std::move(sample_tex_pso_info)));
+    }
 
     sample_texture_cs_pipeline =
         std::move(manager.Compute<UtilsSampleTexturePipelineCS>("core/utils/CopyTexture.cs.hlsl"));
@@ -161,7 +163,15 @@ void ShaderUtils::ShowTexture(
     TextureRef               _src_tex,
     TextureRef               _dst_texture
 ) {
-    _cmd_list.Gfx(show_texture_pipeline, _param, _src_tex->GetView(0, _src_tex->GetNumMips()), _bdls)
+    const EPixelFormat dst_format = _dst_texture->GetFormat();
+    assert(show_texture_pipeline_map.contains(dst_format) && "Unsupported ShowTexture destination format");
+
+    _cmd_list.Gfx(
+                show_texture_pipeline_map.at(dst_format),
+                _param,
+                _src_tex->GetView(0, _src_tex->GetNumMips()),
+                _bdls
+            )
         .Draw(
             "ShowTexture",
             Rect2D(0, 0, _dst_texture->GetExtent().x, _dst_texture->GetExtent().y),

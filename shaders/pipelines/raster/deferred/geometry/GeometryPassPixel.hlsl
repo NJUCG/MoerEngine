@@ -4,7 +4,7 @@
 
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
-BINDLESS_BINDINGS(3, 2, 4, 5)
+BINDLESS_BINDINGS(3)
 #include "shared/Geometry.h"
 #include "shared/raster/ShaderParameters.h"
 #include "shared/scene/SharedSceneStruct.h"
@@ -25,13 +25,17 @@ void DiscardByAlphaTest(uint material_id, float2 uv_in_map) {
 
     // 是否需要discard该像素（AlphaMode为BLEND或MASK时，需要进行discard）
     if (mat.alpha_mode == Moer::EAlphaMode::Mask) {
-        float alpha = TextureHandle(mat.albedo_map_hdl).Sample2D<float4>(uv_in_map).a * mat.albedo_factor.a;
+        float alpha = mat.albedo_map_hdl > 0
+                        ? TextureHandle(mat.albedo_map_hdl).Sample2D<float4>(uv_in_map).a * mat.albedo_factor.a
+                        : mat.albedo_factor.a;
         // printf("MASK: alpha: %f, cutoff: %f, albedo_map.a: %f, base_color.a: %f\n", alpha, mat.alpha_cutoff, TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a, mat.base_color_factor.a);
         if (alpha < mat.alpha_cutoff) {
             discard;
         }
     } else if (mat.alpha_mode == Moer::EAlphaMode::Blend) {
-        float alpha = TextureHandle(mat.albedo_map_hdl).Sample2D<float4>(uv_in_map).a * mat.albedo_factor.a;
+        float alpha = mat.albedo_map_hdl > 0
+                        ? TextureHandle(mat.albedo_map_hdl).Sample2D<float4>(uv_in_map).a * mat.albedo_factor.a
+                        : mat.albedo_factor.a;
         // printf("BLEND: alpha: %f; albedo_map.a: %f; base_color.a: %f\n", alpha, TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a, mat.base_color_factor.a);
         if (alpha < param.alpha_test_blend_pixel_cutoff) {
             discard;

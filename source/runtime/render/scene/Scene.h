@@ -7,7 +7,10 @@
 #include "SceneLoadInfoAsync.h"
 #include "entt/entity/fwd.hpp"
 #include "scene/LogicalComponents.h"
+#include "taskgraph/GraphTask.h"
+#include <atomic>
 #include <filesystem>
+#include <mutex>
 
 namespace Moer {
 
@@ -84,6 +87,7 @@ public:
 public:
     // Graphics API相关接口
     Render::GpuScene::PendingCommandList&& PopPendingCommandList();
+    bool                                   AdoptPendingAsyncLoad();
 
 private:
     // 构造函数 初始化
@@ -101,6 +105,17 @@ private:
     UniquePtr<Render::GpuScene>  m_gpu_scene;
 
     SceneLoadInfoAsync m_scene_load_info;
+    GraphEventRef      m_load_event;
+
+    struct AsyncLoadPayload {
+        UniquePtr<ecs::LogicalScene> logical_scene;
+        UniquePtr<CpuScene>          cpu_scene;
+        UniquePtr<Render::GpuScene>  gpu_scene;
+    };
+
+    mutable std::mutex m_async_payload_mutex;
+    AsyncLoadPayload   m_pending_async_payload;
+    std::atomic_bool   m_has_pending_async_payload = false;
 
 private:
     /**

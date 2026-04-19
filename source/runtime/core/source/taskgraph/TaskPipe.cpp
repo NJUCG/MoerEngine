@@ -63,10 +63,11 @@ GraphEventRef TaskPipe::Enqueue(
     }
     
     create_info.Dispatch();
+    GraphEventRef event = new_task->event;
     
     new_task->Release();
     
-    return new_task->event;
+    return event;
 }
 
 GraphEventRef TaskPipe::Close() {

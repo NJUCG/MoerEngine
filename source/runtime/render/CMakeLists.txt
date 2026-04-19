@@ -144,7 +144,7 @@ if(WIN32)
 elseif(LINUX)
 endif()
 
-if(MSVC)
+if(MOER_USING_MSVC_ABI)
     if (NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
     set(CMAKE_MSVC_RUNTIME_LIBRARY
         MultiThreaded$<$<CONFIG:Debug>:Debug>DLL)

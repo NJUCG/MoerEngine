@@ -6,7 +6,7 @@
 [[vk::push_constant]] ConstantBuffer<Moer::ShowTextureParams> param;
 [[vk::binding(0, 0)]] Texture2D src_tex : register(t0);
 
-BINDLESS_BINDINGS(1, 2, 3, 4)
+BINDLESS_BINDINGS(1)
 
 static SamplerState g_spl{
   Filter = MIN_MAG_MIP_LINEAR;

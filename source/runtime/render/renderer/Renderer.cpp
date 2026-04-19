@@ -1,6 +1,7 @@
 #include "renderer/Renderer.h"
 
 // Runtime
+#include "renderer/common/RuntimeAssets.h"
 #include "config/ConfigManager.h"
 #include "misc/Timer.h"
 #include "renderer/EditorConfig.h"
@@ -14,11 +15,17 @@
 
 namespace Moer::Render {
 
-Renderer::Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks) :
+Renderer::Renderer(
+    uint2&                        _resolution,
+    const SharedPtr<EditorConfig> _config,
+    const EngineHooks&            hooks,
+    ::Moer::RuntimeAssets&        _runtime_assets
+) :
     resolution(_resolution),
     device(RenderDevice::Get()),
     manager(ShaderManager::Get()),
     gfx_queue(device.GetCommandQueue(EQueueType::Graphics)),
+    runtime_assets(_runtime_assets),
     scene(),
     cmd_list() {
 
@@ -33,10 +40,7 @@ Renderer::Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, co
     }
     {
         bindless_array = scene.bindless_array();
-
-        // FIXME: 异步版有bug，会在gfx_queue.Execute()卡死，并且会卡住整台机器一分钟
-        // scene.LoadSceneFromFileAsync(_config->scene_path);
-        scene.LoadSceneFromFile(_config->scene_path);
+        scene.LoadSceneFromFileAsync(_config->scene_path);
 
         SceneGlobalEntry::Get().BindScene(&scene);
     }
@@ -122,6 +126,11 @@ void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {
             );
         }
     }
+}
+
+void Renderer::PumpAsyncLoads() {
+    runtime_assets.SubmitPendingUploads();
+    scene.AdoptPendingAsyncLoad();
 }
 
 } // namespace Moer::Render

@@ -14,6 +14,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX 1
 #endif
+#include <windows.h>
 #endif
 
 #include "rhi/RHI.h"
@@ -41,6 +42,41 @@ using Microsoft::WRL::ComPtr;
 using ShaderParametersInfoMap   = Moer::Render::ShaderParametersInfoMap;
 using ShaderCompilerEnvironment = Moer::Render::ShaderCompilerEnvironment;
 using ReflectParamInfo          = Moer::Render::ReflectParamInfo;
+
+#if PLATFORM_WINDOWS && defined(_MSC_VER)
+static HRESULT DxcCompileWithSeh(
+    IDxcCompiler3*      compiler,
+    const DxcBuffer*    buffer,
+    LPCWSTR*            arguments,
+    uint32_t            argument_count,
+    IDxcIncludeHandler* include_handler,
+    IDxcResult**        result,
+    uint32_t&           seh_code
+) {
+    seh_code = 0;
+    __try {
+        return compiler->Compile(
+            buffer,
+            arguments,
+            argument_count,
+            include_handler,
+            IID_PPV_ARGS(result)
+        );
+    } __except ((seh_code = static_cast<uint32_t>(GetExceptionCode())), EXCEPTION_EXECUTE_HANDLER) {
+        return E_FAIL;
+    }
+}
+
+static HRESULT DxcGetStatusWithSeh(IDxcResult* result, HRESULT& status, uint32_t& seh_code) {
+    seh_code = 0;
+    __try {
+        return result->GetStatus(&status);
+    } __except ((seh_code = static_cast<uint32_t>(GetExceptionCode())), EXCEPTION_EXECUTE_HANDLER) {
+        return E_FAIL;
+    }
+}
+#endif
+
 struct DXCompiler::Impl {
     Impl();
     ~Impl();
@@ -63,7 +99,6 @@ private:
 };
 
 DXCompiler::Impl::Impl() {
-    // Initialize DXC library
     HRESULT hres = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&library));
     if (FAILED(hres)) {
         LOG_ERROR("dxcompiler library load fail.");
@@ -77,7 +112,6 @@ DXCompiler::Impl::Impl() {
         return;
     }
 
-    // Initialize DXC utility
     hres = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
     if (FAILED(hres)) {
         LOG_ERROR("Could not init DXC Utiliy");
@@ -92,56 +126,17 @@ DXCompiler::Impl::~Impl() {
     compiler        = nullptr;
 }
 
-// static ComPtr<IDxcCompiler3>      compiler        = nullptr;
-// static ComPtr<IDxcValidator>      validator       = nullptr;
-// static ComPtr<IDxcLibrary>        library         = nullptr;
-// static ComPtr<IDxcUtils>          utils           = nullptr;
-// static ComPtr<IDxcIncludeHandler> include_handler = nullptr;
-
 DXCompiler& DXCompiler::GetInstance() {
     static DXCompiler s_compiler;
     return s_compiler;
 }
-DXCompiler::~DXCompiler() {
-    // utils->Release();
-    // library->Release();
-    // compiler->Release();
-    // delete reflector;
-    MoerDelete(impl);
-}
 
 DXCompiler::DXCompiler() {
     impl = MoerNew(Impl)();
-    // // Initialize DXC library
-    // HRESULT hres = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&library));
-    // if (FAILED(hres)) {
-    //     LOG_ERROR("dxcompiler library load fail.");
-    //     return;
-    // }
-    // library->CreateIncludeHandler(&include_handler);
+}
 
-    // hres = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
-    // if (FAILED(hres)) {
-    //     LOG_ERROR("Could not init DXC Compiler");
-    //     return;
-    // }
-
-    // // Initialize DXC utility
-    // hres = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
-    // if (FAILED(hres)) {
-    //     LOG_ERROR("Could not init DXC Utiliy");
-    //     return;
-    // }
-    // utils->AddRef();
-    // library->AddRef();
-    // compiler->AddRef();
-    // include_handler->AddRef();
-
-    // s_compiler_func_table[SP_WIN_D3D_SM6] = std::bind(&DXCompiler::CompileD3D12, this, std::placeholders::_1);
-    // s_compiler_func_table[SP_VULKAN_SM6]  = std::bind(&DXCompiler::CompileVulkan, this, std::placeholders::_1);
-
-    // if (g_rhi->GetType() == ERHIType::Vulkan)
-    //     reflector = new DirectXShaderReflectorVulkan();
+DXCompiler::~DXCompiler() {
+    MoerDelete(impl);
 }
 bool LoadCache(long long _last_write_time, const ShaderCompilerInput& input, ShaderCompilerOutput& output);
 void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output) {
@@ -149,6 +144,22 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
     auto push_back_error_message = [&_output](std::string message) {
         _output.errors.push_back(std::move(message));
         _output.b_succeeded = false;
+    };
+
+    auto append_dxc_failure = [&](HRESULT hres, const char* stage, IDxcResult* result_ptr) {
+        std::stringstream error_stream;
+        error_stream << "DXC " << stage << " failed with HRESULT=0x" << std::hex
+                     << static_cast<uint32_t>(hres) << std::dec;
+
+        if (result_ptr != nullptr) {
+            ComPtr<IDxcBlobEncoding> error_blob;
+            if (SUCCEEDED(result_ptr->GetErrorBuffer(&error_blob)) && error_blob != nullptr &&
+                error_blob->GetBufferSize() > 0) {
+                error_stream << "\n" << static_cast<const char*>(error_blob->GetBufferPointer());
+            }
+        }
+
+        push_back_error_message(error_stream.str());
     };
 
     auto add_dx_arg = [](Moer::Array<std::wstring>& arguments) {
@@ -170,12 +181,12 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
 
         // - new dxc(like https://www.nuget.org/packages/Microsoft.Direct3D.DXC/1.8.2502.8) support ResourceDescriptorHeap for spirv
         //   and require extra extension/capability for RT.
-        //   however now meet bug https://github.com/microsoft/DirectXShaderCompiler/issues/7181. seems fixed, but not release yet.
+        //   now we vendor a newer DXC, so keep the Vulkan RT capability set enabled.
         // - for dx, dxc output dxil by default, but not preserve inactive resource binding. while spirv can.
         //   now still use dxil for dx due to above bug
-        //arguments.push_back(L"-fspv-extension=SPV_EXT_descriptor_indexing");
-        //arguments.push_back(L"-fspv-extension=SPV_KHR_ray_tracing");
-        //arguments.push_back(L"-fspv-extension=SPV_KHR_ray_query");
+        arguments.push_back(L"-fspv-extension=SPV_EXT_descriptor_indexing");
+        arguments.push_back(L"-fspv-extension=SPV_KHR_ray_tracing");
+        arguments.push_back(L"-fspv-extension=SPV_KHR_ray_query");
     };
 
     auto set_default_args = [add_dx_arg, add_vk_arg](
@@ -292,17 +303,68 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         for (size_t i = 0; i < arguments.size(); ++i) {
             arguments_wchar[i] = arguments[i].data();
         }
-        HRESULT hres = compiler->Compile(
+        HRESULT hres = S_OK;
+#if PLATFORM_WINDOWS && defined(_MSC_VER)
+        uint32_t seh_code = 0;
+        hres = DxcCompileWithSeh(
+            compiler.Get(),
+            &buffer,
+            (LPCWSTR*)arguments_wchar.data(),
+            (uint32_t)arguments_wchar.size(),
+            include_handler.Get(),
+            result.GetAddressOf(),
+            seh_code
+        );
+        if (seh_code != 0) {
+            push_back_error_message(
+                std::format("DXC compile invocation raised SEH exception 0x{:08x}.", seh_code)
+            );
+            return;
+        }
+#else
+        hres = compiler->Compile(
             &buffer,
             (LPCWSTR*)arguments_wchar.data(),
             (uint32_t)arguments_wchar.size(),
             include_handler.Get(),
             IID_PPV_ARGS(&result)
         );
+#endif
+
+        if (FAILED(hres)) {
+            append_dxc_failure(hres, "compile invocation", result.Get());
+            return;
+        }
+
+        if (result == nullptr) {
+            push_back_error_message("DXC compile invocation returned a null result object.");
+            return;
+        }
+
         uint64_t result_hash[2] = {0, 0};
 
         if (SUCCEEDED(hres)) {
+#if PLATFORM_WINDOWS && defined(_MSC_VER)
+            uint32_t seh_status_code = 0;
+            if (FAILED(DxcGetStatusWithSeh(result.Get(), hres, seh_status_code))) {
+                if (seh_status_code != 0) {
+                    push_back_error_message(
+                        std::format("DXC GetStatus raised SEH exception 0x{:08x}.", seh_status_code)
+                    );
+                } else {
+                    append_dxc_failure(E_FAIL, "status query", result.Get());
+                }
+                return;
+            }
+            if (seh_status_code != 0) {
+                push_back_error_message(
+                    std::format("DXC GetStatus raised SEH exception 0x{:08x}.", seh_status_code)
+                );
+                return;
+            }
+#else
             result->GetStatus(&hres);
+#endif
             ComPtr<IDxcBlob> p_hash = nullptr;
             result->GetOutput(DXC_OUT_SHADER_HASH, IID_PPV_ARGS(&p_hash), nullptr);
             if (p_hash) {
@@ -322,17 +384,9 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
             }
         }
 
-        if (FAILED(hres) && (result)) {
-            ComPtr<IDxcBlobEncoding> error_blob;
-            hres = result->GetErrorBuffer(&error_blob);
-            std::stringstream error_stream;
-            if (SUCCEEDED(hres) && error_blob) {
-
-                error_stream << "Shader compilation failed :\n"
-                             << (const char*)error_blob->GetBufferPointer();
-                push_back_error_message((const char*)error_blob->GetBufferPointer());
-                return;
-            }
+        if (FAILED(hres)) {
+            append_dxc_failure(hres, "compile result", result.Get());
+            return;
         }
 
         if (_input.target_info.shader_platform == SP_VULKAN_SM6) {
@@ -428,18 +482,6 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
 
     Moer::UnorderedMap<std::string, ParameterInfo> param_map;
     using namespace Moer;
-
-    constexpr std::string_view bdles_suffix      = "_114514_bdls";
-    constexpr std::string_view bdls_array_suffix = "_array_114514_bdls";
-    auto                       is_bdls           = [&](const std::string& _name) {
-        return _name.ends_with(bdles_suffix);
-    };
-    auto get_real_name = [](const std::string& _name) {
-        return _name.substr(0, _name.find_first_of("__"));
-    };
-    auto is_bdls_array = [&](const std::string& _name) {
-        return _name.ends_with(bdls_array_suffix);
-    };
 #define SetZeroIfEmpty(_param) \
     if (!_param.has_value())   \
         _param = ReflectParamInfo::Bindless();
@@ -478,6 +520,20 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
             active_res_names.insert(comp.get_name(res.id));
         }
 
+        struct ResourceBindingKey {
+            uint32_t set;
+            uint32_t binding;
+
+            auto operator<=>(const ResourceBindingKey&) const = default;
+        };
+
+        auto get_resource_binding_key = [&](spirv_cross::Resource& _res) {
+            return ResourceBindingKey{
+                .set     = comp.get_decoration(_res.id, spv::DecorationDescriptorSet),
+                .binding = comp.get_decoration(_res.id, spv::DecorationBinding),
+            };
+        };
+
         auto res_is_active = [&](spirv_cross::Resource& _res) {
             auto name = comp.get_name(_res.id);
             return active_res_names.contains(name);
@@ -498,27 +554,18 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 ReflectParamInfo::BindlessArray&  bdls_param = reflect_map[real_name.data()].spirv.bindless;
                 ReflectParamInfo::Bindless*       target     = nullptr;
 
-                if (_desc_type == VDT_STORAGE_BUFFER) {
-                    if (is_bdls_array(name)) {
-                        SetZeroIfEmpty(bdls_param.array);
-                        target = &bdls_param.array.value();
-                    } else {
-                        SetZeroIfEmpty(bdls_param.buffer);
-                        target = &bdls_param.buffer.value();
-                    }
-                } else if (_desc_type == VDT_SAMPLED_IMAGE) {
-                    SetZeroIfEmpty(bdls_param.image);
-                    target = &bdls_param.image.value();
-
-                } else if (_desc_type == VDT_SAMPLER) {
-                    SetZeroIfEmpty(bdls_param.sampler);
-                    target = &bdls_param.sampler.value();
-                } else if (_desc_type == VDT_ACCELERATION_STRUCTURE) {
-                    SetZeroIfEmpty(bdls_param.acceleration_structure);
-                    target = &bdls_param.acceleration_structure.value();
+                if (name == ReflectParamInfo::bdls_indirection_symbol) {
+                    SetZeroIfEmpty(bdls_param.array);
+                    target = &bdls_param.array.value();
+                } else if (name == ReflectParamInfo::bdls_resource_heap_symbol) {
+                    SetZeroIfEmpty(bdls_param.resource_heap);
+                    target = &bdls_param.resource_heap.value();
+                } else if (name == ReflectParamInfo::bdls_sampler_heap_symbol) {
+                    SetZeroIfEmpty(bdls_param.sampler_heap);
+                    target = &bdls_param.sampler_heap.value();
                 } else {
-                    LOG_INFO("unknown bindless type {}", uint(_desc_type));
-                    assert(false && "unknown bindless type");
+                    LOG_INFO("unknown bindless symbol {}", name);
+                    assert(false && "unknown bindless symbol");
                 }
                 target->set           = set;
                 target->binding       = binding;
@@ -549,9 +596,17 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 param.spirv.resources.data = res;
             };
 
+        auto is_bindless_resource =
+            [&](spirv_cross::Resource& _res, EVulkanDescriptorType _desc_type) {
+                const auto name = comp.get_name(_res.id);
+                return name == ReflectParamInfo::bdls_indirection_symbol ||
+                       name == ReflectParamInfo::bdls_resource_heap_symbol ||
+                       name == ReflectParamInfo::bdls_sampler_heap_symbol;
+            };
+
         auto handle_all_res =
             [&](spirv_cross::Resource& _res, EVulkanDescriptorType _desc_type, EShaderResourceType _srt) {
-                if (is_bdls(_res.name)) {
+                if (is_bindless_resource(_res, _desc_type)) {
                     handle_bdls_res_tex(_res, _desc_type, _srt);
                 } else {
                     handle_res(_res, _desc_type, _srt);
@@ -666,8 +721,8 @@ void DXCompiler::Impl::ReflectDXIL(
 
     Moer::UnorderedMap<std::string, ReflectParamInfo> reflect_map;
 
-    constexpr std::string_view bdls_suffix       = "_114514_bdls";
-    constexpr std::string_view bdls_array_suffix = "_array_114514_bdls";
+    constexpr std::string_view bdls_suffix       = "_bindless";
+    constexpr std::string_view bdls_array_suffix = "_array_bindless";
     auto                       is_bdls_array     = [&](const std::string& _name) {
         return _name.ends_with(bdls_array_suffix);
     };
@@ -687,7 +742,7 @@ void DXCompiler::Impl::ReflectDXIL(
 
         //if (param_info.count == 0) {// Texture2D<float4> xxx[]; -> count=0
         //    if (!std::string(shaderInputBindDesc.Name).ends_with(bdls_suffix)) {
-        //        LOG_ERROR("bindless shader resource '{}' should end with '_114514_bdls' in '{}'", shaderInputBindDesc.Name, _input.shader_name);
+        //        LOG_ERROR("bindless shader resource '{}' should end with '_bindless' in '{}'", shaderInputBindDesc.Name, _input.shader_name);
         //    }
         //}
 

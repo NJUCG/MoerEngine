@@ -108,7 +108,7 @@ public:
     VulkanSubmissionRuntime(VulkanSubmissionRuntime&&) noexcept            = delete;
     VulkanSubmissionRuntime& operator=(VulkanSubmissionRuntime&&) noexcept = delete;
 
-    void Enqueue(Array<SubmitInfo>&& submits, bool frame_end);
+    void Enqueue(Array<SubmitInfo>&& submits);
     GraphEventRef Sync(ERHISyncDepth depth);
     void Drain();
     void Flush();

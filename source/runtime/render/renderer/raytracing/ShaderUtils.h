@@ -88,8 +88,8 @@ public:
     GenerateMipsPipeline& GetGenerateMipsPipeline() {
         return generate_mips_pipeline;
     }
-    ShowTexturePipeline& GetShowTexturePipeline() {
-        return show_texture_pipeline;
+    ShowTexturePipeline& GetShowTexturePipeline(EPixelFormat format) {
+        return show_texture_pipeline_map.at(format);
     }
 
     void GenerateLowDiscrepancySequence(
@@ -129,7 +129,7 @@ private:
     GenLowDiscrepancyPipeline    gen_low_discrepancy_pipeline;
     GenerateMipPdfPipeline       generate_mip_pdf_pipeline;
     GenerateMipsPipeline         generate_mips_pipeline;
-    ShowTexturePipeline          show_texture_pipeline;
+    UnorderedMap<EPixelFormat, ShowTexturePipeline> show_texture_pipeline_map;
     UtilsSampleTexturePipelineCS sample_texture_cs_pipeline;
 
     UnorderedMap<EPixelFormat, UtilsSampleTexturePipeline> sample_texture_pipeline_map;

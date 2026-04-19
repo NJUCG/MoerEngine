@@ -19,6 +19,7 @@
 #include "log/LogSystem.h"
 // #include "misc/MacroUtils.h"
 #include "misc/STL.h"
+#include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -52,6 +53,15 @@
 
 namespace Moer::Render {
 namespace VkUtil = Moer::RHI::Vulkan::Util;
+
+namespace {
+
+struct DescriptorHeapCommandCheck {
+    const char* name;
+    PFN_vkVoidFunction address;
+};
+
+} // namespace
 
 VulkanDevice::VulkanDevice(const VulkanRHIConfig&& _config) : RenderDevice::Impl() {
     InitVulkanInstance(_config.api_version);
@@ -492,6 +502,7 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     }
     VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
     volkLoadDevice(m_device);
+    FinalizeDescriptorHeapRuntimeCapability();
 
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.graphics.value(), 0, &m_graphics_queue);
 
@@ -591,18 +602,151 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
     LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
 }
 
+bool VulkanDevice::ValidateDescriptorHeapRuntimeCommands() const {
+    const DescriptorHeapCommandCheck required_commands[] = {
+        {"vkCmdBindResourceHeapEXT", reinterpret_cast<PFN_vkVoidFunction>(m_vk_cmd_bind_resource_heap)},
+        {"vkCmdBindSamplerHeapEXT", reinterpret_cast<PFN_vkVoidFunction>(m_vk_cmd_bind_sampler_heap)},
+        {"vkWriteResourceDescriptorsEXT", reinterpret_cast<PFN_vkVoidFunction>(m_vk_write_resource_descriptors)},
+        {"vkWriteSamplerDescriptorsEXT", reinterpret_cast<PFN_vkVoidFunction>(m_vk_write_sampler_descriptors)},
+        {"vkCmdPushDataEXT", reinterpret_cast<PFN_vkVoidFunction>(m_vk_cmd_push_data)},
+    };
+
+    bool all_loaded = true;
+    for (const auto& command : required_commands) {
+        if (command.address != nullptr) {
+            continue;
+        }
+        LOG_ERROR(
+            "VulkanRHI: descriptor heap disabled: required command {} is unavailable after volkLoadDevice.",
+            command.name
+        );
+        all_loaded = false;
+    }
+    return all_loaded;
+}
+
+void VulkanDevice::LoadDescriptorHeapRuntimeCommands() {
+    m_vk_cmd_bind_resource_heap = reinterpret_cast<PFN_vkCmdBindResourceHeapEXT>(
+        vkGetDeviceProcAddr(m_device, "vkCmdBindResourceHeapEXT")
+    );
+    m_vk_cmd_bind_sampler_heap = reinterpret_cast<PFN_vkCmdBindSamplerHeapEXT>(
+        vkGetDeviceProcAddr(m_device, "vkCmdBindSamplerHeapEXT")
+    );
+    m_vk_write_resource_descriptors = reinterpret_cast<PFN_vkWriteResourceDescriptorsEXT>(
+        vkGetDeviceProcAddr(m_device, "vkWriteResourceDescriptorsEXT")
+    );
+    m_vk_write_sampler_descriptors = reinterpret_cast<PFN_vkWriteSamplerDescriptorsEXT>(
+        vkGetDeviceProcAddr(m_device, "vkWriteSamplerDescriptorsEXT")
+    );
+    m_vk_cmd_push_data = reinterpret_cast<PFN_vkCmdPushDataEXT>(
+        vkGetDeviceProcAddr(m_device, "vkCmdPushDataEXT")
+    );
+}
+
+void VulkanDevice::FinalizeDescriptorHeapRuntimeCapability() {
+    auto& optional_extensions = m_device_info.optional_extensions;
+    optional_extensions.m_has_descriptor_heap_runtime = false;
+
+    if (!optional_extensions.m_has_ext_descriptor_heap) {
+        LOG_WARNING(
+            "VulkanRHI: descriptor heap disabled: VK_EXT_descriptor_heap unsupported or feature query rejected."
+        );
+        return;
+    }
+
+    LoadDescriptorHeapRuntimeCommands();
+
+    if (!ValidateDescriptorHeapRuntimeCommands()) {
+        LOG_ERROR(
+            "VulkanRHI: descriptor heap disabled: VK_EXT_descriptor_heap was enabled but runtime command loading is incomplete."
+        );
+        return;
+    }
+
+    optional_extensions.m_has_descriptor_heap_runtime = true;
+    LOG_INFO(
+        "VulkanRHI: descriptor heap runtime available: maxResourceHeapSize={}, maxSamplerHeapSize={}, maxPushDataSize={}",
+        m_device_info.optional_properties.descriptor_heap_properties.maxResourceHeapSize,
+        m_device_info.optional_properties.descriptor_heap_properties.maxSamplerHeapSize,
+        m_device_info.optional_properties.descriptor_heap_properties.maxPushDataSize
+    );
+}
+
 void VulkanDevice::CreateDescriptorHeap() {
-    new (&m_global_descriptor_heap) VulkanDescriptorHeap(*this);
+    m_global_descriptor_heap = MakeUnique<VulkanDescriptorHeap>(*this);
     //create empty descriptor set layout
     VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_info{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
     };
-    descriptor_set_layout_create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    descriptor_set_layout_create_info.flags = 0;
     vkCreateDescriptorSetLayout(
         m_device, &descriptor_set_layout_create_info, VK_NULL_HANDLE, &empty_descriptor_set_layout
     );
 
-    LOG_INFO("VulkanRHI: Descriptor Heap initialized.");
+    if (HasDescriptorHeapRuntime()) {
+        LOG_INFO("VulkanRHI: Descriptor Heap initialized.");
+        return;
+    }
+
+    LOG_WARNING(
+        "VulkanRHI: descriptor heap startup disabled; continuing on the pre-replacement descriptor-buffer path."
+    );
+}
+
+VkResult VulkanDevice::WriteResourceDescriptors(
+    uint32                             _descriptor_count,
+    const VkResourceDescriptorInfoEXT* _descriptor_infos,
+    const VkHostAddressRangeEXT*       _dst_ranges
+) const {
+    assert(m_vk_write_resource_descriptors != nullptr && "vkWriteResourceDescriptorsEXT is unavailable");
+    return m_vk_write_resource_descriptors(m_device, _descriptor_count, _descriptor_infos, _dst_ranges);
+}
+
+VkResult VulkanDevice::WriteSamplerDescriptors(
+    uint32                       _descriptor_count,
+    const VkSamplerCreateInfo*   _sampler_infos,
+    const VkHostAddressRangeEXT* _dst_ranges
+) const {
+    assert(m_vk_write_sampler_descriptors != nullptr && "vkWriteSamplerDescriptorsEXT is unavailable");
+    return m_vk_write_sampler_descriptors(m_device, _descriptor_count, _sampler_infos, _dst_ranges);
+}
+
+void VulkanDevice::CmdBindResourceHeap(VkCommandBuffer _command_buffer, const VkBindHeapInfoEXT* _bind_info) const {
+    assert(m_vk_cmd_bind_resource_heap != nullptr && "vkCmdBindResourceHeapEXT is unavailable");
+    m_vk_cmd_bind_resource_heap(_command_buffer, _bind_info);
+}
+
+void VulkanDevice::CmdBindSamplerHeap(VkCommandBuffer _command_buffer, const VkBindHeapInfoEXT* _bind_info) const {
+    assert(m_vk_cmd_bind_sampler_heap != nullptr && "vkCmdBindSamplerHeapEXT is unavailable");
+    m_vk_cmd_bind_sampler_heap(_command_buffer, _bind_info);
+}
+
+void VulkanDevice::CmdPushData(VkCommandBuffer _command_buffer, const VkPushDataInfoEXT* _push_info) const {
+    assert(m_vk_cmd_push_data != nullptr && "vkCmdPushDataEXT is unavailable");
+    m_vk_cmd_push_data(_command_buffer, _push_info);
+}
+
+uint64 VulkanDevice::GetPhysicalDescriptorSize(VkDescriptorType _type) const {
+    const auto& heap_props = m_device_info.optional_properties.descriptor_heap_properties;
+    switch (_type) {
+        case VK_DESCRIPTOR_TYPE_SAMPLER:
+            return heap_props.samplerDescriptorSize;
+        case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+        case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+        case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+        case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+        case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+        case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+            return heap_props.imageDescriptorSize;
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+        case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+        case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+            return heap_props.bufferDescriptorSize;
+        default:
+            LOG_ERROR("Unsupported physical descriptor size query: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type));
+            assert(false && "Unsupported physical descriptor size query");
+            return 0;
+    }
 }
 
 void VulkanDevice::CreateInternalShaders() {
@@ -660,11 +804,20 @@ void VulkanDevice::DestroyImmutableSamplers() {
 }
 
 void VulkanDevice::DestroyDescriptorHeap() {
-    m_global_descriptor_heap.~VulkanDescriptorHeap();
-    vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
+    m_global_descriptor_heap.reset();
+    if (empty_descriptor_set_layout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, empty_descriptor_set_layout, VK_NULL_HANDLE);
+        empty_descriptor_set_layout = VK_NULL_HANDLE;
+    }
 }
 
 void VulkanDevice::Destroy() {
+    if (m_device == VK_NULL_HANDLE) {
+        return;
+    }
+
+    WaitIdle();
+
     // for (auto& cmd_allocator : m_command_allocators) {
     //     CHECK_AND_DELETE(cmd_allocator);
     // }
@@ -675,8 +828,12 @@ void VulkanDevice::Destroy() {
     FlushDeferredReleases();
     DestroyInternalResources();
     FlushDeferredReleases();
-    vmaDestroyAllocator(m_allocator);
+    if (m_allocator != VK_NULL_HANDLE) {
+        vmaDestroyAllocator(m_allocator);
+        m_allocator = VK_NULL_HANDLE;
+    }
     vkDestroyDevice(m_device, VK_NULL_HANDLE);
+    m_device = VK_NULL_HANDLE;
 
     LOG_INFO("VulkanRHI: Device destroyed.");
 
@@ -884,7 +1041,7 @@ void VulkanDevice::FlushDebugMessages() const {
 }
 
 void VulkanDevice::WaitIdle() {
-    VulkanSubmissionExecutor::Flush();
+    VulkanSubmissionExecutor::Flush(ERHIFlushDepth::SubmitGPU);
     vkDeviceWaitIdle(m_device);
 
     if (gfx_queue) {
@@ -950,6 +1107,25 @@ static VkPipelineStageFlags2 VkShaderStage2PipelineStage(VkShaderStageFlagBits _
     return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 }
 
+static void MergeDirectHeapBuiltin(
+    const std::optional<ReflectParamInfo::Bindless>& _src,
+    std::optional<ReflectParamInfo::Bindless>&       _dst
+) {
+    if (!_src.has_value()) {
+        return;
+    }
+    if (!_dst.has_value()) {
+        _dst = _src;
+        return;
+    }
+
+    assert(_dst->set == _src->set && "Descriptor heap builtin set mismatch.");
+    assert(_dst->binding == _src->binding && "Descriptor heap builtin binding mismatch.");
+    assert(_dst->count == _src->count && "Descriptor heap builtin count mismatch.");
+    _dst->stage_bits |= _src->stage_bits;
+    _dst->custom_flag.active |= _src->custom_flag.active;
+}
+
 // Merge Shader Reflection Info with Cpp End Definitions, thus we can get binding relations between shader and cpp.
 static void MergeReflectInfo(
     const VulkanDevice&     _device,
@@ -964,6 +1140,7 @@ static void MergeReflectInfo(
     Moer::Array<ParamInfoFlags>& _out_reflect_flags,
     // cpp param name hash to shader binding index
     UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>& _out_descriptor_bindings,
+    VulkanDirectHeapBuiltins& _out_direct_heap_builtins,
     // set to binding to binding info, actual vk pipeline layout
     VkPushConstantRange& _out_push_constant_ranges,
     // push constant range
@@ -997,73 +1174,32 @@ static void MergeReflectInfo(
                 }
                 const ReflectParamInfo&                binding_info = bdls_iter->second;
                 const ReflectParamInfo::BindlessArray& bdls_array   = binding_info.spirv.bindless;
-                bool b_found_bindless_buffer                        = bdls_array.buffer.has_value();
-                bool b_found_bindless_texture                       = bdls_array.image.has_value();
-                bool b_found_bindless_sampler                       = bdls_array.sampler.has_value();
                 bool b_found_bindless_indirect                      = bdls_array.array.has_value();
-                uint texture_set                                    = 0;
-                uint buffer_set                                     = 0;
+                bool b_found_resource_heap                         = bdls_array.resource_heap.has_value();
+                bool b_found_sampler_heap                          = bdls_array.sampler_heap.has_value();
                 if (b_found_bindless_indirect) {
                     const ReflectParamInfo::Bindless& indirect_binding_info = bdls_array.array.value();
+                    const uint indirect_binding = indirect_binding_info.binding;
 
-                    auto&                 array_set     = _out_descriptor_bindings[indirect_binding_info.set];
-                    static constexpr uint indirect_slot = 0;
-                    static constexpr uint sampler_slot  = 0;
-                    static constexpr uint texture_slot  = 0;
-                    static constexpr uint buffer_slot   = 1;
-                    assert(indirect_binding_info.binding == 0 && "Indirect Binding Slot Must be 0.");
-                    auto& vk_binding           = array_set[indirect_slot];
-                    vk_binding.binding         = indirect_slot;
+                    auto& array_set            = _out_descriptor_bindings[indirect_binding_info.set];
+                    auto& vk_binding           = array_set[indirect_binding];
+                    vk_binding.binding         = indirect_binding;
                     vk_binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     vk_binding.descriptorCount = 1;
                     vk_binding.stageFlags |= _stage;
                     vk_binding.pImmutableSamplers = nullptr;
                     _max_set   = uint(std::max(int(_max_set), int(indirect_binding_info.set)));
-                    buffer_set = indirect_binding_info.set;
-                    array_set.bindings[indirect_slot].param_idx = idx;
+                    array_set.bindings[indirect_binding].param_idx = idx;
                     array_set.is_bindless                       = true;
-                    set_valid_bits(idx, bdls_array.array.value().custom_flag.active);
-                    if (b_found_bindless_buffer) {
-                        array_set.bindings[buffer_slot].param_idx = idx;
-                        auto& temp_binding                        = array_set[buffer_slot];
-                        temp_binding.binding                      = buffer_slot;
-                        temp_binding.descriptorType               = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                        temp_binding.descriptorCount              = 5000;
-                        temp_binding.stageFlags |= _stage;
-                        temp_binding.pImmutableSamplers = nullptr;
-                        set_valid_bits(idx, bdls_array.buffer.value().custom_flag.active);
-                    }
-
-                    if (b_found_bindless_texture) {
-                        auto& texture_set = _out_descriptor_bindings[bdls_array.image.value().set];
-                        texture_set.bindings[texture_slot].param_idx = idx;
-
-                        auto& temp_binding           = texture_set[texture_slot];
-                        texture_set.is_bindless      = true;
-                        temp_binding.binding         = texture_slot;
-                        temp_binding.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                        temp_binding.descriptorCount = 5000;
-                        temp_binding.stageFlags |= _stage;
-                        temp_binding.pImmutableSamplers = nullptr;
-
-                        _max_set = uint(std::max(int(_max_set), int(bdls_array.image.value().set)));
-                        set_valid_bits(idx, bdls_array.image.value().custom_flag.active);
-                    }
-
-                    if (b_found_bindless_sampler) {
-                        auto& sampler_set  = _out_descriptor_bindings[bdls_array.sampler.value().set];
-                        auto& temp_binding = sampler_set[sampler_slot];
-                        sampler_set.bindings[sampler_slot].param_idx = idx;
-                        sampler_set.is_bindless                      = true;
-                        temp_binding.binding                         = sampler_slot;
-                        temp_binding.descriptorType                  = VK_DESCRIPTOR_TYPE_SAMPLER;
-                        temp_binding.descriptorCount                 = 256;
-                        temp_binding.stageFlags |= _stage;
-                        temp_binding.pImmutableSamplers = nullptr;
-                        _max_set = uint(std::max(int(_max_set), int(bdls_array.sampler.value().set)));
-                        set_valid_bits(idx, bdls_array.sampler.value().custom_flag.active);
-                    }
                 }
+                MergeDirectHeapBuiltin(bdls_array.resource_heap, _out_direct_heap_builtins.resource_heap);
+                MergeDirectHeapBuiltin(bdls_array.sampler_heap, _out_direct_heap_builtins.sampler_heap);
+                set_valid_bits(
+                    idx,
+                    (b_found_bindless_indirect && bdls_array.array->custom_flag.active) ||
+                        (b_found_resource_heap && bdls_array.resource_heap->custom_flag.active) ||
+                        (b_found_sampler_heap && bdls_array.sampler_heap->custom_flag.active)
+                );
                 _out_reflect_flags[idx].pipeline_flags |= VkShaderStage2PipelineStage(_stage);
 
                 break;
@@ -1217,9 +1353,10 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
         shader_stage_info.pName  = _info.entry_point.data();
     };
     using TPipelineSets = UnorderedMap<uint, VulkanDescriptorSetLayoutCreateInfo>;
-    TPipelineSets       descriptor_bindings;
-    VkPushConstantRange push_constant_ranges{.offset = 0, .size = 0};
-    uint                max_set = 0;
+    TPipelineSets             descriptor_bindings;
+    VulkanDirectHeapBuiltins  direct_heap_builtins;
+    VkPushConstantRange       push_constant_ranges{.offset = 0, .size = 0};
+    uint                      max_set = 0;
 
     Moer::Array<ParamInfoFlags> reflect_flags(_shader_info.layout_hash.size());
     uint64                      valid_bits = 0;
@@ -1235,6 +1372,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
             hash_2_idx,
             reflect_flags,
             descriptor_bindings,
+            direct_heap_builtins,
             push_constant_ranges,
             constant_idx,
             valid_bits,
@@ -1465,10 +1603,14 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     // vk_pso->InitDescriptorSetLayouts(desc_sets_array);
     // vk_pso->InitPipelineResourceCache(desc_sets_array);
     if (push_constant_ranges.size != 0) {
-        vk_pso->InitPipelineLayout(std::move(descriptor_bindings), std::move(push_constant_ranges));
+        vk_pso->InitPipelineLayout(
+            std::move(descriptor_bindings),
+            std::move(push_constant_ranges),
+            std::move(direct_heap_builtins)
+        );
 
     } else {
-        vk_pso->InitPipelineLayout(std::move(descriptor_bindings));
+        vk_pso->InitPipelineLayout(std::move(descriptor_bindings), std::nullopt, std::move(direct_heap_builtins));
     }
 
     // const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
@@ -1485,8 +1627,25 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     // vk_pso->CreatePipelineLayout(pipeline_layout_create_info);
     VkGraphicsPipelineCreateInfo pipeline_create_info{};
     pipeline_create_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipeline_create_info.pNext               = &rendering_create_info;
-    pipeline_create_info.flags               = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    VkPipelineCreateFlags2CreateInfo pipeline_flags2_create_info{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO,
+        .pNext = &rendering_create_info,
+        .flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT
+    };
+    pipeline_create_info.pNext               = &pipeline_flags2_create_info;
+    pipeline_create_info.flags               = 0;
+
+    Array<VkShaderDescriptorSetAndBindingMappingInfoEXT> stage_mapping_infos(shader_stages.size());
+    for (uint32_t stage_index = 0; stage_index < shader_stages.size(); ++stage_index) {
+        stage_mapping_infos[stage_index] = {
+            .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT,
+            .pNext = shader_stages[stage_index].pNext,
+            .mappingCount = uint32_t(vk_pso->bind_template->descriptor_mappings.size()),
+            .pMappings = vk_pso->bind_template->descriptor_mappings.data()
+        };
+        shader_stages[stage_index].pNext = &stage_mapping_infos[stage_index];
+    }
+
     pipeline_create_info.stageCount          = shader_stages.size();
     pipeline_create_info.pStages             = shader_stages.data();
     pipeline_create_info.pVertexInputState   = &vertex_input_state;
@@ -1498,7 +1657,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     pipeline_create_info.pDepthStencilState  = &vk_depth_stencil_state;
     pipeline_create_info.pColorBlendState    = &color_blend_state;
     pipeline_create_info.pDynamicState       = &dynamic_state;
-    pipeline_create_info.layout              = vk_pso->GetPipelineLayout();
+    pipeline_create_info.layout              = VK_NULL_HANDLE;
     pipeline_create_info.renderPass          = nullptr;
     pipeline_create_info.subpass             = 0;
     pipeline_create_info.basePipelineHandle  = nullptr; // MARK...
@@ -1531,7 +1690,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
     VkComputePipelineCreateInfo pipeline_create_info{};
     pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipeline_create_info.pNext              = nullptr;
-    pipeline_create_info.flags              = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    pipeline_create_info.flags              = 0;
     pipeline_create_info.stage              = {};
     pipeline_create_info.layout             = nullptr;
     pipeline_create_info.basePipelineHandle = nullptr;
@@ -1539,6 +1698,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
     VkPipelineShaderStageCreateInfo& shader_stage = pipeline_create_info.stage;
 
     TPipelineSets              descriptor_bindings;
+    VulkanDirectHeapBuiltins   direct_heap_builtins;
     VkPushConstantRange        push_constant_ranges{.offset = 0, .size = 0};
     uint                       max_set = 0;
     Array<ParamInfoFlags>      reflect_flags(_shader_info.layout_hash.size());
@@ -1554,6 +1714,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
             hash_2_idx,
             reflect_flags,
             descriptor_bindings,
+            direct_heap_builtins,
             push_constant_ranges,
             constant_idx,
             valid_bits,
@@ -1599,10 +1760,14 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
 
     // const auto& layouts = vk_pso->GetDescriptorSetsLayout()->GetLayouts();
     if (push_constant_ranges.size != 0) {
-        vk_pso->InitPipelineLayout(std::move(descriptor_bindings), std::move(push_constant_ranges));
+        vk_pso->InitPipelineLayout(
+            std::move(descriptor_bindings),
+            std::move(push_constant_ranges),
+            std::move(direct_heap_builtins)
+        );
 
     } else {
-        vk_pso->InitPipelineLayout(std::move(descriptor_bindings));
+        vk_pso->InitPipelineLayout(std::move(descriptor_bindings), std::nullopt, std::move(direct_heap_builtins));
     }
     // create pipeline layout
     // VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
@@ -1617,10 +1782,22 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
     // vk_pso->CreatePipelineLayout(pipeline_layout_create_info);
 
     pipeline_create_info.sType              = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipeline_create_info.pNext              = nullptr;
-    pipeline_create_info.flags              = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    VkPipelineCreateFlags2CreateInfo pipeline_flags2_create_info{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT
+    };
+    pipeline_create_info.pNext              = &pipeline_flags2_create_info;
+    VkShaderDescriptorSetAndBindingMappingInfoEXT stage_mapping_info{
+        .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT,
+        .pNext = shader_stage.pNext,
+        .mappingCount = uint32_t(vk_pso->bind_template->descriptor_mappings.size()),
+        .pMappings = vk_pso->bind_template->descriptor_mappings.data()
+    };
+    shader_stage.pNext = &stage_mapping_info;
+    pipeline_create_info.flags              = 0;
     pipeline_create_info.stage              = shader_stage;
-    pipeline_create_info.layout             = vk_pso->GetPipelineLayout();
+    pipeline_create_info.layout             = VK_NULL_HANDLE;
     pipeline_create_info.basePipelineHandle = nullptr;
     pipeline_create_info.basePipelineIndex  = -1;
 

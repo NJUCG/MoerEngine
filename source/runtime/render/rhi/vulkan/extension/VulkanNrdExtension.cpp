@@ -6,6 +6,7 @@
 #include "../../vulkan/VulkanDescriptor.h"
 #include "../../vulkan/VulkanDevice.h"
 #include "../../vulkan/VulkanRHIResource.h"
+#include <array>
 #include "vulkan/vulkan_core.h"
 
 namespace Moer::Render::Ext {
@@ -32,16 +33,16 @@ public:
             device_desc.vkDevice         = _device->GetDevice();
             device_desc.vkPhysicalDevice = _device->GetGpu();
 
-            const uint32 queue_family_indices[] = {
+            const std::array<uint32, 4> queue_family_indices = {
                 _device->GetQueueFamilyIndices().graphics.value(),
                 _device->GetQueueFamilyIndices().present.value(),
                 _device->GetQueueFamilyIndices().compute.value(),
                 _device->GetQueueFamilyIndices().transfer.value(),
             };
 
-            device_desc.queueFamilyIndices  = queue_family_indices;
-            device_desc.queueFamilyIndexNum = _device->GetQueueFamilyIndices().Size();
-            device_desc.minorVersion = VK_VERSION_MINOR(_device->GetCoreProperties().core_1_0.apiVersion);
+            device_desc.queueFamilyIndices  = queue_family_indices.data();
+            device_desc.queueFamilyIndexNum = uint32(queue_family_indices.size());
+            device_desc.minorVersion        = VK_VERSION_MINOR(_device->GetCoreProperties().core_1_0.apiVersion);
             device_desc.enableNRIValidation = false;
 
             CHECK_ASSERT(

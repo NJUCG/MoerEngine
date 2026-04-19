@@ -207,7 +207,8 @@ void RTContext::FillFrameResources(uint2 _resolution) {
         "ldr_color",
         Extent2D(_resolution),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
+        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::SAMPLED
     );
     frame_rt.hdr_color = device.CreateTexture(
         "hdr_color",

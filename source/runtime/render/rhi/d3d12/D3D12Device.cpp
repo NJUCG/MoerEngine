@@ -201,7 +201,7 @@ static bool
 CheckReflectionTypeMatch(const ReflectParamInfo::Dxil& resource_info, const ShaderArgCppInfo& arg_info) {
     if (arg_info.type ==
         EShaderArgType::
-            SDA_BindlessArray) // !just a specical case.. not mean real bindless.  'StructuredBuffer<uint> g__array_114514_bdls'
+            SDA_BindlessArray) // !just a specical case.. not mean real bindless.  'StructuredBuffer<uint> g__array_bindless'
         return resource_info.type == ED3D12ShaderVariableType::StructuredBuffer;
     if (arg_info.type == EShaderArgType::SDA_Constant)
         return IsShaderVarRootConstant(resource_info);

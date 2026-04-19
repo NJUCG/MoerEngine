@@ -5,7 +5,7 @@
 
 template <typename T>
 T GetTextureData(int bindless_handle, float2 uv, T default_value, T missing_value) {
-  if (bindless_handle >= 0) {
+  if (bindless_handle > 0) {
     // 可以通过禁用mipmap来消除mesh之间的描边
     return TextureHandle(bindless_handle).Sample2D<T>(uv);
     // return TextureHandle(bindless_handle).SampleLevel<T>(uv, 0.0);

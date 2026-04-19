@@ -415,9 +415,9 @@ struct VkCmdPreprocessor {
             case Command::EType::MultiDraw:
                 Visit(static_cast<const MultiDrawCmd*>(_cmd));
                 break;
-            // case Command::EType::SetGeometryPassDrawState:
-            //     Visit(static_cast<const SetGeometryPassDrawStateCmd*>(_cmd));
-            //     break;
+            case Command::EType::SetGeometryPassDrawState:
+                assert(false && "SetGeometryPassDrawState not implemented");
+                break;
             case Command::EType::BuildAccel:
                 Visit(static_cast<const BuildAccelerationStructuresCmd*>(_cmd));
                 break;
@@ -1245,6 +1245,10 @@ struct VkCmdPreprocessor {
             case CustomCmd::CustomCmdId::CUSTOM_DISPATCH:
                 Visit(static_cast<const CustomDispatchCmd*>(_cmd));
                 break;
+            case CustomCmd::CustomCmdId::CUSTOM_TRANSLATE_FENCE:
+            case CustomCmd::CustomCmdId::CUSTOM_TRANSLATE_LAMBDA:
+            case CustomCmd::CustomCmdId::CUSTOM_FRAME_TICK:
+                break;
             default:
                 assert(false && "Invalid Custom Command for VkCmdPreprocessor");
         }
@@ -1340,9 +1344,9 @@ public:
             case Command::EType::MultiDraw:
                 Visit(static_cast<const MultiDrawCmd&>(*_cmd));
                 break;
-            // case Command::EType::SetGeometryPassDrawState:
-            //     Visit(static_cast<const SetGeometryPassDrawStateCmd&>(*_cmd));
-            //     break;
+            case Command::EType::SetGeometryPassDrawState:
+                assert(false && "SetGeometryPassDrawState not implemented");
+                break;
             case Command::EType::ClearResource:
                 Visit(static_cast<const ClearResourceCmd&>(*_cmd));
                 break;
@@ -1406,7 +1410,6 @@ public:
     void Visit(const CopyBackBufferCmd& _cmd) {
         VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
         auto          tmp_buffer = _cmd.staging_buffer;
-
         // tracker.RegisterFlushBuffer(tmp_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         // tracker.DispatchBarriers(cmd_list);
         cmd_list.CopyBuffer(
@@ -2152,7 +2155,8 @@ public:
     }
 
     void Visit(const UpdateBindlessArrayCmd& _cmd) {
-        VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_cmd.Handle());
+        BindlessArrayRef bindless_ref = _cmd.ArrayRef();
+        VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(bindless_ref.Get());
         // auto                 texture_slots  = _cmd.StealTextureUpdates();
         // auto                 buffer_slots   = _cmd.StealBufferUpdates();
 
@@ -2166,6 +2170,9 @@ public:
         auto          texture_indices_dat = _cmd.StealTextureIndicesData();
         Array<byte>&& buffer_data         = _cmd.StealBufferData();
         auto          buffer_indices_dat  = _cmd.StealBufferIndicesData();
+        auto          freed_array_slots   = _cmd.StealFreedArraySlots();
+        auto          freed_texture_slots = _cmd.StealFreedTextureSlots();
+        auto          freed_buffer_slots  = _cmd.StealFreedBufferSlots();
 
         //update bindless array
         // {
@@ -2406,13 +2413,20 @@ public:
 
             cmd_list.EndLabel();
         }
-
-        // allocator.AddOnComplete([bindless_array,
-        //                          free_slots(_cmd.StealFreeSlots()),
-        //                          free_buffers(_cmd.StealFreeBuffers()),
-        //                          free_textures(std::move(_cmd.StealFreeTextures()))]() {
-        //     bindless_array->OnFree(std::move(free_slots), std::move(free_textures), free_buffers);
-        // });
+        if (!freed_array_slots.empty() || !freed_texture_slots.empty() || !freed_buffer_slots.empty()) {
+            allocator.AddOnComplete(
+                [bindless_ref,
+                 freed_array_slots(std::move(freed_array_slots)),
+                 freed_texture_slots(std::move(freed_texture_slots)),
+                 freed_buffer_slots(std::move(freed_buffer_slots))]() mutable {
+                    auto* completed_array = static_cast<VulkanBindlessArray*>(bindless_ref.Get());
+                    if (completed_array == nullptr) {
+                        return;
+                    }
+                    completed_array->OnFree(freed_array_slots, freed_texture_slots, freed_buffer_slots);
+                }
+            );
+        }
     }
 
     void Visit(const ScopeCmd& _cmd) {
@@ -2634,6 +2648,17 @@ public:
                 break;
             case CustomCmd::CustomCmdId::CUSTOM_DISPATCH:
                 Visit(static_cast<const VkCustomDispatchCmd&>(_cmd));
+                break;
+            case CustomCmd::CustomCmdId::CUSTOM_TRANSLATE_FENCE:
+                static_cast<const TranslateFenceCmd&>(_cmd).Fence().event->TryUnlockSubsequents(
+                    EThread::UNKNOWN_THREAD
+                );
+                break;
+            case CustomCmd::CustomCmdId::CUSTOM_TRANSLATE_LAMBDA:
+                static_cast<const TranslateLambdaCmd&>(_cmd).Execute();
+                break;
+            case CustomCmd::CustomCmdId::CUSTOM_FRAME_TICK:
+                static_cast<const FrameTickCmd&>(_cmd).Execute();
                 break;
             default:
                 assert(false && "Custom Command Not Supported for VkCmdVisitor");
@@ -2978,12 +3003,12 @@ void ProfilerStorage::VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_
 #pragma region[ VkCommandQueue ]
 VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered, TrackerSeed seed) {
     TRACE_SCOPE_CAT("VkCommandQueue.Translate", "Queue");
+    std::unique_lock<std::mutex> translate_lock(translate_state_mtx);
     struct PreparedCmdBatch {
         CmdSubmit               submit;
         FunctionTable           function_table;
         UniquePtr<CmdReorderer> owned_reorderer;
         const CmdReorderer*     reorderer{nullptr};
-        uint64                  last_time{0};
         double                  reorder_time_ms{0.0};
         bool                    has_cmd{false};
     };
@@ -3001,7 +3026,6 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
             },
         .owned_reorderer = nullptr,
         .reorderer = nullptr,
-        .last_time = last_frame,
         .reorder_time_ms = 0.0,
         .has_cmd = false
     };
@@ -3027,8 +3051,6 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
     recorded.submit.emplace(std::move(prepared.submit));
     recorded.has_cmd   = prepared.has_cmd;
     recorded.reorder_time_ms = prepared.reorder_time_ms;
-    const uint64 descriptor_frame = ++record_frame;
-
     if (!recorded.has_cmd) {
         return recorded;
     }
@@ -3072,8 +3094,9 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
         profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
     }
 
+    VulkanDescriptorBinder descriptor_binder{};
     if (queue.GetType() != EQueueType::Copy) {
-        vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(static_cast<uint>(descriptor_frame));
+        descriptor_binder = vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors();
     }
 
     std::string_view queue_label = queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
@@ -3133,7 +3156,18 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
     vk_allocator.GetCmdList().End();
 
     if (queue.GetType() != EQueueType::Copy) {
-        vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(static_cast<uint>(descriptor_frame));
+        descriptor_binder = vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(std::move(descriptor_binder));
+        if (descriptor_binder.IsValid()) {
+            VulkanDescriptorHeap& descriptor_heap = vk_device.GetGlobalDescriptorHeap();
+            auto descriptor_binder_holder = std::make_shared<VulkanDescriptorBinder>(std::move(descriptor_binder));
+            recorded.submit->callbacks.emplace_back([
+                &descriptor_heap,
+                descriptor_binder_holder = std::move(descriptor_binder_holder)
+            ]() mutable {
+                descriptor_heap.RecycleOnlineDescriptorLease(std::move(*descriptor_binder_holder));
+                descriptor_binder_holder.reset();
+            });
+        }
     }
     tracker.Reset();
 
@@ -3258,6 +3292,7 @@ VkCommandQueue::SubmitRecordedForRuntime(
     }
 
     if (_recorded.submit->b_tick_profiling) {
+        std::lock_guard<std::mutex> translate_lock(translate_state_mtx);
         profiler_storage.RegisterCpuTimestamp("Command Reorder", _recorded.reorder_time_ms);
         profiler_storage.RegisterCpuTimestamp("Command Preprocess", _recorded.preprocess_time_ms);
         profiler_storage.AdvanceFrame();
@@ -3352,6 +3387,7 @@ void VkCommandQueue::EmitResolvedGpuTraceEvents(const Array<ProfilerStorage::Res
 #endif
 
 ProfileData VkCommandQueue::GetProfilerEntry() {
+    std::lock_guard<std::mutex> lock(translate_state_mtx);
     return profiler_storage.GetProfilerEntry();
 }
 
@@ -3479,6 +3515,7 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
 
 //TODO:看看barrier
 VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer* _reordered) {
+    std::unique_lock<std::mutex> translate_lock(translate_mutex);
     if (!_evt.query_tokens.empty()) {
         QueryResult error_result{};
         error_result.status = QueryStatus::Error;

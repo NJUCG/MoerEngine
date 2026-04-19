@@ -119,11 +119,6 @@ void Engine::Init(int argc, const char** argv) {
 }
 
 void Engine::Run(const EngineHooks& hooks) {
-
-    // Ensure runtime asset uploads are submitted from the main thread
-    m_runtime_assets->WaitUntilReady();
-    m_runtime_assets->SubmitPendingUploads();
-
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         LOG_INFO(
             "Selecting Render Method : {}",
@@ -131,8 +126,9 @@ void Engine::Run(const EngineHooks& hooks) {
         );
 
         if (m_editor_config->selected_render_method == ERenderMethod::Raster) {
-            m_renderer =
-                MakeUnique<Raster::RasterRenderer>(m_editor_config->GetResolution(), m_editor_config, hooks);
+            m_renderer = MakeUnique<Raster::RasterRenderer>(
+                m_editor_config->GetResolution(), m_editor_config, hooks, *m_runtime_assets
+            );
 
         } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
             // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);

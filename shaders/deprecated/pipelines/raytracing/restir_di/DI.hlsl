@@ -2,7 +2,7 @@
 #include <core/common/Bindless.hlsl>
 #include <core/common/Common.hlsl>
 
-BINDLESS_BINDINGS(3, 2, 4, 5);
+BINDLESS_BINDINGS(3);
 
 #include <materials/Material.hlsli>
 

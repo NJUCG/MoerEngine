@@ -2,7 +2,7 @@
 #include <core/common/Bindless.hlsl>
 #include <core/common/Common.hlsl>
 
-BINDLESS_BINDINGS(3, 2, 4, 5);
+BINDLESS_BINDINGS(3);
 
 #include <materials/Material.hlsli>
 
@@ -45,6 +45,17 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 [[vk::binding(11, 0)]] Texture2D<float4> denoised_specular_lighting
     : register(t8, space0);
 
+bool HasInvalid(float value) { return isnan(value) || isinf(value); }
+
+bool HasInvalid(float3 value) {
+    return HasInvalid(value.x) || HasInvalid(value.y) || HasInvalid(value.z);
+}
+
+bool HasInvalid(float4 value) {
+    return HasInvalid(value.x) || HasInvalid(value.y) || HasInvalid(value.z) ||
+                 HasInvalid(value.w);
+}
+
 [numthreads(8, 8, 1)] void main(uint2 gtid
                                 : SV_DISPATCHTHREADID) {
   float3 composited_color = float3(0, 0, 0);
@@ -62,16 +73,63 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
     float4 diffuse = diffuse_lighting[gtid];
     float4 specular = specular_lighting[gtid];
 
+        if (HasInvalid(view_z)) {
+            out_color[gtid] = float4(1, 1, 1, 1);
+            return;
+        }
+        if (HasInvalid(normal)) {
+            out_color[gtid] = float4(1, 0.5, 0, 1);
+            return;
+        }
+        if (HasInvalid(diffuse_albedo)) {
+            out_color[gtid] = float4(1, 1, 0, 1);
+            return;
+        }
+        if (HasInvalid(specular_rf0)) {
+            out_color[gtid] = float4(1, 0, 1, 1);
+            return;
+        }
+        if (HasInvalid(emissive)) {
+            out_color[gtid] = float4(0, 1, 1, 1);
+            return;
+        }
+        if (HasInvalid(diffuse)) {
+            out_color[gtid] = float4(1, 0, 0, 1);
+            return;
+        }
+        if (HasInvalid(specular)) {
+            out_color[gtid] = float4(0, 1, 0, 1);
+            return;
+        }
+
 #if WITH_NRD
     if (params.denoiser_mode != Moer::s_denoiser_mode_off) {
       float4 denoised_diffuse = denoised_diffuse_lighting[gtid];
       float4 denoised_specular = denoised_specular_lighting[gtid];
+
+            if (HasInvalid(denoised_diffuse)) {
+                out_color[gtid] = float4(0.75, 0.25, 0.25, 1);
+                return;
+            }
+            if (HasInvalid(denoised_specular)) {
+                out_color[gtid] = float4(0.25, 0.75, 0.25, 1);
+                return;
+            }
 
       if (params.denoiser_mode == Moer::s_denoiser_mode_reblur) {
         denoised_diffuse =
             REBLUR_BackEnd_UnpackRadianceAndNormHitDist(denoised_diffuse);
         denoised_specular =
             REBLUR_BackEnd_UnpackRadianceAndNormHitDist(denoised_specular);
+
+                if (HasInvalid(denoised_diffuse)) {
+                    out_color[gtid] = float4(0.75, 0.5, 0.25, 1);
+                    return;
+                }
+                if (HasInvalid(denoised_specular)) {
+                    out_color[gtid] = float4(0.25, 0.75, 0.5, 1);
+                    return;
+                }
       }
 
       // enable mix in debug view later
@@ -81,6 +139,15 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 #endif
     diffuse.rgb *= diffuse_albedo;
     specular.rgb *= max(specular_rf0, 0.001f);
+
+        if (HasInvalid(diffuse)) {
+            out_color[gtid] = float4(0.5, 0, 0, 1);
+            return;
+        }
+        if (HasInvalid(specular)) {
+            out_color[gtid] = float4(0, 0.5, 0, 1);
+            return;
+        }
 
     composited_color += diffuse.rgb + specular.rgb;
     composited_color += emissive;
@@ -94,12 +161,6 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
       uv.x -= params.env_rotation;
       composited_color = env_handle.SampleLevel<float3>(uv, 0);
 
-      //     uint tex_handle =
-      //     g__array_114514_bdls[NonUniformResourceIndex(env_handle.handle)];
-      // uint tex_idx = tex_handle >> 8;
-      // uint sampler_idx = tex_handle & 0xff;
-      // printf("sampler_idx %d\n", tex_handle);
-
       composited_color *= params.env_scale;
     }
     float2 env_motion = Moer::GetEnvMotion(params.main_view, params.prev_view,
@@ -107,7 +168,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
     out_motion[gtid] = float4(env_motion, 0.f, 0.f);
   }
 
-  if (any(isnan(composited_color))) {
+    if (HasInvalid(composited_color)) {
     composited_color = float3(0, 0, 1);
   }
 

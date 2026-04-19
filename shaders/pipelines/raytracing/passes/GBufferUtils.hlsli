@@ -51,7 +51,6 @@ float3 GetMotion(
 
     float3 motion;
     motion.xy = (clip_pos_prev.xy - clip_pos.xy) * _view.clip2window_scale;
-    motion.xy += (_view.jitter - _prev_view.jitter);
     motion.z = clip_pos_prev.w - clip_pos.w;
 
     return motion; // 2.5D motion
@@ -68,7 +67,6 @@ float2 GetEnvMotion(Moer::ViewParam _view, Moer::ViewParam _prev_view, float2 _p
     prev_clip_pos.xyz /= prev_clip_pos.w;
 
     float2 motion = (prev_clip_pos.xy - clip_pos.xy) * _view.clip2window_scale;
-    motion += (_view.jitter - _prev_view.jitter);
     return motion;
 }
 

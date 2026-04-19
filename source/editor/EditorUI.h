@@ -14,6 +14,11 @@ namespace Moer {
 class EditorUI {
 
 public:
+    struct SceneWindowTarget {
+        bool                is_separate_window = false;
+        Render::TextureView frame_buffer;
+    };
+
     EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config);
     ~EditorUI() = default;
     void InitFromConfigManager(); // will be called by Constructor
@@ -41,6 +46,7 @@ public:
         m_b_show_sub_ui = show;
     }
 
+    SceneWindowTarget   GetSceneWindowTarget();
     bool                IsSeperateWindow() const;
     Render::TextureView GetWindowFrameBuffer();
 

@@ -18,27 +18,46 @@ enum class ERHITraceLevel : int {
     Verbose = 2
 };
 
-inline int ParseRHITraceEnvInt(const char* name, int default_value) {
+inline std::string ReadRHITraceEnvValue(const char* name) {
+#if defined(_WIN32)
+    char*  buffer = nullptr;
+    size_t length = 0;
+    if (_dupenv_s(&buffer, &length, name) != 0 || buffer == nullptr || length == 0) {
+        return {};
+    }
+    std::string value(buffer);
+    std::free(buffer);
+    return value;
+#else
     const char* value = std::getenv(name);
     if (value == nullptr || value[0] == '\0') {
+        return {};
+    }
+    return value;
+#endif
+}
+
+inline int ParseRHITraceEnvInt(const char* name, int default_value) {
+    const std::string value = ReadRHITraceEnvValue(name);
+    if (value.empty()) {
         return default_value;
     }
     char* end_ptr    = nullptr;
-    long  parsed_val = std::strtol(value, &end_ptr, 10);
-    if (end_ptr == value) {
+    long  parsed_val = std::strtol(value.c_str(), &end_ptr, 10);
+    if (end_ptr == value.c_str()) {
         return default_value;
     }
     return static_cast<int>(parsed_val);
 }
 
 inline uint64_t ParseRHITraceEnvUInt64(const char* name, uint64_t default_value) {
-    const char* value = std::getenv(name);
-    if (value == nullptr || value[0] == '\0') {
+    const std::string value = ReadRHITraceEnvValue(name);
+    if (value.empty()) {
         return default_value;
     }
     char* end_ptr = nullptr;
-    auto  parsed  = std::strtoull(value, &end_ptr, 10);
-    if (end_ptr == value) {
+    auto  parsed  = std::strtoull(value.c_str(), &end_ptr, 10);
+    if (end_ptr == value.c_str()) {
         return default_value;
     }
     return static_cast<uint64_t>(parsed);
@@ -155,9 +174,8 @@ inline bool IsRHIBarrierTraceEnabled(ERHITraceLevel level = ERHITraceLevel::Basi
 inline const std::vector<std::string>& GetRHITraceResourceNames() {
     static std::vector<std::string> names = []() {
         std::vector<std::string> result;
-        const char* env = std::getenv("MOER_RHI_TRACE_RESOURCES");
-        if (env && env[0] != '\0') {
-            std::string s(env);
+        std::string s = ReadRHITraceEnvValue("MOER_RHI_TRACE_RESOURCES");
+        if (!s.empty()) {
             size_t pos = 0;
             while ((pos = s.find(',')) != std::string::npos) {
                 auto token = s.substr(0, pos);

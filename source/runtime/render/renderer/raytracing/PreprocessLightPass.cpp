@@ -723,7 +723,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             _rt_ctx.local_light_pdf_tex->GetView(),
             _rt_ctx.prim_light_buf->GetView(),
             _rt_ctx.task_buf->GetView(),
-            scene.GetBindlessArray()
+            _rt_ctx.GetBindlessArray()
         )
         .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1), "PrepareLights");
 

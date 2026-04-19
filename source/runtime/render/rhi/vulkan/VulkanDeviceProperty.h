@@ -19,6 +19,9 @@ public:
 
 class VulkanOptionalDeviceProperties {
 public:
+    // descriptor heap
+    VkPhysicalDeviceDescriptorHeapPropertiesEXT   descriptor_heap_properties;
+
     // descriptor buffer
     VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_buffer_properties;
     VkPhysicalDevicePushDescriptorPropertiesKHR   push_descriptor_properties;

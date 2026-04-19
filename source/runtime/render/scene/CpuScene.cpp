@@ -137,7 +137,7 @@ void CpuScene::InitializeMaterials() {
 
     m_map_material_entity_to_id.clear();
 
-    auto to_hdl = [&](const entt::entity entity) -> int64 {
+    auto to_hdl = [&](const entt::entity entity) -> int {
         if (entity == entt::null) {
             return -1; // 不存在，应该使用factor
         }

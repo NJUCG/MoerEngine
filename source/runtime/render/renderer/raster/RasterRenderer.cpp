@@ -31,10 +31,11 @@ namespace Moer::Render::Raster {
 RasterRenderer::RasterRenderer(
     uint2&                        _resolution,
     const SharedPtr<EditorConfig> _config,
-    const EngineHooks&            _hooks
+    const EngineHooks&            _hooks,
+    ::Moer::RuntimeAssets&        _runtime_assets
 ) :
     // Super
-    Renderer(_resolution, _config, _hooks) {
+    Renderer(_resolution, _config, _hooks, _runtime_assets) {
 
     raster_context_ptr =
         MakeUnique<RasterContext>(device, manager, gfx_queue, bindless_array, cmd_list, scene, resolution);
@@ -167,6 +168,8 @@ void RasterRenderer::UpdateGlobalLightingData(
 bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     TRACE_SCOPE_CAT("Raster.Frame", "Frame");
     auto& raster_context = *raster_context_ptr;
+
+    PumpAsyncLoads();
 
     LogSceneLoadStatus(*editor_config);
 
@@ -328,7 +331,17 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         // - Tonemapping Pass
         processing_image = tonemapping_pass->Process(raster_context, raster_config, processing_image);
 
-        if (hooks.on_ui_combine_pass) {
+        if (hooks.on_render_gui && hooks.on_ui_combine_pass) {
+            cmd_list.ClearResource(raster_context.textures.ui_frame_buffer.tex->GetView(), float4(0.f, 0.f, 0.f, 0.f));
+            hooks.on_render_gui(cmd_list, raster_context.textures.ui_frame_buffer.tex);
+            default_output_texture = hooks.on_ui_combine_pass(
+                ui_combine_pass.get(),
+                cmd_list,
+                raster_context.GetSelectedFrameBufferView(raster_config.selected_frame_buffer_index),
+                raster_context.textures.ui_frame_buffer.tex,
+                raster_context.textures.output.tex
+            );
+        } else if (hooks.on_ui_combine_pass) {
             default_output_texture = hooks.on_ui_combine_pass(
                 ui_combine_pass.get(),
                 cmd_list,
@@ -354,18 +367,18 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     // 因为目前Vulkan的输出信息会聚合后再print，所以我们需要轮询，打印出最后添加的信息
     device.FlushDebugMessages();
 
-    if (hooks.on_render_gui) {
+    if (hooks.on_render_gui && !hooks.on_ui_combine_pass) {
         hooks.on_render_gui(cmd_list, default_output_texture);
     }
 
     time++;
     RHIPresentRequest present_request{swapchain, default_output_texture};
-    cmd_list.Signal(timeline, time).DeleteResources().TickProfiling();
+    cmd_list.Signal(timeline, time).DeleteResources().TickProfiling().TickFrame();
     Array<CommandList> frame_cmd_lists{};
     frame_cmd_lists.emplace_back(std::move(cmd_list));
     RHIExecutor::Get().Submit(
         std::move(frame_cmd_lists),
-        ERHIExecSubmitFlags::FlushGPU | ERHIExecSubmitFlags::FrameEnd,
+        ERHIExecSubmitFlags::FlushGPU,
         skip_present ? nullptr : &present_request
     );
     cmd_list = CommandList(EQueueType::Graphics);

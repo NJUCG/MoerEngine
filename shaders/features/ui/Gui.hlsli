@@ -10,7 +10,7 @@ struct DrawParam {
 struct Constant {
   float4x4 mvp;
 };
-BINDLESS_BINDINGS(1, 2, 3, 4)
 
+BINDLESS_BINDINGS(1)
 StructuredBuffer<DrawParam> arg_buffer : register(t0, space0);
 [[vk::push_constant]] ConstantBuffer<Constant> param : register(b0);

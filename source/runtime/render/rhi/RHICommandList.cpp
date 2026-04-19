@@ -35,6 +35,88 @@ bool IsCopyScopeCompatibleCommand(const Command& command) {
             return false;
     }
 }
+
+bool IsFrameTickCommand(const Command* command) {
+    if (command == nullptr || command->Type() != Command::EType::Custom) {
+        return false;
+    }
+    const auto* custom_cmd = static_cast<const CustomCmd*>(command);
+    return custom_cmd->CustomId() == CustomCmd::CustomCmdId::CUSTOM_FRAME_TICK;
+}
+
+bool HasSubmitSideEffects(
+    const Array<std::function<void()>>& callbacks,
+    const Array<WaitEvent>&             wait_events,
+    const Array<SignalEvent>&           signal_events,
+    const Array<QueryToken>&            query_tokens,
+    const Array<GPUEvent>&              gpu_events,
+    bool                                tick_profiling,
+    bool                                delete_resources
+) {
+    return !callbacks.empty() || !wait_events.empty() || !signal_events.empty() ||
+           !query_tokens.empty() || !gpu_events.empty() || tick_profiling || delete_resources;
+}
+
+Array<RHISubmitSegment> BuildSubmitSegments(
+    const Array<UniquePtr<Command>>& commands,
+    EQueueType                       root_queue,
+    bool                             has_side_effects
+) {
+    Array<RHISubmitSegment> segments{};
+    size_t                 parent_begin = 0;
+
+    for (size_t cmd_index = 0; cmd_index < commands.size(); ++cmd_index) {
+        const Command* command = commands[cmd_index].get();
+        if (IsFrameTickCommand(command) && cmd_index + 1 != commands.size()) {
+            LOG_ERROR("CommandList::TickFrame must be the last top-level command in a CommandList");
+            assert(false && "TickFrame must be the last top-level command");
+        }
+
+        if (command == nullptr || command->Type() != Command::EType::CopyScope) {
+            continue;
+        }
+
+        if (parent_begin != cmd_index) {
+            segments.emplace_back(RHISubmitSegment{
+                .queue = root_queue,
+                .begin = parent_begin,
+                .end = cmd_index,
+                .copy_scope_index = RHISubmitSegment::NoCopyScope,
+            });
+        }
+
+        const auto* copy_scope = static_cast<const CopyScopeCmd*>(command);
+        if (!copy_scope->Empty()) {
+            segments.emplace_back(RHISubmitSegment{
+                .queue = EQueueType::Copy,
+                .begin = 0,
+                .end = 0,
+                .copy_scope_index = cmd_index,
+            });
+        }
+        parent_begin = cmd_index + 1;
+    }
+
+    if (parent_begin != commands.size()) {
+        segments.emplace_back(RHISubmitSegment{
+            .queue = root_queue,
+            .begin = parent_begin,
+            .end = commands.size(),
+            .copy_scope_index = RHISubmitSegment::NoCopyScope,
+        });
+    }
+
+    if (segments.empty() && has_side_effects) {
+        segments.emplace_back(RHISubmitSegment{
+            .queue = root_queue,
+            .begin = 0,
+            .end = 0,
+            .copy_scope_index = RHISubmitSegment::NoCopyScope,
+        });
+    }
+
+    return segments;
+}
 }
 
 void CommandQueue::Test() {
@@ -192,6 +274,20 @@ CmdSubmit CommandList::Submit() {
     );
     submit.wait_events        = std::move(submit_wait_events);
     submit.signal_events      = std::move(submit_signal_events);
+    submit.segments           = BuildSubmitSegments(
+        submit.cmds,
+        queue_type,
+        HasSubmitSideEffects(
+            submit.callbacks,
+            submit.wait_events,
+            submit.signal_events,
+            submit.query_tokens,
+            submit.gpu_events,
+            submit_tick_profiling,
+            submit_delete_resources
+        )
+    );
+    submit.translate_execution_class = translate_execution_class;
     submit.b_tick_profiling   = submit_tick_profiling;
     submit.b_delete_resources = submit_delete_resources;
     commands.clear();
@@ -200,6 +296,7 @@ CmdSubmit CommandList::Submit() {
     submit_signal_events.clear();
     query_tokens.clear();
     gpu_events.clear();
+    translate_execution_class = ERHITranslateExecutionClass::Parallel;
     submit_tick_profiling   = false;
     submit_delete_resources = false;
     b_buffer_overlap_active = false;
@@ -610,6 +707,33 @@ void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _
     commands.back()->name = _name;
 }
 
+CommandList& CommandList::TranslateFence(RHITranslateFence _fence) {
+    EnsureNoActiveCopyScope("CommandList::TranslateFence");
+    if (!_fence.event) {
+        LOG_ERROR("CommandList::TranslateFence requires a valid GraphEventRef-backed fence");
+        assert(false && "TranslateFence requires a valid event");
+        return *this;
+    }
+
+    commands.emplace_back(MakeUnique<TranslateFenceCmd>(std::move(_fence)));
+    return *this;
+}
+
+CommandList& CommandList::LambdaCommand(
+    std::function<void()>&& _callback,
+    std::string_view        _name
+) {
+    EnsureNoActiveCopyScope("CommandList::LambdaCommand");
+    if (!_callback) {
+        LOG_ERROR("CommandList::LambdaCommand requires a valid callback");
+        assert(false && "LambdaCommand requires a valid callback");
+        return *this;
+    }
+
+    commands.emplace_back(MakeUnique<TranslateLambdaCmd>(std::move(_callback), _name));
+    return *this;
+}
+
 #pragma endregion
 
 void CommandList::AddCallback(std::function<void()>&& _callback) {
@@ -635,6 +759,12 @@ CommandList& CommandList::Signal(Fence* _fence, uint64 _signal_value) {
     return *this;
 }
 
+CommandList& CommandList::SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class) {
+    EnsureNoActiveCopyScope("CommandList::SetTranslateExecutionClass");
+    translate_execution_class = _execution_class;
+    return *this;
+}
+
 CommandList& CommandList::DeleteResources() {
     EnsureNoActiveCopyScope("CommandList::DeleteResources");
     submit_delete_resources = true;
@@ -644,6 +774,18 @@ CommandList& CommandList::DeleteResources() {
 CommandList& CommandList::TickProfiling() {
     EnsureNoActiveCopyScope("CommandList::TickProfiling");
     submit_tick_profiling = true;
+    return *this;
+}
+
+CommandList& CommandList::TickFrame() {
+    EnsureNoActiveCopyScope("CommandList::TickFrame");
+    if (!commands.empty() && IsFrameTickCommand(commands.back().get())) {
+        LOG_ERROR("CommandList::TickFrame can only be recorded once per CommandList");
+        assert(false && "TickFrame must not be recorded twice");
+        return *this;
+    }
+    commands.emplace_back(MakeUnique<FrameTickCmd>());
+    translate_execution_class = ERHITranslateExecutionClass::SerialControl;
     return *this;
 }
 

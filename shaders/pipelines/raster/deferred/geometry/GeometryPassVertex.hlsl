@@ -5,7 +5,7 @@
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
 #include "shared/ShaderParameters.h"
-BINDLESS_BINDINGS(3, 2, 4, 5)
+BINDLESS_BINDINGS(3)
 #include "shared/Geometry.h"
 #include "shared/raster/ShaderParameters.h"
 #include "shared/scene/SharedSceneStruct.h"

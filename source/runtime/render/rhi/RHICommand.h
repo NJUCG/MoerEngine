@@ -102,6 +102,40 @@ struct SignalEvent {
     uint64 value;
 };
 
+enum class ERHITranslateExecutionClass : uint8_t {
+    Parallel = 0,
+    SerialControl = 1,
+};
+
+struct RHISubmitSegment {
+    static constexpr size_t NoCopyScope = static_cast<size_t>(-1);
+
+    EQueueType queue{EQueueType::Ignore};
+    size_t     begin{0};
+    size_t     end{0};
+    size_t     copy_scope_index{NoCopyScope};
+
+    bool UsesCopyScope() const {
+        return copy_scope_index != NoCopyScope;
+    }
+
+    bool IsEmpty() const {
+        return !UsesCopyScope() && begin == end;
+    }
+};
+
+struct RHITranslateFence {
+    GraphEventRef event{nullptr};
+
+    static RHITranslateFence Create() {
+        return RHITranslateFence{GraphEvent::CreateGraphEvent()};
+    }
+
+    explicit operator bool() const {
+        return event != nullptr;
+    }
+};
+
 enum class QueryKind : uint8_t {
     Timestamp = 0,
     Occlusion = 1
@@ -422,11 +456,13 @@ struct CmdSubmit {
     Array<UniquePtr<Command>>        cmds;
     Array<std::function<void(void)>> callbacks;
     TCachedArgArray                  cached_args;
+    Array<RHISubmitSegment>          segments;
 
     Array<WaitEvent>   wait_events;
     Array<SignalEvent> signal_events;
     Array<QueryToken>  query_tokens;
     Array<GPUEvent>    gpu_events;
+    ERHITranslateExecutionClass translate_execution_class{ERHITranslateExecutionClass::Parallel};
     bool               b_sync{false}; //force sync queue timeline
     bool               b_tick_profiling{false};
     bool               b_delete_resources{false};
@@ -443,6 +479,11 @@ struct CmdSubmit {
 
     CmdSubmit&& Signal(Fence* _fence, uint64 _signal_value) {
         signal_events.emplace_back(uint64(_fence), _signal_value);
+        return std::move(*this);
+    }
+
+    CmdSubmit&& SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class) {
+        translate_execution_class = _execution_class;
         return std::move(*this);
     }
 
@@ -464,6 +505,8 @@ struct CmdSubmit {
         query_tokens       = std::move(_other.query_tokens);
         gpu_events         = std::move(_other.gpu_events);
         cached_args        = std::move(_other.cached_args);
+        segments           = std::move(_other.segments);
+        translate_execution_class = _other.translate_execution_class;
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
         b_delete_resources = _other.b_delete_resources;
@@ -477,6 +520,8 @@ struct CmdSubmit {
         query_tokens       = std::move(_other.query_tokens);
         gpu_events         = std::move(_other.gpu_events);
         cached_args        = std::move(_other.cached_args);
+        segments           = std::move(_other.segments);
+        translate_execution_class = _other.translate_execution_class;
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
         b_delete_resources = _other.b_delete_resources;
@@ -1536,14 +1581,23 @@ public:
         std::string_view     _name = Command::typenames[(uint)Command::EType::Custom]
     );
 
+    RENDER_API CommandList& TranslateFence(RHITranslateFence _fence);
+
+    RENDER_API CommandList& LambdaCommand(
+        std::function<void()>&& _callback,
+        std::string_view        _name = "LambdaCommand"
+    );
+
 #pragma endregion
 
     RENDER_API void AddCallback(std::function<void()>&& _callback);
     RENDER_API CommandList& Wait(Fence* _fence, uint64 _wait_value);
     RENDER_API CommandList& Wait(WaitEvent _event);
     RENDER_API CommandList& Signal(Fence* _fence, uint64 _signal_value);
+    RENDER_API CommandList& SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class);
     RENDER_API CommandList& DeleteResources();
     RENDER_API CommandList& TickProfiling();
+    RENDER_API CommandList& TickFrame();
 
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
@@ -1650,6 +1704,7 @@ private:
     Array<SignalEvent>           submit_signal_events;
     TCachedArgArray              cached_args;
     Array<QueryToken>            query_tokens;
+    ERHITranslateExecutionClass  translate_execution_class{ERHITranslateExecutionClass::Parallel};
     bool                         submit_tick_profiling{false};
     bool                         submit_delete_resources{false};
     EQueueType                   queue_type{EQueueType::Graphics};
@@ -1779,10 +1834,14 @@ class QueueCmd {};
 enum class ERHIExecSubmitFlags : uint8 {
     None     = 0,
     FlushGPU = 1 << 0,
-    FrameEnd = 1 << 1,
 };
 
 ENUM_BIT_OP_IMPL(ERHIExecSubmitFlags, FLAG)
+
+enum class ERHIFlushDepth : uint8 {
+    RHITranslate = 0,
+    SubmitGPU = 1,
+};
 
 struct RHIPresentRequest {
     SwapchainRef swapchain;
@@ -1803,14 +1862,14 @@ public:
         ERHIExecSubmitFlags  flags   = ERHIExecSubmitFlags::FlushGPU,
         RHIPresentRequest*   present = nullptr
     );
+    void Flush(ERHIFlushDepth depth = ERHIFlushDepth::SubmitGPU);
     void Sync(ERHISyncDepth depth = ERHISyncDepth::RHI);
     static void ShutDown();
 private:
-    void FlushPendingLocked(bool frame_end);
+    void EnqueuePendingLocked();
     std::mutex              submit_mutex;
     Array<CommandList>      pending_command_lists{};
     std::optional<RHIPresentRequest> pending_present{};
-    bool                    pending_frame_end{false};
 };
 
 struct ProfileResultEntry {

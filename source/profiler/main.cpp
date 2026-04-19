@@ -1103,11 +1103,11 @@ int RunProfilerMain(int argc, const char** argv) {
         ui_renderer->RenderGUI(cmd_list, output->GetView());
 
         ++frame_time;
-        cmd_list.Signal(timeline, frame_time).DeleteResources();
+    cmd_list.Signal(timeline, frame_time).DeleteResources().TickFrame();
         Array<CommandList> frame_cmd_lists;
         frame_cmd_lists.emplace_back(std::move(cmd_list));
         RHIPresentRequest present_request{swapchain, output};
-        RHIExecutor::Get().Submit(std::move(frame_cmd_lists), ERHIExecSubmitFlags::FlushGPU | ERHIExecSubmitFlags::FrameEnd,
+    RHIExecutor::Get().Submit(std::move(frame_cmd_lists), ERHIExecSubmitFlags::FlushGPU,
                                   &present_request);
         ui_renderer->PresentWindows();
     }

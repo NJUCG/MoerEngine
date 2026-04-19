@@ -6,7 +6,7 @@
 
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
-BINDLESS_BINDINGS(3, 2, 4, 5)
+BINDLESS_BINDINGS(3)
 #include "shared/raster/ShaderParameters.h"
 
 static const float fxaa_contrast_threshold = 0.025;

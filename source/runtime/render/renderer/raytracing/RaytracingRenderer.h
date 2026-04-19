@@ -23,8 +23,6 @@ public:
     virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) override;
 
 private:
-    RuntimeAssets& runtime_assets;
-
     void DumpTextureToFile(
         ExportConfig&          _config,
         FrameResources&        _frame_rt,

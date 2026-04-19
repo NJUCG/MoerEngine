@@ -104,6 +104,10 @@ public:
         return bindless_handles;
     }
 
+    BindlessArrayRef GetBindlessArray() const {
+        return bdls;
+    }
+
     void LoadDefaultResources(RuntimeAssets& _rt_res);
 
     const UnorderedSet<uint>& GetAllocatedBdlsBuf() {

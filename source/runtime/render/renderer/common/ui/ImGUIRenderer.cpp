@@ -117,6 +117,11 @@ struct GuiViewportData {
         viewport_count--;
     }
 };
+
+static GuiViewportData* GetGuiViewportData(ImGuiViewport* _viewport) {
+    return _viewport ? static_cast<GuiViewportData*>(_viewport->RendererUserData) : nullptr;
+}
+
 struct ImGUIData {
     static constexpr EPixelFormat s_supported_formats[] =
         {PF_R8G8B8A8_SRGB, PF_R8G8B8A8_UNORM, PF_B8G8R8A8_SRGB, PF_B8G8R8A8_UNORM};
@@ -379,13 +384,6 @@ void ImGUIRenderBackend::RenderGUI(CommandList& _cmd_list, const TextureView& _f
             g->FrameCountPlatformEnded < g->FrameCount) {
             ImGui::UpdatePlatformWindows();
         }
-        ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
-
-        if (io.BackendFlags & ImGuiBackendFlags_RendererHasViewports) {
-            for (int i = 1; i < platform_io.Viewports.Size; i++)
-                if ((platform_io.Viewports[i]->Flags & ImGuiViewportFlags_IsMinimized) == 0)
-                    GuiRenderWindow(platform_io.Viewports[i], &_cmd_list);
-        }
     }
 }
 
@@ -403,7 +401,7 @@ void ImGUIRenderBackend::PresentWindows() {
 
 TextureView ImGUIRenderBackend::GetWindowFrameBuffer(void* _window) {
     ImGuiViewport*   viewport      = (ImGuiViewport*)_window;
-    GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
+    GuiViewportData* viewport_data = GetGuiViewportData(viewport);
 
     return viewport_data && viewport_data->framebuffer ? viewport_data->framebuffer->GetView() :
                                                          TextureView();
@@ -694,7 +692,10 @@ void GuiDestroyWindow(ImGuiViewport* _viewport) {
     _viewport->RendererUserData = nullptr;
 }
 void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
-    GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData;
+    GuiViewportData* viewport_data = GetGuiViewportData(_viewport);
+    if (!viewport_data || !viewport_data->sc) {
+        return;
+    }
 
     auto& rd_device = GetGUIBackendData()->render_backend->device;
     auto  sc        = viewport_data->sc;
@@ -724,7 +725,10 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
     );
 }
 void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {
-    GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData;
+    GuiViewportData* viewport_data = GetGuiViewportData(_viewport);
+    if (!viewport_data || !viewport_data->framebuffer || _viewport == nullptr || _cmd_list == nullptr) {
+        return;
+    }
 
     auto sc = viewport_data->sc;
     if (!sc)
@@ -738,10 +742,33 @@ void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {
 }
 
 void GuiSwapbuffer(ImGuiViewport* _viewport, void*) {
-    ImGUIData&       backend_data  = *GetGUIBackendData();
-    GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData;
+    GuiViewportData* viewport_data = GetGuiViewportData(_viewport);
+    if (!viewport_data || !viewport_data->sc || !viewport_data->framebuffer) {
+        return;
+    }
+
     RHIPresentRequest present_request{viewport_data->sc, viewport_data->framebuffer};
+
+    ImDrawData* draw_data = _viewport ? _viewport->DrawData : nullptr;
+    const bool has_draw_data = draw_data != nullptr && draw_data->DisplaySize.x > 0.0f &&
+                               draw_data->DisplaySize.y > 0.0f && draw_data->CmdListsCount > 0;
+
+    if (!has_draw_data) {
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+        Array<CommandList> present_cmd_lists{};
+        RHIExecutor::Get().Submit(
+            std::move(present_cmd_lists), ERHIExecSubmitFlags::FlushGPU, &present_request
+        );
+        return;
+    }
+
+    CommandList cmd_list(EQueueType::Graphics);
+    cmd_list.UpdateBindlessArray(GetGUIBackendData()->render_backend->bindless_array);
+    GuiRenderWindow(_viewport, &cmd_list);
+    cmd_list.DeleteResources();
+
     Array<CommandList> present_cmd_lists{};
+    present_cmd_lists.emplace_back(std::move(cmd_list));
     RHIExecutor::Get().Submit(
         std::move(present_cmd_lists), ERHIExecSubmitFlags::FlushGPU, &present_request
     );

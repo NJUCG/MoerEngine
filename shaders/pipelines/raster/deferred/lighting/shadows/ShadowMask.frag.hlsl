@@ -1,6 +1,6 @@
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
-BINDLESS_BINDINGS(3, 2, 4, 5)
+BINDLESS_BINDINGS(3)
 #include "pipelines/RasterCommon.hlsli"
 #include "pipelines/raster/deferred/lighting/shadows/Shadows.hlsli"
 #include "shared/raster/ShaderParameters.h"

@@ -1,5 +1,16 @@
 # MoerEngine — Project Guidelines
 
+## Execution Rules
+
+- Communicate with the user in Chinese only.
+- Write internal reasoning, code comments, non-user-facing notes, and generated documentation in English unless the repository explicitly requires another language.
+- Prefer latest-only implementations. Do not preserve legacy interfaces, fallback code paths, adapters, or compatibility shims unless the user explicitly asks for compatibility.
+- Replace obsolete code instead of layering new behavior on top of it.
+- Run verification only through existing project scripts or repository-defined commands. Do not invent ad-hoc test scripts or one-off validation wrappers.
+- Refuse useless abstraction. Do not add wrappers, pass-through helpers, or indirection layers unless they remove real duplication or encode a stable domain boundary.
+- Encapsulate when behavior or invariants truly belong together. Keep abstraction boundaries small and readable.
+- Keep responses terse and technical. Do not add filler.
+
 ## Build & Run
 
 ```

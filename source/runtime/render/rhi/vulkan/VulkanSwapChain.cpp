@@ -151,6 +151,14 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     bool           b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
     VkSwapchainKHR old_sc     = handle;
     VkInstance     instance   = device.GetInstance();
+    if (b_recreate) {
+        Sync();
+        for (auto& thread : present_threads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    }
     //create surface by window handle
     assert(_info.window_handle != 0 && "Window handle is null when creating vulkan swapchain");
     Moer::WindowContext::CreateVulkanSurface(
@@ -267,6 +275,12 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
                 uint64(in_flight_fences[i]), VK_OBJECT_TYPE_FENCE, "InFlightFence_" + std::to_string(i)
             );
         }
+    } else if (!in_flight_fences.empty()) {
+        VK_CHECK_RESULT(vkResetFences(
+            device.GetDevice(),
+            static_cast<uint32_t>(in_flight_fences.size()),
+            in_flight_fences.data()
+        ));
     }
     image_idx = 0;
 }

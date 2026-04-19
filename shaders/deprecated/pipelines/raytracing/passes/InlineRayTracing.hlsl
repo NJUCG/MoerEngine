@@ -1,7 +1,7 @@
 #include <core/common/Bindless.hlsl>
 #include <core/common/Common.hlsl>
 RTCONFIG_BINDING(1, 0);
-BINDLESS_BINDINGS(3, 2, 4, 5);
+BINDLESS_BINDINGS(3);
 
 #include <deprecated/pipelines/raytracing/inline/RaytracingShared.hlsli>
 
@@ -300,20 +300,6 @@ RTMaterialProp GetMaterialProps(in RTHitInfo hit_info) {
     color = albedo_map.SampleLevel<float4>(coords.xy, coords.z);
   }
   //   printf("coord z %f\n", coords.z);
-
-  //   uint tex_handle =
-  //       g__array_114514_bdls[NonUniformResourceIndex(albedo_map.handle)];
-  //   uint tex_idx = tex_handle >> 8;
-  //   uint sampler_idx = tex_handle & 0xff;
-  //   Texture2D<float4> tex = Texture2D<float4>(
-  //       gTexture2Dfloat4__114514_bdls[NonUniformResourceIndex(
-  //           tex_idx)]);
-
-  //           SamplerState splr =
-  //           SamplerState(gsampler__114514_bdls[NonUniformResourceIndex(sampler_idx)]);
-  //                    float4 color = tex.SampleLevel(splr, coords.xy, 1.f);
-  //   printf("sampler_idx %d\n", sampler_idx);
-  //   printf("albedo_map.handle %d tex_handle %d tex_idx %d sampler_idx %d\n",
   //   albedo_map.handle, tex_handle, tex_idx, sampler_idx);
   float3 base_color = color.xyz;
   float3 n = hit_info.n;
@@ -651,10 +637,6 @@ PathTracingResult PathTracing(PathTracingDesc pt_desc) {
   ArrayBuffer instance_buffer = ArrayBuffer(param.instance_buffer_handle);
 
   ArrayBuffer global_params = ArrayBuffer(param.global_param_handle);
-
-  // uint array_handle =
-  //     g__array_114514_bdls[NonUniformResourceIndex(global_params.handle)];
-  //     printf("array_handle %d\n", array_handle);
 
   RTViewParam view = global_params.Load<RTViewParam>(0);
 

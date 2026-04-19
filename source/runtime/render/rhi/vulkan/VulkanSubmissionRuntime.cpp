@@ -417,8 +417,7 @@ VulkanSubmissionRuntime::~VulkanSubmissionRuntime() {
     Shutdown();
 }
 
-void VulkanSubmissionRuntime::Enqueue(Array<SubmitInfo>&& submits, bool frame_end) {
-    (void)frame_end;
+void VulkanSubmissionRuntime::Enqueue(Array<SubmitInfo>&& submits) {
     if (submits.empty()) {
         return;
     }

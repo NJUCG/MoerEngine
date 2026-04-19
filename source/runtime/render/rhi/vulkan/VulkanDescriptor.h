@@ -13,7 +13,7 @@
 #define VK_DESCRIPTOR_TYPE_END_RANGE   (VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
 #define VK_DESCRIPTOR_TYPE_RANGE_SIZE  3
 
-#include <mutex>
+#include <memory>
 
 namespace Moer::Render {
 class VulkanDevice;
@@ -68,43 +68,51 @@ private:
 
 #pragma region[ descriptor buffer ext ]
 
-struct VulkanDescritporSetLayout {
-    VkDescriptorSetLayout layout;
-    uint                  size;
-    uint                  offset;
+struct VulkanBindlessRingCacheEntry {
+    uint64 version{0};
+    uint64 array_offset{0};
+    uint64 buffer_offset{0};
+    uint64 texture_offset{0};
 };
-struct BufferCpuDescHandle {
-    uint  data[4];
-    void* Data() {
-        return data;
-    }
-    const void* Data() const {
-        return data;
-    }
-};
-struct ImageCpuDescHandle {
-    uint data[4];
-};
-struct VulkanDescriptorHeap {
-    VulkanBuffer* buffer_desc_buffer = nullptr;
-    VulkanBuffer* image_desc_buffer  = nullptr;
 
+struct VulkanDescriptorBinderState;
+
+class VulkanDescriptorBinder {
 public:
-    VulkanDescriptorHeap() = default;
+    VulkanDescriptorBinder() = default;
+    VulkanDescriptorBinder(const VulkanDescriptorBinder&) = delete;
+    VulkanDescriptorBinder& operator=(const VulkanDescriptorBinder&) = delete;
+    VulkanDescriptorBinder(VulkanDescriptorBinder&&) noexcept = default;
+    VulkanDescriptorBinder& operator=(VulkanDescriptorBinder&&) noexcept = default;
+    ~VulkanDescriptorBinder() = default;
+
+    bool IsValid() const {
+        return state != nullptr;
+    }
+
+    RENDER_API void ActivateOnCurrentThread() const;
+    RENDER_API void DeactivateOnCurrentThread() const;
+
+private:
+    std::shared_ptr<VulkanDescriptorBinderState> state{};
+    uint32                                       resource_heap_index{UINT32_MAX};
+    uint64                                       base_offset{0};
+    uint64                                       leased_size{0};
+    uint64                                       used_size{0};
+
+    friend class VulkanOnlineResourceDescriptorManager;
+    friend struct VulkanDescriptorHeap;
+};
+
+class VulkanOnlineResourceDescriptorManager;
+class VulkanOfflineDescriptorManager;
+class VulkanHeapManager;
+
+struct VulkanDescriptorHeap {
+public:
+    VulkanDescriptorHeap();
     VulkanDescriptorHeap(VulkanDevice& _device);
     ~VulkanDescriptorHeap();
-
-    Array<byte> buffer_desc_data;
-    Array<byte> image_desc_data;
-    Array<byte> accel_desc_data;
-
-    Array<uint> buffer_free_list;
-    Array<uint> image_free_list;
-    Array<uint> accel_free_list;
-
-    uint64 buffer_offset;
-    uint64 image_offset;
-    uint64 accel_offset;
 
     uint GetBufferDescIdx(
         const BufferView& _in_buffer,
@@ -117,13 +125,17 @@ public:
     uint GetSamplerDescIdx(Sampler _sampler);
     uint GetAccelDescIdx(VulkanAccelerationStructure* _as);
     uint FreeAccelDescIdx(uint _idx);
+    void CopyOfflineBufferDesc(uint64 _src_offset, void* _dst, uint64 _size) const;
+    void CopyOfflineImageDesc(uint64 _src_offset, void* _dst, uint64 _size) const;
+    void CopyOfflineSamplerDesc(uint64 _src_offset, void* _dst, uint64 _size) const;
+    void CopyOfflineAccelDesc(uint64 _src_offset, void* _dst, uint64 _size) const;
 
 public:
-    uint64 CurrentFrameOffset(uint _frame_idx) const;
-    uint64 GetCurrentOffset() const;
-    void   BeginPushDescriptors(uint _frame_idx);
-
-    void EndPushDescriptors(uint _frame_idx);
+    RENDER_API VulkanDescriptorBinder BeginPushDescriptors();
+    RENDER_API VulkanDescriptorBinder EndPushDescriptors(VulkanDescriptorBinder _binder);
+    RENDER_API void RecycleOnlineDescriptorLease(VulkanDescriptorBinder _binder);
+    RENDER_API uint64 AllocateOnlineDescriptorRange(uint64 _size);
+    RENDER_API VulkanBindlessRingCacheEntry CacheBindlessArray(const VulkanBindlessArray& _array);
 
     // void PushBufferDesc(uint64 _src_offset, uint64 _set_offset);
     void PushUniformDesc(uint64 _src_offset, uint64 _set_offset);
@@ -132,31 +144,26 @@ public:
     void PushSamplerDesc(uint64 _src_offset, uint64 _set_offset);
     void PushAccelDesc(uint64 _src_offset, uint64 _set_offset);
 
-    void IncrementOffset(uint64 _size);
-
 public:
-    VulkanDevice* m_device;
+    VkBindHeapInfoEXT GetResourceHeapBindInfo() const;
+    VkBindHeapInfoEXT GetSamplerHeapBindInfo() const;
+    uint64 GetBindlessArrayDescriptorOffset() const;
+    uint64 GetBindlessBufferDescriptorStride() const;
+    uint64 GetBindlessImageDescriptorStride() const;
+    uint64 GetBindlessSamplerDescriptorOffset(uint32 _sampler_idx) const;
+    uint64 GetBindlessSamplerHeapBaseOffset() const;
+    uint32 GetBindlessBufferHeapIndex(uint64 _src_offset) const;
+    uint32 GetBindlessImageHeapIndex(uint64 _src_offset) const;
+    uint64 GetPhysicalDescriptorSize(VkDescriptorType _type) const;
+    uint64 GetOfflineSamplerDescriptorStride() const;
+    uint64 GetOnlineResourceDescriptorStride(VkDescriptorType _type) const;
+    uint64 GetOnlineResourceDescriptorAlignment(VkDescriptorType _type) const;
 
-    VulkanBuffer* ring_desc_buffer;
-
-    uint storage_desc_stride;
-    uint uniform_desc_stride;
-    uint storage_texel_desc_stride;
-    uint uniform_texel_desc_stride;
-    uint buffer_desc_stride;
-
-    uint image_desc_stride;
-    uint sample_desc_stride;
-    uint accel_desc_stride;
-
-    std::mutex m_mutex;
-    uint64     texture_desc_offset;
-
-    uint          ring_buffer_cnt;
-    uint64        ring_buffer_size;
-    Array<uint64> ring_buffer_offsets;
-    uint64        current_offset;
-    uint8*        map_ptr;
+private:
+    VulkanDevice*                                  m_device{nullptr};
+    UniquePtr<VulkanHeapManager>                   m_heap_manager{};
+    UniquePtr<VulkanOfflineDescriptorManager>      m_offline_manager{};
+    UniquePtr<VulkanOnlineResourceDescriptorManager> m_online_manager{};
 };
 
 #pragma endregion

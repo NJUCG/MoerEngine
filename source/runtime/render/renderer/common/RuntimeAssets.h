@@ -21,11 +21,11 @@ public:
         Render::TextureRef black;
     };
     RuntimeAssets(std::filesystem::path _assets_path, Render::RenderDevice& _device);
+    ~RuntimeAssets();
     bool               IsReady() const;
     Render::TextureRef GetTexture(std::string_view _name) const;
     Render::BufferRef  GetBuffer(std::string_view _name) const;
     Render::TextureRef GetDefaultEnvMap() const;
-    void               WaitUntilReady() const;
 
     // Called from the main thread to submit pending recorded uploads.
     // Returns true if work was submitted (caller should sync if needed).
