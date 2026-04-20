@@ -231,6 +231,9 @@ struct RasterConfig {
     float ssr_metallic_threshold         = 0.5;
     float ssr_step_base                  = 0.025;
 
+    // MARK: Bloom
+    bool bloom_enabled = true;
+
     // MARK: Cooperative Ops
     bool                 cooperative_ops_enabled = true;
     CooperativeOpsStatus cooperative_ops_status{};

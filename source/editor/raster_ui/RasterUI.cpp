@@ -215,6 +215,20 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Bloom
+    if (ImGui::TreeNode("Bloom", "Bloom: [%s]", (m_config.bloom_enabled ? "Enable" : "Disable"))) {
+        if (ImGui::Selectable("Enable", m_config.bloom_enabled)) {
+            m_config.bloom_enabled = true;
+        }
+        draw_border();
+        if (ImGui::Selectable("Disable", !m_config.bloom_enabled)) {
+            m_config.bloom_enabled = false;
+        }
+        draw_border();
+
+        ImGui::TreePop();
+    }
+
     // MARK: Shadow
     if (ImGui::TreeNode(
             "Shadow", "Shadow: [%s]", s_shadow_map_mode_name_map.at(m_config.shadow_map_mode).c_str()
