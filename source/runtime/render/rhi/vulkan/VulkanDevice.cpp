@@ -829,9 +829,9 @@ void VulkanDevice::PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateI
     _create_info.messageSeverity =
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-    _create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    _create_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                                   VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                                   VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
     _create_info.pfnUserCallback = DebugCallback;
 }
 
@@ -1096,12 +1096,16 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
     rendering_create_info.depthAttachmentFormat =
         VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format);
-#if WITH_CUDA
-    rendering_create_info.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
-#else
+
+    // Only set stencil format if the depth format actually has a stencil aspect
+    bool depth_has_stencil =
+        (_create_info.depth_stencil_format == PF_D32_SFLOAT_S8_UINT ||
+         _create_info.depth_stencil_format == PF_D24_UNORM_S8_UINT ||
+         _create_info.depth_stencil_format == PF_D16_UNORM_S8_UINT ||
+         _create_info.depth_stencil_format == PF_S8_UINT);
     rendering_create_info.stencilAttachmentFormat =
-        VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format);
-#endif
+        depth_has_stencil ? VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format) :
+                            VK_FORMAT_UNDEFINED;
 
     auto to_vk_blend_attachment = [](const RHIBlendAttachmentInfo& _info) {
         VkPipelineColorBlendAttachmentState state{};

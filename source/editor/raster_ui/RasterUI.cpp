@@ -58,6 +58,33 @@ void RasterUI::ShowConfig() {
     // MARK: Geometry & Culling
     if (ImGui::TreeNode("Geometry & Culling")) {
 
+        ImGui::Checkbox("Enable GPU Frustum Culling", &m_config.enable_frustum_culling);
+
+        // Culling Statistics
+        if (m_config.enable_frustum_culling) {
+            ImGui::Separator();
+            ImGui::Text("Culling Statistics:");
+            ImGui::Indent();
+
+            if (m_config.culling_stats.total_instances_before == 0) {
+                ImGui::TextDisabled("  Waiting for data...");
+            } else {
+                const auto& stats      = m_config.culling_stats;
+                uint32_t    culled     = stats.total_instances_before - stats.total_instances_after;
+                float       culled_pct = 100.0f * float(culled) / float(stats.total_instances_before);
+                ImGui::Text(
+                    "Instances: %u / %u visible (%u culled, %.1f%%)",
+                    stats.total_instances_after,
+                    stats.total_instances_before,
+                    culled,
+                    culled_pct
+                );
+                ImGui::ProgressBar(culled_pct / 100.0f, ImVec2(150, 0));
+            }
+            ImGui::Unindent();
+            ImGui::Separator();
+        }
+
         ImGui::Checkbox("Enable Alpha Test", &m_config.geometry_enable_alpha_test);
         ImGui::SliderFloat("Alpha Cutoff", &m_config.geometry_alpha_test_blend_pixel_cutoff, 0.0f, 1.0f);
 
@@ -214,9 +241,54 @@ void RasterUI::ShowConfig() {
             ImGui::SliderInt("Num of Cascades", &m_config.shadow_csm_num_of_cascades, 1, CSM_MAX_CASCADES);
             ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
             ImGui::Checkbox("Visualize CSM Cascade", &m_config.shadow_csm_visualize_cascade);
+            if (m_config.shadow_csm_visualize_cascade) {
+                ImGui::TextDisabled("Cascade Colors:");
+
+                static const ImVec4 s_cascade_visualize_colors[CSM_MAX_CASCADES] = {
+                    ImVec4(0.96f, 0.24f, 0.24f, 1.0f),
+                    ImVec4(0.96f, 0.58f, 0.18f, 1.0f),
+                    ImVec4(0.25f, 0.78f, 0.32f, 1.0f),
+                    ImVec4(0.20f, 0.45f, 0.96f, 1.0f)
+                };
+                static const char* s_cascade_visualize_color_names[CSM_MAX_CASCADES] = {
+                    "Cascade 0: Red", "Cascade 1: Orange", "Cascade 2: Green", "Cascade 3: Blue"
+                };
+
+                for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {
+                    ImGui::TextColored(
+                        s_cascade_visualize_colors[i], "%s", s_cascade_visualize_color_names[i]
+                    );
+                }
+            }
             ImGui::Checkbox("Enable CSM Blend", &m_config.shadow_csm_blend_option);
             if (m_config.shadow_csm_blend_option) {
                 ImGui::SliderFloat("Blend Percentage", &m_config.shadow_csm_blend_percentage, 0, 1);
+            }
+        };
+
+        auto csm_shadow_cache_param = [&]() {
+            ImGui::Separator();
+            ImGui::Checkbox("Enable Shadow Cache", &m_config.shadow_cache_enabled);
+            ImGui::TextWrapped(
+                "First N cascades always refresh. Later cascades may reuse cached shadow maps when camera "
+                "motion stays below threshold."
+            );
+            ImGui::SliderInt(
+                "Disable Cache For First N Cascades",
+                &m_config.shadow_cache_disable_first_n_cascades,
+                0,
+                m_config.shadow_csm_num_of_cascades
+            );
+            m_config.shadow_cache_disable_first_n_cascades =
+                Max(0,
+                    Min(m_config.shadow_cache_disable_first_n_cascades, m_config.shadow_csm_num_of_cascades));
+            for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {
+                ImGui::SliderFloat(
+                    std::format("Cascade {} Cache Move Threshold (Texels)", i).c_str(),
+                    &m_config.shadow_cache_camera_move_threshold_in_texels[i],
+                    0.0f,
+                    128.0f
+                );
             }
         };
 
@@ -236,9 +308,11 @@ void RasterUI::ShowConfig() {
                     Max(m_config.shadow_csm_cover_ratio_of_camera[i], mx);
                 mx = m_config.shadow_csm_cover_ratio_of_camera[i];
             }
+            csm_shadow_cache_param();
         } else if (m_config.shadow_map_mode == EShadowMapMode::CSM_AUTO) { // CSM_Auto
             csm_common_param();
             ImGui::SliderFloat("Lerp Factor", &m_config.shadow_csm_lerp_factor, 0, 1);
+            csm_shadow_cache_param();
         }
 
         ImGui::TreePop();
@@ -258,11 +332,14 @@ void RasterUI::ShowConfig() {
             draw_border();
         }
 
+        ImGui::Separator();
+        ImGui::Checkbox("Half Resolution AO", &m_config.ao_half_resolution);
+
         if (m_config.ao_mode == EAoMode::SSAO || m_config.ao_mode == EAoMode::SSAO_AO_ONLY) {
             ImGui::SliderFloat("Intensity", &m_config.ssao_intensity, 0.0f, 2.0f);
-            ImGui::SliderFloat("Ray Trace Radius", &m_config.ssao_max_distance, 0.0f, 2.0f);
-            ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 16);
-            ImGui::SliderInt("Sample Radius", &m_config.ssao_sample_radius, 1, 8);
+            ImGui::SliderFloat("Ray Trace Radius", &m_config.ssao_max_distance, 0.0f, 5.0f);
+            ImGui::SliderInt("Samples Per Pixel", &m_config.ssao_spp, 1, 32);
+            ImGui::SliderInt("Sample Radius", &m_config.ssao_sample_radius, 1, 32);
 
         } else if (m_config.ao_mode == EAoMode::RTAO || m_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
             ImGui::SliderFloat("Intensity", &m_config.rtao_intensity, 0.0f, 1.0f);
@@ -300,6 +377,10 @@ void RasterUI::ShowConfig() {
             // 启用 Reprojection 后才能启用 Validation
             if (m_config.rtao_denoiser_reprojection_enable) {
                 ImGui::Checkbox("Enable RTAO Validation", &m_config.rtao_denoiser_validation_enable);
+                ImGui::Checkbox("Enable RTAO History Clamp", &m_config.rtao_denoiser_history_clamp_enable);
+                ImGui::Checkbox(
+                    "Enable RTAO Motion Weighting", &m_config.rtao_denoiser_motion_weighting_enable
+                );
             } else {
                 // m_config.rtao_denoiser_validation_enable = false;
             }

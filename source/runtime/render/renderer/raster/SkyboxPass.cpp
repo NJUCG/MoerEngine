@@ -34,8 +34,8 @@ void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, 
     } else {
         skybox_param.exposure_factor = float3(1.0f, 1.0f, 1.0f);
     }
-    skybox_param.camera_pos    = camera.GetPosition();
-    skybox_param.inv_view_proj = Transpose(camera.GetViewProjectionMatrixInv());
+    skybox_param.camera_pos = camera.GetPosition();
+    skybox_param.clip2world = Transpose(camera.GetViewProjectionMatrixInv());
 
     DepthAttachment depth_att(context.textures.depth_linear_sampler.tex->GetView().GetTexture());
     depth_att.action = EAttachmentAction::AC_DS_LOAD_STORE;

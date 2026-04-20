@@ -166,6 +166,8 @@ struct TextureWithHandle {
 struct DepthBufferWithHandle {
     DepthBufferRef tex;
     uint           hdl = 0;
+
+    uint2 GetSize();
 };
 
 struct BufferWithHandle {

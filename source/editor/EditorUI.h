@@ -57,6 +57,7 @@ private:
     void ShowConfig();
 #if WITH_PROFILE
     void ShowMemoryProfiler(bool* p_open);
+    void DrawPassAndChildren(const char* parent_name, int depth);
 #endif
 
 private:

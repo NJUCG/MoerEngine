@@ -49,24 +49,42 @@ void main(VsOutput input) : SV_TARGET {
 #else // MARK: GeometryPass
 
 struct PsOutput {
-    uint   vbuffer : SV_TARGET0;
+    float4 base_color : SV_TARGET0;
     float4 normal : SV_TARGET1;
-    float4 tangent : SV_TARGET2;
-    float2 texcoord0 : SV_TARGET3;
-    float4 position : SV_TARGET4;
+    float4 metal_rough_ao : SV_TARGET2;
 };
 
 PsOutput main(VsOutput input) : SV_TARGET {
 
     DiscardByAlphaTest(input.material_id, input.texcoord0); // 此处有可能触发discard，直接终止shader
-    
 
+    ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
+    Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(input.material_id);
+
+    float3 base_color = GetTextureData<float3>(
+        mat.albedo_map_hdl,
+        input.texcoord0,
+        mat.albedo_factor.xyz,
+        MISSING_TEXTURE_COLOR
+    );
+    float2 metallic_roughness = GetTextureData<float2>(
+        mat.metallic_roughness_map_hdl,
+        input.texcoord0,
+        float2(mat.metallic_factor, mat.roughness_factor),
+        float2(mat.metallic_factor, mat.roughness_factor)
+    );
+    float material_ao = GetTextureData<float>(mat.ao_map_hdl, input.texcoord0, 1.0, 1.0);
+    float3 shading_normal = GetNormalFromNormalMap(
+        mat.normal_map_hdl,
+        input.texcoord0,
+        normalize(input.normal),
+        normalize(input.tangent)
+    );
+    
     PsOutput output;
-    output.vbuffer   = input.material_id;
-    output.normal    = float4(Raster::PackNormal(normalize(input.normal)), 1.0);
-    output.tangent   = float4(Raster::PackNormal(normalize(input.tangent)), 1.0);
-    output.texcoord0 = input.texcoord0;
-    output.position  = float4(input.world_position, 1.0);
+    output.base_color = float4(base_color, 0.0);
+    output.normal = float4(Raster::PackNormal(shading_normal), 1.0);
+    output.metal_rough_ao = float4(metallic_roughness, material_ao, 0.0);
 
     return output;
 }

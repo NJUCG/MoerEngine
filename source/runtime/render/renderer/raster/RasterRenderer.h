@@ -22,7 +22,6 @@ class TonemappingPass;
 #if WITH_CUDA
 class CudaPass;
 class TensorRTPass;
-class UpsamplePass;
 #endif
 
 /**
@@ -80,7 +79,6 @@ private:
 #if WITH_CUDA
     UniquePtr<CudaPass>     cuda_pass;
     UniquePtr<TensorRTPass> tensor_rt_pass;
-    UniquePtr<UpsamplePass> upsample_pass;
 #endif
 
     // Other vars

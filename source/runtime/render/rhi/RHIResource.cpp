@@ -32,6 +32,10 @@ uint TextureWithHandle::GetMipHandle(uint mip) {
     return hdl;
 }
 
+uint2 DepthBufferWithHandle::GetSize() {
+    return uint2(tex->GetWidth(), tex->GetHeight());
+}
+
 TextureView::TextureView(Texture* _texture) :
     texture(_texture),
     offset(0),

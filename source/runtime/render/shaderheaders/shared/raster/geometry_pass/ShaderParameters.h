@@ -28,6 +28,8 @@ struct GeometryPassBindlessParam {
     // Bindless handles for bindless rendering
     uint material_buf_hdl;  // Array<GMaterial>
     uint instance_buf_hdl;  // Array<GInstance>
+    uint visible_instance_id_buf_hdl; // Array<uint>, remaps SV_InstanceID when GPU culling is enabled
+    uint use_visible_instance_id_remap;
     uint primitive_buf_hdl; // Array<GPrimitive>
 
     uint position_buf_hdl;       // Array<float3>

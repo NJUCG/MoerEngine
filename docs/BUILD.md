@@ -93,9 +93,9 @@
      * **请注意，LibTorch和TensorRT版本需要与CUDAToolkit版本相对应**
 
 2. 根据模板创建配置文件（启用AI组件）
-   * 根据 `template.EnableCuda.cmake` 创建 `EnableCuda.cmake`
-   * 修改 `EnableCuda.cmake` 的内容
-   * 注：MoerEngine的构建系统会自动检测 `EnableCuda.cmake` 文件。**如果该文件存在，则会启用AI组件**
+   * 根据 `template.EnableFeatures.cmake` 创建 `EnableFeatures.cmake`
+   * 修改 `EnableFeatures.cmake` 中 CUDA 相关的配置项
+   * 注：MoerEngine的构建系统会自动检测 `EnableFeatures.cmake` 文件。**如果该文件存在，则会启用对应的可选组件**
 
 3. 将动态库添加进PATH
 
@@ -135,8 +135,8 @@
    ```
 
 2. 根据模板创建配置文件
-   * 根据 `template.EnableNrd.cmake` 创建 `EnableNrd.cmake`
-   * 修改 `EnableNrd.cmake` 的内容，将 `NRD_DIR` 设置为你Clone的NRD源码路径
+   * 根据 `template.EnableFeatures.cmake` 创建 `EnableFeatures.cmake`（如果已存在则跳过）
+   * 修改 `EnableFeatures.cmake` 中 NRD 相关的配置项，将 `NRD_ROOT` 设置为你Clone的NRD源码路径
 
 3. 重新编译MoerEngine
 
