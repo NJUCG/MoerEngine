@@ -230,17 +230,41 @@ void VulkanCmdList::CopyBufferToTexture(
 
     // _dst->GetExtent() 是整个texture的尺寸
     // _extent 是这次mipmap的尺寸
-    assert(
-        // 这里写一大坨，是为了Release优化掉整个assert语句。这样Release模式下就不会计算expected_size
-        _size == ([&]() -> uint {
-            uint expected_size = GetSizeFromImageFormat(_dst->GetFormat(), _extent);
-            if (expected_size % 16 != 0) {
-                expected_size += 16 - (expected_size % 16);
-            }
-            return expected_size;
-        }()) &&
-        "Copy size does not match texture extent"
-    );
+    const uint64 expected_size_exact    = GetSizeFromImageFormat(_dst->GetFormat(), _extent);
+    const uint64 legacy_texel_count_size = uint64(_extent.x) * uint64(_extent.y) * uint64(_extent.z);
+
+    if (_size != expected_size_exact) {
+        const uint3 texture_extent = _dst->GetExtent();
+        LOG_ERROR(
+            "[CopyBufferToTexture] Size mismatch. Texture='{}' Handle={:#x} Format={} Mip={} ArrayLayer={} "
+            "TextureExtent=({}, {}, {}) CopyOffset=({}, {}, {}) CopyExtent=({}, {}, {}) "
+            "IncomingSize={} ExactExpected={} LegacyTexelCount={} DstMipByteSize={} "
+            "DeltaToExact={} DeltaToLegacy={} LegacyMatch={}",
+            _dst->GetName(),
+            (uint64)_dst->GetHandle(),
+            uint32(_dst->GetFormat()),
+            _mip_level,
+            _array_layer,
+            texture_extent.x,
+            texture_extent.y,
+            texture_extent.z,
+            _dst_offset.x,
+            _dst_offset.y,
+            _dst_offset.z,
+            _extent.x,
+            _extent.y,
+            _extent.z,
+            _size,
+            expected_size_exact,
+            legacy_texel_count_size,
+            _dst->GetMipByteSize(_mip_level),
+            int64_t(_size) - int64_t(expected_size_exact),
+            int64_t(_size) - int64_t(legacy_texel_count_size),
+            _size == legacy_texel_count_size ? "true" : "false"
+        );
+    }
+
+    assert(_size == expected_size_exact && "Copy size does not match texture extent");
 
     vkCmdCopyBufferToImage(
         command_buffer,

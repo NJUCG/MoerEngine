@@ -10,7 +10,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
-#include "rhi/extension/NrdExtension.h"
+#include "rhi/plugin/NrdPlugin.h"
 #include "scene/GpuScene.h"
 #include "scene/loader/LoaderInterface.h"
 #include "shader/ShaderResourceManager.h"
@@ -145,8 +145,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 //////////////////////////////////////////////////////////////////////////
 #if WITH_NRD
     uint64 nrd_time      = 0ull;
-    auto*  nrd_ext       = device.LoadExtension<Ext::NRDExtension>();
-    auto   nrd_interface = nrd_ext->CreateInterface(max_frame_in_flight, resolution.x, resolution.y);
+    auto*  nrd_plugin    = device.LoadPlugin<Ext::NRDPlugin>();
+    auto   nrd_interface = nrd_plugin->CreateInterface(max_frame_in_flight, resolution.x, resolution.y);
 #endif
 
     VisualizeConfig visualize_config{};

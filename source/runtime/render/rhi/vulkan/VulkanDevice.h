@@ -15,11 +15,11 @@
 #include "VulkanDescriptor.h"
 #include "VulkanDeviceFeature.h"
 #include "VulkanDeviceProperty.h"
-#include "VulkanExtension.h"
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanTypeDefs.h"
 #include "vulkan/vulkan_core.h"
+#include "vulkanextension/VulkanExtension.h"
 
 // #include <vk_mem_alloc.h>
 #include "VulkanMemoryAllocator.h"
@@ -116,6 +116,17 @@ public:
     IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;
 
     void FlushDebugMessages() const override;
+
+    // Cooperative support related
+    bool                            IsExtensionCooperativeEnabled() const override;
+    const CooperativeExtensionInfo& GetCooperativeExtensionInfo() const override;
+    bool                            TryConvertCooperativeVectorMatrix(
+        const CooperativeVectorConversionDesc& _desc,
+        std::span<const byte>                  _src_data,
+        std::span<byte>                        _dst_data
+    ) const override;
+
+    // wait idle
     void WaitIdle() override;
 
     // 判断当前物理设备是否为 AMD（基于 vendorID）
@@ -143,14 +154,14 @@ public:
     void CopyData(void* _dst, const BufferView& _src, uint64 _size);
 
 public:
-    DeviceExtension* LoadExtension(std::string_view _name) override;
+    RuntimePlugin* LoadPlugin(std::string_view _name) override;
 
     struct Ext {
-        using Ctor = std::function<DeviceExtension*(VulkanDevice*)>;
-        using Dtor = std::function<void(DeviceExtension*)>;
-        DeviceExtension* ext;
-        Ctor             ctor;
-        Dtor             dtor;
+        using Ctor = std::function<RuntimePlugin*(VulkanDevice*)>;
+        using Dtor = std::function<void(RuntimePlugin*)>;
+        RuntimePlugin* ext;
+        Ctor           ctor;
+        Dtor           dtor;
         Ext(Ctor ctor, Dtor dtor) : ext{nullptr}, ctor{ctor}, dtor{dtor} {}
         Ext(Ext const&) = delete;
         Ext(Ext&& rhs) : ext{rhs.ext}, ctor{rhs.ctor}, dtor{rhs.dtor} {
@@ -166,6 +177,7 @@ public:
 private:
     std::mutex                     ext_mutex;
     UnorderedMap<std::string, Ext> exts;
+    CooperativeExtensionInfo       m_cooperative_extension_info{};
 
     void LoadDefaultExtensions();
 
@@ -246,11 +258,11 @@ private:
 
     VkDebugUtilsMessengerEXT m_debug_utils_messenger = VK_NULL_HANDLE;
 
-    VmaAllocator                              m_allocator = VK_NULL_HANDLE;
-    VulkanDescriptorHeap                      m_global_descriptor_heap{};
-    UniquePtr<VkCommandQueue>                 gfx_queue{}; // VkCommandQueue是MoerEngine的封装！
-    UniquePtr<VkCommandQueue>                 compute_queue{};
-    UniquePtr<VkCopyQueue>                    copy_queue{};
+    VmaAllocator              m_allocator = VK_NULL_HANDLE;
+    VulkanDescriptorHeap      m_global_descriptor_heap{};
+    UniquePtr<VkCommandQueue> gfx_queue{}; // VkCommandQueue是MoerEngine的封装！
+    UniquePtr<VkCommandQueue> compute_queue{};
+    UniquePtr<VkCopyQueue>    copy_queue{};
     // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
     // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
     std::mutex                                m_shared_queue_submit_mutex;
@@ -286,7 +298,7 @@ private:
 
     void Destroy();
 
-    static Set<std::string>            GetGpuExtensions(VkPhysicalDevice _gpu);
+    static Set<std::string> GetGpuExtensions(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
     static TQueueFamilyPropertiesArray GetQueueFamilyProperties(VkPhysicalDevice _gpu);
 
     int32_t GetQueueFamilyIndex(

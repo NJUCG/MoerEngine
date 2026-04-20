@@ -6,13 +6,14 @@
 #include "PixelFormat.h"
 #include "VulkanCommand.h"
 #include "VulkanDebugCallback.h"
-#include "VulkanExtension.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanUtil.h"
-#include "extension/VulkanNrdExtension.h"
+#include "plugin/VulkanCooperativeSupport.h"
+#include "plugin/VulkanNrdPlugin.h"
+#include "vulkanextension/VulkanExtension.h"
 #include <string_view>
 
 #include "log/LogSystem.h"
@@ -341,11 +342,14 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
      */
 void VulkanDevice::InitGpu(uint32 _api_version) {
     // Enable extensions
-    auto gpu_extensions              = VulkanDevice::GetGpuExtensions(m_gpu);
+    auto gpu_extensions = VulkanDevice::GetGpuExtensions(m_gpu);
+
     m_device_info.enabled_extensions = VulkanDeviceExtension::GetMEEnabledDeviceExtensions(gpu_extensions);
 
     // Query core features
     m_device_info.core_features = VulkanDeviceFeatures::GetGpuFeatures(m_gpu, _api_version);
+    // 先从 core feature 中提取 cooperative bundle 需要的前置能力。
+    UpdateCooperativePrerequisites(m_device_info.core_features, m_device_info.optional_extensions);
     // Query advanced features, use advanced features as GPU supported, and developers cannot specify them.
     {
         VkPhysicalDeviceFeatures2 features2{};
@@ -369,6 +373,9 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
             extension->PreGpuProperties(this, props2);
         }
         vkGetPhysicalDeviceProperties2(m_gpu, &props2);
+        for (const auto& extension : m_device_info.enabled_extensions) {
+            extension->PostGpuProperties(this);
+        }
     }
 
     // Query core memory properties
@@ -396,6 +403,10 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
         m_device_info.core_properties.core_1_0.limits.maxBoundDescriptorSets,
         m_device_info.core_properties.core_1_0.limits.timestampComputeAndGraphics
     );
+    // 启动时输出 cooperative 支持摘要，便于后续调试 shader/toolchain 问题。
+    LogCooperativeSupportSummary(m_device_info.optional_extensions, m_device_info.optional_properties);
+    m_cooperative_extension_info =
+        BuildCooperativeExtensionInfo(m_device_info.optional_extensions, m_device_info.optional_properties);
 }
 
 void VulkanDevice::CreateDevice(uint32 _api_version) {
@@ -428,6 +439,10 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     // setup extension and feature info
     Moer::Array<const char*> extensions_loaded;
     for (const auto& extension : m_device_info.enabled_extensions) {
+        if (!extension || !extension->ShouldEnableDeviceCreate()) {
+            // 如果拓展不启用或者不可用，则跳过
+            continue;
+        }
         extensions_loaded.emplace_back(extension->GetExtensionName().data());
         extension->PreCreateDevice(device_create_info);
         LOG_INFO("Loading VulkanDeviceExtension: {}", extension->GetExtensionName());
@@ -638,12 +653,19 @@ void VulkanDevice::Destroy() {
     // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
 }
 
-Set<std::string> VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu) {
-    uint32 gpu_extension_count;
-    // check extensions
-    vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, nullptr);
+Set<std::string> VulkanDevice::GetGpuExtensions(VkPhysicalDevice _gpu, const char* _layer_name) {
+    uint32_t gpu_extension_count = 0;
+    VkResult result = vkEnumerateDeviceExtensionProperties(_gpu, _layer_name, &gpu_extension_count, nullptr);
+    if (result != VK_SUCCESS || gpu_extension_count == 0) {
+        return {};
+    }
+
     Array<VkExtensionProperties> gpu_extensions(gpu_extension_count);
-    vkEnumerateDeviceExtensionProperties(_gpu, nullptr, &gpu_extension_count, gpu_extensions.data());
+    result =
+        vkEnumerateDeviceExtensionProperties(_gpu, _layer_name, &gpu_extension_count, gpu_extensions.data());
+    if (result != VK_SUCCESS) {
+        return {};
+    }
 
     Set<std::string> ret;
     for (const auto& extension : gpu_extensions)
@@ -809,11 +831,76 @@ VkDescriptorType METoVkDescriptorType(uint _desc_type) {
 
 bool VulkanDevice::HasDeviceExtension(std::string_view _ext_name) const {
     for (const auto& ext : m_device_info.enabled_extensions) {
-        if (ext && ext->GetExtensionName() == _ext_name) {
+        if (ext && ext->ShouldEnableDeviceCreate() && ext->GetExtensionName() == _ext_name) {
             return true;
         }
     }
     return false;
+}
+
+bool VulkanDevice::IsExtensionCooperativeEnabled() const {
+    return m_device_info.optional_extensions.IsExtensionCooperativeEnabled();
+}
+
+const CooperativeExtensionInfo& VulkanDevice::GetCooperativeExtensionInfo() const {
+    return m_cooperative_extension_info;
+}
+
+bool VulkanDevice::TryConvertCooperativeVectorMatrix(
+    const CooperativeVectorConversionDesc& _desc,
+    std::span<const byte>                  _src_data,
+    std::span<byte>                        _dst_data
+) const {
+    const auto log_error = [&](std::string_view _message) {
+        LOG_ERROR("VulkanRHI: TryConvertCooperativeVectorMatrix failed: {}", _message);
+    };
+
+    if (!m_device_info.optional_extensions.SupportsCooperativeVector()) {
+        log_error("VK_NV_cooperative_vector is not enabled on the current device.");
+        return false;
+    }
+    if (vkConvertCooperativeVectorMatrixNV == nullptr) {
+        log_error("vkConvertCooperativeVectorMatrixNV is unavailable.");
+        return false;
+    }
+    if (_src_data.empty() || _dst_data.empty()) {
+        log_error("Source and destination buffers must be non-empty.");
+        return false;
+    }
+
+    size_t required_dst_size = _dst_data.size_bytes();
+
+    VkConvertCooperativeVectorMatrixInfoNV info{};
+    info.sType               = VK_STRUCTURE_TYPE_CONVERT_COOPERATIVE_VECTOR_MATRIX_INFO_NV;
+    info.srcSize             = _src_data.size_bytes();
+    info.srcData.hostAddress = _src_data.data();
+    info.pDstSize            = &required_dst_size;
+    info.dstData.hostAddress = _dst_data.data();
+    info.srcComponentType    = static_cast<VkComponentTypeKHR>(_desc.src_component_type);
+    info.dstComponentType    = static_cast<VkComponentTypeKHR>(_desc.dst_component_type);
+    info.numRows             = _desc.num_rows;
+    info.numColumns          = _desc.num_columns;
+    info.srcLayout           = static_cast<VkCooperativeVectorMatrixLayoutNV>(_desc.src_layout);
+    info.srcStride           = _desc.src_stride;
+    info.dstLayout           = static_cast<VkCooperativeVectorMatrixLayoutNV>(_desc.dst_layout);
+    info.dstStride           = _desc.dst_stride;
+
+    const VkResult result = vkConvertCooperativeVectorMatrixNV(m_device, &info);
+    if (result != VK_SUCCESS) {
+        log_error(string_VkResult(result));
+        return false;
+    }
+    if (required_dst_size > _dst_data.size_bytes()) {
+        LOG_ERROR(
+            "VulkanRHI: TryConvertCooperativeVectorMatrix failed: destination buffer is too small "
+            "(required={} bytes, actual={} bytes).",
+            required_dst_size,
+            _dst_data.size_bytes()
+        );
+        return false;
+    }
+
+    return true;
 }
 
 bool VulkanDevice::IsAmdGpu() const {
@@ -1696,7 +1783,7 @@ void VulkanDevice::SetResourceName(uint64 _handle, VkObjectType _type, const std
     vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
 }
 
-DeviceExtension* VulkanDevice::LoadExtension(std::string_view _name) {
+RuntimePlugin* VulkanDevice::LoadPlugin(std::string_view _name) {
     auto ite = exts.find(_name.data());
     if (ite == exts.end())
         return nullptr;
@@ -1727,12 +1814,12 @@ void VulkanDevice::LoadDefaultExtensions() {
 
 #if WITH_NRD
     exts.try_emplace(
-        Moer::Render::Ext::NRDExtension::name.data(),
-        [](VulkanDevice* _device) -> DeviceExtension* {
-            return MoerNew(Moer::Render::Ext::VkNRDExtension(_device));
+        Moer::Render::Ext::NRDPlugin::name.data(),
+        [](VulkanDevice* _device) -> RuntimePlugin* {
+            return MoerNew(Moer::Render::Ext::VkNRDPlugin(_device));
         },
-        [](DeviceExtension* _ext) {
-            MoerDelete(static_cast<Moer::Render::Ext::VkNRDExtension*>(_ext));
+        [](RuntimePlugin* _ext) {
+            MoerDelete(static_cast<Moer::Render::Ext::VkNRDPlugin*>(_ext));
         }
     );
 #endif

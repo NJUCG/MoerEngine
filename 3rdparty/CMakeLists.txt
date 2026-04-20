@@ -3,9 +3,7 @@ set(third_party_folder "3rdparty")
 
 # include(vulkan.cmake)
 include(${moer_root_dir}/cmake/functions.cmake)
-
-copy_dll(dxc dxcompiler SHARED ${moer_third_party_dir}/DirectXShaderCompiler )
-set_target_folder(dxc ${third_party_folder})
+include(${CMAKE_CURRENT_SOURCE_DIR}/dxc.cmake)
 
 # spdlog
 set(SPDLOG_USE_STD_FORMAT ON)

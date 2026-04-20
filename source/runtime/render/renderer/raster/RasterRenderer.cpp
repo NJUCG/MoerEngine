@@ -4,6 +4,7 @@
 #include "AoPass.h"
 #include "BilateralFilterDenoiserPass.h"
 #include "BloomPass.h"
+#include "CooperativeOpsPass.h"
 #include "DirectionalShadowMaskPass.h"
 #include "GeometryPass.h"
 #include "LightingPass.h"
@@ -55,6 +56,7 @@ RasterRenderer::RasterRenderer(
     rtao_denoiser_pass           = MakeUnique<RtaoDenoiserPass>(raster_context);
     bfd_pass                     = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
     ssr_pass                     = MakeUnique<SsrPass>(raster_context);
+    cooperative_ops_pass         = MakeUnique<CooperativeOpsPass>(raster_context);
     aa_pass                      = MakeUnique<AaPass>(raster_context);
     bloom_pass                   = MakeUnique<BloomPass>(raster_context);
     tonemapping_pass             = MakeUnique<TonemappingPass>(raster_context);
@@ -78,6 +80,11 @@ RasterRenderer::RasterRenderer(
     gfx_queue.Sync();
 
     // Other vars
+
+    LOG_INFO(
+        "Cooperative Matrix & Vector Extensions is Enabled: {}",
+        device.IsExtensionCooperativeEnabled() ? "Yes" : "No"
+    );
 }
 
 RasterRenderer::~RasterRenderer() {
@@ -296,6 +303,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // - Screen Space Reflection
         processing_image = ssr_pass->Process(raster_context, raster_config, camera, processing_image);
+
+        // - Cooperative Ops
+        processing_image = cooperative_ops_pass->Process(raster_context, raster_config, processing_image);
 
         // - Anti-aliasing
         processing_image = aa_pass->Process(raster_context, raster_config, camera, processing_image);
