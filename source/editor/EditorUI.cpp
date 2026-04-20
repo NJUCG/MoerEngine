@@ -61,9 +61,12 @@ void EditorUI::InitFromConfigManager() {
 void EditorUI::DrawPassAndChildren(const char* parent_name, int depth) {
     for (int i = 0; i < g_pass_history_count; i++) {
         auto& h = g_pass_history[i];
-        if (!h.active) continue;
-        if (strcmp(h.parent_name, parent_name) != 0) continue;
-        if (h.avg_ms < 0.001f && h.max_ms < 0.001f) continue;
+        if (!h.active)
+            continue;
+        if (strcmp(h.parent_name, parent_name) != 0)
+            continue;
+        if (h.avg_ms < 0.001f && h.max_ms < 0.001f)
+            continue;
 
         ImGui::TableNextRow();
 
@@ -141,18 +144,22 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
 
     if (ImGui::CollapsingHeader("Live Memory Graph")) {
         static float view_max_y = 5.0f;
-        
+
         std::vector<TimePoint> snapshot;
         {
             std::lock_guard<std::mutex> lock(g_history_mtx);
-            if (g_history_data.empty()) return;
+            if (g_history_data.empty())
+                return;
             snapshot.assign(g_history_data.begin(), g_history_data.end());
         }
 
         float plot_width = ImGui::GetContentRegionAvail().x;
         for (int s = 0; s < SOURCE_COUNT; ++s) {
-            struct PlotContext { int s_idx; std::vector<TimePoint>* d; };
-            PlotContext ctx = { s, &snapshot };
+            struct PlotContext {
+                int                     s_idx;
+                std::vector<TimePoint>* d;
+            };
+            PlotContext ctx = {s, &snapshot};
 
             auto getter = [](void* data, int idx) -> float {
                 auto* p = (PlotContext*)data;
@@ -160,14 +167,16 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
             };
 
             float last_val = snapshot.back().values[s];
-            if (last_val * 1.2f > view_max_y) view_max_y = last_val * 1.2f;
+            if (last_val * 1.2f > view_max_y)
+                view_max_y = last_val * 1.2f;
 
             ImGui::PushStyleColor(ImGuiCol_PlotLines, g_UIConfigs[s].color);
-            ImGui::PlotLines("##", getter, &ctx, (int)snapshot.size(), 0, 
-                            nullptr, 0.0f, view_max_y, ImVec2(plot_width, 80));
+            ImGui::PlotLines(
+                "##", getter, &ctx, (int)snapshot.size(), 0, nullptr, 0.0f, view_max_y, ImVec2(plot_width, 80)
+            );
             ImGui::PopStyleColor();
-            
-            ImGui::SameLine(); 
+
+            ImGui::SameLine();
             ImGui::Text("%s: %.2f MB", g_UIConfigs[s].label, last_val);
         }
     }
@@ -180,20 +189,20 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
         if (g_pass_history_count == 0) {
             ImGui::TextDisabled("No GPU data yet...");
         } else {
-            ImGui::BeginTable("PassTable", 4, 
-                ImGuiTableFlags_Borders | 
-                ImGuiTableFlags_RowBg | 
-                ImGuiTableFlags_ScrollY,
+            ImGui::BeginTable(
+                "PassTable",
+                4,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
                 ImVec2(0, 300)
             );
-            ImGui::TableSetupColumn("Pass",           ImGuiTableColumnFlags_WidthFixed, 260);
-            ImGui::TableSetupColumn("Avg ms",         ImGuiTableColumnFlags_WidthFixed, 70);
-            ImGui::TableSetupColumn("Max ms",         ImGuiTableColumnFlags_WidthFixed, 70);
+            ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, 260);
+            ImGui::TableSetupColumn("Avg ms", ImGuiTableColumnFlags_WidthFixed, 70);
+            ImGui::TableSetupColumn("Max ms", ImGuiTableColumnFlags_WidthFixed, 70);
             ImGui::TableSetupColumn("Last 60 frames", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableHeadersRow();
 
             DrawPassAndChildren("", 0);
-            
+
             ImGui::EndTable();
         }
     }
@@ -203,11 +212,11 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
     ImGui::Spacing();
 
     ImGui::Text("Memory Hotspots Export:");
-    
+
     if (ImGui::Button("Quick Dump (Hex Only)")) {
         WriteHotspots(false);
     }
-    
+
     ImGui::SameLine();
 
     if (ImGui::Button("Full Dump (With Symbols)")) {

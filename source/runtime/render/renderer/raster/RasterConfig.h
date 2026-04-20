@@ -235,7 +235,7 @@ struct RasterConfig {
     bool bloom_enabled = true;
 
     // MARK: Cooperative Ops
-    bool                 cooperative_ops_enabled = true;
+    bool                 cooperative_ops_enabled = false;
     CooperativeOpsStatus cooperative_ops_status{};
 
     // MARK: Denoiser

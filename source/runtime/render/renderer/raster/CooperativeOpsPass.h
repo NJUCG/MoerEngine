@@ -2,7 +2,6 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
-#include "rhi/RHI.h"
 
 #include <algorithm>
 #include <string>
@@ -10,11 +9,11 @@
 namespace Moer::Render::Raster {
 
 /**
- * Cooperative Ops scaffold pass.
+ * Cooperative Ops Pass。
  *
- * This pass reserves a stable insertion point for later cooperative experiments.
- * The current implementation is intentionally a no-op and preserves the existing
- * post-process chain output regardless of whether the UI toggle is enabled.
+ * Moer 目前的 Shader 编译路径是 HLSL -> DXC -> SPIR-V -> Vulkan -> 硬件。
+ * 当前 DXC 在编译到 SPIR-V 的路径上不支持 cooperative vector，因此暂时无法在
+ * Moer 中进行 cooperative vector 试验。这个类现阶段仅保留占位，暂时废弃。
  */
 class CooperativeOpsPass {
 public:
@@ -23,6 +22,7 @@ public:
 
     TextureWithHandle
     Process(RasterContext& context, RasterConfig& ui_config, TextureWithHandle input_image) {
+        (void)context;
         UpdateSnapshotStatus(ui_config.cooperative_ops_status);
 
         auto& status = ui_config.cooperative_ops_status;
@@ -34,18 +34,15 @@ public:
 
         ++status.frames_evaluated;
 
-        RunMatrixReadinessProbe(status);
-        RunVectorConversionProbe(context, status);
+        UpdateRuntimeStatus(status);
 
         return input_image;
     }
 
 private:
-    static constexpr uint32_t s_compute_stage_bit   = 0x00000020;
-    static constexpr uint32_t s_row_major_layout    = 0;
-    static constexpr uint32_t s_column_major_layout = 1;
-    static constexpr uint32_t s_float_e4m3_type     = 1000491002;
-    static constexpr uint32_t s_float_e5m2_type     = 1000491003;
+    static constexpr uint32_t s_compute_stage_bit = 0x00000020;
+    static constexpr uint32_t s_float_e4m3_type   = 1000491002;
+    static constexpr uint32_t s_float_e5m2_type   = 1000491003;
 
     static const char* ToYesNo(bool _enabled) {
         return _enabled ? "Yes" : "No";
@@ -99,35 +96,6 @@ private:
         }
     }
 
-    static uint32_t ComponentTypeByteSize(uint32_t _component_type) {
-        switch (_component_type) {
-            case 0:
-            case 4:
-            case 8:
-                return 2;
-            case 1:
-            case 5:
-            case 9:
-                return 4;
-            case 2:
-            case 6:
-            case 10:
-                return 8;
-            case 3:
-            case 7:
-            case s_float_e4m3_type:
-            case s_float_e5m2_type:
-                return 1;
-            default:
-                return 0;
-        }
-    }
-
-    static bool IsRowColumnRoundtripCapable(const CooperativeVectorModeInfo& _mode) {
-        return _mode.matrix_interpretation != s_float_e4m3_type &&
-               _mode.matrix_interpretation != s_float_e5m2_type;
-    }
-
     static std::string FormatMatrixMode(const CooperativeMatrixModeInfo& _mode) {
         return std::to_string(_mode.m_size) + "x" + std::to_string(_mode.n_size) + "x" +
                std::to_string(_mode.k_size) + " scope=" + ScopeName(_mode.scope) +
@@ -164,7 +132,8 @@ private:
         }
 
         for (const auto& mode : m_cooperative_info.vector_modes) {
-            if (IsRowColumnRoundtripCapable(mode)) {
+            if (mode.matrix_interpretation != s_float_e4m3_type &&
+                mode.matrix_interpretation != s_float_e5m2_type) {
                 return &mode;
             }
         }
@@ -193,7 +162,8 @@ private:
                            " inference_ready=" + ToYesNo(m_cooperative_info.inference_ready) +
                            " low_precision=" + ToYesNo(m_cooperative_info.low_precision_supported) +
                            " storage=" + ToYesNo(m_cooperative_info.storage_supported) +
-                           " memory_model=" + ToYesNo(m_cooperative_info.vulkan_memory_model_supported);
+                           " memory_model=" + ToYesNo(m_cooperative_info.vulkan_memory_model_supported) +
+                           " | Shader-side cooperative vector is parked on the current Vulkan path.";
 
         if (const auto* matrix_mode = FindPreferredMatrixMode()) {
             _status.matrix_summary = "Preferred mode: " + FormatMatrixMode(*matrix_mode);
@@ -214,101 +184,41 @@ private:
         }
     }
 
-    void RunMatrixReadinessProbe(CooperativeOpsStatus& _status) const {
+    std::string DescribeMatrixCapability() const {
         if (!m_cooperative_info.matrix_supported) {
-            _status.matrix_runtime_status = "Unavailable";
-            return;
+            return "Cooperative matrix unavailable.";
         }
         if ((m_cooperative_info.matrix_supported_stages & s_compute_stage_bit) == 0) {
-            _status.matrix_runtime_status =
-                "Driver did not advertise compute-stage cooperative matrix support.";
-            return;
+            return "Driver did not advertise compute-stage cooperative matrix support.";
         }
 
         if (const auto* matrix_mode = FindPreferredMatrixMode()) {
-            _status.matrix_runtime_status = "Compute-capable mode ready: " + FormatMatrixMode(*matrix_mode) +
-                                            " (live shader probe pending).";
-        } else {
-            _status.matrix_runtime_status = "No preferred matrix mode selected.";
+            return "Compute-capable mode ready: " + FormatMatrixMode(*matrix_mode) +
+                   " (cooperative shader probe pending).";
         }
+
+        return "No preferred matrix mode selected.";
     }
 
-    void RunVectorConversionProbe(RasterContext& _context, CooperativeOpsStatus& _status) const {
+    void UpdateRuntimeStatus(CooperativeOpsStatus& _status) const {
+        _status.matrix_runtime_status =
+            DescribeMatrixCapability() + " No active matrix experiment is running in this pass.";
+
         if (!m_cooperative_info.vector_supported) {
-            _status.vector_runtime_status = "Unavailable";
+            _status.vector_runtime_status = "NV cooperative vector is unavailable on this device.";
             return;
         }
 
         const CooperativeVectorModeInfo* vector_mode = FindPreferredVectorMode();
-        if (!vector_mode) {
-            _status.vector_runtime_status = "No preferred vector mode selected.";
-            return;
-        }
-        if (!IsRowColumnRoundtripCapable(*vector_mode)) {
-            _status.vector_runtime_status =
-                "Preferred vector mode requires opaque optimal layouts; row/column roundtrip probe skipped.";
-            return;
-        }
-
-        const uint32_t element_size = ComponentTypeByteSize(vector_mode->matrix_interpretation);
-        if (element_size == 0) {
-            _status.vector_runtime_status = "Unsupported matrix component size for vector probe.";
-            return;
-        }
-
-        const uint32_t cols       = std::max(1u, std::min(4u, m_cooperative_info.max_vector_components));
-        const uint32_t rows       = 4;
-        const size_t   row_stride = static_cast<size_t>(cols) * element_size;
-        const size_t   col_stride = static_cast<size_t>(rows) * element_size;
-        const size_t   byte_size  = static_cast<size_t>(rows) * cols * element_size;
-
-        Array<byte> row_major(byte_size);
-        Array<byte> column_major(byte_size);
-        Array<byte> roundtrip(byte_size);
-
-        for (size_t element_idx = 0; element_idx < static_cast<size_t>(rows) * cols; ++element_idx) {
-            uint64_t value = 0x10ull + element_idx;
-            for (uint32_t byte_idx = 0; byte_idx < element_size; ++byte_idx) {
-                row_major[element_idx * element_size + byte_idx] =
-                    static_cast<byte>((value >> (byte_idx * 8)) & 0xffu);
-            }
-        }
-
-        CooperativeVectorConversionDesc to_column_major{};
-        to_column_major.src_component_type = vector_mode->matrix_interpretation;
-        to_column_major.dst_component_type = vector_mode->matrix_interpretation;
-        to_column_major.num_rows           = rows;
-        to_column_major.num_columns        = cols;
-        to_column_major.src_layout         = s_row_major_layout;
-        to_column_major.src_stride         = row_stride;
-        to_column_major.dst_layout         = s_column_major_layout;
-        to_column_major.dst_stride         = col_stride;
-
-        CooperativeVectorConversionDesc to_row_major = to_column_major;
-        to_row_major.src_layout                      = s_column_major_layout;
-        to_row_major.src_stride                      = col_stride;
-        to_row_major.dst_layout                      = s_row_major_layout;
-        to_row_major.dst_stride                      = row_stride;
-
-        if (!_context.device.TryConvertCooperativeVectorMatrix(to_column_major, row_major, column_major)) {
-            _status.vector_runtime_status = "Host conversion failed.";
-            return;
-        }
-
-        if (!_context.device.TryConvertCooperativeVectorMatrix(to_row_major, column_major, roundtrip)) {
-            _status.vector_runtime_status = "Roundtrip conversion failed.";
-            return;
-        }
-
-        if (roundtrip == row_major) {
-            _status.vector_runtime_status =
-                "Row/column roundtrip OK: " + std::to_string(rows) + "x" + std::to_string(cols) +
-                " matrix, element_size=" + std::to_string(element_size) + " bytes.";
-            return;
-        }
+        const std::string                preferred_mode =
+            vector_mode ? (" Preferred mode: " + FormatVectorMode(*vector_mode)) : std::string();
 
         _status.vector_runtime_status =
-            "Roundtrip conversion completed, but the resulting bytes did not match the input.";
+            "Shader-side cooperative vector is parked on the current Vulkan path: MoerEngine compiles "
+            "Vulkan shaders as HLSL -> DXC -> SPIR-V, but dx::linalg cooperative vector authoring is "
+            "disabled under __spirv__. The repo currently only has capability enumeration and host-side "
+            "layout conversion, not a usable shader execution path." +
+            preferred_mode;
     }
 
 private:
