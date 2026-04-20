@@ -24,14 +24,9 @@ struct EngineHooks {
     std::function<TextureRef(UiCombinePass*, CommandList&, TextureView, TextureView, TextureView)>
         on_ui_combine_pass;
 
-    std::function<void(std::string, std::function<void(void)>)> on_register_ui_func;
-
-    std::function<void(std::string)> on_unregister_ui_func;
-
-    std::function<void(void)> on_show_config_sub_ui;
-
-    // Raster
-    std::function<void(const Array<TextureView>&)> on_raster_register_frame_buffers;
+    std::function<void(std::string, std::string, std::function<void(void)>)>
+        on_register_renderer_config_section;
+    std::function<void(std::string, std::string)> on_unregister_renderer_config_section;
 };
 
 class RENDER_API Renderer {

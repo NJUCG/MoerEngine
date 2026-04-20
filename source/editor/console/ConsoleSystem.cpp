@@ -7,7 +7,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
-#include "config/CVarSystem.h"
+#include "command/EngineCommandProcessor.h"
 #include "log/LogSystem.h"
 #include "renderer/EditorConsoleVariables.h"
 #include "window/WindowInput.h"
@@ -22,16 +22,12 @@ struct PumpLogsContext {
     std::vector<std::string>* lines = nullptr;
 };
 
-struct CollectCVarListContext {
-    std::vector<std::string>* lines      = nullptr;
-    std::string_view prefix;
-    bool              use_prefix = false;
-    int               count      = 0;
+struct PumpCommandOutputContext {
+    std::vector<std::string>* lines = nullptr;
 };
 
 struct CollectAutocompleteContext {
-    std::vector<std::string>* candidates = nullptr;
-    std::string_view          token;
+    std::vector<ConsoleSystem::AutocompleteCandidate>* candidates = nullptr;
 };
 
 std::string Trim(std::string_view in) {
@@ -44,14 +40,6 @@ std::string Trim(std::string_view in) {
         --end;
     }
     return std::string(in.substr(begin, end - begin));
-}
-
-std::string ToLower(std::string_view in) {
-    std::string out(in);
-    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return out;
 }
 
 std::string LevelPrefix(spdlog::level::level_enum level) {
@@ -73,45 +61,6 @@ std::string LevelPrefix(spdlog::level::level_enum level) {
     }
 }
 
-bool StartsWithInsensitive(std::string_view text, std::string_view prefix) {
-    if (prefix.size() > text.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < prefix.size(); ++i) {
-        const char a = static_cast<char>(std::tolower(static_cast<unsigned char>(text[i])));
-        const char b = static_cast<char>(std::tolower(static_cast<unsigned char>(prefix[i])));
-        if (a != b) {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::string CVarTypeName(CVar::EType type) {
-    switch (type) {
-        case CVar::EType::Bool:
-            return "bool";
-        case CVar::EType::Int:
-            return "int";
-        case CVar::EType::Float:
-            return "float";
-        case CVar::EType::String:
-            return "string";
-        default:
-            return "unknown";
-    }
-}
-
-std::string GetCVarValueText(const CVar::ICVar* cvar) {
-    if (!cvar) {
-        return {};
-    }
-
-    char buffer[512]{};
-    cvar->CopyValueString(buffer, sizeof(buffer));
-    return buffer;
-}
-
 void AppendRuntimeLogEntry(const LogSystem::ConsoleLogEntryView& entry, void* user_data) {
     auto* context = static_cast<PumpLogsContext*>(user_data);
     if (!context || !context->lines) {
@@ -120,41 +69,52 @@ void AppendRuntimeLogEntry(const LogSystem::ConsoleLogEntryView& entry, void* us
     context->lines->push_back(LevelPrefix(entry.level) + std::string(entry.message));
 }
 
-void AppendCVarListEntry(CVar::ICVar* cvar, void* user_data) {
-    auto* context = static_cast<CollectCVarListContext*>(user_data);
-    if (!context || !context->lines || !cvar) {
+void AppendCommandOutputEntry(const Command::CommandOutputLineView& entry, void* user_data) {
+    auto* context = static_cast<PumpCommandOutputContext*>(user_data);
+    if (!context || !context->lines) {
         return;
     }
-
-    const std::string name(cvar->GetName());
-    if (context->use_prefix && !StartsWithInsensitive(name, context->prefix)) {
-        return;
-    }
-
-    context->lines->push_back(
-        name + " (" + CVarTypeName(cvar->GetType()) + ") = " + GetCVarValueText(cvar)
-    );
-    ++context->count;
+    context->lines->push_back(std::string(entry.text));
 }
 
-void AppendAutocompleteCandidate(CVar::ICVar* cvar, void* user_data) {
+void AppendAutocompleteCandidate(const Command::CommandCandidateView& candidate, void* user_data) {
     auto* context = static_cast<CollectAutocompleteContext*>(user_data);
-    if (!context || !context->candidates || !cvar) {
+    if (!context || !context->candidates) {
         return;
     }
 
-    const std::string name(cvar->GetName());
-    if (StartsWithInsensitive(name, context->token)) {
-        context->candidates->push_back(name);
-    }
+    context->candidates->push_back(ConsoleSystem::AutocompleteCandidate{
+        .text = std::string(candidate.text),
+        .helper = std::string(candidate.helper),
+        .is_command = candidate.is_command,
+    });
 }
 
 } // namespace
 
-ConsoleSystem::ConsoleSystem(const SharedPtr<EditorConfig>& editor_config) : m_editor_config(editor_config) {
+ConsoleSystem::ConsoleSystem(
+    const SharedPtr<EditorConfig>& editor_config,
+    Command::EngineCommandProcessor& command_processor
+) :
+    m_editor_config(editor_config),
+    m_command_processor(command_processor) {
     if (m_editor_config) {
         Render::EditorConsoleVariables::ApplyToEditorConfig(*m_editor_config);
     }
+}
+
+bool ConsoleSystem::IsEditorConsoleOpen() const {
+    return m_editor_console_page_open;
+}
+
+void ConsoleSystem::SetEditorConsoleOpen(bool open) {
+    if (open == m_editor_console_page_open) {
+        return;
+    }
+    m_editor_console_page_open = open;
+    m_focus_window_next_frame  = open;
+    m_focus_input_next_frame   = open;
+    m_focus_input_frames       = open ? 3 : 0;
 }
 
 void ConsoleSystem::ExecuteCommand(std::string_view line) {
@@ -168,78 +128,7 @@ void ConsoleSystem::ExecuteCommand(std::string_view line) {
     m_history_cursor = -1;
     m_history_backup.clear();
 
-    if (ToLower(trimmed) == "help") {
-        AppendOutput("Commands:");
-        AppendOutput("  help");
-        AppendOutput("  cvar list [prefix]");
-        AppendOutput("  <cvar.path> ?");
-        AppendOutput("  <cvar.path> <value>");
-        return;
-    }
-
-    if (StartsWithInsensitive(trimmed, "cvar list")) {
-        std::string prefix;
-        if (trimmed.size() > 9) {
-            prefix = Trim(trimmed.substr(9));
-        }
-        std::vector<std::string> lines;
-        CollectCVarListContext context{
-            .lines      = &lines,
-            .prefix     = prefix,
-            .use_prefix = !prefix.empty(),
-            .count      = 0,
-        };
-        CVar::VisitAll(&AppendCVarListEntry, &context);
-        for (const std::string& line_text : lines) {
-            AppendOutput(line_text);
-        }
-        if (context.count == 0) {
-            AppendOutput("No cvar matches prefix: " + prefix);
-        }
-        return;
-    }
-
-    const size_t first_space = trimmed.find_first_of(" \t");
-    if (first_space == std::string::npos) {
-        AppendOutput("Error: Missing argument. Usage: <path> <value|?>, help, or cvar list [prefix]");
-        return;
-    }
-
-    const std::string path = trimmed.substr(0, first_space);
-    std::string       arg  = Trim(trimmed.substr(first_space + 1));
-    if (arg.empty()) {
-        AppendOutput("Error: Missing argument. Usage: <path> <value|?>");
-        return;
-    }
-
-    CVar::ICVar* cvar = CVar::Find(path);
-    if (!cvar) {
-        AppendOutput("Error: Unknown cvar: " + path);
-        return;
-    }
-
-    if (arg == "?") {
-        AppendOutput(path + " = " + GetCVarValueText(cvar));
-        if (!cvar->GetHelper().empty()) {
-            AppendOutput("  help: " + std::string(cvar->GetHelper()));
-        }
-        if (cvar->GetType() == CVar::EType::Bool) {
-            if (!cvar->GetTrueHelper().empty()) {
-                AppendOutput("  true: " + std::string(cvar->GetTrueHelper()));
-            }
-            if (!cvar->GetFalseHelper().empty()) {
-                AppendOutput("  false: " + std::string(cvar->GetFalseHelper()));
-            }
-        }
-        return;
-    }
-
-    if (const char* error = cvar->SetValueFromString(arg)) {
-        AppendOutput(std::string("Error: ") + error);
-        return;
-    }
-
-    AppendOutput(path + " = " + GetCVarValueText(cvar));
+    m_command_processor << trimmed;
 }
 
 void ConsoleSystem::TickUI() {
@@ -250,6 +139,7 @@ void ConsoleSystem::TickUI() {
     }
 
     PumpRuntimeLogs();
+    PumpCommandOutputs();
     HandleHotkeys();
 
     if (IsRenderConsoleVisible()) {
@@ -294,7 +184,29 @@ void ConsoleSystem::PumpRuntimeLogs() {
     }
 }
 
+void ConsoleSystem::PumpCommandOutputs() {
+    std::vector<std::string> lines;
+    PumpCommandOutputContext context{.lines = &lines};
+    if (!m_command_processor.PollOutput(
+            m_next_command_output_sequence,
+            &AppendCommandOutputEntry,
+            &context,
+            256
+        )) {
+        return;
+    }
+    for (const std::string& line_text : lines) {
+        AppendOutput(line_text);
+    }
+}
+
 void ConsoleSystem::HandleHotkeys() {
+    if (ImGui::GetIO().WantTextInput) {
+        m_last_grave_switch_state = WindowInput::Get().key_button_switch_state[KeyButtons::GRAVE_ACCENT];
+        m_last_escape_down = WindowInput::Get().key_button_state[KeyButtons::ESCAPE];
+        return;
+    }
+
     const bool grave_switch = WindowInput::Get().key_button_switch_state[KeyButtons::GRAVE_ACCENT];
     if (grave_switch != m_last_grave_switch_state) {
         m_last_grave_switch_state = grave_switch;
@@ -395,7 +307,7 @@ void ConsoleSystem::DrawInputLine(const char* id) {
     ImGui::SetNextItemWidth(std::max(ImGui::GetContentRegionAvail().x - 78.0f, 120.0f));
     bool submit_by_enter = ImGui::InputTextWithHint(
         id,
-        "Enter console command",
+        "Enter /command or cvar",
         m_input_buffer.data(),
         m_input_buffer.size(),
         ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory |
@@ -444,17 +356,13 @@ void ConsoleSystem::DrawEditorConsolePanel() {
             ImGui::SetWindowFocus();
             m_focus_window_next_frame = false;
         }
-        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
-            ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            m_focus_input_next_frame = true;
-            m_focus_input_frames = std::max(m_focus_input_frames, 2);
-        }
 
-        ImGui::TextUnformatted("Usage: <path> ?   or   <path> <value>");
+        ImGui::TextUnformatted("Usage: /command   or   <cvar> [value|?]");
         ImGui::SameLine();
         if (ImGui::SmallButton("Clear")) {
             m_output_lines.clear();
             LogSystem::ClearConsoleLogs();
+            m_command_processor.ClearOutput();
         }
         ImGui::SameLine();
         ImGui::Checkbox("AutoScroll", &m_auto_scroll);
@@ -554,6 +462,7 @@ void ConsoleSystem::DrawRenderWindowedConsole() {
     if (ImGui::Button("Clear##RenderConsole")) {
         m_output_lines.clear();
         LogSystem::ClearConsoleLogs();
+        m_command_processor.ClearOutput();
     }
     ImGui::SameLine();
     ImGui::Checkbox("AutoScroll##RenderConsole", &m_auto_scroll);
@@ -569,40 +478,22 @@ void ConsoleSystem::UpdateAutocompleteCandidates() {
 
 void ConsoleSystem::UpdateAutocompleteCandidatesForInput(std::string_view raw_input) {
     const std::string query = Trim(raw_input);
-    const size_t      space_pos = query.find_first_of(" \t");
-    const std::string token = (space_pos == std::string::npos) ? query : query.substr(0, space_pos);
-
-    if (token.empty()) {
+    if (query.empty()) {
         m_autocomplete_candidates.clear();
         m_autocomplete_selected = -1;
         m_last_autocomplete_query.clear();
         return;
     }
 
-    if (token != m_last_autocomplete_query) {
+    if (query != m_last_autocomplete_query) {
         m_autocomplete_selected = 0;
-        m_last_autocomplete_query = token;
+        m_last_autocomplete_query = query;
     }
 
     m_autocomplete_candidates.clear();
 
-    if (StartsWithInsensitive("help", token)) {
-        m_autocomplete_candidates.push_back("help");
-    }
-    if (StartsWithInsensitive("cvar", token)) {
-        m_autocomplete_candidates.push_back("cvar list");
-    }
-    CollectAutocompleteContext context{
-        .candidates = &m_autocomplete_candidates,
-        .token      = token,
-    };
-    CVar::VisitAll(&AppendAutocompleteCandidate, &context);
-
-    std::sort(m_autocomplete_candidates.begin(), m_autocomplete_candidates.end());
-    m_autocomplete_candidates.erase(
-        std::unique(m_autocomplete_candidates.begin(), m_autocomplete_candidates.end()),
-        m_autocomplete_candidates.end()
-    );
+    CollectAutocompleteContext context{.candidates = &m_autocomplete_candidates};
+    m_command_processor.VisitCandidates(query, &AppendAutocompleteCandidate, &context, 64);
 
     if (m_autocomplete_candidates.empty()) {
         m_autocomplete_selected = -1;
@@ -620,7 +511,12 @@ void ConsoleSystem::DrawAutocompleteList(const char* id) {
     if (ImGui::BeginChild(id, ImVec2(0.0f, GetAutocompletePanelHeight()), true)) {
         for (int i = 0; i < static_cast<int>(m_autocomplete_candidates.size()); ++i) {
             const bool selected = (i == m_autocomplete_selected);
-            if (ImGui::Selectable(m_autocomplete_candidates[i].c_str(), selected)) {
+            std::string label = m_autocomplete_candidates[i].text;
+            if (!m_autocomplete_candidates[i].helper.empty()) {
+                label += "    ";
+                label += m_autocomplete_candidates[i].helper;
+            }
+            if (ImGui::Selectable(label.c_str(), selected)) {
                 m_autocomplete_selected = i;
                 AcceptAutocompleteSelection();
             }
@@ -648,11 +544,7 @@ std::string ConsoleSystem::GetSelectedAutocompleteText() const {
     if (selected < 0 || selected >= static_cast<int>(m_autocomplete_candidates.size())) {
         selected = 0;
     }
-    std::string text = m_autocomplete_candidates[selected];
-    if (CVar::Find(text) || text == "cvar list") {
-        text += " ";
-    }
-    return text;
+    return m_autocomplete_candidates[selected].text + " ";
 }
 
 void ConsoleSystem::NavigateHistory(int delta) {

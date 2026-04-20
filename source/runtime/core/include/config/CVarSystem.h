@@ -33,6 +33,20 @@ enum class EType {
     String,
 };
 
+enum class EFlags : uint32_t {
+    None                    = 0,
+    StartupConfigReadOnly   = 1u << 0,
+};
+
+enum class ESetSource {
+    Runtime = 0,
+    StartupConfig,
+};
+
+constexpr bool HasFlag(EFlags flags, EFlags flag) {
+    return (static_cast<uint32_t>(flags) & static_cast<uint32_t>(flag)) != 0;
+}
+
 class ICVar {
 public:
     ICVar(
@@ -40,13 +54,15 @@ public:
         std::string helper,
         std::string true_helper,
         std::string false_helper,
-        EType       type
+        EType       type,
+        EFlags      flags = EFlags::None
     ) :
         m_name(std::move(name)),
         m_helper(std::move(helper)),
         m_true_helper(std::move(true_helper)),
         m_false_helper(std::move(false_helper)),
-        m_type(type) {}
+        m_type(type),
+        m_flags(flags) {}
     virtual ~ICVar() = default;
 
     std::string_view GetName() const {
@@ -64,9 +80,31 @@ public:
     EType GetType() const {
         return m_type;
     }
+    EFlags GetFlags() const {
+        return m_flags;
+    }
+    bool IsStartupConfigReadOnly() const {
+        return HasFlag(m_flags, EFlags::StartupConfigReadOnly);
+    }
+    bool IsStartupConfigSealed() const {
+        return m_startup_config_sealed;
+    }
+    void SealStartupConfig() {
+        if (IsStartupConfigReadOnly()) {
+            m_startup_config_sealed = true;
+        }
+    }
 
     virtual void        CopyValueString(char* buffer, size_t buffer_size) const = 0;
-    virtual const char* SetValueFromString(std::string_view text) = 0;
+    virtual const char* SetValueFromString(std::string_view text, ESetSource source = ESetSource::Runtime) = 0;
+
+protected:
+    const char* ValidateSetSource(ESetSource source) const {
+        if (source == ESetSource::Runtime && IsStartupConfigReadOnly() && m_startup_config_sealed) {
+            return "This cvar is read-only after startup.";
+        }
+        return nullptr;
+    }
 
 private:
     std::string m_name;
@@ -74,13 +112,16 @@ private:
     std::string m_true_helper;
     std::string m_false_helper;
     EType       m_type;
+    EFlags      m_flags = EFlags::None;
+    bool        m_startup_config_sealed = false;
 };
 
 CORE_API bool        Register(ICVar* cvar);
 CORE_API ICVar*      Find(std::string_view name);
 using ICVarVisitor = void (*)(ICVar* cvar, void* user_data);
 CORE_API void        VisitAll(ICVarVisitor visitor, void* user_data);
-CORE_API bool        ApplyIniFile(const std::filesystem::path& file_path);
+CORE_API bool        ApplyValueMap(const UnorderedMap<std::string, std::string>& values, std::string_view source_name);
+CORE_API void        SealStartupConfigReadOnlyCVars();
 
 namespace Detail {
 
@@ -260,6 +301,7 @@ public:
         HelperT&&     helper,
         TrueHelperT&& true_helper,
         FalseHelperT&& false_helper,
+        EFlags        flags = EFlags::None,
         OnChangeFunc  on_change = OnChangeFunc{}
     ) :
         ICVar(
@@ -267,7 +309,8 @@ public:
             Detail::ToUtf8Text(std::forward<HelperT>(helper)),
             Detail::ToUtf8Text(std::forward<TrueHelperT>(true_helper)),
             Detail::ToUtf8Text(std::forward<FalseHelperT>(false_helper)),
-            Detail::ValueTraits<T>::type
+            Detail::ValueTraits<T>::type,
+            flags
         ),
         m_owned_value(default_value),
         m_value_ptr(&m_owned_value),
@@ -282,6 +325,7 @@ public:
         HelperT&&      helper,
         TrueHelperT&&  true_helper,
         FalseHelperT&& false_helper,
+        EFlags         flags = EFlags::None,
         OnChangeFunc   on_change = OnChangeFunc{}
     ) :
         ICVar(
@@ -289,7 +333,8 @@ public:
             Detail::ToUtf8Text(std::forward<HelperT>(helper)),
             Detail::ToUtf8Text(std::forward<TrueHelperT>(true_helper)),
             Detail::ToUtf8Text(std::forward<FalseHelperT>(false_helper)),
-            Detail::ValueTraits<T>::type
+            Detail::ValueTraits<T>::type,
+            flags
         ),
         m_value_ptr(&external_value_ref),
         m_on_change(std::move(on_change)) {
@@ -322,7 +367,10 @@ public:
         Detail::CopyTextToBuffer(value, buffer, buffer_size);
     }
 
-    const char* SetValueFromString(std::string_view text) override {
+    const char* SetValueFromString(std::string_view text, ESetSource source = ESetSource::Runtime) override {
+        if (const char* error = ValidateSetSource(source)) {
+            return error;
+        }
         T parsed_value{};
         if (const char* error = Detail::ValueTraits<T>::Parse(text, parsed_value)) {
             return error;

@@ -137,6 +137,10 @@ target_link_libraries(${test_target}
     PRIVATE Moer::Render
     PRIVATE glfw
 )
+if (TARGET Moer::Profile)
+    target_link_libraries(${test_target} PRIVATE Moer::Profile)
+    target_compile_definitions(${test_target} PRIVATE MOER_TEST_WITH_PROFILE=1)
+endif()
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
 # RHI Translate MultiQueue Test (Vulkan-only runtime path)

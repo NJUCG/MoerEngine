@@ -24,13 +24,6 @@
 #include <thread>
 #include <fstream>
 
-struct FlameEvent {
-    const char* name;
-    long long start_us;
-    long long duration_us;
-    uint32_t thread_id;
-};
-
 class PROFILE_API FlameProfiler {
 public:
     static FlameProfiler& Get() {
@@ -44,10 +37,7 @@ public:
 
     void Save(const std::string& path);
 
-    void Clear() {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_events.clear();
-    }
+    void Clear() {}
 
 private:
     static std::vector<std::pair<const char*, long long>>& GetStack() {
@@ -60,9 +50,6 @@ private:
             std::chrono::high_resolution_clock::now().time_since_epoch()
         ).count();
     }
-
-    std::mutex m_mutex;
-    std::vector<FlameEvent> m_events;
 };
 
 struct FlameScope {

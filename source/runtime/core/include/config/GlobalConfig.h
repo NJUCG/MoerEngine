@@ -1,6 +1,7 @@
 #pragma once
 
 #include "API_Macro.h"
+#include "misc/STL.h"
 #include "misc/Traits.h"
 
 // TODO: auto generate this file according to `MoerEngine.toml`

@@ -2,9 +2,7 @@
 
 #include "Engine.h"
 #include "config/ConfigManager.h"
-
-#include "EditorUI.h"
-#include "console/ConsoleSystem.h"
+#include "log/LogSystem.h"
 #include "trace/Trace.h"
 
 #include <cassert>
@@ -19,6 +17,28 @@ using namespace Moer::Render;
 
 namespace Moer {
 namespace {
+
+bool ContainsNonAscii(const std::filesystem::path& p) {
+    const std::wstring wide_path_str = p.generic_wstring();
+    for (wchar_t wc : wide_path_str) {
+        if (wc > 127) {
+            return true;
+        }
+    }
+    return false;
+}
+
+ERenderMethod ResolveDefaultRenderMethod(std::string_view render_method_name) {
+    if (render_method_name == "Raster") {
+        return ERenderMethod::Raster;
+    }
+    if (render_method_name == "Raytracing") {
+        return ERenderMethod::Raytracing;
+    }
+
+    LOG_WARNING("Invalid default render method: {}. Use Raster instead.", render_method_name);
+    return ERenderMethod::Raster;
+}
 
 std::string BuildUniqueTraceCsvPath() {
     const std::filesystem::path trace_dir = ConfigManager::GetInstance().GetWorkspacePath() / "trace";
@@ -67,8 +87,33 @@ Editor::Editor() {}
 Editor::~Editor() {}
 
 void Editor::Init(int argc, const char** argv) {
+    LogSystem::Init();
+
+    std::filesystem::path workspace_path = argv[0];
+    workspace_path =
+        workspace_path.filename().string().find(".exe") != std::string::npos ?
+            workspace_path.parent_path() :
+            workspace_path;
+
+    LOG_INFO("Workspace Path : {}", workspace_path.string());
+    if (ContainsNonAscii(workspace_path)) {
+        LOG_ERROR(
+            "Workspace Path contains non-ASCII characters (e.g., Chinese characters)! This may cause unexpected "
+            "issues. Current path: {}",
+            workspace_path.string()
+        );
+    }
+
+    ConfigManager::GetInstance().Init(workspace_path);
+
     m_engine = MakeUnique<Engine>();
-    m_engine->Init(argc, argv);
+    auto editor_config = MakeShared<EditorConfig>();
+    const auto& startup_config = ConfigManager::GetInstance().GetConfig();
+    editor_config->SetResolution(startup_config.editor.width, startup_config.editor.height);
+    editor_config->scene_path = startup_config.engine.scene.scene_path;
+    editor_config->selected_render_method =
+        ResolveDefaultRenderMethod(startup_config.engine.render.default_render_method);
+    m_engine->Init(editor_config, startup_config.editor.fullscreen);
 
     Moer::Trace::Config trace_config{};
     trace_config.enable_streaming = true;
@@ -84,83 +129,7 @@ void Editor::Init(int argc, const char** argv) {
 }
 
 void Editor::Run() {
-    // init
-    auto   ui_renderer = MakeUnique<Render::UIRenderer>(RenderDevice::Get());
-    uint2& resolution  = m_engine->GetResolution();
-
-    auto editor_ui = MakeUnique<EditorUI>(std::move(ui_renderer), m_engine->GetEditorConfig());
-    auto console   = MakeShared<ConsoleSystem>(m_engine->GetEditorConfig());
-    editor_ui->RegisterOverlayFunc(
-        "Console",
-        [console]() {
-            console->TickUI();
-        }
-    );
-
-    // run
-    m_engine->Run(
-        EngineHooks{
-            // Common
-            .on_tick_ui =
-                [&editor_ui]() {
-                    editor_ui->TickUI();
-                },
-            .on_render_gui =
-                [&editor_ui](CommandList& cmd_list, TextureRef output_image) {
-                    editor_ui->RenderGUI(cmd_list, output_image);
-                },
-            .on_present_windows =
-                [&editor_ui]() {
-                    editor_ui->PresentWindows();
-                },
-            .on_is_need_reload =
-                [&editor_ui]() {
-                    return editor_ui->IsNeedReload();
-                },
-            .on_ui_combine_pass =
-                [&editor_ui](
-                    UiCombinePass* ui_combine_pass,
-                    CommandList&   cmd_list,
-                    TextureView    input_color_texture,
-                    TextureView    input_ui_texture, // TODO: is this necessary?
-                    TextureView    default_output_texture
-                ) {
-                    auto scene_window_target = editor_ui->GetSceneWindowTarget();
-                    return ui_combine_pass->Process(
-                        cmd_list,
-                        scene_window_target.is_separate_window,
-                        editor_ui->GetConfig()->GetResolution(),
-                        editor_ui->GetSceneColorPos(),
-                        editor_ui->GetSceneColorResolution(),
-                        scene_window_target.frame_buffer,
-                        input_color_texture,
-                        input_ui_texture,
-                        default_output_texture
-                    );
-                },
-            .on_register_ui_func =
-                [&editor_ui](std::string name, std::function<void(void)> lambda) {
-                    editor_ui->RegisterUIFunc(name, std::move(lambda));
-                },
-            .on_unregister_ui_func =
-                [&editor_ui](std::string name) {
-                    editor_ui->UnregisterUIFunc(name);
-                },
-            .on_show_config_sub_ui =
-                [&editor_ui]() {
-                    editor_ui->SetShowSubUI(true);
-                },
-
-            // Raster
-            .on_raster_register_frame_buffers =
-                [&editor_ui](const Array<TextureView>& textures) {
-                    editor_ui->m_raster_ui.RegisterFrameBuffers(textures);
-                }
-        }
-    );
-
-    // release
-    m_editor_ui.reset(); // 释放EditorUI资源
+    m_engine->Run();
 }
 
 void Editor::ShutDown() {

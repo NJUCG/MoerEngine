@@ -54,10 +54,6 @@ Renderer::Renderer(
     {
         ui_combine_pass = MakeUnique<UiCombinePass>(manager);
     }
-    // Show sub ui
-    if (hooks.on_show_config_sub_ui) {
-        hooks.on_show_config_sub_ui();
-    }
 }
 
 Renderer::~Renderer() {

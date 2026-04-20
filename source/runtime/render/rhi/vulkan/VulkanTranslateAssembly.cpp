@@ -18,14 +18,6 @@ static bool HasGpuEventType(const CmdSubmit& submit, GPUEvent::EType type) {
     });
 }
 
-static bool HasFrameTickCommand(const CmdSubmit& submit) {
-    return std::any_of(submit.cmds.begin(), submit.cmds.end(), [](const UniquePtr<Command>& command) {
-        const auto* custom_cmd = dynamic_cast<const CustomCmd*>(command.get());
-        return custom_cmd != nullptr &&
-               custom_cmd->CustomId() == CustomCmd::CustomCmdId::CUSTOM_FRAME_TICK;
-    });
-}
-
 static void AppendTimestampPair(
     Array<UniquePtr<Command>>& commands,
     const QueryToken&          token,
@@ -40,39 +32,39 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
         return;
     }
 
-    const bool has_begin_gpu = HasGpuEventType(submit, GPUEvent::EType::BeginGPU);
-    const bool has_end_gpu = HasGpuEventType(submit, GPUEvent::EType::EndGPU);
-    const bool has_frame_boundary = HasGpuEventType(submit, GPUEvent::EType::FrameBoundary);
-    const bool contains_frame_tick = HasFrameTickCommand(submit);
-    const bool should_profile_submit =
-        submit.b_tick_profiling || contains_frame_tick || !submit.gpu_events.empty();
+    const bool has_begin_command_list =
+        HasGpuEventType(submit, GPUEvent::EType::BeginGPU);
+    const bool has_end_command_list =
+        HasGpuEventType(submit, GPUEvent::EType::EndGPU);
+    const bool has_frame_bound = HasGpuEventType(submit, GPUEvent::EType::FrameBoundary);
 
-    const bool inject_gpu_span = should_profile_submit && !(has_begin_gpu && has_end_gpu);
-    const bool inject_frame_boundary = contains_frame_tick && !has_frame_boundary;
-    if (!inject_gpu_span && !inject_frame_boundary) {
+    const bool inject_command_list_span =
+        submit.b_tick_profiling && !(has_begin_command_list && has_end_command_list);
+    const bool inject_frame_bound = submit.b_tick_profiling && !has_frame_bound;
+    if (!inject_command_list_span && !inject_frame_bound) {
         return;
     }
 
     QueryToken begin_token{};
     QueryToken end_token{};
-    QueryToken frame_boundary_token{};
+    QueryToken frame_bound_token{};
 
-    if (inject_gpu_span) {
-        begin_token = AutoGpuEventTokenFactory::CreateTimestampToken("AutoBeginGPU");
-        end_token   = AutoGpuEventTokenFactory::CreateTimestampToken("AutoEndGPU");
+    if (inject_command_list_span) {
+        begin_token = AutoGpuEventTokenFactory::CreateTimestampToken("AutoBeginCommandList");
+        end_token   = AutoGpuEventTokenFactory::CreateTimestampToken("AutoEndCommandList");
         submit.query_tokens.emplace_back(begin_token);
         submit.query_tokens.emplace_back(end_token);
     }
-    if (inject_frame_boundary) {
-        frame_boundary_token = AutoGpuEventTokenFactory::CreateTimestampToken("AutoFrameBoundary");
-        submit.query_tokens.emplace_back(frame_boundary_token);
+    if (inject_frame_bound) {
+        frame_bound_token = AutoGpuEventTokenFactory::CreateTimestampToken("AutoFrameBound");
+        submit.query_tokens.emplace_back(frame_bound_token);
     }
 
     Array<UniquePtr<Command>> rebuilt_commands{};
     rebuilt_commands.reserve(
         submit.cmds.size() +
-        (inject_gpu_span ? 4u : 0u) +
-        (inject_frame_boundary ? 2u : 0u)
+        (inject_command_list_span ? 4u : 0u) +
+        (inject_frame_bound ? 2u : 0u)
     );
 
     size_t body_begin = 0;
@@ -96,17 +88,17 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
         --body_end;
     }
 
-    if (inject_gpu_span) {
-        AppendTimestampPair(rebuilt_commands, begin_token, "AutoBeginGPU");
+    if (inject_command_list_span) {
+        AppendTimestampPair(rebuilt_commands, begin_token, "AutoBeginCommandList");
     }
     for (size_t cmd_index = body_begin; cmd_index < body_end; ++cmd_index) {
         rebuilt_commands.emplace_back(std::move(submit.cmds[cmd_index]));
     }
-    if (inject_gpu_span) {
-        AppendTimestampPair(rebuilt_commands, end_token, "AutoEndGPU");
+    if (inject_command_list_span) {
+        AppendTimestampPair(rebuilt_commands, end_token, "AutoEndCommandList");
     }
-    if (inject_frame_boundary) {
-        AppendTimestampPair(rebuilt_commands, frame_boundary_token, "AutoFrameBoundary");
+    if (inject_frame_bound) {
+        AppendTimestampPair(rebuilt_commands, frame_bound_token, "AutoFrameBound");
     }
     for (size_t cmd_index = body_end; cmd_index < submit.cmds.size(); ++cmd_index) {
         rebuilt_commands.emplace_back(std::move(submit.cmds[cmd_index]));
@@ -116,10 +108,10 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
     Array<GPUEvent> rebuilt_events{};
     rebuilt_events.reserve(
         submit.gpu_events.size() +
-        (inject_gpu_span ? 2u : 0u) +
-        (inject_frame_boundary ? 1u : 0u)
+        (inject_command_list_span ? 2u : 0u) +
+        (inject_frame_bound ? 1u : 0u)
     );
-    if (inject_gpu_span) {
+    if (inject_command_list_span) {
         rebuilt_events.emplace_back(GPUEvent{
             .type = GPUEvent::EType::BeginGPU,
             .name = "GPU",
@@ -131,7 +123,7 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
     for (auto& event : submit.gpu_events) {
         rebuilt_events.emplace_back(std::move(event));
     }
-    if (inject_gpu_span) {
+    if (inject_command_list_span) {
         rebuilt_events.emplace_back(GPUEvent{
             .type = GPUEvent::EType::EndGPU,
             .name = "",
@@ -140,11 +132,11 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
             .timestamp_ns = 0
         });
     }
-    if (inject_frame_boundary) {
+    if (inject_frame_bound) {
         rebuilt_events.emplace_back(GPUEvent{
             .type = GPUEvent::EType::FrameBoundary,
-            .name = "FrameBoundary",
-            .query = frame_boundary_token,
+            .name = "FrameBound",
+            .query = frame_bound_token,
             .depth = 0,
             .timestamp_ns = 0
         });
@@ -256,7 +248,7 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
         segment_submit.translate_execution_class = source_submit.translate_execution_class;
         if (attach_signals_and_callbacks) {
             segment_submit.b_sync             = source_submit.b_sync;
-            segment_submit.b_tick_profiling   = source_submit.b_tick_profiling;
+            segment_submit.b_tick_profiling   = source_submit.b_tick_profiling && descriptor.queue != EQueueType::Copy;
             segment_submit.b_delete_resources = source_submit.b_delete_resources;
         }
         return segment_submit;

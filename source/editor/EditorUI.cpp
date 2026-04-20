@@ -1,7 +1,6 @@
 #include "EditorUI.h"
 
 // Runtime
-#include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "window/WindowInput.h"
 
@@ -13,6 +12,7 @@
 #include "trace/Trace.h"
 
 // 3rd party (std)
+#include <algorithm>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <nfd.hpp>
@@ -28,35 +28,9 @@ namespace Moer {
 
 EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
     m_ui_renderer(std::move(renderer)),
-    m_config(editor_config),
-    m_raster_ui(editor_config->raster_config),
-    m_raytracing_ui(editor_config->raytracing_config) {
-
-    // Load Config
-    InitFromConfigManager();
-
+    m_config(editor_config) {
     // Init Style
     EditorUIStyle::ApplyDefaultStyle();
-}
-
-void EditorUI::InitFromConfigManager() {
-    auto config = ConfigManager::GetInstance().GetConfig();
-
-    // render method
-    if (config.engine.render.default_render_method == "Raster") {
-        m_config->selected_render_method = ERenderMethod::Raster;
-    } else if (config.engine.render.default_render_method == "Raytracing") {
-        m_config->selected_render_method = ERenderMethod::Raytracing;
-    } else {
-        LOG_WARNING(
-            "Invalid default render method: {}. Use Raster instead.",
-            config.engine.render.default_render_method
-        );
-        m_config->selected_render_method = ERenderMethod::Raster;
-    }
-
-    // scene path
-    m_config->scene_path = config.engine.scene.scene_path;
 }
 
 #if WITH_PROFILE
@@ -305,6 +279,12 @@ void EditorUI::TickUI() {
 
             ImGui::MenuItem("Scene Color", nullptr, &m_b_show_scene_color);
             ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
+            if (m_get_console_window_visible && m_set_console_window_visible) {
+                bool show_console = m_get_console_window_visible();
+                if (ImGui::MenuItem("Console", nullptr, &show_console)) {
+                    m_set_console_window_visible(show_console);
+                }
+            }
             // ImGui::MenuItem("Inspector", nullptr, &m_m_b_show_inspector_window);
             // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
 #if WITH_PROFILE
@@ -440,7 +420,7 @@ void EditorUI::ShowSceneColor() {
     // inject. Needs to be refactored (camera control)
     // 只有在Cursor位于SceneColor窗口上时，才可以控制摄像机
     uint2 mouse_pos = uint2(
-        ImGui::GetMousePos().x - ImGui::GetWindowPos().x, ImGui::GetMousePos().y - ImGui::GetWindowPos().y
+        ImGui::GetMousePos().x - parent_rect.Min.x, ImGui::GetMousePos().y - parent_rect.Min.y
     );
     static uint border = 4;
 
@@ -519,7 +499,6 @@ void EditorUI::ShowConfig() {
         }
         if (last_selected_render_method != m_config->selected_render_method) {
             m_b_need_reload = true;
-            SetShowSubUI(false);
         }
     }
 
@@ -567,17 +546,28 @@ void EditorUI::ShowConfig() {
         ImGui::TreePop();
     }
 
-    if (m_b_show_sub_ui) {
-        ImGui::Separator();
-        switch (m_config->selected_render_method) {
-            case ERenderMethod::Raster:
-                m_raster_ui.ShowConfig();
-                break;
-            case ERenderMethod::Raytracing:
-                m_raytracing_ui.ShowConfig();
-                break;
-            default:
-                break;
+    const std::string active_renderer = std::string(
+        k_render_method_names[static_cast<uint>(m_config->selected_render_method)]
+    );
+    if (const auto renderer_iter = m_renderer_config_sections.find(active_renderer);
+        renderer_iter != m_renderer_config_sections.end() && !renderer_iter->second.empty()) {
+        Array<std::string> section_names;
+        section_names.reserve(renderer_iter->second.size());
+        for (const auto& [section_name, func] : renderer_iter->second) {
+            section_names.push_back(section_name);
+        }
+        std::sort(section_names.begin(), section_names.end());
+
+        ImGui::SeparatorText(active_renderer.c_str());
+        for (const std::string& section_name : section_names) {
+            auto section_iter = renderer_iter->second.find(section_name);
+            if (section_iter == renderer_iter->second.end()) {
+                continue;
+            }
+            if (ImGui::TreeNode(section_name.c_str())) {
+                section_iter->second();
+                ImGui::TreePop();
+            }
         }
     }
 
@@ -593,12 +583,6 @@ void EditorUI::ShowConfig() {
     ImGui::Text("\tFPS: %.1f", io.Framerate);
     ImGui::Text("\tFrame Time: %.1f ms", 1000.0f / io.Framerate);
 
-    // Custom Func
-    for (auto& [name, func] : m_show_func_map) {
-        ImGui::Separator();
-        func();
-    }
-
     ImGui::PopItemWidth(); // 和PushItemWidt相对应
 
     ImGui::End();
@@ -608,12 +592,24 @@ void EditorUI::ResetState() {
     m_b_need_reload = false;
 }
 
-void EditorUI::RegisterUIFunc(std::string _name, std::function<void()>&& _func) {
-    m_show_func_map[_name] = std::move(_func);
+void EditorUI::RegisterRendererConfigSection(
+    std::string renderer_name,
+    std::string section_name,
+    std::function<void()>&& func
+) {
+    m_renderer_config_sections[std::move(renderer_name)][std::move(section_name)] = std::move(func);
 }
 
-void EditorUI::UnregisterUIFunc(std::string _name) {
-    m_show_func_map.erase(_name);
+void EditorUI::UnregisterRendererConfigSection(std::string renderer_name, std::string section_name) {
+    auto renderer_iter = m_renderer_config_sections.find(renderer_name);
+    if (renderer_iter == m_renderer_config_sections.end()) {
+        return;
+    }
+
+    renderer_iter->second.erase(section_name);
+    if (renderer_iter->second.empty()) {
+        m_renderer_config_sections.erase(renderer_iter);
+    }
 }
 
 void EditorUI::RegisterOverlayFunc(std::string _name, std::function<void()>&& _func) {
@@ -622,6 +618,11 @@ void EditorUI::RegisterOverlayFunc(std::string _name, std::function<void()>&& _f
 
 void EditorUI::UnregisterOverlayFunc(std::string _name) {
     m_overlay_func_map.erase(_name);
+}
+
+void EditorUI::BindConsoleWindowState(std::function<bool()> getter, std::function<void(bool)> setter) {
+    m_get_console_window_visible = std::move(getter);
+    m_set_console_window_visible = std::move(setter);
 }
 
 void EditorUI::ShowOverlay() {

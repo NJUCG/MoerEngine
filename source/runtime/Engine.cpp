@@ -2,7 +2,6 @@
 
 // Runtime
 #include "config/ConfigManager.h"
-#include "misc/MMemory.h"
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -12,23 +11,20 @@
 #include "window/WindowContext.h"
 
 // Editor
+#include "../editor/EditorUI.h"
+#include "../editor/console/ConsoleSystem.h"
 #include "renderer/common/RuntimeAssets.h"
-#include "renderer/EditorConsoleVariables.h"
 #include "renderer/raster/RasterRenderer.h"
 #include "renderer/raytracing/RaytracingRenderer.h"
 
 // 3rd party (std)
+#include <algorithm>
 #include <cassert>
-#include <nfd.hpp>
 
 // namespace
 using namespace Moer::Render;
 
 namespace Moer {
-
-static UniquePtr<NFD::Guard> nfd_guard = nullptr;
-
-static bool ContainsNonAscii(const std::filesystem::path& p);
 
 Engine::Engine() {}
 
@@ -36,26 +32,7 @@ Engine::~Engine() {
     assert(has_shutdown && "Engine::ShutDown() was not called before Engine destruction!");
 }
 
-void Engine::Init(int argc, const char** argv) {
-    // Init LogSystem
-    LogSystem::Init(); // for LOG_DEBUG & LOG_TRACE when debug mode
-
-    // Init ConfigManager
-    std::filesystem::path path = argv[0];
-    path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
-
-    LOG_INFO("Workspace Path : {}", path.string());
-
-    if (ContainsNonAscii(path)) {
-        LOG_ERROR(
-            "Workspace Path contains non-ASCII characters (e.g., Chinese characters)! This may cause "
-            "unexpected issues. Current path: {}",
-            path.string()
-        );
-    }
-
-    ConfigManager::GetInstance().Init(path);
-
+void Engine::Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen) {
     // Init TaskSystem
     TaskSystem::Init();
 
@@ -92,20 +69,14 @@ void Engine::Init(int argc, const char** argv) {
 
     ShaderManager::Get(); // Explicit Init ShaderManager
 
-    m_editor_config = MakeShared<EditorConfig>();
-    Render::EditorConsoleVariables::ApplyToEditorConfig(*m_editor_config);
+    m_editor_config = editor_config;
 
     // Init WindowContext
-    m_editor_config->SetResolution(
-        ConfigManager::GetInstance().GetConfig().editor.width,
-        ConfigManager::GetInstance().GetConfig().editor.height
-    );
-    bool b_fullscreen = ConfigManager::GetInstance().GetConfig().editor.fullscreen;
     LOG_INFO(
         "Editor Window Resolution : {}x{}; Fullscreen : {}",
         m_editor_config->GetResolution().x,
         m_editor_config->GetResolution().y,
-        b_fullscreen
+        fullscreen
     );
 
     WindowContext::Init(SurfaceInitInfo(
@@ -113,14 +84,87 @@ void Engine::Init(int argc, const char** argv) {
         m_editor_config->GetResolution().x,
         m_editor_config->GetResolution().y,
         "MoerEditor",
-        b_fullscreen
+        fullscreen
     ));
 
     m_runtime_assets =
         MakeUnique<RuntimeAssets>(ConfigManager::GetInstance().GetEditorResourcePath(), RenderDevice::Get());
+
+    m_editor_ui = MakeUnique<EditorUI>(MakeUnique<Render::UIRenderer>(RenderDevice::Get()), m_editor_config);
+    m_console_system = MakeShared<ConsoleSystem>(m_editor_config, m_command_processor);
+    m_editor_ui->RegisterOverlayFunc(
+        "Console",
+        [console = m_console_system]() {
+            console->TickUI();
+        }
+    );
+    m_editor_ui->BindConsoleWindowState(
+        [console = m_console_system]() {
+            return console->IsEditorConsoleOpen();
+        },
+        [console = m_console_system](bool open) {
+            console->SetEditorConsoleOpen(open);
+        }
+    );
 }
 
-void Engine::Run(const EngineHooks& hooks) {
+void Engine::Run() {
+    const EngineHooks hooks{
+        .on_tick_ui =
+            [this]() {
+                m_editor_ui->TickUI();
+                m_command_processor.ProcessPending();
+            },
+        .on_render_gui =
+            [this](CommandList& cmd_list, TextureRef output_image) {
+                m_editor_ui->RenderGUI(cmd_list, output_image);
+            },
+        .on_present_windows =
+            [this]() {
+                m_editor_ui->PresentWindows();
+            },
+        .on_is_need_reload =
+            [this]() {
+                return m_editor_ui->IsNeedReload();
+            },
+        .on_ui_combine_pass =
+            [this](
+                UiCombinePass* ui_combine_pass,
+                CommandList&   cmd_list,
+                TextureView    input_color_texture,
+                TextureView    input_ui_texture,
+                TextureView    default_output_texture
+            ) {
+                auto scene_window_target = m_editor_ui->GetSceneWindowTarget();
+                return ui_combine_pass->Process(
+                    cmd_list,
+                    scene_window_target.is_separate_window,
+                    m_editor_ui->GetConfig()->GetResolution(),
+                    m_editor_ui->GetSceneColorPos(),
+                    m_editor_ui->GetSceneColorResolution(),
+                    scene_window_target.frame_buffer,
+                    input_color_texture,
+                    input_ui_texture,
+                    default_output_texture
+                );
+            },
+        .on_register_renderer_config_section =
+            [this](std::string renderer_name, std::string section_name, std::function<void(void)> draw_func) {
+                m_editor_ui->RegisterRendererConfigSection(
+                    std::move(renderer_name),
+                    std::move(section_name),
+                    std::move(draw_func)
+                );
+            },
+        .on_unregister_renderer_config_section =
+            [this](std::string renderer_name, std::string section_name) {
+                m_editor_ui->UnregisterRendererConfigSection(
+                    std::move(renderer_name),
+                    std::move(section_name)
+                );
+            },
+    };
+
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         LOG_INFO(
             "Selecting Render Method : {}",
@@ -152,6 +196,9 @@ void Engine::Run(const EngineHooks& hooks) {
 void Engine::ShutDown() {
     GeometryPassPsoManager::ShutDown(); // 如果这个单例没有Get过，则ShutDown时不会消耗额外资源
 
+    m_renderer.reset();
+    m_console_system.reset();
+    m_editor_ui.reset();
     m_runtime_assets.reset(); // 释放RuntimeAssets资源
 
     WindowContext::ShutDown();
@@ -162,44 +209,6 @@ void Engine::ShutDown() {
     TaskSystem::ShutDown();
 
     has_shutdown = true;
-}
-
-void Engine::Init3rdParty() {
-    nfd_guard = MakeUnique<NFD::Guard>();
-}
-
-void Engine::ShutDown3rdParty() {
-    nfd_guard.release();
-}
-
-// 检测路径中是否包含非ASCII字符（包括中文）
-bool ContainsNonAscii(const std::filesystem::path& p) {
-    // std::filesystem::path 内部存储可能是 wchar_t (Windows) 或 char (其他平台)
-    // 转换为 std::string (UTF-8) 或 std::wstring 进行检测更通用
-
-    // 在Windows上，std::filesystem::path::string() 会根据当前 locale 转换为 narrow string
-    // 但为了可靠检测非ASCII字符，最好是转换为宽字符串再检查，或者确保转换为UTF-8
-
-    // 方法1：转换为 UTF-8 string 并检查 (更通用，但依赖std::codecvt_utf8_utf16)
-    // std::string utf8_path_str = p.u8string(); // C++17，直接获取UTF-8编码
-    // for (unsigned char c : utf8_path_str) {
-    //     if (c > 127) { // 检查是否为非ASCII字符
-    //         return true;
-    //     }
-    // }
-    // return false;
-
-    // 方法2：直接检查宽字符串 (更适合Windows，因为内部存储可能是宽字符)
-    // 假设 std::filesystem::path 内部是 wchar_t 或可以转换为 wchar_t
-    std::wstring wide_path_str = p.generic_wstring(); // 获取宽字符串表示
-
-    for (wchar_t wc : wide_path_str) {
-        // ASCII字符的 wchar_t 值范围是 0-127
-        if (wc > 127) {
-            return true; // 发现非ASCII字符
-        }
-    }
-    return false;
 }
 
 } // namespace Moer

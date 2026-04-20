@@ -7,7 +7,24 @@ configure_file(${moer_runtime_render_dir}/config.h.in ${moer_runtime_render_dir}
 file(GLOB_RECURSE render_module_headers CONFIGURE_DEPENDS "*.h" ".hpp" "*.hlsli")
 file(GLOB_RECURSE render_module_sources CONFIGURE_DEPENDS "*.cpp")
 
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${render_module_headers} ${render_module_sources} )
+set(render_native_headers ${render_module_headers})
+set(render_native_sources ${render_module_sources})
+
+set(render_editor_ui_headers
+    ${moer_root_dir}/source/editor/raster_ui/RasterUI.h
+    ${moer_root_dir}/source/editor/raytracing_ui/RaytracingUI.h
+)
+
+set(render_editor_ui_sources
+    ${moer_root_dir}/source/editor/raster_ui/RasterUI.cpp
+    ${moer_root_dir}/source/editor/raytracing_ui/RaytracingUI.cpp
+)
+
+list(APPEND render_module_headers ${render_editor_ui_headers})
+list(APPEND render_module_sources ${render_editor_ui_sources})
+
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${render_native_headers} ${render_native_sources})
+source_group(TREE ${moer_root_dir}/source/editor FILES ${render_editor_ui_headers} ${render_editor_ui_sources})
 
 add_library(${target_name} SHARED ${render_module_headers} ${render_module_sources})
 add_library(Moer::Render ALIAS ${target_name})
@@ -174,16 +191,16 @@ if(NOT EXISTS "${MOER_ENGINE_CONFIG_FILE}")
     message(FATAL_ERROR "\nConfig file not found at path: ${MOER_ENGINE_CONFIG_FILE}.\nPlease generate MoerEngine.toml based on the template.MoerEngine.toml. 请根据模板文件template.MoerEngine.toml生成MoerEngine.toml配置文件。")
 endif()
 
-set(MOER_ENGINE_CONSOLE_VARIABLE_FILE "${moer_root_dir}/ConsoleVariable.ini")
-if(NOT EXISTS "${MOER_ENGINE_CONSOLE_VARIABLE_FILE}")
-    message(FATAL_ERROR "\nConsole variable file not found at path: ${MOER_ENGINE_CONSOLE_VARIABLE_FILE}.")
+set(MOER_CONSOLE_VARIABLE_CONFIG_FILE "${moer_root_dir}/ConsoleVariable.toml")
+if(NOT EXISTS "${MOER_CONSOLE_VARIABLE_CONFIG_FILE}")
+    message(FATAL_ERROR "\nConfig file not found at path: ${MOER_CONSOLE_VARIABLE_CONFIG_FILE}.\nPlease generate ConsoleVariable.toml based on the template.ConsoleVariable.toml. 请根据模板文件template.ConsoleVariable.toml生成ConsoleVariable.toml配置文件。")
 endif()
 
 # 设置输出目录
 add_custom_target(
 	CopyResources
     COMMAND ${CMAKE_COMMAND} -E copy "${moer_root_dir}/MoerEngine.toml"                    "${output_dir}/MoerEngine.toml"
-    COMMAND ${CMAKE_COMMAND} -E copy "${moer_root_dir}/ConsoleVariable.ini"               "${output_dir}/ConsoleVariable.ini"
+    COMMAND ${CMAKE_COMMAND} -E copy "${moer_root_dir}/ConsoleVariable.toml"               "${output_dir}/ConsoleVariable.toml"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}/asset"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/asset"                    "${output_dir}/asset"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${moer_root_dir}/shaders"                  "${output_dir}/asset/shaders"

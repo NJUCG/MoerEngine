@@ -1,10 +1,12 @@
 #pragma once
 
+#include "command/EngineCommandProcessor.h"
 #include "renderer/Renderer.h"
 
 namespace Moer {
 
 class EditorUI;
+class ConsoleSystem;
 class RuntimeAssets;
 
 class RENDER_API Engine {
@@ -12,26 +14,18 @@ public:
     Engine();
     virtual ~Engine();
 
-    void Init(int argc, const char** argv);
-    void Run(const Render::EngineHooks& hooks);
+    void Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen);
+    void Run();
     void ShutDown();
 
-    uint2& GetResolution() {
-        return m_editor_config->GetResolution();
-    }
-
-    SharedPtr<EditorConfig> GetEditorConfig() {
-        return m_editor_config;
-    }
-
 private:
-    void Init3rdParty();
-    void ShutDown3rdParty();
-
     SharedPtr<EditorConfig>  m_editor_config;
+    UniquePtr<EditorUI>      m_editor_ui;
+    SharedPtr<ConsoleSystem> m_console_system;
     UniquePtr<RuntimeAssets> m_runtime_assets;
 
-    UniquePtr<Render::Renderer> m_renderer;
+    UniquePtr<Render::Renderer>    m_renderer;
+    Command::EngineCommandProcessor m_command_processor;
 
     bool has_shutdown = false;
 };

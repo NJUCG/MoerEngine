@@ -1,8 +1,11 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <cstring>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <span>
@@ -10,9 +13,20 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#endif
+
 #include "Core.h"
+#include "config/CVarSystem.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "profile/ProfileDump.h"
 #include "render/rhi/RHIImpl.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -23,6 +37,10 @@
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
+
+#if defined(MOER_TEST_WITH_PROFILE)
+#include "profile.h"
+#endif
 
 namespace {
 
@@ -78,7 +96,31 @@ void ShutdownRHIForTest() {
 constexpr uint32_t kElementCount      = 256;
 constexpr uint32_t kIterations        = 64;
 constexpr uint32_t kPresentIterations = 8;
+
+GPUEvent MakeResolvedGpuEvent(
+    GPUEvent::EType type,
+    std::string_view name,
+    uint32 depth,
+    uint64 timestamp_ns
+) {
+    return GPUEvent{
+        .type = type,
+        .name = std::string(name),
+        .query = {},
+        .depth = depth,
+        .timestamp_ns = timestamp_ns,
+    };
+}
 constexpr uint32_t kCopyScopeIterations = 8;
+
+MOER_PROFILE_DUMP_TEMPLATE(ProfileDumpRuntimeTemplate, Moer::ProfileDump::EKind::Instant, Moer::ProfileDump::EChannel::CPUThread, 1)
+    using FieldTypes = std::tuple<uint64_t, std::string_view, uint32_t>;
+    static constexpr std::array field_names{"record_id", "label", "value"};
+};
+
+static_assert(std::is_same_v<
+    decltype(DUMP_STREAM(ProfileDumpRuntimeTemplate) << uint64_t{1} << "runtime" << uint32_t{7}),
+    Moer::ProfileDump::StreamCommitToken>);
 
 template<typename Fn>
 int RunNamedTestCase(const char* name, Fn&& fn) {
@@ -112,6 +154,621 @@ std::vector<uint8_t> MakeSolidRgba8(uint32_t width, uint32_t height, uint8_t red
     }
     return bytes;
 }
+
+std::filesystem::path MakeProfileDumpTestPath(std::string_view file_name) {
+    std::filesystem::path path = Moer::ConfigManager::GetInstance().GetWorkspacePath() / "logs" / std::string(file_name);
+    std::filesystem::create_directories(path.parent_path());
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    return path;
+}
+
+std::vector<uint8_t> ReadBinaryFile(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        return {};
+    }
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+}
+
+struct ParsedProfileDumpCapture {
+    Array<Moer::ProfileDump::DecodedSchema> schemas;
+    Array<Moer::ProfileDump::DecodedRecord> records;
+    Array<Moer::ProfileDump::EPacketType>   packet_order;
+};
+
+const Moer::ProfileDump::DecodedSchema*
+FindProfileDumpSchema(const ParsedProfileDumpCapture& capture, std::string_view schema_name) {
+    for (const Moer::ProfileDump::DecodedSchema& schema : capture.schemas) {
+        if (schema.name == schema_name) {
+            return &schema;
+        }
+    }
+    return nullptr;
+}
+
+bool ParseProfileDumpCapture(std::span<const uint8_t> bytes, ParsedProfileDumpCapture& capture) {
+    capture.schemas.clear();
+    capture.records.clear();
+    capture.packet_order.clear();
+
+    size_t offset = 0;
+    while (offset < bytes.size()) {
+        Moer::ProfileDump::PacketHeader   header{};
+        std::span<const uint8_t>          payload{};
+        if (!Moer::ProfileDump::ReadNextPacket(bytes, offset, header, payload)) {
+            return false;
+        }
+        capture.packet_order.emplace_back(header.type);
+
+        if (header.type == Moer::ProfileDump::EPacketType::Schema) {
+            Moer::ProfileDump::DecodedSchema schema{};
+            if (!Moer::ProfileDump::DeserializeSchemaPacket(header, payload, schema)) {
+                return false;
+            }
+            if (std::any_of(capture.schemas.begin(), capture.schemas.end(), [&](const Moer::ProfileDump::DecodedSchema& existing) {
+                    return existing.schema_id == schema.schema_id;
+                })) {
+                return false;
+            }
+            capture.schemas.emplace_back(std::move(schema));
+            continue;
+        }
+
+        if (header.type == Moer::ProfileDump::EPacketType::Record) {
+            if (payload.size() < sizeof(uint32_t)) {
+                return false;
+            }
+
+            uint32_t schema_id = 0;
+            std::memcpy(&schema_id, payload.data(), sizeof(schema_id));
+            const auto schema_iter = std::find_if(
+                capture.schemas.begin(),
+                capture.schemas.end(),
+                [&](const Moer::ProfileDump::DecodedSchema& schema) {
+                    return schema.schema_id == schema_id;
+                }
+            );
+            if (schema_iter == capture.schemas.end()) {
+                return false;
+            }
+
+            Moer::ProfileDump::DecodedRecord record{};
+            if (!Moer::ProfileDump::DeserializeRecordPacket(header, payload, *schema_iter, record)) {
+                return false;
+            }
+            capture.records.emplace_back(std::move(record));
+            continue;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+bool AssertRuntimeProfileRecord(
+    const Moer::ProfileDump::DecodedRecord& record,
+    uint64_t                                expected_record_id,
+    std::string_view                        expected_label,
+    uint32_t                                expected_value
+) {
+    if (record.fields.size() != 3) {
+        LOG_ERROR("Runtime profile dump record expected 3 fields, got {}.", record.fields.size());
+        return false;
+    }
+
+    const auto& record_id = record.fields[0];
+    const auto& label = record.fields[1];
+    const auto& value = record.fields[2];
+    if (record_id.type != Moer::ProfileDump::EFieldType::UInt64 ||
+        label.type != Moer::ProfileDump::EFieldType::String ||
+        value.type != Moer::ProfileDump::EFieldType::UInt32) {
+        LOG_ERROR("Runtime profile dump record has unexpected field types.");
+        return false;
+    }
+    if (record_id.uint64_value != expected_record_id ||
+        label.string_value != expected_label ||
+        value.uint32_value != expected_value) {
+        LOG_ERROR(
+            "Runtime profile dump record mismatch: id={} label={} value={}.",
+            record_id.uint64_value,
+            label.string_value,
+            value.uint32_value
+        );
+        return false;
+    }
+    return true;
+}
+
+bool AssertGpuProfileRecord(
+    const Moer::ProfileDump::DecodedRecord& record,
+    uint64_t                                expected_frame_index,
+    std::string_view                        expected_queue_name,
+    std::string_view                        expected_name,
+    uint64_t                                expected_start_ns,
+    uint64_t                                expected_end_ns,
+    uint32_t                                expected_depth,
+    uint64_t                                expected_total_busy_ns,
+    uint64_t                                expected_exclusive_ns
+) {
+    if (record.fields.size() != 8) {
+        LOG_ERROR("GPU profile dump record expected 8 fields, got {}.", record.fields.size());
+        return false;
+    }
+
+    const auto& frame_index = record.fields[0];
+    const auto& queue_name = record.fields[1];
+    const auto& name = record.fields[2];
+    const auto& start_ns = record.fields[3];
+    const auto& end_ns = record.fields[4];
+    const auto& depth = record.fields[5];
+    const auto& total_busy_ns = record.fields[6];
+    const auto& exclusive_ns = record.fields[7];
+    if (frame_index.type != Moer::ProfileDump::EFieldType::UInt64 ||
+        queue_name.type != Moer::ProfileDump::EFieldType::String ||
+        name.type != Moer::ProfileDump::EFieldType::String ||
+        start_ns.type != Moer::ProfileDump::EFieldType::UInt64 ||
+        end_ns.type != Moer::ProfileDump::EFieldType::UInt64 ||
+        depth.type != Moer::ProfileDump::EFieldType::UInt32 ||
+        total_busy_ns.type != Moer::ProfileDump::EFieldType::UInt64 ||
+        exclusive_ns.type != Moer::ProfileDump::EFieldType::UInt64) {
+        LOG_ERROR("GPU profile dump record has unexpected field types.");
+        return false;
+    }
+    if (frame_index.uint64_value != expected_frame_index ||
+        queue_name.string_value != expected_queue_name ||
+        name.string_value != expected_name ||
+        start_ns.uint64_value != expected_start_ns ||
+        end_ns.uint64_value != expected_end_ns ||
+        depth.uint32_value != expected_depth ||
+        total_busy_ns.uint64_value != expected_total_busy_ns ||
+        exclusive_ns.uint64_value != expected_exclusive_ns) {
+        LOG_ERROR(
+            "GPU profile dump record mismatch: frame={} queue={} name={} start={} end={} depth={} total={} exclusive={}.",
+            frame_index.uint64_value,
+            queue_name.string_value,
+            name.string_value,
+            start_ns.uint64_value,
+            end_ns.uint64_value,
+            depth.uint32_value,
+            total_busy_ns.uint64_value,
+            exclusive_ns.uint64_value
+        );
+        return false;
+    }
+    return true;
+}
+
+#if defined(MOER_TEST_WITH_PROFILE)
+bool AssertCpuProfileRecord(const Moer::ProfileDump::DecodedRecord& record, std::string_view expected_name) {
+    if (record.fields.size() != 5) {
+        LOG_ERROR("CPU profile dump record expected 5 fields, got {}.", record.fields.size());
+        return false;
+    }
+
+    const auto& thread_id = record.fields[0];
+    const auto& name = record.fields[1];
+    const auto& start_us = record.fields[2];
+    const auto& duration_us = record.fields[3];
+    const auto& depth = record.fields[4];
+    if (thread_id.type != Moer::ProfileDump::EFieldType::UInt64 ||
+        name.type != Moer::ProfileDump::EFieldType::String ||
+        start_us.type != Moer::ProfileDump::EFieldType::Int64 ||
+        duration_us.type != Moer::ProfileDump::EFieldType::Int64 ||
+        depth.type != Moer::ProfileDump::EFieldType::UInt32) {
+        LOG_ERROR("CPU profile dump record has unexpected field types.");
+        return false;
+    }
+    if (thread_id.uint64_value == 0 ||
+        name.string_value != expected_name ||
+        duration_us.int64_value < 0 ||
+        depth.uint32_value != 0) {
+        LOG_ERROR(
+            "CPU profile dump record mismatch: thread={} name={} start={} duration={} depth={}.",
+            thread_id.uint64_value,
+            name.string_value,
+            start_us.int64_value,
+            duration_us.int64_value,
+            depth.uint32_value
+        );
+        return false;
+    }
+    return true;
+}
+#endif
+
+#if defined(_WIN32)
+class ProfileDumpTcpCaptureServer {
+public:
+    ~ProfileDumpTcpCaptureServer() {
+        Stop();
+    }
+
+    bool Start() {
+        if (running.exchange(true)) {
+            return true;
+        }
+
+        WSADATA data{};
+        if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+            running.store(false);
+            return false;
+        }
+        winsock_initialized = true;
+
+        listen_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (listen_socket == INVALID_SOCKET) {
+            Stop();
+            return false;
+        }
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0;
+
+        const int reuse = 1;
+        setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+        if (bind(listen_socket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            listen(listen_socket, 1) != 0) {
+            Stop();
+            return false;
+        }
+
+        int actual_length = sizeof(addr);
+        if (getsockname(listen_socket, reinterpret_cast<sockaddr*>(&addr), &actual_length) != 0) {
+            Stop();
+            return false;
+        }
+        port = ntohs(addr.sin_port);
+
+        server_thread = std::thread([this]() {
+            sockaddr_in client_addr{};
+            int         client_length = sizeof(client_addr);
+            const SOCKET accepted_socket =
+                accept(listen_socket, reinterpret_cast<sockaddr*>(&client_addr), &client_length);
+            if (accepted_socket == INVALID_SOCKET) {
+                return;
+            }
+
+            client_socket = accepted_socket;
+            uint8_t buffer[4096]{};
+            while (running.load()) {
+                const int received = recv(
+                    accepted_socket,
+                    reinterpret_cast<char*>(buffer),
+                    static_cast<int>(sizeof(buffer)),
+                    0
+                );
+                if (received <= 0) {
+                    break;
+                }
+
+                std::lock_guard lock(buffer_mutex);
+                received_bytes.insert(received_bytes.end(), buffer, buffer + received);
+            }
+        });
+
+        return true;
+    }
+
+    void Stop() {
+        if (!running.exchange(false)) {
+            return;
+        }
+
+        if (listen_socket != INVALID_SOCKET) {
+            closesocket(listen_socket);
+            listen_socket = INVALID_SOCKET;
+        }
+        if (client_socket != INVALID_SOCKET) {
+            closesocket(client_socket);
+            client_socket = INVALID_SOCKET;
+        }
+        if (server_thread.joinable()) {
+            server_thread.join();
+        }
+        if (winsock_initialized) {
+            WSACleanup();
+            winsock_initialized = false;
+        }
+    }
+
+    uint16_t GetPort() const {
+        return port;
+    }
+
+    bool WaitForAtLeast(size_t min_bytes, int timeout_ms) const {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        while (std::chrono::steady_clock::now() < deadline) {
+            {
+                std::lock_guard lock(buffer_mutex);
+                if (received_bytes.size() >= min_bytes) {
+                    return true;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        std::lock_guard lock(buffer_mutex);
+        return received_bytes.size() >= min_bytes;
+    }
+
+    std::vector<uint8_t> SnapshotBytes() const {
+        std::lock_guard lock(buffer_mutex);
+        return received_bytes;
+    }
+
+private:
+    mutable std::mutex   buffer_mutex{};
+    std::vector<uint8_t> received_bytes{};
+    std::atomic<bool>    running{false};
+    bool                 winsock_initialized = false;
+    uint16_t             port = 0;
+    SOCKET               listen_socket = INVALID_SOCKET;
+    SOCKET               client_socket = INVALID_SOCKET;
+    std::thread          server_thread{};
+};
+#endif
+
+int RunProfileDumpStartupReadOnlyCVarTest() {
+    static int startup_locked_value = 5;
+    static Moer::CVar::TCVar<int> startup_locked_cvar(
+        "Test.ProfileDump.StartupLockedValue",
+        startup_locked_value,
+        "Startup-only profile dump cvar for test.",
+        "Startup-only profile dump cvar set.",
+        "Startup-only profile dump cvar set.",
+        Moer::CVar::EFlags::StartupConfigReadOnly
+    );
+
+    Moer::UnorderedMap<std::string, std::string> values;
+    values["Test.ProfileDump.StartupLockedValue"] = "19";
+    if (!Moer::CVar::ApplyValueMap(values, "ProfileDumpTest")) {
+        LOG_ERROR("Profile dump startup readonly test failed to apply startup override.");
+        return 1;
+    }
+    Moer::CVar::SealStartupConfigReadOnlyCVars();
+    if (startup_locked_value != 19) {
+        LOG_ERROR("Profile dump startup readonly test expected value 19, got {}.", startup_locked_value);
+        return 1;
+    }
+    if (startup_locked_cvar.SetValueFromString("23") == nullptr) {
+        LOG_ERROR("Profile dump startup readonly cvar accepted runtime mutation after seal.");
+        return 1;
+    }
+    return 0;
+}
+
+int RunProfileDumpFileSinkTest() {
+    const std::filesystem::path output_path = MakeProfileDumpTestPath("profile_dump_runtime_test.mpd");
+
+    Moer::ProfileDump::RuntimeConfig config{};
+    config.enable_file = true;
+    config.enable_tcp = false;
+    config.tls_max_records = 128;
+    config.tls_max_bytes = 32768;
+    config.auto_publish_records = 128;
+    config.auto_publish_bytes = 32768;
+    config.file_path = output_path.generic_string();
+    Moer::ProfileDump::OverrideConfigForTesting(config);
+
+    DUMP_STREAM(ProfileDumpRuntimeTemplate)
+        << uint64_t{42}
+        << "ProfileDumpRuntimeRecord"
+        << uint32_t{99};
+
+    if (std::filesystem::exists(output_path)) {
+        LOG_ERROR("Profile dump file sink wrote before explicit TLS flush.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        return 1;
+    }
+
+    Moer::ProfileDump::FlushThreadLocal();
+
+    if (!std::filesystem::exists(output_path)) {
+        LOG_ERROR("Profile dump file sink did not create output file after explicit flush.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        return 1;
+    }
+
+    const std::vector<uint8_t> binary = ReadBinaryFile(output_path);
+    ParsedProfileDumpCapture   capture{};
+    if (!ParseProfileDumpCapture(std::span<const uint8_t>(binary.data(), binary.size()), capture)) {
+        LOG_ERROR("Profile dump file sink output failed structured parsing.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        return 1;
+    }
+
+    const Moer::ProfileDump::DecodedSchema* runtime_schema =
+        FindProfileDumpSchema(capture, "ProfileDumpRuntimeTemplate");
+    if (!runtime_schema) {
+        LOG_ERROR("Profile dump file sink output missing runtime schema.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        return 1;
+    }
+    if (capture.packet_order.size() != 2 ||
+        capture.packet_order[0] != Moer::ProfileDump::EPacketType::Schema ||
+        capture.packet_order[1] != Moer::ProfileDump::EPacketType::Record) {
+        LOG_ERROR("Profile dump file sink packet order is invalid.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        return 1;
+    }
+    if (capture.records.size() != 1 || capture.records[0].schema_id != runtime_schema->schema_id ||
+        !AssertRuntimeProfileRecord(capture.records[0], 42, "ProfileDumpRuntimeRecord", 99)) {
+        LOG_ERROR("Profile dump file sink record payload is invalid.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        return 1;
+    }
+
+    Moer::ProfileDump::ClearTestingConfigOverride();
+    return 0;
+}
+
+int RunProfileDumpTcpSinkTest() {
+#if !defined(_WIN32)
+    return 0;
+#else
+    ProfileDumpTcpCaptureServer server{};
+    if (!server.Start()) {
+        LOG_ERROR("Profile dump TCP test failed to start loopback server.");
+        return 1;
+    }
+
+    Moer::ProfileDump::RuntimeConfig config{};
+    config.enable_file = false;
+    config.enable_tcp = true;
+    config.tls_max_records = 128;
+    config.tls_max_bytes = 32768;
+    config.auto_publish_records = 128;
+    config.auto_publish_bytes = 32768;
+    config.tcp_host = "127.0.0.1";
+    config.tcp_port = server.GetPort();
+    Moer::ProfileDump::OverrideConfigForTesting(config);
+
+    DUMP_STREAM(ProfileDumpRuntimeTemplate)
+        << uint64_t{7}
+        << "TcpRuntimeRecordA"
+        << uint32_t{11};
+    DUMP_STREAM(ProfileDumpRuntimeTemplate)
+        << uint64_t{8}
+        << "TcpRuntimeRecordB"
+        << uint32_t{13};
+    Moer::ProfileDump::FlushThreadLocal();
+
+    if (!server.WaitForAtLeast(sizeof(Moer::ProfileDump::PacketHeader), 2000)) {
+        LOG_ERROR("Profile dump TCP sink produced no payload.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        server.Stop();
+        return 1;
+    }
+
+    Moer::ProfileDump::ClearTestingConfigOverride();
+    server.Stop();
+
+    const std::vector<uint8_t> binary = server.SnapshotBytes();
+    ParsedProfileDumpCapture   capture{};
+    if (!ParseProfileDumpCapture(std::span<const uint8_t>(binary.data(), binary.size()), capture)) {
+        LOG_ERROR("Profile dump TCP sink payload failed structured parsing.");
+        return 1;
+    }
+
+    const Moer::ProfileDump::DecodedSchema* runtime_schema =
+        FindProfileDumpSchema(capture, "ProfileDumpRuntimeTemplate");
+    if (!runtime_schema) {
+        LOG_ERROR("Profile dump TCP sink payload missing runtime schema.");
+        return 1;
+    }
+    if (capture.packet_order.size() != 3 ||
+        capture.packet_order[0] != Moer::ProfileDump::EPacketType::Schema ||
+        capture.packet_order[1] != Moer::ProfileDump::EPacketType::Record ||
+        capture.packet_order[2] != Moer::ProfileDump::EPacketType::Record) {
+        LOG_ERROR("Profile dump TCP sink packet order is invalid.");
+        return 1;
+    }
+    if (capture.records.size() != 2 ||
+        capture.records[0].schema_id != runtime_schema->schema_id ||
+        capture.records[1].schema_id != runtime_schema->schema_id ||
+        !AssertRuntimeProfileRecord(capture.records[0], 7, "TcpRuntimeRecordA", 11) ||
+        !AssertRuntimeProfileRecord(capture.records[1], 8, "TcpRuntimeRecordB", 13)) {
+        LOG_ERROR("Profile dump TCP sink records are invalid.");
+        return 1;
+    }
+
+    return 0;
+#endif
+}
+
+int RunGpuEventStreamProfileDumpTest() {
+    const std::filesystem::path output_path = MakeProfileDumpTestPath("profile_dump_gpu_event_test.mpd");
+
+    Moer::ProfileDump::RuntimeConfig config{};
+    config.enable_file = true;
+    config.enable_tcp = false;
+    config.tls_max_records = 128;
+    config.tls_max_bytes = 32768;
+    config.auto_publish_records = 128;
+    config.auto_publish_bytes = 32768;
+    config.file_path = output_path.generic_string();
+    Moer::ProfileDump::OverrideConfigForTesting(config);
+
+    auto& stream = GPUEventStream::Get();
+    stream.ResetForTesting();
+
+    Array<GPUEvent> events;
+    events.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginGPU, "GpuDumpScope", 0, 100));
+    events.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndGPU, "GpuDumpScope", 0, 180));
+    events.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::FrameBoundary, "FrameBoundary", 0, 200));
+    stream.InjectResolvedSubmitForTesting(std::move(events), EQueueType::Graphics);
+    stream.EndFrame();
+    stream.FlushToProfiler();
+
+    if (!std::filesystem::exists(output_path)) {
+        LOG_ERROR("GPUEventStream profile dump integration did not write output file.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        return 1;
+    }
+
+    const std::vector<uint8_t> binary = ReadBinaryFile(output_path);
+    ParsedProfileDumpCapture   capture{};
+    if (!ParseProfileDumpCapture(std::span<const uint8_t>(binary.data(), binary.size()), capture)) {
+        LOG_ERROR("GPUEventStream profile dump output failed structured parsing.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        return 1;
+    }
+
+    const Moer::ProfileDump::DecodedSchema* gpu_schema = FindProfileDumpSchema(capture, "GpuScopeTemplate");
+    if (!gpu_schema) {
+        LOG_ERROR("GPUEventStream profile dump output missing GPU schema.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        return 1;
+    }
+    if (capture.records.size() != 1 || capture.records[0].schema_id != gpu_schema->schema_id ||
+        !AssertGpuProfileRecord(capture.records[0], 0, "Graphics", "GpuDumpScope", 100, 180, 0, 80, 80)) {
+        LOG_ERROR("GPUEventStream profile dump output has invalid GPU record payload.");
+        Moer::ProfileDump::ClearTestingConfigOverride();
+        return 1;
+    }
+
+    Moer::ProfileDump::ClearTestingConfigOverride();
+    return 0;
+}
+
+#if defined(MOER_TEST_WITH_PROFILE)
+int RunFlameProfilerProfileDumpTest() {
+    const std::filesystem::path output_path = MakeProfileDumpTestPath("profile_dump_flame_test.mpd");
+
+    FlameProfiler::Get().Begin("CpuDumpScope");
+    FlameProfiler::Get().End();
+    FlameProfiler::Get().Save(output_path.generic_string());
+
+    if (!std::filesystem::exists(output_path)) {
+        LOG_ERROR("FlameProfiler unified profile dump did not write output file.");
+        return 1;
+    }
+
+    const std::vector<uint8_t> binary = ReadBinaryFile(output_path);
+    ParsedProfileDumpCapture   capture{};
+    if (!ParseProfileDumpCapture(std::span<const uint8_t>(binary.data(), binary.size()), capture)) {
+        LOG_ERROR("FlameProfiler unified profile dump output failed structured parsing.");
+        return 1;
+    }
+
+    const Moer::ProfileDump::DecodedSchema* cpu_schema = FindProfileDumpSchema(capture, "CpuScopeTemplate");
+    if (!cpu_schema) {
+        LOG_ERROR("FlameProfiler unified profile dump output missing CPU schema.");
+        return 1;
+    }
+    if (capture.records.size() != 1 || capture.records[0].schema_id != cpu_schema->schema_id ||
+        !AssertCpuProfileRecord(capture.records[0], "CpuDumpScope")) {
+        LOG_ERROR("FlameProfiler unified profile dump output has invalid CPU record payload.");
+        return 1;
+    }
+
+    return 0;
+}
+#endif
 
 void ApplyShuffle(
     const std::vector<uint32_t>& input,
@@ -1144,8 +1801,9 @@ int RunGpuEventStreamHierarchyTest() {
         return 1;
     }
 
-    const std::array<std::string_view, 6> required_tokens{
+    const std::array<std::string_view, 7> required_tokens{
         "Frame ",
+        "valid=true",
         "Queue Graphics",
         "GPU [queue=Graphics",
         "FrameOuter",
@@ -1167,6 +1825,82 @@ int RunGpuEventStreamHierarchyTest() {
     }
 
     LOG_INFO("GPUEventStream frame debug:\n{}", frame_text);
+    return 0;
+}
+
+int RunGpuEventStreamCrossSubmitAggregationTest() {
+    auto& stream = GPUEventStream::Get();
+    stream.ResetForTesting();
+
+    Array<GPUEvent> first_submit{};
+    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginGPU, "GPU", 0, 100));
+    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginEvent, "FrameOuter", 1, 110));
+    stream.InjectResolvedSubmitForTesting(std::move(first_submit), EQueueType::Graphics);
+
+    Array<GPUEvent> second_submit{};
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginEvent, "FrameInner", 2, 120));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndEvent, "", 2, 170));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndEvent, "", 1, 190));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndGPU, "", 0, 200));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::FrameBoundary, "FrameBoundary", 0, 210));
+    stream.InjectResolvedSubmitForTesting(std::move(second_submit), EQueueType::Graphics);
+    stream.EndFrame();
+
+    const std::string frame_text = stream.FormatLastResolvedFrame();
+    if (frame_text.empty()) {
+        LOG_ERROR("GPUEventStream cross-submit aggregation did not resolve any frame text");
+        return 1;
+    }
+
+    const std::array<std::string_view, 5> required_tokens{
+        "valid=true",
+        "boundary_ns=210",
+        "FrameOuter [queue=Graphics, start_ns=110, end_ns=190, total_busy_ns=80, exclusive_ns=30]",
+        "FrameInner [queue=Graphics, start_ns=120, end_ns=170, total_busy_ns=50, exclusive_ns=50]",
+        "GPU [queue=Graphics, start_ns=100, end_ns=200, total_busy_ns=100, exclusive_ns=20]",
+    };
+    for (std::string_view token : required_tokens) {
+        if (frame_text.find(token) == std::string::npos) {
+            LOG_ERROR("GPUEventStream cross-submit frame text missing token '{}':\n{}", token, frame_text);
+            return 1;
+        }
+    }
+
+    LOG_INFO("GPUEventStream cross-submit frame debug:\n{}", frame_text);
+    return 0;
+}
+
+int RunGpuEventStreamBoundaryValidationTest() {
+    auto& stream = GPUEventStream::Get();
+    stream.ResetForTesting();
+
+    Array<GPUEvent> first_submit{};
+    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginGPU, "GPU", 0, 300));
+    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginEvent, "CrossBoundary", 1, 320));
+    stream.InjectResolvedSubmitForTesting(std::move(first_submit), EQueueType::Graphics);
+
+    Array<GPUEvent> second_submit{};
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::FrameBoundary, "FrameBoundary", 0, 360));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndEvent, "", 1, 390));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndGPU, "", 0, 420));
+    stream.InjectResolvedSubmitForTesting(std::move(second_submit), EQueueType::Graphics);
+    stream.EndFrame();
+
+    const std::string frame_text = stream.FormatLastResolvedFrame();
+    if (frame_text.empty()) {
+        LOG_ERROR("GPUEventStream boundary validation did not resolve any frame text");
+        return 1;
+    }
+    if (frame_text.find("valid=false") == std::string::npos) {
+        LOG_ERROR("GPUEventStream boundary validation should produce an invalid frame:\n{}", frame_text);
+        return 1;
+    }
+    if (frame_text.find("Queue Graphics") != std::string::npos) {
+        LOG_ERROR("GPUEventStream invalid frame should not materialize queue roots:\n{}", frame_text);
+        return 1;
+    }
+
+    LOG_INFO("GPUEventStream invalid frame debug:\n{}", frame_text);
     return 0;
 }
 
@@ -1436,6 +2170,50 @@ int main(int argc, char** argv) {
         if (gpu_event_stream_ret != 0) {
             return shutdown_and_return(gpu_event_stream_ret);
         }
+
+        const int gpu_event_cross_submit_ret =
+            RunNamedTestCase("GPUEventStreamCrossSubmitAggregation", RunGpuEventStreamCrossSubmitAggregationTest);
+        if (gpu_event_cross_submit_ret != 0) {
+            return shutdown_and_return(gpu_event_cross_submit_ret);
+        }
+
+        const int gpu_event_boundary_validation_ret =
+            RunNamedTestCase("GPUEventStreamBoundaryValidation", RunGpuEventStreamBoundaryValidationTest);
+        if (gpu_event_boundary_validation_ret != 0) {
+            return shutdown_and_return(gpu_event_boundary_validation_ret);
+        }
+
+        const int profile_dump_cvar_ret =
+            RunNamedTestCase("ProfileDumpStartupReadOnlyCVar", RunProfileDumpStartupReadOnlyCVarTest);
+        if (profile_dump_cvar_ret != 0) {
+            return shutdown_and_return(profile_dump_cvar_ret);
+        }
+
+        const int profile_dump_file_ret =
+            RunNamedTestCase("ProfileDumpFileSinkFlush", RunProfileDumpFileSinkTest);
+        if (profile_dump_file_ret != 0) {
+            return shutdown_and_return(profile_dump_file_ret);
+        }
+
+        const int profile_dump_tcp_ret =
+            RunNamedTestCase("ProfileDumpTcpSinkConsumerParse", RunProfileDumpTcpSinkTest);
+        if (profile_dump_tcp_ret != 0) {
+            return shutdown_and_return(profile_dump_tcp_ret);
+        }
+
+        const int profile_dump_gpu_ret =
+            RunNamedTestCase("ProfileDumpGpuEventIntegration", RunGpuEventStreamProfileDumpTest);
+        if (profile_dump_gpu_ret != 0) {
+            return shutdown_and_return(profile_dump_gpu_ret);
+        }
+
+#if defined(MOER_TEST_WITH_PROFILE)
+        const int profile_dump_flame_ret =
+            RunNamedTestCase("ProfileDumpFlameProfilerIntegration", RunFlameProfilerProfileDumpTest);
+        if (profile_dump_flame_ret != 0) {
+            return shutdown_and_return(profile_dump_flame_ret);
+        }
+#endif
 
         WindowContext::Init(SurfaceInitInfo(ERHIType::Vulkan, 640, 360, "TestRHITranslatePresent", false));
         window_inited = true;

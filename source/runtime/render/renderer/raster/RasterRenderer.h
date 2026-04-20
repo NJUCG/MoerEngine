@@ -3,6 +3,10 @@
 #include "renderer/Renderer.h"
 #include "rhi/RHIResource.h"
 
+namespace Moer {
+class RasterUI;
+}
+
 namespace Moer::Render::Raster {
 
 class RasterContext;
@@ -58,7 +62,11 @@ public:
 
     virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) override;
 
-    bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
+    bool RunSingle(
+        const SharedPtr<EditorConfig> editor_config,
+        const EngineHooks& hooks,
+        ::Moer::RasterUI& config_ui
+    );
 
     void
     UpdateGlobalLightingData(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);

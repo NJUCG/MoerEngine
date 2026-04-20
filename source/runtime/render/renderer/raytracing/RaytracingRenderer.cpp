@@ -1,5 +1,7 @@
 #include "RaytracingRenderer.h"
 
+#include "../../../../editor/raytracing_ui/RaytracingUI.h"
+
 // Runtime
 #include "PixelFormat.h"
 #include "RaytracingConfig.h"
@@ -55,6 +57,17 @@ RaytracingRenderer::RaytracingRenderer(
     Renderer(_resolution, _config, _hooks, _runtime_assets) {}
 
 void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
+    ::Moer::RaytracingUI config_ui(editor_config->raytracing_config);
+    if (hooks.on_register_renderer_config_section) {
+        hooks.on_register_renderer_config_section(
+            "Raytracing",
+            "Settings",
+            [&config_ui]() {
+                config_ui.ShowConfig();
+            }
+        );
+    }
+
     bool b_new_env_map = false;
 
     TextureRef         env_map{};
@@ -286,18 +299,19 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
                 cmd_list.UpdateBindlessArray(bindless_array);
 
-                if (hooks.on_register_ui_func) {
+                if (hooks.on_register_renderer_config_section) {
 
-                    auto& _gfx_queue = gfx_queue;
+                    auto& debug_queue = gfx_queue;
 
-                    hooks.on_register_ui_func(
-                        "Display MaterialTexture",
+                    hooks.on_register_renderer_config_section(
+                        "Raytracing",
+                        "Material Texture",
                         [&material_textures,
                          &selected_material_texture_name,
                          &b_use_bindless,
                          &b_final_show_texture,
                          &mip_level,
-                         &_gfx_queue]() {
+                         &debug_queue]() {
                             ImGui::Checkbox("Show Final Texture", &b_final_show_texture);
                             ImGui::SliderInt("Mip Level", (int*)&mip_level, 0, 12);
                             ImGui::Checkbox("Use Bindless", &b_use_bindless);
@@ -314,7 +328,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                             }
 
                             //Pass profiling
-                            auto entrys = _gfx_queue.GetProfilerEntry();
+                            auto entrys = debug_queue.GetProfilerEntry();
                             if (!entrys.cpu_entries.empty()) {
                                 ImGui::Text("CPU Time:");
                                 for (auto& [name, time] : entrys.cpu_entries) {
@@ -729,8 +743,9 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     ReleaseResources();
 
-    if (hooks.on_unregister_ui_func) {
-        hooks.on_unregister_ui_func("Display MaterialTexture");
+    if (hooks.on_unregister_renderer_config_section) {
+        hooks.on_unregister_renderer_config_section("Raytracing", "Settings");
+        hooks.on_unregister_renderer_config_section("Raytracing", "Material Texture");
     }
 }
 

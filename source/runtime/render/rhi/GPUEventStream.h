@@ -24,6 +24,7 @@ struct GPUEventNode {
 struct ResolvedGPUFrame {
     uint64 frame_index;
     uint64 boundary_timestamp_ns;
+    bool   valid;
     std::array<Array<GPUEventNode>, static_cast<size_t>(EQueueType::Num)> queue_roots;
 };
 
@@ -36,6 +37,7 @@ public:
     void EndFrame();
     void FlushToProfiler();
     std::string FormatLastResolvedFrame() const;
+    void InjectResolvedSubmitForTesting(Array<GPUEvent>&& events, EQueueType queue);
     void ResetForTesting();
 
 private:
@@ -47,22 +49,30 @@ private:
         bool            resolved;
     };
 
+    struct PendingFrame {
+        uint64 frame_index;
+        uint64 sealed_after_enqueue_order;
+    };
+
     struct CompletedGPUEvent {
         GPUEvent::EType type;
         std::string     name;
         EQueueType      queue;
         uint32          depth;
+        uint64          enqueue_order;
         uint64          timestamp_ns;
     };
 
     void TryResolveReadyFramesLocked();
 
     Array<PendingSubmit>               pending_submits;
-    Array<CompletedGPUEvent>           current_frame_events;
+    Array<PendingFrame>                pending_frames;
+    Array<CompletedGPUEvent>           resolved_events;
     Array<ResolvedGPUFrame>            ready_frames;
     std::optional<ResolvedGPUFrame>    last_resolved_frame;
     uint64                             next_enqueue_order{0};
     uint64                             next_frame_index{0};
+    uint64                             resolved_enqueue_order_exclusive{0};
     mutable std::mutex                 stream_mutex;
 };
 

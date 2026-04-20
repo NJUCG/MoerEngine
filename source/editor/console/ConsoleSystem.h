@@ -13,16 +13,32 @@
 #include "Core.h"
 #include "renderer/EditorConfig.h"
 
+namespace Moer::Command {
+class EngineCommandProcessor;
+}
+
 namespace Moer {
 
 class ConsoleSystem {
 public:
-    ConsoleSystem(const SharedPtr<EditorConfig>& editor_config);
+    struct AutocompleteCandidate {
+        std::string text;
+        std::string helper;
+        bool        is_command = false;
+    };
+
+    ConsoleSystem(
+        const SharedPtr<EditorConfig>& editor_config,
+        Command::EngineCommandProcessor& command_processor
+    );
 
     void ExecuteCommand(std::string_view line);
     void TickUI();
+    bool IsEditorConsoleOpen() const;
+    void SetEditorConsoleOpen(bool open);
 
 private:
+    void PumpCommandOutputs();
     enum class EDisplayMode {
         Hidden = 0,
         Inline,
@@ -54,6 +70,7 @@ private:
     bool IsEditorConsoleInteracting() const;
 
     SharedPtr<EditorConfig> m_editor_config;
+    Command::EngineCommandProcessor& m_command_processor;
 
     std::deque<std::string> m_output_lines;
     std::vector<std::string> m_command_history;
@@ -72,12 +89,13 @@ private:
     int  m_focus_input_frames      = 0;
 
     uint64_t m_next_log_sequence = 1;
+    uint64_t m_next_command_output_sequence = 1;
 
     bool m_auto_scroll = true;
 
-    std::vector<std::string> m_autocomplete_candidates;
-    int                      m_autocomplete_selected = -1;
-    std::string              m_last_autocomplete_query;
+    std::vector<AutocompleteCandidate> m_autocomplete_candidates;
+    int                                m_autocomplete_selected = -1;
+    std::string                        m_last_autocomplete_query;
 
     int         m_history_cursor = -1;
     std::string m_history_backup;

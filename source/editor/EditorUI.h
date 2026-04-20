@@ -6,9 +6,6 @@
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHIResource.h"
 
-#include "raster_ui/RasterUI.h"
-#include "raytracing_ui/RaytracingUI.h"
-
 namespace Moer {
 
 class EditorUI {
@@ -21,7 +18,6 @@ public:
 
     EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config);
     ~EditorUI() = default;
-    void InitFromConfigManager(); // will be called by Constructor
     void TickUI();
     void RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output);
     void PresentWindows();
@@ -42,22 +38,19 @@ public:
         return m_scene_color_resolution.x / m_scene_color_resolution.y;
     }
 
-    void SetShowSubUI(bool show) {
-        m_b_show_sub_ui = show;
-    }
-
     SceneWindowTarget   GetSceneWindowTarget();
     bool                IsSeperateWindow() const;
     Render::TextureView GetWindowFrameBuffer();
 
-    void RegisterUIFunc(std::string _name, std::function<void()>&& _func);
-    void UnregisterUIFunc(std::string _name);
+    void RegisterRendererConfigSection(
+        std::string renderer_name,
+        std::string section_name,
+        std::function<void()>&& func
+    );
+    void UnregisterRendererConfigSection(std::string renderer_name, std::string section_name);
     void RegisterOverlayFunc(std::string _name, std::function<void()>&& _func);
     void UnregisterOverlayFunc(std::string _name);
-
-public: // Sub UI
-    RasterUI     m_raster_ui;
-    RaytracingUI m_raytracing_ui;
+    void BindConsoleWindowState(std::function<bool()> getter, std::function<void(bool)> setter);
 
 private:
     void ResetState(); // reset m_b_need_reload, etc..
@@ -76,7 +69,6 @@ private:
     bool   m_b_show = true;
 
     bool m_b_need_reload = false;
-    bool m_b_show_sub_ui = true; // TODO: 【10.3 Refactor】这玩意是干什么的？
 
 #if WITH_PROFILE
     bool m_b_show_memory_profiler = false;
@@ -88,9 +80,10 @@ private:
 
     UniquePtr<Render::UIRenderer> m_ui_renderer;
 
-    // Custom Func
-    UnorderedMap<std::string, std::function<void()>> m_show_func_map;
+    UnorderedMap<std::string, UnorderedMap<std::string, std::function<void()>>> m_renderer_config_sections;
     UnorderedMap<std::string, std::function<void()>> m_overlay_func_map;
+    std::function<bool()>                            m_get_console_window_visible;
+    std::function<void(bool)>                        m_set_console_window_visible;
 };
 
 } // namespace Moer

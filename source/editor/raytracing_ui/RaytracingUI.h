@@ -1,6 +1,7 @@
 #ifndef MOER_TEST_RaytracingUI_H
 #define MOER_TEST_RaytracingUI_H
 
+#include "Core.h"
 #include "renderer/raytracing/RaytracingConfig.h"
 
 namespace Moer {

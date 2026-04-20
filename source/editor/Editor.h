@@ -4,7 +4,6 @@
 
 namespace Moer {
 
-class EditorUI;
 class Engine;
 
 class Editor {
@@ -17,8 +16,7 @@ public:
     void ShutDown();
 
 private:
-    UniquePtr<Engine>   m_engine;
-    UniquePtr<EditorUI> m_editor_ui;
+    UniquePtr<Engine> m_engine;
 };
 
 } // namespace Moer

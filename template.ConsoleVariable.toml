@@ -1,0 +1,16 @@
+# MoerEngine Console Variables
+# Quoted keys keep dotted cvar names as plain TOML keys.
+
+"RHI.Translate.Parallel" = true
+"RHI.Translate.NumThreads" = 4
+
+# Profile dump startup overrides
+# "Profile.Dump.FileEnabled" = true
+# "Profile.Dump.TcpEnabled" = false
+# "Profile.Dump.FilePath" = "logs/profile_dump_stream.mpd"
+# "Profile.Dump.TcpHost" = "127.0.0.1"
+# "Profile.Dump.TcpPort" = 19090
+# "Profile.Dump.TlsMaxRecords" = 256
+# "Profile.Dump.TlsMaxBytes" = 32768
+# "Profile.Dump.AutoPublishRecords" = 64
+# "Profile.Dump.AutoPublishBytes" = 8192

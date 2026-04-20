@@ -1,5 +1,6 @@
 #include "RasterRenderer.h"
 
+#include "../../../../editor/raster_ui/RasterUI.h"
 #include "AaPass.h"
 #include "AoPass.h"
 #include "BilateralFilterDenoiserPass.h"
@@ -99,10 +100,25 @@ RasterRenderer::~RasterRenderer() {
 }
 
 void RasterRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
+    ::Moer::RasterUI config_ui(editor_config->raster_config);
+    if (hooks.on_register_renderer_config_section) {
+        hooks.on_register_renderer_config_section(
+            "Raster",
+            "Settings",
+            [&config_ui]() {
+                config_ui.ShowConfig();
+            }
+        );
+    }
+
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
-        if (!RunSingle(editor_config, hooks)) {
+        if (!RunSingle(editor_config, hooks, config_ui)) {
             break;
         }
+    }
+
+    if (hooks.on_unregister_renderer_config_section) {
+        hooks.on_unregister_renderer_config_section("Raster", "Settings");
     }
 }
 
@@ -165,7 +181,11 @@ void RasterRenderer::UpdateGlobalLightingData(
     );
 }
 
-bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
+bool RasterRenderer::RunSingle(
+    const SharedPtr<EditorConfig> editor_config,
+    const EngineHooks& hooks,
+    ::Moer::RasterUI& config_ui
+) {
     TRACE_SCOPE_CAT("Raster.Frame", "Frame");
     auto& raster_context = *raster_context_ptr;
 
@@ -201,9 +221,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         );
 #endif
 
-        if (hooks.on_raster_register_frame_buffers) {
-            hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
-        }
+        config_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());
 
     } else if (window_state == EWindowState::Default) {
         // do nothing
@@ -217,9 +235,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         hooks.on_tick_ui();
     }
 
-    if (hooks.on_raster_register_frame_buffers) {
-        hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
-    }
+    config_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());
 
     TextureRef default_output_texture = raster_context.textures.output.tex;
 
