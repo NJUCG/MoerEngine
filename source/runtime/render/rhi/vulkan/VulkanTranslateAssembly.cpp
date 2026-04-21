@@ -423,6 +423,9 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
 
 static void DispatchTranslatePipelineBatch(
     TranslatePipelineBatch&& pipeline_batch,
+    uint64                   trace_frame,
+    TaskPipe&                translate_dispatch_pipe,
+    TaskPipe&                translate_pipe,
     VulkanSubmissionRuntime& submission_runtime
 ) {
     TRACE_SCOPE_CAT("Vulkan.DispatchTranslatePipelineBatch", "RHI");
@@ -436,51 +439,60 @@ static void DispatchTranslatePipelineBatch(
         Array<PendingSubmitTask>  submit_ops{};
         Array<TranslateResult>    translate_results{};
         Array<std::optional<SubmitInfo>> assembled_submit_infos{};
+        uint64                    batch_trace_frame{0};
     };
 
     auto runtime_state = std::make_shared<PipelineRuntimeState>();
-    runtime_state->translate_ops = std::move(pipeline_batch.translate_ops);
-    runtime_state->submit_ops    = std::move(pipeline_batch.submit_ops);
+    runtime_state->translate_ops          = std::move(pipeline_batch.translate_ops);
+    runtime_state->submit_ops             = std::move(pipeline_batch.submit_ops);
     runtime_state->translate_results.resize(runtime_state->translate_ops.size());
     runtime_state->assembled_submit_infos.resize(runtime_state->submit_ops.size());
-
-    GraphEventArray completion_events{};
-    completion_events.reserve(
-        runtime_state->translate_ops.size() + runtime_state->submit_ops.size()
-    );
+    runtime_state->batch_trace_frame = trace_frame;
 
     for (size_t index = 0; index < runtime_state->translate_ops.size(); ++index) {
         auto& translate_task = runtime_state->translate_ops[index];
         if (!translate_task.completion_event) {
             translate_task.completion_event = GraphEvent::CreateGraphEvent();
         }
-        completion_events.emplace_back(translate_task.completion_event);
 
-        auto dispatch = LambdaTask::Create(
+        translate_dispatch_pipe.Enqueue(
             [runtime_state, index]() mutable {
+                ScopedRHITraceFrame dispatch_trace_scope(runtime_state->batch_trace_frame);
+                TRACE_SCOPE_CAT("Vulkan.TranslateDispatchPipe", "RHI");
+
                 auto& current = runtime_state->translate_ops[index];
-                TranslateResult result = current.valid ?
-                                             VulkanTranslateTask::DispatchSingle(
-                                                 current.queue,
-                                                 std::move(current.submit),
-                                                 std::move(current.initial_seed)
-                                             ) :
-                                             VulkanTranslateTask::MakeFailed(
-                                                 current.queue,
-                                                 std::move(current.error)
-                                             );
-                result.translate_complete = current.completion_event;
-                if (!result.valid && !result.error.empty()) {
-                    LOG_ERROR("{}", result.error);
+                auto dispatch = LambdaTask::Create(
+                    [runtime_state, index]() mutable {
+                        ScopedRHITraceFrame translate_trace_scope(runtime_state->batch_trace_frame);
+                        TRACE_SCOPE_CAT("Vulkan.TranslateDispatchTask", "RHI");
+
+                        auto& current = runtime_state->translate_ops[index];
+                        TranslateResult result = current.valid ?
+                                                     VulkanTranslateTask::DispatchSingle(
+                                                         current.queue,
+                                                         std::move(current.submit),
+                                                         std::move(current.initial_seed)
+                                                     ) :
+                                                     VulkanTranslateTask::MakeFailed(
+                                                         current.queue,
+                                                         std::move(current.error)
+                                                     );
+                        result.translate_complete = current.completion_event;
+                        if (!result.valid && !result.error.empty()) {
+                            LOG_ERROR("{}", result.error);
+                        }
+                        runtime_state->translate_results[index] = std::move(result);
+                    },
+                    EThread::AnyThread_NormalPri
+                );
+                if (!current.task_dependencies.empty()) {
+                    dispatch.Wait(std::move(current.task_dependencies));
                 }
-                runtime_state->translate_results[index] = std::move(result);
+                dispatch.Next(current.completion_event).Dispatch();
             },
+            {},
             EThread::AnyThread_NormalPri
         );
-        if (!translate_task.task_dependencies.empty()) {
-            dispatch.Wait(std::move(translate_task.task_dependencies));
-        }
-        dispatch.Next(translate_task.completion_event).Dispatch();
     }
 
     for (size_t index = 0; index < runtime_state->submit_ops.size(); ++index) {
@@ -488,11 +500,13 @@ static void DispatchTranslatePipelineBatch(
         if (!submit_task.completion_event) {
             submit_task.completion_event = GraphEvent::CreateGraphEvent();
         }
-        completion_events.emplace_back(submit_task.completion_event);
-
-        auto dispatch = LambdaTask::Create(
+        translate_pipe.Enqueue(
             [runtime_state, index]() mutable {
+                ScopedRHITraceFrame submit_trace_scope(runtime_state->batch_trace_frame);
+                TRACE_SCOPE_CAT("Vulkan.TranslatePipe", "RHI");
+
                 auto& current = runtime_state->submit_ops[index];
+                const GraphEventRef completion_event = current.completion_event;
                 TranslateResult translate_output =
                     current.translate_index < runtime_state->translate_results.size() ?
                         std::move(runtime_state->translate_results[current.translate_index]) :
@@ -502,6 +516,9 @@ static void DispatchTranslatePipelineBatch(
                         );
 
                 if (translate_output.valid && !translate_output.recorded_submit.has_value()) {
+                    if (completion_event) {
+                        completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+                    }
                     return;
                 }
 
@@ -517,32 +534,45 @@ static void DispatchTranslatePipelineBatch(
                 if (current.present_stage.has_value()) {
                     submit_info.present_stage = std::move(current.present_stage);
                 }
+                if (completion_event) {
+                    completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+                }
             },
+            std::move(submit_task.task_dependencies),
             EThread::AnyThread_NormalPri
         );
-        if (!submit_task.task_dependencies.empty()) {
-            dispatch.Wait(std::move(submit_task.task_dependencies));
-        }
-        dispatch.Next(submit_task.completion_event).Dispatch();
     }
 
-    if (!completion_events.empty()) {
-        TaskGraph::GetInterface().WaitUntilTasksComplete(
-            completion_events,
-            EThread::UNKNOWN_THREAD
+    if (!runtime_state->submit_ops.empty()) {
+        GraphEventArray handoff_dependencies{};
+        if (const GraphEventRef& last_submit_completion =
+                runtime_state->submit_ops.back().completion_event;
+            last_submit_completion) {
+            handoff_dependencies.emplace_back(last_submit_completion);
+        }
+
+        // Batch completion stays explicit as task-graph dependencies on the final
+        // serial handoff task instead of blocking a translate-pipe closure with a raw wait.
+        translate_pipe.Enqueue(
+            [runtime_state, &submission_runtime]() mutable {
+                ScopedRHITraceFrame handoff_trace_scope(runtime_state->batch_trace_frame);
+                TRACE_SCOPE_CAT("Vulkan.TranslateRuntimeHandoff", "RHI");
+
+                Array<SubmitInfo> submit_infos{};
+                submit_infos.reserve(runtime_state->assembled_submit_infos.size());
+                for (auto& submit_info : runtime_state->assembled_submit_infos) {
+                    if (!submit_info.has_value()) {
+                        continue;
+                    }
+                    submit_infos.emplace_back(std::move(submit_info.value()));
+                }
+                if (!submit_infos.empty()) {
+                    submission_runtime.Enqueue(std::move(submit_infos));
+                }
+            },
+            std::move(handoff_dependencies),
+            EThread::AnyThread_NormalPri
         );
-    }
-
-    Array<SubmitInfo> submit_infos{};
-    submit_infos.reserve(runtime_state->assembled_submit_infos.size());
-    for (auto& submit_info : runtime_state->assembled_submit_infos) {
-        if (!submit_info.has_value()) {
-            continue;
-        }
-        submit_infos.emplace_back(std::move(submit_info.value()));
-    }
-    if (!submit_infos.empty()) {
-        submission_runtime.Enqueue(std::move(submit_infos));
     }
 }
 
@@ -563,9 +593,18 @@ TranslatePipelineBatch TranslatePipelineRuntime::Assemble(
 
 void TranslatePipelineRuntime::Dispatch(
     TranslatePipelineBatch&& pipeline_batch,
+    uint64                   trace_frame,
+    TaskPipe&                translate_dispatch_pipe,
+    TaskPipe&                translate_pipe,
     VulkanSubmissionRuntime& submission_runtime
 ) {
-    DispatchTranslatePipelineBatch(std::move(pipeline_batch), submission_runtime);
+    DispatchTranslatePipelineBatch(
+        std::move(pipeline_batch),
+        trace_frame,
+        translate_dispatch_pipe,
+        translate_pipe,
+        submission_runtime
+    );
 }
 
 } // namespace Moer::Render

@@ -48,7 +48,7 @@
       "id": "CP-01",
       "title": "Clean translate-stage ownership before changing scheduling",
       "priority": "critical",
-      "status": "todo",
+      "status": "done",
       "category": "cleanup",
       "must_be_true_after": [
         "The code clearly separates preprocess ownership, parallel translate execution, serial submit assembly, and submission-runtime handoff.",
@@ -65,7 +65,7 @@
       "id": "CP-02",
       "title": "Move parallel translate workload out of the serial TranslatePipe",
       "priority": "critical",
-      "status": "todo",
+      "status": "done",
       "category": "parallelism",
       "must_be_true_after": [
         "Parallel-capable segment translate work no longer occupies the serial TranslatePipe closure for the duration of its execution.",
@@ -81,7 +81,7 @@
       "id": "CP-03",
       "title": "Keep serial TranslatePipe responsibilities narrow and explicit",
       "priority": "critical",
-      "status": "todo",
+      "status": "done",
       "category": "serial_control",
       "must_be_true_after": [
         "TranslatePipe handles only serial control duties: current SubmitContext progression, serial RHICommandList work, submit gating, and runtime handoff.",
@@ -98,7 +98,7 @@
       "id": "CP-04",
       "title": "Preserve preprocess as the sole dependency authority",
       "priority": "high",
-      "status": "todo",
+      "status": "done",
       "category": "dependency_model",
       "must_be_true_after": [
         "SubmissionPreprocess remains the single owner of segment parallel eligibility and fence ordering decisions.",
@@ -114,7 +114,7 @@
       "id": "CP-05",
       "title": "Validate with existing PowerShell scripts only",
       "priority": "critical",
-      "status": "todo",
+      "status": "done_with_gap",
       "category": "validation",
       "must_be_true_after": [
         "Implementation validation uses existing testscripts/test_rhi_translate.ps1 and, when integration scope expands, testscripts/test_all.ps1.",
@@ -135,6 +135,10 @@
     "CP-04: re-check that preprocess remains the only dependency authority and delete any duplicated scheduling logic introduced during refactor.",
     "CP-05: validate through existing PowerShell scripts only, with test_rhi_translate.ps1 first and test_all.ps1 as the broader integration pass when needed."
   ],
+  "execution_result": {
+    "status": "implemented",
+    "validation_gap": "Linux runner can invoke PowerShell, but the repository test flow currently expects a configured build directory, Windows-style executable layout, and this environment also fails CMake configure on missing X11. Existing scripts were attempted, but full checkpoint validation could not complete on this runner."
+  },
   "validation": [
     "Run PowerShell on Windows as required by Rule_Codex.md.",
     "Primary validation path for this work: powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1",

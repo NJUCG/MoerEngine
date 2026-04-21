@@ -10,11 +10,6 @@ struct PendingPreprocessBatch {
     uint64            trace_frame{0};
 };
 
-struct PendingTranslateBatch {
-    TranslatePipelineBatch pipeline_batch{};
-    uint64                 trace_frame{0};
-};
-
 static GraphEventRef CreateCompletedExecutorEvent() {
     GraphEventRef event = GraphEvent::CreateGraphEvent();
     event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
@@ -58,22 +53,13 @@ public:
                     return;
                 }
 
-                auto translate_request            = std::make_shared<PendingTranslateBatch>();
-                translate_request->pipeline_batch = std::move(pipeline_batch);
-                translate_request->trace_frame    = request->trace_frame;
-
-                translate_pipe.Enqueue(
-                    [this, translate_request]() {
-                        ScopedRHITraceFrame trace_scope(translate_request->trace_frame);
-                        TRACE_SCOPE_CAT("VulkanSubmissionExecutor.TranslatePipe", "RHI");
-
-                        translate_pipeline.Dispatch(
-                            std::move(translate_request->pipeline_batch),
-                            submission_runtime
-                        );
-                    },
-                    {},
-                    EThread::AnyThread_NormalPri
+                TRACE_SCOPE_CAT("VulkanSubmissionExecutor.TranslateSchedule", "RHI");
+                translate_pipeline.Dispatch(
+                    std::move(pipeline_batch),
+                    request->trace_frame,
+                    translate_dispatch_pipe,
+                    translate_pipe,
+                    submission_runtime
                 );
             },
             {},
@@ -111,9 +97,11 @@ private:
     void FlushInternal(ERHIFlushDepth depth) {
         WaitForPipe(preprocess_pipe);
         if (depth == ERHIFlushDepth::RHITranslate) {
+            WaitForPipe(translate_dispatch_pipe);
             return;
         }
 
+        WaitForPipe(translate_dispatch_pipe);
         WaitForPipe(translate_pipe);
         submission_runtime.Drain();
     }
@@ -130,6 +118,7 @@ private:
     SubmissionPreprocessor   preprocessor{};
     TranslatePipelineRuntime translate_pipeline{};
     TaskPipe                 preprocess_pipe{};
+    TaskPipe                 translate_dispatch_pipe{};
     TaskPipe                 translate_pipe{};
     std::atomic_bool         b_enable{true};
 };
