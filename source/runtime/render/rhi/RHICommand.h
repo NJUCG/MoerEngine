@@ -1853,6 +1853,8 @@ enum class ERHISyncDepth : uint8 {
     Present = 1,
 };
 
+class RHIBackendExecutor;
+
 class RENDER_API RHIExecutor {
 public:
     static RHIExecutor& Get();
@@ -1866,9 +1868,12 @@ public:
     void Sync(ERHISyncDepth depth = ERHISyncDepth::RHI);
     static void ShutDown();
 private:
+    std::shared_ptr<RHIBackendExecutor> GetBackendExecutorLocked();
+    std::shared_ptr<RHIBackendExecutor> TryGetBackendExecutorLocked() const;
     void EnqueuePendingLocked();
-    std::mutex              submit_mutex;
-    Array<CommandList>      pending_command_lists{};
+    std::mutex                   submit_mutex;
+    std::shared_ptr<RHIBackendExecutor> backend_executor{};
+    Array<CommandList>           pending_command_lists{};
     std::optional<RHIPresentRequest> pending_present{};
 };
 

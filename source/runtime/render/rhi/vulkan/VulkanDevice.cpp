@@ -11,7 +11,6 @@
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
-#include "VulkanSubmissionExecutor.h"
 #include "VulkanUtil.h"
 #include "extension/VulkanNrdExtension.h"
 #include <string_view>
@@ -1063,7 +1062,7 @@ void VulkanDevice::FlushDebugMessages() const {
 }
 
 void VulkanDevice::WaitIdle() {
-    VulkanSubmissionExecutor::Flush(ERHIFlushDepth::SubmitGPU);
+    RHIExecutor::Get().Flush(ERHIFlushDepth::SubmitGPU);
     vkDeviceWaitIdle(m_device);
 
     if (gfx_queue) {

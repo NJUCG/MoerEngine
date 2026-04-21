@@ -266,12 +266,12 @@ struct PendingSubmitTask {
     Array<SyncPointId> wait_syncpoints{};
     GraphEventArray    task_dependencies{};
     GraphEventRef      completion_event{nullptr};
-    std::optional<SubmitPresentStage> present_stage{};
 };
 
 struct TranslatePipelineBatch {
     Array<QueueTranslateInfo> translate_ops{};
     Array<PendingSubmitTask>  submit_ops{};
+    Array<SubmitPresentStage> present_ops{};
 };
 
 class SubmissionPreprocessor {

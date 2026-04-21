@@ -34,6 +34,16 @@
 #include <variant>
 namespace Moer::Render {
 
+namespace {
+
+bool HasFrameBoundaryEvent(std::span<const GPUEvent> gpu_events) {
+    return std::any_of(gpu_events.begin(), gpu_events.end(), [](const GPUEvent& event) {
+        return event.type == GPUEvent::EType::FrameBoundary;
+    });
+}
+
+}
+
 #pragma region[ utils ]
 
 static GraphEventRef ChainCompletionBoundary(
@@ -3298,6 +3308,7 @@ VkCommandQueue::SubmitRecordedForRuntime(
         if (has_submit) {
             result.callbacks            = std::move(_recorded.submit->callbacks);
             result.signal_events        = std::move(_recorded.submit->signal_events);
+            result.has_frame_boundary_event = HasFrameBoundaryEvent(_recorded.submit->gpu_events);
             result.gpu_events           = std::move(_recorded.submit->gpu_events);
             result.scheduled_completion =
                 !result.callbacks.empty() || !result.signal_events.empty() || !result.gpu_events.empty();
@@ -3336,6 +3347,7 @@ VkCommandQueue::SubmitRecordedForRuntime(
     result.allocator            = std::move(_recorded.allocator);
     result.callbacks            = std::move(_recorded.submit->callbacks);
     result.signal_events        = std::move(_recorded.submit->signal_events);
+    result.has_frame_boundary_event = HasFrameBoundaryEvent(_recorded.submit->gpu_events);
     result.gpu_events           = std::move(_recorded.submit->gpu_events);
     result.scheduled_completion = true;
 
@@ -3693,6 +3705,7 @@ VkCopyQueue::SubmitRecordedForRuntime(
                 result.signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
             }
             result.callbacks = std::move(_recorded.submit->callbacks);
+            result.has_frame_boundary_event = HasFrameBoundaryEvent(_recorded.submit->gpu_events);
             result.gpu_events = std::move(_recorded.submit->gpu_events);
             result.scheduled_completion =
                 !result.callbacks.empty() || !result.signal_events.empty() || !result.gpu_events.empty();
@@ -3724,6 +3737,7 @@ VkCopyQueue::SubmitRecordedForRuntime(
     result.timeline_value       = signal_value;
     result.allocator            = std::move(_recorded.allocator);
     result.callbacks            = std::move(_recorded.submit->callbacks);
+    result.has_frame_boundary_event = HasFrameBoundaryEvent(_recorded.submit->gpu_events);
     result.gpu_events           = std::move(_recorded.submit->gpu_events);
     result.scheduled_completion = true;
     result.signal_events.reserve(_recorded.submit->signal_events.size());

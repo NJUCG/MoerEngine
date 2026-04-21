@@ -150,9 +150,7 @@ struct SubmitInfo {
     SyncPointId                      signal_syncpoint{0};
     Array<SyncPointId>               wait_syncpoints{};
     Array<GraphEventRef>             interrupt_completion_events{};
-    SubmissionHostFence              host_fence{};
     TranslateResult                  translate_result{};
-    std::optional<SubmitPresentStage> present_stage{};
 
     SubmitInfo(
         SubmissionKey   in_key,

@@ -284,8 +284,6 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
 
     UnorderedMap<SubmissionKey, SyncPointId, SubmissionKeyHash> signal_syncpoint_by_key{};
     signal_syncpoint_by_key.reserve(pipeline_batch.translate_ops.capacity());
-    std::optional<size_t> last_submit_index{};
-    EQueueType            last_submit_queue = EQueueType::Ignore;
     GraphEventRef         last_submit_event{nullptr};
 
     uint64 op_seq = op_seq_base;
@@ -375,42 +373,20 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
                                 submit_task.signal_syncpoint
                             );
                             pipeline_batch.submit_ops.emplace_back(std::move(submit_task));
-                            last_submit_index = pipeline_batch.submit_ops.size() - 1;
-                            last_submit_queue = translate_info->queue;
                             last_submit_event =
                                 pipeline_batch.submit_ops.back().completion_event;
                         }
                     }
                 },
                 [&](ExecutorPresentOp& present_op) {
-                    std::optional<SubmitPresentStage> present_stage_holder{};
-                    present_stage_holder.emplace(op_seq, std::move(present_op));
-                    auto& present_stage = present_stage_holder.value();
+                    SubmitPresentStage present_stage{op_seq, std::move(present_op)};
                     if (const auto* present_preprocess = preprocess_store.FindPresent(op_seq);
                         present_preprocess != nullptr) {
                         present_stage.has_source_texture_state =
                             present_preprocess->has_source_texture_state;
                         present_stage.source_texture_state = present_preprocess->source_texture_state;
                     }
-                    if (!last_submit_index.has_value() || last_submit_queue != EQueueType::Graphics) {
-                        present_stage.valid = false;
-                        present_stage.error =
-                            "Present requires the last translated submission to be Graphics";
-                        LOG_ERROR("{}", present_stage.error);
-                    } else {
-                        auto& parent_submit = pipeline_batch.submit_ops[last_submit_index.value()];
-                        if (parent_submit.present_stage.has_value()) {
-                            present_stage.valid = false;
-                            present_stage.error =
-                                "Multiple present operations attempted to attach to the same submit";
-                            LOG_ERROR(
-                                "Multiple present operations attempted to attach to submit ({}, {})",
-                                parent_submit.key.op_seq,
-                                parent_submit.key.submit_idx
-                            );
-                        }
-                        parent_submit.present_stage = std::move(present_stage_holder);
-                    }
+                    pipeline_batch.present_ops.emplace_back(std::move(present_stage));
                 }
             },
             op
@@ -430,13 +406,15 @@ static void DispatchTranslatePipelineBatch(
 ) {
     TRACE_SCOPE_CAT("Vulkan.DispatchTranslatePipelineBatch", "RHI");
 
-    if (pipeline_batch.translate_ops.empty() && pipeline_batch.submit_ops.empty()) {
+    if (pipeline_batch.translate_ops.empty() && pipeline_batch.submit_ops.empty() &&
+        pipeline_batch.present_ops.empty()) {
         return;
     }
 
     struct PipelineRuntimeState {
         Array<QueueTranslateInfo> translate_ops{};
         Array<PendingSubmitTask>  submit_ops{};
+        Array<SubmitPresentStage> present_ops{};
         Array<TranslateResult>    translate_results{};
         Array<std::optional<SubmitInfo>> assembled_submit_infos{};
         uint64                    batch_trace_frame{0};
@@ -445,9 +423,10 @@ static void DispatchTranslatePipelineBatch(
     auto runtime_state = std::make_shared<PipelineRuntimeState>();
     runtime_state->translate_ops          = std::move(pipeline_batch.translate_ops);
     runtime_state->submit_ops             = std::move(pipeline_batch.submit_ops);
+    runtime_state->present_ops            = std::move(pipeline_batch.present_ops);
     runtime_state->translate_results.resize(runtime_state->translate_ops.size());
     runtime_state->assembled_submit_infos.resize(runtime_state->submit_ops.size());
-    runtime_state->batch_trace_frame = trace_frame;
+    runtime_state->batch_trace_frame      = trace_frame;
 
     for (size_t index = 0; index < runtime_state->translate_ops.size(); ++index) {
         auto& translate_task = runtime_state->translate_ops[index];
@@ -531,9 +510,6 @@ static void DispatchTranslatePipelineBatch(
                 });
                 SubmitInfo& submit_info = runtime_state->assembled_submit_infos[index].value();
                 submit_info.wait_syncpoints = current.wait_syncpoints;
-                if (current.present_stage.has_value()) {
-                    submit_info.present_stage = std::move(current.present_stage);
-                }
                 if (completion_event) {
                     completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
                 }
@@ -543,12 +519,14 @@ static void DispatchTranslatePipelineBatch(
         );
     }
 
-    if (!runtime_state->submit_ops.empty()) {
+    if (!runtime_state->submit_ops.empty() || !runtime_state->present_ops.empty()) {
         GraphEventArray handoff_dependencies{};
-        if (const GraphEventRef& last_submit_completion =
-                runtime_state->submit_ops.back().completion_event;
-            last_submit_completion) {
-            handoff_dependencies.emplace_back(last_submit_completion);
+        if (!runtime_state->submit_ops.empty()) {
+            if (const GraphEventRef& last_submit_completion =
+                    runtime_state->submit_ops.back().completion_event;
+                last_submit_completion) {
+                handoff_dependencies.emplace_back(last_submit_completion);
+            }
         }
 
         // Batch completion stays explicit as task-graph dependencies on the final
@@ -566,8 +544,11 @@ static void DispatchTranslatePipelineBatch(
                     }
                     submit_infos.emplace_back(std::move(submit_info.value()));
                 }
-                if (!submit_infos.empty()) {
-                    submission_runtime.Enqueue(std::move(submit_infos));
+                if (!submit_infos.empty() || !runtime_state->present_ops.empty()) {
+                    submission_runtime.Enqueue(
+                        std::move(submit_infos),
+                        std::move(runtime_state->present_ops)
+                    );
                 }
             },
             std::move(handoff_dependencies),

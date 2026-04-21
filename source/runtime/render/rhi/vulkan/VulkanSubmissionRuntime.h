@@ -61,6 +61,7 @@ struct SubmissionBatch {
 
     EKind                              kind{EKind::Submit};
     Array<SubmitInfo>                  submits{};
+    Array<SubmitPresentStage>          present_ops{};
     RootRhiBoundary                    root_rhi_boundary{};
     ERHISyncDepth                      sync_depth{ERHISyncDepth::RHI};
     GraphEventRef                      completion_event{nullptr};
@@ -108,13 +109,14 @@ public:
     VulkanSubmissionRuntime(VulkanSubmissionRuntime&&) noexcept            = delete;
     VulkanSubmissionRuntime& operator=(VulkanSubmissionRuntime&&) noexcept = delete;
 
-    void Enqueue(Array<SubmitInfo>&& submits);
+    void Enqueue(Array<SubmitInfo>&& submits, Array<SubmitPresentStage>&& present_ops);
     GraphEventRef Sync(ERHISyncDepth depth);
     void Drain();
     void Flush();
     void Shutdown();
 
 private:
+    void             BindSubmitBatchRootBoundary(SubmissionBatch& batch);
     OrderedBatchRuntimeState InitOrderedBatchRuntimeState(SubmissionBatch& batch);
     void             RunOrderedSubmitBatch(SubmissionBatch& batch);
     void             ScanBatchReadiness(OrderedBatchRuntimeState& state);
@@ -123,8 +125,6 @@ private:
                          std::span<const SyncPointId> wait_syncpoints,
                          Array<ResolvedSyncPoint>&    out_resolved_waits
                      ) const;
-    static Array<WaitEvent> CollapseWaitsByTimelineMax(std::span<const ResolvedSyncPoint> resolved_waits);
-    static Array<WaitEvent> CollapseWaitEventsByTimelineMax(std::span<const WaitEvent> wait_events);
     Array<WaitEvent> BuildResolvedWaits(
         const OrderedBatchRuntimeState& state,
         const SubmitInfo&               submit,
@@ -135,6 +135,14 @@ private:
                          const ResolvedSyncPoint& resolved_syncpoint
                      );
     RootRhiBoundary  BuildBatchTailBoundary(const OrderedBatchRuntimeState& state) const;
+    void             ExecutePresentStages(
+                         const Array<SubmitPresentStage>& present_ops,
+                         std::span<const WaitEvent>       initial_waits
+                     );
+    std::optional<WaitEvent> ExecutePresentStage(
+        const SubmitPresentStage& present_stage,
+        std::span<const WaitEvent> wait_events
+    );
     void             JoinSubmissionThread();
     void             RunSubmissionThread();
     SubmissionPresentContext& GetOrCreatePresentContext(EQueueType queue_type);
@@ -145,11 +153,6 @@ private:
     GraphEventRef    EnqueueOrderedSyncRequestUnchecked(ERHISyncDepth depth, SubmissionBatch::EKind kind);
     GraphEventRef    EnqueueDrainRequestUnchecked();
     void             AttachSyncDependencies(SubmissionBatch& batch);
-    RootRhiBoundary  SnapshotPendingRhiBoundary();
-    void             StorePendingRhiBoundary(RootRhiBoundary&& boundary);
-    static GraphEventRef CreateCompletedEvent();
-    static GraphEventRef CreateCompletionWaitEvent(const GraphEventRef& completion_event);
-    static void      FinishBatchCompletion(SubmissionBatch& batch);
 
 private:
     VulkanInterruptRuntime& interrupt_runtime;
@@ -164,7 +167,6 @@ private:
     std::deque<SubmissionBatch> submission_queue{};
     std::jthread            submission_thread{};
 
-    std::mutex              tail_mutex{};
     RootRhiBoundary         pending_rhi_boundary{};
     std::mutex              present_context_mutex{};
     std::array<std::unique_ptr<SubmissionPresentContext>, static_cast<size_t>(EQueueType::Num)>

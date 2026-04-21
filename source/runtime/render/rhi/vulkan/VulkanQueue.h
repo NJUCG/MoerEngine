@@ -168,6 +168,7 @@ struct VulkanQueueRuntimeSubmitResult {
     Array<std::function<void()>> callbacks{};
     Array<SignalEvent>          signal_events{};
     Array<GPUEvent>             gpu_events{};
+    bool                        has_frame_boundary_event{false};
     uint64                      timeline_value{0};
     bool                        scheduled_completion{false};
 };
@@ -178,6 +179,7 @@ struct VulkanCopyQueueRuntimeSubmitResult {
     Array<std::function<void()>> callbacks{};
     Array<IOSignalEvt>          signal_events{};
     Array<GPUEvent>             gpu_events{};
+    bool                        has_frame_boundary_event{false};
     uint64                      timeline_value{0};
     bool                        scheduled_completion{false};
 };

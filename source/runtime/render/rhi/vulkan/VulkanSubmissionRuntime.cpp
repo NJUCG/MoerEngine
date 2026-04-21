@@ -122,10 +122,59 @@ size_t QueueTypeIndex(EQueueType queue) {
     return index;
 }
 
-bool HasFrameBoundaryEvent(std::span<const GPUEvent> gpu_events) {
-    return std::any_of(gpu_events.begin(), gpu_events.end(), [](const GPUEvent& event) {
-        return event.type == GPUEvent::EType::FrameBoundary;
-    });
+Array<WaitEvent> CollapseWaitsByTimelineMax(std::span<const ResolvedSyncPoint> resolved_waits) {
+    UnorderedMap<uint64, uint64> max_value_by_handle{};
+    max_value_by_handle.reserve(resolved_waits.size());
+    for (const ResolvedSyncPoint& wait : resolved_waits) {
+        auto& max_value = max_value_by_handle[wait.timeline_handle];
+        max_value       = std::max(max_value, wait.value);
+    }
+
+    Array<WaitEvent> final_waits{};
+    final_waits.reserve(max_value_by_handle.size());
+    for (const auto& [timeline_handle, value] : max_value_by_handle) {
+        final_waits.emplace_back(WaitEvent{timeline_handle, value});
+    }
+    return final_waits;
+}
+
+Array<WaitEvent> CollapseWaitEventsByTimelineMax(std::span<const WaitEvent> wait_events) {
+    UnorderedMap<uint64, uint64> max_value_by_handle{};
+    max_value_by_handle.reserve(wait_events.size());
+    for (const WaitEvent& wait : wait_events) {
+        auto& max_value = max_value_by_handle[wait.timeline_handle];
+        max_value       = std::max(max_value, wait.value);
+    }
+
+    Array<WaitEvent> final_waits{};
+    final_waits.reserve(max_value_by_handle.size());
+    for (const auto& [timeline_handle, value] : max_value_by_handle) {
+        final_waits.emplace_back(WaitEvent{timeline_handle, value});
+    }
+    return final_waits;
+}
+
+GraphEventRef CreateCompletedEvent() {
+    GraphEventRef completed = GraphEvent::CreateGraphEvent();
+    completed->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+    return completed;
+}
+
+GraphEventRef CreateCompletionWaitEvent(const GraphEventRef& completion_event) {
+    GraphEventRef wait_event = GraphEvent::CreateGraphEvent();
+    if (completion_event) {
+        wait_event->WaitUntil(completion_event);
+    }
+    wait_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+    return wait_event;
+}
+
+void FinishBatchCompletion(SubmissionBatch& batch) {
+    if (!batch.completion_event) {
+        assert(!BatchKindRequiresCompletionEvent(batch.kind) && "blocking batch must have a completion event");
+        return;
+    }
+    batch.completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
 }
 
 } // namespace
@@ -424,8 +473,8 @@ VulkanSubmissionRuntime::~VulkanSubmissionRuntime() {
     Shutdown();
 }
 
-void VulkanSubmissionRuntime::Enqueue(Array<SubmitInfo>&& submits) {
-    if (submits.empty()) {
+void VulkanSubmissionRuntime::Enqueue(Array<SubmitInfo>&& submits, Array<SubmitPresentStage>&& present_ops) {
+    if (submits.empty() && present_ops.empty()) {
         return;
     }
     assert(b_enable.load(std::memory_order_acquire) && "Enqueue is not allowed after shutdown begins");
@@ -435,7 +484,8 @@ void VulkanSubmissionRuntime::Enqueue(Array<SubmitInfo>&& submits) {
     SubmissionBatch batch{};
     batch.kind             = SubmissionBatch::EKind::Submit;
     batch.submits          = std::move(submits);
-    batch.root_rhi_boundary = SnapshotPendingRhiBoundary();
+    batch.present_ops      = std::move(present_ops);
+    batch.root_rhi_boundary.host_event = GraphEvent::CreateGraphEvent();
     {
         std::lock_guard<std::mutex> lock(submission_mutex);
         submission_queue.emplace_back(std::move(batch));
@@ -542,6 +592,20 @@ void VulkanSubmissionRuntime::JoinSubmissionThread() {
     }
 }
 
+void VulkanSubmissionRuntime::BindSubmitBatchRootBoundary(SubmissionBatch& batch) {
+    assert(batch.kind == SubmissionBatch::EKind::Submit && "root boundary binding only applies to submit batches");
+
+    if (!batch.root_rhi_boundary.host_event) {
+        batch.root_rhi_boundary.host_event = GraphEvent::CreateGraphEvent();
+    }
+
+    if (pending_rhi_boundary.host_event) {
+        batch.root_rhi_boundary.host_event->WaitUntil(pending_rhi_boundary.host_event);
+    }
+    batch.root_rhi_boundary.gpu_waits = pending_rhi_boundary.gpu_waits;
+    batch.root_rhi_boundary.host_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+}
+
 OrderedBatchRuntimeState VulkanSubmissionRuntime::InitOrderedBatchRuntimeState(SubmissionBatch& batch) {
     OrderedBatchRuntimeState state{};
     state.submits            = std::move(batch.submits);
@@ -567,8 +631,15 @@ void VulkanSubmissionRuntime::RunOrderedSubmitBatch(SubmissionBatch& batch) {
         }
     }
 
+    RootRhiBoundary batch_tail_boundary = state.root_rhi_boundary;
     if (!state.submits.empty()) {
-        StorePendingRhiBoundary(BuildBatchTailBoundary(state));
+        batch_tail_boundary = BuildBatchTailBoundary(state);
+        batch_tail_boundary.host_event = state.root_rhi_boundary.host_event;
+        pending_rhi_boundary           = batch_tail_boundary;
+    }
+
+    if (!batch.present_ops.empty()) {
+        ExecutePresentStages(batch.present_ops, batch_tail_boundary.gpu_waits);
     }
 }
 
@@ -670,13 +741,12 @@ uint32 VulkanSubmissionRuntime::FlushPendingReady(OrderedBatchRuntimeState& stat
                     signal_value
                 );
                 if (!result.gpu_events.empty()) {
-                    const bool has_frame_boundary = HasFrameBoundaryEvent(result.gpu_events);
                     GPUEventStream::Get().EnqueueSubmit(
                         std::move(result.gpu_events),
                         submit.queue,
                         result.completion
                     );
-                    if (has_frame_boundary) {
+                    if (result.has_frame_boundary_event) {
                         GPUEventStream::Get().EndFrame();
                     }
                 }
@@ -701,13 +771,12 @@ uint32 VulkanSubmissionRuntime::FlushPendingReady(OrderedBatchRuntimeState& stat
                     signal_value
                 );
                 if (!result.gpu_events.empty()) {
-                    const bool has_frame_boundary = HasFrameBoundaryEvent(result.gpu_events);
                     GPUEventStream::Get().EnqueueSubmit(
                         std::move(result.gpu_events),
                         submit.queue,
                         WaitEvent{result.completion.handle, result.completion.timeline}
                     );
-                    if (has_frame_boundary) {
+                    if (result.has_frame_boundary_event) {
                         GPUEventStream::Get().EndFrame();
                     }
                 }
@@ -749,47 +818,75 @@ uint32 VulkanSubmissionRuntime::FlushPendingReady(OrderedBatchRuntimeState& stat
             }
         );
 
-        if (submit.present_stage.has_value()) {
-            const SubmitPresentStage& present_stage = submit.present_stage.value();
-            if (present_stage.valid && present_stage.present.swapchain && present_stage.present.target.texture) {
-                if (present_stage.present.queue == EQueueType::Copy ||
-                    present_stage.present.queue == EQueueType::Ignore) {
-                    LOG_ERROR("Invalid present queue type: {}", QueueTypeName(present_stage.present.queue));
-                    assert(false && "present must execute on a graphics-capable queue");
-                    return flushed_count;
-                }
-
-                Array<WaitEvent> wait_events{};
-                wait_events.emplace_back(WaitEvent{queue_state.timeline_handle, signal_value});
-                submit.host_fence.Reset();
-                SubmissionPresentContext& context = GetOrCreatePresentContext(present_stage.present.queue);
-                SubmissionPresentResult present_result = context.Present(
-                    present_stage.present,
-                    wait_events,
-                    present_stage.has_source_texture_state ? &present_stage.source_texture_state : nullptr,
-                    submit.host_fence
-                );
-                if (present_result.submitted) {
-                    GraphEventRef present_completion_event = GraphEvent::CreateGraphEvent();
-                    interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
-                        present_stage.op_seq,
-                        present_completion_event,
-                        SubmissionPresentCompletionPayload(
-                            context,
-                            submit.host_fence,
-                            std::move(present_result)
-                        )
-                    ));
-                    context.AppendCompletionBoundary(present_completion_event);
-                }
-            }
-        }
-
         cache.submitted = true;
         state.next_submit_index += 1;
         ++flushed_count;
     }
     return flushed_count;
+}
+
+void VulkanSubmissionRuntime::ExecutePresentStages(
+    const Array<SubmitPresentStage>& present_ops,
+    std::span<const WaitEvent>       initial_waits
+) {
+    Array<WaitEvent> current_waits(initial_waits.begin(), initial_waits.end());
+    for (const SubmitPresentStage& present_stage : present_ops) {
+        const std::optional<WaitEvent> present_completion =
+            ExecutePresentStage(present_stage, current_waits);
+        if (present_completion.has_value()) {
+            current_waits.clear();
+            current_waits.emplace_back(present_completion.value());
+        }
+    }
+}
+
+std::optional<WaitEvent> VulkanSubmissionRuntime::ExecutePresentStage(
+    const SubmitPresentStage& present_stage,
+    std::span<const WaitEvent> wait_events
+) {
+    if (!present_stage.valid) {
+        if (!present_stage.error.empty()) {
+            LOG_ERROR("{}", present_stage.error);
+        }
+        assert(false && "present stage must be valid before runtime execution");
+        return std::nullopt;
+    }
+    if (!present_stage.present.swapchain || !present_stage.present.target.texture) {
+        return std::nullopt;
+    }
+    if (present_stage.present.queue == EQueueType::Copy ||
+        present_stage.present.queue == EQueueType::Ignore) {
+        LOG_ERROR("Invalid present queue type: {}", QueueTypeName(present_stage.present.queue));
+        assert(false && "present must execute on a graphics-capable queue");
+        return std::nullopt;
+    }
+
+    SubmissionHostFence host_fence{};
+    host_fence.Reset();
+    SubmissionPresentContext& context = GetOrCreatePresentContext(present_stage.present.queue);
+    SubmissionPresentResult present_result = context.Present(
+        present_stage.present,
+        wait_events,
+        present_stage.has_source_texture_state ? &present_stage.source_texture_state : nullptr,
+        host_fence
+    );
+    if (!present_result.submitted) {
+        return std::nullopt;
+    }
+
+    const WaitEvent present_completion = present_result.completion;
+    GraphEventRef present_completion_event = GraphEvent::CreateGraphEvent();
+    interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
+        present_stage.op_seq,
+        present_completion_event,
+        SubmissionPresentCompletionPayload(
+            context,
+            host_fence,
+            std::move(present_result)
+        )
+    ));
+    context.AppendCompletionBoundary(present_completion_event);
+    return present_completion;
 }
 
 bool VulkanSubmissionRuntime::TryResolveWaitSyncPoints(
@@ -806,42 +903,6 @@ bool VulkanSubmissionRuntime::TryResolveWaitSyncPoints(
         out_resolved_waits.emplace_back(iter->second);
     }
     return true;
-}
-
-Array<WaitEvent> VulkanSubmissionRuntime::CollapseWaitsByTimelineMax(
-    std::span<const ResolvedSyncPoint> resolved_waits
-) {
-    UnorderedMap<uint64, uint64> max_value_by_handle{};
-    max_value_by_handle.reserve(resolved_waits.size());
-    for (const ResolvedSyncPoint& wait : resolved_waits) {
-        auto& max_value = max_value_by_handle[wait.timeline_handle];
-        max_value       = std::max(max_value, wait.value);
-    }
-
-    Array<WaitEvent> final_waits{};
-    final_waits.reserve(max_value_by_handle.size());
-    for (const auto& [timeline_handle, value] : max_value_by_handle) {
-        final_waits.emplace_back(WaitEvent{timeline_handle, value});
-    }
-    return final_waits;
-}
-
-Array<WaitEvent> VulkanSubmissionRuntime::CollapseWaitEventsByTimelineMax(
-    std::span<const WaitEvent> wait_events
-) {
-    UnorderedMap<uint64, uint64> max_value_by_handle{};
-    max_value_by_handle.reserve(wait_events.size());
-    for (const WaitEvent& wait : wait_events) {
-        auto& max_value = max_value_by_handle[wait.timeline_handle];
-        max_value       = std::max(max_value, wait.value);
-    }
-
-    Array<WaitEvent> final_waits{};
-    final_waits.reserve(max_value_by_handle.size());
-    for (const auto& [timeline_handle, value] : max_value_by_handle) {
-        final_waits.emplace_back(WaitEvent{timeline_handle, value});
-    }
-    return final_waits;
 }
 
 Array<WaitEvent> VulkanSubmissionRuntime::BuildResolvedWaits(
@@ -916,6 +977,7 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
         }
         assert(!BatchKindRequiresCompletionEvent(batch.kind) || batch.completion_event != nullptr);
         if (batch.kind == SubmissionBatch::EKind::Submit) {
+            BindSubmitBatchRootBoundary(batch);
             RunOrderedSubmitBatch(batch);
         }
 
@@ -987,39 +1049,6 @@ void VulkanSubmissionRuntime::AttachSyncDependencies(SubmissionBatch& batch) {
             batch.completion_event->WaitUntil(boundary);
         }
     }
-}
-
-GraphEventRef VulkanSubmissionRuntime::CreateCompletedEvent() {
-    GraphEventRef completed = GraphEvent::CreateGraphEvent();
-    completed->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-    return completed;
-}
-
-GraphEventRef VulkanSubmissionRuntime::CreateCompletionWaitEvent(const GraphEventRef& completion_event) {
-    GraphEventRef wait_event = GraphEvent::CreateGraphEvent();
-    if (completion_event) {
-        wait_event->WaitUntil(completion_event);
-    }
-    wait_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-    return wait_event;
-}
-
-void VulkanSubmissionRuntime::FinishBatchCompletion(SubmissionBatch& batch) {
-    if (!batch.completion_event) {
-        assert(!BatchKindRequiresCompletionEvent(batch.kind) && "blocking batch must have a completion event");
-        return;
-    }
-    batch.completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-}
-
-RootRhiBoundary VulkanSubmissionRuntime::SnapshotPendingRhiBoundary() {
-    std::lock_guard<std::mutex> lock(tail_mutex);
-    return pending_rhi_boundary;
-}
-
-void VulkanSubmissionRuntime::StorePendingRhiBoundary(RootRhiBoundary&& boundary) {
-    std::lock_guard<std::mutex> lock(tail_mutex);
-    pending_rhi_boundary = std::move(boundary);
 }
 
 } // namespace Moer::Render

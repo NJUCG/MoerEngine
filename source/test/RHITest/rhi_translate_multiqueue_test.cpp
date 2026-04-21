@@ -33,6 +33,7 @@
 #include "rhi/GPUEventStream.h"
 #include "rhi/vulkan/VulkanDescriptor.h"
 #include "rhi/vulkan/VulkanDevice.h"
+#include "rhi/vulkan/VulkanSwapChain.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
@@ -2036,6 +2037,30 @@ int RunPresentTests() {
         if (!ValidateUniformValue(iter, iter + 1u, readback_values)) {
             return 1;
         }
+    }
+
+    auto* vk_swapchain = static_cast<VkSwapchain*>(swapchain.Get());
+    if (vk_swapchain == nullptr) {
+        LOG_ERROR("Present test failed to resolve Vulkan swapchain implementation.");
+        return 1;
+    }
+
+    const uint64_t present_only_before = vk_swapchain->image_idx;
+    RHIPresentRequest present_only_request{swapchain, output->GetView()};
+    Array<CommandList> present_only_cmds{};
+    RHIExecutor::Get().Submit(
+        std::move(present_only_cmds),
+        ERHIExecSubmitFlags::FlushGPU,
+        &present_only_request
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+    if (vk_swapchain->image_idx != present_only_before + 1u) {
+        LOG_ERROR(
+            "Present-only submit did not advance swapchain image index: before={}, after={}",
+            present_only_before,
+            vk_swapchain->image_idx
+        );
+        return 1;
     }
 
     RHIExecutor::Get().Sync(ERHISyncDepth::Present);

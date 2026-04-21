@@ -49,7 +49,8 @@ public:
                     request->op_seq_base
                 );
                 if (pipeline_batch.translate_ops.empty() &&
-                    pipeline_batch.submit_ops.empty()) {
+                    pipeline_batch.submit_ops.empty() &&
+                    pipeline_batch.present_ops.empty()) {
                     return;
                 }
 
@@ -123,26 +124,16 @@ private:
     std::atomic_bool         b_enable{true};
 };
 
-static std::mutex g_executor_state_mutex{};
-static std::unique_ptr<VulkanSubmissionExecutorState> g_executor_state{};
-static std::atomic_uint64_t g_executor_op_seq_base{0};
-
-static VulkanSubmissionExecutorState& GetExecutorState() {
-    std::lock_guard<std::mutex> lock(g_executor_state_mutex);
-    if (!g_executor_state) {
-        g_executor_state = std::make_unique<VulkanSubmissionExecutorState>();
-    }
-    return *g_executor_state;
-}
-
-static VulkanSubmissionExecutorState* TryGetExecutorState() {
-    std::lock_guard<std::mutex> lock(g_executor_state_mutex);
-    return g_executor_state.get();
-}
-
 } // namespace
 
-void VulkanSubmissionExecutor::Enqueue(VulkanSubmissionBatch&& batch) {
+struct VulkanSubmissionExecutor::State : VulkanSubmissionExecutorState {};
+
+VulkanSubmissionExecutor::VulkanSubmissionExecutor() :
+    state_(std::make_unique<State>()) {}
+
+VulkanSubmissionExecutor::~VulkanSubmissionExecutor() = default;
+
+void VulkanSubmissionExecutor::Enqueue(RHIBackendSubmissionBatch&& batch) {
     Array<ExecutorOp> ops{};
     ops.reserve(batch.submits.size() + (batch.present.has_value() ? 1u : 0u));
     for (auto& submit_entry : batch.submits) {
@@ -171,36 +162,24 @@ void VulkanSubmissionExecutor::Enqueue(VulkanSubmissionBatch&& batch) {
         return;
     }
 
-    const uint64 op_seq_base = g_executor_op_seq_base.fetch_add(
+    const uint64 op_seq_base = executor_op_seq_base_.fetch_add(
         EstimatePlatformOpCount(ops),
         std::memory_order_relaxed
     );
 
-    GetExecutorState().Enqueue(std::move(ops), op_seq_base, trace_frame);
+    state_->Enqueue(std::move(ops), op_seq_base, trace_frame);
 }
 
 GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth depth) {
-    if (auto* state = TryGetExecutorState(); state != nullptr) {
-        return state->Sync(depth);
-    }
-    return CreateCompletedExecutorEvent();
+    return state_->Sync(depth);
 }
 
 void VulkanSubmissionExecutor::Flush(ERHIFlushDepth depth) {
-    if (auto* state = TryGetExecutorState(); state != nullptr) {
-        state->Flush(depth);
-    }
+    state_->Flush(depth);
 }
 
-void VulkanSubmissionExecutor::Shutdown() {
-    std::unique_ptr<VulkanSubmissionExecutorState> state{};
-    {
-        std::lock_guard<std::mutex> lock(g_executor_state_mutex);
-        state = std::move(g_executor_state);
-    }
-    if (state) {
-        state->Shutdown();
-    }
+void VulkanSubmissionExecutor::ShutDown() {
+    state_->Shutdown();
     VulkanTranslateTask::ResetSchedulerState();
 }
 

@@ -1,14 +1,47 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHI.h"
+#include "rhi/RHIExecutorBackend.h"
 #include "Core.h"
 #include "taskgraph/GraphTask.h"
 #include "vulkan/VulkanSubmissionExecutor.h"
 
 namespace Moer::Render {
 
+namespace {
+
+std::shared_ptr<RHIBackendExecutor> CreateBackendExecutor(ERHIType rhi_type) {
+    switch (rhi_type) {
+        case ERHIType::Vulkan:
+            return std::make_shared<VulkanSubmissionExecutor>();
+        case ERHIType::D3D12:
+            LOG_ERROR("RHIExecutor D3D12 backend executor is not implemented yet");
+            assert(false && "D3D12 backend executor is not implemented yet");
+            return {};
+        default:
+            LOG_ERROR("RHIExecutor got an unsupported RHI type");
+            assert(false && "Unsupported RHI type in RHIExecutor backend creation");
+            return {};
+    }
+}
+
+} // namespace
+
 RHIExecutor& RHIExecutor::Get() {
     static RHIExecutor executor;
     return executor;
+}
+
+std::shared_ptr<RHIBackendExecutor> RHIExecutor::GetBackendExecutorLocked() {
+    if (backend_executor) {
+        return backend_executor;
+    }
+
+    backend_executor = CreateBackendExecutor(RenderDevice::Get().GetRHIType());
+    return backend_executor;
+}
+
+std::shared_ptr<RHIBackendExecutor> RHIExecutor::TryGetBackendExecutorLocked() const {
+    return backend_executor;
 }
 
 void RHIExecutor::Submit(
@@ -56,33 +89,20 @@ void RHIExecutor::Flush(ERHIFlushDepth depth) {
     {
         std::lock_guard<std::mutex> lock(submit_mutex);
         EnqueuePendingLocked();
-    }
-
-    switch (RenderDevice::Get().GetRHIType()) {
-        case ERHIType::Vulkan:
-            VulkanSubmissionExecutor::Flush(depth);
-            break;
-        case ERHIType::D3D12:
-            break;
-        default:
-            assert(false && "Unsupported RHI type in RHIExecutor::Flush");
-            break;
+        if (backend_executor) {
+            backend_executor->Flush(depth);
+        }
     }
 }
 
 void RHIExecutor::Sync(ERHISyncDepth depth) {
-    Flush(ERHIFlushDepth::SubmitGPU);
-
     GraphEventRef event = nullptr;
-    switch (RenderDevice::Get().GetRHIType()) {
-        case ERHIType::Vulkan:
-            event = VulkanSubmissionExecutor::Sync(depth);
-            break;
-        case ERHIType::D3D12:
-            break;
-        default:
-            assert(false && "Unsupported RHI type in RHIExecutor::Sync");
-            break;
+    {
+        std::lock_guard<std::mutex> lock(submit_mutex);
+        EnqueuePendingLocked();
+        if (backend_executor) {
+            event = backend_executor->Sync(depth);
+        }
     }
     if (event) {
         event->Wait();
@@ -94,24 +114,16 @@ void RHIExecutor::ShutDown() {
     {
         std::lock_guard<std::mutex> lock(executor.submit_mutex);
         executor.EnqueuePendingLocked();
-    }
-
-    switch (RenderDevice::Get().GetRHIType()) {
-        case ERHIType::Vulkan:
-            VulkanSubmissionExecutor::Shutdown();
-            break;
-        case ERHIType::D3D12:
-            break;
-        default:
-            assert(false && "Unsupported RHI type in RHIExecutor::ShutDown");
-            break;
+        if (executor.backend_executor) {
+            executor.backend_executor->ShutDown();
+            executor.backend_executor.reset();
+        }
     }
 }
 
 void RHIExecutor::EnqueuePendingLocked() {
-    VulkanSubmissionBatch batch{};
+    RHIBackendSubmissionBatch batch{};
     batch.submits.reserve(pending_command_lists.size());
-    bool require_present_sync_fallback = false;
 
     std::optional<EQueueType> last_non_empty_queue{};
     for (auto& command_list : pending_command_lists) {
@@ -125,12 +137,6 @@ void RHIExecutor::EnqueuePendingLocked() {
     pending_command_lists.clear();
 
     if (pending_present.has_value()) {
-        if (!last_non_empty_queue.has_value()) {
-            LOG_WARNING(
-                "RHIExecutor::Submit got a present-only flush; using ERHISyncDepth::Present as a fallback"
-            );
-            require_present_sync_fallback = true;
-        }
         if (last_non_empty_queue.has_value() && last_non_empty_queue.value() != EQueueType::Graphics) {
             LOG_ERROR("RHIExecutor::Submit requires the last command list before present to be Graphics");
             assert(false && "Present requires the last command list to run on the Graphics queue");
@@ -146,14 +152,7 @@ void RHIExecutor::EnqueuePendingLocked() {
         return;
     }
 
-    if (require_present_sync_fallback) {
-        GraphEventRef event = VulkanSubmissionExecutor::Sync(ERHISyncDepth::Present);
-        if (event) {
-            event->Wait();
-        }
-    }
-
-    VulkanSubmissionExecutor::Enqueue(std::move(batch));
+    GetBackendExecutorLocked()->Enqueue(std::move(batch));
 }
 
 } // namespace Moer::Render
