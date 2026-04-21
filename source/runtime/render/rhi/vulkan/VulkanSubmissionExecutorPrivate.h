@@ -292,6 +292,9 @@ public:
 
     void Dispatch(
         TranslatePipelineBatch&& pipeline_batch,
+        uint64                   trace_frame,
+        TaskPipe&                translate_dispatch_pipe,
+        TaskPipe&                translate_pipe,
         VulkanSubmissionRuntime& submission_runtime
     );
 
