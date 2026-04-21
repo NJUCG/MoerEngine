@@ -439,7 +439,7 @@ static void DispatchTranslatePipelineBatch(
         Array<PendingSubmitTask>  submit_ops{};
         Array<TranslateResult>    translate_results{};
         Array<std::optional<SubmitInfo>> assembled_submit_infos{};
-        uint64                    trace_frame{0};
+        uint64                    batch_trace_frame{0};
     };
 
     auto runtime_state = std::make_shared<PipelineRuntimeState>();
@@ -447,7 +447,7 @@ static void DispatchTranslatePipelineBatch(
     runtime_state->submit_ops             = std::move(pipeline_batch.submit_ops);
     runtime_state->translate_results.resize(runtime_state->translate_ops.size());
     runtime_state->assembled_submit_infos.resize(runtime_state->submit_ops.size());
-    runtime_state->trace_frame = trace_frame;
+    runtime_state->batch_trace_frame = trace_frame;
 
     for (size_t index = 0; index < runtime_state->translate_ops.size(); ++index) {
         auto& translate_task = runtime_state->translate_ops[index];
@@ -457,13 +457,13 @@ static void DispatchTranslatePipelineBatch(
 
         translate_dispatch_pipe.Enqueue(
             [runtime_state, index]() mutable {
-                ScopedRHITraceFrame trace_scope(runtime_state->trace_frame);
+                ScopedRHITraceFrame dispatch_trace_scope(runtime_state->batch_trace_frame);
                 TRACE_SCOPE_CAT("Vulkan.TranslateDispatchPipe", "RHI");
 
                 auto& current = runtime_state->translate_ops[index];
                 auto dispatch = LambdaTask::Create(
                     [runtime_state, index]() mutable {
-                        ScopedRHITraceFrame trace_scope(runtime_state->trace_frame);
+                        ScopedRHITraceFrame translate_trace_scope(runtime_state->batch_trace_frame);
                         TRACE_SCOPE_CAT("Vulkan.TranslateDispatchTask", "RHI");
 
                         auto& current = runtime_state->translate_ops[index];
@@ -502,7 +502,7 @@ static void DispatchTranslatePipelineBatch(
         }
         translate_pipe.Enqueue(
             [runtime_state, index]() mutable {
-                ScopedRHITraceFrame trace_scope(runtime_state->trace_frame);
+                ScopedRHITraceFrame submit_trace_scope(runtime_state->batch_trace_frame);
                 TRACE_SCOPE_CAT("Vulkan.TranslatePipe", "RHI");
 
                 auto& current = runtime_state->submit_ops[index];
@@ -555,7 +555,7 @@ static void DispatchTranslatePipelineBatch(
         // serial handoff task instead of blocking a translate-pipe closure with a raw wait.
         translate_pipe.Enqueue(
             [runtime_state, &submission_runtime]() mutable {
-                ScopedRHITraceFrame trace_scope(runtime_state->trace_frame);
+                ScopedRHITraceFrame handoff_trace_scope(runtime_state->batch_trace_frame);
                 TRACE_SCOPE_CAT("Vulkan.TranslateRuntimeHandoff", "RHI");
 
                 Array<SubmitInfo> submit_infos{};
