@@ -202,21 +202,17 @@ void ConsoleSystem::PumpCommandOutputs() {
 
 void ConsoleSystem::HandleHotkeys() {
     if (ImGui::GetIO().WantTextInput) {
-        m_last_grave_switch_state = false;
         m_last_escape_down = ImGui::IsKeyDown(ImGuiKey_Escape);
         return;
     }
 
     const bool grave_released = ImGui::IsKeyReleased(ImGuiKey_GraveAccent);
-    if (grave_released && !m_last_grave_switch_state) {
-        m_last_grave_switch_state = true;
+    if (grave_released) {
         if (IsRenderWindowActive()) {
             CycleMode();
         } else {
             ToggleEditorConsolePage();
         }
-    } else if (!grave_released) {
-        m_last_grave_switch_state = false;
     }
 
     const bool escape_down = ImGui::IsKeyDown(ImGuiKey_Escape);

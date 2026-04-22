@@ -138,15 +138,33 @@ void VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
 }
 void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
     if (_info.size.x == 0 || _info.size.y == 0) {
+        size = _info.size;
         LOG_WARNING("Swapchain recreate skipped due to zero window size.");
         return;
     }
+    const bool surface_identity_changed =
+        surface != VK_NULL_HANDLE &&
+        (surface_info.native_window_handle != _info.surface.native_window_handle ||
+         surface_info.surface_user_data != _info.surface.surface_user_data ||
+         surface_info.create_vulkan_surface != _info.surface.create_vulkan_surface);
+
     bool           b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
     VkSwapchainKHR old_sc     = handle;
     VkInstance     instance   = device.GetInstance();
     if (b_recreate) {
         Sync();
     }
+
+    if (surface_identity_changed) {
+        if (old_sc != VK_NULL_HANDLE) {
+            vkDestroySwapchainKHR(device.GetDevice(), old_sc, VK_NULL_HANDLE);
+            old_sc = VK_NULL_HANDLE;
+            handle = VK_NULL_HANDLE;
+        }
+        vkDestroySurfaceKHR(device.GetInstance(), surface, VK_NULL_HANDLE);
+        surface = VK_NULL_HANDLE;
+    }
+
     if (surface == VK_NULL_HANDLE) {
         assert(_info.surface.create_vulkan_surface && "Vulkan swapchain requires a surface creation callback");
         _info.surface.create_vulkan_surface(
@@ -156,6 +174,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             &surface
         );
         assert(surface != VK_NULL_HANDLE && "Vulkan surface creation returned a null surface");
+        surface_info = _info.surface;
     }
     //create swapchain
     VkSurfaceCapabilitiesKHR capabilities;

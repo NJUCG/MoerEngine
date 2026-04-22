@@ -82,7 +82,6 @@ private:
     bool m_editor_console_page_open = true;
     bool m_editor_console_input_active   = false;
 
-    bool m_last_grave_switch_state = false;
     bool m_last_escape_down        = false;
     bool m_focus_input_next_frame  = false;
     bool m_focus_window_next_frame = false;

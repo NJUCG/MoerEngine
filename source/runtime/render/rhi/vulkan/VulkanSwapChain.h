@@ -58,6 +58,7 @@ public:
 
     VkSwapchainKHR      handle  = VK_NULL_HANDLE;
     VkSurfaceKHR        surface = VK_NULL_HANDLE;
+    SwapchainSurfaceInfo surface_info{};
     class VulkanDevice& device;
     uint64              image_idx            = 0; // present queue timeline value
     uint                max_frames_in_flight = 3;

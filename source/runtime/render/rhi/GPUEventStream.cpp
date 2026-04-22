@@ -479,11 +479,14 @@ void GPUEventStream::FlushToProfiler() {
 
 void GPUEventStream::FlushCrashSafeToProfiler() {
     Array<ResolvedGPUFrame> frames_to_emit;
-    {
-        std::lock_guard lock(stream_mutex);
-        frames_to_emit = ready_frames;
-        ready_frames.clear();
+    std::unique_lock lock(stream_mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return;
     }
+
+    frames_to_emit = ready_frames;
+    ready_frames.clear();
+    lock.unlock();
 
     for (const ResolvedGPUFrame& frame : frames_to_emit) {
         EmitFrameToProfileDump(frame);

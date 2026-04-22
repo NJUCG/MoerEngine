@@ -646,8 +646,8 @@ void EditorUI::ApplyInputSnapshot() {
         Render::ImGuiIOInputApplyParams{
             .scene_active            = m_scene_color_hovered,
             .play_capture            = m_config->play_mode_enabled && m_config->play_mode_capture_input,
-            .external_key_block      = WindowInput::Get().block_camera_keyboard_input,
-            .external_cursor_visible = WindowInput::Get().force_cursor_visible,
+            .external_key_block      = false,
+            .external_cursor_visible = false,
         }
     );
 }

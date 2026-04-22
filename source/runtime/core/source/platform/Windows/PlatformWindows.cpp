@@ -11,8 +11,6 @@
 #include <iomanip>
 #include <winnt.h>
 
-#pragma comment(lib, "Dbghelp.lib")
-
 namespace {
 
 std::mutex& GetSymbolMutex() {
@@ -29,7 +27,8 @@ bool EnsureSymbolsInitialized() {
     return initialized;
 }
 
-std::filesystem::path MakeCrashDumpPath(uint32_t thread_id) {
+std::filesystem::path MakeCrashDumpPath(uint32_t thread_id, std::error_code& error) {
+    error.clear();
     const auto now = std::chrono::system_clock::now();
     const auto time = std::chrono::system_clock::to_time_t(now);
     std::tm    local_time{};
@@ -42,8 +41,17 @@ std::filesystem::path MakeCrashDumpPath(uint32_t thread_id) {
          << "_tid" << thread_id
          << ".dump";
 
-    const std::filesystem::path dump_dir = std::filesystem::current_path() / "logs" / "crash";
-    std::filesystem::create_directories(dump_dir);
+    const std::filesystem::path current_dir = std::filesystem::current_path(error);
+    if (error) {
+        return {};
+    }
+
+    const std::filesystem::path dump_dir = current_dir / "logs" / "crash";
+    std::filesystem::create_directories(dump_dir, error);
+    if (error) {
+        return {};
+    }
+
     return dump_dir / name.str();
 }
 
@@ -108,7 +116,13 @@ std::string WindowsPlatform::FormatStackTrace(const PlatformStackTrace& trace) {
 
 PlatformCrashDumpResult WindowsPlatform::WriteCrashDump(const PlatformCrashDumpRequest& request) {
     PlatformCrashDumpResult result{};
-    const std::filesystem::path dump_path = MakeCrashDumpPath(request.thread_id);
+    std::error_code           path_error;
+    const std::filesystem::path dump_path = MakeCrashDumpPath(request.thread_id, path_error);
+    if (path_error) {
+        result.error_message = "Failed to prepare crash dump path: " + path_error.message();
+        return result;
+    }
+
     HANDLE file = ::CreateFileW(
         dump_path.wstring().c_str(),
         GENERIC_WRITE,
@@ -122,11 +136,6 @@ PlatformCrashDumpResult WindowsPlatform::WriteCrashDump(const PlatformCrashDumpR
         result.error_message = "CreateFileW failed";
         return result;
     }
-
-    MINIDUMP_EXCEPTION_INFORMATION exception_info{};
-    exception_info.ThreadId = request.thread_id;
-    exception_info.ExceptionPointers = nullptr;
-    exception_info.ClientPointers = FALSE;
 
     const BOOL ok = ::MiniDumpWriteDump(
         GetCurrentProcess(),

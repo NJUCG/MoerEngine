@@ -46,16 +46,18 @@ SwapchainSurfaceInfo PresentationSurface::BuildSurfaceInfo(Moer::WindowHandle* w
 }
 
 void PresentationSurface::Resize(Extent2D new_size) {
-    if (new_size.x == 0 || new_size.y == 0) {
-        swapchain_info.size = new_size;
-        return;
-    }
-
-    if (swapchain && swapchain->size.x == new_size.x && swapchain->size.y == new_size.y) {
-        return;
-    }
-
+    const Extent2D previous_size = swapchain_info.size;
     swapchain_info.size = new_size;
+
+    if (new_size.x == 0 || new_size.y == 0) {
+        frame_buffer = nullptr;
+        return;
+    }
+
+    if (swapchain && previous_size.x == new_size.x && previous_size.y == new_size.y) {
+        return;
+    }
+
     frame_buffer        = nullptr;
     if (!swapchain) {
         swapchain = device.CreateSwapchain(swapchain_info);
@@ -73,32 +75,33 @@ void PresentationSurface::Sync() {
 }
 
 RHIPresentRequest PresentationSurface::CreatePresentRequest(TextureView source) const {
-    assert(swapchain && "PresentationSurface cannot present without a swapchain");
+    assert(IsPresentable() && "PresentationSurface cannot present without a presentable swapchain");
     assert(source.GetTexture() && "PresentationSurface present source is null");
 
     const uint3 source_extent = source.GetTexture()->GetExtent();
-    assert(source_extent.x == swapchain->size.x && source_extent.y == swapchain->size.y &&
+    assert(source_extent.x == swapchain_info.size.x && source_extent.y == swapchain_info.size.y &&
            "PresentationSurface present source extent must match the swapchain extent");
 
     return RHIPresentRequest{swapchain, source};
 }
 
 TextureRef PresentationSurface::EnsureFrameBuffer(EPixelFormat format, ETextureUsageFlags usage) {
-    if (!swapchain || swapchain->size.x == 0 || swapchain->size.y == 0) {
+    if (!swapchain || swapchain_info.size.x == 0 || swapchain_info.size.y == 0) {
         frame_buffer = nullptr;
         return nullptr;
     }
 
     if (frame_buffer) {
         const uint3 extent = frame_buffer->GetExtent();
-        if (extent.x == swapchain->size.x && extent.y == swapchain->size.y && frame_buffer->GetFormat() == format) {
+        if (extent.x == swapchain_info.size.x && extent.y == swapchain_info.size.y &&
+            frame_buffer->GetFormat() == format) {
             return frame_buffer;
         }
     }
 
     frame_buffer = device.CreateTexture(
         debug_name,
-        Extent2D(swapchain->size.x, swapchain->size.y),
+        Extent2D(swapchain_info.size.x, swapchain_info.size.y),
         format,
         usage
     );
@@ -123,11 +126,11 @@ EPixelFormat PresentationSurface::GetFormat() const {
 }
 
 Extent2D PresentationSurface::GetSize() const {
-    return swapchain ? swapchain->size : swapchain_info.size;
+    return swapchain_info.size;
 }
 
 bool PresentationSurface::IsPresentable() const {
-    return swapchain && swapchain->size.x > 0 && swapchain->size.y > 0;
+    return swapchain && swapchain_info.size.x > 0 && swapchain_info.size.y > 0;
 }
 
 } // namespace Moer::Render

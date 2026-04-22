@@ -84,7 +84,6 @@ void StopRenderThread() {
     auto return_event = GraphTask<ReturnGraphTask>::Create(EThread::ERenderThread).Dispatch();
     //not sure, game thread tasks should not be executing, because we are currently on Game Thread
     MOER_ASSERT(
-        !TaskGraph::GetInterface().IsThreadProcessingTask(EThread::EMainThread) &&
         !TaskGraph::GetInterface().IsThreadProcessingTask(EThread::EMainThread),
         "Game thread must not be processing main-thread tasks while stopping the render thread"
     );

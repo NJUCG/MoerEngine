@@ -163,7 +163,7 @@ void Platform::SetEnv(const char* _name, const char* _value) {
 
 PlatformStackTrace Platform::CaptureStackTrace(uint32_t frames_to_skip, uint32_t max_frames) {
 #if PLATFORM_WINDOWS
-    return WindowsPlatform::CaptureStackTrace(frames_to_skip + 1, max_frames);
+    return WindowsPlatform::CaptureStackTrace(frames_to_skip, max_frames);
 #else
     (void)frames_to_skip;
     (void)max_frames;
