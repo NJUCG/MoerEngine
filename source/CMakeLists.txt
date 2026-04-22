@@ -1,4 +1,4 @@
-if (MOER_CORE_ONLY)
+if (LINUX)
     set(moer_runtime_dir ${moer_source_dir}/runtime)
     set(moer_runtime_core_dir ${moer_runtime_dir}/core)
 

@@ -180,13 +180,6 @@ int main() {
     Moer::TaskGraphTest();
     std::cout << "[TESTCASE][PASS] TaskGraphSuite\n";
 
-#if defined(MOER_CORE_ONLY) && defined(PLATFORM_LINUX)
-    std::cout << "[TESTCASE][SKIP] ParallelFor :: skipped in core-only regression mode\n";
-    std::cout << "[TESTCASE][SKIP] ParallelForAsync :: skipped in core-only regression mode\n";
-    Moer::TaskSystem::ShutDown();
-    return 0;
-#endif
-
     std::atomic<int> k = 0;
     ParallelFor(10, [&](int _idx) {
         k += 60;

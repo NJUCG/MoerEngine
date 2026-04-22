@@ -1,6 +1,6 @@
 set(moer_test_folder "test")
 
-if (NOT MOER_CORE_ONLY)
+if (WIN32)
     add_subdirectory(math)
 endif()
 
@@ -64,10 +64,6 @@ if (LINUX)
             TestTaskPipe
     )
     set_target_properties(TestCoreLinux PROPERTIES FOLDER ${moer_test_folder})
-endif()
-
-if (MOER_CORE_ONLY)
-    return()
 endif()
 
 # add_executable(MeshProcessTest "MeshProcessTest.cpp")

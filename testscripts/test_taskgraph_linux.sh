@@ -56,7 +56,6 @@ cmake -S "${REPO_ROOT}" -B "${BUILD_DIR}" -G Ninja \
     -DCMAKE_BUILD_TYPE="${CONFIG}" \
     -DCMAKE_C_COMPILER=clang \
     -DCMAKE_CXX_COMPILER=clang++ \
-    -DMOER_CORE_ONLY=ON \
     -Dmoer_build_test=ON \
     -DWITH_CUDA=OFF \
     -DWITH_NRD=OFF

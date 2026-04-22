@@ -52,12 +52,6 @@ add_compile_definitions(EDITOR_MODE_ON=1)
 
 option(moer_build_test "build test unit" ON)
 option(moer_enable_trace "Enable profiler trace instrumentation" ON)
-option(MOER_CORE_ONLY "Build only core libraries and core tests" OFF)
-
-if(MOER_CORE_ONLY)
-    add_compile_definitions(MOER_CORE_ONLY=1)
-    message(STATUS "MOER_CORE_ONLY = ON")
-endif()
 
 if(moer_enable_trace)
     add_compile_definitions(MOER_TRACE_ENABLED=$<IF:$<CONFIG:Release>,0,1>)
