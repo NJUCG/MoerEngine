@@ -47,6 +47,24 @@ static constexpr VulkanExtensionDesc vulkan_extension_descs[] = {
     },
     {
         .kind     = EVulkanExtensionKind::Device,
+        .name     = VK_KHR_MAINTENANCE_5_EXTENSION_NAME,
+        .optional = true,
+        .factory  = nullptr,
+    },
+    {
+        .kind     = EVulkanExtensionKind::Device,
+        .name     = VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME,
+        .optional = true,
+        .factory  = &CreateVulkanKHRShaderUntypedPointersExtension,
+    },
+    {
+        .kind     = EVulkanExtensionKind::Device,
+        .name     = VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
+        .optional = true,
+        .factory  = &CreateVulkanEXTDescriptorHeapExtension,
+    },
+    {
+        .kind     = EVulkanExtensionKind::Device,
         .name     = VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
         .optional = false,
         .factory  = &CreateVulkanKHRPushDescriptorExtension,

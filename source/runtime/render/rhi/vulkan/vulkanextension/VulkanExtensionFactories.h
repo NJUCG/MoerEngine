@@ -9,6 +9,8 @@ std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTSwapchainMaintenance1Exten
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRAccelerationStructureExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRRayTracingPipelineExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRRayQueryExtension(bool _optional);
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRShaderUntypedPointersExtension(bool _optional);
+std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTDescriptorHeapExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTDescriptorBufferExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRPushDescriptorExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTMemoryDecompressionExtension(bool _optional);

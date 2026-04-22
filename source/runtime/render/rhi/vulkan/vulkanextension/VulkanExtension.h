@@ -170,6 +170,9 @@ public:
     }
 
     // optional extensions
+    bool m_has_khr_shader_untyped_pointers                = false;
+    bool m_has_ext_descriptor_heap                         = false;
+    bool m_has_descriptor_heap_runtime                     = false;
     bool m_has_ext_descriptor_buffer                       = false;
     bool m_has_khr_acceleration_structure                  = false;
     bool m_has_khr_ray_tracing_pipeline                    = false;

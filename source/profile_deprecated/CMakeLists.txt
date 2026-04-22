@@ -2,7 +2,7 @@ if(WITH_PROFILE)
     message(STATUS "CMake WITH_PROFILE == ON")
     
     set(target_name moer_profile)
-    set(moer_profile_dir ${moer_source_dir}/profile)
+    set(moer_profile_dir ${moer_source_dir}/profile_deprecated)
     file(GLOB PROFILE_HEADERS CONFIGURE_DEPENDS "${moer_profile_dir}/*.h")
     file(GLOB PROFILE_SOURCES CONFIGURE_DEPENDS "${moer_profile_dir}/*.cpp")
     list(REMOVE_ITEM PROFILE_SOURCES "${moer_profile_dir}/moer_profiler.cpp")
