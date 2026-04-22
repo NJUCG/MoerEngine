@@ -7,6 +7,7 @@
 #include "shader/ShaderResourceManager.h"
 
 #include "common/UiCombinePass.h"
+#include "renderer/common/PresentationSurface.h"
 
 namespace Moer {
 class RuntimeAssets;
@@ -70,10 +71,9 @@ protected:
     uint2&         resolution; // 数据源位于EditorConfig中
     ::Moer::RuntimeAssets& runtime_assets;
 
-    SwapchainRef     swapchain;
-    BindlessArrayRef bindless_array;
+    UniquePtr<PresentationSurface> presentation_surface;
+    BindlessArrayRef               bindless_array;
 
-    SwapchainCreateInfo swapchain_createinfo;
     Scene               scene;
     CommandList         cmd_list;
 

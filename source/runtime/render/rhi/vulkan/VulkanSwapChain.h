@@ -9,7 +9,6 @@
 #include "misc/CountableRef.h"
 #include "rhi/RHI.h"
 #include "rhi/RHIResource.h"
-#include "window/WindowContext.h"
 
 #include "VulkanPlatform.h"
 namespace Moer::Render {

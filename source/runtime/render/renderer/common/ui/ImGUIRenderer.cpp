@@ -11,6 +11,7 @@
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "renderer/common/PresentationSurface.h"
 
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -30,6 +31,7 @@
 #include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <string>
 
 #include <backends/imgui_impl_glfw.h>
 
@@ -93,17 +95,15 @@ struct GuiFrameRenderBuffers {
     Moer::Render::BufferRef arg_buffer;
 };
 struct GuiViewportData {
-    SwapchainRef sc;
+    UniquePtr<PresentationSurface> surface;
 
     Array<GuiFrameRenderBuffers> render_buffers; // Used by all viewports
-    TextureRef                   framebuffer;
 
-    uint64_t        frame_index;
-    uint32_t        viewport_index;
+    uint64_t        frame_index = 0;
+    uint32_t        viewport_index = 0;
     static uint32_t viewport_count;
 
     GuiViewportData(uint32_t _frame_in_flight) {
-        memset((void*)this, 0, sizeof(*this));
         render_buffers.resize(_frame_in_flight);
         for (uint32_t i = 0; i < _frame_in_flight; ++i) {
             render_buffers[i].vtx_buffer = nullptr;
@@ -342,10 +342,15 @@ void ImGUIRenderBackend::BeginGUIFrame() {
     ImGui_ImplGlfw_NewFrame();
 
     ImGui::NewFrame();
+    input_snapshot = CaptureImGuiIOInput();
 }
 
 void ImGUIRenderBackend::EndGUIFrame() {
     ImGui::Render();
+}
+
+const ImGuiIOInputSnapshot& ImGUIRenderBackend::GetInputSnapshot() const {
+    return input_snapshot;
 }
 
 void ImGUIRenderBackend::RegisterImage(Texture* _texture, Sampler _sampler) {
@@ -399,12 +404,24 @@ void ImGUIRenderBackend::PresentWindows() {
     }
 }
 
-TextureView ImGUIRenderBackend::GetWindowFrameBuffer(void* _window) {
-    ImGuiViewport*   viewport      = (ImGuiViewport*)_window;
-    GuiViewportData* viewport_data = GetGuiViewportData(viewport);
+UIRenderer::WindowRenderTarget ImGUIRenderBackend::GetWindowRenderTarget(std::string_view window_name) {
+    const std::string stable_name(window_name);
+    ImGuiWindow*      window = ImGui::FindWindowByName(stable_name.c_str());
+    if (!window || window->ParentWindow != nullptr || !window->Viewport) {
+        return {};
+    }
 
-    return viewport_data && viewport_data->framebuffer ? viewport_data->framebuffer->GetView() :
-                                                         TextureView();
+    GuiViewportData* viewport_data = GetGuiViewportData(window->Viewport);
+    if (!viewport_data || !viewport_data->surface) {
+        return {};
+    }
+
+    TextureView frame_buffer = viewport_data->surface->GetFrameBufferView();
+    if (!frame_buffer.GetTexture()) {
+        return {};
+    }
+
+    return UIRenderer::WindowRenderTarget{.is_separate_window = true, .frame_buffer = frame_buffer};
 }
 
 } // namespace Moer::Render
@@ -641,35 +658,27 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
     RenderDevice&       rd_device      = render_backend.device;
 
     _viewport->RendererUserData = viewport_data;
-    // viewport_data->copy_fence   = rd_device.CreateFence();
-    // viewport_data->fence        = rd_device.CreateFence();
+
+    if (_viewport->Size.x <= 0.0f || _viewport->Size.y <= 0.0f) {
+        return;
+    }
 
     Moer::WindowHandle handle{(Moer::WindowType*)(_viewport->PlatformHandle ? _viewport->PlatformHandle :
                                                                               _viewport->PlatformHandleRaw)};
-    using namespace Moer::Render;
-    using namespace Moer;
-
-    int width, height;
-    WindowContext::GetWindowSize(&handle, &width, &height);
-
-    SwapchainCreateInfo swapchain_info{
-        .window_handle    = (uint64)&handle,
-        .size             = {(uint)_viewport->Size.x, (uint)_viewport->Size.y},
-        .back_buffer_sz   = backend_data.num_frames_in_flight,
-        .preferred_format = PF_R8G8B8A8_SRGB
-    };
-
-    if (width == 0 || height == 0) {
-        return;
-    }
-    viewport_data->sc          = rd_device.CreateSwapchain(swapchain_info);
-    viewport_data->framebuffer = rd_device.CreateTexture(
-        std::format("ImGui Window {}", viewport_data->viewport_index),
-        Extent2D(_viewport->Size.x, _viewport->Size.y),
+    viewport_data->surface = MakeUnique<PresentationSurface>(
+        rd_device,
+        PresentationSurfaceDesc{
+            .window            = handle,
+            .size              = {(uint)_viewport->Size.x, (uint)_viewport->Size.y},
+            .back_buffer_count = backend_data.num_frames_in_flight,
+            .preferred_format  = PF_R8G8B8A8_SRGB,
+            .debug_name        = std::format("ImGui Window {}", viewport_data->viewport_index),
+        }
+    );
+    viewport_data->surface->EnsureFrameBuffer(
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
     );
-    viewport_data->framebuffer->SetName(std::format("ImGui Window {}", viewport_data->viewport_index));
 }
 
 void GuiDestroyWindow(ImGuiViewport* _viewport) {
@@ -679,75 +688,81 @@ void GuiDestroyWindow(ImGuiViewport* _viewport) {
     auto& device = backend_data.render_backend->device;
 
     if (GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData) {
-        if (viewport_data && viewport_data->sc) {
-            device.GetCommandQueue(EQueueType::Graphics).Sync();
-            viewport_data->sc          = nullptr;
-            viewport_data->framebuffer = nullptr;
-            // We could just call ImGui_ImplDX12_DestroyWindow(main_viewport) as a convenience but that would be misleading since we only use data->Resources[]
-            for (uint32_t i = 0; i < backend_data.num_frames_in_flight; i++)
-                DestroyRenderBuffers(&viewport_data->render_buffers[i]);
-            MoerDelete(viewport_data);
+        device.GetCommandQueue(EQueueType::Graphics).Sync();
+        if (viewport_data->surface) {
+            viewport_data->surface->Sync();
+            viewport_data->surface = nullptr;
         }
+        for (uint32_t i = 0; i < backend_data.num_frames_in_flight; i++)
+            DestroyRenderBuffers(&viewport_data->render_buffers[i]);
+        MoerDelete(viewport_data);
     }
     _viewport->RendererUserData = nullptr;
 }
 void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
     GuiViewportData* viewport_data = GetGuiViewportData(_viewport);
-    if (!viewport_data || !viewport_data->sc) {
+    if (!viewport_data) {
         return;
     }
 
     auto& rd_device = GetGUIBackendData()->render_backend->device;
-    auto  sc        = viewport_data->sc;
-    if (sc->size.x == _size.x && sc->size.y == _size.y)
+    if (_size.x <= 0.0f || _size.y <= 0.0f)
         return;
+
+    const Extent2D new_size{(uint)_size.x, (uint)_size.y};
+    if (viewport_data->surface && viewport_data->surface->GetSize().x == new_size.x &&
+        viewport_data->surface->GetSize().y == new_size.y) {
+        return;
+    }
+
     rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
-    sc->Sync();
-
-    Moer::WindowHandle handle{(Moer::WindowType*)(_viewport->PlatformHandle ? _viewport->PlatformHandle :
-                                                                              _viewport->PlatformHandleRaw)};
-
-    SwapchainCreateInfo swapchain_info{
-        .window_handle    = (uintptr_t)&handle,
-        .size             = {(uint)_size.x, (uint)_size.y},
-        .back_buffer_sz   = 2,
-        .preferred_format = PF_R8G8B8A8_SRGB
-    };
-
-    if (_size.x == 0 || _size.y == 0)
-        return;
-    viewport_data->sc->Recreate(swapchain_info);
-    viewport_data->framebuffer = rd_device.CreateTexture(
-        std::format("ImGui Window {}", viewport_data->viewport_index),
-        Extent2D(_viewport->Size.x, _viewport->Size.y),
+    if (!viewport_data->surface) {
+        Moer::WindowHandle handle{(Moer::WindowType*)(_viewport->PlatformHandle ? _viewport->PlatformHandle :
+                                                                                  _viewport->PlatformHandleRaw)};
+        viewport_data->surface = MakeUnique<PresentationSurface>(
+            rd_device,
+            PresentationSurfaceDesc{
+                .window            = handle,
+                .size              = new_size,
+                .back_buffer_count = GetGUIBackendData()->num_frames_in_flight,
+                .preferred_format  = PF_R8G8B8A8_SRGB,
+                .debug_name        = std::format("ImGui Window {}", viewport_data->viewport_index),
+            }
+        );
+    } else {
+        viewport_data->surface->Resize(new_size);
+    }
+    viewport_data->surface->EnsureFrameBuffer(
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
     );
 }
 void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {
     GuiViewportData* viewport_data = GetGuiViewportData(_viewport);
-    if (!viewport_data || !viewport_data->framebuffer || _viewport == nullptr || _cmd_list == nullptr) {
+    if (!viewport_data || !viewport_data->surface || _viewport == nullptr || _cmd_list == nullptr) {
         return;
     }
 
-    auto sc = viewport_data->sc;
-    if (!sc)
+    TextureView frame_buffer = viewport_data->surface->GetFrameBufferView();
+    if (!frame_buffer.GetTexture())
         return;
-    auto& device    = Moer::Render::RenderDevice::Get();
-    auto  extent    = sc->size;
-    auto& gfx_queue = device.GetCommandQueue(EQueueType::Graphics);
-    GUIRender(_viewport->DrawData, viewport_data->framebuffer->GetView(), *(CommandList*)(_cmd_list));
+    GUIRender(_viewport->DrawData, frame_buffer, *(CommandList*)(_cmd_list));
     // gfx_queue.Execute(std::move(cmd_list.Submit()));
     // gfx_queue.Sync();
 }
 
 void GuiSwapbuffer(ImGuiViewport* _viewport, void*) {
     GuiViewportData* viewport_data = GetGuiViewportData(_viewport);
-    if (!viewport_data || !viewport_data->sc || !viewport_data->framebuffer) {
+    if (!viewport_data || !viewport_data->surface) {
         return;
     }
 
-    RHIPresentRequest present_request{viewport_data->sc, viewport_data->framebuffer};
+    TextureView frame_buffer = viewport_data->surface->GetFrameBufferView();
+    if (!frame_buffer.GetTexture()) {
+        return;
+    }
+
+    RHIPresentRequest present_request = viewport_data->surface->CreatePresentRequest(frame_buffer);
 
     ImDrawData* draw_data = _viewport ? _viewport->DrawData : nullptr;
     const bool has_draw_data = draw_data != nullptr && draw_data->DisplaySize.x > 0.0f &&

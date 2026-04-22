@@ -93,14 +93,14 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     TextureRef output = device.CreateTexture(
         "output",
         Extent2D(resolution.x, resolution.y),
-        swapchain->format,
+        presentation_surface->GetFormat(),
         ETextureUsageFlags::COLOR_ATTACHMENT
     );
 
     TextureRef combine_output = device.CreateTexture(
         "combine_output",
         Extent2D(resolution.x, resolution.y),
-        swapchain->format,
+        presentation_surface->GetFormat(),
         ETextureUsageFlags::COLOR_ATTACHMENT
     );
 
@@ -115,14 +115,14 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         output = device.CreateTexture(
             "output",
             Extent2D(_new_extent.x, _new_extent.y),
-            swapchain->format,
+            presentation_surface->GetFormat(),
             ETextureUsageFlags::COLOR_ATTACHMENT
         );
 
         combine_output = device.CreateTexture(
             "combine_output",
             Extent2D(_new_extent.x, _new_extent.y),
-            swapchain->format,
+            presentation_surface->GetFormat(),
             ETextureUsageFlags::COLOR_ATTACHMENT
         );
 
@@ -698,7 +698,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         }
 
         time++;
-        RHIPresentRequest present_request{swapchain, present_output};
+        RHIPresentRequest present_request = presentation_surface->CreatePresentRequest(present_output);
         cmd_list.Signal(timeline, time).DeleteResources().TickProfiling().TickFrame();
         Array<CommandList> frame_cmd_lists = std::move(pre_frame_cmd_lists);
         frame_cmd_lists.emplace_back(std::move(cmd_list));

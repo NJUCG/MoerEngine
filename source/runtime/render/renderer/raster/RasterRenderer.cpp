@@ -398,7 +398,7 @@ bool RasterRenderer::RunSingle(
     }
 
     time++;
-    RHIPresentRequest present_request{swapchain, default_output_texture};
+    RHIPresentRequest present_request = presentation_surface->CreatePresentRequest(default_output_texture);
     cmd_list.Signal(timeline, time).DeleteResources().TickProfiling().TickFrame();
     Array<CommandList> frame_cmd_lists{};
     frame_cmd_lists.emplace_back(std::move(cmd_list));

@@ -5,6 +5,7 @@
 #include "misc/Timer.h"
 #include "ProfileSession.h"
 #include "profile/ProfileDump.h"
+#include "renderer/common/PresentationSurface.h"
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -872,15 +873,19 @@ int RunProfilerMain(int argc, const char** argv) {
     uint64_t      frame_time = 0;
 
     uint2 resolution = {1680, 980};
-    SwapchainCreateInfo swapchain_ci{
-        .window_handle    = (uintptr_t)WindowContext::GetMainWindow(),
-        .size             = {resolution.x, resolution.y},
-        .back_buffer_sz   = 2,
-        .preferred_format = PF_R8G8B8A8_SRGB
-    };
-    SwapchainRef swapchain = device.CreateSwapchain(swapchain_ci);
+    static constexpr uint profiler_back_buffer_count = 2;
+    PresentationSurface presentation_surface(
+        device,
+        PresentationSurfaceDesc{
+            .window            = *WindowContext::GetMainWindow(),
+            .size              = {resolution.x, resolution.y},
+            .back_buffer_count = profiler_back_buffer_count,
+            .preferred_format  = PF_R8G8B8A8_SRGB,
+            .debug_name        = "Profiler Presentation Surface",
+        }
+    );
     TextureRef   output =
-        device.CreateTexture("ProfilerOutput", Extent2D(resolution.x, resolution.y), swapchain->format, ETextureUsageFlags::COLOR_ATTACHMENT);
+        device.CreateTexture("ProfilerOutput", Extent2D(resolution.x, resolution.y), presentation_surface.GetFormat(), ETextureUsageFlags::COLOR_ATTACHMENT);
 
     auto ui_renderer = MakeUnique<Render::UIRenderer>(device);
 
@@ -895,7 +900,7 @@ int RunProfilerMain(int argc, const char** argv) {
     while (!WindowContext::ShouldClose(WindowContext::GetMainWindow())) {
         WindowContext::Tick();
         const uint64_t max_frames_in_flight =
-            std::max<uint64_t>(1, static_cast<uint64_t>(swapchain_ci.back_buffer_sz));
+            std::max<uint64_t>(1, static_cast<uint64_t>(profiler_back_buffer_count));
         if (frame_time >= max_frames_in_flight) {
             timeline->Wait(frame_time - max_frames_in_flight + 1);
         }
@@ -909,13 +914,11 @@ int RunProfilerMain(int argc, const char** argv) {
         if (resolution.x != static_cast<uint32_t>(w) || resolution.y != static_cast<uint32_t>(h)) {
             resolution = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
             gfx_queue.Sync();
-            swapchain_ci.size = {resolution.x, resolution.y};
-            swapchain->Sync();
-            swapchain->Recreate(swapchain_ci);
+            presentation_surface.Resize({resolution.x, resolution.y});
             output = device.CreateTexture(
                 "ProfilerOutput",
                 Extent2D(resolution.x, resolution.y),
-                swapchain->format,
+                presentation_surface.GetFormat(),
                 ETextureUsageFlags::COLOR_ATTACHMENT
             );
         }
@@ -990,7 +993,7 @@ int RunProfilerMain(int argc, const char** argv) {
     cmd_list.Signal(timeline, frame_time).DeleteResources().TickFrame();
         Array<CommandList> frame_cmd_lists;
         frame_cmd_lists.emplace_back(std::move(cmd_list));
-        RHIPresentRequest present_request{swapchain, output};
+        RHIPresentRequest present_request = presentation_surface.CreatePresentRequest(output);
     RHIExecutor::Get().Submit(std::move(frame_cmd_lists), ERHIExecSubmitFlags::FlushGPU,
                                   &present_request);
         ui_renderer->PresentWindows();
@@ -1000,7 +1003,6 @@ int RunProfilerMain(int argc, const char** argv) {
     RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     ui_renderer.reset();
     output = {};
-    swapchain = {};
     timeline = {};
     FileDialog::ShutDown();
     WindowContext::ShutDown();

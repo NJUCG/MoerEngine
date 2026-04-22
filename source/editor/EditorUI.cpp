@@ -211,30 +211,28 @@ void EditorUI::TickUI() {
     m_ui_renderer->BeginGUIFrame();
     ImGuiIO& io = ImGui::GetIO();
 
-    if (ImGui::IsKeyPressed(ImGuiKey_F5, false) && !m_config->play_mode_enabled) {
+    const Render::ImGuiIOInputSnapshot& input_snapshot = m_ui_renderer->GetInputSnapshot();
+    m_scene_color_hovered = false;
+
+    if (input_snapshot.f5_pressed && !m_config->play_mode_enabled) {
         m_config->play_mode_enabled       = true;
         m_config->play_mode_capture_input = true;
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_F8, false) && m_config->play_mode_enabled) {
+    if (input_snapshot.f8_pressed && m_config->play_mode_enabled) {
         m_config->play_mode_capture_input = !m_config->play_mode_capture_input;
     }
 
     const bool play_capture = m_config->play_mode_enabled && m_config->play_mode_capture_input;
-    WindowInput::Get().force_cursor_hidden       = play_capture;
-    WindowInput::Get().play_mode_camera_control  = play_capture;
-    if (!play_capture) {
-        WindowInput::Get().force_cursor_hidden      = false;
-        WindowInput::Get().play_mode_camera_control = false;
-    }
 
     if (play_capture) {
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         m_scene_color_pos             = {0.0f, 0.0f};
         m_scene_color_resolution      = {viewport->WorkSize.x, viewport->WorkSize.y};
         m_config->aspect_ratio        = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
-        WindowInput::Get().is_active  = true;
+        m_scene_color_hovered         = true;
 
         ShowOverlay();
+        ApplyInputSnapshot();
         m_ui_renderer->EndGUIFrame();
         return;
     }
@@ -323,8 +321,6 @@ void EditorUI::TickUI() {
             if (ImGui::Button("Stop Play")) {
                 m_config->play_mode_enabled       = false;
                 m_config->play_mode_capture_input = false;
-                WindowInput::Get().force_cursor_hidden      = false;
-                WindowInput::Get().play_mode_camera_control = false;
             }
             ImGui::SameLine();
             const char* toggle_label =
@@ -346,6 +342,7 @@ void EditorUI::TickUI() {
     ShowConfig();
     ShowOverlay();
 
+    ApplyInputSnapshot();
     m_ui_renderer->EndGUIFrame();
 }
 
@@ -358,31 +355,16 @@ void EditorUI::PresentWindows() {
 }
 
 EditorUI::SceneWindowTarget EditorUI::GetSceneWindowTarget() {
-    auto* current_window = ImGui::FindWindowByName("Scene Color");
-    if (!current_window || current_window->ParentWindow != nullptr) {
+    const Render::UIRenderer::WindowRenderTarget target =
+        m_ui_renderer->GetWindowRenderTarget("Scene Color");
+    if (!target.is_separate_window || !target.frame_buffer.GetTexture()) {
         return {};
     }
 
-    ImGuiViewport* viewport = current_window->Viewport;
-    if (!viewport) {
-        return {};
-    }
-
-    Render::TextureView frame_buffer = m_ui_renderer->GetWindowFrameBuffer(viewport);
-    if (!frame_buffer.GetTexture()) {
-        return {};
-    }
-
-    return SceneWindowTarget{.is_separate_window = true, .frame_buffer = frame_buffer};
-}
-
-bool EditorUI::IsSeperateWindow() const {
-    auto* current_window = ImGui::FindWindowByName("Scene Color");
-    return current_window && current_window->ParentWindow == nullptr && current_window->Viewport != nullptr;
-}
-
-TextureView EditorUI::GetWindowFrameBuffer() {
-    return GetSceneWindowTarget().frame_buffer;
+    return SceneWindowTarget{
+        .is_separate_window = target.is_separate_window,
+        .frame_buffer       = target.frame_buffer,
+    };
 }
 
 void EditorUI::ShowSceneColor() {
@@ -445,10 +427,10 @@ void EditorUI::ShowSceneColor() {
     );
     static uint border = 4;
 
-    WindowInput::Get().is_active = mouse_pos.x > m_scene_color_pos.x + border &&
-                                   mouse_pos.x < m_scene_color_pos.x + m_scene_color_resolution.x - border &&
-                                   mouse_pos.y > m_scene_color_pos.y + border &&
-                                   mouse_pos.y < m_scene_color_pos.y + m_scene_color_resolution.y - border;
+    m_scene_color_hovered = mouse_pos.x > m_scene_color_pos.x + border &&
+                            mouse_pos.x < m_scene_color_pos.x + m_scene_color_resolution.x - border &&
+                            mouse_pos.y > m_scene_color_pos.y + border &&
+                            mouse_pos.y < m_scene_color_pos.y + m_scene_color_resolution.y - border;
 
     ImGui::End();
 }
@@ -656,6 +638,18 @@ void EditorUI::ShowOverlay() {
     for (auto& [name, func] : m_overlay_func_map) {
         func();
     }
+}
+
+void EditorUI::ApplyInputSnapshot() {
+    Render::ApplyImGuiIOInputToWindowInput(
+        m_ui_renderer->GetInputSnapshot(),
+        Render::ImGuiIOInputApplyParams{
+            .scene_active            = m_scene_color_hovered,
+            .play_capture            = m_config->play_mode_enabled && m_config->play_mode_capture_input,
+            .external_key_block      = WindowInput::Get().block_camera_keyboard_input,
+            .external_cursor_visible = WindowInput::Get().force_cursor_visible,
+        }
+    );
 }
 
 } // namespace Moer
