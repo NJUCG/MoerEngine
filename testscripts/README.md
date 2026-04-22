@@ -12,6 +12,7 @@ Each script is self-contained, targeting one executable, and shares logic via `c
 
 | Script | Executable | Description |
 |--------|-----------|-------------|
+| `test_taskgraph.ps1` | `TestTaskGraph.exe`, `TestTaskPipe.exe` | TaskGraph / TaskPipe regression suite with structured testcase parsing |
 | `test_rhi_translate.ps1` | `TestRHITranslate.exe` | RHI multi-queue translate tests with descriptor-heap capability probe and validation blocker parsing |
 | `test_editor.ps1` | `MoerEditor.exe` | Launch editor, run for N seconds, then kill and inspect log |
 | `test_all.ps1` | both | Run all tests in sequence, single summary |
@@ -27,6 +28,7 @@ Run from the repo root (or any directory — scripts use `$PSScriptRoot` interna
 
 # Single test
 .\testscripts\test_rhi_translate.ps1
+.\testscripts\test_taskgraph.ps1
 .\testscripts\test_editor.ps1
 
 # Choose build config
@@ -54,6 +56,8 @@ Each run creates a timestamped folder under `logs/`:
 logs/
 └── run_YYYYMMDD_HHMMSS/
     ├── summary.txt                 ← PASSED/FAILED/SKIPPED overview for the run
+    ├── taskgraph.log               ← Full stdout+stderr of TestTaskGraph
+    ├── taskpipe.log                ← Full stdout+stderr of TestTaskPipe
     ├── rhi_translate.log           ← Full stdout+stderr of TestRHITranslate
     ├── moereditor.log              ← Full stdout+stderr of MoerEditor
     ├── moereditor_crash.txt        ← Lines that triggered error detection (if any)

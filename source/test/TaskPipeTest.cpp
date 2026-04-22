@@ -41,6 +41,7 @@ void TestTaskPipeBasic() {
     }
 
     assert(counter == 3);
+    std::cout << "[TESTCASE][PASS] TaskPipeBasic\n";
     std::cout << "TestTaskPipeBasic passed!\n\n";
 }
 
@@ -74,6 +75,7 @@ void TestTaskPipeDependencies() {
     }
 
     assert(counter == 2);
+    std::cout << "[TESTCASE][PASS] TaskPipeDependencies\n";
     std::cout << "TestTaskPipeDependencies passed!\n\n";
 }
 
@@ -119,6 +121,7 @@ void TestTaskPipeCloseAndEnqueue() {
     }
 
     assert(counter == 4);
+    std::cout << "[TESTCASE][PASS] TaskPipeCloseAndEnqueue\n";
     std::cout << "TestTaskPipeCloseAndEnqueue passed!\n\n";
 }
 

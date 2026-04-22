@@ -3,6 +3,10 @@
 #include "API_Macro.h"
 #include "Thread.h"
 #include "misc/CountableRef.h"
+#include <array>
+#include <memory>
+
+class AnyThreadScheduler;
 
 enum class ESchedule {
     Max_Local_Capacity = 16
@@ -58,9 +62,9 @@ private:
     int32_t      m_named_thread_count;
     int32_t      m_worker_per_priority;
     int32_t      m_worker_thread_count;
+    std::array<int32_t, EThread::PriorityCount> m_worker_count_per_priority;
 
-    TaskFIFOQueue<BaseGraphTask, 1> m_task_queue[EThread::PriorityCount];
-    TaskFIFOQueue<BaseGraphTask, 1> m_global_queue; //
+    std::unique_ptr<AnyThreadScheduler> m_scheduler;
 };
 
 class CORE_API TriggerEventGraphTask {
