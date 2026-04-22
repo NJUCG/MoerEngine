@@ -410,8 +410,8 @@
         "Existing validation remains green through repository scripts."
       ],
       "validation_entrypoints": [
-        "testscripts/test_rhi_translate.ps1",
-        "testscripts/test_all.ps1"
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1"
       ]
     }
   ]

@@ -71,10 +71,10 @@
       "Bash(powershell -NoProfile -Command \"cd ''F:\\\\Github_Data\\\\MoerEngine''; & cmd.exe /c ''F:\\\\Github_Data\\\\MoerEngine\\\\test_quick.bat -rhi'' 2>&1\")",
       "Bash(powershell -NoProfile -Command \"cd ''F:\\\\Github_Data\\\\MoerEngine''; & cmd.exe /c ''F:\\\\Github_Data\\\\MoerEngine\\\\test_quick.bat -editor'' 2>&1\")",
       "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"F:\\\\Github_Data\\\\MoerEngine\\\\test_quick.ps1\" -Rhi)",
-      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"F:\\\\Github_Data\\\\MoerEngine\\\\testscripts\\\\test_rhi_translate.ps1\")",
-      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"F:\\\\Github_Data\\\\MoerEngine\\\\testscripts\\\\test_editor.ps1\")",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"F:\\\\Github_Data\\\\MoerEngine\\\\testscripts\\\\windows\\\\test_rhi_translate.ps1\")",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"F:\\\\Github_Data\\\\MoerEngine\\\\testscripts\\\\windows\\\\test_editor.ps1\")",
       "Bash(cmake --build build --target TestRHITranslate --config Debug -j4)",
-      "Bash(powershell -ExecutionPolicy Bypass -File testscripts/test_rhi_translate.ps1)"
+      "Bash(powershell -ExecutionPolicy Bypass -File testscripts/windows/test_rhi_translate.ps1)"
     ]
   }
 }

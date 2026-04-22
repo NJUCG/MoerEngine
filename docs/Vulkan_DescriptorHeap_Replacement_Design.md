@@ -419,9 +419,9 @@ All validation must continue to run through the existing PowerShell test entrypo
 
 ### 10.1 Existing Scripts to Extend
 
-- `testscripts/test_rhi_translate.ps1`
-- `testscripts/test_all.ps1`
-- `testscripts/common.ps1`
+- `testscripts/windows/test_rhi_translate.ps1`
+- `testscripts/windows/test_all.ps1`
+- `testscripts/windows/common.ps1`
 
 ### 10.2 Required Script Behavior Additions
 
@@ -437,7 +437,7 @@ The scripts must gain explicit support for descriptor-heap validation:
 
 ### 10.3 RHI Script Output Rules
 
-`testscripts/test_rhi_translate.ps1` should report:
+`testscripts/windows/test_rhi_translate.ps1` should report:
 
 - executable path
 - log path
@@ -447,7 +447,7 @@ The scripts must gain explicit support for descriptor-heap validation:
 
 ### 10.4 Common Script Utilities
 
-`testscripts/common.ps1` should gain helpers for:
+`testscripts/windows/common.ps1` should gain helpers for:
 
 - descriptor-heap capability detection if the executable exposes it
 - validation error extraction for the RHI log path

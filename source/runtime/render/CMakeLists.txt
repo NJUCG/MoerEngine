@@ -159,7 +159,6 @@ target_compile_definitions(${target_name} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MO
 
 if(WIN32)
     target_compile_definitions(${target_name} PUBLIC "NOMINMAX")
-elseif(LINUX)
 endif()
 
 if(MOER_USING_MSVC_ABI)

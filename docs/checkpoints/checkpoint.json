@@ -12,7 +12,7 @@
     "source/runtime/render/renderer/Renderer.h",
     "source/runtime/render/renderer/raster/RasterRenderer.cpp",
     "source/runtime/render/renderer/raytracing/RaytracingRenderer.cpp",
-    "testscripts/test_all.ps1"
+    "testscripts/windows/test_all.ps1"
   ],
   "execute_order": [
     "1",
@@ -112,7 +112,7 @@
   "validation": [
     "Planning only in this checkpoint. No implementation is part of this file.",
     "When implementation starts, build with cmake.EXE --build f:/Github_Data/MoerEngine/build/vscode --config Debug --target MoerEditor.",
-    "After build passes, run powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_all.ps1 using the existing repository script only.",
+    "After build passes, run powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_all.ps1 using the existing repository script only.",
     "Do not add a standalone ad-hoc command test script. Extend existing tests or editor/runtime checks through current repository paths."
   ]
 }

@@ -15,9 +15,9 @@
     "source/runtime/render/rhi/GPUEventStream.h",
     "source/runtime/render/rhi/GPUEventStream.cpp",
     "source/editor/Editor.cpp",
-    "testscripts/test_rhi_translate.ps1",
-    "testscripts/test_editor.ps1",
-    "testscripts/test_all.ps1",
+    "testscripts/windows/test_rhi_translate.ps1",
+    "testscripts/windows/test_editor.ps1",
+    "testscripts/windows/test_all.ps1",
     "testscripts/README.md"
   ],
   "rule_codex_reference": {
@@ -279,13 +279,13 @@
       "must_be_true_after": [
         "There are focused compile-time and runtime tests for template type checking, field-count checking, TLS chunk drain, file sink serialization, and TCP packet/schema ordering.",
         "If no dedicated profiler script exists, these tests are added to existing test targets and executed through current repository PowerShell scripts instead of a new top-level script.",
-        "Focused validation runs powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 first if the new tests live in the existing core/RHI test path.",
-        "Broader regression validation runs powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_all.ps1 after focused validation passes, and validation acceptance only cares about errors."
+        "Focused validation runs powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_rhi_translate.ps1 first if the new tests live in the existing core/RHI test path.",
+        "Broader regression validation runs powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_all.ps1 after focused validation passes, and validation acceptance only cares about errors."
       ],
       "files_likely_affected": [
         "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-        "testscripts/test_rhi_translate.ps1",
-        "testscripts/test_all.ps1",
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1",
         "docs/checkpoints/unified_profile_dump_stream_checkpoint.json"
       ]
     }
@@ -321,9 +321,9 @@
   "validation": [
     "Planning only in this checkpoint. No implementation is part of this file.",
     "When implementation starts, do not add a new standalone profiler top-level script.",
-    "Add focused tests to existing covered test targets, then run powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 if those tests land in the current RHI/core test path.",
-    "After focused tests pass, run powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_all.ps1.",
-    "If editor/profiler runtime smoke coverage is needed later, use powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_editor.ps1 or extend existing aggregate coverage instead of introducing a new primary profiler script.",
+    "Add focused tests to existing covered test targets, then run powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_rhi_translate.ps1 if those tests land in the current RHI/core test path.",
+    "After focused tests pass, run powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_all.ps1.",
+    "If editor/profiler runtime smoke coverage is needed later, use powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_editor.ps1 or extend existing aggregate coverage instead of introducing a new primary profiler script.",
     "During validation, only treat validation errors and functional failures as blockers."
   ]
 }

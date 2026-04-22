@@ -223,19 +223,19 @@
       ],
       "tasks": [
         "Keep parser and transport validation in existing focused tests first.",
-        "Run testscripts/test_rhi_translate.ps1 for focused regression whenever ProfileDump parser or producer wiring changes.",
-        "Run testscripts/test_all.ps1 after milestone-sized landing steps."
+        "Run testscripts/windows/test_rhi_translate.ps1 for focused regression whenever ProfileDump parser or producer wiring changes.",
+        "Run testscripts/windows/test_all.ps1 after milestone-sized landing steps."
       ],
       "implementation_notes": [
-        "Focused validation covers ProfileDump file sink, TCP sink, GPU producer integration, profiler file-load normalization, and profiler incremental stream normalization in testscripts/test_rhi_translate.ps1.",
+        "Focused validation covers ProfileDump file sink, TCP sink, GPU producer integration, profiler file-load normalization, and profiler incremental stream normalization in testscripts/windows/test_rhi_translate.ps1.",
         "No new top-level validation script was added; the existing focused script remains the first gate."
       ],
       "files_likely_affected": [
         "docs/milestones/profiler/format_unification_milestone.json",
         "docs/milestones/profiler/format_unification_m1_checkpoint.json",
         "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-        "testscripts/test_rhi_translate.ps1",
-        "testscripts/test_all.ps1"
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1"
       ]
     }
   ],
@@ -253,8 +253,8 @@
   ],
   "validation": [
     "Current implementation builds with cmake --build build --config Debug, including MoerProfiler.exe.",
-    "Focused regression passed through testscripts/test_rhi_translate.ps1 after the shared ProfileSession module, normalization, and profiler-side ingest tests landed.",
-    "Broader regression also passed through testscripts/test_all.ps1 after this landing.",
+    "Focused regression passed through testscripts/windows/test_rhi_translate.ps1 after the shared ProfileSession module, normalization, and profiler-side ingest tests landed.",
+    "Broader regression also passed through testscripts/windows/test_all.ps1 after this landing.",
     "When implementation starts, update this stage checkpoint together with docs/milestones/profiler/format_unification_milestone.json.",
     "Use only existing repository scripts for later validation."
   ]

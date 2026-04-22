@@ -18,9 +18,9 @@
     "source/runtime/core/include/taskgraph/GraphTask.h",
     "source/runtime/core/include/taskgraph/TaskPipe.h",
     "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-    "testscripts/common.ps1",
-    "testscripts/test_rhi_translate.ps1",
-    "testscripts/test_all.ps1"
+    "testscripts/windows/common.ps1",
+    "testscripts/windows/test_rhi_translate.ps1",
+    "testscripts/windows/test_all.ps1"
   ],
   "goal": "Introduce an explicit host-side translate scheduler at RHICommandList granularity, but move from a pure batch dispatch model to a streaming two-pipe model. VulkanSubmissionExecutor must expose Enqueue-style producer semantics, stream pending batches into a PreprocessPipe that emits immutable QueueTranslateInfo jobs plus GraphEventRef dependency edges, then enqueue those jobs into a TranslatePipe that records platform command buffers and optionally triggers GPU submit based on flush depth. Producer-side APIs remain single-producer for now, but fixed thread affinity is deferred. The scheduler contract must preserve enough executor-derived submit/sync information to support later policies that group multiple RHICommandList translate jobs into shared TranslateContext instances and reduce platform command-buffer count or submit count when profitable.",
   "design_constraints": [
@@ -72,7 +72,7 @@
     {
       "id": "DC-10",
       "title": "PowerShell scripts are the only validation entrypoints",
-      "detail": "Validation continues only through testscripts/test_rhi_translate.ps1 and testscripts/test_all.ps1. No new primary wrapper becomes the main validation path."
+      "detail": "Validation continues only through testscripts/windows/test_rhi_translate.ps1 and testscripts/windows/test_all.ps1. No new primary wrapper becomes the main validation path."
     },
     {
       "id": "DC-11",
@@ -170,7 +170,7 @@
       "detail": "The current design discussion now requires future policies that let multiple RHICommandList translate jobs share one TranslateContext and reduce platform command-buffer usage or submit count. Phase 1 implementation must preserve the executor-derived submit/sync data needed for that policy without prematurely baking grouping heuristics into executor control flow."
     },
     "test_gap": {
-      "location": "source/test/RHITest/rhi_translate_multiqueue_test.cpp and testscripts/*.ps1",
+      "location": "source/test/RHITest/rhi_translate_multiqueue_test.cpp and testscripts/windows/*.ps1",
       "detail": "Structured testcase markers and one additional multi-command-list ordering case are now in place, but scheduler-specific Parallel/SerialControl/FrameEnd cases are still missing."
     }
   },
@@ -205,8 +205,8 @@
       "negative case: missing explicit wait triggers deterministic failure or assertion in test build"
     ],
     "validation_entrypoints": [
-      "testscripts/test_rhi_translate.ps1",
-      "testscripts/test_all.ps1"
+      "testscripts/windows/test_rhi_translate.ps1",
+      "testscripts/windows/test_all.ps1"
     ]
   },
   "streaming_replan": {
@@ -403,9 +403,9 @@
       ],
       "files_likely_affected": [
         "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-        "testscripts/common.ps1",
-        "testscripts/test_rhi_translate.ps1",
-        "testscripts/test_all.ps1"
+        "testscripts/windows/common.ps1",
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1"
       ]
     },
     {

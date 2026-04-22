@@ -11,7 +11,7 @@
     "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h",
     "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
     "source/runtime/render/rhi/RHICommand.h",
-    "testscripts/test_rhi_translate.ps1"
+    "testscripts/windows/test_rhi_translate.ps1"
   ],
   "goal": "Remove interrupt serial-based sync tracking and replace it with ordered GraphEvent-based sync boundaries. Sync() must wait only for submissions enqueued before that Sync request, while preserving the distinction between ERHISyncDepth::RHI and ERHISyncDepth::Present.",
   "rule_codex_reference": {
@@ -253,7 +253,7 @@
       ],
       "files_likely_affected": [
         "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-        "testscripts/test_rhi_translate.ps1"
+        "testscripts/windows/test_rhi_translate.ps1"
       ]
     },
     {
@@ -278,7 +278,7 @@
         "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h",
         "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
         "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-        "testscripts/test_rhi_translate.ps1"
+        "testscripts/windows/test_rhi_translate.ps1"
       ]
     }
   ],
@@ -292,7 +292,7 @@
     "CP-07: After the main refactor is stable, remove SubmissionPresentContextManager as a non-semantic wrapper."
   ],
   "test_script": {
-    "path": "testscripts/test_rhi_translate.ps1",
+    "path": "testscripts/windows/test_rhi_translate.ps1",
     "purpose": "Build and run TestRHITranslate.exe, capture logs, print the log tail, and summarize failures for the Vulkan RHI multi-queue translate tests.",
     "parameters": [
       {
@@ -319,9 +319,9 @@
       "On failure, extracts lines matching mismatch, failed, or [error]."
     ],
     "commands": [
-      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1",
-      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 -Config Release",
-      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 -ExtraArgs @('-DENABLE_VALIDATION=1')"
+      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_rhi_translate.ps1",
+      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_rhi_translate.ps1 -Config Release",
+      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_rhi_translate.ps1 -ExtraArgs @('-DENABLE_VALIDATION=1')"
     ],
     "how_to_use_for_this_refactor": [
       "Run after any checkpoint that changes Sync(), Flush(), SubmissionThread ordering, or InterruptThread completion behavior.",
@@ -334,7 +334,7 @@
     "Sync(Present) waits for the same RHI completion set plus present completion work already ahead of the sync request.",
     "Submissions created after a Sync request are not folded into that Sync wait.",
     "InterruptRuntime no longer owns any global serial or prefix-completion state.",
-    "testscripts/test_rhi_translate.ps1 passes without relying on WaitIdle-based fallback behavior."
+    "testscripts/windows/test_rhi_translate.ps1 passes without relying on WaitIdle-based fallback behavior."
   ],
   "risks": [
     {

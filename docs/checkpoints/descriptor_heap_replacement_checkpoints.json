@@ -19,9 +19,9 @@
     "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
     "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.cpp",
     "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-    "testscripts/test_rhi_translate.ps1",
-    "testscripts/test_all.ps1",
-    "testscripts/common.ps1",
+    "testscripts/windows/test_rhi_translate.ps1",
+    "testscripts/windows/test_all.ps1",
+    "testscripts/windows/common.ps1",
     "shaders/core/common/Bindless.hlsl"
   ],
   "non_compatibility_rule": "This replacement does not keep VK_EXT_descriptor_buffer as a runtime fallback, does not keep the Vulkan indirect bindless array protocol, does not preserve globally stable Vulkan bindless handle semantics, and does not allow dual descriptor-buffer plus descriptor-heap execution paths.",
@@ -84,7 +84,7 @@
       "detail": "Image descriptor generation still relies on vkGetDescriptorEXT-era metadata and does not preserve enough view creation data for native descriptor-heap writes."
     },
     "test_gap": {
-      "location": "testscripts/test_rhi_translate.ps1, testscripts/common.ps1, source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+      "location": "testscripts/windows/test_rhi_translate.ps1, testscripts/windows/common.ps1, source/test/RHITest/rhi_translate_multiqueue_test.cpp",
       "detail": "Existing PowerShell scripts already cover descriptor-heap capability parsing and validation blockers, and RHI tests now include concurrent online-range allocation coverage. They still do not cover descriptor-heap binding classes, direct bindless snapshots, or broader lifetime regressions."
     }
   },
@@ -116,7 +116,7 @@
         "Expose descriptor-heap capability through the Vulkan device runtime so later stages can branch at startup rather than at bind time."
       ],
       "validation": [
-        "Build TestRHITranslate through testscripts/test_rhi_translate.ps1 and fail the checkpoint if Vulkan extension wiring does not compile.",
+        "Build TestRHITranslate through testscripts/windows/test_rhi_translate.ps1 and fail the checkpoint if Vulkan extension wiring does not compile.",
         "Run the script on a machine with VK_EXT_descriptor_heap support and require the log to show descriptor-heap capability detection before any later descriptor-heap path is enabled.",
         "Run the same script on a machine without VK_EXT_descriptor_heap support and require an explicit skip or startup-level disable message instead of silent fallback."
       ],
@@ -148,7 +148,7 @@
         "Remove assumptions that a cached VkImageView handle alone is enough to regenerate the image descriptor payload."
       ],
       "validation": [
-        "Build TestRHITranslate through testscripts/test_rhi_translate.ps1 after every signature or helper change touching VulkanTexture or VulkanDescriptorHeap.",
+        "Build TestRHITranslate through testscripts/windows/test_rhi_translate.ps1 after every signature or helper change touching VulkanTexture or VulkanDescriptorHeap.",
         "Add a descriptor-heap image write translation case that exercises sampled-image and storage-image metadata generation from the same TextureView with different layouts once CP-03 starts consuming the helper.",
         "Require cubemap single-layer views, array slices, and non-zero mip base views to resolve through cached create-info rather than reconstructing from the image handle only."
       ],
@@ -181,7 +181,7 @@
         "Make bindless logical slots resolve to offline entries rather than directly to online slots."
       ],
       "validation": [
-        "Run testscripts/test_rhi_translate.ps1 after changing descriptor ownership to ensure the legacy descriptor-buffer transport still reads from the new offline arenas correctly.",
+        "Run testscripts/windows/test_rhi_translate.ps1 after changing descriptor ownership to ensure the legacy descriptor-buffer transport still reads from the new offline arenas correctly.",
         "Require bindless descriptor memcpy call sites to go through offline-storage helpers instead of raw array access.",
         "Reject any new code path that treats the transient ring descriptor buffer as the canonical CPU descriptor source."
       ],
@@ -217,8 +217,8 @@
         "Use a heap-owned bindless cache map so same-version bindless arrays share one copied ring snapshot per recording."
       ],
       "validation": [
-        "Run testscripts/test_rhi_translate.ps1 and require TestRHITranslate to pass a concurrent online-range allocation case without overlap.",
-        "Run testscripts/test_all.ps1 and require the aggregate Vulkan runtime path to stay green after moving bindless ring caching into heap-owned shared state.",
+        "Run testscripts/windows/test_rhi_translate.ps1 and require TestRHITranslate to pass a concurrent online-range allocation case without overlap.",
+        "Run testscripts/windows/test_all.ps1 and require the aggregate Vulkan runtime path to stay green after moving bindless ring caching into heap-owned shared state.",
         "Reject any implementation that still depends on thread_local descriptor offsets or thread_local bindless cache maps for recording correctness."
       ],
       "files_likely_affected": [
@@ -299,19 +299,19 @@
         "Descriptor-heap-only tests can skip cleanly on unsupported machines."
       ],
       "tasks": [
-        "Extend testscripts/test_rhi_translate.ps1 to print descriptor-heap capability state and grouped subtest results.",
-        "Extend testscripts/common.ps1 with standardized validation parsing and skip helpers.",
-        "Update testscripts/test_all.ps1 to include descriptor-heap summary output without creating a new primary entrypoint."
+        "Extend testscripts/windows/test_rhi_translate.ps1 to print descriptor-heap capability state and grouped subtest results.",
+        "Extend testscripts/windows/common.ps1 with standardized validation parsing and skip helpers.",
+        "Update testscripts/windows/test_all.ps1 to include descriptor-heap summary output without creating a new primary entrypoint."
       ],
       "validation": [
-        "Run testscripts/test_rhi_translate.ps1 and require summary.txt to show both top-level and subtest counts with PASSED, FAILED, and SKIPPED states.",
-        "Run testscripts/test_all.ps1 and require Vulkan validation blockers to fail the aggregate result even when process exit codes are zero.",
+        "Run testscripts/windows/test_rhi_translate.ps1 and require summary.txt to show both top-level and subtest counts with PASSED, FAILED, and SKIPPED states.",
+        "Run testscripts/windows/test_all.ps1 and require Vulkan validation blockers to fail the aggregate result even when process exit codes are zero.",
         "Keep all validation entrypoints in existing PowerShell scripts only."
       ],
       "files_likely_affected": [
-        "testscripts/test_rhi_translate.ps1",
-        "testscripts/common.ps1",
-        "testscripts/test_all.ps1",
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/common.ps1",
+        "testscripts/windows/test_all.ps1",
         "testscripts/README.md"
       ]
     },
@@ -339,7 +339,7 @@
       ],
       "files_likely_affected": [
         "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-        "testscripts/test_rhi_translate.ps1"
+        "testscripts/windows/test_rhi_translate.ps1"
       ]
     },
     {
@@ -387,9 +387,9 @@
   "test_script_rules": {
     "language": "PowerShell only",
     "script_targets": [
-      "testscripts/test_rhi_translate.ps1",
-      "testscripts/test_all.ps1",
-      "testscripts/common.ps1"
+      "testscripts/windows/test_rhi_translate.ps1",
+      "testscripts/windows/test_all.ps1",
+      "testscripts/windows/common.ps1"
     ],
     "requirements": [
       "Do not introduce a new primary non-PowerShell validation entrypoint.",
@@ -404,7 +404,7 @@
     {
       "id": "TD-01",
       "applies_to": ["CP-01", "CP-07"],
-      "script": "testscripts/test_rhi_translate.ps1",
+      "script": "testscripts/windows/test_rhi_translate.ps1",
       "name": "Descriptor heap capability probe",
       "description": "At startup, report whether VK_EXT_descriptor_heap is supported, enabled, or skipped on the current machine before running any descriptor-heap-specific assertions.",
       "pass_condition": "The log contains one clear capability line and the script summary records pass or skip explicitly.",
@@ -414,7 +414,7 @@
     {
       "id": "TD-02",
       "applies_to": ["CP-02", "CP-08"],
-      "script": "testscripts/test_rhi_translate.ps1",
+      "script": "testscripts/windows/test_rhi_translate.ps1",
       "name": "Image descriptor metadata coverage",
       "description": "Exercise sampled-image and storage-image descriptor generation for the same TextureView, plus cubemap single-layer downgrade, array slice, and non-zero mip-range views.",
       "pass_condition": "All tested subresource views produce deterministic descriptor metadata and no Vulkan validation errors appear in the log.",
@@ -424,7 +424,7 @@
     {
       "id": "TD-03",
       "applies_to": ["CP-05", "CP-08"],
-      "script": "testscripts/test_rhi_translate.ps1",
+      "script": "testscripts/windows/test_rhi_translate.ps1",
       "name": "Regular binding class matrix",
       "description": "Cover uniform buffer, storage buffer, uniform texel buffer, storage texel buffer, sampled image, storage image, sampler-only, acceleration structure, descriptor arrays, and mixed layouts across graphics and compute where valid.",
       "pass_condition": "Every descriptor class required by the new mapping path is exercised and the summary reports each subtest independently.",
@@ -434,7 +434,7 @@
     {
       "id": "TD-04",
       "applies_to": ["CP-06", "CP-08"],
-      "script": "testscripts/test_rhi_translate.ps1",
+      "script": "testscripts/windows/test_rhi_translate.ps1",
       "name": "Direct bindless snapshot coverage",
       "description": "Validate texture, sampler, storage-buffer, and mixed texture-plus-sampler bindless snapshots, including multiple in-flight snapshots with snapshot-local index remapping.",
       "pass_condition": "Snapshot-local online indices resolve correctly for all in-flight snapshots without relying on globally stable Vulkan handles.",
@@ -444,7 +444,7 @@
     {
       "id": "TD-05",
       "applies_to": ["CP-04", "CP-08"],
-      "script": "testscripts/test_rhi_translate.ps1",
+      "script": "testscripts/windows/test_rhi_translate.ps1",
       "name": "Retirement-driven reuse hazard test",
       "description": "Submit multiple command lists that intentionally hold online heap regions in flight while later submissions allocate more descriptors, then verify reuse waits for completion.",
       "pass_condition": "No online heap region is reused before the owning submission retires, and validation stays clean.",
@@ -454,7 +454,7 @@
     {
       "id": "TD-06",
       "applies_to": ["CP-07", "CP-08"],
-      "script": "testscripts/test_all.ps1",
+      "script": "testscripts/windows/test_all.ps1",
       "name": "Summary and validation blocker behavior",
       "description": "Require the aggregate script to preserve pass, fail, and skip counts for descriptor-heap subtests and treat Vulkan validation errors as blockers even if the executable exits with code 0.",
       "pass_condition": "The shared summary clearly separates pass, fail, and skip, and validation errors flip the aggregate result to failure.",

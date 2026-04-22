@@ -97,7 +97,7 @@
         "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.cpp",
         "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
         "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-        "testscripts/test_rhi_translate.ps1"
+        "testscripts/windows/test_rhi_translate.ps1"
       ]
     }
   ],

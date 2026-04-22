@@ -6,7 +6,7 @@ file(GLOB_RECURSE core_headers CONFIGURE_DEPENDS "include/*.h" "include/*.inl")
 file(GLOB_RECURSE core_sources CONFIGURE_DEPENDS "source/*.cpp")
 file(GLOB_RECURSE core_private_headers CONFIGURE_DEPENDS "source/*.h")
 
-if(LINUX)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(FILTER core_sources EXCLUDE REGEX ".*/platform/Windows/.*\\.cpp$")
 elseif(WIN32)
     list(FILTER core_sources EXCLUDE REGEX ".*/platform/Linux/.*\\.cpp$")

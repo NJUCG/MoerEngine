@@ -1,4 +1,4 @@
-if (LINUX)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(moer_runtime_dir ${moer_source_dir}/runtime)
     set(moer_runtime_core_dir ${moer_runtime_dir}/core)
 

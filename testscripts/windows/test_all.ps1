@@ -1,23 +1,4 @@
 #Requires -Version 5.1
-<#
-.SYNOPSIS
-    Run all MoerEngine self-check tests in sequence.
-
-.DESCRIPTION
-    Aggregates results from all individual test scripts into one summary.
-    Each test writes to its own log file inside the shared run directory.
-
-.PARAMETER Config
-    Build configuration: Debug (default), Release, RelWithDebInfo
-
-.PARAMETER ExtraArgs
-    Extra arguments forwarded to every test executable.
-
-.EXAMPLE
-    .\test_all.ps1
-    .\test_all.ps1 -Config Release
-    .\test_all.ps1 -ExtraArgs @("-DENABLE_VALIDATION=1")
-#>
 param(
     [ValidateSet("Debug","Release","RelWithDebInfo")]
     [string]$Config = "Debug",
@@ -34,14 +15,19 @@ Initialize-TestRun -Config $Config -ScriptDir $PSScriptRoot
 
 $BinDir = Join-Path $script:Root "target\bin\$Config"
 
-# ─── 1. RHI Translate Multi-Queue ────────────────────────────────────────────
 Write-Host "--- [1/3] RHI Translate Multi-Queue Test ---" -ForegroundColor Yellow
 
 do {
     $Exe   = Join-Path $BinDir "TestRHITranslate.exe"
     $Label = "RHI"
-    if (-not (Build-Target -Target "TestRHITranslate")) { break }
-    if (-not (Assert-Exe $Exe)) { break }
+    if (-not (Build-Target -Target "TestRHITranslate")) {
+        Register-Fail $Label "build failed"
+        break
+    }
+    if (-not (Assert-Exe $Exe)) {
+        Register-Fail $Label "executable missing"
+        break
+    }
 
     $Log      = Join-Path $script:RunDir "rhi_translate.log"
     Write-Host "[$Label] Exe : $Exe"
@@ -113,7 +99,6 @@ do {
 
 Write-Host ""
 
-# ─── 2. TaskGraph / TaskPipe Regression ──────────────────────────────────────
 Write-Host "--- [2/3] TaskGraph / TaskPipe Regression ---" -ForegroundColor Yellow
 Invoke-StructuredBinaryTest `
     -Label "TaskGraph" `
@@ -130,14 +115,19 @@ Invoke-StructuredBinaryTest `
     -LogFile (Join-Path $script:RunDir "taskpipe.log") `
     -ExtraArgs $ExtraArgs
 
-# ─── 3. MoerEditor (20 s) ────────────────────────────────────────────────────
 Write-Host "--- [3/3] MoerEditor Test (20 s) ---" -ForegroundColor Yellow
 
 do {
     $Exe      = Join-Path $BinDir "MoerEditor.exe"
     $Label    = "Editor"
-    if (-not (Build-Target -Target "MoerEditor")) { break }
-    if (-not (Assert-Exe $Exe)) { break }
+    if (-not (Build-Target -Target "MoerEditor")) {
+        Register-Fail $Label "build failed"
+        break
+    }
+    if (-not (Assert-Exe $Exe)) {
+        Register-Fail $Label "executable missing"
+        break
+    }
 
     $Log      = Join-Path $script:RunDir "moereditor.log"
     $CrashLog = Join-Path $script:RunDir "moereditor_crash.txt"

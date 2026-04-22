@@ -706,7 +706,7 @@
           "reason": "Current main test execution order and shutdown behavior."
         },
         {
-          "path": "testscripts/test_rhi_translate.ps1",
+          "path": "testscripts/windows/test_rhi_translate.ps1",
           "start_line": 17,
           "end_line": 64,
           "reason": "Windows powershell test entry point that should be used for regression verification."
@@ -726,7 +726,7 @@
       ],
       "files_likely_affected": [
         "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-        "testscripts/test_rhi_translate.ps1",
+        "testscripts/windows/test_rhi_translate.ps1",
         "source/runtime/render/renderer/common/RuntimeAssets.cpp",
         "source/runtime/render/scene/Scene.cpp"
       ]

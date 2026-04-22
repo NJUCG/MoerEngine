@@ -12,12 +12,12 @@
     "status": "passed",
     "required_before_completion": [
       {
-        "script": "testscripts/test_rhi_translate.ps1",
+        "script": "testscripts/windows/test_rhi_translate.ps1",
         "result": "passed",
         "log_dir": "logs/run_20260421_231918"
       },
       {
-        "script": "testscripts/test_all.ps1",
+        "script": "testscripts/windows/test_all.ps1",
         "result": "passed",
         "log_dir": "logs/run_20260421_231959"
       }
@@ -111,15 +111,15 @@
       "status": "done",
       "rule": "Validation and document updates are part of the stage contract.",
       "must_be_true": [
-        "testscripts/test_rhi_translate.ps1 is the first validation gate.",
-        "testscripts/test_all.ps1 is the milestone-sized validation gate.",
+        "testscripts/windows/test_rhi_translate.ps1 is the first validation gate.",
+        "testscripts/windows/test_all.ps1 is the milestone-sized validation gate.",
         "Milestone and active checkpoint files are updated together."
       ],
       "scope": [
         "docs/milestones/rhi/refactor_milestone.json",
         "docs/milestones/rhi/refactor_m1_checkpoint.json",
-        "testscripts/test_rhi_translate.ps1",
-        "testscripts/test_all.ps1"
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1"
       ]
     }
   ],

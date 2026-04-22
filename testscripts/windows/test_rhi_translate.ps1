@@ -1,19 +1,4 @@
 #Requires -Version 5.1
-<#
-.SYNOPSIS
-    Run TestRHITranslate.exe (RHI multi-queue translate test).
-
-.PARAMETER Config
-    Build configuration: Debug (default), Release, RelWithDebInfo
-
-.PARAMETER ExtraArgs
-    Extra arguments forwarded to the executable.
-
-.EXAMPLE
-    .\test_rhi_translate.ps1
-    .\test_rhi_translate.ps1 -Config Release
-    .\test_rhi_translate.ps1 -ExtraArgs @("-DENABLE_VALIDATION=1")
-#>
 param(
     [ValidateSet("Debug","Release","RelWithDebInfo")]
     [string]$Config = "Debug",
@@ -35,8 +20,14 @@ $Label  = "RHI"
 Write-Host "--- RHI Translate Multi-Queue Test ---" -ForegroundColor Yellow
 
 do {
-    if (-not (Build-Target -Target "TestRHITranslate")) { break }
-    if (-not (Assert-Exe $Exe)) { break }
+    if (-not (Build-Target -Target "TestRHITranslate")) {
+        Register-Fail $Label "build failed"
+        break
+    }
+    if (-not (Assert-Exe $Exe)) {
+        Register-Fail $Label "executable missing"
+        break
+    }
 
     $Log = Join-Path $script:RunDir "rhi_translate.log"
 
@@ -75,7 +66,6 @@ do {
         }
     }
 
-    # Print tail for quick feedback
     Write-Host "[$Label] Output tail:"
     Get-Content $Log -Tail 10 | ForEach-Object { Write-Host "  $_" }
 
@@ -88,7 +78,6 @@ do {
         @($structuredFailures).Count -eq 0) {
         Register-Pass $Label
     } else {
-        # Surface failure lines in console and summary
         $fails = Select-String -Path $Log -Pattern "mismatch|failed|\[error\]" -CaseSensitive:$false
         $fails | ForEach-Object { Write-Host "  $($_.Line)" }
         if (@($errorLines).Count -gt 0) {

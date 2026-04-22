@@ -26,19 +26,19 @@
     "milestone_file": "docs/milestones/rhi/refactor_milestone.json",
     "checkpoint_pattern": "docs/milestones/rhi/refactor_m*_checkpoint.json",
     "update_rule": "Replans must update this file and the active checkpoint file in the same change.",
-    "validation_rule": "Use only testscripts/test_rhi_translate.ps1 and testscripts/test_all.ps1."
+    "validation_rule": "Use only testscripts/windows/test_rhi_translate.ps1 and testscripts/windows/test_all.ps1."
   },
   "baseline_validation": {
     "status": "passed",
     "runs": [
       {
-        "script": "testscripts/test_rhi_translate.ps1",
+        "script": "testscripts/windows/test_rhi_translate.ps1",
         "date": "2026-04-21",
         "result": "passed",
         "log_dir": "logs/run_20260421_231918"
       },
       {
-        "script": "testscripts/test_all.ps1",
+        "script": "testscripts/windows/test_all.ps1",
         "date": "2026-04-21",
         "result": "passed",
         "log_dir": "logs/run_20260421_231959"
@@ -135,8 +135,8 @@
   ],
   "validation": [
     "Keep M1 completed unless the executor contract changes.",
-    "Run testscripts/test_rhi_translate.ps1 on every executor or progression landing.",
-    "Run testscripts/test_all.ps1 after each milestone-sized landing.",
+    "Run testscripts/windows/test_rhi_translate.ps1 on every executor or progression landing.",
+    "Run testscripts/windows/test_all.ps1 after each milestone-sized landing.",
     "Do not add a new primary validation script."
   ],
   "current_stage_state": {
@@ -149,14 +149,14 @@
     "next_stage_work": "CP-04",
     "latest_validation": [
       {
-        "script": "testscripts/test_rhi_translate.ps1",
+        "script": "testscripts/windows/test_rhi_translate.ps1",
         "date": "2026-04-22",
         "result": "passed",
         "log_dir": "logs/run_20260422_000346",
         "scope": "CP-03 landed with present-only submit coverage in PresentRoundTrip."
       },
       {
-        "script": "testscripts/test_all.ps1",
+        "script": "testscripts/windows/test_all.ps1",
         "date": "2026-04-21",
         "result": "failed",
         "log_dir": "logs/run_20260421_234009",

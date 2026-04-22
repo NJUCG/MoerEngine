@@ -364,13 +364,13 @@
         "Behavioral equivalence is preserved while code structure simplifies."
       ],
       "tasks": [
-        "Run testscripts/test_rhi_translate.ps1 after each critical checkpoint.",
+        "Run testscripts/windows/test_rhi_translate.ps1 after each critical checkpoint.",
         "Pay special attention to present completion timing, readback-facing interrupt completion timing, and Sync(Present) behavior.",
         "Reject any solution that adds new fallback waits, compatibility layers, or try/catch-based ownership control."
       ],
       "files_likely_affected": [
         "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-        "testscripts/test_rhi_translate.ps1"
+        "testscripts/windows/test_rhi_translate.ps1"
       ]
     }
   ],
@@ -383,12 +383,12 @@
     "CP-06: validate the structural cleanup with the existing RHI translate test path."
   ],
   "test_script": {
-    "path": "testscripts/test_rhi_translate.ps1",
+    "path": "testscripts/windows/test_rhi_translate.ps1",
     "purpose": "Build and run TestRHITranslate.exe to validate submit, present, sync, copy-scope, and interrupt completion behavior after structural runtime changes.",
     "commands": [
-      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1",
-      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 -Config Release",
-      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 -ExtraArgs @('-DENABLE_VALIDATION=1')"
+      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_rhi_translate.ps1",
+      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_rhi_translate.ps1 -Config Release",
+      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_rhi_translate.ps1 -ExtraArgs @('-DENABLE_VALIDATION=1')"
     ],
     "usage_notes": [
       "Run after any checkpoint that changes batch completion flow, root boundary transport, interrupt enqueue flow, or present scheduling.",
@@ -403,7 +403,7 @@
     "root_rhi_prerequisites is replaced by one RootRhiBoundary mechanism that preserves both host-side ordering and final GPU wait injection.",
     "RunSubmissionThread remains semantically correct but is split into readable dependency and scheduling stages.",
     "Normal control flow does not rely on try/catch and instead asserts internal invariants.",
-    "testscripts/test_rhi_translate.ps1 passes after the refactor."
+    "testscripts/windows/test_rhi_translate.ps1 passes after the refactor."
   ],
   "risks": [
     {

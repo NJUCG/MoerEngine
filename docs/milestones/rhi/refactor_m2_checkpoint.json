@@ -10,8 +10,8 @@
   "goal": "Finish Vulkan-side cleanup in this stage. M2 exits only when Vulkan no longer keeps duplicated progression ownership or ingress-side policy leaks.",
   "entry_gate": [
     "M1 is completed.",
-    "testscripts/test_rhi_translate.ps1 passed on the current baseline.",
-    "testscripts/test_all.ps1 passed on the current baseline."
+    "testscripts/windows/test_rhi_translate.ps1 passed on the current baseline.",
+    "testscripts/windows/test_all.ps1 passed on the current baseline."
   ],
   "hard_rules": [
     {
@@ -143,8 +143,8 @@
       "status": "in_progress",
       "rule": "Each cleanup landing is validated and each replan updates milestone plus active checkpoint together.",
       "actions": [
-        "Run testscripts/test_rhi_translate.ps1 after each progression or stage-boundary landing.",
-        "Run testscripts/test_all.ps1 after each milestone-sized landing.",
+        "Run testscripts/windows/test_rhi_translate.ps1 after each progression or stage-boundary landing.",
+        "Run testscripts/windows/test_all.ps1 after each milestone-sized landing.",
         "Update docs/milestones/rhi/refactor_milestone.json together with this file on every replan."
       ],
       "exit_gate": [
@@ -152,8 +152,8 @@
         "No checkpoint drift exists between the milestone and M2 file."
       ],
       "scope": [
-        "testscripts/test_rhi_translate.ps1",
-        "testscripts/test_all.ps1",
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1",
         "docs/milestones/rhi/refactor_milestone.json",
         "docs/milestones/rhi/refactor_m2_checkpoint.json"
       ]
@@ -167,8 +167,8 @@
   ],
   "validation": [
     "Start from the passed baseline recorded in M1 and the milestone file.",
-    "Run testscripts/test_rhi_translate.ps1 first on each landing.",
-    "Run testscripts/test_all.ps1 after milestone-sized landings.",
+    "Run testscripts/windows/test_rhi_translate.ps1 first on each landing.",
+    "Run testscripts/windows/test_all.ps1 after milestone-sized landings.",
     "Do not add a new primary validation script."
   ],
   "current_execution_state": {
@@ -180,20 +180,20 @@
     "next_checkpoint": "CP-04",
     "validation_runs": [
       {
-        "script": "testscripts/test_rhi_translate.ps1",
+        "script": "testscripts/windows/test_rhi_translate.ps1",
         "date": "2026-04-21",
         "result": "passed",
         "log_dir": "logs/run_20260421_233945"
       },
       {
-        "script": "testscripts/test_rhi_translate.ps1",
+        "script": "testscripts/windows/test_rhi_translate.ps1",
         "date": "2026-04-22",
         "result": "passed",
         "log_dir": "logs/run_20260422_000346",
         "scope": "CP-03 landed with present-only submit coverage in PresentRoundTrip."
       },
       {
-        "script": "testscripts/test_all.ps1",
+        "script": "testscripts/windows/test_all.ps1",
         "date": "2026-04-21",
         "result": "failed",
         "log_dir": "logs/run_20260421_234009",

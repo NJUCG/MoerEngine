@@ -1,8 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(powershell -ExecutionPolicy Bypass -File testscripts/test_editor.ps1)",
-      "Bash(powershell -ExecutionPolicy Bypass -File \"f:\\\\Github_Data\\\\MoerEngine\\\\testscripts\\\\test_all.ps1\" -Config RelWithDebInfo)"
+      "Bash(powershell -ExecutionPolicy Bypass -File testscripts/windows/test_editor.ps1)",
+      "Bash(powershell -ExecutionPolicy Bypass -File \"f:\\\\Github_Data\\\\MoerEngine\\\\testscripts\\\\windows\\\\test_all.ps1\" -Config RelWithDebInfo)"
     ]
   }
 }

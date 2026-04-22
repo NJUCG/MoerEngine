@@ -13,8 +13,8 @@
     "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutorPrivate.h",
     "source/runtime/render/rhi/vulkan/VulkanSubmissionPreprocess.cpp",
     "source/runtime/render/rhi/vulkan/VulkanTranslateAssembly.cpp",
-    "testscripts/test_rhi_translate.ps1",
-    "testscripts/test_all.ps1"
+    "testscripts/windows/test_rhi_translate.ps1",
+    "testscripts/windows/test_all.ps1"
   ],
   "current_state": {
     "corrected_conclusions": [
@@ -40,7 +40,7 @@
     "Parallel-capable translate tasks must not consume the serial TranslatePipe lifetime. If a dedicated load-balance TaskPipe is introduced, it exists to dispatch or coordinate parallel translate work only.",
     "TranslatePipe remains responsible for serial control-flow semantics only: submit-context progression, serial RHICommandList ownership, submit gating, and handoff to submission runtime.",
     "Segment parallelism decisions must continue to come from SubmissionPreprocess and its existing dependency data, including last_fence_event, last_translate_event, task_dependencies, and dependency_graph.",
-    "Validation may use only existing PowerShell test scripts under testscripts/test_*.ps1. No ad-hoc one-off validation wrapper may be introduced.",
+    "Validation may use only existing PowerShell test scripts under testscripts/windows/test_*.ps1. No ad-hoc one-off validation wrapper may be introduced.",
     "Windows-side script execution must use PowerShell, and validation review should filter validation noise and focus on blocking error lines as required by Rule_Codex.md."
   ],
   "checkpoints": [
@@ -117,13 +117,13 @@
       "status": "done_with_gap",
       "category": "validation",
       "must_be_true_after": [
-        "Implementation validation uses existing testscripts/test_rhi_translate.ps1 and, when integration scope expands, testscripts/test_all.ps1.",
+        "Implementation validation uses existing testscripts/windows/test_rhi_translate.ps1 and, when integration scope expands, testscripts/windows/test_all.ps1.",
         "No new primary test wrapper or ad-hoc verification script is introduced.",
         "If the final behavior still lacks direct automation coverage, that gap is stated explicitly instead of being hidden behind manual claims."
       ],
       "files_likely_affected": [
-        "testscripts/test_rhi_translate.ps1",
-        "testscripts/test_all.ps1",
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1",
         "docs/checkpoints/translate_pipe_parallel_reanalysis_checkpoint.json"
       ]
     }
@@ -141,8 +141,8 @@
   },
   "validation": [
     "Run PowerShell on Windows as required by Rule_Codex.md.",
-    "Primary validation path for this work: powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1",
-    "If the implementation changes broader executor/runtime integration, also run powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_all.ps1",
+    "Primary validation path for this work: powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_rhi_translate.ps1",
+    "If the implementation changes broader executor/runtime integration, also run powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_all.ps1",
     "When reviewing logs, filter validation noise and focus on blocking error lines rather than non-fatal validation chatter.",
     "If no existing test_xx.ps1 script fully covers the final scheduling behavior, state that coverage gap explicitly."
   ]

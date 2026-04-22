@@ -3,7 +3,7 @@
 set -euo pipefail
 
 CONFIG="${1:-Debug}"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="${REPO_ROOT}/build-core-linux"
 BIN_DIR="${REPO_ROOT}/target/bin/${CONFIG}"
 LOG_ROOT="${REPO_ROOT}/logs"

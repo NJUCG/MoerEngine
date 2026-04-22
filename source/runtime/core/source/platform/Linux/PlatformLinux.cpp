@@ -1,5 +1,6 @@
 #include "PlatformLinux.h"
 
+#include <cstdlib>
 #include <pthread.h>
 #include <sched.h>
 #include <sys/syscall.h>

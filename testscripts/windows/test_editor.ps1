@@ -1,22 +1,4 @@
 #Requires -Version 5.1
-<#
-.SYNOPSIS
-    Run MoerEditor.exe for 20 seconds, then terminate and inspect the log.
-
-.PARAMETER Config
-    Build configuration: Debug (default), Release, RelWithDebInfo
-
-.PARAMETER TimeoutSec
-    How many seconds to let MoerEditor run before killing it (default: 20).
-
-.PARAMETER ExtraArgs
-    Extra arguments forwarded to MoerEditor.exe.
-
-.EXAMPLE
-    .\test_editor.ps1
-    .\test_editor.ps1 -Config Release
-    .\test_editor.ps1 -TimeoutSec 30
-#>
 param(
     [ValidateSet("Debug","Release","RelWithDebInfo")]
     [string]$Config = "Debug",
@@ -40,8 +22,14 @@ $Label  = "Editor"
 Write-Host "--- MoerEditor Test ($TimeoutSec s) ---" -ForegroundColor Yellow
 
 do {
-    if (-not (Build-Target -Target "MoerEditor")) { break }
-    if (-not (Assert-Exe $Exe)) { break }
+    if (-not (Build-Target -Target "MoerEditor")) {
+        Register-Fail $Label "build failed"
+        break
+    }
+    if (-not (Assert-Exe $Exe)) {
+        Register-Fail $Label "executable missing"
+        break
+    }
 
     $Log      = Join-Path $script:RunDir "moereditor.log"
     $CrashLog = Join-Path $script:RunDir "moereditor_crash.txt"
@@ -55,7 +43,6 @@ do {
     Merge-Stderr $Log "$Log.stderr.tmp"
 
     $failed = $false
-
     if ($survived) {
         Write-Host "[$Label] Killed after $TimeoutSec s."
     } else {
@@ -64,7 +51,6 @@ do {
         if ($script:TimedExitCode -ne 0) { $failed = $true }
     }
 
-    # Crash + Vulkan validation error scan
     $errorLines = Test-LogForErrors -LogFile $Log
     if ($errorLines) {
         Write-Host "[$Label] Errors/validation issues detected:" -ForegroundColor Red

@@ -39,7 +39,6 @@ function(copy_dll target_name dll_name type src_root )
         set_target_properties(${target_name} PROPERTIES 
         IMPORTED_IMPLIB  ${lib}
         IMPORTED_LOCATION  ${lib})
-    elseif(LINUX)
     endif()
 endfunction()
 

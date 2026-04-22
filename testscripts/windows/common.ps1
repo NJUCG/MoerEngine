@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Shared utilities for MoerEngine test scripts.
+    Shared utilities for MoerEngine Windows test scripts.
     Dot-source this file from each individual test script.
 
 .DESCRIPTION
@@ -25,7 +25,6 @@
     All shared state lives in script-scope variables set by Initialize-TestRun.
 #>
 
-# ─── Shared state (populated by Initialize-TestRun) ──────────────────────────
 $script:RunDir      = $null
 $script:SummaryFile = $null
 $script:PassCount   = 0
@@ -37,20 +36,14 @@ $script:SubSkipCount = 0
 $script:Config      = "Debug"
 $script:Root        = $null
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Initialize-TestRun {
-<#
-.SYNOPSIS
-    Must be called at the start of every test script.
-    Creates the per-run logs/<run_STAMP>/ directory.
-#>
     param(
         [string]$Config    = "Debug",
-        [string]$ScriptDir = $PSScriptRoot        # caller passes $PSScriptRoot
+        [string]$ScriptDir = $PSScriptRoot
     )
 
     $script:Config = $Config
-    $script:Root   = Split-Path $ScriptDir -Parent  # testscripts/ -> repo root
+    $script:Root   = Split-Path (Split-Path $ScriptDir -Parent) -Parent
 
     $LogsRoot = Join-Path $script:Root "logs"
     $Stamp    = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -72,7 +65,6 @@ function Initialize-TestRun {
     Write-Host ""
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Write-Summary([string]$Line) {
     Add-Content -Path $script:SummaryFile -Value $Line -Encoding UTF8
 }
@@ -93,12 +85,7 @@ function Write-ResultLine(
     Write-Summary $msg
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Build-Target {
-<#
-.SYNOPSIS
-    Build a CMake target under build/ before test execution.
-#>
     param(
         [Parameter(Mandatory)][string]$Target
     )
@@ -126,11 +113,7 @@ function Build-Target {
     return $true
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Assert-Exe([string]$ExePath) {
-<#
-.SYNOPSIS  Returns $true if the exe exists; prints error + increments FailCount otherwise.
-#>
     if (-not (Test-Path $ExePath)) {
         Write-Host "[ERROR] Not found: $ExePath" -ForegroundColor Red
         Write-Host "        Build first: cmake --build build --config $($script:Config)"
@@ -141,11 +124,7 @@ function Assert-Exe([string]$ExePath) {
     return $true
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Merge-Stderr([string]$MainLog, [string]$ErrLog) {
-<#
-.SYNOPSIS  Appends non-empty stderr file to MainLog, then deletes ErrLog.
-#>
     if (Test-Path $ErrLog) {
         if ((Get-Item $ErrLog).Length -gt 0) {
             Add-Content $MainLog "`n--- stderr ---"
@@ -156,10 +135,6 @@ function Merge-Stderr([string]$MainLog, [string]$ErrLog) {
 }
 
 function Stop-ProcessTree {
-<#
-.SYNOPSIS
-    Force-kills a process and its child process tree.
-#>
     param([Parameter(Mandatory)][int]$ProcessId)
 
     $taskkill = Start-Process -FilePath "taskkill.exe" -ArgumentList @("/PID", "$ProcessId", "/T", "/F") -NoNewWindow -PassThru -Wait
@@ -167,22 +142,12 @@ function Stop-ProcessTree {
 }
 
 function Test-ProcessExited {
-<#
-.SYNOPSIS
-    Returns $true when a process id no longer exists.
-#>
     param([Parameter(Mandatory)][int]$ProcessId)
 
     return $null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Invoke-ExeSync {
-<#
-.SYNOPSIS
-    Run an executable synchronously; redirect stdout+stderr to log files.
-    Returns the process exit code.
-#>
     param(
         [Parameter(Mandatory)][string]   $ExePath,
         [Parameter(Mandatory)][string]   $WorkDir,
@@ -208,10 +173,6 @@ function Invoke-ExeSync {
 }
 
 function Invoke-StructuredBinaryTest {
-<#
-.SYNOPSIS
-    Build and run a structured testcase executable that emits [TESTCASE] markers.
-#>
     param(
         [Parameter(Mandatory)][string]$Label,
         [Parameter(Mandatory)][string]$Target,
@@ -224,8 +185,14 @@ function Invoke-StructuredBinaryTest {
     $missingMarkerReason = "structured testcase markers missing"
 
     do {
-        if (-not (Build-Target -Target $Target)) { break }
-        if (-not (Assert-Exe $ExePath)) { break }
+        if (-not (Build-Target -Target $Target)) {
+            Register-Fail $Label "build failed"
+            break
+        }
+        if (-not (Assert-Exe $ExePath)) {
+            Register-Fail $Label "executable missing"
+            break
+        }
 
         Write-Host "[$Label] Exe : $ExePath"
         Write-Host "[$Label] Log : $LogFile"
@@ -272,15 +239,7 @@ function Invoke-StructuredBinaryTest {
     Write-Host ""
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Invoke-ExeTimed {
-<#
-.SYNOPSIS
-    Start an executable and kill it after $TimeoutSec seconds.
-    Returns $true if the process was still running at timeout (normal),
-            $false if it exited early (possible crash).
-    Sets $script:TimedExitCode to the process exit code (0 if killed).
-#>
     param(
         [Parameter(Mandatory)][string]   $ExePath,
         [Parameter(Mandatory)][string]   $WorkDir,
@@ -315,43 +274,20 @@ function Invoke-ExeTimed {
             $script:TimedExitCode = -1
             return $false
         }
-        return $true   # killed at timeout = normal
+        return $true
     } else {
         $script:TimedExitCode = $proc.ExitCode
-        return $false  # exited early
+        return $false
     }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Test-LogForErrors {
-<#
-.SYNOPSIS
-    Scans a log file for two categories of error and returns all matched lines.
-
-    Category 1 — Application crashes / fatal errors:
-      Matches spdlog [error]-level lines containing crash/exception/fatal/etc.
-      Excludes Vulkan Loader info messages (which only appear at [error] level
-      due to the debug callback but don't indicate application errors).
-
-    Category 2 — Vulkan validation layer hard errors:
-      "Validation Error: [ VUID-... ]"   — hard validation failure
-      "[N] [VUID-...]" detail lines are not treated as failure on their own.
-
-    Returns an array of MatchInfo objects (empty array if no issues found).
-    Callers should check  ($results.Count -gt 0)  to detect problems.
-#>
     param([Parameter(Mandatory)][string]$LogFile)
 
     if (-not (Test-Path $LogFile)) { return @() }
 
-    # Pattern 1: spdlog [error] lines with crash/exception/fatal keywords.
-    # The negative look-ahead (?!.*Loader Message) avoids Vulkan Loader spam
-    # that happens to be routed through the debug callback at [error] severity.
     $p1 = "(?-i)\[error\](?!.*\[Loader Message\]).*(crash|exception|fatal|access.violation|assert)"
-
-    # Pattern 2: Vulkan validation layer hard errors only.
     $p2 = "(?-i)(Validation Error\s*:)"
-
     $combined = "$p1|$p2"
 
     $hits = Select-String -Path $LogFile -Pattern $combined -CaseSensitive
@@ -359,10 +295,6 @@ function Test-LogForErrors {
 }
 
 function Get-DescriptorHeapCapabilityState {
-<#
-.SYNOPSIS
-    Parses a runtime log and returns one of: Enabled, Skipped, Unknown.
-#>
     param([Parameter(Mandatory)][string]$LogFile)
 
     if (-not (Test-Path $LogFile)) {
@@ -383,16 +315,6 @@ function Get-DescriptorHeapCapabilityState {
 }
 
 function Get-StructuredTestCaseResults {
-<#
-.SYNOPSIS
-    Parses standardized per-case markers from a runtime log.
-
-.DESCRIPTION
-    Expected lines:
-      [TESTCASE][PASS] CaseName
-      [TESTCASE][FAIL] CaseName :: reason
-      [TESTCASE][SKIP] CaseName :: reason
-#>
     param([Parameter(Mandatory)][string]$LogFile)
 
     if (-not (Test-Path $LogFile)) { return @() }
@@ -417,11 +339,7 @@ function Get-StructuredTestCaseResults {
     return @($results)
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Save-Minidumps([string]$BinDir) {
-<#
-.SYNOPSIS  Copy any *.dmp / *.mdmp from BinDir into the run log folder.
-#>
     foreach ($ext in "*.dmp","*.mdmp") {
         Get-ChildItem $BinDir -Filter $ext -ErrorAction SilentlyContinue |
             ForEach-Object {
@@ -432,7 +350,6 @@ function Save-Minidumps([string]$BinDir) {
     }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Register-Pass([string]$Label) {
     Write-ResultLine -Scope "Test" -Label $Label -Status "PASSED"
     $script:PassCount++
@@ -462,11 +379,7 @@ function Register-Subtest(
     }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 function Finish-TestRun {
-<#
-.SYNOPSIS  Print final banner, write summary footer, and exit with correct code.
-#>
     Write-Summary "============================================================"
     Write-Summary " TESTS   : PASSED=$($script:PassCount)   FAILED=$($script:FailCount)   SKIPPED=$($script:SkipCount)"
     Write-Summary " SUBTEST : PASSED=$($script:SubPassCount)   FAILED=$($script:SubFailCount)   SKIPPED=$($script:SubSkipCount)"

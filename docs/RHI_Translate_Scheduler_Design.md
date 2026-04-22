@@ -249,7 +249,7 @@ When the scheduler is implemented, add cases for:
 
 Every translate scheduler change must be validated through existing repository scripts only:
 
-- `testscripts/test_rhi_translate.ps1`
-- `testscripts/test_all.ps1`
+- `testscripts/windows/test_rhi_translate.ps1`
+- `testscripts/windows/test_all.ps1`
 
 If a new executable is introduced later, `test_all.ps1` must be extended to aggregate it, but the structured test-case marker contract should remain the same.

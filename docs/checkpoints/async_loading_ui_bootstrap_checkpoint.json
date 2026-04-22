@@ -187,7 +187,7 @@
     ]
   },
   "validation_plan": [
-    "When implementation starts, validate only with existing scripts: testscripts/test_rhi_translate.ps1 first, then testscripts/test_all.ps1.",
+    "When implementation starts, validate only with existing scripts: testscripts/windows/test_rhi_translate.ps1 first, then testscripts/windows/test_all.ps1.",
     "This design checkpoint itself is documentation-only and does not require a build."
   ]
 }

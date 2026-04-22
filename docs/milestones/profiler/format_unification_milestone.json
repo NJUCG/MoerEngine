@@ -10,7 +10,7 @@
       "MoerProfiler now ingests canonical ProfileDump packets over TCP and from offline binary files instead of using the old Trace TCP plus CSV-only consumer boundary.",
       "MoerProfiler consumer storage now uses local profiler-owned event/session/track types instead of depending on trace/Trace.h as its in-memory model.",
       "The profiler consumer implementation is now centralized in source/profiler/ProfileSession.h/.cpp and enforces session-relative normalized timestamps in one place.",
-      "Focused profiler-side normalization coverage now exists in testscripts/test_rhi_translate.ps1 through the TestRHITranslate target."
+      "Focused profiler-side normalization coverage now exists in testscripts/windows/test_rhi_translate.ps1 through the TestRHITranslate target."
     ],
     "next_execution_focus": [
       "Delete the remaining repository-wide legacy profiler surfaces, especially the public source/profile role and Trace transport APIs that still survive outside the profiler app consumer path.",
@@ -36,8 +36,8 @@
     "source/runtime/render/rhi/GPUEventStream.cpp",
     "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
     "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
-    "testscripts/test_rhi_translate.ps1",
-    "testscripts/test_all.ps1"
+    "testscripts/windows/test_rhi_translate.ps1",
+    "testscripts/windows/test_all.ps1"
   ],
   "document_contract": {
     "milestone_file_pattern": "docs/milestones/<domain>/xx_milestone.json",
@@ -166,7 +166,7 @@
     {
       "id": "HC-05",
       "title": "Existing repository scripts only",
-      "detail": "Implementation validation must stay on current repository scripts such as testscripts/test_rhi_translate.ps1 and testscripts/test_all.ps1."
+      "detail": "Implementation validation must stay on current repository scripts such as testscripts/windows/test_rhi_translate.ps1 and testscripts/windows/test_all.ps1."
     }
   ],
   "stages": [
@@ -232,8 +232,8 @@
   ],
   "validation": [
     "Current implementation already builds with cmake --build build --config Debug and produces MoerProfiler.exe with the canonical ProfileDump consumer path compiled in.",
-    "Focused validation now includes profiler-side normalization and stream consumer coverage through testscripts/test_rhi_translate.ps1.",
-    "Broader repository validation passed through testscripts/test_all.ps1 after the shared consumer module and normalization landing.",
+    "Focused validation now includes profiler-side normalization and stream consumer coverage through testscripts/windows/test_rhi_translate.ps1.",
+    "Broader repository validation passed through testscripts/windows/test_all.ps1 after the shared consumer module and normalization landing.",
     "When implementation starts, update both the milestone file and the affected stage checkpoint file together.",
     "Do not add a new standalone primary profiler script for this migration."
   ]

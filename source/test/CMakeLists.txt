@@ -57,7 +57,7 @@ target_link_libraries(${pipe_test_target}
 )
 set_target_properties(${pipe_test_target} PROPERTIES FOLDER ${moer_test_folder})
 
-if (LINUX)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_custom_target(TestCoreLinux
         DEPENDS
             TestTaskGraph
