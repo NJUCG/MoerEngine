@@ -234,16 +234,28 @@ ResolvedGPUFrame BuildResolvedFrame(
 }
 
 template<typename TCompletedEvent>
-ResolvedGPUFrame ResolveFrameFromPrefix(std::span<const TCompletedEvent> event_prefix, uint64 frame_index) {
+ResolvedGPUFrame ResolveFrameFromPrefix(
+    std::span<const TCompletedEvent> event_prefix,
+    uint64                           frame_index,
+    bool                             log_as_error
+) {
     size_t boundary_index = kInvalidIndex;
     uint64 boundary_timestamp_ns = 0;
     bool   frame_valid = true;
+
+    auto report_boundary_issue = [log_as_error](auto&&... args) {
+        if (log_as_error) {
+            LOG_ERROR(std::forward<decltype(args)>(args)...);
+        } else {
+            LOG_WARNING(std::forward<decltype(args)>(args)...);
+        }
+    };
 
     for (size_t event_index = 0; event_index < event_prefix.size(); ++event_index) {
         const auto& event = event_prefix[event_index];
         if (event.type == GPUEvent::EType::FrameBoundary) {
             if (boundary_index != kInvalidIndex) {
-                LOG_ERROR(
+                report_boundary_issue(
                     "GPUEventStream found multiple frame boundaries in frame {} before EndFrame resolution",
                     frame_index
                 );
@@ -256,7 +268,7 @@ ResolvedGPUFrame ResolveFrameFromPrefix(std::span<const TCompletedEvent> event_p
         }
 
         if (boundary_index != kInvalidIndex) {
-            LOG_ERROR(
+            report_boundary_issue(
                 "GPUEventStream found event '{}' after frame boundary in frame {}",
                 event.name,
                 frame_index
@@ -266,7 +278,7 @@ ResolvedGPUFrame ResolveFrameFromPrefix(std::span<const TCompletedEvent> event_p
     }
 
     if (boundary_index == kInvalidIndex) {
-        LOG_ERROR(
+        report_boundary_issue(
             "GPUEventStream sealed frame {} without any FrameBoundary event",
             frame_index
         );
@@ -371,6 +383,7 @@ void GPUEventStream::EnqueueSubmit(Array<GPUEvent>&& events, EQueueType queue, W
     }
 
     std::lock_guard lock(stream_mutex);
+    testing_injected_submits = false;
     pending_submits.emplace_back(PendingSubmit{
         .enqueue_order = next_enqueue_order++,
         .events = std::move(events),
@@ -464,6 +477,7 @@ std::string GPUEventStream::FormatLastResolvedFrame() const {
 
 void GPUEventStream::ResetForTesting() {
     std::lock_guard lock(stream_mutex);
+    testing_injected_submits = true;
     pending_submits.clear();
     pending_frames.clear();
     resolved_events.clear();
@@ -476,6 +490,7 @@ void GPUEventStream::ResetForTesting() {
 
 void GPUEventStream::InjectResolvedSubmitForTesting(Array<GPUEvent>&& events, EQueueType queue) {
     std::lock_guard lock(stream_mutex);
+    testing_injected_submits = true;
 
     const uint64 enqueue_order = next_enqueue_order++;
     for (GPUEvent& event : events) {
@@ -531,7 +546,8 @@ void GPUEventStream::TryResolveReadyFramesLocked() {
 
         ResolvedGPUFrame frame = ResolveFrameFromPrefix(
             std::span<const CompletedGPUEvent>(resolved_events.data(), resolved_prefix_count),
-            pending_frame.frame_index
+            pending_frame.frame_index,
+            !testing_injected_submits
         );
         last_resolved_frame = frame;
         ready_frames.emplace_back(std::move(frame));

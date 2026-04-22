@@ -73,6 +73,7 @@ private:
     uint64                             next_enqueue_order{0};
     uint64                             next_frame_index{0};
     uint64                             resolved_enqueue_order_exclusive{0};
+    bool                               testing_injected_submits{false};
     mutable std::mutex                 stream_mutex;
 };
 
