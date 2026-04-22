@@ -85,6 +85,7 @@ private:
     };
 
     bool TryGetLocalWorker(EThread::Type currentThread, ThreadPriority priority, int32_t& localWorkerIndex) const;
+    int32_t GetLocalWorkerIndex(int32_t threadIndex, ThreadPriority priority) const;
     PriorityPool& GetPool(ThreadPriority priority);
     const PriorityPool& GetPool(ThreadPriority priority) const;
     void    WakeOneWorker(ThreadPriority priority);

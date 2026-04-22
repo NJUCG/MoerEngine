@@ -71,6 +71,7 @@ BaseGraphTask* AnyThreadScheduler::ChaseLevDeque::PopBottom() {
                     std::memory_order_seq_cst,
                     std::memory_order_relaxed
                 )) {
+                // Another worker stole the last slot before the owner committed the pop.
                 task = nullptr;
             }
             m_bottom.store(bottom + 1, std::memory_order_relaxed);
@@ -141,13 +142,17 @@ bool AnyThreadScheduler::TryGetLocalWorker(
         return false;
     }
 
-    int32_t localIndex = threadIndex - m_named_thread_count - priority * m_worker_per_priority;
+    int32_t localIndex = GetLocalWorkerIndex(threadIndex, priority);
     if (localIndex < 0 || localIndex >= m_worker_count_per_priority[priority]) {
         return false;
     }
 
     localWorkerIndex = localIndex;
     return true;
+}
+
+int32_t AnyThreadScheduler::GetLocalWorkerIndex(int32_t threadIndex, ThreadPriority priority) const {
+    return threadIndex - m_named_thread_count - priority * m_worker_per_priority;
 }
 
 AnyThreadScheduler::PriorityPool& AnyThreadScheduler::GetPool(ThreadPriority priority) {
@@ -191,7 +196,7 @@ void AnyThreadScheduler::Enqueue(BaseGraphTask* task, EThread::Type currentThrea
 BaseGraphTask* AnyThreadScheduler::Dequeue(int32_t threadIndex) {
     ThreadPriority priority         = (threadIndex - m_named_thread_count) / m_worker_per_priority;
     PriorityPool&  pool             = GetPool(priority);
-    int32_t        localWorkerIndex = threadIndex - m_named_thread_count - priority * m_worker_per_priority;
+    int32_t        localWorkerIndex = GetLocalWorkerIndex(threadIndex, priority);
 
     assert(localWorkerIndex >= 0 && localWorkerIndex < pool.worker_count);
 
