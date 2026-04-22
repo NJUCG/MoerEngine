@@ -1,7 +1,10 @@
 #ifndef ENUM_BIT_OPERATION_H_
 #define ENUM_BIT_OPERATION_H_
+
+#include "MacroUtils.h"
+
 #ifndef MOER_FORCE_INLINE
-#define MOER_FORCE_INLINE __forceinline
+#define MOER_FORCE_INLINE FORCEINLINE
 #endif // !FORCE_INLINE
 #include <type_traits>
 

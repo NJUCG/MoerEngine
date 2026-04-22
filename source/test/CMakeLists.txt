@@ -1,6 +1,8 @@
 set(moer_test_folder "test")
 
-add_subdirectory(math)
+if (NOT MOER_CORE_ONLY)
+    add_subdirectory(math)
+endif()
 
 # add_executable(RuntimeTest EngineTest.cpp)
 # target_include_directories(RuntimeTest
@@ -58,7 +60,6 @@ set_target_properties(${pipe_test_target} PROPERTIES FOLDER ${moer_test_folder})
 if (LINUX)
     add_custom_target(TestCoreLinux
         DEPENDS
-            TestMath
             TestTaskGraph
             TestTaskPipe
     )

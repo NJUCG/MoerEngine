@@ -55,6 +55,7 @@ option(moer_enable_trace "Enable profiler trace instrumentation" ON)
 option(MOER_CORE_ONLY "Build only core libraries and core tests" OFF)
 
 if(MOER_CORE_ONLY)
+    add_compile_definitions(MOER_CORE_ONLY=1)
     message(STATUS "MOER_CORE_ONLY = ON")
 endif()
 

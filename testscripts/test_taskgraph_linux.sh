@@ -48,8 +48,12 @@ write_summary "Config   : ${CONFIG}"
 write_summary "BuildDir : ${BUILD_DIR}"
 write_summary "Logs     : ${RUN_DIR}"
 
+rm -rf "${BUILD_DIR}"
+
 cmake -S "${REPO_ROOT}" -B "${BUILD_DIR}" -G Ninja \
     -DCMAKE_BUILD_TYPE="${CONFIG}" \
+    -DCMAKE_C_COMPILER=clang \
+    -DCMAKE_CXX_COMPILER=clang++ \
     -DMOER_CORE_ONLY=ON \
     -Dmoer_build_test=ON \
     -DWITH_CUDA=OFF \

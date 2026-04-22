@@ -179,6 +179,14 @@ int main() {
 
     Moer::TaskGraphTest();
     std::cout << "[TESTCASE][PASS] TaskGraphSuite\n";
+
+#if defined(MOER_CORE_ONLY) && defined(PLATFORM_LINUX)
+    std::cout << "[TESTCASE][SKIP] ParallelFor :: skipped in linux core-only mode\n";
+    std::cout << "[TESTCASE][SKIP] ParallelForAsync :: skipped in linux core-only mode\n";
+    Moer::TaskSystem::ShutDown();
+    return 0;
+#endif
+
     std::atomic<int> k = 0;
     ParallelFor(10, [&](int _idx) {
         k += 60;
@@ -193,5 +201,6 @@ int main() {
     assert(k == 1200);
     std::cout << "[TESTCASE][PASS] ParallelForAsync\n";
 
+    Moer::TaskSystem::ShutDown();
     return 0;
 }

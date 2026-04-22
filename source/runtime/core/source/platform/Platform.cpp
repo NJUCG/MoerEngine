@@ -1,12 +1,14 @@
 #include "platform/Platform.h"
 #include "PlatformImplement.h"
 #include "misc/STL.h"
+#if PLATFORM_WINDOWS
 #include <basetsd.h>
+#endif
 #include <cstdint>
 #if PLATFORM_WINDOWS
 #include "Windows/PlatformWindows.h"
 #elif PLATFORM_LINUX
-#include "PlatformLinux.h"
+#include "Linux/PlatformLinux.h"
 #endif
 
 Affinity::Affinity(Affinity&& _other) noexcept {
