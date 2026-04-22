@@ -221,6 +221,8 @@ function Invoke-StructuredBinaryTest {
         [string[]]$ExtraArgs = @()
     )
 
+    $missingMarkerReason = "structured testcase markers missing"
+
     do {
         if (-not (Build-Target -Target $Target)) { break }
         if (-not (Assert-Exe $ExePath)) { break }
@@ -234,7 +236,7 @@ function Invoke-StructuredBinaryTest {
         $structuredCases = Get-StructuredTestCaseResults -LogFile $LogFile
 
         if (@($structuredCases).Count -eq 0) {
-            Register-Subtest -Group $Label -Name "StructuredTestcaseMarkers" -Status "FAILED" -Reason "no structured testcase markers found"
+            Register-Subtest -Group $Label -Name "StructuredTestcaseMarkers" -Status "FAILED" -Reason $missingMarkerReason
         } else {
             foreach ($case in $structuredCases) {
                 Register-Subtest -Group $Label -Name $case.Name -Status $case.Status -Reason $case.Reason
@@ -257,7 +259,7 @@ function Invoke-StructuredBinaryTest {
             $reason = if ($exitCode -ne 0) {
                 "exit $exitCode"
             } elseif (@($structuredCases).Count -eq 0) {
-                "structured testcase markers missing"
+                $missingMarkerReason
             } elseif (@($structuredFailures).Count -gt 0) {
                 "$(@($structuredFailures).Count) structured testcase failures"
             } else {
