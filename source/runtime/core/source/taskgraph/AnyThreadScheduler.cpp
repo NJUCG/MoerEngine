@@ -194,9 +194,9 @@ void AnyThreadScheduler::Enqueue(BaseGraphTask* task, EThread::Type currentThrea
 }
 
 BaseGraphTask* AnyThreadScheduler::Dequeue(int32_t threadIndex) {
-    ThreadPriority priority         = (threadIndex - m_named_thread_count) / m_worker_per_priority;
-    PriorityPool&  pool             = GetPool(priority);
-    int32_t        localWorkerIndex = GetLocalWorkerIndex(threadIndex, priority);
+    ThreadPriority priorityFromIndex = (threadIndex - m_named_thread_count) / m_worker_per_priority;
+    PriorityPool&  pool              = GetPool(priorityFromIndex);
+    int32_t        localWorkerIndex  = GetLocalWorkerIndex(threadIndex, priorityFromIndex);
 
     assert(localWorkerIndex >= 0 && localWorkerIndex < pool.worker_count);
 
