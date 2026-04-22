@@ -16,6 +16,14 @@ public:
 
     bool Contains(const VulkanDeviceFeatures& _other) const;
 
+    inline const VkPhysicalDeviceVulkan11Features& GetCore11Features() const {
+        return core_1_1;
+    }
+
+    inline const VkPhysicalDeviceVulkan12Features& GetCore12Features() const {
+        return core_1_2;
+    }
+
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info, uint32_t _api_version);
 
     VkPhysicalDeviceFeatures         core_1_0;
