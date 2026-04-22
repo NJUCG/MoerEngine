@@ -95,5 +95,4 @@ private:
     std::array<PriorityPool, EThread::PriorityCount> m_pools;
     WakeWorkerFn m_wake_worker_fn;
 };
-
 #endif // ANY_THREAD_SCHEDULER_H

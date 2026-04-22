@@ -2,6 +2,9 @@
 #include <algorithm>
 
 AnyThreadScheduler::ChaseLevDeque::Buffer::Buffer(int64_t initialCapacity) : capacity(initialCapacity) {
+    assert(initialCapacity > 0);
+    assert((initialCapacity & (initialCapacity - 1)) == 0);
+
     slots = std::make_unique<std::atomic<BaseGraphTask*>[]>(capacity);
     for (int64_t index = 0; index < capacity; ++index) {
         slots[index].store(nullptr, std::memory_order_relaxed);
@@ -201,10 +204,7 @@ BaseGraphTask* AnyThreadScheduler::Dequeue(int32_t threadIndex) {
     }
 
     for (int32_t offset = 1; offset < pool.worker_count; ++offset) {
-        int32_t victim = localWorkerIndex + offset;
-        if (victim >= pool.worker_count) {
-            victim -= pool.worker_count;
-        }
+        int32_t victim = (localWorkerIndex + offset) % pool.worker_count;
         if (BaseGraphTask* task = pool.deques[victim]->StealTop()) {
             return task;
         }
