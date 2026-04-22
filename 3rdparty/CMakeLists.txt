@@ -119,12 +119,16 @@ if (WIN32)
 endif()
 
 # entt
-include(${CMAKE_CURRENT_SOURCE_DIR}/entt.cmake)
-set_target_folder(entt ${third_party_folder}/entt)
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/entt/CMakeLists.txt")
+    include(${CMAKE_CURRENT_SOURCE_DIR}/entt.cmake)
+    set_target_folder(entt ${third_party_folder}/entt)
+endif()
 
 # gtl
-include(gtl.cmake)
-set_target_folder(gtl ${third_party_folder}/gtl)
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/gtl/CMakeLists.txt")
+    include(gtl.cmake)
+    set_target_folder(gtl ${third_party_folder}/gtl)
+endif()
 
 if (WITH_NRD AND WIN32)
     # NRI, NRD, SPIRV-Cross

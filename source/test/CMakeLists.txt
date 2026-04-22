@@ -64,6 +64,7 @@ if (LINUX)
             TestTaskPipe
     )
     set_target_properties(TestCoreLinux PROPERTIES FOLDER ${moer_test_folder})
+    return()
 endif()
 
 # add_executable(MeshProcessTest "MeshProcessTest.cpp")
