@@ -1,64 +1,19 @@
 {
-  "project": "MoerEngine ConsoleVariable Bootstrap And In-Editor Console",
-  "goal": "Introduce a dedicated ConsoleVariable.ini startup override layer for engine CVar initial values, provide a bottom-left resident console with input and live engine logs, and expose a hotkey-driven expanded console page without keeping the current hidden or cycle-mode behavior as the main UX.",
+  "project": "Engine Text Command Processor Planning",
+  "planning_only": true,
+  "goal": "Introduce one engine-owned text command processor so Console and future systems submit commands through the same interface, then interpret and process those commands at one deterministic main-thread point each frame without implementing ad-hoc per-window command execution.",
   "source_analyzed": [
-    "source/runtime/Engine.cpp",
-    "source/runtime/core/include/config/ConfigManager.h",
-    "source/runtime/core/source/config/ConfigManager.cpp",
-    "source/runtime/core/include/config/CVarSystem.h",
-    "source/runtime/core/source/config/CVarSystem.cpp",
-    "source/runtime/core/include/config/ini.h",
-    "source/runtime/core/include/log/LogSystem.h",
-    "source/runtime/core/source/log/LogSystem.cpp",
-    "source/editor/Editor.cpp",
-    "source/editor/EditorUI.cpp",
     "source/editor/console/ConsoleSystem.h",
     "source/editor/console/ConsoleSystem.cpp",
-    "source/runtime/render/window/WindowInput.h",
-    "source/runtime/render/window/glfw/GLFWWindowImpl.cpp",
-    "source/runtime/render/CMakeLists.txt",
+    "source/editor/Editor.cpp",
+    "source/editor/EditorUI.cpp",
+    "source/runtime/Engine.cpp",
+    "source/runtime/Engine.h",
+    "source/runtime/render/renderer/Renderer.h",
+    "source/runtime/render/renderer/raster/RasterRenderer.cpp",
+    "source/runtime/render/renderer/raytracing/RaytracingRenderer.cpp",
     "testscripts/test_all.ps1"
   ],
-  "current_state": {
-    "already_exists": [
-      "Editor already creates ConsoleSystem as an overlay in Editor::Run.",
-      "ConsoleSystem already has command input, command history, autocomplete, a bottom-left inline window, and a separate windowed console page.",
-      "The grave accent key is already wired through WindowInput and GLFW key mapping.",
-      "ConsoleSystem already parses `help`, `cvar list`, `<path> ?`, and `<path> <value>` commands."
-    ],
-    "blocking_gaps": [
-      "LogSystem::PollConsoleLogs currently always returns false and ClearConsoleLogs is a no-op, so the existing console cannot actually show engine logs.",
-      "All current TCVar registrations live inside ConsoleSystem.cpp, so they do not exist during Engine::Init and cannot be overridden from startup config.",
-      "CVarSystem only supports Register, Find, and GetAll. It has no startup override loading, no file import, and no persistence layer.",
-      "ConfigManager only loads MoerEngine.toml. There is no ConsoleVariable.ini discovery or override phase.",
-      "Runtime configuration files are loaded from the executable directory, and CMake currently only copies MoerEngine.toml plus assets, so a new ConsoleVariable.ini would not be deployed automatically.",
-      "Current console UX is a three-state cycle Hidden -> Inline -> Windowed. That does not match the requested always-on resident console plus hotkey-open interactive page model."
-    ],
-    "design_pressure": [
-      "The requested feature is not mainly an ImGui problem. The real ownership issue is that CVar registration and CVar override load order are wrong today.",
-      "If CVar definitions remain editor-local statics, ConsoleVariable.ini will only ever be a late runtime patch instead of initial-value override.",
-      "If LogSystem keeps no in-memory ring or queue, the resident console will always be visually present but functionally empty."
-    ]
-  },
-  "design_constraints": [
-    "ConsoleVariable.ini is a separate config layer from MoerEngine.toml and only overrides registered CVar initial values. It must not be folded into GlobalConfig TOML parsing.",
-    "CVar registration must be available before ConsoleVariable.ini is applied. CVar ownership belongs to the runtime subsystem that actually consumes the value, not to ConsoleSystem UI code.",
-    "ConsoleVariable.ini loading should be optional. If the file does not exist, engine defaults remain valid and startup continues.",
-    "The resident bottom-left console is the default editor UX. The hotkey opens or focuses an expanded console page; it should not cycle through hidden, inline, and windowed states as the main path.",
-    "The resident console output must show real engine logs via LogSystem in-memory buffering, not ad-hoc polling from stdout or file tailing.",
-    "Validation must use existing repository scripts only. If interactive console behavior later needs stronger verification, extend existing editor smoke coverage rather than adding a new primary test wrapper."
-  ],
-  "proposed_file_contract": {
-    "path": "ConsoleVariable.ini",
-    "location": "Executable working directory next to MoerEngine.toml.",
-    "status": "Optional override file copied to target/bin/<Config>/ during build.",
-    "recommended_format": [
-      "[ConsoleVariables]",
-      "RHI.Translate.Parallel=true",
-      "RHI.Translate.NumThreads=8"
-    ],
-    "parse_rule": "Unknown CVar names log a warning and are skipped. Type mismatch logs an error and leaves the default value unchanged."
-  },
   "execute_order": [
     "1",
     "2",
@@ -69,92 +24,95 @@
   "checkpoints": [
     {
       "id": "1",
-      "title": "Move CVar ownership out of ConsoleSystem and make startup registration deterministic",
+      "title": "Define one engine-owned command queue and submission surface",
       "must_be_true_after": [
-        "CVar definitions no longer depend on constructing ConsoleSystem in Editor::Run.",
-        "Each CVar is declared near the runtime or editor subsystem that owns the underlying value.",
-        "Engine startup can enumerate and override CVar values before those values are first consumed.",
-        "ConsoleSystem becomes a consumer of the CVar registry instead of the owner of engine configuration state."
+        "There is exactly one engine-owned text command queue for editor/runtime command submission in the process.",
+        "Command producers do not execute command logic inline anymore; they only submit text to the engine-owned queue.",
+        "The public submission API is latest-only and small: an explicit text submission entry plus a `<<` shorthand on the same owner, not a parallel wrapper hierarchy.",
+        "Submitted text is copied into processor-owned storage at the submission boundary so no cross-module STL ownership escapes the owning module."
       ],
       "files_likely_affected": [
-        "source/editor/console/ConsoleSystem.cpp",
-        "source/editor/console/ConsoleSystem.h",
-        "source/runtime/core/include/config/CVarSystem.h",
-        "source/runtime/core/source/config/CVarSystem.cpp",
-        "source/runtime/render/**",
-        "source/editor/**"
+        "source/runtime/Engine.h",
+        "source/runtime/Engine.cpp",
+        "source/runtime/core/include/command/EngineCommandProcessor.h",
+        "source/runtime/core/source/command/EngineCommandProcessor.cpp"
       ]
     },
     {
       "id": "2",
-      "title": "Add ConsoleVariable.ini startup override loading",
+      "title": "Separate submission from interpretation and dispatch",
       "must_be_true_after": [
-        "ConfigManager or an adjacent startup-owned config path loads ConsoleVariable.ini after CVar registration and before runtime systems consume overridden values.",
-        "Overrides are applied through the same typed CVar parsing path used by the runtime console command executor.",
-        "Startup override loading reports missing file, unknown keys, and parse failures through LogSystem with explicit messages.",
-        "ConsoleVariable.ini is copied into the executable output directory together with MoerEngine.toml."
+        "Raw text submission, parsing, dispatch, and execution are distinct steps owned by the engine command processor instead of being mixed into ConsoleSystem.",
+        "The processor accepts text commands only in the first version; structured command objects are not introduced yet.",
+        "A built-in dispatch table exists for engine commands so help/cvar/runtime control commands are interpreted centrally.",
+        "Unknown command reporting is centralized in the processor, not duplicated in every producer."
       ],
       "files_likely_affected": [
-        "source/runtime/core/include/config/ConfigManager.h",
-        "source/runtime/core/source/config/ConfigManager.cpp",
+        "source/runtime/core/include/command/EngineCommandProcessor.h",
+        "source/runtime/core/source/command/EngineCommandProcessor.cpp",
         "source/runtime/core/include/config/CVarSystem.h",
-        "source/runtime/core/source/config/CVarSystem.cpp",
-        "source/runtime/render/CMakeLists.txt",
-        "ConsoleVariable.ini"
+        "source/runtime/core/source/config/CVarSystem.cpp"
       ]
     },
     {
       "id": "3",
-      "title": "Implement real in-memory engine log buffering for console consumption",
+      "title": "Move Console to the unified producer path",
       "must_be_true_after": [
-        "LogSystem keeps a bounded in-memory queue or ring of ConsoleLogEntry records.",
-        "PollConsoleLogs returns real incremental log entries instead of always returning false.",
-        "ClearConsoleLogs clears the in-memory console buffer deterministically.",
-        "Resident and expanded console windows display actual engine logs from the same source of truth."
-      ],
-      "files_likely_affected": [
-        "source/runtime/core/include/log/LogSystem.h",
-        "source/runtime/core/source/log/LogSystem.cpp",
-        "source/editor/console/ConsoleSystem.cpp"
-      ]
-    },
-    {
-      "id": "4",
-      "title": "Replace cycle-mode console UX with resident panel plus hotkey-driven expanded page",
-      "must_be_true_after": [
-        "A bottom-left console panel is always present in the editor main viewport.",
-        "The resident panel contains one input field and a log/output panel above it.",
-        "Hotkey behavior opens, closes, or focuses an expanded console page instead of cycling Hidden -> Inline -> Windowed.",
-        "Keyboard capture and camera-input blocking rules remain explicit and do not interfere with normal editor control when the expanded page is not focused."
+        "ConsoleSystem no longer owns primary command semantics; it becomes one producer plus one output consumer for engine command results.",
+        "Submitting a line from Console enqueues text into the engine command processor through the shared API instead of calling ExecuteCommand inline.",
+        "Future systems can submit commands through the same interface with `processor << \"command text\"` semantics without knowing Console internals.",
+        "Console-specific UI state such as history, autocomplete, and visibility remains local to ConsoleSystem and does not leak into the processor."
       ],
       "files_likely_affected": [
         "source/editor/console/ConsoleSystem.h",
         "source/editor/console/ConsoleSystem.cpp",
-        "source/editor/Editor.cpp",
-        "source/runtime/render/window/WindowInput.h",
-        "source/runtime/render/window/glfw/GLFWWindowImpl.cpp"
+        "source/editor/Editor.cpp"
+      ]
+    },
+    {
+      "id": "4",
+      "title": "Process commands at one deterministic main-thread frame point",
+      "must_be_true_after": [
+        "One explicit main-thread processing phase exists per frame for engine text commands.",
+        "The preferred placement is immediately after `hooks.on_tick_ui()` and before scene pending command submission / render-pass execution in both raster and raytracing renderer loops, so commands submitted by UI in the current frame can affect the same frame deterministically.",
+        "Command draining is FIFO for one frame and bounded by an explicit per-frame policy so one producer cannot starve the frame loop accidentally.",
+        "The processing phase is shared by both raster and raytracing paths through one common hook or one common engine-owned call site instead of duplicated business logic."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/renderer/Renderer.h",
+        "source/runtime/render/renderer/raster/RasterRenderer.cpp",
+        "source/runtime/render/renderer/raytracing/RaytracingRenderer.cpp",
+        "source/runtime/Engine.cpp"
       ]
     },
     {
       "id": "5",
-      "title": "Validate deployment and editor startup behavior through existing scripts",
+      "title": "Define output, errors, and validation contract",
       "must_be_true_after": [
-        "The editor still boots through the existing repository smoke path after adding ConsoleVariable.ini copy and console UI changes.",
-        "No new primary validation script is introduced for the console feature.",
-        "If later interaction coverage is needed, it is added to existing PowerShell-driven editor smoke coverage rather than a parallel script family.",
-        "The documentation for this feature clearly states that current repository scripts only give startup smoke coverage, not full hotkey interaction automation."
+        "Command execution results have one engine-facing output path so Console can display them without owning execution logic.",
+        "The first implementation reports success/error/output text through a processor-owned sink contract or buffered result channel instead of direct UI calls from runtime code.",
+        "Validation stays on existing repository scripts only: build first, then use the current editor/runtime scripts instead of inventing a new command-specific harness.",
+        "The implementation plan explicitly includes regression checks for Console submission, repeated same-frame submission ordering, and cvar mutation through the unified processor."
       ],
       "files_likely_affected": [
-        "testscripts/test_all.ps1",
-        "testscripts/common.ps1",
+        "source/runtime/core/include/command/EngineCommandProcessor.h",
+        "source/runtime/core/source/command/EngineCommandProcessor.cpp",
+        "source/editor/console/ConsoleSystem.cpp",
         "docs/checkpoints/checkpoint.json"
       ]
     }
   ],
+  "design_notes": {
+    "preferred_processing_point": "Process queued text commands once per frame on the main thread immediately after hooks.on_tick_ui() and before scene pending command submission / render passes. This gives UI producers same-frame effect without moving command semantics into window code.",
+    "preferred_submission_api": "Expose one engine-owned processor with an explicit SubmitText(std::string_view) entry and an operator<<(std::string_view) shorthand on the same type. Do not add a second wrapper-only facade.",
+    "ownership_rule": "Text crossing the module boundary must be copied into processor-owned storage immediately. Do not return or transfer STL-managed command buffers across module boundaries.",
+    "first_version_scope": "Text commands only. No structured command AST, no async worker execution, no permissions model in the first landing.",
+    "migration_rule": "Console inline ExecuteCommand logic is transitional debt and should be deleted when the processor lands instead of kept as a fallback path."
+  },
   "validation": [
-    "This checkpoint file is design-only and does not require a build by itself.",
-    "When implementation starts, run powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_all.ps1 as the existing editor startup smoke path.",
-    "If implementation touches RHI-facing CVar consumers, also run powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 before the full aggregate script.",
-    "Current repository scripts do not automate console hotkey interaction or log-window assertions; that gap should be stated explicitly until existing PowerShell coverage is extended."
+    "Planning only in this checkpoint. No implementation is part of this file.",
+    "When implementation starts, build with cmake.EXE --build f:/Github_Data/MoerEngine/build/vscode --config Debug --target MoerEditor.",
+    "After build passes, run powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_all.ps1 using the existing repository script only.",
+    "Do not add a standalone ad-hoc command test script. Extend existing tests or editor/runtime checks through current repository paths."
   ]
 }

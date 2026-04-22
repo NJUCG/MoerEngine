@@ -145,11 +145,15 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
 # RHI Translate MultiQueue Test (Vulkan-only runtime path)
 set(test_target TestRHITranslate)
-add_executable(${test_target} RHITest/rhi_translate_multiqueue_test.cpp)
+add_executable(${test_target}
+    RHITest/rhi_translate_multiqueue_test.cpp
+    ${moer_source_dir}/profiler/ProfileSession.cpp
+)
 target_include_directories(${test_target}
     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
+    PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/profiler>
     PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/RHITest>
 )
 target_link_libraries(${test_target}

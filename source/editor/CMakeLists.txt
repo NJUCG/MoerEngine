@@ -21,7 +21,6 @@ set_target_properties(${target_name} PROPERTIES FOLDER "editor")
 # Dependencies : Moer::Runtime (including Moer::Core, Moer::Render)
 target_link_libraries(${target_name}
     PRIVATE Moer::Runtime
-    PRIVATE nfd
 )
 
 # Include directories

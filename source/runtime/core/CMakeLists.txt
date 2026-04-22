@@ -25,6 +25,7 @@ target_include_directories(${target_name}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/zpp_bits>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/json/include>
+    PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/nativefiledialog-extended-1.2.1/src/include>
 )
 
 target_link_libraries(${target_name}
@@ -32,6 +33,7 @@ target_link_libraries(${target_name}
     PUBLIC spdlog
     PUBLIC nlohmann_json::nlohmann_json
     PUBLIC tomlplusplus
+    PRIVATE nfd
 )
 
 if(WIN32)

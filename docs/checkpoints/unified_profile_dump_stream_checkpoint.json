@@ -1,0 +1,329 @@
+{
+  "project": "Unified TLS Profile Dump Stream",
+  "planning_only": false,
+  "goal": "Unify current CPU and GPU profile producers behind one TLS-based structured dump interface that supports file and TCP output, uses compile-time validated schema templates, exposes DUMP_STREAM(template) << ... syntax, provides explicit TLS flush entry points, and locks its startup configuration through readonly-after-startup CVars.",
+  "doc_refs": [
+    "docs/rules/Rule_Codex.md",
+    ".github/skills/strict-engineering/SKILL.md",
+    "source/profiler/TraceProfiler_Update_Plan.md"
+  ],
+  "source_analyzed": [
+    "source/profile/profile.h",
+    "source/profile/profile.cpp",
+    "source/runtime/core/include/trace/Trace.h",
+    "source/runtime/core/source/trace/Trace.cpp",
+    "source/runtime/render/rhi/GPUEventStream.h",
+    "source/runtime/render/rhi/GPUEventStream.cpp",
+    "source/editor/Editor.cpp",
+    "testscripts/test_rhi_translate.ps1",
+    "testscripts/test_editor.ps1",
+    "testscripts/test_all.ps1",
+    "testscripts/README.md"
+  ],
+  "rule_codex_reference": {
+    "path": "docs/rules/Rule_Codex.md",
+    "rules_used": [
+      "不要兜底/兼容实现",
+      "不要过度设计",
+      "基于Test验证",
+      "过滤validation,只关注error",
+      "windows下运行脚本使用powershell"
+    ],
+    "how_they_apply_here": [
+      "Do not keep both FlameProfiler JSON save and Trace packet streaming as separate first-class output interfaces after the unified dump stream lands. CPU and GPU profile export must converge on one producer-facing interface.",
+      "Do not build a generic telemetry framework. Keep the design narrow: one profile dump hub, one TLS producer path, one structured schema model, and two concrete sinks only: file and TCP.",
+      "Validation must stay on existing repository scripts. If focused coverage is missing, add test cases to existing test targets instead of adding a new profiler-specific top-level script.",
+      "Validation acceptance only cares about functional failure and validation errors. Warnings are not a reason to complicate the design.",
+      "All scripted validation examples in this checkpoint use PowerShell on Windows."
+    ]
+  },
+  "strict_engineering_reference": {
+    "path": ".github/skills/strict-engineering/SKILL.md",
+    "rules_used": [
+      "Prefer latest-only implementation path.",
+      "Reject useless wrappers and pass-through layers.",
+      "Validate only with existing repository scripts.",
+      "Keep ownership explicit and control flow direct."
+    ],
+    "how_they_apply_here": [
+      "The design must converge CPU and GPU profile data into one latest-only dump interface instead of adding a third export path beside existing ones.",
+      "The public API must be direct. DUMP_STREAM(template) writes into the real owner; it must not be a cosmetic wrapper over multiple hidden subsystems.",
+      "Producer ownership, TLS shard ownership, and sink ownership must be explicit in the design document.",
+      "Testing strategy must stay on current scripts only."
+    ]
+  },
+  "current_state": {
+    "already_exists": [
+      "CPU profile collection already uses thread_local stack state in FlameProfiler for scope nesting and collects events into a global vector.",
+      "GPU profile events already resolve into structured queue scopes through GPUEventStream and are emitted into the Trace runtime.",
+      "Trace runtime already supports TCP streaming and CSV/file output and is initialized from Editor with host/port configuration.",
+      "MoerProfiler already consumes streamed trace data over TCP in the current architecture."
+    ],
+    "gaps": [
+      "CPU flame export and GPU trace export do not share one producer-facing structured schema contract today.",
+      "Current CPU profile save path is ad-hoc JSON serialization and is not compile-time schema checked.",
+      "Current Trace API is structured, but it is not exposed as a compile-time templated DUMP_STREAM contract with field-type sequencing guarantees.",
+      "There is no unified TLS-backed producer API that both CPU and GPU profile producers use to write records into one sink pipeline.",
+      "There is no explicit TLS flush control or startup-readonly cache tuning for one unified profile dump path today."
+    ]
+  },
+  "hard_constraints": [
+    {
+      "id": "HC-01",
+      "title": "One producer-facing interface only",
+      "detail": "CPU and GPU profiling producers must converge on one structured dump write interface. Do not keep separate long-term producer APIs for FlameProfiler JSON save and Trace packet streaming."
+    },
+    {
+      "id": "HC-02",
+      "title": "TLS write path on hot path",
+      "detail": "Producer-side writes must go into thread-local shards or thread-local staging buffers so common CPU/GPU profile emission does not contend on one global mutex per record."
+    },
+    {
+      "id": "HC-03",
+      "title": "Compile-time schema validation",
+      "detail": "Template definition must encode channel type, record type, and ordered field types in a way that wrong field type, wrong field count, or incomplete << chain fails at compile time."
+    },
+    {
+      "id": "HC-04",
+      "title": "Exactly two sink kinds in first landing",
+      "detail": "The first design supports file sink and TCP sink only. Do not introduce a generic plugin sink registry or speculative extensibility surface."
+    },
+    {
+      "id": "HC-05",
+      "title": "Structured output format",
+      "detail": "The unified stream must define a schema packet plus record packet contract, or an equivalent explicitly versioned structured format, so file output and network output carry the same semantic record model."
+    },
+    {
+      "id": "HC-06",
+      "title": "Validation stays on existing scripts",
+      "detail": "Implementation validation must use existing PowerShell scripts only. If profiler-specific coverage is missing, extend existing test targets and route them through current scripts instead of creating a new top-level profiler script."
+    },
+    {
+      "id": "HC-07",
+      "title": "Explicit TLS flush is part of the contract",
+      "detail": "The unified profile dump path must expose an explicit TLS flush entry point for current-thread shard publication and immediate sink visibility in special cases."
+    },
+    {
+      "id": "HC-08",
+      "title": "TLS cache tuning is startup-only readonly config",
+      "detail": "TLS shard capacity and auto-publish thresholds must have code defaults and startup override CVars that become runtime read-only after startup config application."
+    }
+  ],
+  "target_design": {
+    "ownership_model": {
+      "ProfileDumpHub": "Single process-level owner of schema registry, sink configuration, TLS shard registration, chunk ingestion, and final sink write ordering.",
+      "ProfileDumpTlsShard": "One thread_local append-only record buffer per producer thread. Producers write fully typed records here with no per-record global lock.",
+      "ProfileDumpDrain": "One explicit drain path that moves completed TLS chunks into the hub and pushes them to configured sinks in deterministic order.",
+      "ProfileDumpSink": "Two concrete sink implementations only in first landing: TcpProfileDumpSink and FileProfileDumpSink."
+    },
+    "public_api": {
+      "template_macro": "Define one macro family that declares a dump template type containing dump category, channel type, schema name, version, and ordered field types.",
+      "stream_macro": "DUMP_STREAM(TemplateName) << value0 << value1 << value2;",
+      "flush_api": [
+        "ProfileDump::FlushThreadLocal() publishes the current thread TLS shard and drains published records to sinks.",
+        "ProfileDump::FlushAll() drains all already-published records to sinks and is used by frame-end or shutdown code paths.",
+        "ProfileDump::Shutdown() performs final drain and closes file/TCP sinks."
+      ],
+      "required_semantics": [
+        "DUMP_STREAM(template) returns a move-only compile-time builder typed by template and current field index.",
+        "Each operator<< only accepts the exact next field type or a whitelisted convertible type defined by explicit dump traits.",
+        "The final builder stage commits the record into the TLS shard automatically.",
+        "Incomplete stream usage is surfaced as a compile-time nodiscard contract and wrong type / wrong extra operand remain compile-time errors."
+      ],
+      "compile_time_guarantees": [
+        "Wrong operand type for a field fails compilation.",
+        "Template channel type is part of the type identity and cannot be changed at call site.",
+        "Only explicitly supported field types are legal in templates."
+      ]
+    },
+    "schema_model": {
+      "required_fields": [
+        "schema_id",
+        "schema_name",
+        "schema_version",
+        "channel_type",
+        "record_type",
+        "ordered_field_descriptors"
+      ],
+      "field_type_policy": [
+        "Allow only a narrow approved set in first landing: bool, fixed-width integers, float, double, enum class with explicit underlying type, and string_view-like non-owning text with explicit serialization traits.",
+        "Reject arbitrary STL containers, variant trees, and nested dynamic objects in first landing.",
+        "Schema id should be deterministic from template metadata so file and TCP sinks serialize the same record family consistently."
+      ],
+      "channel_examples": [
+        "CPUThread",
+        "GPUQueue",
+        "ProfileCounter",
+        "MemoryProfile"
+      ]
+    },
+    "tls_aggregation_model": {
+      "required_behavior": [
+        "Producers append typed records into thread_local shard storage.",
+        "Shard rollover publishes immutable chunks to the central hub.",
+        "The hub serializes chunk order per shard and then emits to file and/or TCP sinks.",
+        "Drain points must be explicit; thread teardown only performs best-effort shard handoff and does not replace explicit flush points."
+      ],
+      "preferred_flush_points": [
+        "End-of-frame on the main thread for regular runtime draining.",
+        "Explicit FlushThreadLocal() for special dumps or current-thread visibility requirements.",
+        "Thread teardown for best-effort final shard handoff.",
+        "Explicit Stop/Shutdown path for final sink flush."
+      ],
+      "non_goals": [
+        "No lock-free general telemetry bus.",
+        "No multi-process shared-memory protocol.",
+        "No remote command channel back from profiler to editor in first landing."
+      ]
+    },
+    "sink_model": {
+      "file_sink": [
+        "Writes the same structured packet model used by TCP sink, not a separate ad-hoc JSON export format.",
+        "File output is append-only within one session and explicitly finalized on shutdown or stop."
+      ],
+      "tcp_sink": [
+        "Reuses the current one-way editor-to-profiler direction.",
+        "Schema packets are sent before first record packet for a schema id.",
+        "Do not introduce bidirectional control messages in first landing."
+      ],
+      "configuration_rule": "The unified dump hub may enable file sink, TCP sink, or both from one config object. Producer code does not know which sink combination is active.",
+      "startup_readonly_config": [
+        "Profile.Dump.FileEnabled, Profile.Dump.TcpEnabled, Profile.Dump.FilePath, Profile.Dump.TcpHost, and Profile.Dump.TcpPort are startup-readonly CVars.",
+        "Profile.Dump.TlsMaxRecords, Profile.Dump.TlsMaxBytes, Profile.Dump.AutoPublishRecords, and Profile.Dump.AutoPublishBytes are startup-readonly CVars.",
+        "ConfigManager applies ConsoleVariable.toml overrides first, then seals startup-readonly CVars so runtime console mutation is rejected."
+      ]
+    },
+    "producer_migration": {
+      "cpu_profile": [
+        "FlameProfiler stops being a special-case JSON exporter in the target design.",
+        "CPU scope begin/end data is normalized into unified dump templates and written through the same TLS stream as other profile records."
+      ],
+      "gpu_profile": [
+        "GPUEventStream resolved nodes or equivalent GPU trace output must emit unified dump records through the same hub instead of bypassing it with a separate export path.",
+        "GPU queue/channel identity stays explicit in schema/channel metadata."
+      ],
+      "trace_runtime": [
+        "Current Trace runtime packet writer becomes one sink/backend implementation detail of the unified profile dump contract, not a parallel user-facing API.",
+        "Counter and instant-style profile records may remain supported, but only through the same schema-checked interface."
+      ]
+    }
+  },
+  "example_contract": {
+    "template_definition_shape": [
+      "One macro defines a template type with a fixed channel and ordered field list.",
+      "Example intent only: CPU scope template carries thread id, name, start_ns, end_ns, depth.",
+      "Example intent only: GPU queue scope template carries queue type, frame index, start_ns, end_ns, total_busy_ns, exclusive_ns."
+    ],
+    "stream_usage_shape": [
+      "DUMP_STREAM(CpuScopeTemplate) << thread_id << name << start_ns << end_ns << depth;",
+          "Wrong field type and extra stream operands are compile-time failures by design.",
+    ],
+    "compile_time_rejection_examples": [
+      "Passing float to a uint64 field must fail compilation.",
+      "Stopping after fewer << operands than the template field count must fail compilation.",
+    ]
+  },
+  "checkpoints": [
+    {
+      "id": "1",
+      "title": "Define the schema-checked dump template contract",
+      "must_be_true_after": [
+        "One template macro family defines dump type, channel type, schema version, and ordered field types.",
+        "DUMP_STREAM(template) << ... becomes the only producer-facing write shape for the new interface.",
+          "FlushThreadLocal and FlushAll exist as explicit drain controls.",
+          "TLS shard capacity and auto-publish thresholds have startup-readonly defaults plus ConsoleVariable.toml override support.",
+        "Wrong field type, wrong field count, and incomplete stream use are compile-time failures by design.",
+        "Only explicitly supported field types are legal in first landing."
+      ],
+      "files_likely_affected": [
+        "source/runtime/core/include/profile/ProfileDump.h",
+          "source/runtime/core/source/profile/ProfileDump.cpp",
+          "source/runtime/core/include/config/CVarSystem.h",
+          "source/runtime/core/source/config/CVarSystem.cpp",
+          "source/runtime/core/source/config/ConfigManager.cpp"
+    },
+    {
+      "id": "2",
+      "title": "Land one TLS aggregation path and two concrete sinks",
+      "must_be_true_after": [
+        "Producer writes go through thread_local shard storage instead of per-record global locking.",
+        "The process owns one ProfileDumpHub that drains TLS chunks and writes structured packets.",
+        "File sink and TCP sink use the same packet and schema model.",
+          "Producer code does not branch on file-versus-network destination.",
+          "Existing trace emission may remain temporarily for editor profiler continuity, but unified CPU/GPU dump export now goes through the new stream."
+      "files_likely_affected": [
+        "source/runtime/core/include/profile/ProfileDump.h",
+        "source/runtime/core/source/profile/ProfileDump.cpp",
+        "source/runtime/core/include/profile/ProfileDumpSink.h",
+          "source/runtime/render/rhi/GPUEventStream.cpp"
+    {
+      "id": "3",
+      "title": "Move CPU and GPU profile producers onto the unified stream",
+      "must_be_true_after": [
+        "CPU flame profile records are emitted through the unified dump stream instead of a special-case JSON save path.",
+        "GPU resolved scope/profile records are emitted through the same unified dump stream with explicit GPU channel metadata.",
+          "There are focused compile-time and runtime tests for template type checking, startup-readonly cvar sealing, explicit TLS flush, file sink serialization, and GPU producer integration.",
+        "Producer code does not branch on file-versus-network destination."
+      ],
+      "files_likely_affected": [
+        "source/profile/profile.h",
+        "source/profile/profile.cpp",
+        "source/runtime/render/rhi/GPUEventStream.cpp",
+        "source/runtime/core/include/trace/Trace.h",
+        "source/runtime/core/source/trace/Trace.cpp"
+      ]
+    },
+    {
+      "id": "4",
+      "title": "Validate with existing scripts and focused test cases only",
+      "must_be_true_after": [
+        "There are focused compile-time and runtime tests for template type checking, field-count checking, TLS chunk drain, file sink serialization, and TCP packet/schema ordering.",
+        "If no dedicated profiler script exists, these tests are added to existing test targets and executed through current repository PowerShell scripts instead of a new top-level script.",
+        "Focused validation runs powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 first if the new tests live in the existing core/RHI test path.",
+        "Broader regression validation runs powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_all.ps1 after focused validation passes, and validation acceptance only cares about errors."
+      ],
+      "files_likely_affected": [
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "testscripts/test_rhi_translate.ps1",
+        "testscripts/test_all.ps1",
+        "docs/checkpoints/unified_profile_dump_stream_checkpoint.json"
+      ]
+    }
+  ],
+  "execute_order": [
+    "1",
+    "2",
+    "3",
+    "4"
+  ],
+  "rejected_alternatives": [
+    {
+      "name": "Keep FlameProfiler JSON save and add unified stream beside it",
+      "status": "rejected",
+      "reason": "This keeps compatibility duplication and violates the latest-only convergence rule."
+    },
+    {
+      "name": "Build a generic telemetry framework with arbitrary sink plugins",
+      "status": "rejected",
+      "reason": "The task is narrower than that and Rule_Codex forbids over-design here."
+    },
+    {
+      "name": "Use one global mutex-protected vector for all producer writes",
+      "status": "rejected",
+      "reason": "The user explicitly wants a TLS-based aggregation path and the hot path should not serialize all producer threads behind one lock."
+    },
+    {
+      "name": "Allow runtime field-type checking instead of compile-time checking",
+      "status": "rejected",
+      "reason": "The requested interface requires compile-time validation of the structured output contract."
+    }
+  ],
+  "validation": [
+    "Planning only in this checkpoint. No implementation is part of this file.",
+    "When implementation starts, do not add a new standalone profiler top-level script.",
+    "Add focused tests to existing covered test targets, then run powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 if those tests land in the current RHI/core test path.",
+    "After focused tests pass, run powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_all.ps1.",
+    "If editor/profiler runtime smoke coverage is needed later, use powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_editor.ps1 or extend existing aggregate coverage instead of introducing a new primary profiler script.",
+    "During validation, only treat validation errors and functional failures as blockers."
+  ]
+}

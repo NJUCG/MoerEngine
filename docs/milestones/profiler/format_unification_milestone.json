@@ -1,0 +1,240 @@
+{
+  "project": "Profiler Format Unification",
+  "planning_only": false,
+  "goal": "Use one latest-only profiler format for offline storage and TCP transport, remove conflicting legacy profiler paths without compatibility, and organize the migration through milestone-owned stage checkpoint files under docs/milestones grouped by requirement domain.",
+  "implementation_status": {
+    "current_stage": "M1 mostly landed, preparing broader deletion follow-through",
+    "recently_completed": [
+      "ProfileDump schema metadata now carries event_type and the parser/tests dispatch through event_type instead of schema name.",
+      "Built-in timing templates were extracted from ProfileDump.h into profile/ProfileDumpTemplates.h so producer and consumer code can share canonical declarations.",
+      "MoerProfiler now ingests canonical ProfileDump packets over TCP and from offline binary files instead of using the old Trace TCP plus CSV-only consumer boundary.",
+      "MoerProfiler consumer storage now uses local profiler-owned event/session/track types instead of depending on trace/Trace.h as its in-memory model.",
+      "The profiler consumer implementation is now centralized in source/profiler/ProfileSession.h/.cpp and enforces session-relative normalized timestamps in one place.",
+      "Focused profiler-side normalization coverage now exists in testscripts/test_rhi_translate.ps1 through the TestRHITranslate target."
+    ],
+    "next_execution_focus": [
+      "Delete the remaining repository-wide legacy profiler surfaces, especially the public source/profile role and Trace transport APIs that still survive outside the profiler app consumer path.",
+      "Extend canonical event_type dispatch beyond CPU/GPU scope events once the normalized store contract is frozen.",
+      "Decide whether session metadata must be emitted as an explicit canonical ProfileDump record rather than being inferred from first-event origin in the consumer."
+    ]
+  },
+  "doc_refs": [
+    ".github/skills/strict-engineering/SKILL.md",
+    "source/profiler/TraceProfiler_Update_Plan.md",
+    "source/profiler/TraceProfiler_Performance_Optimization.md",
+    "docs/checkpoints/unified_profile_dump_stream_checkpoint.json"
+  ],
+  "source_analyzed": [
+    "source/runtime/core/include/trace/Trace.h",
+    "source/runtime/core/source/trace/Trace.cpp",
+    "source/runtime/core/include/profile/ProfileDump.h",
+    "source/runtime/core/source/profile/ProfileDump.cpp",
+    "source/profiler/main.cpp",
+    "source/profile/profile.h",
+    "source/profile/profile.cpp",
+    "source/profile/CMakeLists.txt",
+    "source/runtime/render/rhi/GPUEventStream.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+    "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+    "testscripts/test_rhi_translate.ps1",
+    "testscripts/test_all.ps1"
+  ],
+  "document_contract": {
+    "milestone_file_pattern": "docs/milestones/<domain>/xx_milestone.json",
+    "checkpoint_file_pattern": "docs/milestones/<domain>/xx_xx_checkpoint.json",
+    "grouping_rule": "Milestone files must live under a requirement-specific subfolder such as profiler, renderer, editor, or runtime. Do not flatten unrelated milestone families directly under docs/milestones.",
+    "update_rule": "Any temporary requirement change or replan must update both the owning milestone file and the affected stage checkpoint file instead of changing only one side.",
+    "checkpoint_rule": "Each stage owns its own checkpoint file. Checkpoint content must follow the existing repository checkpoint style: explicit problem statement, execution order, what must be true after each checkpoint, likely affected files, risks, and validation through existing scripts only."
+  },
+  "current_supported_formats": {
+    "streaming_capable": [
+      {
+        "id": "trace_packet_v1",
+        "status": "implemented",
+        "transport": [
+          "tcp"
+        ],
+        "entrypoints": [
+          "Trace::SerializeSessionMetadataPacket",
+          "Trace::SerializeEventsPacket",
+          "Trace::DeserializeSessionMetadataPacket",
+          "Trace::DeserializeEventsPacket"
+        ],
+        "notes": "Current live MoerProfiler ingest format. It is transport-specific, too narrow, and forces a second profiler schema model beside ProfileDump."
+      },
+      {
+        "id": "profile_dump_v1",
+        "status": "implemented",
+        "transport": [
+          "file",
+          "tcp"
+        ],
+        "entrypoints": [
+          "ProfileDump::BeginStream",
+          "ProfileDump::FlushThreadLocal",
+          "ProfileDump::FlushAll",
+          "ProfileDump::ReadNextPacket",
+          "ProfileDump::DeserializeSchemaPacket",
+          "ProfileDump::DeserializeRecordPacket"
+        ],
+        "notes": "Current structured binary schema+record stream. It already has the right hot-path, sink, and parser shape for the long-term canonical contract."
+      }
+    ],
+    "offline_or_legacy": [
+      {
+        "id": "trace_csv",
+        "status": "implemented",
+        "transport": [
+          "file"
+        ],
+        "notes": "Offline only. Not suitable as canonical profiler storage because it is text-heavy, schema-poor, and duplicates parsing/export logic."
+      },
+      {
+        "id": "legacy_flame_profiler_public_path",
+        "status": "implemented_but_conflicting",
+        "transport": [
+          "file"
+        ],
+        "notes": "The source/profile module still exists as a separate public profiler surface. That conflicts with the unified MoerProfiler direction and should not survive as a peer stack."
+      }
+    ]
+  },
+  "format_decision": {
+    "canonical_format": "ProfileDump schema+record binary stream",
+    "best_offline_format": "ProfileDump append-only binary file backed by the same packet contract used on the wire",
+    "best_tcp_format": "ProfileDump schema+record packets over TCP",
+    "why_profile_dump_wins_offline": [
+      "It is already structured, versioned, and schema-driven.",
+      "It avoids CSV text overhead and ad-hoc column evolution.",
+      "It matches the parser/test direction already landed in current focused tests."
+    ],
+    "why_profile_dump_wins_for_tcp": [
+      "It already separates schema packets and record packets so the consumer can evolve without hard-coded packet families.",
+      "It avoids JSON or CSV serialization cost on the producer hot path.",
+      "It lets file and network share one semantic contract instead of keeping Trace-specific transport beside a different offline format."
+    ],
+    "rejected_as_canonical": [
+      {
+        "name": "Trace custom metadata/events packet format",
+        "reason": "It preserves a second transport contract and a second profiler schema model."
+      },
+      {
+        "name": "Trace CSV",
+        "reason": "It is not a serious canonical profiler format."
+      },
+      {
+        "name": "Chrome Trace JSON",
+        "reason": "It can exist later as a downstream exporter, but not as the canonical storage or transport layer."
+      },
+      {
+        "name": "Keep source/profile as a parallel public profiler subsystem",
+        "reason": "That keeps legacy duplication alive and contradicts the latest-only migration rule."
+      }
+    ]
+  },
+  "delete_without_compatibility": {
+    "public_paths_to_remove": [
+      "Trace packet serialization/deserialization as the profiler transport contract",
+      "Trace CSV export as a canonical offline path",
+      "MoerProfiler CSV load workflow",
+      "source/profile public role as a separate profiler system",
+      "Any code path that makes MoerProfiler ingest Trace packets directly instead of ProfileDump packets"
+    ],
+    "migration_rule": "No fallback path survives once the canonical ProfileDump path lands. Any remaining helper macro or producer utility must emit canonical ProfileDump records directly and must not hide the old contract behind a wrapper."
+  },
+  "hard_constraints": [
+    {
+      "id": "HC-01",
+      "title": "One profiler format only",
+      "detail": "After migration, there is exactly one canonical profiler transport and storage contract: ProfileDump packets."
+    },
+    {
+      "id": "HC-02",
+      "title": "No compatibility shims",
+      "detail": "Do not keep Trace packet transport, CSV ingestion, or source/profile as fallback compatibility once equivalent ProfileDump behavior exists."
+    },
+    {
+      "id": "HC-03",
+      "title": "One normalized time model",
+      "detail": "Profiler storage, file output, TCP transport, and UI rendering must use one session-relative time model instead of leaking raw clock-domain values."
+    },
+    {
+      "id": "HC-04",
+      "title": "One consumer model",
+      "detail": "MoerProfiler must parse one canonical packet family and build one canonical event/session store from it."
+    },
+    {
+      "id": "HC-05",
+      "title": "Existing repository scripts only",
+      "detail": "Implementation validation must stay on current repository scripts such as testscripts/test_rhi_translate.ps1 and testscripts/test_all.ps1."
+    }
+  ],
+  "stages": [
+    {
+      "id": "M1",
+      "title": "Freeze canonical format and delete conflicting public paths",
+      "checkpoint_file": "docs/milestones/profiler/format_unification_m1_checkpoint.json",
+      "status": "in_progress",
+      "contains": [
+        "CP-01",
+        "CP-02",
+        "CP-03",
+        "CP-04",
+        "CP-05"
+      ],
+      "why": "Current profiler work is blocked by parallel contracts: Trace packets, CSV, ProfileDump, and the legacy source/profile module. This stage removes the ambiguity before more features land.",
+      "exit_criteria": [
+        "There is one written decision that ProfileDump is the only canonical file and TCP format.",
+        "The session-relative time contract is frozen.",
+        "The delete list for Trace CSV, Trace packet transport, and legacy source/profile is explicit and non-optional."
+      ]
+    },
+    {
+      "id": "M2",
+      "title": "Rewrite runtime producers onto one ProfileDump contract",
+      "planned_checkpoint_file": "docs/milestones/profiler/format_unification_m2_checkpoint.json",
+      "why": "Runtime emission must stop publishing Trace-specific transport packets and instead publish canonical ProfileDump records for CPU, GPU, counters, instants, and metadata.",
+      "exit_criteria": [
+        "CPU and GPU producers emit canonical ProfileDump records directly.",
+        "Trace packet transport APIs are removed or reduced to local migration helpers with no public transport role.",
+        "File and TCP output share the same canonical packet writer."
+      ]
+    },
+    {
+      "id": "M3",
+      "title": "Rewrite MoerProfiler ingest, storage, and offline loading",
+      "planned_checkpoint_file": "docs/milestones/profiler/format_unification_m3_checkpoint.json",
+      "status": "started_early",
+      "why": "MoerProfiler must stop being a Trace-packet plus CSV application and become a ProfileDump consumer with one canonical storage and indexing path.",
+      "exit_criteria": [
+        "MoerProfiler loads canonical binary files and canonical TCP packets through one parser path.",
+        "The UI uses one normalized session model and no longer imports CSV.",
+        "Timeline correctness no longer depends on raw absolute timestamps leaking through the UI."
+      ]
+    },
+    {
+      "id": "M4",
+      "title": "Add richer semantics and scale-oriented storage",
+      "planned_checkpoint_file": "docs/milestones/profiler/format_unification_m4_checkpoint.json",
+      "why": "Once the format and consumer model are stable, richer profile kinds and heavy-data optimizations can land without re-breaking ownership.",
+      "exit_criteria": [
+        "Counter, instant, async, memory, and other profile kinds use the same canonical contract.",
+        "Large sessions remain interactable through indexed and cached storage.",
+        "Any optional external exporter is downstream of the canonical store rather than a parallel ingestion path."
+      ]
+    }
+  ],
+  "execution_order": [
+    "M1",
+    "M2",
+    "M3",
+    "M4"
+  ],
+  "validation": [
+    "Current implementation already builds with cmake --build build --config Debug and produces MoerProfiler.exe with the canonical ProfileDump consumer path compiled in.",
+    "Focused validation now includes profiler-side normalization and stream consumer coverage through testscripts/test_rhi_translate.ps1.",
+    "Broader repository validation passed through testscripts/test_all.ps1 after the shared consumer module and normalization landing.",
+    "When implementation starts, update both the milestone file and the affected stage checkpoint file together.",
+    "Do not add a new standalone primary profiler script for this migration."
+  ]
+}

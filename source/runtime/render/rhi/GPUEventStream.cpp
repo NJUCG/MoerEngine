@@ -1,6 +1,7 @@
 #include "GPUEventStream.h"
 #include "log/LogSystem.h"
 #include "profile/ProfileDump.h"
+#include "profile/ProfileDumpTemplates.h"
 #include "trace/Trace.h"
 #include <algorithm>
 #include <cassert>

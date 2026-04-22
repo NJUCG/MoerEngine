@@ -1,0 +1,767 @@
+{
+  "project": "MoerEngine Async Recording / Main-Thread Submission Boundary",
+  "doc_refs": [
+    "docs/rules/Rule_Codex.md",
+    "docs/checkpoints/submission_rework_checkpoints.json",
+    "docs/checkpoints/interrupt_sync_event_checkpoint.json"
+  ],
+  "source_analyzed": [
+    "source/runtime/render/renderer/common/RuntimeAssets.cpp",
+    "source/runtime/render/scene/Scene.cpp",
+    "source/runtime/render/scene/GpuScene.cpp",
+    "source/runtime/render/rhi/RHICommand.h",
+    "source/runtime/render/rhi/RHIExecutor.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanDevice.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp",
+    "source/runtime/core/include/taskgraph/TaskGraph.h"
+  ],
+  "goal": "Allow asynchronous CPU-side resource preparation and RHICommandList recording, while making Submit, Present, and Sync strictly main-thread-only. Remove cross-submit automatic state tracking and keep state tracking only inside a single submit. Cross-submit queue transfer and inter-submit resource state changes must be expressed explicitly by commands recorded by the caller.",
+  "rule_codex_reference": {
+    "path": "docs/rules/Rule_Codex.md",
+    "rules_used": [
+      "Do not keep fallback or compatibility implementations.",
+      "Do not over-engineer.",
+      "Validate by tests.",
+      "Filter validation output and only care about errors.",
+      "Use powershell for Windows scripts."
+    ],
+    "how_they_apply_here": [
+      "Do not keep both eager GPU-side bindless initialization and deferred first-use initialization at the same time. Choose one model and delete the other path.",
+      "Do not build a generic async transport framework just to move recorded command lists from worker threads to the main thread. Use a small domain-specific result object and a promise/future style handoff.",
+      "Do not solve missing synchronization by adding WaitIdle as a safety blanket. The design must be validated by explicit submission behavior and existing tests.",
+      "Validation acceptance focuses on new validation errors and functional regressions, not warnings.",
+      "Any validation or regression scripts for this work should be run from powershell."
+    ]
+  },
+  "design_constraints": [
+    {
+      "id": "DC-01",
+      "title": "Submission ownership is single-threaded",
+      "detail": "Only the main thread may call RHIExecutor::Submit(...), RHIExecutor::Sync(...), or submit Present requests."
+    },
+    {
+      "id": "DC-02",
+      "title": "Async work is record-only",
+      "detail": "Worker threads may decode assets, build CPU-side metadata, create domain result objects, and record RHICommandList instances, but they may not submit GPU work."
+    },
+    {
+      "id": "DC-03",
+      "title": "Atomic resource creation APIs remain callable from any thread",
+      "detail": "CreateTexture, CreateBuffer, CreateBindlessArray, and similar atomic allocation APIs may stay any-thread callable, but they must not perform hidden GPU submission as part of construction."
+    },
+    {
+      "id": "DC-04",
+      "title": "State tracking is intra-submit only",
+      "detail": "Automatic resource state tracking only reasons about the command lists inside one Submit call. The runtime does not carry automatic state ownership across different Submit calls."
+    },
+    {
+      "id": "DC-05",
+      "title": "Cross-submit transitions are explicit",
+      "detail": "If a resource changes queue ownership or requires a new state in a later Submit call, the caller must record the required manual transition or queue transfer commands explicitly."
+    },
+    {
+      "id": "DC-06",
+      "title": "Bindless initialization cannot hide a submit",
+      "detail": "CreateBindlessArray may prepare CPU-side descriptor storage on any thread, but GPU-visible descriptor buffer initialization must be deferred into a command recorded for a later main-thread submission."
+    },
+    {
+      "id": "DC-07",
+      "title": "Async handoff should stay narrow",
+      "detail": "Do not create a generic Pipe framework for all future async jobs. Use a small promise-returned loading/init payload tailored to async resource recording."
+    }
+  ],
+  "allowed_operations": {
+    "any_thread_atomic_rhi_apis": [
+      "CreateTexture",
+      "CreateBuffer",
+      "CreateBindlessArray",
+      "CreateFence",
+      "Other atomic resource allocation APIs that do not submit GPU work"
+    ],
+    "allowed_async_work": [
+      "Asset file IO",
+      "Image decoding",
+      "CPU-side preprocessing",
+      "RHICommandList recording",
+      "Building a promise/future result that carries recorded command lists back to the main thread"
+    ],
+    "main_thread_only_work": [
+      "RHIExecutor::Submit(...)",
+      "RHIExecutor::Sync(...)",
+      "Present submission",
+      "Any operation that drains, flushes, or globally synchronizes GPU work"
+    ]
+  },
+  "current_problem_summary": {
+    "direct_conflict": [
+      {
+        "location": "source/runtime/render/renderer/common/RuntimeAssets.cpp",
+        "detail": "RuntimeAssets starts worker-thread tasks and currently calls RHIExecutor::Submit plus WaitIdle from that async path."
+      }
+    ],
+    "latent_conflicts": [
+      {
+        "location": "source/runtime/render/scene/Scene.cpp",
+        "detail": "If async scene loading is enabled again, LoadSceneFromFileAsync can construct GPU-side scene state from worker threads."
+      },
+      {
+        "location": "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp",
+        "detail": "VulkanBindlessArray construction currently performs hidden GPU submission during object creation, which violates the desired any-thread atomic API contract."
+      }
+    ],
+    "why_full_cross_submit_state_tracking_conflicts_with_the_new_goal": [
+      "If the runtime tracks resource state globally across Submit calls, it must remember queue ownership and last-known state beyond the current submission boundary.",
+      "That global memory creates hidden coupling between async-produced command lists and the later main-thread submit order.",
+      "Once submission is main-thread-only and async work is record-only, it is cleaner and more predictable to make cross-submit transfer explicit in the recorded commands."
+    ]
+  },
+  "target_design": {
+    "thread_model": {
+      "overview": "Worker threads prepare and record. The main thread owns all submission-facing actions.",
+      "rules": [
+        "A worker thread may produce a ready-to-submit payload, but never consume it by calling Submit itself.",
+        "The main thread receives the payload, optionally merges it with other command lists, and performs the actual Submit/Present/Sync."
+      ]
+    },
+    "state_tracking_model": {
+      "overview": "Automatic state tracking is limited to one Submit call at a time.",
+      "rules": [
+        "Inside a single Submit, the runtime may track state and synthesize intra-submit barriers as it already does.",
+        "Across Submit calls, the runtime does not infer the previous terminal state of a resource.",
+        "If later work depends on a prior queue transfer or state transition, the caller must record explicit commands for that boundary."
+      ],
+      "consequences": [
+        "This removes hidden cross-frame and cross-job coupling from the submission runtime.",
+        "This makes async-recorded command lists portable because they do not depend on mutable global state history outside the final Submit batch."
+      ]
+    },
+    "bindless_initialization_model": {
+      "overview": "CreateBindlessArray becomes CPU-only construction plus deferred GPU initialization.",
+      "preferred_solution": "Allow CreateBindlessArray on any thread, but only allocate CPU-visible state, host-side descriptor payloads, and backing resource handles. Add a dedicated InitBindlessArray command that uploads the immutable/default descriptor data when the bindless array is first used by a command list.",
+      "why_this_fits": [
+        "It preserves the rule that atomic resource creation APIs are any-thread callable.",
+        "It removes the hidden submit from VulkanBindlessArray construction.",
+        "It keeps the submit boundary explicit and owned by the main thread."
+      ],
+      "required_invariants": [
+        "InitBindlessArray must be one-shot per bindless array instance.",
+        "Recording or execution must guarantee InitBindlessArray happens before any command that reads bindless descriptor buffers.",
+        "The old eager-submit path in CreateBindlessArray must be deleted rather than kept as a compatibility branch."
+      ],
+      "open_implementation_choice": [
+        "The one-shot insertion point can be either first UpdateBindlessArray recording or first bindless argument materialization in command recording/finalization.",
+        "Choose exactly one insertion point. Do not support multiple implicit init paths."
+      ]
+    },
+    "async_handoff_model": {
+      "overview": "Use a narrow promise/future handoff instead of a generic pipe.",
+      "preferred_solution": "Async loading jobs return a small loading payload via promise/future. The payload should carry the recorded command list batch and the CPU-side metadata needed to publish results on the main thread.",
+      "recommended_payload_shape": {
+        "name": "AsyncRecordedSubmitPayload",
+        "fields": [
+          "Array<CommandList> command_lists",
+          "CPU-side publish data needed after submit scheduling",
+          "Optional deferred host callbacks that are local to this loading path"
+        ]
+      },
+      "why_not_a_generic_pipe": [
+        "The immediate problem is not generic task transport; it is a bounded handoff from async loading/init jobs back to the main thread.",
+        "A generic pipe would add framework cost and unclear ownership without solving a currently broader problem."
+      ],
+      "why_not_return_only_one_CommandList": [
+        "The submit API already consumes a list of command lists.",
+        "Returning a list keeps the async payload aligned with the real submit boundary and avoids re-wrapping later when one job records more than one list."
+      ]
+    }
+  },
+  "alternatives_considered": [
+    {
+      "name": "Keep hidden GPU submission inside CreateBindlessArray",
+      "status": "rejected",
+      "reason": "This directly violates the new contract that atomic resource creation may happen on any thread but must not submit GPU work."
+    },
+    {
+      "name": "Force async jobs that need submission onto the main thread task queue",
+      "status": "rejected",
+      "reason": "This keeps the bad coupling where one task mixes CPU preparation and submission ownership. The new boundary should be explicit: worker records, main thread submits."
+    },
+    {
+      "name": "Introduce a generic Pipe abstraction for all async rendering jobs",
+      "status": "rejected",
+      "reason": "This is broader than the current need and violates the 'do not over-engineer' rule."
+    },
+    {
+      "name": "Keep full automatic cross-submit state tracking",
+      "status": "rejected",
+      "reason": "It preserves hidden mutable global state across submit boundaries and fights the explicit manual queue-transfer model."
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Lock the submission ownership contract",
+      "priority": "critical",
+      "status": "todo",
+      "category": "architecture",
+      "problem": "The current codebase still allows some code paths to mix async work with actual GPU submission.",
+      "what_must_be_true_after_this_checkpoint": [
+        "The project-level rule is explicit: only the main thread may submit, present, or sync.",
+        "Async work is explicitly limited to CPU preparation and command recording."
+      ],
+      "tasks": [
+        "Document the main-thread-only contract for Submit, Present, and Sync.",
+        "Document the allowed any-thread atomic APIs and the allowed async work boundary.",
+        "Add debug-time assertions in the implementation later, but do not keep compatibility behavior as a fallback."
+      ],
+      "required_reading": [
+        {
+          "path": "docs/rules/Rule_Codex.md",
+          "start_line": 1,
+          "end_line": 5,
+          "reason": "Global design rules that forbid compatibility layers and over-design."
+        },
+        {
+          "path": "source/runtime/render/rhi/RHICommand.h",
+          "start_line": 1779,
+          "end_line": 1814,
+          "reason": "Public submit flags, present request, sync depth, and RHIExecutor interface."
+        },
+        {
+          "path": "source/runtime/render/rhi/RHIExecutor.cpp",
+          "start_line": 13,
+          "end_line": 69,
+          "reason": "Current Submit/Sync behavior and why thread ownership must be made explicit."
+        },
+        {
+          "path": "source/runtime/render/rhi/RHIExecutor.cpp",
+          "start_line": 72,
+          "end_line": 135,
+          "reason": "Shutdown and flush path that also belongs to the main-thread-owned submission boundary."
+        },
+        {
+          "path": "source/runtime/core/include/taskgraph/TaskGraph.h",
+          "start_line": 214,
+          "end_line": 251,
+          "reason": "LambdaTask defaults explain why worker-thread dispatch happens today."
+        },
+        {
+          "path": "source/runtime/render/renderer/common/RuntimeAssets.cpp",
+          "start_line": 20,
+          "end_line": 31,
+          "reason": "Concrete async task entry point that currently mixes async work with submission-facing work."
+        }
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/RHICommand.h",
+        "docs/checkpoints/async_recording_main_thread_submission_checkpoints.json"
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Stop hidden submission from atomic resource creation",
+      "priority": "critical",
+      "status": "todo",
+      "category": "resource_creation",
+      "problem": "CreateBindlessArray currently hides a GPU submit in VulkanBindlessArray construction.",
+      "what_must_be_true_after_this_checkpoint": [
+        "CreateBindlessArray performs no GPU submission.",
+        "Bindless array construction is safe on any thread under the new contract."
+      ],
+      "tasks": [
+        "Remove eager GPU submit from VulkanBindlessArray construction.",
+        "Keep only CPU-side construction plus deferred GPU init metadata.",
+        "Delete the old eager path instead of preserving it behind a branch."
+      ],
+      "required_reading": [
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanDevice.cpp",
+          "start_line": 1699,
+          "end_line": 1700,
+          "reason": "Bindless array creation entry point from the device API."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanRHIResource.h",
+          "start_line": 699,
+          "end_line": 802,
+          "reason": "VulkanBindlessArray structure, pending-init data, and CreateUpdateCommand hook."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp",
+          "start_line": 1782,
+          "end_line": 1941,
+          "reason": "Current constructor path that allocates buffers and performs hidden GPU submission."
+        },
+        {
+          "path": "source/runtime/render/scene/Scene.cpp",
+          "start_line": 10,
+          "end_line": 12,
+          "reason": "Scene constructor currently creates the bindless array immediately."
+        },
+        {
+          "path": "source/runtime/render/scene/Scene.cpp",
+          "start_line": 133,
+          "end_line": 137,
+          "reason": "Lazy bindless array creation path that also needs to remain any-thread safe."
+        }
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/vulkan/VulkanDevice.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanRHIResource.h"
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Introduce explicit one-shot bindless init command",
+      "priority": "critical",
+      "status": "todo",
+      "category": "command_recording",
+      "problem": "Deferred bindless initialization still needs a deterministic execution point before first real use.",
+      "what_must_be_true_after_this_checkpoint": [
+        "A bindless array can record a one-shot InitBindlessArray command before first use.",
+        "Execution order guarantees that descriptor buffers are initialized before any command reads them."
+      ],
+      "tasks": [
+        "Add an InitBindlessArray command or equivalent explicit one-shot init command.",
+        "Choose a single insertion point for the command.",
+        "Ensure the init command participates in normal submission instead of calling hidden submit helpers."
+      ],
+      "required_reading": [
+        {
+          "path": "source/runtime/render/rhi/RHIResource.h",
+          "start_line": 874,
+          "end_line": 919,
+          "reason": "BindlessArray base API and CreateUpdateCommand contract."
+        },
+        {
+          "path": "source/runtime/render/rhi/RHICommand.h",
+          "start_line": 42,
+          "end_line": 69,
+          "reason": "Command type enum where a new explicit init command would be introduced."
+        },
+        {
+          "path": "source/runtime/render/rhi/RHICommand.h",
+          "start_line": 1385,
+          "end_line": 1550,
+          "reason": "CommandList APIs related to UpdateBindlessArray, barriers, imports/exports, and submit packaging."
+        },
+        {
+          "path": "source/runtime/render/rhi/RHICommandList.cpp",
+          "start_line": 457,
+          "end_line": 462,
+          "reason": "Current UpdateBindlessArray recording insertion point."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanRHIResource.h",
+          "start_line": 730,
+          "end_line": 802,
+          "reason": "PendingInitResource layout and VulkanBindlessArray private hooks."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp",
+          "start_line": 2006,
+          "end_line": 2084,
+          "reason": "Existing pending-init tracking helpers that can anchor one-shot bindless init."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp",
+          "start_line": 2084,
+          "end_line": 2231,
+          "reason": "Current bindless update command creation and CPU-side update packing."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+          "start_line": 1180,
+          "end_line": 1211,
+          "reason": "Preprocess-side state tracking for UpdateBindlessArray."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+          "start_line": 2154,
+          "end_line": 2408,
+          "reason": "Execution-side recording logic for bindless array updates."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/RHICmdReorderer.h",
+          "start_line": 1331,
+          "end_line": 1385,
+          "reason": "Reorderer treatment of UpdateBindlessArray and bindless argument usage."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/RHICmdReorderer.h",
+          "start_line": 1555,
+          "end_line": 1571,
+          "reason": "Command dispatch table that must recognize any new explicit bindless init command."
+        }
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/RHICommand.h",
+        "source/runtime/render/rhi/RHICommandList.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp"
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Reduce automatic state tracking to a single submit boundary",
+      "priority": "critical",
+      "status": "todo",
+      "category": "submission_runtime",
+      "problem": "Full cross-submit state tracking conflicts with explicit manual queue transfer and future async-produced command lists.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Automatic state tracking only reasons about resources inside one Submit call.",
+        "The runtime no longer infers prior cross-submit queue ownership automatically."
+      ],
+      "tasks": [
+        "Delete global cross-submit state carry-over used for automatic queue transfer/state reconstruction.",
+        "Keep intra-submit tracking and barrier synthesis only for the current submit batch.",
+        "Define the minimal explicit transition commands needed for inter-submit queue transfer."
+      ],
+      "required_reading": [
+        {
+          "path": "source/runtime/render/rhi/RHIExecutor.cpp",
+          "start_line": 13,
+          "end_line": 59,
+          "reason": "Submit batching boundary that defines what one submit means in the public API."
+        },
+        {
+          "path": "source/runtime/render/rhi/RHIExecutor.cpp",
+          "start_line": 91,
+          "end_line": 135,
+          "reason": "FlushPendingLocked is the handoff from public submit batching into Vulkan submission execution."
+        },
+        {
+          "path": "source/runtime/render/rhi/RHICommand.h",
+          "start_line": 1440,
+          "end_line": 1522,
+          "reason": "Explicit barrier and import/export APIs that can replace implicit cross-submit state carry-over."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+          "start_line": 174,
+          "end_line": 240,
+          "reason": "TranslateInfo stores the persistent state snapshots and cross-queue import/export metadata."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+          "start_line": 1969,
+          "end_line": 2000,
+          "reason": "Persistent state commit logic that currently promotes digest results into cross-submit resource history."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+          "start_line": 2173,
+          "end_line": 2324,
+          "reason": "Current preprocess path that reconstructs cross-submit queue transfer from persistent state."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+          "start_line": 2777,
+          "end_line": 2878,
+          "reason": "Frame execute path and frame-end validation that sit above the preprocessing model."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+          "start_line": 732,
+          "end_line": 925,
+          "reason": "Barrier and queue transfer preprocessing logic inside a single translated submission."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/RHICmdReorderer.h",
+          "start_line": 891,
+          "end_line": 1035,
+          "reason": "Reorderer dependency handling for BarrierCmd and QueueTransferCmd."
+        }
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+        "source/runtime/render/rhi/vulkan/RHICmdReorderer.h"
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Adopt a narrow promise/future payload for async recorded work",
+      "priority": "high",
+      "status": "todo",
+      "category": "async_handoff",
+      "problem": "Async loading needs a clean way to hand recorded command lists back to the main thread without introducing a large generic framework.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Async loading/init jobs can return recorded work through a promise/future style payload.",
+        "The payload is domain-specific and small, not a generic pipe framework."
+      ],
+      "tasks": [
+        "Define a small async recorded payload type aligned with Submit(Array<CommandList>).",
+        "Use promise/future style handoff for worker-to-main-thread transfer.",
+        "Keep the payload scoped to loading/init paths until a broader repeated need is proven."
+      ],
+      "required_reading": [
+        {
+          "path": "source/runtime/render/renderer/common/RuntimeAssets.cpp",
+          "start_line": 20,
+          "end_line": 149,
+          "reason": "Current async RuntimeAssets flow is the clearest example of worker-side loading that should return recorded work."
+        },
+        {
+          "path": "source/runtime/render/scene/Scene.cpp",
+          "start_line": 38,
+          "end_line": 57,
+          "reason": "Async scene entry point and pending command list consumption surface."
+        },
+        {
+          "path": "source/runtime/render/scene/GpuScene.h",
+          "start_line": 58,
+          "end_line": 80,
+          "reason": "Existing PendingCommandList transport shape that already moves recorded gfx work."
+        },
+        {
+          "path": "source/runtime/render/scene/GpuScene.h",
+          "start_line": 120,
+          "end_line": 121,
+          "reason": "Comment explicitly states the pending command list is stored for later main-thread execution."
+        },
+        {
+          "path": "source/runtime/Engine.cpp",
+          "start_line": 117,
+          "end_line": 148,
+          "reason": "Main-thread owner that can receive async payloads and decide when to submit them."
+        }
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/renderer/common/RuntimeAssets.cpp",
+        "source/runtime/render/scene/Scene.cpp",
+        "source/runtime/render/scene/GpuScene.cpp"
+      ]
+    },
+    {
+      "id": "CP-06",
+      "title": "Migrate RuntimeAssets to record-only async loading",
+      "priority": "critical",
+      "status": "todo",
+      "category": "resource_loading",
+      "problem": "RuntimeAssets currently violates the main-thread-only submit rule directly.",
+      "what_must_be_true_after_this_checkpoint": [
+        "RuntimeAssets async work only decodes files and records upload command lists.",
+        "The main thread receives the recorded payload and performs the actual submit."
+      ],
+      "tasks": [
+        "Split RuntimeAssets loading into worker-side decode/record and main-thread submit/publish.",
+        "Remove WaitIdle-based completion from the async path.",
+        "Publish loaded textures only after the main-thread-owned submit has been scheduled and completion is known."
+      ],
+      "required_reading": [
+        {
+          "path": "source/runtime/render/renderer/common/RuntimeAssets.h",
+          "start_line": 9,
+          "end_line": 35,
+          "reason": "Current RuntimeAssets ownership, ready-state, and public API surface."
+        },
+        {
+          "path": "source/runtime/render/renderer/common/RuntimeAssets.cpp",
+          "start_line": 20,
+          "end_line": 31,
+          "reason": "Async task wiring that currently dispatches worker-thread loading."
+        },
+        {
+          "path": "source/runtime/render/renderer/common/RuntimeAssets.cpp",
+          "start_line": 50,
+          "end_line": 149,
+          "reason": "Decode, create, record, submit, and ready-state flow that needs to be split into worker-side record and main-thread submit."
+        },
+        {
+          "path": "source/runtime/core/include/taskgraph/TaskGraph.h",
+          "start_line": 214,
+          "end_line": 251,
+          "reason": "LambdaTask behavior explains why the current constructor path is not main-thread-bound."
+        },
+        {
+          "path": "source/runtime/Engine.cpp",
+          "start_line": 117,
+          "end_line": 148,
+          "reason": "Engine initialization and run loop provide the main-thread integration point for RuntimeAssets commit/publish."
+        },
+        {
+          "path": "source/runtime/Engine.cpp",
+          "start_line": 150,
+          "end_line": 158,
+          "reason": "Shutdown path already owns final Sync and executor shutdown on the main thread."
+        }
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/renderer/common/RuntimeAssets.cpp",
+        "source/runtime/render/renderer/common/RuntimeAssets.h",
+        "source/runtime/Engine.cpp"
+      ]
+    },
+    {
+      "id": "CP-07",
+      "title": "Migrate scene async initialization to the same boundary",
+      "priority": "critical",
+      "status": "todo",
+      "category": "scene_loading",
+      "problem": "Any future return to async scene loading will recreate the same threading violation unless the scene path adopts the same record-only contract.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Async scene loading can prepare CPU scene data and record pending GPU init command lists without submitting them.",
+        "GpuScene or related GPU init paths no longer rely on hidden submit during async construction."
+      ],
+      "tasks": [
+        "Move scene async loading to the same promise-returned recorded payload model.",
+        "Ensure bindless allocation and deferred bindless init follow the same explicit submit boundary.",
+        "Keep scene publish and ready-state transition on the main thread after the relevant submit path is established."
+      ],
+      "required_reading": [
+        {
+          "path": "source/runtime/render/scene/Scene.h",
+          "start_line": 38,
+          "end_line": 112,
+          "reason": "Scene public async API, state fields, and internal load function boundary."
+        },
+        {
+          "path": "source/runtime/render/scene/Scene.cpp",
+          "start_line": 10,
+          "end_line": 57,
+          "reason": "Current scene construction, async load, sync load, and pending command list exposure."
+        },
+        {
+          "path": "source/runtime/render/scene/Scene.cpp",
+          "start_line": 133,
+          "end_line": 141,
+          "reason": "Lazy bindless creation path that must remain compatible with deferred init."
+        },
+        {
+          "path": "source/runtime/render/scene/GpuScene.h",
+          "start_line": 17,
+          "end_line": 27,
+          "reason": "GpuScene constructor/update boundary and ownership model."
+        },
+        {
+          "path": "source/runtime/render/scene/GpuScene.h",
+          "start_line": 58,
+          "end_line": 122,
+          "reason": "PendingCommandList and bindless-related state stored for later execution."
+        },
+        {
+          "path": "source/runtime/render/scene/GpuScene.cpp",
+          "start_line": 26,
+          "end_line": 322,
+          "reason": "Current GPU-scene construction path that creates resources, records copy scopes, allocates bindless handles, and stores pending gfx work."
+        },
+        {
+          "path": "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp",
+          "start_line": 2006,
+          "end_line": 2231,
+          "reason": "Deferred bindless init and update packing are directly relevant to async scene initialization."
+        }
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/scene/Scene.cpp",
+        "source/runtime/render/scene/Scene.h",
+        "source/runtime/render/scene/GpuScene.cpp",
+        "source/runtime/render/scene/GpuScene.h"
+      ]
+    },
+    {
+      "id": "CP-08",
+      "title": "Test and lock the new boundary",
+      "priority": "critical",
+      "status": "todo",
+      "category": "test",
+      "problem": "This refactor changes thread ownership, submission semantics, and bindless initialization order. It must be validated explicitly instead of relying on WaitIdle or manual hope.",
+      "what_must_be_true_after_this_checkpoint": [
+        "The main-thread-only submission rule is enforced by tests or debug assertions.",
+        "No new validation errors appear in the covered loading and submission paths."
+      ],
+      "tasks": [
+        "Run existing RHI translate tests after each critical checkpoint.",
+        "Add a focused regression case for async RuntimeAssets or equivalent async-init submission handoff.",
+        "Validate with Vulkan validation enabled and only treat errors as blockers.",
+        "Run verification scripts from powershell on Windows."
+      ],
+      "required_reading": [
+        {
+          "path": "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+          "start_line": 24,
+          "end_line": 66,
+          "reason": "Current test helpers and submit/sync helper path."
+        },
+        {
+          "path": "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+          "start_line": 218,
+          "end_line": 424,
+          "reason": "Existing CopyScope and Present coverage that exercises submission ordering and sync behavior."
+        },
+        {
+          "path": "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+          "start_line": 428,
+          "end_line": 494,
+          "reason": "Additional present test path that should keep passing after the refactor."
+        },
+        {
+          "path": "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+          "start_line": 542,
+          "end_line": 580,
+          "reason": "Current main test execution order and shutdown behavior."
+        },
+        {
+          "path": "testscripts/test_rhi_translate.ps1",
+          "start_line": 17,
+          "end_line": 64,
+          "reason": "Windows powershell test entry point that should be used for regression verification."
+        },
+        {
+          "path": "source/runtime/render/renderer/common/RuntimeAssets.cpp",
+          "start_line": 20,
+          "end_line": 149,
+          "reason": "Primary regression target for worker-thread submission removal."
+        },
+        {
+          "path": "source/runtime/render/scene/Scene.cpp",
+          "start_line": 38,
+          "end_line": 57,
+          "reason": "Secondary regression target once async scene initialization is migrated."
+        }
+      ],
+      "files_likely_affected": [
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "testscripts/test_rhi_translate.ps1",
+        "source/runtime/render/renderer/common/RuntimeAssets.cpp",
+        "source/runtime/render/scene/Scene.cpp"
+      ]
+    }
+  ],
+  "execution_order": [
+    "CP-01 -> first lock the ownership contract so later changes do not preserve illegal submission paths by accident.",
+    "CP-02 -> remove hidden submission from CreateBindlessArray before enabling more async callers.",
+    "CP-03 -> make deferred bindless initialization explicit and one-shot.",
+    "CP-04 -> then simplify the submission runtime to intra-submit state tracking only.",
+    "CP-05 -> define the narrow async payload model after the submit boundary is stable.",
+    "CP-06 -> migrate RuntimeAssets first because it is the direct current violation.",
+    "CP-07 -> migrate async scene/GpuScene paths next so the same bug class does not come back later.",
+    "CP-08 -> keep tests running throughout and use the final checkpoint to lock the new contract."
+  ],
+  "analysis_notes": {
+    "recommended_direction": [
+      "Yes: CreateBindlessArray should become any-thread-safe only for non-submit work, and GPU-side descriptor buffer initialization should move into a deferred explicit command such as InitBindlessArray.",
+      "Yes: async jobs should hand recorded work back to the main thread with a promise/future style payload instead of performing submission inside the worker.",
+      "No: do not build a generic Pipe abstraction right now.",
+      "No: do not keep full automatic cross-submit state tracking once the design switches to explicit manual queue transfer across submit boundaries."
+    ],
+    "biggest_risks": [
+      "If deferred bindless initialization has more than one implicit insertion point, the runtime will become hard to reason about and debug.",
+      "If cross-submit state tracking is only partially removed, the codebase will keep hidden dependencies on historical resource state and break the intended explicit model.",
+      "If async payloads only return a single CommandList, later multi-list jobs will need another redesign.",
+      "If RuntimeAssets is fixed but Scene/GpuScene async paths are left conceptually unchanged, the same thread-boundary violation will reappear when async scene loading is turned back on."
+    ],
+    "completion_definition": [
+      "No worker-thread path calls RHIExecutor::Submit, Present, or Sync.",
+      "CreateBindlessArray performs no hidden GPU submission.",
+      "Bindless arrays initialize through an explicit one-shot recorded command before first use.",
+      "Automatic state tracking is bounded to one Submit call.",
+      "Async loading/init paths return recorded payloads to the main thread via a narrow promise/future handoff.",
+      "Existing tests still pass and validation produces no new errors."
+    ]
+  }
+}

@@ -1,0 +1,440 @@
+{
+  "project": "MoerEngine Submission / Interrupt Payload Simplification",
+  "doc_refs": [
+    "docs/rules/Rule_Codex.md",
+    "docs/checkpoints/interrupt_sync_event_checkpoint.json",
+    "docs/checkpoints/submission_rework_checkpoints.json"
+  ],
+  "source_analyzed": [
+    "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.h",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionShared.h"
+  ],
+  "goal": "Refactor SubmissionRuntime and InterruptRuntime to use one payload-oriented interrupt enqueue path, one GraphEvent-based batch completion contract, and one explicit root-RHI boundary object that preserves both host-side ordering and GPU wait injection.",
+  "rule_codex_reference": {
+    "path": "docs/rules/Rule_Codex.md",
+    "rules_used": [
+      "Do not keep compatibility implementations",
+      "Do not over-design",
+      "Validate with tests",
+      "Filter validation output and focus on errors",
+      "Use powershell on Windows"
+    ],
+    "how_they_apply_here": [
+      "Do not keep three old interrupt enqueue entry points and add a wrapper on top. Converge on one interrupt task protocol.",
+      "Do not keep both SubmissionBatch.completion and SubmissionBatch.sync_completion. A batch must expose one completion concept.",
+      "Do not replace GPU prerequisite transport with a pure GraphEvent abstraction if real queue waits still exist. Preserve the minimal data needed for final queue submit injection.",
+      "Do not use try/catch as steady-state ownership control. Invalid internal states should fail fast with assert.",
+      "Validate every structural checkpoint with the existing RHI translate test path."
+    ]
+  },
+  "code_alignment": {
+    "submission_batch_today": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h",
+      "facts": [
+        "SubmissionBatch currently carries both completion and sync_completion.",
+        "Drain() blocks on promise<void> completion.",
+        "Sync() and Flush() block on promise<GraphEventRef> sync_completion."
+      ]
+    },
+    "run_submission_thread_today": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
+      "facts": [
+        "RunSubmissionThread currently mixes root prerequisite injection, per-submit dependency attachment, queue submit scheduling, present scheduling, interrupt event chaining, semantic tail folding, and batch completion fulfillment in one loop.",
+        "root_rhi_prerequisites is currently copied into root submits as Array<WaitEvent> and then injected into recorded_submit.wait_events before queue submission.",
+        "interrupt_completion_events currently delay task_completion_event by calling event->WaitUntil(task_completion_event). This dependency direction must be preserved."
+      ]
+    },
+    "interrupt_runtime_today": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.cpp",
+      "facts": [
+        "Queue completion, copy completion, and present completion each have separate enqueue functions with duplicated outer mechanics.",
+        "VulkanInterruptRuntime.h also exposes repeated overload sets for IsTaskReady(...), ProcessTask(...), and UnlockTaskCompletion(...), which spreads one logical task protocol across multiple near-parallel interfaces.",
+        "Most real semantic differences live in ready polling and process logic, not in queue push mechanics."
+      ]
+    }
+  },
+  "design_constraints": [
+    {
+      "id": "DC-01",
+      "title": "Interrupt enqueue must be payload-oriented",
+      "detail": "InterruptRuntime should expose one task-oriented protocol that accepts a unified InterruptTask description. Queue, copy, present, and frame-end work remain different task kinds, but they should not duplicate queue push, locking, notification, or top-level dispatch interface shape."
+    },
+    {
+      "id": "DC-02",
+      "title": "SubmissionBatch must have one completion contract",
+      "detail": "A batch may represent submit, drain, sync, or flush, but it must expose exactly one completion object and one fulfillment rule. The caller must not branch between completion and sync_completion."
+    },
+    {
+      "id": "DC-03",
+      "title": "Single batch completion is GraphEvent-based",
+      "detail": "SubmissionBatch should carry one optional GraphEventRef completion_event. Drain, Sync, and Flush all use the same type. Submit batches may leave it null unless ordered completion is explicitly needed."
+    },
+    {
+      "id": "DC-04",
+      "title": "One logical root boundary must still preserve GPU waits",
+      "detail": "root_rhi_prerequisites should collapse to one RootRhiBoundary object, but that object must still carry the real WaitEvent payload required when recorded submits are finalized into actual queue submissions."
+    },
+    {
+      "id": "DC-05",
+      "title": "Dependency folding must be explicit and readable",
+      "detail": "RunSubmissionThread may preserve the current semantics, but it should express them through named helpers instead of ad-hoc loops and duplicated per-queue blocks."
+    },
+    {
+      "id": "DC-06",
+      "title": "Normal error handling should assert invariants",
+      "detail": "Internal ownership bugs and impossible state combinations should be guarded by assert. LOG_ERROR remains for external runtime failures such as translation errors or Vulkan result failures."
+    },
+    {
+      "id": "DC-07",
+      "title": "Behavior must stay unchanged while structure simplifies",
+      "detail": "Submission ordering, queue waits, present scheduling, interrupt completion timing, readback-facing completion timing, and Sync or Flush semantics must remain unchanged from the caller's point of view."
+    }
+  ],
+  "current_problem_summary": {
+    "interrupt_enqueue_duplication": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.cpp:20-128",
+      "problem": "Three enqueue functions build similar task records with only payload-field differences. This duplicates lock, push, and notify logic."
+    },
+    "interrupt_interface_duplication": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.h:123-146",
+      "problem": "IsTaskReady(...), ProcessTask(...), and UnlockTaskCompletion(...) are each repeated as task-specific overload sets even though they are all dispatch over one logical interrupt task domain."
+    },
+    "run_submission_thread_mixed_concerns": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp:452-691",
+      "problem": "RunSubmissionThread currently mixes validation, dependency injection, queue submission, interrupt event chaining, tail folding, present scheduling, and batch completion signaling in one loop body."
+    },
+    "batch_completion_ambiguity": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h:41-55",
+      "problem": "SubmissionBatch currently carries both promise<void> completion and promise<GraphEventRef> sync_completion even though both represent ordered completion for that batch."
+    },
+    "root_prerequisite_transport": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h:41-55 and source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp:473-505",
+      "problem": "root_rhi_prerequisites is logically one predecessor boundary, but it is transported as copied WaitEvent arrays and injected into root recorded submits early."
+    },
+    "exception_suppression": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp:433-445 and source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp:674-689",
+      "problem": "try/catch around completion fulfillment hides ownership mistakes instead of making completion single-owner and explicit."
+    }
+  },
+  "target_design": {
+    "overview": "SubmissionRuntime prepares one interrupt payload per scheduled completion, enqueues that payload through one InterruptRuntime API, composes GraphEvent dependencies through small helpers, and represents root-RHI prerequisite transport as one explicit boundary object instead of copied wait arrays.",
+    "key_structures": [
+      {
+        "name": "InterruptPayload",
+        "purpose": "Unified transport object for interrupt-visible completion data such as queue pointer, completion event, allocator retirement, callbacks, signals, present host fence, and frame-end marker metadata."
+      },
+      {
+        "name": "InterruptTask",
+        "purpose": "Tagged wrapper consumed by InterruptRuntime. It separates task kind from shared enqueue mechanics and keeps ready or process branching explicit."
+      },
+      {
+        "name": "SubmissionBatch.completion_event",
+        "purpose": "Single caller-created GraphEventRef used for Drain, Sync, and Flush. Submit batches may leave it null."
+      },
+      {
+        "name": "RootRhiBoundary",
+        "purpose": "Single logical predecessor boundary containing host-side ordering data plus the concrete GPU wait packet needed when a real queue submit is emitted."
+      }
+    ],
+    "submission_batch_model": {
+      "design": "Replace completion and sync_completion with one optional GraphEventRef completion_event on SubmissionBatch.",
+      "batch_kinds": [
+        {
+          "kind": "Submit",
+          "completion_rule": "completion_event is normally null. If a future caller needs ordered completion for a pure submit batch, it uses the same field and same semantics."
+        },
+        {
+          "kind": "Drain",
+          "completion_rule": "Drain creates completion_event before enqueue. SubmissionThread unlocks it when the drain batch is reached, after all earlier batches have already been consumed."
+        },
+        {
+          "kind": "Sync",
+          "completion_rule": "Sync creates completion_event before enqueue. SubmissionThread snapshots the current semantic tails, attaches them to completion_event with WaitUntil(...), then unlocks completion_event."
+        },
+        {
+          "kind": "Flush",
+          "completion_rule": "Flush uses the same completion_event mechanism as Sync(Present). Any extra flush-only side effect such as present-context flush happens outside the batch result type."
+        }
+      ],
+      "caller_contract": [
+        "Sync() returns the caller-created completion_event itself, not a promise-produced wrapper event.",
+        "Flush() waits on the caller-created completion_event and then runs present-context flush logic.",
+        "Drain() waits on completion_event directly.",
+        "Stop() unlocks any still-pending completion_event exactly once."
+      ],
+      "implementation_notes": [
+        "This removes std::promise<void> and std::promise<GraphEventRef> from steady-state batch flow.",
+        "GraphEventRef is already the language used by interrupt completion chaining and semantic tail folding, so using it as the single batch completion type reduces conversion points."
+      ]
+    },
+    "root_boundary_model": {
+      "design": "Replace raw Array<WaitEvent> root_rhi_prerequisites transport with one RootRhiBoundary object.",
+      "fields": [
+        "host_event: GraphEventRef",
+        "gpu_waits: Array<WaitEvent>"
+      ],
+      "semantics": [
+        "host_event represents the ordered boundary in host-side dependency composition and improves readability when helper functions attach prerequisites.",
+        "gpu_waits preserves the actual queue wait packet that must still be injected into recorded_submit.wait_events before queue submission.",
+        "The new design is not GraphEvent-only. It intentionally keeps both host and GPU faces of the same boundary because the runtime still needs real WaitEvent data at submit emission time."
+      ],
+      "translation_rules": [
+        "Enqueue() snapshots one RootRhiBoundary rather than a bare Array<WaitEvent>.",
+        "Root submits no longer receive copied prerequisite arrays as long-lived transport state.",
+        "RunSubmissionThread uses an AttachRootBoundary(...) helper for host-side dependency expression and an InjectRootBoundaryGpuWaits(...) helper right before actual queue submit scheduling.",
+        "Pending RHI tail storage evolves from Array<WaitEvent> to RootRhiBoundary-compatible state."
+      ]
+    },
+    "interrupt_payload_scope": {
+      "design": "InterruptPayload and InterruptTask unify the top-level transport and dispatch shape. They do not erase the real differences between queue, copy, present, and frame-end processing.",
+      "rules": [
+        "The common enqueue path owns lock, push, and notify.",
+        "Top-level readiness, processing, and completion-unlock entry points should dispatch on one task type rather than exposing repeated public or private overload sets per concrete task struct.",
+        "Task kind continues to drive polling and process behavior inside that single dispatch path.",
+        "Do not force one giant payload with meaningless fields for every task kind. Use a tagged payload or variant with shared outer mechanics."
+      ]
+    },
+    "dependency_preservation_rules": {
+      "rules": [
+        "Preserve the existing direction of interrupt_completion_events to task_completion_event dependencies. Existing events must wait for the new task completion event, not the other way around.",
+        "Preserve current semantic tail folding behavior for rhi_tail and present_tail until a later checkpoint intentionally changes that model.",
+        "Preserve current translate_result validation and external error logging behavior."
+      ]
+    },
+    "error_handling_policy": {
+      "principles": [
+        "Normal control flow should not use try/catch.",
+        "Batch completion must be single-owner by construction.",
+        "Use assert for invalid internal states such as malformed batch kind and completion_event combinations, missing payload on a scheduled path, null completion_event where a blocking batch requires one, and double-fulfillment attempts.",
+        "Use LOG_ERROR for external or recoverable failures such as translation failure, missing translated packets from upstream invalid input, and Vulkan failures."
+      ],
+      "assert_examples": [
+        "assert(batch.kind == SubmissionBatch::EKind::Submit || batch.completion_event != nullptr)",
+        "assert(!scheduled_completion || task_completion_event != nullptr)",
+        "assert(root_boundary_is_valid_before_injection)",
+        "assert(batch completion_event is unlocked in exactly one place)"
+      ]
+    },
+    "desired_helper_boundaries": [
+      "BuildInterruptPayloadForGraphicsOrCompute(...)",
+      "BuildInterruptPayloadForCopy(...)",
+      "BuildInterruptPayloadForPresent(...)",
+      "AttachRootBoundary(...)",
+      "InjectRootBoundaryGpuWaits(...)",
+      "AttachLogicalSubmissionDependencies(...)",
+      "ScheduleRecordedSubmit(...)",
+      "SchedulePresentStage(...)",
+      "FinishBatchCompletion(...)"
+    ]
+  },
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Define a single interrupt enqueue model",
+      "priority": "critical",
+      "status": "todo",
+      "category": "interrupt_runtime",
+      "problem": "InterruptRuntime currently exposes separate queue, copy, and present enqueue entry points that duplicate outer mechanics.",
+      "what_must_be_true_after_this_checkpoint": [
+        "There is one interrupt enqueue API for completion work.",
+        "Shared task metadata is represented once in a common payload structure.",
+        "Task kind differences remain explicit in ready and process logic.",
+        "Header-level task handling APIs are also collapsed to one task-oriented dispatch surface instead of repeated overload sets."
+      ],
+      "tasks": [
+        "Introduce InterruptPayload and InterruptTask shape in the design.",
+        "Move lock, push, and notify behind one code path.",
+        "Collapse IsTaskReady(...), ProcessTask(...), and UnlockTaskCompletion(...) into single task-oriented entry points that switch or visit on InterruptTask kind.",
+        "Keep queue, copy, present, and frame-end-specific fields only where they are semantically required.",
+        "Do not merge task-specific polling and processing into a fake one-size-fits-all handler."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.h",
+        "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp"
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Collapse SubmissionBatch to one GraphEvent completion contract",
+      "priority": "critical",
+      "status": "todo",
+      "category": "submission_runtime",
+      "problem": "completion and sync_completion split ordered batch completion into two unrelated fields.",
+      "what_must_be_true_after_this_checkpoint": [
+        "SubmissionBatch owns exactly one completion representation.",
+        "Submit, Drain, Sync, and Flush all use the same GraphEventRef-based completion concept.",
+        "Caller-side code does not branch on multiple completion fields."
+      ],
+      "tasks": [
+        "Replace completion and sync_completion with one optional GraphEventRef completion_event on SubmissionBatch.",
+        "Change Drain(), Sync(), and Flush() to create completion_event before enqueue and wait or return that same event.",
+        "Add one FinishBatchCompletion(...) helper that fulfills completion_event according to batch kind.",
+        "Assert invalid batch kind and completion_event combinations instead of handling them with try/catch."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp"
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Introduce RootRhiBoundary and preserve GPU wait translation",
+      "priority": "critical",
+      "status": "todo",
+      "category": "dependency_model",
+      "problem": "root_rhi_prerequisites is one chain-wait concept, but it is transported as copied WaitEvent arrays and early injection hides the actual submit-time translation point.",
+      "what_must_be_true_after_this_checkpoint": [
+        "The previous-RHI boundary is represented by one RootRhiBoundary object.",
+        "Host-side readability improves because root prerequisite attachment becomes explicit helper logic.",
+        "GPU wait translation remains semantically identical to the current behavior."
+      ],
+      "tasks": [
+        "Define RootRhiBoundary with host_event plus gpu_waits.",
+        "Replace SnapshotPendingRHITails() and StorePendingRHITails(...) with RootRhiBoundary-aware storage.",
+        "Attach the boundary through named helpers rather than direct array copying on SubmitInfo.",
+        "Inject boundary.gpu_waits into recorded_submit.wait_events only at the final queue submit emission point."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionShared.h"
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Decompose RunSubmissionThread into explicit dependency and scheduling helpers",
+      "priority": "critical",
+      "status": "todo",
+      "category": "clarity",
+      "problem": "RunSubmissionThread currently contains correct-but-mixed dependency and scheduling logic that is difficult to reason about and easy to regress.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Dependency attachment, queue submit scheduling, interrupt payload construction, and present scheduling are split into named helper steps.",
+        "The order of operations remains unchanged.",
+        "The dependency graph can be read from helper names instead of re-parsing the entire loop."
+      ],
+      "tasks": [
+        "Extract root boundary attachment into a helper.",
+        "Extract submission-to-submission dependency attachment into a helper.",
+        "Extract per-queue recorded submit scheduling into helpers that return a unified scheduling result.",
+        "Extract present-stage scheduling into a helper with explicit preconditions.",
+        "Preserve the direction of interrupt_completion_events to task_completion_event dependencies."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h"
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Remove try/catch from steady-state batch completion flow",
+      "priority": "high",
+      "status": "todo",
+      "category": "cleanup",
+      "problem": "Exception swallowing around promise fulfillment hides ownership mistakes and makes completion flow harder to trust.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Normal batch completion signaling has no try/catch suppression.",
+        "Completion ownership is single-writer and structurally enforced.",
+        "Shutdown path and normal path use the same completion model."
+      ],
+      "tasks": [
+        "Remove try/catch from pending batch cleanup in Stop().",
+        "Remove try/catch from completion fulfillment in RunSubmissionThread().",
+        "Restructure ownership so each completion_event can be fulfilled at most once by design.",
+        "Use assert for impossible internal states such as double fulfillment or null completion_event on Drain, Sync, or Flush."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h"
+      ]
+    },
+    {
+      "id": "CP-06",
+      "title": "Validate the structural refactor with existing RHI translate coverage",
+      "priority": "critical",
+      "status": "todo",
+      "category": "test",
+      "problem": "This refactor changes core submit, sync, present, and interrupt plumbing and can regress behavior while appearing cleaner.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Existing RHI translate tests still pass.",
+        "No new validation errors appear in submit, copy, present, or sync paths.",
+        "Behavioral equivalence is preserved while code structure simplifies."
+      ],
+      "tasks": [
+        "Run testscripts/test_rhi_translate.ps1 after each critical checkpoint.",
+        "Pay special attention to present completion timing, readback-facing interrupt completion timing, and Sync(Present) behavior.",
+        "Reject any solution that adds new fallback waits, compatibility layers, or try/catch-based ownership control."
+      ],
+      "files_likely_affected": [
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "testscripts/test_rhi_translate.ps1"
+      ]
+    }
+  ],
+  "execution_order": [
+    "CP-01: unify the interrupt enqueue shape around InterruptPayload and InterruptTask.",
+    "CP-02: collapse SubmissionBatch to a single GraphEvent completion contract.",
+    "CP-03: replace root_rhi_prerequisites array transport with one RootRhiBoundary that still carries gpu_waits.",
+    "CP-04: split RunSubmissionThread into named dependency and scheduling helpers.",
+    "CP-05: remove try/catch from steady-state completion flow and replace it with assert-backed invariants.",
+    "CP-06: validate the structural cleanup with the existing RHI translate test path."
+  ],
+  "test_script": {
+    "path": "testscripts/test_rhi_translate.ps1",
+    "purpose": "Build and run TestRHITranslate.exe to validate submit, present, sync, copy-scope, and interrupt completion behavior after structural runtime changes.",
+    "commands": [
+      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1",
+      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 -Config Release",
+      "powershell -ExecutionPolicy Bypass -File .\\testscripts\\test_rhi_translate.ps1 -ExtraArgs @('-DENABLE_VALIDATION=1')"
+    ],
+    "usage_notes": [
+      "Run after any checkpoint that changes batch completion flow, root boundary transport, interrupt enqueue flow, or present scheduling.",
+      "Treat new validation errors as regressions even if the executable exits successfully.",
+      "Do not use VulkanDevice::WaitIdle() or other emergency waits to mask structural mistakes."
+    ]
+  },
+  "acceptance_criteria": [
+    "InterruptRuntime accepts one unified completion payload model instead of duplicated enqueue boilerplate.",
+    "InterruptRuntime header and implementation use one task-oriented dispatch surface instead of repeated overload families for readiness, processing, and completion unlock.",
+    "SubmissionBatch uses one GraphEvent-based completion concept, not parallel completion and sync_completion fields.",
+    "root_rhi_prerequisites is replaced by one RootRhiBoundary mechanism that preserves both host-side ordering and final GPU wait injection.",
+    "RunSubmissionThread remains semantically correct but is split into readable dependency and scheduling stages.",
+    "Normal control flow does not rely on try/catch and instead asserts internal invariants.",
+    "testscripts/test_rhi_translate.ps1 passes after the refactor."
+  ],
+  "risks": [
+    {
+      "id": "R-01",
+      "title": "Over-merging interrupt payloads can blur task semantics",
+      "impact": "Queue, copy, present, and frame-end tasks become harder to validate if the payload abstraction erases their real differences.",
+      "mitigation": "Use a tagged payload or variant that shares outer mechanics while preserving task-specific fields explicitly."
+    },
+    {
+      "id": "R-02",
+      "title": "Collapsing batch completion incorrectly can break Drain, Sync, or Flush",
+      "impact": "Drain may stop being a simple ordered barrier, or Sync and Flush may stop returning the right frozen event boundary.",
+      "mitigation": "Keep batch kind explicit and use one caller-created GraphEventRef completion_event whose fulfillment rule is defined per batch kind."
+    },
+    {
+      "id": "R-03",
+      "title": "Replacing root prerequisite arrays too early can hide GPU wait translation details",
+      "impact": "Root submissions may lose required predecessor waits if the logical boundary is not translated back to queue waits at the correct point.",
+      "mitigation": "Use RootRhiBoundary with both host_event and gpu_waits, and inject gpu_waits only at actual queue submit emission time."
+    },
+    {
+      "id": "R-04",
+      "title": "Helper extraction can accidentally invert event dependencies",
+      "impact": "Interrupt completion or readback-facing completion may fire too early.",
+      "mitigation": "Lock the dependency rule that existing interrupt_completion_events must wait for the new task_completion_event and validate this path with tests."
+    },
+    {
+      "id": "R-05",
+      "title": "Removing try/catch without fixing ownership can introduce shutdown deadlocks",
+      "impact": "Pending batches may never complete during shutdown or completion may be unlocked twice.",
+      "mitigation": "Make completion_event single-owner before deleting exception suppression, and assert on malformed internal ownership."
+    }
+  ]
+}

@@ -320,6 +320,7 @@ Array<uint8_t> BuildSchemaPacketPayload(const RegisteredSchema& schema) {
     };
 
     append_string(schema.desc.name);
+    append_string(schema.desc.event_type);
     for (const SchemaFieldDesc& field : schema.desc.fields) {
         const uint8_t field_type = static_cast<uint8_t>(field.type);
         Detail::AppendScalar(payload, field_type);
@@ -530,6 +531,7 @@ uint64_t ReserveSequence() {
 
 const SchemaRuntimeDesc& RegisterSchemaRuntime(
     std::string_view                 name,
+    std::string_view                 event_type,
     EKind                            kind,
     EChannel                         channel,
     uint32_t                         version,
@@ -541,6 +543,7 @@ const SchemaRuntimeDesc& RegisterSchemaRuntime(
     RegisteredSchema schema{};
     schema.desc.schema_id = state.next_schema_id++;
     schema.desc.name = name;
+    schema.desc.event_type = event_type;
     schema.desc.kind = kind;
     schema.desc.channel = channel;
     schema.desc.version = version;

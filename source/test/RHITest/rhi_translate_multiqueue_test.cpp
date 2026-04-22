@@ -26,7 +26,9 @@
 #include "config/CVarSystem.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "ProfileSession.h"
 #include "profile/ProfileDump.h"
+#include "profile/ProfileDumpTemplates.h"
 #include "render/rhi/RHIImpl.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -114,10 +116,16 @@ GPUEvent MakeResolvedGpuEvent(
 }
 constexpr uint32_t kCopyScopeIterations = 8;
 
-MOER_PROFILE_DUMP_TEMPLATE(ProfileDumpRuntimeTemplate, Moer::ProfileDump::EKind::Instant, Moer::ProfileDump::EChannel::CPUThread, 1)
-    using FieldTypes = std::tuple<uint64_t, std::string_view, uint32_t>;
-    static constexpr std::array field_names{"record_id", "label", "value"};
-};
+BEGIN_INSTANT_EVENT_TEMPLATE(
+    ProfileDumpRuntimeTemplate,
+    "test.runtime_instant",
+    Moer::ProfileDump::EChannel::CPUThread,
+    1
+)
+    PROFILE_DUMP_FIELD(uint64_t, record_id)
+    PROFILE_DUMP_FIELD(std::string_view, label)
+    PROFILE_DUMP_FIELD(uint32_t, value)
+END_INSTANT_EVENT_TEMPLATE()
 
 static_assert(std::is_same_v<
     decltype(DUMP_STREAM(ProfileDumpRuntimeTemplate) << uint64_t{1} << "runtime" << uint32_t{7}),
@@ -179,9 +187,9 @@ struct ParsedProfileDumpCapture {
 };
 
 const Moer::ProfileDump::DecodedSchema*
-FindProfileDumpSchema(const ParsedProfileDumpCapture& capture, std::string_view schema_name) {
+FindProfileDumpSchemaByEventType(const ParsedProfileDumpCapture& capture, std::string_view event_type) {
     for (const Moer::ProfileDump::DecodedSchema& schema : capture.schemas) {
-        if (schema.name == schema_name) {
+        if (schema.event_type == event_type) {
             return &schema;
         }
     }
@@ -279,6 +287,73 @@ bool AssertRuntimeProfileRecord(
         );
         return false;
     }
+    return true;
+}
+
+const Moer::Profiler::ProfileEvent* FindProfileConsumerEvent(
+    const Moer::Profiler::ProfileStore& store,
+    std::string_view                    event_name
+) {
+    for (const Moer::Profiler::ProfileEvent& event : store.events) {
+        if (event.name == event_name) {
+            return &event;
+        }
+    }
+    return nullptr;
+}
+
+bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& store) {
+    if (!store.metadata.has_time_origin || store.metadata.time_origin_ns != 200000) {
+        LOG_ERROR(
+            "Profile consumer expected normalized origin 200000ns, got has_origin={} origin={}",
+            store.metadata.has_time_origin,
+            store.metadata.time_origin_ns
+        );
+        return false;
+    }
+    if (store.events.size() != 2 || store.tracks.size() != 2 || store.min_ts != 0 || store.max_ts != 80000) {
+        LOG_ERROR(
+            "Profile consumer normalized store mismatch: events={} tracks={} min={} max={}",
+            store.events.size(),
+            store.tracks.size(),
+            store.min_ts,
+            store.max_ts
+        );
+        return false;
+    }
+
+    const auto* gpu_event = FindProfileConsumerEvent(store, "GpuNormalizedScope");
+    const auto* cpu_event = FindProfileConsumerEvent(store, "CpuNormalizedScope");
+    if (gpu_event == nullptr || cpu_event == nullptr) {
+        LOG_ERROR("Profile consumer normalized store missing CPU or GPU scope event.");
+        return false;
+    }
+
+    if (gpu_event->track_type != Moer::Profiler::ProfileTrackType::GPUQueue ||
+        gpu_event->ts_begin_ns != 50000 || gpu_event->ts_end_ns != 80000 ||
+        gpu_event->category != "timing.gpu_scope" || gpu_event->track_name != "Graphics") {
+        LOG_ERROR(
+            "Profile consumer normalized GPU event mismatch: begin={} end={} category={} track={}",
+            gpu_event->ts_begin_ns,
+            gpu_event->ts_end_ns,
+            gpu_event->category,
+            gpu_event->track_name
+        );
+        return false;
+    }
+
+    if (cpu_event->track_type != Moer::Profiler::ProfileTrackType::CPUThread ||
+        cpu_event->ts_begin_ns != 0 || cpu_event->ts_end_ns != 10000 ||
+        cpu_event->category != "timing.cpu_scope") {
+        LOG_ERROR(
+            "Profile consumer normalized CPU event mismatch: begin={} end={} category={}",
+            cpu_event->ts_begin_ns,
+            cpu_event->ts_end_ns,
+            cpu_event->category
+        );
+        return false;
+    }
+
     return true;
 }
 
@@ -583,7 +658,7 @@ int RunProfileDumpFileSinkTest() {
     }
 
     const Moer::ProfileDump::DecodedSchema* runtime_schema =
-        FindProfileDumpSchema(capture, "ProfileDumpRuntimeTemplate");
+        FindProfileDumpSchemaByEventType(capture, "test.runtime_instant");
     if (!runtime_schema) {
         LOG_ERROR("Profile dump file sink output missing runtime schema.");
         Moer::ProfileDump::ClearTestingConfigOverride();
@@ -656,7 +731,7 @@ int RunProfileDumpTcpSinkTest() {
     }
 
     const Moer::ProfileDump::DecodedSchema* runtime_schema =
-        FindProfileDumpSchema(capture, "ProfileDumpRuntimeTemplate");
+        FindProfileDumpSchemaByEventType(capture, "test.runtime_instant");
     if (!runtime_schema) {
         LOG_ERROR("Profile dump TCP sink payload missing runtime schema.");
         return 1;
@@ -719,7 +794,8 @@ int RunGpuEventStreamProfileDumpTest() {
         return 1;
     }
 
-    const Moer::ProfileDump::DecodedSchema* gpu_schema = FindProfileDumpSchema(capture, "GpuScopeTemplate");
+    const Moer::ProfileDump::DecodedSchema* gpu_schema =
+        FindProfileDumpSchemaByEventType(capture, "timing.gpu_scope");
     if (!gpu_schema) {
         LOG_ERROR("GPUEventStream profile dump output missing GPU schema.");
         Moer::ProfileDump::ClearTestingConfigOverride();
@@ -733,6 +809,123 @@ int RunGpuEventStreamProfileDumpTest() {
     }
 
     Moer::ProfileDump::ClearTestingConfigOverride();
+    return 0;
+}
+
+int RunProfileConsumerFileLoadTest() {
+    const std::filesystem::path output_path = MakeProfileDumpTestPath("profile_consumer_file_load_test.mpd");
+
+    Moer::ProfileDump::RuntimeConfig config{};
+    config.enable_file = true;
+    config.enable_tcp = false;
+    config.tls_max_records = 128;
+    config.tls_max_bytes = 32768;
+    config.auto_publish_records = 128;
+    config.auto_publish_bytes = 32768;
+    config.file_path = output_path.generic_string();
+    Moer::ProfileDump::OverrideConfigForTesting(config);
+
+    DUMP_STREAM(Moer::ProfileDump::Templates::GpuScopeTemplate)
+        << uint64_t{3}
+        << "Graphics"
+        << "GpuNormalizedScope"
+        << uint64_t{250000}
+        << uint64_t{280000}
+        << uint32_t{0}
+        << uint64_t{30000}
+        << uint64_t{30000};
+    DUMP_STREAM(Moer::ProfileDump::Templates::CpuScopeTemplate)
+        << uint64_t{5}
+        << "CpuNormalizedScope"
+        << int64_t{200}
+        << int64_t{10}
+        << uint32_t{1};
+    Moer::ProfileDump::FlushThreadLocal();
+
+    Moer::Profiler::ProfileStore store{};
+    const bool loaded = Moer::Profiler::LoadProfileDumpFile(output_path, store, true);
+    Moer::ProfileDump::ClearTestingConfigOverride();
+    if (!loaded) {
+        LOG_ERROR("Profile consumer file load failed.");
+        return 1;
+    }
+    if (store.metadata.session_name != output_path.filename().string()) {
+        LOG_ERROR("Profile consumer file load session name mismatch: {}", store.metadata.session_name);
+        return 1;
+    }
+    if (!AssertProfileConsumerNormalizedStore(store)) {
+        return 1;
+    }
+    return 0;
+}
+
+int RunProfileConsumerStreamNormalizationTest() {
+    const std::filesystem::path output_path = MakeProfileDumpTestPath("profile_consumer_stream_test.mpd");
+
+    Moer::ProfileDump::RuntimeConfig config{};
+    config.enable_file = true;
+    config.enable_tcp = false;
+    config.tls_max_records = 128;
+    config.tls_max_bytes = 32768;
+    config.auto_publish_records = 128;
+    config.auto_publish_bytes = 32768;
+    config.file_path = output_path.generic_string();
+    Moer::ProfileDump::OverrideConfigForTesting(config);
+
+    DUMP_STREAM(Moer::ProfileDump::Templates::GpuScopeTemplate)
+        << uint64_t{3}
+        << "Graphics"
+        << "GpuNormalizedScope"
+        << uint64_t{250000}
+        << uint64_t{280000}
+        << uint32_t{0}
+        << uint64_t{30000}
+        << uint64_t{30000};
+    DUMP_STREAM(Moer::ProfileDump::Templates::CpuScopeTemplate)
+        << uint64_t{5}
+        << "CpuNormalizedScope"
+        << int64_t{200}
+        << int64_t{10}
+        << uint32_t{1};
+    Moer::ProfileDump::FlushThreadLocal();
+    Moer::ProfileDump::ClearTestingConfigOverride();
+
+    const std::vector<uint8_t> binary = ReadBinaryFile(output_path);
+    if (binary.empty()) {
+        LOG_ERROR("Profile consumer stream normalization test produced no binary capture.");
+        return 1;
+    }
+
+    Moer::Profiler::ProfileDumpSessionDecoder decoder{};
+    Moer::Profiler::ProfileStore              store{};
+    store.SetSessionName("ProfileDump TCP");
+
+    size_t offset = 0;
+    while (offset < binary.size()) {
+        Moer::ProfileDump::PacketHeader header{};
+        std::span<const uint8_t> payload{};
+        if (!Moer::ProfileDump::ReadNextPacket(std::span<const uint8_t>(binary.data(), binary.size()), offset, header, payload)) {
+            LOG_ERROR("Profile consumer stream normalization failed to read packet.");
+            return 1;
+        }
+
+        Array<Moer::Profiler::ProfileEvent> packet_events{};
+        if (!decoder.ConsumePacket(header, payload, packet_events)) {
+            LOG_ERROR("Profile consumer stream normalization failed to consume packet.");
+            return 1;
+        }
+        if (!packet_events.empty()) {
+            store.AppendEvents(packet_events);
+        }
+    }
+
+    if (store.metadata.session_name != "ProfileDump TCP") {
+        LOG_ERROR("Profile consumer stream normalization session name mismatch: {}", store.metadata.session_name);
+        return 1;
+    }
+    if (!AssertProfileConsumerNormalizedStore(store)) {
+        return 1;
+    }
     return 0;
 }
 
@@ -756,7 +949,8 @@ int RunFlameProfilerProfileDumpTest() {
         return 1;
     }
 
-    const Moer::ProfileDump::DecodedSchema* cpu_schema = FindProfileDumpSchema(capture, "CpuScopeTemplate");
+    const Moer::ProfileDump::DecodedSchema* cpu_schema =
+        FindProfileDumpSchemaByEventType(capture, "timing.cpu_scope");
     if (!cpu_schema) {
         LOG_ERROR("FlameProfiler unified profile dump output missing CPU schema.");
         return 1;
@@ -2230,6 +2424,18 @@ int main(int argc, char** argv) {
             RunNamedTestCase("ProfileDumpGpuEventIntegration", RunGpuEventStreamProfileDumpTest);
         if (profile_dump_gpu_ret != 0) {
             return shutdown_and_return(profile_dump_gpu_ret);
+        }
+
+        const int profile_consumer_file_ret =
+            RunNamedTestCase("ProfileConsumerFileLoadNormalization", RunProfileConsumerFileLoadTest);
+        if (profile_consumer_file_ret != 0) {
+            return shutdown_and_return(profile_consumer_file_ret);
+        }
+
+        const int profile_consumer_stream_ret =
+            RunNamedTestCase("ProfileConsumerStreamNormalization", RunProfileConsumerStreamNormalizationTest);
+        if (profile_consumer_stream_ret != 0) {
+            return shutdown_and_return(profile_consumer_stream_ret);
         }
 
 #if defined(MOER_TEST_WITH_PROFILE)

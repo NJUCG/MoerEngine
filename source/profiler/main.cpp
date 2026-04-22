@@ -1,11 +1,13 @@
 #include "Core.h"
 #include "config/ConfigManager.h"
+#include "file/FileDialog.h"
 #include "log/LogSystem.h"
 #include "misc/Timer.h"
+#include "ProfileSession.h"
+#include "profile/ProfileDump.h"
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "trace/Trace.h"
 #include "window/WindowContext.h"
 
 #include <algorithm>
@@ -17,7 +19,6 @@
 #include <filesystem>
 #include <fstream>
 #include <imgui.h>
-#include <nfd.hpp>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -35,63 +36,12 @@ namespace Moer {
 namespace {
 
 using namespace Moer::Render;
+using namespace Moer::Profiler;
 
-struct TrackInfo {
-    uint64_t         key{0};
-    Trace::TrackType type{Trace::TrackType::CPUThread};
-    uint64_t         id{0};
-    std::string      name{"Unknown"};
-    int              max_depth{0};
-};
-
-uint64_t MakeTrackKey(Trace::TrackType type, uint64_t id) {
-    return (uint64_t(static_cast<uint8_t>(type)) << 56u) ^ id;
-}
-
-struct TraceStore {
-    std::mutex                        mutex{};
-    Trace::SessionMetadata            metadata{};
-    Array<Trace::TraceEvent>          events{};
-    UnorderedMap<uint64_t, TrackInfo> tracks{};
-    uint64_t                          min_ts{0};
-    uint64_t                          max_ts{0};
-    uint64_t                          generation{1};
-
-    void AppendEvents(const Array<Trace::TraceEvent>& in_events) {
-        if (in_events.empty()) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(mutex);
-        events.reserve(events.size() + in_events.size());
-        for (const auto& e : in_events) {
-            events.emplace_back(e);
-            if (min_ts == 0 || e.ts_begin_ns < min_ts) {
-                min_ts = e.ts_begin_ns;
-            }
-            if (e.ts_end_ns > max_ts) {
-                max_ts = e.ts_end_ns;
-            }
-
-            const uint64_t track_key = MakeTrackKey(e.track_type, e.track_id);
-            auto&          track     = tracks[track_key];
-            track.key                = track_key;
-            track.id                 = e.track_id;
-            track.type               = e.track_type;
-            if (!e.track_name.empty()) {
-                track.name = e.track_name;
-            } else if (track.name == "Unknown") {
-                track.name = std::string("Track ") + std::to_string(e.track_id);
-            }
-            track.max_depth = std::max(track.max_depth, static_cast<int>(e.depth));
-        }
-        ++generation;
-    }
-};
-
-class TraceIngestServer {
+class ProfileDumpIngestServer {
 public:
-    explicit TraceIngestServer(TraceStore& store) : store_(store) {}
-    ~TraceIngestServer() {
+    explicit ProfileDumpIngestServer(ProfileStore& store) : store_(store) {}
+    ~ProfileDumpIngestServer() {
         Stop();
     }
 
@@ -194,43 +144,42 @@ private:
     }
 
     void ClientMain(SOCKET sock) {
+        store_.SetSessionName("ProfileDump TCP");
+        decoder_.Reset();
         while (running_.load()) {
-            Trace::PacketHeader header{};
+            ProfileDump::PacketHeader header{};
             if (!RecvAll(sock, reinterpret_cast<std::byte*>(&header), sizeof(header))) {
                 break;
             }
-            if (header.magic != 0x4D525443 || header.version != 1) {
+            if (header.magic != ProfileDump::packet_magic || header.version != ProfileDump::packet_version) {
                 break;
             }
-            Array<std::byte> payload{};
+            Array<uint8_t> payload{};
             payload.resize(header.payload_size);
             if (header.payload_size > 0 &&
-                !RecvAll(sock, payload.data(), payload.size())) {
+                !RecvAll(sock, reinterpret_cast<std::byte*>(payload.data()), payload.size())) {
                 break;
             }
 
-            if (header.type == 1) {
-                Trace::SessionMetadata meta{};
-                if (Trace::DeserializeSessionMetadataPacket(header, payload, meta)) {
-                    std::lock_guard<std::mutex> lock(store_.mutex);
-                    store_.metadata = std::move(meta);
-                    ++store_.generation;
-                }
-            } else if (header.type == 2) {
-                Array<Trace::TraceEvent> events{};
-                if (Trace::DeserializeEventsPacket(header, payload, events)) {
-                    store_.AppendEvents(events);
-                }
+            Array<ProfileEvent> events{};
+            if (!decoder_.ConsumePacket(header, payload, events)) {
+                break;
+            }
+            if (!events.empty()) {
+                store_.AppendEvents(events);
             }
         }
+
+        decoder_.Reset();
     }
 #endif
 
 private:
-    TraceStore&         store_;
+    ProfileStore&       store_;
     std::atomic<bool>   running_{false};
     uint16_t            port_{19090};
     std::thread         server_thread_{};
+    ProfileDumpSessionDecoder decoder_{};
 #if defined(_WIN32)
     SOCKET              listen_sock_{INVALID_SOCKET};
     SOCKET              client_sock_{INVALID_SOCKET};
@@ -266,8 +215,8 @@ ImU32 EventColorByName(std::string_view name) {
     return ImColor::HSV(hue, std::clamp(sat, 0.35f, 0.62f), std::clamp(val, 0.62f, 0.88f), 0.92f);
 }
 
-uint64_t EstimateProfileSizeBytes(const TraceStore& store) {
-    uint64_t bytes = static_cast<uint64_t>(store.events.size() * sizeof(Trace::TraceEvent));
+uint64_t EstimateProfileSizeBytes(const ProfileStore& store) {
+    uint64_t bytes = static_cast<uint64_t>(store.events.size() * sizeof(ProfileEvent));
     for (const auto& e : store.events) {
         bytes += static_cast<uint64_t>(e.name.size() + e.category.size() + e.track_name.size() + e.args.size());
     }
@@ -285,7 +234,7 @@ uint64_t EstimateProfileSizeBytesFast(
     size_t track_count,
     size_t session_name_size
 ) {
-    uint64_t bytes = static_cast<uint64_t>(event_count * sizeof(Trace::TraceEvent));
+    uint64_t bytes = static_cast<uint64_t>(event_count * sizeof(ProfileEvent));
     bytes += static_cast<uint64_t>(track_count * sizeof(TrackInfo));
     bytes += static_cast<uint64_t>(session_name_size);
     return bytes;
@@ -304,80 +253,6 @@ std::string FormatBytes(uint64_t bytes) {
         std::snprintf(buf, sizeof(buf), "%llu B", static_cast<unsigned long long>(bytes));
     }
     return std::string(buf);
-}
-
-Array<std::string> SplitCsv(const std::string& line) {
-    Array<std::string> out{};
-    std::string current{};
-    bool        quoted = false;
-    for (char c : line) {
-        if (c == '"') {
-            quoted = !quoted;
-            continue;
-        }
-        if (c == ',' && !quoted) {
-            out.emplace_back(std::move(current));
-            current.clear();
-            continue;
-        }
-        current.push_back(c);
-    }
-    out.emplace_back(std::move(current));
-    return out;
-}
-
-bool LoadCsvEvents(const std::filesystem::path& path, TraceStore& store, bool clear_before_load) {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        return false;
-    }
-
-    Array<Trace::TraceEvent> parsed{};
-    std::string              line{};
-    bool                     header_skipped = false;
-    while (std::getline(file, line)) {
-        if (!header_skipped) {
-            header_skipped = true;
-            continue;
-        }
-        if (line.empty()) {
-            continue;
-        }
-        Array<std::string> cols = SplitCsv(line);
-        if (cols.size() < 13) {
-            continue;
-        }
-        Trace::TraceEvent e{};
-        try {
-            e.event_id      = std::stoull(cols[0]);
-            e.session_id    = std::stoull(cols[1]);
-            e.type          = static_cast<Trace::EventType>(std::stoul(cols[2]));
-            e.track_type    = static_cast<Trace::TrackType>(std::stoul(cols[3]));
-            e.track_id      = std::stoull(cols[4]);
-            e.depth         = static_cast<uint32_t>(std::stoul(cols[5]));
-            e.ts_begin_ns   = std::stoull(cols[6]);
-            e.ts_end_ns     = std::stoull(cols[7]);
-            e.counter_value = std::stod(cols[8]);
-            e.name          = cols[9];
-            e.category      = cols[10];
-            e.track_name    = cols[11];
-            e.args          = cols[12];
-        } catch (...) {
-            continue;
-        }
-        parsed.emplace_back(std::move(e));
-    }
-
-    if (clear_before_load) {
-        std::lock_guard<std::mutex> lock(store.mutex);
-        store.events.clear();
-        store.tracks.clear();
-        store.min_ts = 0;
-        store.max_ts = 0;
-        ++store.generation;
-    }
-    store.AppendEvents(parsed);
-    return true;
 }
 
 void DrawTimeRuler(ImDrawList* draw_list, const ImVec2& origin, float width, float y, uint64_t start_ns, uint64_t end_ns) {
@@ -412,10 +287,10 @@ struct TimelineViewState {
     char     search_text[128]{};
 };
 
-void DrawTimelinePanel(TraceStore& store, TimelineViewState& ui_state) {
+void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
     struct TimelineDataCache {
         uint64_t store_generation{0};
-        Array<Trace::TraceEvent> events{};
+        Array<ProfileEvent>      events{};
         Array<TrackInfo> tracks{};
         uint64_t min_ts{0};
         uint64_t max_ts{0};
@@ -468,7 +343,7 @@ void DrawTimelinePanel(TraceStore& store, TimelineViewState& ui_state) {
             const auto& e = events[i];
             cache.event_index_by_id[e.event_id] = i;
             cache.gpu_display_depth_by_index[i] = e.depth;
-            if (e.type != Trace::EventType::Scope) {
+            if (e.type != ProfileEventType::Scope) {
                 continue;
             }
             const uint64_t track_key = MakeTrackKey(e.track_type, e.track_id);
@@ -490,7 +365,7 @@ void DrawTimelinePanel(TraceStore& store, TimelineViewState& ui_state) {
             });
 
             if (indices.empty() ||
-                events[indices.front()].track_type != Trace::TrackType::GPUQueue) {
+                events[indices.front()].track_type != ProfileTrackType::GPUQueue) {
                 continue;
             }
 
@@ -518,7 +393,7 @@ void DrawTimelinePanel(TraceStore& store, TimelineViewState& ui_state) {
     const uint64_t min_ts = cache.min_ts;
     const uint64_t max_ts = cache.max_ts;
     if (events.empty()) {
-        ImGui::Text("Waiting for trace stream on port 19090...");
+        ImGui::Text("Waiting for ProfileDump stream on port 19090...");
         return;
     }
 
@@ -531,7 +406,7 @@ void DrawTimelinePanel(TraceStore& store, TimelineViewState& ui_state) {
         cache.matched_indices.reserve(events.size() / 16 + 8);
         for (size_t i = 0; i < events.size(); ++i) {
             const auto& e = events[i];
-            if (e.type != Trace::EventType::Scope) {
+            if (e.type != ProfileEventType::Scope) {
                 continue;
             }
             if (search_key.empty() || ContainsCaseInsensitive(e.name, search_key)) {
@@ -600,7 +475,7 @@ void DrawTimelinePanel(TraceStore& store, TimelineViewState& ui_state) {
         for (const auto& track : tracks) {
             bool visible = track_visibility[track.key];
             const std::string label = std::string("[") +
-                                      (track.type == Trace::TrackType::CPUThread ? "CPU" : "GPU") + "] " +
+                                      (track.type == ProfileTrackType::CPUThread ? "CPU" : "GPU") + "] " +
                                       track.name + "##vis_" + std::to_string(track.key);
             if (ImGui::Checkbox(label.c_str(), &visible)) {
                 track_visibility[track.key] = visible;
@@ -803,7 +678,7 @@ void DrawTimelinePanel(TraceStore& store, TimelineViewState& ui_state) {
     for (const auto& row : visible_rows) {
         const auto& track  = row.info;
         const float track_h = row.row_h;
-        const int   cur_type_group = track.type == Trace::TrackType::CPUThread ? 0 : 1;
+        const int   cur_type_group = track.type == ProfileTrackType::CPUThread ? 0 : 1;
         if (cur_type_group != last_type_group) {
             const char* group_label = cur_type_group == 0 ? "CPU Tracks" : "GPU Tracks";
             draw_list->AddRectFilled(
@@ -839,7 +714,7 @@ void DrawTimelinePanel(TraceStore& store, TimelineViewState& ui_state) {
         );
 
         const std::string track_label = std::string("[") +
-                                        (track.type == Trace::TrackType::CPUThread ? "CPU" : "GPU") + "] " +
+                                        (track.type == ProfileTrackType::CPUThread ? "CPU" : "GPU") + "] " +
                                         track.name;
         const float label_y = y_cursor + 3.0f;
         draw_list->AddText(
@@ -885,7 +760,7 @@ void DrawTimelinePanel(TraceStore& store, TimelineViewState& ui_state) {
                 continue;
             }
             uint32_t depth = e.depth;
-            if (e.track_type == Trace::TrackType::GPUQueue) {
+                if (e.track_type == ProfileTrackType::GPUQueue) {
                     depth = cache.gpu_display_depth_by_index[idx];
             }
             const float y0 = y_cursor + lane_h * static_cast<float>(depth);
@@ -977,6 +852,9 @@ int RunProfilerMain(int argc, const char** argv) {
     LOG_INFO("MoerProfiler starting...");
     ConfigManager::GetInstance().Init(path);
     TaskSystem::Init();
+    if (!FileDialog::Init()) {
+        LOG_WARNING("Native file dialog is unavailable in profiler.");
+    }
 
     RenderDevice::Init(
         DeviceInitInfo{
@@ -1006,13 +884,13 @@ int RunProfilerMain(int argc, const char** argv) {
 
     auto ui_renderer = MakeUnique<Render::UIRenderer>(device);
 
-    TraceStore        store{};
-    TraceIngestServer ingest(store);
+    ProfileStore            store{};
+    ProfileDumpIngestServer ingest(store);
     ingest.Start(19090);
 
     TimelineViewState timeline_state{};
     timeline_state.auto_follow = true;
-    char csv_path[512]         = {};
+    char profile_dump_path[512] = {};
 
     while (!WindowContext::ShouldClose(WindowContext::GetMainWindow())) {
         WindowContext::Tick();
@@ -1055,18 +933,24 @@ int RunProfilerMain(int argc, const char** argv) {
         ImGui::Checkbox("Auto Follow", &timeline_state.auto_follow);
         ImGui::SameLine();
         ImGui::InputTextWithHint("##search", "Search timescope name", timeline_state.search_text, sizeof(timeline_state.search_text));
-        ImGui::Text("CSV: %s", csv_path[0] == '\0' ? "(none)" : csv_path);
-        if (ImGui::Button("Browse CSV (Load)")) {
-            NFD::UniquePath selected_path = nullptr;
-            Array<nfdfilteritem_t> filters = {
-                {"CSV", "csv"},
-                {"All", "*"}
-            };
-            nfdresult_t result = NFD::OpenDialog(selected_path, filters.data(), filters.size());
-            if (result == NFD_OKAY && selected_path) {
-                std::snprintf(csv_path, sizeof(csv_path), "%s", selected_path.get());
-                if (!LoadCsvEvents(csv_path, store, true)) {
-                    LOG_WARNING("CSV load failed: {}", csv_path);
+        ImGui::Text("ProfileDump: %s", profile_dump_path[0] == '\0' ? "(none)" : profile_dump_path);
+        if (ImGui::Button("Browse ProfileDump (Load)")) {
+            static constexpr std::array<FileDialog::Filter, 3> profile_dump_filters = {{{
+                "ProfileDump",
+                "mpd"
+            }, {
+                "Binary",
+                "bin"
+            }, {
+                "All",
+                "*"
+            }}};
+            const FileDialog::OpenFileResult result = FileDialog::OpenFile({.filters = profile_dump_filters});
+            if (result.status == FileDialog::EOpenFileStatus::Success) {
+                const std::string selected_path = result.path.string();
+                std::snprintf(profile_dump_path, sizeof(profile_dump_path), "%s", selected_path.c_str());
+                if (!LoadProfileDumpFile(profile_dump_path, store, true)) {
+                    LOG_WARNING("ProfileDump load failed: {}", profile_dump_path);
                 }
             }
         }
@@ -1118,6 +1002,7 @@ int RunProfilerMain(int argc, const char** argv) {
     output = {};
     swapchain = {};
     timeline = {};
+    FileDialog::ShutDown();
     WindowContext::ShutDown();
     RHIExecutor::ShutDown();
     RenderDevice::Dispose();

@@ -71,7 +71,6 @@ target_link_libraries(${target_name}
     PUBLIC dxguid
     PUBLIC D3D12MemoryAllocator
     PUBLIC winpixeventruntime
-    PUBLIC nfd
     PUBLIC AssetLoad
 )
 

@@ -1,6 +1,7 @@
 #include "EditorUI.h"
 
 // Runtime
+#include "file/FileDialog.h"
 #include "log/LogSystem.h"
 #include "window/WindowInput.h"
 
@@ -15,7 +16,6 @@
 #include <algorithm>
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <nfd.hpp>
 #include <string_view>
 
 #if WITH_PROFILE
@@ -508,25 +508,31 @@ void EditorUI::ShowConfig() {
                                      m_config->scene_path :
                                      m_config->scene_path.substr(last_slash + 1);
         if (ImGui::Button("Open Scene")) {
-            NFD::UniquePath        selected_path = nullptr;
-            Array<nfdfilteritem_t> filters       = {
-                {"All Support Formats", "glb,gltf,fbx,obj,dae"},
-                {"glTF 2.0", "glb,gltf"},
-                {"FBX", "fbx"},
-                {"Wavefront", "obj"},
-                {"Moer Renderer Scene (WIP)", "json"},
-            };
-            nfdresult_t result = NFD::OpenDialog(selected_path, filters.data(), filters.size());
-            if (result == NFD_OKAY) {
-                LOG_INFO("User selected file: {}", selected_path.get());
+            static constexpr std::array<FileDialog::Filter, 5> scene_filters = {{{
+                "All Support Formats",
+                "glb,gltf,fbx,obj,dae"
+            }, {
+                "glTF 2.0",
+                "glb,gltf"
+            }, {
+                "FBX",
+                "fbx"
+            }, {
+                "Wavefront",
+                "obj"
+            }, {
+                "Moer Renderer Scene (WIP)",
+                "json"
+            }}};
+            const FileDialog::OpenFileResult result = FileDialog::OpenFile({.filters = scene_filters});
+            if (result.status == FileDialog::EOpenFileStatus::Success) {
+                LOG_INFO("User selected file: {}", result.path.string());
 
                 // Prepare for reload
                 m_b_need_reload      = true;
-                m_config->scene_path = selected_path.get();
-            } else if (result == NFD_CANCEL) {
+                m_config->scene_path = result.path.string();
+            } else if (result.status == FileDialog::EOpenFileStatus::Cancelled) {
                 LOG_INFO("User pressed cancel.");
-            } else {
-                LOG_ERROR("NFD Error: {}", NFD_GetError());
             }
         }
         ImGui::SameLine();

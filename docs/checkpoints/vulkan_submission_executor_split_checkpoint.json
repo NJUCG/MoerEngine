@@ -1,0 +1,418 @@
+{
+  "project": "MoerEngine VulkanSubmissionExecutor Responsibility Split",
+  "status": "draft",
+  "doc_refs": [
+    "docs/checkpoints/rhi_translate_scheduler_checkpoints.json",
+    "docs/checkpoints/submission_interrupt_payload_refactor_checkpoints.json",
+    "docs/checkpoints/submission_rework_checkpoints.json",
+    "docs/rules/Rule_Codex.md"
+  ],
+  "source_analyzed": [
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.h",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanTranslateTask.h",
+    "source/runtime/render/rhi/vulkan/VulkanTranslateTask.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.h",
+    "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.cpp",
+    "source/runtime/render/rhi/GPUEventStream.h",
+    "source/runtime/render/rhi/GPUEventStream.cpp"
+  ],
+  "goal": "Keep VulkanSubmissionExecutor as a thin ingress and orchestration boundary, extract preprocess and translate-assembly logic out of the monolithic cpp, and define one explicit execute order from Enqueue through InterruptRuntime and GPUEventStream without changing current external behavior.",
+  "problem_statement": {
+    "summary": "VulkanSubmissionExecutor.cpp currently mixes ingress orchestration, resource-state preprocess, logical dependency extraction, queue-transfer planning, segment submit materialization, profiling query injection, translate dispatch staging, singleton lifecycle, and pipe flushing. The public header is already thin, but the implementation file still owns too many unrelated responsibilities.",
+    "symptoms": [
+      "Large private static helper surface with mixed abstraction levels.",
+      "Preprocess state types, profiling instrumentation, and pipe orchestration are all coupled in one translation unit.",
+      "Submission and interrupt runtimes are already separate, but executor still partially acts like a domain owner instead of a glue layer.",
+      "Profiler-relevant query and GPU event shaping is colocated with executor control flow even though profiler completion happens later in interrupt runtime."
+    ]
+  },
+  "design_constraints": [
+    {
+      "id": "DC-01",
+      "title": "Public executor API stays unchanged",
+      "detail": "VulkanSubmissionExecutor.h remains Enqueue, Sync, Flush, Shutdown only. No new public wrapper layer is introduced."
+    },
+    {
+      "id": "DC-02",
+      "title": "Executor owns ingress and pipe orchestration only",
+      "detail": "Executor may own batch admission, op-seq allocation, trace-frame assignment, preprocess pipe enqueue, translate pipe enqueue, flush semantics, shutdown ordering, and singleton state lifetime. It must not own resource preprocess algorithms or segment materialization details."
+    },
+    {
+      "id": "DC-03",
+      "title": "Preprocess becomes a dedicated private module",
+      "detail": "Resource digest collection, persistent-state snapshotting, logical dependency graph construction, cross-queue import/export planning, and frame or fence dependency folding move into a dedicated preprocess unit."
+    },
+    {
+      "id": "DC-04",
+      "title": "Translate assembly becomes a dedicated private module",
+      "detail": "Segment CmdSubmit construction, inherited payload selection, queue-transfer command injection, auto GPU profiling event insertion, syncpoint allocation, and present attachment move into a dedicated translate-assembly unit."
+    },
+    {
+      "id": "DC-05",
+      "title": "Profiler completion boundary stays in submission and interrupt runtime",
+      "detail": "Executor-side code may only shape query tokens and GPU event metadata needed by translation. Completion resolution and profiler flush remain owned by SubmissionRuntime, InterruptRuntime, and GPUEventStream. Executor must not call MoerProfiler directly."
+    },
+    {
+      "id": "DC-06",
+      "title": "No compatibility shim layer",
+      "detail": "Do not leave duplicated old static helpers behind as forwarding wrappers. When a responsibility moves to a new private module, the old executor-local implementation is removed."
+    },
+    {
+      "id": "DC-07",
+      "title": "Execute order must stay behaviorally identical",
+      "detail": "Translate dependency timing, submit ordering, present attachment rules, Sync or Flush semantics, interrupt completion order, and GPU profiler event flush timing must remain unchanged from the caller perspective."
+    },
+    {
+      "id": "DC-08",
+      "title": "Instrumentation insertion happens before translate, not after submit",
+      "detail": "Automatic profiling query injection depends on mutable CmdSubmit command streams, so it stays in the pre-translate assembly stage. Only completion-side resolution is later."
+    }
+  ],
+  "current_responsibility_map": {
+    "executor_public_surface": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.h",
+      "assessment": "Already correct. It is a thin static API surface and should remain so."
+    },
+    "executor_cpp_ingress": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp:2030-2954",
+      "assessment": "Reasonable responsibility: singleton state, task pipes, Enqueue or Flush or Sync orchestration, shutdown ordering, trace frame assignment."
+    },
+    "executor_cpp_preprocess": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp:39-2460",
+      "assessment": "Wrong owner. Resource tracking types, digest collection, persistent state load or commit, logical dependency graph, and cross-queue transfer planning are preprocess-domain code and should not live in executor glue."
+    },
+    "executor_cpp_translate_assembly": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp:2461-2894",
+      "assessment": "Wrong owner. Segment submit materialization, queue transfer command injection, auto GPU event injection, syncpoint wiring, and present attachment are translate-assembly-domain code."
+    },
+    "submission_runtime": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
+      "assessment": "Correct owner for resolved wait injection, queue submit scheduling, present submission scheduling, sync or flush or drain semantics, and interrupt task emission."
+    },
+    "interrupt_runtime": {
+      "location": "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.cpp",
+      "assessment": "Correct owner for completion polling, callback and signal resolution, queue completion boundaries, GPUEventStream completion resolution, and profiler flush."
+    },
+    "gpu_event_stream": {
+      "location": "source/runtime/render/rhi/GPUEventStream.cpp",
+      "assessment": "Correct owner for converting completed GPU query payloads into profiler-visible GPU scopes."
+    }
+  },
+  "target_modules": [
+    {
+      "name": "VulkanSubmissionExecutor",
+      "role": "Thin ingress and orchestration owner.",
+      "must_contain": [
+        "VulkanSubmissionBatch to ExecutorOp conversion.",
+        "trace_frame allocation and op_seq_base allocation.",
+        "lazy singleton state construction.",
+        "preprocess_pipe and translate_pipe enqueue logic.",
+        "Flush(RHITranslate) and Flush(SubmitGPU) semantics.",
+        "Sync and Shutdown orchestration."
+      ],
+      "must_not_contain": [
+        "Resource digest algorithms.",
+        "Persistent resource state load or commit helpers.",
+        "Cross-queue import or export planning.",
+        "Segment CmdSubmit assembly details.",
+        "Auto profiling query injection details."
+      ]
+    },
+    {
+      "name": "VulkanSubmissionPreprocess",
+      "role": "Build immutable preprocess results from ExecutorOp batches.",
+      "must_contain": [
+        "ResourceKey and digest data model.",
+        "ResourceAccessCollector and resource-state helpers.",
+        "LogicalDependencyGraph.",
+        "PreprocessTranslateStore and related segment or present metadata.",
+        "PreprocessFrameOps entrypoint.",
+        "PreprocessDependencyState update rules for translate fences and frame ticks."
+      ],
+      "must_not_contain": [
+        "TaskPipe ownership.",
+        "SubmissionRuntime calls.",
+        "InterruptRuntime calls.",
+        "Singleton lifecycle logic."
+      ]
+    },
+    {
+      "name": "VulkanTranslateAssembly",
+      "role": "Convert preprocess results plus moved ExecutorOp payload into QueueTranslateInfo and PendingSubmitTask batches.",
+      "must_contain": [
+        "TranslatePipelineBatch and PendingSubmitTask assembly.",
+        "Segment CmdSubmit extraction from inline ranges or CopyScope.",
+        "Inherited waits, signals, callbacks, query tokens, gpu events, and runtime payload policy.",
+        "QueueTransfer command injection.",
+        "Auto profiling instrumentation injection for command-list span and frame-bound events.",
+        "Present attachment and validation.",
+        "TrackerSeed creation from preprocess snapshots."
+      ],
+      "must_not_contain": [
+        "TaskPipe ownership.",
+        "SubmissionRuntime enqueue or drain calls.",
+        "GPU completion polling.",
+        "Profiler flush logic."
+      ]
+    },
+    {
+      "name": "VulkanSubmissionRuntime",
+      "role": "Consume assembled SubmitInfo, resolve waits, submit to GPU queues, schedule present, and emit interrupt completion tasks.",
+      "must_contain": [
+        "Resolved syncpoint lookup.",
+        "Queue submit scheduling.",
+        "Present scheduling.",
+        "Sync, Flush, and Drain completion boundaries.",
+        "InterruptRuntime task creation."
+      ]
+    },
+    {
+      "name": "VulkanInterruptRuntime",
+      "role": "Poll completion, resolve runtime side effects, and flush GPU profiler events.",
+      "must_contain": [
+        "Queue and copy and present completion polling.",
+        "allocator retirement and callbacks.",
+        "signal event notification.",
+        "GPUEventStream::ResolveCompleted and FlushToProfiler."
+      ]
+    }
+  ],
+  "execute_order_contract": [
+    {
+      "step": 1,
+      "name": "Executor ingress",
+      "owner": "VulkanSubmissionExecutor",
+      "input": "VulkanSubmissionBatch",
+      "output": "Array<ExecutorOp>, op_seq_base, trace_frame",
+      "rules": [
+        "Assign one trace_frame per Enqueue call.",
+        "Assign one op_seq_base spanning all platform operations in the batch.",
+        "Do not preprocess inline on the caller thread."
+      ]
+    },
+    {
+      "step": 2,
+      "name": "PreprocessPipe stage",
+      "owner": "VulkanSubmissionPreprocess via executor-owned TaskPipe",
+      "input": "ExecutorOp batch plus op_seq_base plus rolling PreprocessDependencyState",
+      "output": "PreprocessTranslateStore",
+      "rules": [
+        "Split source submits into translate-visible segments.",
+        "Collect resource access digests per segment.",
+        "Load and advance persistent resource state snapshots.",
+        "Build logical dependency edges and cross-queue import or export metadata.",
+        "Fold translate fence and frame tick effects into PreprocessDependencyState.",
+        "No GPU submit or queue polling occurs here."
+      ]
+    },
+    {
+      "step": 3,
+      "name": "Translate assembly stage",
+      "owner": "VulkanTranslateAssembly",
+      "input": "Moved ExecutorOp payload plus PreprocessTranslateStore",
+      "output": "TranslatePipelineBatch containing QueueTranslateInfo and PendingSubmitTask",
+      "rules": [
+        "Materialize per-segment CmdSubmit payloads.",
+        "Inject queue-transfer commands at segment boundaries.",
+        "Inject automatic profiling query tokens and GPU events before translation when TickProfiling requires it.",
+        "Allocate submit syncpoints and attach logical wait syncpoints.",
+        "Attach Present only to the last graphics submit and validate failure cases deterministically."
+      ]
+    },
+    {
+      "step": 4,
+      "name": "TranslatePipe stage",
+      "owner": "executor-owned TaskPipe invoking VulkanTranslateTask",
+      "input": "TranslatePipelineBatch",
+      "output": "TranslateResult per QueueTranslateInfo plus assembled SubmitInfo list",
+      "rules": [
+        "Translate tasks wait on preprocess-produced GraphEvent dependencies.",
+        "Translate completion unlocks the per-segment completion event.",
+        "Submit assembly waits on translate completion and builds SubmitInfo only after translation has produced recorded packets or a failure.",
+        "No queue submit ordering policy is invented here beyond the existing dependency graph and last-submit chaining."
+      ]
+    },
+    {
+      "step": 5,
+      "name": "Submission runtime stage",
+      "owner": "VulkanSubmissionRuntime",
+      "input": "Array<SubmitInfo>",
+      "output": "GPU queue submissions, present submissions, interrupt completion tasks, resolved syncpoints",
+      "rules": [
+        "Resolve wait_syncpoints to concrete queue timeline waits.",
+        "Submit recorded packets to graphics, compute, or copy queue runtime.",
+        "Publish signal_syncpoint after submit scheduling succeeds.",
+        "Schedule present only from a valid graphics parent submit.",
+        "Emit SubmissionCompletionTask objects for queue, copy, and present completion."
+      ]
+    },
+    {
+      "step": 6,
+      "name": "Interrupt runtime stage",
+      "owner": "VulkanInterruptRuntime",
+      "input": "SubmissionCompletionTask queue",
+      "output": "allocator retirement, callbacks, signal notifications, queue completion boundaries, profiler-visible GPU completion flush",
+      "rules": [
+        "Poll task readiness by queue or copy or present payload kind.",
+        "Resolve callbacks and signal events only after runtime completion is observed.",
+        "Resolve GPUEventStream completion using the queue or copy completion payload.",
+        "Flush profiler-visible GPU events only after completion resolution."
+      ]
+    },
+    {
+      "step": 7,
+      "name": "Profiler emission boundary",
+      "owner": "GPUEventStream",
+      "input": "completed WaitEvent plus registered GPUEvent arrays",
+      "output": "Trace::EmitScope and Trace::EmitInstant payloads consumed by MoerProfiler ingestion",
+      "rules": [
+        "Executor-side auto query insertion only prepares metadata and query tokens.",
+        "GPUEventStream resolves query futures after actual GPU completion.",
+        "MoerProfiler remains downstream of Trace emission and is not called by executor modules."
+      ]
+    }
+  ],
+  "flush_and_sync_contract": {
+    "Flush_RHITranslate": [
+      "Wait for PreprocessPipe boundary only.",
+      "Guarantee that current pending batches have been transformed into translate work and enqueued toward TranslatePipe.",
+      "Do not wait for translate completion.",
+      "Do not wait for GPU submit completion."
+    ],
+    "Flush_SubmitGPU": [
+      "Wait for PreprocessPipe boundary.",
+      "Wait for TranslatePipe boundary.",
+      "Call SubmissionRuntime::Drain to ensure already-assembled submit work is consumed by the submission runtime."
+    ],
+    "Sync": [
+      "First perform Flush(SubmitGPU).",
+      "Then call SubmissionRuntime::Sync(depth).",
+      "Return a GraphEventRef representing the requested ordered completion depth."
+    ],
+    "Shutdown": [
+      "Disable further Enqueue.",
+      "Flush to SubmitGPU depth.",
+      "Shutdown SubmissionRuntime before InterruptRuntime.",
+      "Reset VulkanTranslateTask scheduler state after executor state teardown."
+    ]
+  },
+  "profiler_boundary": {
+    "executor_side_allowed": [
+      "Create auto QueryToken pairs for command-list begin or end and frame-bound markers when profiling is enabled.",
+      "Attach GPUEvent metadata to segment submits before translation."
+    ],
+    "executor_side_forbidden": [
+      "Calling GPUEventStream::ResolveCompleted.",
+      "Calling GPUEventStream::FlushToProfiler.",
+      "Calling MoerProfiler or trace ingestion directly."
+    ],
+    "runtime_side_owner": [
+      "SubmissionRuntime emits completion tasks.",
+      "InterruptRuntime resolves completion and triggers GPUEventStream flush.",
+      "GPUEventStream converts resolved query payloads into Trace events."
+    ]
+  },
+  "file_plan": [
+    {
+      "action": "keep",
+      "path": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.h",
+      "reason": "Public surface is already correct."
+    },
+    {
+      "action": "shrink",
+      "path": "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutor.cpp",
+      "reason": "Leave only ingress, pipe orchestration, singleton state, and flush or sync or shutdown behavior."
+    },
+    {
+      "action": "add",
+      "path": "source/runtime/render/rhi/vulkan/VulkanSubmissionPreprocess.h",
+      "reason": "Private preprocess data model and entrypoint declarations."
+    },
+    {
+      "action": "add",
+      "path": "source/runtime/render/rhi/vulkan/VulkanSubmissionPreprocess.cpp",
+      "reason": "Resource digest, persistent state, dependency graph, cross-queue import or export planning, and frame dependency handling."
+    },
+    {
+      "action": "add",
+      "path": "source/runtime/render/rhi/vulkan/VulkanTranslateAssembly.h",
+      "reason": "Private translate-pipeline assembly declarations."
+    },
+    {
+      "action": "add",
+      "path": "source/runtime/render/rhi/vulkan/VulkanTranslateAssembly.cpp",
+      "reason": "Segment submit construction, queue transfer injection, profiling instrumentation insertion, syncpoint wiring, and present attachment."
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Extract preprocess domain types",
+      "priority": "critical",
+      "status": "todo",
+      "what_must_be_true_after": [
+        "ResourceKey, digest structures, dependency graph, preprocess store, and preprocess dependency state are declared outside VulkanSubmissionExecutor.cpp.",
+        "Executor.cpp no longer owns preprocess-only type definitions."
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Move resource preprocess algorithms out of executor",
+      "priority": "critical",
+      "status": "todo",
+      "what_must_be_true_after": [
+        "PreprocessFrameOps and all persistent-state and dependency helpers live in VulkanSubmissionPreprocess.cpp.",
+        "Executor calls one preprocess entrypoint instead of in-file static helpers."
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Move translate assembly out of executor",
+      "priority": "critical",
+      "status": "todo",
+      "what_must_be_true_after": [
+        "AssembleTranslatePipelineOps, TrackerSeed creation, and PendingSubmitTask assembly live in VulkanTranslateAssembly.cpp.",
+        "Executor no longer owns per-segment CmdSubmit materialization."
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Isolate profiling instrumentation as assembly-domain behavior",
+      "priority": "high",
+      "status": "todo",
+      "what_must_be_true_after": [
+        "AutoGpuEventTokenFactory and InjectAutoCommandListGpuEvents are no longer executor-local concerns.",
+        "Profiling query insertion is documented as pre-translate assembly behavior, while completion flush remains in interrupt runtime."
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Slim executor to orchestration-only",
+      "priority": "critical",
+      "status": "todo",
+      "what_must_be_true_after": [
+        "Executor state keeps only pipes, runtimes, rolling preprocess dependency state, and enable or shutdown flags.",
+        "Executor.cpp reads as ingress and scheduling glue instead of a domain implementation file."
+      ]
+    },
+    {
+      "id": "CP-06",
+      "title": "Validate execute order and runtime boundaries",
+      "priority": "high",
+      "status": "todo",
+      "what_must_be_true_after": [
+        "Flush and Sync semantics remain unchanged.",
+        "Present still attaches only to the last graphics submit.",
+        "GPU profiler events still flush only after interrupt completion processing.",
+        "Existing validation remains green through repository scripts."
+      ],
+      "validation_entrypoints": [
+        "testscripts/test_rhi_translate.ps1",
+        "testscripts/test_all.ps1"
+      ]
+    }
+  ]
+}

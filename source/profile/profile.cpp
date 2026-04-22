@@ -1,6 +1,7 @@
 #include "profile.h"
 #include "../runtime/core/include/misc/MMemory.h"
 #include "../runtime/core/include/profile/ProfileDump.h"
+#include "../runtime/core/include/profile/ProfileDumpTemplates.h"
 #include "MinHook.h"
 #include <iostream>
 #include <thread>

@@ -2,6 +2,7 @@
 
 // Runtime
 #include "config/ConfigManager.h"
+#include "file/FileDialog.h"
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -35,6 +36,10 @@ Engine::~Engine() {
 void Engine::Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen) {
     // Init TaskSystem
     TaskSystem::Init();
+
+    if (!FileDialog::Init()) {
+        LOG_WARNING("Native file dialog is unavailable in editor runtime.");
+    }
 
     // Init RenderDevice
     std::string rhi_type_str = ConfigManager::GetInstance().GetConfig().engine.rhi.type;
@@ -201,6 +206,7 @@ void Engine::ShutDown() {
     m_editor_ui.reset();
     m_runtime_assets.reset(); // 释放RuntimeAssets资源
 
+    FileDialog::ShutDown();
     WindowContext::ShutDown();
     ShaderManager::ShutDown();
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);

@@ -39,7 +39,7 @@ enum class EFieldType : uint8_t {
 };
 
 inline constexpr uint32_t packet_magic = 0x5344504Du;
-inline constexpr uint16_t packet_version = 1;
+inline constexpr uint16_t packet_version = 2;
 
 enum class EPacketType : uint16_t {
     Schema = 1,
@@ -78,6 +78,7 @@ struct DecodedValue {
 struct DecodedSchema {
     uint32_t               schema_id = 0;
     std::string            name;
+    std::string            event_type;
     EKind                  kind = EKind::Scope;
     EChannel               channel = EChannel::CPUThread;
     uint32_t               version = 0;
@@ -93,6 +94,7 @@ struct DecodedRecord {
 struct SchemaRuntimeDesc {
     uint32_t                        schema_id;
     std::string_view                name;
+    std::string_view                event_type;
     EKind                           kind;
     EChannel                        channel;
     uint32_t                        version;
@@ -309,7 +311,8 @@ inline bool DeserializeSchemaPacket(
         !Detail::ReadPacketScalar(payload, offset, parsed_channel) ||
         !Detail::ReadPacketScalar(payload, offset, parsed_schema.version) ||
         !Detail::ReadPacketScalar(payload, offset, field_count) ||
-        !Detail::ReadPacketString(payload, offset, parsed_schema.name)) {
+        !Detail::ReadPacketString(payload, offset, parsed_schema.name) ||
+        !Detail::ReadPacketString(payload, offset, parsed_schema.event_type)) {
         return false;
     }
 
@@ -380,6 +383,37 @@ using RemoveCvRefT = std::remove_cv_t<std::remove_reference_t<T>>;
 
 template<typename T>
 using DecayedT = std::decay_t<T>;
+
+template<size_t N>
+struct FixedString {
+    char value[N]{};
+
+    constexpr FixedString(const char (&text)[N]) {
+        for (size_t index = 0; index < N; ++index) {
+            value[index] = text[index];
+        }
+    }
+};
+
+template<size_t N>
+FixedString(const char (&)[N]) -> FixedString<N>;
+
+template<typename T, FixedString Name>
+struct FieldDescriptor {
+    using ValueType = T;
+
+    static constexpr std::string_view NameView() {
+        return std::string_view(Name.value, (sizeof(Name.value) / sizeof(Name.value[0])) - 1);
+    }
+};
+
+template<typename T, FixedString Name>
+consteval auto MakeFieldDescriptor() {
+    return FieldDescriptor<T, Name>{};
+}
+
+template<typename Template>
+using TemplateFieldTupleT = decltype(Template::Fields());
 
 template<typename T>
 struct NormalizedFieldType {
@@ -484,6 +518,7 @@ constexpr bool CanSerializeField() {
 CORE_API uint64_t ReserveSequence();
 CORE_API const SchemaRuntimeDesc& RegisterSchemaRuntime(
     std::string_view                 name,
+    std::string_view                 event_type,
     EKind                            kind,
     EChannel                         channel,
     uint32_t                         version,
@@ -554,41 +589,43 @@ void SerializeField(Array<uint8_t>& payload, ValueT&& value) {
 
 template<typename Template, size_t... Indices>
 constexpr auto BuildFieldDescArray(std::index_sequence<Indices...>) {
-    using FieldTuple = typename Template::FieldTypes;
+    using FieldTuple = TemplateFieldTupleT<Template>;
     return std::array<SchemaFieldDesc, sizeof...(Indices)>{
         SchemaFieldDesc{
-            std::string_view(Template::field_names[Indices]),
-            FieldTypeTag<NormalizedFieldTypeT<std::tuple_element_t<Indices, FieldTuple>>>::value,
+            std::tuple_element_t<Indices, FieldTuple>::NameView(),
+            FieldTypeTag<
+                NormalizedFieldTypeT<typename std::tuple_element_t<Indices, FieldTuple>::ValueType>
+            >::value,
         }...
     };
 }
 
 template<typename Template>
 void ValidateTemplate() {
-    using FieldTuple = typename Template::FieldTypes;
+    using FieldTuple = TemplateFieldTupleT<Template>;
     static_assert(requires { Template::kName; }, "Profile dump template must define kName.");
+    static_assert(requires { Template::kEventType; }, "Profile dump template must define kEventType.");
     static_assert(requires { Template::kKind; }, "Profile dump template must define kKind.");
     static_assert(requires { Template::kChannel; }, "Profile dump template must define kChannel.");
     static_assert(requires { Template::kVersion; }, "Profile dump template must define kVersion.");
-    static_assert(
-        std::tuple_size_v<FieldTuple> == std::tuple_size_v<decltype(Template::field_names)>,
-        "Profile dump template field count must match field names."
-    );
 
     []<size_t... Indices>(std::index_sequence<Indices...>) {
-        ((void)FieldTypeTag<NormalizedFieldTypeT<std::tuple_element_t<Indices, FieldTuple>>>::value, ...);
+        ((void)FieldTypeTag<
+            NormalizedFieldTypeT<typename std::tuple_element_t<Indices, FieldTuple>::ValueType>
+        >::value, ...);
     }(std::make_index_sequence<std::tuple_size_v<FieldTuple>>{});
 }
 
 template<typename Template>
 const SchemaRuntimeDesc& ResolveSchema() {
     ValidateTemplate<Template>();
-    using FieldTuple = typename Template::FieldTypes;
+    using FieldTuple = TemplateFieldTupleT<Template>;
     static constexpr auto field_descs = BuildFieldDescArray<Template>(
         std::make_index_sequence<std::tuple_size_v<FieldTuple>>{}
     );
     static const SchemaRuntimeDesc& schema = RegisterSchemaRuntime(
         Template::kName,
+        Template::kEventType,
         Template::kKind,
         Template::kChannel,
         Template::kVersion,
@@ -609,8 +646,8 @@ public:
 
     template<typename ValueT>
     auto operator<<(ValueT&& value) && {
-        using FieldTuple = typename Template::FieldTypes;
-        using ExpectedT = std::tuple_element_t<Index, FieldTuple>;
+        using FieldTuple = Detail::TemplateFieldTupleT<Template>;
+        using ExpectedT = typename std::tuple_element_t<Index, FieldTuple>::ValueType;
         static_assert(
             Detail::CanSerializeField<ExpectedT, ValueT>(),
             "Profile dump field type does not match template schema."
@@ -640,45 +677,39 @@ auto BeginStream() {
     return StreamBuilder<Template, 0>(schema, Detail::ReserveSequence(), std::move(payload));
 }
 
-#define MOER_PROFILE_DUMP_TEMPLATE(Name, KindValue, ChannelValue, VersionValue) \
+#define BEGIN_PROFILE_DUMP_TEMPLATE(Name, EventTypeValue, KindValue, ChannelValue, VersionValue) \
     struct Name { \
         static constexpr std::string_view kName = #Name; \
+        static constexpr std::string_view kEventType = EventTypeValue; \
         static constexpr ::Moer::ProfileDump::EKind kKind = KindValue; \
         static constexpr ::Moer::ProfileDump::EChannel kChannel = ChannelValue; \
-        static constexpr uint32_t kVersion = VersionValue;
+        static constexpr uint32_t kVersion = VersionValue; \
+        static consteval auto Fields() { \
+            return std::tuple{
+
+#define PROFILE_DUMP_FIELD(Type, Attribute) \
+                ::Moer::ProfileDump::Detail::MakeFieldDescriptor<Type, #Attribute>(),
+
+#define END_PROFILE_DUMP_TEMPLATE() \
+            }; \
+        } \
+    };
+
+#define BEGIN_TIMING_EVENT_TEMPLATE(Name, EventTypeValue, ChannelValue, VersionValue) \
+    BEGIN_PROFILE_DUMP_TEMPLATE(Name, EventTypeValue, ::Moer::ProfileDump::EKind::Scope, ChannelValue, VersionValue)
+
+#define END_TIMING_EVENT_TEMPLATE() END_PROFILE_DUMP_TEMPLATE()
+
+#define BEGIN_COUNTER_EVENT_TEMPLATE(Name, EventTypeValue, ChannelValue, VersionValue) \
+    BEGIN_PROFILE_DUMP_TEMPLATE(Name, EventTypeValue, ::Moer::ProfileDump::EKind::Counter, ChannelValue, VersionValue)
+
+#define END_COUNTER_EVENT_TEMPLATE() END_PROFILE_DUMP_TEMPLATE()
+
+#define BEGIN_INSTANT_EVENT_TEMPLATE(Name, EventTypeValue, ChannelValue, VersionValue) \
+    BEGIN_PROFILE_DUMP_TEMPLATE(Name, EventTypeValue, ::Moer::ProfileDump::EKind::Instant, ChannelValue, VersionValue)
+
+#define END_INSTANT_EVENT_TEMPLATE() END_PROFILE_DUMP_TEMPLATE()
 
 #define DUMP_STREAM(TemplateName) ::Moer::ProfileDump::BeginStream<TemplateName>()
-
-namespace Templates {
-
-MOER_PROFILE_DUMP_TEMPLATE(CpuScopeTemplate, EKind::Scope, EChannel::CPUThread, 1)
-    using FieldTypes = std::tuple<uint64_t, std::string_view, int64_t, int64_t, uint32_t>;
-    static constexpr std::array field_names{"thread_id", "name", "start_us", "duration_us", "depth"};
-};
-
-MOER_PROFILE_DUMP_TEMPLATE(GpuScopeTemplate, EKind::Scope, EChannel::GPUQueue, 1)
-    using FieldTypes = std::tuple<
-        uint64_t,
-        std::string_view,
-        std::string_view,
-        uint64_t,
-        uint64_t,
-        uint32_t,
-        uint64_t,
-        uint64_t
-    >;
-    static constexpr std::array field_names{
-        "frame_index",
-        "queue_name",
-        "name",
-        "start_ns",
-        "end_ns",
-        "depth",
-        "total_busy_ns",
-        "exclusive_ns"
-    };
-};
-
-} // namespace Templates
 
 } // namespace Moer::ProfileDump
