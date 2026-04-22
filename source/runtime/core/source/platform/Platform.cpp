@@ -160,3 +160,40 @@ uint32_t Platform::GetCurrentThreadID() {
 void Platform::SetEnv(const char* _name, const char* _value) {
     PlatformImplement::GetInstance()->SetEnv(_name, _value);
 }
+
+PlatformStackTrace Platform::CaptureStackTrace(uint32_t frames_to_skip, uint32_t max_frames) {
+#if PLATFORM_WINDOWS
+    return WindowsPlatform::CaptureStackTrace(frames_to_skip + 1, max_frames);
+#else
+    (void)frames_to_skip;
+    (void)max_frames;
+    return PlatformStackTrace{};
+#endif
+}
+
+std::string Platform::FormatStackTrace(const PlatformStackTrace& trace) {
+#if PLATFORM_WINDOWS
+    return WindowsPlatform::FormatStackTrace(trace);
+#else
+    (void)trace;
+    return {};
+#endif
+}
+
+PlatformCrashDumpResult Platform::WriteCrashDump(const PlatformCrashDumpRequest& request) {
+#if PLATFORM_WINDOWS
+    return WindowsPlatform::WriteCrashDump(request);
+#else
+    (void)request;
+    return PlatformCrashDumpResult{};
+#endif
+}
+
+[[noreturn]] void Platform::FailFast(std::string_view reason) {
+#if PLATFORM_WINDOWS
+    WindowsPlatform::FailFast(reason);
+#else
+    (void)reason;
+    std::abort();
+#endif
+}

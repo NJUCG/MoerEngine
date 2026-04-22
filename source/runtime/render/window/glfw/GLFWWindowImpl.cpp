@@ -1,5 +1,6 @@
 #include "GLFWWindowImpl.h"
 
+#include "Core.h"
 #include "misc/MMemory.h"
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
@@ -47,7 +48,7 @@ void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
     if (!glfwInit()) {
         //error log and quit
         LOG_ERROR("Window init fail.");
-        assert(0 && "Window init fail.");
+        MOER_ASSERT(false, "GLFW initialization failed");
     }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     if (info.rhi_type == ERHIType::D3D12) {
@@ -55,7 +56,7 @@ void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
     } else if (info.rhi_type == ERHIType::Vulkan) {
         InitVulkan();
     } else {
-        assert(0 && "Unknown RHI type, code error.");
+        MOER_ASSERT(false, "Unsupported RHI type in GLFWWindowImpl::Init: {}", static_cast<uint32_t>(info.rhi_type));
     }
 
     int          width   = info.width;

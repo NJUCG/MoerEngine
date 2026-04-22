@@ -44,6 +44,7 @@ target_link_libraries(${target_name}
 
 if(WIN32)
     target_link_libraries(${target_name} PUBLIC ws2_32)
+    target_link_libraries(${target_name} PUBLIC dbghelp)
 endif()
 
 # add_dependencies(${target_name} CopyMimallocDlls )

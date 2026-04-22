@@ -2,6 +2,7 @@
 #define MOERENGINE_CORE_H
 #include "API_Macro.h"
 #include "math/Math.h"
+#include "misc/Assert.h"
 #include "misc/Crc32.h"
 #include "misc/EnumBitOperation.h"
 #include "misc/Hash.h"

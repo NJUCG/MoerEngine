@@ -20,7 +20,6 @@
 
 // 3rd party (std)
 #include <algorithm>
-#include <cassert>
 
 // namespace
 using namespace Moer::Render;
@@ -30,7 +29,7 @@ namespace Moer {
 Engine::Engine() {}
 
 Engine::~Engine() {
-    assert(has_shutdown && "Engine::ShutDown() was not called before Engine destruction!");
+    MOER_ASSERT(has_shutdown, "Engine::ShutDown() must be called before Engine destruction");
 }
 
 void Engine::Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen) {
@@ -188,7 +187,11 @@ void Engine::Run() {
             );
 
         } else {
-            assert(false && "Unknown render method");
+            MOER_ASSERT(
+                false,
+                "Unknown render method: {}",
+                static_cast<uint32_t>(m_editor_config->selected_render_method)
+            );
         }
 
         m_renderer->Run(m_editor_config, hooks);

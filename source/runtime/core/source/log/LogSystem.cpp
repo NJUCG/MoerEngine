@@ -56,6 +56,12 @@ void Init() {
 #endif
 }
 
+void Flush() {
+    if (auto* logger = spdlog::default_logger_raw(); logger != nullptr) {
+        logger->flush();
+    }
+}
+
 bool PollConsoleLogs(
     uint64_t&         next_sequence,
     ConsoleLogVisitor visitor,

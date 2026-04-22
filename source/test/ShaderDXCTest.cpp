@@ -77,46 +77,48 @@ int main(int argc, char** argv) {
         path = path.parent_path();
     }
 
-    try {
-        ConfigManager::GetInstance().Init(path);
-        LogSystem::Init();
-        ShaderCompiler::Init();
+    Diagnostics::SetEnsureFailureEscalation(true);
+    Diagnostics::ResetEnsureFailures();
+    ConfigManager::GetInstance().Init(path);
+    LogSystem::Init();
+    ShaderCompiler::Init();
 
-        constexpr std::array kCases = {
-            ShaderCompileCase{"BindlessBindingsOnly.Vulkan", "tests/BindlessBindingsOnly.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
-            ShaderCompileCase{"BindlessDirectArrayBuffer.Vulkan", "tests/BindlessDirectArrayBuffer.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
-            ShaderCompileCase{"BindlessDirectTexture.Vulkan", "tests/BindlessDirectTexture.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
-            ShaderCompileCase{"BindlessArrayBuffer.Vulkan", "tests/BindlessArrayBuffer.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
-            ShaderCompileCase{"BindlessSampler.Vulkan", "tests/BindlessSampler.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
-            ShaderCompileCase{"BindlessTexture.Vulkan", "tests/BindlessTexture.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
-            ShaderCompileCase{"BindlessMinimal.Vulkan", "tests/BindlessMinimal.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
-            ShaderCompileCase{"RayQueryMinimal.Vulkan", "tests/RayQueryMinimal.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
-            ShaderCompileCase{"RayGenMinimal.Vulkan", "tests/RayGenMinimal.rgen.hlsl", "main", ST_RAY_GEN, SP_VULKAN_SM6},
-            ShaderCompileCase{"BindlessMinimal.DXIL", "tests/BindlessMinimal.comp.hlsl", "main", ST_COMPUTE, SP_WIN_D3D_SM6},
-            ShaderCompileCase{"GuiVert.Vulkan", "features/ui/GuiVert.hlsl", "main", ST_VERTEX, SP_VULKAN_SM6},
-            ShaderCompileCase{"GuiFrag.Vulkan", "features/ui/GuiFrag.hlsl", "main", ST_FRAGMENT, SP_VULKAN_SM6},
-        };
+    constexpr std::array kCases = {
+        ShaderCompileCase{"BindlessBindingsOnly.Vulkan", "tests/BindlessBindingsOnly.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
+        ShaderCompileCase{"BindlessDirectArrayBuffer.Vulkan", "tests/BindlessDirectArrayBuffer.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
+        ShaderCompileCase{"BindlessDirectTexture.Vulkan", "tests/BindlessDirectTexture.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
+        ShaderCompileCase{"BindlessArrayBuffer.Vulkan", "tests/BindlessArrayBuffer.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
+        ShaderCompileCase{"BindlessSampler.Vulkan", "tests/BindlessSampler.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
+        ShaderCompileCase{"BindlessTexture.Vulkan", "tests/BindlessTexture.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
+        ShaderCompileCase{"BindlessMinimal.Vulkan", "tests/BindlessMinimal.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
+        ShaderCompileCase{"RayQueryMinimal.Vulkan", "tests/RayQueryMinimal.comp.hlsl", "main", ST_COMPUTE, SP_VULKAN_SM6},
+        ShaderCompileCase{"RayGenMinimal.Vulkan", "tests/RayGenMinimal.rgen.hlsl", "main", ST_RAY_GEN, SP_VULKAN_SM6},
+        ShaderCompileCase{"BindlessMinimal.DXIL", "tests/BindlessMinimal.comp.hlsl", "main", ST_COMPUTE, SP_WIN_D3D_SM6},
+        ShaderCompileCase{"GuiVert.Vulkan", "features/ui/GuiVert.hlsl", "main", ST_VERTEX, SP_VULKAN_SM6},
+        ShaderCompileCase{"GuiFrag.Vulkan", "features/ui/GuiFrag.hlsl", "main", ST_FRAGMENT, SP_VULKAN_SM6},
+    };
 
-        int failed_cases = 0;
-        for (const auto& test_case : kCases) {
-            failed_cases += CompileCase(
-                test_case.case_name,
-                test_case.relative_path,
-                test_case.entry_point,
-                test_case.shader_type,
-                test_case.shader_platform
-            );
-        }
+    int failed_cases = 0;
+    for (const auto& test_case : kCases) {
+        failed_cases += CompileCase(
+            test_case.case_name,
+            test_case.relative_path,
+            test_case.entry_point,
+            test_case.shader_type,
+            test_case.shader_platform
+        );
+    }
 
-        if (failed_cases != 0) {
-            LOG_ERROR("[ShaderDXCTest] failed_cases={}", failed_cases);
-            return 1;
-        }
-
-        LOG_INFO("[ShaderDXCTest] all cases passed");
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "TestShaderDXC failed: " << e.what() << std::endl;
+    if (failed_cases != 0) {
+        LOG_ERROR("[ShaderDXCTest] failed_cases={}", failed_cases);
         return 1;
     }
+
+    if (Diagnostics::HasEnsureFailures()) {
+        LOG_ERROR("[ShaderDXCTest] observed escalated ensure failures");
+        return 1;
+    }
+
+    LOG_INFO("[ShaderDXCTest] all cases passed");
+    return 0;
 }

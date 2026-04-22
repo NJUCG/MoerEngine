@@ -1,5 +1,6 @@
 #include "GPUEventStream.h"
 #include "log/LogSystem.h"
+#include "misc/Assert.h"
 #include "profile/ProfileDump.h"
 #include "profile/ProfileDumpTemplates.h"
 #include "trace/Trace.h"
@@ -370,10 +371,19 @@ std::string BuildFrameDebugText(const ResolvedGPUFrame& frame) {
     return stream.str();
 }
 
+void FlushGpuEventStreamCrashHook() {
+    GPUEventStream::Get().FlushCrashSafeToProfiler();
+}
+
 } // namespace
 
 GPUEventStream& GPUEventStream::Get() {
     static GPUEventStream instance;
+    static const bool     registered_crash_hook = [] {
+        Moer::Diagnostics::SetCrashFlushHook(&FlushGpuEventStreamCrashHook);
+        return true;
+    }();
+    (void)registered_crash_hook;
     return instance;
 }
 
@@ -460,6 +470,22 @@ void GPUEventStream::FlushToProfiler() {
 
     for (const ResolvedGPUFrame& frame : frames_to_emit) {
         EmitFrameToTrace(frame);
+        EmitFrameToProfileDump(frame);
+    }
+    if (!frames_to_emit.empty()) {
+        Moer::ProfileDump::FlushThreadLocal();
+    }
+}
+
+void GPUEventStream::FlushCrashSafeToProfiler() {
+    Array<ResolvedGPUFrame> frames_to_emit;
+    {
+        std::lock_guard lock(stream_mutex);
+        frames_to_emit = ready_frames;
+        ready_frames.clear();
+    }
+
+    for (const ResolvedGPUFrame& frame : frames_to_emit) {
         EmitFrameToProfileDump(frame);
     }
     if (!frames_to_emit.empty()) {
