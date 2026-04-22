@@ -1,3 +1,4 @@
+#include "taskgraph/AnyThreadScheduler.h"
 #include "taskgraph/TaskGraph.h"
 #include "platform/Platform.h"
 #include "taskgraph/GraphTask.h"
@@ -55,7 +56,6 @@ TaskGraph::TaskGraph() {
     m_worker_per_priority = m_worker_thread_count / EThread::PriorityCount;
     m_worker_per_priority =
         m_worker_thread_count % EThread::PriorityCount ? m_worker_per_priority + 1 : m_worker_per_priority;
-    int32_t priority_set_count = m_worker_thread_count / EThread::PriorityCount;
 
     for (int32_t i = 0; i < m_thread_count; i++) {
         EThread::Type  type     = EThread::SetThreadIndex(EThread::UNKNOWN_THREAD, i);
@@ -64,6 +64,7 @@ TaskGraph::TaskGraph() {
         if (i >= m_named_thread_count) {
             //any_thread
             m_workers[i].task_thread = new TaskThreadAnyThread(type);
+            m_worker_count_per_priority[GetThreadPriorityFromIndex(i)]++;
         } else {
             m_workers[i].task_thread = new NamedThread;
             //named_thread
@@ -71,6 +72,14 @@ TaskGraph::TaskGraph() {
         m_workers[i].task_thread->SetAttributes(type, &m_workers[i]);
     }
     instance = this; //set here to make sure access of worker_threads below
+    m_scheduler = std::make_unique<AnyThreadScheduler>(
+        m_named_thread_count,
+        m_worker_per_priority,
+        m_worker_count_per_priority,
+        [this](int32_t threadIndex) {
+            WakeUpWorkerThread(threadIndex, 0);
+        }
+    );
     //todo no handle for thread groups
     for (int32_t i = m_named_thread_count; i < m_thread_count; i++) {
         int32_t     priority = GetThreadPriorityFromIndex(i);
@@ -214,14 +223,7 @@ void TaskGraph::QueueTask(
     bool           wake_worker
 ) {
     if (EThread::GetThreadIndex(_prefered_thread) == EThread::UNKNOWN_THREAD) { //any thread is ok
-        ThreadPriority priority                = task->GetPriority();
-        int32_t        possible_thread_to_wake = m_task_queue[priority].Push(task, 0);
-        if (possible_thread_to_wake >= 0) {
-            //start task thread
-            possible_thread_to_wake =
-                possible_thread_to_wake + priority * m_worker_per_priority + m_named_thread_count;
-            WakeUpWorkerThread(possible_thread_to_wake, 0);
-        }
+        m_scheduler->Enqueue(task, _current_thread);
         return;
     }
     //named thread
@@ -237,11 +239,5 @@ void TaskGraph::QueueTask(
     }
 }
 BaseGraphTask* TaskGraph::DequeueTask(int32_t threadIndex) {
-    int32_t        priority          = GetThreadPriorityFromIndex(threadIndex);
-    int32_t        index_in_priority = (threadIndex - m_named_thread_count) % m_worker_per_priority;
-    BaseGraphTask* task              = m_task_queue[priority].Pop(index_in_priority);
-    //if (task != nullptr) {
-    //	task = m_global_queue.pop(index_in_priority);
-    //}
-    return task;
+    return m_scheduler->Dequeue(threadIndex);
 }

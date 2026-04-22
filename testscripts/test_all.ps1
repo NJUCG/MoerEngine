@@ -35,7 +35,7 @@ Initialize-TestRun -Config $Config -ScriptDir $PSScriptRoot
 $BinDir = Join-Path $script:Root "target\bin\$Config"
 
 # ─── 1. RHI Translate Multi-Queue ────────────────────────────────────────────
-Write-Host "--- [1/2] RHI Translate Multi-Queue Test ---" -ForegroundColor Yellow
+Write-Host "--- [1/3] RHI Translate Multi-Queue Test ---" -ForegroundColor Yellow
 
 do {
     $Exe   = Join-Path $BinDir "TestRHITranslate.exe"
@@ -113,8 +113,25 @@ do {
 
 Write-Host ""
 
-# ─── 2. MoerEditor (20 s) ────────────────────────────────────────────────────
-Write-Host "--- [2/2] MoerEditor Test (20 s) ---" -ForegroundColor Yellow
+# ─── 2. TaskGraph / TaskPipe Regression ──────────────────────────────────────
+Write-Host "--- [2/3] TaskGraph / TaskPipe Regression ---" -ForegroundColor Yellow
+Invoke-StructuredBinaryTest `
+    -Label "TaskGraph" `
+    -Target "TestTaskGraph" `
+    -ExePath (Join-Path $BinDir "TestTaskGraph.exe") `
+    -WorkDir $BinDir `
+    -LogFile (Join-Path $script:RunDir "taskgraph.log") `
+    -ExtraArgs $ExtraArgs
+Invoke-StructuredBinaryTest `
+    -Label "TaskPipe" `
+    -Target "TestTaskPipe" `
+    -ExePath (Join-Path $BinDir "TestTaskPipe.exe") `
+    -WorkDir $BinDir `
+    -LogFile (Join-Path $script:RunDir "taskpipe.log") `
+    -ExtraArgs $ExtraArgs
+
+# ─── 3. MoerEditor (20 s) ────────────────────────────────────────────────────
+Write-Host "--- [3/3] MoerEditor Test (20 s) ---" -ForegroundColor Yellow
 
 do {
     $Exe      = Join-Path $BinDir "MoerEditor.exe"

@@ -207,6 +207,71 @@ function Invoke-ExeSync {
     return $proc.ExitCode
 }
 
+function Invoke-StructuredBinaryTest {
+<#
+.SYNOPSIS
+    Build and run a structured testcase executable that emits [TESTCASE] markers.
+#>
+    param(
+        [Parameter(Mandatory)][string]$Label,
+        [Parameter(Mandatory)][string]$Target,
+        [Parameter(Mandatory)][string]$ExePath,
+        [Parameter(Mandatory)][string]$WorkDir,
+        [Parameter(Mandatory)][string]$LogFile,
+        [string[]]$ExtraArgs = @()
+    )
+
+    $missingMarkerReason = "structured testcase markers missing"
+
+    do {
+        if (-not (Build-Target -Target $Target)) { break }
+        if (-not (Assert-Exe $ExePath)) { break }
+
+        Write-Host "[$Label] Exe : $ExePath"
+        Write-Host "[$Label] Log : $LogFile"
+        if ($ExtraArgs.Count -gt 0) { Write-Host "[$Label] Args: $($ExtraArgs -join ' ')" }
+
+        $exitCode = Invoke-ExeSync -ExePath $ExePath -WorkDir $WorkDir -LogFile $LogFile -ExtraArgs $ExtraArgs
+        $errorLines = Test-LogForErrors -LogFile $LogFile
+        $structuredCases = Get-StructuredTestCaseResults -LogFile $LogFile
+
+        if (@($structuredCases).Count -eq 0) {
+            Register-Subtest -Group $Label -Name "StructuredTestcaseMarkers" -Status "FAILED" -Reason $missingMarkerReason
+        } else {
+            foreach ($case in $structuredCases) {
+                Register-Subtest -Group $Label -Name $case.Name -Status $case.Status -Reason $case.Reason
+            }
+        }
+
+        if (@($errorLines).Count -gt 0) {
+            Register-Subtest -Group $Label -Name "ValidationBlockers" -Status "FAILED" -Reason "$(@($errorLines).Count) blocking lines"
+        } else {
+            Register-Subtest -Group $Label -Name "ValidationBlockers" -Status "PASSED"
+        }
+
+        Write-Host "[$Label] Output tail:"
+        Get-Content $LogFile -Tail 10 | ForEach-Object { Write-Host "  $_" }
+
+        $structuredFailures = @($structuredCases | Where-Object { $_.Status -eq "FAILED" })
+        if ($exitCode -eq 0 -and @($structuredCases).Count -gt 0 -and @($structuredFailures).Count -eq 0 -and @($errorLines).Count -eq 0) {
+            Register-Pass $Label
+        } else {
+            $reason = if ($exitCode -ne 0) {
+                "exit $exitCode"
+            } elseif (@($structuredCases).Count -eq 0) {
+                $missingMarkerReason
+            } elseif (@($structuredFailures).Count -gt 0) {
+                "$(@($structuredFailures).Count) structured testcase failures"
+            } else {
+                "validation blockers detected"
+            }
+            Register-Fail $Label $reason
+        }
+    } while ($false)
+
+    Write-Host ""
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 function Invoke-ExeTimed {
 <#

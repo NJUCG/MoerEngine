@@ -120,4 +120,15 @@ struct MoerStlAllocator : public MoerStlAllocatorCommon<T> {
     using is_always_equal = std::true_type;
 #endif
 };
+
+template<class T, class U>
+constexpr bool operator==(const MoerStlAllocator<T>&, const MoerStlAllocator<U>&) noexcept {
+    // MoerStlAllocator is stateless, so all allocator instances are interchangeable.
+    return true;
+}
+
+template<class T, class U>
+constexpr bool operator!=(const MoerStlAllocator<T>&, const MoerStlAllocator<U>&) noexcept {
+    return false;
+}
 #endif //MOER_ENGINE_MEMORY_H

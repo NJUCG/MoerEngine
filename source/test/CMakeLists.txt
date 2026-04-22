@@ -1,6 +1,8 @@
 set(moer_test_folder "test")
 
-add_subdirectory(math)
+if (WIN32)
+    add_subdirectory(math)
+endif()
 
 # add_executable(RuntimeTest EngineTest.cpp)
 # target_include_directories(RuntimeTest
@@ -54,6 +56,16 @@ target_link_libraries(${pipe_test_target}
     PUBLIC Moer::Core
 )
 set_target_properties(${pipe_test_target} PROPERTIES FOLDER ${moer_test_folder})
+
+if (LINUX)
+    add_custom_target(TestCoreLinux
+        DEPENDS
+            TestTaskGraph
+            TestTaskPipe
+    )
+    set_target_properties(TestCoreLinux PROPERTIES FOLDER ${moer_test_folder})
+    return()
+endif()
 
 # add_executable(MeshProcessTest "MeshProcessTest.cpp")
 # target_include_directories(MeshProcessTest 

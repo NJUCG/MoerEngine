@@ -178,17 +178,22 @@ int main() {
     Moer::TaskSystem::Init();
 
     Moer::TaskGraphTest();
+    std::cout << "[TESTCASE][PASS] TaskGraphSuite\n";
+
     std::atomic<int> k = 0;
     ParallelFor(10, [&](int _idx) {
         k += 60;
     });
     assert(k == 600);
+    std::cout << "[TESTCASE][PASS] ParallelFor\n";
 
     auto finished = ParallelForAsync(10, [&](int _idx) {
         k += 60;
     });
     TaskGraph::GetInterface().WaitUntilTaskComplete(finished, EThread::EMainThread);
     assert(k == 1200);
+    std::cout << "[TESTCASE][PASS] ParallelForAsync\n";
 
+    Moer::TaskSystem::ShutDown();
     return 0;
 }

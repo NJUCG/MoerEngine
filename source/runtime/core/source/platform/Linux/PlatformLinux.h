@@ -4,6 +4,8 @@
 #include "../PlatformImplement.h"
 #include "platform/Platform.h"
 class LinuxPlatform : public PlatformImplement {
+    virtual void SetCurrentThreadAffinity(Affinity&& _affinity) override;
+    virtual void SetCurrentThreadName(std::string_view _name) override;
     virtual void SetThreadAffinityMask(void* current_thread_handle, uint64_t mask) override;
     virtual void
     SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask) override;
@@ -11,6 +13,7 @@ class LinuxPlatform : public PlatformImplement {
     virtual int32_t GetProcessorCoreCountInGroup(uint32_t groupID) override;
     virtual int32_t GetProcessorCoreCount() override;
     uint32_t        GetCurrentThreadID() override;
+    virtual void    SetEnv(const char* _name, const char* _value) override;
 
     virtual const PlatformMemoryInfo& GetMemoryInfo() override;
 };
