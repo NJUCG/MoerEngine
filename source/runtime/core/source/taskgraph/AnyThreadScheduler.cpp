@@ -74,8 +74,8 @@ BaseGraphTask* AnyThreadScheduler::ChaseLevDeque::PopBottom() {
                     std::memory_order_seq_cst,
                     std::memory_order_relaxed
                 )) {
-                // Another worker stole the last slot before the owner committed the pop, so the
-                // previously loaded task pointer is no longer owned by this thread.
+                // Another worker stole the last slot during the single-item race window, so the
+                // task pointer loaded above must be discarded and reported as unavailable here.
                 task = nullptr;
             }
             m_bottom.store(bottom + 1, std::memory_order_relaxed);

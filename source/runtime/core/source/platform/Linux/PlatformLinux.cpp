@@ -88,6 +88,8 @@ void LinuxPlatform::SetEnv(const char* _name, const char* _value) {
 
 const PlatformMemoryInfo& LinuxPlatform::GetMemoryInfo() {
     static PlatformMemoryInfo memory_info = [] {
+        constexpr uint64_t kBytesPerMb = 1024ull * 1024ull;
+
         PlatformMemoryInfo info;
         const auto page_size = static_cast<uint64_t>(sysconf(_SC_PAGE_SIZE));
         const auto total_pages = static_cast<uint64_t>(sysconf(_SC_PHYS_PAGES));
@@ -96,8 +98,9 @@ const PlatformMemoryInfo& LinuxPlatform::GetMemoryInfo() {
         info.allocation_granularity = page_size;
         info.total_physical_memory = total_pages * page_size;
         info.total_virtual_memory = info.total_physical_memory;
-        info.total_physical_memory_mb =
-            static_cast<uint32_t>((info.total_physical_memory + 1024 * 1024 - 1) / 1024 / 1024);
+        info.total_physical_memory_mb = static_cast<uint32_t>(
+            (info.total_physical_memory + kBytesPerMb - 1) / kBytesPerMb
+        );
         return info;
     }();
 

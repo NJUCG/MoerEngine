@@ -26,11 +26,8 @@ run_test() {
         return 1
     fi
 
-    if "${exe_path}" >"${log_file}" 2>&1; then
-        local exit_code=0
-    else
-        local exit_code=$?
-    fi
+    local exit_code=0
+    "${exe_path}" >"${log_file}" 2>&1 || exit_code=$?
 
     if [[ "${exit_code}" -eq 0 ]]; then
         if grep -q '\[TESTCASE\]' "${log_file}"; then

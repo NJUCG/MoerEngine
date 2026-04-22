@@ -123,6 +123,7 @@ struct MoerStlAllocator : public MoerStlAllocatorCommon<T> {
 
 template<class T, class U>
 constexpr bool operator==(const MoerStlAllocator<T>&, const MoerStlAllocator<U>&) noexcept {
+    // MoerStlAllocator is stateless, so all allocator instances are interchangeable.
     return true;
 }
 
