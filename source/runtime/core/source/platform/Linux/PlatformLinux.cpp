@@ -43,6 +43,7 @@ void LinuxPlatform::SetCurrentThreadAffinity(Affinity&& _affinity) {
 }
 
 void LinuxPlatform::SetCurrentThreadName(std::string_view _name) {
+    // pthread_setname_np accepts at most 16 bytes including the trailing null terminator.
     std::string thread_name(_name.substr(0, 15));
     pthread_setname_np(pthread_self(), thread_name.c_str());
 }

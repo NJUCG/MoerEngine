@@ -2,8 +2,11 @@
 #include <algorithm>
 
 AnyThreadScheduler::ChaseLevDeque::Buffer::Buffer(int64_t initialCapacity) : capacity(initialCapacity) {
-    assert(initialCapacity > 0);
-    assert((initialCapacity & (initialCapacity - 1)) == 0);
+    assert(initialCapacity > 0 && "ChaseLevDeque capacity must be positive.");
+    assert(
+        (initialCapacity & (initialCapacity - 1)) == 0 &&
+        "ChaseLevDeque capacity must stay power-of-two for masked indexing."
+    );
 
     slots = std::make_unique<std::atomic<BaseGraphTask*>[]>(capacity);
     for (int64_t index = 0; index < capacity; ++index) {
@@ -71,7 +74,8 @@ BaseGraphTask* AnyThreadScheduler::ChaseLevDeque::PopBottom() {
                     std::memory_order_seq_cst,
                     std::memory_order_relaxed
                 )) {
-                // Another worker stole the last slot before the owner committed the pop.
+                // Another worker stole the last slot before the owner committed the pop, so the
+                // previously loaded task pointer is no longer owned by this thread.
                 task = nullptr;
             }
             m_bottom.store(bottom + 1, std::memory_order_relaxed);

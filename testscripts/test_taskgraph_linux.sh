@@ -27,6 +27,12 @@ run_test() {
     fi
 
     if "${exe_path}" >"${log_file}" 2>&1; then
+        local exit_code=0
+    else
+        local exit_code=$?
+    fi
+
+    if [[ "${exit_code}" -eq 0 ]]; then
         if grep -q '\[TESTCASE\]' "${log_file}"; then
             write_summary "[Test][${label}] PASSED"
             return 0
@@ -37,7 +43,6 @@ run_test() {
         return 1
     fi
 
-    local exit_code=$?
     write_summary "[Test][${label}] FAILED  (exit code ${exit_code})"
     tail -n 20 "${log_file}" || true
     return 1

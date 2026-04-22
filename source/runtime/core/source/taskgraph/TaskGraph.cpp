@@ -56,7 +56,6 @@ TaskGraph::TaskGraph() {
     m_worker_per_priority = m_worker_thread_count / EThread::PriorityCount;
     m_worker_per_priority =
         m_worker_thread_count % EThread::PriorityCount ? m_worker_per_priority + 1 : m_worker_per_priority;
-    m_worker_count_per_priority.fill(0);
 
     for (int32_t i = 0; i < m_thread_count; i++) {
         EThread::Type  type     = EThread::SetThreadIndex(EThread::UNKNOWN_THREAD, i);
