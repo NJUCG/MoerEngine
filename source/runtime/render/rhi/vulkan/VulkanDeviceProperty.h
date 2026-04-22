@@ -2,6 +2,8 @@
 #define VULKAN_DEVICE_PROPERTY_H
 
 #include "VulkanPlatform.h"
+#include "misc/STL.h"
+
 
 class VulkanCoreDeviceProperties {
 public:
@@ -23,18 +25,24 @@ public:
     VkPhysicalDeviceDescriptorHeapPropertiesEXT   descriptor_heap_properties;
 
     // descriptor buffer
-    VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_buffer_properties;
-    VkPhysicalDevicePushDescriptorPropertiesKHR   push_descriptor_properties;
+    VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_buffer_properties{};
+    VkPhysicalDevicePushDescriptorPropertiesKHR   push_descriptor_properties{};
 
     // ray tracing
-    VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties;
-    VkPhysicalDeviceRayTracingPipelinePropertiesKHR    ray_tracing_pipeline_properties;
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties{};
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR    ray_tracing_pipeline_properties{};
 
     // mesh shader
-    VkPhysicalDeviceMeshShaderPropertiesEXT mesh_shader_properties;
+    VkPhysicalDeviceMeshShaderPropertiesEXT mesh_shader_properties{};
     // memory copy indirect
-    VkPhysicalDeviceCopyMemoryIndirectPropertiesNV  copy_memory_indirect_properties;
-    VkPhysicalDeviceMemoryDecompressionPropertiesNV memory_decompression_properties;
+    VkPhysicalDeviceCopyMemoryIndirectPropertiesNV  copy_memory_indirect_properties{};
+    VkPhysicalDeviceMemoryDecompressionPropertiesNV memory_decompression_properties{};
+
+    // cooperative
+    VkPhysicalDeviceCooperativeMatrixPropertiesKHR cooperative_matrix_properties{};
+    VkPhysicalDeviceCooperativeVectorPropertiesNV  cooperative_vector_properties{};
+    Moer::Array<VkCooperativeMatrixPropertiesKHR>  cooperative_matrix_supports{};
+    Moer::Array<VkCooperativeVectorPropertiesNV>   cooperative_vector_supports{};
 };
 
 #endif

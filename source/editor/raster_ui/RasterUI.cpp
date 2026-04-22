@@ -8,7 +8,7 @@
 
 namespace Moer {
 
-RasterUI::RasterUI(RasterConfig& config) : m_config(config) {
+RasterUI::RasterUI(RasterConfig& config) : m_cooperative_ops_ui(config), m_config(config) {
     if (ConfigManager::GetInstance().GetConfig().engine.render.raster.low_quality_mode) {
         m_config.ao_mode = EAoMode::SSAO;
 
@@ -211,6 +211,20 @@ void RasterUI::ShowConfig() {
             // 手动曝光
             ImGui::Checkbox("Enable Reinhard Tone Mapping", &m_config.tonemapping_reinhard_enabled);
         }
+
+        ImGui::TreePop();
+    }
+
+    // MARK: Bloom
+    if (ImGui::TreeNode("Bloom", "Bloom: [%s]", (m_config.bloom_enabled ? "Enable" : "Disable"))) {
+        if (ImGui::Selectable("Enable", m_config.bloom_enabled)) {
+            m_config.bloom_enabled = true;
+        }
+        draw_border();
+        if (ImGui::Selectable("Disable", !m_config.bloom_enabled)) {
+            m_config.bloom_enabled = false;
+        }
+        draw_border();
 
         ImGui::TreePop();
     }
@@ -429,6 +443,9 @@ void RasterUI::ShowConfig() {
 
         ImGui::TreePop();
     }
+
+    // MARK: Cooperative Ops
+    m_cooperative_ops_ui.ShowConfig();
 
     // MARK: Skybox
     if (ImGui::TreeNode("Skybox")) {

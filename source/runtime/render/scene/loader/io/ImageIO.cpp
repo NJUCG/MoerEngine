@@ -262,6 +262,10 @@ static void Generatemipmaps(ImageReadDesc& _desc, bool _is_generate_mipmaps) {
         }
     }
 
+    if (_desc.data && _desc.data_callback) {
+        _desc.data_callback(_desc.data);
+    }
+
     // Update descriptor with generated mipmaps
     _desc.mips          = mip_level;
     _desc.data_size     = mipmaps_size * _desc.layers;

@@ -6,6 +6,7 @@
 #include "rhi/RHICommand.h"
 
 #include <cassert>
+#include <source_location>
 #include <span>
 #include <sstream>
 
@@ -25,6 +26,12 @@ constexpr StaticArray<std::string_view, CSM_MAX_CASCADES> s_shadow_draw_scope_na
     "Raster Shadow Draw CSM2",
     "Raster Shadow Draw CSM3"
 };
+
+std::string BuildDebugLogSiteKey(std::source_location location) {
+    std::ostringstream stream;
+    stream << location.file_name() << ':' << location.line();
+    return stream.str();
+}
 } // namespace
 
 // 返回屏幕空间全屏三角形绘制共用的 draw 参数。
@@ -66,13 +73,27 @@ std::string_view RasterTool::GetShadowDrawProfileScopeName(uint cascade_index) {
     return s_shadow_draw_scope_names[cascade_index];
 }
 
-// 按固定时间间隔输出 raster GPU profiling 汇总，避免把 profiler 状态放进 renderer。
-void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config) {
-    static LoopedTimer s_profiling_log_timer(2.0, false);
-    if (!s_profiling_log_timer.Tick()) {
+void RasterTool::LogDebugEverySeconds(
+    std::string_view str,
+    double           seconds,
+    std::source_location location
+) {
+    if (seconds <= 0.0) {
+        LOG_DEBUG("{}", str);
         return;
     }
 
+    static UnorderedMap<std::string, LoopedTimer> s_debug_log_timers;
+
+    const std::string site_key = BuildDebugLogSiteKey(location);
+    auto [timer_it, inserted]  = s_debug_log_timers.try_emplace(site_key, seconds, true);
+    if (inserted || timer_it->second.Tick()) {
+        LOG_DEBUG("{}", str);
+    }
+}
+
+// 按固定时间间隔输出 raster GPU profiling 汇总，避免把 profiler 状态放进 renderer。
+void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config) {
     const auto profile_data = gfx_queue.GetProfilerEntry();
     if (profile_data.gpu_entries.empty()) {
         return;
@@ -132,7 +153,7 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
                << culling_stats.total_draws << " ratio=" << culling_stats.GetCullingRatio() * 100.0f << "%";
     }
 
-    LOG_INFO("{}", stream.str());
+    LogDebugEverySeconds(stream.str(), 1.0);
 }
 
 } // namespace Moer::Render::Raster

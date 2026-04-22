@@ -4,6 +4,7 @@
 #include "RasterConfig.h"
 #include "rhi/RHICommandDrawData.h"
 
+#include <source_location>
 #include <string_view>
 
 namespace Moer::Render {
@@ -27,6 +28,12 @@ public:
     static std::string_view GetShadowCullingProfileScopeName(uint cascade_index);
 
     static std::string_view GetShadowDrawProfileScopeName(uint cascade_index);
+
+    static void LogDebugEverySeconds(
+        std::string_view      str,
+        double                seconds,
+        std::source_location  location = std::source_location::current()
+    );
 
     static void TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config);
 };
