@@ -99,6 +99,8 @@ int main(int argc, char** argv) {
     std::filesystem::path path = argv[0];
     path.filename().string().find(".exe") != std::string::npos ? path = path.parent_path() : path = path;
     ConfigManager::GetInstance().Init(path);
+    Diagnostics::SetEnsureFailureEscalation(true);
+    Diagnostics::ResetEnsureFailures();
 
     TaskSystem::Init();
     DeviceInitInfo info{.rhi_type = ERHIType::D3D12, .name = "DXRHITest"};
@@ -112,8 +114,7 @@ int main(int argc, char** argv) {
 
     RenderDevice::Init(std::move(info));
 
-    try {
-        capturer->Begin("D:\\codebase\\repos\\MoerEngine\\test.wpix");
+    capturer->Begin("D:\\codebase\\repos\\MoerEngine\\test.wpix");
 
         auto& device = RenderDevice::Get();
 
@@ -221,10 +222,11 @@ int main(int argc, char** argv) {
             LOG_INFO("result={}, expect={}, ok={}", iarr[0], res, iarr[0] == res);
         }
 
-        capturer->End();
+    capturer->End();
 
-    } catch (const std::exception& e) {
-        LOG_ERROR("{}", e.what());
+    if (Diagnostics::HasEnsureFailures()) {
+        LOG_ERROR("DXRHITest observed escalated ensure failures.");
+        return 1;
     }
 
     /*

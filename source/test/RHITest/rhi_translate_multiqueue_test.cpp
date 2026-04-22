@@ -2273,6 +2273,8 @@ int main(int argc, char** argv) {
     Moer::ConfigManager::GetInstance().Init(path);
     Moer::LogSystem::Init();
     Moer::TaskSystem::Init();
+    Moer::Diagnostics::SetEnsureFailureEscalation(true);
+    Moer::Diagnostics::ResetEnsureFailures();
 
     DeviceInitInfo info{
         .rhi_type = ERHIType::Vulkan,
@@ -2286,186 +2288,180 @@ int main(int argc, char** argv) {
     }
 
     bool window_inited = false;
-    try {
-        RenderDevice::Init(std::move(info));
-        ShaderCompiler::Init();
+    RenderDevice::Init(std::move(info));
+    ShaderCompiler::Init();
 
-        auto shutdown_and_return = [&](int code) {
-            if (window_inited) {
-                WindowContext::ShutDown();
-                window_inited = false;
-            }
-            ShaderManager::ShutDown();
-            ShutdownRHIForTest();
-            Moer::TaskSystem::ShutDown();
-            return code;
-        };
-
-        const int queue_ret = RunNamedTestCase("CommandListQueueBinding", RunCommandListQueueBindingTest);
-        if (queue_ret != 0) {
-            return shutdown_and_return(queue_ret);
+    auto shutdown_and_return = [&](int code) {
+        int exit_code = code;
+        if (exit_code == 0 && Moer::Diagnostics::HasEnsureFailures()) {
+            LOG_ERROR("TestRHITranslate observed escalated ensure failures.");
+            exit_code = 1;
         }
-
-        const int translate_metadata_ret = RunNamedTestCase(
-            "TranslateExecutionMetadataRoundTrip",
-            RunTranslateExecutionClassRoundTripTest
-        );
-        if (translate_metadata_ret != 0) {
-            return shutdown_and_return(translate_metadata_ret);
-        }
-
-        const int translate_lambda_ret =
-            RunNamedTestCase("TranslateLambdaCommand", RunTranslateLambdaCommandTest);
-        if (translate_lambda_ret != 0) {
-            return shutdown_and_return(translate_lambda_ret);
-        }
-
-        const int translate_readback_ret =
-            RunNamedTestCase("MultiQueueReadback", RunRHITranslateMultiQueueReadbackTest);
-        if (translate_readback_ret != 0) {
-            return shutdown_and_return(translate_readback_ret);
-        }
-
-        const int multi_cmd_order_ret =
-            RunNamedTestCase("MultiCommandListSubmitOrdering", RunMultiCommandListSubmitOrderingTest);
-        if (multi_cmd_order_ret != 0) {
-            return shutdown_and_return(multi_cmd_order_ret);
-        }
-
-        const int serial_control_ret = RunNamedTestCase(
-            "SerialControlTranslateOrdering",
-            RunSerialControlTranslateOrderingTest
-        );
-        if (serial_control_ret != 0) {
-            return shutdown_and_return(serial_control_ret);
-        }
-
-        const int descriptor_heap_ret = RunNamedTestCase(
-            "ConcurrentDescriptorRangeAllocation",
-            RunDescriptorHeapConcurrentRangeAllocationTest
-        );
-        if (descriptor_heap_ret != 0) {
-            return shutdown_and_return(descriptor_heap_ret);
-        }
-
-        const int graphics_copyscope_ret =
-            RunNamedTestCase("GraphicsCopyScopeRoundTrip", RunGraphicsCopyScopeRoundTripTest);
-        if (graphics_copyscope_ret != 0) {
-            return shutdown_and_return(graphics_copyscope_ret);
-        }
-
-        const int bindless_readback_ret =
-            RunNamedTestCase("BindlessBufferReadback", RunBindlessBufferReadbackTest);
-        if (bindless_readback_ret != 0) {
-            return shutdown_and_return(bindless_readback_ret);
-        }
-
-        const int bindless_texture_readback_ret =
-            RunNamedTestCase("BindlessTextureReadback", RunBindlessTextureReadbackTest);
-        if (bindless_texture_readback_ret != 0) {
-            return shutdown_and_return(bindless_texture_readback_ret);
-        }
-
-        const int multi_bindless_array_ret =
-            RunNamedTestCase("MultiBindlessArrayReadback", RunMultiBindlessArrayReadbackTest);
-        if (multi_bindless_array_ret != 0) {
-            return shutdown_and_return(multi_bindless_array_ret);
-        }
-
-        const int multi_scope_ret =
-            RunNamedTestCase("MultiCopyScopeOrdering", RunMultiCopyScopeOrderingTest);
-        if (multi_scope_ret != 0) {
-            return shutdown_and_return(multi_scope_ret);
-        }
-
-        const int unknown_first_use_ret =
-            RunNamedTestCase("CopyScopeUnknownFirstUse", RunCopyScopeUnknownFirstUseTest);
-        if (unknown_first_use_ret != 0) {
-            return shutdown_and_return(unknown_first_use_ret);
-        }
-
-        const int gpu_event_stream_ret =
-            RunNamedTestCase("GPUEventStreamHierarchy", RunGpuEventStreamHierarchyTest);
-        if (gpu_event_stream_ret != 0) {
-            return shutdown_and_return(gpu_event_stream_ret);
-        }
-
-        const int gpu_event_cross_submit_ret =
-            RunNamedTestCase("GPUEventStreamCrossSubmitAggregation", RunGpuEventStreamCrossSubmitAggregationTest);
-        if (gpu_event_cross_submit_ret != 0) {
-            return shutdown_and_return(gpu_event_cross_submit_ret);
-        }
-
-        const int gpu_event_boundary_validation_ret =
-            RunNamedTestCase("GPUEventStreamBoundaryValidation", RunGpuEventStreamBoundaryValidationTest);
-        if (gpu_event_boundary_validation_ret != 0) {
-            return shutdown_and_return(gpu_event_boundary_validation_ret);
-        }
-
-        const int profile_dump_cvar_ret =
-            RunNamedTestCase("ProfileDumpStartupReadOnlyCVar", RunProfileDumpStartupReadOnlyCVarTest);
-        if (profile_dump_cvar_ret != 0) {
-            return shutdown_and_return(profile_dump_cvar_ret);
-        }
-
-        const int profile_dump_file_ret =
-            RunNamedTestCase("ProfileDumpFileSinkFlush", RunProfileDumpFileSinkTest);
-        if (profile_dump_file_ret != 0) {
-            return shutdown_and_return(profile_dump_file_ret);
-        }
-
-        const int profile_dump_tcp_ret =
-            RunNamedTestCase("ProfileDumpTcpSinkConsumerParse", RunProfileDumpTcpSinkTest);
-        if (profile_dump_tcp_ret != 0) {
-            return shutdown_and_return(profile_dump_tcp_ret);
-        }
-
-        const int profile_dump_gpu_ret =
-            RunNamedTestCase("ProfileDumpGpuEventIntegration", RunGpuEventStreamProfileDumpTest);
-        if (profile_dump_gpu_ret != 0) {
-            return shutdown_and_return(profile_dump_gpu_ret);
-        }
-
-        const int profile_consumer_file_ret =
-            RunNamedTestCase("ProfileConsumerFileLoadNormalization", RunProfileConsumerFileLoadTest);
-        if (profile_consumer_file_ret != 0) {
-            return shutdown_and_return(profile_consumer_file_ret);
-        }
-
-        const int profile_consumer_stream_ret =
-            RunNamedTestCase("ProfileConsumerStreamNormalization", RunProfileConsumerStreamNormalizationTest);
-        if (profile_consumer_stream_ret != 0) {
-            return shutdown_and_return(profile_consumer_stream_ret);
-        }
-
-#if defined(MOER_TEST_WITH_PROFILE)
-        const int profile_dump_flame_ret =
-            RunNamedTestCase("ProfileDumpFlameProfilerIntegration", RunFlameProfilerProfileDumpTest);
-        if (profile_dump_flame_ret != 0) {
-            return shutdown_and_return(profile_dump_flame_ret);
-        }
-#endif
-
-        WindowContext::Init(SurfaceInitInfo(ERHIType::Vulkan, 640, 360, "TestRHITranslatePresent", false));
-        window_inited = true;
-        const int present_copyscope_ret =
-            RunNamedTestCase("PresentWithCopyScope", RunPresentWithCopyScopeTests);
-        if (present_copyscope_ret != 0) {
-            return shutdown_and_return(present_copyscope_ret);
-        }
-        const int present_ret = RunNamedTestCase("PresentRoundTrip", RunPresentTests);
-        if (present_ret != 0) {
-            return shutdown_and_return(present_ret);
-        }
-        return shutdown_and_return(0);
-    } catch (const std::exception& e) {
-        LOG_ERROR("TestRHITranslate failed: {}", e.what());
         if (window_inited) {
             WindowContext::ShutDown();
+            window_inited = false;
         }
         ShaderManager::ShutDown();
         ShutdownRHIForTest();
         Moer::TaskSystem::ShutDown();
-        return 1;
+        return exit_code;
+    };
+
+    const int queue_ret = RunNamedTestCase("CommandListQueueBinding", RunCommandListQueueBindingTest);
+    if (queue_ret != 0) {
+        return shutdown_and_return(queue_ret);
     }
+
+    const int translate_metadata_ret = RunNamedTestCase(
+        "TranslateExecutionMetadataRoundTrip",
+        RunTranslateExecutionClassRoundTripTest
+    );
+    if (translate_metadata_ret != 0) {
+        return shutdown_and_return(translate_metadata_ret);
+    }
+
+    const int translate_lambda_ret =
+        RunNamedTestCase("TranslateLambdaCommand", RunTranslateLambdaCommandTest);
+    if (translate_lambda_ret != 0) {
+        return shutdown_and_return(translate_lambda_ret);
+    }
+
+    const int translate_readback_ret =
+        RunNamedTestCase("MultiQueueReadback", RunRHITranslateMultiQueueReadbackTest);
+    if (translate_readback_ret != 0) {
+        return shutdown_and_return(translate_readback_ret);
+    }
+
+    const int multi_cmd_order_ret =
+        RunNamedTestCase("MultiCommandListSubmitOrdering", RunMultiCommandListSubmitOrderingTest);
+    if (multi_cmd_order_ret != 0) {
+        return shutdown_and_return(multi_cmd_order_ret);
+    }
+
+    const int serial_control_ret = RunNamedTestCase(
+        "SerialControlTranslateOrdering",
+        RunSerialControlTranslateOrderingTest
+    );
+    if (serial_control_ret != 0) {
+        return shutdown_and_return(serial_control_ret);
+    }
+
+    const int descriptor_heap_ret = RunNamedTestCase(
+        "ConcurrentDescriptorRangeAllocation",
+        RunDescriptorHeapConcurrentRangeAllocationTest
+    );
+    if (descriptor_heap_ret != 0) {
+        return shutdown_and_return(descriptor_heap_ret);
+    }
+
+    const int graphics_copyscope_ret =
+        RunNamedTestCase("GraphicsCopyScopeRoundTrip", RunGraphicsCopyScopeRoundTripTest);
+    if (graphics_copyscope_ret != 0) {
+        return shutdown_and_return(graphics_copyscope_ret);
+    }
+
+    const int bindless_readback_ret =
+        RunNamedTestCase("BindlessBufferReadback", RunBindlessBufferReadbackTest);
+    if (bindless_readback_ret != 0) {
+        return shutdown_and_return(bindless_readback_ret);
+    }
+
+    const int bindless_texture_readback_ret =
+        RunNamedTestCase("BindlessTextureReadback", RunBindlessTextureReadbackTest);
+    if (bindless_texture_readback_ret != 0) {
+        return shutdown_and_return(bindless_texture_readback_ret);
+    }
+
+    const int multi_bindless_array_ret =
+        RunNamedTestCase("MultiBindlessArrayReadback", RunMultiBindlessArrayReadbackTest);
+    if (multi_bindless_array_ret != 0) {
+        return shutdown_and_return(multi_bindless_array_ret);
+    }
+
+    const int multi_scope_ret =
+        RunNamedTestCase("MultiCopyScopeOrdering", RunMultiCopyScopeOrderingTest);
+    if (multi_scope_ret != 0) {
+        return shutdown_and_return(multi_scope_ret);
+    }
+
+    const int unknown_first_use_ret =
+        RunNamedTestCase("CopyScopeUnknownFirstUse", RunCopyScopeUnknownFirstUseTest);
+    if (unknown_first_use_ret != 0) {
+        return shutdown_and_return(unknown_first_use_ret);
+    }
+
+    const int gpu_event_stream_ret =
+        RunNamedTestCase("GPUEventStreamHierarchy", RunGpuEventStreamHierarchyTest);
+    if (gpu_event_stream_ret != 0) {
+        return shutdown_and_return(gpu_event_stream_ret);
+    }
+
+    const int gpu_event_cross_submit_ret =
+        RunNamedTestCase("GPUEventStreamCrossSubmitAggregation", RunGpuEventStreamCrossSubmitAggregationTest);
+    if (gpu_event_cross_submit_ret != 0) {
+        return shutdown_and_return(gpu_event_cross_submit_ret);
+    }
+
+    const int gpu_event_boundary_validation_ret =
+        RunNamedTestCase("GPUEventStreamBoundaryValidation", RunGpuEventStreamBoundaryValidationTest);
+    if (gpu_event_boundary_validation_ret != 0) {
+        return shutdown_and_return(gpu_event_boundary_validation_ret);
+    }
+
+    const int profile_dump_cvar_ret =
+        RunNamedTestCase("ProfileDumpStartupReadOnlyCVar", RunProfileDumpStartupReadOnlyCVarTest);
+    if (profile_dump_cvar_ret != 0) {
+        return shutdown_and_return(profile_dump_cvar_ret);
+    }
+
+    const int profile_dump_file_ret =
+        RunNamedTestCase("ProfileDumpFileSinkFlush", RunProfileDumpFileSinkTest);
+    if (profile_dump_file_ret != 0) {
+        return shutdown_and_return(profile_dump_file_ret);
+    }
+
+    const int profile_dump_tcp_ret =
+        RunNamedTestCase("ProfileDumpTcpSinkConsumerParse", RunProfileDumpTcpSinkTest);
+    if (profile_dump_tcp_ret != 0) {
+        return shutdown_and_return(profile_dump_tcp_ret);
+    }
+
+    const int profile_dump_gpu_ret =
+        RunNamedTestCase("ProfileDumpGpuEventIntegration", RunGpuEventStreamProfileDumpTest);
+    if (profile_dump_gpu_ret != 0) {
+        return shutdown_and_return(profile_dump_gpu_ret);
+    }
+
+    const int profile_consumer_file_ret =
+        RunNamedTestCase("ProfileConsumerFileLoadNormalization", RunProfileConsumerFileLoadTest);
+    if (profile_consumer_file_ret != 0) {
+        return shutdown_and_return(profile_consumer_file_ret);
+    }
+
+    const int profile_consumer_stream_ret =
+        RunNamedTestCase("ProfileConsumerStreamNormalization", RunProfileConsumerStreamNormalizationTest);
+    if (profile_consumer_stream_ret != 0) {
+        return shutdown_and_return(profile_consumer_stream_ret);
+    }
+
+#if defined(MOER_TEST_WITH_PROFILE)
+    const int profile_dump_flame_ret =
+        RunNamedTestCase("ProfileDumpFlameProfilerIntegration", RunProfileDumpFlameProfilerProfileDumpTest);
+    if (profile_dump_flame_ret != 0) {
+        return shutdown_and_return(profile_dump_flame_ret);
+    }
+#endif
+
+    WindowContext::Init(SurfaceInitInfo(ERHIType::Vulkan, 640, 360, "TestRHITranslatePresent", false));
+    window_inited = true;
+    const int present_copyscope_ret =
+        RunNamedTestCase("PresentWithCopyScope", RunPresentWithCopyScopeTests);
+    if (present_copyscope_ret != 0) {
+        return shutdown_and_return(present_copyscope_ret);
+    }
+    const int present_ret = RunNamedTestCase("PresentRoundTrip", RunPresentTests);
+    if (present_ret != 0) {
+        return shutdown_and_return(present_ret);
+    }
+    return shutdown_and_return(0);
 }

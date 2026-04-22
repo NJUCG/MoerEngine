@@ -34,6 +34,11 @@
 
 class WindowsPlatform : public PlatformImplement {
 public:
+    static PlatformStackTrace      CaptureStackTrace(uint32_t frames_to_skip, uint32_t max_frames);
+    static std::string             FormatStackTrace(const PlatformStackTrace& trace);
+    static PlatformCrashDumpResult WriteCrashDump(const PlatformCrashDumpRequest& request);
+    [[noreturn]] static void       FailFast(std::string_view reason);
+
     virtual void SetThreadAffinityMask(void* current_thread_handle, uint64_t mask) override;
     virtual void SetCurrentThreadAffinity(Affinity&& _affinity) override;
     virtual void SetCurrentThreadName(std::string_view _name) override;

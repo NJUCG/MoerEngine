@@ -20,6 +20,7 @@
 
 namespace Moer { namespace LogSystem {
 CORE_API void Init();
+CORE_API void Flush();
 
 struct ConsoleLogEntryView {
     uint64_t                  sequence = 0;

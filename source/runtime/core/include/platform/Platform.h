@@ -3,7 +3,10 @@
 #include "API_Macro.h"
 #include "misc/STL.h"
 #include <cstdint>
+#include <filesystem>
 #include <initializer_list>
+#include <string>
+#include <string_view>
 #include <variant>
 #if defined(WIN32) || defined(_WIN32) || defined(_WIN32_) || defined(WIN64) || defined(_WIN64) || \
     defined(_WIN64_)
@@ -31,6 +34,22 @@ struct PlatformMemoryInfo {
 
     // MB
     uint32_t total_physical_memory_mb = 0;
+};
+
+struct PlatformStackTrace {
+    Moer::Array<uintptr_t> frames;
+};
+
+struct PlatformCrashDumpRequest {
+    std::string failure_kind;
+    std::string message;
+    uint32_t    thread_id = 0;
+};
+
+struct PlatformCrashDumpResult {
+    bool                  written = false;
+    std::filesystem::path path;
+    std::string           error_message;
 };
 
 struct Core {
@@ -90,6 +109,11 @@ public:
     CORE_API static int32_t  GetProcessorCoreCount();
     CORE_API static uint32_t GetCurrentThreadID();
     CORE_API static void     SetEnv(const char* _name, const char* _value);
+
+    CORE_API static PlatformStackTrace     CaptureStackTrace(uint32_t frames_to_skip = 0, uint32_t max_frames = 64);
+    CORE_API static std::string            FormatStackTrace(const PlatformStackTrace& trace);
+    CORE_API static PlatformCrashDumpResult WriteCrashDump(const PlatformCrashDumpRequest& request);
+    [[noreturn]] CORE_API static void      FailFast(std::string_view reason);
 
     CORE_API static const PlatformMemoryInfo& GetMemoryInfo();
 };

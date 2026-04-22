@@ -36,6 +36,7 @@ public:
     void ResolveCompleted(WaitEvent completion);
     void EndFrame();
     void FlushToProfiler();
+    void FlushCrashSafeToProfiler();
     std::string FormatLastResolvedFrame() const;
     void InjectResolvedSubmitForTesting(Array<GPUEvent>&& events, EQueueType queue);
     void ResetForTesting();
