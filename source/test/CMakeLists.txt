@@ -55,6 +55,20 @@ target_link_libraries(${pipe_test_target}
 )
 set_target_properties(${pipe_test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+if (LINUX)
+    add_custom_target(TestCoreLinux
+        DEPENDS
+            TestMath
+            TestTaskGraph
+            TestTaskPipe
+    )
+    set_target_properties(TestCoreLinux PROPERTIES FOLDER ${moer_test_folder})
+endif()
+
+if (MOER_CORE_ONLY)
+    return()
+endif()
+
 # add_executable(MeshProcessTest "MeshProcessTest.cpp")
 # target_include_directories(MeshProcessTest 
 #     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>

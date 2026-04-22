@@ -12,6 +12,7 @@ Each script is self-contained, targeting one executable, and shares logic via `c
 
 | Script | Executable | Description |
 |--------|-----------|-------------|
+| `test_taskgraph_linux.sh` | `TestTaskGraph`, `TestTaskPipe` | Linux core-only configure/build/run path for taskgraph regression |
 | `test_taskgraph.ps1` | `TestTaskGraph.exe`, `TestTaskPipe.exe` | TaskGraph / TaskPipe regression suite with structured testcase parsing |
 | `test_rhi_translate.ps1` | `TestRHITranslate.exe` | RHI multi-queue translate tests with descriptor-heap capability probe and validation blocker parsing |
 | `test_editor.ps1` | `MoerEditor.exe` | Launch editor, run for N seconds, then kill and inspect log |
@@ -27,6 +28,7 @@ Run from the repo root (or any directory — scripts use `$PSScriptRoot` interna
 .\testscripts\test_all.ps1
 
 # Single test
+./testscripts/test_taskgraph_linux.sh
 .\testscripts\test_rhi_translate.ps1
 .\testscripts\test_taskgraph.ps1
 .\testscripts\test_editor.ps1

@@ -3,7 +3,9 @@ set(third_party_folder "3rdparty")
 
 # include(vulkan.cmake)
 include(${moer_root_dir}/cmake/functions.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/dxc.cmake)
+if (NOT MOER_CORE_ONLY)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/dxc.cmake)
+endif()
 
 # spdlog
 set(SPDLOG_USE_STD_FORMAT ON)
@@ -11,6 +13,38 @@ set(SPDLOG_BUILD_SHARED ON) # 需要build shared，否则Moer::Core模块设置l
 set(SPDLOG_SANITIZE_ADDRESS ON)
 add_subdirectory(spdlog)
 set_target_properties(spdlog PROPERTIES FOLDER ${third_party_folder}/spdlog)
+
+# json
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+add_subdirectory(json)
+
+# mimalloc
+set(MI_USE_CXX OFF)
+set(MI_BUILD_STATIC      ON)
+set(MI_BUILD_SHARED      ON)
+set(MI_BUILD_OBJECT      OFF)
+if (WIN32)
+    set(MI_WIN_REDIRECT  ON)
+else()
+    set(MI_WIN_REDIRECT  OFF)
+endif()
+set(MI_BUILD_TESTS       OFF)
+add_subdirectory(mimalloc)
+
+string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LC)
+target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-strict-prototypes>")
+target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-unused-variable>")
+target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-missing-field-initializers>")
+# set_target_folder(mimalloc-${CMAKE_BUILD_TYPE_LC} ${third_party_folder}/mimalloc)
+set_target_folder(mimalloc-static ${third_party_folder}/mimalloc)
+
+# toml++
+include(${CMAKE_CURRENT_SOURCE_DIR}/tomlplusplus.cmake)
+set_target_folder(tomlplusplus ${third_party_folder}/tomlplusplus-3.4.0)
+
+if (MOER_CORE_ONLY)
+    return()
+endif()
 
 # glfw
 option(GLFW_BUILD_DOCS OFF)
@@ -41,28 +75,8 @@ set_target_folder(D3D12MemoryAllocator ${third_party_folder}/D3D12MemoryAllocato
 add_subdirectory(winpixeventruntime)
 set_target_folder(winpixeventruntime ${third_party_folder}/winpixeventruntime)
 
-# json
-set(JSON_BuildTests OFF CACHE INTERNAL "")
-add_subdirectory(json)
-
 # asset load (including assimp, stb, exr, etc...)
 add_subdirectory(AssetLoad)
-
-# mimalloc
-set(MI_USE_CXX OFF)
-set(MI_BUILD_STATIC      ON)
-set(MI_BUILD_SHARED      ON)
-set(MI_BUILD_OBJECT      OFF)
-set(MI_WIN_REDIRECT      ON)
-set(MI_BUILD_TESTS       OFF)
-add_subdirectory(mimalloc)
-
-string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LC)
-target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-strict-prototypes>")
-target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-unused-variable>")
-target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-Wno-missing-field-initializers>")
-# set_target_folder(mimalloc-${CMAKE_BUILD_TYPE_LC} ${third_party_folder}/mimalloc)
-set_target_folder(mimalloc-static ${third_party_folder}/mimalloc)
 
 # message(STATUS "Found mimalloc installed at: ${MIMALLOC_LIBRARY_DIR} (${MIMALLOC_VERSION_DIR})")
 # mesh process
@@ -110,11 +124,6 @@ else ()
 endif ()
 
 set(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION ${MOER_WINDOWS_SDK_VERSION})
-
-
-# toml++
-include(${CMAKE_CURRENT_SOURCE_DIR}/tomlplusplus.cmake)
-set_target_folder(tomlplusplus ${third_party_folder}/tomlplusplus-3.4.0)
 
 # entt
 include(${CMAKE_CURRENT_SOURCE_DIR}/entt.cmake)
