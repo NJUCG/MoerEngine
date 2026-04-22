@@ -13,7 +13,6 @@ inline static uint DivCeil(uint _a, uint _b) {
 }
 
 static constexpr EPixelFormat s_supported_formats[] = {
-    PF_R32G32B32_SFLOAT,
     PF_R32G32B32A32_SFLOAT,
     PF_R16G16B16A16_SFLOAT,
     PF_R16G16B16A16_UNORM,

@@ -12,9 +12,6 @@
 #include "window/WindowContext.h"
 
 #include "VulkanPlatform.h"
-#include <atomic>
-#include <mutex>
-#include <thread>
 namespace Moer::Render {
 struct SwapChainSupportDetails {
     VkSurfaceCapabilitiesKHR  capabilities;
@@ -65,16 +62,6 @@ public:
     class VulkanDevice& device;
     uint64              image_idx            = 0; // present queue timeline value
     uint                max_frames_in_flight = 3;
-
-    std::atomic_uint64_t present_timeline = 0;
-
-private:
-    void OnFinishPresent(uint64 _image_idx);
-    void EnqueuePresent(uint64 _present_idx);
-
-private:
-    Array<std::jthread> present_threads;
-    std::atomic<uint>   cur_present_cnt = 0;
 };
 } // namespace Moer::Render
 

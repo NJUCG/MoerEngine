@@ -857,6 +857,7 @@ VulkanResourceHeapStorage& VulkanHeapManager::CreateResourceHeap(const VulkanOff
     buffer_ci.usage = VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT |
                       VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT |
                       VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
+                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
 #if WITH_CUDA

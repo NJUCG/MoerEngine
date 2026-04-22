@@ -1382,7 +1382,8 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     Moer::Array<VkFormat> color_attachment_formats(attachment_count);
 
     for (int i = 0; i < attachment_count; ++i) {
-        color_attachment_formats[i] = VkFormat(_create_info.color_attachments_info[i].pixel_format);
+        color_attachment_formats[i] =
+            VulkanEnumTranslator::METoVKFormat(_create_info.color_attachments_info[i].pixel_format);
     }
     VkPipelineRenderingCreateInfo rendering_create_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     rendering_create_info.pNext                   = nullptr;

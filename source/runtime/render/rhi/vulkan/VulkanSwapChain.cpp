@@ -109,19 +109,13 @@ ChooseSwapExtent(uint32_t* width, uint32_t* height, const VkSurfaceCapabilitiesK
 VkSwapchain::VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info) :
     Swapchain(),
     device(*static_cast<VulkanDevice*>(&_device)) {
-    present_threads.resize(max_frames_in_flight);
     CreateOrRecreate(_info);
 }
 void VkSwapchain::WaitFrameInFlight() {
-    // if (image_idx < max_frames_in_flight) {
-    //     return;
-    // }
-    // auto frame_offset = image_idx % max_frames_in_flight;
-    // vkWaitForFences(device.GetDevice(), 1, &in_flight_fences[frame_offset], VK_TRUE, UINT64_MAX);
-    // vkResetFences(device.GetDevice(), 1, &in_flight_fences[frame_offset]);
-    while (cur_present_cnt.load(std::memory_order_relaxed) >= max_frames_in_flight) {
-        std::this_thread::yield();
+    if (image_idx < max_frames_in_flight) {
+        return;
     }
+    WaitFrameInFlight(image_idx);
 }
 
 void VkSwapchain::WaitFrameInFlight(uint64 _image_idx) {
@@ -153,11 +147,6 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     VkInstance     instance   = device.GetInstance();
     if (b_recreate) {
         Sync();
-        for (auto& thread : present_threads) {
-            if (thread.joinable()) {
-                thread.join();
-            }
-        }
     }
     //create surface by window handle
     assert(_info.window_handle != 0 && "Window handle is null when creating vulkan swapchain");
@@ -285,14 +274,21 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     image_idx = 0;
 }
 VkSwapchain::~VkSwapchain() {
+    if (handle != VK_NULL_HANDLE) {
+        Sync();
+    }
+
     if (handle) {
         vkDestroySwapchainKHR(device.GetDevice(), handle, VK_NULL_HANDLE);
+        handle = VK_NULL_HANDLE;
     }
     if (surface) {
         vkDestroySurfaceKHR(device.GetInstance(), surface, VK_NULL_HANDLE);
+        surface = VK_NULL_HANDLE;
     }
     for (size_t i = 0; i < swapchain_textures.size(); ++i) {
         MoerDelete(swapchain_textures[i]);
+        swapchain_textures[i] = nullptr;
         vkDestroySemaphore(device.GetDevice(), image_ready_fences[i], VK_NULL_HANDLE);
         vkDestroySemaphore(device.GetDevice(), render_finished_fences[i], VK_NULL_HANDLE);
     }
@@ -355,39 +351,10 @@ void VkSwapchain::Present(VkQueue _queue, uint _index) {
     } else if (result != VK_SUCCESS) {
         assert(false && "Error presenting to swapchain.");
     }
-    if (use_present_fence) {
-        // 仅在使用 present fence 的情况下异步等待 in_flight_fences
-        EnqueuePresent(image_idx);
-    }
     ++image_idx;
 }
 
-void VkSwapchain::OnFinishPresent(uint64 _image_idx) {
-    cur_present_cnt.fetch_sub(1, std::memory_order_acq_rel);
-}
-
-void VkSwapchain::EnqueuePresent(uint64 _present_idx) {
-
-    cur_present_cnt.fetch_add(1, std::memory_order_acq_rel);
-    auto& thread = present_threads[_present_idx % max_frames_in_flight];
-    if (thread.joinable()) {
-        thread.join();
-    }
-    thread = std::jthread([this, _present_idx]() {
-        vkWaitForFences(
-            device.GetDevice(), 1, &in_flight_fences[_present_idx % max_frames_in_flight], VK_TRUE, UINT64_MAX
-        );
-        vkResetFences(device.GetDevice(), 1, &in_flight_fences[_present_idx % max_frames_in_flight]);
-        OnFinishPresent(_present_idx);
-    });
-}
-
 void VkSwapchain::Sync() {
-    //wait for present copy
-    while (cur_present_cnt.load(std::memory_order_relaxed) > 0) {
-        std::this_thread::yield();
-    }
-    // wait for present queue
     vkQueueWaitIdle(device.GetPresentQueue());
 }
 } // namespace Moer::Render
