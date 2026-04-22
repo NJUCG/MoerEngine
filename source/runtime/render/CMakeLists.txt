@@ -11,11 +11,13 @@ set(render_native_headers ${render_module_headers})
 set(render_native_sources ${render_module_sources})
 
 set(render_editor_ui_headers
+    ${moer_root_dir}/source/editor/raster_ui/CooperativeOpsUI.h
     ${moer_root_dir}/source/editor/raster_ui/RasterUI.h
     ${moer_root_dir}/source/editor/raytracing_ui/RaytracingUI.h
 )
 
 set(render_editor_ui_sources
+    ${moer_root_dir}/source/editor/raster_ui/CooperativeOpsUI.cpp
     ${moer_root_dir}/source/editor/raster_ui/RasterUI.cpp
     ${moer_root_dir}/source/editor/raytracing_ui/RaytracingUI.cpp
 )
@@ -45,7 +47,7 @@ target_include_directories(${target_name}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/volk>
-	PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/DirectXShaderCompiler/include>
+	PUBLIC $<BUILD_INTERFACE:${MOER_DXC_INCLUDE_DIR}>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/imgui>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/smaa>

@@ -58,6 +58,7 @@ private:
     void ShowConfig();
 #if WITH_PROFILE
     void ShowMemoryProfiler(bool* p_open);
+    void DrawPassAndChildren(const char* parent_name, int depth);
 #endif
     void ShowOverlay();
 
@@ -71,7 +72,7 @@ private:
     bool m_b_need_reload = false;
 
 #if WITH_PROFILE
-    bool m_b_show_memory_profiler = false;
+    bool   m_b_show_memory_profiler = false;
     float2 m_memory_profiler_pos{};
     float2 m_memory_profiler_resolution{300, 200};
 #endif

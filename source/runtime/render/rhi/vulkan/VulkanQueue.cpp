@@ -1456,7 +1456,7 @@ public:
         cmd_list.CopyBufferToTexture(
             reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
             texture,
-            tmp_buffer.GetByteSize(),
+            _cmd.Data().size_bytes(),
             tmp_buffer.GetByteOffset(),
             _cmd.Offset(),
             _cmd.Size(),

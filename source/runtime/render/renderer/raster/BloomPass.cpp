@@ -45,6 +45,10 @@ BloomPass::BloomPass(RasterContext& context) {
 
 TextureWithHandle
 BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, TextureWithHandle& input_texture) {
+    if (!ui_config.bloom_enabled) {
+        return input_texture;
+    }
+
     const uint mip_cnt = context.textures.bloom_downsample_chain.tex->GetNumMips();
 
     Sampler             linear_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};

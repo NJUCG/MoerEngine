@@ -12,12 +12,10 @@ endif()
 
 # ShaderMake for NRD
 if (WIN32)
-	set(REDIST_DXC "${CMAKE_CURRENT_SOURCE_DIR}/DirectXShaderCompiler/bin/Windows/dxc.exe")
+	set(REDIST_DXC "${MOER_DXC_EXECUTABLE}")
     message(STATUS "REDIST_DXC=${REDIST_DXC}")
 else()
-	# Add execute permissions
-	file(CHMOD ${CMAKE_CURRENT_SOURCE_DIR}/DirectXShaderCompiler/bin/Linux/dxc PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
-	set(REDIST_DXC "${CMAKE_CURRENT_SOURCE_DIR}/DirectXShaderCompiler/bin/Linux/dxc")
+	message(FATAL_ERROR "The vendored DXC package currently only supports Windows x64.")
 endif()
 if (EXISTS "${REDIST_DXC}")
 	if (WIN32 AND NOT DXC_PATH)
