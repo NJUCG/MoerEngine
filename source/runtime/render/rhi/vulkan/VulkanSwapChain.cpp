@@ -21,7 +21,6 @@
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 #include "vulkan/vulkan_core.h"
-#include "window/WindowContext.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -148,16 +147,22 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     if (b_recreate) {
         Sync();
     }
-    //create surface by window handle
-    assert(_info.window_handle != 0 && "Window handle is null when creating vulkan swapchain");
-    Moer::WindowContext::CreateVulkanSurface(
-        instance, (WindowHandle*)_info.window_handle, VK_NULL_HANDLE, &surface
-    );
+    if (surface == VK_NULL_HANDLE) {
+        assert(_info.surface.create_vulkan_surface && "Vulkan swapchain requires a surface creation callback");
+        _info.surface.create_vulkan_surface(
+            _info.surface.surface_user_data,
+            instance,
+            VK_NULL_HANDLE,
+            &surface
+        );
+        assert(surface != VK_NULL_HANDLE && "Vulkan surface creation returned a null surface");
+    }
     //create swapchain
     VkSurfaceCapabilitiesKHR capabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.GetGpu(), surface, &capabilities);
     auto details = VkUtil::QuerySwapChainSupport(device.GetGpu(), surface);
     fmt          = ChooseSwapSurfaceFormat(details.formats, _info.preferred_format);
+    size         = _info.size;
     ChooseSwapExtent(&size.x, &size.y, details.capabilities);
     if (size.x == 0 || size.y == 0) {
         LOG_WARNING("Swapchain recreate skipped due to zero swapchain extent.");

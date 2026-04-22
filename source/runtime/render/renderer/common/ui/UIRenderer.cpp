@@ -19,6 +19,9 @@ struct UIRenderer::Impl {
     void EndGUIFrame() {
         backend.EndGUIFrame();
     }
+    const ImGuiIOInputSnapshot& GetInputSnapshot() const {
+        return backend.GetInputSnapshot();
+    }
 
     void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
         backend.RenderGUI(_cmd_list, _framebuffer);
@@ -46,12 +49,16 @@ void UIRenderer::EndGUIFrame() {
     impl->EndGUIFrame();
 }
 
+const ImGuiIOInputSnapshot& UIRenderer::GetInputSnapshot() const {
+    return impl->GetInputSnapshot();
+}
+
 void UIRenderer::RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
     impl->RenderGUI(_cmd_list, _framebuffer);
 }
 
-TextureView UIRenderer::GetWindowFrameBuffer(void* _window) {
-    return impl->backend.GetWindowFrameBuffer(_window);
+UIRenderer::WindowRenderTarget UIRenderer::GetWindowRenderTarget(std::string_view window_name) {
+    return impl->backend.GetWindowRenderTarget(window_name);
 }
 
 void UIRenderer::PresentWindows() {

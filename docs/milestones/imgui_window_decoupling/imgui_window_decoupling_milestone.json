@@ -1,0 +1,301 @@
+{
+  "project": "ImGui Window IO Decoupling",
+  "planning_only": false,
+  "goal": "Reduce future ImGui upgrade impact by isolating ImGui context, IO hook ownership, platform viewport handling, draw-data recording, and presentation routing behind one render-owned integration boundary.",
+  "doc_refs": [
+    "docs/rules/Rule_Codex.md",
+    ".codex/skills/strict-engineering/SKILL.md",
+    "docs/checkpoints/imgui_detached_scene_window_fix_checkpoints.json"
+  ],
+  "source_analyzed": [
+    "source/runtime/render/window/WindowContext.h",
+    "source/runtime/render/window/WindowContext.cpp",
+    "source/runtime/render/window/WindowContextImpl.h",
+    "source/runtime/render/window/WindowContextImpl.cpp",
+    "source/runtime/render/window/glfw/GLFWWindowImpl.h",
+    "source/runtime/render/window/glfw/GLFWWindowImpl.cpp",
+    "source/runtime/render/window/WindowInput.h",
+    "source/runtime/render/window/WindowInput.cpp",
+    "source/runtime/render/renderer/common/UIRenderer.h",
+    "source/runtime/render/renderer/common/UIRenderer.cpp",
+    "source/runtime/render/renderer/common/ui/UIRenderer.cpp",
+    "source/runtime/render/renderer/common/ui/ImGUIRenderer.h",
+    "source/runtime/render/renderer/common/ui/ImGUIRenderer.cpp",
+    "source/runtime/render/renderer/common/UiCombinePass.h",
+    "source/runtime/render/renderer/Renderer.h",
+    "source/runtime/render/renderer/Renderer.cpp",
+    "source/runtime/render/renderer/raster/RasterRenderer.cpp",
+    "source/runtime/render/renderer/raytracing/RaytracingRenderer.cpp",
+    "source/runtime/render/rhi/RHIResource.h",
+    "source/runtime/render/rhi/vulkan/VulkanSwapChain.h",
+    "source/runtime/render/rhi/vulkan/VulkanSwapChain.cpp",
+    "source/editor/EditorUI.h",
+    "source/editor/EditorUI.cpp",
+    "source/runtime/Engine.cpp",
+    "source/profiler/main.cpp"
+  ],
+  "document_contract": {
+    "milestone_file": "docs/milestones/imgui_window_decoupling/imgui_window_decoupling_milestone.json",
+    "checkpoint_files": [
+      "docs/milestones/imgui_window_decoupling/imgui_io_ownership_checkpoint.json",
+      "docs/milestones/imgui_window_decoupling/imgui_presentation_boundary_checkpoint.json"
+    ],
+    "checkpoint_density_rule": "This milestone completes in two large checkpoints. Do not split into stage files unless the implementation discovers a hard dependency.",
+    "update_rule": "Replans must update this milestone file and the active checkpoint file in the same change.",
+    "validation_rule": "Use only existing repository scripts. Primary gates are just b for build and just r only when runtime behavior is touched."
+  },
+  "fixed_decisions": [
+    {
+      "id": "D-01",
+      "decision": "Engine input is derived from a concrete ImGuiIO wrapper/snapshot after ImGui consumes native events.",
+      "implementation_impact": "Delete GLFW callback-side input writes and replace them with one ImGuiIOInput-to-engine-input update path."
+    },
+    {
+      "id": "D-02",
+      "decision": "Keep official imgui_impl_glfw as the platform backend.",
+      "implementation_impact": "Centralize official backend calls instead of implementing a custom ImGui platform backend."
+    },
+    {
+      "id": "D-03",
+      "decision": "Keep extra ImGui viewport presentation as independent RHI submits initially.",
+      "implementation_impact": "Do not batch platform viewport presents in this milestone unless a concrete ordering bug blocks correctness."
+    }
+  ],
+  "target_contracts": [
+    {
+      "name": "WindowSystem",
+      "owns": [
+        "Native main window lifetime",
+        "Event polling",
+        "Window size and close state",
+        "Native handle and surface creation data",
+        "Cursor mode"
+      ],
+      "must_not_own": [
+        "ImGui context",
+        "ImGui IO callbacks",
+        "Camera input semantics",
+        "Swapchain objects"
+      ]
+    },
+    {
+      "name": "ImGuiIntegration",
+      "owns": [
+        "ImGui context lifetime",
+        "Official imgui_impl_glfw initialization and shutdown",
+        "ImGui IO hook ownership",
+        "NewFrame/Render/UpdatePlatformWindows",
+        "ImGui platform viewport renderer callbacks",
+        "Font atlas upload and image registration"
+      ],
+      "must_not_own": [
+        "Scene render passes",
+        "Window creation policy beyond official backend callbacks",
+        "RHI backend surface creation internals"
+      ]
+    },
+    {
+      "name": "ImGuiIOInput",
+      "owns": [
+        "One per-frame input snapshot derived from ImGuiIO",
+        "Editor camera input fields",
+        "Play-mode input override inputs",
+        "Mouse, wheel, key, capture, and cursor policy inputs"
+      ],
+      "must_not_own": [
+        "Native GLFW callbacks",
+        "ImGui backend initialization",
+        "Swapchain creation"
+      ]
+    },
+    {
+      "name": "PresentationSurface",
+      "owns": [
+        "SwapchainRef",
+        "Surface extent and format",
+        "Resize synchronization",
+        "Per-window present source validation",
+        "RHIPresentRequest creation"
+      ],
+      "must_not_own": [
+        "ImGuiViewport as public API",
+        "Editor docking state",
+        "Scene pass logic"
+      ]
+    },
+    {
+      "name": "RendererUIBackend",
+      "owns": [
+        "ImDrawData to CommandList recording",
+        "Main viewport UI recording",
+        "Platform viewport UI recording",
+        "Platform viewport independent present submission"
+      ],
+      "must_not_own": [
+        "Native event callbacks",
+        "Editor input policy",
+        "Window-system lifecycle"
+      ]
+    }
+  ],
+  "architecture_rules": [
+    {
+      "id": "AR-01",
+      "rule": "Only ImGuiIntegration may call imgui_impl_glfw APIs."
+    },
+    {
+      "id": "AR-02",
+      "rule": "No GLFW callback writes WindowInput camera, mouse, key, scroll, or play-mode state."
+    },
+    {
+      "id": "AR-03",
+      "rule": "Renderer and editor code must not depend on raw ImGuiViewport for swapchain or framebuffer ownership."
+    },
+    {
+      "id": "AR-04",
+      "rule": "RHI swapchain creation must not call WindowContext."
+    },
+    {
+      "id": "AR-05",
+      "rule": "Main-window present and platform-window present use the same PresentationSurface contract, while platform-window present remains independently submitted in this milestone."
+    },
+    {
+      "id": "AR-06",
+      "rule": "Delete obsolete callback and UI renderer surfaces instead of preserving compatibility shims."
+    }
+  ],
+  "target_frame_order": [
+    "WindowSystem::PollEvents",
+    "ImGuiIntegration::BeginFrame",
+    "EditorUI::BuildFrame",
+    "ImGuiIOInput::Snapshot",
+    "EditorInputPolicy::ApplySnapshot",
+    "Renderer scene passes",
+    "RendererUIBackend::RecordMainViewport",
+    "ImGuiIntegration::UpdatePlatformWindows",
+    "RendererUIBackend::RecordPlatformViewports",
+    "Renderer submit main present",
+    "RendererUIBackend::PresentPlatformViewports"
+  ],
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "ImGui IO ownership and engine input reroute",
+      "status": "completed",
+      "checkpoint_file": "docs/milestones/imgui_window_decoupling/imgui_io_ownership_checkpoint.json",
+      "exit_gate": [
+        "ImGuiIntegration is the only native IO hook owner.",
+        "ImGuiIOInput is the only source for editor camera/play input.",
+        "GLFW callback-side WindowInput writes are deleted.",
+        "Official imgui_impl_glfw remains the platform backend."
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Presentation boundary and ImGui renderer upgrade surface",
+      "status": "completed",
+      "checkpoint_file": "docs/milestones/imgui_window_decoupling/imgui_presentation_boundary_checkpoint.json",
+      "exit_gate": [
+        "PresentationSurface owns main and platform viewport swapchains.",
+        "VulkanSwapChain no longer depends on WindowContext.",
+        "Editor/renderer code does not expose raw ImGuiViewport framebuffer ownership.",
+        "Public UI integration surface is reduced to one render-owned path."
+      ]
+    }
+  ],
+  "implementation_gap_assessment": [
+    {
+      "id": "GAP-01",
+      "area": "IO hook ownership",
+      "current_implementation": [
+        "GLFWWindowImpl::InstallInterface installs GLFW callbacks.",
+        "ImGUIRenderBackend initializes imgui_impl_glfw with callback installation enabled.",
+        "Current behavior depends on callback chaining and ordering."
+      ],
+      "target_contract": "Only ImGuiIntegration owns native IO hook installation.",
+      "required_delta": [
+        "Remove GLFW callback-side engine input writes.",
+        "Centralize imgui_impl_glfw usage inside ImGuiIntegration.",
+        "Expose input through ImGuiIOInput snapshot."
+      ],
+      "risk": "High. Input behavior changes are user-visible and affect camera, UI text input, F5/F8 play mode, and cursor capture."
+    },
+    {
+      "id": "GAP-02",
+      "area": "Engine input policy",
+      "current_implementation": [
+        "WindowInput is mutated in GLFW callbacks.",
+        "EditorUI also mutates WindowInput from ImGui window state.",
+        "No single frame input snapshot exists."
+      ],
+      "target_contract": "Editor and play input are derived from one ImGuiIOInput snapshot after ImGui frame input is valid.",
+      "required_delta": [
+        "Add concrete ImGuiIOInput snapshot fields.",
+        "Move camera/play/cursor policy to consume the snapshot once per frame.",
+        "Keep WindowInput only as a temporary engine-facing state sink."
+      ],
+      "risk": "High. Bad ordering will break camera focus or UI capture."
+    },
+    {
+      "id": "GAP-03",
+      "area": "Swapchain and surface ownership",
+      "current_implementation": [
+        "Renderer constructs main SwapchainCreateInfo from WindowContext::GetMainWindow.",
+        "VulkanSwapChain includes WindowContext and calls WindowContext::CreateVulkanSurface.",
+        "ImGUIRenderer platform viewport callbacks create and resize swapchains directly."
+      ],
+      "target_contract": "PresentationSurface owns swapchain lifecycle and supplies backend-neutral surface creation data to RHI.",
+      "required_delta": [
+        "Introduce PresentationSurface for main window.",
+        "Route ImGui platform viewport swapchains through PresentationSurface.",
+        "Remove WindowContext dependency from VulkanSwapChain."
+      ],
+      "risk": "Critical. Resize, minimize, shutdown, and detached viewport present can deadlock or present wrong textures if ordering is wrong."
+    },
+    {
+      "id": "GAP-04",
+      "area": "ImGui viewport boundary",
+      "current_implementation": [
+        "EditorUI queries ImGui::FindWindowByName and asks UIRenderer for viewport framebuffer.",
+        "UiCombinePass can draw scene output into an ImGui platform viewport framebuffer.",
+        "RenderGUI updates platform windows after main draw recording."
+      ],
+      "target_contract": "Raw ImGuiViewport mapping is private to ImGuiIntegration; editor and renderer use typed render target contracts.",
+      "required_delta": [
+        "Replace public GetWindowFrameBuffer(raw viewport) with a typed Scene Color target request.",
+        "Ensure detached Scene Color never overrides main-window present source.",
+        "Move platform viewport resource availability checks into ImGuiIntegration/PresentationSurface."
+      ],
+      "risk": "High. This is the same ownership class as the detached Scene Color present bug."
+    },
+    {
+      "id": "GAP-05",
+      "area": "UI integration public surface",
+      "current_implementation": [
+        "There is a legacy global non-namespaced UIRenderer path and a Moer::Render::UIRenderer path.",
+        "Profiler has a separate manual window/swapchain/UI render loop.",
+        "ImGUIRenderer owns too many concerns in one file."
+      ],
+      "target_contract": "One render-owned UI integration surface contains ImGui version-sensitive code and exposes only lifecycle, input snapshot, image registration, draw recording, viewport update, and present.",
+      "required_delta": [
+        "Remove unused duplicate UIRenderer surfaces.",
+        "Align profiler and editor on the same UI lifecycle where practical.",
+        "Keep ImGui version-sensitive code inside the smallest possible integration module."
+      ],
+      "risk": "Medium. Mostly API cleanup, but profiler/editor lifecycle drift can reintroduce upgrade friction."
+    }
+  ],
+  "validation": [
+    "For planning-only changes, no runtime validation is required.",
+    "For CP-01 implementation, run just b and just r; manually cover camera, text input, F5/F8, cursor capture, and Scene Color hover focus.",
+    "For CP-02 implementation, run just b and just r; manually cover main resize, detach, detached resize, minimize/restore, re-dock, renderer switch, profiler startup if available, and shutdown.",
+    "Do not add new validation scripts."
+  ],
+  "current_state": {
+    "active_checkpoint": null,
+    "completed": [
+      "CP-01",
+      "CP-02"
+    ]
+  }
+}

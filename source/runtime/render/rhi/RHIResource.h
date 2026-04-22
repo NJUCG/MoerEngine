@@ -1396,8 +1396,15 @@ struct RenderPassInfo {
     uint                   viewport_cnt = 1;
 };
 
+struct SwapchainSurfaceInfo {
+    uintptr_t native_window_handle = 0;
+    void*     surface_user_data    = nullptr;
+    void (*create_vulkan_surface)(void* user_data, void* instance, void* allocation_callback, void* surface) =
+        nullptr;
+};
+
 struct SwapchainCreateInfo {
-    uintptr_t    window_handle;
+    SwapchainSurfaceInfo surface;
     Extent2D     size;
     uint         back_buffer_sz   = 2;
     EPixelFormat preferred_format = PF_R8G8B8A8_SRGB;

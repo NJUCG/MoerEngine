@@ -39,9 +39,6 @@ public:
     }
 
     SceneWindowTarget   GetSceneWindowTarget();
-    bool                IsSeperateWindow() const;
-    Render::TextureView GetWindowFrameBuffer();
-
     void RegisterRendererConfigSection(
         std::string renderer_name,
         std::string section_name,
@@ -61,6 +58,7 @@ private:
     void DrawPassAndChildren(const char* parent_name, int depth);
 #endif
     void ShowOverlay();
+    void ApplyInputSnapshot();
 
 private:
     bool   m_b_show_scene_color = true;
@@ -68,6 +66,7 @@ private:
     float2 m_scene_color_resolution; // TODO: why float2? not uint2?
     float2 m_scene_color_pos;
     bool   m_b_show = true;
+    bool   m_scene_color_hovered = false;
 
     bool m_b_need_reload = false;
 

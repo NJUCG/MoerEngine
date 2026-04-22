@@ -202,22 +202,24 @@ void ConsoleSystem::PumpCommandOutputs() {
 
 void ConsoleSystem::HandleHotkeys() {
     if (ImGui::GetIO().WantTextInput) {
-        m_last_grave_switch_state = WindowInput::Get().key_button_switch_state[KeyButtons::GRAVE_ACCENT];
-        m_last_escape_down = WindowInput::Get().key_button_state[KeyButtons::ESCAPE];
+        m_last_grave_switch_state = false;
+        m_last_escape_down = ImGui::IsKeyDown(ImGuiKey_Escape);
         return;
     }
 
-    const bool grave_switch = WindowInput::Get().key_button_switch_state[KeyButtons::GRAVE_ACCENT];
-    if (grave_switch != m_last_grave_switch_state) {
-        m_last_grave_switch_state = grave_switch;
+    const bool grave_released = ImGui::IsKeyReleased(ImGuiKey_GraveAccent);
+    if (grave_released && !m_last_grave_switch_state) {
+        m_last_grave_switch_state = true;
         if (IsRenderWindowActive()) {
             CycleMode();
         } else {
             ToggleEditorConsolePage();
         }
+    } else if (!grave_released) {
+        m_last_grave_switch_state = false;
     }
 
-    const bool escape_down = WindowInput::Get().key_button_state[KeyButtons::ESCAPE];
+    const bool escape_down = ImGui::IsKeyDown(ImGuiKey_Escape);
     if (escape_down && !m_last_escape_down) {
         if (m_editor_console_page_open) {
             m_editor_console_page_open = false;

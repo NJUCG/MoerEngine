@@ -48,44 +48,4 @@ void WindowContext::CreateVulkanSurface(
     WindowImpl::GetInstance().CreateVulkanSurface(instance, window, allocation_callback, surface);
 };
 
-void WindowContext::RegisterOnCharFunc(WindowType* handle, OnCharFunc func) {
-    WindowImpl::GetInstance().RegisterOnCharFunc(handle, func);
-}
-void WindowContext::RegisterOnCursorEnterFunc(WindowType* handle, OnCursorEnterFunc func) {
-    WindowImpl::GetInstance().RegisterOnCursorEnterFunc(handle, func);
-}
-void WindowContext::RegisterOnCursorPosFunc(WindowType* handle, OnCursorPosFunc func) {
-    WindowImpl::GetInstance().RegisterOnCursorPosFunc(handle, func);
-}
-void WindowContext::RegisterOnDropFunc(WindowType* handle, OnDropFunc func) {
-    WindowImpl::GetInstance().RegisterOnDropFunc(handle, func);
-}
-void WindowContext::RegisterOnFrameBufferSizeFunc(WindowType* handle, OnFrameBufferSizeFunc func) {
-    WindowImpl::GetInstance().RegisterOnFrameBufferSizeFunc(handle, func);
-}
-void WindowContext::RegisterOnKeyFunc(WindowType* handle, OnKeyFunc func) {
-    WindowImpl::GetInstance().RegisterOnKeyFunc(handle, func);
-}
-void WindowContext::RegisterOnMouseButtonFunc(WindowType* handle, OnMouseButtonFunc func) {
-    WindowImpl::GetInstance().RegisterOnMouseButtonFunc(handle, func);
-}
-void WindowContext::RegisterOnScrollFunc(WindowType* handle, OnScrollFunc func) {
-    WindowImpl::GetInstance().RegisterOnScrollFunc(handle, func);
-}
-void WindowContext::RegisterOnWindowCloseFunc(WindowType* handle, OnWindowCloseFunc func) {
-    WindowImpl::GetInstance().RegisterOnWindowCloseFunc(handle, func);
-}
-void WindowContext::RegisterOnWindowContentScaleFunc(WindowType* handle, OnWindowContentScaleFunc func) {
-    WindowImpl::GetInstance().RegisterOnWindowContentScaleFunc(handle, func);
-}
-void WindowContext::RegisterOnWindowPosFunc(WindowType* handle, OnWindowPosFunc func) {
-    WindowImpl::GetInstance().RegisterOnWindowPosFunc(handle, func);
-}
-void WindowContext::RegisterOnWindowSizeFunc(WindowType* handle, OnWindowSizeFunc func) {
-    WindowImpl::GetInstance().RegisterOnWindowSizeFunc(handle, func);
-}
-void WindowContext::RegisterOnWindowFocusFunc(WindowType* handle, OnWindowFocusFunc func) {
-    WindowImpl::GetInstance().RegisterOnWindowFocusFunc(handle, func);
-}
-
 } // namespace Moer

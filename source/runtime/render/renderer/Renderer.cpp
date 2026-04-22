@@ -30,13 +30,16 @@ Renderer::Renderer(
     cmd_list() {
 
     {
-        swapchain_createinfo = SwapchainCreateInfo{
-            .window_handle    = (uintptr_t)WindowContext::GetMainWindow(),
-            .size             = {resolution.x, resolution.y},
-            .back_buffer_sz   = 2,
-            .preferred_format = PF_R8G8B8A8_SRGB
-        };
-        swapchain = device.CreateSwapchain(swapchain_createinfo);
+        presentation_surface = MakeUnique<PresentationSurface>(
+            device,
+            PresentationSurfaceDesc{
+                .window            = *WindowContext::GetMainWindow(),
+                .size              = {resolution.x, resolution.y},
+                .back_buffer_count = 2,
+                .preferred_format  = PF_R8G8B8A8_SRGB,
+                .debug_name        = "Main Presentation Surface",
+            }
+        );
     }
     {
         bindless_array = scene.bindless_array();
@@ -67,7 +70,7 @@ void Renderer::ReleaseResources() {
 
     timeline->Wait(time);
     gfx_queue.Sync();
-    swapchain->Sync();
+    presentation_surface->Sync();
     device.WaitIdle();
 
     cmd_list.UpdateBindlessArray(bindless_array);
@@ -99,9 +102,7 @@ Renderer::EWindowState Renderer::TickWindowContext(const EngineHooks& hooks) {
         resolution.y = uint32(w_height);
 
         gfx_queue.Sync();
-        swapchain_createinfo.size = {resolution.x, resolution.y};
-        swapchain->Sync();
-        swapchain->Recreate(swapchain_createinfo);
+        presentation_surface->Resize({resolution.x, resolution.y});
 
         return EWindowState::SizeChanged; // 继续执行Tick()
 
