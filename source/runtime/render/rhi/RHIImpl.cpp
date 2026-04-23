@@ -11,6 +11,7 @@
 #include "GLFW/glfw3.h"
 namespace Moer::Render {
 namespace {
+// WindowSurfaceSource implementation for GLFW-backed windows used by current RHI backends.
 class GLFWWindowSurfaceSource final : public WindowSurfaceSource {
 public:
     GLFWWindowSurfaceSource(void* window_system_handle, uintptr_t platform_window_handle) :
@@ -42,7 +43,11 @@ public:
                 static_cast<const VkAllocationCallbacks*>(allocation_callback),
                 static_cast<VkSurfaceKHR*>(surface)
             );
-            MOER_ASSERT(result == VK_SUCCESS, "glfwCreateWindowSurface failed with VkResult={}", static_cast<int32_t>(result));
+            MOER_ASSERT(
+                result == VK_SUCCESS,
+                "glfwCreateWindowSurface failed with VkResult={} while creating a GLFW-backed Vulkan surface",
+                static_cast<int32_t>(result)
+            );
             return;
         }
 

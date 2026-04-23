@@ -135,7 +135,7 @@ void* GLFWWindowImpl::GetInteropHandle(const WindowHandle* _window, EWindowInter
 #if PLATFORM_WINDOWS
         return glfwGetWin32Window((GLFWwindow*)_window->window);
 #else
-        MOER_ASSERT(false, "Platform window interop is not supported on this platform");
+        MOER_ASSERT(false, "Platform window interop is not supported on non-Windows platforms");
         return nullptr;
 #endif
     }
