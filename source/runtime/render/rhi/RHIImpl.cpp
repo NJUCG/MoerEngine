@@ -36,14 +36,16 @@ public:
         void*    surface
     ) const override {
         switch (rhi_type) {
-            case ERHIType::Vulkan:
-                glfwCreateWindowSurface(
+            case ERHIType::Vulkan: {
+                const VkResult result = glfwCreateWindowSurface(
                     static_cast<VkInstance>(instance),
                     static_cast<GLFWwindow*>(window_system_handle),
                     static_cast<const VkAllocationCallbacks*>(allocation_callback),
                     static_cast<VkSurfaceKHR*>(surface)
                 );
+                MOER_ASSERT(result == VK_SUCCESS, "glfwCreateWindowSurface failed with VkResult={}", static_cast<int32_t>(result));
                 return;
+            }
             default:
                 MOER_ASSERT(
                     false,
@@ -161,12 +163,14 @@ IOInterfaceRef RenderDevice::CreateIOInterface(CopyQueue& _copy_queue) {
 }
 
 SwapchainSurfaceInfo RenderDevice::Impl::CreatePlatformSwapchainSurfaceInfo(const Moer::WindowHandle& window) {
+    MOER_ASSERT(window.window != nullptr, "Swapchain surface creation requires a valid window handle");
+
     void* platform_window = Moer::GetWindowInteropHandle(
         &window, Moer::EWindowInteropHandleType::PlatformWindow
     );
     MOER_ASSERT(
-        window.window != nullptr && platform_window != nullptr,
-        "Swapchain surface creation requires both a valid window handle and a valid platform window handle"
+        platform_window != nullptr,
+        "Swapchain surface creation requires a valid platform window handle"
     );
 
     return SwapchainSurfaceInfo{
