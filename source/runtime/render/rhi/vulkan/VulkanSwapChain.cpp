@@ -144,7 +144,10 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     }
     const WindowSurfaceSource* existing_surface_source = surface_info.source.get();
     const WindowSurfaceSource* incoming_surface_source = _info.surface.source.get();
-    MOER_ASSERT(incoming_surface_source != nullptr, "Vulkan swapchain recreate requires a valid incoming surface source");
+    MOER_ASSERT(
+        incoming_surface_source != nullptr,
+        "Vulkan swapchain recreate requires a valid incoming surface source from SwapchainCreateInfo"
+    );
     const bool surface_identity_changed =
         surface != VK_NULL_HANDLE &&
         (existing_surface_source == nullptr ||

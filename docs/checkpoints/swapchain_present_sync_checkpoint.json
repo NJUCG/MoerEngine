@@ -26,7 +26,7 @@
     "temporary_runtime_rule": "Until per-viewport present sync exists, swapchain/viewport lifecycle code must use RHIExecutor::Sync(ERHISyncDepth::Present) instead of calling GraphicsQueue::Sync() or other queue Sync() methods directly.",
     "why_this_is_only_temporary": [
       "ERHISyncDepth::Present currently drains all present-visible work before the sync point, not one specific swapchain or viewport.",
-      "Swapchain::Sync() still exists as a backend-specific host-side wait for the present queue to become idle before resize/destroy paths continue, but caller-side queue ownership has already moved to RHIExecutor semantics."
+      "The backend-specific `Swapchain::Sync()` call still exists as a host-side wait for the present queue to become idle before swap chain resize/destroy paths continue, but caller-side queue ownership has already moved to RHIExecutor semantics."
     ]
   },
   "design_constraints": [
@@ -91,7 +91,7 @@
         "source/runtime/render/renderer/common/ui/ImGUIRenderer.cpp",
         "source/profiler/main.cpp"
       ],
-      "result": "Swapchain resize/destroy/release paths now route through RHIExecutor::Sync(ERHISyncDepth::Present) or RHIExecutor::Sync(ERHISyncDepth::RHI) instead of explicit queue Sync() calls."
+      "result": "Swap chain resize/destroy/release paths now route through RHIExecutor::Sync(ERHISyncDepth::Present) or RHIExecutor::Sync(ERHISyncDepth::RHI) instead of explicit queue Sync() calls."
     },
     {
       "id": "CP-02",
