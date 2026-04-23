@@ -33,7 +33,7 @@ WindowHandle* WindowContext::GetMainWindow() {
     return &WindowImpl::GetInstance().main_window_handle;
 };
 
-void* GetWindowInteropHandle(WindowHandle* window, EWindowInteropHandleType type) {
+void* GetWindowInteropHandle(const WindowHandle* window, EWindowInteropHandleType type) {
     return WindowImpl::GetInstance().GetInteropHandle(window, type);
 }
 

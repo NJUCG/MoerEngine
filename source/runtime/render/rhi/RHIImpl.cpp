@@ -137,7 +137,7 @@ SwapchainSurfaceInfo RenderDevice::Impl::CreateGlfwSwapchainSurfaceInfo(const Mo
     MOER_ASSERT(window.window != nullptr, "Swapchain surface creation requires a valid window handle");
 
     void* platform_window = Moer::GetWindowInteropHandle(
-        const_cast<Moer::WindowHandle*>(&window), Moer::EWindowInteropHandleType::PlatformWindow
+        &window, Moer::EWindowInteropHandleType::PlatformWindow
     );
     MOER_ASSERT(platform_window != nullptr, "GLFW window does not expose a platform window handle");
 
