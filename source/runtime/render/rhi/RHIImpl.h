@@ -1931,7 +1931,7 @@ public:
     virtual void WaitIdle() {};
 
 protected:
-    static SwapchainSurfaceInfo CreateGlfwSwapchainSurfaceInfo(const Moer::WindowHandle& window);
+    static SwapchainSurfaceInfo CreatePlatformSwapchainSurfaceInfo(const Moer::WindowHandle& window);
 };
 
 } // namespace Moer::Render

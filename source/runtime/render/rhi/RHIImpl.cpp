@@ -160,7 +160,7 @@ IOInterfaceRef RenderDevice::CreateIOInterface(CopyQueue& _copy_queue) {
     return impl->CreateIOInterface(_copy_queue);
 }
 
-SwapchainSurfaceInfo RenderDevice::Impl::CreateGlfwSwapchainSurfaceInfo(const Moer::WindowHandle& window) {
+SwapchainSurfaceInfo RenderDevice::Impl::CreatePlatformSwapchainSurfaceInfo(const Moer::WindowHandle& window) {
     MOER_ASSERT(window.window != nullptr, "Swapchain surface creation requires a valid window handle");
 
     void* platform_window = Moer::GetWindowInteropHandle(

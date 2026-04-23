@@ -632,7 +632,7 @@ SwapchainRef D3D12Device::CreateSwapchain(const SwapchainCreateInfo& _info) {
 }
 
 SwapchainSurfaceInfo D3D12Device::CreateSwapchainSurfaceInfo(const Moer::WindowHandle& window) const {
-    return CreateGlfwSwapchainSurfaceInfo(window);
+    return CreatePlatformSwapchainSurfaceInfo(window);
 }
 
 void Moer::Render::D3D12Device::PostInit() {}
