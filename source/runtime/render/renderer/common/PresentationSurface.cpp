@@ -1,29 +1,14 @@
 #include "renderer/common/PresentationSurface.h"
 
-#include "log/LogSystem.h"
-
 #include <cassert>
 
 namespace Moer::Render {
-
-namespace {
-void CreateVulkanSurfaceFromWindowHandle(
-    void* user_data,
-    void* instance,
-    void* allocation_callback,
-    void* surface
-) {
-    auto* window = static_cast<Moer::WindowHandle*>(user_data);
-    assert(window && window->window && "PresentationSurface requires a valid window for Vulkan surface creation");
-    Moer::WindowContext::CreateVulkanSurface(instance, window, allocation_callback, surface);
-}
-} // namespace
 
 PresentationSurface::PresentationSurface(RenderDevice& in_device, PresentationSurfaceDesc desc) :
     device(in_device),
     window(desc.window),
     swapchain_info{
-        .surface          = BuildSurfaceInfo(&window),
+        .surface          = device.CreateSwapchainSurfaceInfo(window),
         .size             = desc.size,
         .back_buffer_sz   = desc.back_buffer_count,
         .preferred_format = desc.preferred_format,
@@ -34,15 +19,6 @@ PresentationSurface::PresentationSurface(RenderDevice& in_device, PresentationSu
     }
 
     swapchain = device.CreateSwapchain(swapchain_info);
-}
-
-SwapchainSurfaceInfo PresentationSurface::BuildSurfaceInfo(Moer::WindowHandle* window) {
-    assert(window && window->window && "PresentationSurface requires a valid window handle");
-    return SwapchainSurfaceInfo{
-        .native_window_handle = reinterpret_cast<uintptr_t>(Moer::WindowContext::GetNativeWindow(window)),
-        .surface_user_data    = window,
-        .create_vulkan_surface = CreateVulkanSurfaceFromWindowHandle,
-    };
 }
 
 void PresentationSurface::Resize(Extent2D new_size) {

@@ -3,10 +3,36 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "window/WindowContextImpl.h"
 #include "shader/ShaderResourceManager.h"
 
 #include "rhi/plugin/NrdPlugin.h"
 namespace Moer::Render {
+namespace {
+class GlfwWindowSurfaceSource final : public WindowSurfaceSource {
+public:
+    GlfwWindowSurfaceSource(void* window_system_handle, uintptr_t platform_window_handle) :
+        window_system_handle(window_system_handle),
+        platform_window_handle(platform_window_handle) {}
+
+    EWindowSystemType GetWindowSystem() const override {
+        return EWindowSystemType::GLFW;
+    }
+
+    void* GetWindowSystemHandle() const override {
+        return window_system_handle;
+    }
+
+    uintptr_t GetPlatformWindowHandle() const override {
+        return platform_window_handle;
+    }
+
+private:
+    void*     window_system_handle   = nullptr;
+    uintptr_t platform_window_handle = 0;
+};
+} // namespace
+
 PipelineHandle RenderDevice::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
     return impl->CreatePipeline(std::move(_pso_info), std::move(_shaders));
 }
@@ -85,6 +111,10 @@ FenceRef RenderDevice::CreateFence() {
     return impl->CreateFence();
 }
 
+SwapchainSurfaceInfo RenderDevice::CreateSwapchainSurfaceInfo(const Moer::WindowHandle& window) const {
+    return impl->CreateSwapchainSurfaceInfo(window);
+}
+
 SwapchainRef RenderDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
     return impl->CreateSwapchain(_info);
 }
@@ -101,6 +131,21 @@ BufferRef RenderDevice::CreateBuffer(
 
 IOInterfaceRef RenderDevice::CreateIOInterface(CopyQueue& _copy_queue) {
     return impl->CreateIOInterface(_copy_queue);
+}
+
+SwapchainSurfaceInfo RenderDevice::Impl::CreateGlfwSwapchainSurfaceInfo(const Moer::WindowHandle& window) {
+    MOER_ASSERT(window.window != nullptr, "Swapchain surface creation requires a valid window handle");
+
+    void* platform_window = Moer::GetWindowInteropHandle(
+        const_cast<Moer::WindowHandle*>(&window), Moer::EWindowInteropHandleType::PlatformWindow
+    );
+    MOER_ASSERT(platform_window != nullptr, "GLFW window does not expose a platform window handle");
+
+    return SwapchainSurfaceInfo{
+        .source = MakeShared<GlfwWindowSurfaceSource>(
+            window.window, reinterpret_cast<uintptr_t>(platform_window)
+        ),
+    };
 }
 
 const EShaderPlatform RenderDevice::GetShaderPlatform() const {

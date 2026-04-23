@@ -12,9 +12,6 @@ public:
     virtual ~GLFWWindowImpl();
 
     virtual void PollEvents() const override;
-    virtual void
-    CreateVulkanSurface(void* instance, WindowHandle* window, void* allocation_callback, void* surface)
-        override;
     virtual void Tick() override;
     virtual void ShutDown() override;
 
@@ -23,7 +20,7 @@ public:
     virtual void  GetWindowSize(WindowHandle*, int32_t* width, int32_t* height) const override;
     virtual void  SetTitle(WindowHandle*, const char* _new_title) override;
     virtual bool  ShouldClose(WindowHandle*) const override;
-    virtual void* GetNativeWindow(WindowHandle*) const override;
+    virtual void* GetInteropHandle(WindowHandle*, EWindowInteropHandleType type) const override;
 
 private:
     void TickCursorState();
@@ -32,10 +29,6 @@ private:
 
     GLFWWindowImpl();
     virtual void Init(const SurfaceInitInfo&) override;
-
-private:
-    void InitVulkan();
-    void InitD3D12();
 };
 } // namespace Moer
 #endif

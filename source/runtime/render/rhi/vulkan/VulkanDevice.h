@@ -112,6 +112,7 @@ public:
 
     CopyQueue& GetCopyQueue() override;
 
+    SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const Moer::WindowHandle& window) const override;
     SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
     IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;

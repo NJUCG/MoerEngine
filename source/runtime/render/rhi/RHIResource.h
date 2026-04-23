@@ -26,6 +26,26 @@
 #include <variant>
 
 static constexpr std::string_view default_name = "NoName";
+
+namespace Moer::Render {
+
+enum class EWindowSystemType : uint8_t {
+    GLFW
+};
+
+class RENDER_API WindowSurfaceSource {
+public:
+    virtual ~WindowSurfaceSource() = default;
+
+    virtual EWindowSystemType GetWindowSystem() const   = 0;
+    virtual void*             GetWindowSystemHandle() const = 0;
+    virtual uintptr_t         GetPlatformWindowHandle() const = 0;
+};
+
+using WindowSurfaceSourceRef = SharedPtr<WindowSurfaceSource>;
+
+} // namespace Moer::Render
+
 template<typename TStructuredParam>
 concept concept_is_shader_struct = requires(TStructuredParam t) {
     std::is_same<typename TStructuredParam::TypeInfo::TParamPtr, TStructuredParam>();
@@ -1108,7 +1128,6 @@ class Viewport : public RHIResource {
 public:
     Viewport() : RHIResource(RRT_VIEWPORT) {}
     virtual ~Viewport() {}
-    virtual void* GetNativeWindow()                = 0;
     virtual void  Present(FenceRef _present_fence) = 0;
     virtual void  Resize(Extent2D)                 = 0;
     // virtual BackBufferInfo GetBackBuffer()                  = 0;
@@ -1397,10 +1416,7 @@ struct RenderPassInfo {
 };
 
 struct SwapchainSurfaceInfo {
-    uintptr_t native_window_handle = 0;
-    void*     surface_user_data    = nullptr;
-    void (*create_vulkan_surface)(void* user_data, void* instance, void* allocation_callback, void* surface) =
-        nullptr;
+    WindowSurfaceSourceRef source;
 };
 
 struct SwapchainCreateInfo {
