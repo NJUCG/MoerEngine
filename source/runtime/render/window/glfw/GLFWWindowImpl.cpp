@@ -37,7 +37,6 @@ void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
         MOER_ASSERT(false, "GLFW initialization failed");
     }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    static_cast<void>(info.rhi_type);
 
     int          width   = info.width;
     int          height  = info.height;

@@ -143,14 +143,14 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         LOG_WARNING("Swapchain recreate skipped due to zero window size.");
         return;
     }
-    const WindowSurfaceSource* current_surface = surface_info.source.get();
-    const WindowSurfaceSource* next_surface    = _info.surface.source.get();
+    const WindowSurfaceSource* existing_surface_source = surface_info.source.get();
+    const WindowSurfaceSource* incoming_surface_source = _info.surface.source.get();
     const bool surface_identity_changed =
         surface != VK_NULL_HANDLE &&
-        (current_surface == nullptr || next_surface == nullptr ||
-         current_surface->GetWindowSystem() != next_surface->GetWindowSystem() ||
-         current_surface->GetWindowSystemHandle() != next_surface->GetWindowSystemHandle() ||
-         current_surface->GetPlatformWindowHandle() != next_surface->GetPlatformWindowHandle());
+        (existing_surface_source == nullptr || incoming_surface_source == nullptr ||
+         existing_surface_source->GetWindowSystem() != incoming_surface_source->GetWindowSystem() ||
+         existing_surface_source->GetWindowSystemHandle() != incoming_surface_source->GetWindowSystemHandle() ||
+         existing_surface_source->GetPlatformWindowHandle() != incoming_surface_source->GetPlatformWindowHandle());
 
     bool           b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
     VkSwapchainKHR old_sc     = handle;
@@ -170,18 +170,22 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     }
 
     if (surface == VK_NULL_HANDLE) {
-        assert(next_surface && "Vulkan swapchain requires a valid window surface source");
-        switch (next_surface->GetWindowSystem()) {
+        assert(incoming_surface_source && "Vulkan swapchain requires a valid window surface source");
+        switch (incoming_surface_source->GetWindowSystem()) {
             case EWindowSystemType::GLFW:
                 VK_CHECK_RESULT(glfwCreateWindowSurface(
                     instance,
-                    static_cast<GLFWwindow*>(next_surface->GetWindowSystemHandle()),
+                    static_cast<GLFWwindow*>(incoming_surface_source->GetWindowSystemHandle()),
                     nullptr,
                     &surface
                 ));
                 break;
             default:
-                assert(false && "Unsupported window system for Vulkan swapchain");
+                MOER_ASSERT(
+                    false,
+                    "Unsupported window system for Vulkan swapchain: {}",
+                    static_cast<uint32_t>(incoming_surface_source->GetWindowSystem())
+                );
                 break;
         }
         assert(surface != VK_NULL_HANDLE && "Vulkan surface creation returned a null surface");

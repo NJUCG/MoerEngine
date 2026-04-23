@@ -2452,7 +2452,7 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    WindowContext::Init(SurfaceInitInfo(ERHIType::Vulkan, 640, 360, "TestRHITranslatePresent", false));
+    WindowContext::Init(SurfaceInitInfo(640, 360, "TestRHITranslatePresent", false));
     window_inited = true;
     const int present_copyscope_ret =
         RunNamedTestCase("PresentWithCopyScope", RunPresentWithCopyScopeTests);
