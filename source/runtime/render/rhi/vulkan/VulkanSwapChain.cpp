@@ -21,7 +21,6 @@
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 #include "vulkan/vulkan_core.h"
-#include "GLFW/glfw3.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -171,23 +170,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
 
     if (surface == VK_NULL_HANDLE) {
         assert(incoming_surface_source && "Vulkan swapchain requires a valid window surface source");
-        switch (incoming_surface_source->GetWindowSystem()) {
-            case EWindowSystemType::GLFW:
-                VK_CHECK_RESULT(glfwCreateWindowSurface(
-                    instance,
-                    static_cast<GLFWwindow*>(incoming_surface_source->GetWindowSystemHandle()),
-                    nullptr,
-                    &surface
-                ));
-                break;
-            default:
-                MOER_ASSERT(
-                    false,
-                    "Unsupported window system for Vulkan swapchain: {}",
-                    static_cast<uint32_t>(incoming_surface_source->GetWindowSystem())
-                );
-                break;
-        }
+        incoming_surface_source->CreateSurface(ERHIType::Vulkan, instance, nullptr, &surface);
         assert(surface != VK_NULL_HANDLE && "Vulkan surface creation returned a null surface");
         surface_info = _info.surface;
     }
