@@ -50,26 +50,6 @@ namespace {
 using namespace Moer;
 using namespace Moer::Render;
 
-void CreateTestVulkanSurfaceFromWindowHandle(
-    void* user_data,
-    void* instance,
-    void* allocation_callback,
-    void* surface
-) {
-    auto* window = static_cast<Moer::WindowHandle*>(user_data);
-    MOER_ASSERT(window != nullptr && window->window != nullptr, "Test swapchain requires a valid window handle");
-    Moer::WindowContext::CreateVulkanSurface(instance, window, allocation_callback, surface);
-}
-
-SwapchainSurfaceInfo BuildTestSwapchainSurfaceInfo(Moer::WindowHandle* window) {
-    MOER_ASSERT(window != nullptr && window->window != nullptr, "Test swapchain requires a valid window handle");
-    return SwapchainSurfaceInfo{
-        .native_window_handle = reinterpret_cast<uintptr_t>(Moer::WindowContext::GetNativeWindow(window)),
-        .surface_user_data = window,
-        .create_vulkan_surface = CreateTestVulkanSurfaceFromWindowHandle,
-    };
-}
-
 struct BindlessReadbackArgs {
     uint32_t src_handle;
     uint32_t xor_mask;
@@ -2131,7 +2111,7 @@ int RunPresentWithCopyScopeTests() {
     constexpr uint32_t kHeight = 360;
 
     SwapchainCreateInfo swapchain_ci{
-        .surface = BuildTestSwapchainSurfaceInfo(window),
+        .surface = device.CreateSwapchainSurfaceInfo(*window),
         .size = {kWidth, kHeight},
         .back_buffer_sz = 2,
         .preferred_format = PF_R8G8B8A8_SRGB
@@ -2199,7 +2179,7 @@ int RunPresentTests() {
     constexpr uint32_t kHeight = 360;
 
     SwapchainCreateInfo swapchain_ci{
-        .surface = BuildTestSwapchainSurfaceInfo(window),
+        .surface = device.CreateSwapchainSurfaceInfo(*window),
         .size = {kWidth, kHeight},
         .back_buffer_sz = 2,
         .preferred_format = PF_R8G8B8A8_SRGB

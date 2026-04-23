@@ -3,7 +3,9 @@
 
 #include "RenderAPI.h"
 
-#include "rhi/RHI.h"
+#include "rhi/RHICommon.h"
+
+#include <string>
 
 namespace Moer {
 using WindowType = void;
@@ -80,11 +82,6 @@ public:
     static WindowHandle* GetMainWindow();
     static void          SetTitle(WindowHandle*, const char* newTitle);
     static bool          ShouldClose(WindowHandle*);
-    //for dx12 win32 window
-    static void* GetNativeWindow(WindowHandle*);
-    //for vulkan surface creation
-    static void
-    CreateVulkanSurface(void* instance, WindowHandle* window, void* allocation_callback, void* surface);
 
 protected:
     friend class WindowImpl;

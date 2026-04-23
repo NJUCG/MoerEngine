@@ -1,7 +1,5 @@
 #include "window/WindowContext.h"
 #include "WindowContextImpl.h"
-#define GLFW_WINDOW
-
 namespace Moer {
 
 void WindowContext::Init(const SurfaceInitInfo& info) {
@@ -31,21 +29,12 @@ bool WindowContext::ShouldClose(WindowHandle* window) {
     return WindowImpl::GetInstance().ShouldClose(window);
 };
 
-void* WindowContext::GetNativeWindow(WindowHandle* window) {
-    return WindowImpl::GetInstance().GetNativeWindow(window);
-};
-
 WindowHandle* WindowContext::GetMainWindow() {
     return &WindowImpl::GetInstance().main_window_handle;
 };
 
-void WindowContext::CreateVulkanSurface(
-    void*         instance,
-    WindowHandle* window,
-    void*         allocation_callback,
-    void*         surface
-) {
-    WindowImpl::GetInstance().CreateVulkanSurface(instance, window, allocation_callback, surface);
-};
+void* GetWindowInteropHandle(WindowHandle* window, EWindowInteropHandleType type) {
+    return WindowImpl::GetInstance().GetInteropHandle(window, type);
+}
 
 } // namespace Moer

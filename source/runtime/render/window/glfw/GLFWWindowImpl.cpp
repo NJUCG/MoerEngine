@@ -6,9 +6,6 @@
 #include "rhi/RHI.h"
 #include "window/WindowContext.h"
 
-// 1： define vulkan ahead of glfw
-#include "rhi/vulkan/VulkanPlatform.h"
-// 2
 #include "GLFW/glfw3.h"
 
 #include "IconsFontAwesome6.h"
@@ -40,13 +37,7 @@ void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
         MOER_ASSERT(false, "GLFW initialization failed");
     }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    if (info.rhi_type == ERHIType::D3D12) {
-        InitD3D12();
-    } else if (info.rhi_type == ERHIType::Vulkan) {
-        InitVulkan();
-    } else {
-        MOER_ASSERT(false, "Unsupported RHI type in GLFWWindowImpl::Init: {}", static_cast<uint32_t>(info.rhi_type));
-    }
+    static_cast<void>(info.rhi_type);
 
     int          width   = info.width;
     int          height  = info.height;
@@ -123,33 +114,6 @@ void GLFWWindowImpl::SetCursorNormal() {
     WindowInput::Get().is_cursor_dirty  = true;
 }
 
-void GLFWWindowImpl::InitVulkan() {
-    if (!glfwVulkanSupported()) {
-        LOG_ERROR("Vulkan not supported by Winodw System");
-        exit(-1);
-    }
-}
-void GLFWWindowImpl::InitD3D12() {
-#if PLATFORM_WINDOWS
-
-#endif
-}
-// void GLFWWindowImpl::CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) {
-//     glfwCreateWindowSurface((VkInstance)instance, (GLFWwindow*)window, (const VkAllocationCallbacks*)allocation_callback, (VkSurfaceKHR*)surface);
-// }
-void GLFWWindowImpl::CreateVulkanSurface(
-    void*         instance,
-    WindowHandle* window,
-    void*         allocation_callback,
-    void*         surface
-) {
-    glfwCreateWindowSurface(
-        (VkInstance)instance,
-        (GLFWwindow*)window->window,
-        (const VkAllocationCallbacks*)allocation_callback,
-        (VkSurfaceKHR*)surface
-    );
-}
 void GLFWWindowImpl::SetFocusMode(WindowHandle* _window, bool _focused) {
     glfwSetInputMode(
         (GLFWwindow*)_window->window, GLFW_CURSOR, _focused ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL
@@ -167,7 +131,10 @@ void GLFWWindowImpl::SetTitle(WindowHandle* _window, const char* _new_title) {
 bool GLFWWindowImpl::ShouldClose(WindowHandle* _window) const {
     return glfwWindowShouldClose((GLFWwindow*)_window->window);
 }
-void* GLFWWindowImpl::GetNativeWindow(WindowHandle* _window) const {
+void* GLFWWindowImpl::GetInteropHandle(WindowHandle* _window, EWindowInteropHandleType type) const {
+    if (type != EWindowInteropHandleType::PlatformWindow) {
+        return nullptr;
+    }
 #if PLATFORM_WINDOWS
     return glfwGetWin32Window((GLFWwindow*)_window->window);
 #endif

@@ -1892,6 +1892,7 @@ public:
 
     virtual CopyQueue& GetCopyQueue() = 0;
 
+    virtual SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const Moer::WindowHandle& window) const = 0;
     virtual SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) = 0;
 
     virtual PipelineHandle
@@ -1928,6 +1929,9 @@ public:
     }
 
     virtual void WaitIdle() {};
+
+protected:
+    static SwapchainSurfaceInfo CreateGlfwSwapchainSurfaceInfo(const Moer::WindowHandle& window);
 };
 
 } // namespace Moer::Render

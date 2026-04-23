@@ -37,9 +37,6 @@ public:
     bool IsPresentable() const;
 
 private:
-    static SwapchainSurfaceInfo BuildSurfaceInfo(Moer::WindowHandle* window);
-
-private:
     RenderDevice&        device;
     Moer::WindowHandle   window;
     SwapchainCreateInfo  swapchain_info;

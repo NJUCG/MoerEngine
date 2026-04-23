@@ -14,6 +14,10 @@
 #include <type_traits>
 
 // Forward declarations to break circular dependency
+namespace Moer {
+struct WindowHandle;
+}
+
 namespace Moer::Render {
 class CommandQueue;
 class CopyQueue;
@@ -185,6 +189,7 @@ public:
 
     RENDER_API CopyQueue& GetCopyQueue();
 
+    RENDER_API SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const Moer::WindowHandle& window) const;
     RENDER_API SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info);
 
     RENDER_API FenceRef CreateFence();
