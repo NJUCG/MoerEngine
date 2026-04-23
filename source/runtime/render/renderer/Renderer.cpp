@@ -69,7 +69,7 @@ void Renderer::ReleaseResources() {
     released = true;
 
     timeline->Wait(time);
-    gfx_queue.Sync();
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     presentation_surface->Sync();
     device.WaitIdle();
 
@@ -81,7 +81,7 @@ void Renderer::ReleaseResources() {
     RHIExecutor::Get().Submit(std::move(cleanup_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
     cmd_list = CommandList(EQueueType::Graphics);
     timeline->Wait(cleanup_signal_value);
-    gfx_queue.Sync();
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     scene.Reset();
 }
@@ -101,7 +101,7 @@ Renderer::EWindowState Renderer::TickWindowContext(const EngineHooks& hooks) {
         resolution.x = uint32(w_width);
         resolution.y = uint32(w_height);
 
-        gfx_queue.Sync();
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
         presentation_surface->Resize({resolution.x, resolution.y});
 
         return EWindowState::SizeChanged; // 继续执行Tick()

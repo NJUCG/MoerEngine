@@ -688,7 +688,7 @@ void GuiDestroyWindow(ImGuiViewport* _viewport) {
     auto& device = backend_data.render_backend->device;
 
     if (GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData) {
-        device.GetCommandQueue(EQueueType::Graphics).Sync();
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
         if (viewport_data->surface) {
             viewport_data->surface->Sync();
             viewport_data->surface = nullptr;
@@ -715,7 +715,7 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         return;
     }
 
-    rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     if (!viewport_data->surface) {
         Moer::WindowHandle handle{(Moer::WindowType*)(_viewport->PlatformHandle ? _viewport->PlatformHandle :
                                                                                   _viewport->PlatformHandleRaw)};

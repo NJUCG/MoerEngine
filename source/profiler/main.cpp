@@ -913,7 +913,7 @@ int RunProfilerMain(int argc, const char** argv) {
         }
         if (resolution.x != static_cast<uint32_t>(w) || resolution.y != static_cast<uint32_t>(h)) {
             resolution = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
-            gfx_queue.Sync();
+            RHIExecutor::Get().Sync(ERHISyncDepth::Present);
             presentation_surface.Resize({resolution.x, resolution.y});
             output = device.CreateTexture(
                 "ProfilerOutput",
