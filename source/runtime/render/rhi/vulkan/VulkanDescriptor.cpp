@@ -981,6 +981,7 @@ public:
                         std::memory_order_acq_rel,
                         std::memory_order_acquire
                     )) {
+                            memset(binder.heap_storage->map_ptr + current, 0, _size);
                     return current;
                 }
             }

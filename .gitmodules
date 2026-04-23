@@ -23,3 +23,11 @@
 	path = 3rdparty/concurrentqueue
 	url = git@github.com:cameron314/concurrentqueue.git
 	shallow = true
+[submodule "3rdparty/NRD"]
+	path = 3rdparty/NRD
+	url = https://github.com/NVIDIA-RTX/NRD.git
+	shallow = true
+[submodule "3rdparty/NRI"]
+	path = 3rdparty/NRI
+	url = https://github.com/NVIDIA-RTX/NRI.git
+	shallow = true

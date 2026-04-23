@@ -14,7 +14,7 @@ set(TENSORRT_DIR "/path/to/tensor_rt" CACHE PATH "TENSORRT_DIR" FORCE)
 # NRD Denoiser
 # ============================================================
 set(WITH_NRD OFF CACHE BOOL "WITH_NRD" FORCE)
-set(NRD_ROOT "/path/to/NRD"  CACHE PATH "NRD_ROOT" FORCE)
+set(NRD_ROOT "${CMAKE_SOURCE_DIR}/3rdparty/NRD"  CACHE PATH "NRD_ROOT" FORCE)
 
 # ============================================================
 # Perfetto Profiling

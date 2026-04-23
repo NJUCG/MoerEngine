@@ -1,6 +1,6 @@
 {
   "project": "MoerEngine Swapchain Present Sync Follow-up",
-  "status": "draft",
+  "status": "in_progress",
   "doc_refs": [
     "docs/checkpoints/interrupt_sync_event_checkpoint.json",
     "docs/checkpoints/vulkan_submission_executor_split_checkpoint.json",
@@ -26,7 +26,18 @@
     "temporary_runtime_rule": "Until per-viewport present sync exists, swapchain/viewport lifecycle code must use RHIExecutor::Sync(ERHISyncDepth::Present) instead of calling GraphicsQueue::Sync() or other queue Sync() methods directly.",
     "why_this_is_only_temporary": [
       "ERHISyncDepth::Present currently drains all present-visible work before the sync point, not one specific swapchain or viewport.",
-      "The backend-specific `Swapchain::Sync()` call still exists as a host-side wait for the present queue to become idle before swap chain resize/destroy paths continue, but caller-side queue ownership has already moved to RHIExecutor semantics."
+      "The backend-specific `Swapchain::Sync()` call still exists as a host-side wait for the present queue to become idle before swap chain resize/destroy paths continue, but caller-side queue ownership has already moved to RHIExecutor semantics.",
+      "ImGUIRenderer still contains a direct graphics queue sync for font upload initialization, but that path is not swapchain/viewport present lifecycle management and is outside this checkpoint scope."
+    ]
+  },
+  "validation": {
+    "script": "testscripts/windows/test_rhi_translate.ps1",
+    "config": "Debug",
+    "latest_log": "logs/run_20260424_013231/rhi_translate.log",
+    "result": "passed",
+    "notes": [
+      "Structured RHI translate cases passed, including PresentWithCopyScope and PresentRoundTrip.",
+      "ValidationBlockers subtest passed in the script summary for the successful run."
     ]
   },
   "design_constraints": [
@@ -139,15 +150,11 @@
     {
       "id": "CP-05",
       "title": "Validate with existing RHI translate path",
-      "status": "todo",
+      "status": "done",
       "files": [
         "testscripts/windows/test_rhi_translate.ps1"
       ],
-      "tasks": [
-        "Build TestRHITranslate with the existing script.",
-        "Run present-related structured cases and confirm no validation blockers.",
-        "Do not validate with ad-hoc queue idle probes."
-      ]
+      "result": "Validated with testscripts/windows/test_rhi_translate.ps1 on Debug. PresentWithCopyScope and PresentRoundTrip passed, and the script reported no validation blockers on the successful run."
     }
   ]
 }

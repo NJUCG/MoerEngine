@@ -33,7 +33,7 @@ set SHOW_HELP=0
 :parse_args
 if "%~1"=="" goto done_args
 if /i "%~1"=="-help"   ( set SHOW_HELP=1 & shift & goto parse_args )
-if /i "%~1"=="-config" ( set CONFIG=%~2  & shift & shift & goto parse_args )
+if /i "%~1"=="-config" ( set "CONFIG=%~2" & shift & shift & goto parse_args )
 if /i "%~1"=="-editor" ( set RUN_EDITOR=1 & shift & goto parse_args )
 if /i "%~1"=="-rhi"    ( set RUN_RHI=1    & shift & goto parse_args )
 if /i "%~1"=="-all"    ( set RUN_EDITOR=1 & set RUN_RHI=1 & shift & goto parse_args )

@@ -178,6 +178,7 @@ VulkanCmdList::~VulkanCmdList() {
     vkFreeCommandBuffers(device.GetDevice(), allocator->GetHandle(), 1, &command_buffer);
 }
 void VulkanCmdList::Begin() {
+    descriptor_state_valid = false;
     VkCommandBufferBeginInfo begin_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext            = nullptr,
@@ -187,7 +188,69 @@ void VulkanCmdList::Begin() {
     VK_CHECK_RESULT(vkBeginCommandBuffer(command_buffer, &begin_info));
 }
 void VulkanCmdList::End() {
+    descriptor_state_valid = false;
     VK_CHECK_RESULT(vkEndCommandBuffer(command_buffer));
+}
+
+void VulkanCmdList::SetDescriptorBinder(VulkanDescriptorBinder _binder) {
+    if (descriptor_binder.IsValid() && descriptor_binder_active) {
+        descriptor_binder.DeactivateOnCurrentThread();
+    }
+
+    descriptor_binder        = std::move(_binder);
+    descriptor_binder_active = false;
+    descriptor_state_valid   = false;
+
+    if (descriptor_binder.IsValid()) {
+        descriptor_binder.ActivateOnCurrentThread();
+        descriptor_binder_active = true;
+    }
+}
+
+VulkanDescriptorBinder VulkanCmdList::ReleaseDescriptorBinder() {
+    descriptor_binder_active = false;
+    descriptor_state_valid   = false;
+    return std::move(descriptor_binder);
+}
+
+void VulkanCmdList::InvalidateDescriptorState() {
+    descriptor_state_valid = false;
+    if (descriptor_binder.IsValid() && descriptor_binder_active) {
+        descriptor_binder.DeactivateOnCurrentThread();
+        descriptor_binder_active = false;
+    }
+}
+
+void VulkanCmdList::RestoreDescriptorState() {
+    if (!descriptor_binder.IsValid()) {
+        return;
+    }
+
+    if (!descriptor_binder_active) {
+        descriptor_binder.ActivateOnCurrentThread();
+        descriptor_binder_active = true;
+    }
+
+    BindGlobalDescriptorHeaps(true, true);
+}
+
+void VulkanCmdList::BindGlobalDescriptorHeaps(bool _bind_resource_heap, bool _bind_sampler_heap) {
+    if (!device.HasDescriptorHeapRuntime()) {
+        return;
+    }
+
+    VulkanDescriptorHeap& descriptor_heap = device.GetGlobalDescriptorHeap();
+    if (_bind_resource_heap) {
+        const VkBindHeapInfoEXT resource_heap_info = descriptor_heap.GetResourceHeapBindInfo();
+        device.CmdBindResourceHeap(command_buffer, &resource_heap_info);
+    }
+
+    if (_bind_sampler_heap) {
+        const VkBindHeapInfoEXT sampler_heap_info = descriptor_heap.GetSamplerHeapBindInfo();
+        device.CmdBindSamplerHeap(command_buffer, &sampler_heap_info);
+    }
+
+    descriptor_state_valid = _bind_resource_heap || _bind_sampler_heap;
 }
 void VulkanCmdList::CopyBuffer(
     VulkanBuffer* _src,
@@ -746,7 +809,8 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                 if (writer.descriptorCount > 1) {
                                     std::span<BufferView> buffers =
                                         std::get<std::span<BufferView>>(_args[set_info.param_idx]);
-                                    for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                    const uint desc_size = std::min(writer.descriptorCount, uint(buffers.size()));
+                                    for (uint j = 0; j < desc_size; ++j) {
                                         uint64 src_handle = descriptor_heap.GetBufferDescIdx(
                                             buffers[j], writer.descriptorType, format
                                         );
@@ -792,15 +856,7 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
         );
     }
 
-    if (bind_template.needs_resource_heap) {
-        const VkBindHeapInfoEXT resource_heap_info = descriptor_heap.GetResourceHeapBindInfo();
-        device.CmdBindResourceHeap(command_buffer, &resource_heap_info);
-    }
-
-    if (bind_template.needs_sampler_heap) {
-        const VkBindHeapInfoEXT sampler_heap_info = descriptor_heap.GetSamplerHeapBindInfo();
-        device.CmdBindSamplerHeap(command_buffer, &sampler_heap_info);
-    }
+    BindGlobalDescriptorHeaps(bind_template.needs_resource_heap, bind_template.needs_sampler_heap);
 
     if (bind_template.push_constants_info.size > 0) {
         const uint32_t constants_offset = bind_template.push_constants_info.offset;

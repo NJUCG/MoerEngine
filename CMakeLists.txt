@@ -10,6 +10,10 @@ else()
     project(MoerEngine LANGUAGES CXX C)
 endif()
 
+if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    message(FATAL_ERROR "clang-cl is not supported. Use an MSVC generator for MSVC, or configure a pure Clang toolchain.")
+endif()
+
 set(PROJECT_VERSION_MAJOR 0)
 set(PROJECT_VERSION_MINOR 1)
 set(PROJECT_VERSION_PATCH 0)

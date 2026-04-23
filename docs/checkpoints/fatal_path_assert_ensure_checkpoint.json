@@ -1,0 +1,353 @@
+{
+  "project": "MoerEngine Fatal Path / Assert Ensure Policy",
+  "planning_only": true,
+  "doc_refs": [
+    "docs/rules/Rule_Codex.md",
+    "docs/checkpoints/checkpoint.json",
+    "docs/checkpoints/submission_interrupt_payload_refactor_checkpoints.json"
+  ],
+  "source_analyzed": [
+    "source/runtime/core/include/platform/Platform.h",
+    "source/runtime/core/source/platform/Platform.cpp",
+    "source/runtime/core/source/platform/Windows/PlatformWindows.cpp",
+    "source/runtime/core/include/profile/ProfileDump.h",
+    "source/runtime/core/source/profile/ProfileDump.cpp",
+    "source/runtime/core/include/log/LogSystem.h",
+    "source/runtime/core/include/Core.h",
+    "source/runtime/render/rhi/GPUEventStream.h",
+    "source/runtime/render/rhi/GPUEventStream.cpp",
+    "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+    "source/test/ShaderDXCTest.cpp",
+    "source/test/RHITest/dxrhitest.cpp",
+    "testscripts/windows/common.ps1",
+    "testscripts/windows/test_all.ps1"
+  ],
+  "goal": "Define one repository-wide failure policy: repository-owned code does not use try/catch for normal or fatal control flow, fatal invariant failures go through one fail-fast assert path with stack and crash dump emission, recoverable invariant breaches go through one ensure path, and automated tests can upgrade ensure failures to hard errors without adding ad-hoc harnesses.",
+  "confirmed_observations": [
+    "Repository-owned code currently has no unified MOER_ASSERT or MOER_ENSURE contract. Most invariant checks still use scattered raw assert(...).",
+    "Repository-owned try/catch remains present in multiple test executables, which hides the actual failure boundary and can turn structural faults into misleading log-level behavior.",
+    "Platform currently exposes affinity, thread naming, env, and memory helpers, but it does not yet expose stack capture, crash dump writing, or fail-fast termination services.",
+    "ProfileDump already has FlushThreadLocal(), FlushAll(), and Shutdown(), so the crash policy should reuse the existing dump transport instead of inventing a second profiling flush system.",
+    "GPUEventStream already integrates with ProfileDump and currently flushes resolved GPU data through FlushToProfiler(), so fatal-path flushing must account for GPU diagnostics without attempting a full engine shutdown."
+  ],
+  "rule_codex_reference": {
+    "path": "docs/rules/Rule_Codex.md",
+    "rules_used": [
+      "Do not keep compatibility implementations",
+      "Do not over-design",
+      "Validate with tests",
+      "Filter validation output and focus on errors",
+      "Use powershell on Windows"
+    ],
+    "how_they_apply_here": [
+      "Do not keep both raw assert and MOER_ASSERT as equal first-class policies. The repository should converge on one owned diagnostic contract.",
+      "Do not add a plugin-style crash callback framework. Keep the fatal path explicit and small: log, flush current-thread streams, capture stack, write dump, terminate.",
+      "Do not preserve try/catch-based ownership suppression in test binaries. Tests should surface engine faults through the same failure contract the engine uses.",
+      "Do not create a new standalone test harness for ensure behavior. Reuse the existing test executables and existing PowerShell scripts."
+    ]
+  },
+  "hard_constraints": [
+    {
+      "id": "HC-01",
+      "title": "Repository-owned code must be exception-free",
+      "detail": "Core, runtime, editor, profiler, and repository-owned test code must not introduce try/catch. Existing repository-owned try/catch blocks are migration debt and should be removed instead of wrapped or hidden behind helper layers. Third-party code is outside this policy only when it is vendored and not maintained as repository-owned engine code."
+    },
+    {
+      "id": "HC-02",
+      "title": "Fatal path must fail fast",
+      "detail": "A failed assert is not a recoverable condition. After logging, flush, stack capture, and dump emission, the process must terminate through a platform fail-fast path. Fatal assert handling must not attempt orderly engine shutdown, queue draining, or worker joins."
+    },
+    {
+      "id": "HC-03",
+      "title": "Crash flush is current-thread and best-effort",
+      "detail": "Fatal handling may flush current-thread buffered diagnostics and already-resolved global profiler data, but it must not block on unresolved GPU queries, background tasks, or cross-thread ownership handoff. Crash flush must never become a second shutdown path."
+    },
+    {
+      "id": "HC-04",
+      "title": "Platform owns dump and stack primitives",
+      "detail": "Stack capture, stack formatting, crash dump writing, and fail-fast termination are platform responsibilities. Higher layers may assemble crash metadata, but they must not call OS-specific APIs directly."
+    },
+    {
+      "id": "HC-05",
+      "title": "Ensure is non-fatal in normal runtime and fatal to CI policy when requested",
+      "detail": "MOER_ENSURE does not crash the process in normal runtime, but the process must support a test mode where any ensure failure becomes a test failure without rewriting the test scripts around a new harness."
+    },
+    {
+      "id": "HC-06",
+      "title": "No compatibility dual-path",
+      "detail": "Do not keep legacy try/catch behavior or raw assert usage as a permanent compatibility path. The checkpoint should converge on one owned failure contract."
+    }
+  ],
+  "current_problem_summary": {
+    "scattered_assert_policy": {
+      "location": "source/runtime/** and source/editor/**",
+      "problem": "The codebase uses raw assert(...) directly in many locations, so failure semantics, log shape, and crash-time diagnostics are inconsistent and not centrally controllable."
+    },
+    "missing_platform_crash_boundary": {
+      "location": "source/runtime/core/include/platform/Platform.h",
+      "problem": "Platform does not yet expose a crash boundary for stack capture, dump writing, or fail-fast termination, so fatal diagnostics cannot be expressed as one owned contract."
+    },
+    "try_catch_masking": {
+      "location": "source/test/RHITest/rhi_translate_multiqueue_test.cpp, source/test/ShaderDXCTest.cpp, source/test/RHITest/dxrhitest.cpp",
+      "problem": "Repository-owned test entrypoints still use try/catch, which can convert structural failure into secondary logging and makes the real fault boundary ambiguous."
+    },
+    "ensure_policy_gap": {
+      "location": "source/runtime/core/include/log/LogSystem.h and testscripts/windows/common.ps1",
+      "problem": "There is no owned ensure contract that logs as warning in normal runtime but escalates cleanly under test. As a result, soft-contract failures are either silent, ad-hoc, or emitted at the wrong severity."
+    },
+    "fatal_flush_gap": {
+      "location": "source/runtime/core/include/profile/ProfileDump.h and source/runtime/render/rhi/GPUEventStream.cpp",
+      "problem": "Profile dump flushing exists, but there is no single fatal-path rule describing which streams must flush, in what order, and under what non-blocking constraints."
+    }
+  },
+  "target_design": {
+    "overview": "Introduce one owned diagnostics contract centered on MOER_ASSERT and MOER_ENSURE. Assert failures enter one fatal handler that emits the failure message, flushes current-thread diagnostics, captures the stack, writes a platform dump artifact, and terminates immediately. Ensure failures enter one warning handler that records the fault and returns control to the caller. Tests can enable ensure escalation so ensure failures are reported as hard test errors through existing binaries and scripts.",
+    "owned_runtime_components": [
+      {
+        "name": "DiagnosticFailureRuntime",
+        "purpose": "Own the shared repository-side handling for assertion metadata, ensure state, fatal flush order, and routing into Platform fail-fast services. This is one concrete module, not a plugin system."
+      },
+      {
+        "name": "Platform crash services",
+        "purpose": "Own OS-specific stack capture, stack formatting, crash dump emission, and final fail-fast termination. Windows implementation is responsible for MiniDumpWriteDump-backed .dump output."
+      },
+      {
+        "name": "Ensure policy state",
+        "purpose": "Own per-process configuration for whether ensure remains warning-only or escalates to test failure semantics."
+      }
+    ],
+    "macro_contract": {
+      "MOER_ASSERT": {
+        "signature": "MOER_ASSERT(expr, format_str, ...)",
+        "semantics": [
+          "Evaluate expr exactly once.",
+          "If expr is true, do nothing.",
+          "If expr is false, capture file, line, function, expression text, thread id, formatted message, and current failure kind as Assert.",
+          "Emit a critical diagnostic message, flush current-thread diagnostics, capture stack, request a crash dump, and terminate through Platform fail-fast.",
+          "MOER_ASSERT is for impossible internal states, ownership violations, invariant corruption, and programmer errors. It is not a branchy runtime validation helper."
+        ],
+        "return_behavior": "No return value. Control does not continue past a failed MOER_ASSERT.",
+        "replacement_rule": "Repository-owned raw assert(...) in runtime, editor, profiler, and platform-adjacent code should migrate to MOER_ASSERT or to explicit recoverable condition handling."
+      },
+      "MOER_ENSURE": {
+        "signature": "MOER_ENSURE(expr, format_str, ...)",
+        "semantics": [
+          "Evaluate expr exactly once.",
+          "Return true when expr is true.",
+          "When expr is false, emit one owned ensure diagnostic carrying file, line, function, expression text, thread id, and formatted message.",
+          "In normal runtime, log the failure as warning, record it in process diagnostics state, and return false so the caller may continue or early-out explicitly.",
+          "In ensure-escalation mode, still avoid process termination by default, but mirror the failure as error-class test output and mark the process as failed-for-testing."
+        ],
+        "return_behavior": "Returns the evaluated expression state so callers can write `if (!MOER_ENSURE(...)) { return; }` without a second check.",
+        "usage_rule": "MOER_ENSURE is for recoverable boundary validation and unexpected external conditions where continued runtime is still meaningful. It is not a substitute for fatal internal invariants."
+      }
+    },
+    "fatal_path_sequence": [
+      "1. MOER_ASSERT failure enters DiagnosticFailureRuntime::HandleAssertFailure(...).",
+      "2. The handler emits one critical log entry through LogSystem and flushes logger sinks immediately after emission.",
+      "3. The handler performs explicit crash-time stream flush in a fixed order: current-thread trace/profile buffers first, already-resolved GPU profiler data second, then a final current-thread profile dump flush. This path must not wait for unresolved work.",
+      "4. The handler asks Platform to capture and format the current stack.",
+      "5. The handler asks Platform to write a crash dump artifact containing the failure metadata and stack context. On Windows this is a MiniDumpWriteDump-produced .dump file located under the crash log session directory.",
+      "6. The handler emits the dump path and formatted stack into the final critical log payload.",
+      "7. The handler terminates the process through Platform fail-fast without invoking normal engine shutdown."
+    ],
+    "fatal_flush_scope": {
+      "required_calls": [
+        "LogSystem::Flush() or equivalent explicit logger sink flush",
+        "ProfileDump::FlushThreadLocal()",
+        "GPUEventStream crash-safe flush entry that publishes only already-resolved frame data",
+        "Any existing thread-local trace flush already owned by runtime core"
+      ],
+      "rules": [
+        "Do not introduce a generic subscriber registry for crash flush. Keep the crash flush call list explicit and owned.",
+        "Do not call full subsystem Shutdown() from fatal handling.",
+        "Do not wait on worker threads, queue idle, unresolved futures, or GPU query completion from fatal handling.",
+        "If a stream cannot guarantee non-blocking crash flush, it must expose a narrower crash-safe flush operation instead of reusing a blocking shutdown path."
+      ]
+    },
+    "platform_contract": {
+      "required_api_surface": [
+        "Platform::CaptureStackTrace(...)",
+        "Platform::FormatStackTrace(...)",
+        "Platform::WriteCrashDump(...)",
+        "Platform::FailFast(...)"
+      ],
+      "windows_notes": [
+        "Windows implementation should use the OS minidump path, with repository naming convention ending in .dump even though the payload is a standard minidump.",
+        "Stack capture should prefer context-aware walking when failure context is available and fall back to current-thread capture when only a direct assert site is known.",
+        "Dump output should include process id, thread id, timestamp, and executable name in the artifact path or metadata."
+      ],
+      "non_windows_rule": "Other platforms may initially provide stack capture plus a platform-native crash artifact or a documented no-dump stub, but the API surface remains the same."
+    },
+    "exception_policy": {
+      "repository_rule": "Repository-owned code does not use try/catch for normal control flow, fatal control flow, or test entrypoint wrapping.",
+      "migration_rule": [
+        "Remove existing try/catch from repository-owned test mains and executable boundaries.",
+        "Prefer explicit error returns, asserts, and ensures over exception suppression.",
+        "If a boundary cannot be migrated in the same change set, document it as temporary debt in the owning checkpoint instead of normalizing it into a shared helper."
+      ]
+    },
+    "test_policy": {
+      "design": "Automated tests enable ensure escalation at process startup. In this mode, every MOER_ENSURE failure still logs its warning-class message for local diagnosis, but it also marks the process as test-failed and mirrors the failure as an error-class diagnostic line so existing PowerShell log scanning catches it.",
+      "requirements": [
+        "Repository-owned test executables must enable ensure escalation explicitly at startup.",
+        "testscripts/windows/common.ps1 should continue to rely on existing error scanning rather than a separate ensure-only harness.",
+        "A test process that observed one or more ensure failures must exit non-zero or emit an existing blocker-level log line before completion."
+      ]
+    },
+    "non_goals": [
+      "No exception-based recovery layer.",
+      "No plugin or observer framework for crash handling.",
+      "No attempt to resume execution after MOER_ASSERT failure.",
+      "No full-engine graceful shutdown from the fatal path.",
+      "No permanent coexistence of raw assert, MOER_ASSERT, and try/catch as equal policy choices."
+    ]
+  },
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Define the owned diagnostics boundary",
+      "priority": "critical",
+      "status": "todo",
+      "category": "core_diagnostics",
+      "problem": "There is no single owned failure boundary for assert, ensure, stack capture, dump emission, and process fail-fast.",
+      "what_must_be_true_after_this_checkpoint": [
+        "One repository-owned diagnostics module exists for assert and ensure handling.",
+        "Platform owns OS-specific crash services behind a small fixed API surface.",
+        "Repository-owned code has a single place to send fatal and non-fatal contract failures."
+      ],
+      "tasks": [
+        "Define failure metadata structs for assert and ensure payloads.",
+        "Define the fixed Platform crash service API.",
+        "Add explicit logger flush capability required by the fatal path.",
+        "Do not introduce a plugin callback registry or adapter layer."
+      ],
+      "files_likely_affected": [
+        "source/runtime/core/include/Core.h",
+        "source/runtime/core/include/log/LogSystem.h",
+        "source/runtime/core/include/platform/Platform.h",
+        "source/runtime/core/source/platform/Platform.cpp",
+        "source/runtime/core/source/platform/Windows/PlatformWindows.cpp",
+        "source/runtime/core/include/misc/Assert.h",
+        "source/runtime/core/source/misc/Assert.cpp"
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Introduce MOER_ASSERT and MOER_ENSURE semantics",
+      "priority": "critical",
+      "status": "todo",
+      "category": "core_diagnostics",
+      "problem": "Raw assert usage is scattered and there is no repository-owned ensure contract.",
+      "what_must_be_true_after_this_checkpoint": [
+        "MOER_ASSERT and MOER_ENSURE exist with fixed semantics and single-evaluation guarantees.",
+        "Repository-owned code can distinguish fatal invariant failure from recoverable boundary failure without inventing ad-hoc logging conventions.",
+        "New runtime/editor/core code stops introducing raw assert(...)."
+      ],
+      "tasks": [
+        "Define macro signatures and failure routing.",
+        "Make MOER_ENSURE return bool for direct branch use.",
+        "Document the intended use boundary between assert and ensure.",
+        "Start replacing high-value runtime-side raw assert sites with MOER_ASSERT."
+      ],
+      "files_likely_affected": [
+        "source/runtime/core/include/misc/Assert.h",
+        "source/runtime/core/source/misc/Assert.cpp",
+        "source/runtime/Engine.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
+        "source/runtime/render/window/glfw/GLFWWindowImpl.cpp"
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Implement crash dump and fatal flush path",
+      "priority": "critical",
+      "status": "todo",
+      "category": "platform",
+      "problem": "Fatal failures currently have no owned path for crash dump output, stack emission, and best-effort stream flushing.",
+      "what_must_be_true_after_this_checkpoint": [
+        "A failed MOER_ASSERT emits stack text and dump path before process termination.",
+        "Current-thread profile and trace buffers are flushed on fatal assert without invoking global shutdown.",
+        "GPUEventStream exposes a crash-safe publish path for already-resolved diagnostics.",
+        "Windows generates a VS-openable .dump artifact through the platform layer."
+      ],
+      "tasks": [
+        "Add stack capture and dump writing to Platform.",
+        "Add explicit logger flush support.",
+        "Add a crash-safe GPUEventStream flush entry if FlushToProfiler() is too broad for fatal use.",
+        "Write dump files into the crash log session directory with stable naming."
+      ],
+      "files_likely_affected": [
+        "source/runtime/core/include/platform/Platform.h",
+        "source/runtime/core/source/platform/Windows/PlatformWindows.cpp",
+        "source/runtime/core/include/log/LogSystem.h",
+        "source/runtime/core/source/profile/ProfileDump.cpp",
+        "source/runtime/render/rhi/GPUEventStream.h",
+        "source/runtime/render/rhi/GPUEventStream.cpp"
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Remove repository-owned try/catch boundaries",
+      "priority": "high",
+      "status": "todo",
+      "category": "migration",
+      "problem": "Repository-owned try/catch still exists in tests and weakens the single failure contract.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Repository-owned executables and test mains no longer wrap execution in try/catch.",
+        "Unexpected structural faults surface through assert or explicit return-code handling instead of exception suppression.",
+        "Any remaining exception boundary is either third-party or documented debt, not normalized as repository policy."
+      ],
+      "tasks": [
+        "Remove try/catch from RHI translate test main.",
+        "Remove try/catch from ShaderDXCTest and DXRHI test entrypoints.",
+        "Audit executable entrypoints for repository-owned exception handling and delete it."
+      ],
+      "files_likely_affected": [
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "source/test/ShaderDXCTest.cpp",
+        "source/test/RHITest/dxrhitest.cpp",
+        "source/editor/main.cpp",
+        "source/profiler/main.cpp"
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Make ensure failures visible to CI",
+      "priority": "high",
+      "status": "todo",
+      "category": "testing",
+      "problem": "Recoverable ensure failures need to remain warnings for developers while still failing automated validation reliably.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Test binaries can enable ensure escalation at startup.",
+        "An ensure failure during automated tests deterministically fails the test process or emits blocker-level output already recognized by existing scripts.",
+        "Existing PowerShell validation scripts remain the canonical validation path."
+      ],
+      "tasks": [
+        "Add process-level ensure escalation mode.",
+        "Enable that mode in repository-owned test executables.",
+        "Use existing log scanning or non-zero exit code instead of a new test harness."
+      ],
+      "files_likely_affected": [
+        "source/runtime/core/include/misc/Assert.h",
+        "source/runtime/core/source/misc/Assert.cpp",
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "source/test/ShaderDXCTest.cpp",
+        "source/test/RHITest/dxrhitest.cpp",
+        "testscripts/windows/common.ps1"
+      ]
+    }
+  ],
+  "acceptance_criteria": [
+    "Repository-owned runtime and test code has one documented assert/ensure contract instead of raw assert plus ad-hoc logging plus try/catch mixtures.",
+    "A failed MOER_ASSERT emits log, stack, and crash dump metadata before fail-fast termination.",
+    "Normal runtime MOER_ENSURE failures remain warning-class and return false to the caller.",
+    "Automated tests can upgrade ensure failures into deterministic failures without a new standalone harness.",
+    "Repository-owned test entrypoints stop masking engine faults with try/catch."
+  ],
+  "validation_plan": [
+    "This checkpoint is documentation-only. No build or runtime validation is required for the JSON file itself.",
+    "When implementation starts, validate through existing repository scripts only: run testscripts/windows/test_rhi_translate.ps1 first, then testscripts/windows/test_all.ps1.",
+    "When the fatal-path implementation lands on Windows, add one repository-owned test or manual validation path that confirms .dump artifact creation and ensure-escalation behavior without inventing a separate external harness."
+  ]
+}

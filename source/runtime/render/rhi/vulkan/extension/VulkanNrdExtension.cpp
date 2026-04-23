@@ -1,4 +1,4 @@
-#include "VulkanNrdPlugin.h"
+#include "VulkanNrdExtension.h"
 
 #if WITH_NRD
 
@@ -11,8 +11,8 @@
 
 namespace Moer::Render::Ext {
 
-class VkNRDPluginInterface final : public NRDInterface {
-    friend class VkNrdPluginDenoiseCmd;
+class VkNRDInterface final : public NRDInterface {
+    friend class VkNrdDenoiseCmd;
 
 private:
     void InitializeNri(VulkanDevice* _device) {
@@ -30,9 +30,9 @@ private:
             {1, nri::QueueType::COPY, _device->GetQueueFamilyIndices().transfer.value()},
         }};
 
-        device_desc.queueFamilies       = queue_families.data();
-        device_desc.queueFamilyNum      = uint32(queue_families.size());
-        device_desc.minorVersion        = VK_VERSION_MINOR(_device->GetCoreProperties().core_1_0.apiVersion);
+        device_desc.queueFamilies      = queue_families.data();
+        device_desc.queueFamilyNum     = uint32(queue_families.size());
+        device_desc.minorVersion       = VK_VERSION_MINOR(_device->GetCoreProperties().core_1_0.apiVersion);
         device_desc.enableNRIValidation = false;
 
         CHECK_ASSERT(
@@ -150,7 +150,7 @@ private:
     }
 
 public:
-    VkNRDPluginInterface(
+    VkNRDInterface(
         VulkanDevice* _device,
         uint8         _max_frame_in_flight,
         uint16        _frame_width,
@@ -342,36 +342,36 @@ private:
 };
 
 UniquePtr<NRDInterface>
-VkNRDPlugin::CreateInterface(uint8 _max_frame_in_flight, uint16 _frame_width, uint16 _frame_height) {
+VkNRDExtension::CreateInterface(uint8 _max_frame_in_flight, uint16 _frame_width, uint16 _frame_height) {
 
-    return MakeUnique<VkNRDPluginInterface>(m_device, _max_frame_in_flight, _frame_width, _frame_height);
+    return MakeUnique<VkNRDInterface>(m_device, _max_frame_in_flight, _frame_width, _frame_height);
 }
 
-UniquePtr<NRDInterface> VkNRDPlugin::RecreateInterface(
+UniquePtr<NRDInterface> VkNRDExtension::RecreateInterface(
     UniquePtr<NRDInterface> _interface,
     uint16                  _frame_width,
     uint16                  _frame_height
 ) {
 
-    auto* vk_interface = static_cast<VkNRDPluginInterface*>(_interface.get());
+    auto* vk_interface = static_cast<VkNRDInterface*>(_interface.get());
 
     vk_interface->Reinitialize(_frame_width, _frame_height);
 
     return std::move(_interface);
 }
 
-class VkNrdPluginDenoiseCmd final : public VkCustomDispatchCmd {
+class VkNrdDenoiseCmd final : public VkCustomDispatchCmd {
 private:
     std::span<const ResourceUsage> GetResourceUsages() const override {
         return nrd_interface.resource_usages;
     }
 
 private:
-    VkNRDPluginInterface& nrd_interface;
+    VkNRDInterface& nrd_interface;
     nrd::Denoiser   denoiser;
 
 public:
-    VkNrdPluginDenoiseCmd(VkNRDPluginInterface& _nrd, const nrd::Denoiser _denoiser) :
+    VkNrdDenoiseCmd(VkNRDInterface& _nrd, const nrd::Denoiser _denoiser) :
         nrd_interface(_nrd),
         denoiser(_denoiser) {}
 
@@ -418,12 +418,8 @@ public:
     }
 };
 
-void VkNRDPluginInterface::Denoise(
-    CommandList& _cmd_list,
-    const nrd::Denoiser _denoiser,
-    std::string_view _name
-) {
-    _cmd_list.AddCustomCommand(MakeUnique<VkNrdPluginDenoiseCmd>(*this, _denoiser), _name);
+void VkNRDInterface::Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) {
+    _cmd_list.AddCustomCommand(MakeUnique<VkNrdDenoiseCmd>(*this, _denoiser), _name);
 }
 
 } // namespace Moer::Render::Ext

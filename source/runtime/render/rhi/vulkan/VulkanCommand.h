@@ -6,6 +6,7 @@
 
 #include "misc/STL.h"
 
+#include "VulkanDescriptor.h"
 #include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
@@ -24,12 +25,22 @@ private:
     VkCommandBuffer           command_buffer;
     class VulkanCmdAllocator* allocator;
     VulkanDevice&             device;
+    VulkanDescriptorBinder    descriptor_binder{};
+    bool                      descriptor_binder_active{false};
+    bool                      descriptor_state_valid{false};
+
+private:
+    void BindGlobalDescriptorHeaps(bool _bind_resource_heap, bool _bind_sampler_heap);
 
 public:
     VulkanCmdList(VulkanCmdAllocator* _allocator, VulkanDevice& _device);
     ~VulkanCmdList();
     void Begin();
     void End();
+    void SetDescriptorBinder(VulkanDescriptorBinder _binder);
+    VulkanDescriptorBinder ReleaseDescriptorBinder();
+    void InvalidateDescriptorState();
+    void RestoreDescriptorState();
     void
     CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
     void CopyBufferToTexture(

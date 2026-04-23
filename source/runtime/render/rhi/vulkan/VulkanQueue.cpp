@@ -2732,6 +2732,7 @@ public:
     }
 
     void Visit(const VkCustomDispatchCmd& _cmd) {
+            cmd_list.InvalidateDescriptorState();
         const VkCustomDispatchCmd::VkDispatchContext context = {
             m_device->GetInstance(),
             m_device->GetGpu(),
@@ -2740,6 +2741,7 @@ public:
             &this->tracker
         };
         _cmd.Execute(context);
+            cmd_list.RestoreDescriptorState();
     }
 
     // void Visit(const UpdateDrawStateCmd& _cmd) {
@@ -3163,9 +3165,8 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
         profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
     }
 
-    VulkanDescriptorBinder descriptor_binder{};
     if (queue.GetType() != EQueueType::Copy) {
-        descriptor_binder = vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors();
+            vk_allocator.GetCmdList().SetDescriptorBinder(vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors());
     }
 
     std::string_view queue_label = queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
@@ -3225,6 +3226,7 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
     vk_allocator.GetCmdList().End();
 
     if (queue.GetType() != EQueueType::Copy) {
+        VulkanDescriptorBinder descriptor_binder = vk_allocator.GetCmdList().ReleaseDescriptorBinder();
         descriptor_binder = vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(std::move(descriptor_binder));
         if (descriptor_binder.IsValid()) {
             VulkanDescriptorHeap& descriptor_heap = vk_device.GetGlobalDescriptorHeap();

@@ -227,7 +227,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             new (&is_ctx) ImportanceSamplingContext(is_params);
 
 #if WITH_NRD
-            nrd_interface = nrd_ext->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
+            nrd_interface = nrd_plugin->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
 #endif
 
             antialias_pass_info.motion              = rt_ctx->frame_rt.motion;
@@ -509,6 +509,9 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
             is_ctx.TickFrame(time);
             visualize_config.visualize_mode = ui_config.final_color;
+            const bool uses_post_process_output =
+                b_final_show_texture || ui_config.final_color == Render::EFinalColor::EFC_SceneColor;
+            const float2 pixel_jitter = uses_post_process_output ? antialias_pass->GetPixelOffset() : float2(0.f);
 
             uint num_emissive_meshes, num_emissive_triangles;
             prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
@@ -526,7 +529,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             );
             cmd_list.UpdateBindlessArray(bindless_array);
 
-            rt_ctx->Tick(camera, antialias_pass->GetPixelOffset());
+            rt_ctx->Tick(camera, pixel_jitter);
 
             prepare_light_pass->Process(cmd_list, *rt_ctx);
 
@@ -556,7 +559,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     nrd_interface->UpdateCommonSettings(
                         nrd_time++,
                         Vector2ui(resolution.x, resolution.y),
-                        antialias_pass->GetPixelOffset(),
+                        pixel_jitter,
                         Transpose(camera.GetViewMatrix()),
                         Transpose(camera.GetProjectionMatrix())
                     );
@@ -597,17 +600,25 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 #endif
 
             composition_pass->Process(cmd_list, *rt_ctx);
-            antialias_pass->Process(
-                cmd_list,
-                *rt_ctx,
-                aa_params,
-                b_feedback_valid,
-                rt_ctx->frame_rt.hdr_color,
-                rt_ctx->frame_rt.resolved_color
-            );
-            tone_mapping_pass->Process(
-                cmd_list, *rt_ctx, tone_params, rt_ctx->frame_rt.resolved_color, rt_ctx->frame_rt.ldr_color
-            );
+                        if (uses_post_process_output) {
+                            antialias_pass->Process(
+                                cmd_list,
+                                *rt_ctx,
+                                aa_params,
+                                b_feedback_valid,
+                                rt_ctx->frame_rt.hdr_color,
+                                rt_ctx->frame_rt.resolved_color
+                            );
+                            tone_mapping_pass->Process(
+                                cmd_list,
+                                *rt_ctx,
+                                tone_params,
+                                rt_ctx->frame_rt.resolved_color,
+                                rt_ctx->frame_rt.ldr_color
+                            );
+                        } else {
+                            b_feedback_valid = false;
+                        }
             visualize_pass->Process(cmd_list, *rt_ctx, visualize_config, bindless_array);
             if (b_final_show_texture && material_textures.contains(selected_material_texture_name)) {
                 TextureRef        texture = material_textures[selected_material_texture_name].tex;
@@ -624,9 +635,11 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             //  cmd_list.CopyFrom(out_direct_lighting->GetView(),
             //  scene_color->GetView());
             rt_ctx->AdvanceFrame();
-            tone_mapping_pass->AdvanceFrame(camera.GetDeltaTime());
-            antialias_pass->AdvanceFrame();
-            b_feedback_valid = true;
+            if (uses_post_process_output) {
+                tone_mapping_pass->AdvanceFrame(camera.GetDeltaTime());
+                antialias_pass->AdvanceFrame();
+                b_feedback_valid = true;
+            }
 
             //////////////////////////////////////////////////////////////////////////
             // handle export

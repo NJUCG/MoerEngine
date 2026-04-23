@@ -34,6 +34,7 @@ $script:SubPassCount = 0
 $script:SubFailCount = 0
 $script:SubSkipCount = 0
 $script:Config      = "Debug"
+$script:BuildDir    = $null
 $script:Root        = $null
 
 function Initialize-TestRun {
@@ -69,6 +70,44 @@ function Write-Summary([string]$Line) {
     Add-Content -Path $script:SummaryFile -Value $Line -Encoding UTF8
 }
 
+function Resolve-BuildDir {
+    $rootBuildDir = Join-Path $script:Root "build"
+    if (-not (Test-Path $rootBuildDir)) {
+        return $null
+    }
+
+    $rootCache = Join-Path $rootBuildDir "CMakeCache.txt"
+    if (Test-Path $rootCache) {
+        return $rootBuildDir
+    }
+
+    $candidates = Get-ChildItem -Path $rootBuildDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName "CMakeCache.txt") }
+
+    if (-not $candidates) {
+        return $null
+    }
+
+    $configToken = switch ($script:Config.ToLowerInvariant()) {
+        "debug" { "debug" }
+        "release" { "release" }
+        "relwithdebinfo" { "relwithdebinfo" }
+        default { $script:Config.ToLowerInvariant() }
+    }
+
+    $preferred = $candidates | Where-Object { $_.Name.ToLowerInvariant().Contains($configToken) } | Select-Object -First 1
+    if ($preferred) {
+        return $preferred.FullName
+    }
+
+    $vscodeDir = $candidates | Where-Object { $_.Name -eq "vscode" } | Select-Object -First 1
+    if ($vscodeDir) {
+        return $vscodeDir.FullName
+    }
+
+    return ($candidates | Select-Object -First 1).FullName
+}
+
 function Write-ResultLine(
     [Parameter(Mandatory)][string]$Scope,
     [Parameter(Mandatory)][string]$Label,
@@ -90,7 +129,11 @@ function Build-Target {
         [Parameter(Mandatory)][string]$Target
     )
 
-    $BuildDir = Join-Path $script:Root "build"
+    if (-not $script:BuildDir) {
+        $script:BuildDir = Resolve-BuildDir
+    }
+
+    $BuildDir = $script:BuildDir
     if (-not (Test-Path $BuildDir)) {
         Write-Host "[ERROR] Build directory not found: $BuildDir" -ForegroundColor Red
         Write-Summary "[ERROR] Build directory not found: $BuildDir"

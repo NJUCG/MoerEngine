@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strict Engineering"
+  short_description: "Enforce terse, compatibility-free modern engineering"
+  default_prompt: "Use $strict-engineering to implement with latest-only design, Chinese user communication, and existing project test scripts only."
