@@ -8,7 +8,7 @@ PresentationSurface::PresentationSurface(RenderDevice& in_device, PresentationSu
     device(in_device),
     window(desc.window),
     swapchain_info{
-        .surface          = device.CreateSwapchainSurfaceInfo(window),
+        .surface          = Moer::WindowContext::CreateSwapchainSurfaceInfo(window),
         .size             = desc.size,
         .back_buffer_sz   = desc.back_buffer_count,
         .preferred_format = desc.preferred_format,

@@ -3,10 +3,11 @@
 #include "Core.h"
 #include "misc/MMemory.h"
 #include "platform/Platform.h"
-#include "rhi/RHI.h"
+#include "rhi/vulkan/VulkanPlatform.h"
 #include "window/WindowContext.h"
 
 #include "GLFW/glfw3.h"
+#include <vulkan/vulkan_core.h>
 
 #include "IconsFontAwesome6.h"
 #include <fstream>
@@ -23,6 +24,59 @@
 #include "window/WindowInput.h"
 
 namespace Moer {
+
+namespace {
+class GLFWWindowSurfaceSource final : public Render::WindowSurfaceSource {
+public:
+    GLFWWindowSurfaceSource(void* window_system_handle, uintptr_t platform_window_handle) :
+        window_system_handle(window_system_handle),
+        platform_window_handle(platform_window_handle) {}
+
+    Render::EWindowSystemType GetWindowSystem() const override {
+        return Render::EWindowSystemType::GLFW;
+    }
+
+    void* GetWindowSystemHandle() const override {
+        return window_system_handle;
+    }
+
+    uintptr_t GetPlatformWindowHandle() const override {
+        return platform_window_handle;
+    }
+
+    void CreateSurface(
+        ERHIType rhi_type,
+        void*            instance,
+        void*            allocation_callback,
+        void*            surface
+    ) const override {
+        if (rhi_type == ERHIType::Vulkan) {
+            const VkResult result = glfwCreateWindowSurface(
+                static_cast<VkInstance>(instance),
+                static_cast<GLFWwindow*>(window_system_handle),
+                static_cast<const VkAllocationCallbacks*>(allocation_callback),
+                static_cast<VkSurfaceKHR*>(surface)
+            );
+            MOER_ASSERT(
+                result == VK_SUCCESS,
+                "glfwCreateWindowSurface failed with VkResult={} while creating a GLFW-backed Vulkan surface",
+                static_cast<int32_t>(result)
+            );
+            return;
+        }
+
+        MOER_ASSERT(
+            false,
+            "Unsupported RHI type for GLFWWindowSurfaceSource::CreateSurface: {}",
+            static_cast<uint32_t>(rhi_type)
+        );
+    }
+
+private:
+    void*     window_system_handle   = nullptr;
+    uintptr_t platform_window_handle = 0;
+};
+} // namespace
 
 GLFWWindowImpl::GLFWWindowImpl() {}
 GLFWWindowImpl::~GLFWWindowImpl() {}
@@ -130,6 +184,23 @@ void GLFWWindowImpl::SetTitle(WindowHandle* _window, const char* _new_title) {
 bool GLFWWindowImpl::ShouldClose(WindowHandle* _window) const {
     return glfwWindowShouldClose((GLFWwindow*)_window->window);
 }
+
+Render::SwapchainSurfaceInfo GLFWWindowImpl::CreateSwapchainSurfaceInfo(const WindowHandle& window) const {
+    MOER_ASSERT(window.window != nullptr, "Swapchain surface creation requires a valid window handle");
+
+    void* platform_window = GetInteropHandle(&window, EWindowInteropHandleType::PlatformWindow);
+    MOER_ASSERT(
+        platform_window != nullptr,
+        "Swapchain surface creation requires a valid platform window handle"
+    );
+
+    return Render::SwapchainSurfaceInfo{
+        .source = MakeShared<GLFWWindowSurfaceSource>(
+            window.window, reinterpret_cast<uintptr_t>(platform_window)
+        ),
+    };
+}
+
 void* GLFWWindowImpl::GetInteropHandle(const WindowHandle* _window, EWindowInteropHandleType type) const {
     if (type == EWindowInteropHandleType::PlatformWindow) {
 #if PLATFORM_WINDOWS

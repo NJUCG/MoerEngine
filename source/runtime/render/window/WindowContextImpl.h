@@ -21,6 +21,7 @@ public:
     virtual void SetTitle(WindowHandle*, const char* _new_title)                     = 0;
     virtual bool ShouldClose(WindowHandle*) const                                    = 0;
 
+    virtual Render::SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const WindowHandle&) const = 0;
     virtual void* GetInteropHandle(const WindowHandle*, EWindowInteropHandleType type) const = 0;
 
 protected:
@@ -34,7 +35,5 @@ protected:
     int  height{0};
     bool focused{false};
 };
-
-void* GetWindowInteropHandle(const WindowHandle* window, EWindowInteropHandleType type);
 } // namespace Moer
 #endif

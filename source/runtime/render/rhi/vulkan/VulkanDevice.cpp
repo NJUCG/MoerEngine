@@ -1999,10 +1999,6 @@ SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
     return SwapchainRef{MoerNew(VkSwapchain)(*this, _info)};
 }
 
-SwapchainSurfaceInfo VulkanDevice::CreateSwapchainSurfaceInfo(const Moer::WindowHandle& window) const {
-    return CreatePlatformSwapchainSurfaceInfo(window);
-}
-
 IOInterfaceRef VulkanDevice::CreateIOInterface(CopyQueue& _copy_queue) {
     VkCopyQueue* copy_queue_vk = static_cast<VkCopyQueue*>(&_copy_queue);
     return MakeShared<VulkanIOInterface>(*this, *copy_queue_vk);

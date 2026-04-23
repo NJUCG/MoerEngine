@@ -2111,7 +2111,7 @@ int RunPresentWithCopyScopeTests() {
     constexpr uint32_t kHeight = 360;
 
     SwapchainCreateInfo swapchain_ci{
-        .surface = device.CreateSwapchainSurfaceInfo(*window),
+        .surface = Moer::WindowContext::CreateSwapchainSurfaceInfo(*window),
         .size = {kWidth, kHeight},
         .back_buffer_sz = 2,
         .preferred_format = PF_R8G8B8A8_SRGB
@@ -2179,7 +2179,7 @@ int RunPresentTests() {
     constexpr uint32_t kHeight = 360;
 
     SwapchainCreateInfo swapchain_ci{
-        .surface = device.CreateSwapchainSurfaceInfo(*window),
+        .surface = Moer::WindowContext::CreateSwapchainSurfaceInfo(*window),
         .size = {kWidth, kHeight},
         .back_buffer_sz = 2,
         .preferred_format = PF_R8G8B8A8_SRGB

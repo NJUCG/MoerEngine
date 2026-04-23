@@ -1,41 +1,5 @@
 cmake_minimum_required(VERSION 3.26.0)
 
-if (WIN32)
-    set(_moer_windows_sdk_bin_hints
-        "$ENV{WindowsSdkVerBinPath}"
-        "$ENV{WindowsSdkBinPath}"
-        "C:/Program Files (x86)/Windows Kits/10/bin"
-    )
-    set(_moer_windows_sdk_bin_suffixes
-        x64
-        bin/x64
-        10.0.26100.0/x64
-        10.0.22621.0/x64
-        10.0.22000.0/x64
-        10.0.19041.0/x64
-    )
-
-    find_program(
-        MOER_WINDOWS_RC_EXECUTABLE
-        NAMES rc.exe
-        HINTS ${_moer_windows_sdk_bin_hints}
-        PATH_SUFFIXES ${_moer_windows_sdk_bin_suffixes}
-    )
-    find_program(
-        MOER_WINDOWS_MT_EXECUTABLE
-        NAMES mt.exe
-        HINTS ${_moer_windows_sdk_bin_hints}
-        PATH_SUFFIXES ${_moer_windows_sdk_bin_suffixes}
-    )
-
-    if (MOER_WINDOWS_RC_EXECUTABLE)
-        set(CMAKE_RC_COMPILER "${MOER_WINDOWS_RC_EXECUTABLE}" CACHE FILEPATH "Windows resource compiler" FORCE)
-    endif()
-    if (MOER_WINDOWS_MT_EXECUTABLE)
-        set(CMAKE_MT "${MOER_WINDOWS_MT_EXECUTABLE}" CACHE FILEPATH "Windows manifest tool" FORCE)
-    endif()
-endif()
-
 # 加载用户配置
 include("${CMAKE_SOURCE_DIR}/cmake/load_config.cmake")
 
@@ -62,36 +26,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(MOER_USING_MSVC_ABI OFF)
-if (MSVC)
-    set(MOER_USING_MSVC_ABI ON)
-elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
-    set(MOER_USING_MSVC_ABI ON)
-endif()
-
-if (MOER_USING_MSVC_ABI AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+if (MSVC AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-endif()
-
-if (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
-    get_filename_component(_moer_windows_sdk_bin_arch_dir "${MOER_WINDOWS_RC_EXECUTABLE}" DIRECTORY)
-    get_filename_component(_moer_windows_sdk_bin_version_dir "${_moer_windows_sdk_bin_arch_dir}" DIRECTORY)
-    get_filename_component(_moer_windows_sdk_bin_root_dir "${_moer_windows_sdk_bin_version_dir}" DIRECTORY)
-    get_filename_component(_moer_windows_sdk_root_dir "${_moer_windows_sdk_bin_root_dir}" DIRECTORY)
-    get_filename_component(_moer_windows_sdk_version "${_moer_windows_sdk_bin_version_dir}" NAME)
-    set(_moer_windows_sdk_include_root "${_moer_windows_sdk_root_dir}/Include/${_moer_windows_sdk_version}")
-    set(_moer_windows_sdk_rc_include_flags
-        "/I\"${_moer_windows_sdk_include_root}/um\""
-        "/I\"${_moer_windows_sdk_include_root}/shared\""
-        "/I\"${_moer_windows_sdk_include_root}/ucrt\""
-    )
-    string(JOIN " " _moer_windows_sdk_rc_include_flags_joined ${_moer_windows_sdk_rc_include_flags})
-    set(CMAKE_DEPFILE_FLAGS_RC "")
-    set(CMAKE_NINJA_DEP_TYPE_RC "")
-    set(
-        CMAKE_RC_COMPILE_OBJECT
-        "<CMAKE_RC_COMPILER> ${_moer_windows_sdk_rc_include_flags_joined} <DEFINES> <INCLUDES> <FLAGS> /fo <OBJECT> <SOURCE>"
-    )
 endif()
 
 # 统一输出路径：MSVC 与 Clang(Ninja) 均使用 target/bin/<Config>/ 与 target/lib/<Config>/
@@ -128,13 +64,6 @@ if(${MSVC})
     # Support Chinese Comments
     add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
     add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
-endif()
-
-if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
-    add_compile_options(
-        "$<$<COMPILE_LANGUAGE:CXX>:-Xclang>"
-        "$<$<COMPILE_LANGUAGE:CXX>:--dependent-lib=$<IF:$<CONFIG:Debug>,msvcprtd,msvcprt>>"
-    )
 endif()
 
 # 子目录：3rdparty

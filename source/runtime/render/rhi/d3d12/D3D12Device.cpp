@@ -631,10 +631,6 @@ SwapchainRef D3D12Device::CreateSwapchain(const SwapchainCreateInfo& _info) {
     return SwapchainRef();
 }
 
-SwapchainSurfaceInfo D3D12Device::CreateSwapchainSurfaceInfo(const Moer::WindowHandle& window) const {
-    return CreatePlatformSwapchainSurfaceInfo(window);
-}
-
 void Moer::Render::D3D12Device::PostInit() {}
 
 void D3D12Device::GetHardwareAdapter(

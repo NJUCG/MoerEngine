@@ -4,6 +4,7 @@
 #include "RenderAPI.h"
 
 #include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 
 #include <string>
 
@@ -79,6 +80,7 @@ public:
     static WindowHandle* GetMainWindow();
     static void          SetTitle(WindowHandle*, const char* newTitle);
     static bool          ShouldClose(WindowHandle*);
+    static Render::SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const WindowHandle& window);
 
 protected:
     friend class WindowImpl;

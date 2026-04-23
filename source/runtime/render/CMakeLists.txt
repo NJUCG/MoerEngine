@@ -161,7 +161,7 @@ if(WIN32)
     target_compile_definitions(${target_name} PUBLIC "NOMINMAX")
 endif()
 
-if(MOER_USING_MSVC_ABI)
+if(MSVC)
     if (NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
     set(CMAKE_MSVC_RUNTIME_LIBRARY
         MultiThreaded$<$<CONFIG:Debug>:Debug>DLL)

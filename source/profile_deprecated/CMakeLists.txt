@@ -80,9 +80,8 @@ if(WITH_PROFILE)
     if (WIN32)
         target_link_libraries(perfetto PRIVATE ws2_32 advapi32 user32)
 
-        # 仅在 MSVC 或 clang-cl 前端下使用 /bigobj，避免 clang++ 把它当作文件名
-        if (MSVC OR (CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
-                     AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"))
+        # Use /bigobj only with MSVC.
+        if (MSVC)
             target_compile_options(perfetto PRIVATE "/bigobj")
         endif()
 

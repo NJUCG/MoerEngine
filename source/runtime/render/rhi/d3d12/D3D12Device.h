@@ -1120,8 +1120,6 @@ public:
     CommandQueue& GetCommandQueue(EQueueType _type) override;
 
     CopyQueue& GetCopyQueue() override;
-
-    SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const Moer::WindowHandle& window) const override;
     SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
 private:

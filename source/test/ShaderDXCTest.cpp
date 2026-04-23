@@ -5,6 +5,7 @@
 
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "misc/Assert.h"
 #include "misc/Hash.h"
 #include "rhi/RHICommon.h"
 #include "shader/ShaderCompiler.h"
