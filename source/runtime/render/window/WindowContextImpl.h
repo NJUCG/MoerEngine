@@ -21,7 +21,7 @@ public:
     virtual void SetTitle(WindowHandle*, const char* _new_title)                     = 0;
     virtual bool ShouldClose(WindowHandle*) const                                    = 0;
 
-    virtual void* GetInteropHandle(WindowHandle*, EWindowInteropHandleType type) const = 0;
+    virtual void* GetInteropHandle(const WindowHandle*, EWindowInteropHandleType type) const = 0;
 
 protected:
     static WindowImpl& GetInstance();
@@ -35,6 +35,6 @@ protected:
     bool focused{false};
 };
 
-void* GetWindowInteropHandle(WindowHandle* window, EWindowInteropHandleType type);
+void* GetWindowInteropHandle(const WindowHandle* window, EWindowInteropHandleType type);
 } // namespace Moer
 #endif

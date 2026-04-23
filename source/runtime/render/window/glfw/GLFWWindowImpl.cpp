@@ -130,13 +130,15 @@ void GLFWWindowImpl::SetTitle(WindowHandle* _window, const char* _new_title) {
 bool GLFWWindowImpl::ShouldClose(WindowHandle* _window) const {
     return glfwWindowShouldClose((GLFWwindow*)_window->window);
 }
-void* GLFWWindowImpl::GetInteropHandle(WindowHandle* _window, EWindowInteropHandleType type) const {
-    if (type != EWindowInteropHandleType::PlatformWindow) {
-        return nullptr;
-    }
+void* GLFWWindowImpl::GetInteropHandle(const WindowHandle* _window, EWindowInteropHandleType type) const {
+    switch (type) {
+        case EWindowInteropHandleType::PlatformWindow:
 #if PLATFORM_WINDOWS
-    return glfwGetWin32Window((GLFWwindow*)_window->window);
+            return glfwGetWin32Window((GLFWwindow*)_window->window);
 #endif
+            return nullptr;
+    }
+
     return nullptr;
 }
 
