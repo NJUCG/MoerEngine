@@ -131,19 +131,16 @@ bool GLFWWindowImpl::ShouldClose(WindowHandle* _window) const {
     return glfwWindowShouldClose((GLFWwindow*)_window->window);
 }
 void* GLFWWindowImpl::GetInteropHandle(const WindowHandle* _window, EWindowInteropHandleType type) const {
-    switch (type) {
-        case EWindowInteropHandleType::PlatformWindow:
+    if (type == EWindowInteropHandleType::PlatformWindow) {
 #if PLATFORM_WINDOWS
-            return glfwGetWin32Window((GLFWwindow*)_window->window);
+        return glfwGetWin32Window((GLFWwindow*)_window->window);
 #else
-            MOER_ASSERT(false, "Platform window interop is not supported on this platform");
-            break;
+        MOER_ASSERT(false, "Platform window interop is not supported on this platform");
+        return nullptr;
 #endif
-        default:
-            MOER_ASSERT(false, "Unsupported window interop handle type: {}", static_cast<uint32_t>(type));
-            break;
     }
 
+    MOER_ASSERT(false, "Unsupported window interop handle type: {}", static_cast<uint32_t>(type));
     return nullptr;
 }
 

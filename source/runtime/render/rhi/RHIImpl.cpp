@@ -35,25 +35,22 @@ public:
         void*    allocation_callback,
         void*    surface
     ) const override {
-        switch (rhi_type) {
-            case ERHIType::Vulkan: {
-                const VkResult result = glfwCreateWindowSurface(
-                    static_cast<VkInstance>(instance),
-                    static_cast<GLFWwindow*>(window_system_handle),
-                    static_cast<const VkAllocationCallbacks*>(allocation_callback),
-                    static_cast<VkSurfaceKHR*>(surface)
-                );
-                MOER_ASSERT(result == VK_SUCCESS, "glfwCreateWindowSurface failed with VkResult={}", static_cast<int32_t>(result));
-                return;
-            }
-            default:
-                MOER_ASSERT(
-                    false,
-                    "Unsupported RHI type for GLFWWindowSurfaceSource::CreateSurface: {}",
-                    static_cast<uint32_t>(rhi_type)
-                );
-                return;
+        if (rhi_type == ERHIType::Vulkan) {
+            const VkResult result = glfwCreateWindowSurface(
+                static_cast<VkInstance>(instance),
+                static_cast<GLFWwindow*>(window_system_handle),
+                static_cast<const VkAllocationCallbacks*>(allocation_callback),
+                static_cast<VkSurfaceKHR*>(surface)
+            );
+            MOER_ASSERT(result == VK_SUCCESS, "glfwCreateWindowSurface failed with VkResult={}", static_cast<int32_t>(result));
+            return;
         }
+
+        MOER_ASSERT(
+            false,
+            "Unsupported RHI type for GLFWWindowSurfaceSource::CreateSurface: {}",
+            static_cast<uint32_t>(rhi_type)
+        );
     }
 
 private:
