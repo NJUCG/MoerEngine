@@ -53,6 +53,12 @@ static constexpr VulkanExtensionDesc vulkan_extension_descs[] = {
     },
     {
         .kind     = EVulkanExtensionKind::Device,
+        .name     = VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME,
+        .optional = true,
+        .factory  = &CreateVulkanKHRComputeShaderDerivativesExtension,
+    },
+    {
+        .kind     = EVulkanExtensionKind::Device,
         .name     = VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME,
         .optional = true,
         .factory  = &CreateVulkanKHRShaderUntypedPointersExtension,

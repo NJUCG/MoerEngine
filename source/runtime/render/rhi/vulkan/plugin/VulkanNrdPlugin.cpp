@@ -7,6 +7,8 @@
 #include "../../vulkan/VulkanDevice.h"
 #include "../../vulkan/VulkanRHIResource.h"
 #include <array>
+#include <cstdio>
+#include <memory>
 #include "vulkan/vulkan_core.h"
 
 namespace Moer::Render::Ext {
@@ -91,10 +93,15 @@ private:
         nrd.max_frame_in_flight = buffered_frames;
 
         nrd::IntegrationCreationDesc integration_desc = {};
-        integration_desc.name                         = "NRD Integration for MoerEngine VkBackend";
         integration_desc.resourceWidth                = _frame_width;
         integration_desc.resourceHeight               = _frame_height;
-        integration_desc.bufferedFramesNum            = buffered_frames;
+        integration_desc.queuedFrameNum               = buffered_frames;
+        std::snprintf(
+            integration_desc.name,
+            sizeof(integration_desc.name),
+            "%s",
+            "NRD Integration for MoerEngine VkBackend"
+        );
 
 #define NRD_ID(x) nrd::Identifier(nrd::Denoiser::x)
         const Array<nrd::DenoiserDesc> denoiser_descs = {
@@ -113,9 +120,8 @@ private:
         instance_desc.denoisersNum              = denoiser_descs.size();
 
         CHECK_ASSERT(
-            nrd.integration.Initialize(
-                integration_desc, instance_desc, *nri_entry.device, nri_entry.rhi, nri_entry.rhi
-            ),
+            nrd.integration.Recreate(integration_desc, instance_desc, nri_entry.device)
+                == nrd::Result::SUCCESS,
             "Failed to initialize NRD Integration"
         );
 
@@ -125,11 +131,16 @@ private:
 #undef NRD_ID
     }
 
+    void ResetResourceSnapshot() {
+        std::destroy_at(&nrd.resource_snapshot);
+        std::construct_at(&nrd.resource_snapshot);
+    }
+
     void ResetIntegrationState() {
         for (auto& desc_map : texture_barrier_descs) {
             for (auto& [_, desc] : desc_map) {
-                if (desc.texture != nullptr) {
-                    nrd.nri.rhi.DestroyTexture(*desc.texture);
+                if (desc.nri.texture != nullptr) {
+                    nrd.nri.rhi.DestroyTexture(desc.nri.texture);
                 }
             }
 
@@ -138,14 +149,14 @@ private:
 
         for (auto& [_, cmd_list] : cmd_lists_on_use) {
             if (cmd_list != nullptr) {
-                nrd.nri.rhi.DestroyCommandBuffer(*cmd_list);
+                nrd.nri.rhi.DestroyCommandBuffer(cmd_list);
             }
         }
 
         cmd_lists_on_use.clear();
         resource_usages.clear();
         resource_usages_indices = {};
-        nrd.user_pool           = {};
+        ResetResourceSnapshot();
         nrd.integration.Destroy();
     }
 
@@ -163,6 +174,7 @@ public:
     void Begin() override {
         // Must be called once on a frame start
         nrd.integration.NewFrame();
+        ResetResourceSnapshot();
     }
 
     void Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) override;
@@ -182,15 +194,15 @@ public:
 
         auto desc_key = uint64(vk_tex->GetHandle());
         if (tex_barrier_desc_map.contains(desc_key)) {
-            auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
+            auto& tex_resource = tex_barrier_desc_map[desc_key];
             if (_index == EResourceSlot::MOTION_VECTOR) {
-                // The 'nri::TextureBarrierDesc.after' of motion vector has been trasitioned to GENERAL by NRD REBLUR Denoisers, so we need to reset it
-                tex_barrier_desc.after.access = nri::AccessBits::SHADER_RESOURCE;
-                tex_barrier_desc.after.layout = nri::Layout::SHADER_RESOURCE;
+                tex_resource.state.access = nri::AccessBits::SHADER_RESOURCE;
+                tex_resource.state.layout = nri::Layout::SHADER_RESOURCE;
+                tex_resource.state.stages = nri::StageBits::COMPUTE_SHADER;
             }
-            nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            nrd.resource_snapshot.SetResource(ResourceSlot(_index), tex_resource);
         } else {
-            auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
+            auto& tex_resource = tex_barrier_desc_map[desc_key];
             // Wrap required textures (better do it only once on initialization)
             nri::TextureVKDesc tex_desc = {};
 
@@ -210,19 +222,12 @@ public:
             // Useful information:
             //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
             //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
-            nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, (nri::Texture*&)tex_barrier_desc.texture);
-            tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE;
-            tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE;
-            tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.after.access  = nri::AccessBits::SHADER_RESOURCE;
-            tex_barrier_desc.after.layout  = nri::Layout::SHADER_RESOURCE;
-            tex_barrier_desc.after.stages  = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.mipOffset     = 0;
-            tex_barrier_desc.mipNum        = vk_tex->GetNumMips();
-            tex_barrier_desc.layerOffset   = 0;
-            tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
-            tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
-            nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, tex_resource.nri.texture);
+            tex_resource.state.access = nri::AccessBits::SHADER_RESOURCE;
+            tex_resource.state.layout = nri::Layout::SHADER_RESOURCE;
+            tex_resource.state.stages = nri::StageBits::COMPUTE_SHADER;
+            tex_resource.userArg      = &tex_resource;
+            nrd.resource_snapshot.SetResource(ResourceSlot(_index), tex_resource);
         }
 
         // Resource usage
@@ -251,10 +256,10 @@ public:
 
         auto desc_key = uint64(vk_tex->GetHandle());
         if (tex_barrier_desc_map.contains(desc_key)) {
-            auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
-            nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            auto& tex_resource = tex_barrier_desc_map[desc_key];
+            nrd.resource_snapshot.SetResource(ResourceSlot(_index), tex_resource);
         } else {
-            auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
+            auto& tex_resource = tex_barrier_desc_map[desc_key];
             // Wrap required textures (better do it only once on initialization)
             nri::TextureVKDesc tex_desc = {};
 
@@ -274,19 +279,12 @@ public:
             // Useful information:
             //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
             //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
-            nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, (nri::Texture*&)tex_barrier_desc.texture);
-            tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.after.access  = nri::AccessBits::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.after.layout  = nri::Layout::SHADER_RESOURCE_STORAGE;
-            tex_barrier_desc.after.stages  = nri::StageBits::COMPUTE_SHADER;
-            tex_barrier_desc.mipOffset     = 0;
-            tex_barrier_desc.mipNum        = vk_tex->GetNumMips();
-            tex_barrier_desc.layerOffset   = 0;
-            tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
-            tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
-            nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, tex_resource.nri.texture);
+            tex_resource.state.access = nri::AccessBits::SHADER_RESOURCE_STORAGE;
+            tex_resource.state.layout = nri::Layout::SHADER_RESOURCE_STORAGE;
+            tex_resource.state.stages = nri::StageBits::COMPUTE_SHADER;
+            tex_resource.userArg      = &tex_resource;
+            nrd.resource_snapshot.SetResource(ResourceSlot(_index), tex_resource);
         }
 
         // Resource usage
@@ -319,8 +317,6 @@ private:
                 return nrd::ResourceType::IN_NORMAL_ROUGHNESS;
             case EResourceSlot::VIEW_Z:
                 return nrd::ResourceType::IN_VIEWZ;
-            case EResourceSlot::BASECOLOR_METALNESS:
-                return nrd::ResourceType::IN_BASECOLOR_METALNESS;
             case EResourceSlot::IN_DIFFUSE:
                 return nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST;
             case EResourceSlot::IN_SPECULAR:
@@ -397,7 +393,16 @@ public:
         }
 
         const nrd::Identifier denoiser_id = nrd::Identifier(denoiser);
-        nrd_integration.Denoise(&denoiser_id, 1, *nri.cmd_list, nrd_interface.nrd.user_pool);
+        auto& resource_snapshot = nrd_interface.nrd.resource_snapshot;
+        nrd_integration.Denoise(&denoiser_id, 1, *nri.cmd_list, resource_snapshot);
+
+        for (size_t resource_index = 0; resource_index < resource_snapshot.uniqueNum; ++resource_index) {
+            auto& resource = resource_snapshot.unique[resource_index];
+            if (resource.userArg != nullptr) {
+                auto* cached_resource = static_cast<nrd::Resource*>(resource.userArg);
+                cached_resource->state = resource.state;
+            }
+        }
 
         // The motion vector has been trasitioned to GENERAL layout by NRD REBLUR Denoisers, so we need to flush the state
         auto mv_usage_slot =

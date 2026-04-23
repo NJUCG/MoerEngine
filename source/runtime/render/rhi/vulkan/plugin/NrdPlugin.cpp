@@ -7,17 +7,23 @@ namespace Moer::Render::Ext {
 NRDInterface::~NRDInterface() {
     for (auto& desc_map : texture_barrier_descs) {
         for (auto& [_, desc] : desc_map) {
-            nrd.nri.rhi.DestroyTexture(*desc.texture);
+            if (desc.nri.texture != nullptr) {
+                nrd.nri.rhi.DestroyTexture(desc.nri.texture);
+            }
         }
     }
 
     for (auto& [_, cmd_list] : cmd_lists_on_use) {
-        nrd.nri.rhi.DestroyCommandBuffer(*cmd_list);
+        if (cmd_list != nullptr) {
+            nrd.nri.rhi.DestroyCommandBuffer(cmd_list);
+        }
     }
 
     nrd.integration.Destroy();
 
-    nri::nriDestroyDevice(*nrd.nri.device);
+    if (nrd.nri.device != nullptr) {
+        nri::nriDestroyDevice(nrd.nri.device);
+    }
 }
 
 void NRDInterface::UpdateCommonSettings(
@@ -135,7 +141,6 @@ void NRDInterface::SetDefaultCommonSettings(uint16 _frame_width, uint16 _frame_h
     nrd_common_settings.isMotionVectorInWorldSpace          = false;
     nrd_common_settings.isHistoryConfidenceAvailable        = false;
     nrd_common_settings.isDisocclusionThresholdMixAvailable = false;
-    nrd_common_settings.isBaseColorMetalnessAvailable       = false;
     nrd_common_settings.enableValidation                    = false;
 }
 

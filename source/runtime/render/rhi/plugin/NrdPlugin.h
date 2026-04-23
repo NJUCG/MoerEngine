@@ -75,9 +75,15 @@ struct ReblurSettings {};
 
 struct RelaxSettings {};
 
-struct Integration {};
+struct Resource {
+    void* userArg = nullptr;
+};
 
-struct UserPool {};
+struct ResourceSnapshot {
+    bool restoreInitialState = false;
+};
+
+struct Integration {};
 
 typedef uint32_t Identifier;
 
@@ -105,7 +111,6 @@ public:
         MOTION_VECTOR,
         NORMAL_ROUGHNESS,
         VIEW_Z,
-        BASECOLOR_METALNESS,
         IN_DIFFUSE,
         IN_SPECULAR,
 
@@ -163,12 +168,12 @@ protected:
 
         nrd::Integration integration = {};
 
-        nrd::UserPool user_pool = {};
+        nrd::ResourceSnapshot resource_snapshot = {};
     };
 
     NRDEntry nrd = {};
 
-    StaticArray<Map<uint64, nri::TextureBarrierDesc>, uint8(EResourceSlot::SLOT_NUM)> texture_barrier_descs =
+    StaticArray<Map<uint64, nrd::Resource>, uint8(EResourceSlot::SLOT_NUM)> texture_barrier_descs =
         {};
 
     UnorderedMap<uint64, nri::CommandBuffer*> cmd_lists_on_use = {};
