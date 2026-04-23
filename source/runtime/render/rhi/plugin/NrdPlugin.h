@@ -21,10 +21,12 @@
 // 2
 #include <Extensions/NRIHelper.h>
 // 3
-#include <Extensions/NRIWrapperVK.h>
+#include <Extensions/NRIRayTracing.h>
 // 4
-#include <NRD.h>
+#include <Extensions/NRIWrapperVK.h>
 // 5
+#include <NRD.h>
+// 6
 #include <NRDIntegration.h>
 
 #else
