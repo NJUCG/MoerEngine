@@ -135,8 +135,9 @@ void* GLFWWindowImpl::GetInteropHandle(const WindowHandle* _window, EWindowInter
         case EWindowInteropHandleType::PlatformWindow:
 #if PLATFORM_WINDOWS
             return glfwGetWin32Window((GLFWwindow*)_window->window);
-#endif
+#else
             return nullptr;
+#endif
         default:
             MOER_ASSERT(false, "Unsupported window interop handle type: {}", static_cast<uint32_t>(type));
             return nullptr;

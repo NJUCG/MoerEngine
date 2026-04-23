@@ -2000,7 +2000,7 @@ SwapchainRef VulkanDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
 }
 
 SwapchainSurfaceInfo VulkanDevice::CreateSwapchainSurfaceInfo(const Moer::WindowHandle& window) const {
-    return CreateGlfwSwapchainSurfaceInfo(window);
+    return CreatePlatformSwapchainSurfaceInfo(window);
 }
 
 IOInterfaceRef VulkanDevice::CreateIOInterface(CopyQueue& _copy_queue) {
