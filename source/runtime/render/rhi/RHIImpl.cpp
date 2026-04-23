@@ -8,6 +8,7 @@
 #include "shader/ShaderResourceManager.h"
 
 #include "rhi/plugin/NrdPlugin.h"
+#include <vulkan/vulkan_core.h>
 #include "GLFW/glfw3.h"
 namespace Moer::Render {
 namespace {
