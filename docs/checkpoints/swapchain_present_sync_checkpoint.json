@@ -26,7 +26,7 @@
     "temporary_runtime_rule": "Until per-viewport present sync exists, swapchain/viewport lifecycle code must use RHIExecutor::Sync(ERHISyncDepth::Present) instead of calling GraphicsQueue::Sync() or other queue Sync() methods directly.",
     "why_this_is_only_temporary": [
       "ERHISyncDepth::Present currently drains all present-visible work before the sync point, not one specific swapchain or viewport.",
-      "Swapchain::Sync() still exists as a backend-specific last-mile wait, but caller-side queue ownership has already moved to RHIExecutor semantics."
+      "Swapchain::Sync() still exists as a backend-specific host-side wait for the present queue to become idle before resize/destroy paths continue, but caller-side queue ownership has already moved to RHIExecutor semantics."
     ]
   },
   "design_constraints": [
