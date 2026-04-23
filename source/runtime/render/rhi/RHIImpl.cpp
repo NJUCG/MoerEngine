@@ -11,7 +11,7 @@ namespace Moer::Render {
 namespace {
 class GlfwWindowSurfaceSource final : public WindowSurfaceSource {
 public:
-    GlfwWindowSurfaceSource(void* window_system_handle, uintptr_t platform_window_handle) :
+    GLFWWindowSurfaceSource(void* window_system_handle, uintptr_t platform_window_handle) :
         window_system_handle(window_system_handle),
         platform_window_handle(platform_window_handle) {}
 
@@ -142,7 +142,7 @@ SwapchainSurfaceInfo RenderDevice::Impl::CreateGlfwSwapchainSurfaceInfo(const Mo
     MOER_ASSERT(platform_window != nullptr, "GLFW window does not expose a platform window handle");
 
     return SwapchainSurfaceInfo{
-        .source = MakeShared<GlfwWindowSurfaceSource>(
+        .source = MakeShared<GLFWWindowSurfaceSource>(
             window.window, reinterpret_cast<uintptr_t>(platform_window)
         ),
     };

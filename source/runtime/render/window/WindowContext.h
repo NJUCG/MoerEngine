@@ -44,21 +44,18 @@ struct RENDER_API GuiWindowInitInfo {
 
 struct RENDER_API SurfaceInitInfo {
     SurfaceInitInfo(
-        const ERHIType&    _rhi_type,
         uint32_t           _width,
         uint32_t           _height,
         const std::string& _title,
         bool               _full_screen
     ) :
-        rhi_type(_rhi_type),
         width(_width),
         height(_height),
         title(_title),
         b_fullscreen(_full_screen) {}
 
-    SurfaceInitInfo() : SurfaceInitInfo(ERHIType::Vulkan, 1920, 1080, "untitled", false) {}
+    SurfaceInitInfo() : SurfaceInitInfo(1920, 1080, "untitled", false) {}
 
-    ERHIType    rhi_type;
     int         width{1280};
     int         height{720};
     std::string title{"MoerEngine"};

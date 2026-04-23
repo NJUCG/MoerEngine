@@ -84,7 +84,6 @@ void Engine::Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen)
     );
 
     WindowContext::Init(SurfaceInitInfo(
-        RenderDevice::Get().GetRHIType(),
         m_editor_config->GetResolution().x,
         m_editor_config->GetResolution().y,
         "MoerEditor",

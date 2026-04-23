@@ -865,7 +865,7 @@ int RunProfilerMain(int argc, const char** argv) {
         }
     );
 
-    WindowContext::Init(SurfaceInitInfo(ERHIType::Vulkan, 1680, 980, "MoerProfiler", false));
+    WindowContext::Init(SurfaceInitInfo(1680, 980, "MoerProfiler", false));
 
     RenderDevice& device     = RenderDevice::Get();
     CommandQueue& gfx_queue  = device.GetCommandQueue(EQueueType::Graphics);
