@@ -40,6 +40,12 @@ public:
     virtual EWindowSystemType GetWindowSystem() const   = 0;
     virtual void*             GetWindowSystemHandle() const = 0;
     virtual uintptr_t         GetPlatformWindowHandle() const = 0;
+    virtual void CreateSurface(
+        ERHIType rhi_type,
+        void*    instance,
+        void*    allocation_callback,
+        void*    surface
+    ) const = 0;
 };
 
 using WindowSurfaceSourceRef = SharedPtr<WindowSurfaceSource>;

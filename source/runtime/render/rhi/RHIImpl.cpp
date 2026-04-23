@@ -3,10 +3,12 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/vulkan/VulkanPlatform.h"
 #include "window/WindowContextImpl.h"
 #include "shader/ShaderResourceManager.h"
 
 #include "rhi/plugin/NrdPlugin.h"
+#include "GLFW/glfw3.h"
 namespace Moer::Render {
 namespace {
 class GLFWWindowSurfaceSource final : public WindowSurfaceSource {
@@ -25,6 +27,31 @@ public:
 
     uintptr_t GetPlatformWindowHandle() const override {
         return platform_window_handle;
+    }
+
+    void CreateSurface(
+        ERHIType rhi_type,
+        void*    instance,
+        void*    allocation_callback,
+        void*    surface
+    ) const override {
+        switch (rhi_type) {
+            case ERHIType::Vulkan:
+                glfwCreateWindowSurface(
+                    static_cast<VkInstance>(instance),
+                    static_cast<GLFWwindow*>(window_system_handle),
+                    static_cast<const VkAllocationCallbacks*>(allocation_callback),
+                    static_cast<VkSurfaceKHR*>(surface)
+                );
+                return;
+            default:
+                MOER_ASSERT(
+                    false,
+                    "Unsupported RHI type for GLFWWindowSurfaceSource::CreateSurface: {}",
+                    static_cast<uint32_t>(rhi_type)
+                );
+                return;
+        }
     }
 
 private:
@@ -139,7 +166,7 @@ SwapchainSurfaceInfo RenderDevice::Impl::CreateGlfwSwapchainSurfaceInfo(const Mo
     void* platform_window = Moer::GetWindowInteropHandle(
         &window, Moer::EWindowInteropHandleType::PlatformWindow
     );
-    MOER_ASSERT(platform_window != nullptr, "GLFW window does not expose a platform window handle");
+    MOER_ASSERT(platform_window != nullptr, "Window surface source does not expose a platform window handle");
 
     return SwapchainSurfaceInfo{
         .source = MakeShared<GLFWWindowSurfaceSource>(
