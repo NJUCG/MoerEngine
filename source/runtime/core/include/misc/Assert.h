@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <format>
 #include <string>
+#include <string_view>
 
 namespace Moer::Diagnostics {
 
@@ -36,13 +37,13 @@ CORE_API bool HandleEnsureFailure(FailureInfo&& info) noexcept;
 
 template<typename... Args>
 [[noreturn]] inline void ReportAssertFailure(
-    const char*               expression,
-    const char*               file,
-    uint32_t                  line,
-    const char*               function,
-    uint32_t                  thread_id,
-    std::format_string<Args...> fmt,
-    Args&&...                 args
+    const char*      expression,
+    const char*      file,
+    uint32_t         line,
+    const char*      function,
+    uint32_t         thread_id,
+    std::string_view format_str,
+    Args&&...        args
 ) {
     FailureInfo info{};
     info.kind = EFailureKind::Assert;
@@ -51,19 +52,19 @@ template<typename... Args>
     info.function = function;
     info.line = line;
     info.thread_id = thread_id;
-    info.message = std::format(fmt, std::forward<Args>(args)...);
+    info.message = std::vformat(format_str, std::make_format_args(args...));
     HandleAssertFailure(std::move(info));
 }
 
 template<typename... Args>
 inline bool ReportEnsureFailure(
-    const char*               expression,
-    const char*               file,
-    uint32_t                  line,
-    const char*               function,
-    uint32_t                  thread_id,
-    std::format_string<Args...> fmt,
-    Args&&...                 args
+    const char*      expression,
+    const char*      file,
+    uint32_t         line,
+    const char*      function,
+    uint32_t         thread_id,
+    std::string_view format_str,
+    Args&&...        args
 ) {
     FailureInfo info{};
     info.kind = EFailureKind::Ensure;
@@ -72,7 +73,7 @@ inline bool ReportEnsureFailure(
     info.function = function;
     info.line = line;
     info.thread_id = thread_id;
-    info.message = std::format(fmt, std::forward<Args>(args)...);
+    info.message = std::vformat(format_str, std::make_format_args(args...));
     return HandleEnsureFailure(std::move(info));
 }
 

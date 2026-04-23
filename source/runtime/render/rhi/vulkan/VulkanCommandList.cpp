@@ -17,6 +17,7 @@
 #include <string_view>
 
 #include "VulkanAllocator.h"
+#include "Core.h"
 #include "shader/ShaderPipeline.h"
 #include "vulkan/vulkan_core.h"
 
@@ -826,7 +827,9 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
 }
 
 void VulkanCmdList::SetPso(const PipelineHandle& _pso_handle) {
+    MOER_ASSERT(_pso_handle.IsValid(), "VulkanCmdList::SetPso received an invalid pipeline handle");
     auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
+    MOER_ASSERT(vk_pso != nullptr, "VulkanCmdList::SetPso resolved a null pipeline state");
     vkCmdBindPipeline(command_buffer, vk_pso->GetPipelineBindPoint(), vk_pso->GetHandle());
 }
 

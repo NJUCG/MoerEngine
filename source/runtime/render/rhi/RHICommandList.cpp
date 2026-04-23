@@ -3,6 +3,7 @@
 //
 #include "PixelFormat.h"
 #include "RHIImpl.h"
+#include "Core.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -235,13 +236,7 @@ void CommandList::ComputeDispatcher::Dispatch(
     ProfileSection   _section
 ) {
     cmd_list.EnsureNoActiveCopyScope("ComputeDispatcher::Dispatch");
-    if (pso.handle.IsValid() == false) {
-        LOG_ERROR(
-            "Attempt to dispatch a compute with invalid PSO. Please check if the PSO is created "
-            "successfully. PSO name: \"{}\"",
-            _name
-        );
-    }
+    MOER_ASSERT(pso.handle.IsValid(), "Compute dispatch requires a valid PSO: {}", _name);
     cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count));
     cmd_list.commands.back()->name = _name;
 }
@@ -252,6 +247,7 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
     ProfileSection   _section
 ) {
     cmd_list.EnsureNoActiveCopyScope("ComputeDispatcher::DispatchIndirect");
+    MOER_ASSERT(pso.handle.IsValid(), "Indirect compute dispatch requires a valid PSO: {}", _name);
     cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _indirect));
     cmd_list.commands.back()->name = _name;
 }
