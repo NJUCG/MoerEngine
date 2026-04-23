@@ -9,7 +9,7 @@
 #include "rhi/plugin/NrdPlugin.h"
 namespace Moer::Render {
 namespace {
-class GlfwWindowSurfaceSource final : public WindowSurfaceSource {
+class GLFWWindowSurfaceSource final : public WindowSurfaceSource {
 public:
     GLFWWindowSurfaceSource(void* window_system_handle, uintptr_t platform_window_handle) :
         window_system_handle(window_system_handle),
