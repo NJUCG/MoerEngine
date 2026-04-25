@@ -44,6 +44,8 @@ target_link_libraries(${target_name}
 if(TARGET nfd)
     target_link_libraries(${target_name} PRIVATE nfd)
     target_compile_definitions(${target_name} PRIVATE MOER_CORE_HAS_NFD=1)
+else()
+    message(STATUS "nfd target not found, FileDialog will be unavailable")
 endif()
 
 if(WIN32)

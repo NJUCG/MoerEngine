@@ -105,7 +105,7 @@ void AppendWideCodePoint(WideString& output, char32_t code_point) {
         output.push_back(static_cast<WideChar>(kHighSurrogateStart + (code_point >> 10)));
         output.push_back(static_cast<WideChar>(kLowSurrogateStart + (code_point & 0x3FF)));
     } else {
-        if (code_point > static_cast<char32_t>(std::numeric_limits<WideChar>::max()) || IsSurrogate(code_point)) {
+        if (code_point > static_cast<char32_t>(std::numeric_limits<WideChar>::max())) {
             RejectInvalidText();
         }
         output.push_back(static_cast<WideChar>(code_point));
