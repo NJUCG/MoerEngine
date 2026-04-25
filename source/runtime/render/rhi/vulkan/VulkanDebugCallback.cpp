@@ -31,7 +31,7 @@ void LogUnknownCooperativeLayerInfo(std::atomic_bool& _once_flag, const char* _e
     bool expected = false;
     if (_once_flag.compare_exchange_strong(expected, true)) {
         LOG_INFO(
-            "VulkanRHI: Validation layer does not recognize {}. Consider updating VulkanSDK to 1.4 or newer "
+            MOER_TEXT("VulkanRHI: Validation layer does not recognize {}. Consider updating VulkanSDK to 1.4 or newer ")
             "for accurate validation results.",
             _extension_name
         );
@@ -127,13 +127,13 @@ bool TryHandleRedundantLoaderMessage(const VkDebugUtilsMessengerCallbackDataEXT*
 
 static void OutputMessage(int sev, const std::string& msg) {
     if (sev >= 3) {
-        LOG_ERROR("\n{}", msg);
+        LOG_ERROR(MOER_TEXT("\n{}"), msg);
     } else if (sev == 2) {
-        LOG_WARNING("\n{}", msg);
+        LOG_WARNING(MOER_TEXT("\n{}"), msg);
     } else if (sev == 1) {
-        LOG_INFO("\n{}", msg);
+        LOG_INFO(MOER_TEXT("\n{}"), msg);
     } else {
-        LOG_DEBUG("\n{}", msg);
+        LOG_DEBUG(MOER_TEXT("\n{}"), msg);
     }
 }
 

@@ -355,7 +355,7 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
                                     const auto dependency_it = signal_syncpoint_by_key.find(dependency_key);
                                     if (dependency_it == signal_syncpoint_by_key.end()) {
                                         LOG_ERROR(
-                                            "Submit ({}, {}) missing dependency submit ({}, {}) during submit task assembly",
+                                            MOER_TEXT("Submit ({}, {}) missing dependency submit ({}, {}) during submit task assembly"),
                                             translate_info->key.op_seq,
                                             translate_info->key.submit_idx,
                                             dependency_key.op_seq,
@@ -458,7 +458,7 @@ static void DispatchTranslatePipelineBatch(
                                                      );
                         result.translate_complete = current.completion_event;
                         if (!result.valid && !result.error.empty()) {
-                            LOG_ERROR("{}", result.error);
+                            LOG_ERROR(MOER_TEXT("{}"), result.error);
                         }
                         runtime_state->translate_results[index] = std::move(result);
                     },

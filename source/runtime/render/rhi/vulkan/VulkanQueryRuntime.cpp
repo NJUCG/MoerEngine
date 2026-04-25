@@ -55,7 +55,7 @@ UniquePtr<VulkanQueryRuntime::IQueryPoolBackend>
 VulkanQueryRuntime::CreateBackend(QueryKind _kind, uint32 _capacity) {
     auto iter = backend_factories.find(_kind);
     if (iter == backend_factories.end()) {
-        LOG_WARNING("No query backend factory registered for kind {}, using default backend.", uint32(_kind));
+        LOG_WARNING(MOER_TEXT("No query backend factory registered for kind {}, using default backend."), uint32(_kind));
         if (_kind == QueryKind::Timestamp) {
             return UniquePtr<IQueryPoolBackend>(MakeUnique<VulkanTimestampPoolBackend>(device, _capacity));
         }
@@ -108,7 +108,7 @@ VulkanQueryRuntime::PoolSlot VulkanQueryRuntime::AcquireSlot(QueryKind _kind, Re
     if (active_pool_idx >= 0 && active_pool_idx < static_cast<int>(pools.size())) {
         PoolInstance& active_pool = pools[active_pool_idx];
         if (!pool_matches_owner(active_pool)) {
-            LOG_WARNING("Query pool owner mismatch, allocating a dedicated pool for this command buffer.");
+            LOG_WARNING(MOER_TEXT("Query pool owner mismatch, allocating a dedicated pool for this command buffer."));
             active_pool_idx = -1;
         } else {
             try_recycle(active_pool);
@@ -145,7 +145,7 @@ VulkanQueryRuntime::PoolSlot VulkanQueryRuntime::AcquireSlot(QueryKind _kind, Re
         PoolInstance instance{};
         instance.backend      = CreateBackend(_kind, new_capacity);
         if (!instance.backend) {
-            LOG_ERROR("Failed to create query pool backend for kind {}, falling back to built-in backend.", uint32(_kind));
+            LOG_ERROR(MOER_TEXT("Failed to create query pool backend for kind {}, falling back to built-in backend."), uint32(_kind));
             if (_kind == QueryKind::Timestamp) {
                 instance.backend = UniquePtr<IQueryPoolBackend>(
                     MakeUnique<VulkanTimestampPoolBackend>(device, new_capacity)

@@ -37,11 +37,11 @@ struct CudaResource {
     void CreateAllocate(RasterContext& context, TextureRef _previousPassOutputTexture) {
         // MARK: image
         cuda_texture = MakeUnique<CudaTexture>(context, _previousPassOutputTexture);
-        LOG_INFO("CudaPass: Created CUDA Kernel Vulkan image buffer");
+        LOG_INFO(MOER_TEXT("CudaPass: Created CUDA Kernel Vulkan image buffer"));
 
         // MARK: semaphore
         cuda_semaphore = MakeUnique<CudaSemaphore>(context);
-        LOG_INFO("CudaPass: Created CUDA Imported Vulkan semaphore");
+        LOG_INFO(MOER_TEXT("CudaPass: Created CUDA Imported Vulkan semaphore"));
     }
 
     void Free(RasterContext& context) {

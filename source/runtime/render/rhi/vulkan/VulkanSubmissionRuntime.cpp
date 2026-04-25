@@ -218,7 +218,7 @@ struct SubmissionPresentContext::Impl {
             }
             if (result != VK_NOT_READY) {
                 LOG_ERROR(
-                    "vkGetFenceStatus failed on present fence slot {} with result {}",
+                    MOER_TEXT("vkGetFenceStatus failed on present fence slot {} with result {}"),
                     present_index % swapchain.max_frames_in_flight,
                     int(result)
                 );
@@ -400,7 +400,7 @@ SubmissionPresentResult SubmissionPresentContext::Present(
         vkQueuePresentKHR(impl->command_queue.vk_device.GetPresentQueue(), &present_info);
     if (present_vk_result != VK_SUCCESS && present_vk_result != VK_SUBOPTIMAL_KHR &&
         present_vk_result != VK_ERROR_OUT_OF_DATE_KHR) {
-        LOG_ERROR("vkQueuePresentKHR failed with result {}", int(present_vk_result));
+        LOG_ERROR(MOER_TEXT("vkQueuePresentKHR failed with result {}"), int(present_vk_result));
     }
     ++swapchain->image_idx;
 
@@ -622,7 +622,7 @@ void VulkanSubmissionRuntime::RunOrderedSubmitBatch(SubmissionBatch& batch) {
         const uint32 flushed_count    = FlushPendingReady(state);
         if (state.next_submit_index == old_submit_index && flushed_count == 0) {
             LOG_ERROR(
-                "Submission runtime made no ordered progress at submit index {} of {}",
+                MOER_TEXT("Submission runtime made no ordered progress at submit index {} of {}"),
                 state.next_submit_index,
                 state.submits.size()
             );
@@ -653,7 +653,7 @@ void VulkanSubmissionRuntime::ScanBatchReadiness(OrderedBatchRuntimeState& state
         auto& submit = state.submits[submit_index];
         if (!submit.translate_result.valid) {
             LOG_ERROR(
-                "Translate failed for ordered submit seq={} ({}, {}): {}",
+                MOER_TEXT("Translate failed for ordered submit seq={} ({}, {}): {}"),
                 submit.submit_seq,
                 submit.key.op_seq,
                 submit.key.submit_idx,
@@ -665,7 +665,7 @@ void VulkanSubmissionRuntime::ScanBatchReadiness(OrderedBatchRuntimeState& state
         if (submit.translate_result.translate_complete &&
             !submit.translate_result.translate_complete->IsComplete()) {
             LOG_ERROR(
-                "Translate completion is not resolved before ordered submit seq={} ({}, {})",
+                MOER_TEXT("Translate completion is not resolved before ordered submit seq={} ({}, {})"),
                 submit.submit_seq,
                 submit.key.op_seq,
                 submit.key.submit_idx
@@ -675,7 +675,7 @@ void VulkanSubmissionRuntime::ScanBatchReadiness(OrderedBatchRuntimeState& state
         }
         if (!submit.translate_result.recorded_submit.has_value()) {
             LOG_ERROR(
-                "Missing recorded submit packet for ordered submit seq={} ({}, {})",
+                MOER_TEXT("Missing recorded submit packet for ordered submit seq={} ({}, {})"),
                 submit.submit_seq,
                 submit.key.op_seq,
                 submit.key.submit_idx
@@ -713,7 +713,7 @@ uint32 VulkanSubmissionRuntime::FlushPendingReady(OrderedBatchRuntimeState& stat
         auto& queue_state = scheduler_state.queue_states.Get(submit.queue);
         if (queue_state.timeline_handle == 0) {
             LOG_ERROR(
-                "Queue runtime state is missing timeline handle for queue {}",
+                MOER_TEXT("Queue runtime state is missing timeline handle for queue {}"),
                 QueueTypeName(submit.queue)
             );
             assert(false && "queue runtime state must be initialized before submit");
@@ -797,7 +797,7 @@ uint32 VulkanSubmissionRuntime::FlushPendingReady(OrderedBatchRuntimeState& stat
             case EQueueType::Num:
             default:
                 LOG_ERROR(
-                    "Invalid queue type in ordered submit runtime: {}",
+                    MOER_TEXT("Invalid queue type in ordered submit runtime: {}"),
                     QueueTypeName(submit.queue)
                 );
                 assert(false && "ordered submit must target a concrete queue");
@@ -846,7 +846,7 @@ std::optional<WaitEvent> VulkanSubmissionRuntime::ExecutePresentStage(
 ) {
     if (!present_stage.valid) {
         if (!present_stage.error.empty()) {
-            LOG_ERROR("{}", present_stage.error);
+            LOG_ERROR(MOER_TEXT("{}"), present_stage.error);
         }
         assert(false && "present stage must be valid before runtime execution");
         return std::nullopt;
@@ -856,7 +856,7 @@ std::optional<WaitEvent> VulkanSubmissionRuntime::ExecutePresentStage(
     }
     if (present_stage.present.queue == EQueueType::Copy ||
         present_stage.present.queue == EQueueType::Ignore) {
-        LOG_ERROR("Invalid present queue type: {}", QueueTypeName(present_stage.present.queue));
+        LOG_ERROR(MOER_TEXT("Invalid present queue type: {}"), QueueTypeName(present_stage.present.queue));
         assert(false && "present must execute on a graphics-capable queue");
         return std::nullopt;
     }
@@ -929,7 +929,7 @@ void VulkanSubmissionRuntime::PublishResolvedSyncPoint(
     const auto [_, inserted] =
         scheduler_state.resolved_syncpoints.emplace(syncpoint_id, resolved_syncpoint);
     if (!inserted) {
-        LOG_ERROR("SyncPoint {} was published more than once", syncpoint_id);
+        LOG_ERROR(MOER_TEXT("SyncPoint {} was published more than once"), syncpoint_id);
         assert(false && "syncpoint must only be published once");
     }
 }
@@ -943,7 +943,7 @@ RootRhiBoundary VulkanSubmissionRuntime::BuildBatchTailBoundary(
         const auto syncpoint_iter = scheduler_state.resolved_syncpoints.find(submit.signal_syncpoint);
         if (syncpoint_iter == scheduler_state.resolved_syncpoints.end()) {
             LOG_ERROR(
-                "Batch tail is missing published syncpoint for ordered submit seq={} ({}, {})",
+                MOER_TEXT("Batch tail is missing published syncpoint for ordered submit seq={} ({}, {})"),
                 submit.submit_seq,
                 submit.key.op_seq,
                 submit.key.submit_idx

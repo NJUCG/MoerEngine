@@ -90,7 +90,7 @@ void MetisTest() {
     auto* meshes = scene->mMeshes;
     auto  flag   = scene->mFlags;
     if (flag & AI_SCENE_FLAGS_INCOMPLETE || !scene || !scene->mRootNode) {
-        LOG_ERROR("Assimp load scene failed");
+        LOG_ERROR(MOER_TEXT("Assimp load scene failed"));
         return;
     }
     auto                      num_meshes = scene->mNumMeshes;
@@ -235,7 +235,7 @@ void MetisTest() {
         int meshlet_index = 0;
         for (const auto& meshlet : output.mesh.meshlets) {
             LOG_INFO(
-                "Meshlet id: {}, Meshlet vertex count: {}, Meshlet prim count: {}",
+                MOER_TEXT("Meshlet id: {}, Meshlet vertex count: {}, Meshlet prim count: {}"),
                 meshlet_index,
                 meshlet.vertex_count,
                 meshlet.prim_count
@@ -244,7 +244,7 @@ void MetisTest() {
             assert(meshlet.prim_count == 64);
         }
     }
-    LOG_INFO("Metis test done");
+    LOG_INFO(MOER_TEXT("Metis test done"));
 }
 
 void InitTestEnv(const std::filesystem::path& workspace_path) {

@@ -99,14 +99,14 @@ VkIndexType VulkanEnumTranslator::METoVKIndexType(EIndexElementType _type) {
         case IET_UINT32:
             return VK_INDEX_TYPE_UINT32;
         default:
-            LOG_CRITICAL("Unsupported index element type: {}", static_cast<uint32_t>(_type));
+            LOG_CRITICAL(MOER_TEXT("Unsupported index element type: {}"), static_cast<uint32_t>(_type));
             return VK_INDEX_TYPE_MAX_ENUM;
     }
 }
 
 VkFormat VulkanEnumTranslator::METoVKFormat(EPixelFormat _format) {
     if (_format > 184) {
-        LOG_CRITICAL("Unsupported pixel format: {}", static_cast<uint32_t>(_format));
+        LOG_CRITICAL(MOER_TEXT("Unsupported pixel format: {}"), static_cast<uint32_t>(_format));
         return VK_FORMAT_MAX_ENUM;
     }
     return VkFormat(_format); // MARK...
@@ -130,7 +130,7 @@ VkImageType VulkanEnumTranslator::METoVKImageType(ETextureDimension _dim) {
         case ETextureDimension::TEX_3D:
             return VK_IMAGE_TYPE_3D;
         default:
-            LOG_CRITICAL("Unsupported texture dimension: {}", static_cast<uint32_t>(_dim));
+            LOG_CRITICAL(MOER_TEXT("Unsupported texture dimension: {}"), static_cast<uint32_t>(_dim));
             return VK_IMAGE_TYPE_MAX_ENUM;
     }
 }
@@ -738,7 +738,7 @@ VkSampleCountFlagBits VulkanEnumTranslator::METoVKSampleCountFlagBits(uint32_t _
         case 64:
             return VK_SAMPLE_COUNT_64_BIT;
         default:
-            LOG_CRITICAL("Unsupported multisample count: {}", static_cast<uint32_t>(_me_count));
+            LOG_CRITICAL(MOER_TEXT("Unsupported multisample count: {}"), static_cast<uint32_t>(_me_count));
             return VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
     }
 }
@@ -760,7 +760,7 @@ VkImageViewType VulkanEnumTranslator::METoVKImageViewType(ETextureDimension _dim
         case ETextureDimension::TEX_CUBE_ARRAY:
             return VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
         default:
-            LOG_CRITICAL("Unsupported SRV dimension type: {}", static_cast<uint32_t>(_dim));
+            LOG_CRITICAL(MOER_TEXT("Unsupported SRV dimension type: {}"), static_cast<uint32_t>(_dim));
             return VK_IMAGE_VIEW_TYPE_MAX_ENUM;
     }
 }
@@ -822,7 +822,7 @@ VkImageLayout VulkanEnumTranslator::METoVKImageLayout(ETextureLayout _layout) {
         //        case ETextureLayout::TEXTURE_LAYOUT_QUEUE_TYPE_COMPUTE:
         //            return VK_IMAGE_LAYOUT_GENERAL;
         default:
-            LOG_CRITICAL("Unsupported texture layout: {}", static_cast<uint32_t>(_layout));
+            LOG_CRITICAL(MOER_TEXT("Unsupported texture layout: {}"), static_cast<uint32_t>(_layout));
             return VK_IMAGE_LAYOUT_MAX_ENUM;
     }
 }
@@ -836,7 +836,7 @@ VkAttachmentLoadOp VulkanEnumTranslator::METoVKAttachmentLoadOp(EAttachmentLoadO
         case EAttachmentLoadOp::NONE:
             return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         default:
-            LOG_CRITICAL("Unsupported EAttachmentLoadOp: {}", static_cast<uint32_t>(_load_op));
+            LOG_CRITICAL(MOER_TEXT("Unsupported EAttachmentLoadOp: {}"), static_cast<uint32_t>(_load_op));
             return VK_ATTACHMENT_LOAD_OP_MAX_ENUM;
     }
 }
@@ -850,7 +850,7 @@ VkAttachmentStoreOp VulkanEnumTranslator::METoVKAttachmentStoreOp(EAttachmentSto
         case EAttachmentStoreOp::MULTISAMPLE_RESOLVE:
             return VK_ATTACHMENT_STORE_OP_STORE;
         default:
-            LOG_CRITICAL("Unsupported EAttachmentStoreOp: {}", static_cast<uint32_t>(_store_op));
+            LOG_CRITICAL(MOER_TEXT("Unsupported EAttachmentStoreOp: {}"), static_cast<uint32_t>(_store_op));
             return VK_ATTACHMENT_STORE_OP_MAX_ENUM;
     }
 }
@@ -866,7 +866,7 @@ VkFilter VulkanEnumTranslator::METoVKImageFilter(ESamplerFilter _filter) {
         case SF_ANISOTROPIC_LINEAR:
             return VK_FILTER_LINEAR;
         default:
-            LOG_CRITICAL("Unsupported ESamplerFilter {}", static_cast<uint8_t>(_filter));
+            LOG_CRITICAL(MOER_TEXT("Unsupported ESamplerFilter {}"), static_cast<uint8_t>(_filter));
             return VK_FILTER_MAX_ENUM;
     }
 }
@@ -963,7 +963,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case ERasterizerCullMode::RCM_BACK: return VK_CULL_MODE_BACK_BIT;
             case ERasterizerCullMode::RCM_FRONT_AND_BACK: return VK_CULL_MODE_FRONT_AND_BACK;
             default:
-                LOG_CRITICAL("Unsupported rasterizer cull mode: {}", static_cast<uint32_t>(_cull_mode));
+                LOG_CRITICAL(MOER_TEXT("Unsupported rasterizer cull mode: {}"), static_cast<uint32_t>(_cull_mode));
                 return VK_CULL_MODE_FLAG_BITS_MAX_ENUM;
         }
     }
@@ -979,7 +979,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case EPrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
             case EPrimitiveTopology::PATCH_LIST: return VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
             default:
-                LOG_CRITICAL("Unsupported primitive topology: {}", static_cast<uint32_t>(_primitive_type));
+                LOG_CRITICAL(MOER_TEXT("Unsupported primitive topology: {}"), static_cast<uint32_t>(_primitive_type));
                 return VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
         }
     }
@@ -991,7 +991,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case ERasterizerFillMode::FM_POINT: return VK_POLYGON_MODE_POINT;
             case ERasterizerFillMode::FM_FILL_RECTANGLE_NV: return VK_POLYGON_MODE_FILL_RECTANGLE_NV;
             default:
-                LOG_CRITICAL("Unsupported rasterizer fill mode: {}", static_cast<uint32_t>(_fill_mode));
+                LOG_CRITICAL(MOER_TEXT("Unsupported rasterizer fill mode: {}"), static_cast<uint32_t>(_fill_mode));
                 return VK_POLYGON_MODE_MAX_ENUM;
         }
     }
@@ -1004,7 +1004,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case BO_MIN: return VK_BLEND_OP_MIN;
             case BO_MAX: return VK_BLEND_OP_MAX;
             default:
-                LOG_CRITICAL("Unsupported color blend operation: {}", static_cast<uint32_t>(_blend_op));
+                LOG_CRITICAL(MOER_TEXT("Unsupported color blend operation: {}"), static_cast<uint32_t>(_blend_op));
                 return VK_BLEND_OP_MAX_ENUM;
         }
     }
@@ -1028,7 +1028,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case BF_SRC1_ALPHA: return VK_BLEND_FACTOR_SRC1_ALPHA;
             case BF_ONE_MINUS_SRC1_ALPHA: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
             default:
-                LOG_CRITICAL("Unsupported color blend factor: {}", static_cast<uint32_t>(_blend_factor));
+                LOG_CRITICAL(MOER_TEXT("Unsupported color blend factor: {}"), static_cast<uint32_t>(_blend_factor));
                 return VK_BLEND_FACTOR_MAX_ENUM;
         }
     }
@@ -1061,14 +1061,14 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case EShaderParameterType::SRV: if (is_texture(_binding_type)) return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
                 if (is_buffer(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 if (is_acceleration_structure(_binding_type)) return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-                LOG_ERROR("Unsupported SRV type: {}", ToString(_binding_type));
+                LOG_ERROR(MOER_TEXT("Unsupported SRV type: {}"), ToString(_binding_type));
             case EShaderParameterType::UAV: if (is_texture(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 if (is_buffer(_binding_type)) return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             case EShaderParameterType::BINDLESS_RESOURCE_INDEX: // MARK...
                 return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             default:
-                LOG_CRITICAL("Unsupported EShaderParameterType: {}", static_cast<uint32_t>(_type));
+                LOG_CRITICAL(MOER_TEXT("Unsupported EShaderParameterType: {}"), static_cast<uint32_t>(_type));
                 return VK_DESCRIPTOR_TYPE_MAX_ENUM;
         }
     }
@@ -1088,7 +1088,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case EShaderType::ST_RAY_INTERSECTION: return VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
             case EShaderType::ST_RAY_ANYHIT: return VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
             default:
-                LOG_CRITICAL("Unsupported EShaderType: {}", static_cast<uint32_t>(_type));
+                LOG_CRITICAL(MOER_TEXT("Unsupported EShaderType: {}"), static_cast<uint32_t>(_type));
                 return VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
         }
     }
@@ -1123,7 +1123,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case SF_ANISOTROPIC_NEAREST: return VK_SAMPLER_MIPMAP_MODE_NEAREST;
             case SF_ANISOTROPIC_LINEAR: return VK_SAMPLER_MIPMAP_MODE_LINEAR;
             default:
-                LOG_CRITICAL("Unknown Mipmap ESamplerFilter {:d}", static_cast<uint8_t>(_filter));
+                LOG_CRITICAL(MOER_TEXT("Unknown Mipmap ESamplerFilter {:d}"), static_cast<uint8_t>(_filter));
                 return VK_SAMPLER_MIPMAP_MODE_MAX_ENUM;
         }
     }
@@ -1135,7 +1135,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case SAM_CLAMP_TO_EDGE: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             case SAM_CLAMP_TO_BORDER: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
             default:
-                LOG_CRITICAL("Unknown ESamplerAddressMode {:d}", static_cast<uint8_t>(_address_mode));
+                LOG_CRITICAL(MOER_TEXT("Unknown ESamplerAddressMode {:d}"), static_cast<uint8_t>(_address_mode));
                 return VK_SAMPLER_ADDRESS_MODE_MAX_ENUM;
         }
     }
@@ -1147,7 +1147,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case EVertexInputRate::VIR_VERTEX: return VK_VERTEX_INPUT_RATE_VERTEX;
             case EVertexInputRate::VIR_INSTANCE: return VK_VERTEX_INPUT_RATE_INSTANCE;
             default:
-                LOG_CRITICAL("Unsupported vertex input rate: {}", static_cast<uint32_t>(_me_rate));
+                LOG_CRITICAL(MOER_TEXT("Unsupported vertex input rate: {}"), static_cast<uint32_t>(_me_rate));
                 return VK_VERTEX_INPUT_RATE_MAX_ENUM;
         }
     }
@@ -1158,7 +1158,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case EQueueType::Compute: return VK_QUEUE_COMPUTE_BIT;
             case EQueueType::Copy: return VK_QUEUE_TRANSFER_BIT;
             default:
-                LOG_CRITICAL("Unsupported queue type: {}", static_cast<uint32_t>(_queue_type));
+                LOG_CRITICAL(MOER_TEXT("Unsupported queue type: {}"), static_cast<uint32_t>(_queue_type));
                 return VK_QUEUE_FLAG_BITS_MAX_ENUM;
         }
     }
@@ -1174,7 +1174,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case ECompareOption::CO_GREATER_OR_EQUAL: return VK_COMPARE_OP_GREATER_OR_EQUAL;
             case ECompareOption::CO_ALWAYS: return VK_COMPARE_OP_ALWAYS;
             default:
-                LOG_CRITICAL("Unsupported depth stencil compare option: {}", static_cast<uint32_t>(_compare_op));
+                LOG_CRITICAL(MOER_TEXT("Unsupported depth stencil compare option: {}"), static_cast<uint32_t>(_compare_op));
                 return VK_COMPARE_OP_MAX_ENUM;
         }
     }
@@ -1190,7 +1190,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case SO_INCREMENT_AND_WRAP: return VK_STENCIL_OP_INCREMENT_AND_WRAP;
             case SO_DECREMENT_AND_WRAP: return VK_STENCIL_OP_DECREMENT_AND_WRAP;
             default:
-                LOG_CRITICAL("Unsupported depth stencil operation: {}", static_cast<uint32_t>(_stencil_op));
+                LOG_CRITICAL(MOER_TEXT("Unsupported depth stencil operation: {}"), static_cast<uint32_t>(_stencil_op));
                 return VK_STENCIL_OP_MAX_ENUM;
         };
     }
@@ -1213,7 +1213,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case RTGT_TRIANGLES: return VK_GEOMETRY_TYPE_TRIANGLES_KHR;
             case RTGT_AABBS: return VK_GEOMETRY_TYPE_AABBS_KHR;
             default:
-                LOG_CRITICAL("Unsupported ray tracing geometry type: {}", static_cast<uint32_t>(_type));
+                LOG_CRITICAL(MOER_TEXT("Unsupported ray tracing geometry type: {}"), static_cast<uint32_t>(_type));
                 return VK_GEOMETRY_TYPE_MAX_ENUM_KHR;
         }
     }
@@ -1329,7 +1329,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                     bind_template->push_data_size += sizeof(uint32_t);
                     bind_template->needs_resource_heap = true;
                 } else {
-                    LOG_CRITICAL("Unsupported bindless descriptor type: {}", uint(first_binding.binding.descriptorType));
+                    LOG_CRITICAL(MOER_TEXT("Unsupported bindless descriptor type: {}"), uint(first_binding.binding.descriptorType));
                     assert(false);
                 }
                 continue;
@@ -1501,7 +1501,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                                 case VK_DESCRIPTOR_TYPE_MAX_ENUM:
                                     break;
                                 default:
-                                    LOG_CRITICAL("Unsupported descriptor type: {}", uint(binding.descriptorType));
+                                    LOG_CRITICAL(MOER_TEXT("Unsupported descriptor type: {}"), uint(binding.descriptorType));
                                     assert(false);
                             }
                         }
@@ -1623,7 +1623,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
         if (bind_template->push_data_size > heap_props.maxPushDataSize) {
             LOG_CRITICAL(
-                "Descriptor heap push data exceeds device limit: required={}, limit={}",
+                MOER_TEXT("Descriptor heap push data exceeds device limit: required={}, limit={}"),
                 bind_template->push_data_size,
                 heap_props.maxPushDataSize
             );
@@ -1662,7 +1662,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         properties2.pNext = VK_NULL_HANDLE;
         VkResult result = vkGetPhysicalDeviceImageFormatProperties2(_device.GetGpu(), &format_info, &properties2);
         if(result != VK_SUCCESS){
-            // LOG_CRITICAL("Failed to get image format properties");
+            // LOG_CRITICAL(MOER_TEXT("Failed to get image format properties"));
             return VK_IMAGE_TILING_LINEAR;
         }
         return format_info.tiling;
@@ -1681,7 +1681,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         // 验证 texture 参数
         if (_info.extent.x == 0 || _info.extent.y == 0) {
             LOG_ERROR(
-                "Invalid texture extent: ({}, {}). Texture name: {}",
+                MOER_TEXT("Invalid texture extent: ({}, {}). Texture name: {}"),
                 _info.extent.x,
                 _info.extent.y,
                 _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown"
@@ -1718,7 +1718,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         if (result != VK_SUCCESS) {
             std::string texture_name = _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown";
             LOG_CRITICAL(
-                "Failed to create texture '{}': extent=({},{}), format={}, mips={}, layers={}, "
+                MOER_TEXT("Failed to create texture '{}': extent=({},{}), format={}, mips={}, layers={}, ")
                 "VkResult={}",
                 texture_name,
                 _info.extent.x,
@@ -1848,7 +1848,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         VmaAllocator allocator = m_device->GetVmaAllocator();
         auto result = vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info, &m_alloc.buffer, &m_alloc.alloc, nullptr);
         if (result == VkResult::VK_ERROR_INITIALIZATION_FAILED) {
-            LOG_CRITICAL("Failed to create buffer, buffer size: {} = {} * {}", buffer_create_info.size, _info.size, _info.stride);
+            LOG_CRITICAL(MOER_TEXT("Failed to create buffer, buffer size: {} = {} * {}"), buffer_create_info.size, _info.size, _info.stride);
         } else {
             VK_CHECK_RESULT(result);
         }
@@ -2413,7 +2413,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         uint buffer_slot_ptr = free_buffer_slots.Pop();
         if (buffer_slot_ptr == 0) { buffer_slot = buffer_slot_offset++; } else { buffer_slot = buffer_slot_ptr; }
         if(_buffer.format != PF_UNDEFINED){
-            LOG_WARNING("Bindless buffer with format is not supported yet, current buffer: {}", _buffer.buffer->GetName());
+            LOG_WARNING(MOER_TEXT("Bindless buffer with format is not supported yet, current buffer: {}"), _buffer.buffer->GetName());
         }
         offline_resource_desc_offsets[slot_idx] = g_heap.GetBufferDescIdx(_buffer, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         offline_sampler_indices[slot_idx] = 0;
@@ -2437,11 +2437,11 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                     using TCmd = std::decay_t<decltype(_cmd)>;
                     if constexpr (std::is_same_v<TCmd, TextureUpdateInfo>){
                         if(_cmd.free){
-                            LOG_WARNING("You are releasing a bindless texture that's pending releasing, array index: {}", _array_idx);
+                            LOG_WARNING(MOER_TEXT("You are releasing a bindless texture that's pending releasing, array index: {}"), _array_idx);
                             return;
                         }else{
                             //TODO: invalidate update command
-                            LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
+                            LOG_WARNING(MOER_TEXT("You are releasing a bindless texture that's pending updating, array index: {}"), _array_idx);
                             resource_allocated_set.erase((uint64)_cmd.texture.Get());
                             UntrackTextureView(_array_idx);
                             ClearPendingInit(_array_idx);
@@ -2455,10 +2455,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                         }
                 } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>){
                     if(_cmd.free){
-                        LOG_WARNING("You are releasing a bindless buffer that's pending releasing, array index: {}", _array_idx);
+                        LOG_WARNING(MOER_TEXT("You are releasing a bindless buffer that's pending releasing, array index: {}"), _array_idx);
                         return;
                     }else{
-                        LOG_WARNING("You are releasing a bindless texture that's pending updating, array index: {}", _array_idx);
+                        LOG_WARNING(MOER_TEXT("You are releasing a bindless texture that's pending updating, array index: {}"), _array_idx);
                         resource_allocated_set.erase((uint64)_cmd.buffer.Get());
                         UntrackTextureView(_array_idx);
                         ClearPendingInit(_array_idx);
@@ -2504,10 +2504,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                     using TCmd = std::decay_t<decltype(_cmd)>;
                     if constexpr (std::is_same_v<TCmd, TextureUpdateInfo>){
                         if(_cmd.free){
-                            LOG_WARNING("You are releasing a bindless texture that's pending releasing, array index: {}", _array_idx);
+                            LOG_WARNING(MOER_TEXT("You are releasing a bindless texture that's pending releasing, array index: {}"), _array_idx);
                             return;
                         }else{
-                            LOG_WARNING("You are releasing a bindless buffer that's pending updating, array index: {}", _array_idx);
+                            LOG_WARNING(MOER_TEXT("You are releasing a bindless buffer that's pending updating, array index: {}"), _array_idx);
 
                             resource_allocated_set.erase((uint64)_cmd.texture.Get());
                             ClearPendingInit(_array_idx);
@@ -2520,10 +2520,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                         }
                     } else if constexpr (std::is_same_v<TCmd, BufferUpdateInfo>){
                         if(_cmd.free){
-                            LOG_WARNING("You are releasing a bindless buffer that's pending releasing, array index: {}", _array_idx);
+                            LOG_WARNING(MOER_TEXT("You are releasing a bindless buffer that's pending releasing, array index: {}"), _array_idx);
                             return;
                         }else{
-                            LOG_WARNING("You are releasing a bindless buffer that's pending updating, array index: {}", _array_idx);
+                            LOG_WARNING(MOER_TEXT("You are releasing a bindless buffer that's pending updating, array index: {}"), _array_idx);
 
                             resource_allocated_set.erase((uint64)_cmd.buffer.Get());
                             ClearPendingInit(_array_idx);
@@ -3191,7 +3191,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         const VkResult result = vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
         if (result != VK_SUCCESS) {
             LOG_ERROR(
-                "[VulkanFence] vkGetSemaphoreCounterValue FAILED! result={}, semaphore={:#x}",
+                MOER_TEXT("[VulkanFence] vkGetSemaphoreCounterValue FAILED! result={}, semaphore={:#x}"),
                 int(result),
                 uint64(timeline)
             );
@@ -3232,7 +3232,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         info.pSemaphores    = &timeline;
         VkResult result = vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
         if (result != VK_SUCCESS) {
-            LOG_ERROR("[VulkanFence] HostWait FAILED! result={}, semaphore={:#x}, wait_value={}",
+            LOG_ERROR(MOER_TEXT("[VulkanFence] HostWait FAILED! result={}, semaphore={:#x}, wait_value={}"),
                       (int)result, (uint64)timeline, _value);
         }
     }
@@ -3266,10 +3266,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         switch (_type) {
             case RTGT_TRIANGLES: return VK_GEOMETRY_TYPE_TRIANGLES_KHR;
             case RTGT_AABBS:
-                LOG_CRITICAL("GeometryType AABB is not supported now");
+                LOG_CRITICAL(MOER_TEXT("GeometryType AABB is not supported now"));
                 return VK_GEOMETRY_TYPE_AABBS_KHR;
             default:
-                LOG_CRITICAL("Unsupported ERayTracingGeometryType: {}", static_cast<uint32_t>(_type));
+                LOG_CRITICAL(MOER_TEXT("Unsupported ERayTracingGeometryType: {}"), static_cast<uint32_t>(_type));
                 return VK_GEOMETRY_TYPE_MAX_ENUM_KHR;
         }
     }

@@ -23,14 +23,14 @@ bool Init() {
     }
 
     if (NFD::Init() != NFD_OKAY) {
-        LOG_ERROR("FileDialog init failed: {}", NFD::GetError());
+        LOG_ERROR(MOER_TEXT("FileDialog init failed: {}"), NFD::GetError());
         return false;
     }
 
     g_is_initialized = true;
     return true;
 #else
-    LOG_ERROR("FileDialog is unavailable because nativefiledialog is not built for this platform.");
+    LOG_ERROR(MOER_TEXT("FileDialog is unavailable because nativefiledialog is not built for this platform."));
     return false;
 #endif
 }
@@ -53,7 +53,7 @@ OpenFileResult OpenFile(const OpenFileRequest& request) {
 #if MOER_CORE_HAS_NFD
     if (!g_is_initialized) {
         result.status = EOpenFileStatus::Error;
-        LOG_ERROR("FileDialog::OpenFile() called before FileDialog::Init().");
+        LOG_ERROR(MOER_TEXT("FileDialog::OpenFile() called before FileDialog::Init()."));
         return result;
     }
 
@@ -92,12 +92,12 @@ OpenFileResult OpenFile(const OpenFileRequest& request) {
     }
 
     result.status = EOpenFileStatus::Error;
-    LOG_ERROR("FileDialog open failed: {}", NFD::GetError());
+    LOG_ERROR(MOER_TEXT("FileDialog open failed: {}"), NFD::GetError());
     return result;
 #else
     (void)request;
     result.status = EOpenFileStatus::Error;
-    LOG_ERROR("FileDialog::OpenFile() is unavailable because nativefiledialog is not built for this platform.");
+    LOG_ERROR(MOER_TEXT("FileDialog::OpenFile() is unavailable because nativefiledialog is not built for this platform."));
     return result;
 #endif
 }

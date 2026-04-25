@@ -44,8 +44,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         auto path = std::filesystem::weakly_canonical(file_path);
 
         if (!std::filesystem::exists(path)) {
-            LOG_WARNING("File not exist: {}", path.string());
-            LOG_WARNING("Please check the `scene_path` in source/configs/MoerEngine.toml.");
+            LOG_WARNING(MOER_TEXT("File not exist: {}"), path.string());
+            LOG_WARNING(MOER_TEXT("Please check the `scene_path` in source/configs/MoerEngine.toml."));
             return nullptr;
         }
 
@@ -59,7 +59,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
         if (gltf_scene == nullptr) {
             LOG_WARNING(
-                "Failed to load gltf file: {}. Assimp error: {}",
+                MOER_TEXT("Failed to load gltf file: {}. Assimp error: {}"),
                 file_path.string(),
                 importer.GetErrorString()
             );
@@ -236,7 +236,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 static bool first_time = true;
                 if (first_time) {
                     first_time = false;
-                    LOG_WARNING("Mesh has TexCoord1, which is not supported yet.");
+                    LOG_WARNING(MOER_TEXT("Mesh has TexCoord1, which is not supported yet."));
                 }
             }
 
@@ -255,7 +255,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             idx_cnt += mesh->mNumFaces * 3;
         }
 
-        LOG_INFO("Meshed Loaded: {} meshes, {} vertices, {} indices", ai_scene->mNumMeshes, vtx_cnt, idx_cnt);
+        LOG_INFO(MOER_TEXT("Meshed Loaded: {} meshes, {} vertices, {} indices"), ai_scene->mNumMeshes, vtx_cnt, idx_cnt);
     }
 
     // MARK: Build Primitive Hash
@@ -387,7 +387,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             ImageReadDesc image_desc = load_image_desc(texture_path);
 
             if (!image_desc.IsValid()) {
-                LOG_ERROR("Load Texture Failed: {}", texture_path);
+                LOG_ERROR(MOER_TEXT("Load Texture Failed: {}"), texture_path);
                 return false;
             }
 
@@ -432,7 +432,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             while (all_done->IsComplete() == false) {
                 if (log_timer.Tick()) {
                     LOG_INFO(
-                        "Loading Textures Parallelly: {}/{}, Failed: {}",
+                        MOER_TEXT("Loading Textures Parallelly: {}/{}, Failed: {}"),
                         done_cnt.load(),
                         all_needed_textures.size(),
                         failed_cnt.load()
@@ -455,7 +455,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 }
                 done_cnt++;
                 LOG_INFO(
-                    "Loading Textures Sequentially: {}/{}, Failed: {}",
+                    MOER_TEXT("Loading Textures Sequentially: {}/{}, Failed: {}"),
                     done_cnt,
                     all_needed_textures_set.size(),
                     failed_cnt
@@ -470,14 +470,14 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         elapsed_timer.Stop();
 
         LOG_INFO(
-            "Textures Loaded: {}. Multi-threads is {}. Time used: {} sec",
+            MOER_TEXT("Textures Loaded: {}. Multi-threads is {}. Time used: {} sec"),
             all_needed_textures_set.size(),
             is_multi_thread ? "ON" : "OFF",
             elapsed_timer.ElapsedSeconds()
         );
 
         if (!all_success) {
-            LOG_ERROR("Some textures failed to load. Please check the log for details.");
+            LOG_ERROR(MOER_TEXT("Some textures failed to load. Please check the log for details."));
             return false;
         }
     }
@@ -673,7 +673,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 c_primitive.material_entt = material_index_to_entity_map[material_index];
             } else {
                 LOG_WARNING(
-                    "Mesh material index {} out of range. Total materials: {}. "
+                    MOER_TEXT("Mesh material index {} out of range. Total materials: {}. ")
                     "Primitive will have null material.",
                     material_index,
                     ai_scene->mNumMaterials
@@ -899,16 +899,16 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         } else if (light->mType == aiLightSourceType::aiLightSource_SPOT) {
             c_light.type = ELightType::Spot;
 
-            LOG_WARNING("Spot light is not supported yet. TODO");
+            LOG_WARNING(MOER_TEXT("Spot light is not supported yet. TODO"));
 
         } else if (light->mType == aiLightSourceType::aiLightSource_AMBIENT) {
             c_light.type = ELightType::Ambient;
 
-            LOG_WARNING("Ambient light is not supported yet. TODO");
+            LOG_WARNING(MOER_TEXT("Ambient light is not supported yet. TODO"));
 
         } else {
             LOG_WARNING(
-                "Unsupported light type: {}. Only Directional, Point, Spot, and Ambient lights are "
+                MOER_TEXT("Unsupported light type: {}. Only Directional, Point, Spot, and Ambient lights are ")
                 "supported.",
                 static_cast<uint32>(light->mType)
             );
@@ -1018,7 +1018,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             uint type_count = uint(is_mesh) + uint(is_light) + uint(is_camera);
             if (type_count > 1) {
                 LOG_WARNING(
-                    "Node '{}' has multiple types (mesh: {}, camera: {}, light: {}). "
+                    MOER_TEXT("Node '{}' has multiple types (mesh: {}, camera: {}, light: {}). ")
                     "Processing with priority: mesh > camera > light.",
                     y->mName.C_Str(),
                     is_mesh,
@@ -1130,13 +1130,13 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             }
         }
 
-        LOG_INFO("{}", ss.str());
+        LOG_INFO(MOER_TEXT("{}"), ss.str());
 
         const int material_info_log_lines =
             ConfigManager::GetInstance().GetConfig().engine.scene.material_info_log_lines;
 
         if (material_info_log_lines < 0) {
-            LOG_INFO("{}", mat_ss.str());
+            LOG_INFO(MOER_TEXT("{}"), mat_ss.str());
 
         } else {
             std::string mat_str = mat_ss.str();
@@ -1152,7 +1152,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             output += "The rest of the material info is not logged.\nSet `material_info_log_lines` in "
                       "\"MoerEngine.toml\" to modify it.\n";
 
-            LOG_INFO("{}", output);
+            LOG_INFO(MOER_TEXT("{}"), output);
         }
     }
 

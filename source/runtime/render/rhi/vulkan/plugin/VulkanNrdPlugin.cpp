@@ -67,7 +67,7 @@ private:
             "Failed to get NRI WrapperVK Interface"
         );
 
-        LOG_INFO("[NRD]: NRI device created");
+        LOG_INFO(MOER_TEXT("[NRD]: NRI device created"));
     }
 
     void ApplyDefaultSettings(uint16 _frame_width, uint16 _frame_height) {
@@ -125,7 +125,7 @@ private:
             "Failed to initialize NRD Integration"
         );
 
-        LOG_INFO("[NRD]: NRD Integration created.");
+        LOG_INFO(MOER_TEXT("[NRD]: NRD Integration created."));
 
         ApplyDefaultSettings(_frame_width, _frame_height);
 #undef NRD_ID
@@ -183,7 +183,7 @@ public:
         ResetIntegrationState();
         InitializeIntegration(nrd.max_frame_in_flight, _frame_width, _frame_height);
 
-        LOG_INFO("[NRD]: NRD integration recreated.");
+        LOG_INFO(MOER_TEXT("[NRD]: NRD integration recreated."));
     }
 
     void SetInput(EResourceSlot _index, TextureRef _texture) override {

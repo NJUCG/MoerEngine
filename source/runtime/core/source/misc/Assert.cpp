@@ -58,7 +58,7 @@ void ResetEnsureFailures() {
     }
 
     LOG_CRITICAL(
-        "[MOER_ASSERT] expr=`{}` file={} line={} function={} thread={} message={}",
+        MOER_TEXT("[MOER_ASSERT] expr=`{}` file={} line={} function={} thread={} message={}"),
         info.expression ? info.expression : "",
         info.file ? info.file : "",
         info.line,
@@ -77,13 +77,13 @@ void ResetEnsureFailures() {
     });
 
     if (dump.written) {
-        LOG_CRITICAL("[MOER_ASSERT] dump={}", dump.path.generic_string());
+        LOG_CRITICAL(MOER_TEXT("[MOER_ASSERT] dump={}"), dump.path.generic_string());
     } else if (!dump.error_message.empty()) {
-        LOG_CRITICAL("[MOER_ASSERT] dump_write_failed={}", dump.error_message);
+        LOG_CRITICAL(MOER_TEXT("[MOER_ASSERT] dump_write_failed={}"), dump.error_message);
     }
 
     if (!stack_text.empty()) {
-        LOG_CRITICAL("[MOER_ASSERT] stack:\n{}", stack_text);
+        LOG_CRITICAL(MOER_TEXT("[MOER_ASSERT] stack:\n{}"), stack_text);
     }
     FlushCrashState();
 
@@ -94,7 +94,7 @@ bool HandleEnsureFailure(FailureInfo&& info) noexcept {
     g_has_ensure_failures.store(true, std::memory_order_release);
 
     LOG_WARNING(
-        "[MOER_ENSURE] expr=`{}` file={} line={} function={} thread={} message={}",
+        MOER_TEXT("[MOER_ENSURE] expr=`{}` file={} line={} function={} thread={} message={}"),
         info.expression ? info.expression : "",
         info.file ? info.file : "",
         info.line,
@@ -105,7 +105,7 @@ bool HandleEnsureFailure(FailureInfo&& info) noexcept {
 
     if (g_ensure_failure_escalation.load(std::memory_order_acquire)) {
         LOG_ERROR(
-            "[MOER_ENSURE_ESCALATED] expr=`{}` file={} line={} function={} thread={} message={}",
+            MOER_TEXT("[MOER_ENSURE_ESCALATED] expr=`{}` file={} line={} function={} thread={} message={}"),
             info.expression ? info.expression : "",
             info.file ? info.file : "",
             info.line,

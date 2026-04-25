@@ -87,7 +87,7 @@ void GLFWWindowImpl::PollEvents() const {
 void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
     if (!glfwInit()) {
         //error log and quit
-        LOG_ERROR("Window init fail.");
+        LOG_ERROR(MOER_TEXT("Window init fail."));
         MOER_ASSERT(false, "GLFW initialization failed");
     }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);

@@ -101,20 +101,20 @@ private:
 DXCompiler::Impl::Impl() {
     HRESULT hres = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&library));
     if (FAILED(hres)) {
-        LOG_ERROR("dxcompiler library load fail.");
+        LOG_ERROR(MOER_TEXT("dxcompiler library load fail."));
         return;
     }
     library->CreateIncludeHandler(&include_handler);
 
     hres = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
     if (FAILED(hres)) {
-        LOG_ERROR("Could not init DXC Compiler");
+        LOG_ERROR(MOER_TEXT("Could not init DXC Compiler"));
         return;
     }
 
     hres = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
     if (FAILED(hres)) {
-        LOG_ERROR("Could not init DXC Utiliy");
+        LOG_ERROR(MOER_TEXT("Could not init DXC Utiliy"));
         return;
     }
 }
@@ -261,7 +261,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         file_path = std::filesystem::canonical(root_path / _input.relative_source_file_path);
     } catch (const std::filesystem::filesystem_error& e) {
         LOG_ERROR(
-            "Shader file not found: {}; Error info: {}",
+            MOER_TEXT("Shader file not found: {}; Error info: {}"),
             (root_path / _input.relative_source_file_path).string(),
             e.what()
         );
@@ -572,7 +572,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                     SetZeroIfEmpty(bdls_param.sampler_heap);
                     target = &bdls_param.sampler_heap.value();
                 } else {
-                    LOG_INFO("unknown bindless symbol {}", name);
+                    LOG_INFO(MOER_TEXT("unknown bindless symbol {}"), name);
                     assert(false && "unknown bindless symbol");
                 }
                 target->set           = set;
@@ -583,7 +583,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 target->stage_bits    = uint(ToPipelineStageFlag(comp.get_execution_model()));
                 target->custom_flag.active |= is_active;
                 // if (is_active) {
-                //     LOG_INFO("active bdls name : {}", name);
+                //     LOG_INFO(MOER_TEXT("active bdls name : {}"), name);
                 // }
             };
 
@@ -636,10 +636,10 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
         for (auto& resource : resources.separate_images) {
             auto type = comp.get_type(resource.base_type_id);
             if (type.image.dim == spv::DimBuffer) {
-                // LOG_INFO("Buffer name : {} set : {} binding : {}", name, set, binding);
+                // LOG_INFO(MOER_TEXT("Buffer name : {} set : {} binding : {}"), name, set, binding);
                 handle_res(resource, VDT_UNIFORM_TEXEL_BUFFER, EShaderResourceType::SRT_SRV);
             } else {
-                // LOG_INFO("Texture name : {} set : {} binding : {}", name, set, binding);
+                // LOG_INFO(MOER_TEXT("Texture name : {} set : {} binding : {}"), name, set, binding);
                 handle_all_res(resource, VDT_SAMPLED_IMAGE, EShaderResourceType::SRT_SRV);
             }
         }
@@ -651,7 +651,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
         for (auto& resource : resources.storage_buffers) {
             spirv_cross::Bitset buffer_flags = comp.get_buffer_block_flags(resource.id);
             // GET_RESOURCE_DEFAULT_INFOS(resource);
-            // LOG_INFO("storage buffer name : {} set : {} binding : {}", name, set, binding);
+            // LOG_INFO(MOER_TEXT("storage buffer name : {} set : {} binding : {}"), name, set, binding);
             handle_all_res(
                 resource,
                 VDT_STORAGE_BUFFER,
@@ -698,7 +698,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
     do {                                                             \
         HRESULT _hr = (hr);                                          \
         if (_hr < 0) {                                               \
-            LOG_CRITICAL("ERROR: hresult={:#x}", (unsigned int)_hr); \
+            LOG_CRITICAL(MOER_TEXT("ERROR: hresult={:#x}"), (unsigned int)_hr); \
             std::terminate();                                        \
         }                                                            \
     } while (0)
@@ -750,7 +750,7 @@ void DXCompiler::Impl::ReflectDXIL(
 
         //if (param_info.count == 0) {// Texture2D<float4> xxx[]; -> count=0
         //    if (!std::string(shaderInputBindDesc.Name).ends_with(bdls_suffix)) {
-        //        LOG_ERROR("bindless shader resource '{}' should end with '_bindless' in '{}'", shaderInputBindDesc.Name, _input.shader_name);
+        //        LOG_ERROR(MOER_TEXT("bindless shader resource '{}' should end with '_bindless' in '{}'"), shaderInputBindDesc.Name, _input.shader_name);
         //    }
         //}
 
@@ -802,7 +802,7 @@ void DXCompiler::Impl::ReflectDXIL(
                         break;
                     default:
                         LOG_WARNING(
-                            "unsupported shader varibale '{}' dimension: '{}' in shader '{}'",
+                            MOER_TEXT("unsupported shader varibale '{}' dimension: '{}' in shader '{}'"),
                             shaderInputBindDesc.Name,
                             uint(shaderInputBindDesc.Type),
                             _input.shader_name
@@ -838,7 +838,7 @@ void DXCompiler::Impl::ReflectDXIL(
                         break;
                     default:
                         LOG_WARNING(
-                            "unsupported shader varibale '{}' rw dimension: '{}' in shader '{}'",
+                            MOER_TEXT("unsupported shader varibale '{}' rw dimension: '{}' in shader '{}'"),
                             shaderInputBindDesc.Name,
                             uint(shaderInputBindDesc.Type),
                             _input.shader_name
@@ -869,7 +869,7 @@ void DXCompiler::Impl::ReflectDXIL(
             case D3D_SIT_TBUFFER:
             case D3D_SIT_UAV_FEEDBACKTEXTURE:
                 LOG_WARNING(
-                    "unsupported shader varibale '{}' type: '{}' in shader '{}'",
+                    MOER_TEXT("unsupported shader varibale '{}' type: '{}' in shader '{}'"),
                     shaderInputBindDesc.Name,
                     uint(shaderInputBindDesc.Type),
                     _input.shader_name

@@ -244,7 +244,7 @@ void Test() {
     while (1) {
         command_list->Reset();
         uint32_t ref_cnt = as_view->GetRefCount();
-        LOG_INFO("ref count: {}", ref_cnt);
+        LOG_INFO(MOER_TEXT("ref count: {}"), ref_cnt);
         command_list->BeginRecording();
         command_list->SetPipelineState(rt_pipeline);
         command_list->TraceRay(1920, 1080, 1);

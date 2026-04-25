@@ -13,7 +13,7 @@
 //        case SF_ANISOTROPIC_LINEAR:
 //            return VK_FILTER_LINEAR;
 //        default:
-//            LOG_CRITICAL("Unknown ESamplerFilter {:d}", static_cast<uint8_t>(_filter));
+//            LOG_CRITICAL(MOER_TEXT("Unknown ESamplerFilter {:d}"), static_cast<uint8_t>(_filter));
 //            return VK_FILTER_MAX_ENUM;
 //    }
 //}
@@ -30,7 +30,7 @@
 //        case SF_ANISOTROPIC_LINEAR:
 //            return VK_SAMPLER_MIPMAP_MODE_LINEAR;
 //        default:
-//            LOG_CRITICAL("Unknown Mipmap ESamplerFilter {:d}", static_cast<uint8_t>(_filter));
+//            LOG_CRITICAL(MOER_TEXT("Unknown Mipmap ESamplerFilter {:d}"), static_cast<uint8_t>(_filter));
 //            return VK_SAMPLER_MIPMAP_MODE_MAX_ENUM;
 //    }
 //}
@@ -46,7 +46,7 @@
 //        case SAM_CLAMP_TO_BORDER:
 //            return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
 //        default:
-//            LOG_CRITICAL("Unknown ESamplerAddressMode {:d}", static_cast<uint8_t>(_address_mode));
+//            LOG_CRITICAL(MOER_TEXT("Unknown ESamplerAddressMode {:d}"), static_cast<uint8_t>(_address_mode));
 //            return VK_SAMPLER_ADDRESS_MODE_MAX_ENUM;
 //    }
 //}
@@ -70,7 +70,7 @@
 //        case SCF_ALWAYS:
 //            return VK_COMPARE_OP_ALWAYS;
 //        default:
-//            LOG_CRITICAL("Unknown ESamplerCompareFunction {:d}", static_cast<uint8_t>(_compare_op));
+//            LOG_CRITICAL(MOER_TEXT("Unknown ESamplerCompareFunction {:d}"), static_cast<uint8_t>(_compare_op));
 //            return VK_COMPARE_OP_MAX_ENUM;
 //    }
 //}

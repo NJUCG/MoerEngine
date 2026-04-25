@@ -356,7 +356,7 @@ ImageReadDesc ImageIO::ReadFromFile(
             path_str.c_str(), KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &ktx_texture
         );
         if (result != KTX_SUCCESS) {
-            LOG_ERROR("Failed to load KTX texture: {}", ktxErrorString(result));
+            LOG_ERROR(MOER_TEXT("Failed to load KTX texture: {}"), ktxErrorString(result));
             throw std::runtime_error("Failed to load KTX texture");
         }
 
@@ -402,7 +402,7 @@ ImageReadDesc ImageIO::ReadFromFile(
         memcpy(desc.data, image.data.data(), desc.data_size);
         Generatemipmaps(desc, _is_generate_mipmaps);
     } else {
-        LOG_ERROR("Unsupported image format");
+        LOG_ERROR(MOER_TEXT("Unsupported image format"));
         throw std::runtime_error("Unsupported image format");
     }
     return desc;

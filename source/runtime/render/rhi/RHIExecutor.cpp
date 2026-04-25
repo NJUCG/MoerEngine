@@ -14,11 +14,11 @@ std::shared_ptr<RHIBackendExecutor> CreateBackendExecutor(ERHIType rhi_type) {
         case ERHIType::Vulkan:
             return std::make_shared<VulkanSubmissionExecutor>();
         case ERHIType::D3D12:
-            LOG_ERROR("RHIExecutor D3D12 backend executor is not implemented yet");
+            LOG_ERROR(MOER_TEXT("RHIExecutor D3D12 backend executor is not implemented yet"));
             assert(false && "D3D12 backend executor is not implemented yet");
             return {};
         default:
-            LOG_ERROR("RHIExecutor got an unsupported RHI type");
+            LOG_ERROR(MOER_TEXT("RHIExecutor got an unsupported RHI type"));
             assert(false && "Unsupported RHI type in RHIExecutor backend creation");
             return {};
     }
@@ -50,7 +50,7 @@ void RHIExecutor::Submit(
     RHIPresentRequest*   present
 ) {
     if (present != nullptr && !present->swapchain) {
-        LOG_ERROR("RHIExecutor::Submit got a null swapchain in RHIPresentRequest");
+        LOG_ERROR(MOER_TEXT("RHIExecutor::Submit got a null swapchain in RHIPresentRequest"));
         assert(false && "Present request swapchain must be valid");
         return;
     }
@@ -63,7 +63,7 @@ void RHIExecutor::Submit(
             const EQueueType queue_type   = command_list.GetQueueType();
             if (queue_type != EQueueType::Graphics && queue_type != EQueueType::Compute) {
                 LOG_ERROR(
-                    "RHIExecutor::Submit only accepts Graphics or Compute command lists, got={}",
+                    MOER_TEXT("RHIExecutor::Submit only accepts Graphics or Compute command lists, got={}"),
                     static_cast<uint32>(queue_type)
                 );
                 assert(false && "RHIExecutor only accepts Graphics or Compute command lists");
@@ -138,7 +138,7 @@ void RHIExecutor::EnqueuePendingLocked() {
 
     if (pending_present.has_value()) {
         if (last_non_empty_queue.has_value() && last_non_empty_queue.value() != EQueueType::Graphics) {
-            LOG_ERROR("RHIExecutor::Submit requires the last command list before present to be Graphics");
+            LOG_ERROR(MOER_TEXT("RHIExecutor::Submit requires the last command list before present to be Graphics"));
             assert(false && "Present requires the last command list to run on the Graphics queue");
             pending_present.reset();
             return;

@@ -31,7 +31,7 @@ VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
     else if (api == "1.3")
         config.api_version = VK_API_VERSION_1_3;
     else {
-        LOG_ERROR("Unsupported vulkan api version: {}", api);
+        LOG_ERROR(MOER_TEXT("Unsupported vulkan api version: {}"), api);
         MOER_ASSERT(false, "Unsupported vulkan api version: {}", api);
     }
 
@@ -62,7 +62,7 @@ void RenderDevice::Init(DeviceInitInfo&& _info) {
         case ERHIType::D3D12:
             Get().impl =
                 std::move(UniquePtr<Impl>(MoerNew(D3D12Device)(ResolveConfigAs<D3D12RHIConfig>(_info))));
-            //LOG_ERROR("D3D12 is not supported yet");
+            //LOG_ERROR(MOER_TEXT("D3D12 is not supported yet"));
             break;
     }
     Get().rhi_type = _info.rhi_type;

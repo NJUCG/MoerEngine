@@ -1485,7 +1485,7 @@ public:
             tmp_buffer.GetByteOffset()
         );
 
-        // LOG_INFO("copyback temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
+        // LOG_INFO(MOER_TEXT("copyback temp buffer handle {} offset {} size {}"), (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
 
         // tracker.RegisterFlushBuffer(VulkanBuffer *_buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage)
         if (auto completion_event = _cmd.CompletionEvent()) {
@@ -1512,7 +1512,7 @@ public:
             _cmd.MipLevel()
         );
 
-        // LOG_INFO("copyback temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
+        // LOG_INFO(MOER_TEXT("copyback temp buffer handle {} offset {} size {}"), (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
 
         if (auto completion_event = _cmd.CompletionEvent()) {
             allocator.AddCompletionEvent(completion_event);
@@ -1644,7 +1644,7 @@ public:
             if (pass_info.color_attachments[i].target->GetWidth() < tex_min_width ||
                 pass_info.color_attachments[i].target->GetHeight() < tex_min_height) {
                 LOG_ERROR(
-                    "Render target size is smaller than render area! target size: {}x{}, render area size: "
+                    MOER_TEXT("Render target size is smaller than render area! target size: {}x{}, render area size: ")
                     "{}x{}. Tex Name: {}. Command Name: {}",
                     pass_info.color_attachments[i].target->GetWidth(),
                     pass_info.color_attachments[i].target->GetHeight(),
@@ -2858,7 +2858,7 @@ void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
     VkResult submit_result = vkQueueSubmit2(queue, 1, &submit_info, _fence);
     if (submit_result != VK_SUCCESS) {
         LOG_ERROR(
-            "[VkNativeQueue] vkQueueSubmit2 FAILED! result={}, queue={:#x}, type={}, "
+            MOER_TEXT("[VkNativeQueue] vkQueueSubmit2 FAILED! result={}, queue={:#x}, type={}, ")
             "wait_count={}, signal_count={}",
             (int)submit_result,
             (uint64)queue,
@@ -3364,7 +3364,7 @@ VkCommandQueue::SubmitRecordedForRuntime(
 
 WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
     (void)_submit;
-    LOG_ERROR("VkCommandQueue::Execute is unsupported after the submission runtime split");
+    LOG_ERROR(MOER_TEXT("VkCommandQueue::Execute is unsupported after the submission runtime split"));
     assert(false && "VkCommandQueue::Execute must not be used after the submission runtime split");
     return {};
 }
@@ -3372,7 +3372,7 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
 void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
     (void)_sc;
     (void)_view;
-    LOG_ERROR("VkCommandQueue::Present is deprecated; use RHIExecutor::Submit(..., present) instead");
+    LOG_ERROR(MOER_TEXT("VkCommandQueue::Present is deprecated; use RHIExecutor::Submit(..., present) instead"));
     assert(false && "VkCommandQueue::Present is unsupported after the submission executor rework");
 }
 
@@ -3539,7 +3539,7 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
         FILE* result_handle = nullptr;
         fopen_s(&result_handle, (const char*)_src.handle.file, "r");
         if (!result_handle) {
-            SPDLOG_ERROR("Failed to open file {}", (const char*)_src.handle.file);
+            SPDLOG_ERROR(MOER_TEXT("Failed to open file {}"), (const char*)_src.handle.file);
             assert(false && "Failed to open file");
         }
         std::fseek(result_handle, _file_offset, SEEK_SET);
@@ -3751,7 +3751,7 @@ VkCopyQueue::SubmitRecordedForRuntime(
 
 IOWaitEvt VkCopyQueue::Execute(CmdSubmit&& _evt) {
     (void)_evt;
-    LOG_ERROR("VkCopyQueue::Execute(CmdSubmit) is unsupported after the submission runtime split");
+    LOG_ERROR(MOER_TEXT("VkCopyQueue::Execute(CmdSubmit) is unsupported after the submission runtime split"));
     assert(false && "VkCopyQueue::Execute(CmdSubmit) must not be used after the submission runtime split");
     return {};
 }
@@ -3785,7 +3785,7 @@ void VkCopyQueue::Complete(uint64 _timeline) {
         ++spin_count;
         if (spin_count == 10'000'000) {
             LOG_ERROR(
-                "[CopyQueue] Complete: STILL WAITING after 10M spins! "
+                MOER_TEXT("[CopyQueue] Complete: STILL WAITING after 10M spins! ")
                 "_timeline={}, executed_frame={}",
                 _timeline,
                 executed_frame.load()
@@ -3793,7 +3793,7 @@ void VkCopyQueue::Complete(uint64 _timeline) {
         }
         if (spin_count % 50'000'000 == 0) {
             LOG_ERROR(
-                "[CopyQueue] Complete: STUCK! spins={}, _timeline={}, executed_frame={}",
+                MOER_TEXT("[CopyQueue] Complete: STUCK! spins={}, _timeline={}, executed_frame={}"),
                 spin_count,
                 _timeline,
                 executed_frame.load()

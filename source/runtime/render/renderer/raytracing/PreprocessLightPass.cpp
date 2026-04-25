@@ -249,7 +249,7 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
         }
         case Moer::ELightType::Spot: {
             // TODO: CLightSpot 还未实现
-            LOG_INFO("Spot light not yet supported in new ECS system");
+            LOG_INFO(MOER_TEXT("Spot light not yet supported in new ECS system"));
             return false;
         }
         case Moer::ELightType::Point: {
@@ -270,11 +270,11 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
         }
         case Moer::ELightType::Environment: {
             // TODO: CLightEnvironment 还未实现
-            LOG_INFO("Environment light not yet supported in new ECS system");
+            LOG_INFO(MOER_TEXT("Environment light not yet supported in new ECS system"));
             return false;
         }
         default: {
-            LOG_INFO("Light Type {} not supported", uint(c_light.type));
+            LOG_INFO(MOER_TEXT("Light Type {} not supported"), uint(c_light.type));
             return false;
         }
     }
@@ -314,7 +314,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         // 获取 primitive_id
         uint primitive_id = scene.GetCpuScene().GetPrimitiveId(primitive_entt);
         if (primitive_id == UINT_MAX) {
-            LOG_ERROR("Primitive entity {} not found in CpuScene", entt::to_integral(primitive_entt));
+            LOG_ERROR(MOER_TEXT("Primitive entity {} not found in CpuScene"), entt::to_integral(primitive_entt));
             return;
         }
 

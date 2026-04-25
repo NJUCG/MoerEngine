@@ -22,7 +22,7 @@ public:
     }
     void Fire(EThread::Type _thread_to_return, const GraphEventRef& _event) {
 
-        SPDLOG_ERROR("info: {} thread:{}", m_info, Platform::GetCurrentThreadID());
+        SPDLOG_ERROR(MOER_TEXT("info: {} thread:{}"), m_info, Platform::GetCurrentThreadID());
     }
 
 private:
@@ -49,7 +49,7 @@ private:
 //
 //		TaskGraph::getInterface().attachToNameThread(EThread::ERenderThread);
 //		syncEvent->trigger();
-//		SPDLOG_INFO("process render thread until return");
+//		SPDLOG_INFO(MOER_TEXT("process render thread until return"));
 //		TaskGraph::getInterface().processThreadUntilReturn(EThread::ERenderThread);
 //
 //	}
@@ -72,10 +72,10 @@ void TaskSystem::ShutDown() {
 
 bool Moer::TaskGraphTest() {
     // UE task graph test
-    SPDLOG_INFO("===============test started================");
+    SPDLOG_INFO(MOER_TEXT("===============test started================"));
     { // task completes before it's waited for
         auto event = LambdaTask::Dispatch([] {
-            SPDLOG_INFO("LambdaTask");
+            SPDLOG_INFO(MOER_TEXT("LambdaTask"));
         });
 
         while (!event->IsComplete()) // in single-threaded mode tasks are executed only when waited for
@@ -83,7 +83,7 @@ bool Moer::TaskGraphTest() {
         }
         event->Wait(EThread::EMainThread);
     }
-    SPDLOG_INFO("=============== task completes before it's waited for success ================");
+    SPDLOG_INFO(MOER_TEXT("=============== task completes before it's waited for success ================"));
 
     { // task completes after it's waited for
         for (int i = 0; i != 100; ++i) {
@@ -94,7 +94,7 @@ bool Moer::TaskGraphTest() {
             event->Wait(EThread::EMainThread);
         }
     }
-    SPDLOG_INFO("=============== task completes after it's waited for success ================");
+    SPDLOG_INFO(MOER_TEXT("=============== task completes after it's waited for success ================"));
     { // event w/o a task, signaled by explicit call to DispatchSubsequents before it's waited for
         for (int i = 0; i != 10000; ++i) {
             GraphEventRef event = GraphEvent::CreateGraphEvent();
@@ -108,7 +108,7 @@ bool Moer::TaskGraphTest() {
             event->Wait(EThread::EMainThread);
         }
     }
-    SPDLOG_INFO("=============== task signaled by explicit call to DispatchSubsequents before it's waited "
+    SPDLOG_INFO(MOER_TEXT("=============== task signaled by explicit call to DispatchSubsequents before it's waited ")
                 "for success ================");
     { // event w/o a task, signaled by explicit call to DispatchSubsequents after it's waited for
         for (int i = 0; i != 100; ++i) {
@@ -123,7 +123,7 @@ bool Moer::TaskGraphTest() {
             task->Wait();
         }
     }
-    SPDLOG_INFO("=============== task signaled by explicit call to DispatchSubsequents after it's waited for "
+    SPDLOG_INFO(MOER_TEXT("=============== task signaled by explicit call to DispatchSubsequents after it's waited for ")
                 "success ================");
     { // wait for prereq by DontCompleteUntil
         for (int i = 0; i != 10000; ++i) {
@@ -148,7 +148,7 @@ bool Moer::TaskGraphTest() {
             event->Wait(EThread::EMainThread);
         }
     }
-    SPDLOG_INFO("=============== wait for prereq by waitUntil success ================");
+    SPDLOG_INFO(MOER_TEXT("=============== wait for prereq by waitUntil success ================"));
     { // prereq is completed before DontCompleteUntil is called
         for (int i = 0; i != 100000; ++i) {
             GraphEventRef prereq = LambdaTask::Dispatch([] {
@@ -169,7 +169,7 @@ bool Moer::TaskGraphTest() {
             event->Wait(EThread::EMainThread);
         }
     }
-    SPDLOG_INFO("=============== prereq is completed before waitUntil is called success ================");
+    SPDLOG_INFO(MOER_TEXT("=============== prereq is completed before waitUntil is called success ================"));
 
     // dependencies
 
@@ -193,7 +193,7 @@ bool Moer::TaskGraphTest() {
         }
     }
     SPDLOG_INFO(
-        "=============== task is not executed until its prerequisite is completed success ================"
+        MOER_TEXT("=============== task is not executed until its prerequisite is completed success ================")
     );
     { // a task is not executed until all its prerequisites are completed
         for (int i = 0; i != 100000; ++i) {
@@ -217,7 +217,7 @@ bool Moer::TaskGraphTest() {
             assert(b_executed);
         }
     }
-    SPDLOG_INFO("=============== a task is not executed until all its prerequisites are completed success "
+    SPDLOG_INFO(MOER_TEXT("=============== a task is not executed until all its prerequisites are completed success ")
                 "================");
     { // holding a task
         struct FTask {
@@ -237,7 +237,7 @@ bool Moer::TaskGraphTest() {
             assert(event->IsComplete());
         }
     }
-    SPDLOG_INFO("=============== holding a task success ================");
+    SPDLOG_INFO(MOER_TEXT("=============== holding a task success ================"));
     { // check ref count for named thread tasks
         for (int i = 0; i != 100000; ++i) {
             GraphEventRef local_queue_task = LambdaTask::Dispatch([] {}, EThread::EMainThread);
@@ -245,7 +245,7 @@ bool Moer::TaskGraphTest() {
             assert(local_queue_task.GetRefCount() == 1);
         }
     }
-    SPDLOG_INFO("=============== check ref count for named thread tasks ================");
+    SPDLOG_INFO(MOER_TEXT("=============== check ref count for named thread tasks ================"));
     for (int i = 0; i != 100000;
          ++i) { // a particular real-life case that doesn't work in the old TaskGraph if run in single-threaded mode.
         // the culprit is that when a task is waited for, in single-threaded mode the queue it was pushed to is executed.
@@ -257,7 +257,7 @@ bool Moer::TaskGraphTest() {
         local_queue_task->Wait(EThread::EMainThread);
         assert(local_queue_task.GetRefCount() == 1);
     }
-    SPDLOG_INFO("=============== (local queue) task  depends on a task that is not in the same queue succuss "
+    SPDLOG_INFO(MOER_TEXT("=============== (local queue) task  depends on a task that is not in the same queue succuss ")
                 "================");
     { // launch a GT task, then an any-thread task that depends on it. wait for the any-thread task. this was a deadlock on the new frontend
         GraphEventRef gt_task = LambdaTask::Dispatch(
@@ -270,7 +270,7 @@ bool Moer::TaskGraphTest() {
         GraphEventRef any_thread_task = LambdaTask::Create([] {}).Wait(gt_task).Dispatch();
         any_thread_task->Wait();
     }
-    SPDLOG_INFO("=============== deadlock test succuss ================");
-    SPDLOG_INFO("===============test over================");
+    SPDLOG_INFO(MOER_TEXT("=============== deadlock test succuss ================"));
+    SPDLOG_INFO(MOER_TEXT("===============test over================"));
     return true;
 }

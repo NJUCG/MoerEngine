@@ -116,7 +116,7 @@
 //         if (m_imported)
 //             return;
 //         if (m_texture) {
-//             LOG_ERROR("Texture already created");
+//             LOG_ERROR(MOER_TEXT("Texture already created"));
 //             return;
 //         }
 //         if (m_is_sub_resource) {

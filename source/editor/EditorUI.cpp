@@ -478,7 +478,7 @@ void EditorUI::ShowConfig() {
     if (scene) {
         is_scene_found_but_not_ready = !scene->IsReady() && scene->IsStartLoading();
     } else {
-        LOG_WARNING("Please bind a scene by `SceneGlobalEntry::Get().BindScene(scene)`");
+        LOG_WARNING(MOER_TEXT("Please bind a scene by `SceneGlobalEntry::Get().BindScene(scene)`"));
     }
     ImGui::BeginDisabled(is_scene_found_but_not_ready);
 
@@ -529,13 +529,13 @@ void EditorUI::ShowConfig() {
             }}};
             const FileDialog::OpenFileResult result = FileDialog::OpenFile({.filters = scene_filters});
             if (result.status == FileDialog::EOpenFileStatus::Success) {
-                LOG_INFO("User selected file: {}", result.path.string());
+                LOG_INFO(MOER_TEXT("User selected file: {}"), result.path.string());
 
                 // Prepare for reload
                 m_b_need_reload      = true;
                 m_config->scene_path = result.path.string();
             } else if (result.status == FileDialog::EOpenFileStatus::Cancelled) {
-                LOG_INFO("User pressed cancel.");
+                LOG_INFO(MOER_TEXT("User pressed cancel."));
             }
         }
         ImGui::SameLine();

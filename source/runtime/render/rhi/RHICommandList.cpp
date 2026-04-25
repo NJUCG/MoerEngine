@@ -69,7 +69,7 @@ Array<RHISubmitSegment> BuildSubmitSegments(
     for (size_t cmd_index = 0; cmd_index < commands.size(); ++cmd_index) {
         const Command* command = commands[cmd_index].get();
         if (IsFrameTickCommand(command) && cmd_index + 1 != commands.size()) {
-            LOG_ERROR("CommandList::TickFrame must be the last top-level command in a CommandList");
+            LOG_ERROR(MOER_TEXT("CommandList::TickFrame must be the last top-level command in a CommandList"));
             assert(false && "TickFrame must be the last top-level command");
         }
 
@@ -143,7 +143,7 @@ CommandList::CommandList() : CommandList(EQueueType::Graphics) {}
 CommandList::CommandList(EQueueType _queue_type) : queue_type(_queue_type) {
     if (!IsValidPrimaryQueueType(_queue_type)) {
         LOG_ERROR(
-            "CommandList only supports Graphics or Compute queue types, got={}",
+            MOER_TEXT("CommandList only supports Graphics or Compute queue types, got={}"),
             static_cast<uint32>(_queue_type)
         );
         assert(false && "CommandList only supports Graphics or Compute queue types");
@@ -155,7 +155,7 @@ void CommandList::EnsureNoActiveCopyScope(std::string_view _api_name) const {
     if (!b_copy_scope_active) {
         return;
     }
-    LOG_ERROR("{} cannot be called while a CopyCommandScope is active", _api_name);
+    LOG_ERROR(MOER_TEXT("{} cannot be called while a CopyCommandScope is active"), _api_name);
     assert(false && "CommandList API used while a CopyCommandScope is active");
 }
 
@@ -254,11 +254,11 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
 
 CmdSubmit CommandList::Submit() {
     if (b_copy_scope_active) {
-        LOG_ERROR("CommandList::Submit called while a CopyCommandScope is still active");
+        LOG_ERROR(MOER_TEXT("CommandList::Submit called while a CopyCommandScope is still active"));
         assert(false && "CommandList::Submit called while a CopyCommandScope is still active");
     }
     if (b_buffer_overlap_active) {
-        LOG_ERROR("CommandList::Submit called while a BufferOverlap scope is still active");
+        LOG_ERROR(MOER_TEXT("CommandList::Submit called while a BufferOverlap scope is still active"));
         assert(false && "CommandList::Submit called while a BufferOverlap scope is still active");
     }
     CmdSubmit submit(
@@ -516,7 +516,7 @@ void CommandList::SetRenderCmds(
     EnsureNoActiveCopyScope("CommandList::SetRenderCmds");
     if (_handle.IsValid() == false) {
         LOG_ERROR(
-            "Attempt to dispatch a compute with invalid PSO. Please check if the PSO is created "
+            MOER_TEXT("Attempt to dispatch a compute with invalid PSO. Please check if the PSO is created ")
             "successfully. PSO name: \"{}\"",
             _name.value_or("Unnamed PSO")
         );
@@ -706,7 +706,7 @@ void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _
 CommandList& CommandList::TranslateFence(RHITranslateFence _fence) {
     EnsureNoActiveCopyScope("CommandList::TranslateFence");
     if (!_fence.event) {
-        LOG_ERROR("CommandList::TranslateFence requires a valid GraphEventRef-backed fence");
+        LOG_ERROR(MOER_TEXT("CommandList::TranslateFence requires a valid GraphEventRef-backed fence"));
         assert(false && "TranslateFence requires a valid event");
         return *this;
     }
@@ -721,7 +721,7 @@ CommandList& CommandList::LambdaCommand(
 ) {
     EnsureNoActiveCopyScope("CommandList::LambdaCommand");
     if (!_callback) {
-        LOG_ERROR("CommandList::LambdaCommand requires a valid callback");
+        LOG_ERROR(MOER_TEXT("CommandList::LambdaCommand requires a valid callback"));
         assert(false && "LambdaCommand requires a valid callback");
         return *this;
     }
@@ -776,7 +776,7 @@ CommandList& CommandList::TickProfiling() {
 CommandList& CommandList::TickFrame() {
     EnsureNoActiveCopyScope("CommandList::TickFrame");
     if (!commands.empty() && IsFrameTickCommand(commands.back().get())) {
-        LOG_ERROR("CommandList::TickFrame can only be recorded once per CommandList");
+        LOG_ERROR(MOER_TEXT("CommandList::TickFrame can only be recorded once per CommandList"));
         assert(false && "TickFrame must not be recorded twice");
         return *this;
     }
@@ -834,7 +834,7 @@ void CommandList::ImportResourcesFromQueue(
     (void)_src_queue;
     (void)_textures_to_import;
     (void)_buffers_to_import;
-    LOG_ERROR("CommandList::ImportResourcesFromQueue has been removed. Use CopyScope.");
+    LOG_ERROR(MOER_TEXT("CommandList::ImportResourcesFromQueue has been removed. Use CopyScope."));
     assert(false && "CommandList::ImportResourcesFromQueue has been removed");
     return;
     {
@@ -843,7 +843,7 @@ void CommandList::ImportResourcesFromQueue(
             const auto& texture_to_import = _textures_to_import[i];
             if (texture_to_import.texture.GetTexture() == nullptr) {
                 LOG_WARNING(
-                    "ImportResourcesFromQueue got empty texture at index {}. src_queue={}",
+                    MOER_TEXT("ImportResourcesFromQueue got empty texture at index {}. src_queue={}"),
                     i,
                     static_cast<uint>(_src_queue)
                 );
@@ -854,7 +854,7 @@ void CommandList::ImportResourcesFromQueue(
             if (buffer_to_import.buffer.GetBuffer() == nullptr ||
                 buffer_to_import.buffer.GetByteSize() == 0) {
                 LOG_WARNING(
-                    "ImportResourcesFromQueue got empty buffer at index {}. src_queue={}",
+                    MOER_TEXT("ImportResourcesFromQueue got empty buffer at index {}. src_queue={}"),
                     i,
                     static_cast<uint>(_src_queue)
                 );
@@ -878,7 +878,7 @@ void CommandList::ExportResourcesToQueue(
     (void)_dst_queue;
     (void)_textures_to_export;
     (void)_buffers_to_export;
-    LOG_ERROR("CommandList::ExportResourcesToQueue has been removed. Use CopyScope.");
+    LOG_ERROR(MOER_TEXT("CommandList::ExportResourcesToQueue has been removed. Use CopyScope."));
     assert(false && "CommandList::ExportResourcesToQueue has been removed");
     return;
     {
@@ -887,7 +887,7 @@ void CommandList::ExportResourcesToQueue(
             const auto& texture_to_export = _textures_to_export[i];
             if (texture_to_export.texture.GetTexture() == nullptr) {
                 LOG_WARNING(
-                    "ExportResourcesToQueue got empty texture at index {}. dst_queue={}",
+                    MOER_TEXT("ExportResourcesToQueue got empty texture at index {}. dst_queue={}"),
                     i,
                     static_cast<uint>(_dst_queue)
                 );
@@ -898,7 +898,7 @@ void CommandList::ExportResourcesToQueue(
             if (buffer_to_export.buffer.GetBuffer() == nullptr ||
                 buffer_to_export.buffer.GetByteSize() == 0) {
                 LOG_WARNING(
-                    "ExportResourcesToQueue got empty buffer at index {}. dst_queue={}",
+                    MOER_TEXT("ExportResourcesToQueue got empty buffer at index {}. dst_queue={}"),
                     i,
                     static_cast<uint>(_dst_queue)
                 );
@@ -939,11 +939,11 @@ CopyCommandScope CommandList::BeginCopyScope() {
         "BeginCopyScope is only valid on Graphics or Compute CommandLists"
     );
     if (b_copy_scope_active) {
-        LOG_ERROR("Nested CopyCommandScope is not allowed");
+        LOG_ERROR(MOER_TEXT("Nested CopyCommandScope is not allowed"));
         assert(false && "Nested CopyCommandScope is not allowed");
     }
     if (!scope_stack.empty() || !timed_scope_query_stack.empty() || event_depth != 0) {
-        LOG_ERROR("CopyCommandScope cannot begin while GPU scopes, queries, or GPU events are active");
+        LOG_ERROR(MOER_TEXT("CopyCommandScope cannot begin while GPU scopes, queries, or GPU events are active"));
         assert(false && "CopyCommandScope cannot cross active scopes or queries");
     }
     b_copy_scope_active = true;
@@ -953,12 +953,12 @@ CopyCommandScope CommandList::BeginCopyScope() {
 void CommandList::BeginBufferOverlap(BufferView _buffer) {
     EnsureNoActiveCopyScope("CommandList::BeginBufferOverlap");
     if (_buffer.GetBuffer() == nullptr) {
-        LOG_ERROR("BeginBufferOverlap requires a valid buffer");
+        LOG_ERROR(MOER_TEXT("BeginBufferOverlap requires a valid buffer"));
         assert(false && "BeginBufferOverlap requires a valid buffer");
         return;
     }
     if (b_buffer_overlap_active) {
-        LOG_ERROR("Nested BeginBufferOverlap is not allowed");
+        LOG_ERROR(MOER_TEXT("Nested BeginBufferOverlap is not allowed"));
         assert(false && "Nested BeginBufferOverlap is not allowed");
         return;
     }
@@ -970,13 +970,13 @@ void CommandList::BeginBufferOverlap(BufferView _buffer) {
 void CommandList::EndBufferOverlap(BufferView _buffer) {
     EnsureNoActiveCopyScope("CommandList::EndBufferOverlap");
     if (!b_buffer_overlap_active) {
-        LOG_ERROR("EndBufferOverlap called without matching BeginBufferOverlap");
+        LOG_ERROR(MOER_TEXT("EndBufferOverlap called without matching BeginBufferOverlap"));
         assert(false && "EndBufferOverlap called without matching BeginBufferOverlap");
         return;
     }
     const uint64 handle = reinterpret_cast<uint64>(_buffer.GetBuffer());
     if (handle != buffer_overlap_handle) {
-        LOG_ERROR("EndBufferOverlap buffer mismatch");
+        LOG_ERROR(MOER_TEXT("EndBufferOverlap buffer mismatch"));
         assert(false && "EndBufferOverlap buffer mismatch");
         return;
     }
@@ -1010,7 +1010,7 @@ void CopyCommandScope::PushCopyCommand(UniquePtr<Command>&& _cmd) {
         return;
     }
     if (!IsCopyScopeCompatibleCommand(*_cmd)) {
-        LOG_ERROR("CopyCommandScope only accepts copy/upload/readback commands, got={}", uint(_cmd->Type()));
+        LOG_ERROR(MOER_TEXT("CopyCommandScope only accepts copy/upload/readback commands, got={}"), uint(_cmd->Type()));
         assert(false && "CopyCommandScope only accepts copy commands");
         return;
     }

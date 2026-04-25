@@ -300,7 +300,7 @@ void VulkanCmdList::CopyBufferToTexture(
     if (_size != expected_size_exact) {
         const uint3 texture_extent = _dst->GetExtent();
         LOG_ERROR(
-            "[CopyBufferToTexture] Size mismatch. Texture='{}' Handle={:#x} Format={} Mip={} ArrayLayer={} "
+            MOER_TEXT("[CopyBufferToTexture] Size mismatch. Texture='{}' Handle={:#x} Format={} Mip={} ArrayLayer={} ")
             "TextureExtent=({}, {}, {}) CopyOffset=({}, {}, {}) CopyExtent=({}, {}, {}) "
             "IncomingSize={} ExactExpected={} LegacyTexelCount={} DstMipByteSize={} "
             "DeltaToExact={} DeltaToLegacy={} LegacyMatch={}",
@@ -692,7 +692,7 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                     const auto* bindless_arg = std::get_if<BindlessArrayRef>(&_args[_binder.param_idx]);
                     if (bindless_arg == nullptr) {
                         LOG_ERROR(
-                            "Bindless binder expected BindlessArrayRef at arg {}, but variant index was {}.",
+                            MOER_TEXT("Bindless binder expected BindlessArrayRef at arg {}, but variant index was {}."),
                             _binder.param_idx,
                             _args[_binder.param_idx].index()
                         );

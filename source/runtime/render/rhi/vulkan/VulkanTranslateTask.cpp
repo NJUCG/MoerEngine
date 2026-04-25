@@ -100,7 +100,7 @@ Array<TranslateResult> VulkanTranslateTask::DispatchBatch(Array<QueueTranslateIn
                                              MakeFailed(current.queue, std::move(current.error));
                 result.translate_complete = current.completion_event;
                 if (!result.valid && !result.error.empty()) {
-                    LOG_ERROR("{}", result.error);
+                    LOG_ERROR(MOER_TEXT("{}"), result.error);
                 }
                 results[index] = std::move(result);
             },

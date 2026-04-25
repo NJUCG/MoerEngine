@@ -79,7 +79,7 @@ void RasterTool::LogDebugEverySeconds(
     std::source_location location
 ) {
     if (seconds <= 0.0) {
-        LOG_DEBUG("{}", str);
+        LOG_DEBUG(MOER_TEXT("{}"), str);
         return;
     }
 
@@ -88,7 +88,7 @@ void RasterTool::LogDebugEverySeconds(
     const std::string site_key = BuildDebugLogSiteKey(location);
     auto [timer_it, inserted]  = s_debug_log_timers.try_emplace(site_key, seconds, true);
     if (inserted || timer_it->second.Tick()) {
-        LOG_DEBUG("{}", str);
+        LOG_DEBUG(MOER_TEXT("{}"), str);
     }
 }
 

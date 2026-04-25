@@ -850,11 +850,11 @@ int RunProfilerMain(int argc, const char** argv) {
     std::filesystem::path path = argv[0];
     path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
     LogSystem::Init();
-    LOG_INFO("MoerProfiler starting...");
+    LOG_INFO(MOER_TEXT("MoerProfiler starting..."));
     ConfigManager::GetInstance().Init(path);
     TaskSystem::Init();
     if (!FileDialog::Init()) {
-        LOG_WARNING("Native file dialog is unavailable in profiler.");
+        LOG_WARNING(MOER_TEXT("Native file dialog is unavailable in profiler."));
     }
 
     RenderDevice::Init(
@@ -953,7 +953,7 @@ int RunProfilerMain(int argc, const char** argv) {
                 const std::string selected_path = result.path.string();
                 std::snprintf(profile_dump_path, sizeof(profile_dump_path), "%s", selected_path.c_str());
                 if (!LoadProfileDumpFile(profile_dump_path, store, true)) {
-                    LOG_WARNING("ProfileDump load failed: {}", profile_dump_path);
+                    LOG_WARNING(MOER_TEXT("ProfileDump load failed: {}"), profile_dump_path);
                 }
             }
         }

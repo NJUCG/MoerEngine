@@ -32,9 +32,9 @@ RenderDocApi::RenderDocApi() {
             get_api(eRENDERDOC_API_Version_1_1_2, (void**)&m_api);
         }
 
-        LOG_INFO("RenderDoc API is enabled.");
+        LOG_INFO(MOER_TEXT("RenderDoc API is enabled."));
     } else {
-        LOG_WARNING("RenderDoc isn't running. RenderDoc API is disabled.");
+        LOG_WARNING(MOER_TEXT("RenderDoc isn't running. RenderDoc API is disabled."));
     }
 }
 
@@ -42,7 +42,7 @@ void RenderDocApi::StartCapture() {
     if (m_api && !is_requesting_capture) {
         is_requesting_capture = true;
         m_api->StartFrameCapture(nullptr, nullptr);
-        LOG_INFO("RenderDoc frame capture started.");
+        LOG_INFO(MOER_TEXT("RenderDoc frame capture started."));
     }
 }
 
@@ -50,7 +50,7 @@ void RenderDocApi::EndCapture() {
     if (m_api && is_requesting_capture) {
         m_api->EndFrameCapture(nullptr, nullptr);
         is_requesting_capture = false; // 捕获完成，重置状态
-        LOG_INFO("RenderDoc frame capture ended.");
+        LOG_INFO(MOER_TEXT("RenderDoc frame capture ended."));
     }
 }
 

@@ -166,7 +166,7 @@ public:
 
         UploadTextureData(cmd_list, out_tex, data, width, height, name.data());
 
-        LOG_DEBUG("Load 2D Texture: {}, size ({}, {}) from \"{}\"", name, width, height, filepath);
+        LOG_DEBUG(MOER_TEXT("Load 2D Texture: {}, size ({}, {}) from \"{}\""), name, width, height, filepath);
     }
 
     template<typename Tag>
@@ -206,7 +206,7 @@ public:
             );
 
             LOG_DEBUG(
-                "Load CubeMap Texture: {}_{}, size ({}, {}) from \"{}\"",
+                MOER_TEXT("Load CubeMap Texture: {}_{}, size ({}, {}) from \"{}\""),
                 name,
                 skybox_faces[i],
                 width,
@@ -259,7 +259,7 @@ public:
             }
 
             if (is_verbose) {
-                LOG_DEBUG("tex {}, size {} x {}", name, size.x, size.y);
+                LOG_DEBUG(MOER_TEXT("tex {}, size {} x {}"), name, size.x, size.y);
             }
         }
     }
@@ -313,7 +313,7 @@ public:
             target.hdl = 0;
             target.tex = nullptr;
         } else {
-            LOG_WARNING("Trying to free a texture handle that is already zeroed.");
+            LOG_WARNING(MOER_TEXT("Trying to free a texture handle that is already zeroed."));
         }
 
         // Mip Handles
@@ -322,7 +322,7 @@ public:
                 bindless_array->UnbindTexture(hdl);
                 hdl = 0;
             } else {
-                LOG_WARNING("Trying to free a mip texture handle that is already zeroed.");
+                LOG_WARNING(MOER_TEXT("Trying to free a mip texture handle that is already zeroed."));
             }
         }
         target.mip_handles.clear();
@@ -340,7 +340,7 @@ public:
             target.hdl = 0;
             target.tex = nullptr;
         } else {
-            LOG_WARNING("Trying to free a texture handle that is already zeroed.");
+            LOG_WARNING(MOER_TEXT("Trying to free a texture handle that is already zeroed."));
         }
     }
 
@@ -364,7 +364,7 @@ private:
         fopen_s(&file, path.c_str(), "rb");
 
         if (!file) {
-            LOG_ERROR("Failed to load texture file: {}", path);
+            LOG_ERROR(MOER_TEXT("Failed to load texture file: {}"), path);
             return nullptr;
         }
 
@@ -372,7 +372,7 @@ private:
         ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
 
         if (!data) {
-            LOG_ERROR("Failed to decode texture data: {}", path);
+            LOG_ERROR(MOER_TEXT("Failed to decode texture data: {}"), path);
             fclose(file);
             return nullptr;
         }

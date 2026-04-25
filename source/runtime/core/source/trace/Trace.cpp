@@ -216,7 +216,7 @@ bool EnsureWinsock() {
 void SenderMain() {
     auto& state = G();
     if (!EnsureWinsock()) {
-        LOG_ERROR("Trace sender failed to initialize WinSock.");
+        LOG_ERROR(MOER_TEXT("Trace sender failed to initialize WinSock."));
         return;
     }
 
@@ -402,7 +402,7 @@ bool Init(const Config& config) {
         state.csv_file.open(csv_path, std::ios::out | std::ios::app);
         state.csv_header_written = has_existing_content;
         if (!state.csv_file.is_open()) {
-            LOG_WARNING("Trace CSV output cannot be opened: {}", csv_path.string());
+            LOG_WARNING(MOER_TEXT("Trace CSV output cannot be opened: {}"), csv_path.string());
         }
     }
 

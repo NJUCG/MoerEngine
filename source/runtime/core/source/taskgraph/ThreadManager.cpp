@@ -163,7 +163,7 @@ RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attribu
     create_event.Wait();
     this->name = _attributes.name;
 
-    SPDLOG_INFO("[{}] {} thread created", name, this->id);
+    SPDLOG_INFO(MOER_TEXT("[{}] {} thread created"), name, this->id);
 }
 
 uint32_t RunnableThread::Run() {
@@ -184,10 +184,10 @@ void RunnableThread::WaitUntilFinished() {
 }
 
 uint32_t TestRunnanble::Run() {
-    SPDLOG_INFO("[{}] start running", Platform::GetCurrentThreadID());
+    SPDLOG_INFO(MOER_TEXT("[{}] start running"), Platform::GetCurrentThreadID());
     while (!m_stop) {
     }
-    SPDLOG_INFO("[{}] finish running", Platform::GetCurrentThreadID());
+    SPDLOG_INFO(MOER_TEXT("[{}] finish running"), Platform::GetCurrentThreadID());
     return 0;
 }
 
@@ -199,6 +199,6 @@ void TestRunnanble::Stop() {
 
 void TestRunnanble::Exit() {
     SPDLOG_INFO(
-        "thread {} exit", static_cast<size_t>(std::hash<std::thread::id>()(std::this_thread::get_id()))
+        MOER_TEXT("thread {} exit"), static_cast<size_t>(std::hash<std::thread::id>()(std::this_thread::get_id()))
     );
 }

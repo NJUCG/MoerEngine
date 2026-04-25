@@ -204,7 +204,7 @@ public:
             MoerDelete(allocator);
             // ++alloc_count
         }
-        // LOG_INFO("Allocator count {}", alloc_count);
+        // LOG_INFO(MOER_TEXT("Allocator count {}"), alloc_count);
         MoerDelete(timeline);
     }
     VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr, TrackerSeed seed = {});

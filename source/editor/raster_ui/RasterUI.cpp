@@ -529,7 +529,7 @@ void RasterUI::ShowConfig() {
             // 自动启用RTAO
             if (m_config.ao_mode != EAoMode::RTAO) {
                 m_config.ao_mode = EAoMode::RTAO;
-                LOG_INFO("Ambient Occlusion Mode switched to RTAO automatically.");
+                LOG_INFO(MOER_TEXT("Ambient Occlusion Mode switched to RTAO automatically."));
             }
         }
         draw_border();

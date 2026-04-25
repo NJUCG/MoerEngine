@@ -123,7 +123,7 @@ private:
         fopen_s(&file, path.c_str(), "rb");
 
         if (!file) {
-            LOG_ERROR("Failed to load texture file: {}", path);
+            LOG_ERROR(MOER_TEXT("Failed to load texture file: {}"), path);
             return nullptr;
         }
 
@@ -131,7 +131,7 @@ private:
         ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
 
         if (!data) {
-            LOG_ERROR("Failed to decode texture data: {}", path);
+            LOG_ERROR(MOER_TEXT("Failed to decode texture data: {}"), path);
             fclose(file);
             return nullptr;
         }

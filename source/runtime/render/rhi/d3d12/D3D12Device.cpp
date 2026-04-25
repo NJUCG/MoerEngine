@@ -136,7 +136,7 @@ Moer::Render::D3D12Device::D3D12Device(const D3D12RHIConfig&& _config) : config(
                                          LPCSTR                 pDescription,
                                          void*                  pContext) {
             LOG_ERROR(
-                "D3D12 VALIDATION: {},{},{},{}", uint(Category), uint(Severity), uint(ID), pDescription
+                MOER_TEXT("D3D12 VALIDATION: {},{},{},{}"), uint(Category), uint(Severity), uint(ID), pDescription
             );
         };
 
@@ -145,7 +145,7 @@ Moer::Render::D3D12Device::D3D12Device(const D3D12RHIConfig&& _config) : config(
         ));
         ASSERT(debug_log_callback_cookie != 0);
     } else {
-        LOG_INFO("ID3D12InfoQueue1 not available, no custom validation messages will be shown");
+        LOG_INFO(MOER_TEXT("ID3D12InfoQueue1 not available, no custom validation messages will be shown"));
     }
 #endif
 
@@ -483,7 +483,7 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
         auto reflect_map_iter = reflect_map.find(name_internal.data());
         if (reflect_map_iter == reflect_map.end()) {
             LOG_WARNING(
-                "provided pipeline arg '{}' not found in shader '{}'", resource_names[i], cs_info.name
+                MOER_TEXT("provided pipeline arg '{}' not found in shader '{}'"), resource_names[i], cs_info.name
             );
             continue;
         }
@@ -1036,23 +1036,23 @@ void D3D12GraphicsCommandQueue::ExecuteThread(std::stop_token _st) {
                     ready_allocators.Push(allocator.release());
                     GetDevice()->GetCsuHeapGpuDyn()->EndPushDescriptors();
                     GetDevice()->GetSamplerHeapGpuDyn()->EndPushDescriptors();
-                    //LOG_INFO("visit event: allocator, {}", fence_value);
+                    //LOG_INFO(MOER_TEXT("visit event: allocator, {}"), fence_value);
                     AtomicMaximum(
                         last_completed_fence_value, fence_value
                     ); // break the 'Sync' condition, later
                 },
                 [&fence_value](const Array<std::function<void()>>& funcs) {
-                    //LOG_INFO("visit event: callback, {}", fence_value);
+                    //LOG_INFO(MOER_TEXT("visit event: callback, {}"), fence_value);
                     for (auto&& f : funcs)
                         f();
                 },
                 [&fence_value](SignalEvent e) {
-                    //LOG_INFO("visit event: signal, {}", fence_value);
+                    //LOG_INFO(MOER_TEXT("visit event: signal, {}"), fence_value);
                     auto fence = reinterpret_cast<D3D12Fence*>(e.timeline_handle);
                     fence->SignalOnHost(e.value);
                 },
                 [&fence_value, this](WaitEvent e) {
-                    LOG_INFO("visit event: wait, {}", fence_value);
+                    LOG_INFO(MOER_TEXT("visit event: wait, {}"), fence_value);
                     FATAL("not implemented");
                     //auto fence = reinterpret_cast<D3D12Fence*>(e.timeline_handle);
                     //fence->WaitOnHost(e.value);
@@ -1446,7 +1446,7 @@ UniquePtr<D3D12CommandResourceAllocator> D3D12GraphicsCommandQueue::RequestComma
     }
     //static uint32_t count = 0;
     //count++;
-    //LOG_WARNING("create allocator {}", count);
+    //LOG_WARNING(MOER_TEXT("create allocator {}"), count);
     return MakeUnique<D3D12CommandResourceAllocator>(*this);
 }
 
@@ -1549,7 +1549,7 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     const uint64 next_fence_value = ++last_submitted_fence_value;
 
     allocator->AddOnComplete([next_fence_value, this] {
-        LOG_INFO("on complete {}", next_fence_value);
+        LOG_INFO(MOER_TEXT("on complete {}"), next_fence_value);
     });
 
     for (auto&& e : _submit.wait_events) {
@@ -2071,7 +2071,7 @@ void D3D12BuddyAllocator::Deallocate(const BuddyBlock& _block) {
 }
 void D3D12BuddyAllocator::CleanUpAllocations() {
     for (auto&& b : deferred_deallocate_blocks) {
-        //LOG_INFO("[{}] deallocate block {} {}", heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback", b.offset, b.order);
+        //LOG_INFO(MOER_TEXT("[{}] deallocate block {} {}"), heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback", b.offset, b.order);
         DeallocateInternal(b);
     }
     deferred_deallocate_blocks.clear();
@@ -2133,7 +2133,7 @@ D3D12BuddyAllocator::BuddyBlock D3D12BuddyAllocator::AllocateInternal(uint32 _si
     total_used_byte_size += allocated_size;
     DASSERT(total_used_byte_size <= total_byte_size);
 
-    //LOG_INFO("[{}] allocate block {} {}", heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback", offset, block_order);
+    //LOG_INFO(MOER_TEXT("[{}] allocate block {} {}"), heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback", offset, block_order);
 
     return BuddyBlock{
         .parent             = this,
@@ -2580,7 +2580,7 @@ D3D12_RESOURCE_FLAGS METoDxTextureResourceFlags(ETextureUsageFlags _me_flags) {
                 | ETextureUsageFlags::VIDEO_ENCODE
                 | ETextureUsageFlags::PRESENT)) {
         // clang-format on
-        LOG_WARNING("Unsupported texture usage flags: {}", static_cast<uint32_t>(_me_flags));
+        LOG_WARNING(MOER_TEXT("Unsupported texture usage flags: {}"), static_cast<uint32_t>(_me_flags));
     }
     return ret;
 }

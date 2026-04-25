@@ -243,7 +243,7 @@ void CpuScene::InitializeMeshes() {
             // 验证 AABB 有效性
             if (!c_primitive.aabb.IsValid()) {
                 LOG_WARNING(
-                    "Primitive {} has invalid AABB: min=({},{},{}), max=({},{},{})",
+                    MOER_TEXT("Primitive {} has invalid AABB: min=({},{},{}), max=({},{},{})"),
                     m_primitive_buf.size(),
                     g_primitive.aabb_min.x, g_primitive.aabb_min.y, g_primitive.aabb_min.z,
                     g_primitive.aabb_max.x, g_primitive.aabb_max.y, g_primitive.aabb_max.z
@@ -338,7 +338,7 @@ void CpuScene::InitializeMeshes() {
     //             ss << "\t\tInstance " << instance.world_transform.ToString(false, 3) << "\n";
     //         }
     //     }
-    //     LOG_INFO("{}", ss.str());
+    //     LOG_INFO(MOER_TEXT("{}"), ss.str());
     // }
 
     {

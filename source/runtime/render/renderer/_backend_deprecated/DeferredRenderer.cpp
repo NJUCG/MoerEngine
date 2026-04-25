@@ -416,17 +416,17 @@
 
 //                 // TODO: implement spot light (need test case)
 //                 // Be careful, I don't test any part of spot light (including data storage, etc)
-//                 LOG_WARNING("Spot light not implemented yet");
+//                 LOG_WARNING(MOER_TEXT("Spot light not implemented yet"));
 
 //             } else {
-//                 LOG_WARNING("Unknown light type");
+//                 LOG_WARNING(MOER_TEXT("Unknown light type"));
 //             }
 
 //             lights.push_back(light_data);
 //         }
 //         if (lights.size() == 0) {
-//             LOG_WARNING("No light in scene! Please make sure the scene cache is latest! And you have at least one light in scene.");
-//             LOG_WARNING("For ply and json scene, the loader hasn't implement default lights. So you can implement it by yourself refer to LightComponent.cpp:CreateDefaultLightComponents() and loader/gltf/Parser.cpp:LoadLights()");
+//             LOG_WARNING(MOER_TEXT("No light in scene! Please make sure the scene cache is latest! And you have at least one light in scene."));
+//             LOG_WARNING(MOER_TEXT("For ply and json scene, the loader hasn't implement default lights. So you can implement it by yourself refer to LightComponent.cpp:CreateDefaultLightComponents() and loader/gltf/Parser.cpp:LoadLights()"));
 //         }
 
 //         light_buffer      = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, lights.data(), lights.size() * sizeof(LightData));

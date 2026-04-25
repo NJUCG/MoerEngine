@@ -119,7 +119,7 @@ ResolvedGPUFrame BuildResolvedFrame(
 
     for (const auto& event : frame_events) {
         if (event.queue == EQueueType::Ignore || event.queue == EQueueType::Num) {
-            LOG_ERROR("GPUEventStream got invalid queue type {} while building frame {}", int(event.queue), frame_index);
+            LOG_ERROR(MOER_TEXT("GPUEventStream got invalid queue type {} while building frame {}"), int(event.queue), frame_index);
             frame_valid = false;
             continue;
         }
@@ -133,7 +133,7 @@ ResolvedGPUFrame BuildResolvedFrame(
             const uint32 expected_depth = static_cast<uint32>(stack.size());
             if (event.depth != expected_depth) {
                 LOG_ERROR(
-                    "GPUEventStream begin depth mismatch in frame {} on queue {}: event depth={}, expected={}",
+                    MOER_TEXT("GPUEventStream begin depth mismatch in frame {} on queue {}: event depth={}, expected={}"),
                     frame_index,
                     QueueTypeName(event.queue),
                     event.depth,
@@ -165,14 +165,14 @@ ResolvedGPUFrame BuildResolvedFrame(
         }
 
         if (!IsEndEvent(event.type)) {
-            LOG_ERROR("GPUEventStream encountered non-scope event inside frame {}", frame_index);
+            LOG_ERROR(MOER_TEXT("GPUEventStream encountered non-scope event inside frame {}"), frame_index);
             frame_valid = false;
             continue;
         }
 
         if (stack.empty()) {
             LOG_ERROR(
-                "GPUEventStream end event underflow in frame {} on queue {}",
+                MOER_TEXT("GPUEventStream end event underflow in frame {} on queue {}"),
                 frame_index,
                 QueueTypeName(event.queue)
             );
@@ -184,7 +184,7 @@ ResolvedGPUFrame BuildResolvedFrame(
         BuildNode& node = arena[node_index];
         if (!IsMatchingEndEvent(node.begin_type, event.type)) {
             LOG_ERROR(
-                "GPUEventStream mismatched begin/end type in frame {} on queue {}",
+                MOER_TEXT("GPUEventStream mismatched begin/end type in frame {} on queue {}"),
                 frame_index,
                 QueueTypeName(event.queue)
             );
@@ -193,7 +193,7 @@ ResolvedGPUFrame BuildResolvedFrame(
         }
         if (event.depth != node.node.depth) {
             LOG_ERROR(
-                "GPUEventStream end depth mismatch in frame {} on queue {}: event depth={}, begin depth={}",
+                MOER_TEXT("GPUEventStream end depth mismatch in frame {} on queue {}: event depth={}, begin depth={}"),
                 frame_index,
                 QueueTypeName(event.queue),
                 event.depth,
@@ -209,7 +209,7 @@ ResolvedGPUFrame BuildResolvedFrame(
     for (size_t queue_index = 0; queue_index < open_stacks.size(); ++queue_index) {
         if (!open_stacks[queue_index].empty()) {
             LOG_ERROR(
-                "GPUEventStream frame boundary crossed active scopes in frame {} on queue {}",
+                MOER_TEXT("GPUEventStream frame boundary crossed active scopes in frame {} on queue {}"),
                 frame_index,
                 QueueTypeName(static_cast<EQueueType>(queue_index))
             );
@@ -418,7 +418,7 @@ void GPUEventStream::ResolveCompleted(WaitEvent completion) {
         for (GPUEvent& event : submit.events) {
             if (!event.query.IsReady()) {
                 LOG_ERROR(
-                    "GPUEventStream saw unresolved query future for event '{}' on queue {}",
+                    MOER_TEXT("GPUEventStream saw unresolved query future for event '{}' on queue {}"),
                     event.name,
                     int(submit.queue)
                 );
@@ -428,7 +428,7 @@ void GPUEventStream::ResolveCompleted(WaitEvent completion) {
             if (query_result.status != QueryStatus::Ready ||
                 !std::holds_alternative<TimestampQueryResult>(query_result.payload)) {
                 LOG_ERROR(
-                    "GPUEventStream failed to resolve timestamp query for event '{}' on queue {}",
+                    MOER_TEXT("GPUEventStream failed to resolve timestamp query for event '{}' on queue {}"),
                     event.name,
                     int(submit.queue)
                 );
@@ -449,7 +449,7 @@ void GPUEventStream::EndFrame() {
 
     if (!pending_frames.empty() &&
         pending_frames.back().sealed_after_enqueue_order == next_enqueue_order) {
-        LOG_ERROR("GPUEventStream received EndFrame twice without new enqueued submits");
+        LOG_ERROR(MOER_TEXT("GPUEventStream received EndFrame twice without new enqueued submits"));
         return;
     }
 

@@ -117,7 +117,7 @@ void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {
         static LoopedTimer timer(2.0);
         if (timer.Tick()) { // 每隔1s触发一次
             LOG_WARNING(
-                "Don't find scene or scene format isn't supported. Please load a valid scene. Latest "
+                MOER_TEXT("Don't find scene or scene format isn't supported. Please load a valid scene. Latest ")
                 "attempted scene: {}",
                 config.scene_path
             );
