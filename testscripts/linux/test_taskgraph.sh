@@ -65,6 +65,7 @@ cmake --build "${BUILD_DIR}" --target TestCoreLinux -j"$(nproc)"
 failed=0
 run_test "TaskGraph" "${BIN_DIR}/TestTaskGraph" "${RUN_DIR}/taskgraph.log" || failed=1
 run_test "TaskPipe" "${BIN_DIR}/TestTaskPipe" "${RUN_DIR}/taskpipe.log" || failed=1
+run_test "StringSystem" "${BIN_DIR}/TestStringSystem" "${RUN_DIR}/string_system.log" || failed=1
 
 if [[ "${failed}" -ne 0 ]]; then
     write_summary "============================================================"

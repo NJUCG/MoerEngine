@@ -48,13 +48,16 @@ powershell -ExecutionPolicy Bypass -File .\testscripts\windows\test_all.ps1
 
 | Script | Executable | Description |
 |--------|-----------|-------------|
-| `linux/test_taskgraph.sh` | `TestTaskGraph`, `TestTaskPipe` | Linux core-only configure/build/run path for taskgraph regression |
+| `linux/test_taskgraph.sh` | `TestTaskGraph`, `TestTaskPipe`, `TestStringSystem` | Linux core-only configure/build/run path for taskgraph and string-system regression |
+| `linux/test_string_system.sh` | `TestStringSystem` | Linux core-only configure/build/run path for string-system regression |
 
 Usage from the repo root:
 
 ```bash
 ./testscripts/linux/test_taskgraph.sh
 ./testscripts/linux/test_taskgraph.sh Release
+./testscripts/linux/test_string_system.sh
+./testscripts/linux/test_string_system.sh Release
 ```
 
 ## Output
