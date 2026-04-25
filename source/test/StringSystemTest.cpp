@@ -48,6 +48,7 @@ void TestStringAliases() {
 }
 
 void TestUnicodeConversion() {
+    // A, Chinese middle character, game controller emoji.
     const String utf8_text = "A\xE4\xB8\xAD\xF0\x9F\x8E\xAE";
     const WideString wide_text = Utf8ToWide(utf8_text);
     const String roundtrip = WideToUtf8(wide_text);
@@ -57,6 +58,7 @@ void TestUnicodeConversion() {
 }
 
 void TestInvalidUtf8Rejected() {
+    // Overlong UTF-8 encoding of '/'.
     const String invalid_text = "\xC0\xAF";
 
     bool rejected = false;

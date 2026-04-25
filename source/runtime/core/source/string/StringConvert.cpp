@@ -56,6 +56,7 @@ char32_t DecodeUtf8CodePoint(StringView text, std::size_t& index) {
         code_point = (code_point << 6) | (next & 0x3F);
     }
 
+    // Reject overlong encodings.
     if ((length == 2 && code_point < 0x80) || (length == 3 && code_point < 0x800) ||
         (length == 4 && code_point < 0x10000)) {
         RejectInvalidText();
