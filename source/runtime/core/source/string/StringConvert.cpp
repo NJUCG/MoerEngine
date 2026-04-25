@@ -20,7 +20,7 @@ bool IsSurrogate(char32_t value) {
     throw std::runtime_error("Invalid Unicode text.");
 }
 
-char32_t DecodeUtf8CodePoint(StringView text, std::size_t& index) {
+char32_t DecodeUtf8CodePoint(Utf8StringView text, std::size_t& index) {
     const auto read_byte = [&](std::size_t offset) -> unsigned char {
         if (index + offset >= text.size()) {
             RejectInvalidText();
@@ -69,7 +69,7 @@ char32_t DecodeUtf8CodePoint(StringView text, std::size_t& index) {
     return code_point;
 }
 
-void AppendUtf8CodePoint(String& output, char32_t code_point) {
+void AppendUtf8CodePoint(Utf8String& output, char32_t code_point) {
     if (code_point > kMaxCodePoint || IsSurrogate(code_point)) {
         RejectInvalidText();
     }
@@ -142,23 +142,23 @@ char32_t DecodeWideCodePoint(WideStringView text, std::size_t& index) {
 
 } // namespace
 
-PlatformString Utf8ToPlatform(StringView text) {
+PlatformString Utf8ToPlatform(Utf8StringView text) {
 #if defined(_WIN32) || defined(_WIN64)
     return Utf8ToWide(text);
 #else
-    return PlatformString(text);
+    return PlatformString(std::basic_string_view<PlatformChar>(text.data(), text.size()));
 #endif
 }
 
-String PlatformToUtf8(PlatformStringView text) {
+Utf8String PlatformToUtf8(PlatformStringView text) {
 #if defined(_WIN32) || defined(_WIN64)
     return WideToUtf8(text);
 #else
-    return String(text);
+    return Utf8String(std::basic_string_view<Utf8Char>(text.data(), text.size()));
 #endif
 }
 
-WideString Utf8ToWide(StringView text) {
+WideString Utf8ToWide(Utf8StringView text) {
     WideString output;
     output.reserve(text.size());
 
@@ -170,8 +170,8 @@ WideString Utf8ToWide(StringView text) {
     return output;
 }
 
-String WideToUtf8(WideStringView text) {
-    String output;
+Utf8String WideToUtf8(WideStringView text) {
+    Utf8String output;
     output.reserve(text.size());
 
     std::size_t index = 0;

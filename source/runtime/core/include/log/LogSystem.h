@@ -2,9 +2,10 @@
 #define MOERENGINE_LOG_SYSTEM_H
 
 #include "API_Macro.h"
+#include "string/Format.h"
+#include "string/StringConvert.h"
 #include <cstddef>
 #include <cstdint>
-#include <format>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -40,12 +41,12 @@ CORE_API bool PollConsoleLogs(
 );
 
 CORE_API void ClearConsoleLogs();
-CORE_API void PushConsoleLog(spdlog::level::level_enum level, std::string_view message);
+CORE_API void PushConsoleLog(spdlog::level::level_enum level, Utf8StringView message);
 
 inline void LogBufferedMessage(
     spdlog::source_loc        loc,
     spdlog::level::level_enum level,
-    std::string_view          message
+    Utf8StringView            message
 ) {
     PushConsoleLog(level, message);
     if (auto* logger = spdlog::default_logger_raw(); logger) {
@@ -53,12 +54,28 @@ inline void LogBufferedMessage(
     }
 }
 
+inline void LogBufferedPlatformMessage(
+    spdlog::source_loc        loc,
+    spdlog::level::level_enum level,
+    PlatformStringView        message
+) {
+    LogBufferedMessage(loc, level, PlatformToUtf8(message));
+}
+
 inline void LogWithSource(
     spdlog::source_loc        loc,
     spdlog::level::level_enum level,
-    const char*               message
+    const PlatformChar*       message
 ) {
-    LogBufferedMessage(loc, level, message ? std::string_view(message) : std::string_view());
+    LogBufferedPlatformMessage(loc, level, message ? PlatformStringView(message) : PlatformStringView());
+}
+
+inline void LogWithSource(
+    spdlog::source_loc        loc,
+    spdlog::level::level_enum level,
+    PlatformStringView        message
+) {
+    LogBufferedPlatformMessage(loc, level, message);
 }
 
 inline void LogWithSource(
@@ -66,7 +83,7 @@ inline void LogWithSource(
     spdlog::level::level_enum level,
     const std::string&        message
 ) {
-    LogBufferedMessage(loc, level, message);
+    LogBufferedMessage(loc, level, Utf8StringView(message.data(), message.size()));
 }
 
 inline void LogWithSource(
@@ -74,7 +91,7 @@ inline void LogWithSource(
     spdlog::level::level_enum level,
     std::string_view          message
 ) {
-    LogBufferedMessage(loc, level, message);
+    LogBufferedMessage(loc, level, Utf8StringView(message.data(), message.size()));
 }
 
 template<class T, typename std::enable_if<!spdlog::is_convertible_to_any_format_string<const T&>::value, int>::type = 0>
@@ -84,18 +101,18 @@ inline void LogWithSource(
     const T&                  message
 ) {
     std::string formatted = spdlog::fmt_lib::format("{}", message);
-    LogBufferedMessage(loc, level, formatted);
+    LogBufferedMessage(loc, level, Utf8StringView(formatted.data(), formatted.size()));
 }
 
 template<typename... Args>
 inline void LogWithSource(
     spdlog::source_loc        loc,
     spdlog::level::level_enum level,
-    std::string_view          fmt,
+    FormatString<Args...>     fmt,
     Args&&...                 args
 ) {
-    std::string message = std::vformat(fmt, std::make_format_args(args...));
-    LogBufferedMessage(loc, level, message);
+    String message = Printf(fmt, std::forward<Args>(args)...);
+    LogBufferedPlatformMessage(loc, level, message);
 }
 }} // namespace Moer::LogSystem
 

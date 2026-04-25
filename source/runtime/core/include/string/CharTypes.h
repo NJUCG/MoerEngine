@@ -6,7 +6,7 @@ using Char8     = char;
 using Char16    = char16_t;
 using Char32    = char32_t;
 using WideChar  = wchar_t;
-using NarrowChar = char;
+using AsciiChar = char;
 using Utf8Char  = Char8;
 using Utf16Char = Char16;
 using Utf32Char = Char32;
@@ -24,3 +24,6 @@ using PlatformChar = Utf8Char;
 #else
 #define MOER_PLATFORM_TEXT_LITERAL(literal) literal
 #endif
+
+#define MOER_TEXT(literal)       MOER_PLATFORM_TEXT_LITERAL(literal)
+#define MOER_ASCII_TEXT(literal) literal

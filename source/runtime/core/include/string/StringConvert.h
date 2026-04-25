@@ -5,9 +5,9 @@
 
 namespace Moer {
 
-CORE_API PlatformString Utf8ToPlatform(StringView text);
-CORE_API String         PlatformToUtf8(PlatformStringView text);
-CORE_API WideString     Utf8ToWide(StringView text);
-CORE_API String         WideToUtf8(WideStringView text);
+CORE_API PlatformString Utf8ToPlatform(Utf8StringView text);
+CORE_API Utf8String     PlatformToUtf8(PlatformStringView text);
+CORE_API WideString     Utf8ToWide(Utf8StringView text);
+CORE_API Utf8String     WideToUtf8(WideStringView text);
 
 } // namespace Moer
