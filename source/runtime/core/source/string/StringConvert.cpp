@@ -56,7 +56,7 @@ char32_t DecodeUtf8CodePoint(StringView text, std::size_t& index) {
         code_point = (code_point << 6) | (next & 0x3F);
     }
 
-    // Reject overlong encodings.
+    // Reject overlong encodings: 2/3/4-byte forms must encode at least U+0080/U+0800/U+10000.
     if ((length == 2 && code_point < 0x80) || (length == 3 && code_point < 0x800) ||
         (length == 4 && code_point < 0x10000)) {
         RejectInvalidText();
@@ -102,6 +102,7 @@ void AppendWideCodePoint(WideString& output, char32_t code_point) {
             return;
         }
 
+        // UTF-16 stores code points above U+FFFF as two 10-bit surrogate components.
         code_point -= 0x10000;
         output.push_back(static_cast<WideChar>(kHighSurrogateStart + (code_point >> 10)));
         output.push_back(static_cast<WideChar>(kLowSurrogateStart + (code_point & 0x3FF)));
@@ -125,6 +126,7 @@ char32_t DecodeWideCodePoint(WideStringView text, std::size_t& index) {
             if (second < kLowSurrogateStart || second > kLowSurrogateEnd) {
                 RejectInvalidText();
             }
+            // Rebuild the original code point from the high and low 10-bit surrogate components.
             return 0x10000 + (((first - kHighSurrogateStart) << 10) | (second - kLowSurrogateStart));
         }
         if (first >= kLowSurrogateStart && first <= kLowSurrogateEnd) {
