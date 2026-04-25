@@ -1,17 +1,14 @@
 {
-  "project": "Engine Text Command Processor Planning",
+  "project": "Engine Character and String System Planning",
   "planning_only": true,
-  "goal": "Introduce one engine-owned text command processor so Console and future systems submit commands through the same interface, then interpret and process those commands at one deterministic main-thread point each frame without implementing ad-hoc per-window command execution.",
+  "goal": "Introduce one engine-owned character and string layer that describes platform-native character types, explicit encoding types, allocator-aware owning strings, and non-owning string views without relying on default char semantics for wchar or platform text logic.",
   "source_analyzed": [
-    "source/editor/console/ConsoleSystem.h",
-    "source/editor/console/ConsoleSystem.cpp",
-    "source/editor/Editor.cpp",
-    "source/editor/EditorUI.cpp",
-    "source/runtime/Engine.cpp",
-    "source/runtime/Engine.h",
-    "source/runtime/render/renderer/Renderer.h",
-    "source/runtime/render/renderer/raster/RasterRenderer.cpp",
-    "source/runtime/render/renderer/raytracing/RaytracingRenderer.cpp",
+    "source/runtime/core/include/misc/CompileTimeString.h",
+    "source/runtime/core/include/misc/STL.h",
+    "source/runtime/core/include/misc/MMemory.h",
+    "source/runtime/core/CMakeLists.txt",
+    "testscripts/README.md",
+    "testscripts/linux/test_taskgraph.sh",
     "testscripts/windows/test_all.ps1"
   ],
   "execute_order": [
@@ -19,100 +16,116 @@
     "2",
     "3",
     "4",
-    "5"
+    "5",
+    "6"
   ],
   "checkpoints": [
     {
       "id": "1",
-      "title": "Define one engine-owned command queue and submission surface",
+      "title": "Define explicit character taxonomy",
       "must_be_true_after": [
-        "There is exactly one engine-owned text command queue for editor/runtime command submission in the process.",
-        "Command producers do not execute command logic inline anymore; they only submit text to the engine-owned queue.",
-        "The public submission API is latest-only and small: an explicit text submission entry plus a `<<` shorthand on the same owner, not a parallel wrapper hierarchy.",
-        "Submitted text is copied into processor-owned storage at the submission boundary so no cross-module STL ownership escapes the owning module."
+        "Engine text code no longer treats plain `char` as the implicit answer for all platform or wide-character paths.",
+        "A single core header defines `Char8`, `Char16`, `Char32`, `WideChar`, `PlatformChar`, and narrow/UTF aliases with compile-time platform selection.",
+        "The aliases describe storage units only; they do not imply transcoding, locale conversion, or file-system semantics by themselves.",
+        "Platform-native text is named separately from UTF text so Windows wide APIs and non-Windows UTF-8 paths are not mixed accidentally."
       ],
       "files_likely_affected": [
-        "source/runtime/Engine.h",
-        "source/runtime/Engine.cpp",
-        "source/runtime/core/include/command/EngineCommandProcessor.h",
-        "source/runtime/core/source/command/EngineCommandProcessor.cpp"
+        "source/runtime/core/include/string/CharTypes.h",
+        "source/runtime/core/include/misc/CompileTimeString.h",
+        "source/runtime/core/include/misc/STL.h"
       ]
     },
     {
       "id": "2",
-      "title": "Separate submission from interpretation and dispatch",
+      "title": "Introduce allocator-aware engine string aliases",
       "must_be_true_after": [
-        "Raw text submission, parsing, dispatch, and execution are distinct steps owned by the engine command processor instead of being mixed into ConsoleSystem.",
-        "The processor accepts text commands only in the first version; structured command objects are not introduced yet.",
-        "A built-in dispatch table exists for engine commands so help/cvar/runtime control commands are interpreted centrally.",
-        "Unknown command reporting is centralized in the processor, not duplicated in every producer."
+        "The first implementation uses `std::basic_string` with `MoerStlAllocator` instead of creating a fake wrapper around the STL container.",
+        "`BasicString<CharT, Traits, Allocator>` and `BasicStringView<CharT, Traits>` exist in the engine namespace with concrete aliases for `String`, `StringView`, `WideString`, `WideStringView`, `PlatformString`, and `PlatformStringView`.",
+        "Owning strings default to the engine allocator; views remain allocator-free and non-owning.",
+        "The public API exposes direct STL-compatible behavior through aliases, not pass-through member functions or adapter classes."
       ],
       "files_likely_affected": [
-        "source/runtime/core/include/command/EngineCommandProcessor.h",
-        "source/runtime/core/source/command/EngineCommandProcessor.cpp",
-        "source/runtime/core/include/config/CVarSystem.h",
-        "source/runtime/core/source/config/CVarSystem.cpp"
+        "source/runtime/core/include/string/String.h",
+        "source/runtime/core/include/misc/STL.h",
+        "source/runtime/core/include/misc/MMemory.h"
       ]
     },
     {
       "id": "3",
-      "title": "Move Console to the unified producer path",
+      "title": "Make compile-time strings encoding-aware",
       "must_be_true_after": [
-        "ConsoleSystem no longer owns primary command semantics; it becomes one producer plus one output consumer for engine command results.",
-        "Submitting a line from Console enqueues text into the engine command processor through the shared API instead of calling ExecuteCommand inline.",
-        "Future systems can submit commands through the same interface with `processor << \"command text\"` semantics without knowing Console internals.",
-        "Console-specific UI state such as history, autocomplete, and visibility remains local to ConsoleSystem and does not leak into the processor."
+        "`CompileTimeString` remains a small compile-time storage utility but is moved or included through the new string boundary.",
+        "Compile-time string deduction works for supported character storage types without hard-coding narrow `char` behavior.",
+        "The utility does not perform transcoding; it only preserves literal character type and size.",
+        "Any new helper exists only if it protects compile-time literal invariants instead of renaming `std::basic_string_view`."
       ],
       "files_likely_affected": [
-        "source/editor/console/ConsoleSystem.h",
-        "source/editor/console/ConsoleSystem.cpp",
-        "source/editor/Editor.cpp"
+        "source/runtime/core/include/misc/CompileTimeString.h",
+        "source/runtime/core/include/string/CompileTimeString.h",
+        "source/runtime/core/include/string/String.h"
       ]
     },
     {
       "id": "4",
-      "title": "Process commands at one deterministic main-thread frame point",
+      "title": "Add explicit conversion and platform boundary rules",
       "must_be_true_after": [
-        "One explicit main-thread processing phase exists per frame for engine text commands.",
-        "The preferred placement is immediately after `hooks.on_tick_ui()` and before scene pending command submission / render-pass execution in both raster and raytracing renderer loops, so commands submitted by UI in the current frame can affect the same frame deterministically.",
-        "Command draining is FIFO for one frame and bounded by an explicit per-frame policy so one producer cannot starve the frame loop accidentally.",
-        "The processing phase is shared by both raster and raytracing paths through one common hook or one common engine-owned call site instead of duplicated business logic."
+        "No implicit conversion exists between UTF, wide, and platform strings.",
+        "Any required conversion API is named by source and destination encoding, for example UTF-8 to platform and platform to UTF-8.",
+        "Conversion functions return engine-owned strings using `MoerStlAllocator` and accept string views at the boundary.",
+        "Unsupported or invalid input policy is explicit before implementation: reject invalid sequences or replace them, but never silently reinterpret bytes as characters."
       ],
       "files_likely_affected": [
-        "source/runtime/render/renderer/Renderer.h",
-        "source/runtime/render/renderer/raster/RasterRenderer.cpp",
-        "source/runtime/render/renderer/raytracing/RaytracingRenderer.cpp",
-        "source/runtime/Engine.cpp"
+        "source/runtime/core/include/string/StringConvert.h",
+        "source/runtime/core/source/string/StringConvert.cpp",
+        "source/runtime/core/CMakeLists.txt"
       ]
     },
     {
       "id": "5",
-      "title": "Define output, errors, and validation contract",
+      "title": "Migrate core aliases without compatibility shims",
       "must_be_true_after": [
-        "Command execution results have one engine-facing output path so Console can display them without owning execution logic.",
-        "The first implementation reports success/error/output text through a processor-owned sink contract or buffered result channel instead of direct UI calls from runtime code.",
-        "Validation stays on existing repository scripts only: build first, then use the current editor/runtime scripts instead of inventing a new command-specific harness.",
-        "The implementation plan explicitly includes regression checks for Console submission, repeated same-frame submission ordering, and cvar mutation through the unified processor."
+        "`misc/STL.h` includes the new string header and exposes engine string aliases from one canonical location.",
+        "New runtime/editor code uses engine string names when ownership or platform text semantics matter.",
+        "Existing `std::string` usage is migrated only where it crosses engine-owned APIs, allocator-sensitive storage, platform API boundaries, or shared public headers.",
+        "No parallel legacy typedefs, deprecated aliases, or compatibility wrappers are kept after migration."
       ],
       "files_likely_affected": [
-        "source/runtime/core/include/command/EngineCommandProcessor.h",
-        "source/runtime/core/source/command/EngineCommandProcessor.cpp",
-        "source/editor/console/ConsoleSystem.cpp",
-        "docs/checkpoints/checkpoint.json"
+        "source/runtime/core/include/misc/STL.h",
+        "source/runtime/core/include/string/String.h",
+        "source/runtime/core/include/string/CharTypes.h",
+        "source/runtime/core/include/platform/*"
+      ]
+    },
+    {
+      "id": "6",
+      "title": "Validate with existing repository scripts only",
+      "must_be_true_after": [
+        "Header-only alias changes compile through the existing core/editor build instead of a new standalone test harness.",
+        "If conversion code is added, it is covered through existing test targets or existing repository test scripts, not an ad-hoc script.",
+        "Validation starts with `just b` when available; otherwise use the repository CMake build path already documented for the project.",
+        "On Linux, use existing `testscripts/linux/test_taskgraph.sh` only when the touched code affects that tested area; on Windows, use `testscripts/windows/test_all.ps1` for the broader existing suite."
+      ],
+      "files_likely_affected": [
+        "source/runtime/core/CMakeLists.txt",
+        "testscripts/README.md",
+        "testscripts/linux/test_taskgraph.sh",
+        "testscripts/windows/test_all.ps1"
       ]
     }
   ],
   "design_notes": {
-    "preferred_processing_point": "Process queued text commands once per frame on the main thread immediately after hooks.on_tick_ui() and before scene pending command submission / render passes. This gives UI producers same-frame effect without moving command semantics into window code.",
-    "preferred_submission_api": "Expose one engine-owned processor with an explicit SubmitText(std::string_view) entry and an operator<<(std::string_view) shorthand on the same type. Do not add a second wrapper-only facade.",
-    "ownership_rule": "Text crossing the module boundary must be copied into processor-owned storage immediately. Do not return or transfer STL-managed command buffers across module boundaries.",
-    "first_version_scope": "Text commands only. No structured command AST, no async worker execution, no permissions model in the first landing.",
-    "migration_rule": "Console inline ExecuteCommand logic is transitional debt and should be deleted when the processor lands instead of kept as a fallback path."
+    "canonical_headers": "Use `source/runtime/core/include/string/CharTypes.h` for character storage aliases and `source/runtime/core/include/string/String.h` for owning/view string aliases. Keep `misc/STL.h` as an aggregate include only.",
+    "preferred_first_version": "Use aliases over `std::basic_string` and `std::basic_string_view` with `MoerStlAllocator`. Do not implement a custom string container until the engine has a concrete invariant that STL cannot express.",
+    "platform_character_rule": "`PlatformChar` is `wchar_t` on Windows and UTF-8 storage on non-Windows targets. Treat it as platform API boundary text, not as the engine's universal internal encoding.",
+    "internal_encoding_rule": "Prefer UTF-8 engine `String` for persisted data, logs, configs, asset paths after normalization, and editor text unless a platform API requires `PlatformString`.",
+    "conversion_rule": "Conversions must be explicit and named. Do not add constructors or overloads that silently convert between `String`, `WideString`, and `PlatformString`.",
+    "allocator_rule": "Owning engine strings use `MoerStlAllocator` by default. `StringView` aliases never own memory and must not outlive the storage they reference.",
+    "rejection_rule": "Do not add a wrapper class that only forwards STL methods. Add a real class only when it owns a stable invariant such as small-buffer policy, normalized encoding, or allocator state that aliases cannot enforce."
   },
   "validation": [
     "Planning only in this checkpoint. No implementation is part of this file.",
-    "When implementation starts, build with cmake.EXE --build f:/Github_Data/MoerEngine/build/vscode --config Debug --target MoerEditor.",
-    "After build passes, run powershell -ExecutionPolicy Bypass -File .\\testscripts\\windows\\test_all.ps1 using the existing repository script only.",
-    "Do not add a standalone ad-hoc command test script. Extend existing tests or editor/runtime checks through current repository paths."
+    "This checkpoint update changes documentation JSON only; no build or runtime validation is required for engine behavior.",
+    "When implementation starts, run the existing project build first: `just b` if available, otherwise the existing CMake build command for the configured tree.",
+    "After implementation, run only existing repository scripts that cover the touched area; do not add one-off string validation scripts outside the test structure."
   ]
 }
