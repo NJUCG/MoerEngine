@@ -133,12 +133,12 @@ static_assert(std::is_same_v<
 
 template<typename Fn>
 int RunNamedTestCase(const char* name, Fn&& fn) {
-    LOG_INFO("[TESTCASE][BEGIN] {}", name);
+    LOG_INFO(MOER_TEXT("[TESTCASE][BEGIN] {}"), name);
     const int ret = fn();
     if (ret == 0) {
-        LOG_INFO("[TESTCASE][PASS] {}", name);
+        LOG_INFO(MOER_TEXT("[TESTCASE][PASS] {}"), name);
     } else {
-        LOG_ERROR("[TESTCASE][FAIL] {} :: exit={}", name, ret);
+        LOG_ERROR(MOER_TEXT("[TESTCASE][FAIL] {} :: exit={}"), name, ret);
     }
     return ret;
 }
@@ -263,7 +263,7 @@ bool AssertRuntimeProfileRecord(
     uint32_t                                expected_value
 ) {
     if (record.fields.size() != 3) {
-        LOG_ERROR("Runtime profile dump record expected 3 fields, got {}.", record.fields.size());
+        LOG_ERROR(MOER_TEXT("Runtime profile dump record expected 3 fields, got {}."), record.fields.size());
         return false;
     }
 
@@ -273,14 +273,14 @@ bool AssertRuntimeProfileRecord(
     if (record_id.type != Moer::ProfileDump::EFieldType::UInt64 ||
         label.type != Moer::ProfileDump::EFieldType::String ||
         value.type != Moer::ProfileDump::EFieldType::UInt32) {
-        LOG_ERROR("Runtime profile dump record has unexpected field types.");
+        LOG_ERROR(MOER_TEXT("Runtime profile dump record has unexpected field types."));
         return false;
     }
     if (record_id.uint64_value != expected_record_id ||
         label.string_value != expected_label ||
         value.uint32_value != expected_value) {
         LOG_ERROR(
-            "Runtime profile dump record mismatch: id={} label={} value={}.",
+            MOER_TEXT("Runtime profile dump record mismatch: id={} label={} value={}."),
             record_id.uint64_value,
             label.string_value,
             value.uint32_value
@@ -305,7 +305,7 @@ const Moer::Profiler::ProfileEvent* FindProfileConsumerEvent(
 bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& store) {
     if (!store.metadata.has_time_origin || store.metadata.time_origin_ns != 200000) {
         LOG_ERROR(
-            "Profile consumer expected normalized origin 200000ns, got has_origin={} origin={}",
+            MOER_TEXT("Profile consumer expected normalized origin 200000ns, got has_origin={} origin={}"),
             store.metadata.has_time_origin,
             store.metadata.time_origin_ns
         );
@@ -313,7 +313,7 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
     }
     if (store.events.size() != 2 || store.tracks.size() != 2 || store.min_ts != 0 || store.max_ts != 80000) {
         LOG_ERROR(
-            "Profile consumer normalized store mismatch: events={} tracks={} min={} max={}",
+            MOER_TEXT("Profile consumer normalized store mismatch: events={} tracks={} min={} max={}"),
             store.events.size(),
             store.tracks.size(),
             store.min_ts,
@@ -325,7 +325,7 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
     const auto* gpu_event = FindProfileConsumerEvent(store, "GpuNormalizedScope");
     const auto* cpu_event = FindProfileConsumerEvent(store, "CpuNormalizedScope");
     if (gpu_event == nullptr || cpu_event == nullptr) {
-        LOG_ERROR("Profile consumer normalized store missing CPU or GPU scope event.");
+        LOG_ERROR(MOER_TEXT("Profile consumer normalized store missing CPU or GPU scope event."));
         return false;
     }
 
@@ -333,7 +333,7 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
         gpu_event->ts_begin_ns != 50000 || gpu_event->ts_end_ns != 80000 ||
         gpu_event->category != "timing.gpu_scope" || gpu_event->track_name != "Graphics") {
         LOG_ERROR(
-            "Profile consumer normalized GPU event mismatch: begin={} end={} category={} track={}",
+            MOER_TEXT("Profile consumer normalized GPU event mismatch: begin={} end={} category={} track={}"),
             gpu_event->ts_begin_ns,
             gpu_event->ts_end_ns,
             gpu_event->category,
@@ -346,7 +346,7 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
         cpu_event->ts_begin_ns != 0 || cpu_event->ts_end_ns != 10000 ||
         cpu_event->category != "timing.cpu_scope") {
         LOG_ERROR(
-            "Profile consumer normalized CPU event mismatch: begin={} end={} category={}",
+            MOER_TEXT("Profile consumer normalized CPU event mismatch: begin={} end={} category={}"),
             cpu_event->ts_begin_ns,
             cpu_event->ts_end_ns,
             cpu_event->category
@@ -369,7 +369,7 @@ bool AssertGpuProfileRecord(
     uint64_t                                expected_exclusive_ns
 ) {
     if (record.fields.size() != 8) {
-        LOG_ERROR("GPU profile dump record expected 8 fields, got {}.", record.fields.size());
+        LOG_ERROR(MOER_TEXT("GPU profile dump record expected 8 fields, got {}."), record.fields.size());
         return false;
     }
 
@@ -389,7 +389,7 @@ bool AssertGpuProfileRecord(
         depth.type != Moer::ProfileDump::EFieldType::UInt32 ||
         total_busy_ns.type != Moer::ProfileDump::EFieldType::UInt64 ||
         exclusive_ns.type != Moer::ProfileDump::EFieldType::UInt64) {
-        LOG_ERROR("GPU profile dump record has unexpected field types.");
+        LOG_ERROR(MOER_TEXT("GPU profile dump record has unexpected field types."));
         return false;
     }
     if (frame_index.uint64_value != expected_frame_index ||
@@ -401,7 +401,7 @@ bool AssertGpuProfileRecord(
         total_busy_ns.uint64_value != expected_total_busy_ns ||
         exclusive_ns.uint64_value != expected_exclusive_ns) {
         LOG_ERROR(
-            "GPU profile dump record mismatch: frame={} queue={} name={} start={} end={} depth={} total={} exclusive={}.",
+            MOER_TEXT("GPU profile dump record mismatch: frame={} queue={} name={} start={} end={} depth={} total={} exclusive={}."),
             frame_index.uint64_value,
             queue_name.string_value,
             name.string_value,
@@ -419,7 +419,7 @@ bool AssertGpuProfileRecord(
 #if defined(MOER_TEST_WITH_PROFILE)
 bool AssertCpuProfileRecord(const Moer::ProfileDump::DecodedRecord& record, std::string_view expected_name) {
     if (record.fields.size() != 5) {
-        LOG_ERROR("CPU profile dump record expected 5 fields, got {}.", record.fields.size());
+        LOG_ERROR(MOER_TEXT("CPU profile dump record expected 5 fields, got {}."), record.fields.size());
         return false;
     }
 
@@ -433,7 +433,7 @@ bool AssertCpuProfileRecord(const Moer::ProfileDump::DecodedRecord& record, std:
         start_us.type != Moer::ProfileDump::EFieldType::Int64 ||
         duration_us.type != Moer::ProfileDump::EFieldType::Int64 ||
         depth.type != Moer::ProfileDump::EFieldType::UInt32) {
-        LOG_ERROR("CPU profile dump record has unexpected field types.");
+        LOG_ERROR(MOER_TEXT("CPU profile dump record has unexpected field types."));
         return false;
     }
     if (thread_id.uint64_value == 0 ||
@@ -441,7 +441,7 @@ bool AssertCpuProfileRecord(const Moer::ProfileDump::DecodedRecord& record, std:
         duration_us.int64_value < 0 ||
         depth.uint32_value != 0) {
         LOG_ERROR(
-            "CPU profile dump record mismatch: thread={} name={} start={} duration={} depth={}.",
+            MOER_TEXT("CPU profile dump record mismatch: thread={} name={} start={} duration={} depth={}."),
             thread_id.uint64_value,
             name.string_value,
             start_us.int64_value,
@@ -602,16 +602,16 @@ int RunProfileDumpStartupReadOnlyCVarTest() {
     Moer::UnorderedMap<std::string, std::string> values;
     values["Test.ProfileDump.StartupLockedValue"] = "19";
     if (!Moer::CVar::ApplyValueMap(values, "ProfileDumpTest")) {
-        LOG_ERROR("Profile dump startup readonly test failed to apply startup override.");
+        LOG_ERROR(MOER_TEXT("Profile dump startup readonly test failed to apply startup override."));
         return 1;
     }
     Moer::CVar::SealStartupConfigReadOnlyCVars();
     if (startup_locked_value != 19) {
-        LOG_ERROR("Profile dump startup readonly test expected value 19, got {}.", startup_locked_value);
+        LOG_ERROR(MOER_TEXT("Profile dump startup readonly test expected value 19, got {}."), startup_locked_value);
         return 1;
     }
     if (startup_locked_cvar.SetValueFromString("23") == nullptr) {
-        LOG_ERROR("Profile dump startup readonly cvar accepted runtime mutation after seal.");
+        LOG_ERROR(MOER_TEXT("Profile dump startup readonly cvar accepted runtime mutation after seal."));
         return 1;
     }
     return 0;
@@ -636,7 +636,7 @@ int RunProfileDumpFileSinkTest() {
         << uint32_t{99};
 
     if (std::filesystem::exists(output_path)) {
-        LOG_ERROR("Profile dump file sink wrote before explicit TLS flush.");
+        LOG_ERROR(MOER_TEXT("Profile dump file sink wrote before explicit TLS flush."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         return 1;
     }
@@ -644,7 +644,7 @@ int RunProfileDumpFileSinkTest() {
     Moer::ProfileDump::FlushThreadLocal();
 
     if (!std::filesystem::exists(output_path)) {
-        LOG_ERROR("Profile dump file sink did not create output file after explicit flush.");
+        LOG_ERROR(MOER_TEXT("Profile dump file sink did not create output file after explicit flush."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         return 1;
     }
@@ -652,7 +652,7 @@ int RunProfileDumpFileSinkTest() {
     const std::vector<uint8_t> binary = ReadBinaryFile(output_path);
     ParsedProfileDumpCapture   capture{};
     if (!ParseProfileDumpCapture(std::span<const uint8_t>(binary.data(), binary.size()), capture)) {
-        LOG_ERROR("Profile dump file sink output failed structured parsing.");
+        LOG_ERROR(MOER_TEXT("Profile dump file sink output failed structured parsing."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         return 1;
     }
@@ -660,20 +660,20 @@ int RunProfileDumpFileSinkTest() {
     const Moer::ProfileDump::DecodedSchema* runtime_schema =
         FindProfileDumpSchemaByEventType(capture, "test.runtime_instant");
     if (!runtime_schema) {
-        LOG_ERROR("Profile dump file sink output missing runtime schema.");
+        LOG_ERROR(MOER_TEXT("Profile dump file sink output missing runtime schema."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         return 1;
     }
     if (capture.packet_order.size() != 2 ||
         capture.packet_order[0] != Moer::ProfileDump::EPacketType::Schema ||
         capture.packet_order[1] != Moer::ProfileDump::EPacketType::Record) {
-        LOG_ERROR("Profile dump file sink packet order is invalid.");
+        LOG_ERROR(MOER_TEXT("Profile dump file sink packet order is invalid."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         return 1;
     }
     if (capture.records.size() != 1 || capture.records[0].schema_id != runtime_schema->schema_id ||
         !AssertRuntimeProfileRecord(capture.records[0], 42, "ProfileDumpRuntimeRecord", 99)) {
-        LOG_ERROR("Profile dump file sink record payload is invalid.");
+        LOG_ERROR(MOER_TEXT("Profile dump file sink record payload is invalid."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         return 1;
     }
@@ -688,7 +688,7 @@ int RunProfileDumpTcpSinkTest() {
 #else
     ProfileDumpTcpCaptureServer server{};
     if (!server.Start()) {
-        LOG_ERROR("Profile dump TCP test failed to start loopback server.");
+        LOG_ERROR(MOER_TEXT("Profile dump TCP test failed to start loopback server."));
         return 1;
     }
 
@@ -714,7 +714,7 @@ int RunProfileDumpTcpSinkTest() {
     Moer::ProfileDump::FlushThreadLocal();
 
     if (!server.WaitForAtLeast(sizeof(Moer::ProfileDump::PacketHeader), 2000)) {
-        LOG_ERROR("Profile dump TCP sink produced no payload.");
+        LOG_ERROR(MOER_TEXT("Profile dump TCP sink produced no payload."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         server.Stop();
         return 1;
@@ -726,21 +726,21 @@ int RunProfileDumpTcpSinkTest() {
     const std::vector<uint8_t> binary = server.SnapshotBytes();
     ParsedProfileDumpCapture   capture{};
     if (!ParseProfileDumpCapture(std::span<const uint8_t>(binary.data(), binary.size()), capture)) {
-        LOG_ERROR("Profile dump TCP sink payload failed structured parsing.");
+        LOG_ERROR(MOER_TEXT("Profile dump TCP sink payload failed structured parsing."));
         return 1;
     }
 
     const Moer::ProfileDump::DecodedSchema* runtime_schema =
         FindProfileDumpSchemaByEventType(capture, "test.runtime_instant");
     if (!runtime_schema) {
-        LOG_ERROR("Profile dump TCP sink payload missing runtime schema.");
+        LOG_ERROR(MOER_TEXT("Profile dump TCP sink payload missing runtime schema."));
         return 1;
     }
     if (capture.packet_order.size() != 3 ||
         capture.packet_order[0] != Moer::ProfileDump::EPacketType::Schema ||
         capture.packet_order[1] != Moer::ProfileDump::EPacketType::Record ||
         capture.packet_order[2] != Moer::ProfileDump::EPacketType::Record) {
-        LOG_ERROR("Profile dump TCP sink packet order is invalid.");
+        LOG_ERROR(MOER_TEXT("Profile dump TCP sink packet order is invalid."));
         return 1;
     }
     if (capture.records.size() != 2 ||
@@ -748,7 +748,7 @@ int RunProfileDumpTcpSinkTest() {
         capture.records[1].schema_id != runtime_schema->schema_id ||
         !AssertRuntimeProfileRecord(capture.records[0], 7, "TcpRuntimeRecordA", 11) ||
         !AssertRuntimeProfileRecord(capture.records[1], 8, "TcpRuntimeRecordB", 13)) {
-        LOG_ERROR("Profile dump TCP sink records are invalid.");
+        LOG_ERROR(MOER_TEXT("Profile dump TCP sink records are invalid."));
         return 1;
     }
 
@@ -781,7 +781,7 @@ int RunGpuEventStreamProfileDumpTest() {
     stream.FlushToProfiler();
 
     if (!std::filesystem::exists(output_path)) {
-        LOG_ERROR("GPUEventStream profile dump integration did not write output file.");
+        LOG_ERROR(MOER_TEXT("GPUEventStream profile dump integration did not write output file."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         return 1;
     }
@@ -789,7 +789,7 @@ int RunGpuEventStreamProfileDumpTest() {
     const std::vector<uint8_t> binary = ReadBinaryFile(output_path);
     ParsedProfileDumpCapture   capture{};
     if (!ParseProfileDumpCapture(std::span<const uint8_t>(binary.data(), binary.size()), capture)) {
-        LOG_ERROR("GPUEventStream profile dump output failed structured parsing.");
+        LOG_ERROR(MOER_TEXT("GPUEventStream profile dump output failed structured parsing."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         return 1;
     }
@@ -797,13 +797,13 @@ int RunGpuEventStreamProfileDumpTest() {
     const Moer::ProfileDump::DecodedSchema* gpu_schema =
         FindProfileDumpSchemaByEventType(capture, "timing.gpu_scope");
     if (!gpu_schema) {
-        LOG_ERROR("GPUEventStream profile dump output missing GPU schema.");
+        LOG_ERROR(MOER_TEXT("GPUEventStream profile dump output missing GPU schema."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         return 1;
     }
     if (capture.records.size() != 1 || capture.records[0].schema_id != gpu_schema->schema_id ||
         !AssertGpuProfileRecord(capture.records[0], 0, "Graphics", "GpuDumpScope", 100, 180, 0, 80, 80)) {
-        LOG_ERROR("GPUEventStream profile dump output has invalid GPU record payload.");
+        LOG_ERROR(MOER_TEXT("GPUEventStream profile dump output has invalid GPU record payload."));
         Moer::ProfileDump::ClearTestingConfigOverride();
         return 1;
     }
@@ -846,11 +846,11 @@ int RunProfileConsumerFileLoadTest() {
     const bool loaded = Moer::Profiler::LoadProfileDumpFile(output_path, store, true);
     Moer::ProfileDump::ClearTestingConfigOverride();
     if (!loaded) {
-        LOG_ERROR("Profile consumer file load failed.");
+        LOG_ERROR(MOER_TEXT("Profile consumer file load failed."));
         return 1;
     }
     if (store.metadata.session_name != output_path.filename().string()) {
-        LOG_ERROR("Profile consumer file load session name mismatch: {}", store.metadata.session_name);
+        LOG_ERROR(MOER_TEXT("Profile consumer file load session name mismatch: {}"), store.metadata.session_name);
         return 1;
     }
     if (!AssertProfileConsumerNormalizedStore(store)) {
@@ -892,7 +892,7 @@ int RunProfileConsumerStreamNormalizationTest() {
 
     const std::vector<uint8_t> binary = ReadBinaryFile(output_path);
     if (binary.empty()) {
-        LOG_ERROR("Profile consumer stream normalization test produced no binary capture.");
+        LOG_ERROR(MOER_TEXT("Profile consumer stream normalization test produced no binary capture."));
         return 1;
     }
 
@@ -905,13 +905,13 @@ int RunProfileConsumerStreamNormalizationTest() {
         Moer::ProfileDump::PacketHeader header{};
         std::span<const uint8_t> payload{};
         if (!Moer::ProfileDump::ReadNextPacket(std::span<const uint8_t>(binary.data(), binary.size()), offset, header, payload)) {
-            LOG_ERROR("Profile consumer stream normalization failed to read packet.");
+            LOG_ERROR(MOER_TEXT("Profile consumer stream normalization failed to read packet."));
             return 1;
         }
 
         Array<Moer::Profiler::ProfileEvent> packet_events{};
         if (!decoder.ConsumePacket(header, payload, packet_events)) {
-            LOG_ERROR("Profile consumer stream normalization failed to consume packet.");
+            LOG_ERROR(MOER_TEXT("Profile consumer stream normalization failed to consume packet."));
             return 1;
         }
         if (!packet_events.empty()) {
@@ -920,7 +920,7 @@ int RunProfileConsumerStreamNormalizationTest() {
     }
 
     if (store.metadata.session_name != "ProfileDump TCP") {
-        LOG_ERROR("Profile consumer stream normalization session name mismatch: {}", store.metadata.session_name);
+        LOG_ERROR(MOER_TEXT("Profile consumer stream normalization session name mismatch: {}"), store.metadata.session_name);
         return 1;
     }
     if (!AssertProfileConsumerNormalizedStore(store)) {
@@ -938,26 +938,26 @@ int RunFlameProfilerProfileDumpTest() {
     FlameProfiler::Get().Save(output_path.generic_string());
 
     if (!std::filesystem::exists(output_path)) {
-        LOG_ERROR("FlameProfiler unified profile dump did not write output file.");
+        LOG_ERROR(MOER_TEXT("FlameProfiler unified profile dump did not write output file."));
         return 1;
     }
 
     const std::vector<uint8_t> binary = ReadBinaryFile(output_path);
     ParsedProfileDumpCapture   capture{};
     if (!ParseProfileDumpCapture(std::span<const uint8_t>(binary.data(), binary.size()), capture)) {
-        LOG_ERROR("FlameProfiler unified profile dump output failed structured parsing.");
+        LOG_ERROR(MOER_TEXT("FlameProfiler unified profile dump output failed structured parsing."));
         return 1;
     }
 
     const Moer::ProfileDump::DecodedSchema* cpu_schema =
         FindProfileDumpSchemaByEventType(capture, "timing.cpu_scope");
     if (!cpu_schema) {
-        LOG_ERROR("FlameProfiler unified profile dump output missing CPU schema.");
+        LOG_ERROR(MOER_TEXT("FlameProfiler unified profile dump output missing CPU schema."));
         return 1;
     }
     if (capture.records.size() != 1 || capture.records[0].schema_id != cpu_schema->schema_id ||
         !AssertCpuProfileRecord(capture.records[0], "CpuDumpScope")) {
-        LOG_ERROR("FlameProfiler unified profile dump output has invalid CPU record payload.");
+        LOG_ERROR(MOER_TEXT("FlameProfiler unified profile dump output has invalid CPU record payload."));
         return 1;
     }
 
@@ -1001,7 +1001,7 @@ bool ValidateResult(
     for (uint32_t i = 0; i < kElementCount; ++i) {
         if (expected[i] != got[i]) {
             LOG_ERROR(
-                "Mismatch at iter={}, index={}, expected={}, got={}",
+                MOER_TEXT("Mismatch at iter={}, index={}, expected={}, got={}"),
                 iter,
                 i,
                 expected[i],
@@ -1020,7 +1020,7 @@ bool ValidateUniformValue(uint32_t iter, uint32_t expected, const std::vector<ui
     for (uint32_t i = 0; i < got.size(); ++i) {
         if (got[i] != expected) {
             LOG_ERROR(
-                "Uniform mismatch at iter={}, index={}, expected={}, got={}",
+                MOER_TEXT("Uniform mismatch at iter={}, index={}, expected={}, got={}"),
                 iter,
                 i,
                 expected,
@@ -1034,7 +1034,7 @@ bool ValidateUniformValue(uint32_t iter, uint32_t expected, const std::vector<ui
 
 bool ValidateAllocatedRanges(const std::vector<uint64_t>& offsets, uint64_t alloc_size) {
     if (offsets.empty()) {
-        LOG_ERROR("Concurrent descriptor range test produced no offsets");
+        LOG_ERROR(MOER_TEXT("Concurrent descriptor range test produced no offsets"));
         return false;
     }
 
@@ -1043,7 +1043,7 @@ bool ValidateAllocatedRanges(const std::vector<uint64_t>& offsets, uint64_t allo
     for (size_t i = 1; i < sorted.size(); ++i) {
         if (sorted[i] < sorted[i - 1] + alloc_size) {
             LOG_ERROR(
-                "Descriptor range overlap detected: prev={}, current={}, alloc_size={}",
+                MOER_TEXT("Descriptor range overlap detected: prev={}, current={}, alloc_size={}"),
                 sorted[i - 1],
                 sorted[i],
                 alloc_size
@@ -1055,17 +1055,17 @@ bool ValidateAllocatedRanges(const std::vector<uint64_t>& offsets, uint64_t allo
 }
 
 int RunDescriptorHeapConcurrentRangeAllocationTest() {
-    LOG_INFO("Descriptor heap concurrent range allocation test started");
+    LOG_INFO(MOER_TEXT("Descriptor heap concurrent range allocation test started"));
     auto* vk_device = dynamic_cast<VulkanDevice*>(RenderDevice::Get().GetImpl());
     if (vk_device == nullptr) {
-        LOG_ERROR("Descriptor heap range allocation test requires VulkanDevice");
+        LOG_ERROR(MOER_TEXT("Descriptor heap range allocation test requires VulkanDevice"));
         return 1;
     }
 
     VulkanDescriptorHeap& descriptor_heap = vk_device->GetGlobalDescriptorHeap();
     VulkanDescriptorBinder binder = descriptor_heap.BeginPushDescriptors();
     if (!binder.IsValid()) {
-        LOG_ERROR("Descriptor heap failed to start concurrent range-allocation binder");
+        LOG_ERROR(MOER_TEXT("Descriptor heap failed to start concurrent range-allocation binder"));
         return 1;
     }
 
@@ -1097,7 +1097,7 @@ int RunDescriptorHeapConcurrentRangeAllocationTest() {
     for (auto& thread : threads) {
         thread.join();
     }
-    LOG_INFO("Descriptor heap test: concurrent range allocation finished");
+    LOG_INFO(MOER_TEXT("Descriptor heap test: concurrent range allocation finished"));
 
     if (!ValidateAllocatedRanges(allocated_offsets, alloc_size)) {
         binder = descriptor_heap.EndPushDescriptors(std::move(binder));
@@ -1109,7 +1109,7 @@ int RunDescriptorHeapConcurrentRangeAllocationTest() {
     const uint64_t max_offset = *std::max_element(allocated_offsets.begin(), allocated_offsets.end());
     if (trailing_offset < max_offset + alloc_size) {
         LOG_ERROR(
-            "Trailing descriptor allocation overlapped earlier concurrent allocations: trailing={}, max={}",
+            MOER_TEXT("Trailing descriptor allocation overlapped earlier concurrent allocations: trailing={}, max={}"),
             trailing_offset,
             max_offset
         );
@@ -1120,7 +1120,7 @@ int RunDescriptorHeapConcurrentRangeAllocationTest() {
 
     binder = descriptor_heap.EndPushDescriptors(std::move(binder));
     descriptor_heap.RecycleOnlineDescriptorLease(std::move(binder));
-    LOG_INFO("Descriptor heap concurrent range allocation test passed");
+    LOG_INFO(MOER_TEXT("Descriptor heap concurrent range allocation test passed"));
     return 0;
 }
 
@@ -1128,11 +1128,11 @@ int RunCommandListQueueBindingTest() {
     CommandList graphics_cmd(EQueueType::Graphics);
 
     if (graphics_cmd.GetQueueType() != EQueueType::Graphics) {
-        LOG_ERROR("Graphics command list queue binding mismatch");
+        LOG_ERROR(MOER_TEXT("Graphics command list queue binding mismatch"));
         return 1;
     }
 
-    LOG_INFO("CommandList queue binding test passed");
+    LOG_INFO(MOER_TEXT("CommandList queue binding test passed"));
     return 0;
 }
 
@@ -1146,28 +1146,28 @@ int RunTranslateExecutionClassRoundTripTest() {
 
     CmdSubmit submit = cmd.Submit();
     if (submit.translate_execution_class != ERHITranslateExecutionClass::SerialControl) {
-        LOG_ERROR("Translate execution class did not round-trip through CommandList::Submit");
+        LOG_ERROR(MOER_TEXT("Translate execution class did not round-trip through CommandList::Submit"));
         return 1;
     }
     if (submit.cmds.size() != 2 || submit.cmds.back()->Type() != Command::EType::Custom) {
-        LOG_ERROR("Translate fence command did not round-trip through CommandList::Submit");
+        LOG_ERROR(MOER_TEXT("Translate fence command did not round-trip through CommandList::Submit"));
         return 1;
     }
 
     const auto* custom_cmd = static_cast<const CustomCmd*>(submit.cmds.back().get());
     if (custom_cmd->CustomId() != CustomCmd::CustomCmdId::CUSTOM_TRANSLATE_FENCE) {
-        LOG_ERROR("Submitted command was not a TranslateFence command");
+        LOG_ERROR(MOER_TEXT("Submitted command was not a TranslateFence command"));
         return 1;
     }
 
     const auto* translate_fence_cmd = static_cast<const TranslateFenceCmd*>(custom_cmd);
     if (translate_fence_cmd->Fence().event.Get() != translate_fence.event.Get()) {
-        LOG_ERROR("Translate fence event did not round-trip through CommandList::Submit");
+        LOG_ERROR(MOER_TEXT("Translate fence event did not round-trip through CommandList::Submit"));
         return 1;
     }
 
     translate_fence.event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-    LOG_INFO("Translate execution control round-trip test passed");
+    LOG_INFO(MOER_TEXT("Translate execution control round-trip test passed"));
     return 0;
 }
 
@@ -1185,11 +1185,11 @@ int RunTranslateLambdaCommandTest() {
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     if (lambda_counter.load(std::memory_order_relaxed) != 1u) {
-        LOG_ERROR("LambdaCommand did not execute exactly once during translate");
+        LOG_ERROR(MOER_TEXT("LambdaCommand did not execute exactly once during translate"));
         return 1;
     }
 
-    LOG_INFO("Translate LambdaCommand test passed");
+    LOG_INFO(MOER_TEXT("Translate LambdaCommand test passed"));
     return 0;
 }
 
@@ -1284,7 +1284,7 @@ int RunRHITranslateMultiQueueReadbackTest() {
         }
     }
 
-    LOG_INFO("RHI translate multiqueue readback test passed, iterations={}", kIterations);
+    LOG_INFO(MOER_TEXT("RHI translate multiqueue readback test passed, iterations={}"), kIterations);
     return 0;
 }
 
@@ -1322,7 +1322,7 @@ int RunMultiCommandListSubmitOrderingTest() {
         return 1;
     }
 
-    LOG_INFO("Multi-commandlist submit ordering test passed");
+    LOG_INFO(MOER_TEXT("Multi-commandlist submit ordering test passed"));
     return 0;
 }
 
@@ -1362,7 +1362,7 @@ int RunSerialControlTranslateOrderingTest() {
         return 1;
     }
 
-    LOG_INFO("SerialControl translate ordering test passed");
+    LOG_INFO(MOER_TEXT("SerialControl translate ordering test passed"));
     return 0;
 }
 
@@ -1411,7 +1411,7 @@ int RunGraphicsCopyScopeRoundTripTest() {
         }
     }
 
-    LOG_INFO("Graphics -> CopyScope -> Graphics test passed, iterations={}", kCopyScopeIterations);
+    LOG_INFO(MOER_TEXT("Graphics -> CopyScope -> Graphics test passed, iterations={}"), kCopyScopeIterations);
     return 0;
 }
 
@@ -1497,7 +1497,7 @@ int RunBindlessBufferReadbackTest() {
     }
 
     LOG_INFO(
-        "Bindless buffer readback test passed, handles=({}, {})",
+        MOER_TEXT("Bindless buffer readback test passed, handles=({}, {})"),
         src_handle_a,
         src_handle_b
     );
@@ -1539,7 +1539,7 @@ int RunBindlessTextureReadbackTest() {
         for (size_t i = 0; i < expected.size(); ++i) {
             if (readback_values[i] != expected[i]) {
                 LOG_ERROR(
-                    "{} mismatch at index={}, expected={}, got={}",
+                    MOER_TEXT("{} mismatch at index={}, expected={}, got={}"),
                     label,
                     i,
                     expected[i],
@@ -1717,7 +1717,7 @@ int RunBindlessTextureReadbackTest() {
     }
 
     LOG_INFO(
-        "Bindless texture readback test passed, mip_handle={}, sampler_handles=({}, {}), update_handle={}",
+        MOER_TEXT("Bindless texture readback test passed, mip_handle={}, sampler_handles=({}, {}), update_handle={}"),
         mip_handle,
         sampler_handle_clamp,
         sampler_handle_repeat,
@@ -1764,7 +1764,7 @@ int RunMultiBindlessArrayReadbackTest() {
 
     if (handle_a != handle_b) {
         LOG_ERROR(
-            "Multi-bindless-array test requires identical local handles, got handle_a={}, handle_b={}",
+            MOER_TEXT("Multi-bindless-array test requires identical local handles, got handle_a={}, handle_b={}"),
             handle_a,
             handle_b
         );
@@ -1839,7 +1839,7 @@ int RunMultiBindlessArrayReadbackTest() {
     for (size_t i = 0; i < expected.size(); ++i) {
         if (readback_values[i] != expected[i]) {
             LOG_ERROR(
-                "MultiBindlessArray mismatch at index={}, expected={}, got={}",
+                MOER_TEXT("MultiBindlessArray mismatch at index={}, expected={}, got={}"),
                 i,
                 expected[i],
                 readback_values[i]
@@ -1849,7 +1849,7 @@ int RunMultiBindlessArrayReadbackTest() {
     }
 
     LOG_INFO(
-        "Multi-bindless-array readback test passed, shared_local_handle={}, results=({}, {}, {})",
+        MOER_TEXT("Multi-bindless-array readback test passed, shared_local_handle={}, results=({}, {}, {})"),
         handle_a,
         readback_values[0],
         readback_values[1],
@@ -1912,7 +1912,7 @@ int RunMultiCopyScopeOrderingTest() {
         return 1;
     }
 
-    LOG_INFO("Multi-CopyScope ordering test passed");
+    LOG_INFO(MOER_TEXT("Multi-CopyScope ordering test passed"));
     return 0;
 }
 
@@ -1948,7 +1948,7 @@ int RunCopyScopeUnknownFirstUseTest() {
         return 1;
     }
 
-    LOG_INFO("CopyScope unknown-first-use test passed");
+    LOG_INFO(MOER_TEXT("CopyScope unknown-first-use test passed"));
     return 0;
 }
 
@@ -1992,7 +1992,7 @@ int RunGpuEventStreamHierarchyTest() {
 
     const std::string frame_text = GPUEventStream::Get().FormatLastResolvedFrame();
     if (frame_text.empty()) {
-        LOG_ERROR("GPUEventStream did not resolve any frame profile text");
+        LOG_ERROR(MOER_TEXT("GPUEventStream did not resolve any frame profile text"));
         return 1;
     }
 
@@ -2007,7 +2007,7 @@ int RunGpuEventStreamHierarchyTest() {
     };
     for (std::string_view token : required_tokens) {
         if (frame_text.find(token) == std::string::npos) {
-            LOG_ERROR("GPUEventStream frame text missing token '{}':\n{}", token, frame_text);
+            LOG_ERROR(MOER_TEXT("GPUEventStream frame text missing token '{}':\n{}"), token, frame_text);
             return 1;
         }
     }
@@ -2015,11 +2015,11 @@ int RunGpuEventStreamHierarchyTest() {
     const size_t outer_pos = frame_text.find("FrameOuter");
     const size_t inner_pos = frame_text.find("FrameInner");
     if (outer_pos == std::string::npos || inner_pos == std::string::npos || outer_pos >= inner_pos) {
-        LOG_ERROR("GPUEventStream frame hierarchy order is invalid:\n{}", frame_text);
+        LOG_ERROR(MOER_TEXT("GPUEventStream frame hierarchy order is invalid:\n{}"), frame_text);
         return 1;
     }
 
-    LOG_INFO("GPUEventStream frame debug:\n{}", frame_text);
+    LOG_INFO(MOER_TEXT("GPUEventStream frame debug:\n{}"), frame_text);
     return 0;
 }
 
@@ -2043,7 +2043,7 @@ int RunGpuEventStreamCrossSubmitAggregationTest() {
 
     const std::string frame_text = stream.FormatLastResolvedFrame();
     if (frame_text.empty()) {
-        LOG_ERROR("GPUEventStream cross-submit aggregation did not resolve any frame text");
+        LOG_ERROR(MOER_TEXT("GPUEventStream cross-submit aggregation did not resolve any frame text"));
         return 1;
     }
 
@@ -2056,12 +2056,12 @@ int RunGpuEventStreamCrossSubmitAggregationTest() {
     };
     for (std::string_view token : required_tokens) {
         if (frame_text.find(token) == std::string::npos) {
-            LOG_ERROR("GPUEventStream cross-submit frame text missing token '{}':\n{}", token, frame_text);
+            LOG_ERROR(MOER_TEXT("GPUEventStream cross-submit frame text missing token '{}':\n{}"), token, frame_text);
             return 1;
         }
     }
 
-    LOG_INFO("GPUEventStream cross-submit frame debug:\n{}", frame_text);
+    LOG_INFO(MOER_TEXT("GPUEventStream cross-submit frame debug:\n{}"), frame_text);
     return 0;
 }
 
@@ -2083,19 +2083,19 @@ int RunGpuEventStreamBoundaryValidationTest() {
 
     const std::string frame_text = stream.FormatLastResolvedFrame();
     if (frame_text.empty()) {
-        LOG_ERROR("GPUEventStream boundary validation did not resolve any frame text");
+        LOG_ERROR(MOER_TEXT("GPUEventStream boundary validation did not resolve any frame text"));
         return 1;
     }
     if (frame_text.find("valid=false") == std::string::npos) {
-        LOG_ERROR("GPUEventStream boundary validation should produce an invalid frame:\n{}", frame_text);
+        LOG_ERROR(MOER_TEXT("GPUEventStream boundary validation should produce an invalid frame:\n{}"), frame_text);
         return 1;
     }
     if (frame_text.find("Queue Graphics") != std::string::npos) {
-        LOG_ERROR("GPUEventStream invalid frame should not materialize queue roots:\n{}", frame_text);
+        LOG_ERROR(MOER_TEXT("GPUEventStream invalid frame should not materialize queue roots:\n{}"), frame_text);
         return 1;
     }
 
-    LOG_INFO("GPUEventStream invalid frame debug:\n{}", frame_text);
+    LOG_INFO(MOER_TEXT("GPUEventStream invalid frame debug:\n{}"), frame_text);
     return 0;
 }
 
@@ -2103,7 +2103,7 @@ int RunPresentWithCopyScopeTests() {
     auto& device = RenderDevice::Get();
     auto* window = WindowContext::GetMainWindow();
     if (window == nullptr) {
-        LOG_ERROR("CopyScope present test window is null.");
+        LOG_ERROR(MOER_TEXT("CopyScope present test window is null."));
         return 1;
     }
 
@@ -2157,13 +2157,13 @@ int RunPresentWithCopyScopeTests() {
         RHIExecutor::Get().Sync(ERHISyncDepth::Present);
 
         if (upload_values != readback_values) {
-            LOG_ERROR("CopyScope present readback mismatch at iter={}", iter);
+            LOG_ERROR(MOER_TEXT("CopyScope present readback mismatch at iter={}"), iter);
             return 1;
         }
     }
 
     RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    LOG_INFO("Present + CopyScope test passed, iterations={}", kPresentIterations);
+    LOG_INFO(MOER_TEXT("Present + CopyScope test passed, iterations={}"), kPresentIterations);
     return 0;
 }
 
@@ -2171,7 +2171,7 @@ int RunPresentTests() {
     auto& device = RenderDevice::Get();
     auto* window = WindowContext::GetMainWindow();
     if (window == nullptr) {
-        LOG_ERROR("Present test window is null.");
+        LOG_ERROR(MOER_TEXT("Present test window is null."));
         return 1;
     }
 
@@ -2235,7 +2235,7 @@ int RunPresentTests() {
 
     auto* vk_swapchain = static_cast<VkSwapchain*>(swapchain.Get());
     if (vk_swapchain == nullptr) {
-        LOG_ERROR("Present test failed to resolve Vulkan swapchain implementation.");
+        LOG_ERROR(MOER_TEXT("Present test failed to resolve Vulkan swapchain implementation."));
         return 1;
     }
 
@@ -2250,7 +2250,7 @@ int RunPresentTests() {
     RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     if (vk_swapchain->image_idx != present_only_before + 1u) {
         LOG_ERROR(
-            "Present-only submit did not advance swapchain image index: before={}, after={}",
+            MOER_TEXT("Present-only submit did not advance swapchain image index: before={}, after={}"),
             present_only_before,
             vk_swapchain->image_idx
         );
@@ -2258,7 +2258,7 @@ int RunPresentTests() {
     }
 
     RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    LOG_INFO("RHI translate present tests passed, iterations={}", kPresentIterations);
+    LOG_INFO(MOER_TEXT("RHI translate present tests passed, iterations={}"), kPresentIterations);
     return 0;
 }
 
@@ -2294,7 +2294,7 @@ int main(int argc, char** argv) {
     auto shutdown_and_return = [&](int code) {
         int exit_code = code;
         if (exit_code == 0 && Moer::Diagnostics::HasEnsureFailures()) {
-            LOG_ERROR("TestRHITranslate observed escalated ensure failures.");
+            LOG_ERROR(MOER_TEXT("TestRHITranslate observed escalated ensure failures."));
             exit_code = 1;
         }
         if (window_inited) {

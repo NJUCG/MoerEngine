@@ -12,7 +12,7 @@ uint32_t TaskThreadAnyThread::ProcessTasks() {
     while (true) {
         BaseGraphTask* task = FindTaskToDo();
         if (task == nullptr) {
-            //SPDLOG_INFO("{} hanged", platform::GetCurrentThreadID());
+            //SPDLOG_INFO(MOER_TEXT("{} hanged"), platform::GetCurrentThreadID());
             m_queue.m_hang_event->Wait();
             if (m_queue.m_close)
                 break;

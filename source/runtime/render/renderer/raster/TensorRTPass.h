@@ -73,7 +73,7 @@ struct TensorRTResource {
 class TensorRTLogger : public ILogger {
     void log(Severity severity, const char* msg) noexcept override {
         if (severity <= Severity::kWARNING)
-            LOG_WARNING("[TRT] {}", msg);
+            LOG_WARNING(MOER_TEXT("[TRT] {}"), msg);
     }
 } gLogger;
 
@@ -105,24 +105,24 @@ struct TensorRTEngine {
 public:
     TensorRTEngine(const std::string& _onnx_path) : onnx_path(_onnx_path) {
 
-        LOG_DEBUG("Prepare to load ONNX and build TensorRT Engine.");
+        LOG_DEBUG(MOER_TEXT("Prepare to load ONNX and build TensorRT Engine."));
 
         cache_path = GetCachePath(onnx_path);
 
         // Try to load from cache first
         if (cache_path.empty() || !LoadEngineFromCache(cache_path)) { // writen by ai
-            LOG_INFO("Cache not found or invalid, building engine from ONNX...");
+            LOG_INFO(MOER_TEXT("Cache not found or invalid, building engine from ONNX..."));
             LoadEngineFromOnnx();
         }
 
         // Context
         context = std::unique_ptr<IExecutionContext>(engine->createExecutionContext());
         if (!context) {
-            LOG_ERROR("Context creation failed");
+            LOG_ERROR(MOER_TEXT("Context creation failed"));
             return;
         }
 
-        LOG_INFO("Created TensorRT IExecutionContext.");
+        LOG_INFO(MOER_TEXT("Created TensorRT IExecutionContext."));
 
         CreateBuffers(/* is_verbose */ true);
     }
@@ -329,7 +329,7 @@ public:
 
                 if (is_verbose) {
                     LOG_DEBUG(
-                        "tex {}: size from ({}, {}) to ({}, {}); channels = {}; type = {}{}",
+                        MOER_TEXT("tex {}: size from ({}, {}) to ({}, {}); channels = {}; type = {}{}"),
                         name,
                         src_tex.width,
                         src_tex.height,
@@ -448,7 +448,7 @@ public:
     void Run(const cudaStream_t& stream_to_run) {
         bool is_success = context->enqueueV3(stream_to_run);
         if (!is_success) {
-            LOG_ERROR("TRT Pass: enqueueV3 failed.");
+            LOG_ERROR(MOER_TEXT("TRT Pass: enqueueV3 failed."));
         }
     }
 
@@ -460,7 +460,7 @@ private:
         // Generate hash from ONNX file content
         std::ifstream file(onnx_file_path, std::ios::binary);
         if (!file.is_open()) {
-            LOG_ERROR("Failed to open ONNX file for hashing: {}", onnx_file_path);
+            LOG_ERROR(MOER_TEXT("Failed to open ONNX file for hashing: {}"), onnx_file_path);
             return "";
         }
 
@@ -487,42 +487,42 @@ private:
 
         auto runtime = std::unique_ptr<IRuntime>(createInferRuntime(gLogger));
         if (!runtime) {
-            LOG_ERROR("Failed to create TensorRT runtime for cache loading");
+            LOG_ERROR(MOER_TEXT("Failed to create TensorRT runtime for cache loading"));
             return false;
         }
 
         engine = std::unique_ptr<ICudaEngine>(runtime->deserializeCudaEngine(engine_data.data(), size));
         if (!engine) {
-            LOG_ERROR("Failed to deserialize cached engine");
+            LOG_ERROR(MOER_TEXT("Failed to deserialize cached engine"));
             return false;
         }
 
-        LOG_DEBUG("Successfully loaded TensorRT engine from cache: {}", cache_file_path);
+        LOG_DEBUG(MOER_TEXT("Successfully loaded TensorRT engine from cache: {}"), cache_file_path);
         return true;
     }
 
     bool SaveEngineToCache(const std::string& cache_file_path) { // writen by ai
         if (!engine) {
-            LOG_ERROR("No engine to save to cache");
+            LOG_ERROR(MOER_TEXT("No engine to save to cache"));
             return false;
         }
 
         auto serialized_engine = std::unique_ptr<IHostMemory>(engine->serialize());
         if (!serialized_engine) {
-            LOG_ERROR("Failed to serialize engine");
+            LOG_ERROR(MOER_TEXT("Failed to serialize engine"));
             return false;
         }
 
         std::ofstream file(cache_file_path, std::ios::binary);
         if (!file.is_open()) {
-            LOG_ERROR("Failed to open cache file for writing: {}", cache_file_path);
+            LOG_ERROR(MOER_TEXT("Failed to open cache file for writing: {}"), cache_file_path);
             return false;
         }
 
         file.write(static_cast<const char*>(serialized_engine->data()), serialized_engine->size());
         file.close();
 
-        LOG_INFO("Successfully saved TensorRT engine to cache: {}", cache_file_path);
+        LOG_INFO(MOER_TEXT("Successfully saved TensorRT engine to cache: {}"), cache_file_path);
         return true;
     }
 
@@ -534,15 +534,15 @@ private:
 
             // 检查设备是否支持 FP16
             if (!builder->platformHasFastFp16()) {
-                LOG_WARNING("Platform does not have fast FP16 support");
+                LOG_WARNING(MOER_TEXT("Platform does not have fast FP16 support"));
             }
 
             // 设置多线程构建
             int32_t numThreads = std::thread::hardware_concurrency();
             if (!builder->setMaxThreads(numThreads)) {
-                LOG_WARNING("Failed to set max threads to {}, using default", numThreads);
+                LOG_WARNING(MOER_TEXT("Failed to set max threads to {}, using default"), numThreads);
             } else {
-                LOG_DEBUG("Builder configured to use {} threads", builder->getMaxThreads());
+                LOG_DEBUG(MOER_TEXT("Builder configured to use {} threads"), builder->getMaxThreads());
             }
         }
         // 1.1 Network
@@ -560,7 +560,7 @@ private:
             parser = std::unique_ptr<nvonnxparser::IParser>(nvonnxparser::createParser(*network, gLogger));
 
             if (!parser->parseFromFile(onnx_path.c_str(), static_cast<int>(ILogger::Severity::kWARNING))) {
-                LOG_ERROR("ONNX parse failed. Please check the ONNX file path!");
+                LOG_ERROR(MOER_TEXT("ONNX parse failed. Please check the ONNX file path!"));
                 return;
             }
         }
@@ -588,7 +588,7 @@ private:
             }
 
             LOG_DEBUG(
-                "Set all network tensors to FP16. Layers/Inputs/Outputs: {}/{}/{}",
+                MOER_TEXT("Set all network tensors to FP16. Layers/Inputs/Outputs: {}/{}/{}"),
                 network->getNbLayers(),
                 network->getNbInputs(),
                 network->getNbOutputs()
@@ -613,15 +613,15 @@ private:
         config->addOptimizationProfile(profile);
 
         // 3. Engine
-        LOG_INFO("Started to Build TensorRT ICudaEngine. It may take several minutes...");
+        LOG_INFO(MOER_TEXT("Started to Build TensorRT ICudaEngine. It may take several minutes..."));
 
         engine = std::unique_ptr<ICudaEngine>(builder->buildEngineWithConfig(*network, *config));
         if (!engine) {
-            LOG_ERROR("Engine build failed");
+            LOG_ERROR(MOER_TEXT("Engine build failed"));
             return;
         }
 
-        LOG_DEBUG("Created TensorRT ICudaEngine.");
+        LOG_DEBUG(MOER_TEXT("Created TensorRT ICudaEngine."));
 
         // Save newly built engine to cache
         if (!cache_path.empty()) {
@@ -721,7 +721,7 @@ private:
         }
 
         if (is_verbose) {
-            LOG_DEBUG("TensorRT Buffers Info: {}", output_stream.str());
+            LOG_DEBUG(MOER_TEXT("TensorRT Buffers Info: {}"), output_stream.str());
         }
     }
 };
@@ -880,7 +880,7 @@ private:
         if (ui_config.ao_mode != EAoMode::RTAO) {
             static LoopedTimer timer(2.0);
             if (timer.Tick()) { // 每隔2s触发一次
-                LOG_WARNING("Ambient Occlusion Mode is not RTAO. Please switch to RTAO!");
+                LOG_WARNING(MOER_TEXT("Ambient Occlusion Mode is not RTAO. Please switch to RTAO!"));
             }
         }
 
@@ -888,7 +888,7 @@ private:
             static LoopedTimer timer(2.0);
             if (timer.Tick()) { // 每隔2s触发一次
                 LOG_WARNING(
-                    "This network only support 1920 x 1080. Current resolution is {} x {}.",
+                    MOER_TEXT("This network only support 1920 x 1080. Current resolution is {} x {}."),
                     res->color.width,
                     res->color.height
                 );
@@ -914,11 +914,11 @@ private:
         );
 
         if (engine.engine->getTensorShape(name).nbDims != 4) {
-            LOG_WARNING("{}.shape != 4", name);
+            LOG_WARNING(MOER_TEXT("{}.shape != 4"), name);
             return;
         }
         if (engine.device_mem_addr_map.contains(name) == false) {
-            LOG_WARNING("Cannot find this buffer: {}", name);
+            LOG_WARNING(MOER_TEXT("Cannot find this buffer: {}"), name);
             return;
         }
 
@@ -977,7 +977,7 @@ private:
             }
 
             LOG_DEBUG(
-                "\tcheck {}: all values same = {}, first value = {}, min = {}, max = {}",
+                MOER_TEXT("\tcheck {}: all values same = {}, first value = {}, min = {}, max = {}"),
                 name,
                 all_same,
                 static_cast<float>(first_val),
@@ -986,8 +986,8 @@ private:
             );
         };
 
-        LOG_DEBUG("");
-        LOG_DEBUG("Engine 1 Input:");
+        LOG_DEBUG(MOER_TEXT(""));
+        LOG_DEBUG(MOER_TEXT("Engine 1 Input:"));
         check_buf(*engine1, "in_ao");
         check_buf(*engine1, "in_depth");
         check_buf(*engine1, "in_color");
@@ -995,8 +995,8 @@ private:
         check_buf(*engine1, "in_prev_ao");
         check_buf(*engine1, "in_prev_embed");
 
-        LOG_DEBUG("");
-        LOG_DEBUG("Engine 1 Output:");
+        LOG_DEBUG(MOER_TEXT(""));
+        LOG_DEBUG(MOER_TEXT("Engine 1 Output:"));
         check_buf(*engine1, "out_XTX_batch");
         check_buf(*engine1, "out_XTY_batch");
         check_buf(*engine1, "out_X_model");
@@ -1006,21 +1006,21 @@ private:
         check_buf(*engine1, "out_prev_ao");
         check_buf(*engine1, "out_embed");
 
-        LOG_DEBUG("");
-        LOG_DEBUG("Engine 2 Input:");
+        LOG_DEBUG(MOER_TEXT(""));
+        LOG_DEBUG(MOER_TEXT("Engine 2 Input:"));
         check_buf(*engine2, "in_X_model");
         check_buf(*engine2, "in_coeffs_batch");
         check_buf(*engine2, "in_upscale_kernel");
         check_buf(*engine2, "in_color");
         check_buf(*engine2, "in_prev_ao");
 
-        LOG_DEBUG("");
-        LOG_DEBUG("Engine 2 Output:");
+        LOG_DEBUG(MOER_TEXT(""));
+        LOG_DEBUG(MOER_TEXT("Engine 2 Output:"));
         check_buf(*engine2, "out_final_output");
         check_buf(*engine2, "out_denoised_ao");
 
-        LOG_DEBUG("");
-        LOG_DEBUG("");
+        LOG_DEBUG(MOER_TEXT(""));
+        LOG_DEBUG(MOER_TEXT(""));
     }
 };
 

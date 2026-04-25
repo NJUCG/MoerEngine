@@ -1200,7 +1200,7 @@ static bool AppendPrefixImport(
     if (result.prefix_transfer_queue.has_value() &&
         result.prefix_transfer_queue.value() != src_queue) {
         LOG_ERROR(
-            "Segment ({}, {}) needs imports from multiple source queues ({} and {})",
+            MOER_TEXT("Segment ({}, {}) needs imports from multiple source queues ({} and {})"),
             result.key.op_seq,
             result.key.submit_idx,
             QueueTypeName(result.prefix_transfer_queue.value()),
@@ -1275,7 +1275,7 @@ static bool AppendSuffixExport(
     if (result.suffix_transfer_queue.has_value() &&
         result.suffix_transfer_queue.value() != dst_queue) {
         LOG_ERROR(
-            "Segment ({}, {}) needs exports to multiple destination queues ({} and {})",
+            MOER_TEXT("Segment ({}, {}) needs exports to multiple destination queues ({} and {})"),
             result.key.op_seq,
             result.key.submit_idx,
             QueueTypeName(result.suffix_transfer_queue.value()),
@@ -1633,7 +1633,7 @@ static PreprocessTranslateStore PreprocessFrameOps(
                     }
                     if (SegmentContainsFrameTick(submit, segment)) {
                         if (segment_index + 1 != segments.size()) {
-                            LOG_ERROR("FrameTick must terminate the recorded CommandList segment sequence");
+                            LOG_ERROR(MOER_TEXT("FrameTick must terminate the recorded CommandList segment sequence"));
                             assert(false && "FrameTick must terminate the segment sequence");
                         }
                         dependency_state = {};

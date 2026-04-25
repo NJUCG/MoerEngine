@@ -310,7 +310,7 @@ void LogicalScene::UCreateDefaultLights(entt::entity parent_node_id, bool should
 
 float3 LogicalScene::GetDirectionalLightDirection(entt::entity entity) const {
     if (!r().all_of<ecs::CTransform>(entity)) {
-        LOG_ERROR("Entity does not have CTransform component");
+        LOG_ERROR(MOER_TEXT("Entity does not have CTransform component"));
         return float3(0.f, 0.f, -1.f);
     }
     return r().get<ecs::CTransform>(entity).rotation.Rotate(float3(0.f, 0.f, -1.f));
@@ -318,7 +318,7 @@ float3 LogicalScene::GetDirectionalLightDirection(entt::entity entity) const {
 
 float3 LogicalScene::GetPointLightPosition(entt::entity entity) const {
     if (!r().all_of<ecs::CTransform>(entity)) {
-        LOG_ERROR("Entity does not have CTransform component");
+        LOG_ERROR(MOER_TEXT("Entity does not have CTransform component"));
         return float3(0.f, 0.f, 0.f);
     }
     return r().get<ecs::CTransform>(entity).translation;

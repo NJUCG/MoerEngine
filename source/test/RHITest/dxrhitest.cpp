@@ -217,15 +217,15 @@ int main(int argc, char** argv) {
             gfx_queue.Execute(list.Submit().Signal(fence, timeline));
 
             gfx_queue.Sync();
-            LOG_INFO("dispatch work done");
+            LOG_INFO(MOER_TEXT("dispatch work done"));
 
-            LOG_INFO("result={}, expect={}, ok={}", iarr[0], res, iarr[0] == res);
+            LOG_INFO(MOER_TEXT("result={}, expect={}, ok={}"), iarr[0], res, iarr[0] == res);
         }
 
     capturer->End();
 
     if (Diagnostics::HasEnsureFailures()) {
-        LOG_ERROR("DXRHITest observed escalated ensure failures.");
+        LOG_ERROR(MOER_TEXT("DXRHITest observed escalated ensure failures."));
         return 1;
     }
 

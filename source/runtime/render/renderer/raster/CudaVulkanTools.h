@@ -35,7 +35,7 @@ public:
     checkCudaErrorsInner(cudaError_t result, char const* const func, const char* const file, int const line) {
         if (result) {
             LOG_ERROR(
-                "CUDA error at {}:{} code={}. error name={}. error description={}. \"{}\"",
+                MOER_TEXT("CUDA error at {}:{} code={}. error name={}. error description={}. \"{}\""),
                 file,
                 line,
                 static_cast<uint>(result),
@@ -54,7 +54,7 @@ public:
     ) {
         if (result) {
             LOG_ERROR(
-                "CUDA error at {}:{}. Error code={}. \"{}\"", file, line, static_cast<int32>(result), func
+                MOER_TEXT("CUDA error at {}:{}. Error code={}. \"{}\""), file, line, static_cast<int32>(result), func
             );
         }
     }
@@ -95,7 +95,7 @@ public:
 
         VkResult result = vkCreateSemaphore(vulkan_device.GetDevice(), &create_info, nullptr, &semaphore);
         if (result != VK_SUCCESS) {
-            LOG_WARNING("CudaPass: vkCreateSemaphore Failed. VkResult = {}", static_cast<int32>(result));
+            LOG_WARNING(MOER_TEXT("CudaPass: vkCreateSemaphore Failed. VkResult = {}"), static_cast<int32>(result));
         }
 
         return semaphore;
@@ -184,7 +184,7 @@ struct CudaTexture {
         height(texture->GetHeight()) {
 
         if (mip_levels == 0 || width == 0 || height == 0) {
-            LOG_WARNING("CudaTexture failed to initialize, texture name: {}.", texture->GetName());
+            LOG_WARNING(MOER_TEXT("CudaTexture failed to initialize, texture name: {}."), texture->GetName());
             return;
         }
 
@@ -326,7 +326,7 @@ private:
         );
         if (result != VK_SUCCESS) {
             LOG_WARNING(
-                "CudaPass: vmaGetMemoryWin32Handle Failed. VkResult = {}", static_cast<int32>(result)
+                MOER_TEXT("CudaPass: vmaGetMemoryWin32Handle Failed. VkResult = {}"), static_cast<int32>(result)
             );
         }
 
@@ -409,7 +409,7 @@ private:
                 break;
             }
             default: {
-                LOG_ERROR("EPixelFormat doesn't support: {}", static_cast<int>(pf));
+                LOG_ERROR(MOER_TEXT("EPixelFormat doesn't support: {}"), static_cast<int>(pf));
             }
         }
 
@@ -471,7 +471,7 @@ struct CudaSemaphore {
             if (result != VK_SUCCESS || win32_handle_before_semaphore == INVALID_HANDLE_VALUE ||
                 win32_handle_before_semaphore == nullptr) {
                 LOG_WARNING(
-                    "CudaPass: vkGetSemaphoreWin32HandleKHR Failed. VkResult = {}", static_cast<int32>(result)
+                    MOER_TEXT("CudaPass: vkGetSemaphoreWin32HandleKHR Failed. VkResult = {}"), static_cast<int32>(result)
                 );
             }
 
@@ -497,7 +497,7 @@ struct CudaSemaphore {
             if (result != VK_SUCCESS || win32_handle_after_semaphore == INVALID_HANDLE_VALUE ||
                 win32_handle_after_semaphore == nullptr) {
                 LOG_WARNING(
-                    "CudaPass: vkGetSemaphoreWin32HandleKHR Failed. VkResult = {}", static_cast<int32>(result)
+                    MOER_TEXT("CudaPass: vkGetSemaphoreWin32HandleKHR Failed. VkResult = {}"), static_cast<int32>(result)
                 );
             }
 
@@ -560,7 +560,7 @@ private:
         );
 
         if (!pfnGetSemaphoreWin32HandleKHR) {
-            LOG_WARNING("CudaPass: Failed to load vkGetSemaphoreWin32HandleKHR");
+            LOG_WARNING(MOER_TEXT("CudaPass: Failed to load vkGetSemaphoreWin32HandleKHR"));
         }
     }
 

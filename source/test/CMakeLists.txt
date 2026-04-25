@@ -57,11 +57,22 @@ target_link_libraries(${pipe_test_target}
 )
 set_target_properties(${pipe_test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(string_test_target TestStringSystem)
+add_executable(${string_test_target} "StringSystemTest.cpp")
+target_include_directories(${string_test_target}
+PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+)
+target_link_libraries(${string_test_target}
+    PUBLIC Moer::Core
+)
+set_target_properties(${string_test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_custom_target(TestCoreLinux
         DEPENDS
             TestTaskGraph
             TestTaskPipe
+            TestStringSystem
     )
     set_target_properties(TestCoreLinux PROPERTIES FOLDER ${moer_test_folder})
     return()

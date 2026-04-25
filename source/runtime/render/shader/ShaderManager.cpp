@@ -139,7 +139,7 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
 
     auto it = shader_resources_cache.TryGetShader(input);
 
-    // LOG_DEBUG("ShaderManager::CompileShader, FileName: {}, EntryName: {}, MutationID: {}, Environment: {} <=> {}",
+    // LOG_DEBUG(MOER_TEXT("ShaderManager::CompileShader, FileName: {}, EntryName: {}, MutationID: {}, Environment: {} <=> {}"),
     //           input.relative_source_file_path,
     //           input.entry_point,
     //           input.mutation_id,
@@ -188,7 +188,7 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
             );
             error_string = replace_shared_directry_strings(error_string);
 
-            LOG_ERROR("Shader Compile Error: {}", error_string);
+            LOG_ERROR(MOER_TEXT("Shader Compile Error: {}"), error_string);
         }
         assert(
             false &&

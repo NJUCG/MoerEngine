@@ -47,7 +47,7 @@ LoadConsoleVariableMapFromTomlFile(const std::filesystem::path& config_path) {
         }
 
         LOG_WARNING(
-            "Ignore unsupported cvar override `{}` from {}. Only string, bool, int and float are supported.",
+            MOER_TEXT("Ignore unsupported cvar override `{}` from {}. Only string, bool, int and float are supported."),
             key_text,
             config_path.generic_string()
         );
@@ -74,9 +74,9 @@ void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
     // check config exists
     std::filesystem::path config_path = _workspace_path / "MoerEngine.toml";
     if (!std::filesystem::exists(config_path)) {
-        LOG_ERROR("Config `{}` does not exist.", config_path.generic_string());
+        LOG_ERROR(MOER_TEXT("Config `{}` does not exist."), config_path.generic_string());
         LOG_ERROR(
-            "Please copy `template.MoerEngine.toml` to `MoerEngine.toml` in root directory. You can read "
+            MOER_TEXT("Please copy `template.MoerEngine.toml` to `MoerEngine.toml` in root directory. You can read ")
             "README.md for details. MoerEngine will abort."
         );
         throw std::runtime_error("Config file does not exist");
@@ -84,9 +84,9 @@ void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
 
     std::filesystem::path cvar_config_path = _workspace_path / "ConsoleVariable.toml";
     if (!std::filesystem::exists(cvar_config_path)) {
-        LOG_ERROR("Config `{}` does not exist.", cvar_config_path.generic_string());
+        LOG_ERROR(MOER_TEXT("Config `{}` does not exist."), cvar_config_path.generic_string());
         LOG_ERROR(
-            "Please copy `template.ConsoleVariable.toml` to `ConsoleVariable.toml` in root directory. "
+            MOER_TEXT("Please copy `template.ConsoleVariable.toml` to `ConsoleVariable.toml` in root directory. ")
             "MoerEngine will abort."
         );
         throw std::runtime_error("Console variable config file does not exist");

@@ -93,7 +93,7 @@ RasterRenderer::RasterRenderer(
     // Other vars
 
     LOG_INFO(
-        "Cooperative Matrix & Vector Extensions is Enabled: {}",
+        MOER_TEXT("Cooperative Matrix & Vector Extensions is Enabled: {}"),
         device.IsExtensionCooperativeEnabled() ? "Yes" : "No"
     );
 }
@@ -209,7 +209,7 @@ bool RasterRenderer::RunSingle(
         skip_present = true;
 
     } else if (window_state == EWindowState::SizeChanged) {
-        LOG_INFO("Size Changed.");
+        LOG_INFO(MOER_TEXT("Size Changed."));
 
         raster_context.FreeFrameBuffers(false);
         raster_context.CreateFrameBuffers();
@@ -386,7 +386,7 @@ bool RasterRenderer::RunSingle(
             // sleep 1.0 / fps seconds
             // 虽然不精确，但简单
             std::this_thread::sleep_for(std::chrono::duration<double>(1.0 / raster_config.debug_fps_limit));
-            LOG_DEBUG("FPS Limit Enabled: {}", raster_config.debug_fps_limit);
+            LOG_DEBUG(MOER_TEXT("FPS Limit Enabled: {}"), raster_config.debug_fps_limit);
         }
     }
 

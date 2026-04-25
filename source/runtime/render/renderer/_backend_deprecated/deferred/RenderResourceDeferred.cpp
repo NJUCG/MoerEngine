@@ -83,7 +83,7 @@
 
 //     RenderContext::~RenderContext() {
 //         if (impl) {
-//             LOG_WARNING("RenderContext is not properly shut down.");
+//             LOG_WARNING(MOER_TEXT("RenderContext is not properly shut down."));
 //             MoerDelete(impl);
 //             impl = nullptr;
 //         }

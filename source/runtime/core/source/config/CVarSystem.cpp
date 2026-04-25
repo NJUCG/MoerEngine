@@ -87,13 +87,13 @@ bool ApplyValueMap(const UnorderedMap<std::string, std::string>& values, std::st
 
         ICVar* cvar = Find(key);
         if (!cvar) {
-            LOG_WARNING("Ignore unknown cvar override `{}` from {}.", key, source_label);
+            LOG_WARNING(MOER_TEXT("Ignore unknown cvar override `{}` from {}."), key, source_label);
             continue;
         }
 
         if (const char* error = cvar->SetValueFromString(value_iter->second, ESetSource::StartupConfig)) {
             LOG_WARNING(
-                "Failed to apply cvar override `{}` = `{}` from {}: {}",
+                MOER_TEXT("Failed to apply cvar override `{}` = `{}` from {}: {}"),
                 key,
                 value_iter->second,
                 source_label,
@@ -104,7 +104,7 @@ bool ApplyValueMap(const UnorderedMap<std::string, std::string>& values, std::st
 
         char value_buffer[256]{};
         cvar->CopyValueString(value_buffer, sizeof(value_buffer));
-        LOG_INFO("Applied cvar override from {}: {} = {}", source_label, key, value_buffer);
+        LOG_INFO(MOER_TEXT("Applied cvar override from {}: {} = {}"), source_label, key, value_buffer);
         applied_any = true;
     }
 

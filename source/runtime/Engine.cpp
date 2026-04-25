@@ -37,7 +37,7 @@ void Engine::Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen)
     TaskSystem::Init();
 
     if (!FileDialog::Init()) {
-        LOG_WARNING("Native file dialog is unavailable in editor runtime.");
+        LOG_WARNING(MOER_TEXT("Native file dialog is unavailable in editor runtime."));
     }
 
     // Init RenderDevice
@@ -46,16 +46,16 @@ void Engine::Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen)
 
     ERHIType rhi_type = [&]() {
         if (rhi_type_str == "vulkan") {
-            LOG_INFO("Using Vulkan as RHI backend");
+            LOG_INFO(MOER_TEXT("Using Vulkan as RHI backend"));
             return ERHIType::Vulkan;
         }
         if (rhi_type_str == "d3d12") {
-            LOG_INFO("Using D3D12 as RHI backend");
+            LOG_INFO(MOER_TEXT("Using D3D12 as RHI backend"));
             return ERHIType::D3D12;
         }
 
         LOG_WARNING(
-            "Unknown RHI type '{}', fallback to Vulkan",
+            MOER_TEXT("Unknown RHI type '{}', fallback to Vulkan"),
             ConfigManager::GetInstance().GetConfig().engine.rhi.type
         );
         return ERHIType::Vulkan;
@@ -77,7 +77,7 @@ void Engine::Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen)
 
     // Init WindowContext
     LOG_INFO(
-        "Editor Window Resolution : {}x{}; Fullscreen : {}",
+        MOER_TEXT("Editor Window Resolution : {}x{}; Fullscreen : {}"),
         m_editor_config->GetResolution().x,
         m_editor_config->GetResolution().y,
         fullscreen
@@ -170,7 +170,7 @@ void Engine::Run() {
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         LOG_INFO(
-            "Selecting Render Method : {}",
+            MOER_TEXT("Selecting Render Method : {}"),
             k_render_method_names[static_cast<uint>(m_editor_config->selected_render_method)]
         );
 

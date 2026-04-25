@@ -69,7 +69,7 @@ void RuntimeAssets::RecordTextureUploads() {
             {
                 CopyCommandScope copy_scope = cmd_list.BeginCopyScope();
                 for (auto& entry : std::filesystem::directory_iterator(texture_path)) {
-                    LOG_INFO("Load texture {}", entry.path().string());
+                    LOG_INFO(MOER_TEXT("Load texture {}"), entry.path().string());
                     if (entry.path().extension() == ".png") {
                         FILE* file = nullptr;
                         fopen_s(&file, entry.path().string().c_str(), "rb");

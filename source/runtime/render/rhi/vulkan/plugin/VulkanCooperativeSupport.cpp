@@ -83,7 +83,7 @@ void LogCooperativeSupportSummary(
     const std::string unsupported_extensions = BuildUnsupportedCooperativeExtensionList(_optional_extensions);
     if (!unsupported_extensions.empty()) {
         LOG_INFO(
-            "VulkanRHI: Cooperative extensions are not supported: {}. Cooperative-related passes in raster "
+            MOER_TEXT("VulkanRHI: Cooperative extensions are not supported: {}. Cooperative-related passes in raster ")
             "renderer will be disabled.",
             unsupported_extensions
         );
@@ -91,7 +91,7 @@ void LogCooperativeSupportSummary(
     }
 
     LOG_INFO(
-        "VulkanRHI: Cooperative support - matrix={} robust={} matrix_modes={} vector={} training={} "
+        MOER_TEXT("VulkanRHI: Cooperative support - matrix={} robust={} matrix_modes={} vector={} training={} ")
         "vector_modes={} inference_ready={} float16={} int8={} vulkan_memory_model={}",
         _optional_extensions.SupportsCooperativeMatrix(),
         _optional_extensions.SupportsCooperativeMatrixRobustBufferAccess(),

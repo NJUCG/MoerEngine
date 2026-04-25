@@ -27,9 +27,9 @@ ConsoleLogStorage& GetConsoleLogStorage() {
 void PushConsoleLogLocked(
     ConsoleLogStorage&            storage,
     spdlog::level::level_enum     level,
-    std::string_view              message
+    Utf8StringView                message
 ) {
-    std::string text(message);
+    std::string text(message.data(), message.size());
     while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
         text.pop_back();
     }
@@ -110,7 +110,7 @@ void ClearConsoleLogs() {
     storage.entries.clear();
 }
 
-void PushConsoleLog(spdlog::level::level_enum level, std::string_view message) {
+void PushConsoleLog(spdlog::level::level_enum level, Utf8StringView message) {
     auto& storage = GetConsoleLogStorage();
     std::lock_guard lock(storage.mutex);
     PushConsoleLogLocked(storage, level, message);

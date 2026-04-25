@@ -39,8 +39,14 @@ target_link_libraries(${target_name}
     PUBLIC spdlog
     PUBLIC nlohmann_json::nlohmann_json
     PUBLIC tomlplusplus
-    PRIVATE nfd
 )
+
+if(TARGET nfd)
+    target_link_libraries(${target_name} PRIVATE nfd)
+    target_compile_definitions(${target_name} PRIVATE MOER_CORE_HAS_NFD=1)
+else()
+    message(STATUS "nfd target not found, FileDialog will be unavailable")
+endif()
 
 if(WIN32)
     target_link_libraries(${target_name} PUBLIC ws2_32)

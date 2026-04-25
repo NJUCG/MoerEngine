@@ -8,6 +8,7 @@
 # 2. Generated, Build Files, Cache
 /out/*
 /build/*
+/build-core-linux/*
 /target/*
 /.cache/
 build_vs2022

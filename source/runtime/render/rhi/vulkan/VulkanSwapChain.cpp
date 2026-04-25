@@ -139,7 +139,7 @@ void VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
 void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
     if (_info.size.x == 0 || _info.size.y == 0) {
         size = _info.size;
-        LOG_WARNING("Swapchain recreate skipped due to zero window size.");
+        LOG_WARNING(MOER_TEXT("Swapchain recreate skipped due to zero window size."));
         return;
     }
     const WindowSurfaceSource* existing_surface_source = surface_info.source.get();
@@ -185,7 +185,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     size         = _info.size;
     ChooseSwapExtent(&size.x, &size.y, details.capabilities);
     if (size.x == 0 || size.y == 0) {
-        LOG_WARNING("Swapchain recreate skipped due to zero swapchain extent.");
+        LOG_WARNING(MOER_TEXT("Swapchain recreate skipped due to zero swapchain extent."));
         return;
     }
     VkPresentModeKHR present_mode = ChooseSwapPresentMode(details.present_modes, false);
@@ -343,7 +343,7 @@ std::tuple<VkSemaphore, uint, uint> VkSwapchain::AquireNextImage() {
         return {ready_sem, aquire_idx, image_idx};
     }
     // assert(false && "Error acquiring next present texture.");
-    LOG_WARNING("Fail to acquire next image, window may be resized.");
+    LOG_WARNING(MOER_TEXT("Fail to acquire next image, window may be resized."));
     return {VK_NULL_HANDLE, UINT32_MAX, image_idx};
 }
 

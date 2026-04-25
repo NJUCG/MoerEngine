@@ -179,14 +179,14 @@
 // UniquePtr<SceneData>
 // JsonSceneParser::Impl::LoadSceneFromFile(const Path& abs_scn_json_path, bool _delete_after_load) {
 
-//     LOG_ERROR("JSON Scene Loader needs a huge refactor. JSON scene is not supported yet.");
+//     LOG_ERROR(MOER_TEXT("JSON Scene Loader needs a huge refactor. JSON scene is not supported yet."));
 //     assert(false);
 
 //     GpuPrimitiveBuilder::InitBuild();
 //     ExtendedSceneData ret_scene;
 //     auto              real_path = std::filesystem::weakly_canonical(abs_scn_json_path);
 //     if (!std::filesystem::exists(real_path)) {
-//         LOG_ERROR("Load Json Scene Failed: File not exist: {}", real_path.string());
+//         LOG_ERROR(MOER_TEXT("Load Json Scene Failed: File not exist: {}"), real_path.string());
 //         return nullptr;
 //     }
 //     std::ifstream ifs(real_path);
@@ -195,7 +195,7 @@
 //         scene_json = Json::parse(ifs);
 //         ifs.close();
 //     } catch (std::exception& e) {
-//         LOG_ERROR("Load Json Scene Failed (Ill-formed Json): {}", e.what());
+//         LOG_ERROR(MOER_TEXT("Load Json Scene Failed (Ill-formed Json): {}"), e.what());
 //         ifs.close();
 //         return nullptr;
 //     }
@@ -204,20 +204,20 @@
 //     ret_scene.scn_dat->m_path = real_path;
 // #endif
 //     if (!LoadMaterials(ret_scene, scene_json)) {
-//         LOG_ERROR("Load Json Scene Failed: Fatal Material Error.");
+//         LOG_ERROR(MOER_TEXT("Load Json Scene Failed: Fatal Material Error."));
 //         return nullptr;
 //     }
-//     LOG_INFO("Json Scene Loader: Load Materials Successful.");
+//     LOG_INFO(MOER_TEXT("Json Scene Loader: Load Materials Successful."));
 //     if (!LoadCamera(ret_scene, scene_json.value("camera", Json::object()))) {
-//         LOG_ERROR("Load Json Scene Failed: Fatal Camera Error.");
+//         LOG_ERROR(MOER_TEXT("Load Json Scene Failed: Fatal Camera Error."));
 //         return nullptr;
 //     }
-//     LOG_INFO("Json Scene Loader: Load Camera Successful.");
+//     LOG_INFO(MOER_TEXT("Json Scene Loader: Load Camera Successful."));
 //     if (!LoadEntities(ret_scene, scene_json)) {
-//         LOG_ERROR("Load Json Scene Failed: Fatal Entities Error.");
+//         LOG_ERROR(MOER_TEXT("Load Json Scene Failed: Fatal Entities Error."));
 //         return nullptr;
 //     }
-//     LOG_INFO("Json Scene Loader: Load Entities Successful.");
+//     LOG_INFO(MOER_TEXT("Json Scene Loader: Load Entities Successful."));
 
 //     if (IsCurrentlyGameThread()) {
 //         RenderThreadFence fence;
@@ -235,7 +235,7 @@
 
 // [[nodiscard]] bool JsonSceneParser::Impl::LoadEntities(ExtendedSceneData& dst, const Json& scene_json) {
 //     if (!scene_json.contains("entities")) {
-//         LOG_WARNING("No entities found in {}.", abs_json_path.string());
+//         LOG_WARNING(MOER_TEXT("No entities found in {}."), abs_json_path.string());
 //         return true;
 //     }
 //     const auto& entities_json     = scene_json["entities"];
@@ -293,9 +293,9 @@
 //         }
 //     } catch (std::exception& e) {
 //         if (entity_json.contains("file")) {
-//             LOG_ERROR("Load entity({}) failed: {}", entity_json["file"].get<std::string>(), e.what());
+//             LOG_ERROR(MOER_TEXT("Load entity({}) failed: {}"), entity_json["file"].get<std::string>(), e.what());
 //         } else {
-//             LOG_ERROR("Load entity failed: {}. Possibly missing file path.", e.what());
+//             LOG_ERROR(MOER_TEXT("Load entity failed: {}. Possibly missing file path."), e.what());
 //         }
 //         return false;
 //     }
@@ -456,7 +456,7 @@
 
 // bool JsonSceneParser::Impl::LoadMaterials(ExtendedSceneData& dst, const Json& scene_json) {
 //     if (!scene_json.contains("materials")) {
-//         LOG_WARNING("No materials found in {}.", abs_json_path.string());
+//         LOG_WARNING(MOER_TEXT("No materials found in {}."), abs_json_path.string());
 //         return true;
 //     }
 //     InitDefaultMaterial(dst);
@@ -475,9 +475,9 @@
 //             }
 //         } catch (std::exception& e) {
 //             if (material_json.contains("name")) {
-//                 LOG_ERROR("Load material({}) failed: {}", material_json["name"].get<std::string>(), e.what());
+//                 LOG_ERROR(MOER_TEXT("Load material({}) failed: {}"), material_json["name"].get<std::string>(), e.what());
 //             } else {
-//                 LOG_ERROR("Load material failed: {}. Possibly missing 'name'.", e.what());
+//                 LOG_ERROR(MOER_TEXT("Load material failed: {}. Possibly missing 'name'."), e.what());
 //             }
 //             return false;
 //         }
@@ -532,7 +532,7 @@
 
 // void JsonSceneParser::Impl::LoadLambertMaterial(ExtendedSceneData& dst, const Json& material_json) {
 //     if (!material_json.contains("name")) {
-//         LOG_ERROR("Invalid material format: Missing 'name' for a lambert material.");
+//         LOG_ERROR(MOER_TEXT("Invalid material format: Missing 'name' for a lambert material."));
 //         return;
 //     }
 //     std::string name     = material_json.at("name");
@@ -560,7 +560,7 @@
 
 // void JsonSceneParser::Impl::LoadConductorMaterial(ExtendedSceneData& dst, const Json& material_json) {
 //     if (!material_json.contains("name")) {
-//         LOG_ERROR("Invalid material format: Missing 'name' for a conductor material.");
+//         LOG_ERROR(MOER_TEXT("Invalid material format: Missing 'name' for a conductor material."));
 //         return;
 //     }
 //     std::string name     = material_json.at("name");
@@ -585,7 +585,7 @@
 
 // void JsonSceneParser::Impl::LoadNullMaterial(ExtendedSceneData& dst, const Json& material_json) {
 //     if (!material_json.contains("name")) {
-//         LOG_ERROR("Invalid material format: Missing 'name' for a conductor material.");
+//         LOG_ERROR(MOER_TEXT("Invalid material format: Missing 'name' for a conductor material."));
 //         return;
 //     }
 //     std::string name     = material_json.at("name");
@@ -622,12 +622,12 @@
 //     }
 //     ImageReadDesc image_desc = ImageIO::ReadFromFile(abs_texture_path);
 //     if (!image_desc.IsValid()) {
-//         LOG_ERROR("Load Texture Failed: {}", abs_texture_path.string());
+//         LOG_ERROR(MOER_TEXT("Load Texture Failed: {}"), abs_texture_path.string());
 //         return;
 //     }
 //     TextureData texture_data = CreateTextureData(image_desc);
 //     dst.saveTextureData(texture_key, texture_data, mat, param_name);
-//     LOG_INFO("Load Texture Success: {}", abs_texture_path.string());
+//     LOG_INFO(MOER_TEXT("Load Texture Success: {}"), abs_texture_path.string());
 // }
 
 // TextureData CreateTextureData(const ImageReadDesc& image_desc) {

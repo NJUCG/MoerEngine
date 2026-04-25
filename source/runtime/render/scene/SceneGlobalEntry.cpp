@@ -26,7 +26,7 @@ void SceneGlobalEntry::BindScene(Scene* scene) {
 Scene* SceneGlobalEntry::GetScene() {
     std::lock_guard<std::mutex> lock(GetMutex());
     if (m_scene == nullptr) {
-        LOG_ERROR("SceneGlobalEntry::GetScene() called but no Scene is bound");
+        LOG_ERROR(MOER_TEXT("SceneGlobalEntry::GetScene() called but no Scene is bound"));
     }
     return m_scene;
 }
@@ -34,7 +34,7 @@ Scene* SceneGlobalEntry::GetScene() {
 const Scene* SceneGlobalEntry::GetScene() const {
     std::lock_guard<std::mutex> lock(GetMutex());
     if (m_scene == nullptr) {
-        LOG_ERROR("SceneGlobalEntry::GetScene() called but no Scene is bound");
+        LOG_ERROR(MOER_TEXT("SceneGlobalEntry::GetScene() called but no Scene is bound"));
     }
     return m_scene;
 }

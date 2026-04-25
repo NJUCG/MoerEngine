@@ -235,7 +235,7 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
             f.close();
         } else {
             LOG_INFO(
-                "No existing imgui.ini file found, loading preset config: {}",
+                MOER_TEXT("No existing imgui.ini file found, loading preset config: {}"),
                 ConfigManager::GetInstance().GetConfig().editor.preset_imgui_config_path
             );
 

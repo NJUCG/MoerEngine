@@ -35,7 +35,7 @@ void LightComponent::WriteToStream(OutputStream& _stream) const {
         // do nothing
 
     } else {
-        LOG_WARNING("Unknown light type: {}", static_cast<uint8_t>(GetType()));
+        LOG_WARNING(MOER_TEXT("Unknown light type: {}"), static_cast<uint8_t>(GetType()));
     }
 }
 
@@ -79,7 +79,7 @@ CountableRef<LightComponent> LightComponent::ReadFromStream(InputStream& _stream
         return MoerNew(AmbientLightComponent)(color);
 
     } else {
-        LOG_ERROR("Unknown light type: {}. Code Error!", static_cast<uint8_t>(type));
+        LOG_ERROR(MOER_TEXT("Unknown light type: {}. Code Error!"), static_cast<uint8_t>(type));
         return nullptr;
     }
 }

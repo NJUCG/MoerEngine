@@ -113,7 +113,7 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
     std::filesystem::path      layer_path(vk_layer_path);
     if (std::filesystem::exists(layer_path)) {
         Platform::SetEnv("VK_LAYER_PATH", MOER_XSTR(MOER_VK_LAYER_PATH));
-        LOG_INFO("Set VK_LAYER_PATH to {}", MOER_XSTR(MOER_VK_LAYER_PATH));
+        LOG_INFO(MOER_TEXT("Set VK_LAYER_PATH to {}"), MOER_XSTR(MOER_VK_LAYER_PATH));
     }
 
     const auto instance_layers = [&]() {
@@ -131,7 +131,7 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
 
     const auto& is_layer_valid = [&](std::string_view _view) {
         if (!instance_layers.contains(_view.data())) {
-            LOG_WARNING("Layer '{}' is not supported.", _view.data());
+            LOG_WARNING(MOER_TEXT("Layer '{}' is not supported."), _view.data());
             return false;
         }
         return true;
@@ -178,7 +178,7 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
 
     const auto& is_extension_supported = [&](const std::string& _ext) {
         if (!instance_extensions.contains(_ext)) {
-            LOG_ERROR("Reqired instance extension '{}' is not supported", _ext);
+            LOG_ERROR(MOER_TEXT("Reqired instance extension '{}' is not supported"), _ext);
             return false;
         }
         return true;
@@ -204,7 +204,7 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
         if (instance_extensions.contains(optional_ext.data())) {
             instance_extensions_loaded.emplace_back(optional_ext.data());
         } else {
-            LOG_WARNING("Optional instance extension '{}' is not supported", optional_ext);
+            LOG_WARNING(MOER_TEXT("Optional instance extension '{}' is not supported"), optional_ext);
         }
     }
     CHECK_ASSERT(
@@ -239,7 +239,7 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
         ) != instance_extensions_loaded.end();
 
     if (m_device_info.has_surface_maintenance1_instance) {
-        LOG_INFO("Loading VulkanInstanceExtension: {}", VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+        LOG_INFO(MOER_TEXT("Loading VulkanInstanceExtension: {}"), VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
     }
 
     VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
@@ -287,7 +287,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         auto gpu_features = VulkanDeviceFeatures::GetGpuFeatures(_gpu, _api_version);
         bool ok           = gpu_features.Contains(features_required);
         if (!ok) {
-            LOG_ERROR("GPU does NOT satisfy required core Vulkan features.");
+            LOG_ERROR(MOER_TEXT("GPU does NOT satisfy required core Vulkan features."));
         }
         return ok;
     };
@@ -308,7 +308,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         // // 笔记本等多 GPU 场景：名称含 "RTX" 时跳过（例如 RTX 5070 Laptop），便于强制走 A 卡等其它适配器
         // const std::string_view gpu_name(props.deviceName);
         // if (gpu_name.find("NVIDIA") != std::string_view::npos) {
-        //     LOG_INFO("SelectGpu: skipping '{}' (name contains '5070').", props.deviceName);
+        //     LOG_INFO(MOER_TEXT("SelectGpu: skipping '{}' (name contains '5070')."), props.deviceName);
         //     continue;
         // }
 
@@ -330,7 +330,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
                 priority += 4;
                 break;
             default:
-                LOG_ERROR("GPU Device type is invalid!");
+                LOG_ERROR(MOER_TEXT("GPU Device type is invalid!"));
         }
 
         auto indices = QueryQueueFamilyIndices(gpu);
@@ -342,7 +342,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
     }
 
     if (gpu_candidates.empty()) {
-        LOG_ERROR("No available GPU. Details:");
+        LOG_ERROR(MOER_TEXT("No available GPU. Details:"));
 
         // 仅在失败分支里输出调试信息：按 GPU 输出缺失的必需扩展
         for (const auto& gpu : gpu_list) {
@@ -366,7 +366,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
             }
 
             if (has_missing) {
-                LOG_ERROR("{}", log_msg);
+                LOG_ERROR(MOER_TEXT("{}"), log_msg);
             }
         }
 
@@ -432,9 +432,9 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
     m_device_info.queue_family_indices = VulkanDevice::QueryQueueFamilyIndices(m_gpu);
     m_device_info.queue_family_props   = VulkanDevice::GetQueueFamilyProperties(m_gpu);
 
-    LOG_INFO("VulkanRHI: GPU initialized.");
+    LOG_INFO(MOER_TEXT("VulkanRHI: GPU initialized."));
     LOG_INFO(
-        "\n- DeviceName: {}."
+        MOER_TEXT("\n- DeviceName: {}.")
         "\n- API={}.{}.{} (0x{:x}) Driver=0x{:x} VendorId=0x{:x}."
         "\n- DeviceID=0x{:x} Type={}."
         "\n- Max Descriptor Sets Bound {}, Timestamps {}.",
@@ -492,7 +492,7 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
         }
         extensions_loaded.emplace_back(extension->GetExtensionName().data());
         extension->PreCreateDevice(device_create_info);
-        LOG_INFO("Loading VulkanDeviceExtension: {}", extension->GetExtensionName());
+        LOG_INFO(MOER_TEXT("Loading VulkanDeviceExtension: {}"), extension->GetExtensionName());
     }
     device_create_info.enabledExtensionCount   = static_cast<uint32>(extensions_loaded.size());
     device_create_info.ppEnabledExtensionNames = extensions_loaded.data();
@@ -528,7 +528,7 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
 
     if (m_graphics_queue == m_transfer_queue) {
         LOG_WARNING(
-            "gfx and transfer share the same VkQueue handle. "
+            MOER_TEXT("gfx and transfer share the same VkQueue handle. ")
             "Installing shared submit mutex to avoid concurrent vkQueueSubmit2."
         );
         gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
@@ -536,7 +536,7 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     }
     if (m_compute_queue == m_graphics_queue) {
         LOG_WARNING(
-            "compute and gfx share the same VkQueue handle. "
+            MOER_TEXT("compute and gfx share the same VkQueue handle. ")
             "Installing shared submit mutex to avoid concurrent vkQueueSubmit2."
         );
         gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
@@ -606,7 +606,7 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
 
     VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
 
-    LOG_INFO("Vulkan Memory Allocator initialized with api version: {}.", alloc_create_info.vulkanApiVersion);
+    LOG_INFO(MOER_TEXT("Vulkan Memory Allocator initialized with api version: {}."), alloc_create_info.vulkanApiVersion);
 }
 
 bool VulkanDevice::ValidateDescriptorHeapRuntimeCommands() const {
@@ -624,7 +624,7 @@ bool VulkanDevice::ValidateDescriptorHeapRuntimeCommands() const {
             continue;
         }
         LOG_ERROR(
-            "VulkanRHI: descriptor heap disabled: required command {} is unavailable after volkLoadDevice.",
+            MOER_TEXT("VulkanRHI: descriptor heap disabled: required command {} is unavailable after volkLoadDevice."),
             command.name
         );
         all_loaded = false;
@@ -656,7 +656,7 @@ void VulkanDevice::FinalizeDescriptorHeapRuntimeCapability() {
 
     if (!optional_extensions.m_has_ext_descriptor_heap) {
         LOG_WARNING(
-            "VulkanRHI: descriptor heap disabled: VK_EXT_descriptor_heap unsupported or feature query rejected."
+            MOER_TEXT("VulkanRHI: descriptor heap disabled: VK_EXT_descriptor_heap unsupported or feature query rejected.")
         );
         return;
     }
@@ -665,14 +665,14 @@ void VulkanDevice::FinalizeDescriptorHeapRuntimeCapability() {
 
     if (!ValidateDescriptorHeapRuntimeCommands()) {
         LOG_ERROR(
-            "VulkanRHI: descriptor heap disabled: VK_EXT_descriptor_heap was enabled but runtime command loading is incomplete."
+            MOER_TEXT("VulkanRHI: descriptor heap disabled: VK_EXT_descriptor_heap was enabled but runtime command loading is incomplete.")
         );
         return;
     }
 
     optional_extensions.m_has_descriptor_heap_runtime = true;
     LOG_INFO(
-        "VulkanRHI: descriptor heap runtime available: maxResourceHeapSize={}, maxSamplerHeapSize={}, maxPushDataSize={}",
+        MOER_TEXT("VulkanRHI: descriptor heap runtime available: maxResourceHeapSize={}, maxSamplerHeapSize={}, maxPushDataSize={}"),
         m_device_info.optional_properties.descriptor_heap_properties.maxResourceHeapSize,
         m_device_info.optional_properties.descriptor_heap_properties.maxSamplerHeapSize,
         m_device_info.optional_properties.descriptor_heap_properties.maxPushDataSize
@@ -691,12 +691,12 @@ void VulkanDevice::CreateDescriptorHeap() {
     );
 
     if (HasDescriptorHeapRuntime()) {
-        LOG_INFO("VulkanRHI: Descriptor Heap initialized.");
+        LOG_INFO(MOER_TEXT("VulkanRHI: Descriptor Heap initialized."));
         return;
     }
 
     LOG_WARNING(
-        "VulkanRHI: descriptor heap startup disabled; continuing on the pre-replacement descriptor-buffer path."
+        MOER_TEXT("VulkanRHI: descriptor heap startup disabled; continuing on the pre-replacement descriptor-buffer path.")
     );
 }
 
@@ -750,7 +750,7 @@ uint64 VulkanDevice::GetPhysicalDescriptorSize(VkDescriptorType _type) const {
         case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
             return heap_props.bufferDescriptorSize;
         default:
-            LOG_ERROR("Unsupported physical descriptor size query: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type));
+            LOG_ERROR(MOER_TEXT("Unsupported physical descriptor size query: {}"), VK_TYPE_TO_STRING(VkDescriptorType, _type));
             assert(false && "Unsupported physical descriptor size query");
             return 0;
     }
@@ -842,7 +842,7 @@ void VulkanDevice::Destroy() {
     vkDestroyDevice(m_device, VK_NULL_HANDLE);
     m_device = VK_NULL_HANDLE;
 
-    LOG_INFO("VulkanRHI: Device destroyed.");
+    LOG_INFO(MOER_TEXT("VulkanRHI: Device destroyed."));
 
     // Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"
 }
@@ -988,7 +988,7 @@ QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu) 
     if (is_amd) {
         indices.transfer = indices.graphics.value();
         LOG_WARNING(
-            "AMD GPU '{}' (vendorID={:#x}) detected. "
+            MOER_TEXT("AMD GPU '{}' (vendorID={:#x}) detected. ")
             "Forcing transfer queue = graphics to avoid DMA queue VK_ERROR_DEVICE_LOST.",
             gpu_props.deviceName,
             gpu_props.vendorID
@@ -1067,7 +1067,7 @@ bool VulkanDevice::TryConvertCooperativeVectorMatrix(
     std::span<byte>                        _dst_data
 ) const {
     const auto log_error = [&](std::string_view _message) {
-        LOG_ERROR("VulkanRHI: TryConvertCooperativeVectorMatrix failed: {}", _message);
+        LOG_ERROR(MOER_TEXT("VulkanRHI: TryConvertCooperativeVectorMatrix failed: {}"), _message);
     };
 
     if (!m_device_info.optional_extensions.SupportsCooperativeVector()) {
@@ -1107,7 +1107,7 @@ bool VulkanDevice::TryConvertCooperativeVectorMatrix(
     }
     if (required_dst_size > _dst_data.size_bytes()) {
         LOG_ERROR(
-            "VulkanRHI: TryConvertCooperativeVectorMatrix failed: destination buffer is too small "
+            MOER_TEXT("VulkanRHI: TryConvertCooperativeVectorMatrix failed: destination buffer is too small ")
             "(required={} bytes, actual={} bytes).",
             required_dst_size,
             _dst_data.size_bytes()
@@ -1844,7 +1844,7 @@ PipelineHandle VulkanDevice::CreatePipeline(PipelineShaderInfo&& _shader_info) {
                 merge_reflect_info(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
                 emplace_shader(_shader_info_group.cs, VK_SHADER_STAGE_COMPUTE_BIT);
             } else {
-                LOG_ERROR("Unsupported shader group type: {}", typeid(T).name());
+                LOG_ERROR(MOER_TEXT("Unsupported shader group type: {}"), typeid(T).name());
             }
         },
         _shader_info.shader_group

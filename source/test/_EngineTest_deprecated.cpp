@@ -10,14 +10,14 @@
 #include <filesystem>
 #include <vcruntime_string.h>
 #define BEGIN_TEST(TestName)                          \
-    LOG_INFO("===================================="); \
-    LOG_INFO("Begin Test: {}", #TestName);            \
-    LOG_INFO("====================================");
+    LOG_INFO(MOER_TEXT("====================================")); \
+    LOG_INFO(MOER_TEXT("Begin Test: {}"), #TestName);            \
+    LOG_INFO(MOER_TEXT("===================================="));
 
 #define END_TEST(TestName)                            \
-    LOG_INFO("===================================="); \
-    LOG_INFO("End Test: {}", #TestName);              \
-    LOG_INFO("====================================");
+    LOG_INFO(MOER_TEXT("====================================")); \
+    LOG_INFO(MOER_TEXT("End Test: {}"), #TestName);              \
+    LOG_INFO(MOER_TEXT("===================================="));
 
 void RenderThreadSuspendTest(const Moer::Engine& engine) {
     BEGIN_TEST(RenderThreadSuspendTest)
@@ -29,7 +29,7 @@ void RenderThreadSuspendTest(const Moer::Engine& engine) {
                 // FunctionGraphTask::ConstructAndDispatchWhenReady(
                 //     []() {
                 //         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                //         LOG_WARNING("Render Thread Ticking");
+                //         LOG_WARNING(MOER_TEXT("Render Thread Ticking"));
                 //     },
                 //     nullptr,
                 //     EThread::ERenderThread);
@@ -37,7 +37,7 @@ void RenderThreadSuspendTest(const Moer::Engine& engine) {
                 LambdaTask::Dispatch(
                     []() {
                         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                        LOG_WARNING("Render Thread Ticking");
+                        LOG_WARNING(MOER_TEXT("Render Thread Ticking"));
                     },
                     EThread::ERenderThread
                 );
@@ -51,7 +51,7 @@ void RenderThreadSuspendTest(const Moer::Engine& engine) {
         //             FunctionGraphTask::ConstructAndDispatchWhenReady(
         //                 []() {
         //                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        //                     LOG_WARNING("Render Thread Ticking");
+        //                     LOG_WARNING(MOER_TEXT("Render Thread Ticking"));
         //                 },
         //                 nullptr,
         //                 EThread::ERenderThread);
@@ -66,7 +66,7 @@ void RenderThreadSuspendTest(const Moer::Engine& engine) {
         Moer::ScopedResumeRenderThread scope_suspend;
         for (uint32_t i = 0; i < 5; i++) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            LOG_WARNING("Main Thread Ticking");
+            LOG_WARNING(MOER_TEXT("Main Thread Ticking"));
         }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));

@@ -172,7 +172,7 @@ void ClosableMpScStackTest() {
         assert(i != nullptr);
         assert(i->a == 1 && i->b == 2 && i->c == 3 && i->d == 4);
     }
-    LOG_INFO("push count: {}", push_count.load());
+    LOG_INFO(MOER_TEXT("push count: {}"), push_count.load());
 }
 int main() {
     Moer::TaskSystem::Init();

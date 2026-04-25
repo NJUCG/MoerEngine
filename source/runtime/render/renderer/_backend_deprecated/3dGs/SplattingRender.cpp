@@ -201,7 +201,7 @@
 // }
 // void Moer::SplattingRender::Impl::ReallocateBuffers() {
 
-//     LOG_INFO("ReallocateBuffers {} {}", num_instances, sortBufferSizeMultiplier);
+//     LOG_INFO(MOER_TEXT("ReallocateBuffers {} {}"), num_instances, sortBufferSizeMultiplier);
 
 //     uint32_t sort_k_buffer_size = numVertices * sortBufferSizeMultiplier * sizeof(uint64_t);
 //     sortKBufferEven             = g_rhi->RHICreateBuffer<float>(sort_k_buffer_size, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC);

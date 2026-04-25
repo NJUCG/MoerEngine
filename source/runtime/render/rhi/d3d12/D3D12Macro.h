@@ -14,7 +14,7 @@ namespace Moer::Render {
     do {                                                             \
         HRESULT _hr = (hr);                                          \
         if (_hr < 0) {                                               \
-            LOG_CRITICAL("ERROR: hresult={:#x}", (unsigned int)_hr); \
+            LOG_CRITICAL(MOER_TEXT("ERROR: hresult={:#x}"), (unsigned int)_hr); \
             std::terminate();                                        \
         }                                                            \
     } while (0)
@@ -23,7 +23,7 @@ namespace Moer::Render {
     do {                                               \
         bool ok = (x);                                 \
         if (!ok) {                                     \
-            LOG_CRITICAL("assert failed EXPR {}", #x); \
+            LOG_CRITICAL(MOER_TEXT("assert failed EXPR {}"), #x); \
             std::terminate();                          \
         }                                              \
     } while (0)
@@ -32,7 +32,7 @@ namespace Moer::Render {
     do {                                                              \
         bool ok = (x);                                                \
         if (!ok) {                                                    \
-            LOG_CRITICAL("assert failed EXPR {} NOTE {}", #x, (msg)); \
+            LOG_CRITICAL(MOER_TEXT("assert failed EXPR {} NOTE {}"), #x, (msg)); \
             std::terminate();                                         \
         }                                                             \
     } while (0)

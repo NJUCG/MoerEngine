@@ -25,9 +25,9 @@ void RenderThreadMain(Event* _is_bound_to_taskgraph_event) {
         _is_bound_to_taskgraph_event->Trigger();
     }
     MOER_ASSERT(IsRenderThreadInitialized(), "Render thread is not initialized before RenderThreadMain");
-    LOG_INFO("[RENDER THREAD] thread id:{} executing", GetRenderThreadId());
+    LOG_INFO(MOER_TEXT("[RENDER THREAD] thread id:{} executing"), GetRenderThreadId());
     TaskGraph::GetInterface().ProcessThreadUntilReturn(EThread::ERenderThread);
-    LOG_INFO("[RENDER THREAD] thread id:{} end", GetRenderThreadId());
+    LOG_INFO(MOER_TEXT("[RENDER THREAD] thread id:{} end"), GetRenderThreadId());
 }
 class RenderThread : public Runnable {
 public:
@@ -77,7 +77,7 @@ void StartRenderThread() {
 
 void StopRenderThread() {
 
-    LOG_INFO("Wait for Rendering Thread To Stop.");
+    LOG_INFO(MOER_TEXT("Wait for Rendering Thread To Stop."));
     //wait for thread to finish executing
     // GraphEventRef return_task = GraphTask<ReturnGraphTask>::CreateTask(nullptr, EThread::EMainThread)
     //                                 .ConstructAndDispatchWhenReady(EThread::ERenderThread);
@@ -94,13 +94,13 @@ void StopRenderThread() {
     MoerDelete((RenderThread*)g_render_thread_runnable);
     g_render_thread_runnable = nullptr;
 
-    LOG_INFO("Rendering Thread Stopped.");
+    LOG_INFO(MOER_TEXT("Rendering Thread Stopped."));
 };
 
 void ShutDownRenderThread() {}
 
 void RestartRenderThread() {
-    LOG_INFO("Restarting Render Thread.");
+    LOG_INFO(MOER_TEXT("Restarting Render Thread."));
     MOER_ASSERT(
         IsGameThreadInitialized() && IsCurrentlyGameThread(),
         "Render thread control is only allowed on the initialized game thread"
@@ -116,7 +116,7 @@ void SuspendRenderThread(bool _restart_later) {
         IsGameThreadInitialized() && IsCurrentlyGameThread(),
         "Render thread control is only allowed on the initialized game thread"
     );
-    LOG_INFO("Try Suspending Render Thread.");
+    LOG_INFO(MOER_TEXT("Try Suspending Render Thread."));
     if (_restart_later) {
         StopRenderThread();
         g_render_thread_suspending++;
@@ -137,9 +137,9 @@ void SuspendRenderThread(bool _restart_later) {
 
             LambdaTask::Dispatch(
                 []() {
-                    LOG_INFO("Render Thread Suspending.");
+                    LOG_INFO(MOER_TEXT("Render Thread Suspending."));
                     g_render_suspend_end_event->Wait();
-                    LOG_INFO("Render Thread End Suspending.");
+                    LOG_INFO(MOER_TEXT("Render Thread End Suspending."));
                 },
                 EThread::ERenderThread
             );
@@ -153,13 +153,13 @@ void SuspendRenderThread(bool _restart_later) {
 
 void ResumeRenderThread(bool _promised_restart_before) {
     if (_promised_restart_before) {
-        LOG_INFO("Restarting Render Thread.");
+        LOG_INFO(MOER_TEXT("Restarting Render Thread."));
         g_render_thread_suspending--;
         StartRenderThread();
 
     } else {
         if (g_render_thread_suspending.fetch_add(-1) == 1) {
-            LOG_INFO("Trigger Render Thread End Suspending.");
+            LOG_INFO(MOER_TEXT("Trigger Render Thread End Suspending."));
             g_render_suspend_end_event->Trigger();
         }
     }

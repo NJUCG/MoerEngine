@@ -65,7 +65,7 @@ VkImageLayout DecideImageLayout(VkDescriptorType _type) {
         case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
             return VK_IMAGE_LAYOUT_GENERAL;
         default:
-            LOG_ERROR("Unsupported image descriptor type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type));
+            LOG_ERROR(MOER_TEXT("Unsupported image descriptor type: {}"), VK_TYPE_TO_STRING(VkDescriptorType, _type));
             return VK_IMAGE_LAYOUT_UNDEFINED;
     }
 }
@@ -422,7 +422,7 @@ public:
                 break;
             default:
                 LOG_ERROR(
-                    "Unsupported buffer descriptor type: {}",
+                    MOER_TEXT("Unsupported buffer descriptor type: {}"),
                     VK_TYPE_TO_STRING(VkDescriptorType, _type)
                 );
                 assert(false && "Unsupported buffer descriptor type");
@@ -967,7 +967,7 @@ public:
             const uint64 next = current + _size;
             if (next > binder.range_limit) {
                 LOG_ERROR(
-                    "Descriptor heap online range overflow: current={}, requested={}, limit={}",
+                    MOER_TEXT("Descriptor heap online range overflow: current={}, requested={}, limit={}"),
                     current,
                     _size,
                     binder.range_limit
@@ -1378,7 +1378,7 @@ public:
             case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
                 return Moer::AlignUp(GetPhysicalDescriptorSize(_type), GetOnlineResourceDescriptorAlignment(_type));
             default:
-                LOG_ERROR("Unsupported heap descriptor stride type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type));
+                LOG_ERROR(MOER_TEXT("Unsupported heap descriptor stride type: {}"), VK_TYPE_TO_STRING(VkDescriptorType, _type));
                 assert(false && "Unsupported heap descriptor stride type");
                 return 0;
         }
@@ -1396,7 +1396,7 @@ public:
             case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
                 return m_device->GetOptionalProperties().descriptor_heap_properties.imageDescriptorAlignment;
             default:
-                LOG_ERROR("Unsupported heap descriptor alignment type: {}", VK_TYPE_TO_STRING(VkDescriptorType, _type));
+                LOG_ERROR(MOER_TEXT("Unsupported heap descriptor alignment type: {}"), VK_TYPE_TO_STRING(VkDescriptorType, _type));
                 assert(false && "Unsupported heap descriptor alignment type");
                 return 0;
         }

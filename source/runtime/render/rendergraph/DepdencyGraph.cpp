@@ -28,7 +28,7 @@
 //             auto node = stack.top();
 //             stack.pop();
 
-//             LOG_INFO("Culling node: {}", node->GetName());
+//             LOG_INFO(MOER_TEXT("Culling node: {}"), node->GetName());
 
 //             auto in_coming_edges = GetInComingEdges(node);
 //             for (auto& edge : in_coming_edges) {

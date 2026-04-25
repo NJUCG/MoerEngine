@@ -219,7 +219,7 @@ Render::BindlessArrayRef Scene::GetBindlessArray() {
 entt::entity Scene::GetMainCameraEntity() const {
     auto entity = r().view<ecs::CTagMainCamera>().front();
     if (entity == entt::null) {
-        LOG_ERROR("No main camera found in scene");
+        LOG_ERROR(MOER_TEXT("No main camera found in scene"));
     }
     return entity;
 }
@@ -231,7 +231,7 @@ entt::entity Scene::GetMainDirectionalLightEntity() const {
         // 如果没找到，忽略 MainTag，继续找
         entity = r().view<ecs::CLightDirectional>().front();
         if (entity == entt::null) {
-            LOG_ERROR("No directional light found in scene");
+            LOG_ERROR(MOER_TEXT("No directional light found in scene"));
         }
     }
     return entity;
@@ -244,7 +244,7 @@ entt::entity Scene::GetMainPointLightEntity() const {
         // 如果没找到，忽略 MainTag，继续找
         entity = r().view<ecs::CLightPoint>().front();
         if (entity == entt::null) {
-            LOG_ERROR("No point light found in scene");
+            LOG_ERROR(MOER_TEXT("No point light found in scene"));
         }
     }
     return entity;
@@ -253,7 +253,7 @@ entt::entity Scene::GetMainPointLightEntity() const {
 ecs::CCamera& Scene::GetMainCamera() {
     auto entity = GetMainCameraEntity();
     if (entity == entt::null || !r().valid(entity) || !r().all_of<ecs::CCamera>(entity)) {
-        LOG_ERROR("Invalid main camera entity or missing CCamera component");
+        LOG_ERROR(MOER_TEXT("Invalid main camera entity or missing CCamera component"));
         assert(false && "Invalid main camera entity");
     }
     return r().get<ecs::CCamera>(entity);
@@ -262,7 +262,7 @@ ecs::CCamera& Scene::GetMainCamera() {
 const ecs::CLightDirectional& Scene::GetMainDirectionalLight() const {
     auto entity = GetMainDirectionalLightEntity();
     if (entity == entt::null || !r().valid(entity) || !r().all_of<ecs::CLightDirectional>(entity)) {
-        LOG_ERROR("Invalid main directional light entity or missing CLightDirectional component");
+        LOG_ERROR(MOER_TEXT("Invalid main directional light entity or missing CLightDirectional component"));
         assert(false && "Invalid main directional light entity");
     }
     return r().get<ecs::CLightDirectional>(entity);
@@ -271,7 +271,7 @@ const ecs::CLightDirectional& Scene::GetMainDirectionalLight() const {
 const ecs::CLightPoint& Scene::GetMainPointLight() const {
     auto entity = GetMainPointLightEntity();
     if (entity == entt::null || !r().valid(entity) || !r().all_of<ecs::CLightPoint>(entity)) {
-        LOG_ERROR("Invalid main point light entity or missing CLightPoint component");
+        LOG_ERROR(MOER_TEXT("Invalid main point light entity or missing CLightPoint component"));
         assert(false && "Invalid main point light entity");
     }
     return r().get<ecs::CLightPoint>(entity);
@@ -279,7 +279,7 @@ const ecs::CLightPoint& Scene::GetMainPointLight() const {
 
 const ecs::CTransform& Scene::GetTransform(entt::entity entity) const {
     if (entity == entt::null || !r().valid(entity) || !r().all_of<ecs::CTransform>(entity)) {
-        LOG_ERROR("Invalid entity or missing CTransform component");
+        LOG_ERROR(MOER_TEXT("Invalid entity or missing CTransform component"));
         assert(false && "Invalid entity for GetTransform");
     }
     return r().get<ecs::CTransform>(entity);

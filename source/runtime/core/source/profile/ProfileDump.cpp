@@ -182,19 +182,19 @@ RuntimeConfig BuildConfigFromCVars() {
     config.tcp_port = tcp_port;
 
     if (ClampPositive(config.tls_max_records, 256)) {
-        LOG_WARNING("Profile.Dump.TlsMaxRecords must be positive. Fallback to 256.");
+        LOG_WARNING(MOER_TEXT("Profile.Dump.TlsMaxRecords must be positive. Fallback to 256."));
     }
     if (ClampPositive(config.tls_max_bytes, 32768)) {
-        LOG_WARNING("Profile.Dump.TlsMaxBytes must be positive. Fallback to 32768.");
+        LOG_WARNING(MOER_TEXT("Profile.Dump.TlsMaxBytes must be positive. Fallback to 32768."));
     }
     if (ClampPositive(config.auto_publish_records, 64)) {
-        LOG_WARNING("Profile.Dump.AutoPublishRecords must be positive. Fallback to 64.");
+        LOG_WARNING(MOER_TEXT("Profile.Dump.AutoPublishRecords must be positive. Fallback to 64."));
     }
     if (ClampPositive(config.auto_publish_bytes, 8192)) {
-        LOG_WARNING("Profile.Dump.AutoPublishBytes must be positive. Fallback to 8192.");
+        LOG_WARNING(MOER_TEXT("Profile.Dump.AutoPublishBytes must be positive. Fallback to 8192."));
     }
     if (ClampPositive(config.tcp_port, 19090)) {
-        LOG_WARNING("Profile.Dump.TcpPort must be positive. Fallback to 19090.");
+        LOG_WARNING(MOER_TEXT("Profile.Dump.TcpPort must be positive. Fallback to 19090."));
     }
 
     if (config.file_path.empty()) {
@@ -251,7 +251,7 @@ bool EnsureWinsockLocked(HubState& state) {
     WSADATA data{};
     const int ret = WSAStartup(MAKEWORD(2, 2), &data);
     if (ret != 0) {
-        LOG_WARNING("ProfileDump failed to initialize Winsock: {}", ret);
+        LOG_WARNING(MOER_TEXT("ProfileDump failed to initialize Winsock: {}"), ret);
         return false;
     }
     state.winsock_initialized = true;
@@ -357,7 +357,7 @@ bool EnsureFileSinkLocked(HubState& state, const RuntimeConfig& config) {
 
     state.file_stream.open(path, std::ios::binary | std::ios::trunc);
     if (!state.file_stream.is_open()) {
-        LOG_WARNING("ProfileDump failed to open file sink `{}`.", config.file_path);
+        LOG_WARNING(MOER_TEXT("ProfileDump failed to open file sink `{}`."), config.file_path);
         return false;
     }
 
@@ -383,7 +383,7 @@ bool EnsureTcpSinkLocked(HubState& state, const RuntimeConfig& config) {
     ResetTcpSinkLocked(state);
     state.tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (state.tcp_socket == INVALID_SOCKET) {
-        LOG_WARNING("ProfileDump failed to create TCP socket.");
+        LOG_WARNING(MOER_TEXT("ProfileDump failed to create TCP socket."));
         return false;
     }
 
@@ -391,13 +391,13 @@ bool EnsureTcpSinkLocked(HubState& state, const RuntimeConfig& config) {
     addr.sin_family = AF_INET;
     addr.sin_port = htons(static_cast<u_short>(config.tcp_port));
     if (inet_pton(AF_INET, config.tcp_host.c_str(), &addr.sin_addr) != 1) {
-        LOG_WARNING("ProfileDump invalid TCP host `{}`.", config.tcp_host);
+        LOG_WARNING(MOER_TEXT("ProfileDump invalid TCP host `{}`."), config.tcp_host);
         ResetTcpSinkLocked(state);
         return false;
     }
 
     if (connect(state.tcp_socket, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
-        LOG_WARNING("ProfileDump failed to connect TCP sink {}:{}.", config.tcp_host, config.tcp_port);
+        LOG_WARNING(MOER_TEXT("ProfileDump failed to connect TCP sink {}:{}."), config.tcp_host, config.tcp_port);
         ResetTcpSinkLocked(state);
         return false;
     }
@@ -483,7 +483,7 @@ void EmitPendingToSinksLocked(HubState& state) {
             };
             if (!tcp_writer(reinterpret_cast<const uint8_t*>(&header), sizeof(header)) ||
                 !tcp_writer(payload.data(), payload.size())) {
-                LOG_WARNING("ProfileDump lost TCP connection while sending schema packet.");
+                LOG_WARNING(MOER_TEXT("ProfileDump lost TCP connection while sending schema packet."));
                 ResetTcpSinkLocked(state);
                 break;
             }
@@ -507,7 +507,7 @@ void EmitPendingToSinksLocked(HubState& state) {
             };
             if (!tcp_writer(reinterpret_cast<const uint8_t*>(&header), sizeof(header)) ||
                 !tcp_writer(payload.data(), payload.size())) {
-                LOG_WARNING("ProfileDump lost TCP connection while sending record packet.");
+                LOG_WARNING(MOER_TEXT("ProfileDump lost TCP connection while sending record packet."));
                 ResetTcpSinkLocked(state);
                 break;
             }

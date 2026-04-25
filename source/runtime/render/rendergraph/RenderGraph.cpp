@@ -24,7 +24,7 @@
 //     }
 //     void BlackBoard::PutHandle(std::string_view name, RenderGraphHandle handle) {
 //         if (m_handles.contains(name)) {
-//             LOG_ERROR("Resource {0} already exists in blackboard", name);
+//             LOG_ERROR(MOER_TEXT("Resource {0} already exists in blackboard"), name);
 //             return;
 //         }
 //         m_handles.emplace(name, handle);
@@ -214,7 +214,7 @@
 
 //     void RenderGraph::Execute(const RenderGraphExecuteConfig& config) {
 //         Compile();
-//         // LOG_INFO("Compile Time: {0}ms", timer.ElapsedMilliseconds());
+//         // LOG_INFO(MOER_TEXT("Compile Time: {0}ms"), timer.ElapsedMilliseconds());
 
 //         auto* cmd_list = config.cmd_list;
 //         for (auto& pass : m_passes) {
@@ -307,7 +307,7 @@
 //                 if (resource->destroy_pass)
 //                     resource->destroy_pass->AddResourceToDestroy(resource);
 //             } else {
-//                 LOG_INFO("Resource {0} is not used", resource->GetName());
+//                 LOG_INFO(MOER_TEXT("Resource {0} is not used"), resource->GetName());
 //             }
 //         }
 //     }
@@ -387,7 +387,7 @@
 //     }
 //     RenderGraphHandle RenderGraph::AddTextureInternal(RenderGraphTexture* texture) {
 //         if (m_black_board.GetHandle(texture->GetName()).IsInitialized()) {
-//             LOG_ERROR("Resource {0} already exists in blackboard", texture->GetName());
+//             LOG_ERROR(MOER_TEXT("Resource {0} already exists in blackboard"), texture->GetName());
 //             return RenderGraphHandle();
 //         }
 //         m_dependency_graph.RegisterNode(texture);

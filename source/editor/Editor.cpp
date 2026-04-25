@@ -35,7 +35,7 @@ ERenderMethod ResolveDefaultRenderMethod(std::string_view render_method_name) {
         return ERenderMethod::Raytracing;
     }
 
-    LOG_WARNING("Invalid default render method: {}. Use Raster instead.", render_method_name);
+    LOG_WARNING(MOER_TEXT("Invalid default render method: {}. Use Raster instead."), render_method_name);
     return ERenderMethod::Raster;
 }
 
@@ -94,10 +94,10 @@ void Editor::Init(int argc, const char** argv) {
             workspace_path.parent_path() :
             workspace_path;
 
-    LOG_INFO("Workspace Path : {}", workspace_path.string());
+    LOG_INFO(MOER_TEXT("Workspace Path : {}"), workspace_path.string());
     if (ContainsNonAscii(workspace_path)) {
         LOG_ERROR(
-            "Workspace Path contains non-ASCII characters (e.g., Chinese characters)! This may cause unexpected "
+            MOER_TEXT("Workspace Path contains non-ASCII characters (e.g., Chinese characters)! This may cause unexpected ")
             "issues. Current path: {}",
             workspace_path.string()
         );

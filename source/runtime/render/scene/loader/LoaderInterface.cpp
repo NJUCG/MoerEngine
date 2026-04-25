@@ -21,7 +21,7 @@ bool LoaderInterface::LoadSceneFromFile(
     ecs::LogicalScene&           out_logical_scene,
     const std::filesystem::path& file_path
 ) {
-    LOG_INFO("Start loading LogicalScene from file: {}", file_path.string());
+    LOG_INFO(MOER_TEXT("Start loading LogicalScene from file: {}"), file_path.string());
 
     return LoaderInterface::LoadSceneFromFileCommon(out_logical_scene, file_path);
 }
@@ -32,7 +32,7 @@ SharedPtr<SceneLoadInfoAsync> LoaderInterface::LoadSceneFromFileAsync(
     ecs::LogicalScene&           out_logical_scene,
     const std::filesystem::path& file_path
 ) {
-    LOG_INFO("Start loading LogicalScene from file \"Async\": {}", file_path.string());
+    LOG_INFO(MOER_TEXT("Start loading LogicalScene from file \"Async\": {}"), file_path.string());
 
     SharedPtr<SceneLoadInfoAsync> load_info = MakeShared<SceneLoadInfoAsync>();
 
@@ -63,18 +63,18 @@ bool LoaderInterface::LoadSceneFromFileCommon(
     // auto ext = file_path.string().substr(_file_path.string().find_last_of(".") + 1);
 
     if (scene_load_function_maps.contains(ext) == false) {
-        LOG_ERROR("Loading Logical Scene - Unsupported file format: {}", ext);
+        LOG_ERROR(MOER_TEXT("Loading Logical Scene - Unsupported file format: {}"), ext);
         return false;
     }
 
     bool result = scene_load_function_maps[ext](out_logical_scene, file_path);
 
     if (!result) {
-        LOG_ERROR("Loading Logical Scene - Failed to load scene from file: {}", file_path.string());
+        LOG_ERROR(MOER_TEXT("Loading Logical Scene - Failed to load scene from file: {}"), file_path.string());
         return false;
     }
 
-    LOG_INFO("Loading Logical Scene - Scene loaded successfully from file: {}", file_path.string());
+    LOG_INFO(MOER_TEXT("Loading Logical Scene - Scene loaded successfully from file: {}"), file_path.string());
     return true;
 }
 

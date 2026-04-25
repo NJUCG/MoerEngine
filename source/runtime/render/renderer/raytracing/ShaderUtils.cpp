@@ -134,7 +134,7 @@ void ShaderUtils::GenerateMips(CommandList& _cmd_list, std::span<TextureView> _m
         if (b_first_time) {
             b_first_time = false;
             LOG_WARNING(
-                "Here may be a bug when total mips > 5. GenerateMips for {} will be called. mip_level={}, "
+                MOER_TEXT("Here may be a bug when total mips > 5. GenerateMips for {} will be called. mip_level={}, ")
                 "extent={},{}",
                 _mips[0].GetTexture()->GetName(),
                 _mips[0].mip_level,

@@ -64,13 +64,13 @@ void RenderSystem::ShutDown() {
 
     StopRenderThread();
 
-    LOG_INFO("Render System Shut down.");
+    LOG_INFO(MOER_TEXT("Render System Shut down."));
 }
 
 void RenderSystem::InitRHI() {
     //todo: init by config
 
-    LOG_WARNING("RenderSystem needs to be refactored");
+    LOG_WARNING(MOER_TEXT("RenderSystem needs to be refactored"));
     // const auto& config_data = Moer::ConfigManager::GetInstance().GetConfig();
     // if (strcmp(config_data.engine.rhi.default_rhi.c_str(), RHI_VULKAN_NAME) == 0) {
     //     g_rhi = new VulkanRHIImpl();

@@ -200,7 +200,7 @@ bool VulkanInterruptRuntime::PollTimelineCompletion(
     constexpr auto warn_step = std::chrono::seconds(2);
     if (elapsed >= warn_step * (pending_warn_count + 1)) {
         LOG_WARNING(
-            "Interrupt task still pending, kind={}, op_seq={}, timeline={}, elapsed_ms={}",
+            MOER_TEXT("Interrupt task still pending, kind={}, op_seq={}, timeline={}, elapsed_ms={}"),
             task_name,
             op_seq,
             timeline_value,
@@ -225,7 +225,7 @@ bool VulkanInterruptRuntime::PollPresentFence(
     }
     if (result != VK_NOT_READY) {
         LOG_ERROR(
-            "Present fence query failed, op_seq={}, result={}",
+            MOER_TEXT("Present fence query failed, op_seq={}, result={}"),
             task.common.op_seq,
             int(result)
         );
@@ -238,7 +238,7 @@ bool VulkanInterruptRuntime::PollPresentFence(
     constexpr auto warn_step = std::chrono::seconds(2);
     if (elapsed >= warn_step * (task.common.pending_warn_count + 1)) {
         LOG_WARNING(
-            "Present fence still pending, op_seq={}, elapsed_ms={}",
+            MOER_TEXT("Present fence still pending, op_seq={}, elapsed_ms={}"),
             task.common.op_seq,
             std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
         );

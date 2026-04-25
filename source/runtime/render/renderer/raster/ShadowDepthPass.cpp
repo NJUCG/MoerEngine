@@ -211,7 +211,7 @@ void tick_and_log_shadow_cache(
                << shadow_cache_thresholds_in_texels[cascade_index] << ')';
     }
 
-    LOG_INFO("{}", stream.str());
+    LOG_INFO(MOER_TEXT("{}"), stream.str());
 }
 
 CSMCascadeCandidate build_csm_cascade_candidate(
@@ -410,7 +410,7 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
             AssetTool::AllocateRasterResourceHandle(context.bdls, shadow_map_texture, tex_cfg);
 
             LOG_DEBUG(
-                "Create ShadowMap Texture: {}, size ({}, {}), bindless handle: {}",
+                MOER_TEXT("Create ShadowMap Texture: {}, size ({}, {}), bindless handle: {}"),
                 std::format("ShadowMapTexture_{}", i),
                 ui_config.shadow_csm_sm_size,
                 ui_config.shadow_csm_sm_size,
@@ -454,7 +454,7 @@ void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
                 context.bdls->AllocateTexture(cube_res.tex, Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
 
             LOG_DEBUG(
-                "Create PointLight ShadowMap: {}, size ({}, {}), bindless handle: {}",
+                MOER_TEXT("Create PointLight ShadowMap: {}, size ({}, {}), bindless handle: {}"),
                 cube_res.name,
                 ui_config.shadow_csm_sm_size,
                 ui_config.shadow_csm_sm_size,
@@ -493,7 +493,7 @@ std::optional<ecs::CLightDirectional> ShadowDepthPass::GetMainLightDirection(Ras
     auto entity_opt = GetMainLightDirectionEntity(context);
     if (!entity_opt.has_value()) {
         LOG_ERROR(
-            "No directional light found in the scene. Please ensure at least one entity has "
+            MOER_TEXT("No directional light found in the scene. Please ensure at least one entity has ")
             "CLightDirectional component."
         );
         return std::nullopt;
@@ -529,7 +529,7 @@ std::optional<ecs::CLightPoint> ShadowDepthPass::GetMainPointLight(RasterContext
     auto entity_opt = GetMainPointLightEntity(context);
     if (!entity_opt.has_value()) {
         LOG_ERROR(
-            "No point light found in the scene. Please ensure at least one entity has CLightPoint component."
+            MOER_TEXT("No point light found in the scene. Please ensure at least one entity has CLightPoint component.")
         );
         return std::nullopt;
     }
@@ -721,7 +721,7 @@ void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_con
             RenderCSM(context, ui_config, camera);
             break;
         default:
-            LOG_ERROR("Shadow map mode {} not supported", static_cast<int>(ui_config.shadow_map_mode));
+            LOG_ERROR(MOER_TEXT("Shadow map mode {} not supported"), static_cast<int>(ui_config.shadow_map_mode));
             break;
     }
     return;

@@ -121,10 +121,10 @@ public:
 
     // // MARK: GeometryPass
     // GeometryPassPipeline CreateGeometryPso(const VertexAttributesBitmask& bitmask) {
-    //     LOG_INFO("GeometryPassPsoManager, creating GeometryPass PSO for vertex attributes bitmask: {}", bitmask);
+    //     LOG_INFO(MOER_TEXT("GeometryPassPsoManager, creating GeometryPass PSO for vertex attributes bitmask: {}"), bitmask);
 
     //     if (!m_pso_records_map.contains(bitmask)) {
-    //         LOG_ERROR("GeometryPassPsoManager, vertex attribute bitmask {} is not supported!", bitmask);
+    //         LOG_ERROR(MOER_TEXT("GeometryPassPsoManager, vertex attribute bitmask {} is not supported!"), bitmask);
     //         return GeometryPassPipeline();
     //     }
 
@@ -153,10 +153,10 @@ public:
     // }
 
     // ShadowDepthPassPipeline CreateShadowPso(const VertexAttributesBitmask& bitmask) {
-    //     LOG_INFO("GeometryPassPsoManager, creating ShadowDepthPass PSO for vertex attributes bitmask: {}", bitmask);
+    //     LOG_INFO(MOER_TEXT("GeometryPassPsoManager, creating ShadowDepthPass PSO for vertex attributes bitmask: {}"), bitmask);
 
     //     if (!m_pso_records_map.contains(bitmask)) {
-    //         LOG_ERROR("GeometryPassPsoManager, vertex attribute bitmask {} is not supported!", bitmask);
+    //         LOG_ERROR(MOER_TEXT("GeometryPassPsoManager, vertex attribute bitmask {} is not supported!"), bitmask);
     //         return ShadowDepthPassPipeline();
     //     }
 

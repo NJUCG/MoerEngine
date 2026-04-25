@@ -39,7 +39,7 @@ int CompileCase(
     input.shader_name_hash          = static_cast<uint32_t>(GetHash(relative_path));
 
     LOG_INFO(
-        "[ShaderDXCTest][BEGIN] case={}, path={}, entry={}, type={}, platform={}",
+        MOER_TEXT("[ShaderDXCTest][BEGIN] case={}, path={}, entry={}, type={}, platform={}"),
         case_name,
         relative_path,
         entry_point,
@@ -50,18 +50,18 @@ int CompileCase(
     ShaderCompilerOutput output = ShaderCompiler::Compile(std::move(input));
     if (!output.b_succeeded) {
         for (const auto& error : output.errors) {
-            LOG_ERROR("[ShaderDXCTest][ERROR] case={} :: {}", case_name, error);
+            LOG_ERROR(MOER_TEXT("[ShaderDXCTest][ERROR] case={} :: {}"), case_name, error);
         }
         return 1;
     }
 
     if (output.shader_code.empty()) {
-        LOG_ERROR("[ShaderDXCTest][ERROR] case={} produced empty shader blob", case_name);
+        LOG_ERROR(MOER_TEXT("[ShaderDXCTest][ERROR] case={} produced empty shader blob"), case_name);
         return 1;
     }
 
     LOG_INFO(
-        "[ShaderDXCTest][PASS] case={}, blob_size={}, hash1={}, hash2={}",
+        MOER_TEXT("[ShaderDXCTest][PASS] case={}, blob_size={}, hash1={}, hash2={}"),
         case_name,
         output.shader_code.size(),
         output.compiled_hash1,
@@ -111,15 +111,15 @@ int main(int argc, char** argv) {
     }
 
     if (failed_cases != 0) {
-        LOG_ERROR("[ShaderDXCTest] failed_cases={}", failed_cases);
+        LOG_ERROR(MOER_TEXT("[ShaderDXCTest] failed_cases={}"), failed_cases);
         return 1;
     }
 
     if (Diagnostics::HasEnsureFailures()) {
-        LOG_ERROR("[ShaderDXCTest] observed escalated ensure failures");
+        LOG_ERROR(MOER_TEXT("[ShaderDXCTest] observed escalated ensure failures"));
         return 1;
     }
 
-    LOG_INFO("[ShaderDXCTest] all cases passed");
+    LOG_INFO(MOER_TEXT("[ShaderDXCTest] all cases passed"));
     return 0;
 }
