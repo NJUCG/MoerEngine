@@ -56,7 +56,8 @@ char32_t DecodeUtf8CodePoint(StringView text, std::size_t& index) {
         code_point = (code_point << 6) | (next & 0x3F);
     }
 
-    if ((length == 3 && code_point < 0x800) || (length == 4 && code_point < 0x10000)) {
+    if ((length == 2 && code_point < 0x80) || (length == 3 && code_point < 0x800) ||
+        (length == 4 && code_point < 0x10000)) {
         RejectInvalidText();
     }
     if (code_point > kMaxCodePoint || IsSurrogate(code_point)) {
@@ -90,6 +91,10 @@ void AppendUtf8CodePoint(String& output, char32_t code_point) {
 }
 
 void AppendWideCodePoint(WideString& output, char32_t code_point) {
+    if (IsSurrogate(code_point)) {
+        RejectInvalidText();
+    }
+
     if constexpr (sizeof(WideChar) == 2) {
         if (code_point <= 0xFFFF) {
             output.push_back(static_cast<WideChar>(code_point));
@@ -100,7 +105,7 @@ void AppendWideCodePoint(WideString& output, char32_t code_point) {
         output.push_back(static_cast<WideChar>(kHighSurrogateStart + (code_point >> 10)));
         output.push_back(static_cast<WideChar>(kLowSurrogateStart + (code_point & 0x3FF)));
     } else {
-        if (code_point > static_cast<char32_t>(std::numeric_limits<WideChar>::max())) {
+        if (code_point > static_cast<char32_t>(std::numeric_limits<WideChar>::max()) || IsSurrogate(code_point)) {
             RejectInvalidText();
         }
         output.push_back(static_cast<WideChar>(code_point));
