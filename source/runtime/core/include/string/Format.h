@@ -12,7 +12,7 @@ template<typename... Args>
 using FormatString = std::basic_format_string<PlatformChar, std::type_identity_t<Args>...>;
 
 template<typename... Args>
-using Utf8FormatString = std::basic_format_string<Utf8Char, std::type_identity_t<Args>...>;
+using Utf8FormatString = std::basic_format_string<Char8, std::type_identity_t<Args>...>;
 
 template<typename... Args>
 String Printf(FormatString<Args...> fmt, Args&&... args) {

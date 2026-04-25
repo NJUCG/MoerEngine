@@ -163,12 +163,12 @@ using String             = PlatformString;
 
 using AsciiStringView = BasicStringView<AsciiChar, AsciiEncoding>;
 using AsciiString     = BasicString<AsciiChar, AsciiEncoding>;
-using Utf8StringView  = BasicStringView<Utf8Char, Utf8Encoding>;
-using Utf8String      = BasicString<Utf8Char, Utf8Encoding>;
-using Utf16StringView = BasicStringView<Utf16Char, Utf16Encoding>;
-using Utf16String     = BasicString<Utf16Char, Utf16Encoding>;
-using Utf32StringView = BasicStringView<Utf32Char, Utf32Encoding>;
-using Utf32String     = BasicString<Utf32Char, Utf32Encoding>;
+using Utf8StringView  = BasicStringView<Char8, Utf8Encoding>;
+using Utf8String      = BasicString<Char8, Utf8Encoding>;
+using Utf16StringView = BasicStringView<Char16, Utf16Encoding>;
+using Utf16String     = BasicString<Char16, Utf16Encoding>;
+using Utf32StringView = BasicStringView<Char32, Utf32Encoding>;
+using Utf32String     = BasicString<Char32, Utf32Encoding>;
 using WideStringView  = BasicStringView<WideChar, WideEncoding>;
 using WideString      = BasicString<WideChar, WideEncoding>;
 

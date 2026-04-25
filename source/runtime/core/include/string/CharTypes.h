@@ -7,14 +7,11 @@ using Char16    = char16_t;
 using Char32    = char32_t;
 using WideChar  = wchar_t;
 using AsciiChar = char;
-using Utf8Char  = Char8;
-using Utf16Char = Char16;
-using Utf32Char = Char32;
 
 #if defined(_WIN32) || defined(_WIN64)
 using PlatformChar = WideChar;
 #else
-using PlatformChar = Utf8Char;
+using PlatformChar = Char8;
 #endif
 
 } // namespace Moer

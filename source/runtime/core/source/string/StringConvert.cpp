@@ -154,7 +154,7 @@ Utf8String PlatformToUtf8(PlatformStringView text) {
 #if defined(_WIN32) || defined(_WIN64)
     return WideToUtf8(text);
 #else
-    return Utf8String(std::basic_string_view<Utf8Char>(text.data(), text.size()));
+    return Utf8String(std::basic_string_view<Char8>(text.data(), text.size()));
 #endif
 }
 
