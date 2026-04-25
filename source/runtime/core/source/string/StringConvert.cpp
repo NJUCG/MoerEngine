@@ -135,19 +135,19 @@ char32_t DecodeWideCodePoint(WideStringView text, std::size_t& index) {
 } // namespace
 
 PlatformString Utf8ToPlatform(StringView text) {
-    if constexpr (std::is_same_v<PlatformChar, Char8>) {
-        return PlatformString(text);
-    } else {
-        return Utf8ToWide(text);
-    }
+#if defined(_WIN32) || defined(_WIN64)
+    return Utf8ToWide(text);
+#else
+    return PlatformString(text);
+#endif
 }
 
 String PlatformToUtf8(PlatformStringView text) {
-    if constexpr (std::is_same_v<PlatformChar, Char8>) {
-        return String(text);
-    } else {
-        return WideToUtf8(text);
-    }
+#if defined(_WIN32) || defined(_WIN64)
+    return WideToUtf8(text);
+#else
+    return String(text);
+#endif
 }
 
 WideString Utf8ToWide(StringView text) {
