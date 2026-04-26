@@ -6,7 +6,6 @@
 #include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 
-#include "common/UiCombinePass.h"
 #include "renderer/common/PresentationSurface.h"
 
 namespace Moer {
@@ -25,9 +24,7 @@ struct EngineHooks {
     std::function<void(CommandList&, TextureRef)> on_render_gui;
     std::function<void(void)>                     on_present_windows;
     std::function<bool(void)>                     on_is_need_reload;
-
-    std::function<TextureRef(UiCombinePass*, CommandList&, TextureView, TextureView, TextureView)>
-        on_ui_combine_pass;
+    std::function<void(TextureView)>              on_publish_scene_output;
 
     std::function<void(std::string, std::string, std::function<void(Synapse::Context&)>)>
         on_register_renderer_config_section;
@@ -80,8 +77,6 @@ protected:
 
     Scene               scene;
     CommandList         cmd_list;
-
-    UniquePtr<UiCombinePass> ui_combine_pass;
 
     // Other vars
     FenceRef timeline;

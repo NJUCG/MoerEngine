@@ -277,6 +277,7 @@ bool RasterRenderer::RunSingle(
     config_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());
 
     TextureRef default_output_texture = raster_context.textures.output.tex;
+    bool       gui_rendered           = false;
     Array<CommandList> pre_frame_cmd_lists{};
 
     // MARK: 3. Run Render Passes
@@ -387,24 +388,19 @@ bool RasterRenderer::RunSingle(
         // - Tonemapping Pass
         processing_image = tonemapping_pass->Process(raster_context, raster_config, processing_image);
 
-        if (hooks.on_render_gui && hooks.on_ui_combine_pass) {
-            cmd_list.ClearResource(raster_context.textures.ui_frame_buffer.tex->GetView(), float4(0.f, 0.f, 0.f, 0.f));
-            hooks.on_render_gui(cmd_list, raster_context.textures.ui_frame_buffer.tex);
-            default_output_texture = hooks.on_ui_combine_pass(
-                ui_combine_pass.get(),
-                cmd_list,
-                raster_context.GetSelectedFrameBufferView(raster_config.selected_frame_buffer_index),
-                raster_context.textures.ui_frame_buffer.tex,
-                raster_context.textures.output.tex
-            );
-        } else if (hooks.on_ui_combine_pass) {
-            default_output_texture = hooks.on_ui_combine_pass(
-                ui_combine_pass.get(),
-                cmd_list,
-                raster_context.GetSelectedFrameBufferView(raster_config.selected_frame_buffer_index),
-                raster_context.textures.ui_frame_buffer.tex,
-                raster_context.textures.output.tex
-            );
+        TextureView scene_output = raster_context.GetSelectedFrameBufferView(raster_config.selected_frame_buffer_index);
+        if (editor_config->play_mode_enabled) {
+            default_output_texture = scene_output.GetTexture();
+        } else {
+            if (hooks.on_publish_scene_output) {
+                hooks.on_publish_scene_output(scene_output);
+            }
+            if (hooks.on_render_gui) {
+                cmd_list.ClearResource(raster_context.textures.output.tex->GetView(), float4(0.f, 0.f, 0.f, 1.f));
+                hooks.on_render_gui(cmd_list, raster_context.textures.output.tex);
+                default_output_texture = raster_context.textures.output.tex;
+                gui_rendered = true;
+            }
         }
 
         // without test
@@ -423,7 +419,8 @@ bool RasterRenderer::RunSingle(
     // 因为目前Vulkan的输出信息会聚合后再print，所以我们需要轮询，打印出最后添加的信息
     device.FlushDebugMessages();
 
-    if (hooks.on_render_gui && !hooks.on_ui_combine_pass) {
+    if (!editor_config->play_mode_enabled && hooks.on_render_gui && !gui_rendered) {
+        cmd_list.ClearResource(default_output_texture->GetView(), float4(0.f, 0.f, 0.f, 1.f));
         hooks.on_render_gui(cmd_list, default_output_texture);
     }
 
@@ -444,7 +441,7 @@ bool RasterRenderer::RunSingle(
     );
     cmd_list = CommandList(EQueueType::Graphics);
 
-    if (!skip_present && hooks.on_present_windows) {
+    if (!skip_present && !editor_config->play_mode_enabled && hooks.on_present_windows) {
         hooks.on_present_windows();
     }
 

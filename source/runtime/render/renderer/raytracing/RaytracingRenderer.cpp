@@ -32,7 +32,6 @@
 #include "ShaderUtils.h"
 #include "ToneMappingPass.h"
 #include "VisualizePass.h"
-#include "renderer/common/UiCombinePass.h"
 
 // 3rd party
 #include <atomic>
@@ -103,13 +102,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         ETextureUsageFlags::COLOR_ATTACHMENT
     );
 
-    TextureRef ui_frame_buffer = device.CreateTexture(
-        "ui_frame_buffer",
-        Extent2D(resolution.x, resolution.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
-    );
-
     auto create_frame_buffers = [&](uint2 _new_extent) {
         output = device.CreateTexture(
             "output",
@@ -125,12 +117,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             ETextureUsageFlags::COLOR_ATTACHMENT
         );
 
-        ui_frame_buffer = device.CreateTexture(
-            "ui_frame_buffer",
-            Extent2D(_new_extent.x, _new_extent.y),
-            PF_R8G8B8A8_SRGB,
-            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
-        );
     };
 
     Timer timer;
@@ -159,7 +145,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     UniquePtr<VisualizePass>    visualize_pass     = MakeUnique<VisualizePass>(device, manager);
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
     UniquePtr<ToneMappingPass>  tone_mapping_pass;
-    UniquePtr<UiCombinePass>    ui_combine_pass = MakeUnique<UiCombinePass>(manager);
 
     rt_ctx->SetResolution(resolution);
     AntialiasPass::CreateInfo antialias_pass_info{
@@ -685,18 +670,15 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color;
         TextureRef present_output = final_color;
 
-        if (hooks.on_ui_combine_pass) {
-            present_output = hooks.on_ui_combine_pass(
-                ui_combine_pass.get(),
-                cmd_list,
-                final_color,
-                ui_frame_buffer,
-                combine_output
-            );
-        }
-
-        if (hooks.on_render_gui) {
-            hooks.on_render_gui(cmd_list, present_output);
+        if (!editor_config->play_mode_enabled) {
+            if (hooks.on_publish_scene_output) {
+                hooks.on_publish_scene_output(final_color);
+            }
+            if (hooks.on_render_gui) {
+                cmd_list.ClearResource(combine_output->GetView(), float4(0.f, 0.f, 0.f, 1.f));
+                hooks.on_render_gui(cmd_list, combine_output);
+                present_output = combine_output;
+            }
         }
 
         if (rt_scene) {
@@ -721,7 +703,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         );
         cmd_list = CommandList(EQueueType::Graphics);
 
-        if (!skip_present && hooks.on_present_windows) {
+        if (!skip_present && !editor_config->play_mode_enabled && hooks.on_present_windows) {
             hooks.on_present_windows();
         }
         if (should_close_now) {

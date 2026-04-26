@@ -49,6 +49,8 @@ typedef enum {
     RIGHT,
     ESCAPE,
     GRAVE_ACCENT,
+    F5,
+    F8,
 
     KeyButtonCount,
     KeyButtonFirst = A,
@@ -104,6 +106,15 @@ struct RENDER_API WindowInput {
     StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_state        = {false}; // Press or Release
     StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_switch_state = {false
     }; // Press once to switch state
+
+    StaticArray<bool, MouseButtons::MouseButtonCount> native_mouse_button_down = {false};
+    StaticArray<bool, KeyButtons::KeyButtonCount>     native_key_down          = {false};
+    StaticArray<bool, KeyButtons::KeyButtonCount>     native_key_pressed       = {false};
+    StaticArray<bool, KeyButtons::KeyButtonCount>     native_key_released      = {false};
+    StaticArray<bool, KeyButtons::KeyButtonCount>     native_key_last_down     = {false};
+    float2 native_mouse_pos{};
+    float2 native_mouse_delta{};
+    bool   native_mouse_dirty = true;
 
     // singleton
     static WindowInput& Get();

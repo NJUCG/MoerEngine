@@ -11,8 +11,6 @@
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowContext.h"
 
-#include "common/UiCombinePass.h"
-
 namespace Moer::Render {
 
 Renderer::Renderer(
@@ -53,9 +51,6 @@ Renderer::Renderer(
         time                = 0ull;
         first_load          = true;
         max_frame_in_flight = ConfigManager::GetInstance().GetConfig().engine.rhi.max_frame_in_flight;
-    }
-    {
-        ui_combine_pass = MakeUnique<UiCombinePass>(manager);
     }
 }
 

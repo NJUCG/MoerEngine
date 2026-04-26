@@ -2,6 +2,7 @@
 
 #include "RenderAPI.h"
 #include "misc/Traits.h"
+#include "renderer/common/UIRenderer.h"
 #include "renderer/common/ui/ImGuiIOInput.h"
 
 #include <cstdarg>
@@ -101,8 +102,12 @@ struct SceneViewportState {
     bool   visible            = false;
     bool   separate_window    = false;
     bool   hovered            = false;
+    bool   focused            = false;
+    bool   input_started      = false;
+    bool   mouse_down         = false;
     float2 content_pos        = {0.0f, 0.0f};
     float2 content_resolution = {0.0f, 0.0f};
+    Render::UIRenderer::RenderOutputSlotHandle render_output_slot;
 };
 
 class RENDER_API Context {
@@ -129,7 +134,7 @@ public:
     bool BeginChild(const char* id, Size size = {0.0f, 0.0f}, bool border = false, bool horizontal_scrollbar = false);
     void EndChild();
     void PanelHeader(const PanelHeaderDesc& desc);
-    SceneViewportState DrawSceneViewportPanel(const char* name, bool* open);
+    SceneViewportState DrawSceneViewportPanel(const char* name, bool* open, Render::UIRenderer& ui_renderer);
 
     bool BeginMenuBar();
     void EndMenuBar();

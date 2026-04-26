@@ -3,6 +3,7 @@
 // Runtime
 #include "file/FileDialog.h"
 #include "log/LogSystem.h"
+#include "window/WindowInput.h"
 
 // Editor
 #include "scene/Scene.h"
@@ -18,6 +19,26 @@
 using namespace Moer::Render;
 
 namespace Moer {
+namespace {
+
+bool AnyCameraMouseButtonDown(const Render::ImGuiIOInputSnapshot& input) {
+    return input.mouse_button_down[MouseButtons::Left] || input.mouse_button_down[MouseButtons::Middle] ||
+           input.mouse_button_down[MouseButtons::Right];
+}
+
+void ClearCameraInput(WindowInput& input) {
+    input.camera_forward  = false;
+    input.camera_backward = false;
+    input.camera_left     = false;
+    input.camera_right    = false;
+    input.camera_up       = false;
+    input.camera_down     = false;
+    input.speed_up        = false;
+    input.speed_down      = false;
+    input.reset_speed     = false;
+}
+
+} // namespace
 
 EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
     m_ui_renderer(std::move(renderer)),
@@ -27,6 +48,28 @@ EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfi
 }
 
 void EditorUI::TickUI() {
+    m_scene_color_hovered = false;
+    m_scene_color_focused = false;
+
+    if (m_config->play_mode_enabled) {
+        if (WindowInput::Get().native_key_pressed[KeyButtons::F8]) {
+            m_config->play_mode_enabled       = false;
+            m_config->play_mode_capture_input = false;
+            WindowInput::Get().force_cursor_hidden = false;
+            WindowInput::Get().play_mode_camera_control = false;
+            m_scene_color_input_active = false;
+            m_scene_color_focused = false;
+        } else {
+            WindowInput& input          = WindowInput::Get();
+            m_scene_color_pos          = {0.0f, 0.0f};
+            m_scene_color_resolution   = {input.width, input.height};
+            m_config->aspect_ratio     = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
+            m_scene_color_hovered      = true;
+            m_scene_color_focused      = true;
+            ApplyPlayInput();
+            return;
+        }
+    }
 
     // 注：Resolution表示整个窗口的大小（不包含windows标题栏）；SceneColor只表示场景渲染区域的大小
     // 更新SceneColor的分辨率
@@ -37,30 +80,10 @@ void EditorUI::TickUI() {
     Synapse::Context& ui = *m_synapse_context;
 
     const Render::ImGuiIOInputSnapshot& input_snapshot = ui.GetInputSnapshot();
-    m_scene_color_hovered = false;
 
     if (input_snapshot.f5_pressed && !m_config->play_mode_enabled) {
         m_config->play_mode_enabled       = true;
         m_config->play_mode_capture_input = true;
-    }
-    if (input_snapshot.f8_pressed && m_config->play_mode_enabled) {
-        m_config->play_mode_capture_input = !m_config->play_mode_capture_input;
-    }
-
-    const bool play_capture = m_config->play_mode_enabled && m_config->play_mode_capture_input;
-
-    if (play_capture) {
-        const float2 viewport_size    = ui.GetMainViewportWorkSize();
-        m_scene_color_pos             = {0.0f, 0.0f};
-        m_scene_color_resolution      = viewport_size;
-        m_config->aspect_ratio        = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
-        m_scene_color_hovered         = true;
-
-        ShowOverlay();
-        ApplyInputSnapshot();
-        m_synapse_context->EndFrame();
-        m_ui_renderer->EndGUIFrame();
-        return;
     }
 
     if (ui.BeginMainDockspace(Synapse::DockspaceDesc{
@@ -107,12 +130,6 @@ void EditorUI::TickUI() {
                     m_config->play_mode_enabled       = false;
                     m_config->play_mode_capture_input = false;
                 }
-                ui.SameLine();
-                const char* toggle_label =
-                    m_config->play_mode_capture_input ? "Eject (F8)" : "Possess (F8)";
-                if (ui.IconButton(Synapse::EIcon::Camera, toggle_label, m_config->play_mode_capture_input)) {
-                    m_config->play_mode_capture_input = !m_config->play_mode_capture_input;
-                }
             }
             ui.EndMenuBar();
         }
@@ -139,31 +156,34 @@ void EditorUI::PresentWindows() {
     m_ui_renderer->PresentWindows();
 }
 
-EditorUI::SceneWindowTarget EditorUI::GetSceneWindowTarget() {
-    const Render::UIRenderer::WindowRenderTarget target =
-        m_ui_renderer->GetWindowRenderTarget("Scene Color");
-    if (!target.is_separate_window || !target.frame_buffer.GetTexture()) {
-        return {};
-    }
-
-    return SceneWindowTarget{
-        .is_separate_window = target.is_separate_window,
-        .frame_buffer       = target.frame_buffer,
-    };
+void EditorUI::PublishSceneRenderOutput(Render::TextureView resource) {
+    m_ui_renderer->PublishRenderOutput(m_scene_render_output_slot, resource);
 }
 
 void EditorUI::ShowSceneColor() {
     if (!m_b_show_scene_color) {
+        m_scene_color_input_active = false;
+        m_scene_color_focused = false;
         return;
     }
     const Synapse::SceneViewportState scene_view =
-        m_synapse_context->DrawSceneViewportPanel("Scene Color", &m_b_show_scene_color);
+        m_synapse_context->DrawSceneViewportPanel("Scene Color", &m_b_show_scene_color, *m_ui_renderer);
     if (!scene_view.visible) {
+        m_scene_color_input_active = false;
+        m_scene_color_focused = false;
         return;
     }
     m_scene_color_resolution = scene_view.content_resolution;
     m_scene_color_pos        = scene_view.content_pos;
     m_scene_color_hovered    = scene_view.hovered;
+    m_scene_color_focused    = scene_view.focused;
+    if (scene_view.input_started) {
+        m_scene_color_input_active = true;
+    }
+    if (!scene_view.focused || !scene_view.mouse_down) {
+        m_scene_color_input_active = false;
+    }
+    m_scene_render_output_slot = scene_view.render_output_slot;
 }
 
 void EditorUI::ShowConfig() {
@@ -378,15 +398,65 @@ void EditorUI::ShowOverlay() {
 }
 
 void EditorUI::ApplyInputSnapshot() {
+    const Render::ImGuiIOInputSnapshot& input_snapshot = m_ui_renderer->GetInputSnapshot();
+    if (!AnyCameraMouseButtonDown(input_snapshot)) {
+        m_scene_color_input_active = false;
+    }
+    const bool scene_camera_active = m_scene_color_focused && m_scene_color_input_active;
+
     Render::ApplyImGuiIOInputToWindowInput(
-        m_ui_renderer->GetInputSnapshot(),
+        input_snapshot,
         Render::ImGuiIOInputApplyParams{
-            .scene_active            = m_scene_color_hovered,
+            .scene_active            = scene_camera_active,
             .play_capture            = m_config->play_mode_enabled && m_config->play_mode_capture_input,
             .external_key_block      = false,
             .external_cursor_visible = false,
         }
     );
+}
+
+void EditorUI::ApplyPlayInput() {
+    WindowInput& input = WindowInput::Get();
+
+    input.is_active                = true;
+    input.force_cursor_hidden      = true;
+    input.force_cursor_visible     = false;
+    input.play_mode_camera_control = true;
+    input.block_camera_keyboard_input = false;
+
+    input.cursor_last_x = input.native_mouse_pos.x;
+    input.cursor_last_y = input.native_mouse_pos.y;
+    if (input.is_cursor_dirty) {
+        input.cursor_delta_x = 0.0f;
+        input.cursor_delta_y = 0.0f;
+        input.is_cursor_dirty = false;
+    } else {
+        input.cursor_delta_x = input.native_mouse_delta.x;
+        input.cursor_delta_y = input.native_mouse_delta.y;
+    }
+    input.scroll_offset = 0.0f;
+
+    for (uint32_t i = 0; i < MouseButtons::MouseButtonCount; ++i) {
+        input.mouse_button_state[i] = input.native_mouse_button_down[i];
+    }
+
+    for (uint32_t i = 0; i < KeyButtons::KeyButtonCount; ++i) {
+        input.key_button_state[i] = input.native_key_down[i];
+        if (input.native_key_released[i]) {
+            input.key_button_switch_state[i] = !input.key_button_switch_state[i];
+        }
+    }
+
+    ClearCameraInput(input);
+    input.camera_forward  = input.native_key_down[KeyButtons::W];
+    input.camera_backward = input.native_key_down[KeyButtons::S];
+    input.camera_left     = input.native_key_down[KeyButtons::A];
+    input.camera_right    = input.native_key_down[KeyButtons::D];
+    input.camera_up       = input.native_key_down[KeyButtons::E];
+    input.camera_down     = input.native_key_down[KeyButtons::Q];
+    input.speed_up        = input.native_key_down[KeyButtons::UP];
+    input.speed_down      = input.native_key_down[KeyButtons::DOWN];
+    input.reset_speed     = input.native_key_down[KeyButtons::F];
 }
 
 } // namespace Moer

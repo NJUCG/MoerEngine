@@ -21,8 +21,8 @@ void WindowContext::GetWindowSize(WindowHandle* window, int* width, int* height)
     WindowImpl::GetInstance().GetWindowSize(window, width, height);
 };
 
-void WindowContext::SetTitle(WindowHandle* window, const char* newTitle) {
-    WindowImpl::GetInstance().SetTitle(window, newTitle);
+void WindowContext::SetTitle(WindowHandle* window, const char* new_title) {
+    WindowImpl::GetInstance().SetTitle(window, new_title);
 };
 
 bool WindowContext::ShouldClose(WindowHandle* window) {

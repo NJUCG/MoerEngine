@@ -18,11 +18,6 @@ class EditorUI {
 public:
     using RendererConfigDrawFunc = std::function<void(Synapse::Context&)>;
 
-    struct SceneWindowTarget {
-        bool                is_separate_window = false;
-        Render::TextureView frame_buffer;
-    };
-
     EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config);
     ~EditorUI() = default;
     void TickUI();
@@ -45,7 +40,7 @@ public:
         return m_scene_color_resolution.x / m_scene_color_resolution.y;
     }
 
-    SceneWindowTarget   GetSceneWindowTarget();
+    void PublishSceneRenderOutput(Render::TextureView resource);
     void RegisterRendererConfigSection(
         std::string renderer_name,
         std::string section_name,
@@ -62,6 +57,7 @@ private:
     void ShowConfig();
     void ShowOverlay();
     void ApplyInputSnapshot();
+    void ApplyPlayInput();
 
 private:
     bool   m_b_show_scene_color = true;
@@ -70,6 +66,9 @@ private:
     float2 m_scene_color_pos;
     bool   m_b_show = true;
     bool   m_scene_color_hovered = false;
+    bool   m_scene_color_focused = false;
+    bool   m_scene_color_input_active = false;
+    Render::UIRenderer::RenderOutputSlotHandle m_scene_render_output_slot;
 
     bool m_b_need_reload = false;
 

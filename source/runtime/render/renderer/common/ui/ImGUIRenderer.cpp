@@ -45,6 +45,31 @@ void GuiSwapbuffer(ImGuiViewport* _viewport, void*);
 
 namespace Moer::Render {
 
+namespace {
+constexpr uint64_t k_render_output_texture_token_bit = 1ull << 63;
+constexpr uint64_t k_render_output_slot_index_mask   = (1ull << 31) - 1ull;
+
+bool IsRenderOutputTextureId(uint64_t texture_id) {
+    return (texture_id & k_render_output_texture_token_bit) != 0;
+}
+
+UIRenderer::RenderOutputSlotHandle DecodeRenderOutputTextureId(uint64_t texture_id) {
+    return UIRenderer::RenderOutputSlotHandle{
+        .slot_index = static_cast<uint32_t>(texture_id & k_render_output_slot_index_mask),
+        .generation = static_cast<uint32_t>((texture_id >> 31) & 0xFFFFFFFFull),
+    };
+}
+
+uint64_t EncodeRenderOutputTextureId(UIRenderer::RenderOutputSlotHandle handle) {
+    if (!handle.IsValid() || handle.slot_index > k_render_output_slot_index_mask) {
+        return 0;
+    }
+    return k_render_output_texture_token_bit |
+           (static_cast<uint64_t>(handle.generation) << 31) |
+           static_cast<uint64_t>(handle.slot_index);
+}
+} // namespace
+
 struct ImGUIArg {
     ImVec2 min_xy;
     ImVec2 max_xy;
@@ -216,10 +241,8 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
                 ImGui_ImplGlfw_InitForOther(window, true);
         }
         {
-
-            io.Fonts->AddFontDefault();
-            AddFont({FONT_ICON_FILE_NAME_FAS, 13.0f, EFontType::Icon});
             AddFont({"msyh.ttc", 20.0f, EFontType::Chinese});
+            AddFont({FONT_ICON_FILE_NAME_FAS, 13.0f, EFontType::Icon});
         }
     }
     bindless_array = device.CreateBindlessArray();
@@ -286,14 +309,40 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
     render_backend_data->render_backend = this;
     main_viewport->RendererUserData     = viewport_data;
 
+    using namespace Moer::Render;
+    auto& rd_device = Moer::Render::RenderDevice::Get();
+    {
+        Array<std::byte> transparent_pixels(256);
+        transparent_texture = rd_device.CreateTexture(
+            "ImGUI::TransparentTexture",
+            Extent2D(1, 1),
+            PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED
+        );
+        FenceRef upload_fence = rd_device.CreateFence();
+
+        CommandList cmd_list;
+        cmd_list.CopyFrom(std::span<std::byte>(transparent_pixels.data(), transparent_pixels.size()), transparent_texture);
+        cmd_list.Signal(upload_fence, 1);
+
+        Array<CommandList> upload_cmd_lists{};
+        upload_cmd_lists.emplace_back(std::move(cmd_list));
+        RHIExecutor::Get().Submit(std::move(upload_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
+        upload_fence->Wait(1);
+        rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
+        transparent_texture_handle = bindless_array->AllocateTexture(
+            transparent_texture,
+            Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
+        );
+        registered_images.try_emplace(transparent_texture, transparent_texture_handle);
+    }
+
     uint8_t* pixels;
 
     int width, height;
     //MARK... this is freaking slow, it's build first called, we need a default data for it, and async load other fonts
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
-    using namespace Moer::Render;
-    auto& rd_device = Moer::Render::RenderDevice::Get();
     //upload texture
     {
         const uint32_t alignment    = 256;
@@ -324,7 +373,29 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
 inline ImGUIData* GetGUIBackendData() {
     return ImGui::GetCurrentContext() ? (ImGUIData*)ImGui::GetIO().BackendRendererUserData : nullptr;
 }
+
+static void EndPlatformFrameIfNeeded() {
+    ImGuiContext* context = ImGui::GetCurrentContext();
+    if (!context) {
+        return;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    if ((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) && context->FrameCountEnded == context->FrameCount &&
+        context->FrameCountPlatformEnded < context->FrameCount) {
+        ImGui::UpdatePlatformWindows();
+    }
+}
+
 ImGUIRenderBackend::~ImGUIRenderBackend() {
+    ImGuiIO&   io   = ImGui::GetIO();
+    ImGUIData* data = GetGUIBackendData();
+
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        ImGui::DestroyPlatformWindows();
+        ImGui::GetPlatformIO().ClearRendererHandlers();
+    }
+
     {
         //delete main viewport data
         ImGuiViewport*   main_viewport = ImGui::GetMainViewport();
@@ -332,8 +403,12 @@ ImGUIRenderBackend::~ImGUIRenderBackend() {
         MoerDelete(viewport_data);
         main_viewport->RendererUserData = nullptr;
     }
+
+    io.BackendRendererName     = nullptr;
+    io.BackendRendererUserData = nullptr;
+    io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasViewports);
+
     ImGui_ImplGlfw_Shutdown();
-    ImGUIData* data = GetGUIBackendData();
     ImGui::DestroyContext();
     bindless_array = nullptr;
     MoerDelete(data);
@@ -347,6 +422,7 @@ void ImGUIRenderBackend::BeginGUIFrame() {
 
 void ImGUIRenderBackend::EndGUIFrame() {
     ImGui::Render();
+    EndPlatformFrameIfNeeded();
 }
 
 const ImGuiIOInputSnapshot& ImGUIRenderBackend::GetInputSnapshot() const {
@@ -365,6 +441,7 @@ void ImGUIRenderBackend::UnRegisterImage(Texture* _texture) {}
 
 void ImGUIRenderBackend::RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
     ImGuiIO& io = ImGui::GetIO();
+    DrainRenderOutputUpdates();
     _cmd_list.UpdateBindlessArray(bindless_array);
 
     // if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f)
@@ -382,14 +459,7 @@ void ImGUIRenderBackend::RenderGUI(CommandList& _cmd_list, const TextureView& _f
         auto& rd_device = RenderDevice::Get();
         GUIRender(main_draw_data, _framebuffer, _cmd_list);
     }
-    {
-        ImGuiContext* g  = ImGui::GetCurrentContext();
-        auto&         io = ImGui::GetIO();
-        if (g && (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) && g->FrameCountEnded == g->FrameCount &&
-            g->FrameCountPlatformEnded < g->FrameCount) {
-            ImGui::UpdatePlatformWindows();
-        }
-    }
+    EndPlatformFrameIfNeeded();
 }
 
 void ImGUIRenderBackend::PresentWindows() {
@@ -404,24 +474,89 @@ void ImGUIRenderBackend::PresentWindows() {
     }
 }
 
-UIRenderer::WindowRenderTarget ImGUIRenderBackend::GetWindowRenderTarget(std::string_view window_name) {
-    const std::string stable_name(window_name);
-    ImGuiWindow*      window = ImGui::FindWindowByName(stable_name.c_str());
-    if (!window || window->ParentWindow != nullptr || !window->Viewport) {
-        return {};
+UIRenderer::RenderOutputSlotHandle ImGUIRenderBackend::RegisterRenderOutputSlot(uint32_t imgui_id) {
+    std::lock_guard lock(render_output_mutex);
+
+    if (auto iter = render_output_slots_by_id.find(imgui_id); iter != render_output_slots_by_id.end()) {
+        return iter->second;
     }
 
-    GuiViewportData* viewport_data = GetGuiViewportData(window->Viewport);
-    if (!viewport_data || !viewport_data->surface) {
-        return {};
+    const uint32_t slot_index = static_cast<uint32_t>(render_output_generations.size());
+    UIRenderer::RenderOutputSlotHandle handle{
+        .slot_index = slot_index,
+        .generation = 1,
+    };
+    render_output_slots_by_id.emplace(imgui_id, handle);
+    render_output_generations.push_back(handle.generation);
+    render_output_snapshot.resize(render_output_generations.size());
+    return handle;
+}
+
+uint64_t ImGUIRenderBackend::GetRenderOutputTextureId(UIRenderer::RenderOutputSlotHandle handle) const {
+    return EncodeRenderOutputTextureId(handle);
+}
+
+void ImGUIRenderBackend::PublishRenderOutput(
+    UIRenderer::RenderOutputSlotHandle handle,
+    TextureView                        resource
+) {
+    if (!handle.IsValid()) {
+        return;
     }
 
-    TextureView frame_buffer = viewport_data->surface->GetFrameBufferView();
-    if (!frame_buffer.GetTexture()) {
-        return {};
+    std::lock_guard lock(render_output_mutex);
+    pending_render_output_updates.push_back(PendingRenderOutputUpdate{
+        .handle   = handle,
+        .resource = resource,
+    });
+}
+
+void ImGUIRenderBackend::DrainRenderOutputUpdates() {
+    std::lock_guard lock(render_output_mutex);
+
+    if (render_output_snapshot.size() < render_output_generations.size()) {
+        render_output_snapshot.resize(render_output_generations.size());
     }
 
-    return UIRenderer::WindowRenderTarget{.is_separate_window = true, .frame_buffer = frame_buffer};
+    for (const PendingRenderOutputUpdate& update : pending_render_output_updates) {
+        const auto handle = update.handle;
+        if (!handle.IsValid() || handle.slot_index >= render_output_generations.size()) {
+            continue;
+        }
+        if (render_output_generations[handle.slot_index] != handle.generation) {
+            continue;
+        }
+        render_output_snapshot[handle.slot_index] = RenderOutputResource{
+            .generation = handle.generation,
+            .resource   = update.resource,
+        };
+    }
+    pending_render_output_updates.clear();
+}
+
+uint ImGUIRenderBackend::ResolveTextureHandle(uint64_t texture_id) {
+    if (!IsRenderOutputTextureId(texture_id)) {
+        return static_cast<uint>(texture_id);
+    }
+
+    const UIRenderer::RenderOutputSlotHandle handle = DecodeRenderOutputTextureId(texture_id);
+    if (!handle.IsValid() || handle.slot_index >= render_output_snapshot.size()) {
+        return transparent_texture_handle;
+    }
+
+    const RenderOutputResource& output = render_output_snapshot[handle.slot_index];
+    if (output.generation != handle.generation || !output.resource.GetTexture()) {
+        return transparent_texture_handle;
+    }
+
+    auto iter = registered_images.try_emplace(output.resource.GetTexture(), 0);
+    if (iter.second) {
+        iter.first->second = bindless_array->AllocateTexture(
+            output.resource,
+            Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
+        );
+    }
+    return iter.first->second;
 }
 
 } // namespace Moer::Render
@@ -574,7 +709,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
                 if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
                     continue;
 
-                uint texture_handle = (uint)cmd->TextureId;
+                uint texture_handle = render_backend.ResolveTextureHandle(static_cast<uint64_t>(cmd->GetTexID()));
                 // arg_buffer[cmd_offset].min_xy = {clip_min.x, clip_min.y};
                 // arg_buffer[cmd_offset].max_xy = {clip_max.x, clip_max.y};
                 args.emplace_back(

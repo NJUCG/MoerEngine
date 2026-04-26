@@ -26,6 +26,15 @@ struct UIRenderer::Impl {
     void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
         backend.RenderGUI(_cmd_list, _framebuffer);
     }
+    UIRenderer::RenderOutputSlotHandle RegisterRenderOutputSlot(uint32_t imgui_id) {
+        return backend.RegisterRenderOutputSlot(imgui_id);
+    }
+    uint64_t GetRenderOutputTextureId(UIRenderer::RenderOutputSlotHandle handle) const {
+        return backend.GetRenderOutputTextureId(handle);
+    }
+    void PublishRenderOutput(UIRenderer::RenderOutputSlotHandle handle, TextureView resource) {
+        backend.PublishRenderOutput(handle, resource);
+    }
     ImGUIRenderBackend backend;
 };
 
@@ -57,8 +66,16 @@ void UIRenderer::RenderGUI(CommandList& _cmd_list, const TextureView& _framebuff
     impl->RenderGUI(_cmd_list, _framebuffer);
 }
 
-UIRenderer::WindowRenderTarget UIRenderer::GetWindowRenderTarget(std::string_view window_name) {
-    return impl->backend.GetWindowRenderTarget(window_name);
+UIRenderer::RenderOutputSlotHandle UIRenderer::RegisterRenderOutputSlot(uint32_t imgui_id) {
+    return impl->RegisterRenderOutputSlot(imgui_id);
+}
+
+uint64_t UIRenderer::GetRenderOutputTextureId(RenderOutputSlotHandle handle) const {
+    return impl->GetRenderOutputTextureId(handle);
+}
+
+void UIRenderer::PublishRenderOutput(RenderOutputSlotHandle handle, TextureView resource) {
+    impl->PublishRenderOutput(handle, resource);
 }
 
 void UIRenderer::PresentWindows() {

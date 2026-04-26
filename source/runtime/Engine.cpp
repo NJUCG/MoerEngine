@@ -148,26 +148,9 @@ void Engine::Run() {
             [this]() {
                 return m_editor_ui->IsNeedReload();
             },
-        .on_ui_combine_pass =
-            [this](
-                UiCombinePass* ui_combine_pass,
-                CommandList&   cmd_list,
-                TextureView    input_color_texture,
-                TextureView    input_ui_texture,
-                TextureView    default_output_texture
-            ) {
-                auto scene_window_target = m_editor_ui->GetSceneWindowTarget();
-                return ui_combine_pass->Process(
-                    cmd_list,
-                    scene_window_target.is_separate_window,
-                    m_editor_ui->GetConfig()->GetResolution(),
-                    m_editor_ui->GetSceneColorPos(),
-                    m_editor_ui->GetSceneColorResolution(),
-                    scene_window_target.frame_buffer,
-                    input_color_texture,
-                    input_ui_texture,
-                    default_output_texture
-                );
+        .on_publish_scene_output =
+            [this](TextureView scene_output) {
+                m_editor_ui->PublishSceneRenderOutput(scene_output);
             },
         .on_register_renderer_config_section =
             [this](std::string renderer_name, std::string section_name, std::function<void(Synapse::Context&)> draw_func) {

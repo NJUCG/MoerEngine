@@ -71,6 +71,10 @@ ImGuiKey ToImGuiKey(KeyButtons key) {
             return ImGuiKey_Escape;
         case KeyButtons::GRAVE_ACCENT:
             return ImGuiKey_GraveAccent;
+        case KeyButtons::F5:
+            return ImGuiKey_F5;
+        case KeyButtons::F8:
+            return ImGuiKey_F8;
         default:
             return ImGuiKey_None;
     }
@@ -161,8 +165,8 @@ void ApplyImGuiIOInputToWindowInput(
     }
 
     for (uint32_t i = 0; i < KeyButtons::KeyButtonCount; ++i) {
-        input.key_button_state[i] = snapshot.key_down[i];
-        if (snapshot.key_released[i]) {
+        input.key_button_state[i] = allow_keyboard && snapshot.key_down[i];
+        if (allow_keyboard && snapshot.key_released[i]) {
             input.key_button_switch_state[i] = !input.key_button_switch_state[i];
         }
     }

@@ -5,6 +5,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
+
 namespace Moer::Synapse {
 namespace {
 
@@ -54,6 +56,72 @@ void TextDisabledVImpl(const char* fmt, va_list args) {
 
 void TextWrappedVImpl(const char* fmt, va_list args) {
     ImGui::TextWrappedV(fmt, args);
+}
+
+bool IsAnyCameraMouseButtonDown() {
+    return ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+           ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+}
+
+bool IsAnyCameraMouseButtonClicked() {
+    return ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+           ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+}
+
+bool IsWindowFocusClick(const ImGuiContext& context) {
+    return context.IO.MouseClicked[ImGuiMouseButton_Left] || context.IO.MouseClicked[ImGuiMouseButton_Right];
+}
+
+bool CanFocusWindow(ImGuiWindow* window) {
+    return window && !window->Hidden && !window->Collapsed && !(window->Flags & ImGuiWindowFlags_Tooltip) &&
+           !(window->Flags & ImGuiWindowFlags_NoNavFocus);
+}
+
+void FocusHoveredWindowOnClick() {
+    ImGuiContext* context = ImGui::GetCurrentContext();
+    if (!context || !IsWindowFocusClick(*context) || context->HoveredWindow == nullptr) {
+        return;
+    }
+
+    ImGuiWindow* window = context->HoveredWindow;
+    if (!CanFocusWindow(window)) {
+        return;
+    }
+    ImGui::FocusWindow(window, ImGuiFocusRequestFlags_RestoreFocusedChild | ImGuiFocusRequestFlags_UnlessBelowModal);
+}
+
+void RenderFocusedWindowBorder() {
+    ImGuiContext* context = ImGui::GetCurrentContext();
+    if (!context || !context->NavWindow) {
+        return;
+    }
+
+    ImGuiWindow* nav_window = context->NavWindow;
+    ImGuiWindow* window = nav_window->RootWindowForTitleBarHighlight;
+    if (!window) {
+        window = nav_window;
+    }
+    if ((window->Flags & ImGuiWindowFlags_NoNavFocus) && !(nav_window->Flags & ImGuiWindowFlags_NoNavFocus)) {
+        window = nav_window;
+    }
+    if (!window || window->Hidden || window->Collapsed || !window->Viewport) {
+        return;
+    }
+    if (window->Flags & ImGuiWindowFlags_Tooltip) {
+        return;
+    }
+
+    const float pulse = 0.65f + 0.35f * (0.5f + 0.5f * ImSin(static_cast<float>(context->Time) * 4.0f));
+    const ImU32 glow_color = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 0.49f, 0.06f, 0.22f * pulse));
+    const ImU32 line_color = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 0.78f, 0.12f, 0.82f * pulse));
+
+    ImRect rect = window->Rect();
+    rect.Expand(-1.0f);
+
+    ImDrawList* draw_list = ImGui::GetForegroundDrawList(window->Viewport);
+    draw_list->AddRect(rect.Min, rect.Max, glow_color, window->WindowRounding, 0, 3.0f);
+    rect.Expand(-1.0f);
+    draw_list->AddRect(rect.Min, rect.Max, line_color, window->WindowRounding, 0, 1.0f);
 }
 
 } // namespace
@@ -128,9 +196,11 @@ void Context::ApplyDefaultTheme() {
 
 void Context::BeginFrame(const Render::ImGuiIOInputSnapshot& input_snapshot) {
     m_input_snapshot = &input_snapshot;
+    FocusHoveredWindowOnClick();
 }
 
 void Context::EndFrame() {
+    RenderFocusedWindowBorder();
     m_input_snapshot = nullptr;
 }
 
@@ -266,13 +336,13 @@ void Context::PanelHeader(const PanelHeaderDesc& desc) {
     ImGui::SeparatorText(desc.title);
 }
 
-SceneViewportState Context::DrawSceneViewportPanel(const char* name, bool* open) {
+SceneViewportState Context::DrawSceneViewportPanel(const char* name, bool* open, Render::UIRenderer& ui_renderer) {
     SceneViewportState state{};
     if (open && !*open) {
         return state;
     }
 
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground;
     if (!ImGui::Begin(name, open, window_flags)) {
         ImGui::End();
         return state;
@@ -284,48 +354,28 @@ SceneViewportState Context::DrawSceneViewportPanel(const char* name, bool* open)
         return state;
     }
 
-    const bool separate_window = current_window->ParentWindow == nullptr;
-    const auto menu_rect       = current_window->MenuBarRect();
-    const auto menu_bar        = current_window->MenuBarHeight();
-    const auto window_rect     = current_window->Rect();
+    ImVec2 image_size = ImGui::GetContentRegionAvail();
+    image_size.x      = std::max(image_size.x, 1.0f);
+    image_size.y      = std::max(image_size.y, 1.0f);
 
-    ImRect parent_rect{};
-    float2 local_pos{};
-    if (separate_window) {
-        parent_rect = {
-            current_window->Pos.x,
-            current_window->Pos.y,
-            current_window->Pos.x + current_window->Size.x,
-            current_window->Pos.y + current_window->Size.y
-        };
-        local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y - parent_rect.Min.y};
-    } else {
-        parent_rect = current_window->ParentWindow->Rect();
-        local_pos = {
-            window_rect.Min.x - parent_rect.Min.x,
-            menu_rect.Max.y + menu_bar - parent_rect.Min.y
-        };
-    }
+    const ImGuiID imgui_id = ImGui::GetID("##RenderOutput");
+    const Render::UIRenderer::RenderOutputSlotHandle slot =
+        ui_renderer.RegisterRenderOutputSlot(static_cast<uint32_t>(imgui_id));
+    const uint64_t texture_id = ui_renderer.GetRenderOutputTextureId(slot);
+    const ImVec2 image_pos = ImGui::GetCursorScreenPos();
+    ImGui::Image(ImTextureRef(static_cast<ImTextureID>(texture_id)), image_size);
 
-    const float2 scene_size = {
-        current_window->Size.x,
-        current_window->Size.y + current_window->Pos.y - menu_rect.Max.y
-    };
-
-    const uint2 mouse_pos = uint2(
-        ImGui::GetMousePos().x - parent_rect.Min.x,
-        ImGui::GetMousePos().y - parent_rect.Min.y
-    );
-    constexpr uint border = 4;
+    const ImVec2 viewport_pos = current_window->Viewport ? current_window->Viewport->Pos : ImVec2(0.0f, 0.0f);
 
     state.visible            = true;
-    state.separate_window    = separate_window;
-    state.content_pos        = local_pos;
-    state.content_resolution = scene_size;
-    state.hovered = mouse_pos.x > state.content_pos.x + border &&
-                    mouse_pos.x < state.content_pos.x + state.content_resolution.x - border &&
-                    mouse_pos.y > state.content_pos.y + border &&
-                    mouse_pos.y < state.content_pos.y + state.content_resolution.y - border;
+    state.separate_window    = current_window->Viewport != ImGui::GetMainViewport();
+    state.content_pos        = {image_pos.x - viewport_pos.x, image_pos.y - viewport_pos.y};
+    state.content_resolution = {image_size.x, image_size.y};
+    state.hovered            = ImGui::IsItemHovered();
+    state.focused            = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    state.input_started      = state.focused && state.hovered && IsAnyCameraMouseButtonClicked();
+    state.mouse_down         = IsAnyCameraMouseButtonDown();
+    state.render_output_slot = slot;
 
     ImGui::End();
     return state;

@@ -78,7 +78,7 @@ target_compile_options(
 add_dependencies(NRD NRI copy_dll_dxc)
 
 # post build
-set(NRD_ENCODING_FILE "${NRD_ROOT}/Shaders/Include/NRDEncoding.hlsli")
+set(NRD_ENCODING_FILE "${NRD_ROOT}/Shaders/NRDConfig.hlsli")
 set(MOER_SHADER_NRD_DIR "${moer_shader_dir}/external/nrd")
 add_custom_command(
     OUTPUT "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"

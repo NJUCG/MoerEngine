@@ -78,7 +78,7 @@ public:
     static void          SetFocusMode(WindowHandle*, bool focused);
     static bool          GetFocusMode(WindowHandle*);
     static WindowHandle* GetMainWindow();
-    static void          SetTitle(WindowHandle*, const char* newTitle);
+    static void          SetTitle(WindowHandle*, const char* new_title);
     static bool          ShouldClose(WindowHandle*);
     static Render::SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const WindowHandle& window);
 

@@ -252,13 +252,21 @@ inline decltype(auto) ToPlatformFormatArg(T&& value) {
 template<typename T>
 using PlatformFormatArgType = std::remove_cvref_t<decltype(ToPlatformFormatArg(std::declval<T>()))>;
 
+#if defined(_MSC_VER) && _MSC_VER < 1930
+template<typename CharT, typename... Args>
+using BasicFormatString = std::_Basic_format_string<CharT, Args...>;
+#else
+template<typename CharT, typename... Args>
+using BasicFormatString = std::basic_format_string<CharT, Args...>;
+#endif
+
 } // namespace Detail
 
 template<typename... Args>
-using FormatString = std::basic_format_string<PlatformChar, Detail::PlatformFormatArgType<Args>...>;
+using FormatString = Detail::BasicFormatString<PlatformChar, Detail::PlatformFormatArgType<Args>...>;
 
 template<typename... Args>
-using Utf8FormatString = std::basic_format_string<Char8, std::type_identity_t<Args>...>;
+using Utf8FormatString = Detail::BasicFormatString<Char8, std::type_identity_t<Args>...>;
 
 template<typename... Args>
 String Printf(FormatString<Args...> fmt, Args&&... args) {

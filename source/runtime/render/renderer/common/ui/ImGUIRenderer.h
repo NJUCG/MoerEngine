@@ -6,8 +6,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
-#include <string_view>
-#define ImTextureID uint64_t
+#include <mutex>
 struct UIFrameData;
 
 namespace Moer::Render {
@@ -27,12 +26,36 @@ public:
 
     void PresentWindows();
 
-    UIRenderer::WindowRenderTarget GetWindowRenderTarget(std::string_view window_name);
+    UIRenderer::RenderOutputSlotHandle RegisterRenderOutputSlot(uint32_t imgui_id);
+    uint64_t GetRenderOutputTextureId(UIRenderer::RenderOutputSlotHandle handle) const;
+    void PublishRenderOutput(UIRenderer::RenderOutputSlotHandle handle, TextureView resource);
+
+    void DrainRenderOutputUpdates();
+    uint ResolveTextureHandle(uint64_t texture_id);
 
     BindlessArrayRef             bindless_array;
     RenderDevice&                device;
     UnorderedMap<Texture*, uint> registered_images;
     ImGuiIOInputSnapshot         input_snapshot;
+
+    struct RenderOutputResource {
+        uint32_t    generation = 0;
+        TextureView resource;
+    };
+
+    struct PendingRenderOutputUpdate {
+        UIRenderer::RenderOutputSlotHandle handle;
+        TextureView                        resource;
+    };
+
+    std::mutex render_output_mutex;
+    UnorderedMap<uint32_t, UIRenderer::RenderOutputSlotHandle> render_output_slots_by_id;
+    Array<uint32_t> render_output_generations;
+    Array<PendingRenderOutputUpdate> pending_render_output_updates;
+    Array<RenderOutputResource> render_output_snapshot;
+
+    TextureRef transparent_texture;
+    uint       transparent_texture_handle = 0;
 };
 } // namespace Moer::Render
 

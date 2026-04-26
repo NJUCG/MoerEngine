@@ -6,14 +6,19 @@
 #include "renderer/common/ui/ImGuiIOInput.h"
 #include "rhi/RHI.h"
 #include <cstdint>
-#include <string_view>
 
 namespace Moer::Render {
 class UIRenderer {
 public:
-    struct WindowRenderTarget {
-        bool        is_separate_window = false;
-        TextureView frame_buffer;
+    struct RenderOutputSlotHandle {
+        static constexpr uint32_t InvalidIndex = 0xFFFFFFFFu;
+
+        uint32_t slot_index = InvalidIndex;
+        uint32_t generation = 0;
+
+        bool IsValid() const {
+            return slot_index != InvalidIndex && generation != 0;
+        }
     };
 
     struct Impl;
@@ -30,7 +35,9 @@ public:
     RENDER_API void RegisterImage(Texture* _texture, Sampler _sampler);
     RENDER_API void UnRegisterImage(Texture* _texture);
 
-    RENDER_API WindowRenderTarget GetWindowRenderTarget(std::string_view window_name);
+    RENDER_API RenderOutputSlotHandle RegisterRenderOutputSlot(uint32_t imgui_id);
+    RENDER_API uint64_t GetRenderOutputTextureId(RenderOutputSlotHandle handle) const;
+    RENDER_API void PublishRenderOutput(RenderOutputSlotHandle handle, TextureView resource);
     RENDER_API void        PresentWindows();
 
 private:
