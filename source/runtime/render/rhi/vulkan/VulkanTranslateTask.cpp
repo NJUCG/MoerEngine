@@ -118,7 +118,7 @@ Array<TranslateResult> VulkanTranslateTask::DispatchBatch(Array<QueueTranslateIn
 }
 
 void VulkanTranslateTask::ResetSchedulerState() {
-    // No-op: translate ordering is now fully encoded by preprocess-generated graph events.
+    // No-op until the translate scheduler owns load-balancing state.
 }
 
 } // namespace Moer::Render
