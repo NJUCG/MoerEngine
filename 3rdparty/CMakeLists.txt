@@ -1,7 +1,6 @@
 
 set(third_party_folder "3rdparty")
 
-# include(vulkan.cmake)
 include(${moer_root_dir}/cmake/functions.cmake)
 if (WIN32)
     include(${CMAKE_CURRENT_SOURCE_DIR}/dxc.cmake)

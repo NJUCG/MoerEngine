@@ -73,6 +73,14 @@ inline void LogWithSource(
 inline void LogWithSource(
     spdlog::source_loc        loc,
     spdlog::level::level_enum level,
+    const char*               message
+) {
+    LogBufferedMessage(loc, level, message ? Utf8StringView(message) : Utf8StringView());
+}
+
+inline void LogWithSource(
+    spdlog::source_loc        loc,
+    spdlog::level::level_enum level,
     PlatformStringView        message
 ) {
     LogBufferedPlatformMessage(loc, level, message);
@@ -113,6 +121,17 @@ inline void LogWithSource(
 ) {
     String message = Printf(fmt, std::forward<Args>(args)...);
     LogBufferedPlatformMessage(loc, level, message);
+}
+
+template<typename... Args>
+inline void LogWithSource(
+    spdlog::source_loc        loc,
+    spdlog::level::level_enum level,
+    Utf8FormatString<Args...> fmt,
+    Args&&...                 args
+) {
+    Utf8String message = Utf8Printf(fmt, std::forward<Args>(args)...);
+    LogBufferedMessage(loc, level, message);
 }
 }} // namespace Moer::LogSystem
 

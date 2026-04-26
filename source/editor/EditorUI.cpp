@@ -16,10 +16,6 @@
 #include <imgui_internal.h>
 #include <string_view>
 
-#if WITH_PROFILE
-#include "Profile.h"
-#endif
-
 using namespace Moer::Render;
 
 namespace Moer {
@@ -30,177 +26,6 @@ EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfi
     // Init Style
     EditorUIStyle::ApplyDefaultStyle();
 }
-
-#if WITH_PROFILE
-void EditorUI::DrawPassAndChildren(const char* parent_name, int depth) {
-    for (int i = 0; i < g_pass_history_count; i++) {
-        auto& h = g_pass_history[i];
-        if (!h.active)
-            continue;
-        if (strcmp(h.parent_name, parent_name) != 0)
-            continue;
-        if (h.avg_ms < 0.001f && h.max_ms < 0.001f)
-            continue;
-
-        ImGui::TableNextRow();
-
-        ImGui::TableSetColumnIndex(0);
-        ImGui::Indent((1 + depth) * 20.0f);
-        ImGui::Text("%s", h.name);
-        ImGui::Unindent((1 + depth) * 20.0f);
-
-        ImGui::TableSetColumnIndex(1);
-        if (h.avg_ms > 5.0f)
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%.4f", h.avg_ms);
-        else if (h.avg_ms > 2.0f)
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "%.4f", h.avg_ms);
-        else
-            ImGui::Text("%.4f", h.avg_ms);
-
-        ImGui::TableSetColumnIndex(2);
-        ImGui::Text("%.4f", h.max_ms);
-
-        ImGui::TableSetColumnIndex(3);
-        float ordered[60];
-        for (int j = 0; j < 60; j++) {
-            ordered[j] = h.samples[(h.write_idx + j) % 60];
-        }
-        char plot_label[64];
-        snprintf(plot_label, sizeof(plot_label), "##pass_%d", i);
-        float plot_max = h.max_ms > 0.0f ? h.max_ms * 1.2f : 1.0f;
-        ImGui::PlotLines(plot_label, ordered, 60, 0, nullptr, 0.0f, plot_max, ImVec2(-1, 28));
-
-        DrawPassAndChildren(h.name, depth + 1);
-    }
-}
-
-void EditorUI::ShowMemoryProfiler(bool* p_open) {
-    Profile_TickSample();
-
-    if (!ImGui::Begin("Memory Profiler", p_open)) {
-        ImGui::End();
-        return;
-    }
-
-    if (ImGui::CollapsingHeader("Real-time Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (ImGui::BeginTable("MetricsTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-            ImGui::TableSetupColumn("Source");
-            ImGui::TableSetupColumn("Current (MB)");
-            ImGui::TableSetupColumn("Peak (MB)");
-            ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-            ImGui::TableHeadersRow();
-
-            for (int i = 0; i < SOURCE_COUNT; ++i) {
-                const auto& config    = g_UIConfigs[i];
-                float       currentMB = Profile_GetBytesBySource(config.source) / 1048576.0f;
-                float       peakMB    = Profile_GetPeakBytesBySource(config.source) / 1048576.0f;
-
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::Text("%s", config.label);
-
-                ImGui::TableSetColumnIndex(1);
-                ImGui::Text("%.3f", currentMB);
-
-                ImGui::TableSetColumnIndex(2);
-                ImGui::Text("%.3f", peakMB);
-
-                ImGui::TableSetColumnIndex(3);
-                ImGui::ColorButton(
-                    config.label, config.color, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoInputs
-                );
-            }
-            ImGui::EndTable();
-        }
-    }
-
-    ImGui::Spacing();
-
-    if (ImGui::CollapsingHeader("Live Memory Graph")) {
-        static float view_max_y = 5.0f;
-
-        std::vector<TimePoint> snapshot;
-        {
-            std::lock_guard<std::mutex> lock(g_history_mtx);
-            if (g_history_data.empty())
-                return;
-            snapshot.assign(g_history_data.begin(), g_history_data.end());
-        }
-
-        float plot_width = ImGui::GetContentRegionAvail().x;
-        for (int s = 0; s < SOURCE_COUNT; ++s) {
-            struct PlotContext {
-                int                     s_idx;
-                std::vector<TimePoint>* d;
-            };
-            PlotContext ctx = {s, &snapshot};
-
-            auto getter = [](void* data, int idx) -> float {
-                auto* p = (PlotContext*)data;
-                return p->d->operator[](idx).values[p->s_idx];
-            };
-
-            float last_val = snapshot.back().values[s];
-            if (last_val * 1.2f > view_max_y)
-                view_max_y = last_val * 1.2f;
-
-            ImGui::PushStyleColor(ImGuiCol_PlotLines, g_UIConfigs[s].color);
-            ImGui::PlotLines(
-                "##", getter, &ctx, (int)snapshot.size(), 0, nullptr, 0.0f, view_max_y, ImVec2(plot_width, 80)
-            );
-            ImGui::PopStyleColor();
-
-            ImGui::SameLine();
-            ImGui::Text("%s: %.2f MB", g_UIConfigs[s].label, last_val);
-        }
-    }
-
-    ImGui::Spacing();
-
-    if (ImGui::CollapsingHeader("GPU Pass Timing", ImGuiTreeNodeFlags_DefaultOpen)) {
-        std::lock_guard<std::mutex> lock(g_pass_history_mtx);
-
-        if (g_pass_history_count == 0) {
-            ImGui::TextDisabled("No GPU data yet...");
-        } else {
-            ImGui::BeginTable(
-                "PassTable",
-                4,
-                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
-                ImVec2(0, 300)
-            );
-            ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, 260);
-            ImGui::TableSetupColumn("Avg ms", ImGuiTableColumnFlags_WidthFixed, 70);
-            ImGui::TableSetupColumn("Max ms", ImGuiTableColumnFlags_WidthFixed, 70);
-            ImGui::TableSetupColumn("Last 60 frames", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableHeadersRow();
-
-            DrawPassAndChildren("", 0);
-
-            ImGui::EndTable();
-        }
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::Text("Memory Hotspots Export:");
-
-    if (ImGui::Button("Quick Dump (Hex Only)")) {
-        WriteHotspots(false);
-    }
-
-    ImGui::SameLine();
-
-    if (ImGui::Button("Full Dump (With Symbols)")) {
-        WriteHotspots(true);
-    }
-
-    ImGui::Spacing();
-    ImGui::End();
-}
-#endif
 
 void EditorUI::TickUI() {
 
@@ -282,6 +107,7 @@ void EditorUI::TickUI() {
     if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
         ImGuiID dockspace_id = ImGui::GetID("Docking Main");
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
+        SetupDefaultDockLayout(dockspace_id);
     }
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("Menu")) {
@@ -307,7 +133,10 @@ void EditorUI::TickUI() {
             // ImGui::MenuItem("Inspector", nullptr, &m_m_b_show_inspector_window);
             // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
 #if WITH_PROFILE
-            ImGui::MenuItem("Memory Profiler", nullptr, &m_b_show_memory_profiler);
+            bool show_runtime_profiler = m_runtime_profiler.IsOpen();
+            if (ImGui::MenuItem("runtime_profiler", nullptr, &show_runtime_profiler)) {
+                m_runtime_profiler.SetOpen(show_runtime_profiler);
+            }
 #endif
             ImGui::EndMenu();
         }
@@ -332,18 +161,40 @@ void EditorUI::TickUI() {
         ImGui::EndMenuBar();
     }
     ImGui::End();
-#if WITH_PROFILE
-    if (m_b_show_memory_profiler) {
-        ShowMemoryProfiler(&m_b_show_memory_profiler);
-    }
-#endif
     ResetState();
     ShowSceneColor();
     ShowConfig();
+#if WITH_PROFILE
+    m_runtime_profiler.TickUI();
+#endif
     ShowOverlay();
 
     ApplyInputSnapshot();
     m_ui_renderer->EndGUIFrame();
+}
+
+void EditorUI::SetupDefaultDockLayout(ImGuiID dockspace_id) {
+    ImGuiDockNode* dockspace_node = ImGui::DockBuilderGetNode(dockspace_id);
+    if (!dockspace_node || dockspace_node->IsSplitNode() || !dockspace_node->Windows.empty()) {
+        return;
+    }
+
+    ImGuiID main_id = dockspace_id;
+    ImGui::DockBuilderRemoveNode(dockspace_id);
+    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspace_id, ImGui::GetMainViewport()->WorkSize);
+
+    ImGuiID right_id = ImGui::DockBuilderSplitNode(main_id, ImGuiDir_Right, 0.28f, nullptr, &main_id);
+    ImGuiID config_id = right_id;
+    ImGuiID profiler_id = ImGui::DockBuilderSplitNode(right_id, ImGuiDir_Down, 0.50f, nullptr, &config_id);
+
+    ImGui::DockBuilderDockWindow("Scene Color", main_id);
+    ImGui::DockBuilderDockWindow("Configs", config_id);
+#if WITH_PROFILE
+    ImGui::DockBuilderDockWindow("runtime_profiler", profiler_id);
+#endif
+    ImGui::DockBuilderDockWindow("Console", profiler_id);
+    ImGui::DockBuilderFinish(dockspace_id);
 }
 
 void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output) {

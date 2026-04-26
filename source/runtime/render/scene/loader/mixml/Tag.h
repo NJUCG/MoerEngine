@@ -2,6 +2,8 @@
 
 #include "misc/STL.h"
 
+#include <string>
+
 namespace Moer::MiXml {
 enum class ETag : unsigned int {
     UNKNOWN = 0,

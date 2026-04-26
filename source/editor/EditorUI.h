@@ -6,6 +6,12 @@
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHIResource.h"
 
+#include <imgui.h>
+
+#if WITH_PROFILE
+#include "runtime_profiler/RuntimeProfiler.h"
+#endif
+
 namespace Moer {
 
 class EditorUI {
@@ -51,12 +57,9 @@ public:
 
 private:
     void ResetState(); // reset m_b_need_reload, etc..
+    void SetupDefaultDockLayout(ImGuiID dockspace_id);
     void ShowSceneColor();
     void ShowConfig();
-#if WITH_PROFILE
-    void ShowMemoryProfiler(bool* p_open);
-    void DrawPassAndChildren(const char* parent_name, int depth);
-#endif
     void ShowOverlay();
     void ApplyInputSnapshot();
 
@@ -71,9 +74,7 @@ private:
     bool m_b_need_reload = false;
 
 #if WITH_PROFILE
-    bool   m_b_show_memory_profiler = false;
-    float2 m_memory_profiler_pos{};
-    float2 m_memory_profiler_resolution{300, 200};
+    RuntimeProfiler m_runtime_profiler;
 #endif
 
     SharedPtr<EditorConfig> m_config;

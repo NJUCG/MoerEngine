@@ -1217,6 +1217,9 @@ public:
     VulkanDescriptorHeap::VulkanDescriptorHeap(VulkanDevice& _device) : m_device(&_device) {
         m_heap_manager    = MakeUnique<VulkanHeapManager>(_device);
         m_offline_manager = MakeUnique<VulkanOfflineDescriptorManager>(_device, *m_heap_manager);
+        if (!_device.HasDescriptorHeapRuntime()) {
+            return;
+        }
         m_heap_manager->Initialize(*m_offline_manager);
         m_online_manager  = MakeUnique<VulkanOnlineResourceDescriptorManager>(
             _device,

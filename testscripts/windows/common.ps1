@@ -178,7 +178,21 @@ function Merge-Stderr([string]$MainLog, [string]$ErrLog) {
 }
 
 function Stop-ProcessTree {
-    param([Parameter(Mandatory)][int]$ProcessId)
+    param(
+        [Parameter(Mandatory)][int]$ProcessId,
+        [int]$GraceSec = 10
+    )
+
+    $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($null -ne $proc) {
+        $proc.Refresh()
+        if ($proc.MainWindowHandle -ne 0) {
+            [void]$proc.CloseMainWindow()
+            if ($proc.WaitForExit($GraceSec * 1000)) {
+                return $true
+            }
+        }
+    }
 
     $taskkill = Start-Process -FilePath "taskkill.exe" -ArgumentList @("/PID", "$ProcessId", "/T", "/F") -NoNewWindow -PassThru -Wait
     return $taskkill.ExitCode -eq 0 -or $taskkill.ExitCode -eq 128 -or $taskkill.ExitCode -eq 255
@@ -319,7 +333,9 @@ function Invoke-ExeTimed {
         }
         return $true
     } else {
-        $script:TimedExitCode = $proc.ExitCode
+        $exitCode = $proc.ExitCode
+        if ($null -eq $exitCode) { $exitCode = 0 }
+        $script:TimedExitCode = $exitCode
         return $false
     }
 }
@@ -329,8 +345,8 @@ function Test-LogForErrors {
 
     if (-not (Test-Path $LogFile)) { return @() }
 
-    $p1 = "(?-i)\[error\](?!.*\[Loader Message\]).*(crash|exception|fatal|access.violation|assert)"
-    $p2 = "(?-i)(Validation Error\s*:)"
+    $p1 = "(?-i)\[(error|critical)\](?!.*\[Loader Message\]).*(crash|exception|fatal|access.violation|assert)"
+    $p2 = "(?-i)(Validation Error\s*:|VUID-|Shader Compile Error|Assertion failed|Fatal : VkResult)"
     $combined = "$p1|$p2"
 
     $hits = Select-String -Path $LogFile -Pattern $combined -CaseSensitive

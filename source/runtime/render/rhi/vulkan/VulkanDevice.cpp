@@ -78,6 +78,9 @@ VulkanDevice::VulkanDevice(const VulkanRHIConfig&& _config) : RenderDevice::Impl
 }
 
 void VulkanDevice::PostInit() {
+    if (!HasDescriptorHeapRuntime()) {
+        return;
+    }
     CreateInternalShaders();
 }
 
@@ -108,13 +111,14 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
     instance_create_info.flags            = 0;
     instance_create_info.pApplicationInfo = &application_info;
 
-    // instance layer
+#ifdef MOER_VK_LAYER_PATH
     constexpr std::string_view vk_layer_path = MOER_XSTR(MOER_VK_LAYER_PATH);
     std::filesystem::path      layer_path(vk_layer_path);
     if (std::filesystem::exists(layer_path)) {
         Platform::SetEnv("VK_LAYER_PATH", MOER_XSTR(MOER_VK_LAYER_PATH));
         LOG_INFO(MOER_TEXT("Set VK_LAYER_PATH to {}"), MOER_XSTR(MOER_VK_LAYER_PATH));
     }
+#endif
 
     const auto instance_layers = [&]() {
         uint32 instance_layer_count = 0;
@@ -547,36 +551,11 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
 void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_version) {
     VmaAllocatorCreateInfo alloc_create_info{};
 
-    VmaVulkanFunctions vma_functions{};
-    vma_functions.vkGetPhysicalDeviceProperties           = vkGetPhysicalDeviceProperties;
-    vma_functions.vkGetPhysicalDeviceMemoryProperties     = vkGetPhysicalDeviceMemoryProperties;
-    vma_functions.vkAllocateMemory                        = vkAllocateMemory;
-    vma_functions.vkFreeMemory                            = vkFreeMemory;
-    vma_functions.vkMapMemory                             = vkMapMemory;
-    vma_functions.vkUnmapMemory                           = vkUnmapMemory;
-    vma_functions.vkFlushMappedMemoryRanges               = vkFlushMappedMemoryRanges;
-    vma_functions.vkInvalidateMappedMemoryRanges          = vkInvalidateMappedMemoryRanges;
-    vma_functions.vkBindBufferMemory                      = vkBindBufferMemory;
-    vma_functions.vkBindImageMemory                       = vkBindImageMemory;
-    vma_functions.vkGetBufferMemoryRequirements           = vkGetBufferMemoryRequirements;
-    vma_functions.vkGetImageMemoryRequirements            = vkGetImageMemoryRequirements;
-    vma_functions.vkCreateBuffer                          = vkCreateBuffer;
-    vma_functions.vkDestroyBuffer                         = vkDestroyBuffer;
-    vma_functions.vkCreateImage                           = vkCreateImage;
-    vma_functions.vkDestroyImage                          = vkDestroyImage;
-    vma_functions.vkCmdCopyBuffer                         = vkCmdCopyBuffer;
-    vma_functions.vkGetBufferMemoryRequirements2KHR       = vkGetBufferMemoryRequirements2;
-    vma_functions.vkGetImageMemoryRequirements2KHR        = vkGetImageMemoryRequirements2;
-    vma_functions.vkBindBufferMemory2KHR                  = vkBindBufferMemory2;
-    vma_functions.vkBindImageMemory2KHR                   = vkBindImageMemory2;
-    vma_functions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2;
-
     alloc_create_info.vulkanApiVersion = _api_version;
 
     alloc_create_info.instance         = _instance;
     alloc_create_info.physicalDevice   = m_gpu;
     alloc_create_info.device           = m_device;
-    alloc_create_info.pVulkanFunctions = &vma_functions;
 
     //capable of using buffer via device address(64bit) passed to shader.
     alloc_create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
@@ -585,8 +564,7 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
     }
 
 #if WITH_CUDA
-    // 因为上文 vma_functions 传的是指针，所以这里可以直接修改
-    vma_functions.vkGetMemoryWin32HandleKHR = vkGetMemoryWin32HandleKHR;
+    alloc_create_info.flags |= VMA_ALLOCATOR_CREATE_KHR_EXTERNAL_MEMORY_WIN32_BIT;
 
     // 这里的代码是应vma要求写的，需要手动设置handleTypes，以便跨graphics api使用
     std::vector<VkExternalMemoryHandleTypeFlagsKHR> handleTypes(
@@ -603,6 +581,10 @@ void VulkanDevice::CreateMemoryAllocator(VkInstance _instance, uint32 _api_versi
 
     alloc_create_info.pTypeExternalMemoryHandleTypes = handleTypes.data();
 #endif
+
+    VmaVulkanFunctions vma_functions{};
+    VK_CHECK_RESULT(vmaImportVulkanFunctionsFromVolk(&alloc_create_info, &vma_functions));
+    alloc_create_info.pVulkanFunctions = &vma_functions;
 
     VK_CHECK_RESULT(vmaCreateAllocator(&alloc_create_info, &m_allocator));
 
@@ -696,7 +678,7 @@ void VulkanDevice::CreateDescriptorHeap() {
     }
 
     LOG_WARNING(
-        MOER_TEXT("VulkanRHI: descriptor heap startup disabled; continuing on the pre-replacement descriptor-buffer path.")
+        MOER_TEXT("VulkanRHI: descriptor heap startup skipped; this runtime requires VK_EXT_descriptor_heap.")
     );
 }
 

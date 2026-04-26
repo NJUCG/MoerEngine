@@ -1,4 +1,5 @@
 #include "taskgraph/ThreadManager.h"
+#include "log/LogSystem.h"
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
 #include <algorithm>
@@ -163,7 +164,7 @@ RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attribu
     create_event.Wait();
     this->name = _attributes.name;
 
-    SPDLOG_INFO(MOER_TEXT("[{}] {} thread created"), name, this->id);
+    LOG_INFO(MOER_TEXT("[{}] {} thread created"), name, this->id);
 }
 
 uint32_t RunnableThread::Run() {
@@ -184,10 +185,10 @@ void RunnableThread::WaitUntilFinished() {
 }
 
 uint32_t TestRunnanble::Run() {
-    SPDLOG_INFO(MOER_TEXT("[{}] start running"), Platform::GetCurrentThreadID());
+    LOG_INFO(MOER_TEXT("[{}] start running"), Platform::GetCurrentThreadID());
     while (!m_stop) {
     }
-    SPDLOG_INFO(MOER_TEXT("[{}] finish running"), Platform::GetCurrentThreadID());
+    LOG_INFO(MOER_TEXT("[{}] finish running"), Platform::GetCurrentThreadID());
     return 0;
 }
 
@@ -198,7 +199,7 @@ void TestRunnanble::Stop() {
 }
 
 void TestRunnanble::Exit() {
-    SPDLOG_INFO(
+    LOG_INFO(
         MOER_TEXT("thread {} exit"), static_cast<size_t>(std::hash<std::thread::id>()(std::this_thread::get_id()))
     );
 }

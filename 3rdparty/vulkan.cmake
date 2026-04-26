@@ -1,15 +1,13 @@
-# #Vulkan SDK
+set(MOER_VULKAN_SDK_BINARY_DIR "${moer_third_party_dir}/VulkanSDK/binary")
+
 if(WIN32)
-    add_compile_definitions("VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Windows")
-    add_compile_definitions("VK_ICD_FILENAMES=${moer_third_party_dir}/VulkanSDK/binary/Windows/vulkan_icd.json")
+    set(MOER_VULKAN_SDK_LAYER_DIR "${MOER_VULKAN_SDK_BINARY_DIR}/Windows")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_compile_definitions("VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/Linux")
-    #https://chromium.googlesource.com/external/github.com/KhronosGroup/Vulkan-Loader/+/HEAD/loader/LoaderAndLayerInterface.md#icd-discovery
-    add_compile_definitions("VK_ICD_FILENAMES=${moer_third_party_dir}/VulkanSDK/binary/Linux/vulkan_icd.json")
+    set(MOER_VULKAN_SDK_LAYER_DIR "${MOER_VULKAN_SDK_BINARY_DIR}/Linux")
 elseif(APPLE)
-    add_compile_definitions("VK_LAYER_PATH=${moer_third_party_dir}/VulkanSDK/binary/MacOS")
-    #https://chromium.googlesource.com/external/github.com/KhronosGroup/Vulkan-Loader/+/HEAD/loader/LoaderAndLayerInterface.md#icd-discovery
-    add_compile_definitions("VK_ICD_FILENAMES=${moer_third_party_dir}/VulkanSDK/binary/MacOS/MoltenVK_icd.json")
-    
-else()
+    set(MOER_VULKAN_SDK_LAYER_DIR "${MOER_VULKAN_SDK_BINARY_DIR}/MacOS")
+endif()
+
+if(MOER_VULKAN_SDK_LAYER_DIR AND EXISTS "${MOER_VULKAN_SDK_LAYER_DIR}")
+    add_compile_definitions(MOER_VK_LAYER_PATH=${MOER_VULKAN_SDK_LAYER_DIR})
 endif()

@@ -73,7 +73,7 @@ private:
             FILE* result_handle = nullptr;
             fopen_s(&result_handle, (const char*)_handle.file, "r");
             if (!result_handle) {
-                SPDLOG_ERROR(MOER_TEXT("Failed to open file {}"), (const char*)_handle.file);
+                LOG_ERROR(MOER_TEXT("Failed to open file {}"), (const char*)_handle.file);
                 return;
             }
             std::fseek(result_handle, _file_offset, SEEK_SET);
@@ -88,7 +88,7 @@ private:
             FILE* result_handle = nullptr;
             fopen_s(&result_handle, (const char*)handle.file, "r");
             if (!result_handle) {
-                SPDLOG_ERROR(MOER_TEXT("Failed to open file {}"), (const char*)handle.file);
+                LOG_ERROR(MOER_TEXT("Failed to open file {}"), (const char*)handle.file);
                 return;
             }
             std::fseek(result_handle, file_offset, SEEK_SET);
@@ -112,7 +112,7 @@ private:
             FILE* dst_handle = nullptr;
             fopen_s(&dst_handle, (const char*)_in_dst_handle.file, "r+");
             if (!src_handle || !dst_handle) {
-                SPDLOG_ERROR(MOER_TEXT("Failed to open file {}"), (const char*)_handle.file);
+                LOG_ERROR(MOER_TEXT("Failed to open file {}"), (const char*)_handle.file);
                 return;
             }
             std::fseek(src_handle, _offset, SEEK_SET);
@@ -140,7 +140,7 @@ private:
         });
     }
     void InnerWorkLoop() {
-        SPDLOG_INFO(MOER_TEXT("IOLooper started"));
+        LOG_INFO(MOER_TEXT("IOLooper started"));
         while (enabled) {
             Array<std::function<void(void)>> requests_copy;
             {
@@ -154,7 +154,7 @@ private:
                 request();
             }
         }
-        SPDLOG_INFO(MOER_TEXT("IOLooper exited"));
+        LOG_INFO(MOER_TEXT("IOLooper exited"));
     }
 };
 
@@ -269,7 +269,7 @@ private:
                                 _src.data.data(), _src.data.size(), _dst.handle, _dst.offset
                             );
                         } else {
-                            SPDLOG_ERROR(MOER_TEXT("Invalid command"));
+                            LOG_ERROR(MOER_TEXT("Invalid command"));
                         }
                     }
                 },

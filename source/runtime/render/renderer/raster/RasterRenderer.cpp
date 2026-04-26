@@ -99,11 +99,40 @@ RasterRenderer::RasterRenderer(
 }
 
 RasterRenderer::~RasterRenderer() {
-    auto& raster_context = *raster_context_ptr;
-    raster_context.FreeFrameBuffers(true);
-
-    // 下面这段需要在Renderer子类中执行。否则各种Pass对象被Release的时候，对应的资源还没有被释放
+    ReleaseRasterResources();
     ReleaseResources();
+}
+
+void RasterRenderer::ReleaseRasterResources() {
+    if (raster_resources_released) {
+        return;
+    }
+    raster_resources_released = true;
+
+    if (time > 0) {
+        timeline->Wait(time);
+        gfx_queue.Sync();
+    }
+
+    raster_context_ptr->FreeFrameBuffers(true);
+
+#if WITH_CUDA
+    tensor_rt_pass.reset();
+    cuda_pass.reset();
+#endif
+    tonemapping_pass.reset();
+    bloom_pass.reset();
+    aa_pass.reset();
+    cooperative_ops_pass.reset();
+    ssr_pass.reset();
+    bfd_pass.reset();
+    rtao_denoiser_pass.reset();
+    ao_pass.reset();
+    skybox_pass.reset();
+    lighting_pass.reset();
+    geometry_pass.reset();
+    directional_shadow_mask_pass.reset();
+    shadow_depth_pass.reset();
 }
 
 void RasterRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
@@ -123,6 +152,9 @@ void RasterRenderer::Run(const SharedPtr<EditorConfig> editor_config, const Engi
             break;
         }
     }
+
+    ReleaseRasterResources();
+    ReleaseResources();
 
     if (hooks.on_unregister_renderer_config_section) {
         hooks.on_unregister_renderer_config_section("Raster", "Settings");
@@ -245,6 +277,7 @@ bool RasterRenderer::RunSingle(
     config_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());
 
     TextureRef default_output_texture = raster_context.textures.output.tex;
+    Array<CommandList> pre_frame_cmd_lists{};
 
     // MARK: 3. Run Render Passes
 
@@ -256,21 +289,18 @@ bool RasterRenderer::RunSingle(
         // commands to the copy queue, and auto-generates acquire/release barriers.
         auto&& scene_cmd_list = scene.PopPendingCommandList();
         if (!scene_cmd_list.gfx_queue_cmd_list.IsEmpty()) {
-            Array<CommandList> scene_cmd_lists{};
-            scene_cmd_lists.emplace_back(std::move(scene_cmd_list.gfx_queue_cmd_list));
-            RHIExecutor::Get().Submit(std::move(scene_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
+            pre_frame_cmd_lists.emplace_back(std::move(scene_cmd_list.gfx_queue_cmd_list));
         }
 
         if (first_load) {
             first_load = false;
 
-            // 随手加一句，避免出错（重构完毕后可以尝试去除）
             cmd_list.UpdateBindlessArray(bindless_array);
 
-            Array<CommandList> first_load_cmd_lists{};
-            first_load_cmd_lists.emplace_back(std::move(cmd_list));
-            RHIExecutor::Get().Submit(std::move(first_load_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
-            cmd_list = CommandList(EQueueType::Graphics);
+            if (!cmd_list.IsEmpty()) {
+                pre_frame_cmd_lists.emplace_back(std::move(cmd_list));
+                cmd_list = CommandList(EQueueType::Graphics);
+            }
         }
 
         auto& raster_config = editor_config->raster_config;
@@ -400,7 +430,12 @@ bool RasterRenderer::RunSingle(
     time++;
     RHIPresentRequest present_request = presentation_surface->CreatePresentRequest(default_output_texture);
     cmd_list.Signal(timeline, time).DeleteResources().TickProfiling().TickFrame();
-    Array<CommandList> frame_cmd_lists{};
+    const bool should_close_now = WindowContext::ShouldClose(WindowContext::GetMainWindow());
+    if (should_close_now) {
+        skip_present = true;
+    }
+
+    Array<CommandList> frame_cmd_lists = std::move(pre_frame_cmd_lists);
     frame_cmd_lists.emplace_back(std::move(cmd_list));
     RHIExecutor::Get().Submit(
         std::move(frame_cmd_lists),
@@ -411,6 +446,10 @@ bool RasterRenderer::RunSingle(
 
     if (!skip_present && hooks.on_present_windows) {
         hooks.on_present_windows();
+    }
+
+    if (should_close_now) {
+        return false;
     }
 
     if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {

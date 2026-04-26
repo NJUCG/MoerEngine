@@ -6,6 +6,7 @@
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/vulkan/VulkanDevice.h"
 #include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
@@ -70,6 +71,19 @@ void Engine::Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen)
             }
         )
     );
+    render_device_initialized = true;
+
+    if (rhi_type == ERHIType::Vulkan) {
+        auto& vulkan_device = static_cast<Render::VulkanDevice&>(*RenderDevice::Get().GetImpl());
+        if (!vulkan_device.HasDescriptorHeapRuntime()) {
+            LOG_WARNING(
+                MOER_TEXT("MoerEditor startup skipped: VK_EXT_descriptor_heap is unavailable on this Vulkan runtime.")
+            );
+            return;
+        }
+    }
+
+    runtime_supported = true;
 
     ShaderManager::Get(); // Explicit Init ShaderManager
 
@@ -112,6 +126,10 @@ void Engine::Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen)
 }
 
 void Engine::Run() {
+    if (!runtime_supported) {
+        return;
+    }
+
     const EngineHooks hooks{
         .on_tick_ui =
             [this]() {
@@ -209,13 +227,19 @@ void Engine::ShutDown() {
     m_runtime_assets.reset(); // 释放RuntimeAssets资源
 
     FileDialog::ShutDown();
-    WindowContext::ShutDown();
+    if (runtime_supported) {
+        WindowContext::ShutDown();
+    }
     ShaderManager::ShutDown();
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    RHIExecutor::ShutDown();
-    RenderDevice::Dispose();
+    if (render_device_initialized) {
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        RHIExecutor::ShutDown();
+        RenderDevice::Dispose();
+        render_device_initialized = false;
+    }
     TaskSystem::ShutDown();
 
+    runtime_supported = false;
     has_shutdown = true;
 }
 

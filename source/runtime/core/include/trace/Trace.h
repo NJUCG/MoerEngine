@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 
 #ifndef MOER_TRACE_ENABLED

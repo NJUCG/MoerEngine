@@ -144,7 +144,8 @@ char32_t DecodeWideCodePoint(WideStringView text, std::size_t& index) {
 
 PlatformString Utf8ToPlatform(Utf8StringView text) {
 #if defined(_WIN32) || defined(_WIN64)
-    return Utf8ToWide(text);
+    const WideString wide_text = Utf8ToWide(text);
+    return PlatformString(std::basic_string_view<PlatformChar>(wide_text.data(), wide_text.size()));
 #else
     return PlatformString(std::basic_string_view<PlatformChar>(text.data(), text.size()));
 #endif
@@ -152,7 +153,7 @@ PlatformString Utf8ToPlatform(Utf8StringView text) {
 
 Utf8String PlatformToUtf8(PlatformStringView text) {
 #if defined(_WIN32) || defined(_WIN64)
-    return WideToUtf8(text);
+    return WideToUtf8(WideStringView(text.data(), text.size()));
 #else
     return Utf8String(std::basic_string_view<Char8>(text.data(), text.size()));
 #endif

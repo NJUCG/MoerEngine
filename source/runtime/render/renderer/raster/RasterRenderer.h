@@ -73,6 +73,8 @@ public:
     UpdateGlobalLightingData(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 
 private:
+    void ReleaseRasterResources();
+
     // Context
     UniquePtr<RasterContext> raster_context_ptr; // For forward declaration
 
@@ -98,6 +100,7 @@ private:
 
     // Other vars
     // TODO: rt_geometries 已迁移到 GpuScene，未来应移除
+    bool raster_resources_released = false;
 }; // namespace Moer::Render::Raster
 
 } // namespace Moer::Render::Raster

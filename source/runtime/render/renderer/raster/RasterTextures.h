@@ -51,17 +51,17 @@ namespace Moer::Render::Raster {
           .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(TexHandle, tonemapping_output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))    \
     X(TexHandle, ui_frame_buffer, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))       \
-    X(TexHandle, output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_SRGB).Usage(E_C_ATTACH))                      \
+    X(TexHandle, output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_SRGB).Usage(E_SAMPLED_COLOR))                 \
     X(DepthBufferWithHandle,                                                                                    \
       depth_linear_sampler,                                                                                     \
       TexDepthTag,                                                                                              \
-      TexConfig::Default(WITH_CUDA ? PF_D32_SFLOAT : PF_D32_SFLOAT_S8_UINT)                                     \
+        TexConfig::Default(PF_D32_SFLOAT)                                                                        \
           .Usage(E_S_DEPTH)                                                                                     \
           .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(DepthBufferWithHandle,                                                                                    \
       depth_nearest_sampler,                                                                                    \
       TexDepthTag,                                                                                              \
-      TexConfig::Default(WITH_CUDA ? PF_D32_SFLOAT : PF_D32_SFLOAT_S8_UINT)                                     \
+        TexConfig::Default(PF_D32_SFLOAT)                                                                        \
           .Usage(E_S_DEPTH)                                                                                     \
           .SamplerConfig(SF_NEAREST, SAM_CLAMP_TO_EDGE)                                                         \
           .From(depth_linear_sampler))                                                                          \

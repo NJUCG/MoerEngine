@@ -3539,7 +3539,7 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
         FILE* result_handle = nullptr;
         fopen_s(&result_handle, (const char*)_src.handle.file, "r");
         if (!result_handle) {
-            SPDLOG_ERROR(MOER_TEXT("Failed to open file {}"), (const char*)_src.handle.file);
+            LOG_ERROR(MOER_TEXT("Failed to open file {}"), (const char*)_src.handle.file);
             assert(false && "Failed to open file");
         }
         std::fseek(result_handle, _file_offset, SEEK_SET);

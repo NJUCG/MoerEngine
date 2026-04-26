@@ -2307,6 +2307,14 @@ int main(int argc, char** argv) {
         return exit_code;
     };
 
+    auto& vk_device = static_cast<VulkanDevice&>(*RenderDevice::Get().GetImpl());
+    if (!vk_device.HasDescriptorHeapRuntime()) {
+        LOG_INFO(
+            MOER_TEXT("[TESTCASE][SKIP] DescriptorHeapRuntimeUnsupported :: VK_EXT_descriptor_heap is unavailable")
+        );
+        return shutdown_and_return(0);
+    }
+
     const int queue_ret = RunNamedTestCase("CommandListQueueBinding", RunCommandListQueueBindingTest);
     if (queue_ret != 0) {
         return shutdown_and_return(queue_ret);

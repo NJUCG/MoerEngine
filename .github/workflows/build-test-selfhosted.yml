@@ -1,0 +1,84 @@
+name: Build and Test Self-Hosted
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: CMake build configuration
+        required: true
+        default: Debug
+        type: choice
+        options:
+          - Debug
+          - Release
+          - RelWithDebInfo
+
+jobs:
+  build-test:
+    name: Windows NVIDIA 4080 Build and Test
+    runs-on: [self-hosted, Windows, X64, label-valerie]
+    timeout-minutes: 120
+
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: Checkout MoerEngine
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Prepare MoerEngine config
+        run: |
+          Copy-Item -Path template.MoerEngine.toml -Destination MoerEngine.toml -Force
+
+          $sceneRoot = "asset/scenes/sponza"
+          if (Test-Path $sceneRoot) {
+              Remove-Item -Path $sceneRoot -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path "asset/scenes" -Force | Out-Null
+          git clone --depth 1 https://github.com/NJUCG/MoerEngineScenes.git $sceneRoot
+
+          $sceneFile = Get-ChildItem -Path $sceneRoot -Recurse -File |
+              Where-Object { $_.Name -ieq "sponza.gltf" } |
+              Select-Object -First 1
+          if (-not $sceneFile) {
+              throw "sponza.gltf was not found in MoerEngineScenes"
+          }
+
+          $relativeScenePath = Resolve-Path -Path $sceneFile.FullName -Relative
+          $relativeScenePath = $relativeScenePath.Replace("\", "/")
+          if ($relativeScenePath.StartsWith("./")) {
+              $relativeScenePath = $relativeScenePath.Substring(2)
+          }
+          $relativeScenePath = "./$relativeScenePath"
+
+          $toml = Get-Content -Path MoerEngine.toml -Raw
+          $toml = $toml -replace "scene_path\s*=\s*'[^']*'", "scene_path = '$relativeScenePath'"
+          Set-Content -Path MoerEngine.toml -Value $toml -Encoding UTF8
+
+          Write-Host "Configured scene_path = '$relativeScenePath'"
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=${{ inputs.config }} `
+            -DCMAKE_C_COMPILER=clang `
+            -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Run Windows validation suite
+        run: |
+          .\testscripts\windows\test_all.ps1 -Config ${{ inputs.config }}
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: moerengine-${{ inputs.config }}-logs
+          path: |
+            logs/**
+            build/CMakeFiles/CMakeOutput.log
+            build/CMakeFiles/CMakeError.log
+          if-no-files-found: ignore

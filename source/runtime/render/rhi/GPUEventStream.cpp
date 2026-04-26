@@ -244,22 +244,21 @@ ResolvedGPUFrame ResolveFrameFromPrefix(
     uint64 boundary_timestamp_ns = 0;
     bool   frame_valid = true;
 
-    auto report_boundary_issue = [log_as_error](auto&&... args) {
-        if (log_as_error) {
-            LOG_ERROR(std::forward<decltype(args)>(args)...);
-        } else {
-            LOG_WARNING(std::forward<decltype(args)>(args)...);
-        }
-    };
-
     for (size_t event_index = 0; event_index < event_prefix.size(); ++event_index) {
         const auto& event = event_prefix[event_index];
         if (event.type == GPUEvent::EType::FrameBoundary) {
             if (boundary_index != kInvalidIndex) {
-                report_boundary_issue(
-                    "GPUEventStream found multiple frame boundaries in frame {} before EndFrame resolution",
-                    frame_index
-                );
+                if (log_as_error) {
+                    LOG_ERROR(
+                        "GPUEventStream found multiple frame boundaries in frame {} before EndFrame resolution",
+                        frame_index
+                    );
+                } else {
+                    LOG_WARNING(
+                        "GPUEventStream found multiple frame boundaries in frame {} before EndFrame resolution",
+                        frame_index
+                    );
+                }
                 frame_valid = false;
                 continue;
             }
@@ -269,20 +268,29 @@ ResolvedGPUFrame ResolveFrameFromPrefix(
         }
 
         if (boundary_index != kInvalidIndex) {
-            report_boundary_issue(
-                "GPUEventStream found event '{}' after frame boundary in frame {}",
-                event.name,
-                frame_index
-            );
+            if (log_as_error) {
+                LOG_ERROR(
+                    "GPUEventStream found event '{}' after frame boundary in frame {}",
+                    event.name,
+                    frame_index
+                );
+            } else {
+                LOG_WARNING(
+                    "GPUEventStream found event '{}' after frame boundary in frame {}",
+                    event.name,
+                    frame_index
+                );
+            }
             frame_valid = false;
         }
     }
 
     if (boundary_index == kInvalidIndex) {
-        report_boundary_issue(
-            "GPUEventStream sealed frame {} without any FrameBoundary event",
-            frame_index
-        );
+        if (log_as_error) {
+            LOG_ERROR("GPUEventStream sealed frame {} without any FrameBoundary event", frame_index);
+        } else {
+            LOG_WARNING("GPUEventStream sealed frame {} without any FrameBoundary event", frame_index);
+        }
         return MakeInvalidFrame(frame_index, 0);
     }
 

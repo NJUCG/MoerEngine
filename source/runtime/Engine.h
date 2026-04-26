@@ -27,6 +27,8 @@ private:
     UniquePtr<Render::Renderer>    m_renderer;
     Command::EngineCommandProcessor m_command_processor;
 
+    bool render_device_initialized = false;
+    bool runtime_supported = false;
     bool has_shutdown = false;
 };
 

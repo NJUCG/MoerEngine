@@ -31,3 +31,7 @@
 	path = 3rdparty/NRI
 	url = https://github.com/NVIDIA-RTX/NRI.git
 	shallow = true
+[submodule "3rdparty/volk"]
+	path = 3rdparty/volk
+	url = https://github.com/zeux/volk.git
+	shallow = true

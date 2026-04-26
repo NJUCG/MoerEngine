@@ -20,6 +20,7 @@ Vulkan extension 架构
 #define VULKAN_EXTENSION_H
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 #include "../VulkanTypeDefs.h"

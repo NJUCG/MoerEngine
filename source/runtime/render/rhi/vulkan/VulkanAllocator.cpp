@@ -87,11 +87,14 @@ VkNativeQueryPool::VkNativeQueryPool(VulkanDevice& _device, VkQueryType _type, u
     VkQueryPoolCreateInfo create_info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
     create_info.queryType  = _type;
     create_info.queryCount = _query_count;
-    vkCreateQueryPool(device.GetDevice(), &create_info, nullptr, &query_pool);
+    VK_CHECK_RESULT(vkCreateQueryPool(device.GetDevice(), &create_info, nullptr, &query_pool));
 }
 
 VkNativeQueryPool::~VkNativeQueryPool() {
-    vkDestroyQueryPool(device.GetDevice(), query_pool, nullptr);
+    if (query_pool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(device.GetDevice(), query_pool, nullptr);
+        query_pool = VK_NULL_HANDLE;
+    }
 }
 
 void VkNativeQueryPool::GetResults(

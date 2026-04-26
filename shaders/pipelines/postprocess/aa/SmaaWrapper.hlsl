@@ -11,14 +11,13 @@ BINDLESS_BINDINGS(3)
 // 2. extracting bindless sampler & textures
 
 SamplerState SMAAGetSampler(uint sampler_idx) {
-    return gsampler_bindless[NonUniformResourceIndex(sampler_idx)];
+    return AccessGlobalSamplerHeap(sampler_idx);
 }
 
 Texture2D SMAAGetTexture2D(uint handle_idx) {
-    uint tex_handle = READ_BINDLESS_PACKED_HANDLE(handle_idx);
+    uint tex_handle = ReadBindlessPackedHandle(handle_idx);
     uint tex_idx = BINDLESS_TEXTURE_DESCRIPTOR_INDEX(tex_handle);
-    Texture2D tex = Texture2D(gTexture2Dfloat4_bindless[NonUniformResourceIndex(tex_idx)]);
-    return tex;
+    return AccessGlobalTexture2DHeap<float4>(tex_idx);
 }
 
 // 3. smaa settings
@@ -38,8 +37,8 @@ Texture2D SMAAGetTexture2D(uint handle_idx) {
 // 4. smaa porting functions (custom shading language for bindless rhi)
 
 #if defined(SMAA_CUSTOM_SL)
-#define PointSampler gsampler_bindless[NonUniformResourceIndex(param.point_sampler)]
-#define LinearSampler gsampler_bindless[NonUniformResourceIndex(param.linear_sampler)]
+#define PointSampler SMAAGetSampler(param.point_sampler)
+#define LinearSampler SMAAGetSampler(param.linear_sampler)
 #define SMAATexture2D(tex) Texture2D tex
 #define SMAATexturePass2D(tex) tex
 #define SMAASampleLevelZero(tex, coord) tex.SampleLevel(LinearSampler, coord, 0)

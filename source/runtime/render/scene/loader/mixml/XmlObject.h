@@ -2,6 +2,10 @@
 
 #include "Tag.h"
 
+#include <string>
+#include <string_view>
+#include <utility>
+
 namespace Moer::MiXml {
 struct Property {
     std::string name;

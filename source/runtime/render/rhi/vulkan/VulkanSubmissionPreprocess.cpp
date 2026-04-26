@@ -626,20 +626,52 @@ private:
             const auto depth_action = GetDepthAction(pass_info.depth_attachment.action);
             const auto depth_handle = uint64(pass_info.depth_attachment.target);
             if (IsLoadAction(depth_action)) {
-                MarkReadTexture(digest, depth_handle, ETextureState::DEPTH_STENCIL);
+                MarkReadTextureWithRange(
+                    digest,
+                    depth_handle,
+                    ETextureState::DEPTH_STENCIL,
+                    static_cast<uint8>(pass_info.depth_attachment.mip_level),
+                    1,
+                    static_cast<uint8>(pass_info.depth_attachment.array_layer),
+                    1
+                );
             }
             if (IsStoreAction(depth_action)) {
-                MarkWriteTexture(digest, depth_handle, ETextureState::DEPTH_STENCIL);
+                MarkWriteTextureWithRange(
+                    digest,
+                    depth_handle,
+                    ETextureState::DEPTH_STENCIL,
+                    static_cast<uint8>(pass_info.depth_attachment.mip_level),
+                    1,
+                    static_cast<uint8>(pass_info.depth_attachment.array_layer),
+                    1
+                );
             }
         }
 
         for (const auto& color_attachment : pass_info.color_attachments) {
             const auto color_handle = uint64(color_attachment.target);
             if (IsLoadAction(color_attachment.action)) {
-                MarkReadTexture(digest, color_handle, ETextureState::RENDER_TARGET);
+                MarkReadTextureWithRange(
+                    digest,
+                    color_handle,
+                    ETextureState::RENDER_TARGET,
+                    static_cast<uint8>(color_attachment.mip_level),
+                    1,
+                    static_cast<uint8>(color_attachment.array_layer),
+                    1
+                );
             }
             if (IsStoreAction(color_attachment.action)) {
-                MarkWriteTexture(digest, color_handle, ETextureState::RENDER_TARGET);
+                MarkWriteTextureWithRange(
+                    digest,
+                    color_handle,
+                    ETextureState::RENDER_TARGET,
+                    static_cast<uint8>(color_attachment.mip_level),
+                    1,
+                    static_cast<uint8>(color_attachment.array_layer),
+                    1
+                );
             }
         }
     }

@@ -97,7 +97,7 @@ public:
 
 private:
     VulkanDevice& device;
-    VkQueryPool   query_pool;
+    VkQueryPool   query_pool{VK_NULL_HANDLE};
     uint32        count;
     VkQueryType   type;
 };

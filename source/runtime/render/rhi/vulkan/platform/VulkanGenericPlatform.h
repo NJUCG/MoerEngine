@@ -7,6 +7,8 @@
 
 #include "misc/STL.h"
 
+#include <string>
+
 #include <volk.h>
 
 namespace Moer::Render {

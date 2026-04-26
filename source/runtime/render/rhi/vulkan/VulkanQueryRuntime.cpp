@@ -105,6 +105,13 @@ VulkanQueryRuntime::PoolSlot VulkanQueryRuntime::AcquireSlot(QueryKind _kind, Re
         return _pool.owner_thread == _ctx.owner_thread && _pool.owner_cmd == _ctx.owner_cmd;
     };
 
+    auto reuse_pool_for_owner = [&](PoolInstance& _pool) {
+        _pool.owner_thread = _ctx.owner_thread;
+        _pool.owner_cmd    = _ctx.owner_cmd;
+        _pool.next_query   = 0;
+        _pool.in_use       = true;
+    };
+
     if (active_pool_idx >= 0 && active_pool_idx < static_cast<int>(pools.size())) {
         PoolInstance& active_pool = pools[active_pool_idx];
         if (!pool_matches_owner(active_pool)) {
@@ -134,6 +141,17 @@ VulkanQueryRuntime::PoolSlot VulkanQueryRuntime::AcquireSlot(QueryKind _kind, Re
                 active_pool_idx   = i;
                 return PoolSlot{.kind = _kind, .pool_index = uint32(i), .query_index = pool.next_query++};
             }
+        }
+
+        for (int i = 0; i < static_cast<int>(pools.size()); ++i) {
+            PoolInstance& pool = pools[i];
+            if (!pool.backend || pool.in_use || pool.pending_slot_uses != 0) {
+                continue;
+            }
+
+            reuse_pool_for_owner(pool);
+            active_pool_idx = i;
+            return PoolSlot{.kind = _kind, .pool_index = uint32(i), .query_index = pool.next_query++};
         }
 
         const uint32 initial_capacity = GetInitialPoolSize(_kind);

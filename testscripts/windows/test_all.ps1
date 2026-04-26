@@ -149,6 +149,9 @@ do {
     }
 
     $errorLines = Test-LogForErrors -LogFile $Log
+    $descriptorHeapCapability = Get-DescriptorHeapCapabilityState -LogFile $Log
+    $runtimeUnsupported = $descriptorHeapCapability.State -eq "Skipped"
+
     if ($errorLines) {
         Write-Host "[$Label] Errors/validation issues detected:" -ForegroundColor Red
         $errorLines | ForEach-Object { Write-Host "  $($_.Line)" }
@@ -158,7 +161,13 @@ do {
     }
     Save-Minidumps -BinDir $BinDir
 
-    if (-not $failed) { Register-Pass $Label } else { Register-Fail $Label "see $Log" }
+    if ($runtimeUnsupported -and -not $errorLines) {
+        Register-Skip $Label $descriptorHeapCapability.Reason
+    } elseif (-not $failed) {
+        Register-Pass $Label
+    } else {
+        Register-Fail $Label "see $Log"
+    }
 } while ($false)
 
 Write-Host ""
