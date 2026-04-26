@@ -6,6 +6,7 @@
 #include "trace/Trace.h"
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <sstream>
 
 namespace Moer::Render {
@@ -14,6 +15,13 @@ namespace {
 
 constexpr size_t kQueueCount = static_cast<size_t>(EQueueType::Num);
 constexpr size_t kInvalidIndex = static_cast<size_t>(-1);
+
+uint64 SteadyNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()
+    )
+        .count();
+}
 
 template<GPUEvent::EType... Types>
 bool IsEventType(GPUEvent::EType type) {
@@ -444,12 +452,31 @@ void GPUEventStream::ResolveCompleted(WaitEvent completion) {
                 continue;
             }
             auto ts_result = std::get<TimestampQueryResult>(query_result.payload);
-            event.timestamp_ns = ts_result.begin_tick;
+            event.timestamp_ns = ConvertTimestampToNsLocked(submit.queue, ts_result);
         }
         submit.resolved = true;
     }
 
     TryResolveReadyFramesLocked();
+}
+
+uint64 GPUEventStream::ConvertTimestampToNsLocked(EQueueType queue, const TimestampQueryResult& result) {
+    const size_t queue_index = static_cast<size_t>(queue);
+    if (queue_index >= timestamp_domains.size() || result.tick_period_ns <= 0.0) {
+        return result.begin_tick;
+    }
+
+    TimestampDomain& domain = timestamp_domains[queue_index];
+    if (!domain.valid || result.begin_tick < domain.anchor_tick || domain.tick_period_ns != result.tick_period_ns) {
+        domain.valid = true;
+        domain.anchor_tick = result.begin_tick;
+        domain.anchor_time_ns = SteadyNowNs();
+        domain.tick_period_ns = result.tick_period_ns;
+    }
+
+    const long double delta_ticks = static_cast<long double>(result.begin_tick - domain.anchor_tick);
+    const long double delta_ns = delta_ticks * static_cast<long double>(domain.tick_period_ns);
+    return domain.anchor_time_ns + static_cast<uint64>(std::max<long double>(0.0, delta_ns));
 }
 
 void GPUEventStream::EndFrame() {
@@ -523,6 +550,7 @@ void GPUEventStream::ResetForTesting() {
     next_enqueue_order = 0;
     next_frame_index = 0;
     resolved_enqueue_order_exclusive = 0;
+    timestamp_domains = {};
 }
 
 void GPUEventStream::InjectResolvedSubmitForTesting(Array<GPUEvent>&& events, EQueueType queue) {

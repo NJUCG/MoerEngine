@@ -315,7 +315,7 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
         );
         return false;
     }
-    if (store.events.size() != 2 || store.tracks.size() != 2 || store.min_ts != 0 || store.max_ts != 80000) {
+    if (store.events.size() != 3 || store.tracks.size() != 2 || store.min_ts != 0 || store.max_ts != 90000) {
         LOG_ERROR(
             MOER_TEXT("Profile consumer normalized store mismatch: events={} tracks={} min={} max={}"),
             store.events.size(),
@@ -327,21 +327,37 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
     }
 
     const auto* gpu_event = FindProfileConsumerEvent(store, "GpuNormalizedScope");
+    const auto* gpu_alias_event = FindProfileConsumerEvent(store, "GpuAliasScope");
     const auto* cpu_event = FindProfileConsumerEvent(store, "CpuNormalizedScope");
-    if (gpu_event == nullptr || cpu_event == nullptr) {
+    if (gpu_event == nullptr || gpu_alias_event == nullptr || cpu_event == nullptr) {
         LOG_ERROR(MOER_TEXT("Profile consumer normalized store missing CPU or GPU scope event."));
         return false;
     }
 
+    const uint64_t graphics_track_id = Moer::Trace::MakeGpuQueueTrackId(0u, 0u);
     if (gpu_event->track_type != Moer::Profiler::ProfileTrackType::GPUQueue ||
+        gpu_event->track_id != graphics_track_id ||
         gpu_event->ts_begin_ns != 50000 || gpu_event->ts_end_ns != 80000 ||
-        !Utf8Equals(gpu_event->category, "timing.gpu_scope") || !Utf8Equals(gpu_event->track_name, "Graphics")) {
+        !Utf8Equals(gpu_event->category, "timing.gpu_scope") || !Utf8Equals(gpu_event->track_name, "GPU0/Queue(Graphics)")) {
         LOG_ERROR(
             MOER_TEXT("Profile consumer normalized GPU event mismatch: begin={} end={} category={} track={}"),
             gpu_event->ts_begin_ns,
             gpu_event->ts_end_ns,
             gpu_event->category,
             gpu_event->track_name
+        );
+        return false;
+    }
+    if (gpu_alias_event->track_type != Moer::Profiler::ProfileTrackType::GPUQueue ||
+        gpu_alias_event->track_id != graphics_track_id ||
+        gpu_alias_event->ts_begin_ns != 85000 || gpu_alias_event->ts_end_ns != 90000 ||
+        !Utf8Equals(gpu_alias_event->track_name, "GPU0/Queue(Graphics)")) {
+        LOG_ERROR(
+            MOER_TEXT("Profile consumer GPU queue track alias was not merged: begin={} end={} track_id={} track={}"),
+            gpu_alias_event->ts_begin_ns,
+            gpu_alias_event->ts_end_ns,
+            gpu_alias_event->track_id,
+            gpu_alias_event->track_name
         );
         return false;
     }
@@ -831,16 +847,25 @@ int RunProfileConsumerFileLoadTest() {
 
     DUMP_STREAM(Moer::ProfileDump::Templates::GpuScopeTemplate)
         << uint64_t{3}
-        << "Graphics"
-        << "GpuNormalizedScope"
+        << MOER_ASCII_TEXT("Graphics")
+        << MOER_ASCII_TEXT("GpuNormalizedScope")
         << uint64_t{250000}
         << uint64_t{280000}
         << uint32_t{0}
         << uint64_t{30000}
         << uint64_t{30000};
+    DUMP_STREAM(Moer::ProfileDump::Templates::GpuScopeTemplate)
+        << uint64_t{3}
+        << MOER_ASCII_TEXT("GPU0/Queue(Graphics)")
+        << MOER_ASCII_TEXT("GpuAliasScope")
+        << uint64_t{285000}
+        << uint64_t{290000}
+        << uint32_t{0}
+        << uint64_t{5000}
+        << uint64_t{5000};
     DUMP_STREAM(Moer::ProfileDump::Templates::CpuScopeTemplate)
         << uint64_t{5}
-        << "CpuNormalizedScope"
+        << MOER_ASCII_TEXT("CpuNormalizedScope")
         << int64_t{200}
         << int64_t{10}
         << uint32_t{1};
@@ -884,16 +909,25 @@ int RunProfileConsumerStreamNormalizationTest() {
 
     DUMP_STREAM(Moer::ProfileDump::Templates::GpuScopeTemplate)
         << uint64_t{3}
-        << "Graphics"
-        << "GpuNormalizedScope"
+        << MOER_ASCII_TEXT("Graphics")
+        << MOER_ASCII_TEXT("GpuNormalizedScope")
         << uint64_t{250000}
         << uint64_t{280000}
         << uint32_t{0}
         << uint64_t{30000}
         << uint64_t{30000};
+    DUMP_STREAM(Moer::ProfileDump::Templates::GpuScopeTemplate)
+        << uint64_t{3}
+        << MOER_ASCII_TEXT("GPU0/Queue(Graphics)")
+        << MOER_ASCII_TEXT("GpuAliasScope")
+        << uint64_t{285000}
+        << uint64_t{290000}
+        << uint32_t{0}
+        << uint64_t{5000}
+        << uint64_t{5000};
     DUMP_STREAM(Moer::ProfileDump::Templates::CpuScopeTemplate)
         << uint64_t{5}
-        << "CpuNormalizedScope"
+        << MOER_ASCII_TEXT("CpuNormalizedScope")
         << int64_t{200}
         << int64_t{10}
         << uint32_t{1};
@@ -1006,22 +1040,26 @@ int RunTraceConsumerDecodeTest() {
         );
         return 1;
     }
+    if (!decoder.TimeOriginNs().has_value() || decoder.TimeOriginNs().value() != metadata.start_ts_ns) {
+        LOG_ERROR(MOER_TEXT("Trace consumer decoded time origin mismatch."));
+        return 1;
+    }
 
     Moer::Profiler::ProfileStore store{};
     store.SetSessionName(std::move(decoded_session_name));
-    store.AppendEvents(decoded_events);
+    store.AppendEvents(decoded_events, decoder.TimeOriginNs());
     const auto* scope_event = FindProfileConsumerEvent(store, "TraceScope");
     const auto* counter_event = FindProfileConsumerEvent(store, "TraceCounter");
     if (scope_event == nullptr || counter_event == nullptr) {
         LOG_ERROR(MOER_TEXT("Trace consumer normalized store missing decoded events."));
         return 1;
     }
-    if (scope_event->ts_begin_ns != 0 || scope_event->ts_end_ns != 3000 ||
+    if (scope_event->ts_begin_ns != 1000 || scope_event->ts_end_ns != 4000 ||
         !Utf8Equals(scope_event->track_name, "TraceThread")) {
         LOG_ERROR(MOER_TEXT("Trace consumer scope normalization mismatch."));
         return 1;
     }
-    if (counter_event->type != Moer::Profiler::ProfileEventType::Counter || counter_event->ts_begin_ns != 3500 ||
+    if (counter_event->type != Moer::Profiler::ProfileEventType::Counter || counter_event->ts_begin_ns != 4500 ||
         counter_event->counter_value != 3.5) {
         LOG_ERROR(MOER_TEXT("Trace consumer counter decode mismatch."));
         return 1;
@@ -1030,9 +1068,9 @@ int RunTraceConsumerDecodeTest() {
     const std::filesystem::path csv_path = MakeProfileDumpTestPath("trace_consumer_csv_test.csv");
     {
         std::ofstream csv(csv_path, std::ios::binary);
-        csv << "event_id,session_id,type,track_type,track_id,depth,ts_begin_ns,ts_end_ns,counter,name,category,track_name,args\n";
-        csv << "11,7,0,0,42,1,2000,5000,0,\"TraceScope\",\"Trace\",\"TraceThread\",\"\"\n";
-        csv << "12,7,2,0,42,0,5500,5500,3.5,\"TraceCounter\",\"Trace\",\"TraceThread\",\"\"\n";
+        csv << MOER_ASCII_TEXT("event_id,session_id,type,track_type,track_id,depth,ts_begin_ns,ts_end_ns,counter,name,category,track_name,args\n");
+        csv << MOER_ASCII_TEXT("11,7,0,0,42,1,2000,5000,0,\"TraceScope\",\"Trace\",\"TraceThread\",\"\"\n");
+        csv << MOER_ASCII_TEXT("12,7,2,0,42,0,5500,5500,3.5,\"TraceCounter\",\"Trace\",\"TraceThread\",\"\"\n");
     }
 
     Moer::Profiler::ProfileStore csv_store{};
@@ -1059,6 +1097,45 @@ int RunTraceConsumerDecodeTest() {
     if (csv_counter_event->type != Moer::Profiler::ProfileEventType::Counter ||
         csv_counter_event->ts_begin_ns != 3500 || csv_counter_event->counter_value != 3.5) {
         LOG_ERROR(MOER_TEXT("Trace consumer CSV counter decode mismatch."));
+        return 1;
+    }
+
+    const std::filesystem::path csv_origin_path = MakeProfileDumpTestPath(MOER_ASCII_TEXT("trace_consumer_csv_origin_test.csv"));
+    {
+        std::ofstream csv(csv_origin_path, std::ios::binary);
+        csv << MOER_ASCII_TEXT("#moer_trace_csv_version=1\n");
+        csv << MOER_ASCII_TEXT("#session_id=7\n");
+        csv << MOER_ASCII_TEXT("#time_origin_ns=1000\n");
+        csv << MOER_ASCII_TEXT("#session_name=TraceUnit\n");
+        csv << MOER_ASCII_TEXT("event_id,session_id,type,track_type,track_id,depth,ts_begin_ns,ts_end_ns,counter,name,category,track_name,args\n");
+        csv << MOER_ASCII_TEXT("11,7,0,0,42,1,2000,5000,0,\"TraceScope\",\"Trace\",\"TraceThread\",\"\"\n");
+        csv << MOER_ASCII_TEXT("12,7,2,0,42,0,5500,5500,3.5,\"TraceCounter\",\"Trace\",\"TraceThread\",\"\"\n");
+    }
+
+    Moer::Profiler::ProfileStore csv_origin_store{};
+    const std::string csv_origin_path_utf8 = csv_origin_path.generic_string();
+    if (!Moer::Profiler::LoadProfilerCaptureFile(
+            Moer::Utf8StringView(csv_origin_path_utf8.data(), csv_origin_path_utf8.size()),
+            csv_origin_store,
+            true
+        )) {
+        LOG_ERROR(MOER_TEXT("Trace consumer CSV origin load failed."));
+        return 1;
+    }
+    const auto* csv_origin_scope = FindProfileConsumerEvent(csv_origin_store, MOER_ASCII_TEXT("TraceScope"));
+    const auto* csv_origin_counter = FindProfileConsumerEvent(csv_origin_store, MOER_ASCII_TEXT("TraceCounter"));
+    if (csv_origin_scope == nullptr || csv_origin_counter == nullptr) {
+        LOG_ERROR(MOER_TEXT("Trace consumer CSV origin normalized store missing decoded events."));
+        return 1;
+    }
+    if (!csv_origin_store.metadata.has_time_origin || csv_origin_store.metadata.time_origin_ns != 1000 ||
+        csv_origin_store.min_ts != 0 || csv_origin_scope->ts_begin_ns != 1000 || csv_origin_scope->ts_end_ns != 4000) {
+        LOG_ERROR(MOER_TEXT("Trace consumer CSV origin scope normalization mismatch."));
+        return 1;
+    }
+    if (csv_origin_counter->type != Moer::Profiler::ProfileEventType::Counter ||
+        csv_origin_counter->ts_begin_ns != 4500 || csv_origin_counter->counter_value != 3.5) {
+        LOG_ERROR(MOER_TEXT("Trace consumer CSV origin counter decode mismatch."));
         return 1;
     }
     return 0;

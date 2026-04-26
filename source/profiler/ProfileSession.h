@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <span>
 
 namespace Moer::Profiler {
@@ -65,7 +66,7 @@ struct ProfileStore {
 
     void Reset();
     void SetSessionName(Utf8String session_name);
-    void AppendEvents(const Array<ProfileEvent>& raw_events);
+    void AppendEvents(const Array<ProfileEvent>& raw_events, std::optional<uint64_t> source_time_origin_ns = std::nullopt);
 };
 
 class ProfileDumpSessionDecoder {
@@ -101,8 +102,11 @@ public:
         Utf8String*              out_session_name = nullptr
     );
 
+    std::optional<uint64_t> TimeOriginNs() const;
+
 private:
-    uint64_t m_session_id{0};
+    uint64_t                m_session_id{0};
+    std::optional<uint64_t> m_time_origin_ns{};
 };
 
 bool LoadProfileDumpFile(Utf8StringView path, ProfileStore& store, bool clear_before_load);

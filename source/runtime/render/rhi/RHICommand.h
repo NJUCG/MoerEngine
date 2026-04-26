@@ -150,6 +150,7 @@ enum class QueryStatus : uint8_t {
 struct TimestampQueryResult {
     uint64_t begin_tick{0};
     uint64_t end_tick{0};
+    double   tick_period_ns{0.0};
     double   duration_ns{0.0};
 };
 

@@ -75,6 +75,10 @@ uint64_t NowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch()).count();
 }
 
+uint64_t MakeSessionId(uint64_t start_ts_ns) {
+    return start_ts_ns ^ uint64_t(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+}
+
 uint32_t HashBytes(const std::byte* data, size_t size) {
     uint32_t hash = 2166136261u;
     for (size_t i = 0; i < size; ++i) {
@@ -180,9 +184,13 @@ void WriteCsvRow(const TraceEvent& event) {
 
     std::lock_guard<std::mutex> lock(state.csv_mutex);
     if (!state.csv_header_written) {
+        state.csv_file << MOER_ASCII_TEXT("#moer_trace_csv_version=1\n")
+                       << MOER_ASCII_TEXT("#session_id=") << state.session_id << MOER_ASCII_TEXT("\n")
+                       << MOER_ASCII_TEXT("#time_origin_ns=") << state.session_start_ts_ns << MOER_ASCII_TEXT("\n")
+                       << MOER_ASCII_TEXT("#session_name=") << state.config.session_name << MOER_ASCII_TEXT("\n");
         state.csv_file
-            << "event_id,session_id,type,track_type,track_id,depth,ts_begin_ns,ts_end_ns,counter,name,"
-               "category,track_name,args\n";
+            << MOER_ASCII_TEXT("event_id,session_id,type,track_type,track_id,depth,ts_begin_ns,ts_end_ns,counter,name,")
+               MOER_ASCII_TEXT("category,track_name,args\n");
         state.csv_header_written = true;
     }
     state.csv_file << event.event_id << "," << event.session_id << "," << static_cast<uint32_t>(event.type)
@@ -332,7 +340,7 @@ bool Init(const Config& config) {
 
     state.config = config;
     state.session_start_ts_ns = NowNs();
-    state.session_id          = state.session_start_ts_ns ^ uint64_t(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    state.session_id          = MakeSessionId(state.session_start_ts_ns);
     state.running.store(true, std::memory_order_release);
     state.recording.store(config.start_recording, std::memory_order_release);
     state.connected.store(false, std::memory_order_release);
@@ -399,6 +407,11 @@ void StartRecording() {
     if (!state.initialized.load(std::memory_order_acquire)) {
         return;
     }
+    if (state.recording.load(std::memory_order_acquire)) {
+        return;
+    }
+    state.session_start_ts_ns = NowNs();
+    state.session_id          = MakeSessionId(state.session_start_ts_ns);
     state.recording.store(true, std::memory_order_release);
 #endif
 }

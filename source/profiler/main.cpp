@@ -124,7 +124,7 @@ private:
                     break;
                 }
                 if (!events.empty()) {
-                    m_store.AppendEvents(events);
+                    m_store.AppendEvents(events, m_trace_decoder.TimeOriginNs());
                 }
                 continue;
             }
@@ -304,15 +304,15 @@ uint64_t EstimateProfileSizeBytesFast(
 
 Utf8String FormatBytes(uint64_t bytes) {
     const double value = static_cast<double>(bytes);
-    char         buf[64]{};
+    AsciiChar    buf[64]{};
     if (value >= 1024.0 * 1024.0 * 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.2f GiB", value / (1024.0 * 1024.0 * 1024.0));
+        std::snprintf(buf, sizeof(buf), MOER_ASCII_TEXT("%.2f GiB"), value / (1024.0 * 1024.0 * 1024.0));
     } else if (value >= 1024.0 * 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.2f MiB", value / (1024.0 * 1024.0));
+        std::snprintf(buf, sizeof(buf), MOER_ASCII_TEXT("%.2f MiB"), value / (1024.0 * 1024.0));
     } else if (value >= 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.2f KiB", value / 1024.0);
+        std::snprintf(buf, sizeof(buf), MOER_ASCII_TEXT("%.2f KiB"), value / 1024.0);
     } else {
-        std::snprintf(buf, sizeof(buf), "%llu B", static_cast<unsigned long long>(bytes));
+        std::snprintf(buf, sizeof(buf), MOER_ASCII_TEXT("%llu B"), static_cast<unsigned long long>(bytes));
     }
     return ToProfilerString(buf);
 }
@@ -321,7 +321,7 @@ struct TimelineViewState {
     uint64_t view_start_ns{0};
     uint64_t view_end_ns{0};
     bool     auto_follow{true};
-    char     search_text[128]{};
+    AsciiChar search_text[128]{};
 };
 
 void DrawTimeRuler(
@@ -335,22 +335,22 @@ void DrawTimeRuler(
     ui.DrawLine({origin.x, y}, {origin.x + width, y}, PackColor(180, 180, 180), 1.0f);
 
     const double span_ns = static_cast<double>(std::max<uint64_t>(1, end_ns - start_ns));
-    constexpr int major_ticks = 10;
+    const int major_ticks = std::clamp(static_cast<int>(width / 130.0f), 3, 12);
     for (int i = 0; i <= major_ticks; ++i) {
         const float  t = static_cast<float>(i) / static_cast<float>(major_ticks);
         const float  x = origin.x + t * width;
         const double ts_ns = static_cast<double>(start_ns) + t * span_ns;
         ui.DrawLine({x, y}, {x, y + 8.0f}, PackColor(200, 200, 200), 1.0f);
 
-        char label[64]{};
+        AsciiChar label[64]{};
         if (ts_ns >= 1e9) {
-            std::snprintf(label, sizeof(label), "%.3fs", ts_ns / 1e9);
+            std::snprintf(label, sizeof(label), MOER_ASCII_TEXT("%.3fs"), ts_ns / 1e9);
         } else if (ts_ns >= 1e6) {
-            std::snprintf(label, sizeof(label), "%.3fms", ts_ns / 1e6);
+            std::snprintf(label, sizeof(label), MOER_ASCII_TEXT("%.3fms"), ts_ns / 1e6);
         } else if (ts_ns >= 1e3) {
-            std::snprintf(label, sizeof(label), "%.3fus", ts_ns / 1e3);
+            std::snprintf(label, sizeof(label), MOER_ASCII_TEXT("%.3fus"), ts_ns / 1e3);
         } else {
-            std::snprintf(label, sizeof(label), "%.0fns", ts_ns);
+            std::snprintf(label, sizeof(label), MOER_ASCII_TEXT("%.0fns"), ts_ns);
         }
         ui.DrawCanvasText({x + 2.0f, y + 10.0f}, PackColor(200, 200, 200), label);
     }
@@ -371,6 +371,8 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
         Utf8String cached_search{};
         Array<uint8_t> search_match_mask{};
         Array<size_t> matched_indices{};
+        Array<uint32_t> overview_bins{};
+        uint32_t overview_max_bin{0};
     };
 
     static TimelineDataCache cache{};
@@ -407,6 +409,10 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
         cache.gpu_display_max_depth_by_track.clear();
         cache.event_index_by_id.clear();
         cache.event_index_by_id.reserve(std::max<size_t>(8, events.size()));
+        static constexpr size_t overview_bin_count = 192;
+        cache.overview_bins.assign(overview_bin_count, 0);
+        cache.overview_max_bin = 0;
+        const uint64_t overview_span = std::max<uint64_t>(1, cache.max_ts + 1 - cache.min_ts);
 
         for (size_t i = 0; i < events.size(); ++i) {
             const auto& e = events[i];
@@ -414,6 +420,13 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
             cache.gpu_display_depth_by_index[i] = e.depth;
             const uint64_t track_key = MakeTrackKey(e.track_type, e.track_id);
             cache.scope_indices_by_track[track_key].emplace_back(i);
+            const double bin_t = double(e.ts_begin_ns - cache.min_ts) / double(overview_span);
+            const size_t bin = std::min(
+                overview_bin_count - 1,
+                static_cast<size_t>(std::max(0.0, bin_t) * double(overview_bin_count))
+            );
+            cache.overview_bins[bin] += 1;
+            cache.overview_max_bin = std::max(cache.overview_max_bin, cache.overview_bins[bin]);
         }
 
         for (auto& [track_key, indices] : cache.scope_indices_by_track) {
@@ -531,17 +544,17 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
         }
     }
 
-    if (ui.Button("Visible Tracks")) {
-        ui.OpenPopup("VisibleTracksPopup");
+    if (ui.Button(MOER_ASCII_TEXT("Visible Tracks"))) {
+        ui.OpenPopup(MOER_ASCII_TEXT("VisibleTracksPopup"));
     }
-    if (ui.BeginPopup("VisibleTracksPopup")) {
+    if (ui.BeginPopup(MOER_ASCII_TEXT("VisibleTracksPopup"))) {
         for (const auto& track : tracks) {
             bool visible = track_visibility[track.key];
-            char key_suffix[64]{};
-            std::snprintf(key_suffix, sizeof(key_suffix), "##vis_%llu", static_cast<unsigned long long>(track.key));
-            Utf8String label = ToProfilerString("[");
-            label += track.type == ProfileTrackType::CPUThread ? "CPU" : "GPU";
-            label += "] ";
+            AsciiChar key_suffix[64]{};
+            std::snprintf(key_suffix, sizeof(key_suffix), MOER_ASCII_TEXT("##vis_%llu"), static_cast<unsigned long long>(track.key));
+            Utf8String label = ToProfilerString(MOER_ASCII_TEXT("["));
+            label += track.type == ProfileTrackType::CPUThread ? MOER_ASCII_TEXT("CPU") : MOER_ASCII_TEXT("GPU");
+            label += MOER_ASCII_TEXT("] ");
             label += Utf8StringView(track.name);
             label += key_suffix;
             if (ui.Checkbox(label.c_str(), &visible)) {
@@ -612,7 +625,45 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
         }
     };
 
-    ui.BeginChild("TimelineMergedCanvas", {0.0f, 0.0f}, true, true);
+    auto zoom_view_at = [&](double anchor_t, double zoom) {
+        ui_state.auto_follow = false;
+        const uint64_t span = std::max<uint64_t>(1, ui_state.view_end_ns - ui_state.view_start_ns);
+        const uint64_t data_span = std::max<uint64_t>(1, (max_ts + 1) - min_ts);
+        const uint64_t new_span = static_cast<uint64_t>(std::clamp(span * zoom, 1000.0, double(data_span)));
+        const uint64_t anchor = ui_state.view_start_ns + static_cast<uint64_t>(anchor_t * double(span));
+        const uint64_t anchor_offset = static_cast<uint64_t>(anchor_t * double(new_span));
+        const uint64_t new_start = anchor > anchor_offset ? anchor - anchor_offset : 0;
+        ui_state.view_start_ns = new_start;
+        ui_state.view_end_ns = new_start + new_span;
+        clamp_view_range(min_ts, max_ts + 1);
+    };
+
+    auto pan_view_by = [&](int64_t shift_ns) {
+        ui_state.auto_follow = false;
+        int64_t new_start = static_cast<int64_t>(ui_state.view_start_ns) + shift_ns;
+        int64_t new_end = static_cast<int64_t>(ui_state.view_end_ns) + shift_ns;
+        if (new_start < 0) {
+            new_end -= new_start;
+            new_start = 0;
+        }
+        ui_state.view_start_ns = static_cast<uint64_t>(new_start);
+        ui_state.view_end_ns = static_cast<uint64_t>(new_end);
+        clamp_view_range(min_ts, max_ts + 1);
+    };
+
+    auto center_view_at = [&](uint64_t center_ns) {
+        ui_state.auto_follow = false;
+        const uint64_t span = std::max<uint64_t>(1, ui_state.view_end_ns - ui_state.view_start_ns);
+        const uint64_t half_span = span / 2;
+        ui_state.view_start_ns = center_ns > half_span ? center_ns - half_span : 0;
+        ui_state.view_end_ns = ui_state.view_start_ns + span;
+        clamp_view_range(min_ts, max_ts + 1);
+    };
+
+    const float overview_child_h = 64.0f;
+    const float timeline_child_h = std::max(220.0f, ui.GetContentRegionAvail().y - overview_child_h - 6.0f);
+
+    ui.BeginChild(MOER_ASCII_TEXT("TimelineMergedCanvas"), {0.0f, timeline_child_h}, true, true);
 
     const Synapse::Size canvas_origin = ui.GetCursorScreenPos();
     const float  canvas_w      = std::max(1000.0f, ui.GetContentRegionAvail().x);
@@ -635,62 +686,26 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
         const Synapse::Size mouse_delta = ui.GetMouseDelta();
 
         if (mouse_wheel != 0.0f && !ui.IsShiftDown() && mouse_in_timeline) {
-            ui_state.auto_follow = false;
             const double zoom = mouse_wheel > 0.0f ? 0.8 : 1.25;
-            const uint64_t new_span =
-                static_cast<uint64_t>(std::clamp(span * zoom, 1000.0, double(std::max<uint64_t>(1, (max_ts + 1) - min_ts))));
             const double mouse_t = std::clamp((mouse_pos.x - timeline_x0) / std::max(1.0f, timeline_w), 0.0f, 1.0f);
-            const uint64_t anchor = ui_state.view_start_ns + static_cast<uint64_t>(mouse_t * double(span));
-            uint64_t new_start = anchor > static_cast<uint64_t>(mouse_t * double(new_span)) ?
-                                     anchor - static_cast<uint64_t>(mouse_t * double(new_span)) :
-                                     0;
-            ui_state.view_start_ns = new_start;
-            ui_state.view_end_ns   = new_start + new_span;
-            clamp_view_range(min_ts, max_ts + 1);
+            zoom_view_at(mouse_t, zoom);
         }
 
         if (ui.IsMouseDragging(Synapse::EMouseButton::Middle) && mouse_in_timeline) {
-            ui_state.auto_follow = false;
             const double delta_t = -double(mouse_delta.x) / std::max(1.0f, timeline_w);
             const int64_t shift_ns = static_cast<int64_t>(delta_t * double(span));
-            int64_t new_start = static_cast<int64_t>(ui_state.view_start_ns) + shift_ns;
-            int64_t new_end   = static_cast<int64_t>(ui_state.view_end_ns) + shift_ns;
-            if (new_start < 0) {
-                new_end -= new_start;
-                new_start = 0;
-            }
-            ui_state.view_start_ns = static_cast<uint64_t>(new_start);
-            ui_state.view_end_ns   = static_cast<uint64_t>(new_end);
-            clamp_view_range(min_ts, max_ts + 1);
+            pan_view_by(shift_ns);
         }
 
         // Horizontal pan support: Shift + wheel and arrow keys
         if (mouse_wheel != 0.0f && ui.IsShiftDown() && mouse_in_timeline) {
-            ui_state.auto_follow = false;
             const int64_t shift_ns = static_cast<int64_t>(-mouse_wheel * double(span) * 0.12);
-            int64_t new_start = static_cast<int64_t>(ui_state.view_start_ns) + shift_ns;
-            int64_t new_end   = static_cast<int64_t>(ui_state.view_end_ns) + shift_ns;
-            if (new_start < 0) {
-                new_end -= new_start;
-                new_start = 0;
-            }
-            ui_state.view_start_ns = static_cast<uint64_t>(new_start);
-            ui_state.view_end_ns   = static_cast<uint64_t>(new_end);
-            clamp_view_range(min_ts, max_ts + 1);
+            pan_view_by(shift_ns);
         }
         if (ui.IsKeyDown(Synapse::EKey::LeftArrow) || ui.IsKeyDown(Synapse::EKey::RightArrow)) {
-            ui_state.auto_follow = false;
             const int dir = ui.IsKeyDown(Synapse::EKey::LeftArrow) ? -1 : 1;
             const int64_t shift_ns = static_cast<int64_t>(double(span) * 0.015 * dir);
-            int64_t new_start = static_cast<int64_t>(ui_state.view_start_ns) + shift_ns;
-            int64_t new_end   = static_cast<int64_t>(ui_state.view_end_ns) + shift_ns;
-            if (new_start < 0) {
-                new_end -= new_start;
-                new_start = 0;
-            }
-            ui_state.view_start_ns = static_cast<uint64_t>(new_start);
-            ui_state.view_end_ns   = static_cast<uint64_t>(new_end);
-            clamp_view_range(min_ts, max_ts + 1);
+            pan_view_by(shift_ns);
         }
     }
 
@@ -914,6 +929,90 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
     );
     ui.Dummy({canvas_w, std::max(200.0f, y_cursor - canvas_origin.y + 20.0f)});
     ui.EndChild();
+
+    ui.BeginChild(MOER_ASCII_TEXT("TimelineOverview"), {0.0f, overview_child_h}, true, false);
+    const Synapse::Size overview_origin = ui.GetCursorScreenPos();
+    const float overview_w = std::max(700.0f, ui.GetContentRegionAvail().x);
+    const float overview_x0 = overview_origin.x + label_col_w;
+    const float overview_timeline_w = std::max(300.0f, overview_w - label_col_w - 20.0f);
+    const float overview_y0 = overview_origin.y + 24.0f;
+    const float overview_h = 20.0f;
+    const uint64_t data_span = std::max<uint64_t>(1, (max_ts + 1) - min_ts);
+    const Synapse::Size overview_mouse_pos = ui.GetMousePos();
+    const bool mouse_in_overview = overview_mouse_pos.x >= overview_x0 &&
+                                   overview_mouse_pos.x <= overview_x0 + overview_timeline_w &&
+                                   overview_mouse_pos.y >= overview_y0 - 10.0f &&
+                                   overview_mouse_pos.y <= overview_y0 + overview_h + 14.0f;
+
+    ui.DrawCanvasText(
+        {overview_origin.x + 8.0f, overview_origin.y + 6.0f},
+        PackColor(205, 205, 205),
+        MOER_ASCII_TEXT("Overview")
+    );
+    ui.DrawRectFilled(
+        {overview_x0, overview_y0},
+        {overview_x0 + overview_timeline_w, overview_y0 + overview_h},
+        PackColor(18, 18, 20),
+        3.0f
+    );
+    if (!cache.overview_bins.empty() && cache.overview_max_bin > 0) {
+        const float bin_w = overview_timeline_w / static_cast<float>(cache.overview_bins.size());
+        for (size_t i = 0; i < cache.overview_bins.size(); ++i) {
+            const float fraction = static_cast<float>(cache.overview_bins[i]) / static_cast<float>(cache.overview_max_bin);
+            const float x0 = overview_x0 + static_cast<float>(i) * bin_w;
+            const float x1 = x0 + std::max(1.0f, bin_w - 1.0f);
+            const float y0 = overview_y0 + overview_h - std::max(2.0f, fraction * overview_h);
+            ui.DrawRectFilled({x0, y0}, {x1, overview_y0 + overview_h}, PackColor(96, 142, 166, 190), 1.0f);
+        }
+    }
+
+    auto overview_to_x = [&](uint64_t ts) {
+        const double t = (static_cast<double>(ts) - static_cast<double>(min_ts)) / static_cast<double>(data_span);
+        return overview_x0 + static_cast<float>(std::clamp(t, 0.0, 1.0) * overview_timeline_w);
+    };
+    const float view_x0 = overview_to_x(ui_state.view_start_ns);
+    const float view_x1 = overview_to_x(ui_state.view_end_ns);
+    ui.DrawRectFilled(
+        {view_x0, overview_y0 - 3.0f},
+        {view_x1, overview_y0 + overview_h + 3.0f},
+        PackColor(225, 179, 72, 58),
+        3.0f
+    );
+    ui.DrawRect(
+        {view_x0, overview_y0 - 3.0f},
+        {view_x1, overview_y0 + overview_h + 3.0f},
+        PackColor(225, 179, 72, 230),
+        3.0f,
+        1.5f
+    );
+
+    AsciiChar range_label[96]{};
+    std::snprintf(
+        range_label,
+        sizeof(range_label),
+        MOER_ASCII_TEXT("%.3f ms / %.3f ms"),
+        static_cast<double>(ui_state.view_end_ns - ui_state.view_start_ns) / 1e6,
+        static_cast<double>(data_span) / 1e6
+    );
+    ui.DrawCanvasText({overview_x0, overview_origin.y + 5.0f}, PackColor(150, 150, 150), range_label);
+
+    if (ui.IsWindowHovered() && mouse_in_overview) {
+        const double mouse_t = std::clamp(
+            (overview_mouse_pos.x - overview_x0) / std::max(1.0f, overview_timeline_w),
+            0.0f,
+            1.0f
+        );
+        const float wheel = ui.GetMouseWheel();
+        if (wheel != 0.0f && !ui.IsShiftDown()) {
+            zoom_view_at(mouse_t, wheel > 0.0f ? 0.8 : 1.25);
+        } else if (ui.IsMouseClicked(Synapse::EMouseButton::Left) ||
+                   ui.IsMouseDragging(Synapse::EMouseButton::Left)) {
+            const uint64_t target_ns = min_ts + static_cast<uint64_t>(mouse_t * double(data_span));
+            center_view_at(target_ns);
+        }
+    }
+    ui.Dummy({overview_w, overview_child_h});
+    ui.EndChild();
 }
 
 } // namespace
@@ -961,7 +1060,21 @@ int RunProfilerMain(int argc, const char** argv) {
 
     auto ui_renderer = MakeUnique<Render::UIRenderer>(device);
     Synapse::Context synapse_context{};
-    synapse_context.ApplyDefaultTheme();
+    Synapse::Theme profiler_theme{};
+    profiler_theme.panel_bg = {0.012f, 0.013f, 0.014f, 1.0f};
+    profiler_theme.panel_border = {0.18f, 0.18f, 0.18f, 0.55f};
+    profiler_theme.panel_header = {0.08f, 0.085f, 0.09f, 0.82f};
+    profiler_theme.panel_header_hovered = {0.12f, 0.125f, 0.13f, 0.86f};
+    profiler_theme.panel_header_active = {0.16f, 0.16f, 0.15f, 0.90f};
+    profiler_theme.toolbar_bg = {0.025f, 0.026f, 0.028f, 0.92f};
+    profiler_theme.accent = {0.88f, 0.70f, 0.28f, 1.0f};
+    profiler_theme.button = {0.10f, 0.11f, 0.11f, 0.78f};
+    profiler_theme.button_hovered = {0.16f, 0.17f, 0.17f, 0.86f};
+    profiler_theme.button_active = {0.25f, 0.22f, 0.14f, 0.92f};
+    profiler_theme.panel_rounding = 4.0f;
+    profiler_theme.child_rounding = 4.0f;
+    profiler_theme.frame_rounding = 3.0f;
+    synapse_context.ApplyTheme(profiler_theme);
 
     ProfileStore            store{};
     ProfilerIngestServer ingest(store);
@@ -999,22 +1112,13 @@ int RunProfilerMain(int argc, const char** argv) {
         ui_renderer->BeginGUIFrame();
         synapse_context.BeginFrame(ui_renderer->GetInputSnapshot());
         Synapse::Context& ui = synapse_context;
-        if (ui.BeginRootPanel(Synapse::PanelDesc{.name = "ProfilerTrace"})) {
-            ui.Checkbox("Auto Follow", &timeline_state.auto_follow);
-            ui.SameLine();
-            ui.InputTextWithHint(
-                "##search",
-                "Search timescope name",
-                timeline_state.search_text,
-                sizeof(timeline_state.search_text)
-            );
-            ui.Text("Capture: %s", capture_path.empty() ? "(none)" : capture_path.c_str());
-            if (ui.ToolbarButton(Synapse::EIcon::FolderOpen, "Load Capture")) {
+        if (ui.BeginRootPanel(Synapse::PanelDesc{.name = MOER_ASCII_TEXT("ProfilerTrace")})) {
+            if (ui.ToolbarButton(Synapse::EIcon::FolderOpen, MOER_ASCII_TEXT("Load"))) {
                 static constexpr std::array<FileDialog::Filter, 4> capture_filters = {{
-                    {"Profiler Capture", "mpd,mrtc,csv,bin"},
-                    {"Trace CSV", "csv"},
-                    {"Binary", "bin"},
-                    {"All", "*"},
+                    {MOER_ASCII_TEXT("Profiler Capture"), MOER_ASCII_TEXT("mpd,mrtc,csv,bin")},
+                    {MOER_ASCII_TEXT("Trace CSV"), MOER_ASCII_TEXT("csv")},
+                    {MOER_ASCII_TEXT("Binary"), MOER_ASCII_TEXT("bin")},
+                    {MOER_ASCII_TEXT("All"), MOER_ASCII_TEXT("*")},
                 }};
                 const FileDialog::EOpenFileStatus status = FileDialog::OpenFile(FileDialog::OpenFileRequest{
                     .filters = capture_filters,
@@ -1029,6 +1133,15 @@ int RunProfilerMain(int argc, const char** argv) {
                     }
                 }
             }
+            ui.SameLine();
+            ui.Checkbox(MOER_ASCII_TEXT("Auto Follow"), &timeline_state.auto_follow);
+            ui.SameLine();
+            ui.InputTextWithHint(
+                MOER_ASCII_TEXT("##search"),
+                MOER_ASCII_TEXT("Search timescope name"),
+                timeline_state.search_text,
+                sizeof(timeline_state.search_text)
+            );
 
             Utf8String ui_session_name{};
             size_t      ui_event_count = 0;
@@ -1043,13 +1156,18 @@ int RunProfilerMain(int argc, const char** argv) {
                 ui_min_ts       = store.min_ts;
                 ui_max_ts       = store.max_ts;
             }
-            ui.Text("Session: %s", ui_session_name.empty() ? "(none)" : ui_session_name.c_str());
-            ui.Text("Events: %llu", static_cast<unsigned long long>(ui_event_count));
             const Utf8String profile_size =
                 FormatBytes(EstimateProfileSizeBytesFast(ui_event_count, ui_track_count, ui_session_name.size()));
-            ui.Text("Profile Size (approx): %s", profile_size.c_str());
+            ui.SameLine();
             ui.Text(
-                "Time Range: [%llu, %llu]",
+                MOER_ASCII_TEXT("%s | %llu events | %s"),
+                ui_session_name.empty() ? MOER_ASCII_TEXT("No session") : ui_session_name.c_str(),
+                static_cast<unsigned long long>(ui_event_count),
+                profile_size.c_str()
+            );
+            ui.Text(
+                MOER_ASCII_TEXT("Capture: %s | Time: [%llu, %llu] ns"),
+                capture_path.empty() ? MOER_ASCII_TEXT("(live)") : capture_path.c_str(),
                 static_cast<unsigned long long>(ui_min_ts),
                 static_cast<unsigned long long>(ui_max_ts)
             );

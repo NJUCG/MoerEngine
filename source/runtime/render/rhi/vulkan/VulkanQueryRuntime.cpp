@@ -415,6 +415,7 @@ void VulkanQueryRuntime::ResolveCompleted(uint64 _timeline) {
                         result.payload = TimestampQueryResult{
                             .begin_tick = begin_tick,
                             .end_tick   = end_tick,
+                            .tick_period_ns = double(timestamp_period),
                             .duration_ns = double(end_tick - begin_tick) * double(timestamp_period)
                         };
                     }

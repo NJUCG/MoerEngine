@@ -64,6 +64,14 @@ private:
         uint64          timestamp_ns;
     };
 
+    struct TimestampDomain {
+        bool   valid{false};
+        uint64 anchor_tick{0};
+        uint64 anchor_time_ns{0};
+        double tick_period_ns{0.0};
+    };
+
+    uint64 ConvertTimestampToNsLocked(EQueueType queue, const TimestampQueryResult& result);
     void TryResolveReadyFramesLocked();
 
     Array<PendingSubmit>               pending_submits;
@@ -74,6 +82,7 @@ private:
     uint64                             next_enqueue_order{0};
     uint64                             next_frame_index{0};
     uint64                             resolved_enqueue_order_exclusive{0};
+    std::array<TimestampDomain, static_cast<size_t>(EQueueType::Num)> timestamp_domains{};
     bool                               testing_injected_submits{false};
     mutable std::mutex                 stream_mutex;
 };
