@@ -60,6 +60,7 @@ struct QueueTranslateInfo {
     TrackerSeed initial_seed{};
     GraphEventArray task_dependencies{};
     GraphEventRef   completion_event{nullptr};
+    ERHITranslateExecutionClass execution_class{ERHITranslateExecutionClass::Parallel};
     bool         valid{true};
     std::string  error{};
 
@@ -76,7 +77,8 @@ struct QueueTranslateInfo {
         source_segment_index(in_source_segment_index),
         queue(in_queue),
         submit(std::move(in_submit)),
-        initial_seed(std::move(in_seed)) {}
+        initial_seed(std::move(in_seed)),
+        execution_class(submit.translate_execution_class) {}
 
     QueueTranslateInfo(QueueTranslateInfo&&) noexcept            = default;
     QueueTranslateInfo& operator=(QueueTranslateInfo&&) noexcept = default;

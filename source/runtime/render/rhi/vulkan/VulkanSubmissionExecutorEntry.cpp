@@ -192,6 +192,7 @@ void VulkanSubmissionExecutor::Flush(ERHIFlushDepth depth) {
 
 void VulkanSubmissionExecutor::ShutDown() {
     state_->Shutdown();
+    VulkanTranslateTask::ResetSchedulerState();
 }
 
 } // namespace Moer::Render

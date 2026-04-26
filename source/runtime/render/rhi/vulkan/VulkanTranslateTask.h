@@ -11,7 +11,9 @@ public:
         CmdSubmit&& submit,
         TrackerSeed&& initial_seed
     );
+    static Array<TranslateResult> DispatchBatch(Array<QueueTranslateInfo>&& inputs);
     static TranslateResult MakeFailed(EQueueType queue, std::string error);
+    static void ResetSchedulerState();
 };
 
 } // namespace Moer::Render
