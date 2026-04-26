@@ -13,6 +13,7 @@ static constexpr size_t LOG_BATCH_FLUSH = 0;
 
 moodycamel::ConcurrentQueue<EventRecord>* g_rings[(int)MemorySource::MAX_SOURCES] = { nullptr };
 std::atomic<uint64_t> g_global_sequence{0};
+static std::atomic<bool> g_profile_accepting_events{false};
 
 std::priority_queue<EventRecord, std::vector<EventRecord>, RecordComparator> g_reorder_buffer;
 uint64_t g_expected_sequence = 0;
@@ -60,6 +61,28 @@ PROFILE_API size_t Profile_GetPeakBytesBySource(MemorySource source) {
 
 PROFILE_API size_t Profile_GetBytesBySource(MemorySource source) {
     return g_metrics.bytes[(size_t)source].load();
+}
+
+bool IsProfileAcceptingEvents() {
+    return g_profile_accepting_events.load(std::memory_order_acquire);
+}
+
+bool EnqueueProfileEvent(MemorySource source, const EventRecord& record) {
+    if (!IsProfileAcceptingEvents()) {
+        return false;
+    }
+
+    const size_t source_index = static_cast<size_t>(source);
+    if (source_index >= static_cast<size_t>(MemorySource::MAX_SOURCES)) {
+        return false;
+    }
+
+    auto* ring = g_rings[source_index];
+    if (!ring) {
+        return false;
+    }
+
+    return ring->enqueue(record);
 }
 
 //类似UDP，新增缓冲区
@@ -496,6 +519,7 @@ void ProfileExitFunc() {
     static std::atomic<bool> s_saved = false;
     if (s_saved.exchange(true)) return;
 
+    g_profile_accepting_events.store(false, std::memory_order_release);
     remove_hooks();
 
     // stop worker
@@ -515,13 +539,6 @@ void ProfileExitFunc() {
         g_dbghelp_inited.store(false);
     }
 
-    for (int i = 0; i < (int)MemorySource::MAX_SOURCES; i++) {
-        if (g_rings[i]) {
-            delete g_rings[i];
-            g_rings[i] = nullptr;
-        }
-    }
-    
     FlameProfiler::Get().Save(get_log_path() + "/frame_trace.json");
     FlameProfiler::Get().Clear();
     
@@ -646,6 +663,7 @@ void ProfileInitFunc()
     g_rings[(int)MemorySource::Editor]    = new moodycamel::ConcurrentQueue<EventRecord>(1 << 20); // Editor内存操作最频繁
     g_rings[(int)MemorySource::Vulkan]    = new moodycamel::ConcurrentQueue<EventRecord>(1 << 16); // Vulkan分配相对少
     g_rings[(int)MemorySource::VulkanTmp] = new moodycamel::ConcurrentQueue<EventRecord>(1 << 16);
+    g_profile_accepting_events.store(true, std::memory_order_release);
 
     if (!InitSymbolEngine()) {
         printf("[Profiler] Failed to initialize Symbol Engine, PDB hooks will fail.\n");

@@ -101,7 +101,6 @@ Renderer::EWindowState Renderer::TickWindowContext(const EngineHooks& hooks) {
         resolution.x = uint32(w_width);
         resolution.y = uint32(w_height);
 
-        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
         presentation_surface->Resize({resolution.x, resolution.y});
 
         return EWindowState::SizeChanged; // 继续执行Tick()

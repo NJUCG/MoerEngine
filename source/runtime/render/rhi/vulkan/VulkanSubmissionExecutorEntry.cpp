@@ -76,6 +76,14 @@ public:
         return submission_runtime.Sync(depth);
     }
 
+    GraphEventRef Sync(Swapchain* swapchain) {
+        if (!b_enable.load(std::memory_order_acquire)) {
+            return CreateCompletedExecutorEvent();
+        }
+        FlushInternal(ERHIFlushDepth::SubmitGPU);
+        return submission_runtime.Sync(swapchain);
+    }
+
     void Flush(ERHIFlushDepth depth) {
         if (!b_enable.load(std::memory_order_acquire)) {
             return;
@@ -172,6 +180,10 @@ void VulkanSubmissionExecutor::Enqueue(RHIBackendSubmissionBatch&& batch) {
 
 GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth depth) {
     return state_->Sync(depth);
+}
+
+GraphEventRef VulkanSubmissionExecutor::Sync(Swapchain* swapchain) {
+    return state_->Sync(swapchain);
 }
 
 void VulkanSubmissionExecutor::Flush(ERHIFlushDepth depth) {

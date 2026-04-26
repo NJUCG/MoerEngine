@@ -42,9 +42,10 @@ public:
     void Flush();
     void Shutdown();
     void ResolvePresentCompletion(UniquePtr<VulkanPresentor>&& presentor, uint64 timeline_value);
-    void AppendCompletionBoundary(const GraphEventRef& completion_event);
+    void AppendCompletionBoundary(Swapchain* swapchain, const GraphEventRef& completion_event);
     void ResetCompletionBoundary();
     const GraphEventRef& GetCompletionBoundary() const;
+    const GraphEventRef& GetCompletionBoundary(Swapchain* swapchain) const;
 
 private:
     struct Impl;
@@ -64,6 +65,7 @@ struct SubmissionBatch {
     Array<SubmitPresentStage>          present_ops{};
     RootRhiBoundary                    root_rhi_boundary{};
     ERHISyncDepth                      sync_depth{ERHISyncDepth::RHI};
+    Swapchain*                         sync_swapchain{nullptr};
     GraphEventRef                      completion_event{nullptr};
 };
 
@@ -111,6 +113,7 @@ public:
 
     void Enqueue(Array<SubmitInfo>&& submits, Array<SubmitPresentStage>&& present_ops);
     GraphEventRef Sync(ERHISyncDepth depth);
+    GraphEventRef Sync(Swapchain* swapchain);
     void Drain();
     void Flush();
     void Shutdown();
@@ -150,6 +153,7 @@ private:
     void             ShutdownPresentContexts();
     void             ResetOwnerCompletionBoundaries();
     GraphEventRef    EnqueueOrderedSyncRequest(ERHISyncDepth depth, SubmissionBatch::EKind kind);
+    GraphEventRef    EnqueueOrderedSwapchainSyncRequest(Swapchain* swapchain);
     GraphEventRef    EnqueueOrderedSyncRequestUnchecked(ERHISyncDepth depth, SubmissionBatch::EKind kind);
     GraphEventRef    EnqueueDrainRequestUnchecked();
     void             AttachSyncDependencies(SubmissionBatch& batch);

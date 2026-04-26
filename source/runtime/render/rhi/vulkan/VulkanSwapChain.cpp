@@ -10,6 +10,7 @@
 #include "misc/MMemory.h"
 #include "misc/Traits.h"
 #include "rhi/RHI.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
@@ -380,6 +381,6 @@ void VkSwapchain::Present(VkQueue _queue, uint _index) {
 }
 
 void VkSwapchain::Sync() {
-    vkQueueWaitIdle(device.GetPresentQueue());
+    RHIExecutor::Get().Sync(this);
 }
 } // namespace Moer::Render

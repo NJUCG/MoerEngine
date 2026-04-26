@@ -36,7 +36,6 @@
 
 // 3rd party
 #include <atomic>
-#include <imgui.h>
 #include <stb/stb_image_write.h>
 
 namespace Moer::Render::Raytracing {
@@ -62,8 +61,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         hooks.on_register_renderer_config_section(
             "Raytracing",
             "Settings",
-            [&config_ui]() {
-                config_ui.ShowConfig();
+            [&config_ui](Synapse::Context& ui) {
+                config_ui.ShowConfig(ui);
             }
         );
     }
@@ -311,38 +310,38 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                          &b_use_bindless,
                          &b_final_show_texture,
                          &mip_level,
-                         &debug_queue]() {
-                            ImGui::Checkbox("Show Final Texture", &b_final_show_texture);
-                            ImGui::SliderInt("Mip Level", (int*)&mip_level, 0, 12);
-                            ImGui::Checkbox("Use Bindless", &b_use_bindless);
-                            if (ImGui::TreeNode("MaterialTexture")) {
+                         &debug_queue](Synapse::Context& ui) {
+                            ui.Checkbox("Show Final Texture", &b_final_show_texture);
+                            ui.SliderInt("Mip Level", (int*)&mip_level, 0, 12);
+                            ui.Checkbox("Use Bindless", &b_use_bindless);
+                            if (ui.TreeNode("MaterialTexture")) {
                                 for (auto& [name, tex] : material_textures) {
                                     // selectable
-                                    if (ImGui::Selectable(
+                                    if (ui.Selectable(
                                             name.data(), selected_material_texture_name == name
                                         )) {
                                         selected_material_texture_name = name;
                                     }
                                 }
-                                ImGui::TreePop();
+                                ui.TreePop();
                             }
 
                             //Pass profiling
                             auto entrys = debug_queue.GetProfilerEntry();
                             if (!entrys.cpu_entries.empty()) {
-                                ImGui::Text("CPU Time:");
+                                ui.Text("CPU Time:");
                                 for (auto& [name, time] : entrys.cpu_entries) {
                                     if (name.ends_with("Percentage")) {
-                                        ImGui::Text("%s: %.3f%%", name.c_str(), time * 100);
+                                        ui.Text("%s: %.3f%%", name.c_str(), time * 100);
 
                                     } else
-                                        ImGui::Text("%s: %.3f ms", name.c_str(), time);
+                                        ui.Text("%s: %.3f ms", name.c_str(), time);
                                 }
                             }
                             if (!entrys.gpu_entries.empty()) {
-                                ImGui::Text("GPU Time:");
+                                ui.Text("GPU Time:");
                                 for (auto& [name, time] : entrys.gpu_entries) {
-                                    ImGui::Text("%s: %.3f ms", name.c_str(), time);
+                                    ui.Text("%s: %.3f ms", name.c_str(), time);
                                 }
                             }
                         }

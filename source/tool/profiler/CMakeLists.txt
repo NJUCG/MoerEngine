@@ -17,6 +17,10 @@ target_link_libraries(${target_name}
   PRIVATE Moer::Render
 )
 
+if(WIN32)
+  target_link_libraries(${target_name} PRIVATE Comdlg32)
+endif()
+
 target_include_directories(
   ${target_name}
   PRIVATE $<BUILD_INTERFACE:${profiler_source_dir}>

@@ -1,13 +1,9 @@
 #include "profile/ProfileDump.h"
 
-#if defined(_WIN32) || defined(_WIN64)
-#include <WinSock2.h>
-#include <WS2tcpip.h>
-#endif
-
 #include "config/CVarSystem.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "network/Socket.h"
 
 #include <algorithm>
 #include <atomic>
@@ -44,12 +40,9 @@ struct HubState {
     std::ofstream          file_stream;
     std::string            active_file_path;
 
-#if defined(_WIN32) || defined(_WIN64)
-    bool                   winsock_initialized = false;
-    SOCKET                 tcp_socket = INVALID_SOCKET;
     std::string            active_tcp_host;
     int                    active_tcp_port = 0;
-#endif
+    Network::TcpSocket     tcp_socket{};
 };
 
 HubState& GetState() {
@@ -230,51 +223,14 @@ void ResetFileSinkLocked(HubState& state) {
     }
 }
 
-#if defined(_WIN32) || defined(_WIN64)
 void ResetTcpSinkLocked(HubState& state) {
-    if (state.tcp_socket != INVALID_SOCKET) {
-        closesocket(state.tcp_socket);
-        state.tcp_socket = INVALID_SOCKET;
-    }
+    state.tcp_socket.Close();
     state.active_tcp_host.clear();
     state.active_tcp_port = 0;
     for (RegisteredSchema& schema : state.schemas) {
         schema.emitted_to_tcp = false;
     }
 }
-
-bool EnsureWinsockLocked(HubState& state) {
-    if (state.winsock_initialized) {
-        return true;
-    }
-
-    WSADATA data{};
-    const int ret = WSAStartup(MAKEWORD(2, 2), &data);
-    if (ret != 0) {
-        LOG_WARNING(MOER_TEXT("ProfileDump failed to initialize Winsock: {}"), ret);
-        return false;
-    }
-    state.winsock_initialized = true;
-    return true;
-}
-
-bool SendAll(SOCKET socket_handle, const uint8_t* data, size_t size) {
-    size_t sent_total = 0;
-    while (sent_total < size) {
-        const int sent = send(
-            socket_handle,
-            reinterpret_cast<const char*>(data + sent_total),
-            static_cast<int>(size - sent_total),
-            0
-        );
-        if (sent <= 0) {
-            return false;
-        }
-        sent_total += static_cast<size_t>(sent);
-    }
-    return true;
-}
-#endif
 
 template<typename Writer>
 void WriteStringPayload(Writer&& writer, std::string_view text) {
@@ -365,38 +321,20 @@ bool EnsureFileSinkLocked(HubState& state, const RuntimeConfig& config) {
     return true;
 }
 
-#if defined(_WIN32) || defined(_WIN64)
 bool EnsureTcpSinkLocked(HubState& state, const RuntimeConfig& config) {
     if (!config.enable_tcp) {
         ResetTcpSinkLocked(state);
         return false;
     }
-    if (!EnsureWinsockLocked(state)) {
-        return false;
-    }
-    if (state.tcp_socket != INVALID_SOCKET &&
+    if (state.tcp_socket.IsOpen() &&
         state.active_tcp_host == config.tcp_host &&
         state.active_tcp_port == config.tcp_port) {
         return true;
     }
 
     ResetTcpSinkLocked(state);
-    state.tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (state.tcp_socket == INVALID_SOCKET) {
-        LOG_WARNING(MOER_TEXT("ProfileDump failed to create TCP socket."));
-        return false;
-    }
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(static_cast<u_short>(config.tcp_port));
-    if (inet_pton(AF_INET, config.tcp_host.c_str(), &addr.sin_addr) != 1) {
-        LOG_WARNING(MOER_TEXT("ProfileDump invalid TCP host `{}`."), config.tcp_host);
-        ResetTcpSinkLocked(state);
-        return false;
-    }
-
-    if (connect(state.tcp_socket, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
+    if (state.tcp_socket.Connect(Utf8StringView(config.tcp_host.data(), config.tcp_host.size()), static_cast<uint16_t>(config.tcp_port)) !=
+        Network::ESocketStatus::Success) {
         LOG_WARNING(MOER_TEXT("ProfileDump failed to connect TCP sink {}:{}."), config.tcp_host, config.tcp_port);
         ResetTcpSinkLocked(state);
         return false;
@@ -406,7 +344,6 @@ bool EnsureTcpSinkLocked(HubState& state, const RuntimeConfig& config) {
     state.active_tcp_port = config.tcp_port;
     return true;
 }
-#endif
 
 void PublishThreadLocalShard(bool flush_after_publish) {
     HubState& state = GetState();
@@ -436,11 +373,7 @@ void EmitPendingToSinksLocked(HubState& state) {
     });
 
     const bool can_write_file = EnsureFileSinkLocked(state, config);
-#if defined(_WIN32) || defined(_WIN64)
     const bool can_write_tcp = EnsureTcpSinkLocked(state, config);
-#else
-    const bool can_write_tcp = false;
-#endif
 
     if (!can_write_file && !can_write_tcp) {
         state.published_records.clear();
@@ -457,11 +390,10 @@ void EmitPendingToSinksLocked(HubState& state) {
         state.file_stream.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
     };
 
-#if defined(_WIN32) || defined(_WIN64)
     auto tcp_writer = [&](const uint8_t* data, size_t size) {
-        return SendAll(state.tcp_socket, data, size);
+        return state.tcp_socket.SendAll(std::span<const std::byte>(reinterpret_cast<const std::byte*>(data), size)) ==
+               Network::ESocketStatus::Success;
     };
-#endif
 
     for (RegisteredSchema& schema : state.schemas) {
         if (!is_schema_referenced(schema.desc.schema_id)) {
@@ -472,7 +404,6 @@ void EmitPendingToSinksLocked(HubState& state) {
             WritePacket(file_writer, EPacketType::Schema, payload);
             schema.emitted_to_file = true;
         }
-#if defined(_WIN32) || defined(_WIN64)
         if (can_write_tcp && !schema.emitted_to_tcp) {
             const Array<uint8_t> payload = BuildSchemaPacketPayload(schema);
             PacketHeader header{
@@ -489,7 +420,6 @@ void EmitPendingToSinksLocked(HubState& state) {
             }
             schema.emitted_to_tcp = true;
         }
-#endif
     }
 
     for (const PendingRecord& record : state.published_records) {
@@ -497,7 +427,6 @@ void EmitPendingToSinksLocked(HubState& state) {
         if (can_write_file) {
             WritePacket(file_writer, EPacketType::Record, payload);
         }
-#if defined(_WIN32) || defined(_WIN64)
         if (can_write_tcp) {
             PacketHeader header{
                 .magic = packet_magic,
@@ -512,7 +441,6 @@ void EmitPendingToSinksLocked(HubState& state) {
                 break;
             }
         }
-#endif
     }
 
     if (state.file_stream.is_open()) {
@@ -593,13 +521,7 @@ void Shutdown() {
     HubState& state = GetState();
     std::lock_guard lock(state.mutex);
     ResetFileSinkLocked(state);
-#if defined(_WIN32) || defined(_WIN64)
     ResetTcpSinkLocked(state);
-    if (state.winsock_initialized) {
-        WSACleanup();
-        state.winsock_initialized = false;
-    }
-#endif
 }
 
 void OverrideOutputFileForCurrentSession(const std::filesystem::path& path) {
@@ -621,9 +543,7 @@ void OverrideConfigForTesting(const RuntimeConfig& config) {
     state.runtime_config = config;
     state.runtime_config_initialized = true;
     ResetFileSinkLocked(state);
-#if defined(_WIN32) || defined(_WIN64)
     ResetTcpSinkLocked(state);
-#endif
 }
 
 void ClearTestingConfigOverride() {
@@ -633,9 +553,7 @@ void ClearTestingConfigOverride() {
     state.runtime_config = RuntimeConfig{};
     state.runtime_config_initialized = false;
     ResetFileSinkLocked(state);
-#if defined(_WIN32) || defined(_WIN64)
     ResetTcpSinkLocked(state);
-#endif
 }
 
 RuntimeConfig GetRuntimeConfigSnapshot() {

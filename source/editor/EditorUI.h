@@ -4,9 +4,8 @@
 #include "misc/Traits.h"
 #include "renderer/EditorConfig.h"
 #include "renderer/common/UIRenderer.h"
+#include "renderer/common/ui/synapse/Synapse.h"
 #include "rhi/RHIResource.h"
-
-#include <imgui.h>
 
 #if WITH_PROFILE
 #include "runtime_profiler/RuntimeProfiler.h"
@@ -17,6 +16,8 @@ namespace Moer {
 class EditorUI {
 
 public:
+    using RendererConfigDrawFunc = std::function<void(Synapse::Context&)>;
+
     struct SceneWindowTarget {
         bool                is_separate_window = false;
         Render::TextureView frame_buffer;
@@ -48,7 +49,7 @@ public:
     void RegisterRendererConfigSection(
         std::string renderer_name,
         std::string section_name,
-        std::function<void()>&& func
+        RendererConfigDrawFunc&& func
     );
     void UnregisterRendererConfigSection(std::string renderer_name, std::string section_name);
     void RegisterOverlayFunc(std::string _name, std::function<void()>&& _func);
@@ -57,7 +58,6 @@ public:
 
 private:
     void ResetState(); // reset m_b_need_reload, etc..
-    void SetupDefaultDockLayout(ImGuiID dockspace_id);
     void ShowSceneColor();
     void ShowConfig();
     void ShowOverlay();
@@ -80,8 +80,9 @@ private:
     SharedPtr<EditorConfig> m_config;
 
     UniquePtr<Render::UIRenderer> m_ui_renderer;
+    UniquePtr<Synapse::Context>   m_synapse_context;
 
-    UnorderedMap<std::string, UnorderedMap<std::string, std::function<void()>>> m_renderer_config_sections;
+    UnorderedMap<std::string, UnorderedMap<std::string, RendererConfigDrawFunc>> m_renderer_config_sections;
     UnorderedMap<std::string, std::function<void()>> m_overlay_func_map;
     std::function<bool()>                            m_get_console_window_visible;
     std::function<void(bool)>                        m_set_console_window_visible;

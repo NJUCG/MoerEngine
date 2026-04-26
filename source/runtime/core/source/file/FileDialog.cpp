@@ -1,7 +1,6 @@
 #include "file/FileDialog.h"
 
 #include "log/LogSystem.h"
-
 #if MOER_CORE_HAS_NFD
 #include "../../../../../3rdparty/nativefiledialog-extended-1.2.1/src/include/nfd.hpp"
 
@@ -48,13 +47,11 @@ void ShutDown() {
 #endif
 }
 
-OpenFileResult OpenFile(const OpenFileRequest& request) {
-    OpenFileResult result{};
+EOpenFileStatus OpenFile(const OpenFileRequest& request) {
 #if MOER_CORE_HAS_NFD
     if (!g_is_initialized) {
-        result.status = EOpenFileStatus::Error;
         LOG_ERROR(MOER_TEXT("FileDialog::OpenFile() called before FileDialog::Init()."));
-        return result;
+        return EOpenFileStatus::Error;
     }
 
     std::vector<std::string> native_filter_names;
@@ -65,8 +62,8 @@ OpenFileResult OpenFile(const OpenFileRequest& request) {
     native_filters.reserve(request.filters.size());
 
     for (const Filter& filter : request.filters) {
-        native_filter_names.emplace_back(filter.name);
-        native_filter_patterns.emplace_back(filter.pattern);
+        native_filter_names.emplace_back(filter.name.data(), filter.name.size());
+        native_filter_patterns.emplace_back(filter.pattern.data(), filter.pattern.size());
         native_filters.push_back({
             native_filter_names.back().c_str(),
             native_filter_patterns.back().c_str(),
@@ -81,24 +78,23 @@ OpenFileResult OpenFile(const OpenFileRequest& request) {
     );
 
     if (native_result == NFD_OKAY && selected_path) {
-        result.status = EOpenFileStatus::Success;
-        result.path   = std::filesystem::u8path(selected_path.get());
-        return result;
+        if (request.callback) {
+            const Utf8String selected_path_utf8 = Utf8String(selected_path.get());
+            request.callback(selected_path_utf8, request.user_data);
+        }
+        return EOpenFileStatus::Success;
     }
 
     if (native_result == NFD_CANCEL) {
-        result.status = EOpenFileStatus::Cancelled;
-        return result;
+        return EOpenFileStatus::Cancelled;
     }
 
-    result.status = EOpenFileStatus::Error;
     LOG_ERROR(MOER_TEXT("FileDialog open failed: {}"), NFD::GetError());
-    return result;
+    return EOpenFileStatus::Error;
 #else
     (void)request;
-    result.status = EOpenFileStatus::Error;
     LOG_ERROR(MOER_TEXT("FileDialog::OpenFile() is unavailable because nativefiledialog is not built for this platform."));
-    return result;
+    return EOpenFileStatus::Error;
 #endif
 }
 

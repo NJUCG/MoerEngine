@@ -170,7 +170,7 @@ void Engine::Run() {
                 );
             },
         .on_register_renderer_config_section =
-            [this](std::string renderer_name, std::string section_name, std::function<void(void)> draw_func) {
+            [this](std::string renderer_name, std::string section_name, std::function<void(Synapse::Context&)> draw_func) {
                 m_editor_ui->RegisterRendererConfigSection(
                     std::move(renderer_name),
                     std::move(section_name),

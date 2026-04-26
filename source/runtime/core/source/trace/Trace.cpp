@@ -2,6 +2,7 @@
 
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "network/Socket.h"
 
 #include <algorithm>
 #include <chrono>
@@ -13,13 +14,7 @@
 #include <format>
 #include <mutex>
 #include <thread>
-
-#if defined(_WIN32)
-#define NOMINMAX
-#include <WinSock2.h>
-#include <WS2tcpip.h>
-#pragma comment(lib, "ws2_32.lib")
-#endif
+#include <type_traits>
 
 namespace Moer::Trace {
 namespace {
@@ -199,73 +194,31 @@ void WriteCsvRow(const TraceEvent& event) {
     state.csv_file.flush();
 }
 
-#if defined(_WIN32)
-bool EnsureWinsock() {
-    static std::atomic<bool> init_ok{false};
-    static std::atomic<bool> init_done{false};
-    if (init_done.load(std::memory_order_acquire)) {
-        return init_ok.load(std::memory_order_relaxed);
-    }
-    WSADATA data{};
-    const int ret = WSAStartup(MAKEWORD(2, 2), &data);
-    init_ok.store(ret == 0, std::memory_order_release);
-    init_done.store(true, std::memory_order_release);
-    return ret == 0;
-}
-
 void SenderMain() {
     auto& state = G();
-    if (!EnsureWinsock()) {
-        LOG_ERROR(MOER_TEXT("Trace sender failed to initialize WinSock."));
-        return;
-    }
-
-    SOCKET sock = INVALID_SOCKET;
+    Network::TcpSocket socket{};
     bool metadata_sent = false;
 
     auto close_socket = [&]() {
-        if (sock != INVALID_SOCKET) {
-            closesocket(sock);
-            sock = INVALID_SOCKET;
-        }
+        socket.Close();
         metadata_sent = false;
         state.connected.store(false, std::memory_order_release);
     };
 
     auto connect_server = [&]() -> bool {
         close_socket();
-
-        addrinfo hints{};
-        hints.ai_family   = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_protocol = IPPROTO_TCP;
-
-        addrinfo* result = nullptr;
-        const int gai_ret = getaddrinfo(
-            state.config.host.c_str(),
-            std::to_string(state.config.port).c_str(),
-            &hints,
-            &result
-        );
-        if (gai_ret != 0 || result == nullptr) {
+        if (socket.Connect(Utf8StringView(state.config.host.data(), state.config.host.size()), state.config.port) !=
+            Network::ESocketStatus::Success) {
             return false;
         }
-
-        SOCKET new_sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-        if (new_sock == INVALID_SOCKET) {
-            freeaddrinfo(result);
-            return false;
-        }
-
-        const int c_ret = connect(new_sock, result->ai_addr, static_cast<int>(result->ai_addrlen));
-        freeaddrinfo(result);
-        if (c_ret != 0) {
-            closesocket(new_sock);
-            return false;
-        }
-        sock = new_sock;
         state.connected.store(true, std::memory_order_release);
         return true;
+    };
+
+    auto send_packet = [&](const auto& packet) {
+        const size_t byte_size = packet.size() * sizeof(typename std::remove_reference_t<decltype(packet)>::value_type);
+        return socket.SendAll(std::span<const std::byte>(reinterpret_cast<const std::byte*>(packet.data()), byte_size)) ==
+               Network::ESocketStatus::Success;
     };
 
     while (state.running.load(std::memory_order_acquire)) {
@@ -274,14 +227,14 @@ void SenderMain() {
             continue;
         }
         if (!state.recording.load(std::memory_order_relaxed)) {
-            if (sock != INVALID_SOCKET) {
+            if (socket.IsOpen()) {
                 close_socket();
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
             continue;
         }
 
-        if (sock == INVALID_SOCKET && !connect_server()) {
+        if (!socket.IsOpen() && !connect_server()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
             continue;
         }
@@ -297,13 +250,7 @@ void SenderMain() {
                 close_socket();
                 continue;
             }
-            const int sent = send(
-                sock,
-                reinterpret_cast<const char*>(packet.data()),
-                static_cast<int>(packet.size()),
-                0
-            );
-            if (sent != static_cast<int>(packet.size())) {
+            if (!send_packet(packet)) {
                 close_socket();
                 continue;
             }
@@ -332,8 +279,7 @@ void SenderMain() {
         if (!SerializeEventsPacket(batch, packet)) {
             continue;
         }
-        const int sent = send(sock, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0);
-        if (sent != static_cast<int>(packet.size())) {
+        if (!send_packet(packet)) {
             close_socket();
             continue;
         }
@@ -341,7 +287,6 @@ void SenderMain() {
 
     close_socket();
 }
-#endif
 
 std::string DefaultCpuTrackName() {
     const auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
@@ -406,9 +351,7 @@ bool Init(const Config& config) {
         }
     }
 
-#if defined(_WIN32)
     state.sender_thread = std::thread(SenderMain);
-#endif
     return true;
 #endif
 }

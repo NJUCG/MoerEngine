@@ -29,6 +29,7 @@ public:
 
     virtual void Enqueue(RHIBackendSubmissionBatch&& batch) = 0;
     virtual GraphEventRef Sync(ERHISyncDepth depth = ERHISyncDepth::RHI) = 0;
+    virtual GraphEventRef Sync(Swapchain* swapchain) = 0;
     virtual void Flush(ERHIFlushDepth depth = ERHIFlushDepth::SubmitGPU) = 0;
     virtual void ShutDown() = 0;
 };

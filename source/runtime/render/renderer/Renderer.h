@@ -13,6 +13,10 @@ namespace Moer {
 class RuntimeAssets;
 }
 
+namespace Moer::Synapse {
+class Context;
+}
+
 namespace Moer::Render {
 
 struct EngineHooks {
@@ -25,7 +29,7 @@ struct EngineHooks {
     std::function<TextureRef(UiCombinePass*, CommandList&, TextureView, TextureView, TextureView)>
         on_ui_combine_pass;
 
-    std::function<void(std::string, std::string, std::function<void(void)>)>
+    std::function<void(std::string, std::string, std::function<void(Synapse::Context&)>)>
         on_register_renderer_config_section;
     std::function<void(std::string, std::string)> on_unregister_renderer_config_section;
 };

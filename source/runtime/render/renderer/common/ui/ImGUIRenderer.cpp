@@ -685,10 +685,8 @@ void GuiDestroyWindow(ImGuiViewport* _viewport) {
     ImGUIData& backend_data = *GetGUIBackendData();
     using namespace Moer::Render;
     using namespace Moer;
-    auto& device = backend_data.render_backend->device;
 
     if (GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData) {
-        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
         if (viewport_data->surface) {
             viewport_data->surface->Sync();
             viewport_data->surface = nullptr;
@@ -715,7 +713,6 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         return;
     }
 
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     if (!viewport_data->surface) {
         Moer::WindowHandle handle{(Moer::WindowType*)(_viewport->PlatformHandle ? _viewport->PlatformHandle :
                                                                                   _viewport->PlatformHandleRaw)};
@@ -769,7 +766,7 @@ void GuiSwapbuffer(ImGuiViewport* _viewport, void*) {
                                draw_data->DisplaySize.y > 0.0f && draw_data->CmdListsCount > 0;
 
     if (!has_draw_data) {
-        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+        viewport_data->surface->Sync();
         Array<CommandList> present_cmd_lists{};
         RHIExecutor::Get().Submit(
             std::move(present_cmd_lists), ERHIExecSubmitFlags::FlushGPU, &present_request

@@ -54,6 +54,7 @@ SubmissionPresentCompletionPayload::SubmissionPresentCompletionPayload(
     host_fence_device(in_host_fence.device),
     host_fence(in_host_fence.handle),
     owns_host_fence(in_host_fence.owned),
+    completion(in_result.completion),
     timeline_value(in_result.timeline_value),
     presentor(std::move(in_result.presentor)) {}
 
@@ -215,6 +216,17 @@ bool VulkanInterruptRuntime::PollPresentFence(
     SubmissionCompletionTask&          task,
     SubmissionPresentCompletionPayload& payload
 ) {
+    if (!PollTimelineCompletion(
+            payload.completion.timeline_handle,
+            payload.completion.value,
+            task.common.op_seq,
+            "present submit completion",
+            task.common.pending_since,
+            task.common.pending_warn_count
+        )) {
+        return false;
+    }
+
     if (payload.host_fence == VK_NULL_HANDLE || payload.host_fence_device == VK_NULL_HANDLE) {
         return true;
     }

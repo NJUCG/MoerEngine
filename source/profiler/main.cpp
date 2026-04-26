@@ -1,37 +1,26 @@
-#include "Core.h"
 #include "config/ConfigManager.h"
 #include "file/FileDialog.h"
 #include "log/LogSystem.h"
-#include "misc/Timer.h"
+#include "network/Socket.h"
 #include "ProfileSession.h"
 #include "profile/ProfileDump.h"
 #include "renderer/common/PresentationSurface.h"
 #include "renderer/common/UIRenderer.h"
+#include "renderer/common/ui/synapse/Synapse.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "window/WindowContext.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
-#include <cmath>
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
-#include <imgui.h>
 #include <mutex>
 #include <string>
 #include <thread>
-
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <WinSock2.h>
-#include <WS2tcpip.h>
-#pragma comment(lib, "ws2_32.lib")
-#endif
 
 namespace Moer {
 namespace {
@@ -39,155 +28,155 @@ namespace {
 using namespace Moer::Render;
 using namespace Moer::Profiler;
 
-class ProfileDumpIngestServer {
+static constexpr uint32_t trace_packet_magic = 0x4D525443u;
+
+class ProfilerIngestServer {
 public:
-    explicit ProfileDumpIngestServer(ProfileStore& store) : store_(store) {}
-    ~ProfileDumpIngestServer() {
+    explicit ProfilerIngestServer(ProfileStore& profile_store) : m_store(profile_store) {}
+    ~ProfilerIngestServer() {
         Stop();
     }
 
     bool Start(uint16_t port) {
-#if !defined(_WIN32)
-        (void)port;
-        return false;
-#else
-        if (running_.exchange(true)) {
+        if (m_running.exchange(true)) {
             return true;
         }
-        port_ = port;
-
-        WSADATA data{};
-        if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
-            running_.store(false);
-            return false;
-        }
-        server_thread_ = std::thread([this]() { ServerMain(); });
+        m_listen_port = port;
+        m_server_thread = std::thread([this]() { ServerMain(); });
         return true;
-#endif
     }
 
     void Stop() {
-#if defined(_WIN32)
-        if (!running_.exchange(false)) {
+        if (!m_running.exchange(false)) {
             return;
         }
-        if (listen_sock_ != INVALID_SOCKET) {
-            closesocket(listen_sock_);
-            listen_sock_ = INVALID_SOCKET;
+        m_listen_socket.Close();
+        m_client_socket.Close();
+        if (m_server_thread.joinable()) {
+            m_server_thread.join();
         }
-        if (client_sock_ != INVALID_SOCKET) {
-            closesocket(client_sock_);
-            client_sock_ = INVALID_SOCKET;
-        }
-        if (server_thread_.joinable()) {
-            server_thread_.join();
-        }
-        WSACleanup();
-#endif
     }
 
 private:
-#if defined(_WIN32)
-    static bool RecvAll(SOCKET sock, std::byte* data, size_t len) {
-        size_t recv_total = 0;
-        while (recv_total < len) {
-            const int ret =
-                recv(sock, reinterpret_cast<char*>(data + recv_total), static_cast<int>(len - recv_total), 0);
-            if (ret <= 0) {
-                return false;
-            }
-            recv_total += static_cast<size_t>(ret);
-        }
-        return true;
+    static bool RecvAll(Network::TcpSocket& socket, uint8_t* data, size_t len) {
+        return socket.RecvAll(std::span<std::byte>(reinterpret_cast<std::byte*>(data), len)) ==
+               Network::ESocketStatus::Success;
+    }
+
+    template<typename HeaderT>
+    static bool RecvHeaderAfterMagic(Network::TcpSocket& socket, uint32_t magic, HeaderT& header) {
+        header = {};
+        header.magic = magic;
+        return RecvAll(
+            socket,
+            reinterpret_cast<uint8_t*>(&header) + sizeof(magic),
+            sizeof(HeaderT) - sizeof(magic)
+        );
     }
 
     void ServerMain() {
-        listen_sock_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (listen_sock_ == INVALID_SOCKET) {
+        if (m_listen_socket.BindListen(Network::TcpListenDesc{.port = m_listen_port, .backlog = 1}) !=
+            Network::ESocketStatus::Success) {
+            m_running.store(false);
             return;
         }
 
-        sockaddr_in addr{};
-        addr.sin_family      = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        addr.sin_port        = htons(port_);
-
-        int yes = 1;
-        setsockopt(listen_sock_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&yes), sizeof(yes));
-        if (bind(listen_sock_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-            return;
-        }
-        if (listen(listen_sock_, 1) != 0) {
-            return;
-        }
-
-        while (running_.load()) {
-            sockaddr_in client_addr{};
-            int         client_len = sizeof(client_addr);
-            SOCKET      sock =
-                accept(listen_sock_, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
-            if (sock == INVALID_SOCKET) {
-                if (!running_.load()) {
+        while (m_running.load()) {
+            Network::TcpSocket client{};
+            if (m_listen_socket.Accept(client) != Network::ESocketStatus::Success) {
+                if (!m_running.load()) {
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 continue;
             }
 
-            if (client_sock_ != INVALID_SOCKET) {
-                closesocket(client_sock_);
-            }
-            client_sock_ = sock;
-            ClientMain(sock);
-            closesocket(sock);
-            client_sock_ = INVALID_SOCKET;
+            m_client_socket = std::move(client);
+            ClientMain(m_client_socket);
+            m_client_socket.Close();
         }
     }
 
-    void ClientMain(SOCKET sock) {
-        store_.SetSessionName("ProfileDump TCP");
-        decoder_.Reset();
-        while (running_.load()) {
-            ProfileDump::PacketHeader header{};
-            if (!RecvAll(sock, reinterpret_cast<std::byte*>(&header), sizeof(header))) {
-                break;
-            }
-            if (header.magic != ProfileDump::packet_magic || header.version != ProfileDump::packet_version) {
-                break;
-            }
-            Array<uint8_t> payload{};
-            payload.resize(header.payload_size);
-            if (header.payload_size > 0 &&
-                !RecvAll(sock, reinterpret_cast<std::byte*>(payload.data()), payload.size())) {
+    void ClientMain(Network::TcpSocket& socket) {
+        m_store.Reset();
+        m_store.SetSessionName("Profiler TCP");
+        m_profile_dump_decoder.Reset();
+        m_trace_decoder.Reset();
+        while (m_running.load()) {
+            uint32_t magic = 0;
+            if (!RecvAll(socket, reinterpret_cast<uint8_t*>(&magic), sizeof(magic))) {
                 break;
             }
 
-            Array<ProfileEvent> events{};
-            if (!decoder_.ConsumePacket(header, payload, events)) {
-                break;
+            if (magic == ProfileDump::packet_magic) {
+                ProfileDump::PacketHeader header{};
+                if (!RecvHeaderAfterMagic(socket, magic, header) || header.version != ProfileDump::packet_version) {
+                    break;
+                }
+                Array<uint8_t> payload{};
+                payload.resize(header.payload_size);
+                if (header.payload_size > 0 && !RecvAll(socket, payload.data(), payload.size())) {
+                    break;
+                }
+
+                Array<ProfileEvent> events{};
+                if (!m_profile_dump_decoder.ConsumePacket(header, payload, events)) {
+                    break;
+                }
+                if (!events.empty()) {
+                    m_store.AppendEvents(events);
+                }
+                continue;
             }
-            if (!events.empty()) {
-                store_.AppendEvents(events);
+
+            if (magic == trace_packet_magic) {
+                Trace::PacketHeader header{};
+                if (!RecvHeaderAfterMagic(socket, magic, header)) {
+                    break;
+                }
+                Array<uint8_t> payload{};
+                payload.resize(header.payload_size);
+                if (header.payload_size > 0 && !RecvAll(socket, payload.data(), payload.size())) {
+                    break;
+                }
+
+                Array<ProfileEvent> events{};
+                Utf8String session_name{};
+                if (!m_trace_decoder.ConsumePacket(header, payload, events, &session_name)) {
+                    break;
+                }
+                if (!session_name.empty()) {
+                    m_store.SetSessionName(std::move(session_name));
+                }
+                if (!events.empty()) {
+                    m_store.AppendEvents(events);
+                }
+                continue;
             }
+
+            break;
         }
 
-        decoder_.Reset();
+        m_profile_dump_decoder.Reset();
+        m_trace_decoder.Reset();
     }
-#endif
 
 private:
-    ProfileStore&       store_;
-    std::atomic<bool>   running_{false};
-    uint16_t            port_{19090};
-    std::thread         server_thread_{};
-    ProfileDumpSessionDecoder decoder_{};
-#if defined(_WIN32)
-    SOCKET              listen_sock_{INVALID_SOCKET};
-    SOCKET              client_sock_{INVALID_SOCKET};
-#endif
+    ProfileStore&             m_store;
+    std::atomic<bool>         m_running{false};
+    uint16_t                  m_listen_port{19090};
+    std::thread               m_server_thread{};
+    ProfileDumpSessionDecoder m_profile_dump_decoder{};
+    TraceSessionDecoder       m_trace_decoder{};
+    Network::TcpSocket        m_listen_socket{};
+    Network::TcpSocket        m_client_socket{};
 };
 
-bool ContainsCaseInsensitive(std::string_view text, std::string_view token) {
+Utf8String ToProfilerString(const char* text) {
+    return Utf8String(text ? text : "");
+}
+
+bool ContainsCaseInsensitive(Utf8StringView text, Utf8StringView token) {
     if (token.empty()) {
         return true;
     }
@@ -207,13 +196,85 @@ bool ContainsCaseInsensitive(std::string_view text, std::string_view token) {
     return false;
 }
 
-ImU32 EventColorByName(std::string_view name) {
-    const uint32_t h = static_cast<uint32_t>(std::hash<std::string_view>{}(name));
-    // Keep saturation/value in a pleasant range and spread hue by hash.
+bool Utf8Less(Utf8StringView lhs, Utf8StringView rhs) {
+    return std::lexicographical_compare(lhs.data(), lhs.data() + lhs.size(), rhs.data(), rhs.data() + rhs.size());
+}
+
+uint32_t HashUtf8(Utf8StringView text) {
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < text.size(); ++i) {
+        hash ^= static_cast<uint8_t>(text[i]);
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
+    return (static_cast<uint32_t>(a) << 24u) |
+           (static_cast<uint32_t>(b) << 16u) |
+           (static_cast<uint32_t>(g) << 8u) |
+           static_cast<uint32_t>(r);
+}
+
+uint32_t HsvToPackedColor(float hue, float saturation, float value, float alpha) {
+    hue = hue - static_cast<float>(static_cast<int>(hue));
+    const float scaled_hue = hue * 6.0f;
+    const int   sector = static_cast<int>(scaled_hue);
+    const float f = scaled_hue - static_cast<float>(sector);
+    const float p = value * (1.0f - saturation);
+    const float q = value * (1.0f - saturation * f);
+    const float t = value * (1.0f - saturation * (1.0f - f));
+
+    float r = value;
+    float g = t;
+    float b = p;
+    switch (sector % 6) {
+        case 0:
+            r = value;
+            g = t;
+            b = p;
+            break;
+        case 1:
+            r = q;
+            g = value;
+            b = p;
+            break;
+        case 2:
+            r = p;
+            g = value;
+            b = t;
+            break;
+        case 3:
+            r = p;
+            g = q;
+            b = value;
+            break;
+        case 4:
+            r = t;
+            g = p;
+            b = value;
+            break;
+        default:
+            r = value;
+            g = p;
+            b = q;
+            break;
+    }
+
+    return PackColor(
+        static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255.0f),
+        static_cast<uint8_t>(std::clamp(g, 0.0f, 1.0f) * 255.0f),
+        static_cast<uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255.0f),
+        static_cast<uint8_t>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f)
+    );
+}
+
+uint32_t EventColorByName(Utf8StringView name) {
+    const uint32_t h = HashUtf8(name);
     const float hue = (h % 360u) / 360.0f;
     const float sat = 0.45f + float((h >> 8u) & 0x1Fu) / 255.0f;
     const float val = 0.68f + float((h >> 16u) & 0x1Fu) / 255.0f;
-    return ImColor::HSV(hue, std::clamp(sat, 0.35f, 0.62f), std::clamp(val, 0.62f, 0.88f), 0.92f);
+    return HsvToPackedColor(hue, std::clamp(sat, 0.35f, 0.62f), std::clamp(val, 0.62f, 0.88f), 0.92f);
 }
 
 uint64_t EstimateProfileSizeBytes(const ProfileStore& store) {
@@ -241,7 +302,7 @@ uint64_t EstimateProfileSizeBytesFast(
     return bytes;
 }
 
-std::string FormatBytes(uint64_t bytes) {
+Utf8String FormatBytes(uint64_t bytes) {
     const double value = static_cast<double>(bytes);
     char         buf[64]{};
     if (value >= 1024.0 * 1024.0 * 1024.0) {
@@ -253,19 +314,33 @@ std::string FormatBytes(uint64_t bytes) {
     } else {
         std::snprintf(buf, sizeof(buf), "%llu B", static_cast<unsigned long long>(bytes));
     }
-    return std::string(buf);
+    return ToProfilerString(buf);
 }
 
-void DrawTimeRuler(ImDrawList* draw_list, const ImVec2& origin, float width, float y, uint64_t start_ns, uint64_t end_ns) {
-    draw_list->AddLine({origin.x, y}, {origin.x + width, y}, IM_COL32(180, 180, 180, 255), 1.0f);
+struct TimelineViewState {
+    uint64_t view_start_ns{0};
+    uint64_t view_end_ns{0};
+    bool     auto_follow{true};
+    char     search_text[128]{};
+};
+
+void DrawTimeRuler(
+    Synapse::Context& ui,
+    Synapse::Size     origin,
+    float             width,
+    float             y,
+    uint64_t          start_ns,
+    uint64_t          end_ns
+) {
+    ui.DrawLine({origin.x, y}, {origin.x + width, y}, PackColor(180, 180, 180), 1.0f);
 
     const double span_ns = static_cast<double>(std::max<uint64_t>(1, end_ns - start_ns));
-    const int    major_ticks = 10;
+    constexpr int major_ticks = 10;
     for (int i = 0; i <= major_ticks; ++i) {
         const float  t = static_cast<float>(i) / static_cast<float>(major_ticks);
         const float  x = origin.x + t * width;
         const double ts_ns = static_cast<double>(start_ns) + t * span_ns;
-        draw_list->AddLine({x, y}, {x, y + 8.0f}, IM_COL32(200, 200, 200, 255), 1.0f);
+        ui.DrawLine({x, y}, {x, y + 8.0f}, PackColor(200, 200, 200), 1.0f);
 
         char label[64]{};
         if (ts_ns >= 1e9) {
@@ -277,18 +352,11 @@ void DrawTimeRuler(ImDrawList* draw_list, const ImVec2& origin, float width, flo
         } else {
             std::snprintf(label, sizeof(label), "%.0fns", ts_ns);
         }
-        draw_list->AddText({x + 2.0f, y + 10.0f}, IM_COL32(200, 200, 200, 255), label);
+        ui.DrawCanvasText({x + 2.0f, y + 10.0f}, PackColor(200, 200, 200), label);
     }
 }
 
-struct TimelineViewState {
-    uint64_t view_start_ns{0};
-    uint64_t view_end_ns{0};
-    bool     auto_follow{true};
-    char     search_text[128]{};
-};
-
-void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
+void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewState& ui_state) {
     struct TimelineDataCache {
         uint64_t store_generation{0};
         Array<ProfileEvent>      events{};
@@ -300,7 +368,7 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
         UnorderedMap<uint64_t, int> gpu_display_max_depth_by_track{};
         UnorderedMap<uint64_t, size_t> event_index_by_id{};
         uint64_t search_generation{0};
-        std::string cached_search{};
+        Utf8String cached_search{};
         Array<uint8_t> search_match_mask{};
         Array<size_t> matched_indices{};
     };
@@ -322,7 +390,7 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
                 if (a.type != b.type) {
                     return static_cast<uint8_t>(a.type) < static_cast<uint8_t>(b.type);
                 }
-                return a.name < b.name;
+                return Utf8Less(a.name, b.name);
             });
             cache.min_ts       = store.min_ts;
             cache.max_ts       = store.max_ts;
@@ -344,9 +412,6 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
             const auto& e = events[i];
             cache.event_index_by_id[e.event_id] = i;
             cache.gpu_display_depth_by_index[i] = e.depth;
-            if (e.type != ProfileEventType::Scope) {
-                continue;
-            }
             const uint64_t track_key = MakeTrackKey(e.track_type, e.track_id);
             cache.scope_indices_by_track[track_key].emplace_back(i);
         }
@@ -394,11 +459,11 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
     const uint64_t min_ts = cache.min_ts;
     const uint64_t max_ts = cache.max_ts;
     if (events.empty()) {
-        ImGui::Text("Waiting for ProfileDump stream on port 19090...");
+        ui.Text("Waiting for ProfileDump/Trace stream on port 19090...");
         return;
     }
 
-    const std::string search_key = ui_state.search_text;
+    const Utf8String search_key = ToProfilerString(ui_state.search_text);
     if (cache.search_generation != cache.store_generation || cache.cached_search != search_key) {
         cache.cached_search = search_key;
         cache.search_generation = cache.store_generation;
@@ -407,9 +472,6 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
         cache.matched_indices.reserve(events.size() / 16 + 8);
         for (size_t i = 0; i < events.size(); ++i) {
             const auto& e = events[i];
-            if (e.type != ProfileEventType::Scope) {
-                continue;
-            }
             if (search_key.empty() || ContainsCaseInsensitive(e.name, search_key)) {
                 cache.search_match_mask[i] = 1;
                 if (!search_key.empty()) {
@@ -427,9 +489,9 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
         if (match_cursor >= static_cast<int>(matched_indices.size())) {
             match_cursor = static_cast<int>(matched_indices.size()) - 1;
         }
-        ImGui::Text("Matches: %d", static_cast<int>(matched_indices.size()));
-        ImGui::SameLine();
-        if (ImGui::Button("Prev")) {
+        ui.Text("Matches: %d", static_cast<int>(matched_indices.size()));
+        ui.SameLine();
+        if (ui.Button("Prev")) {
             match_cursor = (match_cursor - 1 + static_cast<int>(matched_indices.size())) %
                            static_cast<int>(matched_indices.size());
             const auto& e = events[matched_indices[match_cursor]];
@@ -439,8 +501,8 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
             ui_state.view_end_ns   = ui_state.view_start_ns + span;
             ui_state.auto_follow   = false;
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Next")) {
+        ui.SameLine();
+        if (ui.Button("Next")) {
             match_cursor = (match_cursor + 1) % static_cast<int>(matched_indices.size());
             const auto& e = events[matched_indices[match_cursor]];
             selected_event_id = e.event_id;
@@ -449,7 +511,7 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
             ui_state.view_end_ns   = ui_state.view_start_ns + span;
             ui_state.auto_follow   = false;
         }
-        ImGui::Separator();
+        ui.Separator();
     }
 
     if (ui_state.auto_follow || ui_state.view_end_ns <= ui_state.view_start_ns) {
@@ -469,20 +531,24 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
         }
     }
 
-    if (ImGui::Button("Visible Tracks")) {
-        ImGui::OpenPopup("VisibleTracksPopup");
+    if (ui.Button("Visible Tracks")) {
+        ui.OpenPopup("VisibleTracksPopup");
     }
-    if (ImGui::BeginPopup("VisibleTracksPopup")) {
+    if (ui.BeginPopup("VisibleTracksPopup")) {
         for (const auto& track : tracks) {
             bool visible = track_visibility[track.key];
-            const std::string label = std::string("[") +
-                                      (track.type == ProfileTrackType::CPUThread ? "CPU" : "GPU") + "] " +
-                                      track.name + "##vis_" + std::to_string(track.key);
-            if (ImGui::Checkbox(label.c_str(), &visible)) {
+            char key_suffix[64]{};
+            std::snprintf(key_suffix, sizeof(key_suffix), "##vis_%llu", static_cast<unsigned long long>(track.key));
+            Utf8String label = ToProfilerString("[");
+            label += track.type == ProfileTrackType::CPUThread ? "CPU" : "GPU";
+            label += "] ";
+            label += Utf8StringView(track.name);
+            label += key_suffix;
+            if (ui.Checkbox(label.c_str(), &visible)) {
                 track_visibility[track.key] = visible;
             }
         }
-        ImGui::EndPopup();
+        ui.EndPopup();
     }
     size_t visible_count = 0;
     for (const auto& [id, visible] : track_visibility) {
@@ -491,13 +557,13 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
             ++visible_count;
         }
     }
-    ImGui::SameLine();
-    ImGui::Text(
+    ui.SameLine();
+    ui.Text(
         "Visible: %llu / %llu",
         static_cast<unsigned long long>(visible_count),
         static_cast<unsigned long long>(tracks.size())
     );
-    ImGui::Separator();
+    ui.Separator();
 
     struct VisibleTrackRow {
         TrackInfo info{};
@@ -546,14 +612,13 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
         }
     };
 
-    ImGui::BeginChild("TimelineMergedCanvas", {0.0f, 0.0f}, true, ImGuiWindowFlags_HorizontalScrollbar);
+    ui.BeginChild("TimelineMergedCanvas", {0.0f, 0.0f}, true, true);
 
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    const ImVec2 canvas_origin = ImGui::GetCursorScreenPos();
-    const float  canvas_w      = std::max(1000.0f, ImGui::GetContentRegionAvail().x);
+    const Synapse::Size canvas_origin = ui.GetCursorScreenPos();
+    const float  canvas_w      = std::max(1000.0f, ui.GetContentRegionAvail().x);
     const float  timeline_x0   = canvas_origin.x + label_col_w;
     const float  timeline_w    = std::max(300.0f, canvas_w - label_col_w - 20.0f);
-    const ImVec2 mouse_pos     = ImGui::GetMousePos();
+    const Synapse::Size mouse_pos     = ui.GetMousePos();
     const bool   mouse_in_timeline =
         mouse_pos.x >= timeline_x0 && mouse_pos.x <= (timeline_x0 + timeline_w);
 
@@ -564,16 +629,17 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
     clamp_view_range(min_ts, max_ts + 1);
 
     // Zoom + pan
-    if (ImGui::IsWindowHovered()) {
-        ImGuiIO& io = ImGui::GetIO();
+    if (ui.IsWindowHovered()) {
         const uint64_t span = std::max<uint64_t>(1, ui_state.view_end_ns - ui_state.view_start_ns);
+        const float mouse_wheel = ui.GetMouseWheel();
+        const Synapse::Size mouse_delta = ui.GetMouseDelta();
 
-        if (io.MouseWheel != 0.0f && !io.KeyShift && mouse_in_timeline) {
+        if (mouse_wheel != 0.0f && !ui.IsShiftDown() && mouse_in_timeline) {
             ui_state.auto_follow = false;
-            const double zoom = io.MouseWheel > 0.0f ? 0.8 : 1.25;
+            const double zoom = mouse_wheel > 0.0f ? 0.8 : 1.25;
             const uint64_t new_span =
                 static_cast<uint64_t>(std::clamp(span * zoom, 1000.0, double(std::max<uint64_t>(1, (max_ts + 1) - min_ts))));
-            const double mouse_t = std::clamp((io.MousePos.x - timeline_x0) / std::max(1.0f, timeline_w), 0.0f, 1.0f);
+            const double mouse_t = std::clamp((mouse_pos.x - timeline_x0) / std::max(1.0f, timeline_w), 0.0f, 1.0f);
             const uint64_t anchor = ui_state.view_start_ns + static_cast<uint64_t>(mouse_t * double(span));
             uint64_t new_start = anchor > static_cast<uint64_t>(mouse_t * double(new_span)) ?
                                      anchor - static_cast<uint64_t>(mouse_t * double(new_span)) :
@@ -583,9 +649,9 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
             clamp_view_range(min_ts, max_ts + 1);
         }
 
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) && mouse_in_timeline) {
+        if (ui.IsMouseDragging(Synapse::EMouseButton::Middle) && mouse_in_timeline) {
             ui_state.auto_follow = false;
-            const double delta_t = -double(io.MouseDelta.x) / std::max(1.0f, timeline_w);
+            const double delta_t = -double(mouse_delta.x) / std::max(1.0f, timeline_w);
             const int64_t shift_ns = static_cast<int64_t>(delta_t * double(span));
             int64_t new_start = static_cast<int64_t>(ui_state.view_start_ns) + shift_ns;
             int64_t new_end   = static_cast<int64_t>(ui_state.view_end_ns) + shift_ns;
@@ -599,9 +665,9 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
         }
 
         // Horizontal pan support: Shift + wheel and arrow keys
-        if (io.MouseWheel != 0.0f && io.KeyShift && mouse_in_timeline) {
+        if (mouse_wheel != 0.0f && ui.IsShiftDown() && mouse_in_timeline) {
             ui_state.auto_follow = false;
-            const int64_t shift_ns = static_cast<int64_t>(-io.MouseWheel * double(span) * 0.12);
+            const int64_t shift_ns = static_cast<int64_t>(-mouse_wheel * double(span) * 0.12);
             int64_t new_start = static_cast<int64_t>(ui_state.view_start_ns) + shift_ns;
             int64_t new_end   = static_cast<int64_t>(ui_state.view_end_ns) + shift_ns;
             if (new_start < 0) {
@@ -612,9 +678,9 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
             ui_state.view_end_ns   = static_cast<uint64_t>(new_end);
             clamp_view_range(min_ts, max_ts + 1);
         }
-        if (ImGui::IsKeyDown(ImGuiKey_LeftArrow) || ImGui::IsKeyDown(ImGuiKey_RightArrow)) {
+        if (ui.IsKeyDown(Synapse::EKey::LeftArrow) || ui.IsKeyDown(Synapse::EKey::RightArrow)) {
             ui_state.auto_follow = false;
-            const int dir = ImGui::IsKeyDown(ImGuiKey_LeftArrow) ? -1 : 1;
+            const int dir = ui.IsKeyDown(Synapse::EKey::LeftArrow) ? -1 : 1;
             const int64_t shift_ns = static_cast<int64_t>(double(span) * 0.015 * dir);
             int64_t new_start = static_cast<int64_t>(ui_state.view_start_ns) + shift_ns;
             int64_t new_end   = static_cast<int64_t>(ui_state.view_end_ns) + shift_ns;
@@ -628,7 +694,7 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
         }
     }
 
-    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::IsKeyPressed(ImGuiKey_F)) {
+    if (ui.IsWindowFocusedChildWindows() && ui.IsKeyPressed(Synapse::EKey::F)) {
         auto it = cache.event_index_by_id.find(selected_event_id);
         if (it != cache.event_index_by_id.end()) {
             const auto&   e = events[it->second];
@@ -641,31 +707,31 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
         }
     }
 
-    draw_list->AddRectFilled(
+    ui.DrawRectFilled(
         canvas_origin,
         {canvas_origin.x + canvas_w, canvas_origin.y + top_header_h},
-        IM_COL32(20, 20, 20, 255)
+        PackColor(20, 20, 20)
     );
-    draw_list->AddRectFilled(
+    ui.DrawRectFilled(
         {canvas_origin.x, canvas_origin.y},
         {canvas_origin.x + label_col_w, canvas_origin.y + top_header_h},
-        IM_COL32(34, 34, 34, 255)
+        PackColor(34, 34, 34)
     );
-    draw_list->AddLine(
+    ui.DrawLine(
         {timeline_x0, canvas_origin.y},
         {timeline_x0, canvas_origin.y + top_header_h},
-        IM_COL32(80, 80, 80, 255),
+        PackColor(80, 80, 80),
         1.0f
     );
     DrawTimeRuler(
-        draw_list,
+        ui,
         {timeline_x0, canvas_origin.y},
         timeline_w,
         canvas_origin.y,
         ui_state.view_start_ns,
         ui_state.view_end_ns
     );
-    ImGui::Dummy({canvas_w, top_header_h});
+    ui.Dummy({canvas_w, top_header_h});
 
     const double range_ns = static_cast<double>(std::max<uint64_t>(1, ui_state.view_end_ns - ui_state.view_start_ns));
     auto to_x = [&](uint64_t ts) {
@@ -682,45 +748,46 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
         const int   cur_type_group = track.type == ProfileTrackType::CPUThread ? 0 : 1;
         if (cur_type_group != last_type_group) {
             const char* group_label = cur_type_group == 0 ? "CPU Tracks" : "GPU Tracks";
-            draw_list->AddRectFilled(
+            ui.DrawRectFilled(
                 {canvas_origin.x, y_cursor},
                 {canvas_origin.x + canvas_w, y_cursor + group_header_h},
-                IM_COL32(40, 40, 40, 255)
+                PackColor(40, 40, 40)
             );
-            draw_list->AddText(
+            ui.DrawCanvasText(
                 {canvas_origin.x + 8.0f, y_cursor + 2.0f},
-                IM_COL32(230, 230, 230, 255),
+                PackColor(230, 230, 230),
                 group_label
             );
             y_cursor += group_header_h;
-            ImGui::Dummy({1.0f, group_header_h});
+            ui.Dummy({1.0f, group_header_h});
             last_type_group = cur_type_group;
         }
 
-        draw_list->AddRectFilled(
+        ui.DrawRectFilled(
             {canvas_origin.x, y_cursor},
             {canvas_origin.x + label_col_w, y_cursor + track_h},
-            IM_COL32(30, 30, 30, 255)
+            PackColor(30, 30, 30)
         );
-        draw_list->AddRectFilled(
+        ui.DrawRectFilled(
             {timeline_x0, y_cursor},
             {timeline_x0 + timeline_w, y_cursor + track_h},
-            IM_COL32(24, 24, 24, 255)
+            PackColor(24, 24, 24)
         );
-        draw_list->AddLine(
+        ui.DrawLine(
             {canvas_origin.x, y_cursor},
             {canvas_origin.x + canvas_w, y_cursor},
-            IM_COL32(70, 70, 70, 255),
+            PackColor(70, 70, 70),
             1.0f
         );
 
-        const std::string track_label = std::string("[") +
-                                        (track.type == ProfileTrackType::CPUThread ? "CPU" : "GPU") + "] " +
-                                        track.name;
+        Utf8String track_label = ToProfilerString("[");
+        track_label += track.type == ProfileTrackType::CPUThread ? "CPU" : "GPU";
+        track_label += "] ";
+        track_label += Utf8StringView(track.name);
         const float label_y = y_cursor + 3.0f;
-        draw_list->AddText(
+        ui.DrawCanvasText(
             {canvas_origin.x + 8.0f, label_y},
-            IM_COL32(220, 220, 220, 255),
+            PackColor(220, 220, 220),
             track_label.c_str()
         );
 
@@ -750,105 +817,110 @@ void DrawTimelinePanel(ProfileStore& store, TimelineViewState& ui_state) {
                 if (e.ts_end_ns < ui_state.view_start_ns || e.ts_begin_ns > ui_state.view_end_ns) {
                     continue;
                 }
-            float x0 = to_x(e.ts_begin_ns);
-            float       x1 = to_x(e.ts_end_ns);
-            if (x1 <= x0) {
-                x1 = x0 + 1.0f;
-            }
-            x0 = std::max(x0, timeline_x0);
-            x1 = std::min(x1, timeline_x0 + timeline_w);
-            if (x1 <= x0) {
-                continue;
-            }
-            uint32_t depth = e.depth;
+                float x0 = to_x(e.ts_begin_ns);
+                float x1 = to_x(e.ts_end_ns);
+                if (e.type != ProfileEventType::Scope || x1 <= x0) {
+                    x1 = x0 + 3.0f;
+                    x0 = x0 - 1.5f;
+                }
+                x0 = std::max(x0, timeline_x0);
+                x1 = std::min(x1, timeline_x0 + timeline_w);
+                if (x1 <= x0) {
+                    continue;
+                }
+                uint32_t depth = e.depth;
                 if (e.track_type == ProfileTrackType::GPUQueue) {
                     depth = cache.gpu_display_depth_by_index[idx];
-            }
-            const float y0 = y_cursor + lane_h * static_cast<float>(depth);
-            const float y1 = y0 + lane_h - 2.0f;
-
-            const ImU32 color = EventColorByName(e.name);
-
-            draw_list->AddRectFilled({x0, y0}, {x1, y1}, color, 2.0f);
-            if (e.event_id == selected_event_id) {
-                draw_list->AddRect({x0, y0}, {x1, y1}, IM_COL32(255, 255, 0, 255), 2.0f, 0, 2.0f);
-            }
-            const float inner_w = x1 - x0 - 6.0f;
-            const float inner_h = y1 - y0 - 2.0f;
-            if (inner_w > 8.0f && inner_h > 7.0f) {
-                float text_size = std::min(ImGui::GetFontSize(), inner_h);
-                text_size = std::max(8.0f, text_size);
-                ImVec2 text_sz = ImGui::CalcTextSize(e.name.c_str());
-                if (text_sz.x > 0.0f && text_sz.x > inner_w) {
-                    text_size = std::max(8.0f, text_size * (inner_w / text_sz.x));
                 }
-                const ImVec2 text_pos = {
-                    x0 + 4.0f,
-                    y0 + (y1 - y0 - text_size) * 0.5f
-                };
-                const ImVec4 clip4 = {x0 + 2.0f, y0, x1 - 2.0f, y1};
-                draw_list->AddText(
-                    ImGui::GetFont(),
-                    text_size,
-                    text_pos,
-                    IM_COL32(230, 230, 230, 255),
-                    e.name.c_str(),
-                    nullptr,
-                    0.0f,
-                    &clip4
-                );
-            }
+                const float y0 = y_cursor + lane_h * static_cast<float>(depth);
+                const float y1 = y0 + lane_h - 2.0f;
 
-            if (ImGui::IsMouseHoveringRect({x0, y0}, {x1, y1})) {
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                    selected_event_id = e.event_id;
+                const uint32_t color = EventColorByName(e.name);
+
+                if (e.type == ProfileEventType::Scope) {
+                    ui.DrawRectFilled({x0, y0}, {x1, y1}, color, 2.0f);
+                } else {
+                    const float marker_x = (x0 + x1) * 0.5f;
+                    const float marker_y = (y0 + y1) * 0.5f;
+                    ui.DrawCircleFilled({marker_x, marker_y}, 4.0f, color, 12);
+                    ui.DrawLine({marker_x, y0}, {marker_x, y1}, color, 1.0f);
                 }
-                std::string parent_name = "None";
-                if (e.depth > 0) {
-                    uint64_t best_begin = 0;
+                if (e.event_id == selected_event_id) {
+                    ui.DrawRect({x0, y0}, {x1, y1}, PackColor(255, 255, 0), 2.0f, 2.0f);
+                }
+                const float inner_w = x1 - x0 - 6.0f;
+                const float inner_h = y1 - y0 - 2.0f;
+                if (inner_w > 8.0f && inner_h > 7.0f) {
+                    float text_size = std::min(ui.GetFontSize(), inner_h);
+                    text_size = std::max(8.0f, text_size);
+                    const Synapse::Size text_sz = ui.CalcTextSize(e.name.c_str());
+                    if (text_sz.x > 0.0f && text_sz.x > inner_w) {
+                        text_size = std::max(8.0f, text_size * (inner_w / text_sz.x));
+                    }
+                    ui.DrawTextClipped(
+                        {x0 + 4.0f, y0 + (y1 - y0 - text_size) * 0.5f},
+                        PackColor(230, 230, 230),
+                        e.name.c_str(),
+                        text_size,
+                        {x0 + 2.0f, y0},
+                        {x1 - 2.0f, y1}
+                    );
+                }
+
+                if (ui.IsMouseHoveringRect({x0, y0}, {x1, y1})) {
+                    if (ui.IsMouseClicked(Synapse::EMouseButton::Left)) {
+                        selected_event_id = e.event_id;
+                    }
+                    Utf8String parent_name = ToProfilerString("None");
+                    if (e.depth > 0) {
+                        uint64_t best_begin = 0;
                         for (size_t candidate_idx : track_indices) {
                             const auto& candidate = events[candidate_idx];
                             if (candidate.depth + 1 != e.depth) {
-                            continue;
-                        }
-                        if (candidate.ts_begin_ns <= e.ts_begin_ns && candidate.ts_end_ns >= e.ts_end_ns &&
-                            candidate.ts_begin_ns >= best_begin) {
-                            best_begin  = candidate.ts_begin_ns;
-                            parent_name = candidate.name;
+                                continue;
+                            }
+                            if (candidate.ts_begin_ns <= e.ts_begin_ns && candidate.ts_end_ns >= e.ts_end_ns &&
+                                candidate.ts_begin_ns >= best_begin) {
+                                best_begin  = candidate.ts_begin_ns;
+                                parent_name = candidate.name;
+                            }
                         }
                     }
-                }
 
-                ImGui::BeginTooltip();
-                ImGui::Text("Name: %s", e.name.c_str());
-                ImGui::Text("Category: %s", e.category.c_str());
-                ImGui::Text("Depth: %u", depth);
-                ImGui::Text("Duration: %.3f ms", static_cast<double>(e.ts_end_ns - e.ts_begin_ns) / 1e6);
-                ImGui::Text("Parent: %s", parent_name.c_str());
-                ImGui::EndTooltip();
+                    ui.BeginTooltip();
+                    ui.Text("Name: %s", e.name.c_str());
+                    ui.Text("Category: %s", e.category.c_str());
+                    ui.Text("Type: %s", e.type == ProfileEventType::Scope ? "Scope" : (e.type == ProfileEventType::Counter ? "Counter" : "Instant"));
+                    ui.Text("Depth: %u", depth);
+                    ui.Text("Duration: %.3f ms", static_cast<double>(e.ts_end_ns - e.ts_begin_ns) / 1e6);
+                    if (e.type == ProfileEventType::Counter) {
+                        ui.Text("Value: %.4f", e.counter_value);
+                    }
+                    ui.Text("Parent: %s", parent_name.c_str());
+                    ui.EndTooltip();
+                }
             }
-        }
         }
 
         y_cursor += track_h;
-        ImGui::Dummy({1.0f, track_h});
+        ui.Dummy({1.0f, track_h});
     }
 
-    draw_list->AddLine(
+    ui.DrawLine(
         {canvas_origin.x, y_cursor},
         {canvas_origin.x + canvas_w, y_cursor},
-        IM_COL32(70, 70, 70, 255),
+        PackColor(70, 70, 70),
         1.0f
     );
-    ImGui::Dummy({canvas_w, std::max(200.0f, y_cursor - canvas_origin.y + 20.0f)});
-    ImGui::EndChild();
+    ui.Dummy({canvas_w, std::max(200.0f, y_cursor - canvas_origin.y + 20.0f)});
+    ui.EndChild();
 }
 
 } // namespace
 
 int RunProfilerMain(int argc, const char** argv) {
     std::filesystem::path path = argv[0];
-    path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
+    path = path.extension() == ".exe" ? path.parent_path() : path;
     LogSystem::Init();
     LOG_INFO(MOER_TEXT("MoerProfiler starting..."));
     ConfigManager::GetInstance().Init(path);
@@ -874,7 +946,7 @@ int RunProfilerMain(int argc, const char** argv) {
 
     uint2 resolution = {1680, 980};
     static constexpr uint profiler_back_buffer_count = 2;
-    PresentationSurface presentation_surface(
+    auto presentation_surface = MakeUnique<PresentationSurface>(
         device,
         PresentationSurfaceDesc{
             .window            = *WindowContext::GetMainWindow(),
@@ -885,17 +957,19 @@ int RunProfilerMain(int argc, const char** argv) {
         }
     );
     TextureRef   output =
-        device.CreateTexture("ProfilerOutput", Extent2D(resolution.x, resolution.y), presentation_surface.GetFormat(), ETextureUsageFlags::COLOR_ATTACHMENT);
+        device.CreateTexture("ProfilerOutput", Extent2D(resolution.x, resolution.y), presentation_surface->GetFormat(), ETextureUsageFlags::COLOR_ATTACHMENT);
 
     auto ui_renderer = MakeUnique<Render::UIRenderer>(device);
+    Synapse::Context synapse_context{};
+    synapse_context.ApplyDefaultTheme();
 
     ProfileStore            store{};
-    ProfileDumpIngestServer ingest(store);
+    ProfilerIngestServer ingest(store);
     ingest.Start(19090);
 
     TimelineViewState timeline_state{};
     timeline_state.auto_follow = true;
-    char profile_dump_path[512] = {};
+    Utf8String capture_path{};
 
     while (!WindowContext::ShouldClose(WindowContext::GetMainWindow())) {
         WindowContext::Tick();
@@ -913,89 +987,92 @@ int RunProfilerMain(int argc, const char** argv) {
         }
         if (resolution.x != static_cast<uint32_t>(w) || resolution.y != static_cast<uint32_t>(h)) {
             resolution = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
-            RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-            presentation_surface.Resize({resolution.x, resolution.y});
+            presentation_surface->Resize({resolution.x, resolution.y});
             output = device.CreateTexture(
                 "ProfilerOutput",
                 Extent2D(resolution.x, resolution.y),
-                presentation_surface.GetFormat(),
+                presentation_surface->GetFormat(),
                 ETextureUsageFlags::COLOR_ATTACHMENT
             );
         }
 
         ui_renderer->BeginGUIFrame();
-        {
-            const ImGuiViewport* viewport = ImGui::GetMainViewport();
-            ImGui::SetNextWindowPos(viewport->WorkPos);
-            ImGui::SetNextWindowSize(viewport->WorkSize);
-            ImGui::SetNextWindowViewport(viewport->ID);
-        }
-        ImGuiWindowFlags profiler_window_flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                                                 ImGuiWindowFlags_NoMove;
-        ImGui::Begin("ProfilerTrace", nullptr, profiler_window_flags);
-        ImGui::Checkbox("Auto Follow", &timeline_state.auto_follow);
-        ImGui::SameLine();
-        ImGui::InputTextWithHint("##search", "Search timescope name", timeline_state.search_text, sizeof(timeline_state.search_text));
-        ImGui::Text("ProfileDump: %s", profile_dump_path[0] == '\0' ? "(none)" : profile_dump_path);
-        if (ImGui::Button("Browse ProfileDump (Load)")) {
-            static constexpr std::array<FileDialog::Filter, 3> profile_dump_filters = {{{
-                "ProfileDump",
-                "mpd"
-            }, {
-                "Binary",
-                "bin"
-            }, {
-                "All",
-                "*"
-            }}};
-            const FileDialog::OpenFileResult result = FileDialog::OpenFile({.filters = profile_dump_filters});
-            if (result.status == FileDialog::EOpenFileStatus::Success) {
-                const std::string selected_path = result.path.string();
-                std::snprintf(profile_dump_path, sizeof(profile_dump_path), "%s", selected_path.c_str());
-                if (!LoadProfileDumpFile(profile_dump_path, store, true)) {
-                    LOG_WARNING(MOER_TEXT("ProfileDump load failed: {}"), profile_dump_path);
+        synapse_context.BeginFrame(ui_renderer->GetInputSnapshot());
+        Synapse::Context& ui = synapse_context;
+        if (ui.BeginRootPanel(Synapse::PanelDesc{.name = "ProfilerTrace"})) {
+            ui.Checkbox("Auto Follow", &timeline_state.auto_follow);
+            ui.SameLine();
+            ui.InputTextWithHint(
+                "##search",
+                "Search timescope name",
+                timeline_state.search_text,
+                sizeof(timeline_state.search_text)
+            );
+            ui.Text("Capture: %s", capture_path.empty() ? "(none)" : capture_path.c_str());
+            if (ui.ToolbarButton(Synapse::EIcon::FolderOpen, "Load Capture")) {
+                static constexpr std::array<FileDialog::Filter, 4> capture_filters = {{
+                    {"Profiler Capture", "mpd,mrtc,csv,bin"},
+                    {"Trace CSV", "csv"},
+                    {"Binary", "bin"},
+                    {"All", "*"},
+                }};
+                const FileDialog::EOpenFileStatus status = FileDialog::OpenFile(FileDialog::OpenFileRequest{
+                    .filters = capture_filters,
+                    .callback = [](Utf8StringView selected_path, void* user_data) {
+                        *static_cast<Utf8String*>(user_data) = Utf8String(selected_path);
+                    },
+                    .user_data = &capture_path,
+                });
+                if (status == FileDialog::EOpenFileStatus::Success) {
+                    if (!LoadProfilerCaptureFile(capture_path, store, true)) {
+                        LOG_WARNING(MOER_TEXT("Profiler capture load failed: {}"), capture_path);
+                    }
                 }
             }
-        }
 
-        std::string ui_session_name{};
-        size_t      ui_event_count = 0;
-        size_t      ui_track_count = 0;
-        uint64_t    ui_min_ts = 0;
-        uint64_t    ui_max_ts = 0;
-        {
-            std::lock_guard<std::mutex> lock(store.mutex);
-            ui_session_name = store.metadata.session_name;
-            ui_event_count  = store.events.size();
-            ui_track_count  = store.tracks.size();
-            ui_min_ts       = store.min_ts;
-            ui_max_ts       = store.max_ts;
+            Utf8String ui_session_name{};
+            size_t      ui_event_count = 0;
+            size_t      ui_track_count = 0;
+            uint64_t    ui_min_ts = 0;
+            uint64_t    ui_max_ts = 0;
+            {
+                std::lock_guard<std::mutex> lock(store.mutex);
+                ui_session_name = store.metadata.session_name;
+                ui_event_count  = store.events.size();
+                ui_track_count  = store.tracks.size();
+                ui_min_ts       = store.min_ts;
+                ui_max_ts       = store.max_ts;
+            }
+            ui.Text("Session: %s", ui_session_name.empty() ? "(none)" : ui_session_name.c_str());
+            ui.Text("Events: %llu", static_cast<unsigned long long>(ui_event_count));
+            const Utf8String profile_size =
+                FormatBytes(EstimateProfileSizeBytesFast(ui_event_count, ui_track_count, ui_session_name.size()));
+            ui.Text("Profile Size (approx): %s", profile_size.c_str());
+            ui.Text(
+                "Time Range: [%llu, %llu]",
+                static_cast<unsigned long long>(ui_min_ts),
+                static_cast<unsigned long long>(ui_max_ts)
+            );
+            ui.Separator();
+            DrawTimelinePanel(ui, store, timeline_state);
+            ui.EndPanel();
         }
-        ImGui::Text("Session: %s", ui_session_name.empty() ? "(none)" : ui_session_name.c_str());
-        ImGui::Text("Events: %llu", static_cast<unsigned long long>(ui_event_count));
-        const std::string profile_size =
-            FormatBytes(EstimateProfileSizeBytesFast(ui_event_count, ui_track_count, ui_session_name.size()));
-        ImGui::Text("Profile Size (approx): %s", profile_size.c_str());
-        ImGui::Text(
-            "Time Range: [%llu, %llu]",
-            static_cast<unsigned long long>(ui_min_ts),
-            static_cast<unsigned long long>(ui_max_ts)
-        );
-        ImGui::Separator();
-        DrawTimelinePanel(store, timeline_state);
-        ImGui::End();
+        synapse_context.EndFrame();
         ui_renderer->EndGUIFrame();
 
         CommandList cmd_list{};
         ui_renderer->RenderGUI(cmd_list, output->GetView());
 
         ++frame_time;
-    cmd_list.Signal(timeline, frame_time).DeleteResources().TickFrame();
+        cmd_list.Signal(timeline, frame_time).DeleteResources().TickFrame();
         Array<CommandList> frame_cmd_lists;
         frame_cmd_lists.emplace_back(std::move(cmd_list));
-        RHIPresentRequest present_request = presentation_surface.CreatePresentRequest(output);
-    RHIExecutor::Get().Submit(std::move(frame_cmd_lists), ERHIExecSubmitFlags::FlushGPU,
-                                  &present_request);
+        RHIPresentRequest present_request = presentation_surface->CreatePresentRequest(output);
+        RHIExecutor::Get().Submit(
+            std::move(frame_cmd_lists),
+            ERHIExecSubmitFlags::FlushGPU,
+            &present_request
+        );
         ui_renderer->PresentWindows();
     }
 
@@ -1004,10 +1081,11 @@ int RunProfilerMain(int argc, const char** argv) {
     ui_renderer.reset();
     output = {};
     timeline = {};
-    FileDialog::ShutDown();
+    presentation_surface.reset();
     WindowContext::ShutDown();
     RHIExecutor::ShutDown();
     RenderDevice::Dispose();
+    FileDialog::ShutDown();
     TaskSystem::ShutDown();
     return 0;
 }

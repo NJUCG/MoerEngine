@@ -3,6 +3,7 @@
 
 #include "Core.h"
 #include "renderer/raytracing/RaytracingConfig.h"
+#include "renderer/common/ui/synapse/Synapse.h"
 
 namespace Moer {
 
@@ -11,7 +12,7 @@ public:
     RaytracingUI(RaytracingConfig& config);
     ~RaytracingUI() = default;
 
-    void ShowConfig();
+    void ShowConfig(Synapse::Context& ui);
 
     const RaytracingConfig& GetConfig() const {
         return config;

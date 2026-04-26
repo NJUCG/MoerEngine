@@ -5,6 +5,7 @@
 #include "Core.h"
 #include "misc/Traits.h"
 #include "renderer/raster/RasterConfig.h"
+#include "renderer/common/ui/synapse/Synapse.h"
 #include "rhi/RHIResource.h"
 
 namespace Moer {
@@ -15,7 +16,7 @@ public:
     RasterUI(RasterConfig& config);
     ~RasterUI() = default;
 
-    void ShowConfig();
+    void ShowConfig(Synapse::Context& ui);
 
     const RasterConfig& GetConfig() const {
         return m_config;

@@ -236,6 +236,7 @@ struct SubmissionPresentContext::Impl {
     std::mutex                         submit_mutex{};
     std::mutex                         presentor_mutex{};
     GraphEventRef                      completion_boundary{nullptr};
+    UnorderedMap<Swapchain*, GraphEventRef> completion_boundary_by_swapchain{};
     LockFreeQueueBase<VulkanPresentor, false> presentors{};
 };
 
@@ -363,7 +364,6 @@ SubmissionPresentResult SubmissionPresentContext::Present(
     tracker.Reset();
 
     const uint64 completion_value = ++impl->last_submitted_timeline;
-    impl->native_queue.Signal(impl->timeline.Get(), completion_value, VK_PIPELINE_STAGE_2_COPY_BIT);
     for (const auto& wait_event : wait_events) {
         auto* fence = reinterpret_cast<VulkanFence*>(wait_event.timeline_handle);
         if (fence == nullptr) {
@@ -373,11 +373,7 @@ SubmissionPresentResult SubmissionPresentContext::Present(
     }
     impl->native_queue.Wait(ready_semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     impl->native_queue.Signal(swapchain->GetRenderFinishedFence(), VK_PIPELINE_STAGE_2_COPY_BIT);
-    VkFence submit_fence = VK_NULL_HANDLE;
-    if (!use_present_fence) {
-        submit_fence = swapchain->GetInFlightFence(present_index);
-    }
-    impl->native_queue.Submit(cmd_list, submit_fence);
+    impl->native_queue.Submit(cmd_list);
 
     VkSemaphore render_finished_semaphore = swapchain->GetRenderFinishedFence();
     VkFence     in_flight_fence           = VK_NULL_HANDLE;
@@ -402,6 +398,12 @@ SubmissionPresentResult SubmissionPresentContext::Present(
         present_vk_result != VK_ERROR_OUT_OF_DATE_KHR) {
         LOG_ERROR(MOER_TEXT("vkQueuePresentKHR failed with result {}"), int(present_vk_result));
     }
+    VkFence queue_completion_fence = VK_NULL_HANDLE;
+    if (!use_present_fence) {
+        queue_completion_fence = swapchain->GetInFlightFence(present_index);
+    }
+    impl->native_queue.Signal(impl->timeline.Get(), completion_value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    impl->native_queue.SubmitEmpty(queue_completion_fence);
     ++swapchain->image_idx;
 
     present_result.submitted         = true;
@@ -409,7 +411,7 @@ SubmissionPresentResult SubmissionPresentContext::Present(
     present_result.timeline_value    = completion_value;
     present_result.presentor         = std::move(presentor);
     out_host_fence.device            = impl->command_queue.vk_device.GetDevice();
-    out_host_fence.handle            = use_present_fence ? in_flight_fence : submit_fence;
+    out_host_fence.handle            = use_present_fence ? in_flight_fence : queue_completion_fence;
     out_host_fence.owned             = false;
     return present_result;
 }
@@ -431,16 +433,29 @@ void SubmissionPresentContext::ResolvePresentCompletion(
     impl->presentors.Push(presentor.release());
 }
 
-void SubmissionPresentContext::AppendCompletionBoundary(const GraphEventRef& completion_event) {
+void SubmissionPresentContext::AppendCompletionBoundary(Swapchain* swapchain, const GraphEventRef& completion_event) {
     impl->completion_boundary = ChainCompletionBoundary(impl->completion_boundary, completion_event);
+    if (swapchain != nullptr) {
+        impl->completion_boundary_by_swapchain[swapchain] = ChainCompletionBoundary(
+            impl->completion_boundary_by_swapchain[swapchain],
+            completion_event
+        );
+    }
 }
 
 void SubmissionPresentContext::ResetCompletionBoundary() {
     impl->completion_boundary = nullptr;
+    impl->completion_boundary_by_swapchain.clear();
 }
 
 const GraphEventRef& SubmissionPresentContext::GetCompletionBoundary() const {
     return impl->completion_boundary;
+}
+
+const GraphEventRef& SubmissionPresentContext::GetCompletionBoundary(Swapchain* swapchain) const {
+    static const GraphEventRef empty_boundary{nullptr};
+    const auto iter = impl->completion_boundary_by_swapchain.find(swapchain);
+    return iter == impl->completion_boundary_by_swapchain.end() ? empty_boundary : iter->second;
 }
 
 QueueRuntimeState& SubmissionQueueStateSet::Get(EQueueType queue) {
@@ -497,6 +512,13 @@ GraphEventRef VulkanSubmissionRuntime::Sync(ERHISyncDepth depth) {
     return EnqueueOrderedSyncRequest(depth, SubmissionBatch::EKind::Sync);
 }
 
+GraphEventRef VulkanSubmissionRuntime::Sync(Swapchain* swapchain) {
+    if (swapchain == nullptr) {
+        return CreateCompletedEvent();
+    }
+    return EnqueueOrderedSwapchainSyncRequest(swapchain);
+}
+
 void VulkanSubmissionRuntime::Flush() {
     GraphEventRef completion =
         EnqueueOrderedSyncRequest(ERHISyncDepth::Present, SubmissionBatch::EKind::Flush);
@@ -544,6 +566,27 @@ GraphEventRef VulkanSubmissionRuntime::EnqueueOrderedSyncRequestUnchecked(
     SubmissionBatch batch{};
     batch.kind             = kind;
     batch.sync_depth       = depth;
+    batch.completion_event = batch_completion;
+    {
+        std::lock_guard<std::mutex> lock(submission_mutex);
+        submission_queue.emplace_back(std::move(batch));
+    }
+    submission_cv.notify_one();
+    return wait_event;
+}
+
+GraphEventRef VulkanSubmissionRuntime::EnqueueOrderedSwapchainSyncRequest(Swapchain* swapchain) {
+    assert(b_enable.load(std::memory_order_acquire) && "Swapchain sync request is not allowed after shutdown begins");
+    if (!b_enable.load(std::memory_order_acquire)) {
+        return CreateCompletedEvent();
+    }
+
+    GraphEventRef batch_completion = GraphEvent::CreateGraphEvent();
+    GraphEventRef wait_event       = CreateCompletionWaitEvent(batch_completion);
+    SubmissionBatch batch{};
+    batch.kind             = SubmissionBatch::EKind::Sync;
+    batch.sync_depth       = ERHISyncDepth::Present;
+    batch.sync_swapchain   = swapchain;
     batch.completion_event = batch_completion;
     {
         std::lock_guard<std::mutex> lock(submission_mutex);
@@ -885,7 +928,7 @@ std::optional<WaitEvent> VulkanSubmissionRuntime::ExecutePresentStage(
             std::move(present_result)
         )
     ));
-    context.AppendCompletionBoundary(present_completion_event);
+    context.AppendCompletionBoundary(present_stage.present.swapchain.Get(), present_completion_event);
     return present_completion;
 }
 
@@ -1025,6 +1068,19 @@ void VulkanSubmissionRuntime::AttachSyncDependencies(SubmissionBatch& batch) {
         return;
     }
     assert(batch.completion_event != nullptr && "sync-like batch must have a completion event");
+
+    if (batch.sync_swapchain != nullptr) {
+        std::lock_guard<std::mutex> lock(present_context_mutex);
+        for (const auto& context : present_contexts) {
+            if (context == nullptr) {
+                continue;
+            }
+            if (const GraphEventRef& boundary = context->GetCompletionBoundary(batch.sync_swapchain); boundary) {
+                batch.completion_event->WaitUntil(boundary);
+            }
+        }
+        return;
+    }
 
     if (const GraphEventRef& boundary = graphics_queue_owner.GetCompletionBoundary(); boundary) {
         batch.completion_event->WaitUntil(boundary);

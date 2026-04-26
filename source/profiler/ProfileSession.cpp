@@ -1,18 +1,229 @@
 #include "ProfileSession.h"
 
+#include "file/File.h"
 #include "profile/ProfileDumpTemplates.h"
+#include "string/StringConvert.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <fstream>
+#include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace Moer::Profiler {
 namespace {
 
+static constexpr uint32_t trace_packet_magic = 0x4D525443u;
+static constexpr uint16_t trace_packet_version = 1;
+static constexpr uint16_t trace_packet_type_metadata = 1;
+static constexpr uint16_t trace_packet_type_events = 2;
+
+Utf8String ToProfilerString(Utf8StringView text) {
+    return Utf8String(text);
+}
+
+Utf8String ToProfilerString(const std::string& text) {
+    return Utf8String(Utf8String::native_view_type(text.data(), text.size()));
+}
+
+Utf8String ToProfilerString(const char* text) {
+    return Utf8String(text ? text : "");
+}
+
+std::filesystem::path ToLocalPath(Utf8StringView path) {
+#if defined(_WIN32) || defined(_WIN64)
+    const WideString wide_path = Utf8ToWide(path);
+    return std::filesystem::path(std::wstring_view(wide_path.data(), wide_path.size()));
+#else
+    return std::filesystem::path(std::string_view(path.data(), path.size()));
+#endif
+}
+
+Utf8String PathFilenameToProfilerString(Utf8StringView path_text) {
+    const std::filesystem::path path = ToLocalPath(path_text);
+    const std::filesystem::path filename = path.filename();
+#if defined(_WIN32) || defined(_WIN64)
+    const std::wstring& native = filename.native();
+    return WideToUtf8(WideStringView(native.data(), native.size()));
+#else
+    const std::string& native = filename.native();
+    return ToProfilerString(native);
+#endif
+}
+
+uint64_t HashUtf8(Utf8StringView text) {
+    uint64_t hash = 1469598103934665603ull;
+    for (size_t i = 0; i < text.size(); ++i) {
+        hash ^= static_cast<uint8_t>(text[i]);
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+Utf8String MakeCpuTrackName(uint64_t track_id) {
+    char buffer[64]{};
+    std::snprintf(buffer, sizeof(buffer), "CPU %llu", static_cast<unsigned long long>(track_id));
+    return ToProfilerString(buffer);
+}
+
+Utf8String MakeFallbackTrackName(uint64_t track_id) {
+    char buffer[64]{};
+    std::snprintf(buffer, sizeof(buffer), "Track %llu", static_cast<unsigned long long>(track_id));
+    return ToProfilerString(buffer);
+}
+
+uint32_t HashBytes(const uint8_t* data, size_t size) {
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= data[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+template<typename T>
+bool ReadPod(std::span<const uint8_t> payload, size_t& offset, T& out) {
+    if (offset + sizeof(T) > payload.size()) {
+        return false;
+    }
+    std::memcpy(&out, payload.data() + offset, sizeof(T));
+    offset += sizeof(T);
+    return true;
+}
+
+bool ReadTraceString(std::span<const uint8_t> payload, size_t& offset, Utf8String& out) {
+    uint16_t len = 0;
+    if (!ReadPod(payload, offset, len)) {
+        return false;
+    }
+    if (offset + len > payload.size()) {
+        return false;
+    }
+    out = Utf8String(Utf8String::native_view_type(reinterpret_cast<const char*>(payload.data() + offset), len));
+    offset += len;
+    return true;
+}
+
+Array<std::string_view> SplitCsvLine(std::string_view line) {
+    Array<std::string_view> fields{};
+    size_t                  field_start = 0;
+    bool                    quoted = false;
+    for (size_t i = 0; i < line.size(); ++i) {
+        const char c = line[i];
+        if (c == '"') {
+            quoted = !quoted;
+            continue;
+        }
+        if (c == ',' && !quoted) {
+            fields.emplace_back(line.data() + field_start, i - field_start);
+            field_start = i + 1;
+        }
+    }
+    fields.emplace_back(line.data() + field_start, line.size() - field_start);
+    return fields;
+}
+
+std::string_view TrimCsvField(std::string_view field) {
+    while (!field.empty() && (field.front() == ' ' || field.front() == '\t' || field.front() == '\r')) {
+        field.remove_prefix(1);
+    }
+    while (!field.empty() && (field.back() == ' ' || field.back() == '\t' || field.back() == '\r')) {
+        field.remove_suffix(1);
+    }
+    if (field.size() >= 2 && field.front() == '"' && field.back() == '"') {
+        field.remove_prefix(1);
+        field.remove_suffix(1);
+    }
+    return field;
+}
+
+bool ParseUint64(std::string_view text, uint64_t& out) {
+    const std::string value(text);
+    char*             end = nullptr;
+    out = std::strtoull(value.c_str(), &end, 10);
+    return end == value.c_str() + value.size();
+}
+
+bool ParseUint32(std::string_view text, uint32_t& out) {
+    uint64_t value = 0;
+    if (!ParseUint64(text, value) || value > UINT32_MAX) {
+        return false;
+    }
+    out = static_cast<uint32_t>(value);
+    return true;
+}
+
+bool ParseDouble(std::string_view text, double& out) {
+    const std::string value(text);
+    char*             end = nullptr;
+    out = std::strtod(value.c_str(), &end);
+    return end == value.c_str() + value.size();
+}
+
+bool DecodeTraceCsvRow(std::string_view line, ProfileEvent& event) {
+    Array<std::string_view> fields = SplitCsvLine(line);
+    if (fields.size() != 13) {
+        return false;
+    }
+    for (std::string_view& field : fields) {
+        field = TrimCsvField(field);
+    }
+
+    uint32_t type = 0;
+    uint32_t track_type = 0;
+    if (!ParseUint64(fields[0], event.event_id) || !ParseUint64(fields[1], event.session_id) ||
+        !ParseUint32(fields[2], type) || !ParseUint32(fields[3], track_type) ||
+        !ParseUint64(fields[4], event.track_id) || !ParseUint32(fields[5], event.depth) ||
+        !ParseUint64(fields[6], event.ts_begin_ns) || !ParseUint64(fields[7], event.ts_end_ns) ||
+        !ParseDouble(fields[8], event.counter_value)) {
+        return false;
+    }
+
+    switch (static_cast<Trace::EventType>(type)) {
+        case Trace::EventType::Scope:
+            event.type = ProfileEventType::Scope;
+            break;
+        case Trace::EventType::Counter:
+            event.type = ProfileEventType::Counter;
+            break;
+        case Trace::EventType::Instant:
+            event.type = ProfileEventType::Instant;
+            break;
+        case Trace::EventType::Meta:
+            return false;
+        default:
+            return false;
+    }
+    switch (static_cast<Trace::TrackType>(track_type)) {
+        case Trace::TrackType::CPUThread:
+            event.track_type = ProfileTrackType::CPUThread;
+            break;
+        case Trace::TrackType::GPUQueue:
+            event.track_type = ProfileTrackType::GPUQueue;
+            break;
+        default:
+            return false;
+    }
+    if (event.ts_end_ns < event.ts_begin_ns) {
+        return false;
+    }
+    event.name = Utf8String(Utf8String::native_view_type(fields[9].data(), fields[9].size()));
+    event.category = Utf8String(Utf8String::native_view_type(fields[10].data(), fields[10].size()));
+    event.track_name = Utf8String(Utf8String::native_view_type(fields[11].data(), fields[11].size()));
+    event.args = Utf8String(Utf8String::native_view_type(fields[12].data(), fields[12].size()));
+    if (event.track_name.empty()) {
+        event.track_name = event.track_type == ProfileTrackType::CPUThread ? MakeCpuTrackName(event.track_id) :
+                                                                            MakeFallbackTrackName(event.track_id);
+    }
+    return true;
+}
+
 const ProfileDump::DecodedValue* FindDecodedField(
     const ProfileDump::DecodedSchema& schema,
     const ProfileDump::DecodedRecord& record,
-    std::string_view                  field_name,
+    const char*                       field_name,
     ProfileDump::EFieldType           expected_type
 ) {
     if (schema.fields.size() != record.fields.size()) {
@@ -60,9 +271,9 @@ bool DecodeCpuScopeRecord(
     event.depth = depth->uint32_value;
     event.ts_begin_ns = static_cast<uint64_t>(start_us->int64_value) * 1000ull;
     event.ts_end_ns = static_cast<uint64_t>(start_us->int64_value + duration_us->int64_value) * 1000ull;
-    event.name = name->string_value;
-    event.category = std::string(schema.event_type);
-    event.track_name = std::string("CPU ") + std::to_string(event.track_id);
+    event.name = ToProfilerString(name->string_value);
+    event.category = ToProfilerString(schema.event_type);
+    event.track_name = MakeCpuTrackName(event.track_id);
     return true;
 }
 
@@ -90,13 +301,13 @@ bool DecodeGpuScopeRecord(
     event.session_id = frame_index->uint64_value;
     event.type = ProfileEventType::Scope;
     event.track_type = ProfileTrackType::GPUQueue;
-    event.track_id = static_cast<uint64_t>(std::hash<std::string>{}(queue_name->string_value));
+    event.track_id = HashUtf8(ToProfilerString(queue_name->string_value));
     event.depth = depth->uint32_value;
     event.ts_begin_ns = start_ns->uint64_value;
     event.ts_end_ns = end_ns->uint64_value;
-    event.name = name->string_value;
-    event.category = std::string(schema.event_type);
-    event.track_name = queue_name->string_value;
+    event.name = ToProfilerString(name->string_value);
+    event.category = ToProfilerString(schema.event_type);
+    event.track_name = ToProfilerString(queue_name->string_value);
     return true;
 }
 
@@ -141,7 +352,7 @@ void ProfileStore::Reset() {
     ++generation;
 }
 
-void ProfileStore::SetSessionName(std::string session_name) {
+void ProfileStore::SetSessionName(Utf8String session_name) {
     std::lock_guard<std::mutex> lock(mutex);
     metadata.session_name = std::move(session_name);
     ++generation;
@@ -188,14 +399,14 @@ void ProfileStore::AppendEvents(const Array<ProfileEvent>& raw_events) {
         }
 
         const uint64_t track_key = MakeTrackKey(normalized_event.track_type, normalized_event.track_id);
-        auto& track = tracks[track_key];
+        auto&          track = tracks[track_key];
         track.key = track_key;
         track.id = normalized_event.track_id;
         track.type = normalized_event.track_type;
         if (!normalized_event.track_name.empty()) {
             track.name = normalized_event.track_name;
-        } else if (track.name == "Unknown") {
-            track.name = std::string("Track ") + std::to_string(normalized_event.track_id);
+        } else if (Utf8StringView(track.name) == Utf8StringView("Unknown")) {
+            track.name = MakeFallbackTrackName(normalized_event.track_id);
         }
         track.max_depth = std::max(track.max_depth, static_cast<int>(normalized_event.depth));
     }
@@ -274,27 +485,146 @@ bool ProfileDumpSessionDecoder::DecodePayload(std::span<const uint8_t> bytes, Ar
     return true;
 }
 
-bool LoadProfileDumpFile(const std::filesystem::path& path, ProfileStore& store, bool clear_before_load) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
+void TraceSessionDecoder::Reset() {
+    m_session_id = 0;
+}
+
+bool TraceSessionDecoder::ConsumePacket(
+    const Trace::PacketHeader& header,
+    std::span<const uint8_t>   payload,
+    Array<ProfileEvent>&       out_events,
+    Utf8String*                out_session_name
+) {
+    out_events.clear();
+    if (header.magic != trace_packet_magic || header.version != trace_packet_version) {
+        return false;
+    }
+    if (header.payload_size != payload.size() || HashBytes(payload.data(), payload.size()) != header.checksum) {
         return false;
     }
 
-    file.seekg(0, std::ios::end);
-    const std::streamsize file_size = file.tellg();
-    if (file_size <= 0) {
+    size_t offset = 0;
+    if (header.type == trace_packet_type_metadata) {
+        uint64_t start_ts_ns = 0;
+        Utf8String session_name{};
+        if (!ReadPod(payload, offset, m_session_id) || !ReadPod(payload, offset, start_ts_ns) ||
+            !ReadTraceString(payload, offset, session_name)) {
+            return false;
+        }
+        (void)start_ts_ns;
+        if (out_session_name) {
+            *out_session_name = std::move(session_name);
+        }
+        return offset == payload.size();
+    }
+
+    if (header.type != trace_packet_type_events) {
         return false;
     }
-    file.seekg(0, std::ios::beg);
 
-    Array<uint8_t> bytes{};
-    bytes.resize(static_cast<size_t>(file_size));
-    if (!file.read(reinterpret_cast<char*>(bytes.data()), file_size)) {
+    uint32_t count = 0;
+    if (!ReadPod(payload, offset, count)) {
+        return false;
+    }
+    out_events.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        ProfileEvent event{};
+        uint8_t type = 0;
+        uint8_t track_type = 0;
+        if (!ReadPod(payload, offset, event.event_id) || !ReadPod(payload, offset, event.session_id) ||
+            !ReadPod(payload, offset, type) || !ReadPod(payload, offset, track_type) ||
+            !ReadPod(payload, offset, event.track_id) || !ReadPod(payload, offset, event.depth) ||
+            !ReadPod(payload, offset, event.ts_begin_ns) || !ReadPod(payload, offset, event.ts_end_ns) ||
+            !ReadPod(payload, offset, event.counter_value) || !ReadTraceString(payload, offset, event.name) ||
+            !ReadTraceString(payload, offset, event.category) || !ReadTraceString(payload, offset, event.track_name) ||
+            !ReadTraceString(payload, offset, event.args)) {
+            return false;
+        }
+
+        switch (static_cast<Trace::EventType>(type)) {
+            case Trace::EventType::Scope:
+                event.type = ProfileEventType::Scope;
+                break;
+            case Trace::EventType::Counter:
+                event.type = ProfileEventType::Counter;
+                break;
+            case Trace::EventType::Instant:
+                event.type = ProfileEventType::Instant;
+                break;
+            case Trace::EventType::Meta:
+                continue;
+            default:
+                return false;
+        }
+        switch (static_cast<Trace::TrackType>(track_type)) {
+            case Trace::TrackType::CPUThread:
+                event.track_type = ProfileTrackType::CPUThread;
+                break;
+            case Trace::TrackType::GPUQueue:
+                event.track_type = ProfileTrackType::GPUQueue;
+                break;
+            default:
+                return false;
+        }
+        if (event.track_name.empty()) {
+            event.track_name = event.track_type == ProfileTrackType::CPUThread ? MakeCpuTrackName(event.track_id) :
+                                                                                MakeFallbackTrackName(event.track_id);
+        }
+        if (event.ts_end_ns < event.ts_begin_ns) {
+            return false;
+        }
+        out_events.emplace_back(std::move(event));
+    }
+    return offset == payload.size();
+}
+
+bool TraceSessionDecoder::DecodePayload(
+    std::span<const uint8_t> bytes,
+    Array<ProfileEvent>&     out_events,
+    Utf8String*              out_session_name
+) {
+    Reset();
+    out_events.clear();
+
+    size_t offset = 0;
+    while (offset < bytes.size()) {
+        Trace::PacketHeader header{};
+        if (offset + sizeof(header) > bytes.size()) {
+            return false;
+        }
+        std::memcpy(&header, bytes.data() + offset, sizeof(header));
+        offset += sizeof(header);
+        if (offset + header.payload_size > bytes.size()) {
+            return false;
+        }
+        std::span<const uint8_t> payload(bytes.data() + offset, header.payload_size);
+        offset += header.payload_size;
+
+        Array<ProfileEvent> packet_events{};
+        Utf8String packet_session_name{};
+        if (!ConsumePacket(header, payload, packet_events, &packet_session_name)) {
+            return false;
+        }
+        if (out_session_name && !packet_session_name.empty()) {
+            *out_session_name = std::move(packet_session_name);
+        }
+        out_events.insert(out_events.end(), packet_events.begin(), packet_events.end());
+    }
+
+    return true;
+}
+
+std::span<const uint8_t> AsBytes(std::span<const std::byte> data) {
+    return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), data.size());
+}
+
+bool DecodeProfileDumpCapture(std::span<const uint8_t> bytes, Utf8StringView path, ProfileStore& store, bool clear_before_load) {
+    if (bytes.empty()) {
         return false;
     }
 
     ProfileDumpSessionDecoder decoder{};
-    Array<ProfileEvent> raw_events{};
+    Array<ProfileEvent>       raw_events{};
     if (!decoder.DecodePayload(bytes, raw_events)) {
         return false;
     }
@@ -302,9 +632,144 @@ bool LoadProfileDumpFile(const std::filesystem::path& path, ProfileStore& store,
     if (clear_before_load) {
         store.Reset();
     }
-    store.SetSessionName(path.filename().string());
+    store.SetSessionName(PathFilenameToProfilerString(path));
     store.AppendEvents(raw_events);
     return true;
+}
+
+bool DecodeTraceCapture(std::span<const uint8_t> bytes, Utf8StringView path, ProfileStore& store, bool clear_before_load) {
+    if (bytes.empty()) {
+        return false;
+    }
+
+    TraceSessionDecoder decoder{};
+    Array<ProfileEvent> raw_events{};
+    Utf8String          session_name{};
+    if (!decoder.DecodePayload(bytes, raw_events, &session_name)) {
+        return false;
+    }
+
+    if (clear_before_load) {
+        store.Reset();
+    }
+    store.SetSessionName(session_name.empty() ? PathFilenameToProfilerString(path) : std::move(session_name));
+    store.AppendEvents(raw_events);
+    return true;
+}
+
+bool DecodeTraceCsvCapture(std::span<const uint8_t> bytes, Utf8StringView path, ProfileStore& store, bool clear_before_load) {
+    if (bytes.empty()) {
+        return false;
+    }
+
+    std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    Array<ProfileEvent> raw_events{};
+    size_t              cursor = 0;
+    bool                consumed_header = false;
+    while (cursor <= text.size()) {
+        const size_t line_end = text.find('\n', cursor);
+        std::string_view line = line_end == std::string_view::npos ? text.substr(cursor) : text.substr(cursor, line_end - cursor);
+        cursor = line_end == std::string_view::npos ? text.size() + 1 : line_end + 1;
+        if (!line.empty() && line.back() == '\r') {
+            line.remove_suffix(1);
+        }
+        if (line.empty()) {
+            continue;
+        }
+        if (!consumed_header) {
+            consumed_header = true;
+            if (line.starts_with("event_id,")) {
+                continue;
+            }
+        }
+
+        ProfileEvent event{};
+        if (!DecodeTraceCsvRow(line, event)) {
+            return false;
+        }
+        raw_events.emplace_back(std::move(event));
+    }
+
+    if (raw_events.empty()) {
+        return false;
+    }
+    if (clear_before_load) {
+        store.Reset();
+    }
+    store.SetSessionName(PathFilenameToProfilerString(path));
+    store.AppendEvents(raw_events);
+    return true;
+}
+
+struct LoadCaptureContext {
+    ProfileStore*  store{nullptr};
+    Utf8StringView path{};
+    bool           clear_before_load{false};
+    bool           loaded{false};
+};
+
+bool LoadProfileDumpFile(Utf8StringView path, ProfileStore& store, bool clear_before_load) {
+    LoadCaptureContext context{.store = &store, .path = path, .clear_before_load = clear_before_load};
+    const File::EReadFileStatus status = File::ReadBinaryFile(File::ReadBinaryRequest{
+        .path = path,
+        .callback = [](std::span<const std::byte> data, void* user_data) {
+            auto& context = *static_cast<LoadCaptureContext*>(user_data);
+            context.loaded = DecodeProfileDumpCapture(
+                AsBytes(data),
+                context.path,
+                *context.store,
+                context.clear_before_load
+            );
+        },
+        .user_data = &context,
+    });
+    return status == File::EReadFileStatus::Success && context.loaded;
+}
+
+bool LoadTraceFile(Utf8StringView path, ProfileStore& store, bool clear_before_load) {
+    LoadCaptureContext context{.store = &store, .path = path, .clear_before_load = clear_before_load};
+    const File::EReadFileStatus status = File::ReadBinaryFile(File::ReadBinaryRequest{
+        .path = path,
+        .callback = [](std::span<const std::byte> data, void* user_data) {
+            auto& context = *static_cast<LoadCaptureContext*>(user_data);
+            const std::span<const uint8_t> bytes = AsBytes(data);
+            context.loaded = DecodeTraceCapture(bytes, context.path, *context.store, context.clear_before_load) ||
+                             DecodeTraceCsvCapture(bytes, context.path, *context.store, context.clear_before_load);
+        },
+        .user_data = &context,
+    });
+    return status == File::EReadFileStatus::Success && context.loaded;
+}
+
+bool LoadProfilerCaptureFile(Utf8StringView path, ProfileStore& store, bool clear_before_load) {
+    LoadCaptureContext context{.store = &store, .path = path, .clear_before_load = clear_before_load};
+    const File::EReadFileStatus status = File::ReadBinaryFile(File::ReadBinaryRequest{
+        .path = path,
+        .callback = [](std::span<const std::byte> data, void* user_data) {
+            auto& context = *static_cast<LoadCaptureContext*>(user_data);
+            const std::span<const uint8_t> bytes = AsBytes(data);
+            if (bytes.size() < sizeof(uint32_t)) {
+                return;
+            }
+
+            uint32_t magic = 0;
+            std::memcpy(&magic, bytes.data(), sizeof(magic));
+            if (magic == ProfileDump::packet_magic) {
+                context.loaded = DecodeProfileDumpCapture(
+                    bytes,
+                    context.path,
+                    *context.store,
+                    context.clear_before_load
+                );
+            } else if (magic == trace_packet_magic) {
+                context.loaded = DecodeTraceCapture(bytes, context.path, *context.store, context.clear_before_load);
+            } else {
+                context.loaded = DecodeTraceCsvCapture(bytes, context.path, *context.store, context.clear_before_load);
+            }
+        },
+        .user_data = &context,
+    });
+    return status == File::EReadFileStatus::Success && context.loaded;
 }
 
 } // namespace Moer::Profiler

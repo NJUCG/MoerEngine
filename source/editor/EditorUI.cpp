@@ -3,17 +3,16 @@
 // Runtime
 #include "file/FileDialog.h"
 #include "log/LogSystem.h"
-#include "window/WindowInput.h"
 
 // Editor
-#include "EditorUIStyle.h"
 #include "scene/Scene.h"
 #include "scene/SceneGlobalEntry.h"
 
 // 3rd party (std)
 #include <algorithm>
-#include <imgui.h>
-#include <imgui_internal.h>
+#include <array>
+#include <cstdlib>
+#include <iterator>
 #include <string_view>
 
 using namespace Moer::Render;
@@ -23,8 +22,8 @@ namespace Moer {
 EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
     m_ui_renderer(std::move(renderer)),
     m_config(editor_config) {
-    // Init Style
-    EditorUIStyle::ApplyDefaultStyle();
+    m_synapse_context = MakeUnique<Synapse::Context>();
+    m_synapse_context->ApplyDefaultTheme();
 }
 
 void EditorUI::TickUI() {
@@ -34,9 +33,10 @@ void EditorUI::TickUI() {
     m_config->aspect_ratio = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
 
     m_ui_renderer->BeginGUIFrame();
-    ImGuiIO& io = ImGui::GetIO();
+    m_synapse_context->BeginFrame(m_ui_renderer->GetInputSnapshot());
+    Synapse::Context& ui = *m_synapse_context;
 
-    const Render::ImGuiIOInputSnapshot& input_snapshot = m_ui_renderer->GetInputSnapshot();
+    const Render::ImGuiIOInputSnapshot& input_snapshot = ui.GetInputSnapshot();
     m_scene_color_hovered = false;
 
     if (input_snapshot.f5_pressed && !m_config->play_mode_enabled) {
@@ -50,117 +50,74 @@ void EditorUI::TickUI() {
     const bool play_capture = m_config->play_mode_enabled && m_config->play_mode_capture_input;
 
     if (play_capture) {
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const float2 viewport_size    = ui.GetMainViewportWorkSize();
         m_scene_color_pos             = {0.0f, 0.0f};
-        m_scene_color_resolution      = {viewport->WorkSize.x, viewport->WorkSize.y};
+        m_scene_color_resolution      = viewport_size;
         m_config->aspect_ratio        = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
         m_scene_color_hovered         = true;
 
         ShowOverlay();
         ApplyInputSnapshot();
+        m_synapse_context->EndFrame();
         m_ui_renderer->EndGUIFrame();
         return;
     }
 
-    static bool               opt_fullscreen  = true;
-    static bool               opt_padding     = false;
-    static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
-    // ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
-    // We are using the ImGuiWindowFlags_NoDocking flag to make the parent window not dockable into,
-    // because it would be confusing to have two docking targets within each others.
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar;
-    if (opt_fullscreen) {
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->WorkPos);
-        ImGui::SetNextWindowSize(viewport->WorkSize);
-        ImGui::SetNextWindowViewport(viewport->ID);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-                        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-        window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-        window_flags |= ImGuiWindowFlags_NoBackground;
-    } else {
-        dockspace_flags &= ~ImGuiDockNodeFlags_PassthruCentralNode;
-    }
-
-    // When using ImGuiDockNodeFlags_PassthruCentralNode, DockSpace() will render our background
-    // and handle the pass-thru hole, so we ask Begin() to not render a background.
-    if (dockspace_flags & ImGuiDockNodeFlags_PassthruCentralNode)
-        window_flags |= ImGuiWindowFlags_NoBackground;
-
-    // Important: note that we proceed even if Begin() returns false (aka window is collapsed).
-    // This is because we want to keep our DockSpace() active. If a DockSpace() is inactive,
-    // all active windows docked into it will lose their parent and become undocked.
-    // We cannot preserve the docking relationship between an active window and an inactive docking, otherwise
-    // any change of dockspace/settings would lead to windows being stuck in limbo and never being visible.
-    if (!opt_padding)
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin("Editor Menu", &m_b_show, window_flags);
-    if (!opt_padding)
-        ImGui::PopStyleVar();
-
-    if (opt_fullscreen)
-        ImGui::PopStyleVar(2);
-
-    // Submit the DockSpace
-    if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
-        ImGuiID dockspace_id = ImGui::GetID("Docking Main");
-        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
-        SetupDefaultDockLayout(dockspace_id);
-    }
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("Menu")) {
-            // if (ImGui::MenuItem("Reload Current Level")) {
-            // }
-            // if (ImGui::MenuItem("Save Current Level")) {
-            // }
-            if (ImGui::MenuItem("Exit")) {
-                exit(0);
+    if (ui.BeginMainDockspace(Synapse::DockspaceDesc{
+            .open            = &m_b_show,
+#if WITH_PROFILE
+            .enable_profiler = m_runtime_profiler.IsOpen(),
+#else
+            .enable_profiler = false,
+#endif
+        })) {
+        if (ui.BeginMenuBar()) {
+            if (ui.BeginMenu("Menu")) {
+                if (ui.MenuItem("Exit")) {
+                    exit(0);
+                }
+                ui.EndMenu();
             }
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("Window")) {
+            if (ui.BeginMenu("Window")) {
 
-            ImGui::MenuItem("Scene Color", nullptr, &m_b_show_scene_color);
-            ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
-            if (m_get_console_window_visible && m_set_console_window_visible) {
-                bool show_console = m_get_console_window_visible();
-                if (ImGui::MenuItem("Console", nullptr, &show_console)) {
-                    m_set_console_window_visible(show_console);
+                ui.MenuItem("Scene Color", &m_b_show_scene_color);
+                ui.MenuItem("Configs", &m_b_show_config);
+                if (m_get_console_window_visible && m_set_console_window_visible) {
+                    bool show_console = m_get_console_window_visible();
+                    if (ui.MenuItem("Console", &show_console)) {
+                        m_set_console_window_visible(show_console);
+                    }
+                }
+#if WITH_PROFILE
+                bool show_runtime_profiler = m_runtime_profiler.IsOpen();
+                if (ui.MenuItem("runtime_profiler", &show_runtime_profiler)) {
+                    m_runtime_profiler.SetOpen(show_runtime_profiler);
+                }
+#endif
+                ui.EndMenu();
+            }
+            ui.Separator();
+            if (!m_config->play_mode_enabled) {
+                if (ui.IconButton(Synapse::EIcon::Play, "Play (F5)")) {
+                    m_config->play_mode_enabled       = true;
+                    m_config->play_mode_capture_input = true;
+                }
+            } else {
+                if (ui.IconButton(Synapse::EIcon::Stop, "Stop Play")) {
+                    m_config->play_mode_enabled       = false;
+                    m_config->play_mode_capture_input = false;
+                }
+                ui.SameLine();
+                const char* toggle_label =
+                    m_config->play_mode_capture_input ? "Eject (F8)" : "Possess (F8)";
+                if (ui.IconButton(Synapse::EIcon::Camera, toggle_label, m_config->play_mode_capture_input)) {
+                    m_config->play_mode_capture_input = !m_config->play_mode_capture_input;
                 }
             }
-            // ImGui::MenuItem("Inspector", nullptr, &m_m_b_show_inspector_window);
-            // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
-#if WITH_PROFILE
-            bool show_runtime_profiler = m_runtime_profiler.IsOpen();
-            if (ImGui::MenuItem("runtime_profiler", nullptr, &show_runtime_profiler)) {
-                m_runtime_profiler.SetOpen(show_runtime_profiler);
-            }
-#endif
-            ImGui::EndMenu();
+            ui.EndMenuBar();
         }
-        ImGui::Separator();
-        if (!m_config->play_mode_enabled) {
-            if (ImGui::Button("Play (F5)")) {
-                m_config->play_mode_enabled       = true;
-                m_config->play_mode_capture_input = true;
-            }
-        } else {
-            if (ImGui::Button("Stop Play")) {
-                m_config->play_mode_enabled       = false;
-                m_config->play_mode_capture_input = false;
-            }
-            ImGui::SameLine();
-            const char* toggle_label =
-                m_config->play_mode_capture_input ? "Eject (F8)" : "Possess (F8)";
-            if (ImGui::Button(toggle_label)) {
-                m_config->play_mode_capture_input = !m_config->play_mode_capture_input;
-            }
-        }
-        ImGui::EndMenuBar();
     }
-    ImGui::End();
+    ui.EndMainDockspace();
     ResetState();
     ShowSceneColor();
     ShowConfig();
@@ -170,31 +127,8 @@ void EditorUI::TickUI() {
     ShowOverlay();
 
     ApplyInputSnapshot();
+    m_synapse_context->EndFrame();
     m_ui_renderer->EndGUIFrame();
-}
-
-void EditorUI::SetupDefaultDockLayout(ImGuiID dockspace_id) {
-    ImGuiDockNode* dockspace_node = ImGui::DockBuilderGetNode(dockspace_id);
-    if (!dockspace_node || dockspace_node->IsSplitNode() || !dockspace_node->Windows.empty()) {
-        return;
-    }
-
-    ImGuiID main_id = dockspace_id;
-    ImGui::DockBuilderRemoveNode(dockspace_id);
-    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
-    ImGui::DockBuilderSetNodeSize(dockspace_id, ImGui::GetMainViewport()->WorkSize);
-
-    ImGuiID right_id = ImGui::DockBuilderSplitNode(main_id, ImGuiDir_Right, 0.28f, nullptr, &main_id);
-    ImGuiID config_id = right_id;
-    ImGuiID profiler_id = ImGui::DockBuilderSplitNode(right_id, ImGuiDir_Down, 0.50f, nullptr, &config_id);
-
-    ImGui::DockBuilderDockWindow("Scene Color", main_id);
-    ImGui::DockBuilderDockWindow("Configs", config_id);
-#if WITH_PROFILE
-    ImGui::DockBuilderDockWindow("runtime_profiler", profiler_id);
-#endif
-    ImGui::DockBuilderDockWindow("Console", profiler_id);
-    ImGui::DockBuilderFinish(dockspace_id);
 }
 
 void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output) {
@@ -219,104 +153,48 @@ EditorUI::SceneWindowTarget EditorUI::GetSceneWindowTarget() {
 }
 
 void EditorUI::ShowSceneColor() {
-    ImGuiIO&         io           = ImGui::GetIO();
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
-
-    const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
     if (!m_b_show_scene_color) {
         return;
     }
-    if (!ImGui::Begin("Scene Color", &m_b_show_scene_color, window_flags)) {
-        // Should not call ImGui::End() here
+    const Synapse::SceneViewportState scene_view =
+        m_synapse_context->DrawSceneViewportPanel("Scene Color", &m_b_show_scene_color);
+    if (!scene_view.visible) {
         return;
     }
-
-    float2 scene_size = {0, 0};
-
-    static float2 xy_ratio = {16, 9};
-    // auto          menu_rect = ImGui::GetCurrentWindow()->MenuBarRect();
-
-    auto* current_window      = ImGui::FindWindowByName("Scene Color");
-    bool  m_b_separate_window = current_window->ParentWindow == nullptr;
-    auto  menu_rect           = current_window->MenuBarRect();
-    auto  menu_bar            = current_window->MenuBarHeight();
-
-    scene_size.x = current_window->Size.x;
-    scene_size.y = current_window->Size.y + current_window->Pos.y - menu_rect.Max.y; // what is this?
-
-    auto   window_rect = current_window->Rect(); // this is main window rect
-    ImRect parent_rect{};
-
-    if (m_b_separate_window) {
-
-        parent_rect = {
-            current_window->Pos.x,
-            current_window->Pos.y,
-            current_window->Pos.x + current_window->Size.x,
-            current_window->Pos.y + current_window->Size.y
-        };
-
-        float2 local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y - parent_rect.Min.y};
-
-        m_scene_color_resolution = {scene_size.x, scene_size.y};
-        m_scene_color_pos        = {local_pos.x, local_pos.y};
-    } else {
-        parent_rect = current_window->ParentWindow->Rect();
-
-        float2 local_pos = {
-            window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y + menu_bar - parent_rect.Min.y
-        };
-
-        m_scene_color_resolution = {scene_size.x, scene_size.y};
-        m_scene_color_pos        = {local_pos.x, local_pos.y};
-    }
-
-    // inject. Needs to be refactored (camera control)
-    // 只有在Cursor位于SceneColor窗口上时，才可以控制摄像机
-    uint2 mouse_pos = uint2(
-        ImGui::GetMousePos().x - parent_rect.Min.x, ImGui::GetMousePos().y - parent_rect.Min.y
-    );
-    static uint border = 4;
-
-    m_scene_color_hovered = mouse_pos.x > m_scene_color_pos.x + border &&
-                            mouse_pos.x < m_scene_color_pos.x + m_scene_color_resolution.x - border &&
-                            mouse_pos.y > m_scene_color_pos.y + border &&
-                            mouse_pos.y < m_scene_color_pos.y + m_scene_color_resolution.y - border;
-
-    ImGui::End();
+    m_scene_color_resolution = scene_view.content_resolution;
+    m_scene_color_pos        = scene_view.content_pos;
+    m_scene_color_hovered    = scene_view.hovered;
 }
 
 void EditorUI::ShowConfig() {
-    ImGuiIO&         io           = ImGui::GetIO();
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
+    Synapse::Context& ui = *m_synapse_context;
 
     if (!m_b_show_config) {
         return;
     }
-    if (!ImGui::Begin("Configs", &m_b_show_config, window_flags)) {
+    if (!ui.BeginPanel(Synapse::PanelDesc{.name = "Configs", .open = &m_b_show_config})) {
         return;
     }
 
-    ImGui::PushItemWidth(120); // 设置所有组件width为120
+    ui.PushItemWidth(ui.GetTheme().item_width);
 
-    EditorUIStyle::ShowStyleSelector("Style##Default");
-    if (ImGui::TreeNode("Trace")) {
+    if (ui.TreeNode("Trace")) {
         const Moer::Trace::Stats trace_stats = Moer::Trace::GetStats();
-        ImGui::Text("Enabled: %s", trace_stats.enabled ? "Yes" : "No");
-        ImGui::Text("Recording: %s", trace_stats.recording ? "On" : "Off");
+        ui.Text("Enabled: %s", trace_stats.enabled ? "Yes" : "No");
+        ui.Text("Recording: %s", trace_stats.recording ? "On" : "Off");
         if (trace_stats.recording) {
-            if (ImGui::Button("Stop Trace")) {
+            if (ui.Button("Stop Trace")) {
                 Moer::Trace::StopRecording();
             }
         } else {
-            if (ImGui::Button("Start Trace")) {
+            if (ui.Button("Start Trace")) {
                 Moer::Trace::StartRecording();
             }
         }
-        ImGui::Text("Connected: %s", trace_stats.connected ? "Yes" : "No");
-        ImGui::Text("Queued Events: %llu", static_cast<unsigned long long>(trace_stats.queued_events));
-        ImGui::Text("Dropped Events: %llu", static_cast<unsigned long long>(trace_stats.dropped_events));
-        ImGui::TreePop();
+        ui.Text("Connected: %s", trace_stats.connected ? "Yes" : "No");
+        ui.Text("Queued Events: %llu", static_cast<unsigned long long>(trace_stats.queued_events));
+        ui.Text("Dropped Events: %llu", static_cast<unsigned long long>(trace_stats.dropped_events));
+        ui.TreePop();
     }
 
     // MARK: Common Configs
@@ -331,25 +209,25 @@ void EditorUI::ShowConfig() {
     } else {
         LOG_WARNING(MOER_TEXT("Please bind a scene by `SceneGlobalEntry::Get().BindScene(scene)`"));
     }
-    ImGui::BeginDisabled(is_scene_found_but_not_ready);
+    ui.BeginDisabled(is_scene_found_but_not_ready);
 
     // Render Method
     {
         auto last_selected_render_method = m_config->selected_render_method;
-        if (ImGui::BeginCombo(
+        if (ui.BeginCombo(
                 "Render Method",
                 k_render_method_names[static_cast<uint>(m_config->selected_render_method)].data()
             )) {
-            for (int i = 0; i < IM_ARRAYSIZE(k_render_method_names); i++) {
+            for (int i = 0; i < static_cast<int>(std::size(k_render_method_names)); i++) {
                 const bool is_selected = (m_config->selected_render_method == static_cast<ERenderMethod>(i));
-                if (ImGui::Selectable(k_render_method_names[i].data(), is_selected)) {
+                if (ui.Selectable(k_render_method_names[i].data(), is_selected)) {
                     m_config->selected_render_method = static_cast<ERenderMethod>(i);
                 }
                 if (is_selected) {
-                    ImGui::SetItemDefaultFocus();
+                    ui.SetItemDefaultFocus();
                 }
             }
-            ImGui::EndCombo();
+            ui.EndCombo();
         }
         if (last_selected_render_method != m_config->selected_render_method) {
             m_b_need_reload = true;
@@ -361,7 +239,7 @@ void EditorUI::ShowConfig() {
         std::string scene_name = (last_slash == std::string::npos) ?
                                      m_config->scene_path :
                                      m_config->scene_path.substr(last_slash + 1);
-        if (ImGui::Button("Open Scene")) {
+        if (ui.Button("Open Scene")) {
             static constexpr std::array<FileDialog::Filter, 5> scene_filters = {{{
                 "All Support Formats",
                 "glb,gltf,fbx,obj,dae"
@@ -378,32 +256,39 @@ void EditorUI::ShowConfig() {
                 "Moer Renderer Scene (WIP)",
                 "json"
             }}};
-            const FileDialog::OpenFileResult result = FileDialog::OpenFile({.filters = scene_filters});
-            if (result.status == FileDialog::EOpenFileStatus::Success) {
-                LOG_INFO(MOER_TEXT("User selected file: {}"), result.path.string());
+            Utf8String selected_scene_path{};
+            const FileDialog::EOpenFileStatus result = FileDialog::OpenFile(FileDialog::OpenFileRequest{
+                .filters = scene_filters,
+                .callback = [](Utf8StringView selected_path, void* user_data) {
+                    *static_cast<Utf8String*>(user_data) = Utf8String(selected_path);
+                },
+                .user_data = &selected_scene_path,
+            });
+            if (result == FileDialog::EOpenFileStatus::Success) {
+                LOG_INFO(MOER_TEXT("User selected file: {}"), selected_scene_path.c_str());
 
                 // Prepare for reload
                 m_b_need_reload      = true;
-                m_config->scene_path = result.path.string();
-            } else if (result.status == FileDialog::EOpenFileStatus::Cancelled) {
+                m_config->scene_path = std::string(selected_scene_path.data(), selected_scene_path.size());
+            } else if (result == FileDialog::EOpenFileStatus::Cancelled) {
                 LOG_INFO(MOER_TEXT("User pressed cancel."));
             }
         }
-        ImGui::SameLine();
-        ImGui::Text("Current: [%s]", scene_name.c_str());
+        ui.SameLine();
+        ui.Text("Current: [%s]", scene_name.c_str());
     }
 
-    if (ImGui::TreeNode("Camera")) {
+    if (ui.TreeNode("Camera")) {
 
-        ImGui::SliderFloat("Speed (log10)", &m_config->camera_speed_log10, -1.f, 2.6f);
-        ImGui::SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
+        ui.SliderFloat("Speed (log10)", &m_config->camera_speed_log10, -1.f, 2.6f);
+        ui.SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
 
-        ImGui::SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 0.99f);
-        ImGui::SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
+        ui.SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 0.99f);
+        ui.SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
         m_config->camera_near_clip_log10 =
             std::min(m_config->camera_near_clip_log10, m_config->camera_far_clip_log10 - 0.1f);
 
-        ImGui::TreePop();
+        ui.TreePop();
     }
 
     const std::string active_renderer = std::string(
@@ -418,34 +303,35 @@ void EditorUI::ShowConfig() {
         }
         std::sort(section_names.begin(), section_names.end());
 
-        ImGui::SeparatorText(active_renderer.c_str());
+        ui.SeparatorText(active_renderer.c_str());
         for (const std::string& section_name : section_names) {
             auto section_iter = renderer_iter->second.find(section_name);
             if (section_iter == renderer_iter->second.end()) {
                 continue;
             }
-            if (ImGui::TreeNode(section_name.c_str())) {
-                section_iter->second();
-                ImGui::TreePop();
+            if (ui.TreeNode(section_name.c_str())) {
+                section_iter->second(ui);
+                ui.TreePop();
             }
         }
     }
 
-    ImGui::Separator();
+    ui.Separator();
 
-    ImGui::EndDisabled();
+    ui.EndDisabled();
     if (is_scene_found_but_not_ready) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Scene is loading... Please wait.");
+        ui.TextColored({1.0f, 0.4f, 0.4f, 1.0f}, "Scene is loading... Please wait.");
     }
     /////////////////////////////////////////////////// End Disabled Here
 
-    ImGui::Text("Infos: ");
-    ImGui::Text("\tFPS: %.1f", io.Framerate);
-    ImGui::Text("\tFrame Time: %.1f ms", 1000.0f / io.Framerate);
+    const float framerate = ui.GetFramerate();
+    ui.Text("Infos: ");
+    ui.Text("\tFPS: %.1f", framerate);
+    ui.Text("\tFrame Time: %.1f ms", 1000.0f / framerate);
 
-    ImGui::PopItemWidth(); // 和PushItemWidt相对应
+    ui.PopItemWidth();
 
-    ImGui::End();
+    ui.EndPanel();
 }
 
 void EditorUI::ResetState() {
@@ -455,7 +341,7 @@ void EditorUI::ResetState() {
 void EditorUI::RegisterRendererConfigSection(
     std::string renderer_name,
     std::string section_name,
-    std::function<void()>&& func
+    RendererConfigDrawFunc&& func
 ) {
     m_renderer_config_sections[std::move(renderer_name)][std::move(section_name)] = std::move(func);
 }

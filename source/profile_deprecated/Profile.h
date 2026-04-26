@@ -28,6 +28,8 @@ extern std::unordered_map<uint64_t, size_t>        g_live_allocs_vktmp;
 PROFILE_API size_t Profile_GetPeakBytesBySource(MemorySource source);
 PROFILE_API size_t Profile_GetBytesBySource(MemorySource source);
 void Profile_TickSample();
+bool IsProfileAcceptingEvents();
+bool EnqueueProfileEvent(MemorySource source, const EventRecord& record);
 //std::vector<HotspotSnapshot> GetHotspots(size_t top_n, MemorySource filterSource);
 void WriteHotspots(bool ifDump);
 void UpdatePassHistory(const CBState& snap);

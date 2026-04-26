@@ -11,6 +11,10 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     return()
 endif()
 
+set(moer_runtime_dir ${moer_source_dir}/runtime)
+set(moer_runtime_core_dir ${moer_runtime_dir}/core)
+
+add_subdirectory(runtime/core)
 add_subdirectory(profile_deprecated)
 add_subdirectory(cuda)
 add_subdirectory(runtime)

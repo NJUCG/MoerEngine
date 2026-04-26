@@ -23,6 +23,12 @@ target_link_libraries(${target_name}
     PRIVATE Moer::Runtime
 )
 
+if (WITH_PROFILE)
+    target_link_libraries(${target_name}
+        PRIVATE Moer::Profile
+    )
+endif()
+
 # Include directories
 target_include_directories(
   ${target_name}

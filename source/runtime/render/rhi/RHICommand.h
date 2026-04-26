@@ -1866,6 +1866,7 @@ public:
     );
     void Flush(ERHIFlushDepth depth = ERHIFlushDepth::SubmitGPU);
     void Sync(ERHISyncDepth depth = ERHISyncDepth::RHI);
+    void Sync(Swapchain* swapchain);
     static void ShutDown();
 private:
     std::shared_ptr<RHIBackendExecutor> GetBackendExecutorLocked();

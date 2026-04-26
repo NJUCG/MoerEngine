@@ -67,6 +67,7 @@ struct SubmissionPresentCompletionPayload {
     VkFence                     host_fence{VK_NULL_HANDLE};
     bool                        owns_host_fence{false};
     bool                        host_fence_failed{false};
+    WaitEvent                   completion{};
     uint64                      timeline_value{0};
     UniquePtr<VulkanPresentor>  presentor{};
 

@@ -295,11 +295,15 @@ const Moer::Profiler::ProfileEvent* FindProfileConsumerEvent(
     std::string_view                    event_name
 ) {
     for (const Moer::Profiler::ProfileEvent& event : store.events) {
-        if (event.name == event_name) {
+        if (Moer::Utf8StringView(event.name) == Moer::Utf8StringView(event_name.data(), event_name.size())) {
             return &event;
         }
     }
     return nullptr;
+}
+
+bool Utf8Equals(const Moer::Utf8String& text, const char* expected) {
+    return Moer::Utf8StringView(text) == Moer::Utf8StringView(expected);
 }
 
 bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& store) {
@@ -331,7 +335,7 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
 
     if (gpu_event->track_type != Moer::Profiler::ProfileTrackType::GPUQueue ||
         gpu_event->ts_begin_ns != 50000 || gpu_event->ts_end_ns != 80000 ||
-        gpu_event->category != "timing.gpu_scope" || gpu_event->track_name != "Graphics") {
+        !Utf8Equals(gpu_event->category, "timing.gpu_scope") || !Utf8Equals(gpu_event->track_name, "Graphics")) {
         LOG_ERROR(
             MOER_TEXT("Profile consumer normalized GPU event mismatch: begin={} end={} category={} track={}"),
             gpu_event->ts_begin_ns,
@@ -344,7 +348,7 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
 
     if (cpu_event->track_type != Moer::Profiler::ProfileTrackType::CPUThread ||
         cpu_event->ts_begin_ns != 0 || cpu_event->ts_end_ns != 10000 ||
-        cpu_event->category != "timing.cpu_scope") {
+        !Utf8Equals(cpu_event->category, "timing.cpu_scope")) {
         LOG_ERROR(
             MOER_TEXT("Profile consumer normalized CPU event mismatch: begin={} end={} category={}"),
             cpu_event->ts_begin_ns,
@@ -843,13 +847,19 @@ int RunProfileConsumerFileLoadTest() {
     Moer::ProfileDump::FlushThreadLocal();
 
     Moer::Profiler::ProfileStore store{};
-    const bool loaded = Moer::Profiler::LoadProfileDumpFile(output_path, store, true);
+    const std::string output_path_utf8 = output_path.generic_string();
+    const bool        loaded = Moer::Profiler::LoadProfileDumpFile(
+        Moer::Utf8StringView(output_path_utf8.data(), output_path_utf8.size()),
+        store,
+        true
+    );
     Moer::ProfileDump::ClearTestingConfigOverride();
     if (!loaded) {
         LOG_ERROR(MOER_TEXT("Profile consumer file load failed."));
         return 1;
     }
-    if (store.metadata.session_name != output_path.filename().string()) {
+    const std::string expected_session_name = output_path.filename().string();
+    if (std::string_view(store.metadata.session_name.data(), store.metadata.session_name.size()) != expected_session_name) {
         LOG_ERROR(MOER_TEXT("Profile consumer file load session name mismatch: {}"), store.metadata.session_name);
         return 1;
     }
@@ -919,11 +929,136 @@ int RunProfileConsumerStreamNormalizationTest() {
         }
     }
 
-    if (store.metadata.session_name != "ProfileDump TCP") {
+    if (!Utf8Equals(store.metadata.session_name, "ProfileDump TCP")) {
         LOG_ERROR(MOER_TEXT("Profile consumer stream normalization session name mismatch: {}"), store.metadata.session_name);
         return 1;
     }
     if (!AssertProfileConsumerNormalizedStore(store)) {
+        return 1;
+    }
+    return 0;
+}
+
+int RunTraceConsumerDecodeTest() {
+    Moer::Trace::SessionMetadata metadata{};
+    metadata.session_id = 7;
+    metadata.session_name = "TraceUnit";
+    metadata.start_ts_ns = 1000;
+
+    Array<Moer::Trace::TraceEvent> trace_events{};
+    Moer::Trace::TraceEvent scope{};
+    scope.event_id = 11;
+    scope.session_id = metadata.session_id;
+    scope.type = Moer::Trace::EventType::Scope;
+    scope.track_type = Moer::Trace::TrackType::CPUThread;
+    scope.track_id = 42;
+    scope.depth = 1;
+    scope.ts_begin_ns = 2000;
+    scope.ts_end_ns = 5000;
+    scope.name = "TraceScope";
+    scope.category = "Trace";
+    scope.track_name = "TraceThread";
+    trace_events.emplace_back(std::move(scope));
+
+    Moer::Trace::TraceEvent counter{};
+    counter.event_id = 12;
+    counter.session_id = metadata.session_id;
+    counter.type = Moer::Trace::EventType::Counter;
+    counter.track_type = Moer::Trace::TrackType::CPUThread;
+    counter.track_id = 42;
+    counter.ts_begin_ns = 5500;
+    counter.ts_end_ns = 5500;
+    counter.counter_value = 3.5;
+    counter.name = "TraceCounter";
+    counter.category = "Trace";
+    counter.track_name = "TraceThread";
+    trace_events.emplace_back(std::move(counter));
+
+    Array<std::byte> metadata_packet{};
+    Array<std::byte> events_packet{};
+    if (!Moer::Trace::SerializeSessionMetadataPacket(metadata, metadata_packet) ||
+        !Moer::Trace::SerializeEventsPacket(trace_events, events_packet)) {
+        LOG_ERROR(MOER_TEXT("Trace consumer decode test failed to serialize packets."));
+        return 1;
+    }
+
+    Array<uint8_t> binary{};
+    binary.reserve(metadata_packet.size() + events_packet.size());
+    auto append_packet = [&](const Array<std::byte>& packet) {
+        const auto* begin = reinterpret_cast<const uint8_t*>(packet.data());
+        binary.insert(binary.end(), begin, begin + packet.size());
+    };
+    append_packet(metadata_packet);
+    append_packet(events_packet);
+
+    Moer::Profiler::TraceSessionDecoder decoder{};
+    Array<Moer::Profiler::ProfileEvent> decoded_events{};
+    Moer::Utf8String decoded_session_name{};
+    if (!decoder.DecodePayload(binary, decoded_events, &decoded_session_name)) {
+        LOG_ERROR(MOER_TEXT("Trace consumer decode failed."));
+        return 1;
+    }
+    if (!Utf8Equals(decoded_session_name, "TraceUnit") || decoded_events.size() != 2) {
+        LOG_ERROR(
+            MOER_TEXT("Trace consumer decoded metadata/events mismatch: session={} events={}"),
+            decoded_session_name,
+            decoded_events.size()
+        );
+        return 1;
+    }
+
+    Moer::Profiler::ProfileStore store{};
+    store.SetSessionName(std::move(decoded_session_name));
+    store.AppendEvents(decoded_events);
+    const auto* scope_event = FindProfileConsumerEvent(store, "TraceScope");
+    const auto* counter_event = FindProfileConsumerEvent(store, "TraceCounter");
+    if (scope_event == nullptr || counter_event == nullptr) {
+        LOG_ERROR(MOER_TEXT("Trace consumer normalized store missing decoded events."));
+        return 1;
+    }
+    if (scope_event->ts_begin_ns != 0 || scope_event->ts_end_ns != 3000 ||
+        !Utf8Equals(scope_event->track_name, "TraceThread")) {
+        LOG_ERROR(MOER_TEXT("Trace consumer scope normalization mismatch."));
+        return 1;
+    }
+    if (counter_event->type != Moer::Profiler::ProfileEventType::Counter || counter_event->ts_begin_ns != 3500 ||
+        counter_event->counter_value != 3.5) {
+        LOG_ERROR(MOER_TEXT("Trace consumer counter decode mismatch."));
+        return 1;
+    }
+
+    const std::filesystem::path csv_path = MakeProfileDumpTestPath("trace_consumer_csv_test.csv");
+    {
+        std::ofstream csv(csv_path, std::ios::binary);
+        csv << "event_id,session_id,type,track_type,track_id,depth,ts_begin_ns,ts_end_ns,counter,name,category,track_name,args\n";
+        csv << "11,7,0,0,42,1,2000,5000,0,\"TraceScope\",\"Trace\",\"TraceThread\",\"\"\n";
+        csv << "12,7,2,0,42,0,5500,5500,3.5,\"TraceCounter\",\"Trace\",\"TraceThread\",\"\"\n";
+    }
+
+    Moer::Profiler::ProfileStore csv_store{};
+    const std::string csv_path_utf8 = csv_path.generic_string();
+    if (!Moer::Profiler::LoadProfilerCaptureFile(
+            Moer::Utf8StringView(csv_path_utf8.data(), csv_path_utf8.size()),
+            csv_store,
+            true
+        )) {
+        LOG_ERROR(MOER_TEXT("Trace consumer CSV load failed."));
+        return 1;
+    }
+    const auto* csv_scope_event = FindProfileConsumerEvent(csv_store, "TraceScope");
+    const auto* csv_counter_event = FindProfileConsumerEvent(csv_store, "TraceCounter");
+    if (csv_scope_event == nullptr || csv_counter_event == nullptr) {
+        LOG_ERROR(MOER_TEXT("Trace consumer CSV normalized store missing decoded events."));
+        return 1;
+    }
+    if (csv_scope_event->ts_begin_ns != 0 || csv_scope_event->ts_end_ns != 3000 ||
+        !Utf8Equals(csv_scope_event->track_name, "TraceThread")) {
+        LOG_ERROR(MOER_TEXT("Trace consumer CSV scope normalization mismatch."));
+        return 1;
+    }
+    if (csv_counter_event->type != Moer::Profiler::ProfileEventType::Counter ||
+        csv_counter_event->ts_begin_ns != 3500 || csv_counter_event->counter_value != 3.5) {
+        LOG_ERROR(MOER_TEXT("Trace consumer CSV counter decode mismatch."));
         return 1;
     }
     return 0;
@@ -2154,7 +2289,7 @@ int RunPresentWithCopyScopeTests() {
         if (readback_event) {
             readback_event->Wait();
         }
-        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+        RHIExecutor::Get().Sync(swapchain);
 
         if (upload_values != readback_values) {
             LOG_ERROR(MOER_TEXT("CopyScope present readback mismatch at iter={}"), iter);
@@ -2162,7 +2297,7 @@ int RunPresentWithCopyScopeTests() {
         }
     }
 
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+    RHIExecutor::Get().Sync(swapchain);
     LOG_INFO(MOER_TEXT("Present + CopyScope test passed, iterations={}"), kPresentIterations);
     return 0;
 }
@@ -2247,7 +2382,7 @@ int RunPresentTests() {
         ERHIExecSubmitFlags::FlushGPU,
         &present_only_request
     );
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+    RHIExecutor::Get().Sync(swapchain);
     if (vk_swapchain->image_idx != present_only_before + 1u) {
         LOG_ERROR(
             MOER_TEXT("Present-only submit did not advance swapchain image index: before={}, after={}"),
@@ -2450,6 +2585,12 @@ int main(int argc, char** argv) {
         RunNamedTestCase("ProfileConsumerStreamNormalization", RunProfileConsumerStreamNormalizationTest);
     if (profile_consumer_stream_ret != 0) {
         return shutdown_and_return(profile_consumer_stream_ret);
+    }
+
+    const int trace_consumer_decode_ret =
+        RunNamedTestCase("TraceConsumerDecode", RunTraceConsumerDecodeTest);
+    if (trace_consumer_decode_ret != 0) {
+        return shutdown_and_return(trace_consumer_decode_ret);
     }
 
 #if defined(MOER_TEST_WITH_PROFILE)

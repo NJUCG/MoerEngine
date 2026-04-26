@@ -109,6 +109,26 @@ void RHIExecutor::Sync(ERHISyncDepth depth) {
     }
 }
 
+void RHIExecutor::Sync(Swapchain* swapchain) {
+    if (swapchain == nullptr) {
+        LOG_ERROR(MOER_TEXT("RHIExecutor::Sync got a null swapchain"));
+        assert(false && "Swapchain sync requires a valid swapchain");
+        return;
+    }
+
+    GraphEventRef event = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(submit_mutex);
+        EnqueuePendingLocked();
+        if (backend_executor) {
+            event = backend_executor->Sync(swapchain);
+        }
+    }
+    if (event) {
+        event->Wait();
+    }
+}
+
 void RHIExecutor::ShutDown() {
     auto& executor = Get();
     {

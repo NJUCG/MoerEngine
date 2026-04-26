@@ -58,6 +58,7 @@ if(WITH_PROFILE)
     )
     
     target_link_libraries(${target_name}
+        PUBLIC Moer::Core
         PUBLIC perfetto
         PRIVATE ${CMAKE_THREAD_LIBS_INIT}
         dbghelp.lib

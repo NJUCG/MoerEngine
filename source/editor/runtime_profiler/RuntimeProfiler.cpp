@@ -61,11 +61,11 @@ void RuntimeProfiler::DrawPassAndChildren(const char* parent_name, int depth) {
 }
 
 void RuntimeProfiler::TickUI() {
-    Profile_TickSample();
-
     if (!m_open) {
         return;
     }
+
+    Profile_TickSample();
 
     if (!ImGui::Begin("runtime_profiler", &m_open)) {
         ImGui::End();

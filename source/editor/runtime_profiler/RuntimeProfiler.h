@@ -20,7 +20,7 @@ private:
     void DrawPassAndChildren(const char* parent_name, int depth);
 
 private:
-    bool m_open = true;
+    bool m_open = false;
 };
 
 } // namespace Moer

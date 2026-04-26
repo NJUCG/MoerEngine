@@ -15,6 +15,7 @@ public:
 
     void Enqueue(RHIBackendSubmissionBatch&& batch) override;
     GraphEventRef Sync(ERHISyncDepth depth = ERHISyncDepth::RHI) override;
+    GraphEventRef Sync(Swapchain* swapchain) override;
     void Flush(ERHIFlushDepth depth = ERHIFlushDepth::SubmitGPU) override;
     void ShutDown() override;
 

@@ -2,12 +2,12 @@
 
 #include "misc/STL.h"
 #include "profile/ProfileDump.h"
+#include "string/String.h"
+#include "trace/Trace.h"
 
 #include <cstdint>
-#include <filesystem>
 #include <mutex>
 #include <span>
-#include <string>
 
 namespace Moer::Profiler {
 
@@ -23,7 +23,7 @@ enum class ProfileEventType : uint8_t {
 };
 
 struct ProfileSessionMetadata {
-    std::string session_name{};
+    Utf8String session_name{};
     uint64_t    time_origin_ns{0};
     bool        has_time_origin = false;
 };
@@ -38,17 +38,17 @@ struct ProfileEvent {
     uint64_t         ts_begin_ns{0};
     uint64_t         ts_end_ns{0};
     double           counter_value{0.0};
-    std::string      name{};
-    std::string      category{};
-    std::string      track_name{};
-    std::string      args{};
+    Utf8String       name{};
+    Utf8String       category{};
+    Utf8String       track_name{};
+    Utf8String       args{};
 };
 
 struct TrackInfo {
     uint64_t         key{0};
     ProfileTrackType type{ProfileTrackType::CPUThread};
     uint64_t         id{0};
-    std::string      name{"Unknown"};
+    Utf8String       name{"Unknown"};
     int              max_depth{0};
 };
 
@@ -64,7 +64,7 @@ struct ProfileStore {
     uint64_t                          generation{1};
 
     void Reset();
-    void SetSessionName(std::string session_name);
+    void SetSessionName(Utf8String session_name);
     void AppendEvents(const Array<ProfileEvent>& raw_events);
 };
 
@@ -84,6 +84,29 @@ private:
     UnorderedMap<uint32_t, ProfileDump::DecodedSchema> m_schemas{};
 };
 
-bool LoadProfileDumpFile(const std::filesystem::path& path, ProfileStore& store, bool clear_before_load);
+class TraceSessionDecoder {
+public:
+    void Reset();
+
+    bool ConsumePacket(
+        const Trace::PacketHeader& header,
+        std::span<const uint8_t>   payload,
+        Array<ProfileEvent>&       out_events,
+        Utf8String*                out_session_name = nullptr
+    );
+
+    bool DecodePayload(
+        std::span<const uint8_t> bytes,
+        Array<ProfileEvent>&     out_events,
+        Utf8String*              out_session_name = nullptr
+    );
+
+private:
+    uint64_t m_session_id{0};
+};
+
+bool LoadProfileDumpFile(Utf8StringView path, ProfileStore& store, bool clear_before_load);
+bool LoadTraceFile(Utf8StringView path, ProfileStore& store, bool clear_before_load);
+bool LoadProfilerCaptureFile(Utf8StringView path, ProfileStore& store, bool clear_before_load);
 
 } // namespace Moer::Profiler

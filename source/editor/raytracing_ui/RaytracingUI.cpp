@@ -1,22 +1,11 @@
 #include "RaytracingUI.h"
 
-#include "Core.h"
 #include "math/Function.h"
 #include "misc/STL.h"
-#include "renderer/common/UIRenderer.h"
-#include "rhi/RHIResource.h"
 #include "shaderheaders/shared/ShaderParameters.h"
-#include "shaderheaders/shared/lighting/ShaderParameters.h"
-
-#include "renderer/raytracing/AntiAliasPass.h"
 #include "renderer/raytracing/RaytracingConfig.h"
 
-// 3rd party
-#include <imgui.h>
-#include <imgui_internal.h>
-
 using namespace Moer::Render;
-using namespace Moer::Render::Raytracing;
 
 namespace Moer {
 
@@ -84,201 +73,201 @@ RaytracingUI::RaytracingUI(RaytracingConfig& config) : config(config) {
     final_color_map["Custom"]     = EFinalColor::EFC_CUSTOM;
 }
 
-void RaytracingUI::ShowConfig() {
-    if (!ImGui::TreeNode("Raytracing Config")) {
+void RaytracingUI::ShowConfig(Synapse::Context& ui) {
+    if (!ui.TreeNode("Raytracing Config")) {
         return;
     }
 
-    if (ImGui::TreeNode("Final Color")) {
+    if (ui.TreeNode("Final Color")) {
         for (auto& [name, index] : final_color_map) {
-            if (ImGui::Selectable(name.c_str(), config.final_color == index)) {
+            if (ui.Selectable(name.c_str(), config.final_color == index)) {
                 config.final_color = static_cast<EFinalColor>(index);
             }
         }
 
-        ImGui::TreePop();
+        ui.TreePop();
     }
-    ImGui::Separator();
+    ui.Separator();
 
-    if (ImGui::TreeNode("Process Light Configs")) {
-        ImGui::Checkbox("Parallel Mode", &config.process_light_cfg.parallel_mode);
-        ImGui::SliderInt("Num Threads", &config.process_light_cfg.num_threads, 1, 32);
-        ImGui::TreePop();
+    if (ui.TreeNode("Process Light Configs")) {
+        ui.Checkbox("Parallel Mode", &config.process_light_cfg.parallel_mode);
+        ui.SliderInt("Num Threads", &config.process_light_cfg.num_threads, 1, 32);
+        ui.TreePop();
     }
 
     // Grid Config
-    if (ImGui::TreeNode("Grid Config")) {
+    if (ui.TreeNode("Grid Config")) {
 
-        if (ImGui::TreeNode("Presample Mode")) {
+        if (ui.TreeNode("Presample Mode")) {
             for (auto& name : s_grid_light_presample_mode_names) {
                 uint idx = &name - s_grid_light_presample_mode_names;
-                if (ImGui::Selectable(name.data(), config.grid_config.grid_mode == idx)) {
+                if (ui.Selectable(name.data(), config.grid_config.grid_mode == idx)) {
                     config.grid_config.grid_mode = idx;
                 }
             }
-            ImGui::TreePop();
+            ui.TreePop();
         }
-        ImGui::SliderInt("Light Per Ceil", &config.grid_config.light_per_ceil, 1, 1024);
-        ImGui::SliderFloat("Cell Size", &config.grid_config.cell_size, 1.f, 400.f);
-        ImGui::TreePop();
+        ui.SliderInt("Light Per Ceil", &config.grid_config.light_per_ceil, 1, 1024);
+        ui.SliderFloat("Cell Size", &config.grid_config.cell_size, 1.f, 400.f);
+        ui.TreePop();
     }
-    ImGui::Separator();
+    ui.Separator();
 
-    if (ImGui::TreeNode("ReSTIRDI")) {
-        if (ImGui::TreeNode("InitialSampleSettings")) {
-            if (ImGui::TreeNode("LocalLightSelection")) {
+    if (ui.TreeNode("ReSTIRDI")) {
+        if (ui.TreeNode("InitialSampleSettings")) {
+            if (ui.TreeNode("LocalLightSelection")) {
                 for (auto& name : s_local_light_sample_mode_names) {
                     uint idx = &name - s_local_light_sample_mode_names;
-                    if (ImGui::Selectable(
+                    if (ui.Selectable(
                             name.data(),
                             config.restir_di_cfg.initial_sample_config.local_light_sample_mode == idx
                         )) {
                         config.restir_di_cfg.initial_sample_config.local_light_sample_mode = idx;
                     }
                 }
-                ImGui::TreePop();
+                ui.TreePop();
             }
-            ImGui::TreePop();
+            ui.TreePop();
         }
 
-        if (ImGui::TreeNode("TemporalResampleSettings")) {
-            if (ImGui::TreeNode("BiasCorrection")) {
+        if (ui.TreeNode("TemporalResampleSettings")) {
+            if (ui.TreeNode("BiasCorrection")) {
                 for (auto& name : s_bias_correction_mode_names) {
                     uint idx = &name - s_bias_correction_mode_names;
-                    if (ImGui::Selectable(
+                    if (ui.Selectable(
                             name.data(), config.restir_di_cfg.temporal_resample_config.bias_correction == idx
                         )) {
                         config.restir_di_cfg.temporal_resample_config.bias_correction = idx;
                     }
                 }
-                ImGui::TreePop();
+                ui.TreePop();
             }
-            ImGui::SliderFloat(
+            ui.SliderFloat(
                 "depth threshold", &config.restir_di_cfg.temporal_resample_config.depth_threshold, 0.1f, 30.0f
             );
-            ImGui::SliderFloat(
+            ui.SliderFloat(
                 "normal threshold",
                 &config.restir_di_cfg.temporal_resample_config.normal_threshold,
                 0.0f,
                 1.0f
             );
-            ImGui::TreePop();
+            ui.TreePop();
         }
 
-        if (ImGui::TreeNode("SpatialResampleSettings")) {
-            if (ImGui::TreeNode("BiasCorrection")) {
+        if (ui.TreeNode("SpatialResampleSettings")) {
+            if (ui.TreeNode("BiasCorrection")) {
                 for (auto& name : s_bias_correction_mode_names) {
                     uint idx = &name - s_bias_correction_mode_names;
-                    if (ImGui::Selectable(
+                    if (ui.Selectable(
                             name.data(), config.restir_di_cfg.spatial_resample_config.bias_correction == idx
                         )) {
                         config.restir_di_cfg.spatial_resample_config.bias_correction = idx;
                     }
                 }
-                ImGui::TreePop();
+                ui.TreePop();
             }
-            ImGui::SliderFloat(
+            ui.SliderFloat(
                 "depth threshold", &config.restir_di_cfg.spatial_resample_config.depth_threshold, 0.0f, 1.0f
             );
-            ImGui::SliderFloat(
+            ui.SliderFloat(
                 "normal threshold", &config.restir_di_cfg.spatial_resample_config.normal_threshold, 0.0f, 1.0f
             );
-            ImGui::SliderInt(
+            ui.SliderInt(
                 "num spatial samples",
                 &config.restir_di_cfg.spatial_resample_config.num_spatial_samples,
                 1,
                 32
             );
-            ImGui::TreePop();
+            ui.TreePop();
         }
 
-        ImGui::TreePop();
+        ui.TreePop();
     }
-    ImGui::Separator();
-    ImGui::Text("NRD Config");
-    if (ImGui::TreeNode("DenoiserConfig")) {
+    ui.Separator();
+    ui.Text("NRD Config");
+    if (ui.TreeNode("DenoiserConfig")) {
         for (auto& name : s_denoiser_mode_names) {
             uint idx = &name - s_denoiser_mode_names;
-            if (ImGui::Selectable(name.data(), config.denoiser_cfg.denoiser_type == idx)) {
+            if (ui.Selectable(name.data(), config.denoiser_cfg.denoiser_type == idx)) {
                 config.denoiser_cfg.denoiser_type = idx;
             }
         }
-        ImGui::TreePop();
+        ui.TreePop();
     }
-    ImGui::Separator();
-    ImGui::Text("Post-Process Config");
-    ImGui::Checkbox("Enable ToneMapping", &config.tone_mapping_cfg.enable_tone_mapping);
-    if (ImGui::TreeNode("ToneMapping")) {
-        ImGui::SliderFloat(
+    ui.Separator();
+    ui.Text("Post-Process Config");
+    ui.Checkbox("Enable ToneMapping", &config.tone_mapping_cfg.enable_tone_mapping);
+    if (ui.TreeNode("ToneMapping")) {
+        ui.SliderFloat(
             "Histogram Low Percentile", &config.tone_mapping_cfg.histogram_low_percentile, 0.0f, 1.0f
         );
-        ImGui::SliderFloat(
+        ui.SliderFloat(
             "Histogram High Percentile", &config.tone_mapping_cfg.histogram_high_percentile, 0.0f, 1.0f
         );
-        ImGui::SliderFloat(
+        ui.SliderFloat(
             "Eye Adaptation Speed Up", &config.tone_mapping_cfg.eye_adaptation_speed_up, 0.0f, 10.0f
         );
-        ImGui::SliderFloat(
+        ui.SliderFloat(
             "Eye Adaptation Speed Down", &config.tone_mapping_cfg.eye_adaptation_speed_down, 0.0f, 10.0f
         );
-        ImGui::SliderFloat(
+        ui.SliderFloat(
             "Min Adapted Luminance", &config.tone_mapping_cfg.min_adapted_luminance, 0.0f, 10.0f
         );
-        ImGui::SliderFloat(
+        ui.SliderFloat(
             "Max Adapted Luminance", &config.tone_mapping_cfg.max_adapted_luminance, 0.0f, 10.0f
         );
-        ImGui::SliderFloat("Exposure Bias", &config.tone_mapping_cfg.exposure_bias, -10.0f, 10.0f);
-        ImGui::SliderFloat("WhitePoint", &config.tone_mapping_cfg.white_point, 0.0f, 10.0f);
-        ImGui::TreePop();
+        ui.SliderFloat("Exposure Bias", &config.tone_mapping_cfg.exposure_bias, -10.0f, 10.0f);
+        ui.SliderFloat("WhitePoint", &config.tone_mapping_cfg.white_point, 0.0f, 10.0f);
+        ui.TreePop();
     }
-    if (ImGui::TreeNode("AntiAlias")) {
-        if (ImGui::TreeNode("AA Settings")) {
+    if (ui.TreeNode("AntiAlias")) {
+        if (ui.TreeNode("AA Settings")) {
             for (uint i = 0; i < EAnitiAliasMode::EAA_Num; i++) {
-                if (ImGui::Selectable(s_aa_mode_names[i].data(), config.aa_cfg.aa_mode == i)) {
+                if (ui.Selectable(s_aa_mode_names[i].data(), config.aa_cfg.aa_mode == i)) {
                     config.aa_cfg.aa_mode = (EAnitiAliasMode)i;
                 }
             }
-            ImGui::TreePop();
+            ui.TreePop();
         }
 
-        if (ImGui::TreeNode("Jitter Settings")) {
+        if (ui.TreeNode("Jitter Settings")) {
             for (uint i = 0; i < uint(EJitter::WhiteNoise) + 1; i++) {
-                if (ImGui::Selectable(s_jitter_mode_names[i].data(), uint(config.aa_cfg.jitter_mode) == i)) {
+                if (ui.Selectable(s_jitter_mode_names[i].data(), uint(config.aa_cfg.jitter_mode) == i)) {
                     config.aa_cfg.jitter_mode = (EJitter)i;
                 }
             }
-            ImGui::TreePop();
+            ui.TreePop();
         }
-        ImGui::SliderFloat("New Frame Weight", &config.aa_cfg.new_frame_weight, 0.0f, 1.0f);
-        ImGui::SliderFloat("Clamping Factor", &config.aa_cfg.clamping_factor, 0.0f, 10.0f);
-        ImGui::SliderFloat("Max Radiance", &config.aa_cfg.max_radiance, 0.0f, 10000.0f);
-        ImGui::Checkbox("Enable History Clamping", &config.aa_cfg.enable_history_clamping);
-        ImGui::TreePop();
+        ui.SliderFloat("New Frame Weight", &config.aa_cfg.new_frame_weight, 0.0f, 1.0f);
+        ui.SliderFloat("Clamping Factor", &config.aa_cfg.clamping_factor, 0.0f, 10.0f);
+        ui.SliderFloat("Max Radiance", &config.aa_cfg.max_radiance, 0.0f, 10000.0f);
+        ui.Checkbox("Enable History Clamping", &config.aa_cfg.enable_history_clamping);
+        ui.TreePop();
     }
-    ImGui::Separator();
-    ImGui::Text("Directional Light Config");
+    ui.Separator();
+    ui.Text("Directional Light Config");
     config.sun_direction = Normalizef(config.sun_direction);
-    ImGui::SliderFloat3("Sun Direction", &config.sun_direction.x, -1.0f, 1.0f);
-    ImGui::SliderFloat("Exposure", &config.exposure, 0.0f, 10.0f);
-    // ImGui::SliderFloat("Sun Angular Diameter", &config.sun_angular_diameter,
+    ui.SliderFloat3("Sun Direction", &config.sun_direction.x, -1.0f, 1.0f);
+    ui.SliderFloat("Exposure", &config.exposure, 0.0f, 10.0f);
+    // ui.SliderFloat("Sun Angular Diameter", &config.sun_angular_diameter,
     // 0.0f, 1.0f);
 
     int max_bounce = config.max_bounce;
-    // ImGui::SliderInt("Max Bounce", &max_bounce, 1, 5);
+    // ui.SliderInt("Max Bounce", &max_bounce, 1, 5);
     config.max_bounce = max_bounce;
 
-    ImGui::Separator();
-    ImGui::Text("Capture Settings");
+    ui.Separator();
+    ui.Text("Capture Settings");
     for (uint i = 0; i < EOutputTexture::EOT_Num; i++) {
-        if (ImGui::Selectable(s_exported_texture_names[i].data(), config.export_cfg.output_texture == i)) {
+        if (ui.Selectable(s_exported_texture_names[i].data(), config.export_cfg.output_texture == i)) {
             config.export_cfg.output_texture = (EOutputTexture)i;
         }
     }
-    if (ImGui::Button("Capture Screen")) {
+    if (ui.Button("Capture Screen")) {
         config.export_cfg.b_export = true;
     }
 
-    ImGui::TreePop();
+    ui.TreePop();
 }
 
 } // namespace Moer

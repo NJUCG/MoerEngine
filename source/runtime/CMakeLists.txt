@@ -7,7 +7,9 @@ set(moer_runtime_dir ${moer_source_dir}/runtime)
 set(moer_runtime_core_dir ${moer_runtime_dir}/core)
 set(moer_runtime_render_dir ${moer_runtime_dir}/render)
 
-add_subdirectory(core)
+if(NOT TARGET Moer::Core)
+    add_subdirectory(core)
+endif()
 add_subdirectory(render)
 
 # CONFIGURE_DEPENDS，指如果文件变化了，则自动重新GLOB

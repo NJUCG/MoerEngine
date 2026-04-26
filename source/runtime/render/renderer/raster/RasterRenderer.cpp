@@ -141,8 +141,8 @@ void RasterRenderer::Run(const SharedPtr<EditorConfig> editor_config, const Engi
         hooks.on_register_renderer_config_section(
             "Raster",
             "Settings",
-            [&config_ui]() {
-                config_ui.ShowConfig();
+            [&config_ui](Synapse::Context& ui) {
+                config_ui.ShowConfig(ui);
             }
         );
     }
