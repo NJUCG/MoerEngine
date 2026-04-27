@@ -2,6 +2,7 @@
 
 #include "API_Macro.h"
 #include "misc/STL.h"
+#include "string/String.h"
 
 #include <atomic>
 #include <cstdint>
@@ -123,7 +124,7 @@ CORE_API void StartRecording();
 CORE_API void StopRecording();
 CORE_API bool IsRecording();
 
-CORE_API void SetThreadName(std::string_view thread_name);
+CORE_API void SetThreadName(Utf8StringView thread_name);
 CORE_API uint64_t DefaultCpuTrackId();
 CORE_API uint64_t MakeGpuQueueTrackId(uint32_t gpu_index, uint32_t queue_type);
 
@@ -142,6 +143,7 @@ CORE_API void EmitCounter(
     std::string_view args     = {}
 );
 CORE_API void EnableCsvExport(std::string_view csv_path);
+CORE_API Utf8String GetCsvPath();
 CORE_API Stats GetStats();
 
 CORE_API bool SerializeSessionMetadataPacket(

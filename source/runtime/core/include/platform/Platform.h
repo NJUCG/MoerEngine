@@ -2,6 +2,7 @@
 #define PLATFORM_H
 #include "API_Macro.h"
 #include "misc/STL.h"
+#include "string/String.h"
 #include <cstdint>
 #include <filesystem>
 #include <initializer_list>
@@ -101,7 +102,7 @@ protected:
 public:
     CORE_API static void SetThreadAffinity(void* current_thread_handle, uint64_t mask);
     CORE_API static void SetCurrentThreadAffinity(Affinity&& _affinity);
-    CORE_API static void SetCurrentThreadName(std::string_view _name);
+    CORE_API static void SetCurrentThreadName(Moer::Utf8StringView _name);
     CORE_API static void
     SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask);
     CORE_API static int32_t  GetProcessorWorkGroupCount();

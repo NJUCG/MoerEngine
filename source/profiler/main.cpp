@@ -9,6 +9,7 @@
 #include "renderer/common/ui/synapse/Synapse.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "taskgraph/ThreadManager.h"
 #include "window/WindowContext.h"
 
 #include <algorithm>
@@ -30,7 +31,27 @@ using namespace Moer::Profiler;
 
 static constexpr uint32_t trace_packet_magic = 0x4D525443u;
 
+class ProfilerIngestServer;
+
+class ProfilerIngestServerRunnable : public Runnable {
+public:
+    explicit ProfilerIngestServerRunnable(ProfilerIngestServer& in_owner) : m_owner(in_owner) {}
+
+    uint32_t Run() override;
+    void     Init() override {}
+    void     Stop() override;
+    void     Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
+    }
+
+private:
+    ProfilerIngestServer& m_owner;
+};
+
 class ProfilerIngestServer {
+    friend class ProfilerIngestServerRunnable;
+
 public:
     explicit ProfilerIngestServer(ProfileStore& profile_store) : m_store(profile_store) {}
     ~ProfilerIngestServer() {
@@ -41,23 +62,35 @@ public:
         if (m_running.exchange(true)) {
             return true;
         }
+        JoinServerThread();
         m_listen_port = port;
-        m_server_thread = std::thread([this]() { ServerMain(); });
+        m_server_runnable = MoerNew(ProfilerIngestServerRunnable)(*this);
+        m_server_thread   = RunnableThread::Create(
+            m_server_runnable,
+            ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("ProfilerIngestThread")}
+        );
         return true;
     }
 
     void Stop() {
-        if (!m_running.exchange(false)) {
-            return;
-        }
+        m_running.store(false);
         m_listen_socket.Close();
         m_client_socket.Close();
-        if (m_server_thread.joinable()) {
-            m_server_thread.join();
-        }
+        JoinServerThread();
     }
 
 private:
+    void JoinServerThread() {
+        if (m_server_thread != nullptr) {
+            MoerDelete(m_server_thread);
+            m_server_thread = nullptr;
+        }
+        if (m_server_runnable != nullptr) {
+            MoerDelete(m_server_runnable);
+            m_server_runnable = nullptr;
+        }
+    }
+
     static bool RecvAll(Network::TcpSocket& socket, uint8_t* data, size_t len) {
         return socket.RecvAll(std::span<std::byte>(reinterpret_cast<std::byte*>(data), len)) ==
                Network::ESocketStatus::Success;
@@ -165,12 +198,22 @@ private:
     ProfileStore&             m_store;
     std::atomic<bool>         m_running{false};
     uint16_t                  m_listen_port{19090};
-    std::thread               m_server_thread{};
+    ProfilerIngestServerRunnable* m_server_runnable{nullptr};
+    RunnableThread*               m_server_thread{nullptr};
     ProfileDumpSessionDecoder m_profile_dump_decoder{};
     TraceSessionDecoder       m_trace_decoder{};
     Network::TcpSocket        m_listen_socket{};
     Network::TcpSocket        m_client_socket{};
 };
+
+uint32_t ProfilerIngestServerRunnable::Run() {
+    m_owner.ServerMain();
+    return 0;
+}
+
+void ProfilerIngestServerRunnable::Stop() {
+    m_owner.Stop();
+}
 
 Utf8String ToProfilerString(const char* text) {
     return Utf8String(text ? text : "");
@@ -322,6 +365,12 @@ struct TimelineViewState {
     uint64_t view_end_ns{0};
     bool     auto_follow{true};
     AsciiChar search_text[128]{};
+    Utf8String highlighted_event_name{};
+    bool       selecting_time_range{false};
+    bool       has_time_range_selection{false};
+    uint64_t   time_range_anchor_ns{0};
+    uint64_t   time_range_start_ns{0};
+    uint64_t   time_range_end_ns{0};
 };
 
 void DrawTimeRuler(
@@ -753,6 +802,53 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
         const double t = (static_cast<double>(ts) - static_cast<double>(ui_state.view_start_ns)) / range_ns;
         return timeline_x0 + static_cast<float>(std::clamp(t, 0.0, 1.0) * timeline_w);
     };
+    auto to_time = [&](float x) {
+        const double t = std::clamp((x - timeline_x0) / std::max(1.0f, timeline_w), 0.0f, 1.0f);
+        return ui_state.view_start_ns + static_cast<uint64_t>(t * range_ns);
+    };
+
+    const bool mouse_in_timeline_body = mouse_in_timeline && mouse_pos.y >= canvas_origin.y + top_header_h;
+    if (ui.IsWindowHovered() && mouse_in_timeline_body) {
+        if (ui.IsMouseClicked(Synapse::EMouseButton::Left)) {
+            const uint64_t time_ns = to_time(mouse_pos.x);
+            ui_state.selecting_time_range      = true;
+            ui_state.has_time_range_selection  = false;
+            ui_state.time_range_anchor_ns      = time_ns;
+            ui_state.time_range_start_ns       = time_ns;
+            ui_state.time_range_end_ns         = time_ns;
+        }
+        if (ui_state.selecting_time_range && ui.IsMouseDown(Synapse::EMouseButton::Left)) {
+            const uint64_t time_ns = to_time(mouse_pos.x);
+            ui_state.time_range_start_ns = std::min(ui_state.time_range_anchor_ns, time_ns);
+            ui_state.time_range_end_ns   = std::max(ui_state.time_range_anchor_ns, time_ns);
+        }
+        if (ui.IsMouseReleased(Synapse::EMouseButton::Left)) {
+            const uint64_t selected_span = ui_state.time_range_end_ns - ui_state.time_range_start_ns;
+            ui_state.selecting_time_range     = false;
+            ui_state.has_time_range_selection = selected_span > std::max<uint64_t>(1, static_cast<uint64_t>(range_ns / 1000.0));
+        }
+        if (ui.IsMouseClicked(Synapse::EMouseButton::Right)) {
+            ui_state.selecting_time_range     = false;
+            ui_state.has_time_range_selection = false;
+        }
+    } else if (ui_state.selecting_time_range && ui.IsMouseReleased(Synapse::EMouseButton::Left)) {
+        ui_state.selecting_time_range     = false;
+        ui_state.has_time_range_selection = ui_state.time_range_end_ns > ui_state.time_range_start_ns;
+    }
+
+    const bool time_range_active = (ui_state.selecting_time_range || ui_state.has_time_range_selection) &&
+                                   ui_state.time_range_end_ns > ui_state.time_range_start_ns;
+    const uint64_t selected_range_start_ns = ui_state.time_range_start_ns;
+    const uint64_t selected_range_end_ns   = ui_state.time_range_end_ns;
+
+    struct EventOverlayRect {
+        Synapse::Size min{};
+        Synapse::Size max{};
+    };
+    Array<EventOverlayRect> range_overlay_rects{};
+    Array<EventOverlayRect> name_overlay_rects{};
+    EventOverlayRect        selected_overlay_rect{};
+    bool                    has_selected_overlay_rect = false;
 
     float y_cursor = canvas_origin.y + top_header_h;
     int   last_type_group = -1;
@@ -809,18 +905,7 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
         auto indices_it = cache.scope_indices_by_track.find(track.key);
         if (indices_it != cache.scope_indices_by_track.end()) {
             const auto& track_indices = indices_it->second;
-            auto start_it = std::lower_bound(
-                track_indices.begin(),
-                track_indices.end(),
-                ui_state.view_start_ns,
-                [&](size_t idx, uint64_t ts) { return events[idx].ts_begin_ns < ts; }
-            );
-            size_t start_pos = static_cast<size_t>(start_it - track_indices.begin());
-            while (start_pos > 0 && events[track_indices[start_pos - 1]].ts_end_ns >= ui_state.view_start_ns) {
-                --start_pos;
-            }
-
-            for (size_t pos = start_pos; pos < track_indices.size(); ++pos) {
+            for (size_t pos = 0; pos < track_indices.size(); ++pos) {
                 const size_t      idx = track_indices[pos];
                 const auto&       e   = events[idx];
                 if (e.ts_begin_ns > ui_state.view_end_ns) {
@@ -851,6 +936,12 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
                 const float y1 = y0 + lane_h - 2.0f;
 
                 const uint32_t color = EventColorByName(e.name);
+                const EventOverlayRect event_rect{{x0, y0}, {x1, y1}};
+                const uint64_t event_end_ns = std::max<uint64_t>(e.ts_end_ns, e.ts_begin_ns + 1);
+                const bool event_covered_by_range = time_range_active && e.ts_begin_ns <= selected_range_end_ns &&
+                                                    event_end_ns >= selected_range_start_ns;
+                const bool event_highlighted_by_name = !ui_state.highlighted_event_name.empty() &&
+                                                       e.name == ui_state.highlighted_event_name;
 
                 if (e.type == ProfileEventType::Scope) {
                     ui.DrawRectFilled({x0, y0}, {x1, y1}, color, 2.0f);
@@ -860,8 +951,15 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
                     ui.DrawCircleFilled({marker_x, marker_y}, 4.0f, color, 12);
                     ui.DrawLine({marker_x, y0}, {marker_x, y1}, color, 1.0f);
                 }
+                if (event_covered_by_range) {
+                    range_overlay_rects.emplace_back(event_rect);
+                }
+                if (event_highlighted_by_name) {
+                    name_overlay_rects.emplace_back(event_rect);
+                }
                 if (e.event_id == selected_event_id) {
-                    ui.DrawRect({x0, y0}, {x1, y1}, PackColor(255, 255, 0), 2.0f, 2.0f);
+                    selected_overlay_rect      = event_rect;
+                    has_selected_overlay_rect = true;
                 }
                 const float inner_w = x1 - x0 - 6.0f;
                 const float inner_h = y1 - y0 - 2.0f;
@@ -883,7 +981,14 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
                 }
 
                 if (ui.IsMouseHoveringRect({x0, y0}, {x1, y1})) {
-                    if (ui.IsMouseClicked(Synapse::EMouseButton::Left)) {
+                    if (ui.IsMouseDoubleClicked(Synapse::EMouseButton::Left)) {
+                        selected_event_id = e.event_id;
+                        if (ui_state.highlighted_event_name == e.name) {
+                            ui_state.highlighted_event_name = Utf8String{};
+                        } else {
+                            ui_state.highlighted_event_name = e.name;
+                        }
+                    } else if (ui.IsMouseClicked(Synapse::EMouseButton::Left)) {
                         selected_event_id = e.event_id;
                     }
                     Utf8String parent_name = ToProfilerString("None");
@@ -921,13 +1026,34 @@ void DrawTimelinePanel(Synapse::Context& ui, ProfileStore& store, TimelineViewSt
         ui.Dummy({1.0f, track_h});
     }
 
+    if (time_range_active) {
+        const float range_x0 = to_x(selected_range_start_ns);
+        const float range_x1 = to_x(selected_range_end_ns);
+        const float body_y0  = canvas_origin.y + top_header_h;
+        const float body_y1  = y_cursor;
+        ui.DrawRectFilled({timeline_x0, body_y0}, {range_x0, body_y1}, PackColor(0, 0, 0, 96));
+        ui.DrawRectFilled({range_x1, body_y0}, {timeline_x0 + timeline_w, body_y1}, PackColor(0, 0, 0, 96));
+        ui.DrawRectFilled({range_x0, body_y0}, {range_x1, body_y1}, PackColor(92, 156, 206, 42));
+        ui.DrawRect({range_x0, body_y0}, {range_x1, body_y1}, PackColor(132, 202, 245, 150), 0.0f, 1.0f);
+    }
+    for (const EventOverlayRect& rect : range_overlay_rects) {
+        ui.DrawRectFilled(rect.min, rect.max, PackColor(255, 255, 255, 34), 2.0f);
+        ui.DrawRect(rect.min, rect.max, PackColor(255, 255, 255, 92), 2.0f, 1.0f);
+    }
+    for (const EventOverlayRect& rect : name_overlay_rects) {
+        ui.DrawRect(rect.min, rect.max, PackColor(110, 220, 255, 190), 2.0f, 1.5f);
+    }
+    if (has_selected_overlay_rect) {
+        ui.DrawRect(selected_overlay_rect.min, selected_overlay_rect.max, PackColor(255, 255, 0), 2.0f, 2.0f);
+    }
+
     ui.DrawLine(
         {canvas_origin.x, y_cursor},
         {canvas_origin.x + canvas_w, y_cursor},
         PackColor(70, 70, 70),
         1.0f
     );
-    ui.Dummy({canvas_w, std::max(200.0f, y_cursor - canvas_origin.y + 20.0f)});
+    ui.Dummy({canvas_w, 20.0f});
     ui.EndChild();
 
     ui.BeginChild(MOER_ASCII_TEXT("TimelineOverview"), {0.0f, overview_child_h}, true, false);
@@ -1083,6 +1209,12 @@ int RunProfilerMain(int argc, const char** argv) {
     TimelineViewState timeline_state{};
     timeline_state.auto_follow = true;
     Utf8String capture_path{};
+    if (argc > 1 && argv[1] != nullptr && argv[1][0] != '\0') {
+        capture_path = ToProfilerString(argv[1]);
+        if (!LoadProfilerCaptureFile(capture_path, store, true)) {
+            LOG_WARNING(MOER_TEXT("Failed to load profiler capture `{}`."), capture_path);
+        }
+    }
 
     while (!WindowContext::ShouldClose(WindowContext::GetMainWindow())) {
         WindowContext::Tick();

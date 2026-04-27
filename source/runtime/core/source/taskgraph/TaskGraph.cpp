@@ -1,6 +1,7 @@
 #include "taskgraph/AnyThreadScheduler.h"
 #include "taskgraph/TaskGraph.h"
 #include "platform/Platform.h"
+#include "string/Format.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/ThreadManager.h"
 //#define NOMINMAX 1
@@ -83,8 +84,12 @@ TaskGraph::TaskGraph() {
     //todo no handle for thread groups
     for (int32_t i = m_named_thread_count; i < m_thread_count; i++) {
         int32_t     priority = GetThreadPriorityFromIndex(i);
-        std::string name     = "WorkerThread_" + GetPriorityStr(priority) + "_" +
-                           std::to_string((i - m_named_thread_count) % m_worker_per_priority);
+        Moer::Utf8StringView priority_name = GetPriorityName(priority);
+        Moer::Utf8String name = Moer::Utf8Printf(
+            MOER_ASCII_TEXT("WorkerThread_{}_{}"),
+            priority_name.data(),
+            (i - m_named_thread_count) % m_worker_per_priority
+        );
         m_workers[i].actual_thread = RunnableThread::Create(
             &GetThread(i),
             ThreadAttributes{.affinity = Affinity::AnyOf(i, std::move(Affinity::All())), .name = name}
@@ -121,6 +126,12 @@ EThread::Type TaskGraph::GetCurrentThread(bool localQueue) {
     auto* thread = ThreadManager::Instance().GetRunnableThread(Platform::GetCurrentThreadID());
     if (thread) {
         ThreadIndex index = thread->m_runnable->GetIndex();
+        if (index < 0 || index >= m_thread_count) {
+            return EThread::SetPriority(
+                EThread::UNKNOWN_THREAD,
+                EThread::NORMAL_PRI
+            );
+        }
         return EThread::Type(
             m_workers[index].task_thread->m_thread_type |
             (localQueue ? EThread::LOCAL_QUEUE : EThread::MAIN_QUEUE)

@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -38,7 +39,9 @@
 #include "rhi/vulkan/VulkanSwapChain.h"
 #include "shader/ShaderCompiler.h"
 #include "shader/ShaderResourceManager.h"
+#include "string/Format.h"
 #include "taskgraph/TaskSystem.h"
+#include "taskgraph/ThreadManager.h"
 #include "window/WindowContext.h"
 
 #if defined(MOER_TEST_WITH_PROFILE)
@@ -49,6 +52,53 @@ namespace {
 
 using namespace Moer;
 using namespace Moer::Render;
+
+class TestFunctionRunnable : public Runnable {
+public:
+    explicit TestFunctionRunnable(std::function<void()>&& in_function) : m_function(std::move(in_function)) {}
+
+    uint32_t Run() override {
+        m_function();
+        return 0;
+    }
+
+    void Init() override {}
+    void Stop() override {}
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
+    }
+
+private:
+    std::function<void()> m_function;
+};
+
+class ScopedTestThread {
+public:
+    ScopedTestThread(Utf8StringView name, std::function<void()>&& function) :
+        m_runnable(std::move(function)),
+        m_thread(RunnableThread::Create(
+            &m_runnable,
+            ThreadAttributes{.affinity = Affinity{}, .name = name}
+        )) {}
+
+    ~ScopedTestThread() {
+        if (m_thread != nullptr) {
+            MoerDelete(m_thread);
+            m_thread = nullptr;
+        }
+    }
+
+    void Join() {
+        if (m_thread != nullptr) {
+            m_thread->Join();
+        }
+    }
+
+private:
+    TestFunctionRunnable m_runnable;
+    RunnableThread*      m_thread{nullptr};
+};
 
 struct BindlessReadbackArgs {
     uint32_t src_handle;
@@ -475,7 +525,7 @@ bool AssertCpuProfileRecord(const Moer::ProfileDump::DecodedRecord& record, std:
 #endif
 
 #if defined(_WIN32)
-class ProfileDumpTcpCaptureServer {
+class ProfileDumpTcpCaptureServer : public Runnable {
 public:
     ~ProfileDumpTcpCaptureServer() {
         Stop();
@@ -519,37 +569,22 @@ public:
         }
         port = ntohs(addr.sin_port);
 
-        server_thread = std::thread([this]() {
-            sockaddr_in client_addr{};
-            int         client_length = sizeof(client_addr);
-            const SOCKET accepted_socket =
-                accept(listen_socket, reinterpret_cast<sockaddr*>(&client_addr), &client_length);
-            if (accepted_socket == INVALID_SOCKET) {
-                return;
-            }
-
-            client_socket = accepted_socket;
-            uint8_t buffer[4096]{};
-            while (running.load()) {
-                const int received = recv(
-                    accepted_socket,
-                    reinterpret_cast<char*>(buffer),
-                    static_cast<int>(sizeof(buffer)),
-                    0
-                );
-                if (received <= 0) {
-                    break;
-                }
-
-                std::lock_guard lock(buffer_mutex);
-                received_bytes.insert(received_bytes.end(), buffer, buffer + received);
-            }
-        });
+        m_server_thread = RunnableThread::Create(
+            this,
+            ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("ProfileDumpTcpCaptureThread")}
+        );
 
         return true;
     }
 
-    void Stop() {
+    uint32_t Run() override {
+        ServerMain();
+        return 0;
+    }
+
+    void Init() override {}
+
+    void Stop() override {
         if (!running.exchange(false)) {
             return;
         }
@@ -562,13 +597,19 @@ public:
             closesocket(client_socket);
             client_socket = INVALID_SOCKET;
         }
-        if (server_thread.joinable()) {
-            server_thread.join();
+        if (m_server_thread != nullptr) {
+            MoerDelete(m_server_thread);
+            m_server_thread = nullptr;
         }
         if (winsock_initialized) {
             WSACleanup();
             winsock_initialized = false;
         }
+    }
+
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
     }
 
     uint16_t GetPort() const {
@@ -597,6 +638,32 @@ public:
     }
 
 private:
+    void ServerMain() {
+        sockaddr_in client_addr{};
+        int         client_length = sizeof(client_addr);
+        const SOCKET accepted_socket = accept(listen_socket, reinterpret_cast<sockaddr*>(&client_addr), &client_length);
+        if (accepted_socket == INVALID_SOCKET) {
+            return;
+        }
+
+        client_socket = accepted_socket;
+        uint8_t buffer[4096]{};
+        while (running.load()) {
+            const int received = recv(
+                accepted_socket,
+                reinterpret_cast<char*>(buffer),
+                static_cast<int>(sizeof(buffer)),
+                0
+            );
+            if (received <= 0) {
+                break;
+            }
+
+            std::lock_guard lock(buffer_mutex);
+            received_bytes.insert(received_bytes.end(), buffer, buffer + received);
+        }
+    }
+
     mutable std::mutex   buffer_mutex{};
     std::vector<uint8_t> received_bytes{};
     std::atomic<bool>    running{false};
@@ -604,7 +671,7 @@ private:
     uint16_t             port = 0;
     SOCKET               listen_socket = INVALID_SOCKET;
     SOCKET               client_socket = INVALID_SOCKET;
-    std::thread          server_thread{};
+    RunnableThread*      m_server_thread{nullptr};
 };
 #endif
 
@@ -1290,9 +1357,11 @@ int RunDescriptorHeapConcurrentRangeAllocationTest() {
     std::vector<uint64_t> allocated_offsets;
     allocated_offsets.reserve(kThreadCount * kAllocationsPerThread);
     std::mutex allocation_mutex;
-    std::array<std::thread, kThreadCount> threads;
+    Moer::Array<Moer::UniquePtr<ScopedTestThread>> threads;
+    threads.reserve(kThreadCount);
     for (uint32_t thread_idx = 0; thread_idx < kThreadCount; ++thread_idx) {
-        threads[thread_idx] = std::thread([&]() {
+        Utf8String thread_name = Utf8Printf(MOER_ASCII_TEXT("DescriptorHeapWorker_{}"), thread_idx);
+        threads.emplace_back(Moer::MakeUnique<ScopedTestThread>(thread_name, [&]() {
             binder.ActivateOnCurrentThread();
             std::vector<uint64_t> local_offsets;
             local_offsets.reserve(kAllocationsPerThread);
@@ -1304,10 +1373,10 @@ int RunDescriptorHeapConcurrentRangeAllocationTest() {
             allocated_offsets.insert(
                 allocated_offsets.end(), local_offsets.begin(), local_offsets.end()
             );
-        });
+        }));
     }
     for (auto& thread : threads) {
-        thread.join();
+        thread->Join();
     }
     LOG_INFO(MOER_TEXT("Descriptor heap test: concurrent range allocation finished"));
 

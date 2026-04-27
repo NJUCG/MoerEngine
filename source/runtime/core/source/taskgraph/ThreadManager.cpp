@@ -2,11 +2,9 @@
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
 #include "taskgraph/Event.h"
-#include <algorithm>
+#include "trace/Trace.h"
 #include <assert.h>
 #include <functional>
-#include <iostream>
-#include <string>
 #include <thread>
 
 #if defined(PLATFORM_WINDOWS)
@@ -17,43 +15,46 @@
 #else
 #endif
 
-#define MAIN_THREAD_NAME    "MainThread"
-#define RENDER_THREAD_NAME  "RenderThread"
-#define UNKNOWN_THREAD_NAME "UnknownThread"
+namespace {
+
+constexpr Moer::Utf8StringView main_thread_name{MOER_ASCII_TEXT("MainThread")};
+constexpr Moer::Utf8StringView render_thread_name{MOER_ASCII_TEXT("RenderThread")};
+constexpr Moer::Utf8StringView unknown_thread_name{MOER_ASCII_TEXT("UnknownThread")};
+
+} // namespace
 
 CORE_API uint32_t ThreadManager::g_game_thread_id   = 0;
 CORE_API uint32_t ThreadManager::g_render_thread_id = 0;
 
-std::string GetPriorityStr(int32_t priority) {
+Moer::Utf8StringView GetPriorityName(int32_t priority) {
     assert(priority < EThread::PriorityCount);
     priority = priority << EThread::PRIORITY_SHEFT;
     switch (priority) {
         case EThread::HIGH_PRI:
-            return "Pri_High";
+            return Moer::Utf8StringView{MOER_ASCII_TEXT("Pri_High")};
         case EThread::NORMAL_PRI:
-            return "Pri_Normal";
+            return Moer::Utf8StringView{MOER_ASCII_TEXT("Pri_Normal")};
         default:
-            return "Pri_Low";
-            break;
+            return Moer::Utf8StringView{MOER_ASCII_TEXT("Pri_Low")};
     }
-    return "";
 }
 ThreadManager::~ThreadManager() {
     ShutDown();
 }
-void ThreadManager::AddThread(uint32_t id, RunnableThread* thread) {
-    if (m_threads.find(id) == m_threads.end()) {
-        m_threads.emplace(id, thread);
-        m_thread_indexs.emplace(id, m_threads.size() - 1);
+void ThreadManager::RegisterThread(uint32_t id, RunnableThread* thread, Moer::Utf8StringView name) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_threads.find(id) != m_threads.end()) {
+        return;
     }
+    m_threads.emplace(id, ThreadInfo{.thread = thread, .name = Moer::Utf8String(name), .index = m_next_thread_index++});
 }
 
-void ThreadManager::RemoveThread(RunnableThread* thread) {
+void ThreadManager::UnregisterThread(RunnableThread* thread) {
     assert(thread != nullptr);
+    std::lock_guard<std::mutex> lock(m_mutex);
     auto target = m_threads.find(thread->id);
     if (target != m_threads.end()) {
         m_threads.erase(target);
-        m_thread_indexs.erase(thread->id);
     }
 }
 void ThreadManager::SetGameThreadID(uint32_t _game_thread_id) {
@@ -73,23 +74,21 @@ void ThreadManager::Tick() {}
 
 void ThreadManager::Initialize() {
     g_game_thread_id = Platform::GetCurrentThreadID();
-    Platform::SetCurrentThreadName(MAIN_THREAD_NAME);
-    AddThread(g_game_thread_id, nullptr);
+    RegisterThread(g_game_thread_id, nullptr, main_thread_name);
+    Platform::SetCurrentThreadName(main_thread_name);
+    Moer::Trace::SetThreadName(main_thread_name);
 }
 uint32_t ThreadManager::GetCurrentThreadID() {
     return Platform::GetCurrentThreadID();
 }
 
 uint32_t ThreadManager::GetCurrentThreadIndex() {
-    return Instance().m_thread_indexs.at(Platform::GetCurrentThreadID());
+    ThreadManager& manager = Instance();
+    std::lock_guard<std::mutex> lock(manager.m_mutex);
+    return manager.m_threads.at(Platform::GetCurrentThreadID()).index;
 }
 
-const char* ThreadManager::GetThreadName(uint32_t id) {
-
-    if (id == g_game_thread_id)
-        return MAIN_THREAD_NAME;
-    if (id == g_render_thread_id)
-        return RENDER_THREAD_NAME;
+Moer::Utf8String ThreadManager::GetThreadName(uint32_t id) {
     return Instance().GetRunnableThreadName(id);
 }
 
@@ -99,25 +98,44 @@ ThreadManager& ThreadManager::Instance() {
 }
 
 void ThreadManager::ShutDown() {
-    for (auto i = m_threads.begin(); i != m_threads.end(); i++) {
-        if (i->second != nullptr && i->second->Joinable()) {
-            i->second->Join();
+    Moer::Array<RunnableThread*> threads_to_join{};
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        threads_to_join.reserve(m_threads.size());
+        for (auto& [id, info] : m_threads) {
+            if (info.thread != nullptr && info.thread->Joinable()) {
+                threads_to_join.push_back(info.thread);
+            }
         }
+    }
+
+    for (RunnableThread* thread : threads_to_join) {
+        thread->Join();
     }
 }
 
-const char* ThreadManager::GetRunnableThreadName(uint32_t id) {
+Moer::Utf8String ThreadManager::GetRunnableThreadName(uint32_t id) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     auto target = m_threads.find(id);
-    if (target != m_threads.end())
-        return target->second->name.c_str();
-    return UNKNOWN_THREAD_NAME;
+    if (target != m_threads.end()) {
+        return target->second.name;
+    }
+    if (id == g_render_thread_id) {
+        return Moer::Utf8String(render_thread_name);
+    }
+    if (id == g_game_thread_id) {
+        return Moer::Utf8String(main_thread_name);
+    }
+    return Moer::Utf8String(unknown_thread_name);
 }
 
 RunnableThread* ThreadManager::GetRunnableThread(uint32_t id) {
-    if (id == g_game_thread_id)
+    if (id == g_game_thread_id) {
         return nullptr;
-    auto* thread = m_threads.at(id);
-    return thread;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto target = m_threads.find(id);
+    return target == m_threads.end() ? nullptr : target->second.thread;
 }
 
 void RunnableThread::Setup(uint64_t _affinity) {
@@ -128,20 +146,19 @@ void RunnableThread::SetAffinity(Affinity&& _affinity) {
     Platform::SetCurrentThreadAffinity(std::move(_affinity));
 }
 
-void RunnableThread::SetName(std::string_view _name) {
+void RunnableThread::SetName(Moer::Utf8StringView _name) {
     Platform::SetCurrentThreadName(_name);
-    name = _name;
+    Moer::Trace::SetThreadName(_name);
 }
 
 RunnableThread::~RunnableThread() {
-    ThreadManager::Instance().RemoveThread(this);
     Join();
+    ThreadManager::Instance().UnregisterThread(this);
 }
 
 RunnableThread* RunnableThread::Create(Runnable* _runnable, ThreadAttributes _attributes) {
     RunnableThread* created_thread = nullptr;
     created_thread                 = MoerNew(RunnableThread)(_runnable, _attributes);
-    ThreadManager::Instance().AddThread(created_thread->id, created_thread);
     return created_thread;
 }
 
@@ -153,8 +170,12 @@ RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attribu
     m_create_event = EventPool::Get()->GetEvent(false);
     m_end_event    = EventPool::Get()->GetEvent(false);
     EventRef create_event(m_create_event);
+    Moer::Utf8String thread_name(_attributes.name);
+    ThreadManager::Instance();
     m_thread = MoerNew(std::thread)(
-        [_in_runnable, name(_attributes.name), affinity(std::move(_attributes.affinity)), this]() {
+        [_in_runnable, name(std::move(thread_name)), affinity(std::move(_attributes.affinity)), this]() {
+            id = Platform::GetCurrentThreadID();
+            ThreadManager::Instance().RegisterThread(id, this, name);
             SetName(name);
             auto tmp_affinity = affinity;
             SetAffinity(std::move(tmp_affinity));
@@ -162,14 +183,12 @@ RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attribu
         }
     );
     create_event.Wait();
-    this->name = _attributes.name;
 
-    LOG_INFO(MOER_TEXT("[{}] {} thread created"), name, this->id);
+    LOG_INFO(MOER_TEXT("[{}] {} thread created"), GetName(), this->id);
 }
 
 uint32_t RunnableThread::Run() {
     assert(m_runnable != nullptr);
-    id = Platform::GetCurrentThreadID();
     m_create_event->Trigger();
     m_runnable->Init();
 

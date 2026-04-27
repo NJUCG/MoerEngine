@@ -3,6 +3,7 @@
 #include "VulkanProfiler.h"
 #include "MemoryProfiler.h"
 #include "MinHook.h"
+#include "taskgraph/ThreadManager.h"
 
 #pragma comment(lib,"psapi.lib")
 #pragma comment(lib, "dbghelp.lib")
@@ -21,7 +22,7 @@ const size_t MAX_REORDER_WINDOW = 4096;
 
 static std::atomic<bool> g_dbghelp_inited(false);
 
-static std::thread g_worker;
+static RunnableThread* g_worker = nullptr;
 static std::atomic<bool> g_worker_running(false);
 
 std::string log_path = get_log_path() + "\\profiler.log";
@@ -135,6 +136,25 @@ static void worker_thread_func() {
         }
     }
 }
+
+class ProfileWorkerRunnable final : public Runnable {
+public:
+    uint32_t Run() override {
+        worker_thread_func();
+        return 0;
+    }
+    void Init() override {}
+    void Stop() override {
+        g_worker_running.store(false, std::memory_order_release);
+    }
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
+    }
+};
+
+static ProfileWorkerRunnable g_worker_runnable;
+
 void process_record_logical(const EventRecord& rec) {
     const uint8_t s_idx = static_cast<uint8_t>(rec.source);
     if (s_idx >= (uint8_t)MemorySource::MAX_SOURCES) return;
@@ -526,7 +546,11 @@ void ProfileExitFunc() {
     //std::this_thread::sleep_for(std::chrono::milliseconds(3000));
     
     g_worker_running.store(false, std::memory_order_release);
-    if (g_worker.joinable()) g_worker.join();
+    if (g_worker != nullptr) {
+        g_worker->Join();
+        MoerDelete(g_worker);
+        g_worker = nullptr;
+    }
 
     // cleanup
     if (g_log_ofs.is_open()) {
@@ -611,9 +635,14 @@ void* PatternScan(BYTE* base, size_t size, const BYTE* pattern, const char* mask
 
 void ProfileInitDynamic()
 {
+    if (g_worker != nullptr) return;
+
     // start worker
     g_worker_running.store(true);
-    g_worker = std::thread(worker_thread_func);
+    g_worker = RunnableThread::Create(
+        &g_worker_runnable,
+        ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("ProfileWorkerThread")}
+    );
 }
 
 void install_hooks_static() {
@@ -687,9 +716,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
 
-        //std::thread(ProfileInitFunc).detach(); //异步玄学挂的上
         ProfileInitFunc(); //同步玄学挂的上
-        //std::thread(ProfileInitDynamic).detach();//异步可能挂不上
 
     }
     return TRUE;

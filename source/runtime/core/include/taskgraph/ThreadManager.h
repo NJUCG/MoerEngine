@@ -4,10 +4,10 @@
 #include "misc/MMemory.h"
 #include "misc/STL.h"
 #include "platform/Platform.h"
+#include "string/String.h"
 #include <assert.h>
-#include <string>
+#include <mutex>
 #include <thread>
-#include <variant>
 typedef int32_t ThreadIndex;
 typedef int32_t QueueIndex;
 typedef int32_t ThreadPriority;
@@ -59,7 +59,7 @@ public:
         return Type((type & ~INDEX_MASK) | (INDEX_MASK & index));
     }
 };
-std::string GetPriorityStr(int32_t priority);
+Moer::Utf8StringView GetPriorityName(int32_t priority);
 //thread executing structure
 class Runnable;
 //actual thread
@@ -80,14 +80,15 @@ private:
     void Initialize();
 
 public:
-    void           AddThread(uint32_t id, RunnableThread*);
-    void           RemoveThread(RunnableThread*);
+    void           RegisterThread(uint32_t id, RunnableThread* thread, Moer::Utf8StringView name);
+    void           UnregisterThread(RunnableThread* thread);
     inline int32_t GetNum() {
+        std::lock_guard<std::mutex> lock(m_mutex);
         return m_threads.size();
     }
     void                  Tick();
     static ThreadManager& Instance();
-    static const char*    GetThreadName(uint32_t id);
+    static Moer::Utf8String GetThreadName(uint32_t id);
     static void           SetGameThreadID(uint32_t _game_thread_id);
     static void           SetRenderThreadID(uint32_t _render_thread_id);
     static uint32_t       GetRenderThreadID();
@@ -98,14 +99,22 @@ public:
 private:
     void                                 ShutDown();
     RunnableThread*                      GetRunnableThread(uint32_t id);
-    Moer::Map<uint32_t, RunnableThread*> m_threads;
-    Moer::Map<uint32_t, uint32_t>        m_thread_indexs;
-    const char*                          GetRunnableThreadName(uint32_t id);
+    Moer::Utf8String                     GetRunnableThreadName(uint32_t id);
+
+    struct ThreadInfo {
+        RunnableThread*  thread{nullptr};
+        Moer::Utf8String name{};
+        uint32_t         index{0};
+    };
+
+    std::mutex                      m_mutex;
+    Moer::Map<uint32_t, ThreadInfo> m_threads;
+    uint32_t                        m_next_thread_index{0};
 };
 
 struct ThreadAttributes {
-    Affinity         affinity;
-    std::string_view name;
+    Affinity             affinity;
+    Moer::Utf8StringView name;
 };
 
 class RunnableThread {
@@ -119,25 +128,32 @@ public:
     void Join() {
         if (m_thread && m_thread->joinable()) {
             m_thread->join();
+        }
+        if (m_thread) {
             MoerDelete(m_thread);
+            m_thread = nullptr;
         }
     }
     void Detach() {
-        m_thread->detach();
+        if (m_thread) {
+            m_thread->detach();
+            MoerDelete(m_thread);
+            m_thread = nullptr;
+        }
     }
     bool Joinable() {
-        return m_thread->joinable();
+        return m_thread != nullptr && m_thread->joinable();
     }
     void WaitUntilFinished();
 
-    inline const std::string& GetName() {
-        return name;
+    inline Moer::Utf8String GetName() {
+        return ThreadManager::GetThreadName(id);
     }
 
 protected:
     void Setup(uint64_t affinity);
     void SetAffinity(Affinity&& _affinity);
-    void SetName(std::string_view _name);
+    void SetName(Moer::Utf8StringView _name);
     RunnableThread(Runnable*, ThreadAttributes _attributes);
     uint32_t Run();
 
@@ -145,9 +161,8 @@ private:
     Runnable*    m_runnable;
     Event*       m_create_event;
     Event*       m_end_event;
-    uint32_t     id;
-    std::string  name;
-    std::thread* m_thread;
+    uint32_t     id{0};
+    std::thread* m_thread{nullptr};
 };
 
 class Runnable {

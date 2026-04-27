@@ -25,6 +25,7 @@ struct Size {
 
 enum class EMouseButton {
     Left,
+    Right,
     Middle
 };
 
@@ -45,6 +46,8 @@ enum class EIcon {
     Reload,
     Eye,
     Camera,
+    Record,
+    Profiler,
     ChevronRight
 };
 
@@ -69,8 +72,8 @@ struct Theme {
     float child_rounding        = 4.0f;
     float frame_rounding        = 3.0f;
     float popup_rounding        = 4.0f;
-    float toolbar_height        = 28.0f;
-    float icon_button_size      = 24.0f;
+    float toolbar_height        = 34.0f;
+    float icon_button_size      = 30.0f;
 };
 
 struct DockspaceDesc {
@@ -189,9 +192,12 @@ public:
     bool  IsShiftDown() const;
     bool  IsWindowHovered() const;
     bool  IsWindowFocusedChildWindows() const;
+    bool  IsMouseDown(EMouseButton button) const;
     bool  IsMouseDragging(EMouseButton button) const;
+    bool  IsMouseReleased(EMouseButton button) const;
     bool  IsMouseHoveringRect(Size min, Size max) const;
     bool  IsMouseClicked(EMouseButton button) const;
+    bool  IsMouseDoubleClicked(EMouseButton button) const;
     bool  IsKeyDown(EKey key) const;
     bool  IsKeyPressed(EKey key) const;
 

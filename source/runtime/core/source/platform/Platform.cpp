@@ -123,7 +123,7 @@ void Platform::SetCurrentThreadAffinity(Affinity&& _affinity) {
     PlatformImplement::GetInstance()->SetCurrentThreadAffinity(std::move(_affinity));
 }
 
-void Platform::SetCurrentThreadName(std::string_view _name) {
+void Platform::SetCurrentThreadName(Moer::Utf8StringView _name) {
     PlatformImplement::GetInstance()->SetCurrentThreadName(_name);
 }
 void Platform::SetThreadAffinity(void* current_thread_handle, uint64_t mask) {

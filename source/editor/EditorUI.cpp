@@ -3,6 +3,7 @@
 // Runtime
 #include "file/FileDialog.h"
 #include "log/LogSystem.h"
+#include "trace/Trace.h"
 #include "window/WindowInput.h"
 
 // Editor
@@ -13,8 +14,17 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <filesystem>
 #include <iterator>
 #include <string_view>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 using namespace Moer::Render;
 
@@ -36,6 +46,66 @@ void ClearCameraInput(WindowInput& input) {
     input.speed_up        = false;
     input.speed_down      = false;
     input.reset_speed     = false;
+}
+
+bool LaunchProfilerProcess(const std::filesystem::path& capture_path = {}) {
+#if defined(_WIN32)
+    wchar_t module_path[MAX_PATH]{};
+    const DWORD module_length = GetModuleFileNameW(nullptr, module_path, static_cast<DWORD>(std::size(module_path)));
+    if (module_length == 0 || module_length >= std::size(module_path)) {
+        LOG_WARNING(MOER_TEXT("Failed to resolve MoerEditor executable path."));
+        return false;
+    }
+
+    const std::filesystem::path editor_path   = std::filesystem::path(module_path);
+    const std::filesystem::path profiler_path = editor_path.parent_path() / L"MoerProfiler.exe";
+    std::wstring parameters{};
+    if (!capture_path.empty()) {
+        parameters.reserve(capture_path.wstring().size() + 2);
+        parameters.push_back(L'"');
+        parameters += capture_path.wstring();
+        parameters.push_back(L'"');
+    }
+    HINSTANCE result = ShellExecuteW(
+        nullptr,
+        L"open",
+        profiler_path.c_str(),
+        parameters.empty() ? nullptr : parameters.c_str(),
+        profiler_path.parent_path().c_str(),
+        SW_SHOWNORMAL
+    );
+    if (reinterpret_cast<intptr_t>(result) <= 32) {
+        LOG_WARNING(MOER_TEXT("Failed to launch MoerProfiler: {}"), profiler_path.string());
+        return false;
+    }
+    return true;
+#else
+    (void)capture_path;
+    LOG_WARNING(MOER_TEXT("Launching MoerProfiler from Editor is only implemented on Windows."));
+    return false;
+#endif
+}
+
+void OpenProfilerCapturePicker() {
+    static constexpr std::array<FileDialog::Filter, 3> capture_filters = {{
+        {"Profiler Capture", "mpd,mrtc,csv,bin"},
+        {"Trace CSV", "csv"},
+        {"All Files", "*"},
+    }};
+
+    Utf8String selected_path{};
+    const FileDialog::EOpenFileStatus result = FileDialog::OpenFile(FileDialog::OpenFileRequest{
+        .filters = capture_filters,
+        .callback = [](Utf8StringView selected_file_path, void* user_data) {
+            *static_cast<Utf8String*>(user_data) = Utf8String(selected_file_path);
+        },
+        .user_data = &selected_path,
+    });
+    if (result == FileDialog::EOpenFileStatus::Success) {
+        LaunchProfilerProcess(std::filesystem::path(selected_path.c_str()));
+    } else if (result == FileDialog::EOpenFileStatus::Error) {
+        LOG_WARNING(MOER_TEXT("Failed to open profiler capture picker."));
+    }
 }
 
 } // namespace
@@ -130,6 +200,40 @@ void EditorUI::TickUI() {
                     m_config->play_mode_enabled       = false;
                     m_config->play_mode_capture_input = false;
                 }
+            }
+            ui.SameLine();
+            const Trace::Stats trace_stats = Trace::GetStats();
+            if (ui.IconButton(
+                    Synapse::EIcon::Record,
+                    trace_stats.recording ? "Stop Trace" : "Start Trace",
+                    trace_stats.recording
+                )) {
+                if (trace_stats.recording) {
+                    Trace::StopRecording();
+                } else {
+                    Trace::StartRecording();
+                }
+            }
+            ui.SameLine();
+            if (ui.IconButton(Synapse::EIcon::Profiler, "Open MoerProfiler")) {
+                ui.OpenPopup("EditorProfilerLaunchPopup");
+            }
+            if (ui.BeginPopup("EditorProfilerLaunchPopup")) {
+                if (ui.MenuItem("Open Profiler")) {
+                    LaunchProfilerProcess();
+                }
+
+                const Utf8String trace_csv_path = Trace::GetCsvPath();
+                ui.BeginDisabled(trace_csv_path.empty());
+                if (ui.MenuItem("Open Current Trace")) {
+                    LaunchProfilerProcess(std::filesystem::path(trace_csv_path.c_str()));
+                }
+                ui.EndDisabled();
+
+                if (ui.MenuItem("Open Trace...")) {
+                    OpenProfilerCapturePicker();
+                }
+                ui.EndPopup();
             }
             ui.EndMenuBar();
         }

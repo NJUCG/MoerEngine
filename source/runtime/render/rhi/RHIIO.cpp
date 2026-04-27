@@ -1,5 +1,9 @@
 #include "rhi/RHIIO.h"
 #include "rhi/RHI.h"
+#include "taskgraph/ThreadManager.h"
+
+#include <atomic>
+
 namespace Moer::Render {
 class DeviceIOService : public IOInterface {
 public:
@@ -22,25 +26,44 @@ private:
 uint64 TextureViewDesc::GetByteSize() const {
     return GetSizeFromImageFormat(pixel_fmt, size);
 }
-class IOLooper {
-    std::jthread                     thread;
-    std::mutex                       mutex;
-    Array<std::function<void(void)>> requests;
-    bool                             enabled = true;
+class IOLooper : public Runnable {
+    RunnableThread*                  m_thread{nullptr};
+    std::mutex                       m_mutex;
+    Array<std::function<void(void)>> m_requests;
+    std::atomic_bool                 m_enabled{true};
 
 public:
     IOLooper() {
-        thread = std::jthread([this]() {
-            InnerWorkLoop();
-        });
+        m_thread = RunnableThread::Create(
+            this,
+            ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("RHI-IOLooperThread")}
+        );
     }
-    ~IOLooper() {}
+    ~IOLooper() {
+        Stop();
+        JoinThread();
+    }
 
-    static void Init() {
+    uint32_t Run() override {
+        InnerWorkLoop();
+        return 0;
+    }
+    void Init() override {}
+    void Stop() override {
+        m_enabled.store(false, std::memory_order_release);
+    }
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
+    }
+
+    static void Startup() {
         IOLooper::Get();
     }
     static void Dispose() {
-        IOLooper::Get().enabled = false;
+        IOLooper& looper = IOLooper::Get();
+        looper.Stop();
+        looper.JoinThread();
     }
     static void EnqueueRequest(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len) {
         IOLooper::Get().InnerEnqueueRequest(_handle, _file_offset, _ptr, _len);
@@ -67,9 +90,15 @@ private:
         static IOLooper looper;
         return looper;
     }
+    void JoinThread() {
+        if (m_thread != nullptr) {
+            MoerDelete(m_thread);
+            m_thread = nullptr;
+        }
+    }
     void InnerEnqueueRequest(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len) {
-        std::lock_guard<std::mutex> lk(mutex);
-        requests.push_back([=]() {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        m_requests.push_back([=]() {
             FILE* result_handle = nullptr;
             fopen_s(&result_handle, (const char*)_handle.file, "r");
             if (!result_handle) {
@@ -83,8 +112,8 @@ private:
     }
 
     void InnerEnqueueRequest(const void* ptr, size_t len, FileHandle handle, size_t file_offset) {
-        std::lock_guard<std::mutex> lk(mutex);
-        requests.push_back([=]() {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        m_requests.push_back([=]() {
             FILE* result_handle = nullptr;
             fopen_s(&result_handle, (const char*)handle.file, "r");
             if (!result_handle) {
@@ -105,8 +134,8 @@ private:
         size_t     _dst_offset,
         size_t     _dst_size
     ) {
-        std::lock_guard<std::mutex> lk(mutex);
-        requests.push_back([=]() {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        m_requests.push_back([=]() {
             FILE* src_handle = nullptr;
             fopen_s(&src_handle, (const char*)_handle.file, "r");
             FILE* dst_handle = nullptr;
@@ -134,18 +163,18 @@ private:
         });
     }
     void InnerEnqueueSignal(Event* _event_handle, uint64_t _timeline) {
-        std::lock_guard<std::mutex> lk(mutex);
-        requests.push_back([=, this]() {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        m_requests.push_back([=, this]() {
             _event_handle->Signal(_timeline);
         });
     }
     void InnerWorkLoop() {
         LOG_INFO(MOER_TEXT("IOLooper started"));
-        while (enabled) {
+        while (m_enabled.load(std::memory_order_acquire)) {
             Array<std::function<void(void)>> requests_copy;
             {
-                std::lock_guard<std::mutex> lk(mutex);
-                requests_copy = std::move(requests);
+                std::lock_guard<std::mutex> lk(m_mutex);
+                requests_copy = std::move(m_requests);
             }
             if (requests_copy.empty()) {
                 std::this_thread::yield();
@@ -190,6 +219,7 @@ struct IOHandler {
         }
         return time_stamp;
     }
+
     Queue<CallBacks> m_callbacks;
     void             Tick() {
         IOCommandListHolder cmds_batch;
@@ -281,10 +311,10 @@ private:
         IOLooper::EnqueueSignal(&event, _cmd_holder.time_stamp);
     }
 };
-struct IOService::Impl {
-    std::jthread*           thread;
+struct IOService::Impl : public Runnable {
+    RunnableThread*         m_thread{nullptr};
     IOHandler               handler;
-    bool                    requested_exit = false;
+    std::atomic_bool        m_requested_exit{false};
     static IOService::Impl& Get() {
         static IOService::Impl impl;
         return impl;
@@ -292,20 +322,39 @@ struct IOService::Impl {
 
     using time_stamp = uint32_t;
     void WorkLoop() {
-        while (!requested_exit) {
+        while (!m_requested_exit.load(std::memory_order_acquire)) {
             handler.Tick();
         }
         handler.Join();
     }
+    uint32_t Run() override {
+        WorkLoop();
+        return 0;
+    }
+    void Init() override {}
+    void Stop() override {
+        m_requested_exit.store(true, std::memory_order_release);
+    }
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
+    }
     Impl() {
-        IOLooper::Init();
-        thread = MoerNew(std::jthread)([this]() {
-            WorkLoop();
-        });
+        IOLooper::Startup();
+        m_thread = RunnableThread::Create(
+            this,
+            ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("RHI-IOServiceThread")}
+        );
+    }
+    ~Impl() {
+        Dispose();
     }
     void Dispose() {
-        requested_exit = true;
-        MoerDelete(thread);
+        Stop();
+        if (m_thread != nullptr) {
+            MoerDelete(m_thread);
+            m_thread = nullptr;
+        }
         IOLooper::Dispose();
     }
     void Sync(uint64_t _time_stamp) {

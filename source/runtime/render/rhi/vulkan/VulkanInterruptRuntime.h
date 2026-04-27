@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanSubmissionShared.h"
+#include "taskgraph/ThreadManager.h"
 
 #include <atomic>
 #include <chrono>
@@ -8,7 +9,6 @@
 #include <deque>
 #include <functional>
 #include <mutex>
-#include <thread>
 #include <utility>
 #include <variant>
 
@@ -115,6 +115,8 @@ public:
     void          Shutdown();
 
 private:
+    class InterruptRunnable;
+
     void   Stop();
     void   RunInterruptThread();
     bool   TryAcquireReadyTask(SubmissionCompletionTask& task);
@@ -137,8 +139,9 @@ private:
     std::mutex                       queue_mutex{};
     std::condition_variable          queue_cv{};
     std::deque<SubmissionCompletionTask> task_queue{};
-    std::jthread                     interrupt_thread{};
     std::chrono::microseconds        idle_poll_interval{100};
+    InterruptRunnable*               interrupt_runnable{nullptr};
+    RunnableThread*                  interrupt_thread{nullptr};
 };
 
 } // namespace Moer::Render

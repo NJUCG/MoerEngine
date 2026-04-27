@@ -68,7 +68,7 @@ void StartRenderThread() {
         g_render_thread_runnable,
         ThreadAttributes{
             .affinity = Affinity::AnyOf(EThread::GetThreadIndex(EThread::ERenderThread), Affinity::All()),
-            .name     = "RenderThread"
+            .name     = MOER_ASCII_TEXT("RenderThread")
         }
     );
 

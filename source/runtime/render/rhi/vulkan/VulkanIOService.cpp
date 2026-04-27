@@ -7,6 +7,7 @@
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIIO.h"
+#include "taskgraph/ThreadManager.h"
 #include "vulkan/vulkan_core.h"
 #include <atomic>
 #include <memory>
@@ -145,23 +146,40 @@ void VulkanCommitSession::CommitIOTask(VulkanIOTask* _tsk) {
     io_interface.CommitIOTask(_tsk);
 }
 
-struct VulkanIOTaskThread {
-    std::jthread                    thread;
-    bool                            enabled = true;
+struct VulkanIOTaskThread : public Runnable {
+    RunnableThread*                 thread{nullptr};
+    std::atomic_bool                enabled{true};
     LockFreeQueueBase<VulkanIOTask> queue;
     VulkanIOTaskThread() {
-        thread = std::jthread([this]() {
-            InnerWorkLoop();
-        });
+        thread = RunnableThread::Create(
+            this,
+            ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("VulkanIOTaskThread")}
+        );
     }
 
     ~VulkanIOTaskThread() {
-        enabled = false;
-        thread.join();
+        Stop();
+        if (thread != nullptr) {
+            MoerDelete(thread);
+            thread = nullptr;
+        }
+    }
+
+    uint32_t Run() override {
+        InnerWorkLoop();
+        return 0;
+    }
+    void Init() override {}
+    void Stop() override {
+        enabled.store(false, std::memory_order_release);
+    }
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
     }
 
     void InnerWorkLoop() {
-        while (enabled) {
+        while (enabled.load(std::memory_order_acquire)) {
             VulkanIOTask* task;
             if (task = queue.Pop(); task) {
                 // Process the submission
@@ -639,52 +657,13 @@ void VulkanIOInterface::Tick() {
     }
 }
 
-struct SessionThread {
-    std::jthread            thread;
-    std::mutex              mutex;
-    std::condition_variable cv;
-    bool                    enabled = true;
-
-    Queue<VulkanCommitSession*> commit_sessions;
-    SessionThread() {
-        thread = std::jthread([this]() {
-            InnerWorkLoop();
-        });
-    }
-    ~SessionThread() {
-        enabled = false;
-        thread.join();
-    }
-
-    void InnerWorkLoop() {
-        while (enabled) {
-
-            while (true) {
-                VulkanCommitSession* session = nullptr;
-                {
-                    std::unique_lock<std::mutex> lk(mutex);
-                    if (commit_sessions.empty()) {
-                        break;
-                    }
-                    session = std::move(commit_sessions.front());
-                }
-
-                assert(session != nullptr && "Session is null");
-            }
-
-            {
-                //wait for queue submission
-                std::unique_lock<std::mutex> lock(mutex);
-                while (enabled && commit_sessions.empty()) {
-                    cv.wait(lock);
-                }
-            }
-        }
-    }
-};
-
 VulkanStorage::VulkanStorage(VulkanDevice& _device, VkCopyQueue& _queue) : copy_queue(_queue) {
     task_thread = MoerNew(VulkanIOTaskThread)();
+}
+
+VulkanStorage::~VulkanStorage() {
+    MoerDelete(task_thread);
+    task_thread = nullptr;
 }
 
 VulkanCommitSession* VulkanStorage::GetCurrentSession() {

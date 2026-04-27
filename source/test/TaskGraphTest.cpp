@@ -5,10 +5,10 @@
 #include "misc/STL.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskSystem.h"
+#include "taskgraph/ThreadManager.h"
 #include <atomic>
 #include <cassert>
-#include <chrono>
-#include <thread>
+#include <functional>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -25,6 +25,54 @@ static void msleep(unsigned long msecs) {
 #if defined(_WIN32) || defined(_WIN64)
 #include <mimalloc-new-delete.h>
 #endif
+
+class TestFunctionRunnable : public Runnable {
+public:
+    explicit TestFunctionRunnable(std::function<void()>&& in_function) : m_function(std::move(in_function)) {}
+
+    uint32_t Run() override {
+        m_function();
+        return 0;
+    }
+
+    void Init() override {}
+    void Stop() override {}
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
+    }
+
+private:
+    std::function<void()> m_function;
+};
+
+class ScopedTestThread {
+public:
+    ScopedTestThread(Moer::Utf8StringView name, std::function<void()>&& function) :
+        m_runnable(std::move(function)),
+        m_thread(RunnableThread::Create(
+            &m_runnable,
+            ThreadAttributes{.affinity = Affinity{}, .name = name}
+        )) {}
+
+    ~ScopedTestThread() {
+        if (m_thread != nullptr) {
+            MoerDelete(m_thread);
+            m_thread = nullptr;
+        }
+    }
+
+    void Join() {
+        if (m_thread != nullptr) {
+            m_thread->Join();
+        }
+    }
+
+private:
+    TestFunctionRunnable m_runnable;
+    RunnableThread*      m_thread{nullptr};
+};
+
 struct A {
     explicit A() {
         a = 1;
@@ -44,13 +92,13 @@ void LockFreeStackTest() {
     A a;
     stack.Push(MoerNew(A)());
 
-    std::jthread t2([&]() {
+    ScopedTestThread t2(MOER_ASCII_TEXT("LockFreeStackPush0"), [&]() {
         for (int i = 0; i < 1000; ++i) {
             stack.Push(&a);
         }
     });
 
-    std::jthread t4([&]() {
+    ScopedTestThread t4(MOER_ASCII_TEXT("LockFreeStackPush1"), [&]() {
         for (int i = 0; i < 1099; ++i) {
             stack.Push(&a);
         }
@@ -58,13 +106,13 @@ void LockFreeStackTest() {
 
     //pop
 
-    std::jthread t5([&]() {
+    ScopedTestThread t5(MOER_ASCII_TEXT("LockFreeStackPop0"), [&]() {
         for (int i = 0; i < 1000; ++i) {
             stack.Pop();
         }
     });
 
-    std::jthread t6([&]() {
+    ScopedTestThread t6(MOER_ASCII_TEXT("LockFreeStackPop1"), [&]() {
         for (int i = 0; i < 1000; ++i) {
             stack.Pop();
         }
@@ -77,13 +125,13 @@ void LockFreeQueueTest() {
     A a;
     queue.Push(&a);
 
-    std::jthread t2([&]() {
+    ScopedTestThread t2(MOER_ASCII_TEXT("LockFreeQueuePush0"), [&]() {
         for (int i = 0; i < 1000; ++i) {
             queue.Push(&a);
         }
     });
 
-    std::jthread t4([&]() {
+    ScopedTestThread t4(MOER_ASCII_TEXT("LockFreeQueuePush1"), [&]() {
         for (int i = 0; i < 1099; ++i) {
             queue.Push(&a);
         }
@@ -91,13 +139,13 @@ void LockFreeQueueTest() {
 
     //pop
 
-    std::jthread t5([&]() {
+    ScopedTestThread t5(MOER_ASCII_TEXT("LockFreeQueuePop0"), [&]() {
         for (int i = 0; i < 1000; ++i) {
             queue.Pop();
         }
     });
 
-    std::jthread t6([&]() {
+    ScopedTestThread t6(MOER_ASCII_TEXT("LockFreeQueuePop1"), [&]() {
         for (int i = 0; i < 1000; ++i) {
             queue.Pop();
         }
@@ -142,29 +190,29 @@ void ClosableMpScStackTest() {
         }
     };
 
-    std::jthread t1(push_operation);
-    std::jthread t8(consume_operation);
-    std::jthread t2(push_operation);
-    std::jthread t3(push_operation);
-    std::jthread t4(push_operation);
-    std::jthread t5(push_operation);
-    std::jthread t6(push_operation);
-    std::jthread t7(push_operation);
+    ScopedTestThread t1(MOER_ASCII_TEXT("ClosableStackPush0"), std::function<void()>(push_operation));
+    ScopedTestThread t8(MOER_ASCII_TEXT("ClosableStackConsume"), std::function<void()>(consume_operation));
+    ScopedTestThread t2(MOER_ASCII_TEXT("ClosableStackPush1"), std::function<void()>(push_operation));
+    ScopedTestThread t3(MOER_ASCII_TEXT("ClosableStackPush2"), std::function<void()>(push_operation));
+    ScopedTestThread t4(MOER_ASCII_TEXT("ClosableStackPush3"), std::function<void()>(push_operation));
+    ScopedTestThread t5(MOER_ASCII_TEXT("ClosableStackPush4"), std::function<void()>(push_operation));
+    ScopedTestThread t6(MOER_ASCII_TEXT("ClosableStackPush5"), std::function<void()>(push_operation));
+    ScopedTestThread t7(MOER_ASCII_TEXT("ClosableStackPush6"), std::function<void()>(push_operation));
 
-    std::jthread t9(queue_enque_operation);
-    std::jthread t10(queue_deque_operation);
+    ScopedTestThread t9(MOER_ASCII_TEXT("LockFreeQueueEnqueue"), std::function<void()>(queue_enque_operation));
+    ScopedTestThread t10(MOER_ASCII_TEXT("LockFreeQueueDequeue"), std::function<void()>(queue_deque_operation));
 
-    t1.join();
-    t2.join();
-    t3.join();
-    t4.join();
-    t5.join();
-    t6.join();
-    t7.join();
-    t8.join();
+    t1.Join();
+    t2.Join();
+    t3.Join();
+    t4.Join();
+    t5.Join();
+    t6.Join();
+    t7.Join();
+    t8.Join();
 
-    t9.join();
-    t10.join();
+    t9.Join();
+    t10.Join();
 
     assert(push_count == array.size());
     std::reverse(array.begin(), array.end());

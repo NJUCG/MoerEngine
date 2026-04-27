@@ -1,5 +1,6 @@
 #include "PlatformLinux.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <pthread.h>
 #include <sched.h>
@@ -43,9 +44,10 @@ void LinuxPlatform::SetCurrentThreadAffinity(Affinity&& _affinity) {
     pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set);
 }
 
-void LinuxPlatform::SetCurrentThreadName(std::string_view _name) {
+void LinuxPlatform::SetCurrentThreadName(Moer::Utf8StringView _name) {
     // pthread_setname_np accepts at most 16 bytes including the trailing null terminator.
-    std::string thread_name(_name.substr(0, 15));
+    const size_t name_size = std::min<size_t>(_name.size(), 15);
+    std::string thread_name(_name.data(), name_size);
     pthread_setname_np(pthread_self(), thread_name.c_str());
 }
 

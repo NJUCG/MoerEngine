@@ -20,6 +20,7 @@ imgui.ini
 justfile
 EnableFeatures.cmake
 MoerEngine.toml
+*.ps1
 
 # 4. Vibe Coding
 /.cursor/

@@ -5,6 +5,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIIO.h"
+#include "taskgraph/ThreadManager.h"
 #include <atomic>
 #include <thread>
 namespace Moer::Render {
@@ -121,6 +122,7 @@ public:
     friend VulkanCommitSession;
     friend class VulkanIOTaskThread;
     VulkanStorage(VulkanDevice& _device, VkCopyQueue& _copy_queue);
+    ~VulkanStorage();
     void Enqueue(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len);
     void Enqueue(FileHandle _handle, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
     void Enqueue(

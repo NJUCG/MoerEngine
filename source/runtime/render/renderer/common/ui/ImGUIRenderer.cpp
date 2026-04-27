@@ -242,7 +242,7 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
         }
         {
             AddFont({"msyh.ttc", 20.0f, EFontType::Chinese});
-            AddFont({FONT_ICON_FILE_NAME_FAS, 13.0f, EFontType::Icon});
+            AddFont({FONT_ICON_FILE_NAME_FAS, 24.0f, EFontType::Icon});
         }
     }
     bindless_array = device.CreateBindlessArray();

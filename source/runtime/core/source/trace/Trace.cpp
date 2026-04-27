@@ -3,6 +3,7 @@
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "network/Socket.h"
+#include "taskgraph/ThreadManager.h"
 
 #include <algorithm>
 #include <chrono>
@@ -23,6 +24,23 @@ using SteadyClock = std::chrono::steady_clock;
 
 static constexpr uint16_t kPacketTypeMetadata = 1;
 static constexpr uint16_t kPacketTypeEvents   = 2;
+
+void SenderMain();
+
+class TraceSenderRunnable : public Runnable {
+public:
+    uint32_t Run() override {
+        SenderMain();
+        return 0;
+    }
+
+    void Init() override {}
+    void Stop() override {}
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
+    }
+};
 
 struct TraceRuntimeState {
     std::atomic<bool> initialized{false};
@@ -59,7 +77,8 @@ struct TraceRuntimeState {
     std::mutex thread_name_mutex{};
     UnorderedMap<uint64_t, std::string> track_names{};
 
-    std::thread sender_thread{};
+    TraceSenderRunnable* sender_runnable{nullptr};
+    RunnableThread*      sender_thread{nullptr};
 
     std::mutex csv_mutex{};
     std::ofstream csv_file{};
@@ -350,6 +369,7 @@ bool Init(const Config& config) {
         if (csv_path.empty()) {
             csv_path = ConfigManager::GetInstance().GetWorkspacePath() / "trace" / "trace_stream.csv";
         }
+        state.config.csv_path = csv_path.string();
         std::filesystem::create_directories(csv_path.parent_path());
         bool has_existing_content = std::filesystem::exists(csv_path) && std::filesystem::file_size(csv_path) > 0;
         state.csv_file.open(csv_path, std::ios::out | std::ios::app);
@@ -359,7 +379,11 @@ bool Init(const Config& config) {
         }
     }
 
-    state.sender_thread = std::thread(SenderMain);
+    state.sender_runnable = MoerNew(TraceSenderRunnable)();
+    state.sender_thread   = RunnableThread::Create(
+        state.sender_runnable,
+        ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("TraceSenderThread")}
+    );
     return true;
 #endif
 }
@@ -376,8 +400,13 @@ void Shutdown() {
     state.recording.store(false, std::memory_order_release);
     state.queue_cv.notify_all();
 
-    if (state.sender_thread.joinable()) {
-        state.sender_thread.join();
+    if (state.sender_thread != nullptr) {
+        MoerDelete(state.sender_thread);
+        state.sender_thread = nullptr;
+    }
+    if (state.sender_runnable != nullptr) {
+        MoerDelete(state.sender_runnable);
+        state.sender_runnable = nullptr;
     }
     {
         std::lock_guard<std::mutex> lock(state.csv_mutex);
@@ -436,7 +465,7 @@ bool IsRecording() {
 #endif
 }
 
-void SetThreadName(std::string_view thread_name) {
+void SetThreadName(Utf8StringView thread_name) {
 #if !MOER_TRACE_ENABLED
     (void)thread_name;
     return;
@@ -444,7 +473,7 @@ void SetThreadName(std::string_view thread_name) {
     const uint64_t track_id = DefaultCpuTrackId();
     auto&          state    = G();
     std::lock_guard<std::mutex> lock(state.thread_name_mutex);
-    state.track_names[track_id] = std::string(thread_name);
+    state.track_names[track_id] = std::string(thread_name.data(), thread_name.size());
 #endif
 }
 
@@ -636,8 +665,19 @@ void EnableCsvExport(std::string_view csv_path) {
     return;
 #else
     auto& state            = G();
+    std::lock_guard<std::mutex> lock(state.csv_mutex);
     state.config.enable_csv = true;
     state.config.csv_path   = std::string(csv_path);
+#endif
+}
+
+Utf8String GetCsvPath() {
+#if !MOER_TRACE_ENABLED
+    return {};
+#else
+    auto& state = G();
+    std::lock_guard<std::mutex> lock(state.csv_mutex);
+    return Utf8String(state.config.csv_path.c_str());
 #endif
 }
 

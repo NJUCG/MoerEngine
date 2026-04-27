@@ -26,6 +26,8 @@ ImGuiMouseButton ToImGuiMouseButton(EMouseButton button) {
     switch (button) {
         case EMouseButton::Left:
             return ImGuiMouseButton_Left;
+        case EMouseButton::Right:
+            return ImGuiMouseButton_Right;
         case EMouseButton::Middle:
             return ImGuiMouseButton_Middle;
         default:
@@ -606,8 +608,16 @@ bool Context::IsWindowFocusedChildWindows() const {
     return ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
 }
 
+bool Context::IsMouseDown(EMouseButton button) const {
+    return ImGui::IsMouseDown(ToImGuiMouseButton(button));
+}
+
 bool Context::IsMouseDragging(EMouseButton button) const {
     return ImGui::IsMouseDragging(ToImGuiMouseButton(button));
+}
+
+bool Context::IsMouseReleased(EMouseButton button) const {
+    return ImGui::IsMouseReleased(ToImGuiMouseButton(button));
 }
 
 bool Context::IsMouseHoveringRect(Size min, Size max) const {
@@ -616,6 +626,10 @@ bool Context::IsMouseHoveringRect(Size min, Size max) const {
 
 bool Context::IsMouseClicked(EMouseButton button) const {
     return ImGui::IsMouseClicked(ToImGuiMouseButton(button));
+}
+
+bool Context::IsMouseDoubleClicked(EMouseButton button) const {
+    return ImGui::IsMouseDoubleClicked(ToImGuiMouseButton(button));
 }
 
 bool Context::IsKeyDown(EKey key) const {
@@ -710,6 +724,10 @@ const char* Context::GetIconGlyph(EIcon icon) const {
             return ICON_FA_EYE;
         case EIcon::Camera:
             return ICON_FA_CAMERA;
+        case EIcon::Record:
+            return ICON_FA_CIRCLE_DOT;
+        case EIcon::Profiler:
+            return ICON_FA_CHART_LINE;
         case EIcon::ChevronRight:
             return ICON_FA_CHEVRON_RIGHT;
         default:

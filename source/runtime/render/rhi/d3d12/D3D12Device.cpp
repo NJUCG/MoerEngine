@@ -1001,14 +1001,38 @@ Allocation D3D12GpuGlobalAllocator::AllocateTextureHeap(
     return alloc;
 }
 
-void D3D12GraphicsCommandQueue::ExecuteThread(std::stop_token _st) {
+class D3D12GraphicsCommandQueue::ExecuteRunnable : public Runnable {
+public:
+    explicit ExecuteRunnable(D3D12GraphicsCommandQueue& in_owner) : m_owner(in_owner) {}
+
+    uint32_t Run() override {
+        m_owner.ExecuteThread();
+        return 0;
+    }
+
+    void Init() override {}
+    void Stop() override {
+        m_owner.execute_thread_running.store(false, std::memory_order_release);
+        m_owner.cv.notify_all();
+    }
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
+    }
+
+private:
+    D3D12GraphicsCommandQueue& m_owner;
+};
+
+void D3D12GraphicsCommandQueue::ExecuteThread() {
     do {
         {
             std::unique_lock lck(mtx);
-            if (!cv.wait(lck, _st, [&]() {
-                    return !event_queue.empty();
-                })) {
-                continue;
+            cv.wait(lck, [&]() {
+                return !execute_thread_running.load(std::memory_order_acquire) || !event_queue.empty();
+            });
+            if (!execute_thread_running.load(std::memory_order_acquire) && event_queue.empty()) {
+                break;
             }
         }
 
@@ -1061,7 +1085,7 @@ void D3D12GraphicsCommandQueue::ExecuteThread(std::stop_token _st) {
         }
         is_second_thread_busy = false;
 
-    } while (!_st.stop_requested());
+    } while (execute_thread_running.load(std::memory_order_acquire));
 }
 
 struct D3D12CommandPreprocessVisitor {
@@ -1462,9 +1486,6 @@ D3D12GraphicsCommandQueue::D3D12GraphicsCommandQueue(D3D12Device* _device, EQueu
     queue_type(D3D12_COMMAND_LIST_TYPE_DIRECT),
     last_submitted_fence_value(0),
     last_completed_fence_value(0),
-    thd([this](std::stop_token _st) {
-        ExecuteThread(_st);
-    }),
     queue_fence(_device) {
     ASSERT(_type == EQueueType::Graphics); // ?
 
@@ -1475,12 +1496,24 @@ D3D12GraphicsCommandQueue::D3D12GraphicsCommandQueue(D3D12Device* _device, EQueu
         device->Native()->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(queue.ReleaseAndGetAddressOf()))
     );
     queue->SetName(StringWiden("GraphicsCommandQueue").c_str());
+    execute_runnable = MoerNew(ExecuteRunnable)(*this);
+    execute_thread   = RunnableThread::Create(
+        execute_runnable,
+        ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("D3D12GraphicsQueueThread")}
+    );
 }
 
 D3D12GraphicsCommandQueue::~D3D12GraphicsCommandQueue() {
-    //is_thread_enable = false;
+    execute_thread_running.store(false, std::memory_order_release);
     cv.notify_all();
-    thd.join();
+    if (execute_thread != nullptr) {
+        MoerDelete(execute_thread);
+        execute_thread = nullptr;
+    }
+    if (execute_runnable != nullptr) {
+        MoerDelete(execute_runnable);
+        execute_runnable = nullptr;
+    }
 }
 
 void D3D12GraphicsCommandQueue::Wait(WaitEvent _event) {

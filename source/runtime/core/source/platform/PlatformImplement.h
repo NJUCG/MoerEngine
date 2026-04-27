@@ -7,7 +7,7 @@ public:
     static PlatformImplement* GetInstance();
     virtual void              SetThreadAffinityMask(void* current_thread_handle, uint64_t mask) = 0;
     virtual void              SetCurrentThreadAffinity(Affinity&& _affinity)                    = 0;
-    virtual void              SetCurrentThreadName(std::string_view _name)                      = 0;
+    virtual void              SetCurrentThreadName(Moer::Utf8StringView _name)                  = 0;
     virtual void
     SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask) = 0;
     virtual int32_t  GetProcessorWorkGroupCount()                                                    = 0;

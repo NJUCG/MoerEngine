@@ -4,7 +4,6 @@
 #include "VulkanSubmissionRuntime.h"
 #include "VulkanRHITrace.h"
 #include "log/LogSystem.h"
-#include "platform/Platform.h"
 #include "rhi/GPUEventStream.h"
 
 #include <cassert>
@@ -12,6 +11,28 @@
 #include <thread>
 
 namespace Moer::Render {
+
+class VulkanInterruptRuntime::InterruptRunnable : public Runnable {
+public:
+    explicit InterruptRunnable(VulkanInterruptRuntime& in_owner) : m_owner(in_owner) {}
+
+    uint32_t Run() override {
+        m_owner.RunInterruptThread();
+        return 0;
+    }
+
+    void Init() override {}
+    void Stop() override {
+        m_owner.Stop();
+    }
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
+    }
+
+private:
+    VulkanInterruptRuntime& m_owner;
+};
 
 SubmissionCompletionCommon::SubmissionCompletionCommon(
     uint64        in_op_seq,
@@ -59,10 +80,14 @@ SubmissionPresentCompletionPayload::SubmissionPresentCompletionPayload(
     presentor(std::move(in_result.presentor)) {}
 
 VulkanInterruptRuntime::VulkanInterruptRuntime() :
-    interrupt_thread([this]() { RunInterruptThread(); }) {}
+    interrupt_runnable(MoerNew(InterruptRunnable)(*this)),
+    interrupt_thread(RunnableThread::Create(
+        interrupt_runnable,
+        ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("InterruptThread")}
+    )) {}
 
 VulkanInterruptRuntime::~VulkanInterruptRuntime() {
-    Stop();
+    Shutdown();
 }
 
 void VulkanInterruptRuntime::EnqueueTask(SubmissionCompletionTask&& task) {
@@ -75,8 +100,13 @@ void VulkanInterruptRuntime::EnqueueTask(SubmissionCompletionTask&& task) {
 
 void VulkanInterruptRuntime::Shutdown() {
     Stop();
-    if (interrupt_thread.joinable()) {
-        interrupt_thread.join();
+    if (interrupt_thread != nullptr) {
+        MoerDelete(interrupt_thread);
+        interrupt_thread = nullptr;
+    }
+    if (interrupt_runnable != nullptr) {
+        MoerDelete(interrupt_runnable);
+        interrupt_runnable = nullptr;
     }
 }
 
@@ -101,7 +131,6 @@ void VulkanInterruptRuntime::Stop() {
 }
 
 void VulkanInterruptRuntime::RunInterruptThread() {
-    Platform::SetCurrentThreadName("InterruptThread");
     while (true) {
         SubmissionCompletionTask task{};
         if (!TryAcquireReadyTask(task)) {

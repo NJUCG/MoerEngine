@@ -124,7 +124,7 @@ void Editor::Init(int argc, const char** argv) {
     trace_config.session_name     = "MoerEditor";
     trace_config.csv_path         = BuildUniqueTraceCsvPath();
     Moer::Trace::Init(trace_config);
-    Moer::Trace::SetThreadName("MainThread");
+    Moer::Trace::SetThreadName(MOER_ASCII_TEXT("MainThread"));
 }
 
 void Editor::Run() {

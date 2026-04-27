@@ -9,6 +9,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "taskgraph/ThreadManager.h"
 
 #include "D3D12Macro.h"
 
@@ -958,6 +959,8 @@ public:
 
 class D3D12GraphicsCommandQueue final : public CommandQueue, public D3D12DeviceChild {
 private:
+    class ExecuteRunnable;
+
     ComPtr<ID3D12CommandQueue> queue;
     D3D12_COMMAND_LIST_TYPE    queue_type;
     D3D12Fence                 queue_fence;
@@ -999,10 +1002,12 @@ private:
     std::condition_variable_any cv;
 
     std::atomic<bool> is_second_thread_busy = false; // to wait ExecuteThread() to complete when Sync()
-    std::jthread      thd;                           // dtor first
+    std::atomic_bool  execute_thread_running{true};
+    ExecuteRunnable*  execute_runnable{nullptr};
+    RunnableThread*   execute_thread{nullptr};
 
 private:
-    void ExecuteThread(std::stop_token _st);
+    void ExecuteThread();
 
 public:
     ID3D12CommandQueue* Native() const {

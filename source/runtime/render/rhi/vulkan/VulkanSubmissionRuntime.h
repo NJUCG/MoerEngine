@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanSubmissionShared.h"
+#include "taskgraph/ThreadManager.h"
 
 #include <atomic>
 #include <array>
@@ -8,7 +9,6 @@
 #include <deque>
 #include <mutex>
 #include <span>
-#include <thread>
 
 namespace Moer::Render {
 
@@ -159,6 +159,8 @@ private:
     void             AttachSyncDependencies(SubmissionBatch& batch);
 
 private:
+    class SubmissionRunnable;
+
     VulkanInterruptRuntime& interrupt_runtime;
     VkCommandQueue&         graphics_queue_owner;
     VkCommandQueue&         compute_queue_owner;
@@ -169,7 +171,8 @@ private:
     std::mutex              submission_mutex{};
     std::condition_variable submission_cv{};
     std::deque<SubmissionBatch> submission_queue{};
-    std::jthread            submission_thread{};
+    SubmissionRunnable*     submission_runnable{nullptr};
+    RunnableThread*         submission_thread{nullptr};
 
     RootRhiBoundary         pending_rhi_boundary{};
     std::mutex              present_context_mutex{};

@@ -200,14 +200,18 @@ void WindowsPlatform::SetCurrentThreadAffinity(Affinity&& _affinity) {
 
     ::DeleteProcThreadAttributeList(attr_list);
 }
-void WindowsPlatform::SetCurrentThreadName(std::string_view _name) {
+void WindowsPlatform::SetCurrentThreadName(Moer::Utf8StringView _name) {
     static auto set_thread_description = reinterpret_cast<HRESULT(WINAPI*)(HANDLE, PCWSTR)>(
         GetProcAddress(GetModuleHandleA("kernelbase.dll"), "SetThreadDescription")
     );
     if (set_thread_description == nullptr) {
         return;
     }
-    std::wstring wname(_name.begin(), _name.end());
+    std::wstring wname{};
+    wname.reserve(_name.size());
+    for (size_t index = 0; index < _name.size(); ++index) {
+        wname.push_back(static_cast<wchar_t>(_name[index]));
+    }
     set_thread_description(GetCurrentThread(), wname.data());
 }
 void WindowsPlatform::SetThreadGroupAffinity(

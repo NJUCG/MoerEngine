@@ -4,7 +4,6 @@
 #include "VulkanDevice.h"
 #include "VulkanRHITrace.h"
 #include "log/LogSystem.h"
-#include "platform/Platform.h"
 #include "rhi/GPUEventStream.h"
 #include "rhi/RHIImpl.h"
 
@@ -14,6 +13,28 @@
 #include <thread>
 
 namespace Moer::Render {
+
+class VulkanSubmissionRuntime::SubmissionRunnable : public Runnable {
+public:
+    explicit SubmissionRunnable(VulkanSubmissionRuntime& in_owner) : m_owner(in_owner) {}
+
+    uint32_t Run() override {
+        m_owner.RunSubmissionThread();
+        return 0;
+    }
+
+    void Init() override {}
+    void Stop() override {
+        m_owner.Shutdown();
+    }
+    void Exit() override {}
+    ThreadIndex GetIndex() override {
+        return EThread::UNKNOWN_THREAD;
+    }
+
+private:
+    VulkanSubmissionRuntime& m_owner;
+};
 
 namespace {
 
@@ -474,14 +495,19 @@ VulkanSubmissionRuntime::VulkanSubmissionRuntime(VulkanInterruptRuntime& in_inte
     compute_queue_owner(
         static_cast<VkCommandQueue&>(RenderDevice::Get().GetCommandQueue(EQueueType::Compute))
     ),
-    copy_queue_owner(static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue())),
-    submission_thread([this]() { RunSubmissionThread(); }) {
+    copy_queue_owner(static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue())) {
     scheduler_state.queue_states.Get(EQueueType::Graphics).timeline_handle =
         graphics_queue_owner.GetTimelineHandle();
     scheduler_state.queue_states.Get(EQueueType::Compute).timeline_handle =
         compute_queue_owner.GetTimelineHandle();
     scheduler_state.queue_states.Get(EQueueType::Copy).timeline_handle =
         copy_queue_owner.GetTimelineHandle();
+
+    submission_runnable = MoerNew(SubmissionRunnable)(*this);
+    submission_thread   = RunnableThread::Create(
+        submission_runnable,
+        ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("SubmissionThread")}
+    );
 }
 
 VulkanSubmissionRuntime::~VulkanSubmissionRuntime() {
@@ -630,8 +656,13 @@ void VulkanSubmissionRuntime::Shutdown() {
 
 void VulkanSubmissionRuntime::JoinSubmissionThread() {
     submission_cv.notify_all();
-    if (submission_thread.joinable()) {
-        submission_thread.join();
+    if (submission_thread != nullptr) {
+        MoerDelete(submission_thread);
+        submission_thread = nullptr;
+    }
+    if (submission_runnable != nullptr) {
+        MoerDelete(submission_runnable);
+        submission_runnable = nullptr;
     }
 }
 
@@ -1004,7 +1035,6 @@ RootRhiBoundary VulkanSubmissionRuntime::BuildBatchTailBoundary(
 }
 
 void VulkanSubmissionRuntime::RunSubmissionThread() {
-    Platform::SetCurrentThreadName("SubmissionThread");
     while (true) {
         SubmissionBatch batch{};
         {
