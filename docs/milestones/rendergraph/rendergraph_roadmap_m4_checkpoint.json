@@ -1,0 +1,188 @@
+{
+  "project": "RenderGraph Roadmap",
+  "planning_only": true,
+  "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
+  "stage": {
+    "id": "M4",
+    "title": "Implement async setup, compile, record, and submit orchestration",
+    "status": "planned"
+  },
+  "goal": "Enable asynchronous RenderGraph setup and compile, parallel RDG lambda command recording, and RHIExecutor-backed translate graph submission so frame work can use multi-threaded record plus multi-threaded translate without a second submission model.",
+  "entry_gate": [
+    "M2 barrier and queue synchronization compiler is implemented.",
+    "M3 resource lifetime and reuse are compiled before record.",
+    "RHIExecutor remains the only submit and translate pipeline entrypoint."
+  ],
+  "hard_rules": [
+    {
+      "id": "HR-M4-01",
+      "rule": "AsyncSetup may declare graph data only. It must not create RHI resources, update bindless arrays, record commands, or call RHIExecutor."
+    },
+    {
+      "id": "HR-M4-02",
+      "rule": "Worker-thread RDG lambdas record into assigned CommandList instances only. They must not submit, present, sync, or mutate global RHI state."
+    },
+    {
+      "id": "HR-M4-03",
+      "rule": "Compiled submit ordering must be explicit before command recording starts. Do not infer submit dependencies after worker lambdas finish."
+    },
+    {
+      "id": "HR-M4-04",
+      "rule": "Do not introduce a RenderGraph-owned GPU submission backend. Submit through RHIExecutor."
+    },
+    {
+      "id": "HR-M4-05",
+      "rule": "Do not let record workers allocate pass parameters or compiled resource tables from transient thread-local storage unless ownership is transferred into the RG allocator before Compile freezes."
+    },
+    {
+      "id": "HR-M4-06",
+      "rule": "Do not emit unmatched GPU scope begin/end events into separate CommandLists without a compiled scope id and explicit ordering relation."
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Implement AsyncSetup contract",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Graph construction can run in parallel only if setup code is pure declaration work and cannot touch live RHI submission state.",
+      "what_must_be_true_after_this_checkpoint": [
+        "AsyncSetup tasks build pass declarations, resource descriptors, imports, exports, and queue intent only.",
+        "Setup output is immutable input to Compile.",
+        "Invalid setup behavior is rejected by API shape or debug assertions.",
+        "Setup does not depend on RHI command list lifetime."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/runtime/core/include/taskgraph/"
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Implement asynchronous Compile",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Barrier, lifetime, queue, and submit planning should be compiled before record and can use task parallelism once setup output is immutable.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Compile runs dependency analysis, culling, lifetime assignment, barrier batching, queue segmentation, and submit-plan generation.",
+        "Compile output is immutable and can be consumed by record tasks without locks around graph mutation.",
+        "Compile produces clear failure diagnostics for unknown first read, undeclared bindless access, unsupported pool reuse, and multi-source queue segment violations.",
+        "Compile can run synchronously for simple callers and asynchronously for frame pipelines without changing semantics."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/DepdencyGraph.h",
+        "source/runtime/render/rendergraph/PassNode.h"
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Implement parallel RDG lambda recording",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Pass command recording should scale across worker threads, but each lambda needs a stable resolved view set and a command list with no shared mutable command stream.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Compile assigns record groups by queue, pass ordering layer, and dependency compatibility.",
+        "Each record task receives one CommandList and a read-only resolved resource table.",
+        "Record tasks may run in parallel when compiled hazards and queue order allow it.",
+        "CommandList ownership is single-writer and returned to the graph only after the task completes."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rhi/RHICommand.h",
+        "source/runtime/render/rhi/RHICommandList.cpp"
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Compile RHIExecutor submit and translate graph",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Parallel record is not enough; the graph must also submit command lists in a shape that lets RHIExecutor translate in parallel and submit with correct GPU ordering.",
+      "what_must_be_true_after_this_checkpoint": [
+        "RenderGraph emits an ordered submit plan containing CommandLists, queue identity, host translate prerequisites, GPU wait/signal requirements, and present/export tails.",
+        "The main thread hands the compiled command-list batch to RHIExecutor::Submit.",
+        "RHIExecutor retains ownership of translate tasks, submission runtime, interrupt completion, and Sync semantics.",
+        "RenderGraph does not bypass RHIExecutor or duplicate its translate scheduler."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanTranslateTask.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp"
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Add focused async record and translate validation cases",
+      "status": "todo",
+      "priority": "high",
+      "problem": "Async setup, record, and translate bugs require stress cases that prove worker threads never submit and that compiled dependencies survive parallel execution.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Tests cover parallel setup, parallel compile, parallel record, multi-queue submit plans, and multi-threaded translate progression.",
+        "Tests assert worker-thread paths do not call RHIExecutor::Submit, Present, or Sync.",
+        "Tests run through testscripts/windows/test_rhi_translate.ps1 and broader regression through testscripts/windows/test_all.ps1."
+      ],
+      "files_likely_affected": [
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1"
+      ]
+    },
+    {
+      "id": "CP-06",
+      "title": "Implement RG allocator phase ownership",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Async setup, compile, and record need stable ownership for graph data and pass parameters. Without a phase-owned allocator, parallel record can observe stale parameter data or mutate graph structures after compile.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Setup tasks allocate pass declarations, RGResource wrappers, and pass parameter blobs from the graph setup allocator.",
+        "Compile freezes setup allocator data and writes immutable compiled artifacts into the compile allocator.",
+        "Record workers consume compiled artifact views and resolved resource tables without mutating setup data.",
+        "Frame teardown releases graph CPU allocations only after all record tasks have completed and RHIExecutor has accepted the produced CommandLists.",
+        "Long-lived caches are explicitly separate from frame-local RG allocator memory."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphResource.h",
+        "source/runtime/render/rendergraph/RenderGraphPass.h"
+      ]
+    },
+    {
+      "id": "CP-07",
+      "title": "Compile GPU trace scopes across CommandLists",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "A graph-level GPU scope may cover passes that compile into multiple CommandLists or multiple queues. Native command-list begin/end stack semantics are insufficient for that logical scope.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Compile creates a trace scope plan with stable scope ids, parent ids, names, begin points, end points, and queue/submit ordering requirements.",
+        "Pass-local scopes emit ordinary begin/end events inside a single CommandList when possible.",
+        "Cross-CommandList scopes emit graph-level begin/end marker events with explicit scope ids and depend on compiled submit order instead of stack pairing.",
+        "GPUEventStream can reconstruct logical nesting from scope ids and ordering metadata even when events arrive from different CommandLists.",
+        "Compile rejects scope shapes that would imply nested ordering across unordered queue work without a synchronization edge."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/runtime/render/rhi/RHICommand.h",
+        "source/runtime/render/rhi/GPUEventStream.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.cpp"
+      ]
+    }
+  ],
+  "stage_exit_gate": [
+    "RenderGraph setup and compile can run asynchronously without RHI side effects.",
+    "RDG lambdas record command lists in parallel through single-writer command-list ownership.",
+    "The compiled submit plan feeds RHIExecutor and enables multi-threaded translate without a second submission backend.",
+    "RG allocator lifetime is phase-owned and GPU trace scopes remain reconstructible across multiple compiled CommandLists."
+  ],
+  "validation": [
+    "Run testscripts/windows/test_rhi_translate.ps1 after focused async record and translate tests land.",
+    "Run testscripts/windows/test_all.ps1 after the stage-sized landing."
+  ]
+}

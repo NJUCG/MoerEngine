@@ -1,0 +1,137 @@
+{
+  "project": "RenderGraph Roadmap",
+  "planning_only": true,
+  "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
+  "stage": {
+    "id": "M3",
+    "title": "Implement transient and global resource reuse",
+    "status": "planned"
+  },
+  "goal": "Add frame-local transient resource aliasing and constrained global resource pooling after the barrier compiler can prove lifetimes and emit alias barriers.",
+  "entry_gate": [
+    "M2 barrier compiler can derive resource lifetimes and hazards.",
+    "Compiled barriers can express aliasing and queue ownership boundaries.",
+    "External import/export resources have explicit lifetime and state boundaries."
+  ],
+  "hard_rules": [
+    {
+      "id": "HR-M3-01",
+      "rule": "Do not pool imported external resources."
+    },
+    {
+      "id": "HR-M3-02",
+      "rule": "Do not globally pool sampled-only textures, depth textures, upload buffers, readback buffers, acceleration structures, or bindless backing buffers."
+    },
+    {
+      "id": "HR-M3-03",
+      "rule": "Global ResourcePool reuse is limited to color attachments, UAV textures, and UAV buffers."
+    },
+    {
+      "id": "HR-M3-04",
+      "rule": "Do not alias resources whose live intervals overlap after queue synchronization expansion."
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Compile resource lifetime intervals",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Transient allocation cannot be correct until the graph knows first use, last use, queue-expanded lifetime, export lifetime, and alias barriers.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Each transient resource has a compiled first-use and last-use pass index per queue segment.",
+        "Cross-queue handoffs extend lifetime until the consumer queue completes the relevant acquire/use interval.",
+        "Exported resources remain live through their declared final state publication.",
+        "Imported resources are excluded from transient allocation."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraphResource.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/PassNode.h"
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Implement TransientResourceAllocator",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Frame-local resources should be reused inside one compiled graph instead of being created and destroyed per pass.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Allocator groups compatible transient texture and buffer descriptors.",
+        "Allocator assigns physical resources only to non-overlapping lifetime intervals.",
+        "Alias barriers are inserted when one physical resource backs multiple logical resources in one frame.",
+        "Transient resources are retired at the frame boundary and never escape through user handles."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraphResource.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rhi/RHIResource.h",
+        "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp"
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Implement constrained ResourcePool",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Some resources should survive across frames for allocation efficiency, but unconstrained global pooling creates stale state, layout, and lifetime bugs.",
+      "what_must_be_true_after_this_checkpoint": [
+        "ResourcePool accepts only color attachment textures, UAV textures, and UAV buffers.",
+        "Pool keys include size, format, usage flags, sample count, mip/array shape, and memory class.",
+        "Pool checkout returns resources in a known canonical state or forces an explicit compiled transition before first use.",
+        "Pool return is delayed until the RHIExecutor completion boundary proves the last GPU use is retired."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraphResource.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanInterruptRuntime.cpp"
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Integrate reuse with external imports and bindless updates",
+      "status": "todo",
+      "priority": "high",
+      "problem": "Resource reuse must not invalidate bindless descriptors or external references that outlive a frame-local graph.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Transient resources cannot be allocated into bindless arrays that outlive the graph unless the graph owns descriptor update and invalidation lifetime.",
+        "Imported resources are never placed in the transient allocator or global ResourcePool.",
+        "Global pooled resources are unbound or rebound only through explicit graph-owned descriptor update passes.",
+        "Pool retirement cannot race worker-thread record or RHI translate."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rhi/RHIResource.h",
+        "source/runtime/render/rhi/RHICommandList.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp",
+        "source/runtime/render/rendergraph/RenderGraph.cpp"
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Add focused reuse validation cases",
+      "status": "todo",
+      "priority": "high",
+      "problem": "Aliasing and pooling bugs often appear as later-frame corruption, so focused tests must verify reuse rules and retirement boundaries.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Tests cover non-overlapping transient aliasing, overlapping lifetime rejection, alias barriers, pool checkout canonical state, and delayed pool return.",
+        "Tests cover rejection of unsupported global pool resource categories.",
+        "Tests run through existing repository scripts."
+      ],
+      "files_likely_affected": [
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1"
+      ]
+    }
+  ],
+  "stage_exit_gate": [
+    "Frame-local transient resources reuse memory safely through compiled lifetime intervals.",
+    "Global ResourcePool reuse is constrained to the allowed resource categories only.",
+    "Pool return and alias reuse are ordered by RHIExecutor completion boundaries."
+  ],
+  "validation": [
+    "Run testscripts/windows/test_rhi_translate.ps1 after focused reuse tests land.",
+    "Run testscripts/windows/test_all.ps1 after the stage-sized landing."
+  ]
+}
