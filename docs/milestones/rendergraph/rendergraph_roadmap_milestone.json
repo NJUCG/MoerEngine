@@ -27,13 +27,13 @@
     "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
     "checkpoint_pattern": "docs/milestones/rendergraph/rendergraph_roadmap_m*_checkpoint.json",
     "update_rule": "Any replan must update this milestone file and the affected active checkpoint file in the same change.",
-    "validation_rule": "Use only existing repository scripts. Prefer testscripts/windows/test_rhi_translate.ps1 for focused RHI/RDG behavior and testscripts/windows/test_all.ps1 after milestone-sized landings. Planning-only edits do not require a build."
+    "validation_rule": "Use only existing repository scripts. Prefer testscripts/windows/test_rhi_translate.ps1 for focused RHI/RenderGraph behavior and testscripts/windows/test_all.ps1 after milestone-sized landings. Planning-only edits do not require a build."
   },
   "baseline_state": {
     "rendergraph_status": "legacy_skeleton",
     "notes": [
       "RenderGraph.cpp and RenderGraphResource.cpp currently contain commented legacy code and must not be treated as a compatibility surface.",
-      "The existing RenderGraph headers expose old RHIGraphicsCommandList-oriented concepts that must be replaced by the new CommandList/RHIExecutor model.",
+      "The existing RenderGraph headers expose old RHIGraphicsCommandList-oriented concepts that must be replaced by the new RHICommandList/RHIExecutor model.",
       "VulkanSubmissionPreprocess currently owns complex resource tracking that should move upward into RenderGraph once pass declarations are precise."
     ]
   },
@@ -78,7 +78,7 @@
     },
     {
       "id": "AR-04",
-      "rule": "All RDG lambdas record into provided CommandList instances only. Worker threads must not call RHIExecutor::Submit, Present, or Sync."
+      "rule": "AddPass owns exactly one execution lambda. That lambda records into the provided RHICommandList only; worker threads must not call RHIExecutor::Submit, Present, or Sync."
     },
     {
       "id": "AR-05",
@@ -86,7 +86,7 @@
     },
     {
       "id": "AR-06",
-      "rule": "AsyncSetup and Compile may run off-thread, but setup functions may only declare resources and pass metadata. They must not mutate RHI runtime state."
+      "rule": "AddSetupPass and Compile may run off-thread, but setup functions may only declare resources and pass metadata. They must not mutate RHI runtime state."
     },
     {
       "id": "AR-07",
@@ -95,12 +95,16 @@
     {
       "id": "AR-08",
       "rule": "GPU trace scopes are graph-level declarations, not CommandList-local stack assumptions. RenderGraph compiles scope begin/end events into concrete CommandLists and emits cross-CommandList scope identity and ordering explicitly."
+    },
+    {
+      "id": "AR-09",
+      "rule": "The public graph shape is parameter-first and execution-lambda-only: graph.Alloc<T>() allocates graph-owned parameters, RG_EVENT_SCOPE(graph, name, ...) declares scopes outside pass execution, graph.AddSetupPass(...) declares setup work through a setup context, graph.AddPass(param, flags, [](RHICommandList& cmd_list, RGContext context) { ... }) records execution, and graph.Dispatch() runs setup, compile, record, and submit orchestration."
     }
   ],
   "stages": [
     {
       "id": "M1",
-      "title": "Freeze RDG contract and replace the legacy skeleton",
+      "title": "Freeze RenderGraph contract and replace the legacy skeleton",
       "status": "planned",
       "checkpoint_file": "docs/milestones/rendergraph/rendergraph_roadmap_m1_checkpoint.json",
       "exit_gate": [
@@ -138,8 +142,8 @@
       "status": "planned",
       "checkpoint_file": "docs/milestones/rendergraph/rendergraph_roadmap_m4_checkpoint.json",
       "exit_gate": [
-        "AsyncSetup and Compile run safely before command recording.",
-        "RDG pass lambdas record CommandLists in parallel without submitting from worker threads.",
+        "AddSetupPass and Compile run safely before command recording.",
+        "RenderGraph execution lambdas record RHICommandLists in parallel without submitting from worker threads.",
         "RenderGraph submits a compiled translate graph through RHIExecutor for multi-threaded translate and ordered GPU submission.",
         "GPU trace scopes remain correct when one logical graph scope spans multiple compiled CommandLists."
       ]
@@ -159,7 +163,7 @@
   ],
   "validation": [
     "Planning-only changes do not run build scripts.",
-    "When M1 implementation starts, run testscripts/windows/test_rhi_translate.ps1 for focused RHI/RDG transition and queue tests.",
+    "When M1 implementation starts, run testscripts/windows/test_rhi_translate.ps1 for focused RHI/RenderGraph transition and queue tests.",
     "Run testscripts/windows/test_all.ps1 after each milestone-sized implementation landing.",
     "Do not add an ad-hoc validation script for milestone JSON files."
   ]

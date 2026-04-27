@@ -7,7 +7,7 @@
     "title": "Implement async setup, compile, record, and submit orchestration",
     "status": "planned"
   },
-  "goal": "Enable asynchronous RenderGraph setup and compile, parallel RDG lambda command recording, and RHIExecutor-backed translate graph submission so frame work can use multi-threaded record plus multi-threaded translate without a second submission model.",
+  "goal": "Enable asynchronous RenderGraph setup and compile, parallel AddPass execution-lambda command recording, and RHIExecutor-backed translate graph submission so frame work can use multi-threaded record plus multi-threaded translate without a second submission model.",
   "entry_gate": [
     "M2 barrier and queue synchronization compiler is implemented.",
     "M3 resource lifetime and reuse are compiled before record.",
@@ -16,11 +16,11 @@
   "hard_rules": [
     {
       "id": "HR-M4-01",
-      "rule": "AsyncSetup may declare graph data only. It must not create RHI resources, update bindless arrays, record commands, or call RHIExecutor."
+      "rule": "AddSetupPass may declare graph data only. It must not create RHI resources, update bindless arrays, record commands, or call RHIExecutor."
     },
     {
       "id": "HR-M4-02",
-      "rule": "Worker-thread RDG lambdas record into assigned CommandList instances only. They must not submit, present, sync, or mutate global RHI state."
+      "rule": "Worker-thread AddPass execution lambdas record into assigned RHICommandList instances only. They must not submit, present, sync, or mutate global RHI state."
     },
     {
       "id": "HR-M4-03",
@@ -37,17 +37,25 @@
     {
       "id": "HR-M4-06",
       "rule": "Do not emit unmatched GPU scope begin/end events into separate CommandLists without a compiled scope id and explicit ordering relation."
+    },
+    {
+      "id": "HR-M4-07",
+      "rule": "Do not add a second AddPass setup callback during async record implementation. Setup work stays in AddSetupPass."
+    },
+    {
+      "id": "HR-M4-08",
+      "rule": "Do not let execution lambdas declare graph-level GPU scopes. RG_EVENT_SCOPE declarations are compiled before record starts."
     }
   ],
   "checkpoints": [
     {
       "id": "CP-01",
-      "title": "Implement AsyncSetup contract",
+      "title": "Implement AddSetupPass contract",
       "status": "todo",
       "priority": "critical",
       "problem": "Graph construction can run in parallel only if setup code is pure declaration work and cannot touch live RHI submission state.",
       "what_must_be_true_after_this_checkpoint": [
-        "AsyncSetup tasks build pass declarations, resource descriptors, imports, exports, and queue intent only.",
+        "AddSetupPass tasks build pass declarations, resource descriptors, imports, exports, and queue intent only through the setup context.",
         "Setup output is immutable input to Compile.",
         "Invalid setup behavior is rejected by API shape or debug assertions.",
         "Setup does not depend on RHI command list lifetime."
@@ -78,15 +86,16 @@
     },
     {
       "id": "CP-03",
-      "title": "Implement parallel RDG lambda recording",
+      "title": "Implement parallel AddPass execution-lambda recording",
       "status": "todo",
       "priority": "critical",
       "problem": "Pass command recording should scale across worker threads, but each lambda needs a stable resolved view set and a command list with no shared mutable command stream.",
       "what_must_be_true_after_this_checkpoint": [
         "Compile assigns record groups by queue, pass ordering layer, and dependency compatibility.",
-        "Each record task receives one CommandList and a read-only resolved resource table.",
+        "Each record task receives one RHICommandList, graph-owned parameters, and a read-only resolved resource table.",
         "Record tasks may run in parallel when compiled hazards and queue order allow it.",
-        "CommandList ownership is single-writer and returned to the graph only after the task completes."
+        "RHICommandList ownership is single-writer and returned to the graph only after the task completes.",
+        "AddPass still has exactly one execution lambda; setup data comes from AddSetupPass and graph.Alloc<T>() parameters."
       ],
       "files_likely_affected": [
         "source/runtime/render/rendergraph/RenderGraphPass.h",
@@ -139,7 +148,7 @@
       "priority": "critical",
       "problem": "Async setup, compile, and record need stable ownership for graph data and pass parameters. Without a phase-owned allocator, parallel record can observe stale parameter data or mutate graph structures after compile.",
       "what_must_be_true_after_this_checkpoint": [
-        "Setup tasks allocate pass declarations, RGResource wrappers, and pass parameter blobs from the graph setup allocator.",
+        "Setup tasks allocate pass declarations, RGResource wrappers, and graph.Alloc<T>() parameter objects from the graph setup allocator.",
         "Compile freezes setup allocator data and writes immutable compiled artifacts into the compile allocator.",
         "Record workers consume compiled artifact views and resolved resource tables without mutating setup data.",
         "Frame teardown releases graph CPU allocations only after all record tasks have completed and RHIExecutor has accepted the produced CommandLists.",
@@ -159,7 +168,7 @@
       "priority": "critical",
       "problem": "A graph-level GPU scope may cover passes that compile into multiple CommandLists or multiple queues. Native command-list begin/end stack semantics are insufficient for that logical scope.",
       "what_must_be_true_after_this_checkpoint": [
-        "Compile creates a trace scope plan with stable scope ids, parent ids, names, begin points, end points, and queue/submit ordering requirements.",
+        "RG_EVENT_SCOPE declarations create trace metadata before Compile, and Compile creates a trace scope plan with stable scope ids, parent ids, names, begin points, end points, and queue/submit ordering requirements.",
         "Pass-local scopes emit ordinary begin/end events inside a single CommandList when possible.",
         "Cross-CommandList scopes emit graph-level begin/end marker events with explicit scope ids and depend on compiled submit order instead of stack pairing.",
         "GPUEventStream can reconstruct logical nesting from scope ids and ordering metadata even when events arrive from different CommandLists.",
@@ -177,7 +186,7 @@
   ],
   "stage_exit_gate": [
     "RenderGraph setup and compile can run asynchronously without RHI side effects.",
-    "RDG lambdas record command lists in parallel through single-writer command-list ownership.",
+    "AddPass execution lambdas record command lists in parallel through single-writer command-list ownership.",
     "The compiled submit plan feeds RHIExecutor and enables multi-threaded translate without a second submission backend.",
     "RG allocator lifetime is phase-owned and GPU trace scopes remain reconstructible across multiple compiled CommandLists."
   ],

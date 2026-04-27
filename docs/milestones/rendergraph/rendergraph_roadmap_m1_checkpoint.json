@@ -4,7 +4,7 @@
   "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
   "stage": {
     "id": "M1",
-    "title": "Freeze RDG contract and replace the legacy skeleton",
+    "title": "Freeze RenderGraph contract and replace the legacy skeleton",
     "status": "planned"
   },
   "goal": "Define the latest-only RenderGraph contract before implementation starts. This stage makes RenderGraph the owner of precise resource declarations and removes the old skeleton from the target architecture instead of adapting it.",
@@ -28,7 +28,7 @@
     },
     {
       "id": "HR-M1-04",
-      "rule": "Do not allow AsyncSetup lambdas to create RHI resources, update bindless arrays, or submit work."
+      "rule": "Do not allow AddSetupPass lambdas to create RHI resources, update bindless arrays, record commands, or submit work."
     },
     {
       "id": "HR-M1-05",
@@ -37,6 +37,14 @@
     {
       "id": "HR-M1-06",
       "rule": "Do not model GPU trace scopes as a raw CommandList-local stack when the logical scope can span multiple compiled CommandLists."
+    },
+    {
+      "id": "HR-M1-07",
+      "rule": "Do not add a separate setup lambda to AddPass. AddPass has one execution lambda only; setup belongs to AddSetupPass and parameters belong to graph.Alloc<T>()."
+    },
+    {
+      "id": "HR-M1-08",
+      "rule": "Do not declare GPU scopes inside AddPass execution lambdas when the scope describes graph-level lifetime. Use RG_EVENT_SCOPE(graph, name, ...) outside pass execution."
     }
   ],
   "checkpoints": [
@@ -48,7 +56,7 @@
       "problem": "The current RenderGraph code is a commented legacy skeleton with RHIGraphicsCommandList-era concepts. Building around it would keep stale ownership and fake compatibility alive.",
       "what_must_be_true_after_this_checkpoint": [
         "The target design names the existing RenderGraph implementation as replacement work, not a preserved API.",
-        "The new public entrypoint is a frame-local RenderGraph builder/compiler/executor surface based on CommandList and RHIExecutor.",
+        "The new public entrypoint is a frame-local RenderGraph allocator/setup/pass/dispatch surface based on RHICommandList and RHIExecutor.",
         "Old classes are either deleted or rewritten in place when implementation starts."
       ],
       "files_likely_affected": [
@@ -87,9 +95,11 @@
       "problem": "RenderGraph must compile queue placement and synchronization. If pass lambdas choose queues implicitly during record, the graph cannot own cross-queue correctness.",
       "what_must_be_true_after_this_checkpoint": [
         "Each pass has one declared execution domain: Graphics, Compute, Copy, or Raytracing.",
+        "AddPass accepts graph-owned parameters, pass flags, and exactly one execution lambda with the shape [](RHICommandList& cmd_list, RGContext context) { ... }.",
+        "Setup work is registered through AddSetupPass and a setup context instead of a second AddPass setup lambda.",
         "Copy passes compile to CopyScope or executor-derived copy submit work; users do not manually author queue transfers.",
         "Queue intent is part of compile input and is frozen before command recording starts.",
-        "Pass lambdas receive only the resolved resource views and the CommandList selected by the compiled plan."
+        "Execution lambdas receive only graph-owned parameters, resolved context data, and the RHICommandList selected by the compiled plan."
       ],
       "files_likely_affected": [
         "source/runtime/render/rendergraph/RenderGraphPass.h",
@@ -103,7 +113,7 @@
       "title": "Freeze raw RHI simplification contract",
       "status": "todo",
       "priority": "high",
-      "problem": "RenderGraph cannot reduce backend complexity unless raw RHI stops promising precise subresource and range scheduling semantics outside RDG.",
+      "problem": "RenderGraph cannot reduce backend complexity unless raw RHI stops promising precise subresource and range scheduling semantics outside RenderGraph.",
       "what_must_be_true_after_this_checkpoint": [
         "Raw RHI whole-resource persistent state is the only cross-frame backend state contract.",
         "Raw RHI buffer range and texture subresource data are local barrier details, not persistent scheduling ownership.",
@@ -122,9 +132,9 @@
       "title": "Lock validation contract",
       "status": "todo",
       "priority": "high",
-      "problem": "RDG implementation will touch RHI scheduling and resource lifetime. Validation must reuse existing project scripts and avoid ad-hoc test wrappers.",
+      "problem": "RenderGraph implementation will touch RHI scheduling and resource lifetime. Validation must reuse existing project scripts and avoid ad-hoc test wrappers.",
       "what_must_be_true_after_this_checkpoint": [
-        "Focused RHI/RDG tests are planned under TestRHITranslate and run through testscripts/windows/test_rhi_translate.ps1.",
+        "Focused RHI/RenderGraph tests are planned under TestRHITranslate and run through testscripts/windows/test_rhi_translate.ps1.",
         "Milestone-sized changes run testscripts/windows/test_all.ps1.",
         "No standalone RenderGraph validation script is introduced."
       ],
@@ -141,10 +151,10 @@
       "priority": "critical",
       "problem": "RenderGraph setup, compile, and parallel record need stable graph-owned memory. Caller-owned stack objects or ad-hoc heap allocation would make pass parameters, RGResource objects, and compiled plans unsafe across async phases.",
       "what_must_be_true_after_this_checkpoint": [
-        "RenderGraph owns a frame-local CPU allocator for PassNode, RGResource, access declarations, pass parameter blobs, compiled plan objects, and resolved resource tables.",
+        "RenderGraph owns a frame-local CPU allocator for PassNode, RGResource, access declarations, graph.Alloc<T>() parameter objects, compiled plan objects, and resolved resource tables.",
         "Setup-phase allocations are mutable only until Compile starts, then treated as frozen input.",
         "Compile-phase allocations produce immutable artifacts consumed by record tasks without graph mutation locks.",
-        "Record tasks receive read-only resolved resource tables and per-pass parameter data with graph-owned lifetime.",
+        "Record tasks receive read-only resolved resource tables and graph-owned parameter data with graph lifetime.",
         "Only external imported RHI resources are caller-owned; the RGResource wrappers and pass parameter storage are graph-owned."
       ],
       "files_likely_affected": [
@@ -162,7 +172,7 @@
       "priority": "critical",
       "problem": "Current GPU scope APIs are CommandList-local begin/end events. Parallel RenderGraph record can split one logical scope across multiple CommandLists and queues, so stack pairing cannot be inferred from record order.",
       "what_must_be_true_after_this_checkpoint": [
-        "RenderGraph trace scopes are declared as graph metadata with stable scope id, parent id, name, and logical lifetime.",
+        "RG_EVENT_SCOPE(graph, name, ...) declares graph trace scopes outside AddPass execution lambdas and stores stable scope id, parent id, name, and logical lifetime metadata.",
         "Compile assigns scope begin/end emission points to concrete CommandLists after pass grouping and queue segmentation are known.",
         "A scope that spans multiple CommandLists is represented by explicit scope identity and ordering metadata instead of relying on one native command buffer stack.",
         "Nested scopes that cross unordered queues are either compiled with an ordering boundary or rejected with a clear diagnostic.",
@@ -180,6 +190,7 @@
   "stage_exit_gate": [
     "The new RenderGraph boundary is explicit enough to implement without preserving the old skeleton.",
     "Resource access declarations cover subresource, buffer range, bindless, queue intent, imports, and exports.",
+    "The public API shape is graph.Alloc<T>(), RG_EVENT_SCOPE(...), AddSetupPass(...), AddPass(param, flags, execution_lambda), and Dispatch().",
     "Raw RHI simplification rules are frozen before backend tracker cleanup starts.",
     "RG allocator lifetime and cross-CommandList GPU trace scope correctness are frozen before async implementation starts."
   ],

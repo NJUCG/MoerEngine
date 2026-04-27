@@ -126,8 +126,8 @@
   ],
   "stage_exit_gate": [
     "RenderGraph emits deterministic queue-local barriers and cross-queue handoffs from declarations.",
-    "Vulkan preprocess no longer needs to own RenderGraph-level subresource, buffer-range, or bindless resource inference for RDG-generated work.",
-    "Focused RHI/RDG tests cover the compiled barrier plan."
+    "Vulkan preprocess no longer needs to own RenderGraph-level subresource, buffer-range, or bindless resource inference for RenderGraph-generated work.",
+    "Focused RHI/RenderGraph tests cover the compiled barrier plan."
   ],
   "validation": [
     "Run testscripts/windows/test_rhi_translate.ps1 after implementation changes in this stage.",
