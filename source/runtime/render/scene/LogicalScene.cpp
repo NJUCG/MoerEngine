@@ -108,9 +108,6 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
     Array<entt::entity> dirty_entities;
     dirty_entities.reserve(registry.group<ecs::CNode, ecs::CTransform>().size());
     registry.group<ecs::CNode, ecs::CTransform>().each([&](auto entity_id, auto& c_node, auto& c_transform) {
-        if (c_transform.is_dirty == false)
-            return;
-
         // 检查父节点是否 dirty，向下传递
         bool is_parent_dirty = false;
         if (c_node.parent_entt != entt::null) {
@@ -119,7 +116,7 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
         }
 
         // is_dirty会向下传递
-        c_transform.is_dirty = c_transform.is_dirty || is_parent_dirty;
+        c_transform.is_dirty |= is_parent_dirty;
         if (c_transform.is_dirty) {
             dirty_entities.push_back(entity_id);
         }
