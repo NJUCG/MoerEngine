@@ -286,6 +286,9 @@ struct RasterConfig {
     bool  debug_fps_limit_enable            = false;
     float debug_fps_limit                   = 60;
     bool  debug_request_scene_update        = false;
+    bool  debug_request_material_update     = false;
+    float3 debug_test_case_add_light_position = float3(0.f, 2.f, 0.f);
+    float3 debug_test_case_add_light_color    = float3(1.f, 0.2f, 0.05f);
 
     // MARK: Others
 

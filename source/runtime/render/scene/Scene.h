@@ -219,6 +219,9 @@ template<>
 RENDER_API void Scene::MarkDirty<ecs::CLightPoint>(entt::entity entity);
 
 template<>
+RENDER_API void Scene::MarkDirty<ecs::CMaterial>(entt::entity entity);
+
+template<>
 RENDER_API void Scene::MarkDirty<ecs::CTransform>(entt::entity entity);
 
 } // namespace Moer

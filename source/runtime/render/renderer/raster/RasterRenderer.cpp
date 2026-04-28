@@ -9,6 +9,7 @@
 #include "GeometryPass.h"
 #include "LightingPass.h"
 #include "RasterResource.h"
+#include "RasterTestCase.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
 #include "RtaoDenoiserPass.h"
@@ -235,7 +236,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         auto& raster_config = editor_config->raster_config;
 
-        RasterTool::ProcessDebugSceneUpdateRequest(raster_config, scene);
+        RasterTestCase::ProcessDebugSceneUpdateRequest(raster_config, scene);
+        RasterTestCase::ProcessDebugMaterialRequest(raster_config, scene);
 
         if (scene.Tick()) {
             RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);

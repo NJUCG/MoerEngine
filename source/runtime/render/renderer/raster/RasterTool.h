@@ -43,8 +43,6 @@ public:
     static void TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config);
 
     static void ExecuteScenePendingCommands(Scene& scene, RenderDevice& device, CommandQueue& gfx_queue);
-
-    static void ProcessDebugSceneUpdateRequest(RasterConfig& raster_config, Scene& scene);
 };
 
 } // namespace Moer::Render::Raster

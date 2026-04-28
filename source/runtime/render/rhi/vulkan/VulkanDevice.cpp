@@ -1184,15 +1184,19 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     rendering_create_info.depthAttachmentFormat =
         VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format);
 
-    // Only set stencil format if the depth format actually has a stencil aspect
+    // Only declare a stencil attachment when the PSO actually enables stencil tests.
     bool depth_has_stencil =
         (_create_info.depth_stencil_format == PF_D32_SFLOAT_S8_UINT ||
          _create_info.depth_stencil_format == PF_D24_UNORM_S8_UINT ||
          _create_info.depth_stencil_format == PF_D16_UNORM_S8_UINT ||
          _create_info.depth_stencil_format == PF_S8_UINT);
+    bool stencil_enabled = _create_info.depth_stencil_info.b_enable_front_face_stencil ||
+                           _create_info.depth_stencil_info.b_enable_back_face_stencil;
+    vk_pso->b_uses_stencil_attachment = depth_has_stencil && stencil_enabled;
     rendering_create_info.stencilAttachmentFormat =
-        depth_has_stencil ? VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format) :
-                            VK_FORMAT_UNDEFINED;
+        vk_pso->b_uses_stencil_attachment ?
+            VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format) :
+            VK_FORMAT_UNDEFINED;
 
     auto to_vk_blend_attachment = [](const RHIBlendAttachmentInfo& _info) {
         VkPipelineColorBlendAttachmentState state{};

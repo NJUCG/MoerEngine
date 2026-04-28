@@ -579,8 +579,17 @@ void RasterUI::ShowConfig() {
 
         ImGui::Separator(); // 分割线
 
-        if (ImGui::Button("Debug Scene Update")) {
+        ImGui::SliderFloat3(
+            "TestCase Add Light Position", (float*)&m_config.debug_test_case_add_light_position, -2.0f, 2.0f
+        );
+        ImGui::ColorEdit3("TestCase Add Light Color", (float*)&m_config.debug_test_case_add_light_color);
+
+        if (ImGui::Button("TestCase Add Light")) {
             m_config.debug_request_scene_update = true;
+        }
+
+        if (ImGui::Button("TestCase Modify Material")) {
+            m_config.debug_request_material_update = true;
         }
 
         ImGui::Separator(); // 分割线
