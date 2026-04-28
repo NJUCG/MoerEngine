@@ -1034,12 +1034,12 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
     // AABB计算分为两步
     // 1. 如果Mesh有更新，则把AABB向Mesh同步：SBuildMeshAABB
-    // 2. Node更新时，取Renderable对应的Mesh的AABB，在树上进行AABB合并：SUpdateAllNodeTransformAndAABB
+    // 2. Node更新时，取Renderable对应的Mesh的AABB，在树上进行AABB合并
     out_logical_scene.SBuildMeshAABB();
 
     // 有camera和light，会修改CTransform的数据
     // - 例如，平行光会把自己的direction叠加到对应transform的rotation上
-    out_logical_scene.SUpdateAllNodeTransformAndAABB();
+    out_logical_scene.Update();
 
     {
         // log

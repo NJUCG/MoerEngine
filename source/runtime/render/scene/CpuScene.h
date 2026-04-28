@@ -29,8 +29,10 @@ class GpuScene;
  * - 存储所有准备上传到GPU的场景数据；
  * - 实现所有 LogicalScene -> CpuScene 的逻辑
  * 
- * TODO: LogicalScene数据变更时，增量更新CpuScene数据
- *       考虑使用 事件队列 或 观察者模式
+ * 增量更新通过CTagNeedUpdate实现：
+ * - 当CLight/CMaterial/CTransform被修改时，场景修改接口会添加CTagNeedUpdate标签
+ * - UpdateLights/UpdateMaterials/UpdateMeshes通过view过滤出有CTagNeedUpdate的实体进行处理
+ * - 处理完毕后清除CTagNeedUpdate标签
  */
 class RENDER_API CpuScene {
 

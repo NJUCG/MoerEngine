@@ -33,9 +33,9 @@ struct CCamera {
 
 /**
  * MARK: Light
- * 
+ *
  * 通过CLight表示一个Entity是Light
- * 
+ *
  * Light的Position和Direction，通过CWorldTransform计算
  */
 struct CTagMainLight {};
@@ -200,5 +200,20 @@ struct CtxMegaBuffers {
 
     Array<uint32> index;
 };
+
+/**
+ * Need Update Tag Component
+ *
+ * 用于标记需要在CpuScene中重新上传到GpuScene的组件
+ * 比如 Light 可能同时有 CLight 和 CTransform 组件，所以对 NeedUpdate 的类型需要做区分
+ *
+ * 使用方法：
+ * - 修改场景数据时：reg.emplace<CTagNeedUpdateLight>(entity)
+ * - 更新函数中：auto view = reg.view<const CTagNeedUpdateLight, const CLight>();
+ * - 处理完毕后：reg.clear<CTagNeedUpdateLight>() 清除所有标记
+ */
+struct CTagNeedUpdateLight {};
+struct CTagNeedUpdateMaterial {};
+struct CTagNeedUpdateTransform {};
 
 } // namespace Moer::ecs

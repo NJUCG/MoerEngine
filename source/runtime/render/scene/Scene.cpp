@@ -58,7 +58,11 @@ Render::GpuScene::PendingCommandList&& Scene::PopPendingCommandList() {
 }
 
 void Scene::Tick() {
-    // TODO
+    m_logical_scene->Update();
+
+    m_cpu_scene->Update();
+
+    m_gpu_scene->Update(*m_logical_scene, *m_cpu_scene);
 }
 
 void Scene::Reset() {

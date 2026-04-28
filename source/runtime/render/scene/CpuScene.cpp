@@ -20,9 +20,15 @@ CpuScene::CpuScene(ecs::LogicalScene& m_logical_scene) : m_logical_scene(m_logic
 }
 
 void CpuScene::Update() {
+    auto& r = m_logical_scene.r();
+
     UpdateLights();
     UpdateMaterials();
     UpdateMeshes();
+
+    r.clear<ecs::CTagNeedUpdateLight>();
+    r.clear<ecs::CTagNeedUpdateMaterial>();
+    r.clear<ecs::CTagNeedUpdateTransform>();
 }
 
 uint CpuScene::GetPrimitiveId(entt::entity primitive_entt) const {

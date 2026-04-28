@@ -18,6 +18,10 @@ const entt::registry& LogicalScene::r() const {
     return registry;
 }
 
+void LogicalScene::Update() {
+    SUpdateAllNodeTransformAndAABB();
+}
+
 LogicalScene::LogicalScene() {
     registry = entt::registry{};
 

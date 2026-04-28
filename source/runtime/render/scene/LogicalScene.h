@@ -38,7 +38,7 @@ namespace Moer::ecs {
  * 
  * 所有函数默认直接操作当前LogicalScene对象内的entt::registry
  * 
- * 所有System均以 S 开头；所有的辅助函数均以 U (utility) 开头
+ * Update为外部统一更新入口；所有System均以 S 开头；所有的辅助函数均以 U (utility) 开头
  */
 class RENDER_API LogicalScene {
 
@@ -50,6 +50,9 @@ public:
 
     entt::registry&       r();
     const entt::registry& r() const;
+
+    // LogicalScene 外部统一更新入口
+    void Update();
 
     void SBuildPrimitiveHash();
 
