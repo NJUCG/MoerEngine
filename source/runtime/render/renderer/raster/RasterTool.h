@@ -44,12 +44,7 @@ public:
 
     static void ExecuteScenePendingCommands(Scene& scene, RenderDevice& device, CommandQueue& gfx_queue);
 
-    static bool ProcessDebugPointLightRequest(
-        RasterConfig& raster_config,
-        Scene&        scene,
-        RenderDevice& device,
-        CommandQueue& gfx_queue
-    );
+    static void ProcessDebugSceneUpdateRequest(RasterConfig& raster_config, Scene& scene);
 };
 
 } // namespace Moer::Render::Raster

@@ -42,6 +42,35 @@ class CommandList;
  */
 class RENDER_API Scene {
 
+    /**
+     * Runtime Scene Update Feature Checklist
+     *
+     * - Update
+     *   - Light【done】
+     *   - Material
+     *   - Transform
+     *   - Mesh / Renderable
+     * - Add
+     *   - Light(PointLight)【done】
+     *   - Material
+     *   - Mesh / Renderable
+     *   - Entity / Node
+     * - Remove
+     *   - Light
+     *   - Material
+     *   - Mesh / Renderable
+     *   - Entity / Node
+     * - Rebuild
+     *   - Material / Texture Handle
+     *   - Mesh / Primitive / Instance Buffer
+     *   - Raytracing BLAS / TLAS
+     * - Infrastructure
+     *   - Patch Entry【done】
+     *   - Dirty / NeedUpdate Tag【done】
+     *   - NeedCreate Tag【done】
+     *   - Per-frame Guarded Tick【done】
+     */
+
 public:
     Scene();
     ~Scene() = default;
@@ -62,9 +91,9 @@ public:
     void LoadSceneFromFile(const std::filesystem::path& file_path);
 
     /**
-     * 每帧调用，更新CpuScene和GpuScene数据
+    * 每帧调用，有需要时更新CpuScene和GpuScene数据
      */
-    void Tick();
+    bool Tick();
 
     /**
      * 重置所有场景数据
@@ -134,6 +163,9 @@ private:
      * LoadSceneFromFileAsync 和 LoadSceneFromFile 的公共实现
      */
     void LoadSceneInternal(const std::filesystem::path& file_path);
+
+    // 判断当前 Scene 是否存在需要同步到 CpuScene/GpuScene 的 tag。
+    bool HasPendingSceneSync() const;
 
 public:
     /**

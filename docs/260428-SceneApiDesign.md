@@ -269,7 +269,8 @@ scene.Patch<ecs::CTransform>(entity, [](auto& transform) {
 - `SceneLightApi.cpp`：提供 `Scene::CreatePointLight()`，用于运行时创建 point light。
 - `CpuScene::CreateLights()`：处理 `CTagNeedCreateLight`，为新增 light 分配 CPU render cache slot。
 - `GpuScene::UpdateLightBuffer()`：同步 CPU light cache 到 GPU light buffer。debug 阶段 light 数量很小，当前采用全量上传；buffer 不足时重建并更新 bindless handle。后续需要替换为 capacity/chunk 策略和局部更新。
-- `RasterConfig::debug_request_create_point_light`：Raster UI 的一次性请求位。UI 只置位请求，`RasterRenderer` 每帧消费，请求消费后调用 `Scene::CreatePointLight()`、`Scene::Tick()` 并执行 pending command list。
+- `Scene::Tick()`：设计为每帧可调用的 guarded sync 入口。内部先检查 `NeedUpdate/NeedCreate` tag，没有同步需求时直接返回 `false`，有需求时更新 `LogicalScene -> CpuScene -> GpuScene` 并返回 `true`。
+- `RasterConfig::debug_request_scene_update`：Raster UI 的单入口调试请求位。UI 只提供 `Debug Scene Update` 按钮，具体测试逻辑集中写在 `RasterTool::ProcessDebugSceneUpdateRequest()` 中；`RasterRenderer` 每帧调用 `Scene::Tick()`，仅当返回 `true` 时执行 pending command list。
 - `RaytracingRenderer` 中方向光参数和 transform 的外部修改已迁移到 `Scene::Patch<T>()`。
 
 当前代码中 `Scene::r()` 和 `LogicalScene::r()` 仍然公开 mutable registry，这是历史接口。后续迁移目标是：

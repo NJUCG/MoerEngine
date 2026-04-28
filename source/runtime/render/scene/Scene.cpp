@@ -57,12 +57,33 @@ Render::GpuScene::PendingCommandList&& Scene::PopPendingCommandList() {
     return std::move(m_gpu_scene->PopPendingCommandList());
 }
 
-void Scene::Tick() {
+bool Scene::Tick() {
+    assert(m_logical_scene && m_cpu_scene && m_gpu_scene && "Scene is not ready");
+    if (!HasPendingSceneSync()) {
+        return false;
+    }
+
     m_logical_scene->Update();
 
     m_cpu_scene->Update();
 
     m_gpu_scene->Update(*m_logical_scene, *m_cpu_scene);
+
+    return true;
+}
+
+bool Scene::HasPendingSceneSync() const {
+    if (!m_logical_scene || !m_cpu_scene || !m_gpu_scene) {
+        return false;
+    }
+
+    const auto& registry = r();
+    return !registry.view<const ecs::CTagNeedUpdateLight>().empty() ||
+           !registry.view<const ecs::CTagNeedUpdateMaterial>().empty() ||
+           !registry.view<const ecs::CTagNeedUpdateTransform>().empty() ||
+           !registry.view<const ecs::CTagNeedCreateLight>().empty() ||
+           !registry.view<const ecs::CTagNeedCreateMaterial>().empty() ||
+           !registry.view<const ecs::CTagNeedCreateTransform>().empty();
 }
 
 void Scene::Reset() {

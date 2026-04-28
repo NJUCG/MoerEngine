@@ -579,14 +579,8 @@ void RasterUI::ShowConfig() {
 
         ImGui::Separator(); // 分割线
 
-        ImGui::Text("Debug Point Light");
-        ImGui::SliderFloat3(
-            "Point Light Position", (float*)&m_config.debug_point_light_position, -5.0f, 5.0f
-        );
-        ImGui::ColorEdit3("Point Light Color", (float*)&m_config.debug_point_light_color);
-        ImGui::SliderFloat("Point Light Intensity", &m_config.debug_point_light_intensity, 0.0f, 50000.0f);
-        if (ImGui::Button("Create Point Light")) {
-            m_config.debug_request_create_point_light = true;
+        if (ImGui::Button("Debug Scene Update")) {
+            m_config.debug_request_scene_update = true;
         }
 
         ImGui::Separator(); // 分割线

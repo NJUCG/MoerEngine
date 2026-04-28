@@ -234,8 +234,10 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }
 
         auto& raster_config = editor_config->raster_config;
-        if (RasterTool::ProcessDebugPointLightRequest(raster_config, scene, device, gfx_queue)) {
-            scene.Tick();
+
+        RasterTool::ProcessDebugSceneUpdateRequest(raster_config, scene);
+
+        if (scene.Tick()) {
             RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
         }
 

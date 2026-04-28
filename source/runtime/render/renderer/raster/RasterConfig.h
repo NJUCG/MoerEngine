@@ -282,13 +282,10 @@ struct RasterConfig {
     int           inSize_x      = 540;
 
     // MARK: Debug
-    float  debug_param                       = 1.0f;
-    bool   debug_fps_limit_enable            = false;
-    float  debug_fps_limit                   = 60;
-    bool   debug_request_create_point_light  = false;
-    float3 debug_point_light_position        = float3(0.f, 2.f, 0.f);
-    float3 debug_point_light_color           = float3(1.f, 0.2f, 0.05f);
-    float  debug_point_light_intensity       = 1000.f;
+    float debug_param                       = 1.0f;
+    bool  debug_fps_limit_enable            = false;
+    float debug_fps_limit                   = 60;
+    bool  debug_request_scene_update        = false;
 
     // MARK: Others
 

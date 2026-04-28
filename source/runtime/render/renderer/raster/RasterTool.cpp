@@ -165,28 +165,23 @@ void RasterTool::ExecuteScenePendingCommands(Scene& scene, RenderDevice& device,
     gfx_queue.Sync();
 }
 
-// 消费 Raster UI 的一次性 debug PointLight 创建请求。
-bool RasterTool::ProcessDebugPointLightRequest(
-    RasterConfig& raster_config,
-    Scene&        scene,
-    RenderDevice& device,
-    CommandQueue& gfx_queue
-) {
-    if (!raster_config.debug_request_create_point_light) {
-        return false;
+// 消费 Raster UI 的单入口 scene update 调试请求。
+void RasterTool::ProcessDebugSceneUpdateRequest(RasterConfig& raster_config, Scene& scene) {
+    if (!raster_config.debug_request_scene_update) {
+        return;
     }
 
-    raster_config.debug_request_create_point_light = false;
+    raster_config.debug_request_scene_update = false;
 
     PointLightCreateInfo create_info{};
-    create_info.position  = raster_config.debug_point_light_position;
-    create_info.color     = raster_config.debug_point_light_color;
-    create_info.intensity = raster_config.debug_point_light_intensity;
+    create_info.position  = float3(0.f, 2.f, 0.f);
+    create_info.color     = float3(1.f, 0.2f, 0.05f);
+    create_info.intensity = 1000.f;
     create_info.name      = "Debug Point Light";
 
     const entt::entity light_entity = scene.CreatePointLight(create_info);
     if (light_entity == entt::null) {
-        return false;
+        return;
     }
 
     LOG_INFO(
@@ -199,8 +194,6 @@ bool RasterTool::ProcessDebugPointLightRequest(
         create_info.color.z,
         create_info.intensity
     );
-
-    return true;
 }
 
 } // namespace Moer::Render::Raster
