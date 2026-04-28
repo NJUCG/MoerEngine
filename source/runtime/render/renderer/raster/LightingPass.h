@@ -13,9 +13,10 @@ namespace Moer::Render::Raster {
 class PbrMaterialShadingPipeline : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(PbrMaterialShadingPipeline);
-    DEFINE_SHADER_CONSTANT_STRUCT(MaterialPassBindlessParam, param);
+    DEFINE_SHADER_BUFFER(lighting_data);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_ARGS(bdls, param);
+    DEFINE_SHADER_CONSTANT_STRUCT(MaterialPassBindlessParam, param);
+    DEFINE_SHADER_ARGS(lighting_data, bdls, param);
 };
 
 class LightingPass {
@@ -46,24 +47,20 @@ public:
 
     void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
 
-        MaterialPassBindlessParam material_param{};
-        material_param.extra_ambient_color     = ui_config.shading_extra_ambient_color;
-        material_param.extra_ambient_intensity = ui_config.shading_extra_ambient_intensity;
-        material_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
-        material_param.shading_mode            = static_cast<uint>(ui_config.shading_mode);
+        MaterialPassBindlessParam pass_param{};
+        pass_param.extra_ambient_color     = ui_config.shading_extra_ambient_color;
+        pass_param.extra_ambient_intensity = ui_config.shading_extra_ambient_intensity;
+        pass_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
+        pass_param.shading_mode            = static_cast<uint>(ui_config.shading_mode);
 
-        material_param.material_buf_hdl    = context.scene.GetGpuSceneRes().material_buf.hdl;
-        material_param.vbuffer             = context.textures.vbuffer.hdl;
-        material_param.gbuffer_normal      = context.textures.normal.hdl;
-        material_param.gbuffer_tangent     = context.textures.tangent.hdl;
-        material_param.gbuffer_uv          = context.textures.uv.hdl;
-        material_param.gbuffer_depth       = context.textures.depth_nearest_sampler.hdl;
-        material_param.gbuffer_position    = context.textures.position.hdl;
-        material_param.global_param_handle = context.lighting_data_buffer.hdl;
+        pass_param.gbuffer_base_color     = context.textures.base_color.hdl;
+        pass_param.gbuffer_normal         = context.textures.normal.hdl;
+        pass_param.gbuffer_metal_rough_ao = context.textures.metal_rough_ao.hdl;
+        pass_param.gbuffer_depth          = context.textures.depth_nearest_sampler.hdl;
 
-        material_param.light_buf_hdl      = context.scene.GetGpuSceneRes().light_buf.hdl;
-        material_param.cubemap_handle     = context.textures.cubemap_tex.hdl;
-        material_param.shadow_mask_handle = context.textures.shadow_mask.hdl;
+        pass_param.light_buf_hdl      = context.scene.GetGpuSceneRes().light_buf.hdl;
+        pass_param.cubemap_handle     = context.textures.cubemap_tex.hdl;
+        pass_param.shadow_mask_handle = context.textures.shadow_mask.hdl;
 
         //context.cmd_list.SetStencilReference(1, 1);
 
@@ -72,7 +69,7 @@ public:
             DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture());
         depth_attachment.action = AC_DS_LOAD_STORE;
 
-        context.cmd_list.Gfx(pbr_pipeline, context.bdls, material_param)
+        context.cmd_list.Gfx(pbr_pipeline, context.lighting_data_buffer.buf, context.bdls, pass_param)
             .Draw(
                 "Lighting Pass",
                 context.textures.lighting_output.GetRect2D(),

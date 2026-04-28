@@ -27,7 +27,6 @@ struct VsContext {
     Moer::GPrimitive primitive;
 
     // derived 2
-    float3 out_world_pos;
     float4 out_clip_pos;
 
 #if !SHADOW_DEPTH_PASS
@@ -47,8 +46,14 @@ struct VsContext {
         instance_id = _instance_id;
 
         // 1. GInstance
+        uint scene_instance_id = instance_id;
+        if (param.use_visible_instance_id_remap != 0) {
+            ArrayBuffer visible_instance_id_buf = ArrayBuffer(param.visible_instance_id_buf_hdl);
+            scene_instance_id                   = visible_instance_id_buf.Load<uint>(instance_id);
+        }
+
         ArrayBuffer     instance_buf = ArrayBuffer(param.instance_buf_hdl);
-        Moer::GInstance instance     = instance_buf.Load<Moer::GInstance>(instance_id);
+        Moer::GInstance instance     = instance_buf.Load<Moer::GInstance>(scene_instance_id);
         primitive_id                 = instance.primitive_id; // primitive_id == draw_id
         model2world                  = instance.world_transform;
 
@@ -68,8 +73,8 @@ struct VsContext {
             ArrayBuffer position_buf = ArrayBuffer(param.position_buf_hdl);
             vertex_pos               = position_buf.Load<float3>(primitive.position_start_idx + vertex_id);
         }
-        out_world_pos = mul(model2world, float4(vertex_pos, 1.0)).xyz;
-        out_clip_pos  = mul(param.world2clip, float4(out_world_pos, 1.0));
+        float3 world_pos = mul(model2world, float4(vertex_pos, 1.0)).xyz;
+        out_clip_pos  = mul(param.world2clip, float4(world_pos, 1.0));
 
 #if !SHADOW_DEPTH_PASS
 
@@ -125,7 +130,6 @@ VsOutput main(
 #if !SHADOW_DEPTH_PASS
 
     output.position       = context.out_clip_pos;
-    output.world_position = context.out_world_pos;
     output.normal         = context.out_normal;
     output.tangent        = context.out_tangent;
     output.texcoord0      = context.out_texcoord0;

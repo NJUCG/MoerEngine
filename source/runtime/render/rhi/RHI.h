@@ -4,11 +4,13 @@
 #include "PixelFormat.h"
 #include "RenderAPI.h"
 #include "rhi/RHICommon.h"
+#include "rhi/plugin/RHICooperative.h"
 #include "rhi/RHIResource.h"
 #include "taskgraph/ThreadManager.h"
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <type_traits>
 
 // Forward declarations to break circular dependency
@@ -84,14 +86,16 @@ struct DeviceConfig {
     uint b_support_virtual_texture : 1;
 };
 
-class DeviceExtension {
+// RuntimePlugin用于承载运行时可选插件
+// 旧名字为DeviceExtension，重命名是为了避免和Vulkan API扩展概念混淆
+class RuntimePlugin {
 protected:
-    virtual ~DeviceExtension() = default;
+    virtual ~RuntimePlugin() = default;
 };
 
 template<typename T>
 concept DeviceExt =
-    std::is_base_of_v<DeviceExtension, T> && std::is_same_v<const std::string_view, decltype(T::name)>;
+    std::is_base_of_v<RuntimePlugin, T> && std::is_same_v<const std::string_view, decltype(T::name)>;
 
 class RenderDevice {
 public:
@@ -196,7 +200,15 @@ public:
     }
 
     template<DeviceExt Ext>
-    RENDER_API Ext* LoadExtension() const;
+    RENDER_API Ext* LoadPlugin() const;
+
+    RENDER_API bool IsExtensionCooperativeEnabled() const;
+    RENDER_API const CooperativeExtensionInfo& GetCooperativeExtensionInfo() const;
+    RENDER_API bool TryConvertCooperativeVectorMatrix(
+        const CooperativeVectorConversionDesc& _desc,
+        std::span<const byte>                  _src_data,
+        std::span<byte>                        _dst_data
+    ) const;
 
     RENDER_API void FlushDebugMessages() const;
     RENDER_API void WaitIdle();

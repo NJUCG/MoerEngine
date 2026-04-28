@@ -59,7 +59,8 @@ public:
         }
 
         SsrPipelineBindlessParam param;
-        param.view_projection_matrix         = Transpose(camera.GetViewProjectionMatrix());
+        param.clip2world                     = Transpose(camera.GetViewProjectionMatrixInv());
+        param.world2clip                     = Transpose(camera.GetViewProjectionMatrix());
         param.camera_position                = camera.GetPosition();
         param.near_clip                      = camera.GetNearClip();
         param.resolution                     = float2(context.textures.ssr_output.GetSize());
@@ -71,12 +72,9 @@ public:
         param.ssr_is_enable_jitter           = ui_config.ssr_is_enable_jitter;
         param.ssr_is_force_ground_enable_ssr = ui_config.ssr_is_force_ground_enable_ssr;
         param.color_tex                      = input_image.hdl;
-        param.position_tex                   = context.textures.position.hdl;
         param.normal_tex                     = context.textures.normal.hdl;
         param.depth_tex                      = context.textures.depth_linear_sampler.hdl;
-        param.vbuffer                        = context.textures.vbuffer.hdl;
-        param.gbuffer_uv                     = context.textures.uv.hdl;
-        param.material_buf_hdl               = context.scene.GetGpuSceneRes().material_buf.hdl;
+        param.gbuffer_metal_rough_ao         = context.textures.metal_rough_ao.hdl;
 
         context.cmd_list.Gfx(ssr_pipeline, context.bdls, param)
             .Draw(

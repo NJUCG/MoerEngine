@@ -241,6 +241,20 @@ void CpuScene::InitializeMeshes() {
             } else {
                 g_primitive.index_start_idx = 0; // 默认值
             }
+            
+            // AABB for frustum culling
+            g_primitive.aabb_min = c_primitive.aabb.min;
+            g_primitive.aabb_max = c_primitive.aabb.max;
+
+            // 验证 AABB 有效性
+            if (!c_primitive.aabb.IsValid()) {
+                LOG_WARNING(
+                    "Primitive {} has invalid AABB: min=({},{},{}), max=({},{},{})",
+                    m_primitive_buf.size(),
+                    g_primitive.aabb_min.x, g_primitive.aabb_min.y, g_primitive.aabb_min.z,
+                    g_primitive.aabb_max.x, g_primitive.aabb_max.y, g_primitive.aabb_max.z
+                );
+            }
 
             uint primitive_id = static_cast<uint>(m_primitive_buf.size());
             m_primitive_buf.emplace_back(g_primitive);

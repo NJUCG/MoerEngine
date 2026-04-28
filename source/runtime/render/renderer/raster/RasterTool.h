@@ -1,16 +1,41 @@
 #pragma once
 
+#include "misc/STL.h"
+#include "RasterConfig.h"
 #include "rhi/RHICommandDrawData.h"
+
+#include <source_location>
+#include <string_view>
+
+namespace Moer::Render {
+class CommandQueue;
+}
 
 namespace Moer::Render::Raster {
 
 class RasterTool {
 public:
-    static Array<SingleDrawParam> GetFullScreenDrawDatas() {
-        Array<SingleDrawParam> full_screen_draw_datas;
-        full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
-        return full_screen_draw_datas;
-    }
+    static Array<SingleDrawParam> GetFullScreenDrawDatas();
+
+    static std::string_view GetShadowDepthPassProfileScopeName();
+
+    static std::string_view GetGeometryPassProfileScopeName();
+
+    static std::string_view GetGeometryCullingProfileScopeName();
+
+    static std::string_view GetGeometryDrawProfileScopeName();
+
+    static std::string_view GetShadowCullingProfileScopeName(uint cascade_index);
+
+    static std::string_view GetShadowDrawProfileScopeName(uint cascade_index);
+
+    static void LogDebugEverySeconds(
+        std::string_view      str,
+        double                seconds,
+        std::source_location  location = std::source_location::current()
+    );
+
+    static void TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config);
 };
 
 } // namespace Moer::Render::Raster

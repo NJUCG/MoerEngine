@@ -107,12 +107,52 @@ static const Array<std::string> s_ai_trt_visualize_buffer_array = {
     "Engine2 out_final_output",   "Engine2 out_denoised_ao",
 }; // namespace Moer
 
+struct CooperativeOpsStatus {
+    bool extension_enabled                     = false;
+    bool inference_ready                       = false;
+    bool matrix_supported                      = false;
+    bool matrix_robust_buffer_access_supported = false;
+    bool vector_supported                      = false;
+    bool vector_training_supported             = false;
+    bool low_precision_supported               = false;
+    bool storage_supported                     = false;
+    bool vulkan_memory_model_supported         = false;
+
+    uint matrix_mode_count       = 0;
+    uint vector_mode_count       = 0;
+    uint matrix_supported_stages = 0;
+    uint vector_supported_stages = 0;
+    uint max_vector_components   = 0;
+    uint frames_evaluated        = 0;
+
+    std::string overview              = "Waiting for cooperative snapshot...";
+    std::string matrix_summary        = "Waiting for cooperative snapshot...";
+    std::string matrix_runtime_status = "Idle";
+    std::string vector_summary        = "Waiting for cooperative snapshot...";
+    std::string vector_runtime_status = "Idle";
+};
+
 struct RasterConfig {
 
     // MARK: Geometry
 
     bool  geometry_enable_alpha_test             = true;
     float geometry_alpha_test_blend_pixel_cutoff = 0.5f; // 当AlphaMode为BLEND时，低于该值的像素会被丢弃
+    bool  enable_frustum_culling                 = true; // GPU视锥剔除
+
+    // MARK: Culling Statistics (只读，由GPU更新)
+    struct CullingStats {
+        uint total_instances_before = 0;
+        uint total_instances_after  = 0;
+        uint visible_draws          = 0;
+        uint total_draws            = 0;
+
+        float GetCullingRatio() const {
+            if (total_instances_before == 0)
+                return 0.0f;
+            return 1.0f - (float)total_instances_after / (float)total_instances_before;
+        }
+    } culling_stats;
 
     // MARK: Shading
     EShadingMode shading_mode = EShadingMode::DEFAULT_PBR;
@@ -156,22 +196,26 @@ struct RasterConfig {
 
     // MARK: AO
     EAoMode ao_mode            = EAoMode::RTAO;
-    float   ssao_intensity     = 1.0f;
-    int     ssao_spp           = 16;
-    int     ssao_sample_radius = 2;
-    float   ssao_max_distance  = 0.5f;
+    bool    ao_half_resolution = true;
+
+    float ssao_intensity     = 1.0f;
+    int   ssao_spp           = 16;
+    int   ssao_sample_radius = 16;
+    float ssao_max_distance  = 1.0f;
 
     ERtaoSampleMode rtao_sample_mode        = ERtaoSampleMode::COSINE_WEIGHTED;
     float           rtao_intensity          = 1.0f;
     float           rtao_ray_trace_distance = 1.0f;
-    int             rtao_spp                = 4;
+    int             rtao_spp                = 8;
 
-    bool  rtao_denoiser_enable                 = true;
-    bool  rtao_denoiser_reprojection_enable    = true;
-    bool  rtao_denoiser_validation_enable      = true;
-    float rtao_denoiser_history_ratio          = 0.8f;
-    float rtao_denoiser_valid_depth_threshold  = 0.01f;
-    float rtao_denoiser_valid_normal_threshold = 0.8f;
+    bool  rtao_denoiser_enable                  = true;
+    bool  rtao_denoiser_reprojection_enable     = true;
+    bool  rtao_denoiser_validation_enable       = true;
+    bool  rtao_denoiser_history_clamp_enable    = true;
+    bool  rtao_denoiser_motion_weighting_enable = true;
+    float rtao_denoiser_history_ratio           = 0.9f;
+    float rtao_denoiser_valid_depth_threshold   = 0.01f;
+    float rtao_denoiser_valid_normal_threshold  = 0.8f;
 
     float ssdo_depth_bias         = 0.001f;
     float ssdo_sample_radius      = 0.16f;
@@ -187,6 +231,13 @@ struct RasterConfig {
     float ssr_metallic_threshold         = 0.5;
     float ssr_step_base                  = 0.025;
 
+    // MARK: Bloom
+    bool bloom_enabled = true;
+
+    // MARK: Cooperative Ops
+    bool                 cooperative_ops_enabled = false;
+    CooperativeOpsStatus cooperative_ops_status{};
+
     // MARK: Denoiser
     EDenoiserMode denoiser_mode                     = EDenoiserMode::NONE;
     float         denoiser_bfd_spatial_sigma_square = 20.0f;  // [1, 200]
@@ -201,21 +252,24 @@ struct RasterConfig {
     bool ai_trt_force_ldr = true;
 
     // MARK: Shadow
-    EShadowMapMode shadow_map_mode              = EShadowMapMode::CSM;
-    int            shadow_sampling_mode         = 0;
-    int            shadow_csm_num_of_cascades   = 4;
-    float          shadow_csm_lerp_factor       = 0.015f;
-    float          shadow_csm_blend_percentage  = 0.3f;
-    bool           shadow_csm_blend_option      = true;
-    int            shadow_csm_sm_size           = 4096;
-    bool           shadow_csm_visualize_cascade = false;
+    EShadowMapMode shadow_map_mode                       = EShadowMapMode::CSM;
+    int            shadow_sampling_mode                  = 0;
+    int            shadow_csm_num_of_cascades            = 4;
+    float          shadow_csm_lerp_factor                = 0.015f;
+    float          shadow_csm_blend_percentage           = 0.3f;
+    bool           shadow_csm_blend_option               = true;
+    int            shadow_csm_sm_size                    = 4096;
+    bool           shadow_csm_visualize_cascade          = false;
+    bool           shadow_cache_enabled                  = true; // 开启后允许远级联复用上一帧阴影图
+    int            shadow_cache_disable_first_n_cascades = 0;    // 前N层级联始终全量刷新
 
     // MARK: Shadow - PCSS
     bool  shadow_pcss_enabled          = true;
     float shadow_pcss_light_size_world = 0.01f;
 
-    StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera =
-        {0.005, 0.02, 0.1, 0.25, 0.32, 1.0};
+    StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera = {0.005, 0.02, 0.1, 0.25};
+    StaticArray<float, CSM_MAX_CASCADES> shadow_cache_camera_move_threshold_in_texels =
+        {1.0f, 8.0f, 32.0f, 128.0f}; // 级联中心移动超过该阈值后刷新
 
     // MARK: Skybox
     bool  skybox_exposure_correct_enabled      = true;         // 启用的话，就会找到第一个平行光，乘上它的颜色

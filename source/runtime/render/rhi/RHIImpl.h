@@ -1706,7 +1706,7 @@ public:
     CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) = 0; //gfx
     virtual PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders)        = 0; //compute
 
-    virtual DeviceExtension* LoadExtension(std::string_view _name) {
+    virtual RuntimePlugin* LoadPlugin(std::string_view _name) {
         return nullptr;
     }
 
@@ -1716,6 +1716,23 @@ public:
 
     virtual void FlushDebugMessages() const {
         ; // do nothing by default
+    }
+
+    virtual bool IsExtensionCooperativeEnabled() const {
+        return false;
+    }
+
+    virtual const CooperativeExtensionInfo& GetCooperativeExtensionInfo() const {
+        static const CooperativeExtensionInfo s_empty_info{};
+        return s_empty_info;
+    }
+
+    virtual bool TryConvertCooperativeVectorMatrix(
+        const CooperativeVectorConversionDesc&,
+        std::span<const byte>,
+        std::span<byte>
+    ) const {
+        return false;
     }
 
     virtual void WaitIdle() {};

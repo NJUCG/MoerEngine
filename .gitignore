@@ -20,9 +20,13 @@ justfile
 EnableFeatures.cmake
 MoerEngine.toml
 
-# 4. Logs
+# 4. Vibe Coding
+/.cursor/
+
+# 5. Logs
 logs/
 log*.txt
+debug-*.log
 .VSCodeCounter/
 rhi_docs/01-overview.md
 rhi_docs/02-core-abstractions.md

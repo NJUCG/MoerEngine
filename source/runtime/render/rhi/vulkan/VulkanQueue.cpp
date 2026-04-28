@@ -1,4 +1,5 @@
 #include "VulkanQueue.h"
+#include "PixelFormat.h"
 #include "RHICmdReorderer.h"
 #include "VulkanAllocator.h"
 #include "VulkanCommand.h"
@@ -13,7 +14,6 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIIO.h"
 #include "rhi/RHIResource.h"
-#include "PixelFormat.h"
 
 #include "VulkanCustomCommand.h"
 #include "shader/ShaderPipeline.h"
@@ -52,6 +52,11 @@ VkRenderingAttachmentInfo FromColorAttachmentInfo(const ColorAttachment& _attach
     return attachment_info;
 }
 
+static bool FormatHasStencil(EPixelFormat format) {
+    return format == PF_D32_SFLOAT_S8_UINT || format == PF_D24_UNORM_S8_UINT ||
+           format == PF_D16_UNORM_S8_UINT || format == PF_S8_UINT;
+}
+
 VkRenderingAttachmentInfo FromDepthAttachmentInfo(const DepthAttachment& _attachment) {
     VkRenderingAttachmentInfo attachment_info{};
     attachment_info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -62,7 +67,9 @@ VkRenderingAttachmentInfo FromDepthAttachmentInfo(const DepthAttachment& _attach
         static_cast<uint8>(_attachment.mip_level), 1, static_cast<uint8>(_attachment.array_layer), 1
     );
 
-    attachment_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    bool has_stencil            = FormatHasStencil(_attachment.target->GetFormat());
+    attachment_info.imageLayout = has_stencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL :
+                                                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     attachment_info.loadOp =
         VulkanEnumTranslator::METoVKAttachmentLoadOp(GetLoadOp(GetDepthAction(_attachment.action)));
     attachment_info.storeOp =
@@ -1292,7 +1299,7 @@ public:
         cmd_list.CopyBufferToTexture(
             reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
             texture,
-            tmp_buffer.GetByteSize(),
+            _cmd.Data().size_bytes(),
             tmp_buffer.GetByteOffset(),
             _cmd.Offset(),
             _cmd.Size(),
@@ -1487,8 +1494,10 @@ public:
             }
         }
         std::optional<VkRenderingAttachmentInfo> depth_stencil_attachment;
+        bool                                     has_stencil = false;
         if (pass_info.depth_attachment.Valid()) {
             depth_stencil_attachment = FromDepthAttachmentInfo(pass_info.depth_attachment);
+            has_stencil              = FormatHasStencil(pass_info.depth_attachment.target->GetFormat());
         }
 
         VkRenderingInfo dynamic_rendering_info{
@@ -1503,12 +1512,9 @@ public:
             .pColorAttachments    = color_attachments.data(),
             .pDepthAttachment =
                 depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
-#if WITH_CUDA
-            .pStencilAttachment = nullptr
-#else
-            .pStencilAttachment =
-                depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr
-#endif
+            .pStencilAttachment = (depth_stencil_attachment.has_value() && has_stencil) ?
+                                      &depth_stencil_attachment.value() :
+                                      nullptr
         };
 
         cmd_list.BeginRendering(std::move(dynamic_rendering_info));
@@ -1526,12 +1532,12 @@ public:
         const auto& draw_datas         = _cmd.DrawData();
         const auto& rect               = pass_info.render_area;
         VkViewport  viewport{
-             .x        = float(rect.offset.x),
-             .y        = float(rect.offset.y),
-             .width    = float(rect.extent.width),
-             .height   = float(rect.extent.height),
-             .minDepth = 0.0f,
-             .maxDepth = 1.0f
+            .x        = float(rect.offset.x),
+            .y        = float(rect.offset.y),
+            .width    = float(rect.extent.width),
+            .height   = float(rect.extent.height),
+            .minDepth = 0.0f,
+            .maxDepth = 1.0f
         };
 
         viewport.y += viewport.height;
@@ -1668,8 +1674,10 @@ public:
             color_attachments[i] = FromColorAttachmentInfo(pass_info.color_attachments[i]);
         }
         std::optional<VkRenderingAttachmentInfo> depth_stencil_attachment;
+        bool                                     has_stencil = false;
         if (pass_info.depth_attachment.Valid()) {
             depth_stencil_attachment = FromDepthAttachmentInfo(pass_info.depth_attachment);
+            has_stencil              = FormatHasStencil(pass_info.depth_attachment.target->GetFormat());
         }
 
         VkRenderingInfo dynamic_rendering_info{
@@ -1684,23 +1692,20 @@ public:
             .pColorAttachments    = color_attachments.data(),
             .pDepthAttachment =
                 depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
-#if WITH_CUDA
-            .pStencilAttachment = nullptr
-#else
-            .pStencilAttachment =
-                depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr
-#endif
+            .pStencilAttachment = (depth_stencil_attachment.has_value() && has_stencil) ?
+                                      &depth_stencil_attachment.value() :
+                                      nullptr
         };
 
         cmd_list.BeginRendering(std::move(dynamic_rendering_info));
         const auto& rect = pass_info.render_area;
         VkViewport  viewport{
-             .x        = float(rect.offset.x),
-             .y        = float(rect.offset.y),
-             .width    = float(rect.extent.width),
-             .height   = float(rect.extent.height),
-             .minDepth = 0.0f,
-             .maxDepth = 1.0f
+            .x        = float(rect.offset.x),
+            .y        = float(rect.offset.y),
+            .width    = float(rect.extent.width),
+            .height   = float(rect.extent.height),
+            .minDepth = 0.0f,
+            .maxDepth = 1.0f
         };
         viewport.y += viewport.height;
         viewport.height = -viewport.height;
@@ -1773,9 +1778,9 @@ public:
                                         }
 
                                         if (draw_data.indirect_draw_param.has_value()) {
-                                            VulkanBuffer* indirect_buffer =
-                                                ResourceCast(draw_data.indirect_draw_param->buffer.GetBuffer()
-                                                );
+                                            VulkanBuffer* indirect_buffer = ResourceCast(
+                                                draw_data.indirect_draw_param->buffer.GetBuffer()
+                                            );
                                             if (draw_data.indirect_draw_param->count_buffer.has_value()) {
                                                 //draw indirect with count buffer
                                                 auto* count_buffer = ResourceCast(
@@ -1814,9 +1819,9 @@ public:
 
                                         //draw indirect
                                         if (draw_data.indirect_draw_param.has_value()) {
-                                            VulkanBuffer* indirect_buffer =
-                                                ResourceCast(draw_data.indirect_draw_param->buffer.GetBuffer()
-                                                );
+                                            VulkanBuffer* indirect_buffer = ResourceCast(
+                                                draw_data.indirect_draw_param->buffer.GetBuffer()
+                                            );
                                             if (draw_data.indirect_draw_param->count_buffer.has_value()) {
                                                 //draw indirect with count buffer
                                                 auto* count_buffer = ResourceCast(
@@ -2264,8 +2269,8 @@ public:
             if (b_texture) {
                 arg.component_cnt = texture_indices_dat.size();
                 arg.stride        = m_device->GetOptionalProperties()
-                                 .descriptor_buffer_properties.sampledImageDescriptorSize >>
-                             2;
+                                        .descriptor_buffer_properties.sampledImageDescriptorSize >>
+                                    2;
 
                 cmd_list.BindDescriptors(
                     shuffle_sd.handle,
@@ -2284,8 +2289,8 @@ public:
             if (b_buffer) {
                 arg.component_cnt = buffer_indices_dat.size();
                 arg.stride        = m_device->GetOptionalProperties()
-                                 .descriptor_buffer_properties.storageBufferDescriptorSize >>
-                             2;
+                                        .descriptor_buffer_properties.storageBufferDescriptorSize >>
+                                    2;
 
                 cmd_list.BindDescriptors(
                     shuffle_sd.handle,
@@ -2389,13 +2394,13 @@ public:
             return;
         }
         // VulkanRaytracingScene* scene   = reinterpret_cast<VulkanRaytracingScene*>(_cmd.Handle());
-        
+
         // Calculate 16-byte aligned offset for TLAS instance data (Vulkan spec requirement)
-        constexpr uint64 kInstanceDataAlignment = 256;  // 256-byte for AMD GPU compatibility
-        uint64 raw_device_address = instance_buffer->DeviceAddress();
-        uint64 aligned_device_address = Moer::AlignUp(raw_device_address, kInstanceDataAlignment);
-        uint64 alignment_offset = aligned_device_address - raw_device_address;
-        
+        constexpr uint64 kInstanceDataAlignment = 256; // 256-byte for AMD GPU compatibility
+        uint64           raw_device_address     = instance_buffer->DeviceAddress();
+        uint64           aligned_device_address = Moer::AlignUp(raw_device_address, kInstanceDataAlignment);
+        uint64           alignment_offset       = aligned_device_address - raw_device_address;
+
         if (to_update.size() != 0) {
             BufferView staging =
                 allocator.AllocateShaderBuffer(to_update.size() * sizeof(VkAccelerationStructureInstanceKHR));
@@ -2426,7 +2431,8 @@ public:
             BufferView aligned_instance_buffer_view(
                 instance_buffer,
                 alignment_offset,
-                (instance_buffer->GetByteSize() - alignment_offset) / sizeof(VkAccelerationStructureInstanceKHR),
+                (instance_buffer->GetByteSize() - alignment_offset) /
+                    sizeof(VkAccelerationStructureInstanceKHR),
                 sizeof(VkAccelerationStructureInstanceKHR),
                 EPixelFormat::PF_UNDEFINED
             );
@@ -2473,7 +2479,7 @@ public:
         geometry.flags        = 0;
         geometry.geometry.instances.sType =
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
-        geometry.geometry.instances.arrayOfPointers    = VK_FALSE;
+        geometry.geometry.instances.arrayOfPointers = VK_FALSE;
         // Use 16-byte aligned device address for TLAS instance data (Vulkan spec requirement)
         // Reuse the aligned address calculated earlier in this function
         geometry.geometry.instances.data.deviceAddress = aligned_device_address;
@@ -2610,7 +2616,8 @@ void VkNativeQueue::SubmitEmpty(VkFence _fence) {
     // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
     // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
     std::unique_lock<std::mutex> guard;
-    if (submit_mutex) guard = std::unique_lock<std::mutex>(*submit_mutex);
+    if (submit_mutex)
+        guard = std::unique_lock<std::mutex>(*submit_mutex);
 
     VkSubmitInfo2 submit_info{};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
@@ -2629,7 +2636,8 @@ void VkNativeQueue::SubmitEmpty(VkFence _fence) {
 
 void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
     std::unique_lock<std::mutex> guard;
-    if (submit_mutex) guard = std::unique_lock<std::mutex>(*submit_mutex);
+    if (submit_mutex)
+        guard = std::unique_lock<std::mutex>(*submit_mutex);
 
     VkSubmitInfo2   submit_info{};
     VkCommandBuffer cmd = _cmdlist.GetHandle();
@@ -2649,10 +2657,15 @@ void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
 
     VkResult submit_result = vkQueueSubmit2(queue, 1, &submit_info, _fence);
     if (submit_result != VK_SUCCESS) {
-        LOG_ERROR("[VkNativeQueue] vkQueueSubmit2 FAILED! result={}, queue={:#x}, type={}, "
-                  "wait_count={}, signal_count={}",
-                  (int)submit_result, (uint64)queue, (int)type,
-                  wait_infos.size(), signal_infos.size());
+        LOG_ERROR(
+            "[VkNativeQueue] vkQueueSubmit2 FAILED! result={}, queue={:#x}, type={}, "
+            "wait_count={}, signal_count={}",
+            (int)submit_result,
+            (uint64)queue,
+            (int)type,
+            wait_infos.size(),
+            signal_infos.size()
+        );
     }
     wait_infos.clear();
     signal_infos.clear();
@@ -2660,42 +2673,50 @@ void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
 
 void VkNativeQueue::Wait(VulkanFence* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
     VkSemaphore sem = _fence->GetUnderlyingHandle();
-    wait_infos.push_back(VkSemaphoreSubmitInfo{
-        .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .pNext     = nullptr,
-        .semaphore = sem,
-        .value     = _fence_val,
-        .stageMask = _stage
-    });
+    wait_infos.push_back(
+        VkSemaphoreSubmitInfo{
+            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .pNext     = nullptr,
+            .semaphore = sem,
+            .value     = _fence_val,
+            .stageMask = _stage
+        }
+    );
 }
 
 void VkNativeQueue::Wait(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
-    wait_infos.push_back(VkSemaphoreSubmitInfo{
-        .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .pNext     = nullptr,
-        .semaphore = _sem,
-        .value     = 0,
-        .stageMask = _stage
-    });
+    wait_infos.push_back(
+        VkSemaphoreSubmitInfo{
+            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .pNext     = nullptr,
+            .semaphore = _sem,
+            .value     = 0,
+            .stageMask = _stage
+        }
+    );
 }
 void VkNativeQueue::Signal(VulkanFence* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
     VkSemaphore sem = _fence->GetUnderlyingHandle();
-    signal_infos.push_back(VkSemaphoreSubmitInfo{
-        .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .pNext     = nullptr,
-        .semaphore = sem,
-        .value     = _fence_val,
-        .stageMask = _stage
-    });
+    signal_infos.push_back(
+        VkSemaphoreSubmitInfo{
+            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .pNext     = nullptr,
+            .semaphore = sem,
+            .value     = _fence_val,
+            .stageMask = _stage
+        }
+    );
 }
 void VkNativeQueue::Signal(VkSemaphore _sem, VkPipelineStageFlags2 _stage) {
-    signal_infos.push_back(VkSemaphoreSubmitInfo{
-        .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .pNext     = nullptr,
-        .semaphore = _sem,
-        .value     = 0,
-        .stageMask = _stage
-    });
+    signal_infos.push_back(
+        VkSemaphoreSubmitInfo{
+            .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .pNext     = nullptr,
+            .semaphore = _sem,
+            .value     = 0,
+            .stageMask = _stage
+        }
+    );
 }
 void VkCommandQueue::Wait(WaitEvent _evt) {
     auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
@@ -3129,8 +3150,8 @@ void VkCommandQueue::ExecuteThread() {
                 return;
             }
             uint64 prev_timeline = executed_frame;
-            while (prev_timeline < timeline && !executed_frame.compare_exchange_weak(prev_timeline, timeline)
-            ) {
+            while (prev_timeline < timeline &&
+                   !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
                 std::this_thread::yield();
             }
         };
@@ -3441,8 +3462,8 @@ void VkCopyQueue::ExecuteThread() {
                 return;
             }
             uint64 prev_timeline = executed_frame;
-            while (prev_timeline < timeline && !executed_frame.compare_exchange_weak(prev_timeline, timeline)
-            ) {
+            while (prev_timeline < timeline &&
+                   !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
                 std::this_thread::yield();
             }
         };
@@ -3695,13 +3716,21 @@ void VkCopyQueue::Complete(uint64 _timeline) {
         std::this_thread::yield();
         ++spin_count;
         if (spin_count == 10'000'000) {
-            LOG_ERROR("[CopyQueue] Complete: STILL WAITING after 10M spins! "
-                      "_timeline={}, executed_frame={}, enabled={}",
-                      _timeline, executed_frame.load(), (bool)enabled);
+            LOG_ERROR(
+                "[CopyQueue] Complete: STILL WAITING after 10M spins! "
+                "_timeline={}, executed_frame={}, enabled={}",
+                _timeline,
+                executed_frame.load(),
+                (bool)enabled
+            );
         }
         if (spin_count % 50'000'000 == 0) {
-            LOG_ERROR("[CopyQueue] Complete: STUCK! spins={}, _timeline={}, executed_frame={}",
-                      spin_count, _timeline, executed_frame.load());
+            LOG_ERROR(
+                "[CopyQueue] Complete: STUCK! spins={}, _timeline={}, executed_frame={}",
+                spin_count,
+                _timeline,
+                executed_frame.load()
+            );
         }
     }
 }

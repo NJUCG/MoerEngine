@@ -26,11 +26,11 @@
 #define PCSS_ENABLE_POST_PCF_SHARPENING 1
 
 // Blocker search samples
-#define PCSS_SEARCH_BITS    5
+#define PCSS_SEARCH_BITS    4
 #define PCSS_SEARCH_SAMPLES (1 << PCSS_SEARCH_BITS)
 
 // Shadow filtering samples
-#define PCSS_SAMPLE_BITS 5
+#define PCSS_SAMPLE_BITS 4
 #define PCSS_SAMPLES     (1 << PCSS_SAMPLE_BITS)
 
 //必须先定义宏，再包含头文件
@@ -66,7 +66,7 @@ bool IsDirectionalLight_Dir() {
             }                                                                                                \
         }                                                                                                    \
                                                                                                              \
-        [unroll] for (int i = 0; i < PCSS_SEARCH_SAMPLES; ++i) {                                             \
+        [loop] for (int i = 0; i < PCSS_SEARCH_SAMPLES; ++i) {                                             \
             float2 raw_offset = mul(rotation, POISSON_DISK[i]);                                              \
                                                                                                              \
             float3 sample_pos            = GetShadowSamplingPos##SUFFIX(ctx, raw_offset * search_radius_uv); \
@@ -132,6 +132,10 @@ DEFINE_FIND_BLOCKER(Dir)
                                                                                                                             \
         if (stats.numBlockers < 0.1)                                                                                        \
             return 1.0;                                                                                                     \
+                                                                                                                            \
+        /* 全遮挡 early-out：所有样本都是 blocker，PCF 必然返回 0，直接跳过整个 PCF 阶段 */                                 \
+        if (stats.numBlockers > (float(PCSS_SEARCH_SAMPLES) - 0.5))                                                         \
+            return 0.0;                                                                                                     \
                                                                                                                             \
         float penumbra_uv = CalculatePenumbra##SUFFIX(ctx, stats.avgDepth);                                                 \
                                                                                                                             \

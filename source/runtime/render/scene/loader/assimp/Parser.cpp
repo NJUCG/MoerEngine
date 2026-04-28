@@ -383,12 +383,12 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         }
 
         // 加载单个纹理并创建对应的entity和CTexture
-        auto load_texture = [&](const std::string& texture_path) {
+        auto load_texture = [&](const std::string& texture_path) -> bool {
             ImageReadDesc image_desc = load_image_desc(texture_path);
 
             if (!image_desc.IsValid()) {
-                LOG_WARNING("Load Texture Failed: {}", texture_path);
-                return;
+                LOG_ERROR("Load Texture Failed: {}", texture_path);
+                return false;
             }
 
             const auto entity    = tex_map[texture_path];
@@ -398,6 +398,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             c_name.name = texture_path;
 
             update_c_texture(c_texture, image_desc);
+
+            return true;
         };
 
         // multi-thread load textures
@@ -407,16 +409,21 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         Timer elapsed_timer;
         elapsed_timer.Start();
 
+        bool all_success = true;
+
         if (is_multi_thread) {
             // 多线程加载纹理
-            std::atomic<uint32> done_cnt = 0;
+            std::atomic<uint32> done_cnt   = 0;
+            std::atomic<uint32> failed_cnt = 0;
 
             Array<std::string> all_needed_textures(
                 all_needed_textures_set.begin(), all_needed_textures_set.end()
             );
 
             auto all_done = ParallelForAsync(all_needed_textures.size(), [&](uint32 i) {
-                load_texture(all_needed_textures[i]);
+                if (!load_texture(all_needed_textures[i])) {
+                    failed_cnt.fetch_add(1);
+                }
                 done_cnt.fetch_add(1);
             });
 
@@ -425,19 +432,38 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             while (all_done->IsComplete() == false) {
                 if (log_timer.Tick()) {
                     LOG_INFO(
-                        "Loading Textures Parallelly: {}/{}", done_cnt.load(), all_needed_textures.size()
+                        "Loading Textures Parallelly: {}/{}, Failed: {}",
+                        done_cnt.load(),
+                        all_needed_textures.size(),
+                        failed_cnt.load()
                     );
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
 
+            if (failed_cnt.load() > 0) {
+                all_success = false;
+            }
+
         } else {
             // 单线程加载纹理
-            uint32 done_cnt = 0;
+            uint32 done_cnt   = 0;
+            uint32 failed_cnt = 0;
             for (const auto& texture_path : all_needed_textures_set) {
-                load_texture(texture_path);
+                if (!load_texture(texture_path)) {
+                    failed_cnt++;
+                }
                 done_cnt++;
-                LOG_INFO("Loading Textures Sequentially: {}/{}", done_cnt, all_needed_textures_set.size());
+                LOG_INFO(
+                    "Loading Textures Sequentially: {}/{}, Failed: {}",
+                    done_cnt,
+                    all_needed_textures_set.size(),
+                    failed_cnt
+                );
+            }
+
+            if (failed_cnt > 0) {
+                all_success = false;
             }
         }
 
@@ -449,6 +475,11 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             is_multi_thread ? "ON" : "OFF",
             elapsed_timer.ElapsedSeconds()
         );
+
+        if (!all_success) {
+            LOG_ERROR("Some textures failed to load. Please check the log for details.");
+            return false;
+        }
     }
 
     // MARK: Load Materials
@@ -1051,27 +1082,28 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         // node & mesh
         ss << "\tTotal Node Count: " << total_node_cnt << "\n";
         ss << "\tAssimp Mesh Count: " << ai_scene->mNumMeshes << "\n";
-        r.view<const ecs::CNode>().each([&](auto entity_id, const ecs::CNode& c_node) {
-            // get the num of mesh from CRenderable
-            uint mesh_cnt = 0;
-            if (r.all_of<ecs::CRenderable>(entity_id)) {
-                const auto& c_renderable = r.get<ecs::CRenderable>(entity_id);
-                if (c_renderable.mesh_entt != entt::null && r.valid(c_renderable.mesh_entt) &&
-                    r.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
-                    const auto& c_mesh = r.get<ecs::CMesh>(c_renderable.mesh_entt);
-                    mesh_cnt           = static_cast<uint>(c_mesh.primitive_entts.size());
-                }
-            }
 
-            ss << "\t\tNode " << (uint32)entity_id << ": mesh count: " << mesh_cnt;
+        // r.view<const ecs::CNode>().each([&](auto entity_id, const ecs::CNode& c_node) {
+        //     // get the num of mesh from CRenderable
+        //     uint mesh_cnt = 0;
+        //     if (r.all_of<ecs::CRenderable>(entity_id)) {
+        //         const auto& c_renderable = r.get<ecs::CRenderable>(entity_id);
+        //         if (c_renderable.mesh_entt != entt::null && r.valid(c_renderable.mesh_entt) &&
+        //             r.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
+        //             const auto& c_mesh = r.get<ecs::CMesh>(c_renderable.mesh_entt);
+        //             mesh_cnt           = static_cast<uint>(c_mesh.primitive_entts.size());
+        //         }
+        //     }
 
-            if (r.all_of<ecs::CTransform>(entity_id)) {
-                const ecs::CTransform& c_transform = r.get<ecs::CTransform>(entity_id);
-                ss << ": transform: " << c_transform.d_world_transform.ToString(false, 3);
-            }
+        //     ss << "\t\tNode " << (uint32)entity_id << ": mesh count: " << mesh_cnt;
 
-            ss << "\n";
-        });
+        //     if (r.all_of<ecs::CTransform>(entity_id)) {
+        //         const ecs::CTransform& c_transform = r.get<ecs::CTransform>(entity_id);
+        //         ss << ": transform: " << c_transform.d_world_transform.ToString(false, 3);
+        //     }
+
+        //     ss << "\n";
+        // });
 
         // camera
         ss << "\tTotal Camera Count: " << camera_map.size() << ". Assimp: " << ai_scene->mNumCameras << "\n";

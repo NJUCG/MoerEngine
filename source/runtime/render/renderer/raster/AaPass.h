@@ -328,9 +328,9 @@ public:
 
         auto smaa_shared_param = [&]() {
             SmaaSharedPipelineBindlessParam param;
+            param.clip2world         = Transpose(camera.GetViewProjectionMatrixInv());
             param.aa_mode            = static_cast<uint32>(ui_config.aa_mode);
             param.color_tex          = input_image.hdl;
-            param.position_tex       = context.textures.position.hdl;
             param.depth_tex          = context.textures.depth_linear_sampler.hdl;
             param.search_tex         = smaa_search_tex.hdl;
             param.area_tex           = smaa_area_tex.hdl;
@@ -347,7 +347,7 @@ public:
                 context.textures.aa_output.GetSizeX(),
                 context.textures.aa_output.GetSizeY()
             );
-            param.curr_inv_vp_and_prev_vp = Transpose(previous_view_proj * current_inv_view_proj);
+            param.clip2prev_clip = Transpose(previous_view_proj * current_inv_view_proj);
             return param;
         }();
 

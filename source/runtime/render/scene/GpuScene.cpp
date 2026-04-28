@@ -521,4 +521,16 @@ void GpuScene::UpdateRaytracingScene(CommandList& cmd_list) {
     cmd_list.UpdateRaytracingScene(m_res.rt_scene);
 }
 
+void GpuScene::RestoreDrawCommands(CommandList& cmd_list) {
+    // 从 CPU 数据重新上传 draw_cmd_buf，恢复原始 instance_cnt
+    cmd_list.CopyFrom(
+        std::span<byte>(
+            (byte*)m_cpu_scene.m_draw_cmd_buf.data(),
+            m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData)
+        ),
+        m_res.draw_cmd_buf.buf->GetView(),
+        "RestoreDrawCommands"
+    );
+}
+
 } // namespace Moer::Render

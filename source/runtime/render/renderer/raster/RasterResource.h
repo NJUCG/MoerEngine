@@ -11,7 +11,10 @@
 #include <stb_image.h>
 
 #include "RasterCompileTimeConstants.h"
+#include "RasterGpuCullingResource.h"
 #include "RasterTextures.h"
+
+#include <cstdint>
 
 namespace Moer::Render::Raster {
 
@@ -42,16 +45,7 @@ public:
 
     float frame_time;
 
-    // 超分Pass前的分辨率
-    uint2 GetResolutionBeforeSR() {
-#if WITH_CUDA && SUPER_RESOLUTION_ENABLED
-        return uint2(resolution.x / 2.0f, resolution.y / 2.0f);
-#else
-        return uint2(resolution.x, resolution.y);
-#endif
-    }
-    // 超分Pass后的分辨率（原始分辨率）
-    uint2 GetResolutionOriginal() {
+    uint2 GetResolution() {
         return uint2(resolution.x, resolution.y);
     }
 
@@ -62,9 +56,38 @@ public:
 
     // Shadow Data
     struct CSMData {
+        struct ShadowCacheConfigSnapshot {
+            int                                  shadow_map_mode                       = 0;
+            int                                  shadow_sampling_mode                  = 0;
+            int                                  shadow_csm_num_of_cascades            = 0;
+            int                                  shadow_csm_sm_size                    = 0;
+            float                                shadow_csm_lerp_factor                = 0.0f;
+            float                                shadow_csm_blend_percentage           = 0.0f;
+            bool                                 shadow_csm_blend_option               = false;
+            bool                                 shadow_pcss_enabled                   = false;
+            float                                shadow_pcss_light_size_world          = 0.0f;
+            bool                                 shadow_cache_enabled                  = false;
+            int                                  shadow_cache_disable_first_n_cascades = 0;
+            StaticArray<float, CSM_MAX_CASCADES> shadow_csm_cover_ratio_of_camera{};
+            StaticArray<float, CSM_MAX_CASCADES> shadow_cache_camera_move_threshold_in_texels{};
+        };
+
+        struct ShadowCacheEntry {
+            bool     valid = false;
+            float4x4 world2shadow_clip{};
+            float4   scale_data{};
+            float3   snapped_light_space_center = float3(0.f, 0.f, 0.f);
+            float    world_units_per_texel      = 0.0f;
+            uint64_t last_update_frame          = 0; // TODO: 后续接入最大陈旧帧数刷新
+        };
+
         float3                                                      light_dir;
         StaticArray<DepthBufferWithHandleAndName, CSM_MAX_CASCADES> shadow_map_textures;
-        StaticArray<float4x4, CSM_MAX_CASCADES>                     world_to_shadow_clip;
+        StaticArray<float4x4, CSM_MAX_CASCADES>                     world2shadow_clip;
+        StaticArray<ShadowCacheEntry, CSM_MAX_CASCADES>             shadow_cache_entries{};
+        ShadowCacheConfigSnapshot                                   shadow_cache_config_snapshot{};
+        bool     shadow_cache_config_snapshot_valid = false;
+        uint64_t shadow_cache_frame_counter         = 0;
     } csm_data;
 
     struct PointShadowData {
@@ -86,6 +109,8 @@ public:
 
         uint active_count = 1;
     } point_shadow_data;
+
+    GpuCullingBuffers gpu_culling_buffers;
 
     // RayTracing
     RaytracingSceneRef rt_scene() {
@@ -165,7 +190,9 @@ public:
 
         //GPU Side
         lighting_data_buffer.buf = device.CreateBuffer<byte>(
-            "Raster::LightData", sizeof(LightingData), EBufferUsageFlags::UNORDERED_ACCESS
+            "Raster::LightData",
+            sizeof(LightingData),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::CONSTANT_BUFFER
         );
         lighting_data_buffer.hdl = bdls->AllocateBuffer(lighting_data_buffer.buf->GetView());
     }

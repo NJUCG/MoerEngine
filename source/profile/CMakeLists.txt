@@ -54,6 +54,7 @@ if(WITH_PROFILE)
         "${moer_source_dir}/runtime/render"
         "${moer_root_dir}/3rdparty/VulkanSDK/include"
         "${moer_root_dir}/3rdparty/imgui"
+        "${moer_root_dir}/3rdparty/concurrentqueue"
     )
     
     target_link_libraries(${target_name}

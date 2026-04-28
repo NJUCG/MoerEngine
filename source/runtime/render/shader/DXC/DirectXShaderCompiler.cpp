@@ -30,7 +30,7 @@
 #include <string>
 #include <string_view>
 
-#include "dxc/dxcapi.h"
+#include "dxcapi.h"
 #include "shader/ShaderCommon.h"
 #include "spirv_cross.hpp"
 #include <d3d12shader.h>
@@ -145,6 +145,9 @@ DXCompiler::DXCompiler() {
 }
 bool LoadCache(long long _last_write_time, const ShaderCompilerInput& input, ShaderCompilerOutput& output);
 void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output) {
+    const auto dxc_header_path =
+        Moer::ConfigManager::GetInstance().GetWorkspacePath() / "3rdparty" / "dxc_2026_02_20" / "inc";
+    const auto dxc_hlsl_header_path = dxc_header_path / "hlsl";
 
     auto push_back_error_message = [&_output](std::string message) {
         _output.errors.push_back(std::move(message));
@@ -178,7 +181,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         //arguments.push_back(L"-fspv-extension=SPV_KHR_ray_query");
     };
 
-    auto set_default_args = [add_dx_arg, add_vk_arg](
+    auto set_default_args = [add_dx_arg, add_vk_arg, dxc_header_path, dxc_hlsl_header_path](
                                 Moer::Array<std::wstring>& arguments,
                                 EShaderPlatform            _platform,
                                 EShaderType                _type,
@@ -194,6 +197,11 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(Moer::ConfigManager::GetInstance().GetEngineShaderPath().generic_wstring());
         arguments.push_back(L"-I");
         arguments.push_back(Moer::ConfigManager::GetInstance().GetEngineShaderSharedPath().generic_wstring());
+        // Allow shaders to include vendored DXC standard headers like hlsl/vk/khr/cooperative_matrix.h.
+        arguments.push_back(L"-I");
+        arguments.push_back(dxc_header_path.generic_wstring());
+        arguments.push_back(L"-I");
+        arguments.push_back(dxc_hlsl_header_path.generic_wstring());
         // arguments.push_back(L"-Zpr");
         // arguments.push_back(L"-all-resources-bound");
         if (_platform == SP_WIN_D3D_SM6)

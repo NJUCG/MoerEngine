@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CooperativeOpsUI.h"
+
 #include "Core.h"
 #include "misc/Traits.h"
 #include "renderer/raster/RasterConfig.h"
@@ -29,6 +31,7 @@ private:
 private:
     Array<Render::TextureView> m_frame_buffer_and_name_array;
 
+    CooperativeOpsUI m_cooperative_ops_ui;
     RasterConfig& m_config;
 };
 

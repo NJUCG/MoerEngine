@@ -57,6 +57,12 @@ enum {
  * GPrimitive 和 CPrimitive 是一一对应的
  */
 struct GPrimitive {
+    // AABB for frustum culling (local space)
+    float3 aabb_min;
+    float  padding0; // padding to align to 16 bytes
+    float3 aabb_max;
+    uint   padding1; // padding to align to 16 bytes
+
     uint material_idx;
     uint attribute_mask;
 
