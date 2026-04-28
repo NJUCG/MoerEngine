@@ -40,10 +40,12 @@ ToneMappingPass::ToneMappingPass(
         "tone_mapping_constants2", sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER
     );
     histogram_buffer = device.CreateBuffer<uint>(
-        "histogram_buffer", _info.histogram_bins, EBufferUsageFlags::UNORDERED_ACCESS
+        "histogram_buffer", _info.histogram_bins, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER
     );
     histogram_buffer->SetName("histogram_buffer");
-    exposure_buffer = device.CreateBuffer<uint>("exposure_buffer", 1, EBufferUsageFlags::UNORDERED_ACCESS);
+    exposure_buffer = device.CreateBuffer<uint>(
+        "exposure_buffer", 1, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER
+    );
 
     if (_info.color_lut) {
         color_lut = _info.color_lut;
