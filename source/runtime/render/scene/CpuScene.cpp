@@ -94,7 +94,7 @@ void CpuScene::InitializeLights() {
             light.color     = c_light_dir.color;
             light.intensity = c_light_dir.intensity;
             light.type      = static_cast<uint>(ELightType::Directional);
-            light.direction = m_logical_scene.GetDirectionalLightDirection(entity);
+            light.direction = c_light_dir.d_direction;
             emplace_light(entity, light);
         });
     }
@@ -105,7 +105,7 @@ void CpuScene::InitializeLights() {
             light.color     = c_light_point.color;
             light.intensity = c_light_point.intensity;
             light.type      = static_cast<uint>(ELightType::Point);
-            light.position  = m_logical_scene.GetPointLightPosition(entity);
+            light.position  = c_light_point.d_position;
             emplace_light(entity, light);
         });
     }
@@ -251,8 +251,12 @@ void CpuScene::InitializeMeshes() {
                 LOG_WARNING(
                     "Primitive {} has invalid AABB: min=({},{},{}), max=({},{},{})",
                     m_primitive_buf.size(),
-                    g_primitive.aabb_min.x, g_primitive.aabb_min.y, g_primitive.aabb_min.z,
-                    g_primitive.aabb_max.x, g_primitive.aabb_max.y, g_primitive.aabb_max.z
+                    g_primitive.aabb_min.x,
+                    g_primitive.aabb_min.y,
+                    g_primitive.aabb_min.z,
+                    g_primitive.aabb_max.x,
+                    g_primitive.aabb_max.y,
+                    g_primitive.aabb_max.z
                 );
             }
 

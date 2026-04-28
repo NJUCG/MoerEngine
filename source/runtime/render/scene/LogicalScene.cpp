@@ -2,6 +2,7 @@
 
 #include "LogicalComponents.h"
 #include "log/LogSystem.h"
+#include "math/Function.h"
 #include "misc/Hash.h"
 
 #include <entt/entt.hpp>
@@ -20,6 +21,7 @@ const entt::registry& LogicalScene::r() const {
 
 void LogicalScene::Update() {
     SUpdateAllNodeTransformAndAABB();
+    SUpdateAllLightData();
 }
 
 LogicalScene::LogicalScene() {
@@ -143,6 +145,20 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
             Transform(c_transform.translation, c_transform.scale, c_transform.rotation).GetMatrix4x4();
         c_transform.d_world_transform = parent_transform * local_transform;
 
+        // 如果有 Light 组件，则标记该 Light 需要更新派生数据
+        if (registry.all_of<ecs::CLightDirectional>(entity_id)) {
+            registry.get<ecs::CLightDirectional>(entity_id).is_dirty = true;
+            if (!registry.all_of<ecs::CTagNeedUpdateLight>(entity_id)) {
+                registry.emplace<ecs::CTagNeedUpdateLight>(entity_id);
+            }
+        }
+        if (registry.all_of<ecs::CLightPoint>(entity_id)) {
+            registry.get<ecs::CLightPoint>(entity_id).is_dirty = true;
+            if (!registry.all_of<ecs::CTagNeedUpdateLight>(entity_id)) {
+                registry.emplace<ecs::CTagNeedUpdateLight>(entity_id);
+            }
+        }
+
         // 更新 AABB：获取当前节点的 Mesh AABB（如果有 CRenderable）
         Box3D mesh_aabb = Box3D(); // 默认为 invalid
         if (registry.all_of<ecs::CRenderable>(entity_id)) {
@@ -202,6 +218,31 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
         auto& c_transform    = registry.get<ecs::CTransform>(entity_id);
         c_transform.is_dirty = false;
     }
+}
+
+void LogicalScene::SUpdateAllLightData() {
+    r().view<ecs::CLightDirectional, ecs::CTransform>().each(
+        [&](auto, ecs::CLightDirectional& c_light, const ecs::CTransform& c_transform) {
+            if (!c_light.is_dirty) {
+                return;
+            }
+
+            const float4 world_direction = c_transform.d_world_transform * float4(0.f, 0.f, -1.f, 0.f);
+            c_light.d_direction          = Normalizef(float3(world_direction));
+            c_light.is_dirty             = false;
+        }
+    );
+
+    r().view<ecs::CLightPoint, ecs::CTransform>().each(
+        [&](auto, ecs::CLightPoint& c_light, const ecs::CTransform& c_transform) {
+            if (!c_light.is_dirty) {
+                return;
+            }
+
+            c_light.d_position = float3(c_transform.d_world_transform.GetColumn(3));
+            c_light.is_dirty   = false;
+        }
+    );
 }
 
 void LogicalScene::UEmplaceNodeToParent(
@@ -307,22 +348,6 @@ void LogicalScene::UCreateDefaultLights(entt::entity parent_node_id, bool should
     }
 
     // TODO..
-}
-
-float3 LogicalScene::GetDirectionalLightDirection(entt::entity entity) const {
-    if (!r().all_of<ecs::CTransform>(entity)) {
-        LOG_ERROR("Entity does not have CTransform component");
-        return float3(0.f, 0.f, -1.f);
-    }
-    return r().get<ecs::CTransform>(entity).rotation.Rotate(float3(0.f, 0.f, -1.f));
-}
-
-float3 LogicalScene::GetPointLightPosition(entt::entity entity) const {
-    if (!r().all_of<ecs::CTransform>(entity)) {
-        LOG_ERROR("Entity does not have CTransform component");
-        return float3(0.f, 0.f, 0.f);
-    }
-    return r().get<ecs::CTransform>(entity).translation;
 }
 
 } // namespace Moer::ecs

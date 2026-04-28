@@ -558,10 +558,8 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
     const float near_clip = camera.GetNearClip();
     const float far_clip  = camera.GetFarClip();
 
-    // 从 CTransform 计算方向（默认方向为 (0, 0, -1)）
-    const auto& c_transform = r.get<ecs::CTransform>(light_entity);
-    context.lighting_data.main_light_direction =
-        Normalizef(c_transform.rotation.Rotate(float3(0.f, 0.f, -1.f)));
+    const auto& c_light_directional = r.get<ecs::CLightDirectional>(light_entity);
+    context.lighting_data.main_light_direction = Normalizef(c_light_directional.d_direction);
     context.csm_data.light_dir = context.lighting_data.main_light_direction;
 
     const uint disabled_cache_cascade_count = static_cast<uint>(

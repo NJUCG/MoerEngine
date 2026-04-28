@@ -197,9 +197,9 @@ static bool CanConvert(entt::entity entity, const Moer::Scene& scene) {
     const auto& c_light = r.get<ecs::CLight>(entity);
     switch (c_light.type) {
         case Moer::ELightType::Directional:
-            return r.all_of<ecs::CLightDirectional, ecs::CTransform>(entity);
+            return r.all_of<ecs::CLightDirectional>(entity);
         case Moer::ELightType::Point:
-            return r.all_of<ecs::CLightPoint, ecs::CTransform>(entity);
+            return r.all_of<ecs::CLightPoint>(entity);
         case Moer::ELightType::Spot:
             // TODO: CLightSpot 还未实现
             return false;
@@ -241,9 +241,7 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
             _info.color_type_flags = (uint)EPolyLightType::ELDirectional << g_poly_morphic_light_type_shift;
             PackPolyLightColor(radiance, _info);
 
-            // 从 LogicalScene 获取方向光的方向
-            float3 direction = scene.GetLogicalScene().GetDirectionalLightDirection(entity);
-            _info.direction1 = PackNormalizedVector(Normalizef(direction));
+            _info.direction1 = PackNormalizedVector(Normalizef(c_light_dir.d_direction));
             _info.scalars    = Fp32ToFp16(half_angular_size_rad) | (Fp32ToFp16(solid_angle) << 16);
             break;
         }
@@ -264,8 +262,7 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
 
             PackPolyLightColor(flux, _info);
 
-            // 从 LogicalScene 获取点光的位置
-            _info.center = scene.GetLogicalScene().GetPointLightPosition(entity);
+            _info.center = c_light_point.d_position;
             break;
         }
         case Moer::ELightType::Environment: {

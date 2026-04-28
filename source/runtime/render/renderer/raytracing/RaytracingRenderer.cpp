@@ -377,11 +377,15 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     auto& c_light_dir     = scene.r().get<ecs::CLightDirectional>(light_entity);
                     c_light_dir.color     = float3(0.9f, 0.65f, 0.4f);
                     c_light_dir.intensity = ui_config.exposure;
+                    c_light_dir.is_dirty  = true;
 
                     // 更新方向光的旋转（从默认方向 float3(0.f, 0.f, -1.f) 到目标方向）
                     auto& c_transform    = scene.r().get<ecs::CTransform>(light_entity);
                     c_transform.rotation = Quaternion(float3(0.f, 0.f, -1.f), -ui_config.sun_direction);
                     c_transform.is_dirty = true;
+                    if (!scene.r().all_of<ecs::CTagNeedUpdateLight>(light_entity)) {
+                        scene.r().emplace<ecs::CTagNeedUpdateLight>(light_entity);
+                    }
                     // FIXME: ECS更新框架还没写完，这里代码无法生效
                 }
             }

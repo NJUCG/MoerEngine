@@ -36,7 +36,7 @@ struct CCamera {
  *
  * 通过CLight表示一个Entity是Light
  *
- * Light的Position和Direction，通过CWorldTransform计算
+ * Light的Transform权威数据来自CTransform，渲染侧常用的世界空间数据缓存在Light组件的derived字段中。
  */
 struct CTagMainLight {};
 struct CLight {
@@ -45,10 +45,16 @@ struct CLight {
 struct CLightDirectional {
     float3 color     = float3(1.f, 1.f, 1.f);
     float  intensity = 1.f;
+
+    bool   is_dirty    = true;
+    float3 d_direction = float3(0.f, 0.f, -1.f); // derived from CTransform
 };
 struct CLightPoint {
     float3 color     = float3(1.f, 1.f, 1.f);
     float  intensity = 1.f;
+
+    bool   is_dirty  = true;
+    float3 d_position = float3(0.f, 0.f, 0.f); // derived from CTransform
 };
 struct CLightAmbient {
     float3 color     = float3(1.f, 1.f, 1.f);
@@ -202,18 +208,22 @@ struct CtxMegaBuffers {
 };
 
 /**
- * Need Update Tag Component
+ * Render Scene Sync Tag Components
  *
- * 用于标记需要在CpuScene中重新上传到GpuScene的组件
- * 比如 Light 可能同时有 CLight 和 CTransform 组件，所以对 NeedUpdate 的类型需要做区分
+ * 用于标记 LogicalScene 到 CpuScene/GpuScene 的同步需求，按操作类型区分：
+ * - NeedUpdate：已有 render-side slot 的原地数据更新，不改变数组布局
+ * - NeedCreate：Logical entity 还没有 render-side slot，需要分配索引并创建缓存项
+ * - NeedDestroy：未来用于释放/失效 render-side slot
+ * - NeedRebuild：未来用于复杂结构变化的局部 cache 重建兜底
  *
- * 使用方法：
- * - 修改场景数据时：reg.emplace<CTagNeedUpdateLight>(entity)
- * - 更新函数中：auto view = reg.view<const CTagNeedUpdateLight, const CLight>();
- * - 处理完毕后：reg.clear<CTagNeedUpdateLight>() 清除所有标记
+ * 约束：NeedUpdate 不处理新增；新增必须走 NeedCreate，避免数据更新和结构变化混在一起。
  */
 struct CTagNeedUpdateLight {};
 struct CTagNeedUpdateMaterial {};
 struct CTagNeedUpdateTransform {};
+
+struct CTagNeedCreateLight {};
+struct CTagNeedCreateMaterial {};
+struct CTagNeedCreateTransform {};
 
 } // namespace Moer::ecs
