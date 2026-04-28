@@ -25,6 +25,15 @@ public:
 
     void Update(const ecs::LogicalScene& logical_scene, CpuScene& cpu_scene);
 
+private:
+    /**
+     * MARK: Private Update Functions
+     */
+
+    // 同步 CPU light cache 到 GPU light buffer，必要时重建 bindless buffer。
+    void UpdateLightBuffer(CommandList& cmd_list);
+
+public:
     /**
      * 便于抛出GpuScene Res接口
      */

@@ -9,6 +9,48 @@
 
 namespace Moer {
 
+// 将 LogicalScene 中的 Light 组件转换为 shader 可见的 GLight 数据。
+static bool TryBuildGLight(const entt::registry& registry, entt::entity entity, GLight& out_light) {
+    out_light = GLight{};
+
+    if (registry.all_of<ecs::CLightDirectional>(entity)) {
+        const auto& c_light = registry.get<ecs::CLightDirectional>(entity);
+        out_light.color     = c_light.color;
+        out_light.intensity = c_light.intensity;
+        out_light.type      = static_cast<uint>(ELightType::Directional);
+        out_light.direction = c_light.d_direction;
+        return true;
+    }
+    if (registry.all_of<ecs::CLightPoint>(entity)) {
+        const auto& c_light = registry.get<ecs::CLightPoint>(entity);
+        out_light.color     = c_light.color;
+        out_light.intensity = c_light.intensity;
+        out_light.type      = static_cast<uint>(ELightType::Point);
+        out_light.position  = c_light.d_position;
+        return true;
+    }
+    if (registry.all_of<ecs::CLightAmbient>(entity)) {
+        const auto& c_light = registry.get<ecs::CLightAmbient>(entity);
+        out_light.color     = c_light.color;
+        out_light.intensity = c_light.intensity;
+        out_light.type      = static_cast<uint>(ELightType::Ambient);
+        return true;
+    }
+    if (registry.all_of<ecs::CLightSpot>(entity)) {
+        // TODO: CLightSpot 字段尚未定义；后续实现 spotlight 参数后，在这里补 GLight 转换。
+        LOG_ERROR("CLightSpot is not implemented yet");
+        return false;
+    }
+    if (registry.all_of<ecs::CLightEnvironment>(entity)) {
+        // TODO: CLightEnvironment 的 GPU 表达尚未确定；后续拆分 IBL 资源管理时补转换。
+        LOG_ERROR("CLightEnvironment is not implemented yet");
+        return false;
+    }
+
+    LOG_ERROR("Entity is tagged as CLight but has no supported concrete light component.");
+    return false;
+}
+
 CpuScene::CpuScene(ecs::LogicalScene& m_logical_scene) : m_logical_scene(m_logical_scene) {
     /**
      * 注意初始化顺序：
@@ -22,10 +64,12 @@ CpuScene::CpuScene(ecs::LogicalScene& m_logical_scene) : m_logical_scene(m_logic
 void CpuScene::Update() {
     auto& r = m_logical_scene.r();
 
+    CreateNeededLights();
     UpdateLights();
     UpdateMaterials();
     UpdateMeshes();
 
+    r.clear<ecs::CTagNeedCreateLight>();
     r.clear<ecs::CTagNeedUpdateLight>();
     r.clear<ecs::CTagNeedUpdateMaterial>();
     r.clear<ecs::CTagNeedUpdateTransform>();
@@ -81,56 +125,62 @@ void CpuScene::InitializeLights() {
 
     m_map_light_entity_to_id.clear();
 
-    auto emplace_light = [&](const auto entity, const GLight& light) {
+    const auto& view = r.view<const ecs::CLight>();
+    view.each([&](const auto entity, const ecs::CLight&) {
+        GLight light{};
+        if (!TryBuildGLight(r, entity, light)) {
+            return;
+        }
+
         uint light_id = static_cast<uint>(m_light_buf.size());
         m_light_buf.emplace_back(light);
-        m_map_light_entity_to_id[entity] = light_id; // build index cache
-    };
+        m_map_light_entity_to_id[entity] = light_id;
+    });
+}
 
-    {
-        const auto& view = r.view<const ecs::CLightDirectional>();
-        view.each([&](const auto entity, const ecs::CLightDirectional& c_light_dir) {
-            GLight light;
-            light.color     = c_light_dir.color;
-            light.intensity = c_light_dir.intensity;
-            light.type      = static_cast<uint>(ELightType::Directional);
-            light.direction = c_light_dir.d_direction;
-            emplace_light(entity, light);
-        });
-    }
-    {
-        const auto& view = r.view<const ecs::CLightPoint>();
-        view.each([&](const auto entity, const ecs::CLightPoint& c_light_point) {
-            GLight light;
-            light.color     = c_light_point.color;
-            light.intensity = c_light_point.intensity;
-            light.type      = static_cast<uint>(ELightType::Point);
-            light.position  = c_light_point.d_position;
-            emplace_light(entity, light);
-        });
-    }
-    {
-        const auto& view = r.view<const ecs::CLightAmbient>();
-        view.each([&](const auto entity, const ecs::CLightAmbient& c_light_ambient) {
-            GLight light;
-            light.color     = c_light_ambient.color;
-            light.intensity = c_light_ambient.intensity;
-            light.type      = static_cast<uint>(ELightType::Ambient);
-            emplace_light(entity, light);
-        });
-    }
-    {
-        const auto& view = r.view<const ecs::CLightSpot>();
-        // TODO
-    }
-    {
-        const auto& view = r.view<const ecs::CLightEnvironment>();
-        // TODO
-    }
+// 创建带 CTagNeedCreateLight 的新 Light cache slot。
+void CpuScene::CreateNeededLights() {
+    auto& r = m_logical_scene.r();
+
+    auto view = r.view<const ecs::CTagNeedCreateLight, const ecs::CLight>();
+    view.each([&](const auto entity, const ecs::CLight&) {
+        if (m_map_light_entity_to_id.contains(entity)) {
+            return;
+        }
+
+        GLight light{};
+        if (!TryBuildGLight(r, entity, light)) {
+            return;
+        }
+
+        uint light_id = static_cast<uint>(m_light_buf.size());
+        m_light_buf.emplace_back(light);
+        m_map_light_entity_to_id[entity] = light_id;
+    });
 }
 
 void CpuScene::UpdateLights() {
-    // TODO
+    auto& r = m_logical_scene.r();
+
+    // 查询所有需要同步到渲染场景的 Light 实体
+    auto view = r.view<const ecs::CTagNeedUpdateLight, const ecs::CLight>();
+    view.each([&](const auto entity, const ecs::CLight&) {
+        auto light_id_it = m_map_light_entity_to_id.find(entity);
+        if (light_id_it == m_map_light_entity_to_id.end()) {
+            LOG_ERROR(
+                "The light to update was not initialized. Runtime creation should use CTagNeedCreateLight."
+            );
+            return;
+        }
+
+        GLight light{};
+        if (!TryBuildGLight(r, entity, light)) {
+            return;
+        }
+
+        uint light_id         = light_id_it->second;
+        m_light_buf[light_id] = light;
+    });
 }
 
 void CpuScene::InitializeMaterials() {
@@ -176,7 +226,30 @@ void CpuScene::InitializeMaterials() {
 }
 
 void CpuScene::UpdateMaterials() {
-    // TODO
+    auto& r = m_logical_scene.r();
+
+    auto view = r.view<const ecs::CTagNeedUpdateMaterial, const ecs::CMaterial>();
+    view.each([&](const auto entity, const ecs::CMaterial& c_material) {
+        auto mat_id_it = m_map_material_entity_to_id.find(entity);
+        if (mat_id_it == m_map_material_entity_to_id.end()) {
+            LOG_ERROR(
+                "The material to update was not initialized. Adding new materials is not supported yet."
+            );
+            return;
+        }
+
+        const uint material_id = mat_id_it->second;
+
+        GMaterial g_material        = m_material_buf[material_id];
+        g_material.albedo_factor    = c_material.albedo_factor;
+        g_material.emissive_factor  = c_material.emissive_factor;
+        g_material.metallic_factor  = c_material.metallic_factor;
+        g_material.roughness_factor = c_material.roughness_factor;
+        g_material.alpha_mode       = static_cast<uint8>(c_material.alpha_mode);
+        g_material.alpha_cutoff     = c_material.alpha_cutoff;
+
+        m_material_buf[material_id] = g_material;
+    });
 }
 
 void CpuScene::InitializeMeshes() {
@@ -241,7 +314,7 @@ void CpuScene::InitializeMeshes() {
             } else {
                 g_primitive.index_start_idx = 0; // 默认值
             }
-            
+
             // AABB for frustum culling
             g_primitive.aabb_min = c_primitive.aabb.min;
             g_primitive.aabb_max = c_primitive.aabb.max;

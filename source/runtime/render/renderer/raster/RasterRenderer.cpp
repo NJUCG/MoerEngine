@@ -18,7 +18,6 @@
 #include "TonemappingPass.h"
 #include "debug/RenderDocApi.h"
 #include "misc/Timer.h"
-#include "scene/LogicalComponents.h"
 #include "window/WindowContext.h"
 
 #if WITH_CUDA
@@ -222,11 +221,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     if (scene.IsReady()) {
 
         // 处理场景加载过程中遗留的命令
-        auto&& scene_cmd_list = scene.PopPendingCommandList();
-        auto   copy_evt       = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
-        device.GetCopyQueue().Sync(copy_evt.timeline);
-        gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
-        gfx_queue.Sync();
+        RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
 
         if (first_load) {
             first_load = false;
@@ -239,7 +234,12 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }
 
         auto& raster_config = editor_config->raster_config;
-        auto& camera        = scene.GetMainCamera().camera;
+        if (RasterTool::ProcessDebugPointLightRequest(raster_config, scene, device, gfx_queue)) {
+            scene.Tick();
+            RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
+        }
+
+        auto& camera = scene.GetMainCamera().camera;
 
         {
             // Jitter Camera for SMAA T2x

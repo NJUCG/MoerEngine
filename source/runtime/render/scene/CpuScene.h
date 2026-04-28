@@ -109,6 +109,8 @@ private:
     UnorderedMap<entt::entity, uint> m_map_light_entity_to_id;
 
     void InitializeLights();
+    // 创建带 CTagNeedCreateLight 的新 Light cache slot。
+    void CreateNeededLights();
     void UpdateLights();
 
     // material & texture

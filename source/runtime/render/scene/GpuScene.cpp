@@ -362,11 +362,46 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
 }
 
 void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene) {
-    auto& device = RenderDevice::Get();
-
-    // TODO: others
+    UpdateLightBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
 
     UpdateRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list); // gfx_queue交给主线程执行
+}
+
+// 同步 CPU light cache 到 GPU light buffer，必要时重建 bindless buffer。
+void GpuScene::UpdateLightBuffer(CommandList& cmd_list) {
+    const uint64 required_byte_size = m_cpu_scene.m_light_buf.size() * sizeof(GLight);
+    if (required_byte_size == 0) {
+        return;
+    }
+
+    bool need_bindless_update = false;
+    if (m_res.light_buf.buf == nullptr || m_res.light_buf.buf->GetByteSize() < required_byte_size) {
+        auto& device = RenderDevice::Get();
+
+        if (m_res.light_buf.hdl != 0) {
+            m_bindless_array->UnbindBuffer(m_res.light_buf.hdl);
+            m_res.light_buf.hdl = 0;
+        }
+
+        // TODO: debug 阶段 light 数量很小，先按当前需求大小重建；后续改为 capacity/chunk 策略和局部更新。
+        m_res.light_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::LightBuffer",
+            required_byte_size,
+            EBufferUsageFlags::UNORDERED_ACCESS
+        );
+        m_res.light_buf.hdl = m_bindless_array->AllocateBuffer(m_res.light_buf.buf->GetView());
+        need_bindless_update = true;
+    }
+
+    cmd_list.CopyFrom(
+        std::span<byte>((byte*)m_cpu_scene.m_light_buf.data(), required_byte_size),
+        m_res.light_buf.buf->GetView(),
+        "CopyFrom GpuScene::LightBuffer"
+    );
+
+    if (need_bindless_update) {
+        cmd_list.UpdateBindlessArray(m_bindless_array);
+    }
 }
 
 GpuScene::~GpuScene() noexcept {

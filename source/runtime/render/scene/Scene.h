@@ -5,9 +5,14 @@
 #include "LogicalScene.h"
 #include "RenderAPI.h"
 #include "SceneLoadInfoAsync.h"
-#include "entt/entity/fwd.hpp"
+
 #include "scene/LogicalComponents.h"
+#include "scene/SceneLightApi.h"
+
+#include <cassert>
+#include <entt/entt.hpp>
 #include <filesystem>
+#include <utility>
 
 namespace Moer {
 
@@ -85,6 +90,26 @@ public:
     // Graphics API相关接口
     Render::GpuScene::PendingCommandList&& PopPendingCommandList();
 
+public:
+    // 修改已有组件并自动标记对应的场景同步 dirty/tag。
+    template<typename T, typename Fn>
+    T& Patch(entt::entity entity, Fn&& fn) {
+        auto& registry = r();
+        assert(registry.valid(entity) && "Patch target entity is invalid");
+        assert(registry.all_of<T>(entity) && "Patch target entity does not have the component");
+
+        registry.patch<T>(entity, std::forward<Fn>(fn));
+        MarkDirty<T>(entity);
+        return registry.get<T>(entity);
+    }
+
+    // 标记组件修改带来的场景同步 dirty/tag，具体特化放在独立实现文件中。
+    template<typename T>
+    void MarkDirty(entt::entity entity);
+
+    // 创建运行时 PointLight，并标记为需要创建 render-side light slot。
+    entt::entity CreatePointLight(const PointLightCreateInfo& create_info);
+
 private:
     // 构造函数 初始化
     /**
@@ -154,5 +179,14 @@ public:
 
     const ecs::CTransform& GetTransform(entt::entity entity) const;
 };
+
+template<>
+RENDER_API void Scene::MarkDirty<ecs::CLightDirectional>(entt::entity entity);
+
+template<>
+RENDER_API void Scene::MarkDirty<ecs::CLightPoint>(entt::entity entity);
+
+template<>
+RENDER_API void Scene::MarkDirty<ecs::CTransform>(entt::entity entity);
 
 } // namespace Moer

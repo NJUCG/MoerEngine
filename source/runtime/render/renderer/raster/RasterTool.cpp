@@ -3,9 +3,13 @@
 #include "RasterConfig.h"
 #include "log/LogSystem.h"
 #include "misc/Timer.h"
+#include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "scene/Scene.h"
+#include "scene/SceneLightApi.h"
 
 #include <cassert>
+#include <entt/entity/entity.hpp>
 #include <source_location>
 #include <span>
 #include <sstream>
@@ -73,11 +77,7 @@ std::string_view RasterTool::GetShadowDrawProfileScopeName(uint cascade_index) {
     return s_shadow_draw_scope_names[cascade_index];
 }
 
-void RasterTool::LogDebugEverySeconds(
-    std::string_view str,
-    double           seconds,
-    std::source_location location
-) {
+void RasterTool::LogDebugEverySeconds(std::string_view str, double seconds, std::source_location location) {
     if (seconds <= 0.0) {
         LOG_DEBUG("{}", str);
         return;
@@ -154,6 +154,53 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
     }
 
     LogDebugEverySeconds(stream.str(), 1.0);
+}
+
+// 执行 Scene 同步阶段积累的 copy/gfx command list。
+void RasterTool::ExecuteScenePendingCommands(Scene& scene, RenderDevice& device, CommandQueue& gfx_queue) {
+    auto&& scene_cmd_list = scene.PopPendingCommandList();
+    auto   copy_evt       = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
+    device.GetCopyQueue().Sync(copy_evt.timeline);
+    gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
+    gfx_queue.Sync();
+}
+
+// 消费 Raster UI 的一次性 debug PointLight 创建请求。
+bool RasterTool::ProcessDebugPointLightRequest(
+    RasterConfig& raster_config,
+    Scene&        scene,
+    RenderDevice& device,
+    CommandQueue& gfx_queue
+) {
+    if (!raster_config.debug_request_create_point_light) {
+        return false;
+    }
+
+    raster_config.debug_request_create_point_light = false;
+
+    PointLightCreateInfo create_info{};
+    create_info.position  = raster_config.debug_point_light_position;
+    create_info.color     = raster_config.debug_point_light_color;
+    create_info.intensity = raster_config.debug_point_light_intensity;
+    create_info.name      = "Debug Point Light";
+
+    const entt::entity light_entity = scene.CreatePointLight(create_info);
+    if (light_entity == entt::null) {
+        return false;
+    }
+
+    LOG_INFO(
+        "Debug point light created at ({}, {}, {}) with color ({}, {}, {}) and intensity {}.",
+        create_info.position.x,
+        create_info.position.y,
+        create_info.position.z,
+        create_info.color.x,
+        create_info.color.y,
+        create_info.color.z,
+        create_info.intensity
+    );
+
+    return true;
 }
 
 } // namespace Moer::Render::Raster
