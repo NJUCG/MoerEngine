@@ -73,13 +73,13 @@ class RENDER_API Scene {
 
 public:
     struct TickState {
-        bool did_sync           = false;
-        bool updated_light      = false;
-        bool updated_material   = false;
-        bool updated_transform  = false;
-        bool created_light      = false;
-        bool created_material   = false;
-        bool created_transform  = false;
+        bool did_sync          = false;
+        bool updated_light     = false;
+        bool updated_material  = false;
+        bool updated_transform = false;
+        bool created_light     = false;
+        bool created_material  = false;
+        bool created_transform = false;
 
         explicit operator bool() const {
             return did_sync;
@@ -107,7 +107,7 @@ public:
     /**
     * 每帧调用，有需要时更新CpuScene和GpuScene数据
      */
-    const TickState& Tick();
+    const TickState& Tick(bool is_run_test_case = false);
 
     const TickState& GetLastTickState() const;
 

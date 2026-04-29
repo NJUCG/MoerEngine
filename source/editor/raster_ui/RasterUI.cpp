@@ -592,6 +592,18 @@ void RasterUI::ShowConfig() {
             m_config.debug_request_material_update = true;
         }
 
+        if (ImGui::Button("SceneTestCase Noop")) {
+            m_config.debug_requested_scene_test_case = ESceneTestCaseId::FrameworkNoop;
+        }
+
+        if (ImGui::Button("SceneTestCase Create Point Light")) {
+            m_config.debug_requested_scene_test_case = ESceneTestCaseId::CreatePointLightOnce;
+        }
+
+        if (ImGui::Button("SceneTestCase Patch Point Light Transform")) {
+            m_config.debug_requested_scene_test_case = ESceneTestCaseId::PatchCreatedPointLightTransform;
+        }
+
         ImGui::Checkbox(
             "TestCase Move Renderables",
             &m_config.debug_test_case_renderable_transform_motion_enabled

@@ -19,6 +19,7 @@
 #include "TonemappingPass.h"
 #include "debug/RenderDocApi.h"
 #include "misc/Timer.h"
+#include "scene/testcase/SceneTestCaseRunner.h"
 #include "window/WindowContext.h"
 
 #include <chrono>
@@ -254,7 +255,16 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         RasterTestCase::ProcessRenderableTransformMotion(raster_config, scene, elapsed_time_seconds);
         RasterTestCase::ProcessPointLightTransformMotion(raster_config, scene, elapsed_time_seconds);
 
-        const auto& scene_tick_state = scene.Tick();
+        auto& scene_test_case_runner = SceneTestCaseRunner::Get();
+        if (raster_config.debug_requested_scene_test_case != ESceneTestCaseId::None) {
+            scene_test_case_runner.RequestCase(raster_config.debug_requested_scene_test_case);
+            raster_config.debug_requested_scene_test_case = ESceneTestCaseId::None;
+        }
+
+        const bool is_run_scene_test_case =
+            scene_test_case_runner.HasActiveCase() || scene_test_case_runner.HasPendingCase();
+
+        const auto& scene_tick_state = scene.Tick(is_run_scene_test_case);
         if (scene_tick_state) {
             RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
         }

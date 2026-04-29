@@ -3,6 +3,7 @@
 #include "loader/LoaderInterface.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
+#include "scene/testcase/SceneTestCaseRunner.h"
 #include "taskgraph/TaskGraph.h"
 
 namespace Moer {
@@ -57,18 +58,25 @@ Render::GpuScene::PendingCommandList&& Scene::PopPendingCommandList() {
     return std::move(m_gpu_scene->PopPendingCommandList());
 }
 
-const Scene::TickState& Scene::Tick() {
+const Scene::TickState& Scene::Tick(bool is_run_test_case) {
     assert(m_logical_scene && m_cpu_scene && m_gpu_scene && "Scene is not ready");
-    m_last_tick_state = BuildPendingTickState();
-    if (!m_last_tick_state) {
-        return m_last_tick_state;
+
+    if (is_run_test_case) {
+        SceneTestCaseRunner::Get().PreTick(*this);
     }
 
-    m_logical_scene->Update();
+    m_last_tick_state = BuildPendingTickState();
+    if (m_last_tick_state) {
+        m_logical_scene->Update();
 
-    m_cpu_scene->Update();
+        m_cpu_scene->Update();
 
-    m_gpu_scene->Update(*m_logical_scene, *m_cpu_scene);
+        m_gpu_scene->Update(*m_logical_scene, *m_cpu_scene);
+    }
+
+    if (is_run_test_case) {
+        SceneTestCaseRunner::Get().PostTick(*this, m_last_tick_state);
+    }
 
     return m_last_tick_state;
 }
@@ -87,15 +95,15 @@ Scene::TickState Scene::BuildPendingTickState() const {
         return state;
     }
 
-    const auto& registry = r();
+    const auto& registry    = r();
     state.updated_light     = !registry.view<const ecs::CTagNeedUpdateLight>().empty();
     state.updated_material  = !registry.view<const ecs::CTagNeedUpdateMaterial>().empty();
     state.updated_transform = !registry.view<const ecs::CTagNeedUpdateTransform>().empty();
     state.created_light     = !registry.view<const ecs::CTagNeedCreateLight>().empty();
     state.created_material  = !registry.view<const ecs::CTagNeedCreateMaterial>().empty();
     state.created_transform = !registry.view<const ecs::CTagNeedCreateTransform>().empty();
-    state.did_sync = state.updated_light || state.updated_material || state.updated_transform ||
-                     state.created_light || state.created_material || state.created_transform;
+    state.did_sync          = state.updated_light || state.updated_material || state.updated_transform ||
+                              state.created_light || state.created_material || state.created_transform;
     return state;
 }
 
