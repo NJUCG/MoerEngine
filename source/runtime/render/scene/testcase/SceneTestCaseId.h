@@ -20,7 +20,7 @@ enum class ESceneTestCaseId : std::uint32_t {
     // 创建 point light 后跨帧 Patch transform，并验证 derived light position 更新
     PatchCreatedPointLightTransform,
 
-    // 预留：验证未来 point light 删除 API 的 Scene sync 链路
+    // 创建 point light 后再删除，并验证删除同步链路
     CreateDestroyPointLight,
 
     // 预留：验证未来 entity 与 transform component 结构性增删 API

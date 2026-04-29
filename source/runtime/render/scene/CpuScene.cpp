@@ -64,8 +64,13 @@ CpuScene::CpuScene(ecs::LogicalScene& m_logical_scene) : m_logical_scene(m_logic
 void CpuScene::Update() {
     auto& r = m_logical_scene.r();
 
-    CreateNeededLights();
-    UpdateLights();
+    if (HasLightDestroyRequest()) {
+        // 删除链路当前走全量 rebuild，先保证正确性，后续再考虑增量回收
+        RebuildLightsExcludingPendingDestroy();
+    } else {
+        CreateNeededLights();
+        UpdateLights();
+    }
     UpdateMaterials();
     UpdateMeshes();
 
@@ -165,6 +170,10 @@ void CpuScene::UpdateLights() {
     // 查询所有需要同步到渲染场景的 Light 实体
     auto view = r.view<const ecs::CTagNeedUpdateLight, const ecs::CLight>();
     view.each([&](const auto entity, const ecs::CLight&) {
+        if (r.all_of<ecs::CTagNeedDestroyLight>(entity)) {
+            return;
+        }
+
         auto light_id_it = m_map_light_entity_to_id.find(entity);
         if (light_id_it == m_map_light_entity_to_id.end()) {
             LOG_ERROR(
@@ -180,6 +189,39 @@ void CpuScene::UpdateLights() {
 
         uint light_id         = light_id_it->second;
         m_light_buf[light_id] = light;
+    });
+}
+
+// 检查本帧是否存在 light 删除请求
+bool CpuScene::HasLightDestroyRequest() const {
+    const auto& r    = m_logical_scene.r();
+    const auto  view = r.view<const ecs::CTagNeedDestroyLight, const ecs::CLight>();
+    return view.begin() != view.end();
+}
+
+// 当前通过全量重建 light cache 处理删除，优先保证结构正确性
+void CpuScene::RebuildLightsExcludingPendingDestroy() {
+    auto& r = m_logical_scene.r();
+
+    m_light_buf.clear();
+    m_light_buf.reserve(r.view<const ecs::CLight>().size());
+
+    m_map_light_entity_to_id.clear();
+
+    const auto& view = r.view<const ecs::CLight>();
+    view.each([&](const auto entity, const ecs::CLight&) {
+        if (r.all_of<ecs::CTagNeedDestroyLight>(entity)) {
+            return;
+        }
+
+        GLight light{};
+        if (!TryBuildGLight(r, entity, light)) {
+            return;
+        }
+
+        uint light_id = static_cast<uint>(m_light_buf.size());
+        m_light_buf.emplace_back(light);
+        m_map_light_entity_to_id[entity] = light_id;
     });
 }
 

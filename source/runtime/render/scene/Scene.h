@@ -56,7 +56,7 @@ class RENDER_API Scene {
      *   - Mesh / Renderable
      *   - Entity / Node
      * - Remove
-     *   - Light
+     *   - Light(PointLight)【done】
      *   - Material
      *   - Mesh / Renderable
      *   - Entity / Node
@@ -80,6 +80,7 @@ public:
         bool created_light     = false;
         bool created_material  = false;
         bool created_transform = false;
+        bool destroyed_light   = false;
 
         explicit operator bool() const {
             return did_sync;
@@ -154,6 +155,9 @@ public:
 
     // 创建运行时 PointLight，并标记为需要创建 render-side light slot。
     entt::entity CreatePointLight(const PointLightCreateInfo& create_info);
+
+    // 删除 point light 会在后续 Tick 中触发 light cache rebuild，当前先接受这部分开销
+    bool DestroyPointLight(entt::entity light_entity);
 
 private:
     // 构造函数 初始化

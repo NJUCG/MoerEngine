@@ -319,6 +319,52 @@ void LogicalScene::UEmplaceNodeToParent(
     }
 }
 
+// 从父节点的 child 链表中摘除指定节点
+void LogicalScene::UDetachNodeFromParent(entt::entity child_entt, CNode& child_node) {
+    if (child_node.parent_entt == entt::null) {
+        child_node.prev_sibling_entt = entt::null;
+        child_node.next_sibling_entt = entt::null;
+        return;
+    }
+
+    if (!r().valid(child_node.parent_entt) || !r().all_of<CNode>(child_node.parent_entt)) {
+        LOG_ERROR("Cannot detach node because parent node is invalid.");
+        child_node.parent_entt       = entt::null;
+        child_node.prev_sibling_entt = entt::null;
+        child_node.next_sibling_entt = entt::null;
+        return;
+    }
+
+    auto& parent_node = r().get<CNode>(child_node.parent_entt);
+
+    if (parent_node.first_child_entt == child_entt) {
+        parent_node.first_child_entt = child_node.next_sibling_entt;
+    }
+    if (parent_node.last_child_entt == child_entt) {
+        parent_node.last_child_entt = child_node.prev_sibling_entt;
+    }
+    if (parent_node.child_count > 0) {
+        parent_node.child_count -= 1;
+    }
+
+    if (child_node.prev_sibling_entt != entt::null && r().valid(child_node.prev_sibling_entt) &&
+        r().all_of<CNode>(child_node.prev_sibling_entt)) {
+        auto& prev_sibling_node             = r().get<CNode>(child_node.prev_sibling_entt);
+        prev_sibling_node.next_sibling_entt = child_node.next_sibling_entt;
+    }
+
+    if (child_node.next_sibling_entt != entt::null && r().valid(child_node.next_sibling_entt) &&
+        r().all_of<CNode>(child_node.next_sibling_entt)) {
+        auto& next_sibling_node             = r().get<CNode>(child_node.next_sibling_entt);
+        next_sibling_node.prev_sibling_entt = child_node.prev_sibling_entt;
+    }
+
+    child_node.parent_entt       = entt::null;
+    child_node.prev_sibling_entt = entt::null;
+    child_node.next_sibling_entt = entt::null;
+    child_node.depth             = 0;
+}
+
 void LogicalScene::UCreateDefaultCamera(entt::entity parent_node_id, bool shuold_create_main_camera) {
     // 创建默认摄像机实体
     entt::entity camera_entity = r().create();

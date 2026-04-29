@@ -236,6 +236,99 @@ private:
     float3       m_patched_position = float3(0.35f, 2.75f, 0.45f);
 };
 
+class CreateDestroyPointLightTestCase final : public SceneTestCaseBase {
+public:
+    // 返回 point light 创建删除 testcase 的名称
+    std::string_view Name() const override {
+        return "CreateDestroyPointLight";
+    }
+
+    // 记录初始 light 数量并重置运行阶段
+    void Reset(Scene& scene) override {
+        m_finished            = false;
+        m_failed              = false;
+        m_light_entity        = entt::null;
+        m_initial_light_count = scene.cpu_scene().GetLightCount();
+        m_stage               = Stage::CreateLight;
+    }
+
+    // 第一帧创建 point light，第二帧请求删除 point light
+    void PreTick(Scene& scene, const SceneTestCaseContext&) override {
+        if (m_stage == Stage::CreateLight) {
+            PointLightCreateInfo create_info{};
+            create_info.position  = float3(-0.35f, 2.f, 0.f);
+            create_info.color     = float3(1.f, 0.8f, 0.2f);
+            create_info.intensity = 10000.f;
+            create_info.name      = "SceneTestCase CreateDestroyPointLight";
+            m_light_entity        = scene.CreatePointLight(create_info);
+            m_stage               = Stage::WaitCreateSync;
+            return;
+        }
+
+        if (m_stage == Stage::DestroyLight) {
+            if (!Expect(
+                    m_light_entity != entt::null && scene.r().valid(m_light_entity),
+                    "Destroy target point light is invalid."
+                )) {
+                m_stage = Stage::Done;
+                Finish();
+                return;
+            }
+
+            if (!Expect(scene.DestroyPointLight(m_light_entity), "DestroyPointLight request failed.")) {
+                m_stage = Stage::Done;
+                Finish();
+                return;
+            }
+
+            m_stage = Stage::WaitDestroySync;
+        }
+    }
+
+    // 分阶段验证 point light 创建和删除同步结果
+    void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
+        if (m_stage == Stage::WaitCreateSync) {
+            auto& registry = scene.r();
+            Expect(m_light_entity != entt::null, "Created point light entity should not be entt::null.");
+            Expect(registry.valid(m_light_entity), "Created point light entity should be valid.");
+            Expect(tick_state.did_sync, "Point light creation should trigger scene sync.");
+            Expect(tick_state.created_light, "Point light creation should set created_light TickState.");
+            Expect(
+                scene.cpu_scene().GetLightCount() == m_initial_light_count + 1,
+                "CpuScene light count should increase after point light creation."
+            );
+            m_stage = Stage::DestroyLight;
+            return;
+        }
+
+        if (m_stage == Stage::WaitDestroySync) {
+            auto& registry = scene.r();
+            Expect(tick_state.did_sync, "Point light deletion should trigger scene sync.");
+            Expect(tick_state.destroyed_light, "Point light deletion should set destroyed_light TickState.");
+            Expect(!registry.valid(m_light_entity), "Destroyed point light entity should be invalid.");
+            Expect(
+                scene.cpu_scene().GetLightCount() == m_initial_light_count,
+                "CpuScene light count should return to the initial baseline."
+            );
+            m_stage = Stage::Done;
+            Finish();
+        }
+    }
+
+private:
+    enum class Stage {
+        CreateLight,
+        WaitCreateSync,
+        DestroyLight,
+        WaitDestroySync,
+        Done,
+    };
+
+    entt::entity m_light_entity        = entt::null;
+    uint         m_initial_light_count = 0;
+    Stage        m_stage               = Stage::CreateLight;
+};
+
 } // namespace
 
 // 根据 testcase ID 返回日志可读名称
@@ -268,6 +361,8 @@ UniquePtr<ISceneTestCase> CreateSceneTestCase(ESceneTestCaseId test_case_id) {
             return MakeUnique<CreatePointLightOnceTestCase>();
         case ESceneTestCaseId::PatchCreatedPointLightTransform:
             return MakeUnique<PatchCreatedPointLightTransformTestCase>();
+        case ESceneTestCaseId::CreateDestroyPointLight:
+            return MakeUnique<CreateDestroyPointLightTestCase>();
         default:
             return nullptr;
     }

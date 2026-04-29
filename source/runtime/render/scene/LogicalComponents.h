@@ -53,7 +53,7 @@ struct CLightPoint {
     float3 color     = float3(1.f, 1.f, 1.f);
     float  intensity = 1.f;
 
-    bool   is_dirty  = true;
+    bool   is_dirty   = true;
     float3 d_position = float3(0.f, 0.f, 0.f); // derived from CTransform
 };
 struct CLightAmbient {
@@ -213,7 +213,7 @@ struct CtxMegaBuffers {
  * 用于标记 LogicalScene 到 CpuScene/GpuScene 的同步需求，按操作类型区分：
  * - NeedUpdate：已有 render-side slot 的原地数据更新，不改变数组布局
  * - NeedCreate：Logical entity 还没有 render-side slot，需要分配索引并创建缓存项
- * - NeedDestroy：未来用于释放/失效 render-side slot
+ * - NeedDestroy：释放/失效 render-side slot
  * - NeedRebuild：未来用于复杂结构变化的局部 cache 重建兜底
  *
  * 约束：NeedUpdate 不处理新增；新增必须走 NeedCreate，避免数据更新和结构变化混在一起。
@@ -225,5 +225,7 @@ struct CTagNeedUpdateTransform {};
 struct CTagNeedCreateLight {};
 struct CTagNeedCreateMaterial {};
 struct CTagNeedCreateTransform {};
+
+struct CTagNeedDestroyLight {};
 
 } // namespace Moer::ecs

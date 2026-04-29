@@ -112,6 +112,10 @@ private:
     // 创建带 CTagNeedCreateLight 的新 Light cache slot。
     void CreateNeededLights();
     void UpdateLights();
+    // 检查本帧是否存在 light 删除请求
+    bool HasLightDestroyRequest() const;
+    // 当前通过全量重建 light cache 处理删除，优先保证结构正确性
+    void RebuildLightsExcludingPendingDestroy();
 
     // material & texture
     Array<GMaterial> m_material_buf;

@@ -58,6 +58,34 @@ Render::GpuScene::PendingCommandList&& Scene::PopPendingCommandList() {
     return std::move(m_gpu_scene->PopPendingCommandList());
 }
 
+// 在 scene sync 完成后销毁所有 pending destroy light entity
+static void FinalizeDestroyedLights(Scene& scene) {
+    auto& registry = scene.r();
+
+    Array<entt::entity> destroyed_lights;
+    auto view = registry.view<const ecs::CTagNeedDestroyLight, const ecs::CLightPoint, ecs::CNode>();
+    destroyed_lights.reserve(view.size_hint());
+    for (const auto entity : view) {
+        destroyed_lights.push_back(entity);
+    }
+
+    for (const entt::entity entity : destroyed_lights) {
+        if (!registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
+            continue;
+        }
+
+        auto& node = registry.get<ecs::CNode>(entity);
+        if (node.first_child_entt != entt::null || node.child_count != 0) {
+            LOG_ERROR("Cannot finalize destroyed point light because it still has children.");
+            registry.remove<ecs::CTagNeedDestroyLight>(entity);
+            continue;
+        }
+
+        scene.logical_scene().UDetachNodeFromParent(entity, node);
+        registry.destroy(entity);
+    }
+}
+
 const Scene::TickState& Scene::Tick(bool is_run_test_case) {
     assert(m_logical_scene && m_cpu_scene && m_gpu_scene && "Scene is not ready");
 
@@ -72,6 +100,8 @@ const Scene::TickState& Scene::Tick(bool is_run_test_case) {
         m_cpu_scene->Update();
 
         m_gpu_scene->Update(*m_logical_scene, *m_cpu_scene);
+
+        FinalizeDestroyedLights(*this);
     }
 
     if (is_run_test_case) {
@@ -102,8 +132,10 @@ Scene::TickState Scene::BuildPendingTickState() const {
     state.created_light     = !registry.view<const ecs::CTagNeedCreateLight>().empty();
     state.created_material  = !registry.view<const ecs::CTagNeedCreateMaterial>().empty();
     state.created_transform = !registry.view<const ecs::CTagNeedCreateTransform>().empty();
+    state.destroyed_light   = !registry.view<const ecs::CTagNeedDestroyLight>().empty();
     state.did_sync          = state.updated_light || state.updated_material || state.updated_transform ||
-                              state.created_light || state.created_material || state.created_transform;
+                              state.created_light || state.created_material || state.created_transform ||
+                              state.destroyed_light;
     return state;
 }
 

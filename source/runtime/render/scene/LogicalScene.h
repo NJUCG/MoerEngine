@@ -77,6 +77,9 @@ public:
         CNode&             child_node
     );
 
+    // 从父节点的 child 链表中摘除指定节点
+    void UDetachNodeFromParent(entt::entity child_entt, CNode& child_node);
+
     /**
      * 创建默认摄像机entity，并将其挂在在指定node下
      * 
@@ -91,7 +94,6 @@ public:
      * 若parent_node_id为entt::null，则创建在根节点CTagRootNode下
      */
     void UCreateDefaultLights(entt::entity parent_node_id = entt::null, bool should_create_main_light = true);
-
 };
 
 } // namespace Moer::ecs

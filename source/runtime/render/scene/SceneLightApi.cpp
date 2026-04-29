@@ -63,4 +63,38 @@ entt::entity Scene::CreatePointLight(const PointLightCreateInfo& create_info) {
     return light_entity;
 }
 
+// 删除 point light 会在后续 Tick 中触发 light cache rebuild，当前先接受这部分开销
+bool Scene::DestroyPointLight(entt::entity light_entity) {
+    auto& registry = r();
+
+    if (light_entity == entt::null || !registry.valid(light_entity)) {
+        LOG_ERROR("Cannot destroy point light because entity is invalid.");
+        return false;
+    }
+
+    if (!registry.all_of<ecs::CLight, ecs::CLightPoint, ecs::CNode>(light_entity)) {
+        LOG_ERROR("Cannot destroy point light because entity is missing point light components.");
+        return false;
+    }
+
+    const auto& node = registry.get<ecs::CNode>(light_entity);
+    if (node.first_child_entt != entt::null || node.child_count != 0) {
+        LOG_ERROR("Cannot destroy point light because only leaf light nodes are supported now.");
+        return false;
+    }
+
+    if (registry.all_of<ecs::CTagNeedUpdateLight>(light_entity)) {
+        registry.remove<ecs::CTagNeedUpdateLight>(light_entity);
+    }
+    if (registry.all_of<ecs::CTagNeedCreateLight>(light_entity)) {
+        registry.remove<ecs::CTagNeedCreateLight>(light_entity);
+    }
+    if (registry.all_of<ecs::CTagNeedUpdateTransform>(light_entity)) {
+        registry.remove<ecs::CTagNeedUpdateTransform>(light_entity);
+    }
+
+    registry.emplace_or_replace<ecs::CTagNeedDestroyLight>(light_entity);
+    return true;
+}
+
 } // namespace Moer

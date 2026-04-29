@@ -604,13 +604,15 @@ void RasterUI::ShowConfig() {
             m_config.debug_requested_scene_test_case = ESceneTestCaseId::PatchCreatedPointLightTransform;
         }
 
+        if (ImGui::Button("SceneTestCase Create/Destroy Point Light")) {
+            m_config.debug_requested_scene_test_case = ESceneTestCaseId::CreateDestroyPointLight;
+        }
+
         ImGui::Checkbox(
-            "TestCase Move Renderables",
-            &m_config.debug_test_case_renderable_transform_motion_enabled
+            "TestCase Move Renderables", &m_config.debug_test_case_renderable_transform_motion_enabled
         );
         ImGui::Checkbox(
-            "TestCase Move Point Lights",
-            &m_config.debug_test_case_point_light_transform_motion_enabled
+            "TestCase Move Point Lights", &m_config.debug_test_case_point_light_transform_motion_enabled
         );
 
         ImGui::Separator(); // 分割线
