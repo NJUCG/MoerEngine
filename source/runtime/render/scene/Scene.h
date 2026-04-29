@@ -48,7 +48,7 @@ class RENDER_API Scene {
      * - Update
      *   - Light【done】
      *   - Material
-     *   - Transform
+     *   - Transform【done】
      *   - Mesh / Renderable
      * - Add
      *   - Light(PointLight)【done】

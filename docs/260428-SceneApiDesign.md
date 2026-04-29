@@ -247,7 +247,10 @@ scene.Patch<ecs::CTransform>(entity, [](auto& transform) {
 - 置位 `CTransform::is_dirty`。
 - 挂 `CTagNeedUpdateTransform`。
 - 如果 entity 上有 light 组件，挂 `CTagNeedUpdateLight`。
-- 后续由 `LogicalScene::Update()` 统一更新 light derived data。
+- 后续由 `LogicalScene::Update()` 统一更新 world transform、AABB 和 light derived data。
+- 如果父节点 transform dirty，`LogicalScene` 会把 dirty 向子节点传播，并为受影响节点挂 `CTagNeedUpdateTransform`，确保子 renderable instance 也能同步。
+- 如果子节点 transform dirty，祖先节点的 AABB 也会重新合并，避免层级 AABB 滞后。
+- 如果 entity 有 `CTransform` 但没有 `CNode`，这是当前 scene hierarchy 的非法状态，`LogicalScene` 只记录 `LOG_ERROR` 并跳过该 transform update。
 
 ## 内部系统例外
 
@@ -267,10 +270,13 @@ scene.Patch<ecs::CTransform>(entity, [](auto& transform) {
 - `Scene::Patch<T>()`：组件级修改入口，内部调用 EnTT `registry.patch<T>()` 后执行 `MarkDirty<T>()`。
 - `SceneDirty.cpp`：集中保存 Light / Transform 的 `MarkDirty<T>()` 特化。
 - `SceneLightApi.cpp`：提供 `Scene::CreatePointLight()`，用于运行时创建 point light。
-- `CpuScene::CreateLights()`：处理 `CTagNeedCreateLight`，为新增 light 分配 CPU render cache slot。
+- `CpuScene::CreateNeededLights()`：处理 `CTagNeedCreateLight`，为新增 light 分配 CPU render cache slot。
+- `CpuScene::UpdateMeshes()`：处理 `CTagNeedUpdateTransform`，根据 transform entity 到 instance slot 的映射更新 `GInstance`，从而同步已有 renderable 的实例矩阵。
 - `GpuScene::UpdateLightBuffer()`：同步 CPU light cache 到 GPU light buffer。debug 阶段 light 数量很小，当前采用全量上传；buffer 不足时重建并更新 bindless handle。后续需要替换为 capacity/chunk 策略和局部更新。
+- `GpuScene::UpdateInstanceBuffer()`：同步 CPU instance cache 到 GPU instance buffer，使 GeometryPass 和 GPU culling 使用最新实例矩阵。
+- `GpuScene::UpdateRaytracingScene()`：使用更新后的 CPU instance 数据刷新 RT TLAS instance transform；本阶段只更新 transform，不 rebuild BLAS。
 - `Scene::Tick()`：设计为每帧可调用的 guarded sync 入口。内部先检查 `NeedUpdate/NeedCreate` tag，没有同步需求时直接返回 `false`，有需求时更新 `LogicalScene -> CpuScene -> GpuScene` 并返回 `true`。
-- `RasterConfig::debug_request_scene_update`：Raster UI 的单入口调试请求位。UI 只提供 `Debug Scene Update` 按钮，具体测试逻辑集中写在 `RasterTool::ProcessDebugSceneUpdateRequest()` 中；`RasterRenderer` 每帧调用 `Scene::Tick()`，仅当返回 `true` 时执行 pending command list。
+- `RasterTestCase`：集中保存 Raster 调试用例。当前包含 `TestCase Add Light`、`TestCase Modify Material`、`TestCase Move Renderables`、`TestCase Move Point Lights`。Transform motion 测试只通过 `Scene::Patch<ecs::CTransform>()` 写入，不直接修改 registry。
 - `RaytracingRenderer` 中方向光参数和 transform 的外部修改已迁移到 `Scene::Patch<T>()`。
 
 当前代码中 `Scene::r()` 和 `LogicalScene::r()` 仍然公开 mutable registry，这是历史接口。后续迁移目标是：
@@ -278,7 +284,7 @@ scene.Patch<ecs::CTransform>(entity, [](auto& transform) {
 1. 给结构变化增加 `CreateEntity`、`DestroyEntity`、`AddComponent<T>`、`RemoveComponent<T>` 或更高层 create/destroy API。
 2. 将 public `Scene::r()` 收敛为 const 版本；mutable registry 仅留在内部 API。
 3. 检查 renderer pass，确保只读路径不依赖 mutable registry。
-4. 将 material / transform 的运行时 create/update 路径补齐到同一套 `Patch + NeedCreate/NeedUpdate` 语义。
+4. 将 material create / texture handle rebuild、mesh / renderable create/update/destroy 路径补齐到同一套 `Patch + NeedCreate/NeedUpdate/NeedRebuild` 语义。
 5. 后续实现 `NeedDestroy` / `NeedRebuild` 时，同步更新本文档。
 
 ## 文档同步要求

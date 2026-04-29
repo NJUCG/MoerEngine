@@ -36,6 +36,9 @@ private:
     // 同步 CPU material cache 到 GPU material buffer，必要时重建 bindless buffer。
     void UpdateMaterialBuffer(CommandList& cmd_list);
 
+    // 同步 CPU instance cache 到 GPU instance buffer，必要时重建 bindless buffer。
+    void UpdateInstanceBuffer(CommandList& cmd_list);
+
 public:
     /**
      * 便于抛出GpuScene Res接口

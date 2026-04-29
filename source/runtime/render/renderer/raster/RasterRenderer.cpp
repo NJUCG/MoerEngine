@@ -238,6 +238,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         RasterTestCase::ProcessDebugSceneUpdateRequest(raster_config, scene);
         RasterTestCase::ProcessDebugMaterialRequest(raster_config, scene);
+        RasterTestCase::ProcessRenderableTransformMotion(raster_config, scene, time);
+        RasterTestCase::ProcessPointLightTransformMotion(raster_config, scene, time);
 
         if (scene.Tick()) {
             RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);

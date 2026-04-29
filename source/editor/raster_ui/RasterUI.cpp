@@ -592,6 +592,15 @@ void RasterUI::ShowConfig() {
             m_config.debug_request_material_update = true;
         }
 
+        ImGui::Checkbox(
+            "TestCase Move Renderables",
+            &m_config.debug_test_case_renderable_transform_motion_enabled
+        );
+        ImGui::Checkbox(
+            "TestCase Move Point Lights",
+            &m_config.debug_test_case_point_light_transform_motion_enabled
+        );
+
         ImGui::Separator(); // 分割线
 
         ImGui::Checkbox("Enable FPS Limit", &m_config.debug_fps_limit_enable);

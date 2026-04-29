@@ -110,8 +110,65 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
         return lhs.depth < rhs.depth;
     });
 
+    auto build_mesh_aabb = [&](const entt::entity entity_id, const ecs::CTransform& c_transform) {
+        Box3D mesh_aabb = Box3D();
+        if (!registry.all_of<ecs::CRenderable>(entity_id)) {
+            return mesh_aabb;
+        }
+
+        const auto& c_renderable = registry.get<ecs::CRenderable>(entity_id);
+        if (c_renderable.mesh_entt == entt::null || !registry.valid(c_renderable.mesh_entt) ||
+            !registry.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
+            return mesh_aabb;
+        }
+
+        const auto& c_mesh = registry.get<ecs::CMesh>(c_renderable.mesh_entt);
+        if (!c_mesh.d_aabb.IsValid()) {
+            return mesh_aabb;
+        }
+
+        const float3& min = c_mesh.d_aabb.min;
+        const float3& max = c_mesh.d_aabb.max;
+        Transform     transform_mat(c_transform.d_world_transform);
+
+        mesh_aabb.Expand(transform_mat * float3(min.x, min.y, min.z));
+        mesh_aabb.Expand(transform_mat * float3(max.x, min.y, min.z));
+        mesh_aabb.Expand(transform_mat * float3(min.x, max.y, min.z));
+        mesh_aabb.Expand(transform_mat * float3(max.x, max.y, min.z));
+        mesh_aabb.Expand(transform_mat * float3(min.x, min.y, max.z));
+        mesh_aabb.Expand(transform_mat * float3(max.x, min.y, max.z));
+        mesh_aabb.Expand(transform_mat * float3(min.x, max.y, max.z));
+        mesh_aabb.Expand(transform_mat * float3(max.x, max.y, max.z));
+
+        return mesh_aabb;
+    };
+
+    auto mark_aabb_update_chain = [&](UnorderedSet<entt::entity>& aabb_update_set, entt::entity entity_id) {
+        while (entity_id != entt::null && registry.valid(entity_id) &&
+               registry.all_of<ecs::CNode>(entity_id)) {
+            aabb_update_set.emplace(entity_id);
+            entity_id = registry.get<ecs::CNode>(entity_id).parent_entt;
+        }
+    };
+
+    auto mark_light_update_if_needed = [&](const entt::entity entity_id) {
+        if (registry.all_of<ecs::CLightDirectional>(entity_id)) {
+            registry.get<ecs::CLightDirectional>(entity_id).is_dirty = true;
+            if (!registry.all_of<ecs::CTagNeedUpdateLight>(entity_id)) {
+                registry.emplace<ecs::CTagNeedUpdateLight>(entity_id);
+            }
+        }
+        if (registry.all_of<ecs::CLightPoint>(entity_id)) {
+            registry.get<ecs::CLightPoint>(entity_id).is_dirty = true;
+            if (!registry.all_of<ecs::CTagNeedUpdateLight>(entity_id)) {
+                registry.emplace<ecs::CTagNeedUpdateLight>(entity_id);
+            }
+        }
+    };
+
     // 第一步：收集所有需要更新的 entity（同时处理 is_dirty 向下传递）
-    Array<entt::entity> dirty_entities;
+    Array<entt::entity>        dirty_entities;
+    UnorderedSet<entt::entity> aabb_update_set;
     dirty_entities.reserve(registry.group<ecs::CNode, ecs::CTransform>().size());
     registry.group<ecs::CNode, ecs::CTransform>().each([&](auto entity_id, auto& c_node, auto& c_transform) {
         // 检查父节点是否 dirty，向下传递
@@ -125,10 +182,30 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
         c_transform.is_dirty |= is_parent_dirty;
         if (c_transform.is_dirty) {
             dirty_entities.push_back(entity_id);
+            registry.emplace_or_replace<ecs::CTagNeedUpdateTransform>(entity_id);
+            mark_aabb_update_chain(aabb_update_set, entity_id);
         }
     });
 
-    // 第二步：正向遍历更新变换矩阵和 Mesh AABB（从浅到深）
+    registry.view<ecs::CTransform>(entt::exclude<ecs::CNode>).each([&](auto entity_id, auto& c_transform) {
+        if (c_transform.is_dirty) {
+            LOG_ERROR(
+                "CTransform update skipped because entity {} does not have CNode.",
+                entt::to_integral(entity_id)
+            );
+            c_transform.is_dirty = false;
+        }
+    });
+
+    Array<entt::entity> aabb_update_entities;
+    aabb_update_entities.reserve(aabb_update_set.size());
+    registry.group<ecs::CNode, ecs::CTransform>().each([&](auto entity_id, auto&, auto&) {
+        if (aabb_update_set.contains(entity_id)) {
+            aabb_update_entities.push_back(entity_id);
+        }
+    });
+
+    // 第二步：正向遍历更新变换矩阵（从浅到深）
     for (entt::entity entity_id : dirty_entities) {
         auto& c_node      = registry.get<ecs::CNode>(entity_id);
         auto& c_transform = registry.get<ecs::CTransform>(entity_id);
@@ -146,53 +223,16 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
         c_transform.d_world_transform = parent_transform * local_transform;
 
         // 如果有 Light 组件，则标记该 Light 需要更新派生数据
-        if (registry.all_of<ecs::CLightDirectional>(entity_id)) {
-            registry.get<ecs::CLightDirectional>(entity_id).is_dirty = true;
-            if (!registry.all_of<ecs::CTagNeedUpdateLight>(entity_id)) {
-                registry.emplace<ecs::CTagNeedUpdateLight>(entity_id);
-            }
-        }
-        if (registry.all_of<ecs::CLightPoint>(entity_id)) {
-            registry.get<ecs::CLightPoint>(entity_id).is_dirty = true;
-            if (!registry.all_of<ecs::CTagNeedUpdateLight>(entity_id)) {
-                registry.emplace<ecs::CTagNeedUpdateLight>(entity_id);
-            }
-        }
+        mark_light_update_if_needed(entity_id);
+    }
 
-        // 更新 AABB：获取当前节点的 Mesh AABB（如果有 CRenderable）
-        Box3D mesh_aabb = Box3D(); // 默认为 invalid
-        if (registry.all_of<ecs::CRenderable>(entity_id)) {
-            const auto& c_renderable = registry.get<ecs::CRenderable>(entity_id);
-            if (c_renderable.mesh_entt != entt::null && registry.valid(c_renderable.mesh_entt) &&
-                registry.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
-                const auto& c_mesh = registry.get<ecs::CMesh>(c_renderable.mesh_entt);
-                if (c_mesh.d_aabb.IsValid()) {
-                    // 将 Mesh 的 AABB 经过当前变换矩阵变换到世界空间
-                    // 变换 AABB 的 8 个顶点
-                    const float3& min = c_mesh.d_aabb.min;
-                    const float3& max = c_mesh.d_aabb.max;
-                    Transform     transform_mat(c_transform.d_world_transform);
-
-                    mesh_aabb = Box3D();
-                    // 变换 AABB 的 8 个顶点
-                    mesh_aabb.Expand(transform_mat * float3(min.x, min.y, min.z));
-                    mesh_aabb.Expand(transform_mat * float3(max.x, min.y, min.z));
-                    mesh_aabb.Expand(transform_mat * float3(min.x, max.y, min.z));
-                    mesh_aabb.Expand(transform_mat * float3(max.x, max.y, min.z));
-                    mesh_aabb.Expand(transform_mat * float3(min.x, min.y, max.z));
-                    mesh_aabb.Expand(transform_mat * float3(max.x, min.y, max.z));
-                    mesh_aabb.Expand(transform_mat * float3(min.x, max.y, max.z));
-                    mesh_aabb.Expand(transform_mat * float3(max.x, max.y, max.z));
-                }
-            }
-        }
-
-        // 初始化当前节点的 AABB 为 Mesh AABB（如果没有 Mesh，则为 invalid）
-        c_transform.d_aabb = mesh_aabb;
+    for (entt::entity entity_id : aabb_update_entities) {
+        auto& c_transform  = registry.get<ecs::CTransform>(entity_id);
+        c_transform.d_aabb = build_mesh_aabb(entity_id, c_transform);
     }
 
     // 第三步：反向遍历合并子节点的 AABB（从深到浅，确保子节点先处理）
-    for (auto it = dirty_entities.rbegin(); it != dirty_entities.rend(); ++it) {
+    for (auto it = aabb_update_entities.rbegin(); it != aabb_update_entities.rend(); ++it) {
         auto  entity_id   = *it;
         auto& c_node      = registry.get<ecs::CNode>(entity_id);
         auto& c_transform = registry.get<ecs::CTransform>(entity_id);

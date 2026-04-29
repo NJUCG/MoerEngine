@@ -274,6 +274,7 @@ void CpuScene::InitializeMeshes() {
     m_instance_buf.clear();
 
     m_map_primitive_entity_to_id.clear();
+    m_map_transform_entity_to_instance_slots.clear();
     m_primitive_id_to_transform_entt_arrays.clear();
 
     m_primitive_buf.reserve(r.view<const ecs::CPrimitive>().size());
@@ -380,12 +381,21 @@ void CpuScene::InitializeMeshes() {
                 // 这里冗余的CRenderable是为了在内存中去重
                 for (const entt::entity primitive_entt : c_mesh.primitive_entts) {
                     const uint primitive_id = m_map_primitive_entity_to_id[primitive_entt];
+                    const uint instance_idx_in_primitive =
+                        static_cast<uint>(m_primitive_id_to_transform_entt_arrays[primitive_id].size());
 
                     m_primitive_id_to_transform_entt_arrays[primitive_id].emplace_back(
                         GInstance{
                             .world_transform =
                                 Transpose(c_transform.d_world_transform), // HLSL列主序，需要转置
                             .primitive_id = primitive_id                  // 存储 Primitive ID 用于反向映射
+                        }
+                    );
+                    m_map_transform_entity_to_instance_slots[entity].emplace_back(
+                        InstanceSlot{
+                            .primitive_id              = primitive_id,
+                            .instance_idx_in_primitive = instance_idx_in_primitive,
+                            .flat_instance_idx         = UINT_MAX,
                         }
                     );
                     instance_cnt++;
@@ -407,6 +417,14 @@ void CpuScene::InitializeMeshes() {
                 m_instance_buf.emplace_back(instance);
             }
             prefix_sum += static_cast<uint>(m_primitive_id_to_transform_entt_arrays[i].size());
+        }
+
+        for (auto& [_, instance_slots] : m_map_transform_entity_to_instance_slots) {
+            for (InstanceSlot& instance_slot : instance_slots) {
+                instance_slot.flat_instance_idx =
+                    m_primitive_id_to_first_instance_idx[instance_slot.primitive_id] +
+                    instance_slot.instance_idx_in_primitive;
+            }
         }
     }
 
@@ -489,7 +507,33 @@ void CpuScene::InitializeMeshes() {
 }
 
 void CpuScene::UpdateMeshes() {
-    // TODO
+    auto& r = m_logical_scene.r();
+
+    auto view = r.view<const ecs::CTagNeedUpdateTransform, const ecs::CTransform>();
+    view.each([&](const auto entity, const ecs::CTransform& c_transform) {
+        auto instance_slots_it = m_map_transform_entity_to_instance_slots.find(entity);
+        if (instance_slots_it == m_map_transform_entity_to_instance_slots.end()) {
+            return;
+        }
+
+        for (const InstanceSlot& instance_slot : instance_slots_it->second) {
+            assert(instance_slot.primitive_id < m_primitive_id_to_transform_entt_arrays.size());
+            assert(
+                instance_slot.instance_idx_in_primitive <
+                m_primitive_id_to_transform_entt_arrays[instance_slot.primitive_id].size()
+            );
+            assert(instance_slot.flat_instance_idx < m_instance_buf.size());
+
+            GInstance instance{
+                .world_transform = Transpose(c_transform.d_world_transform),
+                .primitive_id    = instance_slot.primitive_id,
+            };
+
+            m_primitive_id_to_transform_entt_arrays[instance_slot.primitive_id]
+                                                   [instance_slot.instance_idx_in_primitive] = instance;
+            m_instance_buf[instance_slot.flat_instance_idx]                                  = instance;
+        }
+    });
 }
 
 } // namespace Moer

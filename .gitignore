@@ -28,6 +28,7 @@ logs/
 log*.txt
 debug-*.log
 .VSCodeCounter/
+docs/temp
 rhi_docs/01-overview.md
 rhi_docs/02-core-abstractions.md
 rhi_docs/03-command-lists-and-queues.md

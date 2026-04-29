@@ -127,6 +127,13 @@ private:
     Array<GPrimitive>                 m_primitive_buf; // 1:1 GPrimitive & DrawIndexedCmdData
     // primitive_buf 与 draw_cmd_buf 是对应的，index相同则对应相同primitive
     Array<GInstance> m_instance_buf; // N:1 GPrimitive
+
+    struct InstanceSlot {
+        uint primitive_id              = UINT_MAX;
+        uint instance_idx_in_primitive = UINT_MAX;
+        uint flat_instance_idx         = UINT_MAX;
+    };
+
     /**
      * 从LogicalScene中获取MegaBuffers引用
      * 
@@ -139,8 +146,9 @@ private:
         return m_logical_scene.r().ctx().get<const ecs::CtxMegaBuffers>();
     }
 
-    UnorderedMap<entt::entity, uint> m_map_primitive_entity_to_id;
-    Array<Array<GInstance>>          m_primitive_id_to_transform_entt_arrays;
+    UnorderedMap<entt::entity, uint>                m_map_primitive_entity_to_id;
+    UnorderedMap<entt::entity, Array<InstanceSlot>> m_map_transform_entity_to_instance_slots;
+    Array<Array<GInstance>>                         m_primitive_id_to_transform_entt_arrays;
     Array<uint>
         m_primitive_id_to_first_instance_idx; // m_primitive_id_to_transform_entt_arrays的前缀和，表示每个Primitive对应的第一个Instance在m_instance_buf中的索引
 

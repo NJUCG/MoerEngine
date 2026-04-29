@@ -1,10 +1,15 @@
+/**
+ * This file is all written by AI.
+ */
 #include "RasterTestCase.h"
 
 #include "log/LogSystem.h"
+#include "math/Function.h"
 #include "scene/LogicalComponents.h"
 #include "scene/Scene.h"
 #include "scene/SceneLightApi.h"
 
+#include <cmath>
 #include <entt/entity/entity.hpp>
 #include <unordered_set>
 
@@ -19,6 +24,15 @@ struct DebugMaterialPreset {
     float            metallic_factor;
     std::string_view name;
 };
+
+struct TransformMotionState {
+    float3 base_translation;
+    float3 direction;
+    float  amplitude = 0.f;
+    float  phase     = 0.f;
+};
+
+using TransformMotionStateMap = UnorderedMap<entt::entity, TransformMotionState>;
 
 DebugMaterialPreset GetDebugMaterialPreset(uint preset_index) {
     switch (preset_index % 4) {
@@ -56,6 +70,112 @@ Array<entt::entity> FindPrimitiveReferencedMaterialEntities(Scene& scene) {
 uint& DebugMaterialPresetCursor() {
     static uint s_debug_material_preset_cursor = 0;
     return s_debug_material_preset_cursor;
+}
+
+uint HashEntity(entt::entity entity, uint salt) {
+    uint value = static_cast<uint>(entt::to_integral(entity)) ^ salt;
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return value;
+}
+
+float HashToUnitFloat(uint value) {
+    return static_cast<float>(value & 0x00ffffffu) / static_cast<float>(0x00ffffffu);
+}
+
+float HashToRange(uint value, float min_value, float max_value) {
+    return min_value + (max_value - min_value) * HashToUnitFloat(value);
+}
+
+float3 BuildMotionDirection(entt::entity entity, uint salt) {
+    const float x = HashToRange(HashEntity(entity, salt + 1u), -1.f, 1.f);
+    const float y = HashToRange(HashEntity(entity, salt + 2u), -1.f, 1.f);
+    const float z = HashToRange(HashEntity(entity, salt + 3u), -1.f, 1.f);
+
+    const float length = std::sqrt(x * x + y * y + z * z);
+    if (length <= 1e-5f) {
+        return float3(1.f, 0.f, 0.f);
+    }
+    return float3(x / length, y / length, z / length);
+}
+
+TransformMotionState CreateMotionState(
+    entt::entity           entity,
+    const ecs::CTransform& transform,
+    uint                   salt,
+    float                  min_amplitude,
+    float                  max_amplitude
+) {
+    return TransformMotionState{
+        .base_translation = transform.translation,
+        .direction        = BuildMotionDirection(entity, salt),
+        .amplitude        = HashToRange(HashEntity(entity, salt + 4u), min_amplitude, max_amplitude),
+        .phase            = HashToRange(HashEntity(entity, salt + 5u), 0.f, 6.28318530718f),
+    };
+}
+
+void RestoreTransformMotionStates(Scene& scene, TransformMotionStateMap& states) {
+    auto& registry = scene.r();
+    for (auto& [entity, state] : states) {
+        if (!registry.valid(entity) || !registry.all_of<ecs::CTransform>(entity)) {
+            continue;
+        }
+
+        scene.Patch<ecs::CTransform>(entity, [&](ecs::CTransform& transform) {
+            transform.translation = state.base_translation;
+        });
+    }
+    states.clear();
+}
+
+template<typename ViewBuilder>
+void ProcessTransformMotionGroup(
+    Scene&                   scene,
+    bool                     enabled,
+    uint64                   frame_index,
+    TransformMotionStateMap& states,
+    ViewBuilder&&            build_view,
+    uint                     salt,
+    float                    min_amplitude,
+    float                    max_amplitude
+) {
+    if (!enabled) {
+        if (!states.empty()) {
+            RestoreTransformMotionStates(scene, states);
+        }
+        return;
+    }
+
+    auto&           registry    = scene.r();
+    auto            view        = build_view(registry);
+    const float     motion_time = static_cast<float>(frame_index) * (1.f / 60.f);
+    constexpr float speed       = 1.25f;
+
+    view.each([&](const auto entity, const auto&, const ecs::CTransform& transform) {
+        auto [state_it, inserted] = states.try_emplace(entity);
+        if (inserted) {
+            state_it->second = CreateMotionState(entity, transform, salt, min_amplitude, max_amplitude);
+        }
+
+        const TransformMotionState& state  = state_it->second;
+        const float                 offset = std::sin(motion_time * speed + state.phase) * state.amplitude;
+        scene.Patch<ecs::CTransform>(entity, [&](ecs::CTransform& patched_transform) {
+            patched_transform.translation = state.base_translation + state.direction * offset;
+        });
+    });
+}
+
+TransformMotionStateMap& RenderableMotionStates() {
+    static TransformMotionStateMap s_states;
+    return s_states;
+}
+
+TransformMotionStateMap& PointLightMotionStates() {
+    static TransformMotionStateMap s_states;
+    return s_states;
 }
 
 } // namespace
@@ -120,6 +240,44 @@ bool RasterTestCase::ProcessDebugMaterialRequest(RasterConfig& raster_config, Sc
         "Patch Debug Material applied preset '{}' to {} materials.", preset.name, material_entities.size()
     );
     return true;
+}
+
+void RasterTestCase::ProcessRenderableTransformMotion(
+    RasterConfig& raster_config,
+    Scene&        scene,
+    uint64        frame_index
+) {
+    ProcessTransformMotionGroup(
+        scene,
+        raster_config.debug_test_case_renderable_transform_motion_enabled,
+        frame_index,
+        RenderableMotionStates(),
+        [](entt::registry& registry) {
+            return registry.view<const ecs::CRenderable, const ecs::CTransform>();
+        },
+        0x4d52524fu,
+        0.08f,
+        0.22f
+    );
+}
+
+void RasterTestCase::ProcessPointLightTransformMotion(
+    RasterConfig& raster_config,
+    Scene&        scene,
+    uint64        frame_index
+) {
+    ProcessTransformMotionGroup(
+        scene,
+        raster_config.debug_test_case_point_light_transform_motion_enabled,
+        frame_index,
+        PointLightMotionStates(),
+        [](entt::registry& registry) {
+            return registry.view<const ecs::CLightPoint, const ecs::CTransform>();
+        },
+        0x504c4954u,
+        0.35f,
+        1.15f
+    );
 }
 
 } // namespace Moer::Render::Raster

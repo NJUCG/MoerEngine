@@ -364,6 +364,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
 void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene) {
     UpdateLightBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
     UpdateMaterialBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+    UpdateInstanceBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
 
     UpdateRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list); // gfx_queue交给主线程执行
 }
@@ -433,6 +434,41 @@ void GpuScene::UpdateMaterialBuffer(CommandList& cmd_list) {
         std::span<byte>((byte*)m_cpu_scene.m_material_buf.data(), required_byte_size),
         m_res.material_buf.buf->GetView(),
         "CopyFrom GpuScene::MaterialBuffer"
+    );
+
+    if (need_bindless_update) {
+        cmd_list.UpdateBindlessArray(m_bindless_array);
+    }
+}
+
+void GpuScene::UpdateInstanceBuffer(CommandList& cmd_list) {
+    const uint64 required_byte_size = m_cpu_scene.m_instance_buf.size() * sizeof(GInstance);
+    if (required_byte_size == 0) {
+        return;
+    }
+
+    bool need_bindless_update = false;
+    if (m_res.instance_buf.buf == nullptr || m_res.instance_buf.buf->GetByteSize() < required_byte_size) {
+        auto& device = RenderDevice::Get();
+
+        if (m_res.instance_buf.hdl != 0) {
+            m_bindless_array->UnbindBuffer(m_res.instance_buf.hdl);
+            m_res.instance_buf.hdl = 0;
+        }
+
+        m_res.instance_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::InstanceBuffer",
+            required_byte_size,
+            EBufferUsageFlags::UNORDERED_ACCESS
+        );
+        m_res.instance_buf.hdl = m_bindless_array->AllocateBuffer(m_res.instance_buf.buf->GetView());
+        need_bindless_update = true;
+    }
+
+    cmd_list.CopyFrom(
+        std::span<byte>((byte*)m_cpu_scene.m_instance_buf.data(), required_byte_size),
+        m_res.instance_buf.buf->GetView(),
+        "CopyFrom GpuScene::InstanceBuffer"
     );
 
     if (need_bindless_update) {

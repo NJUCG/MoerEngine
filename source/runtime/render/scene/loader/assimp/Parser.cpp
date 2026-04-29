@@ -931,7 +931,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             ai_mat.Decompose(ai_scale, ai_rotation, ai_translation);
 
             out_translation         = float3(ai_translation.x, ai_translation.y, ai_translation.z);
-            out_rotation_quaternion = Quaternion(ai_rotation.x, ai_rotation.y, ai_rotation.z, ai_rotation.w);
+            out_rotation_quaternion = Quaternion(ai_rotation.w, ai_rotation.x, ai_rotation.y, ai_rotation.z);
             out_scale               = float3(ai_scale.x, ai_scale.y, ai_scale.z);
         };
 
