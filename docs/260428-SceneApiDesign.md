@@ -275,7 +275,7 @@ scene.Patch<ecs::CTransform>(entity, [](auto& transform) {
 - `GpuScene::UpdateLightBuffer()`：同步 CPU light cache 到 GPU light buffer。debug 阶段 light 数量很小，当前采用全量上传；buffer 不足时重建并更新 bindless handle。后续需要替换为 capacity/chunk 策略和局部更新。
 - `GpuScene::UpdateInstanceBuffer()`：同步 CPU instance cache 到 GPU instance buffer，使 GeometryPass 和 GPU culling 使用最新实例矩阵。
 - `GpuScene::UpdateRaytracingScene()`：使用更新后的 CPU instance 数据刷新 RT TLAS instance transform；本阶段只更新 transform，不 rebuild BLAS。
-- `Scene::Tick()`：设计为每帧可调用的 guarded sync 入口。内部先检查 `NeedUpdate/NeedCreate` tag，没有同步需求时直接返回 `false`，有需求时更新 `LogicalScene -> CpuScene -> GpuScene` 并返回 `true`。
+- `Scene::Tick()`：设计为每帧可调用的 guarded sync 入口。内部先采样 `NeedUpdate/NeedCreate` tag 生成 `TickState`，再在有同步需求时更新 `LogicalScene -> CpuScene -> GpuScene`。外部通过返回值或 `GetLastTickState()` 读取本帧是否同步、是否更新 transform 等信息，不直接窥探 registry tag。
 - `RasterTestCase`：集中保存 Raster 调试用例。当前包含 `TestCase Add Light`、`TestCase Modify Material`、`TestCase Move Renderables`、`TestCase Move Point Lights`。Transform motion 测试只通过 `Scene::Patch<ecs::CTransform>()` 写入，不直接修改 registry。
 - `RaytracingRenderer` 中方向光参数和 transform 的外部修改已迁移到 `Scene::Patch<T>()`。
 

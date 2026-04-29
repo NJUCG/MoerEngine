@@ -21,12 +21,23 @@
 #include "misc/Timer.h"
 #include "window/WindowContext.h"
 
+#include <chrono>
+
 #if WITH_CUDA
 #include "CudaPass.h"
 #include "TensorRTPass.h"
 #endif
 
 namespace Moer::Render::Raster {
+
+namespace {
+
+float GetElapsedTimeSeconds() {
+    static const auto s_start_time = std::chrono::steady_clock::now();
+    return std::chrono::duration<float>(std::chrono::steady_clock::now() - s_start_time).count();
+}
+
+} // namespace
 
 RasterRenderer::RasterRenderer(
     uint2&                        _resolution,
@@ -236,12 +247,15 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         auto& raster_config = editor_config->raster_config;
 
+        const float elapsed_time_seconds = GetElapsedTimeSeconds();
+
         RasterTestCase::ProcessDebugSceneUpdateRequest(raster_config, scene);
         RasterTestCase::ProcessDebugMaterialRequest(raster_config, scene);
-        RasterTestCase::ProcessRenderableTransformMotion(raster_config, scene, time);
-        RasterTestCase::ProcessPointLightTransformMotion(raster_config, scene, time);
+        RasterTestCase::ProcessRenderableTransformMotion(raster_config, scene, elapsed_time_seconds);
+        RasterTestCase::ProcessPointLightTransformMotion(raster_config, scene, elapsed_time_seconds);
 
-        if (scene.Tick()) {
+        const auto& scene_tick_state = scene.Tick();
+        if (scene_tick_state) {
             RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
         }
 
@@ -261,6 +275,10 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         camera.Tick(editor_config);
 
         raster_context.Update(camera.GetDeltaTime());
+
+        if (scene_tick_state.updated_transform) {
+            raster_context.csm_data.shadow_cache_config_snapshot_valid = false;
+        }
 
         // others
         // FIXME: 统一update scene

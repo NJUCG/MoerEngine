@@ -72,6 +72,20 @@ class RENDER_API Scene {
      */
 
 public:
+    struct TickState {
+        bool did_sync           = false;
+        bool updated_light      = false;
+        bool updated_material   = false;
+        bool updated_transform  = false;
+        bool created_light      = false;
+        bool created_material   = false;
+        bool created_transform  = false;
+
+        explicit operator bool() const {
+            return did_sync;
+        }
+    };
+
     Scene();
     ~Scene() = default;
 
@@ -93,7 +107,9 @@ public:
     /**
     * 每帧调用，有需要时更新CpuScene和GpuScene数据
      */
-    bool Tick();
+    const TickState& Tick();
+
+    const TickState& GetLastTickState() const;
 
     /**
      * 重置所有场景数据
@@ -155,6 +171,7 @@ private:
     UniquePtr<Render::GpuScene>  m_gpu_scene;
 
     SceneLoadInfoAsync m_scene_load_info;
+    TickState          m_last_tick_state;
 
 private:
     /**
@@ -166,6 +183,8 @@ private:
 
     // 判断当前 Scene 是否存在需要同步到 CpuScene/GpuScene 的 tag。
     bool HasPendingSceneSync() const;
+
+    TickState BuildPendingTickState() const;
 
 public:
     /**

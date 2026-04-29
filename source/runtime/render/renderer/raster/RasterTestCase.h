@@ -14,9 +14,9 @@ public:
 
     static bool ProcessDebugMaterialRequest(RasterConfig& raster_config, Scene& scene);
 
-    static void ProcessRenderableTransformMotion(RasterConfig& raster_config, Scene& scene, uint64 frame_index);
+    static void ProcessRenderableTransformMotion(RasterConfig& raster_config, Scene& scene, float elapsed_time_seconds);
 
-    static void ProcessPointLightTransformMotion(RasterConfig& raster_config, Scene& scene, uint64 frame_index);
+    static void ProcessPointLightTransformMotion(RasterConfig& raster_config, Scene& scene, float elapsed_time_seconds);
 };
 
 } // namespace Moer::Render::Raster

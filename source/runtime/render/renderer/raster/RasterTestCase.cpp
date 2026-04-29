@@ -135,7 +135,7 @@ template<typename ViewBuilder>
 void ProcessTransformMotionGroup(
     Scene&                   scene,
     bool                     enabled,
-    uint64                   frame_index,
+    float                    elapsed_time_seconds,
     TransformMotionStateMap& states,
     ViewBuilder&&            build_view,
     uint                     salt,
@@ -149,10 +149,9 @@ void ProcessTransformMotionGroup(
         return;
     }
 
-    auto&           registry    = scene.r();
-    auto            view        = build_view(registry);
-    const float     motion_time = static_cast<float>(frame_index) * (1.f / 60.f);
-    constexpr float speed       = 1.25f;
+    auto&           registry = scene.r();
+    auto            view     = build_view(registry);
+    constexpr float speed    = 1.25f;
 
     view.each([&](const auto entity, const auto&, const ecs::CTransform& transform) {
         auto [state_it, inserted] = states.try_emplace(entity);
@@ -160,8 +159,8 @@ void ProcessTransformMotionGroup(
             state_it->second = CreateMotionState(entity, transform, salt, min_amplitude, max_amplitude);
         }
 
-        const TransformMotionState& state  = state_it->second;
-        const float                 offset = std::sin(motion_time * speed + state.phase) * state.amplitude;
+        const TransformMotionState& state = state_it->second;
+        const float offset = std::sin(elapsed_time_seconds * speed + state.phase) * state.amplitude;
         scene.Patch<ecs::CTransform>(entity, [&](ecs::CTransform& patched_transform) {
             patched_transform.translation = state.base_translation + state.direction * offset;
         });
@@ -245,12 +244,12 @@ bool RasterTestCase::ProcessDebugMaterialRequest(RasterConfig& raster_config, Sc
 void RasterTestCase::ProcessRenderableTransformMotion(
     RasterConfig& raster_config,
     Scene&        scene,
-    uint64        frame_index
+    float         elapsed_time_seconds
 ) {
     ProcessTransformMotionGroup(
         scene,
         raster_config.debug_test_case_renderable_transform_motion_enabled,
-        frame_index,
+        elapsed_time_seconds,
         RenderableMotionStates(),
         [](entt::registry& registry) {
             return registry.view<const ecs::CRenderable, const ecs::CTransform>();
@@ -264,12 +263,12 @@ void RasterTestCase::ProcessRenderableTransformMotion(
 void RasterTestCase::ProcessPointLightTransformMotion(
     RasterConfig& raster_config,
     Scene&        scene,
-    uint64        frame_index
+    float         elapsed_time_seconds
 ) {
     ProcessTransformMotionGroup(
         scene,
         raster_config.debug_test_case_point_light_transform_motion_enabled,
-        frame_index,
+        elapsed_time_seconds,
         PointLightMotionStates(),
         [](entt::registry& registry) {
             return registry.view<const ecs::CLightPoint, const ecs::CTransform>();

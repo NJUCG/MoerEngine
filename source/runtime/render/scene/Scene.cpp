@@ -57,10 +57,11 @@ Render::GpuScene::PendingCommandList&& Scene::PopPendingCommandList() {
     return std::move(m_gpu_scene->PopPendingCommandList());
 }
 
-bool Scene::Tick() {
+const Scene::TickState& Scene::Tick() {
     assert(m_logical_scene && m_cpu_scene && m_gpu_scene && "Scene is not ready");
-    if (!HasPendingSceneSync()) {
-        return false;
+    m_last_tick_state = BuildPendingTickState();
+    if (!m_last_tick_state) {
+        return m_last_tick_state;
     }
 
     m_logical_scene->Update();
@@ -69,21 +70,33 @@ bool Scene::Tick() {
 
     m_gpu_scene->Update(*m_logical_scene, *m_cpu_scene);
 
-    return true;
+    return m_last_tick_state;
+}
+
+const Scene::TickState& Scene::GetLastTickState() const {
+    return m_last_tick_state;
 }
 
 bool Scene::HasPendingSceneSync() const {
+    return BuildPendingTickState().did_sync;
+}
+
+Scene::TickState Scene::BuildPendingTickState() const {
+    TickState state{};
     if (!m_logical_scene || !m_cpu_scene || !m_gpu_scene) {
-        return false;
+        return state;
     }
 
     const auto& registry = r();
-    return !registry.view<const ecs::CTagNeedUpdateLight>().empty() ||
-           !registry.view<const ecs::CTagNeedUpdateMaterial>().empty() ||
-           !registry.view<const ecs::CTagNeedUpdateTransform>().empty() ||
-           !registry.view<const ecs::CTagNeedCreateLight>().empty() ||
-           !registry.view<const ecs::CTagNeedCreateMaterial>().empty() ||
-           !registry.view<const ecs::CTagNeedCreateTransform>().empty();
+    state.updated_light     = !registry.view<const ecs::CTagNeedUpdateLight>().empty();
+    state.updated_material  = !registry.view<const ecs::CTagNeedUpdateMaterial>().empty();
+    state.updated_transform = !registry.view<const ecs::CTagNeedUpdateTransform>().empty();
+    state.created_light     = !registry.view<const ecs::CTagNeedCreateLight>().empty();
+    state.created_material  = !registry.view<const ecs::CTagNeedCreateMaterial>().empty();
+    state.created_transform = !registry.view<const ecs::CTagNeedCreateTransform>().empty();
+    state.did_sync = state.updated_light || state.updated_material || state.updated_transform ||
+                     state.created_light || state.created_material || state.created_transform;
+    return state;
 }
 
 void Scene::Reset() {
