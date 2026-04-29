@@ -1,0 +1,210 @@
+{
+  "project": "RenderGraph Roadmap",
+  "planning_only": true,
+  "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
+  "stage": {
+    "id": "platform_external_interop",
+    "title": "Implement platform external pass and multi-graph interop",
+    "status": "planned"
+  },
+  "goal": "Support platform-command-list native custom GPU work outside RHICommandList, explicit raw RHI -> RenderGraph -> raw RHI sequencing, multiple RenderGraph instances in one frame, and allocator correctness across those boundaries without reintroducing hidden backend tracking.",
+  "entry_gate": [
+    "The contract replacement checkpoint has frozen the external pass and interop boundary contract.",
+    "The barrier and queue synchronization checkpoint can lower API-neutral import/export and queue handoff intents.",
+    "The resource reuse checkpoint separates graph-local transient aliasing from global physical pooling.",
+    "The async record and submit checkpoint can submit compiled plans through RHIExecutor without a second RHI submission backend."
+  ],
+  "hard_rules": [
+    {
+      "id": "HR-EXTERNAL-01",
+      "rule": "Do not hide NVAPI, DirectML-style, or other platform-command-list native GPU work inside ordinary AddPass lambdas. Use an explicit external pass node."
+    },
+    {
+      "id": "HR-EXTERNAL-02",
+      "rule": "Initial external passes must be PlatformCommandList passes. They declare resource access, native platform command-list handle capability, native resource handle capability, memory sharing mode, and queue type before Compile."
+    },
+    {
+      "id": "HR-EXTERNAL-03",
+      "rule": "Raw RHI -> RenderGraph -> raw RHI sequencing must use import/export receipts with state, owner queue, and completion boundary. Do not depend on backend tracker side effects."
+    },
+    {
+      "id": "HR-EXTERNAL-04",
+      "rule": "Do not transparently alias transient resources across independent RenderGraph instances. Compile one graph when cross-workload alias optimization is required."
+    },
+    {
+      "id": "HR-EXTERNAL-05",
+      "rule": "RGGlobalResourcePool is shared through RGFrameContext and may only check out resources whose retire boundary is complete and whose pool key matches required native interop capabilities."
+    },
+    {
+      "id": "HR-EXTERNAL-06",
+      "rule": "External native passes cannot access pooled or transient resources unless native handle stability, descriptor lifetime, and containing RHIExecutor completion tracking are all proven at compile time."
+    },
+    {
+      "id": "HR-EXTERNAL-07",
+      "rule": "Do not support direct GPU runtime external passes with independent submit/sync in this milestone."
+    },
+    {
+      "id": "HR-EXTERNAL-08",
+      "rule": "PlatformCommandList external callbacks are not executed by RenderGraph record tasks. RG record emits typed RHI platform callback commands, and backend visitors execute callbacks during translate/platform record."
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Implement RGFrameContext and boundary receipts",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Raw RHI work, external native work, and multiple graph dispatches need a shared boundary owner. Without one, resource state would leak through backend trackers or global flushes.",
+      "what_must_be_true_after_this_checkpoint": [
+        "RGFrameContext stores frame sequence id, graph sequence ids, latest exported whole-resource state, owner queue, and completion boundary per resource.",
+        "Raw RHI submit receipts can be registered as graph import sources.",
+        "RenderGraph Dispatch publishes a receipt for exported resources and completion boundaries.",
+        "Importing an incomplete producer boundary creates an explicit wait or compile error.",
+        "The boundary model does not require a global Flush between raw RHI and RenderGraph work."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphResource.h",
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/RHICommand.h"
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Implement explicit platform-command-list external pass nodes",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Native APIs such as NVAPI or DirectML-style command-list extensions may need GPU work that does not record through RHICommandList, but still records into the backend platform command list and has resource hazards.",
+      "what_must_be_true_after_this_checkpoint": [
+        "External passes use a separate AddExternalPass-style API and do not receive RHICommandList&.",
+        "Only PlatformCommandList external pass kind is accepted in the initial implementation.",
+        "External callbacks receive RGPlatformCommandListContext with the platform command-list handle and resolved native resource handles.",
+        "External pass setup uses the same explicit resource access declarations as normal passes.",
+        "Compile validates backend support for platform command-list handle, native resource handles, memory sharing mode, and command-list queue type.",
+        "External callbacks cannot allocate graph resources, mutate graph structure, submit RHICommandLists, or signal/wait independent GPU timelines.",
+        "RenderGraph record tasks do not execute external callbacks; they emit typed RHI platform callback commands."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rhi/RHIResource.h"
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Implement RHI platform callback command and segment barriers",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Platform-command-list external work needs a native command list that only exists during backend translate. RenderGraph must therefore emit a typed RHI command instead of executing the callback during graph record.",
+      "what_must_be_true_after_this_checkpoint": [
+        "External passes are graph nodes in dependency analysis and topological ordering.",
+        "Compile places each external pass into a command-list segment matching its queue type.",
+        "Compile emits barrier intents before and after external callbacks inside the containing command list.",
+        "RG record emits a typed RHI platform callback command between those barriers.",
+        "Backend translate/platform record executes the callback when the native command list and native resource handles are valid.",
+        "External pass completion is the containing RHIExecutor submit completion boundary.",
+        "Resource lifetimes extend through the containing RHIExecutor completion boundary before transient alias or pool return is allowed."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/runtime/render/rhi/RHICommand.h",
+        "source/runtime/render/rhi/RHIImpl.h",
+        "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+        "source/runtime/render/rhi/d3d12/D3D12Device.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionPreprocess.cpp",
+        "source/runtime/render/rhi/vulkan/RHICmdReorderer.h"
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Support raw RHI before and after RenderGraph",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "The renderer may need to issue raw RHI work, dispatch a graph, then continue with raw RHI work. That sequence must be explicit and must not require backend command scanning to rediscover state.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Raw RHI work before a graph exports resource state and completion boundary into RGFrameContext.",
+        "Graph imports from raw RHI receipts with explicit state and owner queue.",
+        "Graph exports can be consumed by later raw RHI command lists with no hidden tracker dependency.",
+        "Queue waits/signals are compiled at the boundary instead of forcing a device-wide flush.",
+        "Debug validation rejects raw RHI reuse of graph outputs without an export receipt."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rhi/RHICommandList.cpp",
+        "source/runtime/render/rhi/RHIExecutor.cpp"
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Support multiple RenderGraph instances per frame",
+      "status": "todo",
+      "priority": "high",
+      "problem": "Multiple systems may build separate graphs in one frame. They need safe sequencing and shared global pool access without cross-graph mutation of graph-local allocators.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Every graph in the frame is constructed with the same RGFrameContext.",
+        "Each graph owns its own setup allocator, compile allocator, scratch allocator, and transient alias allocator.",
+        "Graph A to graph B resource flow requires A export receipt and B import declaration.",
+        "Independent graphs can dispatch independently when they do not import each other's resources or contend for incomplete pooled resources.",
+        "Cross-graph transient aliasing remains unsupported unless those workloads are compiled as one graph."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphResource.h"
+      ]
+    },
+    {
+      "id": "CP-06",
+      "title": "Integrate allocator with interop boundaries",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Pooled and transient resources can be corrupted if an external native pass or another graph holds a resource past the allocator's assumed lifetime.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Global pool keys include platform-command-list native interop capability flags when resources can be used by external passes.",
+        "Pool checkout requires completed retire boundary, matching owner queue state, matching last known resource state handling, and matching interop capabilities.",
+        "Pool return waits for the containing RHIExecutor completion boundary before the resource is available again.",
+        "Transient allocator is graph-local and never lends physical slots to another RenderGraph instance.",
+        "Imported external resources remain excluded from transient aliasing and global pooling."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraphResource.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rhi/RHIResource.h",
+        "source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp"
+      ]
+    },
+    {
+      "id": "CP-07",
+      "title": "Add focused interop validation cases",
+      "status": "todo",
+      "priority": "high",
+      "problem": "Interop bugs appear as stale resource state, missed waits, or allocator reuse before the containing command list completes. Focused cases must cover those boundaries directly.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Tests cover raw RHI -> RenderGraph -> raw RHI sequencing without device-wide flush.",
+        "Tests cover two RenderGraph instances in one frame with explicit export/import and independent dispatch.",
+        "Tests cover rejection of missing platform-command-list external pass capability data.",
+        "Tests cover allocator refusal to reuse resources before RHIExecutor completion boundaries retire.",
+        "Tests run through existing repository scripts."
+      ],
+      "files_likely_affected": [
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1"
+      ]
+    }
+  ],
+  "stage_exit_gate": [
+    "Platform-command-list external passes are explicit graph nodes with declared resources and native capabilities.",
+    "Raw RHI and RenderGraph exchange resources through receipts rather than hidden backend state.",
+    "Multiple RenderGraph instances in one frame share RGFrameContext and the global pool while keeping graph-local allocators isolated.",
+    "Allocator reuse waits on RHIExecutor completion for command lists that contain external passes."
+  ],
+  "validation": [
+    "Run testscripts/windows/test_rhi_translate.ps1 after focused interop tests land.",
+    "Run testscripts/windows/test_all.ps1 after the stage-sized landing."
+  ]
+}

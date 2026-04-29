@@ -3,32 +3,44 @@
   "planning_only": true,
   "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
   "stage": {
-    "id": "M3",
+    "id": "resource_reuse",
     "title": "Implement transient and global resource reuse",
     "status": "planned"
   },
   "goal": "Add frame-local transient resource aliasing and constrained global resource pooling after the barrier compiler can prove lifetimes and emit alias barriers.",
   "entry_gate": [
-    "M2 barrier compiler can derive resource lifetimes and hazards.",
+    "The barrier and queue synchronization checkpoint can derive resource lifetimes and hazards.",
     "Compiled barriers can express aliasing and queue ownership boundaries.",
     "External import/export resources have explicit lifetime and state boundaries."
   ],
   "hard_rules": [
     {
-      "id": "HR-M3-01",
+      "id": "HR-RESOURCE-01",
       "rule": "Do not pool imported external resources."
     },
     {
-      "id": "HR-M3-02",
+      "id": "HR-RESOURCE-02",
       "rule": "Do not globally pool sampled-only textures, depth textures, upload buffers, readback buffers, acceleration structures, or bindless backing buffers."
     },
     {
-      "id": "HR-M3-03",
+      "id": "HR-RESOURCE-03",
       "rule": "Global ResourcePool reuse is limited to color attachments, UAV textures, and UAV buffers."
     },
     {
-      "id": "HR-M3-04",
+      "id": "HR-RESOURCE-04",
       "rule": "Do not alias resources whose live intervals overlap after queue synchronization expansion."
+    },
+    {
+      "id": "HR-RESOURCE-05",
+      "rule": "Do not collapse global ResourcePool and frame-local transient aliasing into one allocator. Global pooling owns cross-frame physical reuse; transient allocation owns single-frame logical aliasing."
+    },
+    {
+      "id": "HR-RESOURCE-06",
+      "rule": "Do not force canonical transitions on global pool return. Store final known state and compile checkout transition or discard first-use transition instead."
+    },
+    {
+      "id": "HR-RESOURCE-07",
+      "rule": "Do not let external native passes or multiple RenderGraph instances borrow pooled resources unless pool checkout can prove completion, owner queue, last state, native interop capability, and descriptor lifetime."
     }
   ],
   "checkpoints": [
@@ -60,7 +72,8 @@
         "Allocator groups compatible transient texture and buffer descriptors.",
         "Allocator assigns physical resources only to non-overlapping lifetime intervals.",
         "Alias barriers are inserted when one physical resource backs multiple logical resources in one frame.",
-        "Transient resources are retired at the frame boundary and never escape through user handles."
+        "Transient resources are retired at the frame boundary and never escape through user handles.",
+        "Transient allocator records physical slots separately from global pool checkout so single-frame aliasing and cross-frame reuse remain independent."
       ],
       "files_likely_affected": [
         "source/runtime/render/rendergraph/RenderGraphResource.h",
@@ -77,9 +90,12 @@
       "problem": "Some resources should survive across frames for allocation efficiency, but unconstrained global pooling creates stale state, layout, and lifetime bugs.",
       "what_must_be_true_after_this_checkpoint": [
         "ResourcePool accepts only color attachment textures, UAV textures, and UAV buffers.",
-        "Pool keys include size, format, usage flags, sample count, mip/array shape, and memory class.",
-        "Pool checkout returns resources in a known canonical state or forces an explicit compiled transition before first use.",
-        "Pool return is delayed until the RHIExecutor completion boundary proves the last GPU use is retired."
+        "Pool keys include size, format, usage flags, sample count, mip/array shape, memory class, sharing mode, backend allocation compatibility flags, and native interop capability flags.",
+        "Pool checkout returns resources with stored last known state and owner queue metadata.",
+        "Compile emits checkout first-use transition from stored state, or discard transition when the first use fully overwrites the resource.",
+        "Pool return is delayed until the RHIExecutor completion boundary proves the last GPU use is retired.",
+        "Pool return records final whole-resource state instead of eagerly transitioning to a canonical state.",
+        "Global ResourcePool is shared through RGFrameContext, not through graph-local transient allocator state."
       ],
       "files_likely_affected": [
         "source/runtime/render/rendergraph/RenderGraphResource.h",
@@ -98,7 +114,8 @@
         "Transient resources cannot be allocated into bindless arrays that outlive the graph unless the graph owns descriptor update and invalidation lifetime.",
         "Imported resources are never placed in the transient allocator or global ResourcePool.",
         "Global pooled resources are unbound or rebound only through explicit graph-owned descriptor update passes.",
-        "Pool retirement cannot race worker-thread record or RHI translate."
+        "External native passes can touch pooled resources only when the pool key includes compatible native handle and synchronization capabilities.",
+        "Pool retirement cannot race worker-thread record, external pass completion, or RHI translate."
       ],
       "files_likely_affected": [
         "source/runtime/render/rhi/RHIResource.h",
@@ -128,6 +145,8 @@
   "stage_exit_gate": [
     "Frame-local transient resources reuse memory safely through compiled lifetime intervals.",
     "Global ResourcePool reuse is constrained to the allowed resource categories only.",
+    "Global ResourcePool and transient alias allocator have separate responsibilities and metadata.",
+    "External native access and multiple RenderGraph instances use RGFrameContext-managed global pool checkout, not cross-graph transient aliasing.",
     "Pool return and alias reuse are ordered by RHIExecutor completion boundaries."
   ],
   "validation": [

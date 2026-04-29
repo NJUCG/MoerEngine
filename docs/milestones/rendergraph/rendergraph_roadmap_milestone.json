@@ -4,6 +4,7 @@
   "goal": "Rebuild RenderGraph as the owner of precise resource tracking, barrier compilation, queue synchronization, resource reuse, asynchronous setup, asynchronous command recording, and RHIExecutor submit orchestration. Raw RHI keeps only simple whole-resource tracking and structured CopyScope ownership.",
   "doc_refs": [
     ".github/skills/strict-engineering/SKILL.md",
+    "docs/milestones/rendergraph/rendergraph_architecture_design.md",
     "docs/RHI_Submission_Rework_Design.md",
     "docs/RHI_Translate_Scheduler_Design.md",
     "docs/milestones/rhi/refactor_milestone.json",
@@ -25,7 +26,7 @@
   ],
   "document_contract": {
     "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
-    "checkpoint_pattern": "docs/milestones/rendergraph/rendergraph_roadmap_m*_checkpoint.json",
+    "checkpoint_pattern": "docs/milestones/rendergraph/rendergraph_*_checkpoint.json",
     "update_rule": "Any replan must update this milestone file and the affected active checkpoint file in the same change.",
     "validation_rule": "Use only existing repository scripts. Prefer testscripts/windows/test_rhi_translate.ps1 for focused RHI/RenderGraph behavior and testscripts/windows/test_all.ps1 after milestone-sized landings. Planning-only edits do not require a build."
   },
@@ -35,7 +36,8 @@
       "RenderGraph.cpp and RenderGraphResource.cpp currently contain commented legacy code and must not be treated as a compatibility surface.",
       "The existing RenderGraph headers expose old RHIGraphicsCommandList-oriented concepts that must be replaced by the new RHICommandList/RHIExecutor model.",
       "VulkanSubmissionPreprocess currently owns complex resource tracking that should move upward into RenderGraph once pass declarations are precise."
-    ]
+    ],
+    "selected_design": "docs/milestones/rendergraph/rendergraph_architecture_design.md"
   },
   "resource_tracking_constraints": [
     {
@@ -99,14 +101,46 @@
     {
       "id": "AR-09",
       "rule": "The public graph shape is parameter-first and execution-lambda-only: graph.Alloc<T>() allocates graph-owned parameters, RG_EVENT_SCOPE(graph, name, ...) declares scopes outside pass execution, graph.AddSetupPass(...) declares setup work through a setup context, graph.AddPass(param, flags, [](RHICommandList& cmd_list, RGContext context) { ... }) records execution, and graph.Dispatch() runs setup, compile, record, and submit orchestration."
+    },
+    {
+      "id": "AR-10",
+      "rule": "API-specific read/read merge, write/write ordering, layout transition, queue ownership, and alias barrier differences are encapsulated by the RenderGraph barrier compiler plus backend barrier policy. Pass code must not call backend-specific transition helpers."
+    },
+    {
+      "id": "AR-11",
+      "rule": "Resource reuse is two-layered: RGGlobalResourcePool owns cross-frame physical resource reuse with delayed retirement, while RGTransientResourceAllocator owns single-frame logical aliasing and alias barriers. Imported resources never enter either pool."
+    },
+    {
+      "id": "AR-12",
+      "rule": "Native custom work outside RHICommandList, such as NVAPI or DirectML-style command-list extensions, must be represented as typed external passes with declared resource access and native capability requirements. Initial support is limited to platform-command-list interaction; direct GPU runtime external submit/sync is out of scope."
+    },
+    {
+      "id": "AR-13",
+      "rule": "Raw RHI -> RenderGraph -> raw RHI and multiple RenderGraph sequences communicate only through RGFrameContext import/export receipts containing final state, owner queue, and completion boundary. Do not rely on hidden backend tracker side effects."
+    },
+    {
+      "id": "AR-14",
+      "rule": "CPU graph allocators and transient alias allocators are per RenderGraph instance. RGGlobalResourcePool is shared through RGFrameContext and can only hand out resources whose retire boundary is complete and whose pool key matches required native interop capability."
+    },
+    {
+      "id": "AR-15",
+      "rule": "Single-step debug mode is controlled by console variables sampled outside the RenderGraph scope. In single-step mode, pass declaration immediately records, submits through RHIExecutor, waits for GPU completion, and publishes a boundary receipt; the mode cannot switch while a graph is active."
+    },
+    {
+      "id": "AR-16",
+      "rule": "RenderGraph validation can dump graph parameters, RG resources, resolved RHI resources, barriers, fences, queue handoffs, and formatted DOT synchronization graphs from frozen setup or compiled data without changing scheduling."
+    },
+    {
+      "id": "AR-17",
+      "rule": "RenderGraph has two record stages: RG record writes abstract commands into RHICommandList, and RHI backend translate/platform-record writes native command lists. Ordinary AddPass lambdas never receive platform command-list handles; PlatformCommandList external passes are emitted as typed RHI platform callback commands and executed by backend visitors during translate."
     }
   ],
   "stages": [
     {
-      "id": "M1",
+      "id": "contract_replacement",
       "title": "Freeze RenderGraph contract and replace the legacy skeleton",
       "status": "planned",
-      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_roadmap_m1_checkpoint.json",
+      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_contract_replacement_checkpoint.json",
       "exit_gate": [
         "The RenderGraph ownership boundary is frozen in writing.",
         "The legacy RenderGraph API is marked for replacement, not compatibility wrapping.",
@@ -115,10 +149,10 @@
       ]
     },
     {
-      "id": "M2",
+      "id": "barrier_queue_sync",
       "title": "Implement barrier compiler and queue synchronization plan",
       "status": "planned",
-      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_roadmap_m2_checkpoint.json",
+      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_barrier_queue_sync_checkpoint.json",
       "exit_gate": [
         "RenderGraph builds precise hazard edges from declared accesses.",
         "Barrier batching and reorder are deterministic and queue-aware.",
@@ -126,10 +160,10 @@
       ]
     },
     {
-      "id": "M3",
+      "id": "resource_reuse",
       "title": "Implement transient and global resource reuse",
       "status": "planned",
-      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_roadmap_m3_checkpoint.json",
+      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_resource_reuse_checkpoint.json",
       "exit_gate": [
         "Frame-local transient resources are allocated and aliased through lifetime intervals.",
         "ResourcePool reuses only color attachments, UAV textures, and UAV buffers.",
@@ -137,33 +171,61 @@
       ]
     },
     {
-      "id": "M4",
+      "id": "async_record_submit",
       "title": "Implement async setup, compile, record, and submit orchestration",
       "status": "planned",
-      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_roadmap_m4_checkpoint.json",
+      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_async_record_submit_checkpoint.json",
       "exit_gate": [
         "AddSetupPass and Compile run safely before command recording.",
         "RenderGraph execution lambdas record RHICommandLists in parallel without submitting from worker threads.",
         "RenderGraph submits a compiled translate graph through RHIExecutor for multi-threaded translate and ordered GPU submission.",
         "GPU trace scopes remain correct when one logical graph scope spans multiple compiled CommandLists."
       ]
+    },
+    {
+      "id": "platform_external_interop",
+      "title": "Implement platform external pass and multi-graph interop",
+      "status": "planned",
+      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_platform_external_interop_checkpoint.json",
+      "exit_gate": [
+        "Platform-command-list external passes participate in the same dependency, barrier, lifetime, and RHIExecutor completion model as RHI passes.",
+        "Raw RHI work before and after RenderGraph uses explicit import/export receipts without global flushes.",
+        "Multiple RenderGraph instances in one frame share RGFrameContext and the global pool while keeping graph-local CPU and transient allocators isolated.",
+        "External/native interop resources obey allocator eligibility, native capability keys, and completion boundaries."
+      ]
+    },
+    {
+      "id": "debug_validation",
+      "title": "Implement single-step debug and validation dumps",
+      "status": "planned",
+      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_debug_validation_checkpoint.json",
+      "exit_gate": [
+        "Console variables select normal or single-step debug execution before graph scope starts.",
+        "Single-step mode records, submits, and GPU-syncs each declared pass for debugging without allowing mid-graph mode changes.",
+        "Validation dumps graph parameters, RG resources, resolved RHI resources, barriers, fences, and formatted synchronization graphs.",
+        "Debug and validation output is read-only and deterministic."
+      ]
     }
   ],
   "execution_order": [
-    "M1",
-    "M2",
-    "M3",
-    "M4"
+    "contract_replacement",
+    "barrier_queue_sync",
+    "resource_reuse",
+    "async_record_submit",
+    "platform_external_interop",
+    "debug_validation"
   ],
   "non_goals": [
     "Do not preserve the old RenderGraph public API as a compatibility layer.",
     "Do not make raw RHI responsible for subresource or buffer-range scheduling correctness.",
     "Do not support global reuse for sampled-only textures, depth textures, upload buffers, readback buffers, or external imported resources unless a later milestone explicitly changes the pool contract.",
-    "Do not introduce a second submit path beside RHIExecutor."
+    "Do not introduce a second submit path beside RHIExecutor.",
+    "Do not support transparent transient aliasing across independent RenderGraph instances. Compile one graph when cross-workload alias optimization is required.",
+    "Do not support direct GPU runtime external passes with independent submit/sync in the initial external pass milestone."
   ],
   "validation": [
     "Planning-only changes do not run build scripts.",
-    "When M1 implementation starts, run testscripts/windows/test_rhi_translate.ps1 for focused RHI/RenderGraph transition and queue tests.",
+    "When contract replacement implementation starts, run testscripts/windows/test_rhi_translate.ps1 for focused RHI/RenderGraph transition and queue tests.",
     "Run testscripts/windows/test_all.ps1 after each milestone-sized implementation landing.",
     "Do not add an ad-hoc validation script for milestone JSON files."
   ]

@@ -3,11 +3,12 @@
   "planning_only": true,
   "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
   "stage": {
-    "id": "M1",
+    "id": "contract_replacement",
     "title": "Freeze RenderGraph contract and replace the legacy skeleton",
     "status": "planned"
   },
   "goal": "Define the latest-only RenderGraph contract before implementation starts. This stage makes RenderGraph the owner of precise resource declarations and removes the old skeleton from the target architecture instead of adapting it.",
+  "design_artifact": "docs/milestones/rendergraph/rendergraph_architecture_design.md",
   "entry_gate": [
     "The RHI submission chain remains RHIExecutor-owned.",
     "CopyScope is the only structured raw-RHI copy queue source.",
@@ -15,36 +16,52 @@
   ],
   "hard_rules": [
     {
-      "id": "HR-M1-01",
+      "id": "HR-CONTRACT-01",
       "rule": "Do not preserve RHIGraphicsCommandList-based RenderGraph APIs as compatibility wrappers."
     },
     {
-      "id": "HR-M1-02",
+      "id": "HR-CONTRACT-02",
       "rule": "Do not let bindless descriptors imply hidden resource dependencies."
     },
     {
-      "id": "HR-M1-03",
+      "id": "HR-CONTRACT-03",
       "rule": "Do not expose public cross-queue Barrier or QueueTransfer authoring through RenderGraph users."
     },
     {
-      "id": "HR-M1-04",
+      "id": "HR-CONTRACT-04",
       "rule": "Do not allow AddSetupPass lambdas to create RHI resources, update bindless arrays, record commands, or submit work."
     },
     {
-      "id": "HR-M1-05",
+      "id": "HR-CONTRACT-05",
       "rule": "Do not allocate graph-owned pass parameters, RGResource descriptors, or compiled plan data from caller stack lifetime."
     },
     {
-      "id": "HR-M1-06",
+      "id": "HR-CONTRACT-06",
       "rule": "Do not model GPU trace scopes as a raw CommandList-local stack when the logical scope can span multiple compiled CommandLists."
     },
     {
-      "id": "HR-M1-07",
+      "id": "HR-CONTRACT-07",
       "rule": "Do not add a separate setup lambda to AddPass. AddPass has one execution lambda only; setup belongs to AddSetupPass and parameters belong to graph.Alloc<T>()."
     },
     {
-      "id": "HR-M1-08",
+      "id": "HR-CONTRACT-08",
       "rule": "Do not declare GPU scopes inside AddPass execution lambdas when the scope describes graph-level lifetime. Use RG_EVENT_SCOPE(graph, name, ...) outside pass execution."
+    },
+    {
+      "id": "HR-CONTRACT-09",
+      "rule": "Do not hide native custom GPU work inside ordinary AddPass execution lambdas. Initial external native work must use an explicit platform-command-list external pass contract with declared access."
+    },
+    {
+      "id": "HR-CONTRACT-10",
+      "rule": "Do not rely on hidden backend tracker state when sequencing raw RHI, RenderGraph, and later raw RHI work. Boundary state must be carried by import/export receipts."
+    },
+    {
+      "id": "HR-CONTRACT-11",
+      "rule": "Do not expose backend platform command-list handles to ordinary AddPass execution lambdas. AddPass records abstract RHI commands only."
+    },
+    {
+      "id": "HR-CONTRACT-12",
+      "rule": "Do not execute platform-command-list external callbacks during RG record. They are emitted as RHI commands and executed during backend translate/platform record."
     }
   ],
   "checkpoints": [
@@ -96,6 +113,7 @@
       "what_must_be_true_after_this_checkpoint": [
         "Each pass has one declared execution domain: Graphics, Compute, Copy, or Raytracing.",
         "AddPass accepts graph-owned parameters, pass flags, and exactly one execution lambda with the shape [](RHICommandList& cmd_list, RGContext context) { ... }.",
+        "The AddPass lambda records abstract RHI commands only and never receives a platform command-list handle.",
         "Setup work is registered through AddSetupPass and a setup context instead of a second AddPass setup lambda.",
         "Copy passes compile to CopyScope or executor-derived copy submit work; users do not manually author queue transfers.",
         "Queue intent is part of compile input and is frozen before command recording starts.",
@@ -185,12 +203,36 @@
         "source/runtime/render/rhi/GPUEventStream.cpp",
         "source/runtime/render/rhi/vulkan/VulkanTranslateAssembly.cpp"
       ]
+    },
+    {
+      "id": "CP-08",
+      "title": "Freeze external pass and interop boundary contract",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "The renderer may need native custom GPU work outside RHICommandList, raw RHI work before and after a graph, and multiple RenderGraph instances in one frame. Without an explicit contract, those paths would reintroduce hidden resource state and allocator lifetime bugs.",
+      "what_must_be_true_after_this_checkpoint": [
+        "External native work uses a separate AddExternalPass-style contract and does not receive RHICommandList&.",
+        "Initial external pass support is limited to platform-command-list interaction; direct GPU runtime submit/sync is rejected.",
+        "External passes declare resource reads/writes, native platform command-list requirements, native resource handle requirements, and queue type before Compile.",
+        "RG record emits platform-command-list external work as a typed RHI command; backend translate executes the native callback when the platform command list exists.",
+        "Raw RHI -> RenderGraph -> raw RHI sequencing uses explicit import/export receipts with whole-resource state, owner queue, and completion boundary.",
+        "Multiple RenderGraph instances share RGFrameContext for receipts and global pool access, but keep CPU graph allocation and transient alias allocation per graph.",
+        "Cross-graph transient aliasing is not implicit; workloads that require one alias plan must be compiled as one graph."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/runtime/render/rendergraph/RenderGraphResource.h",
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/RHIResource.h"
+      ]
     }
   ],
   "stage_exit_gate": [
     "The new RenderGraph boundary is explicit enough to implement without preserving the old skeleton.",
     "Resource access declarations cover subresource, buffer range, bindless, queue intent, imports, and exports.",
     "The public API shape is graph.Alloc<T>(), RG_EVENT_SCOPE(...), AddSetupPass(...), AddPass(param, flags, execution_lambda), and Dispatch().",
+    "External pass and raw RHI/RenderGraph interop boundaries are explicit before implementation starts.",
     "Raw RHI simplification rules are frozen before backend tracker cleanup starts.",
     "RG allocator lifetime and cross-CommandList GPU trace scope correctness are frozen before async implementation starts."
   ],

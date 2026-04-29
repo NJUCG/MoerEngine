@@ -3,32 +3,36 @@
   "planning_only": true,
   "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
   "stage": {
-    "id": "M2",
+    "id": "barrier_queue_sync",
     "title": "Implement barrier compiler and queue synchronization plan",
     "status": "planned"
   },
   "goal": "Move complex transition planning and cross-queue synchronization out of RHI preprocessing and into a deterministic RenderGraph compiler that emits batched barriers, reordered barriers, and an RHIExecutor submit dependency plan.",
   "entry_gate": [
-    "M1 resource declaration model is frozen.",
+    "The contract replacement checkpoint has frozen the resource declaration model.",
     "Pass queue intent is known before compile.",
     "Imported resources have known initial state and exported resources declare final state."
   ],
   "hard_rules": [
     {
-      "id": "HR-M2-01",
+      "id": "HR-BARRIER-01",
       "rule": "Do not infer RenderGraph dependencies by scanning recorded RHICommandList contents. Compile from pass declarations."
     },
     {
-      "id": "HR-M2-02",
+      "id": "HR-BARRIER-02",
       "rule": "Do not emit per-resource barriers immediately when they can be batched at pass or queue boundaries."
     },
     {
-      "id": "HR-M2-03",
+      "id": "HR-BARRIER-03",
       "rule": "Do not let one compiled queue segment import from multiple source queues. Split the segment instead."
     },
     {
-      "id": "HR-M2-04",
+      "id": "HR-BARRIER-04",
       "rule": "Do not keep a parallel RenderGraph submit path beside RHIExecutor."
+    },
+    {
+      "id": "HR-BARRIER-05",
+      "rule": "Do not expose backend transition helpers through AddSetupPass or AddPass. API differences are handled by the RenderGraph barrier compiler and backend barrier policy."
     }
   ],
   "checkpoints": [
@@ -76,7 +80,8 @@
       "problem": "Naive per-edge barriers recreate backend tracker noise and increase command stream cost. The compiler must batch and reorder barriers without crossing semantic boundaries.",
       "what_must_be_true_after_this_checkpoint": [
         "Barriers are grouped by queue, pass boundary, resource type, and compatible source/destination states.",
-        "Redundant read-read and same-state transitions are removed.",
+        "Redundant read-read and same-state transitions are removed only when backend read compatibility and layout classes allow removal.",
+        "Write-write transitions keep ordering only when previous contents are observable, writes are partial or overlapping, ordering class requires it, or cross-queue final value must be deterministic.",
         "Barrier reorder is deterministic and never moves a barrier across a conflicting resource access or queue handoff.",
         "Compiled barriers are emitted as queue-local RHI Barriers or CopyScope boundary work, not as user-authored QueueTransfer commands."
       ],
@@ -109,6 +114,27 @@
     },
     {
       "id": "CP-05",
+      "title": "Implement backend barrier policy layer",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Vulkan, D3D12, and future APIs differ in read/read layout compatibility, write/write ordering requirements, queue ownership transfer, and alias barrier semantics. A single generic transition helper would either over-synchronize or leak backend rules into RenderGraph passes.",
+      "what_must_be_true_after_this_checkpoint": [
+        "RenderGraph compiles API-neutral barrier intents before backend lowering.",
+        "Backend policy classifies read compatibility, write ordering, layout transition, queue ownership, and alias requirements.",
+        "Read/read merges only when backend compatibility class matches; otherwise compile emits layout-only transition when required.",
+        "Write/write ordering is kept only when previous contents are observable, writes are partial or overlapping, ordering class requires it, or cross-queue final value must be deterministic.",
+        "Backend-specific lowering is isolated behind policy methods and is not exposed to AddSetupPass or AddPass users."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/runtime/render/rhi/RHICommand.h",
+        "source/runtime/render/rhi/vulkan/VulkanResourceTracker.cpp",
+        "source/runtime/render/rhi/d3d12/D3D12Device.cpp"
+      ]
+    },
+    {
+      "id": "CP-06",
       "title": "Add focused barrier and queue validation cases",
       "status": "todo",
       "priority": "high",

@@ -1,0 +1,148 @@
+{
+  "project": "RenderGraph Roadmap",
+  "planning_only": true,
+  "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
+  "stage": {
+    "id": "debug_validation",
+    "title": "Implement single-step debug and validation dumps",
+    "status": "planned"
+  },
+  "goal": "Add a debug-only single-step RenderGraph execution mode and a validation dump layer that prints graph parameters, RG resources, resolved RHI resources, barriers, fences, and formatted synchronization graphs without changing scheduling decisions.",
+  "entry_gate": [
+    "The contract replacement checkpoint has frozen the public RenderGraph construction and execution contract.",
+    "The barrier and queue synchronization checkpoint produces explicit barrier/fence plans.",
+    "The async record and submit checkpoint submits through RHIExecutor and can run normal asynchronous execution.",
+    "The platform external interop checkpoint represents platform-command-list external passes as explicit graph nodes."
+  ],
+  "hard_rules": [
+    {
+      "id": "HR-DEBUG-01",
+      "rule": "Single-step mode is selected only by console variables sampled before graph construction or graph scope entry. Do not switch execution mode inside an active RenderGraph."
+    },
+    {
+      "id": "HR-DEBUG-02",
+      "rule": "Single-step mode is debug-only. It must not become the normal scheduling path and must not preserve async batching behavior."
+    },
+    {
+      "id": "HR-DEBUG-03",
+      "rule": "In single-step mode, AddPass records, submits through RHIExecutor, waits for GPU completion, and publishes a boundary receipt before returning."
+    },
+    {
+      "id": "HR-DEBUG-04",
+      "rule": "Validation dumps are read-only. They must never feed data back into scheduling, allocation, barrier, fence, or queue decisions."
+    },
+    {
+      "id": "HR-DEBUG-05",
+      "rule": "Validation output must include graph parameters, RG resources, resolved RHI resources, barriers, fences, queue handoffs, external platform-command-list nodes, and boundary receipts when enabled."
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Implement debug cvar snapshot and scope guard",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Changing debug mode while a graph is being declared or dispatched would make half the graph use one execution model and half the graph use another.",
+      "what_must_be_true_after_this_checkpoint": [
+        "RenderGraph snapshots RenderGraph.Debug.SingleStep, RenderGraph.Validation.DumpParameters, RenderGraph.Validation.DumpResources, RenderGraph.Validation.DumpSyncGraph, and RenderGraph.Validation.DumpDirectory before graph construction or graph scope entry.",
+        "The snapshot is stored in RGDebugController and is immutable for the lifetime of the graph.",
+        "Cvar changes while a graph is active are rejected or deferred to the next graph with a clear diagnostic.",
+        "Normal mode and single-step mode are selected from the snapshot only."
+      ],
+      "files_likely_affected": [
+        "ConsoleVariable.toml",
+        "template.ConsoleVariable.toml",
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphPass.h"
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Implement single-step record-submit-sync execution",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Synchronization and resource-state bugs are hard to isolate when the graph batches barriers and records passes in parallel. A debug path should expose one pass boundary at a time.",
+      "what_must_be_true_after_this_checkpoint": [
+        "In single-step mode, AddSetupPass executes declaration work immediately.",
+        "In single-step mode, AddPass validates that required setup declarations exist, compiles a one-pass plan from the current boundary state, records one RHICommandList, submits through RHIExecutor, waits for GPU completion, and publishes a boundary receipt before returning.",
+        "Platform-command-list external passes emit an immediate RHI platform callback command; backend translate executes the callback and the same per-pass GPU wait synchronizes it.",
+        "Single-step mode disables async setup, async compile, parallel record, cross-pass barrier batching, and transient aliasing across future passes.",
+        "Normal mode output is unchanged when the cvar is disabled."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/RHICommandList.cpp"
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Dump graph parameters and resources",
+      "status": "todo",
+      "priority": "high",
+      "problem": "Debugging missing declarations and wrong resource bindings requires seeing both graph-level objects and resolved RHI objects in one deterministic dump.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Validation can print graph.Alloc<T>() parameter metadata: type id, byte size, owning pass, and referenced RG resources.",
+        "Validation can print RG resource descriptors, import/export state, declared accesses, lifetime interval, alias slot, pool eligibility, and resolved view data.",
+        "Validation can print resolved RHI resource identity, debug name, backend handle class, usage flags, last known whole-resource state, owner queue, and pool entry id when available.",
+        "Dump order is deterministic by graph id, pass id, resource id, and declaration order."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphResource.h",
+        "source/runtime/render/rhi/RHIResource.h"
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Dump barrier and fence synchronization graphs",
+      "status": "todo",
+      "priority": "high",
+      "problem": "Barrier and fence errors need a readable graph that shows pass/resource edges, queue handoffs, waits, signals, and insertion points instead of only raw backend barriers.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Validation can print barrier batches as text tables with pass id, resource id, range, source state, destination state, access, stage, queue, and insertion point.",
+        "Validation can print fence and queue handoff tables with producer segment, consumer segment, wait token, signal token, queue ids, and resource ranges.",
+        "Validation emits DOT files for pass/resource dependency graph and barrier/fence synchronization graph.",
+        "External platform-command-list nodes, raw RHI receipts, multi-graph import/export edges, and present/export tails appear in the graph output.",
+        "Dumping is side-effect free and can run after compile or after single-step pass execution."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/runtime/render/rhi/RHICommand.h",
+        "source/runtime/render/rhi/RHIExecutor.cpp"
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Add focused debug and validation tests",
+      "status": "todo",
+      "priority": "high",
+      "problem": "Debug paths often drift from normal execution unless tests prove mode snapshotting, per-pass sync, and dump determinism.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Tests prove cvar changes do not switch mode inside an active graph.",
+        "Tests prove single-step mode submits and waits once per declared pass.",
+        "Tests prove normal mode keeps async compile/record behavior when single-step is disabled.",
+        "Tests prove validation dumps contain graph parameters, RG resources, RHI resources, barriers, fences, and formatted graph output.",
+        "Tests run through existing repository scripts."
+      ],
+      "files_likely_affected": [
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1"
+      ]
+    }
+  ],
+  "stage_exit_gate": [
+    "Single-step debug mode is selected before graph scope and cannot switch mid-graph.",
+    "Each AddPass in single-step mode records, submits, GPU-syncs, and publishes a boundary receipt before returning.",
+    "Validation dumps include graph parameters, RG resources, resolved RHI resources, barriers, fences, queue handoffs, external nodes, and boundary receipts.",
+    "Validation graph output is deterministic and side-effect free."
+  ],
+  "validation": [
+    "Run testscripts/windows/test_rhi_translate.ps1 after focused debug and validation tests land.",
+    "Run testscripts/windows/test_all.ps1 after the stage-sized landing."
+  ]
+}

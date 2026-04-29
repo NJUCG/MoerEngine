@@ -3,48 +3,52 @@
   "planning_only": true,
   "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
   "stage": {
-    "id": "M4",
+    "id": "async_record_submit",
     "title": "Implement async setup, compile, record, and submit orchestration",
     "status": "planned"
   },
   "goal": "Enable asynchronous RenderGraph setup and compile, parallel AddPass execution-lambda command recording, and RHIExecutor-backed translate graph submission so frame work can use multi-threaded record plus multi-threaded translate without a second submission model.",
   "entry_gate": [
-    "M2 barrier and queue synchronization compiler is implemented.",
-    "M3 resource lifetime and reuse are compiled before record.",
+    "The barrier and queue synchronization checkpoint is implemented.",
+    "The resource reuse checkpoint compiles lifetimes before record.",
     "RHIExecutor remains the only submit and translate pipeline entrypoint."
   ],
   "hard_rules": [
     {
-      "id": "HR-M4-01",
+      "id": "HR-ASYNC-01",
       "rule": "AddSetupPass may declare graph data only. It must not create RHI resources, update bindless arrays, record commands, or call RHIExecutor."
     },
     {
-      "id": "HR-M4-02",
+      "id": "HR-ASYNC-02",
       "rule": "Worker-thread AddPass execution lambdas record into assigned RHICommandList instances only. They must not submit, present, sync, or mutate global RHI state."
     },
     {
-      "id": "HR-M4-03",
+      "id": "HR-ASYNC-03",
       "rule": "Compiled submit ordering must be explicit before command recording starts. Do not infer submit dependencies after worker lambdas finish."
     },
     {
-      "id": "HR-M4-04",
+      "id": "HR-ASYNC-04",
       "rule": "Do not introduce a RenderGraph-owned GPU submission backend. Submit through RHIExecutor."
     },
     {
-      "id": "HR-M4-05",
+      "id": "HR-ASYNC-05",
       "rule": "Do not let record workers allocate pass parameters or compiled resource tables from transient thread-local storage unless ownership is transferred into the RG allocator before Compile freezes."
     },
     {
-      "id": "HR-M4-06",
+      "id": "HR-ASYNC-06",
       "rule": "Do not emit unmatched GPU scope begin/end events into separate CommandLists without a compiled scope id and explicit ordering relation."
     },
     {
-      "id": "HR-M4-07",
+      "id": "HR-ASYNC-07",
       "rule": "Do not add a second AddPass setup callback during async record implementation. Setup work stays in AddSetupPass."
     },
     {
-      "id": "HR-M4-08",
+      "id": "HR-ASYNC-08",
       "rule": "Do not let execution lambdas declare graph-level GPU scopes. RG_EVENT_SCOPE declarations are compiled before record starts."
+    },
+    {
+      "id": "HR-ASYNC-09",
+      "rule": "Do not let RenderGraph record workers access backend platform command-list handles. Worker threads record abstract RHICommandList commands only."
     }
   ],
   "checkpoints": [
@@ -95,6 +99,7 @@
         "Each record task receives one RHICommandList, graph-owned parameters, and a read-only resolved resource table.",
         "Record tasks may run in parallel when compiled hazards and queue order allow it.",
         "RHICommandList ownership is single-writer and returned to the graph only after the task completes.",
+        "Record tasks never receive backend platform command-list handles; platform external work is represented as typed RHI commands for backend translate.",
         "AddPass still has exactly one execution lambda; setup data comes from AddSetupPass and graph.Alloc<T>() parameters."
       ],
       "files_likely_affected": [
