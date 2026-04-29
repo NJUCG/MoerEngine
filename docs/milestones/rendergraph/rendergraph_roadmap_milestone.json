@@ -19,6 +19,9 @@
     "source/runtime/render/rendergraph/DepdencyGraph.h",
     "source/runtime/render/rhi/RHICommand.h",
     "source/runtime/render/rhi/RHICommandList.cpp",
+    "source/runtime/render/rhi/RHIImpl.h",
+    "source/test/RHITest/rhi_commandlist_rg_baseline_test.cpp",
+    "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
     "source/runtime/render/rhi/RHIExecutor.cpp",
     "source/runtime/render/rhi/vulkan/VulkanSubmissionPreprocess.cpp",
     "source/runtime/render/rhi/vulkan/VulkanTranslateAssembly.cpp",
@@ -35,7 +38,8 @@
     "notes": [
       "RenderGraph.cpp and RenderGraphResource.cpp currently contain commented legacy code and must not be treated as a compatibility surface.",
       "The existing RenderGraph headers expose old RHIGraphicsCommandList-oriented concepts that must be replaced by the new RHICommandList/RHIExecutor model.",
-      "VulkanSubmissionPreprocess currently owns complex resource tracking that should move upward into RenderGraph once pass declarations are precise."
+      "VulkanSubmissionPreprocess currently owns complex resource tracking that should move upward into RenderGraph once pass declarations are precise.",
+      "TestRHITranslate now contains RHICommandListRGBaseline as the non-RenderGraph parity baseline for copy, clear, compute, graphics, raytracing AS/TLAS/ray-query, GPU scope, timestamp query, and readback validation."
     ],
     "selected_design": "docs/milestones/rendergraph/rendergraph_architecture_design.md"
   },

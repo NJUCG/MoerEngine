@@ -58,11 +58,19 @@ do {
     }
 
     $structuredCases = Get-StructuredTestCaseResults -LogFile $Log
+    $requiredCases = @("RHICommandListRGBaseline")
+    $missingRequiredCases = @()
     if (@($structuredCases).Count -eq 0) {
         Register-Subtest -Group $Label -Name "StructuredTestcaseMarkers" -Status "FAILED" -Reason "no structured testcase markers found"
     } else {
         foreach ($case in $structuredCases) {
             Register-Subtest -Group $Label -Name $case.Name -Status $case.Status -Reason $case.Reason
+        }
+        foreach ($requiredCase in $requiredCases) {
+            if (-not ($structuredCases | Where-Object { $_.Name -eq $requiredCase })) {
+                $missingRequiredCases += $requiredCase
+                Register-Subtest -Group $Label -Name $requiredCase -Status "FAILED" -Reason "required testcase marker missing"
+            }
         }
     }
 
@@ -75,7 +83,8 @@ do {
         @($errorLines).Count -eq 0 -and
         $capability.State -ne "Unknown" -and
         @($structuredCases).Count -gt 0 -and
-        @($structuredFailures).Count -eq 0) {
+        @($structuredFailures).Count -eq 0 -and
+        @($missingRequiredCases).Count -eq 0) {
         Register-Pass $Label
     } else {
         $fails = Select-String -Path $Log -Pattern "mismatch|failed|\[error\]" -CaseSensitive:$false
@@ -91,6 +100,8 @@ do {
             "structured testcase markers missing"
         } elseif (@($structuredFailures).Count -gt 0) {
             "$(@($structuredFailures).Count) structured testcase failures"
+        } elseif (@($missingRequiredCases).Count -gt 0) {
+            "missing required testcase: $($missingRequiredCases -join ', ')"
         } else {
             "validation blockers detected"
         }

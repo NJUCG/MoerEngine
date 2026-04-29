@@ -8,7 +8,7 @@
 
 namespace Moer::Render {
 
-VkExternalMemoryImageCreateInfo* GetExternalMemoryImageCreateInfoPtr(const void* pNext) {
+VkExternalMemoryImageCreateInfo* GetExternalMemoryImageCreateInfoPtr(const void* p_next) {
     static VkExternalMemoryImageCreateInfo vkExternalMemImageCreateInfo = {};
     static bool                            firstLoad                    = true;
     if (firstLoad) {
@@ -17,11 +17,11 @@ VkExternalMemoryImageCreateInfo* GetExternalMemoryImageCreateInfoPtr(const void*
         vkExternalMemImageCreateInfo.sType       = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
         vkExternalMemImageCreateInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
     }
-    vkExternalMemImageCreateInfo.pNext = pNext;
+    vkExternalMemImageCreateInfo.pNext = p_next;
     return &vkExternalMemImageCreateInfo;
 }
 
-VkExternalMemoryBufferCreateInfo* GetExternalMemoryBufferCreateInfoPtr(const void* pNext) {
+VkExternalMemoryBufferCreateInfo* GetExternalMemoryBufferCreateInfoPtr(const void* p_next) {
     static VkExternalMemoryBufferCreateInfo vkExternalBufImageCreateInfo = {};
     static bool                             firstLoad                    = true;
     if (firstLoad) {
@@ -30,7 +30,7 @@ VkExternalMemoryBufferCreateInfo* GetExternalMemoryBufferCreateInfoPtr(const voi
         vkExternalBufImageCreateInfo.sType       = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
         vkExternalBufImageCreateInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
     }
-    vkExternalBufImageCreateInfo.pNext = pNext;
+    vkExternalBufImageCreateInfo.pNext = p_next;
     return &vkExternalBufImageCreateInfo;
 }
 

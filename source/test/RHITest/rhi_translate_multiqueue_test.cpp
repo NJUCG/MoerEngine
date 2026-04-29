@@ -48,10 +48,16 @@
 #include "profile.h"
 #endif
 
+namespace Moer::Render::Tests {
+int RunRHICommandListRGBaselineTest();
+}
+
 namespace {
 
 using namespace Moer;
 using namespace Moer::Render;
+
+namespace TestCases = Moer::Render::Tests;
 
 class TestFunctionRunnable : public Runnable {
 public:
@@ -2619,6 +2625,14 @@ int main(int argc, char** argv) {
         RunNamedTestCase("MultiQueueReadback", RunRHITranslateMultiQueueReadbackTest);
     if (translate_readback_ret != 0) {
         return shutdown_and_return(translate_readback_ret);
+    }
+
+    const int rg_baseline_ret = RunNamedTestCase(
+        "RHICommandListRGBaseline",
+        TestCases::RunRHICommandListRGBaselineTest
+    );
+    if (rg_baseline_ret != 0) {
+        return shutdown_and_return(rg_baseline_ret);
     }
 
     const int multi_cmd_order_ret =
