@@ -70,7 +70,7 @@ void RasterTestCase::ProcessDebugSceneUpdateRequest(RasterConfig& raster_config,
     PointLightCreateInfo create_info{};
     create_info.position  = raster_config.debug_test_case_add_light_position;
     create_info.color     = raster_config.debug_test_case_add_light_color;
-    create_info.intensity = 1000.f;
+    create_info.intensity = 10000.f;
     create_info.name      = "TestCase Point Light";
 
     const entt::entity light_entity = scene.CreatePointLight(create_info);
