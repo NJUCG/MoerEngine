@@ -323,21 +323,30 @@ RenderGraphHandle RenderGraph::AddResource(RGResource&& resource) {
 }
 
 void RenderGraph::ValidateSetup() const {
+    Moer::Array<bool> texture_written(m_resources.size(), false);
+    Moer::Array<bool> buffer_written(m_resources.size(), false);
+
     for (const auto& pass : m_passes) {
         assert(pass.execute && "Every setup pass must have one AddPass execution lambda");
         assert(RGPassHasSingleExecutionDomain(pass.flags));
         for (const auto& access : pass.texture_accesses) {
             const auto& resource = CheckedResource(access.handle);
             assert(resource.kind == ERGResourceKind::Texture);
-            if (!RGAccessWrites(access.mode)) {
-                assert((resource.imported || resource.initial_texture_state != Render::ETextureState::UNDEFINED || !resource.imported) && "First read of an unknown external texture is invalid");
+            if (!RGAccessWrites(access.mode) && !resource.imported && !texture_written[access.handle.index]) {
+                assert(false && "First read of a graph-created texture before any graph write is invalid");
+            }
+            if (RGAccessWrites(access.mode)) {
+                texture_written[access.handle.index] = true;
             }
         }
         for (const auto& access : pass.buffer_accesses) {
             const auto& resource = CheckedResource(access.handle);
             assert(resource.kind == ERGResourceKind::Buffer);
-            if (!RGAccessWrites(access.mode)) {
-                assert((resource.imported || resource.initial_buffer_state != Render::EBufferState::UNDEFINED || !resource.imported) && "First read of an unknown external buffer is invalid");
+            if (!RGAccessWrites(access.mode) && !resource.imported && !buffer_written[access.handle.index]) {
+                assert(false && "First read of a graph-created buffer before any graph write is invalid");
+            }
+            if (RGAccessWrites(access.mode)) {
+                buffer_written[access.handle.index] = true;
             }
         }
     }
