@@ -1,8 +1,10 @@
 #include "rendergraph/RenderGraph.h"
 
 #include "misc/Assert.h"
+#include "misc/Hash.h"
 
 #include <algorithm>
+#include <unordered_set>
 #include <utility>
 
 namespace Moer {
@@ -326,8 +328,8 @@ RenderGraphHandle RenderGraph::AddResource(RGResource&& resource) {
 }
 
 void RenderGraph::ValidateSetup() const {
-    Moer::Array<bool> texture_written(m_resources.size(), false);
-    Moer::Array<bool> buffer_written(m_resources.size(), false);
+    Moer::Array<bool> has_texture_write_before_pass(m_resources.size(), false);
+    Moer::Array<bool> has_buffer_write_before_pass(m_resources.size(), false);
 
     for (const auto& pass : m_passes) {
         assert(pass.execute && "Every RGPass must have one AddPass execution lambda");
@@ -335,7 +337,7 @@ void RenderGraph::ValidateSetup() const {
         for (const auto& access : pass.texture_accesses) {
             const auto& resource = CheckedResource(access.handle);
             assert(resource.kind == ERGResourceKind::Texture);
-            if (!RGAccessWrites(access.mode) && !resource.imported && !texture_written[access.handle.index]) {
+            if (!RGAccessWrites(access.mode) && !resource.imported && !has_texture_write_before_pass[access.handle.index]) {
                 MOER_ASSERT(
                     false,
                     "Graph-created texture `{}` (handle {}) read before any pass writes to it",
@@ -344,13 +346,13 @@ void RenderGraph::ValidateSetup() const {
                 );
             }
             if (RGAccessWrites(access.mode)) {
-                texture_written[access.handle.index] = true;
+                has_texture_write_before_pass[access.handle.index] = true;
             }
         }
         for (const auto& access : pass.buffer_accesses) {
             const auto& resource = CheckedResource(access.handle);
             assert(resource.kind == ERGResourceKind::Buffer);
-            if (!RGAccessWrites(access.mode) && !resource.imported && !buffer_written[access.handle.index]) {
+            if (!RGAccessWrites(access.mode) && !resource.imported && !has_buffer_write_before_pass[access.handle.index]) {
                 MOER_ASSERT(
                     false,
                     "Graph-created buffer `{}` (handle {}) read before any pass writes to it",
@@ -359,7 +361,7 @@ void RenderGraph::ValidateSetup() const {
                 );
             }
             if (RGAccessWrites(access.mode)) {
-                buffer_written[access.handle.index] = true;
+                has_buffer_write_before_pass[access.handle.index] = true;
             }
         }
     }
@@ -367,21 +369,35 @@ void RenderGraph::ValidateSetup() const {
 
 void RenderGraph::BuildHazards() {
     m_compiled_plan.hazard_edges.clear();
-    const auto add_hazard = [this](
+    struct HazardKey {
+        uint32_t src{0};
+        uint32_t dst{0};
+        uint32_t resource{0};
+        ERGResourceKind resource_kind{ERGResourceKind::Texture};
+
+        bool operator==(const HazardKey& other) const {
+            return src == other.src && dst == other.dst && resource == other.resource &&
+                   resource_kind == other.resource_kind;
+        }
+    };
+    struct HazardKeyHash {
+        size_t operator()(const HazardKey& key) const {
+            uint64_t hash = key.src;
+            HashCombine(hash, key.dst);
+            HashCombine(hash, key.resource);
+            HashCombine(hash, static_cast<uint8_t>(key.resource_kind));
+            return hash;
+        }
+    };
+
+    std::unordered_set<HazardKey, HazardKeyHash> hazard_keys;
+    const auto add_hazard = [this, &hazard_keys](
                                 uint32_t src,
                                 uint32_t dst,
                                 RenderGraphHandle resource,
                                 ERGResourceKind resource_kind
                             ) {
-        const auto exists = std::any_of(
-            m_compiled_plan.hazard_edges.begin(),
-            m_compiled_plan.hazard_edges.end(),
-            [src, dst, resource, resource_kind](const RGCompiledHazardEdge& edge) {
-                return edge.src_pass == src && edge.dst_pass == dst && edge.resource == resource &&
-                       edge.resource_kind == resource_kind;
-            }
-        );
-        if (!exists) {
+        if (hazard_keys.insert(HazardKey{src, dst, resource.index, resource_kind}).second) {
             m_compiled_plan.hazard_edges.push_back(RGCompiledHazardEdge{src, dst, resource, resource_kind});
         }
     };

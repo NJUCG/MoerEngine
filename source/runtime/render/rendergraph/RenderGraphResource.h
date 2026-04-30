@@ -33,6 +33,7 @@ struct RGTextureRange {
     uint32_t            array_min{0};
     uint32_t            array_count{1};
 
+    // Overlaps when aspect flags intersect and mip/array intervals both intersect.
     bool Overlaps(const RGTextureRange& other) const;
 };
 
@@ -40,7 +41,9 @@ struct RGBufferRange {
     uint64_t offset{0};
     uint64_t size{0};
 
+    // {0, 0} represents the whole buffer.
     bool IsWholeResource() const;
+    // Whole-buffer ranges overlap every valid range; partial ranges overlap when byte intervals intersect.
     bool Overlaps(const RGBufferRange& other) const;
 };
 
