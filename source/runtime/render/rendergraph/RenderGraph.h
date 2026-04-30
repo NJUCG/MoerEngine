@@ -3,13 +3,14 @@
 
 #include "RenderGraphPass.h"
 #include "misc/STL.h"
-#include "render/RenderAPI.h"
+#include "RenderAPI.h"
 
 #include <cassert>
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <typeindex>
+#include <utility>
 
 namespace Moer {
 
@@ -73,13 +74,13 @@ public:
     RenderGraphHandle CreateBuffer(std::string_view name, const RGBufferDesc& desc);
     RenderGraphHandle ImportTexture(
         std::string_view       name,
-        RHITextureRef          texture,
+        Render::TextureRef     texture,
         Render::ETextureState  initial_state,
         Render::EQueueType     owner_queue = Render::EQueueType::Graphics
     );
     RenderGraphHandle ImportBuffer(
         std::string_view      name,
-        RHIBufferRef          buffer,
+        Render::BufferRef     buffer,
         Render::EBufferState  initial_state,
         Render::EQueueType    owner_queue = Render::EQueueType::Graphics
     );

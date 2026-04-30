@@ -1,6 +1,7 @@
 #include "rendergraph/RenderGraph.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Moer {
 
@@ -155,7 +156,7 @@ RenderGraphHandle RenderGraph::CreateBuffer(std::string_view name, const RGBuffe
 
 RenderGraphHandle RenderGraph::ImportTexture(
     std::string_view name,
-    RHITextureRef texture,
+    Render::TextureRef texture,
     Render::ETextureState initial_state,
     Render::EQueueType owner_queue
 ) {
@@ -173,7 +174,7 @@ RenderGraphHandle RenderGraph::ImportTexture(
 
 RenderGraphHandle RenderGraph::ImportBuffer(
     std::string_view name,
-    RHIBufferRef buffer,
+    Render::BufferRef buffer,
     Render::EBufferState initial_state,
     Render::EQueueType owner_queue
 ) {

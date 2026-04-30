@@ -11,7 +11,7 @@
 
 namespace Moer {
 
-using RHICommandList = CommandList;
+using RHICommandList = Render::CommandList;
 
 struct RGTextureDesc {
     Extent3D           extent{};
@@ -80,8 +80,8 @@ struct RGResource {
     bool              exported{false};
     RGTextureDesc     texture_desc{};
     RGBufferDesc      buffer_desc{};
-    RHITextureRef     imported_texture{};
-    RHIBufferRef      imported_buffer{};
+    Render::TextureRef imported_texture{};
+    Render::BufferRef  imported_buffer{};
     Render::EQueueType owner_queue{Render::EQueueType::Graphics};
     Render::ETextureState initial_texture_state{Render::ETextureState::UNDEFINED};
     Render::EBufferState  initial_buffer_state{Render::EBufferState::UNDEFINED};
