@@ -333,7 +333,7 @@ void RenderGraph::ValidateSetup() const {
             const auto& resource = CheckedResource(access.handle);
             assert(resource.kind == ERGResourceKind::Texture);
             if (!RGAccessWrites(access.mode) && !resource.imported && !texture_written[access.handle.index]) {
-                assert(false && "First read of a graph-created texture before any graph write is invalid");
+                assert(false && "Graph-created texture read before any pass writes to it");
             }
             if (RGAccessWrites(access.mode)) {
                 texture_written[access.handle.index] = true;
@@ -343,7 +343,7 @@ void RenderGraph::ValidateSetup() const {
             const auto& resource = CheckedResource(access.handle);
             assert(resource.kind == ERGResourceKind::Buffer);
             if (!RGAccessWrites(access.mode) && !resource.imported && !buffer_written[access.handle.index]) {
-                assert(false && "First read of a graph-created buffer before any graph write is invalid");
+                assert(false && "Graph-created buffer read before any pass writes to it");
             }
             if (RGAccessWrites(access.mode)) {
                 buffer_written[access.handle.index] = true;
