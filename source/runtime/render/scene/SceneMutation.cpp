@@ -1,6 +1,13 @@
 #include "Scene.h"
 
+#include "math/Function.h"
+#include "log/LogSystem.h"
+
+#include <cmath>
+
 namespace Moer {
+
+// 如果你对SceneMutation.cpp有疑问，请参考Scene的类注释
 
 ///////////////
 // Scene Mutation
@@ -24,6 +31,138 @@ static void MarkSceneMeshRebuild(Scene& scene) {
     }
 
     registry.emplace_or_replace<ecs::CTagNeedRebuildMesh>(*it);
+}
+
+static PrimitiveCreateInfo BuildCubePrimitiveData(entt::entity material_entt) {
+    constexpr float h = 0.5f;
+
+    PrimitiveCreateInfo info{};
+    info.name          = "Runtime Cube Primitive";
+    info.material_entt = material_entt;
+
+    info.positions = {
+        float3(-h, -h, h), float3(h, -h, h),  float3(h, h, h),   float3(-h, h, h),
+        float3(h, -h, -h), float3(-h, -h, -h), float3(-h, h, -h), float3(h, h, -h),
+        float3(h, -h, h),  float3(h, -h, -h), float3(h, h, -h),  float3(h, h, h),
+        float3(-h, -h, -h), float3(-h, -h, h), float3(-h, h, h),  float3(-h, h, -h),
+        float3(-h, h, h),  float3(h, h, h),   float3(h, h, -h),  float3(-h, h, -h),
+        float3(-h, -h, -h), float3(h, -h, -h), float3(h, -h, h),  float3(-h, -h, h),
+    };
+
+    info.normals = {
+        float3(0.f, 0.f, 1.f),  float3(0.f, 0.f, 1.f),  float3(0.f, 0.f, 1.f),  float3(0.f, 0.f, 1.f),
+        float3(0.f, 0.f, -1.f), float3(0.f, 0.f, -1.f), float3(0.f, 0.f, -1.f), float3(0.f, 0.f, -1.f),
+        float3(1.f, 0.f, 0.f),  float3(1.f, 0.f, 0.f),  float3(1.f, 0.f, 0.f),  float3(1.f, 0.f, 0.f),
+        float3(-1.f, 0.f, 0.f), float3(-1.f, 0.f, 0.f), float3(-1.f, 0.f, 0.f), float3(-1.f, 0.f, 0.f),
+        float3(0.f, 1.f, 0.f),  float3(0.f, 1.f, 0.f),  float3(0.f, 1.f, 0.f),  float3(0.f, 1.f, 0.f),
+        float3(0.f, -1.f, 0.f), float3(0.f, -1.f, 0.f), float3(0.f, -1.f, 0.f), float3(0.f, -1.f, 0.f),
+    };
+
+    info.texcoord0 = {
+        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
+        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
+        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
+        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
+        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
+        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
+    };
+
+    for (uint32 face = 0; face < 6; ++face) {
+        const uint32 base = face * 4;
+        info.indices.push_back(base + 0);
+        info.indices.push_back(base + 1);
+        info.indices.push_back(base + 2);
+        info.indices.push_back(base + 0);
+        info.indices.push_back(base + 2);
+        info.indices.push_back(base + 3);
+    }
+
+    info.aabb     = Box3D(float3(-h, -h, -h), float3(h, h, h));
+    info.has_aabb = true;
+    return info;
+}
+
+static PrimitiveCreateInfo BuildFacetedSpherePrimitiveData(entt::entity material_entt) {
+    constexpr float  radius             = 0.5f;
+    constexpr float  pi                 = 3.14159265358979323846f;
+    constexpr uint32 longitude_segments = 16;
+    constexpr uint32 latitude_segments  = 8;
+
+    PrimitiveCreateInfo info{};
+    info.name          = "Runtime FacetedSphere Primitive";
+    info.material_entt = material_entt;
+
+    auto sphere_point = [](uint32 latitude, uint32 longitude) {
+        const float theta     = pi * static_cast<float>(latitude) / static_cast<float>(latitude_segments);
+        const float phi       = 2.f * pi * static_cast<float>(longitude) / static_cast<float>(longitude_segments);
+        const float sin_theta = std::sin(theta);
+
+        return float3(
+            radius * sin_theta * std::cos(phi),
+            radius * std::cos(theta),
+            radius * sin_theta * std::sin(phi)
+        );
+    };
+
+    auto add_flat_triangle = [&](const float3& a, const float3& b, const float3& c) {
+        const float3 normal = Normalizef(Cross(b - a, c - a));
+        const uint32 base   = static_cast<uint32>(info.positions.size());
+
+        info.positions.push_back(a);
+        info.positions.push_back(b);
+        info.positions.push_back(c);
+
+        info.normals.push_back(normal);
+        info.normals.push_back(normal);
+        info.normals.push_back(normal);
+
+        info.indices.push_back(base + 0);
+        info.indices.push_back(base + 1);
+        info.indices.push_back(base + 2);
+    };
+
+    for (uint32 lon = 0; lon < longitude_segments; ++lon) {
+        const float3 top  = sphere_point(0, 0);
+        const float3 next = sphere_point(1, lon + 1);
+        const float3 curr = sphere_point(1, lon);
+        add_flat_triangle(top, next, curr);
+    }
+
+    for (uint32 lat = 1; lat + 1 < latitude_segments; ++lat) {
+        for (uint32 lon = 0; lon < longitude_segments; ++lon) {
+            const float3 north_curr = sphere_point(lat, lon);
+            const float3 north_next = sphere_point(lat, lon + 1);
+            const float3 south_curr = sphere_point(lat + 1, lon);
+            const float3 south_next = sphere_point(lat + 1, lon + 1);
+
+            add_flat_triangle(north_curr, north_next, south_curr);
+            add_flat_triangle(south_curr, north_next, south_next);
+        }
+    }
+
+    for (uint32 lon = 0; lon < longitude_segments; ++lon) {
+        const float3 curr   = sphere_point(latitude_segments - 1, lon);
+        const float3 next   = sphere_point(latitude_segments - 1, lon + 1);
+        const float3 bottom = sphere_point(latitude_segments, 0);
+        add_flat_triangle(curr, next, bottom);
+    }
+
+    info.aabb     = Box3D(float3(-radius, -radius, -radius), float3(radius, radius, radius));
+    info.has_aabb = true;
+    return info;
+}
+
+static PrimitiveCreateInfo BuildProceduralPrimitiveData(
+    EProceduralPrimitiveShape shape,
+    entt::entity              material_entt
+) {
+    switch (shape) {
+        case EProceduralPrimitiveShape::Cube:
+            return BuildCubePrimitiveData(material_entt);
+        case EProceduralPrimitiveShape::FacetedSphere:
+            return BuildFacetedSpherePrimitiveData(material_entt);
+    }
+    return BuildCubePrimitiveData(material_entt);
 }
 
 // 创建普通 entity，不接入 scene node 树，也不触发 scene sync
@@ -51,6 +190,83 @@ entt::entity Scene::CreateRenderableWithNode(const RenderableCreateInfo& create_
     registry.emplace_or_replace<ecs::CTagNeedUpdateTransform>(entity);
     MarkSceneMeshRebuild(*this);
     return entity;
+}
+
+// 创建运行时 Material，并标记为需要创建 render-side material slot。
+entt::entity Scene::CreateMaterial(const MaterialCreateInfo& create_info) {
+    entt::entity entity = logical_scene().UCreateMaterial(create_info);
+    if (entity != entt::null) {
+        r().emplace_or_replace<ecs::CTagNeedCreateMaterial>(entity);
+    }
+    return entity;
+}
+
+// 创建运行时 Primitive Data，并 append 到 CtxMegaBuffers。
+entt::entity Scene::CreatePrimitive(const PrimitiveCreateInfo& create_info) {
+    entt::entity entity = logical_scene().UCreatePrimitive(create_info);
+    if (entity != entt::null) {
+        MarkSceneMeshRebuild(*this);
+    }
+    return entity;
+}
+
+// 创建运行时 Mesh，第一版只做全量 mesh resource rebuild。
+entt::entity Scene::CreateMesh(const MeshCreateInfo& create_info) {
+    entt::entity entity = logical_scene().UCreateMesh(create_info);
+    if (entity != entt::null) {
+        MarkSceneMeshRebuild(*this);
+    }
+    return entity;
+}
+
+// 创建简单 procedural material + primitive + mesh + renderable。
+CreateProceduralRenderableResult Scene::CreateProceduralRenderable(
+    const ProceduralMeshCreateInfo& create_info
+) {
+    CreateProceduralRenderableResult result{};
+
+    MaterialCreateInfo material_info = create_info.material;
+    if (material_info.name.empty()) {
+        material_info.name = "Runtime Procedural Material";
+    }
+
+    result.material_entt = CreateMaterial(material_info);
+    if (result.material_entt == entt::null) {
+        return result;
+    }
+
+    PrimitiveCreateInfo primitive_info = BuildProceduralPrimitiveData(create_info.shape, result.material_entt);
+    result.primitive_entt             = CreatePrimitive(primitive_info);
+    if (result.primitive_entt == entt::null) {
+        return result;
+    }
+
+    MeshCreateInfo mesh_info{};
+    mesh_info.name = "Runtime Procedural Mesh";
+    mesh_info.primitive_entts.push_back(result.primitive_entt);
+    result.mesh_entt = CreateMesh(mesh_info);
+    if (result.mesh_entt == entt::null) {
+        return result;
+    }
+
+    RenderableCreateInfo renderable_info{};
+    renderable_info.mesh_entt        = result.mesh_entt;
+    renderable_info.parent_node_entt = create_info.parent_node_entt;
+    renderable_info.name             = create_info.name;
+    renderable_info.translation      = create_info.translation;
+    renderable_info.rotation         = create_info.rotation;
+    renderable_info.scale            = create_info.scale;
+    result.renderable_entt           = CreateRenderableWithNode(renderable_info);
+
+    LOG_INFO(
+        "Runtime procedural renderable created: material={}, primitive={}, mesh={}, renderable={}",
+        static_cast<uint32>(entt::to_integral(result.material_entt)),
+        static_cast<uint32>(entt::to_integral(result.primitive_entt)),
+        static_cast<uint32>(entt::to_integral(result.mesh_entt)),
+        static_cast<uint32>(entt::to_integral(result.renderable_entt))
+    );
+
+    return result;
 }
 
 // 修改已有 EntityWithNode 的 local transform，并标记 transform 同步

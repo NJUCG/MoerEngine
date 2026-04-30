@@ -124,6 +124,8 @@ private:
 
     // Material必须在Mesh之前初始化，因为Mesh需要Material ID
     void InitializeMaterials();
+    // 创建带 CTagNeedCreateMaterial 的新 Material cache slot。
+    void CreateNeededMaterials();
     void UpdateMaterials();
 
     // mesh

@@ -64,4 +64,14 @@ bool SetMainDirectionalLightDirection(Scene& scene, const float3& direction) {
     return true;
 }
 
+bool AddPointLight(Scene& scene, const float3& position, const float3& color) {
+    PointLightCreateInfo create_info{};
+    create_info.position  = position;
+    create_info.color     = color;
+    create_info.intensity = 1.f;
+    create_info.name      = "Editing Point Light";
+
+    return scene.CreatePointLight(create_info) != entt::null;
+}
+
 } // namespace Moer::SceneEditing

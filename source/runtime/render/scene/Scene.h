@@ -46,7 +46,8 @@ class CommandList;
  * - LogicalScene：负责具体 ECS 操作
  * - Scene：负责对外接口声明与场景同步管理
  * - SceneCreateInfo.h：负责 Scene API 的 CreateInfo 定义
- * - SceneMutation.cpp：负责调用 LogicalScene，并维护同步数据与 Dirty 标记
+ * - SceneMutation.cpp：负责实现 Scene mutation API，调用 LogicalScene，并维护同步数据与 Dirty 标记
+ * - scene/editing/SceneEditing：负责编辑器/工具层意图封装，把 UI 操作翻译为正式 Scene API 调用；不直接维护同步 tag
  */
 class RENDER_API Scene {
 
@@ -170,6 +171,20 @@ public:
 
     // 创建带 CNode 和 CRenderable 的 entity，并复用已有 mesh 资源。
     entt::entity CreateRenderableWithNode(const RenderableCreateInfo& create_info);
+
+    // 创建运行时 Material，并标记为需要创建 render-side material slot。
+    entt::entity CreateMaterial(const MaterialCreateInfo& create_info);
+
+    // 创建运行时 Primitive Data，并 append 到 CtxMegaBuffers。
+    entt::entity CreatePrimitive(const PrimitiveCreateInfo& create_info);
+
+    // 创建运行时 Mesh，第一版只做全量 mesh resource rebuild。
+    entt::entity CreateMesh(const MeshCreateInfo& create_info);
+
+    // 创建简单 procedural material + primitive + mesh + renderable。
+    CreateProceduralRenderableResult CreateProceduralRenderable(
+        const ProceduralMeshCreateInfo& create_info
+    );
 
     // 修改已有 EntityWithNode 的 local transform，并标记 transform 同步。
     bool SetLocalTransform(entt::entity entity, const Transform& local_transform);

@@ -1217,6 +1217,104 @@ private:
     float3 m_single_clone_root_offset = float3(0.f, 0.f, 20.f);
 };
 
+class CreateProceduralRenderableTestCase final : public SceneTestCaseBase {
+public:
+    std::string_view Name() const override {
+        return "CreateProceduralRenderable";
+    }
+
+    void Reset(Scene& scene) override {
+        m_finished = false;
+        m_failed   = false;
+
+        m_waiting_for_sync       = false;
+        m_result                 = {};
+        m_initial_primitive_count = scene.cpu_scene().GetPrimitiveCount();
+        m_initial_material_count  = scene.r().view<const ecs::CMaterial>().size();
+    }
+
+    void PreTick(Scene& scene, const SceneTestCaseContext&) override {
+        if (m_waiting_for_sync) {
+            return;
+        }
+
+        ProceduralMeshCreateInfo create_info{};
+        create_info.shape       = EProceduralPrimitiveShape::Cube;
+        create_info.name        = "SceneTestCase Procedural Cube";
+        create_info.translation = float3(0.f, 1.5f, 6.f);
+        create_info.scale       = float3(1.5f, 1.5f, 1.5f);
+
+        create_info.material.name             = "SceneTestCase Procedural Material";
+        create_info.material.albedo_factor    = float4(0.1f, 0.65f, 1.f, 1.f);
+        create_info.material.roughness_factor = 0.35f;
+        create_info.material.metallic_factor  = 0.f;
+
+        m_result = scene.CreateProceduralRenderable(create_info);
+        if (!Expect(static_cast<bool>(m_result), "CreateProceduralRenderable should return a valid result.")) {
+            Finish();
+            return;
+        }
+
+        m_waiting_for_sync = true;
+    }
+
+    void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
+        if (!m_waiting_for_sync) {
+            return;
+        }
+
+        auto& registry = scene.r();
+        Expect(tick_state.did_sync, "CreateProceduralRenderable should trigger scene sync.");
+        Expect(tick_state.created_material, "CreateProceduralRenderable should create material cache.");
+        Expect(tick_state.updated_transform, "CreateProceduralRenderable should update transform cache.");
+        Expect(tick_state.rebuilt_mesh, "CreateProceduralRenderable should rebuild mesh resource cache.");
+
+        Expect(
+            registry.valid(m_result.material_entt) && registry.all_of<ecs::CMaterial>(m_result.material_entt),
+            "Procedural material entity should be valid."
+        );
+        Expect(
+            registry.valid(m_result.primitive_entt) && registry.all_of<ecs::CPrimitive>(m_result.primitive_entt),
+            "Procedural primitive entity should be valid."
+        );
+        Expect(
+            registry.valid(m_result.mesh_entt) && registry.all_of<ecs::CMesh>(m_result.mesh_entt),
+            "Procedural mesh entity should be valid."
+        );
+        Expect(
+            registry.valid(m_result.renderable_entt) &&
+                registry.all_of<ecs::CRenderable, ecs::CNode>(m_result.renderable_entt),
+            "Procedural renderable entity should be valid."
+        );
+
+        const auto& cpu_scene    = scene.cpu_scene();
+        const uint  primitive_id = cpu_scene.GetPrimitiveId(m_result.primitive_entt);
+        Expect(primitive_id != UINT_MAX, "Procedural primitive should have a CpuScene primitive id.");
+        Expect(
+            cpu_scene.GetPrimitiveCount() == m_initial_primitive_count + 1,
+            "CpuScene primitive count should increase by one."
+        );
+        if (primitive_id != UINT_MAX) {
+            Expect(
+                cpu_scene.GetInstanceCountForPrimitive(primitive_id) == 1,
+                "Procedural primitive should have exactly one instance."
+            );
+        }
+        Expect(
+            registry.view<const ecs::CMaterial>().size() == m_initial_material_count + 1,
+            "Logical material count should increase by one."
+        );
+
+        Finish();
+    }
+
+private:
+    CreateProceduralRenderableResult m_result;
+    uint                             m_initial_primitive_count = 0;
+    size_t                           m_initial_material_count  = 0;
+    bool                             m_waiting_for_sync        = false;
+};
+
 } // namespace
 
 // 根据 testcase ID 返回日志可读名称
@@ -1238,6 +1336,8 @@ std::string_view GetSceneTestCaseName(ESceneTestCaseId test_case_id) {
             return "EntityWithNodeRejectInvalidOps";
         case ESceneTestCaseId::CreateDestroyRenderable:
             return "CreateDestroyRenderable";
+        case ESceneTestCaseId::CreateProceduralRenderable:
+            return "CreateProceduralRenderable";
         case ESceneTestCaseId::DebugAddPointLight:
             return "DebugAddPointLight";
         case ESceneTestCaseId::DebugModifyMaterial:
@@ -1263,6 +1363,8 @@ UniquePtr<ISceneTestCase> CreateSceneTestCase(const SceneTestCaseRequest& reques
             return MakeUnique<EntityWithNodeRejectInvalidOpsTestCase>();
         case ESceneTestCaseId::CreateDestroyRenderable:
             return MakeUnique<CreateDestroyRenderableTestCase>(request.renderable_stress_create_enabled);
+        case ESceneTestCaseId::CreateProceduralRenderable:
+            return MakeUnique<CreateProceduralRenderableTestCase>();
         case ESceneTestCaseId::DebugAddPointLight:
             return MakeUnique<DebugAddPointLightTestCase>(
                 request.add_light_position, request.add_light_color

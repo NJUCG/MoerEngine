@@ -137,8 +137,6 @@ void DispatchRequestedSceneTestCase(SceneTestCaseConfig& config) {
     SceneTestCaseRequest request{};
     request.test_case_id                     = config.requested_test_case;
     request.renderable_stress_create_enabled = config.renderable_stress_create_enabled;
-    request.add_light_position               = config.add_light_position;
-    request.add_light_color                  = config.add_light_color;
 
     SceneTestCaseRunner::Get().RequestCase(CreateSceneTestCase(request));
     config.requested_test_case = ESceneTestCaseId::None;

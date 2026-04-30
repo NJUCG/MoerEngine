@@ -50,6 +50,33 @@ static bool TryBuildGLight(const entt::registry& registry, entt::entity entity, 
     return false;
 }
 
+static int64 ToPendingTextureHandle(const entt::entity entity) {
+    if (entity == entt::null) {
+        return -1;
+    }
+    return -2;
+}
+
+static GMaterial BuildGMaterialFromComponent(const ecs::CMaterial& c_material) {
+    GMaterial g_material{};
+
+    g_material.albedo_factor    = c_material.albedo_factor;
+    g_material.emissive_factor  = c_material.emissive_factor;
+    g_material.metallic_factor  = c_material.metallic_factor;
+    g_material.roughness_factor = c_material.roughness_factor;
+
+    g_material.alpha_mode   = static_cast<uint8>(c_material.alpha_mode);
+    g_material.alpha_cutoff = c_material.alpha_cutoff;
+
+    g_material.normal_map_hdl             = ToPendingTextureHandle(c_material.normal_map_entt);
+    g_material.ao_map_hdl                 = ToPendingTextureHandle(c_material.ao_map_entt);
+    g_material.albedo_map_hdl             = ToPendingTextureHandle(c_material.albedo_map_entt);
+    g_material.emissive_map_hdl           = ToPendingTextureHandle(c_material.emissive_map_entt);
+    g_material.metallic_roughness_map_hdl = ToPendingTextureHandle(c_material.metallic_roughness_map_entt);
+
+    return g_material;
+}
+
 CpuScene::CpuScene(ecs::LogicalScene& m_logical_scene) : m_logical_scene(m_logical_scene) {
     /**
      * 注意初始化顺序：
@@ -70,6 +97,7 @@ void CpuScene::Update() {
         CreateNeededLights();
         UpdateLights();
     }
+    CreateNeededMaterials();
     UpdateMaterials();
     if (HasMeshRebuildRequest()) {
         // Renderable create/destroy 当前走全量 rebuild，先保证 instance / draw command 结构正确
@@ -79,6 +107,7 @@ void CpuScene::Update() {
     }
 
     r.clear<ecs::CTagNeedCreateLight>();
+    r.clear<ecs::CTagNeedCreateMaterial>();
     r.clear<ecs::CTagNeedUpdateLight>();
     r.clear<ecs::CTagNeedUpdateMaterial>();
     r.clear<ecs::CTagNeedUpdateTransform>();
@@ -240,35 +269,28 @@ void CpuScene::InitializeMaterials() {
 
     m_map_material_entity_to_id.clear();
 
-    auto to_hdl = [&](const entt::entity entity) -> int64 {
-        if (entity == entt::null) {
-            return -1; // 不存在，应该使用factor
-        }
-        return -2; // 存在，但还没上传到Gpu
-    };
-
     r.view<const ecs::CMaterial>().each([&](const auto entity, const ecs::CMaterial& c_material) {
-        GMaterial g_material{};
-
-        g_material.albedo_factor    = c_material.albedo_factor;
-        g_material.emissive_factor  = c_material.emissive_factor;
-        g_material.metallic_factor  = c_material.metallic_factor;
-        g_material.roughness_factor = c_material.roughness_factor;
-
-        g_material.alpha_mode   = static_cast<uint8>(c_material.alpha_mode);
-        g_material.alpha_cutoff = c_material.alpha_cutoff;
-
-        g_material.normal_map_hdl             = to_hdl(c_material.normal_map_entt);
-        g_material.ao_map_hdl                 = to_hdl(c_material.ao_map_entt);
-        g_material.albedo_map_hdl             = to_hdl(c_material.albedo_map_entt);
-        g_material.emissive_map_hdl           = to_hdl(c_material.emissive_map_entt);
-        g_material.metallic_roughness_map_hdl = to_hdl(c_material.metallic_roughness_map_entt);
-
-        // TODO: 在GpuScene中填充各种map的handle
+        GMaterial g_material = BuildGMaterialFromComponent(c_material);
 
         uint material_id = static_cast<uint>(m_material_buf.size());
         m_material_buf.emplace_back(g_material);
         m_map_material_entity_to_id[entity] = material_id; // build index cache
+    });
+}
+
+// 创建带 CTagNeedCreateMaterial 的新 Material cache slot。
+void CpuScene::CreateNeededMaterials() {
+    auto& r = m_logical_scene.r();
+
+    auto view = r.view<const ecs::CTagNeedCreateMaterial, const ecs::CMaterial>();
+    view.each([&](const auto entity, const ecs::CMaterial& c_material) {
+        if (m_map_material_entity_to_id.contains(entity)) {
+            return;
+        }
+
+        uint material_id = static_cast<uint>(m_material_buf.size());
+        m_material_buf.emplace_back(BuildGMaterialFromComponent(c_material));
+        m_map_material_entity_to_id[entity] = material_id;
     });
 }
 
@@ -280,7 +302,7 @@ void CpuScene::UpdateMaterials() {
         auto mat_id_it = m_map_material_entity_to_id.find(entity);
         if (mat_id_it == m_map_material_entity_to_id.end()) {
             LOG_ERROR(
-                "The material to update was not initialized. Adding new materials is not supported yet."
+                "The material to update was not initialized. Runtime creation should use CTagNeedCreateMaterial."
             );
             return;
         }

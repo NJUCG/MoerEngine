@@ -32,6 +32,9 @@ enum class ESceneTestCaseId : std::uint32_t {
     // 验证 renderable 创建、复制偏移和删除同步链路
     CreateDestroyRenderable,
 
+    // 验证 procedural material / primitive / mesh / renderable 创建链路
+    CreateProceduralRenderable,
+
     // 调试创建 point light，并走 Scene sync 路径
     DebugAddPointLight,
 

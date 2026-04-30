@@ -91,6 +91,12 @@ public:
 
     entt::entity UCreateRenderableWithNode(const RenderableCreateInfo& create_info);
 
+    entt::entity UCreateMaterial(const MaterialCreateInfo& create_info);
+
+    entt::entity UCreatePrimitive(const PrimitiveCreateInfo& create_info);
+
+    entt::entity UCreateMesh(const MeshCreateInfo& create_info);
+
     bool USetLocalTransform(entt::entity entity, const Transform& local_transform);
 
     bool UAttachToParent(

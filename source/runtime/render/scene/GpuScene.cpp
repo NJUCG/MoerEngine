@@ -8,6 +8,55 @@
 
 namespace Moer::Render {
 
+static bool RecreateByteBufferIfNeeded(
+    BindlessArrayRef  bindless_array,
+    BufferWithHandle& target,
+    std::string_view  name,
+    uint64            required_byte_size,
+    EBufferUsageFlags usage
+) {
+    if (required_byte_size == 0) {
+        return false;
+    }
+    if (target.buf != nullptr && target.buf->GetByteSize() >= required_byte_size) {
+        return false;
+    }
+
+    auto& device = RenderDevice::Get();
+
+    if (target.hdl != 0) {
+        bindless_array->UnbindBuffer(target.hdl);
+        target.hdl = 0;
+    }
+
+    target.buf = device.CreateBuffer<byte>(name, static_cast<uint>(required_byte_size), usage);
+    target.hdl = bindless_array->AllocateBuffer(target.buf->GetView());
+    return true;
+}
+
+static void UploadByteBuffer(
+    CommandList&      cmd_list,
+    BindlessArrayRef  bindless_array,
+    BufferWithHandle& target,
+    std::string_view  name,
+    const void*       data,
+    uint64            required_byte_size,
+    EBufferUsageFlags usage
+) {
+    if (required_byte_size == 0) {
+        return;
+    }
+
+    const bool need_bindless_update =
+        RecreateByteBufferIfNeeded(bindless_array, target, name, required_byte_size, usage);
+
+    cmd_list.CopyFrom(std::span<byte>((byte*)data, required_byte_size), target.buf->GetView(), name);
+
+    if (need_bindless_update) {
+        cmd_list.UpdateBindlessArray(bindless_array);
+    }
+}
+
 /**
  * 这里存在着一点耦合问题：GpuScene需要修改CpuScene创建好的数据
  * - 原因就是，CpuScene需要bindless handle，但是这些handle只有在GpuScene中才能创建
@@ -366,7 +415,13 @@ void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_
 
     if (rebuilt_mesh) {
         UpdateDrawCommandBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdatePrimitiveBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
         UpdateInstanceBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdatePositionMegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdatePackedNormalMegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdatePackedTangentMegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdateTexcoord0MegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdateIndexMegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
 
         // Renderable 结构变化会改变 TLAS instance 数量，当前直接整批重建 RT scene
         InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list);
@@ -447,8 +502,7 @@ void GpuScene::UpdateMaterialBuffer(CommandList& cmd_list) {
 }
 
 void GpuScene::UpdateDrawCommandBuffer(CommandList& cmd_list) {
-    const uint64 required_byte_size =
-        m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData);
+    const uint64 required_byte_size = m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData);
     if (required_byte_size == 0) {
         return;
     }
@@ -516,6 +570,78 @@ void GpuScene::UpdateInstanceBuffer(CommandList& cmd_list) {
     if (need_bindless_update) {
         cmd_list.UpdateBindlessArray(m_bindless_array);
     }
+}
+
+void GpuScene::UpdatePrimitiveBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.primitive_buf,
+        "GpuScene::PrimitiveBuffer",
+        m_cpu_scene.m_primitive_buf.data(),
+        m_cpu_scene.m_primitive_buf.size() * sizeof(GPrimitive),
+        EBufferUsageFlags::UNORDERED_ACCESS
+    );
+}
+
+void GpuScene::UpdatePositionMegaBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.position_buf,
+        "GpuScene::PositionMegaBuffer",
+        m_cpu_scene.mega_buf().position.data(),
+        m_cpu_scene.mega_buf().position.size() * sizeof(float3),
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+    );
+}
+
+void GpuScene::UpdatePackedNormalMegaBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.packed_normal_buf,
+        "GpuScene::NormalMegaBuffer",
+        m_cpu_scene.mega_buf().packed_normal.data(),
+        m_cpu_scene.mega_buf().packed_normal.size() * sizeof(uint32),
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+    );
+}
+
+void GpuScene::UpdatePackedTangentMegaBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.packed_tangent_buf,
+        "GpuScene::TangentMegaBuffer",
+        m_cpu_scene.mega_buf().packed_tangent.data(),
+        m_cpu_scene.mega_buf().packed_tangent.size() * sizeof(uint32),
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+    );
+}
+
+void GpuScene::UpdateTexcoord0MegaBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.texcoord0_buf,
+        "GpuScene::Texcoord0MegaBuffer",
+        m_cpu_scene.mega_buf().texcoord0.data(),
+        m_cpu_scene.mega_buf().texcoord0.size() * sizeof(float2),
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+    );
+}
+
+void GpuScene::UpdateIndexMegaBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.index_buf,
+        "GpuScene::IndexMegaBuffer",
+        m_cpu_scene.mega_buf().index.data(),
+        m_cpu_scene.mega_buf().index.size() * sizeof(uint32),
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDEX_BUFFER
+    );
 }
 
 GpuScene::~GpuScene() noexcept {

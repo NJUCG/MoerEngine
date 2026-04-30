@@ -42,6 +42,14 @@ private:
     // 同步 CPU draw command cache 到 GPU draw command buffer，必要时重建 bindless buffer。
     void UpdateDrawCommandBuffer(CommandList& cmd_list);
 
+    // 同步 CPU primitive cache 和 mega buffers，必要时重建 bindless buffer。
+    void UpdatePrimitiveBuffer(CommandList& cmd_list);
+    void UpdatePositionMegaBuffer(CommandList& cmd_list);
+    void UpdatePackedNormalMegaBuffer(CommandList& cmd_list);
+    void UpdatePackedTangentMegaBuffer(CommandList& cmd_list);
+    void UpdateTexcoord0MegaBuffer(CommandList& cmd_list);
+    void UpdateIndexMegaBuffer(CommandList& cmd_list);
+
 public:
     /**
      * 便于抛出GpuScene Res接口

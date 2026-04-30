@@ -4,8 +4,10 @@
 #include "log/LogSystem.h"
 #include "math/Function.h"
 #include "misc/Hash.h"
+#include "shaderheaders/shared/utils/Packing.h"
 
 #include <entt/entt.hpp>
+#include <cmath>
 
 namespace Moer::ecs {
 
@@ -19,6 +21,34 @@ static void SetEntityName(entt::registry& registry, entt::entity entity, std::st
     }
 
     registry.emplace_or_replace<ecs::CName>(entity).name = name;
+}
+
+static float3 SafeNormalizePrimitiveVector(const float3& value, const float3& fallback) {
+    const float length = std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
+    if (length <= 1e-5f) {
+        return fallback;
+    }
+    return value * (1.f / length);
+}
+
+static ecs::CPrimitive::BufferView MakePrimitiveBufferView(uint32 start_idx, uint32 stride) {
+    return ecs::CPrimitive::BufferView{
+        .start_idx = start_idx,
+        .stride    = stride,
+        .is_valid  = true,
+    };
+}
+
+static bool IsMatchingAttributeCount(size_t attribute_count, size_t position_count) {
+    return attribute_count == 0 || attribute_count == position_count;
+}
+
+static Box3D BuildPrimitiveDataAABB(const Array<float3>& positions) {
+    Box3D aabb;
+    for (const float3& position : positions) {
+        aabb.Expand(position);
+    }
+    return aabb;
 }
 
 static void RefreshSubtreeDepth(entt::registry& registry, entt::entity entity) {
@@ -444,6 +474,160 @@ entt::entity LogicalScene::UCreateRenderableWithNode(const RenderableCreateInfo&
 
     auto& parent_node = r().get<ecs::CNode>(parent_node_entt);
     UEmplaceNodeToParent(parent_node_entt, parent_node, entity, node);
+    return entity;
+}
+
+entt::entity LogicalScene::UCreateMaterial(const MaterialCreateInfo& create_info) {
+    entt::entity entity = r().create();
+    auto&        material = r().emplace<ecs::CMaterial>(entity);
+    SetEntityName(r(), entity, create_info.name);
+
+    material.albedo_factor    = create_info.albedo_factor;
+    material.emissive_factor  = create_info.emissive_factor;
+    material.metallic_factor  = create_info.metallic_factor;
+    material.roughness_factor = create_info.roughness_factor;
+    material.alpha_mode       = create_info.alpha_mode;
+    material.alpha_cutoff     = create_info.alpha_cutoff;
+
+    return entity;
+}
+
+entt::entity LogicalScene::UCreatePrimitive(const PrimitiveCreateInfo& create_info) {
+    if (create_info.positions.empty()) {
+        LogSceneApiError("Cannot create primitive because positions are empty.");
+        return entt::null;
+    }
+    if (create_info.indices.empty()) {
+        LogSceneApiError("Cannot create primitive because indices are empty.");
+        return entt::null;
+    }
+    if ((create_info.indices.size() % 3) != 0) {
+        LogSceneApiError("Cannot create primitive because index count is not a multiple of 3.");
+        return entt::null;
+    }
+    if (!IsMatchingAttributeCount(create_info.normals.size(), create_info.positions.size())) {
+        LogSceneApiError("Cannot create primitive because normal count does not match position count.");
+        return entt::null;
+    }
+    if (!IsMatchingAttributeCount(create_info.tangents.size(), create_info.positions.size())) {
+        LogSceneApiError("Cannot create primitive because tangent count does not match position count.");
+        return entt::null;
+    }
+    if (!IsMatchingAttributeCount(create_info.texcoord0.size(), create_info.positions.size())) {
+        LogSceneApiError("Cannot create primitive because texcoord0 count does not match position count.");
+        return entt::null;
+    }
+    if (create_info.material_entt == entt::null || !r().valid(create_info.material_entt) ||
+        !r().all_of<ecs::CMaterial>(create_info.material_entt)) {
+        LogSceneApiError("Cannot create primitive because material entity is invalid or missing CMaterial.");
+        return entt::null;
+    }
+
+    for (uint32 index : create_info.indices) {
+        if (index >= create_info.positions.size()) {
+            LogSceneApiError("Cannot create primitive because an index is out of range.");
+            return entt::null;
+        }
+    }
+
+    if (!r().ctx().contains<ecs::CtxMegaBuffers>()) {
+        r().ctx().emplace<ecs::CtxMegaBuffers>();
+    }
+
+    auto& mega_buffers = r().ctx().get<ecs::CtxMegaBuffers>();
+
+    entt::entity entity = r().create();
+    auto&        primitive = r().emplace<ecs::CPrimitive>(entity);
+    SetEntityName(r(), entity, create_info.name);
+
+    primitive.vertex_count  = static_cast<uint32>(create_info.positions.size());
+    primitive.index_count   = static_cast<uint32>(create_info.indices.size());
+    primitive.material_entt = create_info.material_entt;
+    primitive.aabb          = create_info.has_aabb ? create_info.aabb : BuildPrimitiveDataAABB(create_info.positions);
+
+    primitive.position = MakePrimitiveBufferView(
+        static_cast<uint32>(mega_buffers.position.size()), sizeof(float3)
+    );
+    mega_buffers.position.insert(
+        mega_buffers.position.end(), create_info.positions.begin(), create_info.positions.end()
+    );
+
+    if (!create_info.normals.empty()) {
+        primitive.packed_normal = MakePrimitiveBufferView(
+            static_cast<uint32>(mega_buffers.packed_normal.size()), sizeof(uint32)
+        );
+        for (const float3& normal : create_info.normals) {
+            mega_buffers.packed_normal.emplace_back(
+                Pack_Normal(SafeNormalizePrimitiveVector(normal, float3(0.f, 0.f, 1.f)))
+            );
+        }
+    } else {
+        LOG_WARNING("Runtime primitive '{}' was created without normal data.", create_info.name);
+    }
+
+    if (!create_info.tangents.empty()) {
+        primitive.packed_tangent = MakePrimitiveBufferView(
+            static_cast<uint32>(mega_buffers.packed_tangent.size()), sizeof(uint32)
+        );
+        for (const float3& tangent : create_info.tangents) {
+            mega_buffers.packed_tangent.emplace_back(
+                Pack_Normal(SafeNormalizePrimitiveVector(tangent, float3(1.f, 0.f, 0.f)))
+            );
+        }
+    }
+
+    if (!create_info.texcoord0.empty()) {
+        primitive.texcoord0 = MakePrimitiveBufferView(
+            static_cast<uint32>(mega_buffers.texcoord0.size()), sizeof(float2)
+        );
+        mega_buffers.texcoord0.insert(
+            mega_buffers.texcoord0.end(), create_info.texcoord0.begin(), create_info.texcoord0.end()
+        );
+    }
+
+    primitive.index = MakePrimitiveBufferView(static_cast<uint32>(mega_buffers.index.size()), sizeof(uint32));
+    mega_buffers.index.insert(mega_buffers.index.end(), create_info.indices.begin(), create_info.indices.end());
+
+    SBuildPrimitiveHash();
+
+    LOG_INFO(
+        "Runtime Primitive Data appended: vertices={}, indices={}, mega(position={}, normal={}, tangent={}, uv0={}, index={})",
+        create_info.positions.size(),
+        create_info.indices.size(),
+        mega_buffers.position.size(),
+        mega_buffers.packed_normal.size(),
+        mega_buffers.packed_tangent.size(),
+        mega_buffers.texcoord0.size(),
+        mega_buffers.index.size()
+    );
+
+    return entity;
+}
+
+entt::entity LogicalScene::UCreateMesh(const MeshCreateInfo& create_info) {
+    if (create_info.primitive_entts.empty()) {
+        LogSceneApiError("Cannot create mesh because primitive list is empty.");
+        return entt::null;
+    }
+
+    for (entt::entity primitive_entt : create_info.primitive_entts) {
+        if (primitive_entt == entt::null || !r().valid(primitive_entt) ||
+            !r().all_of<ecs::CPrimitive>(primitive_entt)) {
+            LogSceneApiError("Cannot create mesh because a primitive entity is invalid or missing CPrimitive.");
+            return entt::null;
+        }
+    }
+
+    entt::entity entity = r().create();
+    auto&        mesh   = r().emplace<ecs::CMesh>(entity);
+    SetEntityName(r(), entity, create_info.name);
+
+    mesh.primitive_entts = create_info.primitive_entts;
+
+    SBuildPrimitiveHash();
+    SBuildMeshHash();
+    SBuildMeshAABB();
+
     return entity;
 }
 

@@ -227,6 +227,7 @@ struct CTagNeedCreateTransform {};
 
 struct CTagNeedDestroyLight {};
 
+// Mesh resource 结构变化兜底：覆盖 CPrimitive / CMesh / CRenderable instance cache / CtxMegaBuffers 的全量同步。
 struct CTagNeedRebuildMesh {};
 
 } // namespace Moer::ecs
