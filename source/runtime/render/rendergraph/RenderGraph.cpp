@@ -152,6 +152,7 @@ void RenderGraph::ExportBuffer(RenderGraphHandle handle, Render::EBufferState fi
 
 void RenderGraph::AddSetupPass(std::string_view name, SetupExecute&& setup) {
     assert(m_phase == Phase::Setup);
+    assert(setup && "AddSetupPass requires a valid preparation callback");
     m_setup_passes.push_back(RGSetupPass{std::string(name), std::move(setup)});
 }
 
@@ -188,7 +189,9 @@ void RenderGraph::Dispatch(RHICommandList* cmd_list) {
     Compile();
     RGSetupContext setup_context(*this);
     for (auto& setup_pass : m_setup_passes) {
-        setup_pass.execute(setup_context);
+        if (setup_pass.execute) {
+            setup_pass.execute(setup_context);
+        }
     }
     if (cmd_list) {
         RGContext context(*this);

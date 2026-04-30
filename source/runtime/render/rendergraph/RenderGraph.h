@@ -134,6 +134,8 @@ private:
     );
     template<typename T>
     void CollectParameterAccess(uint32_t pass_index, const T& parameters) {
+        // Parameters can optionally expose RG resource dependencies through DeclareRGAccess().
+        // Passes without graph resources omit this method.
         if constexpr (requires(const T& value, RGParameterAccessCollector& collector) {
                           value.DeclareRGAccess(collector);
                       }) {

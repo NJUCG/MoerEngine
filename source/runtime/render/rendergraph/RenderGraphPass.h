@@ -25,6 +25,7 @@ private:
 
 class RGSetupContext {
 public:
+    // Provides graph access for CPU preparation tasks; resource access is declared by pass parameters.
     explicit RGSetupContext(RenderGraph& graph) : m_graph(graph) {}
 
     RenderGraph& Graph() const { return m_graph; }
