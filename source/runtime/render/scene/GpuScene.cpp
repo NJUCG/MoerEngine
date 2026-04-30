@@ -1,7 +1,6 @@
 #include "GpuScene.h"
 
 #include "CpuScene.h"
-#include "log/LogSystem.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -361,9 +360,19 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
     InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list); // gfx_queue交给主线程执行
 }
 
-void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene) {
+void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene, bool rebuilt_mesh) {
     UpdateLightBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
     UpdateMaterialBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+
+    if (rebuilt_mesh) {
+        UpdateDrawCommandBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdateInstanceBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+
+        // Renderable 结构变化会改变 TLAS instance 数量，当前直接整批重建 RT scene
+        InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list);
+        return;
+    }
+
     UpdateInstanceBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
 
     UpdateRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list); // gfx_queue交给主线程执行
@@ -430,6 +439,45 @@ void GpuScene::UpdateMaterialBuffer(CommandList& cmd_list) {
         std::span<byte>((byte*)m_cpu_scene.m_material_buf.data(), required_byte_size),
         m_res.material_buf.buf->GetView(),
         "CopyFrom GpuScene::MaterialBuffer"
+    );
+
+    if (need_bindless_update) {
+        cmd_list.UpdateBindlessArray(m_bindless_array);
+    }
+}
+
+void GpuScene::UpdateDrawCommandBuffer(CommandList& cmd_list) {
+    const uint64 required_byte_size =
+        m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData);
+    if (required_byte_size == 0) {
+        return;
+    }
+
+    bool need_bindless_update = false;
+    if (m_res.draw_cmd_buf.buf == nullptr || m_res.draw_cmd_buf.buf->GetByteSize() < required_byte_size) {
+        auto& device = RenderDevice::Get();
+
+        if (m_res.draw_cmd_buf.hdl != 0) {
+            m_bindless_array->UnbindBuffer(m_res.draw_cmd_buf.hdl);
+            m_res.draw_cmd_buf.hdl = 0;
+        }
+
+        m_res.draw_cmd_buf.buf = device.CreateBuffer<Render::DrawIndexedCmdData>(
+            "GpuScene::DrawCmdBuffer",
+            m_cpu_scene.m_draw_cmd_buf.size(),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER
+        );
+        m_res.draw_cmd_buf.hdl = m_bindless_array->AllocateBuffer(m_res.draw_cmd_buf.buf->GetView());
+        need_bindless_update   = true;
+    }
+
+    cmd_list.CopyFrom(
+        std::span<byte>(
+            (byte*)m_cpu_scene.m_draw_cmd_buf.data(),
+            m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData)
+        ),
+        m_res.draw_cmd_buf.buf->GetView(),
+        "CopyFrom GpuScene::DrawCmdBuffer"
     );
 
     if (need_bindless_update) {

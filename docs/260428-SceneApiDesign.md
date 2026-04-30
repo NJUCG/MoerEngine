@@ -268,8 +268,9 @@ scene.Patch<ecs::CTransform>(entity, [](auto& transform) {
 当前已经落地：
 
 - `Scene::Patch<T>()`：组件级修改入口，内部调用 EnTT `registry.patch<T>()` 后执行 `MarkDirty<T>()`。
-- `SceneDirty.cpp`：集中保存 Light / Transform 的 `MarkDirty<T>()` 特化。
-- `SceneLightApi.cpp`：提供 `Scene::CreatePointLight()`，用于运行时创建 point light。
+- `SceneMutation.cpp`：集中保存结构修改 API 与 `MarkDirty<T>()` 特化。
+- `SceneCreateInfo.h`：集中保存 Scene 结构修改 API 的 CreateInfo 定义。
+- `Scene::CreatePointLight()`：已经提供运行时创建 point light 的结构性 API。
 - `CpuScene::CreateNeededLights()`：处理 `CTagNeedCreateLight`，为新增 light 分配 CPU render cache slot。
 - `CpuScene::UpdateMeshes()`：处理 `CTagNeedUpdateTransform`，根据 transform entity 到 instance slot 的映射更新 `GInstance`，从而同步已有 renderable 的实例矩阵。
 - `GpuScene::UpdateLightBuffer()`：同步 CPU light cache 到 GPU light buffer。debug 阶段 light 数量很小，当前采用全量上传；buffer 不足时重建并更新 bindless handle。后续需要替换为 capacity/chunk 策略和局部更新。

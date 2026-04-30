@@ -89,6 +89,8 @@ public:
 
     entt::entity UCreateEntityWithNode(const EntityWithNodeCreateInfo& create_info);
 
+    entt::entity UCreateRenderableWithNode(const RenderableCreateInfo& create_info);
+
     bool USetLocalTransform(entt::entity entity, const Transform& local_transform);
 
     bool UAttachToParent(
@@ -105,6 +107,8 @@ public:
     );
 
     bool UDestroyEntity(entt::entity entity, entt::entity* old_parent_entt = nullptr);
+
+    bool UDestroyRenderable(entt::entity entity, entt::entity* old_parent_entt = nullptr);
 
     entt::entity UCreatePointLight(const PointLightCreateInfo& create_info);
 

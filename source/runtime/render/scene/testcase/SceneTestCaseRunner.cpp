@@ -33,6 +33,16 @@ void SceneTestCaseRunner::RequestCase(ESceneTestCaseId test_case_id) {
     LOG_INFO("SceneTestCase request queued: {}.", GetSceneTestCaseName(test_case_id));
 }
 
+// 设置 renderable create/destroy testcase 的创建压力模式
+void SceneTestCaseRunner::SetCreateDestroyRenderableStressEnabled(bool enabled) {
+    m_create_destroy_renderable_stress_enabled = enabled;
+}
+
+// 查询 renderable create/destroy testcase 的创建压力模式
+bool SceneTestCaseRunner::IsCreateDestroyRenderableStressEnabled() const {
+    return m_create_destroy_renderable_stress_enabled;
+}
+
 // 返回当前是否有正在运行的 testcase
 bool SceneTestCaseRunner::HasActiveCase() const {
     return m_active_case != nullptr;

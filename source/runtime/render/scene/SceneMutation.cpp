@@ -15,6 +15,17 @@ static void MarkSceneNodeDirtyIfValid(Scene& scene, entt::entity entity) {
     scene.MarkDirty<ecs::CNode>(entity);
 }
 
+static void MarkSceneMeshRebuild(Scene& scene) {
+    auto& registry = scene.r();
+    auto  view     = registry.view<ecs::CTagRootNode>();
+    auto  it       = view.begin();
+    if (it == view.end()) {
+        return;
+    }
+
+    registry.emplace_or_replace<ecs::CTagNeedRebuildMesh>(*it);
+}
+
 // 创建普通 entity，不接入 scene node 树，也不触发 scene sync
 entt::entity Scene::CreateEntity(std::string_view name) {
     return logical_scene().UCreateEntity(name);
@@ -26,6 +37,19 @@ entt::entity Scene::CreateEntityWithNode(const EntityWithNodeCreateInfo& create_
     if (entity != entt::null) {
         r().emplace_or_replace<ecs::CTagNeedUpdateTransform>(entity);
     }
+    return entity;
+}
+
+// 创建带 CNode 和 CRenderable 的 entity，并复用已有 mesh 资源
+entt::entity Scene::CreateRenderableWithNode(const RenderableCreateInfo& create_info) {
+    entt::entity entity = logical_scene().UCreateRenderableWithNode(create_info);
+    if (entity == entt::null) {
+        return entt::null;
+    }
+
+    auto& registry = r();
+    registry.emplace_or_replace<ecs::CTagNeedUpdateTransform>(entity);
+    MarkSceneMeshRebuild(*this);
     return entity;
 }
 
@@ -79,6 +103,18 @@ bool Scene::DestroyEntity(entt::entity entity) {
     }
 
     MarkSceneNodeDirtyIfValid(*this, old_parent_entt);
+    return true;
+}
+
+// 删除 renderable 会在后续 Tick 中触发 mesh instance cache rebuild，当前先接受这部分开销
+bool Scene::DestroyRenderable(entt::entity renderable_entity) {
+    entt::entity old_parent_entt = entt::null;
+    if (!logical_scene().UDestroyRenderable(renderable_entity, &old_parent_entt)) {
+        return false;
+    }
+
+    MarkSceneNodeDirtyIfValid(*this, old_parent_entt);
+    MarkSceneMeshRebuild(*this);
     return true;
 }
 

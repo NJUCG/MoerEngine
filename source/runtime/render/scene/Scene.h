@@ -89,6 +89,7 @@ public:
         bool created_material  = false;
         bool created_transform = false;
         bool destroyed_light   = false;
+        bool rebuilt_mesh      = false;
 
         explicit operator bool() const {
             return did_sync;
@@ -167,6 +168,9 @@ public:
     // 创建带 CNode 的 entity，并接入 parent 或 root node。
     entt::entity CreateEntityWithNode(const EntityWithNodeCreateInfo& create_info);
 
+    // 创建带 CNode 和 CRenderable 的 entity，并复用已有 mesh 资源。
+    entt::entity CreateRenderableWithNode(const RenderableCreateInfo& create_info);
+
     // 修改已有 EntityWithNode 的 local transform，并标记 transform 同步。
     bool SetLocalTransform(entt::entity entity, const Transform& local_transform);
 
@@ -178,6 +182,9 @@ public:
 
     // 删除普通 entity 或 leaf EntityWithNode，复杂 render-side entity 暂不支持。
     bool DestroyEntity(entt::entity entity);
+
+    // 删除 renderable 会在后续 Tick 中触发 mesh instance cache rebuild，当前先接受这部分开销
+    bool DestroyRenderable(entt::entity renderable_entity);
 
     // 创建运行时 PointLight，并标记为需要创建 render-side light slot。
     entt::entity CreatePointLight(const PointLightCreateInfo& create_info);

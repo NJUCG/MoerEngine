@@ -158,6 +158,10 @@ private:
 
     // Mesh必须在Materials之后初始化，因为Primitive需要Material ID
     void InitializeMeshes();
+    // 检查本帧是否存在 renderable 结构变化请求
+    bool HasMeshRebuildRequest() const;
+    // 当前通过全量重建 mesh instance cache 处理 renderable create/destroy，优先保证结构正确性
+    void RebuildMeshes();
     void UpdateMeshes();
 };
 

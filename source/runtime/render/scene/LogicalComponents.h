@@ -227,4 +227,6 @@ struct CTagNeedCreateTransform {};
 
 struct CTagNeedDestroyLight {};
 
+struct CTagNeedRebuildMesh {};
+
 } // namespace Moer::ecs

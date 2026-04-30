@@ -25,6 +25,12 @@ public:
     // 请求运行一个 Scene testcase
     void RequestCase(ESceneTestCaseId test_case_id);
 
+    // 配置 renderable create/destroy testcase 的创建压力模式
+    void SetCreateDestroyRenderableStressEnabled(bool enabled);
+
+    // 查询 renderable create/destroy testcase 是否启用创建压力模式
+    bool IsCreateDestroyRenderableStressEnabled() const;
+
     // 查询当前是否有正在运行的 testcase
     bool HasActiveCase() const;
 
@@ -50,8 +56,9 @@ private:
 private:
     ESceneTestCaseId                      m_pending_case_id = ESceneTestCaseId::None;
     UniquePtr<ISceneTestCase>             m_active_case;
-    std::uint64_t                         m_frame_index = 0;
-    std::chrono::steady_clock::time_point m_start_time  = std::chrono::steady_clock::now();
+    bool                                  m_create_destroy_renderable_stress_enabled = false;
+    std::uint64_t                         m_frame_index                              = 0;
+    std::chrono::steady_clock::time_point m_start_time = std::chrono::steady_clock::now();
 };
 
 } // namespace Moer

@@ -256,6 +256,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         RasterTestCase::ProcessPointLightTransformMotion(raster_config, scene, elapsed_time_seconds);
 
         auto& scene_test_case_runner = SceneTestCaseRunner::Get();
+        scene_test_case_runner.SetCreateDestroyRenderableStressEnabled(
+            raster_config.debug_scene_test_case_renderable_stress_create_enabled
+        );
         if (raster_config.debug_requested_scene_test_case != ESceneTestCaseId::None) {
             scene_test_case_runner.RequestCase(raster_config.debug_requested_scene_test_case);
             raster_config.debug_requested_scene_test_case = ESceneTestCaseId::None;

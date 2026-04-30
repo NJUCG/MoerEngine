@@ -617,6 +617,15 @@ void RasterUI::ShowConfig() {
         }
 
         ImGui::Checkbox(
+            "SceneTestCase Renderable Stress Create (5x5-1)",
+            &m_config.debug_scene_test_case_renderable_stress_create_enabled
+        );
+
+        if (ImGui::Button("SceneTestCase Create/Destroy Renderable")) {
+            m_config.debug_requested_scene_test_case = ESceneTestCaseId::CreateDestroyRenderable;
+        }
+
+        ImGui::Checkbox(
             "TestCase Move Renderables", &m_config.debug_test_case_renderable_transform_motion_enabled
         );
         ImGui::Checkbox(

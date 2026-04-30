@@ -23,7 +23,7 @@ public:
     GpuScene(const GpuScene&)            = delete;
     GpuScene& operator=(const GpuScene&) = delete;
 
-    void Update(const ecs::LogicalScene& logical_scene, CpuScene& cpu_scene);
+    void Update(const ecs::LogicalScene& logical_scene, CpuScene& cpu_scene, bool rebuilt_mesh);
 
 private:
     /**
@@ -38,6 +38,9 @@ private:
 
     // 同步 CPU instance cache 到 GPU instance buffer，必要时重建 bindless buffer。
     void UpdateInstanceBuffer(CommandList& cmd_list);
+
+    // 同步 CPU draw command cache 到 GPU draw command buffer，必要时重建 bindless buffer。
+    void UpdateDrawCommandBuffer(CommandList& cmd_list);
 
 public:
     /**

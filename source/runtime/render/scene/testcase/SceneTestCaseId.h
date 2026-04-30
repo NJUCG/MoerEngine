@@ -29,7 +29,7 @@ enum class ESceneTestCaseId : std::uint32_t {
     // 验证 EntityWithNode 结构性 API 拒绝关键非法操作
     EntityWithNodeRejectInvalidOps,
 
-    // 预留：验证未来 renderable 创建和删除 API
+    // 验证 renderable 创建、复制偏移和删除同步链路
     CreateDestroyRenderable,
 };
 

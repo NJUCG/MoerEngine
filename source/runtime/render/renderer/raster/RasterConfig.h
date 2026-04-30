@@ -283,16 +283,17 @@ struct RasterConfig {
     int           inSize_x      = 540;
 
     // MARK: Debug
-    float            debug_param                                          = 1.0f;
-    bool             debug_fps_limit_enable                               = false;
-    float            debug_fps_limit                                      = 60;
-    bool             debug_request_scene_update                           = false;
-    bool             debug_request_material_update                        = false;
-    ESceneTestCaseId debug_requested_scene_test_case                      = ESceneTestCaseId::None;
-    bool             debug_test_case_renderable_transform_motion_enabled  = false;
-    bool             debug_test_case_point_light_transform_motion_enabled = false;
-    float3           debug_test_case_add_light_position                   = float3(0.f, 2.f, 0.f);
-    float3           debug_test_case_add_light_color                      = float3(1.f, 0.2f, 0.05f);
+    float            debug_param                                            = 1.0f;
+    bool             debug_fps_limit_enable                                 = false;
+    float            debug_fps_limit                                        = 60;
+    bool             debug_request_scene_update                             = false;
+    bool             debug_request_material_update                          = false;
+    ESceneTestCaseId debug_requested_scene_test_case                        = ESceneTestCaseId::None;
+    bool             debug_scene_test_case_renderable_stress_create_enabled = false;
+    bool             debug_test_case_renderable_transform_motion_enabled    = false;
+    bool             debug_test_case_point_light_transform_motion_enabled   = false;
+    float3           debug_test_case_add_light_position                     = float3(0.f, 2.f, 0.f);
+    float3           debug_test_case_add_light_color                        = float3(1.f, 0.2f, 0.05f);
 
     // MARK: Others
 

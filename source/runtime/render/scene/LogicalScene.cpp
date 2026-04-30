@@ -414,6 +414,39 @@ entt::entity LogicalScene::UCreateEntityWithNode(const EntityWithNodeCreateInfo&
     return entity;
 }
 
+entt::entity LogicalScene::UCreateRenderableWithNode(const RenderableCreateInfo& create_info) {
+    entt::entity parent_node_entt = create_info.parent_node_entt;
+    if (parent_node_entt == entt::null) {
+        parent_node_entt = UGetRootNodeEntity();
+    }
+
+    if (!UIsEntityWithNode(parent_node_entt)) {
+        LogSceneApiError("Cannot create renderable because parent node is invalid or missing CNode.");
+        return entt::null;
+    }
+    if (create_info.mesh_entt == entt::null || !r().valid(create_info.mesh_entt) ||
+        !r().all_of<ecs::CMesh>(create_info.mesh_entt)) {
+        LogSceneApiError("Cannot create renderable because mesh entity is invalid or missing CMesh.");
+        return entt::null;
+    }
+
+    entt::entity entity      = r().create();
+    auto&        node        = r().emplace<ecs::CNode>(entity);
+    auto&        renderable  = r().emplace<ecs::CRenderable>(entity);
+    renderable.mesh_entt     = create_info.mesh_entt;
+
+    SetEntityName(r(), entity, create_info.name);
+
+    node.translation = create_info.translation;
+    node.rotation    = create_info.rotation;
+    node.scale       = create_info.scale;
+    node.is_dirty    = true;
+
+    auto& parent_node = r().get<ecs::CNode>(parent_node_entt);
+    UEmplaceNodeToParent(parent_node_entt, parent_node, entity, node);
+    return entity;
+}
+
 bool LogicalScene::USetLocalTransform(entt::entity entity, const Transform& local_transform) {
     if (!UIsEntityWithNode(entity)) {
         LogSceneApiError("Cannot set local transform because entity is invalid or missing CNode.");
@@ -569,6 +602,39 @@ bool LogicalScene::UDestroyEntity(entt::entity entity, entt::entity* old_parent_
         }
         UDetachNodeFromParent(entity, node);
     }
+
+    r().destroy(entity);
+    return true;
+}
+
+bool LogicalScene::UDestroyRenderable(entt::entity entity, entt::entity* old_parent_entt) {
+    if (old_parent_entt) {
+        *old_parent_entt = entt::null;
+    }
+
+    if (entity == entt::null || !r().valid(entity)) {
+        LogSceneApiError("Cannot destroy renderable because entity is invalid.");
+        return false;
+    }
+    if (!r().all_of<ecs::CRenderable, ecs::CNode>(entity)) {
+        LogSceneApiError("Cannot destroy renderable because entity is missing CRenderable or CNode.");
+        return false;
+    }
+    if (r().all_of<ecs::CTagRootNode>(entity)) {
+        LogSceneApiError("Cannot destroy root node through DestroyRenderable.");
+        return false;
+    }
+
+    auto& node = r().get<ecs::CNode>(entity);
+    if (node.first_child_entt != entt::null || node.child_count != 0) {
+        LogSceneApiError("Cannot destroy renderable because only leaf renderable nodes are supported now.");
+        return false;
+    }
+
+    if (old_parent_entt) {
+        *old_parent_entt = node.parent_entt;
+    }
+    UDetachNodeFromParent(entity, node);
 
     r().destroy(entity);
     return true;

@@ -2,10 +2,12 @@
  * 实现第一批 Scene testcase smoke cases，用来验证 testcase 框架和现有 Scene API
  */
 #include "scene/testcase/SceneTestCaseRegistry.h"
+#include "scene/testcase/SceneTestCaseRunner.h"
 
 #include "log/LogSystem.h"
-#include "scene/SceneCreateInfo.h"
+#include "math/Transform.h"
 #include "scene/LogicalComponents.h"
+#include "scene/SceneCreateInfo.h"
 
 #include <cmath>
 
@@ -36,6 +38,68 @@ entt::entity FindRootNodeEntity(Scene& scene) {
         return entt::null;
     }
     return *it;
+}
+
+struct CreateDestroyPointLightPersistentState {
+    entt::entity light_entity        = entt::null;
+    uint         initial_light_count = 0;
+};
+
+struct CreateDestroyRenderablePersistentState {
+    Array<entt::entity> clone_roots;
+    Array<entt::entity> clone_renderables;
+    Array<uint>         initial_instance_counts;
+    Array<uint>         expected_instance_increments;
+};
+
+CreateDestroyPointLightPersistentState s_create_destroy_point_light_state{};
+CreateDestroyRenderablePersistentState s_create_destroy_renderable_state{};
+
+bool HasValidStoredPointLight(Scene& scene) {
+    auto&      registry = scene.r();
+    const auto light    = s_create_destroy_point_light_state.light_entity;
+    return light != entt::null && registry.valid(light) &&
+           registry.all_of<ecs::CLightPoint, ecs::CNode>(light);
+}
+
+bool HasValidStoredRenderableClones(Scene& scene) {
+    auto& registry = scene.r();
+    if (s_create_destroy_renderable_state.clone_roots.empty() ||
+        s_create_destroy_renderable_state.clone_renderables.empty()) {
+        return false;
+    }
+
+    for (const entt::entity entity : s_create_destroy_renderable_state.clone_roots) {
+        if (entity == entt::null || !registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
+            return false;
+        }
+    }
+
+    for (const entt::entity entity : s_create_destroy_renderable_state.clone_renderables) {
+        if (entity == entt::null || !registry.valid(entity) ||
+            !registry.all_of<ecs::CRenderable, ecs::CNode>(entity)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+Array<float3> BuildRenderableCloneRootOffsets(bool stress_create_enabled, const float3& single_clone_offset) {
+    if (!stress_create_enabled) {
+        return {single_clone_offset};
+    }
+
+    Array<float3> offsets;
+    offsets.reserve(24);
+    for (int grid_z = -2; grid_z <= 2; ++grid_z) {
+        for (int grid_x = -2; grid_x <= 2; ++grid_x) {
+            if (grid_x == 0 && grid_z == 0) {
+                continue;
+            }
+            offsets.push_back(float3(float(grid_x) * 30.f, 0.f, float(grid_z) * 20.f));
+        }
+    }
+    return offsets;
 }
 
 class SceneTestCaseBase : public ISceneTestCase {
@@ -258,51 +322,63 @@ public:
         return "CreateDestroyPointLight";
     }
 
-    // 记录初始 light 数量并重置运行阶段
+    // 第一次触发只创建 point light，下一次触发再执行删除
     void Reset(Scene& scene) override {
-        m_finished            = false;
-        m_failed              = false;
-        m_light_entity        = entt::null;
-        m_initial_light_count = scene.cpu_scene().GetLightCount();
-        m_stage               = Stage::CreateLight;
+        m_finished         = false;
+        m_failed           = false;
+        m_light_entity     = entt::null;
+        m_waiting_for_sync = false;
+
+        if (HasValidStoredPointLight(scene)) {
+            m_run_mode            = ERunMode::Destroy;
+            m_light_entity        = s_create_destroy_point_light_state.light_entity;
+            m_initial_light_count = s_create_destroy_point_light_state.initial_light_count;
+            return;
+        }
+
+        s_create_destroy_point_light_state = {};
+        m_run_mode                         = ERunMode::Create;
+        m_initial_light_count              = scene.cpu_scene().GetLightCount();
     }
 
-    // 第一帧创建 point light，第二帧请求删除 point light
+    // 单次运行只执行创建或删除其中之一，便于用户观察效果
     void PreTick(Scene& scene, const SceneTestCaseContext&) override {
-        if (m_stage == Stage::CreateLight) {
+        if (m_waiting_for_sync) {
+            return;
+        }
+
+        if (m_run_mode == ERunMode::Create) {
             PointLightCreateInfo create_info{};
             create_info.position  = float3(-0.35f, 2.f, 0.f);
             create_info.color     = float3(1.f, 0.8f, 0.2f);
             create_info.intensity = 10000.f;
             create_info.name      = "SceneTestCase CreateDestroyPointLight";
             m_light_entity        = scene.CreatePointLight(create_info);
-            m_stage               = Stage::WaitCreateSync;
-            return;
-        }
-
-        if (m_stage == Stage::DestroyLight) {
+        } else {
             if (!Expect(
                     m_light_entity != entt::null && scene.r().valid(m_light_entity),
                     "Destroy target point light is invalid."
                 )) {
-                m_stage = Stage::Done;
                 Finish();
                 return;
             }
 
             if (!Expect(scene.DestroyPointLight(m_light_entity), "DestroyPointLight request failed.")) {
-                m_stage = Stage::Done;
                 Finish();
                 return;
             }
-
-            m_stage = Stage::WaitDestroySync;
         }
+
+        m_waiting_for_sync = true;
     }
 
-    // 分阶段验证 point light 创建和删除同步结果
+    // 创建阶段验证新增对象，删除阶段验证对象消失并恢复基线
     void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
-        if (m_stage == Stage::WaitCreateSync) {
+        if (!m_waiting_for_sync) {
+            return;
+        }
+
+        if (m_run_mode == ERunMode::Create) {
             auto& registry = scene.r();
             Expect(m_light_entity != entt::null, "Created point light entity should not be entt::null.");
             Expect(registry.valid(m_light_entity), "Created point light entity should be valid.");
@@ -312,36 +388,38 @@ public:
                 scene.cpu_scene().GetLightCount() == m_initial_light_count + 1,
                 "CpuScene light count should increase after point light creation."
             );
-            m_stage = Stage::DestroyLight;
+            if (!m_failed) {
+                s_create_destroy_point_light_state.light_entity        = m_light_entity;
+                s_create_destroy_point_light_state.initial_light_count = m_initial_light_count;
+            }
+            Finish();
             return;
         }
 
-        if (m_stage == Stage::WaitDestroySync) {
-            auto& registry = scene.r();
-            Expect(tick_state.did_sync, "Point light deletion should trigger scene sync.");
-            Expect(tick_state.destroyed_light, "Point light deletion should set destroyed_light TickState.");
-            Expect(!registry.valid(m_light_entity), "Destroyed point light entity should be invalid.");
-            Expect(
-                scene.cpu_scene().GetLightCount() == m_initial_light_count,
-                "CpuScene light count should return to the initial baseline."
-            );
-            m_stage = Stage::Done;
-            Finish();
+        auto& registry = scene.r();
+        Expect(tick_state.did_sync, "Point light deletion should trigger scene sync.");
+        Expect(tick_state.destroyed_light, "Point light deletion should set destroyed_light TickState.");
+        Expect(!registry.valid(m_light_entity), "Destroyed point light entity should be invalid.");
+        Expect(
+            scene.cpu_scene().GetLightCount() == m_initial_light_count,
+            "CpuScene light count should return to the initial baseline."
+        );
+        if (!m_failed) {
+            s_create_destroy_point_light_state = {};
         }
+        Finish();
     }
 
 private:
-    enum class Stage {
-        CreateLight,
-        WaitCreateSync,
-        DestroyLight,
-        WaitDestroySync,
-        Done,
+    enum class ERunMode {
+        Create,
+        Destroy,
     };
 
     entt::entity m_light_entity        = entt::null;
     uint         m_initial_light_count = 0;
-    Stage        m_stage               = Stage::CreateLight;
+    ERunMode     m_run_mode            = ERunMode::Create;
+    bool         m_waiting_for_sync    = false;
 };
 
 class EntityWithNodeStructuralFlowTestCase final : public SceneTestCaseBase {
@@ -353,17 +431,17 @@ public:
 
     // 记录 root 基线并重置结构测试状态
     void Reset(Scene& scene) override {
-        m_finished                  = false;
-        m_failed                    = false;
-        m_parent_a                  = entt::null;
-        m_parent_b                  = entt::null;
-        m_child                     = entt::null;
-        m_root                      = FindRootNodeEntity(scene);
-        m_initial_root_child_count  = 0;
-        m_destroy_child_result      = false;
-        m_destroy_parent_a_result   = false;
-        m_destroy_parent_b_result   = false;
-        m_stage                     = Stage::CreateHierarchy;
+        m_finished                 = false;
+        m_failed                   = false;
+        m_parent_a                 = entt::null;
+        m_parent_b                 = entt::null;
+        m_child                    = entt::null;
+        m_root                     = FindRootNodeEntity(scene);
+        m_initial_root_child_count = 0;
+        m_destroy_child_result     = false;
+        m_destroy_parent_a_result  = false;
+        m_destroy_parent_b_result  = false;
+        m_stage                    = Stage::CreateHierarchy;
 
         if (m_root != entt::null && scene.r().valid(m_root) && scene.r().all_of<ecs::CNode>(m_root)) {
             m_initial_root_child_count = scene.r().get<ecs::CNode>(m_root).child_count;
@@ -394,7 +472,9 @@ public:
         }
 
         if (m_stage == Stage::AttachToOtherParent) {
-            if (!Expect(scene.AttachToParent(m_child, m_parent_b), "AttachToParent child -> parent B failed.")) {
+            if (!Expect(
+                    scene.AttachToParent(m_child, m_parent_b), "AttachToParent child -> parent B failed."
+                )) {
                 Finish();
                 return;
             }
@@ -471,14 +551,18 @@ public:
             auto& registry = scene.r();
             Expect(tick_state.did_sync, "DetachFromParent should trigger scene sync.");
             Expect(tick_state.updated_transform, "DetachFromParent should update transform data.");
-            if (IsValidNode(registry, m_root) && IsValidNode(registry, m_parent_b) && IsValidNode(registry, m_child)) {
+            if (IsValidNode(registry, m_root) && IsValidNode(registry, m_parent_b) &&
+                IsValidNode(registry, m_child)) {
                 const auto& root_node     = registry.get<ecs::CNode>(m_root);
                 const auto& parent_b_node = registry.get<ecs::CNode>(m_parent_b);
                 const auto& child_node    = registry.get<ecs::CNode>(m_child);
                 Expect(parent_b_node.child_count == 0, "Parent B child count should decrease after detach.");
                 Expect(child_node.parent_entt == m_root, "Child should detach back to root.");
                 Expect(child_node.depth == root_node.depth + 1, "Detached child depth should follow root.");
-                Expect(root_node.child_count == m_initial_root_child_count + 3, "Root child count after detach is incorrect.");
+                Expect(
+                    root_node.child_count == m_initial_root_child_count + 3,
+                    "Root child count after detach is incorrect."
+                );
                 Expect(
                     IsNear(GetWorldTranslation(child_node), m_child_local_position),
                     "Child world position after detach is incorrect."
@@ -495,7 +579,9 @@ public:
             Expect(m_destroy_parent_a_result, "DestroyEntity parent A should succeed.");
             Expect(m_destroy_parent_b_result, "DestroyEntity parent B should succeed.");
             Expect(tick_state.did_sync, "DestroyEntity should trigger scene sync for detached parents.");
-            Expect(tick_state.updated_transform, "DestroyEntity should update transform data for parent chains.");
+            Expect(
+                tick_state.updated_transform, "DestroyEntity should update transform data for parent chains."
+            );
             Expect(!registry.valid(m_child), "Destroyed child should be invalid.");
             Expect(!registry.valid(m_parent_a), "Destroyed parent A should be invalid.");
             Expect(!registry.valid(m_parent_b), "Destroyed parent B should be invalid.");
@@ -537,8 +623,8 @@ private:
     bool  m_destroy_parent_b_result  = false;
     Stage m_stage                    = Stage::CreateHierarchy;
 
-    float3 m_parent_a_position   = float3(1.f, 0.f, 0.f);
-    float3 m_parent_b_position   = float3(3.f, 0.f, 0.f);
+    float3 m_parent_a_position    = float3(1.f, 0.f, 0.f);
+    float3 m_parent_b_position    = float3(3.f, 0.f, 0.f);
     float3 m_child_local_position = float3(0.f, 2.f, 0.f);
 };
 
@@ -551,16 +637,16 @@ public:
 
     // 重置非法操作 testcase 状态
     void Reset(Scene&) override {
-        m_finished             = false;
-        m_failed               = false;
-        m_parent               = entt::null;
-        m_child                = entt::null;
-        m_attach_cycle_result  = true;
-        m_attach_self_result   = true;
-        m_destroy_parent_result = true;
-        m_destroy_child_result = false;
+        m_finished               = false;
+        m_failed                 = false;
+        m_parent                 = entt::null;
+        m_child                  = entt::null;
+        m_attach_cycle_result    = true;
+        m_attach_self_result     = true;
+        m_destroy_parent_result  = true;
+        m_destroy_child_result   = false;
         m_destroy_cleanup_result = false;
-        m_stage                = Stage::CreateHierarchy;
+        m_stage                  = Stage::CreateHierarchy;
     }
 
     // 创建父子节点、执行非法操作，并在最后清理测试 entity
@@ -658,6 +744,291 @@ private:
     Stage m_stage                  = Stage::CreateHierarchy;
 };
 
+class CreateDestroyRenderableTestCase final : public SceneTestCaseBase {
+public:
+    // 返回 renderable 创建删除 testcase 的名称
+    std::string_view Name() const override {
+        return "CreateDestroyRenderable";
+    }
+
+    // 第一次触发只创建 renderable 副本，下一次触发再执行删除
+    void Reset(Scene& scene) override {
+        m_finished = false;
+        m_failed   = false;
+
+        m_waiting_for_sync = false;
+
+        m_clone_roots.clear();
+        m_source_renderables.clear();
+        m_clone_renderables.clear();
+        m_destroy_clone_results.clear();
+        m_destroy_root_results.clear();
+        m_clone_root_offsets.clear();
+
+        if (HasValidStoredRenderableClones(scene)) {
+            m_run_mode                     = ERunMode::Destroy;
+            m_clone_roots                  = s_create_destroy_renderable_state.clone_roots;
+            m_clone_renderables            = s_create_destroy_renderable_state.clone_renderables;
+            m_initial_instance_counts      = s_create_destroy_renderable_state.initial_instance_counts;
+            m_expected_instance_increments = s_create_destroy_renderable_state.expected_instance_increments;
+            return;
+        }
+
+        s_create_destroy_renderable_state = {};
+        m_run_mode                        = ERunMode::Create;
+        m_clone_root_offsets              = BuildRenderableCloneRootOffsets(
+            SceneTestCaseRunner::Get().IsCreateDestroyRenderableStressEnabled(), m_single_clone_root_offset
+        );
+
+        const auto& cpu_scene = scene.cpu_scene();
+        m_initial_instance_counts.clear();
+        m_expected_instance_increments.clear();
+        m_initial_instance_counts.resize(cpu_scene.GetPrimitiveCount(), 0);
+        m_expected_instance_increments.resize(cpu_scene.GetPrimitiveCount(), 0);
+
+        for (uint primitive_id = 0; primitive_id < cpu_scene.GetPrimitiveCount(); ++primitive_id) {
+            m_initial_instance_counts[primitive_id] = cpu_scene.GetInstanceCountForPrimitive(primitive_id);
+        }
+
+        auto& registry = scene.r();
+        auto  view     = registry.view<ecs::CRenderable, ecs::CNode>();
+        for (const entt::entity entity : view) {
+            const auto& renderable = registry.get<ecs::CRenderable>(entity);
+            if (renderable.mesh_entt == entt::null || !registry.valid(renderable.mesh_entt) ||
+                !registry.all_of<ecs::CMesh>(renderable.mesh_entt)) {
+                continue;
+            }
+
+            m_source_renderables.push_back(entity);
+
+            const auto& mesh = registry.get<ecs::CMesh>(renderable.mesh_entt);
+            for (const entt::entity primitive_entt : mesh.primitive_entts) {
+                const uint primitive_id = cpu_scene.GetPrimitiveId(primitive_entt);
+                if (primitive_id == UINT_MAX || primitive_id >= m_expected_instance_increments.size()) {
+                    continue;
+                }
+                m_expected_instance_increments[primitive_id] += 1;
+            }
+        }
+    }
+
+    // 单次运行只执行创建或删除其中之一，便于用户观察 clone 场景
+    void PreTick(Scene& scene, const SceneTestCaseContext&) override {
+        if (m_waiting_for_sync) {
+            return;
+        }
+
+        if (m_run_mode == ERunMode::Create) {
+            if (!Expect(
+                    !m_source_renderables.empty(), "Scene should contain at least one source renderable."
+                )) {
+                Finish();
+                return;
+            }
+
+            m_clone_roots.clear();
+            m_clone_roots.reserve(m_clone_root_offsets.size());
+            m_clone_renderables.clear();
+            m_clone_renderables.reserve(m_source_renderables.size() * m_clone_root_offsets.size());
+
+            auto& registry = scene.r();
+            for (const float3& clone_root_offset : m_clone_root_offsets) {
+                EntityWithNodeCreateInfo clone_root_info{};
+                clone_root_info.name          = "SceneTestCase Renderable Clone Root";
+                clone_root_info.translation   = clone_root_offset;
+                const entt::entity clone_root = scene.CreateEntityWithNode(clone_root_info);
+                m_clone_roots.push_back(clone_root);
+
+                for (const entt::entity source_entity : m_source_renderables) {
+                    if (!Expect(
+                            registry.valid(source_entity) &&
+                                registry.all_of<ecs::CRenderable, ecs::CNode>(source_entity),
+                            "Source renderable became invalid before clone creation."
+                        )) {
+                        Finish();
+                        return;
+                    }
+
+                    const auto& source_node       = registry.get<ecs::CNode>(source_entity);
+                    const auto& source_renderable = registry.get<ecs::CRenderable>(source_entity);
+                    const auto  affine = Transform(source_node.d_world_transform).AffineDecomposition();
+
+                    RenderableCreateInfo create_info{};
+                    create_info.mesh_entt        = source_renderable.mesh_entt;
+                    create_info.parent_node_entt = clone_root;
+                    create_info.name             = "SceneTestCase Renderable Clone";
+                    create_info.translation      = affine.translation;
+                    create_info.rotation         = affine.quaternion;
+                    create_info.scale            = affine.scaling;
+
+                    m_clone_renderables.push_back(scene.CreateRenderableWithNode(create_info));
+                }
+            }
+        } else {
+            m_destroy_clone_results.clear();
+            m_destroy_clone_results.reserve(m_clone_renderables.size());
+            for (const entt::entity clone_entity : m_clone_renderables) {
+                m_destroy_clone_results.push_back(scene.DestroyRenderable(clone_entity));
+            }
+
+            m_destroy_root_results.clear();
+            m_destroy_root_results.reserve(m_clone_roots.size());
+            for (const entt::entity clone_root : m_clone_roots) {
+                m_destroy_root_results.push_back(scene.DestroyEntity(clone_root));
+            }
+        }
+
+        m_waiting_for_sync = true;
+    }
+
+    // 创建阶段验证 clone 和 instance 增量，删除阶段验证恢复到基线
+    void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
+        if (!m_waiting_for_sync) {
+            return;
+        }
+
+        if (m_run_mode == ERunMode::Create) {
+            auto& registry = scene.r();
+            Expect(tick_state.did_sync, "Renderable clone creation should trigger scene sync.");
+            Expect(tick_state.rebuilt_mesh, "Renderable clone creation should rebuild mesh instance cache.");
+            Expect(
+                m_clone_roots.size() == m_clone_root_offsets.size(),
+                "Clone root count should match the configured clone batch count."
+            );
+            Expect(
+                m_clone_renderables.size() == m_source_renderables.size() * m_clone_root_offsets.size(),
+                "Clone renderable count should match source renderables times batch count."
+            );
+
+            for (size_t root_index = 0;
+                 root_index < m_clone_roots.size() && root_index < m_clone_root_offsets.size();
+                 ++root_index) {
+                const entt::entity clone_root = m_clone_roots[root_index];
+                if (!Expect(
+                        clone_root != entt::null && registry.valid(clone_root) &&
+                            registry.all_of<ecs::CNode>(clone_root),
+                        "Every clone root should be a valid EntityWithNode."
+                    )) {
+                    continue;
+                }
+
+                const auto& clone_root_node = registry.get<ecs::CNode>(clone_root);
+                Expect(
+                    IsNear(GetWorldTranslation(clone_root_node), m_clone_root_offsets[root_index]),
+                    "Clone root world position should match the configured batch offset."
+                );
+
+                for (size_t source_index = 0; source_index < m_source_renderables.size(); ++source_index) {
+                    const entt::entity source_entity = m_source_renderables[source_index];
+                    const size_t       clone_index = root_index * m_source_renderables.size() + source_index;
+                    if (clone_index >= m_clone_renderables.size()) {
+                        Expect(false, "Clone renderable index is out of range.");
+                        continue;
+                    }
+
+                    const entt::entity clone_entity = m_clone_renderables[clone_index];
+                    if (!Expect(
+                            registry.valid(clone_entity) &&
+                                registry.all_of<ecs::CRenderable, ecs::CNode>(clone_entity),
+                            "Clone renderable should be valid after scene sync."
+                        )) {
+                        continue;
+                    }
+
+                    const auto& source_node       = registry.get<ecs::CNode>(source_entity);
+                    const auto& clone_node        = registry.get<ecs::CNode>(clone_entity);
+                    const auto& source_renderable = registry.get<ecs::CRenderable>(source_entity);
+                    const auto& clone_renderable  = registry.get<ecs::CRenderable>(clone_entity);
+
+                    Expect(
+                        clone_renderable.mesh_entt == source_renderable.mesh_entt,
+                        "Clone renderable should reuse the source mesh entity."
+                    );
+                    Expect(
+                        IsNear(
+                            GetWorldTranslation(clone_node),
+                            GetWorldTranslation(source_node) + m_clone_root_offsets[root_index]
+                        ),
+                        "Clone renderable world position should equal source world position plus batch "
+                        "offset."
+                    );
+                }
+            }
+
+            const auto& cpu_scene = scene.cpu_scene();
+            for (uint primitive_id = 0; primitive_id < cpu_scene.GetPrimitiveCount(); ++primitive_id) {
+                Expect(
+                    cpu_scene.GetInstanceCountForPrimitive(primitive_id) ==
+                        m_initial_instance_counts[primitive_id] +
+                            m_expected_instance_increments[primitive_id] * m_clone_root_offsets.size(),
+                    "Primitive instance count after renderable clone creation is incorrect."
+                );
+            }
+
+            if (!m_failed) {
+                s_create_destroy_renderable_state.clone_roots             = m_clone_roots;
+                s_create_destroy_renderable_state.clone_renderables       = m_clone_renderables;
+                s_create_destroy_renderable_state.initial_instance_counts = m_initial_instance_counts;
+                s_create_destroy_renderable_state.expected_instance_increments =
+                    m_expected_instance_increments;
+            }
+            Finish();
+            return;
+        }
+
+        auto& registry = scene.r();
+        for (const bool destroy_result : m_destroy_clone_results) {
+            Expect(destroy_result, "DestroyRenderable should succeed for every clone renderable.");
+        }
+        for (const bool destroy_result : m_destroy_root_results) {
+            Expect(destroy_result, "DestroyEntity should succeed for every clone root.");
+        }
+        Expect(tick_state.did_sync, "Renderable clone cleanup should trigger scene sync.");
+        Expect(tick_state.rebuilt_mesh, "Renderable clone cleanup should rebuild mesh instance cache.");
+
+        for (const entt::entity clone_entity : m_clone_renderables) {
+            Expect(!registry.valid(clone_entity), "Destroyed clone renderable should be invalid.");
+        }
+        for (const entt::entity clone_root : m_clone_roots) {
+            Expect(!registry.valid(clone_root), "Destroyed clone root should be invalid.");
+        }
+
+        const auto& cpu_scene = scene.cpu_scene();
+        for (uint primitive_id = 0; primitive_id < cpu_scene.GetPrimitiveCount(); ++primitive_id) {
+            Expect(
+                cpu_scene.GetInstanceCountForPrimitive(primitive_id) ==
+                    m_initial_instance_counts[primitive_id],
+                "Primitive instance count should return to the initial baseline after clone cleanup."
+            );
+        }
+
+        if (!m_failed) {
+            s_create_destroy_renderable_state = {};
+        }
+        Finish();
+    }
+
+private:
+    enum class ERunMode {
+        Create,
+        Destroy,
+    };
+
+    Array<entt::entity> m_source_renderables;
+    Array<entt::entity> m_clone_roots;
+    Array<entt::entity> m_clone_renderables;
+    Array<bool>         m_destroy_clone_results;
+    Array<bool>         m_destroy_root_results;
+    Array<uint>         m_initial_instance_counts;
+    Array<uint>         m_expected_instance_increments;
+    Array<float3>       m_clone_root_offsets;
+
+    ERunMode m_run_mode         = ERunMode::Create;
+    bool     m_waiting_for_sync = false;
+
+    float3 m_single_clone_root_offset = float3(0.f, 0.f, 20.f);
+};
+
 } // namespace
 
 // 根据 testcase ID 返回日志可读名称
@@ -698,6 +1069,8 @@ UniquePtr<ISceneTestCase> CreateSceneTestCase(ESceneTestCaseId test_case_id) {
             return MakeUnique<EntityWithNodeStructuralFlowTestCase>();
         case ESceneTestCaseId::EntityWithNodeRejectInvalidOps:
             return MakeUnique<EntityWithNodeRejectInvalidOpsTestCase>();
+        case ESceneTestCaseId::CreateDestroyRenderable:
+            return MakeUnique<CreateDestroyRenderableTestCase>();
         default:
             return nullptr;
     }

@@ -26,4 +26,13 @@ struct EntityWithNodeCreateInfo {
     float3           scale            = float3(1.f, 1.f, 1.f);
 };
 
+struct RenderableCreateInfo {
+    entt::entity     mesh_entt        = entt::null;
+    entt::entity     parent_node_entt = entt::null;
+    std::string_view name             = {};
+    float3           translation      = float3(0.f, 0.f, 0.f);
+    Quaternion       rotation         = Quaternion();
+    float3           scale            = float3(1.f, 1.f, 1.f);
+};
+
 } // namespace Moer

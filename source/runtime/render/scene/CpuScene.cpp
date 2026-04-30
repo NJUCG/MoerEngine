@@ -5,7 +5,6 @@
 #include "log/LogSystem.h"
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
 #include <entt/entt.hpp>
-#include <sstream>
 
 namespace Moer {
 
@@ -72,12 +71,18 @@ void CpuScene::Update() {
         UpdateLights();
     }
     UpdateMaterials();
-    UpdateMeshes();
+    if (HasMeshRebuildRequest()) {
+        // Renderable create/destroy 当前走全量 rebuild，先保证 instance / draw command 结构正确
+        RebuildMeshes();
+    } else {
+        UpdateMeshes();
+    }
 
     r.clear<ecs::CTagNeedCreateLight>();
     r.clear<ecs::CTagNeedUpdateLight>();
     r.clear<ecs::CTagNeedUpdateMaterial>();
     r.clear<ecs::CTagNeedUpdateTransform>();
+    r.clear<ecs::CTagNeedRebuildMesh>();
 }
 
 uint CpuScene::GetPrimitiveId(entt::entity primitive_entt) const {
@@ -544,6 +549,18 @@ void CpuScene::InitializeMeshes() {
 
         assert(m_draw_cmd_buf.size() == m_primitive_buf.size());
     }
+}
+
+// 检查本帧是否存在 renderable 结构变化请求
+bool CpuScene::HasMeshRebuildRequest() const {
+    const auto& r    = m_logical_scene.r();
+    const auto  view = r.view<const ecs::CTagNeedRebuildMesh>();
+    return view.begin() != view.end();
+}
+
+// 当前通过全量重建 mesh instance cache 处理 renderable create/destroy，优先保证结构正确性
+void CpuScene::RebuildMeshes() {
+    InitializeMeshes();
 }
 
 void CpuScene::UpdateMeshes() {

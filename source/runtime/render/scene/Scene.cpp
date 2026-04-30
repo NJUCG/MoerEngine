@@ -99,7 +99,7 @@ const Scene::TickState& Scene::Tick(bool is_run_test_case) {
 
         m_cpu_scene->Update();
 
-        m_gpu_scene->Update(*m_logical_scene, *m_cpu_scene);
+        m_gpu_scene->Update(*m_logical_scene, *m_cpu_scene, m_last_tick_state.rebuilt_mesh);
 
         FinalizeDestroyedLights(*this);
     }
@@ -133,9 +133,10 @@ Scene::TickState Scene::BuildPendingTickState() const {
     state.created_material  = !registry.view<const ecs::CTagNeedCreateMaterial>().empty();
     state.created_transform = !registry.view<const ecs::CTagNeedCreateTransform>().empty();
     state.destroyed_light   = !registry.view<const ecs::CTagNeedDestroyLight>().empty();
+    state.rebuilt_mesh      = !registry.view<const ecs::CTagNeedRebuildMesh>().empty();
     state.did_sync          = state.updated_light || state.updated_material || state.updated_transform ||
                               state.created_light || state.created_material || state.created_transform ||
-                              state.destroyed_light;
+                              state.destroyed_light || state.rebuilt_mesh;
     return state;
 }
 
