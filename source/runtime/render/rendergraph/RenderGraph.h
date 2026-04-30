@@ -93,9 +93,9 @@ public:
     template<typename T>
     void AddPass(T* parameters, ERGPassFlags flags, typename RGPass::Execute&& execute) {
         assert(parameters && "RenderGraph pass parameters must be graph-owned");
-        std::string pass_name = std::string("RGPass_") + std::to_string(m_passes.size());
+        std::string pass_name = "RGPass_" + std::to_string(m_passes.size());
         if constexpr (requires(const T& value) {
-                          value.GetRGPassName();
+                          std::string(value.GetRGPassName());
                       }) {
             pass_name = std::string(parameters->GetRGPassName());
         }

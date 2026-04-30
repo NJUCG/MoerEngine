@@ -34,8 +34,8 @@ struct MyPassParameters {
     RGTextureView output;
 
     void DeclareRGAccess(RGParameterAccessCollector& collector) const {
-        collector.Texture(input);
-        collector.Texture(output);
+        collector.AddTexture(input);
+        collector.AddTexture(output);
     }
 };
 
@@ -73,8 +73,8 @@ struct MyPlatformPassParameters {
     RGTextureView output;
 
     void DeclareRGAccess(RGParameterAccessCollector& collector) const {
-        collector.Texture(input);
-        collector.Texture(output);
+        collector.AddTexture(input);
+        collector.AddTexture(output);
     }
 };
 

@@ -57,11 +57,11 @@ bool               RGPassHasSingleExecutionDomain(ERGPassFlags flags);
 
 class RGParameterAccessCollector {
 public:
-    void Texture(const RGTextureView& view) {
+    void AddTexture(const RGTextureView& view) {
         texture_accesses.push_back(view.ToAccess());
     }
 
-    void Buffer(const RGBufferView& view) {
+    void AddBuffer(const RGBufferView& view) {
         buffer_accesses.push_back(view.ToAccess());
     }
 
