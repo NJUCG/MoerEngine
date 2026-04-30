@@ -274,6 +274,8 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     image_idx = 0;
 }
 VkSwapchain::~VkSwapchain() {
+    Sync();
+
     if (handle) {
         vkDestroySwapchainKHR(device.GetDevice(), handle, VK_NULL_HANDLE);
     }
@@ -375,7 +377,8 @@ void VkSwapchain::Sync() {
     while (cur_present_cnt.load(std::memory_order_relaxed) > 0) {
         std::this_thread::yield();
     }
-    // wait for present queue
+    // Swapchain semaphores are signaled by graphics queue and waited by present queue.
+    vkQueueWaitIdle(device.GetGraphicsQueue());
     vkQueueWaitIdle(device.GetPresentQueue());
 }
 } // namespace Moer::Render

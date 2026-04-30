@@ -354,10 +354,14 @@ void EditorUI::ShowSceneColor() {
 
     const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
     if (!m_b_show_scene_color) {
+        m_b_scene_color_mouse_captured = false;
+        WindowInput::Get().is_active   = false;
         return;
     }
     if (!ImGui::Begin("Scene Color", &m_b_show_scene_color, window_flags)) {
         // Should not call ImGui::End() here
+        m_b_scene_color_mouse_captured = false;
+        WindowInput::Get().is_active   = false;
         return;
     }
 
@@ -402,16 +406,39 @@ void EditorUI::ShowSceneColor() {
     }
 
     // inject. Needs to be refactored (camera control)
-    // 只有在Cursor位于SceneColor窗口上时，才可以控制摄像机
-    uint2 mouse_pos = uint2(
-        ImGui::GetMousePos().x - ImGui::GetWindowPos().x, ImGui::GetMousePos().y - ImGui::GetWindowPos().y
-    );
-    static uint border = 4;
+    // 鼠标按下起点在SceneColor内时，才捕获本次拖拽并控制摄像机
+    static constexpr float border = 4.f;
 
-    WindowInput::Get().is_active = mouse_pos.x > m_scene_color_pos.x + border &&
-                                   mouse_pos.x < m_scene_color_pos.x + m_scene_color_resolution.x - border &&
-                                   mouse_pos.y > m_scene_color_pos.x + border &&
-                                   mouse_pos.y < m_scene_color_pos.y + m_scene_color_resolution.y - border;
+    const float  scene_color_top = menu_rect.Max.y + (m_b_separate_window ? 0.f : menu_bar);
+    const ImVec2 scene_color_min = ImVec2(window_rect.Min.x + border, scene_color_top + border);
+    const ImVec2 scene_color_max = ImVec2(
+        window_rect.Min.x + m_scene_color_resolution.x - border,
+        scene_color_top + m_scene_color_resolution.y - border
+    );
+    const ImVec2 mouse_pos = ImGui::GetMousePos();
+
+    const bool b_scene_color_hovered = mouse_pos.x > scene_color_min.x && mouse_pos.x < scene_color_max.x &&
+                                       mouse_pos.y > scene_color_min.y && mouse_pos.y < scene_color_max.y;
+
+    const bool b_mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                                 ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+                                 ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+    const bool b_mouse_down    = WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
+                                 WindowInput::Get().mouse_button_state[MouseButtons::Middle] ||
+                                 WindowInput::Get().mouse_button_state[MouseButtons::Right];
+
+    if (!b_mouse_down) {
+        m_b_scene_color_mouse_captured = false;
+    } else if (!m_b_scene_color_mouse_captured && b_mouse_clicked && b_scene_color_hovered) {
+        m_b_scene_color_mouse_captured     = true;
+        WindowInput::Get().is_cursor_dirty = true;
+        WindowInput::Get().cursor_delta_x  = 0.f;
+        WindowInput::Get().cursor_delta_y  = 0.f;
+    }
+
+    WindowInput::Get().is_active =
+        m_b_scene_color_mouse_captured ||
+        (b_scene_color_hovered && WindowInput::Get().key_button_switch_state[KeyButtons::F]);
 
     ImGui::End();
 }

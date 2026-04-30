@@ -64,9 +64,10 @@ private:
 #endif
 
 private:
-    bool   m_b_show_scene_color   = true;
-    bool   m_b_show_config        = true;
-    bool   m_b_show_scene_editing = true;
+    bool   m_b_show_scene_color           = true;
+    bool   m_b_show_config                = true;
+    bool   m_b_show_scene_editing         = true;
+    bool   m_b_scene_color_mouse_captured = false;
     float2 m_scene_color_resolution; // TODO: why float2? not uint2?
     float2 m_scene_color_pos;
     bool   m_b_show = true;
