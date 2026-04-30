@@ -70,8 +70,21 @@ void SceneEditingUI::ShowWindow(bool* p_open) {
             ImGui::Separator();
             ImGui::SliderFloat3("PointLight Position", (float*)&m_add_point_light_position, -20.f, 20.f);
             ImGui::ColorEdit3("PointLight Color", (float*)&m_add_point_light_color);
+            ImGui::SliderFloat(
+                "PointLight Intensity",
+                &m_add_point_light_intensity,
+                1.f,
+                100000.f,
+                "%.0f",
+                ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat
+            );
             if (ImGui::Button("Add Point Light")) {
-                if (SceneEditing::AddPointLight(*scene, m_add_point_light_position, m_add_point_light_color)) {
+                if (SceneEditing::AddPointLight(
+                        *scene,
+                        m_add_point_light_position,
+                        m_add_point_light_color,
+                        m_add_point_light_intensity
+                    )) {
                     m_last_light_status = "Point light created";
                 } else {
                     m_last_light_status = "Create point light failed";
@@ -99,10 +112,9 @@ void SceneEditingUI::ShowWindow(bool* p_open) {
                 create_info.translation = m_create_translation;
                 create_info.scale       = m_create_scale;
 
-                create_info.material.name             = "Runtime UI Procedural Material";
-                create_info.material.albedo_factor    = float4(
-                    m_create_albedo.x, m_create_albedo.y, m_create_albedo.z, 1.f
-                );
+                create_info.material.name = "Runtime UI Procedural Material";
+                create_info.material.albedo_factor =
+                    float4(m_create_albedo.x, m_create_albedo.y, m_create_albedo.z, 1.f);
                 create_info.material.roughness_factor = m_create_roughness;
                 create_info.material.metallic_factor  = m_create_metallic;
 

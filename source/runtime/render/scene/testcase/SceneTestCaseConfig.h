@@ -3,7 +3,6 @@
  */
 #pragma once
 
-#include "misc/Traits.h"
 #include "scene/testcase/SceneTestCaseId.h"
 
 namespace Moer {

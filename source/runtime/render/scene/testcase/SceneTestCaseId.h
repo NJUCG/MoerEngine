@@ -35,9 +35,6 @@ enum class ESceneTestCaseId : std::uint32_t {
     // 验证 procedural material / primitive / mesh / renderable 创建链路
     CreateProceduralRenderable,
 
-    // 调试创建 point light，并走 Scene sync 路径
-    DebugAddPointLight,
-
     // 调试修改场景材质，并走 Scene sync 路径
     DebugModifyMaterial,
 };

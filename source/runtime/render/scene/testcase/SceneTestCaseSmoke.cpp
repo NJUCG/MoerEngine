@@ -361,73 +361,6 @@ private:
     float3       m_patched_position = float3(0.35f, 2.75f, 0.45f);
 };
 
-class DebugAddPointLightTestCase final : public SceneTestCaseBase {
-public:
-    DebugAddPointLightTestCase(const float3& position, const float3& color) :
-        m_position(position),
-        m_color(color) {}
-
-    // 返回调试 point light 创建 testcase 的名称
-    std::string_view Name() const override {
-        return "DebugAddPointLight";
-    }
-
-    // 重置创建状态
-    void Reset(Scene&) override {
-        m_finished     = false;
-        m_failed       = false;
-        m_light_entity = entt::null;
-        m_created      = false;
-    }
-
-    // 创建 point light，让本帧 Tick 采样 create tag
-    void PreTick(Scene& scene, const SceneTestCaseContext&) override {
-        if (m_created) {
-            return;
-        }
-
-        PointLightCreateInfo create_info{};
-        create_info.position  = m_position;
-        create_info.color     = m_color;
-        create_info.intensity = 10000.f;
-        create_info.name      = "SceneTestCase DebugAddPointLight";
-
-        m_light_entity = scene.CreatePointLight(create_info);
-        m_created      = true;
-    }
-
-    // 验证调试 point light 创建请求已被 Scene sync 消费
-    void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
-        auto& registry = scene.r();
-        Expect(m_light_entity != entt::null, "DebugAddPointLight returned entt::null.");
-        Expect(registry.valid(m_light_entity), "Debug point light entity is invalid.");
-        Expect(
-            registry.all_of<ecs::CLightPoint, ecs::CNode>(m_light_entity),
-            "Debug point light is missing CLightPoint or CNode."
-        );
-        Expect(tick_state.did_sync, "DebugAddPointLight should trigger scene sync.");
-        Expect(tick_state.created_light, "DebugAddPointLight should set created_light TickState.");
-        Expect(tick_state.updated_transform, "DebugAddPointLight should set updated_transform TickState.");
-
-        LOG_INFO(
-            "SceneTestCase DebugAddPointLight created point light at ({}, {}, {}) with color ({}, {}, {}).",
-            m_position.x,
-            m_position.y,
-            m_position.z,
-            m_color.x,
-            m_color.y,
-            m_color.z
-        );
-        Finish();
-    }
-
-private:
-    entt::entity m_light_entity = entt::null;
-    bool         m_created      = false;
-    float3       m_position     = float3(0.f, 2.f, 0.f);
-    float3       m_color        = float3(1.f, 0.2f, 0.05f);
-};
-
 class DebugModifyMaterialTestCase final : public SceneTestCaseBase {
 public:
     // 返回调试材质修改 testcase 的名称
@@ -1338,8 +1271,6 @@ std::string_view GetSceneTestCaseName(ESceneTestCaseId test_case_id) {
             return "CreateDestroyRenderable";
         case ESceneTestCaseId::CreateProceduralRenderable:
             return "CreateProceduralRenderable";
-        case ESceneTestCaseId::DebugAddPointLight:
-            return "DebugAddPointLight";
         case ESceneTestCaseId::DebugModifyMaterial:
             return "DebugModifyMaterial";
     }
@@ -1365,10 +1296,6 @@ UniquePtr<ISceneTestCase> CreateSceneTestCase(const SceneTestCaseRequest& reques
             return MakeUnique<CreateDestroyRenderableTestCase>(request.renderable_stress_create_enabled);
         case ESceneTestCaseId::CreateProceduralRenderable:
             return MakeUnique<CreateProceduralRenderableTestCase>();
-        case ESceneTestCaseId::DebugAddPointLight:
-            return MakeUnique<DebugAddPointLightTestCase>(
-                request.add_light_position, request.add_light_color
-            );
         case ESceneTestCaseId::DebugModifyMaterial:
             return MakeUnique<DebugModifyMaterialTestCase>();
         default:

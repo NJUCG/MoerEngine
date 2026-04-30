@@ -1,5 +1,6 @@
 #include "scene/editing/SceneEditing.h"
 
+#include "log/LogSystem.h"
 #include "math/Function.h"
 #include "scene/LogicalComponents.h"
 #include "scene/Scene.h"
@@ -64,14 +65,41 @@ bool SetMainDirectionalLightDirection(Scene& scene, const float3& direction) {
     return true;
 }
 
-bool AddPointLight(Scene& scene, const float3& position, const float3& color) {
+bool AddPointLight(Scene& scene, const float3& position, const float3& color, float intensity) {
     PointLightCreateInfo create_info{};
     create_info.position  = position;
     create_info.color     = color;
-    create_info.intensity = 1.f;
+    create_info.intensity = intensity;
     create_info.name      = "Editing Point Light";
 
-    return scene.CreatePointLight(create_info) != entt::null;
+    const entt::entity light_entity = scene.CreatePointLight(create_info);
+    if (light_entity == entt::null) {
+        LOG_ERROR(
+            "SceneEditing AddPointLight failed: position=({}, {}, {}), color=({}, {}, {}), intensity={}",
+            position.x,
+            position.y,
+            position.z,
+            color.x,
+            color.y,
+            color.z,
+            intensity
+        );
+        return false;
+    }
+
+    LOG_INFO(
+        "SceneEditing AddPointLight created entity {}: position=({}, {}, {}), color=({}, {}, {}), "
+        "intensity={}",
+        static_cast<uint32>(entt::to_integral(light_entity)),
+        position.x,
+        position.y,
+        position.z,
+        color.x,
+        color.y,
+        color.z,
+        intensity
+    );
+    return true;
 }
 
 } // namespace Moer::SceneEditing
