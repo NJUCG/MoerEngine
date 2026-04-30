@@ -46,4 +46,12 @@ bool RGAccessConflicts(ERGAccessMode lhs, ERGAccessMode rhs) {
     return RGAccessWrites(lhs) || RGAccessWrites(rhs);
 }
 
+RGTextureAccess RGTextureView::ToAccess() const {
+    return RGTextureAccess{handle, range, access, state, queue, bindless};
+}
+
+RGBufferAccess RGBufferView::ToAccess() const {
+    return RGBufferAccess{handle, range, access, state, queue, bindless};
+}
+
 } // namespace Moer

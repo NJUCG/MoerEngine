@@ -25,59 +25,12 @@ private:
 
 class RGSetupContext {
 public:
-    RGSetupContext(RenderGraph& graph, uint32_t pass_index) : m_graph(graph), m_pass_index(pass_index) {}
+    explicit RGSetupContext(RenderGraph& graph) : m_graph(graph) {}
 
-    void ReadTexture(
-        RenderGraphHandle      handle,
-        Render::ETextureState  state = Render::ETextureState::SHADER_RESOURCE,
-        RGTextureRange         range = {},
-        Render::EQueueType     queue = Render::EQueueType::Graphics,
-        bool                   bindless = false
-    );
-
-    void WriteTexture(
-        RenderGraphHandle      handle,
-        Render::ETextureState  state = Render::ETextureState::RENDER_TARGET,
-        RGTextureRange         range = {},
-        Render::EQueueType     queue = Render::EQueueType::Graphics,
-        bool                   bindless = false
-    );
-
-    void ReadWriteTexture(
-        RenderGraphHandle      handle,
-        Render::ETextureState  state = Render::ETextureState::UNORDERED_ACCESS,
-        RGTextureRange         range = {},
-        Render::EQueueType     queue = Render::EQueueType::Graphics,
-        bool                   bindless = false
-    );
-
-    void ReadBuffer(
-        RenderGraphHandle     handle,
-        Render::EBufferState  state = Render::EBufferState::SHADER_RESOURCE,
-        RGBufferRange         range = {},
-        Render::EQueueType    queue = Render::EQueueType::Graphics,
-        bool                  bindless = false
-    );
-
-    void WriteBuffer(
-        RenderGraphHandle     handle,
-        Render::EBufferState  state = Render::EBufferState::UNORDERED_ACCESS,
-        RGBufferRange         range = {},
-        Render::EQueueType    queue = Render::EQueueType::Graphics,
-        bool                  bindless = false
-    );
-
-    void ReadWriteBuffer(
-        RenderGraphHandle     handle,
-        Render::EBufferState  state = Render::EBufferState::UNORDERED_ACCESS,
-        RGBufferRange         range = {},
-        Render::EQueueType    queue = Render::EQueueType::Graphics,
-        bool                  bindless = false
-    );
+    RenderGraph& Graph() const { return m_graph; }
 
 private:
     RenderGraph& m_graph;
-    uint32_t     m_pass_index{0};
 };
 
 enum class ERGPassFlags : uint8_t {
@@ -100,6 +53,20 @@ Render::EQueueType RGPassQueue(ERGPassFlags flags);
 EPassType          RGPassType(ERGPassFlags flags);
 bool               RGPassHasSingleExecutionDomain(ERGPassFlags flags);
 
+class RGParameterAccessCollector {
+public:
+    void Texture(const RGTextureView& view) {
+        texture_accesses.push_back(view.ToAccess());
+    }
+
+    void Buffer(const RGBufferView& view) {
+        buffer_accesses.push_back(view.ToAccess());
+    }
+
+    Moer::Array<RGTextureAccess> texture_accesses{};
+    Moer::Array<RGBufferAccess>  buffer_accesses{};
+};
+
 struct RGPass {
     using Execute = std::function<void(RHICommandList& cmd_list, RGContext context)>;
 
@@ -115,6 +82,7 @@ struct RGPass {
 
 struct RGSetupPass {
     std::string name{};
+    std::function<void(RGSetupContext& setup)> execute{};
 };
 
 } // namespace Moer

@@ -92,11 +92,11 @@
     },
     {
       "id": "AR-06",
-      "rule": "AddSetupPass and Compile may run off-thread, but setup functions may only declare resources and pass metadata. They must not mutate RHI runtime state."
+      "rule": "AddSetupPass and Compile may run off-thread, but setup functions are preparation tasks executed before pass execution lambdas. Resource access is declared by graph-owned pass parameters through RG resource views. Setup functions must not mutate RHI runtime state."
     },
     {
       "id": "AR-07",
-      "rule": "RenderGraph owns a frame-local CPU allocator for graph nodes, RGResource descriptors, access declarations, pass parameter blobs, compiled artifacts, and resolved resource tables. Allocation is phase-owned: setup data freezes before compile, compiled data freezes before record, and record workers receive read-only resolved data."
+      "rule": "RenderGraph owns a frame-local CPU allocator for graph nodes, RGResource descriptors, pass parameter blobs with RG resource views, compiled artifacts, and resolved resource tables. Allocation is phase-owned: setup data freezes before compile, compiled data freezes before record, and record workers receive read-only resolved data."
     },
     {
       "id": "AR-08",

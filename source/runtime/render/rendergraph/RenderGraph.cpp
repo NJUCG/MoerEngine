@@ -38,66 +38,6 @@ void RGFrameContext::Reset(uint64_t frame_sequence) {
     m_receipts.clear();
 }
 
-void RGSetupContext::ReadTexture(
-    RenderGraphHandle handle,
-    Render::ETextureState state,
-    RGTextureRange range,
-    Render::EQueueType queue,
-    bool bindless
-) {
-    m_graph.AddTextureAccess(m_pass_index, RGTextureAccess{handle, range, ERGAccessMode::Read, state, queue, bindless});
-}
-
-void RGSetupContext::WriteTexture(
-    RenderGraphHandle handle,
-    Render::ETextureState state,
-    RGTextureRange range,
-    Render::EQueueType queue,
-    bool bindless
-) {
-    m_graph.AddTextureAccess(m_pass_index, RGTextureAccess{handle, range, ERGAccessMode::Write, state, queue, bindless});
-}
-
-void RGSetupContext::ReadWriteTexture(
-    RenderGraphHandle handle,
-    Render::ETextureState state,
-    RGTextureRange range,
-    Render::EQueueType queue,
-    bool bindless
-) {
-    m_graph.AddTextureAccess(m_pass_index, RGTextureAccess{handle, range, ERGAccessMode::ReadWrite, state, queue, bindless});
-}
-
-void RGSetupContext::ReadBuffer(
-    RenderGraphHandle handle,
-    Render::EBufferState state,
-    RGBufferRange range,
-    Render::EQueueType queue,
-    bool bindless
-) {
-    m_graph.AddBufferAccess(m_pass_index, RGBufferAccess{handle, range, ERGAccessMode::Read, state, queue, bindless});
-}
-
-void RGSetupContext::WriteBuffer(
-    RenderGraphHandle handle,
-    Render::EBufferState state,
-    RGBufferRange range,
-    Render::EQueueType queue,
-    bool bindless
-) {
-    m_graph.AddBufferAccess(m_pass_index, RGBufferAccess{handle, range, ERGAccessMode::Write, state, queue, bindless});
-}
-
-void RGSetupContext::ReadWriteBuffer(
-    RenderGraphHandle handle,
-    Render::EBufferState state,
-    RGBufferRange range,
-    Render::EQueueType queue,
-    bool bindless
-) {
-    m_graph.AddBufferAccess(m_pass_index, RGBufferAccess{handle, range, ERGAccessMode::ReadWrite, state, queue, bindless});
-}
-
 bool RGPassHasSingleExecutionDomain(ERGPassFlags flags) {
     uint32_t count = 0;
     count += EnumHasAnyFlag(flags, ERGPassFlags::Graphics) ? 1 : 0;
@@ -212,14 +152,10 @@ void RenderGraph::ExportBuffer(RenderGraphHandle handle, Render::EBufferState fi
 
 void RenderGraph::AddSetupPass(std::string_view name, SetupExecute&& setup) {
     assert(m_phase == Phase::Setup);
-    const uint32_t pass_index = static_cast<uint32_t>(m_passes.size());
-    m_setup_passes.push_back(RGSetupPass{std::string(name)});
-    m_passes.push_back(RGPass{.name = std::string(name)});
-    RGSetupContext context(*this, pass_index);
-    setup(context);
+    m_setup_passes.push_back(RGSetupPass{std::string(name), std::move(setup)});
 }
 
-void RenderGraph::AddPassInternal(
+uint32_t RenderGraph::AddPassInternal(
     void* parameters,
     std::type_index type,
     uint32_t size,
@@ -228,17 +164,15 @@ void RenderGraph::AddPassInternal(
 ) {
     assert(m_phase == Phase::Setup);
     assert(RGPassHasSingleExecutionDomain(flags));
-    if (m_passes.empty() || m_passes.back().execute) {
-        m_setup_passes.push_back(RGSetupPass{"DirectAddPassCall"});
-        m_passes.push_back(RGPass{.name = "DirectAddPassCall"});
-    }
-
-    auto& pass = m_passes.back();
+    const uint32_t pass_index = static_cast<uint32_t>(m_passes.size());
+    auto& pass = m_passes.emplace_back();
+    pass.name = std::string("RGPass_") + std::to_string(pass_index);
     pass.parameters = parameters;
     pass.parameter_type = type;
     pass.parameter_size = size;
     pass.flags = flags;
     pass.execute = std::move(execute);
+    return pass_index;
 }
 
 void RenderGraph::Compile() {
@@ -252,6 +186,10 @@ void RenderGraph::Compile() {
 
 void RenderGraph::Dispatch(RHICommandList* cmd_list) {
     Compile();
+    RGSetupContext setup_context(*this);
+    for (auto& setup_pass : m_setup_passes) {
+        setup_pass.execute(setup_context);
+    }
     if (cmd_list) {
         RGContext context(*this);
         for (auto& pass : m_passes) {

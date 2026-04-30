@@ -93,7 +93,14 @@ public:
     template<typename T>
     void AddPass(T* parameters, ERGPassFlags flags, typename RGPass::Execute&& execute) {
         assert(parameters && "RenderGraph pass parameters must be graph-owned");
-        AddPassInternal(parameters, std::type_index(typeid(T)), static_cast<uint32_t>(sizeof(T)), flags, std::move(execute));
+        const uint32_t pass_index = AddPassInternal(
+            parameters,
+            std::type_index(typeid(T)),
+            static_cast<uint32_t>(sizeof(T)),
+            flags,
+            std::move(execute)
+        );
+        CollectParameterAccess(pass_index, *parameters);
     }
 
     void Compile();
@@ -118,7 +125,28 @@ private:
         uint32_t size{0};
     };
 
-    void AddPassInternal(void* parameters, std::type_index type, uint32_t size, ERGPassFlags flags, RGPass::Execute&& execute);
+    uint32_t AddPassInternal(
+        void* parameters,
+        std::type_index type,
+        uint32_t size,
+        ERGPassFlags flags,
+        RGPass::Execute&& execute
+    );
+    template<typename T>
+    void CollectParameterAccess(uint32_t pass_index, const T& parameters) {
+        if constexpr (requires(const T& value, RGParameterAccessCollector& collector) {
+                          value.DeclareRGAccess(collector);
+                      }) {
+            RGParameterAccessCollector collector{};
+            parameters.DeclareRGAccess(collector);
+            for (const auto& texture_access : collector.texture_accesses) {
+                AddTextureAccess(pass_index, texture_access);
+            }
+            for (const auto& buffer_access : collector.buffer_accesses) {
+                AddBufferAccess(pass_index, buffer_access);
+            }
+        }
+    }
     void AddTextureAccess(uint32_t pass_index, const RGTextureAccess& access);
     void AddBufferAccess(uint32_t pass_index, const RGBufferAccess& access);
     RGResource& CheckedResource(RenderGraphHandle handle);
@@ -135,8 +163,6 @@ private:
     Moer::Array<RGPass>        m_passes{};
     Moer::Array<RGAllocation>  m_allocations{};
     RGCompiledPlan             m_compiled_plan{};
-
-    friend class RGSetupContext;
 };
 
 } // namespace Moer

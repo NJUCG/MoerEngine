@@ -76,6 +76,28 @@ struct RGBufferAccess {
     bool                   bindless{false};
 };
 
+struct RGTextureView {
+    RenderGraphHandle      handle{};
+    RGTextureRange         range{};
+    ERGAccessMode          access{ERGAccessMode::Read};
+    Render::ETextureState  state{Render::ETextureState::SHADER_RESOURCE};
+    Render::EQueueType     queue{Render::EQueueType::Graphics};
+    bool                   bindless{false};
+
+    RGTextureAccess ToAccess() const;
+};
+
+struct RGBufferView {
+    RenderGraphHandle     handle{};
+    RGBufferRange         range{};
+    ERGAccessMode         access{ERGAccessMode::Read};
+    Render::EBufferState  state{Render::EBufferState::SHADER_RESOURCE};
+    Render::EQueueType    queue{Render::EQueueType::Graphics};
+    bool                  bindless{false};
+
+    RGBufferAccess ToAccess() const;
+};
+
 struct RGResource {
     std::string       name{};
     ERGResourceKind   kind{ERGResourceKind::Texture};
