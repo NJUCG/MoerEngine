@@ -1,5 +1,7 @@
 #include "rendergraph/RenderGraph.h"
 
+#include "misc/Assert.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -225,8 +227,8 @@ void RenderGraph::AddPassInternal(
     assert(m_phase == Phase::Setup);
     assert(RGPassHasSingleExecutionDomain(flags));
     if (m_passes.empty() || m_passes.back().execute) {
-        m_setup_passes.push_back(RGSetupPass{"UnnamedPass"});
-        m_passes.push_back(RGPass{.name = "UnnamedPass"});
+        m_setup_passes.push_back(RGSetupPass{"DirectAddPassCall"});
+        m_passes.push_back(RGPass{.name = "DirectAddPassCall"});
     }
 
     auto& pass = m_passes.back();
@@ -255,11 +257,12 @@ void RenderGraph::Dispatch(RHICommandList* cmd_list) {
         }
     }
 
-    for (const auto& resource : m_resources) {
+    for (uint32_t resource_index = 0; resource_index < m_resources.size(); ++resource_index) {
+        const auto& resource = m_resources[resource_index];
         if (!resource.exported) {
             continue;
         }
-        const auto handle = RenderGraphHandle(static_cast<RenderGraphHandle::Index>(&resource - m_resources.data()));
+        const auto handle = RenderGraphHandle(static_cast<RenderGraphHandle::Index>(resource_index));
         m_frame_context.PublishReceipt(RGFrameReceipt{
             .resource = handle,
             .owner_queue = resource.owner_queue,
@@ -327,13 +330,18 @@ void RenderGraph::ValidateSetup() const {
     Moer::Array<bool> buffer_written(m_resources.size(), false);
 
     for (const auto& pass : m_passes) {
-        assert(pass.execute && "Every setup pass must have one AddPass execution lambda");
+        assert(pass.execute && "Every RGPass must have one AddPass execution lambda");
         assert(RGPassHasSingleExecutionDomain(pass.flags));
         for (const auto& access : pass.texture_accesses) {
             const auto& resource = CheckedResource(access.handle);
             assert(resource.kind == ERGResourceKind::Texture);
             if (!RGAccessWrites(access.mode) && !resource.imported && !texture_written[access.handle.index]) {
-                assert(false && "Graph-created texture read before any pass writes to it");
+                MOER_ASSERT(
+                    false,
+                    "Graph-created texture `{}` (handle {}) read before any pass writes to it",
+                    resource.name,
+                    access.handle.index
+                );
             }
             if (RGAccessWrites(access.mode)) {
                 texture_written[access.handle.index] = true;
@@ -343,7 +351,12 @@ void RenderGraph::ValidateSetup() const {
             const auto& resource = CheckedResource(access.handle);
             assert(resource.kind == ERGResourceKind::Buffer);
             if (!RGAccessWrites(access.mode) && !resource.imported && !buffer_written[access.handle.index]) {
-                assert(false && "Graph-created buffer read before any pass writes to it");
+                MOER_ASSERT(
+                    false,
+                    "Graph-created buffer `{}` (handle {}) read before any pass writes to it",
+                    resource.name,
+                    access.handle.index
+                );
             }
             if (RGAccessWrites(access.mode)) {
                 buffer_written[access.handle.index] = true;
