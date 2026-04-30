@@ -1,171 +1,95 @@
 #pragma once
-#include "DepdencyGraph.h"
+
+#include "RenderGraphHandle.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+
+#include <cstdint>
+#include <string>
+
 namespace Moer {
-class PassNode;
-// class RHIGraphicsCommandList;
-class RENDER_API RenderGraphResource : public DepdencyGraph::Node {
-public:
-    enum class Type {
-        Buffer,
-        Texture1D,
-        Texture2D,
-        Texture3D,
-        TextureCube,
-        Texture2DMultisample,
-        ALL
-    };
-    void ConnectForRead(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
-    void ConnectForWrite(DepdencyGraph& graph, PassNode*, DepdencyGraph::ResourceDesc _desc);
-    RenderGraphResource(std::string_view name, Type type, bool imported = false);
-    Type GetType() const {
-        return m_type;
-    }
 
-    virtual uint32_t ResloveResourceUsage(
-        const DepdencyGraph::ResourceDesc&,
-        RHIBarrierDependencyInfo& barrier_info,
-        EPassType                 pass_type
-    ) = 0;
-    //Pass to create this resource
-    PassNode* create_pass{nullptr};
-    // Pass to destroy this resource
-    PassNode* destroy_pass{nullptr};
+using RHICommandList = CommandList;
 
-    //Create Real Resource Before Execute
-    virtual void Create() {};
-    virtual void Destroy() {};
-    virtual ~RenderGraphResource() = default;
-
-protected:
-    bool m_imported{false};
-    Type m_type;
+struct RGTextureDesc {
+    Extent3D           extent{};
+    EPixelFormat       format{PF_UNDEFINED};
+    ETextureUsageFlags usage{};
+    uint32_t           mip_levels{1};
+    uint32_t           array_layers{1};
 };
 
-class RENDER_API RenderGraphBuffer : public RenderGraphResource {
-public:
-    using Usage = EBufferRuntimeUsageFlags;
-    struct Descriptor {
-        uint32_t size;
-        Usage    usage;
-    };
-    RenderGraphBuffer(std::string_view name, Descriptor desc);
-    RenderGraphBuffer(std::string_view name, RHIBufferRef);
-    void     Create() override;
-    uint32_t ResloveResourceUsage(
-        const DepdencyGraph::ResourceDesc&,
-        RHIBarrierDependencyInfo& barrier_info,
-        EPassType                 pass_type
-    ) override;
-    RHISRVRef    GetSRV() const;
-    RHIUAVRef    GetUAV() const;
-    RHIBufferRef GetBuffer() const;
-
-protected:
-    RHIBufferRef m_buffer{nullptr};
-    Descriptor   m_desc{};
-    Usage        m_usage;
+struct RGBufferDesc {
+    uint64_t          size{0};
+    EBufferUsageFlags usage{};
 };
 
-// class HardWareTexture;
-// using HWTextureRef = CountableRef<HardWareTexture>;
+struct RGTextureRange {
+    ETextureAspectFlags aspect{ETextureAspectFlags::COLOR};
+    uint32_t            mip_min{0};
+    uint32_t            mip_count{1};
+    uint32_t            array_min{0};
+    uint32_t            array_count{1};
 
-class RENDER_API RenderGraphTexture : public RenderGraphResource {
-public:
-    using Usage = ETextureStateFlags;
-    struct Descriptor {
-        Extent2D           extent2D;
-        uint16_t           depth;
-        EPixelFormat       format;
-        ETextureUsageFlags usage;
-        uint32_t           mipLevels{1};
-        uint32_t           arrayLayers{1};
-    };
-    RHIUAVRef GetUAV(
-        EPixelFormat format    = PF_UNDEFINED,
-        uint32_t     mip_num   = -1,
-        uint32_t     array_min = -1,
-        uint32_t     array_num = -1
-    );
-    RHISRVRef GetSRV(
-        EPixelFormat format    = PF_UNDEFINED,
-        uint32_t     mip_min   = -1,
-        uint32_t     mip_num   = -1,
-        uint32_t     array_min = -1,
-        uint32_t     array_num = -1
-    );
-    static ETextureLayout GetTextureLayout(Usage _state);
-    RHITextureRef         GetTexture() const;
-    EPixelFormat          GetFormat() const;
-    void                  Create() override;
-    RenderGraphTexture(std::string_view name, Descriptor desc);
-    RenderGraphTexture(std::string_view name, RHITextureRef tex);
-    RenderGraphTexture(std::string_view name, RenderGraphTexture* parent, RHISubresourceRange sub_res);
-    uint32_t ResloveResourceUsage(
-        const DepdencyGraph::ResourceDesc&,
-        RHIBarrierDependencyInfo& barrier_info,
-        EPassType                 type
-    ) override;
-
-protected:
-    RHITextureRef m_texture;
-    Descriptor    m_desc;
-
-    RHISubresourceRange GetSubResource() const;
-
-    RenderGraphTexture* m_parent{nullptr};
-    bool                m_is_sub_resource{false};
-    RHISubresourceRange m_sub_res{};
-
-    struct MipRange {
-        uint32_t mip_min : 16 {0};
-        uint32_t mip_num : 16 {1};
-    };
-    struct ArrayRange {
-        uint32_t array_min : 16 {0};
-        uint32_t array_num : 16 {1};
-    };
-
-    // struct ViewInfoHashFunc
-    // {
-    //     std::size_t operator()(const RHIViewInfo& view_info) const
-    //     {
-    //        size_t hash = 0;
-    //        HashCombine(hash,view_info.base_info.view_type);
-    //        HashCombine(hash,view_info.base_info.format);
-    //        if(view_info.IsSRV()) {
-    //           HashCombine(hash,view_info.texture.srv.mip_min);
-    //           HashCombine(hash,view_info.texture.srv.mip_num);
-    //           HashCombine(hash,view_info.texture.srv.array_min);
-    //           HashCombine(hash,view_info.texture.srv.array_num);
-    //        }
-    //         if(view_info.IsUAV()) {
-    //             HashCombine(hash,view_info.texture.uav.mip_min);
-    //             HashCombine(hash,view_info.texture.uav.mip_num);
-    //             HashCombine(hash,view_info.texture.uav.array_min);
-    //             HashCombine(hash,view_info.texture.uav.array_num);
-    //         }
-    //         return hash;
-    //     }
-    // };
-    //
-    //
-    // mutable std::unordered_map<RHIViewInfo, RHISRVRef, ViewInfoHashFunc> mSrvs;
-    // mutable std::unordered_map<RHIViewInfo, RHIUAVRef, ViewInfoHashFunc> mUavs;
+    bool Overlaps(const RGTextureRange& other) const;
 };
 
-struct TextureSubResource {
-    uint32_t mip_min{0};
-    uint32_t mip_num{1};
-    uint32_t array_min{0};
-    uint32_t array_num{1};
+struct RGBufferRange {
+    uint64_t offset{0};
+    uint64_t size{0};
+
+    bool IsWholeResource() const;
+    bool Overlaps(const RGBufferRange& other) const;
 };
 
-class RENDER_API RenderGraphSubResource : public RenderGraphTexture {
-    RenderGraphSubResource(std::string_view _name, RenderGraphTexture* _parent, TextureSubResource _sub_res);
+enum class ERGResourceKind : uint8_t {
+    Texture,
+    Buffer
 };
+
+enum class ERGAccessMode : uint8_t {
+    Read,
+    Write,
+    ReadWrite
+};
+
+struct RGTextureAccess {
+    RenderGraphHandle       handle{};
+    RGTextureRange          range{};
+    ERGAccessMode           mode{ERGAccessMode::Read};
+    Render::ETextureState   state{Render::ETextureState::SHADER_RESOURCE};
+    Render::EQueueType      queue{Render::EQueueType::Graphics};
+    bool                    bindless{false};
+};
+
+struct RGBufferAccess {
+    RenderGraphHandle      handle{};
+    RGBufferRange          range{};
+    ERGAccessMode          mode{ERGAccessMode::Read};
+    Render::EBufferState   state{Render::EBufferState::SHADER_RESOURCE};
+    Render::EQueueType     queue{Render::EQueueType::Graphics};
+    bool                   bindless{false};
+};
+
+struct RGResource {
+    std::string       name{};
+    ERGResourceKind   kind{ERGResourceKind::Texture};
+    bool              imported{false};
+    bool              exported{false};
+    RGTextureDesc     texture_desc{};
+    RGBufferDesc      buffer_desc{};
+    RHITextureRef     imported_texture{};
+    RHIBufferRef      imported_buffer{};
+    Render::EQueueType owner_queue{Render::EQueueType::Graphics};
+    Render::ETextureState initial_texture_state{Render::ETextureState::UNDEFINED};
+    Render::EBufferState  initial_buffer_state{Render::EBufferState::UNDEFINED};
+    Render::ETextureState final_texture_state{Render::ETextureState::UNDEFINED};
+    Render::EBufferState  final_buffer_state{Render::EBufferState::UNDEFINED};
+};
+
+bool RGAccessWrites(ERGAccessMode mode);
+bool RGAccessConflicts(ERGAccessMode lhs, ERGAccessMode rhs);
 
 } // namespace Moer

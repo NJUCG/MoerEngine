@@ -1,88 +1,120 @@
 #pragma once
-#include "DepdencyGraph.h"
-#include "rhi/RHICommand.h"
 
+#include "RenderGraphResource.h"
+#include "misc/STL.h"
+
+#include <cstdint>
 #include <functional>
+#include <string>
+#include <type_traits>
+#include <typeindex>
 
 namespace Moer {
+
 class RenderGraph;
-// class RHIGraphicsCommandList;
-enum class RENDER_GRAPH_PASS_TYPE : uint8_t {
-    UNDEFINED  = 0,
-    GRAPHICS   = 1,
-    COMPUTE    = 1 << 1,
-    RAYTRACING = 1 << 2,
-    ALL        = GRAPHICS | COMPUTE | RAYTRACING,
-};
 
-// struct RenderPassSettings {
-//     RENDER_GRAPH_PASS_TYPE type = RENDER_GRAPH_PASS_TYPE::UNDEFINED;
-// };
-
-struct RenderPassContext {
-    RenderGraph&            graph;
-    RHIGraphicsCommandList* cmd_list;
-    Extent3D                render_extent;
-    EPassType               pass_type;
-};
-
-// class RENDER_API {
-//
-// };
-
-using GraphicsExecute   = std::function<void(RenderPassContext& _context)>;
-using ComputeExecute    = std::function<void(RenderPassContext& _context)>;
-using RaytracingExecute = std::function<void(RenderPassContext& _context)>;
-using CopyExecute       = std::function<void(RenderPassContext& _context)>;
-
-class RenderGraphPass {
+class RGContext {
 public:
-    // virtual void execute() = 0;
+    explicit RGContext(RenderGraph& graph) : m_graph(graph) {}
 
-    virtual ~RenderGraphPass() = default;
+    RenderGraph& Graph() const { return m_graph; }
 
-public:
-    explicit RenderGraphPass(GraphicsExecute&& _execute) noexcept : m_execute(std::move(_execute)) {}
-
-    void Execute(RenderPassContext& _data) {
-        m_execute(_data);
-    }
-
-    // RenderPassContext& getData() { return data; }
-
-protected:
-    // RenderPassContext data;
-    GraphicsExecute m_execute;
+private:
+    RenderGraph& m_graph;
 };
 
-// template<typename Data, typename Execute>
-// class RenderGraphPass : public RenderGraphPassBase {
-//     Data    data;
-//     Execute mExecute;
-//
-// public:
-//     explicit RenderGraphPass(Execute&& execute) noexcept
-//         : mExecute(std::move(execute)) {
-//     }
-//
-//     void execute() override {
-//         mExecute();
-//     }
-//
-//     Data& getData() { return data; }
-// };
+class RGSetupContext {
+public:
+    RGSetupContext(RenderGraph& graph, uint32_t pass_index) : m_graph(graph), m_pass_index(pass_index) {}
 
-// using GraphicRenderGraphPass    = RenderGraphPass<RenderPassSettings, GraphicsExecute>;
-// using ComputeRenderGraphPass    = RenderGraphPass<RenderPassSettings, ComputeExecute>;
-// using RaytracingRenderGraphPass = RenderGraphPass<RenderPassSettings, RaytracingExecute>;
+    void ReadTexture(
+        RenderGraphHandle      handle,
+        Render::ETextureState  state = Render::ETextureState::SHADER_RESOURCE,
+        RGTextureRange         range = {},
+        Render::EQueueType     queue = Render::EQueueType::Graphics,
+        bool                   bindless = false
+    );
 
-// class RENDER_API GraphicsPass : public PassNode {
-//
-// };
-//
-// class RENDER_API ComputePass : public PassNode {
-// };
-//
-// class RENDER_API RayTracingPass : public PassNode {
-// };
+    void WriteTexture(
+        RenderGraphHandle      handle,
+        Render::ETextureState  state = Render::ETextureState::RENDER_TARGET,
+        RGTextureRange         range = {},
+        Render::EQueueType     queue = Render::EQueueType::Graphics,
+        bool                   bindless = false
+    );
+
+    void ReadWriteTexture(
+        RenderGraphHandle      handle,
+        Render::ETextureState  state = Render::ETextureState::UNORDERED_ACCESS,
+        RGTextureRange         range = {},
+        Render::EQueueType     queue = Render::EQueueType::Graphics,
+        bool                   bindless = false
+    );
+
+    void ReadBuffer(
+        RenderGraphHandle     handle,
+        Render::EBufferState  state = Render::EBufferState::SHADER_RESOURCE,
+        RGBufferRange         range = {},
+        Render::EQueueType    queue = Render::EQueueType::Graphics,
+        bool                  bindless = false
+    );
+
+    void WriteBuffer(
+        RenderGraphHandle     handle,
+        Render::EBufferState  state = Render::EBufferState::UNORDERED_ACCESS,
+        RGBufferRange         range = {},
+        Render::EQueueType    queue = Render::EQueueType::Graphics,
+        bool                  bindless = false
+    );
+
+    void ReadWriteBuffer(
+        RenderGraphHandle     handle,
+        Render::EBufferState  state = Render::EBufferState::UNORDERED_ACCESS,
+        RGBufferRange         range = {},
+        Render::EQueueType    queue = Render::EQueueType::Graphics,
+        bool                  bindless = false
+    );
+
+private:
+    RenderGraph& m_graph;
+    uint32_t     m_pass_index{0};
+};
+
+enum class ERGPassFlags : uint8_t {
+    None       = 0,
+    Graphics   = 1 << 0,
+    Compute    = 1 << 1,
+    Copy       = 1 << 2,
+    Raytracing = 1 << 3
+};
+
+constexpr ERGPassFlags operator|(ERGPassFlags lhs, ERGPassFlags rhs) {
+    return static_cast<ERGPassFlags>(static_cast<uint8_t>(lhs) | static_cast<uint8_t>(rhs));
+}
+
+constexpr bool EnumHasAnyFlag(ERGPassFlags value, ERGPassFlags flag) {
+    return (static_cast<uint8_t>(value) & static_cast<uint8_t>(flag)) != 0;
+}
+
+Render::EQueueType RGPassQueue(ERGPassFlags flags);
+EPassType          RGPassType(ERGPassFlags flags);
+bool               RGPassHasSingleExecutionDomain(ERGPassFlags flags);
+
+struct RGPass {
+    using Execute = std::function<void(RHICommandList& cmd_list, RGContext context)>;
+
+    std::string               name{};
+    void*                     parameters{nullptr};
+    std::type_index           parameter_type{typeid(void)};
+    uint32_t                  parameter_size{0};
+    ERGPassFlags              flags{ERGPassFlags::None};
+    Execute                   execute{};
+    Moer::Array<RGTextureAccess> texture_accesses{};
+    Moer::Array<RGBufferAccess>  buffer_accesses{};
+};
+
+struct RGSetupPass {
+    std::string name{};
+};
+
 } // namespace Moer

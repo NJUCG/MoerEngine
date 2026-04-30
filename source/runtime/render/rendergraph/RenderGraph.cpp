@@ -1,409 +1,369 @@
-// #include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraph.h"
 
-// #include "log/LogSystem.h"
-// #include "misc/Timer.h"
-// #include "rendergraph/DepdencyGraph.h"
-// #include "rendergraph/PassNode.h"
-// #include "rendergraph/RenderGraphHandle.h"
-// namespace Moer {
-//     RenderGraphTexture* BlackBoard::GetTexture(std::string_view name) const {
-//         return m_renderGraph.GetTexture(GetHandle(name));
-//     }
-//     RenderGraphHandle BlackBoard::GetHandle(std::string_view name) const {
-//         if (m_handles.find(name) == m_handles.end()) {
-//             return RenderGraphHandle();
-//         }
-//         return m_handles.at(name);
-//     }
-//     Moer::Array<RenderGraphHandle> BlackBoard::GetHandles(const Moer::Array<std::string>& names) const {
-//         Moer::Array<RenderGraphHandle> handles;
-//         for (const auto& name : names) {
-//             handles.emplace_back(GetHandle(name));
-//         }
-//         return handles;
-//     }
-//     void BlackBoard::PutHandle(std::string_view name, RenderGraphHandle handle) {
-//         if (m_handles.contains(name)) {
-//             LOG_ERROR(MOER_TEXT("Resource {0} already exists in blackboard"), name);
-//             return;
-//         }
-//         m_handles.emplace(name, handle);
-//     }
-//     BlackBoard::BlackBoard(RenderGraph& renderGraph) : m_renderGraph(renderGraph) {
-//     }
-//     RenderGraphBuffer* BlackBoard::GetBuffer(std::string_view name) const {
-//         return m_renderGraph.GetBuffer(GetHandle(name));
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::ReadTexture(RenderGraphHandle _input, RenderGraphTexture::Usage _usage, uint32_t _mip_level, uint32_t _mip_cnt) {
-//         DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = _mip_cnt, .array_index = 0, .array_count = 1, .usage = _usage};
-//         m_renderGraph.ReadInternal(m_pass, _input, std::move(desc));
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::WriteTexture(RenderGraphHandle _output, RenderGraphTexture::Usage _usage, uint32_t _mip_level, uint32_t _mip_cnt) {
+#include <algorithm>
 
-//         DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = _mip_cnt, .array_index = 0, .array_count = 1, .usage = _usage};
-//         m_renderGraph.WriteInternal(m_pass, _output, std::move(desc));
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::ReadWriteTexture(RenderGraphHandle _inout, RenderGraphTexture::Usage _usage, uint32_t _mip_level, uint32_t _mip_cnt) {
-//         DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = _mip_cnt, .array_index = 0, .array_count = 1, .usage = _usage};
-//         m_renderGraph.ReadInternal(m_pass, _inout, std::move(desc));
-//         m_renderGraph.WriteInternal(m_pass, _inout, std::move(desc));
-//         return *this;
-//     }
+namespace Moer {
 
-//     RenderGraph::Builder& RenderGraph::Builder::ReadWriteTextures(const Moer::Array<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
-//         for (auto input : inputs) {
-//             DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = 0, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = usage};
-//             m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
-//             m_renderGraph.WriteInternal(m_pass, input, std::move(desc));
-//         }
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::ReadTextures(const Moer::Array<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
-//         for (auto input : inputs) {
-//             DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = 0, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = usage};
-//             m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
-//         }
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::WriteTextures(const Moer::Array<RenderGraphHandle>& output, RenderGraphTexture::Usage usage) {
-//         for (auto out : output) {
-//             DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = 0, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = usage};
-//             m_renderGraph.WriteInternal(m_pass, out, std::move(desc));
-//         }
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::ReadBuffer(RenderGraphHandle input, RenderGraphBuffer::Usage usage) {
-//         DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = usage};
-//         m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::WriteBuffer(RenderGraphHandle output, RenderGraphBuffer::Usage usage) {
-//         DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = usage};
-//         m_renderGraph.WriteInternal(m_pass, output, std::move(desc));
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::WriteBuffers(const Moer::Array<RenderGraphHandle>& output, RenderGraphBuffer::Usage usage) {
-//         for (auto out : output) {
-//             DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = usage};
-//             m_renderGraph.WriteInternal(m_pass, out, std::move(desc));
-//         }
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::ReadBuffers(const Moer::Array<RenderGraphHandle>& _inputs, RenderGraphBuffer::Usage _usage) {
-//         for (auto input : _inputs) {
-//             DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = _usage};
-//             m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
-//         }
-//         return *this;
-//     }
-//     void RenderGraph::Builder::DeclareRenderPass(const RenderGraphPassDescriptor& descriptor) {
-//         if (descriptor.depth_stencil_attachment.IsInitialized()) {
-//             //Depth Attachment may be used in this pass,but not used in later pass
-//             //to avoid cull depth attachment, we need to add a ref
-//             m_renderGraph.GetResource(descriptor.depth_stencil_attachment)->AddRef();
-//         }
-//         auto pass = static_cast<GraphicsPassNode*>(m_pass);
-//         pass->DeclareRenderPass(descriptor);
-//     }
-//     void RenderGraph::Builder::DeclareComputePass(const ComputePassDescriptor& descriptor) {
-//         auto pass = static_cast<ComputePassNode*>(m_pass);
-//         pass->DeclareComputePass(descriptor);
-//     }
-//     RenderGraph::Builder::Builder(PassNode* pass, RenderGraph& renderGraph) : m_pass(pass), m_renderGraph(renderGraph) {
-//     }
-//     void RenderGraph::SetCutUnUsedResources(bool cut) {
-//         m_cut = cut;
-//     }
-//     RenderGraph::RenderGraph() : m_black_board(*this) {
-//     }
-//     void RenderGraph::Reset() {
-//         m_dependency_graph.Reset();
-//         m_black_board.Reset();
-//         for (auto& resource : m_last_resources) {
-//             MoerDelete(resource);
-//         }
-//         for (auto& pass : m_last_passes) {
-//             MoerDelete(pass);
-//         }
-//         m_last_resources = std::move(m_resources);
-//         m_last_passes    = std::move(m_passes);
+uint64_t RGFrameContext::NextGraphSequence() {
+    return m_next_graph_sequence++;
+}
 
-//         m_resources = {};
-//         m_passes    = {};
-//     }
-//     RenderGraphHandle RenderGraph::CreateTexture(std::string_view name, const RenderGraphTexture::Descriptor& descriptor) {
-//         RenderGraphTexture* texture = MoerNew(RenderGraphTexture)(name, descriptor);
-//         return AddTextureInternal(texture);
-//     }
-//     RenderGraphHandle RenderGraph::ImportTexture(std::string_view name, RHITextureRef rhi_texture) {
-//         RenderGraphTexture* texture = MoerNew(RenderGraphTexture)(name, rhi_texture);
-//         return AddTextureInternal(texture);
-//     }
-//     RenderGraphHandle RenderGraph::CreateBuffer(std::string_view _name, const RenderGraphBuffer::Descriptor& descriptor) {
-//         RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(_name, descriptor);
-//         return AddBufferInternal(buffer);
-//     }
-//     RenderGraphHandle RenderGraph::ImportBuffer(std::string_view _name, RHIBufferRef _rhi_buffer) {
-//         RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(_name, _rhi_buffer);
-//         return AddBufferInternal(buffer);
-//     }
-//     // RenderGraphHandle RenderGraph::CreateTextureSubResource(RenderGraphHandle parent, std::string_view name, const RHISubresourceRange& sub_resource) {
-//     //     if (auto handle = m_black_board.GetHandle(name); handle.IsInitialized()) {
-//     //         return handle;
-//     //     }
-//     //     RenderGraphTexture* parent_texture = GetTexture(parent);
-//     //     RenderGraphTexture* texture        = MoerNew(RenderGraphTexture)(name, parent_texture, sub_resource);
-//     //     return AddTextureInternal(texture);
-//     // }
-//     void RenderGraph::AddGraphicPass(std::string_view name, const GraphicSetup& setup, GraphicsExecute&& execute) {
-//         RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(execute));
-//         auto*            node = MoerNew(GraphicsPassNode)(name, pass);
-//         m_passes.emplace_back(node);
-//         Builder builder(node, *this);
-//         setup(builder);
-//     }
-//     void RenderGraph::AddComputePass(std::string_view name, const ComputeSetUp& setup, ComputeExecute&& execute) {
-//         RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(execute));
-//         auto             node = MoerNew(ComputePassNode)(name, pass);
-//         m_passes.emplace_back(node);
-//         Builder builder(node, *this);
-//         setup(builder);
-//     }
-//     void RenderGraph::AddRayTracingPass(std::string_view name, const RayTracingSetup& setup, RaytracingExecute&& execute) {
-//         //TODO
-//     }
+void RGFrameContext::PublishReceipt(const RGFrameReceipt& receipt) {
+    for (auto& current : m_receipts) {
+        if (current.resource == receipt.resource) {
+            current = receipt;
+            return;
+        }
+    }
+    m_receipts.push_back(receipt);
+}
 
-//     void RenderGraph::AddCopyPass(std::string_view _name, const CopySetup& _setup, CopyExecute&& _execute) {
-//         RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(_execute));
-//         auto*            node = MoerNew(CopyPassNode)(_name, pass);
-//         m_passes.emplace_back(node);
-//         Builder builder(node, *this);
-//         _setup(builder);
-//     }
-//     void RenderGraph::AddImageCopyPass(std::string_view _name, RenderGraphHandle _src, RenderGraphHandle _dst) {
-//         if (_src == _dst) {
-//             return;
-//         }
-//         auto execute = [_src, _dst](RenderPassContext& context) {
-//             auto*              cmd_list        = context.cmd_list;
-//             auto*              graph           = &context.graph;
-//             auto               src_rhi_texture = graph->GetTexture(_src)->GetTexture();
-//             auto               dst_rhi_texture = graph->GetTexture(_dst)->GetTexture();
-//             RHIBlitTextureInfo blit_info{};
-//             blit_info.src_slice  = RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
-//             blit_info.dst_slice  = RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
-//             blit_info.src_layout = RenderGraphTexture::GetTextureLayout(std::get<RenderGraphTexture::Usage>(src_rhi_texture->GetTrackedUsage(0)));
-//             blit_info.dst_layout = RenderGraphTexture::GetTextureLayout(std::get<RenderGraphTexture::Usage>(dst_rhi_texture->GetTrackedUsage(0)));
-//             auto     extent      = dst_rhi_texture->GetExtent3D();
-//             auto     src_extent  = src_rhi_texture->GetExtent3D();
-//             Offset3D zero_offset(0, 0, 0);
-//             blit_info.src_offsets[0] = zero_offset;
-//             blit_info.src_offsets[1] = Offset3D(src_extent.x, src_extent.y, 1);
-//             blit_info.dst_offsets[0] = zero_offset;
-//             blit_info.dst_offsets[1] = Offset3D(extent.x, extent.y, 1);
-//             cmd_list->BlitTexture(blit_info, src_rhi_texture, dst_rhi_texture);
-//         };
-//         auto setup = [_src, _dst](Builder& builder) {
-//             builder.ReadTexture(_src, RenderGraphTexture::Usage::TS_TRANSFER_SRC);
-//             builder.WriteTexture(_dst, RenderGraphTexture::Usage::TS_TRANSFER_DST);
-//         };
-//         AddCopyPass(_name, std::move(setup), std::move(execute));
-//     }
+const RGFrameReceipt* RGFrameContext::FindReceipt(RenderGraphHandle resource) const {
+    for (const auto& receipt : m_receipts) {
+        if (receipt.resource == resource) {
+            return &receipt;
+        }
+    }
+    return nullptr;
+}
 
-//     void RenderGraph::Execute(const RenderGraphExecuteConfig& config) {
-//         Compile();
-//         // LOG_INFO(MOER_TEXT("Compile Time: {0}ms"), timer.ElapsedMilliseconds());
+void RGFrameContext::Reset(uint64_t frame_sequence) {
+    m_frame_sequence = frame_sequence;
+    m_next_graph_sequence = 0;
+    m_receipts.clear();
+}
 
-//         auto* cmd_list = config.cmd_list;
-//         for (auto& pass : m_passes) {
-//             for (auto& resource : pass->GetResourcesToCreate()) {
-//                 resource->Create();
-//             }
-//             pass->ResloveResourceUsage(cmd_list);
-//             RenderPassContext pass_context{.graph = *this, .cmd_list = cmd_list, .render_extent = config.render_extent, .pass_type = pass->GetPassType()};
-//             pass->Execute(pass_context);
-//             for (auto& resource : pass->GetResourcesToDestroy()) {
-//                 resource->Destroy();
-//             }
-//         }
-//     }
-//     void RenderGraph::Compile() {
-//         bool need_compile = IsNeedCompile();
+void RGSetupContext::ReadTexture(
+    RenderGraphHandle handle,
+    Render::ETextureState state,
+    RGTextureRange range,
+    Render::EQueueType queue,
+    bool bindless
+) {
+    m_graph.AddTextureAccess(m_pass_index, RGTextureAccess{handle, range, ERGAccessMode::Read, state, queue, bindless});
+}
 
-//         if (!need_compile) {
-//             std::unordered_map<PassNode*, uint32_t> pass_idxes;
-//             for (size_t i = 0; i < m_last_passes.size(); i++) {
-//                 pass_idxes.emplace(m_last_passes[i], i);
-//             }
-//             for (int i = 0; i < m_resources.size(); i++) {
-//                 auto* resource      = m_resources[i];
-//                 auto* last_resource = m_last_resources[i];
-//                 resource->SetRefCount(last_resource->GetRefCount());
-//                 if (last_resource->create_pass) {
-//                     uint32_t create_pass_idx = pass_idxes[last_resource->create_pass];
-//                     resource->create_pass    = m_passes[create_pass_idx];
-//                 }
-//                 if (last_resource->destroy_pass) {
-//                     uint32_t destroy_pass_idx = pass_idxes[last_resource->destroy_pass];
-//                     resource->destroy_pass    = m_passes[destroy_pass_idx];
-//                 }
-//             }
-//             for (int i = 0; i < m_passes.size(); i++) {
-//                 auto* pass      = m_passes[i];
-//                 auto* last_pass = m_last_passes[i];
-//                 pass->SetBarrierInfo(last_pass->GetBarrierInfo());
-//             }
+void RGSetupContext::WriteTexture(
+    RenderGraphHandle handle,
+    Render::ETextureState state,
+    RGTextureRange range,
+    Render::EQueueType queue,
+    bool bindless
+) {
+    m_graph.AddTextureAccess(m_pass_index, RGTextureAccess{handle, range, ERGAccessMode::Write, state, queue, bindless});
+}
 
-//         }
+void RGSetupContext::ReadWriteTexture(
+    RenderGraphHandle handle,
+    Render::ETextureState state,
+    RGTextureRange range,
+    Render::EQueueType queue,
+    bool bindless
+) {
+    m_graph.AddTextureAccess(m_pass_index, RGTextureAccess{handle, range, ERGAccessMode::ReadWrite, state, queue, bindless});
+}
 
-//         else {
-//             m_dependency_graph.Cull();
+void RGSetupContext::ReadBuffer(
+    RenderGraphHandle handle,
+    Render::EBufferState state,
+    RGBufferRange range,
+    Render::EQueueType queue,
+    bool bindless
+) {
+    m_graph.AddBufferAccess(m_pass_index, RGBufferAccess{handle, range, ERGAccessMode::Read, state, queue, bindless});
+}
 
-//             Moer::Array<PassNode*> available_passes;
-//             for (auto& pass : m_passes) {
-//                 if (!pass->IsCulled()) {
-//                     available_passes.emplace_back(pass);
-//                 }
-//             }
+void RGSetupContext::WriteBuffer(
+    RenderGraphHandle handle,
+    Render::EBufferState state,
+    RGBufferRange range,
+    Render::EQueueType queue,
+    bool bindless
+) {
+    m_graph.AddBufferAccess(m_pass_index, RGBufferAccess{handle, range, ERGAccessMode::Write, state, queue, bindless});
+}
 
-//             auto       first = available_passes.begin();
-//             const auto last  = available_passes.end();
+void RGSetupContext::ReadWriteBuffer(
+    RenderGraphHandle handle,
+    Render::EBufferState state,
+    RGBufferRange range,
+    Render::EQueueType queue,
+    bool bindless
+) {
+    m_graph.AddBufferAccess(m_pass_index, RGBufferAccess{handle, range, ERGAccessMode::ReadWrite, state, queue, bindless});
+}
 
-//             while (first != last) {
-//                 PassNode* const pass_node = *first;
-//                 first++;
-//                 auto in_resources  = m_dependency_graph.GetInComingNodes(pass_node);
-//                 auto out_resources = m_dependency_graph.GetOutGoingNodes(pass_node);
+bool RGPassHasSingleExecutionDomain(ERGPassFlags flags) {
+    uint32_t count = 0;
+    count += EnumHasAnyFlag(flags, ERGPassFlags::Graphics) ? 1 : 0;
+    count += EnumHasAnyFlag(flags, ERGPassFlags::Compute) ? 1 : 0;
+    count += EnumHasAnyFlag(flags, ERGPassFlags::Copy) ? 1 : 0;
+    count += EnumHasAnyFlag(flags, ERGPassFlags::Raytracing) ? 1 : 0;
+    return count == 1;
+}
 
-//                 for (auto* const in_resource : in_resources) {
-//                     auto* const resource = dynamic_cast<RenderGraphResource*>(in_resource);
-//                     //Currently not suupport pass connect
-//                     assert(resource);
+Render::EQueueType RGPassQueue(ERGPassFlags flags) {
+    assert(RGPassHasSingleExecutionDomain(flags));
+    if (EnumHasAnyFlag(flags, ERGPassFlags::Compute)) {
+        return Render::EQueueType::Compute;
+    }
+    if (EnumHasAnyFlag(flags, ERGPassFlags::Copy)) {
+        return Render::EQueueType::Copy;
+    }
+    return Render::EQueueType::Graphics;
+}
 
-//                     resource->create_pass  = resource->create_pass ? resource->create_pass : pass_node;
-//                     resource->destroy_pass = pass_node;
-//                 }
-//                 for (auto* const out_resource : out_resources) {
-//                     auto* const resource = dynamic_cast<RenderGraphResource*>(out_resource);
-//                     assert(resource);
-//                     resource->create_pass  = resource->create_pass ? resource->create_pass : pass_node;
-//                     resource->destroy_pass = pass_node;
-//                 }
+EPassType RGPassType(ERGPassFlags flags) {
+    assert(RGPassHasSingleExecutionDomain(flags));
+    if (EnumHasAnyFlag(flags, ERGPassFlags::Compute)) {
+        return EPassType::Compute;
+    }
+    if (EnumHasAnyFlag(flags, ERGPassFlags::Copy)) {
+        return EPassType::Copy;
+    }
+    if (EnumHasAnyFlag(flags, ERGPassFlags::Raytracing)) {
+        return EPassType::Raytracing;
+    }
+    return EPassType::Graphics;
+}
 
-//                 for (auto* const edge : m_dependency_graph.GetEdges(pass_node)) {
-//                     auto* resource = dynamic_cast<RenderGraphResource*>(edge->src == pass_node ? edge->dst : edge->src);
-//                     pass_node->AddResourceUsage(resource, edge->desc);
-//                 }
-//             }
-//             // pass_node->FinalizeUsage();
-//         }
+RenderGraph::RenderGraph(RGFrameContext& frame_context) :
+    m_frame_context(frame_context),
+    m_graph_sequence(frame_context.NextGraphSequence()) {}
 
-//         for (const auto& resource : m_resources) {
-//             if (!m_cut | !resource->IsCulled()) {
-//                 if (resource->create_pass)
-//                     resource->create_pass->AddResourceToCreate(resource);
-//                 if (resource->destroy_pass)
-//                     resource->destroy_pass->AddResourceToDestroy(resource);
-//             } else {
-//                 LOG_INFO(MOER_TEXT("Resource {0} is not used"), resource->GetName());
-//             }
-//         }
-//     }
-//     BlackBoard& RenderGraph::GetBlackBoard() {
-//         return m_black_board;
-//     }
-//     void BlackBoard::Reset() {
-//         m_handles.clear();
-//     }
-//     bool RenderGraph::IsWriteResource(RenderGraphHandle handle, PassNode* node) const {
-//         auto* resource = GetResource(handle);
-//         return m_dependency_graph.IsWriteResource(node, resource);
-//     }
-//     bool RenderGraph::IsReadResource(RenderGraphHandle handle, PassNode* node) const {
-//         auto* resource = GetResource(handle);
-//         return m_dependency_graph.IsReadResource(node, resource);
-//     }
-//     RenderGraphTexture* RenderGraph::GetTexture(RenderGraphHandle handle) const {
-//         return dynamic_cast<RenderGraphTexture*>(GetResource(handle));
-//     }
-//     RenderGraphBuffer* RenderGraph::GetBuffer(RenderGraphHandle handle) const {
-//         return dynamic_cast<RenderGraphBuffer*>(GetResource(handle));
-//     }
-//     RenderGraphResource::Type RenderGraph::GetResourceType(RenderGraphHandle handle) const {
-//         return GetResource(handle)->GetType();
-//     }
-//     RenderGraph& RenderGraph::SetGraphOutput(RenderGraphHandle handle) {
-//         GetResource(handle)->AddRef();
-//         return *this;
-//     }
-//     std::vector<std::string_view> RenderGraph::GetResourceNames(RenderGraphResource::Type type) const {
-//         std::vector<std::string_view> resourceNames;
-//         for (auto& resource : m_resources) {
-//             if (resource->GetType() == type || type == RenderGraphResource::Type::ALL)
-//                 resourceNames.emplace_back(resource->GetName());
-//         }
-//         return resourceNames;
-//     }
-//     RenderGraph::~RenderGraph() {
-//         for (auto& resource : m_resources) {
-//             MoerDelete(resource);
-//         }
-//         for (auto& pass : m_passes) {
-//             MoerDelete(pass);
-//         }
-//     }
-//     bool RenderGraph::IsNeedCompile() const {
-//         if (m_last_passes.size() != m_passes.size() || m_last_resources.size() != m_resources.size()) {
-//             return true;
-//         }
-//         static auto check_pass_is_same = [](const PassNode* a, const PassNode* b) {
-//             if (a->GetName() != b->GetName()) {
-//                 return false;
-//             }
-//             if (a->GetPassType() != b->GetPassType()) {
-//                 return false;
-//             }
-//             return true;
-//         };
-//         for (size_t i = 0; i < m_passes.size(); i++) {
-//             if (!check_pass_is_same(m_passes[i], m_last_passes[i])) {
-//                 return true;
-//             }
-//         }
-//         for (size_t i = 0; i < m_resources.size(); i++) {
-//             if (m_resources[i]->GetName() != m_last_resources[i]->GetName()) {
-//                 return true;
-//             }
-//         }
-//         return false;
-//     }
-//     void RenderGraph::WriteInternal(PassNode* pass, RenderGraphHandle output, DepdencyGraph::ResourceDesc&& _desc) {
-//         GetResource(output)->ConnectForWrite(m_dependency_graph, pass, std::move(_desc));
-//     }
-//     void RenderGraph::ReadInternal(PassNode* pass, RenderGraphHandle input, DepdencyGraph::ResourceDesc&& _desc) {
-//         GetResource(input)->ConnectForRead(m_dependency_graph, pass, std::move(_desc));
-//     }
-//     RenderGraphHandle RenderGraph::AddTextureInternal(RenderGraphTexture* texture) {
-//         if (m_black_board.GetHandle(texture->GetName()).IsInitialized()) {
-//             LOG_ERROR(MOER_TEXT("Resource {0} already exists in blackboard"), texture->GetName());
-//             return RenderGraphHandle();
-//         }
-//         m_dependency_graph.RegisterNode(texture);
-//         const RenderGraphHandle handle(static_cast<RenderGraphHandle::Index>(m_resources.size()));
-//         m_black_board.PutHandle(texture->GetName(), handle);
-//         m_resources.emplace_back(texture);
-//         return handle;
-//     }
-//     RenderGraphHandle RenderGraph::AddBufferInternal(RenderGraphBuffer* buffer) {
-//         m_dependency_graph.RegisterNode(buffer);
-//         const RenderGraphHandle handle(static_cast<RenderGraphHandle::Index>(m_resources.size()));
-//         m_black_board.PutHandle(buffer->GetName(), handle);
-//         m_resources.emplace_back(buffer);
-//         return handle;
-//     }
-//     RenderGraphResource* RenderGraph::GetResource(RenderGraphHandle handle) const {
-//         return m_resources[handle.index];
-//     }
-// }// namespace Moer
+RenderGraph::~RenderGraph() {
+    Reset();
+}
+
+RenderGraphHandle RenderGraph::CreateTexture(std::string_view name, const RGTextureDesc& desc) {
+    assert(m_phase == Phase::Setup);
+    RGResource resource{};
+    resource.name = std::string(name);
+    resource.kind = ERGResourceKind::Texture;
+    resource.texture_desc = desc;
+    return AddResource(std::move(resource));
+}
+
+RenderGraphHandle RenderGraph::CreateBuffer(std::string_view name, const RGBufferDesc& desc) {
+    assert(m_phase == Phase::Setup);
+    RGResource resource{};
+    resource.name = std::string(name);
+    resource.kind = ERGResourceKind::Buffer;
+    resource.buffer_desc = desc;
+    return AddResource(std::move(resource));
+}
+
+RenderGraphHandle RenderGraph::ImportTexture(
+    std::string_view name,
+    RHITextureRef texture,
+    Render::ETextureState initial_state,
+    Render::EQueueType owner_queue
+) {
+    assert(m_phase == Phase::Setup);
+    assert(texture && initial_state != Render::ETextureState::UNDEFINED);
+    RGResource resource{};
+    resource.name = std::string(name);
+    resource.kind = ERGResourceKind::Texture;
+    resource.imported = true;
+    resource.imported_texture = texture;
+    resource.initial_texture_state = initial_state;
+    resource.owner_queue = owner_queue;
+    return AddResource(std::move(resource));
+}
+
+RenderGraphHandle RenderGraph::ImportBuffer(
+    std::string_view name,
+    RHIBufferRef buffer,
+    Render::EBufferState initial_state,
+    Render::EQueueType owner_queue
+) {
+    assert(m_phase == Phase::Setup);
+    assert(buffer && initial_state != Render::EBufferState::UNDEFINED);
+    RGResource resource{};
+    resource.name = std::string(name);
+    resource.kind = ERGResourceKind::Buffer;
+    resource.imported = true;
+    resource.imported_buffer = buffer;
+    resource.initial_buffer_state = initial_state;
+    resource.owner_queue = owner_queue;
+    return AddResource(std::move(resource));
+}
+
+void RenderGraph::ExportTexture(RenderGraphHandle handle, Render::ETextureState final_state, Render::EQueueType owner_queue) {
+    auto& resource = CheckedResource(handle);
+    assert(resource.kind == ERGResourceKind::Texture);
+    resource.exported = true;
+    resource.final_texture_state = final_state;
+    resource.owner_queue = owner_queue;
+}
+
+void RenderGraph::ExportBuffer(RenderGraphHandle handle, Render::EBufferState final_state, Render::EQueueType owner_queue) {
+    auto& resource = CheckedResource(handle);
+    assert(resource.kind == ERGResourceKind::Buffer);
+    resource.exported = true;
+    resource.final_buffer_state = final_state;
+    resource.owner_queue = owner_queue;
+}
+
+void RenderGraph::AddSetupPass(std::string_view name, SetupExecute&& setup) {
+    assert(m_phase == Phase::Setup);
+    const uint32_t pass_index = static_cast<uint32_t>(m_passes.size());
+    m_setup_passes.push_back(RGSetupPass{std::string(name)});
+    m_passes.push_back(RGPass{.name = std::string(name)});
+    RGSetupContext context(*this, pass_index);
+    setup(context);
+}
+
+void RenderGraph::AddPassInternal(
+    void* parameters,
+    std::type_index type,
+    uint32_t size,
+    ERGPassFlags flags,
+    RGPass::Execute&& execute
+) {
+    assert(m_phase == Phase::Setup);
+    assert(RGPassHasSingleExecutionDomain(flags));
+    if (m_passes.empty() || m_passes.back().execute) {
+        m_setup_passes.push_back(RGSetupPass{"UnnamedPass"});
+        m_passes.push_back(RGPass{.name = "UnnamedPass"});
+    }
+
+    auto& pass = m_passes.back();
+    pass.parameters = parameters;
+    pass.parameter_type = type;
+    pass.parameter_size = size;
+    pass.flags = flags;
+    pass.execute = std::move(execute);
+}
+
+void RenderGraph::Compile() {
+    if (m_phase != Phase::Setup) {
+        return;
+    }
+    ValidateSetup();
+    BuildHazards();
+    m_phase = Phase::Compiled;
+}
+
+void RenderGraph::Dispatch(RHICommandList* cmd_list) {
+    Compile();
+    if (cmd_list) {
+        RGContext context(*this);
+        for (auto& pass : m_passes) {
+            pass.execute(*cmd_list, context);
+        }
+    }
+
+    for (const auto& resource : m_resources) {
+        if (!resource.exported) {
+            continue;
+        }
+        const auto handle = RenderGraphHandle(static_cast<RenderGraphHandle::Index>(&resource - m_resources.data()));
+        m_frame_context.PublishReceipt(RGFrameReceipt{
+            .resource = handle,
+            .owner_queue = resource.owner_queue,
+            .texture_state = resource.final_texture_state,
+            .buffer_state = resource.final_buffer_state,
+            .completion_value = m_graph_sequence
+        });
+    }
+
+    m_phase = Phase::Dispatched;
+}
+
+void RenderGraph::Reset() {
+    for (auto& allocation : m_allocations) {
+        if (allocation.ptr && allocation.destroy) {
+            allocation.destroy(allocation.ptr);
+        }
+    }
+    m_allocations.clear();
+    m_resources.clear();
+    m_setup_passes.clear();
+    m_passes.clear();
+    m_compiled_plan.hazard_edges.clear();
+    m_phase = Phase::Setup;
+}
+
+void RenderGraph::AddTextureAccess(uint32_t pass_index, const RGTextureAccess& access) {
+    assert(pass_index < m_passes.size());
+    const auto& resource = CheckedResource(access.handle);
+    assert(resource.kind == ERGResourceKind::Texture);
+    assert(access.state != Render::ETextureState::UNDEFINED);
+    m_passes[pass_index].texture_accesses.push_back(access);
+}
+
+void RenderGraph::AddBufferAccess(uint32_t pass_index, const RGBufferAccess& access) {
+    assert(pass_index < m_passes.size());
+    const auto& resource = CheckedResource(access.handle);
+    assert(resource.kind == ERGResourceKind::Buffer);
+    assert(access.state != Render::EBufferState::UNDEFINED);
+    m_passes[pass_index].buffer_accesses.push_back(access);
+}
+
+RGResource& RenderGraph::CheckedResource(RenderGraphHandle handle) {
+    assert(handle.IsInitialized() && handle.index < m_resources.size());
+    return m_resources[handle.index];
+}
+
+const RGResource& RenderGraph::CheckedResource(RenderGraphHandle handle) const {
+    assert(handle.IsInitialized() && handle.index < m_resources.size());
+    return m_resources[handle.index];
+}
+
+RenderGraphHandle RenderGraph::AddResource(RGResource&& resource) {
+    assert(m_resources.size() < RenderGraphHandle::UNINITIALIZED);
+    for (const auto& existing : m_resources) {
+        assert(existing.name != resource.name && "RenderGraph resource names must be unique");
+    }
+    const auto handle = RenderGraphHandle(static_cast<RenderGraphHandle::Index>(m_resources.size()));
+    m_resources.push_back(std::move(resource));
+    return handle;
+}
+
+void RenderGraph::ValidateSetup() const {
+    for (const auto& pass : m_passes) {
+        assert(pass.execute && "Every setup pass must have one AddPass execution lambda");
+        assert(RGPassHasSingleExecutionDomain(pass.flags));
+        for (const auto& access : pass.texture_accesses) {
+            const auto& resource = CheckedResource(access.handle);
+            assert(resource.kind == ERGResourceKind::Texture);
+            if (!RGAccessWrites(access.mode)) {
+                assert((resource.imported || resource.initial_texture_state != Render::ETextureState::UNDEFINED || !resource.imported) && "First read of an unknown external texture is invalid");
+            }
+        }
+        for (const auto& access : pass.buffer_accesses) {
+            const auto& resource = CheckedResource(access.handle);
+            assert(resource.kind == ERGResourceKind::Buffer);
+            if (!RGAccessWrites(access.mode)) {
+                assert((resource.imported || resource.initial_buffer_state != Render::EBufferState::UNDEFINED || !resource.imported) && "First read of an unknown external buffer is invalid");
+            }
+        }
+    }
+}
+
+void RenderGraph::BuildHazards() {
+    m_compiled_plan.hazard_edges.clear();
+    for (uint32_t dst = 0; dst < m_passes.size(); ++dst) {
+        const auto& dst_pass = m_passes[dst];
+        for (uint32_t src = 0; src < dst; ++src) {
+            const auto& src_pass = m_passes[src];
+            for (const auto& src_access : src_pass.texture_accesses) {
+                for (const auto& dst_access : dst_pass.texture_accesses) {
+                    if (src_access.handle == dst_access.handle && src_access.range.Overlaps(dst_access.range) && RGAccessConflicts(src_access.mode, dst_access.mode)) {
+                        m_compiled_plan.hazard_edges.push_back(RGCompiledHazardEdge{src, dst, src_access.handle, ERGResourceKind::Texture});
+                    }
+                }
+            }
+            for (const auto& src_access : src_pass.buffer_accesses) {
+                for (const auto& dst_access : dst_pass.buffer_accesses) {
+                    if (src_access.handle == dst_access.handle && src_access.range.Overlaps(dst_access.range) && RGAccessConflicts(src_access.mode, dst_access.mode)) {
+                        m_compiled_plan.hazard_edges.push_back(RGCompiledHazardEdge{src, dst, src_access.handle, ERGResourceKind::Buffer});
+                    }
+                }
+            }
+        }
+    }
+}
+
+} // namespace Moer
