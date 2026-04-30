@@ -57,10 +57,12 @@ bool               RGPassHasSingleExecutionDomain(ERGPassFlags flags);
 
 class RGParameterAccessCollector {
 public:
+    // Called by parameter DeclareRGAccess() implementations to register one texture dependency.
     void AddTexture(const RGTextureView& view) {
         texture_accesses.push_back(view.ToAccess());
     }
 
+    // Called by parameter DeclareRGAccess() implementations to register one buffer dependency.
     void AddBuffer(const RGBufferView& view) {
         buffer_accesses.push_back(view.ToAccess());
     }

@@ -92,15 +92,19 @@ public:
 
     template<typename T>
     void AddPass(T* parameters, ERGPassFlags flags, typename RGPass::Execute&& execute) {
+        AddPass(
+            "RGPass_" + std::to_string(m_passes.size()),
+            parameters,
+            flags,
+            std::move(execute)
+        );
+    }
+
+    template<typename T>
+    void AddPass(std::string_view name, T* parameters, ERGPassFlags flags, typename RGPass::Execute&& execute) {
         assert(parameters && "RenderGraph pass parameters must be graph-owned");
-        std::string pass_name = "RGPass_" + std::to_string(m_passes.size());
-        if constexpr (requires(const T& value) {
-                          std::string(value.GetRGPassName());
-                      }) {
-            pass_name = std::string(parameters->GetRGPassName());
-        }
         const uint32_t pass_index = AddPassInternal(
-            std::move(pass_name),
+            std::string(name),
             parameters,
             std::type_index(typeid(T)),
             static_cast<uint32_t>(sizeof(T)),
@@ -141,9 +145,9 @@ private:
         RGPass::Execute&& execute
     );
     template<typename T>
+    // Parameters optionally implement void DeclareRGAccess(RGParameterAccessCollector&) const.
+    // RenderGraph calls it during AddPass to extract resource dependencies before Compile.
     void CollectParameterAccess(uint32_t pass_index, const T& parameters) {
-        // Parameters can optionally expose RG resource dependencies through
-        // void DeclareRGAccess(RGParameterAccessCollector&) const.
         // Passes without graph resources omit this method.
         if constexpr (requires(const T& value, RGParameterAccessCollector& collector) {
                           value.DeclareRGAccess(collector);

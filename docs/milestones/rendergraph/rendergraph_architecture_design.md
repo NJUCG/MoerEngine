@@ -28,6 +28,8 @@ Hard constraints:
 
 Selected public shape:
 
+`DeclareRGAccess` must be a `const` method so RenderGraph can extract dependencies without mutating frozen parameter data.
+
 ```cpp
 struct MyPassParameters {
     RGTextureView input;
@@ -57,7 +59,7 @@ graph.AddSetupPass(MOER_TEXT("LightingPrepare"), [param](RGSetupContext& setup) 
     BuildLightingCpuTables(param);
 });
 
-graph.AddPass(param, ERGPassFlags::Graphics, [](RHICommandList& cmd_list, RGContext context) {
+graph.AddPass("Lighting", param, ERGPassFlags::Graphics, [](RHICommandList& cmd_list, RGContext context) {
     const auto& resources = context.Resources<MyPassParameters>();
     cmd_list.Gfx(resources.pipeline, resources.input_srv, resources.output_rtv);
 });
