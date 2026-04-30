@@ -42,13 +42,13 @@ void Scene::MarkDirty<ecs::CMaterial>(entt::entity entity) {
     MarkNeedUpdateMaterial(registry, entity);
 }
 
-// 标记 Transform 派生数据需要刷新，并联动同 entity 上的 Light 同步。
+// 标记 Node 派生数据需要刷新，并联动同 entity 上的 Light 同步。
 template<>
-void Scene::MarkDirty<ecs::CTransform>(entt::entity entity) {
-    auto& registry  = r();
-    auto& transform = registry.get<ecs::CTransform>(entity);
+void Scene::MarkDirty<ecs::CNode>(entt::entity entity) {
+    auto& registry = r();
+    auto& node     = registry.get<ecs::CNode>(entity);
 
-    transform.is_dirty = true;
+    node.is_dirty = true;
     registry.emplace_or_replace<ecs::CTagNeedUpdateTransform>(entity);
 
     if (registry.all_of<ecs::CLightDirectional>(entity)) {

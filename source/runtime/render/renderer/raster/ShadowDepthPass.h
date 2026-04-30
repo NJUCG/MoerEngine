@@ -38,7 +38,7 @@ public:
     // 辅助函数
     static std::optional<ecs::CLightDirectional> GetMainLightDirection(RasterContext& context);
     static std::optional<ecs::CLightPoint>       GetMainPointLight(RasterContext& context);
-    // 获取主光源实体 ID（用于获取 CTransform）
+    // 获取主光源实体 ID（用于获取 CNode）
     static std::optional<entt::entity> GetMainLightDirectionEntity(RasterContext& context);
     static std::optional<entt::entity> GetMainPointLightEntity(RasterContext& context);
 

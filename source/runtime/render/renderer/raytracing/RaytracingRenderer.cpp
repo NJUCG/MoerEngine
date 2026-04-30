@@ -235,11 +235,11 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 scene_bounding.min = float3(0.f);
                 scene_bounding.max = float3(0.f);
 
-                // 遍历所有有 CRenderable 和 CTransform 的 entity，合并它们的 AABB
-                scene.r().view<ecs::CRenderable, ecs::CTransform>().each(
-                    [&](auto entity_id, const auto& c_renderable, const auto& c_transform) {
-                        if (c_transform.d_aabb.IsValid()) {
-                            scene_bounding.Expand(c_transform.d_aabb);
+                // 遍历所有有 CRenderable 和 CNode 的 entity，合并它们的 AABB
+                scene.r().view<ecs::CRenderable, ecs::CNode>().each(
+                    [&](auto entity_id, const auto& c_renderable, const auto& c_node) {
+                        if (c_node.d_aabb.IsValid()) {
+                            scene_bounding.Expand(c_node.d_aabb);
                         }
                     }
                 );
@@ -372,7 +372,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
                 auto light_entity = scene.GetMainDirectionalLightEntity();
                 if (light_entity != entt::null && scene.r().valid(light_entity) &&
-                    scene.r().all_of<ecs::CLightDirectional, ecs::CTransform>(light_entity)) {
+                    scene.r().all_of<ecs::CLightDirectional, ecs::CNode>(light_entity)) {
                     // 更新方向光的颜色和强度
                     scene.Patch<ecs::CLightDirectional>(light_entity, [&](auto& c_light_dir) {
                         c_light_dir.color     = float3(0.9f, 0.65f, 0.4f);
@@ -380,8 +380,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     });
 
                     // 更新方向光的旋转（从默认方向 float3(0.f, 0.f, -1.f) 到目标方向）
-                    scene.Patch<ecs::CTransform>(light_entity, [&](auto& c_transform) {
-                        c_transform.rotation = Quaternion(float3(0.f, 0.f, -1.f), -ui_config.sun_direction);
+                    scene.Patch<ecs::CNode>(light_entity, [&](auto& c_node) {
+                        c_node.rotation = Quaternion(float3(0.f, 0.f, -1.f), -ui_config.sun_direction);
                     });
 
                     scene.Tick();

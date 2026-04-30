@@ -232,7 +232,7 @@ public:
     const ecs::CLightDirectional& GetMainDirectionalLight() const;
     const ecs::CLightPoint&       GetMainPointLight() const;
 
-    const ecs::CTransform& GetTransform(entt::entity entity) const;
+    const ecs::CNode& GetNode(entt::entity entity) const;
 };
 
 template<>
@@ -245,6 +245,6 @@ template<>
 RENDER_API void Scene::MarkDirty<ecs::CMaterial>(entt::entity entity);
 
 template<>
-RENDER_API void Scene::MarkDirty<ecs::CTransform>(entt::entity entity);
+RENDER_API void Scene::MarkDirty<ecs::CNode>(entt::entity entity);
 
 } // namespace Moer

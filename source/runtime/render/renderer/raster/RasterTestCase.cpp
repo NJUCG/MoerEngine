@@ -103,14 +103,14 @@ float3 BuildMotionDirection(entt::entity entity, uint salt) {
 }
 
 TransformMotionState CreateMotionState(
-    entt::entity           entity,
-    const ecs::CTransform& transform,
-    uint                   salt,
-    float                  min_amplitude,
-    float                  max_amplitude
+    entt::entity      entity,
+    const ecs::CNode& node,
+    uint              salt,
+    float             min_amplitude,
+    float             max_amplitude
 ) {
     return TransformMotionState{
-        .base_translation = transform.translation,
+        .base_translation = node.translation,
         .direction        = BuildMotionDirection(entity, salt),
         .amplitude        = HashToRange(HashEntity(entity, salt + 4u), min_amplitude, max_amplitude),
         .phase            = HashToRange(HashEntity(entity, salt + 5u), 0.f, 6.28318530718f),
@@ -120,12 +120,12 @@ TransformMotionState CreateMotionState(
 void RestoreTransformMotionStates(Scene& scene, TransformMotionStateMap& states) {
     auto& registry = scene.r();
     for (auto& [entity, state] : states) {
-        if (!registry.valid(entity) || !registry.all_of<ecs::CTransform>(entity)) {
+        if (!registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
             continue;
         }
 
-        scene.Patch<ecs::CTransform>(entity, [&](ecs::CTransform& transform) {
-            transform.translation = state.base_translation;
+        scene.Patch<ecs::CNode>(entity, [&](ecs::CNode& node) {
+            node.translation = state.base_translation;
         });
     }
     states.clear();
@@ -153,16 +153,16 @@ void ProcessTransformMotionGroup(
     auto            view     = build_view(registry);
     constexpr float speed    = 1.25f;
 
-    view.each([&](const auto entity, const auto&, const ecs::CTransform& transform) {
+    view.each([&](const auto entity, const auto&, const ecs::CNode& node) {
         auto [state_it, inserted] = states.try_emplace(entity);
         if (inserted) {
-            state_it->second = CreateMotionState(entity, transform, salt, min_amplitude, max_amplitude);
+            state_it->second = CreateMotionState(entity, node, salt, min_amplitude, max_amplitude);
         }
 
         const TransformMotionState& state = state_it->second;
         const float offset = std::sin(elapsed_time_seconds * speed + state.phase) * state.amplitude;
-        scene.Patch<ecs::CTransform>(entity, [&](ecs::CTransform& patched_transform) {
-            patched_transform.translation = state.base_translation + state.direction * offset;
+        scene.Patch<ecs::CNode>(entity, [&](ecs::CNode& patched_node) {
+            patched_node.translation = state.base_translation + state.direction * offset;
         });
     });
 }
@@ -252,7 +252,7 @@ void RasterTestCase::ProcessRenderableTransformMotion(
         elapsed_time_seconds,
         RenderableMotionStates(),
         [](entt::registry& registry) {
-            return registry.view<const ecs::CRenderable, const ecs::CTransform>();
+            return registry.view<const ecs::CRenderable, const ecs::CNode>();
         },
         0x4d52524fu,
         0.08f,
@@ -271,7 +271,7 @@ void RasterTestCase::ProcessPointLightTransformMotion(
         elapsed_time_seconds,
         PointLightMotionStates(),
         [](entt::registry& registry) {
-            return registry.view<const ecs::CLightPoint, const ecs::CTransform>();
+            return registry.view<const ecs::CLightPoint, const ecs::CNode>();
         },
         0x504c4954u,
         0.35f,

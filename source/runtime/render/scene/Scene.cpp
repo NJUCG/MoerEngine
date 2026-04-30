@@ -284,12 +284,12 @@ const ecs::CLightPoint& Scene::GetMainPointLight() const {
     return r().get<ecs::CLightPoint>(entity);
 }
 
-const ecs::CTransform& Scene::GetTransform(entt::entity entity) const {
-    if (entity == entt::null || !r().valid(entity) || !r().all_of<ecs::CTransform>(entity)) {
-        LOG_ERROR("Invalid entity or missing CTransform component");
-        assert(false && "Invalid entity for GetTransform");
+const ecs::CNode& Scene::GetNode(entt::entity entity) const {
+    if (entity == entt::null || !r().valid(entity) || !r().all_of<ecs::CNode>(entity)) {
+        LOG_ERROR("Invalid entity or missing CNode component");
+        assert(false && "Invalid entity for GetNode");
     }
-    return r().get<ecs::CTransform>(entity);
+    return r().get<ecs::CNode>(entity);
 }
 
 } // namespace Moer

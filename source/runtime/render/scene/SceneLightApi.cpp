@@ -34,15 +34,14 @@ entt::entity Scene::CreatePointLight(const PointLightCreateInfo& create_info) {
 
     entt::entity light_entity = registry.create();
 
-    auto& c_node      = registry.emplace<ecs::CNode>(light_entity);
-    auto& c_transform = registry.emplace<ecs::CTransform>(light_entity);
-    auto& c_light     = registry.emplace<ecs::CLight>(light_entity);
-    auto& c_point     = registry.emplace<ecs::CLightPoint>(light_entity);
+    auto& c_node  = registry.emplace<ecs::CNode>(light_entity);
+    auto& c_light = registry.emplace<ecs::CLight>(light_entity);
+    auto& c_point = registry.emplace<ecs::CLightPoint>(light_entity);
 
     registry.emplace<ecs::CName>(light_entity).name = create_info.name;
 
-    c_transform.translation = create_info.position;
-    c_transform.is_dirty    = true;
+    c_node.translation = create_info.position;
+    c_node.is_dirty    = true;
 
     c_light.type       = ELightType::Point;
     c_point.color      = create_info.color;

@@ -26,7 +26,7 @@ namespace Moer::ecs {
 struct CTagMainCamera {};
 struct CCamera {
     // camera之前重写过，执行稳定，这里直接复用
-    // FIXME: 所以，目前camera会再存一份position等数据，没有和CTransform接入
+    // FIXME: 所以，目前camera会再存一份position等数据，没有和CNode接入
     // TODO: 统一为ECS格式
     Camera camera;
 };
@@ -36,7 +36,7 @@ struct CCamera {
  *
  * 通过CLight表示一个Entity是Light
  *
- * Light的Transform权威数据来自CTransform，渲染侧常用的世界空间数据缓存在Light组件的derived字段中。
+ * Light的Transform权威数据来自CNode，渲染侧常用的世界空间数据缓存在Light组件的derived字段中。
  */
 struct CTagMainLight {};
 struct CLight {
@@ -47,14 +47,14 @@ struct CLightDirectional {
     float  intensity = 1.f;
 
     bool   is_dirty    = true;
-    float3 d_direction = float3(0.f, 0.f, -1.f); // derived from CTransform
+    float3 d_direction = float3(0.f, 0.f, -1.f); // derived from CNode
 };
 struct CLightPoint {
     float3 color     = float3(1.f, 1.f, 1.f);
     float  intensity = 1.f;
 
     bool   is_dirty   = true;
-    float3 d_position = float3(0.f, 0.f, 0.f); // derived from CTransform
+    float3 d_position = float3(0.f, 0.f, 0.f); // derived from CNode
 };
 struct CLightAmbient {
     float3 color     = float3(1.f, 1.f, 1.f);
@@ -68,22 +68,12 @@ struct CLightEnvironment { // IBL
     // TODO
 };
 
-// MARK: Transform & Hieray
-
-struct CTransform {
-    float3     translation = float3(0.f, 0.f, 0.f);
-    Quaternion rotation    = Quaternion();
-    float3     scale       = float3(1.f, 1.f, 1.f);
-
-    bool is_dirty = true; // 是否需要更新 变换矩阵 & AABB
-
-    float4x4 d_world_transform = float4x4::Identity(); // derived
-    Box3D    d_aabb = Box3D(); // derived，AABB = 儿子CTransform的AABB * 自己的变换 + 挂载的CMesh的AABB
-};
+// MARK: Node & Hieray
 
 struct CTagRootNode {};
 
 // CNode应该被UEmplaceNodeToParent正确设置
+// CNode包含了Transform信息
 struct CNode {
     entt::entity parent_entt       = entt::null;
     entt::entity prev_sibling_entt = entt::null;
@@ -92,6 +82,15 @@ struct CNode {
     entt::entity last_child_entt   = entt::null;
     uint32       child_count       = 0;
     uint32       depth             = 0;
+
+    float3     translation = float3(0.f, 0.f, 0.f);
+    Quaternion rotation    = Quaternion();
+    float3     scale       = float3(1.f, 1.f, 1.f);
+
+    bool is_dirty = true; // 是否需要更新 变换矩阵 & AABB
+
+    float4x4 d_world_transform = float4x4::Identity(); // derived
+    Box3D    d_aabb            = Box3D(); // derived，AABB = 儿子CNode的AABB * 自己的变换 + 挂载的CMesh的AABB
 };
 
 struct CSceneMetaData {

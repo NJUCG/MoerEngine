@@ -114,8 +114,8 @@ public:
         Expect(m_light_entity != entt::null, "CreatePointLight returned entt::null.");
         Expect(registry.valid(m_light_entity), "Created point light entity is invalid.");
         Expect(
-            registry.all_of<ecs::CLightPoint, ecs::CTransform>(m_light_entity),
-            "Created point light is missing CLightPoint or CTransform."
+            registry.all_of<ecs::CLightPoint, ecs::CNode>(m_light_entity),
+            "Created point light is missing CLightPoint or CNode."
         );
         Expect(tick_state.did_sync, "CreatePointLight should trigger scene sync.");
         Expect(tick_state.created_light, "CreatePointLight should set created_light TickState.");
@@ -143,7 +143,7 @@ public:
         m_stage        = Stage::CreateLight;
     }
 
-    // 第一帧创建 point light，第二帧通过 Scene::Patch 修改 transform
+    // 第一帧创建 point light，第二帧通过 Scene::Patch 修改 node transform
     void PreTick(Scene& scene, const SceneTestCaseContext&) override {
         if (m_stage == Stage::CreateLight) {
             PointLightCreateInfo create_info{};
@@ -166,8 +166,8 @@ public:
                 return;
             }
 
-            scene.Patch<ecs::CTransform>(m_light_entity, [&](ecs::CTransform& transform) {
-                transform.translation = m_patched_position;
+            scene.Patch<ecs::CNode>(m_light_entity, [&](ecs::CNode& node) {
+                node.translation = m_patched_position;
             });
             m_stage = Stage::WaitPatchSync;
         }
@@ -183,8 +183,8 @@ public:
                 "Created point light entity should be valid before patch stage."
             );
             Expect(
-                registry.all_of<ecs::CLightPoint, ecs::CTransform>(m_light_entity),
-                "Created point light should have CLightPoint and CTransform before patch stage."
+                registry.all_of<ecs::CLightPoint, ecs::CNode>(m_light_entity),
+                "Created point light should have CLightPoint and CNode before patch stage."
             );
             Expect(tick_state.did_sync, "Point light creation should trigger scene sync.");
             Expect(tick_state.created_light, "Point light creation should set created_light TickState.");

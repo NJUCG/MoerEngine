@@ -387,11 +387,9 @@ void GpuScene::UpdateLightBuffer(CommandList& cmd_list) {
 
         // TODO: debug 阶段 light 数量很小，先按当前需求大小重建；后续改为 capacity/chunk 策略和局部更新。
         m_res.light_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::LightBuffer",
-            required_byte_size,
-            EBufferUsageFlags::UNORDERED_ACCESS
+            "GpuScene::LightBuffer", required_byte_size, EBufferUsageFlags::UNORDERED_ACCESS
         );
-        m_res.light_buf.hdl = m_bindless_array->AllocateBuffer(m_res.light_buf.buf->GetView());
+        m_res.light_buf.hdl  = m_bindless_array->AllocateBuffer(m_res.light_buf.buf->GetView());
         need_bindless_update = true;
     }
 
@@ -422,12 +420,10 @@ void GpuScene::UpdateMaterialBuffer(CommandList& cmd_list) {
         }
 
         m_res.material_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::MaterialBuffer",
-            required_byte_size,
-            EBufferUsageFlags::UNORDERED_ACCESS
+            "GpuScene::MaterialBuffer", required_byte_size, EBufferUsageFlags::UNORDERED_ACCESS
         );
         m_res.material_buf.hdl = m_bindless_array->AllocateBuffer(m_res.material_buf.buf->GetView());
-        need_bindless_update = true;
+        need_bindless_update   = true;
     }
 
     cmd_list.CopyFrom(
@@ -457,12 +453,10 @@ void GpuScene::UpdateInstanceBuffer(CommandList& cmd_list) {
         }
 
         m_res.instance_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::InstanceBuffer",
-            required_byte_size,
-            EBufferUsageFlags::UNORDERED_ACCESS
+            "GpuScene::InstanceBuffer", required_byte_size, EBufferUsageFlags::UNORDERED_ACCESS
         );
         m_res.instance_buf.hdl = m_bindless_array->AllocateBuffer(m_res.instance_buf.buf->GetView());
-        need_bindless_update = true;
+        need_bindless_update   = true;
     }
 
     cmd_list.CopyFrom(
@@ -502,7 +496,7 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
      *    - TLAS：每个 RaytracingScene 包含一个 TLAS（Top-Level Acceleration Structure）
      *            - TLAS 是顶层加速结构，包含所有 TLAS Instance
      *            - 场景中只有一个 TLAS（可能还有 prev_tlas 用于双缓冲）
-     *    - TLAS Instance：每个 (CPrimitive, CTransform) 对对应一个 TLAS Instance
+     *    - TLAS Instance：每个 (CPrimitive, CNode) 对对应一个 TLAS Instance
      *            - TLAS Instance 存储在 RaytracingScene::instances 数组中
      *            - TLAS Instance 顺序 = m_instance_buf 顺序 = GInstance[] 顺序
      *            - 每个 TLAS Instance 的 custom_index = 该 Instance 在 m_instance_buf 中的索引

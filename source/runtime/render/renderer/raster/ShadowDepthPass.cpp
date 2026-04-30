@@ -558,9 +558,9 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
     const float near_clip = camera.GetNearClip();
     const float far_clip  = camera.GetFarClip();
 
-    const auto& c_light_directional = r.get<ecs::CLightDirectional>(light_entity);
+    const auto& c_light_directional            = r.get<ecs::CLightDirectional>(light_entity);
     context.lighting_data.main_light_direction = Normalizef(c_light_directional.d_direction);
-    context.csm_data.light_dir = context.lighting_data.main_light_direction;
+    context.csm_data.light_dir                 = context.lighting_data.main_light_direction;
 
     const uint disabled_cache_cascade_count = static_cast<uint>(
         Max(0, Min(ui_config.shadow_cache_disable_first_n_cascades, static_cast<int>(enabled_cascade_layers)))
@@ -749,13 +749,10 @@ void ShadowDepthPass::RenderPointShadows(
     cube_res.near_plane = near_plane;
     cube_res.far_plane  = far_plane;
 
-    // 从 CTransform 获取位置（translation 在矩阵的第 4 列的 xyz 分量）
-    const auto& c_transform = r.get<ecs::CTransform>(light_entity);
-    cube_res.light_pos      = float3(
-        c_transform.d_world_transform[0].w,
-        c_transform.d_world_transform[1].w,
-        c_transform.d_world_transform[2].w
-    );
+    // 从 CNode 获取位置（translation 在矩阵的第 4 列的 xyz 分量）
+    const auto& c_node = r.get<ecs::CNode>(light_entity);
+    cube_res.light_pos =
+        float3(c_node.d_world_transform[0].w, c_node.d_world_transform[1].w, c_node.d_world_transform[2].w);
 
     // 计算投影矩阵 (90度 FOV, Aspect 1.0)
     // 交换了 near_plane 和 far_plane 以适应 Inverse Depth

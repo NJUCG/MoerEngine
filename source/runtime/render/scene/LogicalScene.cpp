@@ -26,10 +26,6 @@ void LogicalScene::Update() {
 
 LogicalScene::LogicalScene() {
     registry = entt::registry{};
-
-    // Registry Settings
-
-    registry.group<ecs::CNode, ecs::CTransform>();
 }
 
 LogicalScene::~LogicalScene() {
@@ -106,11 +102,11 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
 
     // 按深度排序节点，确保父节点在前，子节点在后
     // TODO: cache is sorted
-    registry.group<ecs::CNode, ecs::CTransform>().sort<ecs::CNode>([](const auto& lhs, const auto& rhs) {
+    registry.sort<ecs::CNode>([](const auto& lhs, const auto& rhs) {
         return lhs.depth < rhs.depth;
     });
 
-    auto build_mesh_aabb = [&](const entt::entity entity_id, const ecs::CTransform& c_transform) {
+    auto build_mesh_aabb = [&](const entt::entity entity_id, const ecs::CNode& c_node) {
         Box3D mesh_aabb = Box3D();
         if (!registry.all_of<ecs::CRenderable>(entity_id)) {
             return mesh_aabb;
@@ -129,7 +125,7 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
 
         const float3& min = c_mesh.d_aabb.min;
         const float3& max = c_mesh.d_aabb.max;
-        Transform     transform_mat(c_transform.d_world_transform);
+        Transform     transform_mat(c_node.d_world_transform);
 
         mesh_aabb.Expand(transform_mat * float3(min.x, min.y, min.z));
         mesh_aabb.Expand(transform_mat * float3(max.x, min.y, min.z));
@@ -169,37 +165,27 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
     // 第一步：收集所有需要更新的 entity（同时处理 is_dirty 向下传递）
     Array<entt::entity>        dirty_entities;
     UnorderedSet<entt::entity> aabb_update_set;
-    dirty_entities.reserve(registry.group<ecs::CNode, ecs::CTransform>().size());
-    registry.group<ecs::CNode, ecs::CTransform>().each([&](auto entity_id, auto& c_node, auto& c_transform) {
+    dirty_entities.reserve(registry.view<ecs::CNode>().size());
+    registry.view<ecs::CNode>().each([&](auto entity_id, auto& c_node) {
         // 检查父节点是否 dirty，向下传递
         bool is_parent_dirty = false;
         if (c_node.parent_entt != entt::null) {
-            const auto& parent_c_transform = registry.get<ecs::CTransform>(c_node.parent_entt);
-            is_parent_dirty                = parent_c_transform.is_dirty;
+            const auto& parent_node = registry.get<ecs::CNode>(c_node.parent_entt);
+            is_parent_dirty         = parent_node.is_dirty;
         }
 
         // is_dirty会向下传递
-        c_transform.is_dirty |= is_parent_dirty;
-        if (c_transform.is_dirty) {
+        c_node.is_dirty |= is_parent_dirty;
+        if (c_node.is_dirty) {
             dirty_entities.push_back(entity_id);
             registry.emplace_or_replace<ecs::CTagNeedUpdateTransform>(entity_id);
             mark_aabb_update_chain(aabb_update_set, entity_id);
         }
     });
 
-    registry.view<ecs::CTransform>(entt::exclude<ecs::CNode>).each([&](auto entity_id, auto& c_transform) {
-        if (c_transform.is_dirty) {
-            LOG_ERROR(
-                "CTransform update skipped because entity {} does not have CNode.",
-                entt::to_integral(entity_id)
-            );
-            c_transform.is_dirty = false;
-        }
-    });
-
     Array<entt::entity> aabb_update_entities;
     aabb_update_entities.reserve(aabb_update_set.size());
-    registry.group<ecs::CNode, ecs::CTransform>().each([&](auto entity_id, auto&, auto&) {
+    registry.view<ecs::CNode>().each([&](auto entity_id, auto&) {
         if (aabb_update_set.contains(entity_id)) {
             aabb_update_entities.push_back(entity_id);
         }
@@ -207,79 +193,74 @@ void LogicalScene::SUpdateAllNodeTransformAndAABB() {
 
     // 第二步：正向遍历更新变换矩阵（从浅到深）
     for (entt::entity entity_id : dirty_entities) {
-        auto& c_node      = registry.get<ecs::CNode>(entity_id);
-        auto& c_transform = registry.get<ecs::CTransform>(entity_id);
+        auto& c_node = registry.get<ecs::CNode>(entity_id);
 
         // 计算父节点的世界变换矩阵
         float4x4 parent_transform = float4x4::Identity();
         if (c_node.parent_entt != entt::null) {
-            const auto& parent_c_transform = registry.get<ecs::CTransform>(c_node.parent_entt);
-            parent_transform               = parent_c_transform.d_world_transform;
+            const auto& parent_node = registry.get<ecs::CNode>(c_node.parent_entt);
+            parent_transform        = parent_node.d_world_transform;
         }
 
         // 更新变换矩阵
         float4x4 local_transform =
-            Transform(c_transform.translation, c_transform.scale, c_transform.rotation).GetMatrix4x4();
-        c_transform.d_world_transform = parent_transform * local_transform;
+            Transform(c_node.translation, c_node.scale, c_node.rotation).GetMatrix4x4();
+        c_node.d_world_transform = parent_transform * local_transform;
 
         // 如果有 Light 组件，则标记该 Light 需要更新派生数据
         mark_light_update_if_needed(entity_id);
     }
 
     for (entt::entity entity_id : aabb_update_entities) {
-        auto& c_transform  = registry.get<ecs::CTransform>(entity_id);
-        c_transform.d_aabb = build_mesh_aabb(entity_id, c_transform);
+        auto& c_node  = registry.get<ecs::CNode>(entity_id);
+        c_node.d_aabb = build_mesh_aabb(entity_id, c_node);
     }
 
     // 第三步：反向遍历合并子节点的 AABB（从深到浅，确保子节点先处理）
     for (auto it = aabb_update_entities.rbegin(); it != aabb_update_entities.rend(); ++it) {
-        auto  entity_id   = *it;
-        auto& c_node      = registry.get<ecs::CNode>(entity_id);
-        auto& c_transform = registry.get<ecs::CTransform>(entity_id);
+        auto  entity_id = *it;
+        auto& c_node    = registry.get<ecs::CNode>(entity_id);
 
         // 合并所有子节点的 AABB
         if (c_node.first_child_entt != entt::null) {
             entt::entity child_entt = c_node.first_child_entt;
             while (child_entt != entt::null) {
-                if (registry.all_of<ecs::CTransform>(child_entt)) {
-                    const auto& child_transform = registry.get<ecs::CTransform>(child_entt);
-                    if (child_transform.d_aabb.IsValid()) {
-                        c_transform.d_aabb.Expand(child_transform.d_aabb);
-                    }
-                }
                 const auto& child_node = registry.get<ecs::CNode>(child_entt);
-                child_entt             = child_node.next_sibling_entt;
+                if (child_node.d_aabb.IsValid()) {
+                    c_node.d_aabb.Expand(child_node.d_aabb);
+                }
+                child_entt = child_node.next_sibling_entt;
             }
         }
     }
 
     // 第四步：清空所有节点的is_dirty标记
     for (entt::entity entity_id : dirty_entities) {
-        auto& c_transform    = registry.get<ecs::CTransform>(entity_id);
-        c_transform.is_dirty = false;
+        auto& c_node    = registry.get<ecs::CNode>(entity_id);
+        c_node.is_dirty = false;
     }
 }
 
 void LogicalScene::SUpdateAllLightData() {
-    r().view<ecs::CLightDirectional, ecs::CTransform>().each(
-        [&](auto, ecs::CLightDirectional& c_light, const ecs::CTransform& c_transform) {
+    r().view<ecs::CLightDirectional, ecs::CNode>().each(
+        [&](auto, ecs::CLightDirectional& c_light, const ecs::CNode& c_node) {
             if (!c_light.is_dirty) {
                 return;
             }
 
-            const float4 world_direction = c_transform.d_world_transform * float4(0.f, 0.f, -1.f, 0.f);
+            const float4 world_direction = c_node.d_world_transform * float4(0.f, 0.f, -1.f, 0.f);
             c_light.d_direction          = Normalizef(float3(world_direction));
             c_light.is_dirty             = false;
         }
     );
 
-    r().view<ecs::CLightPoint, ecs::CTransform>().each(
-        [&](auto, ecs::CLightPoint& c_light, const ecs::CTransform& c_transform) {
+    r().view<ecs::CLightPoint, ecs::CNode>().each(
+        [&](auto, ecs::CLightPoint& c_light, const ecs::CNode& c_node) {
             if (!c_light.is_dirty) {
                 return;
             }
 
-            c_light.d_position = float3(c_transform.d_world_transform.GetColumn(3));
+            c_light.d_position = float3(c_node.d_world_transform.GetColumn(3));
             c_light.is_dirty   = false;
         }
     );
@@ -369,9 +350,8 @@ void LogicalScene::UCreateDefaultCamera(entt::entity parent_node_id, bool shuold
     // 创建默认摄像机实体
     entt::entity camera_entity = r().create();
 
-    auto& c_node      = r().emplace<ecs::CNode>(camera_entity);
-    auto& c_transform = r().emplace<ecs::CTransform>(camera_entity);
-    auto& c_camera    = r().emplace<ecs::CCamera>(camera_entity);
+    auto& c_node   = r().emplace<ecs::CNode>(camera_entity);
+    auto& c_camera = r().emplace<ecs::CCamera>(camera_entity);
     if (shuold_create_main_camera) {
         r().emplace<ecs::CTagMainCamera>(camera_entity);
     }
@@ -389,8 +369,7 @@ void LogicalScene::UCreateDefaultCamera(entt::entity parent_node_id, bool shuold
     // CCamera
     c_camera.camera = Camera::CreateDefaultCamera();
 
-    // CTransform
-    // TODO: Camera目前没有和CTransform接入
+    // TODO: Camera目前没有和CNode接入
 }
 
 void LogicalScene::UCreateDefaultLights(entt::entity parent_node_id, bool should_create_main_light) {
@@ -404,10 +383,9 @@ void LogicalScene::UCreateDefaultLights(entt::entity parent_node_id, bool should
     auto create_light_entity = [&](ELightType light_type) -> entt::entity {
         entt::entity light_entity = r().create();
 
-        auto& c_node      = r().emplace<ecs::CNode>(light_entity);
-        auto& c_transform = r().emplace<ecs::CTransform>(light_entity);
-        auto& c_light     = r().emplace<ecs::CLight>(light_entity);
-        c_light.type      = light_type;
+        auto& c_node  = r().emplace<ecs::CNode>(light_entity);
+        auto& c_light = r().emplace<ecs::CLight>(light_entity);
+        c_light.type  = light_type;
 
         UEmplaceNodeToParent(parent_node_id, parent_node, light_entity, c_node);
 
@@ -425,12 +403,12 @@ void LogicalScene::UCreateDefaultLights(entt::entity parent_node_id, bool should
         c_directional_light.color     = float3(0.9f, 0.65f, 0.4f);
         c_directional_light.intensity = 100.0f;
 
-        auto& c_transform    = r().get<ecs::CTransform>(main_light_entity);
-        c_transform.rotation = Quaternion(
+        auto& c_node    = r().get<ecs::CNode>(main_light_entity);
+        c_node.rotation = Quaternion(
             float3(0.f, 0.f, -1.f),   // from
             float3(-1.f, -2.5f, -1.f) // to
         );
-        c_transform.is_dirty = true;
+        c_node.is_dirty = true;
     }
 
     // TODO..

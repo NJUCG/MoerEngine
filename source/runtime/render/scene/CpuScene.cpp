@@ -303,8 +303,8 @@ void CpuScene::InitializeMeshes() {
      *    收集所有CPrimitive
      *    因为CPrimitive是渲染的最小单元，为了GPU Driven与GPU Cache命中率，所以会按照CPrimitive顺序渲染
      *    这里就先收集所有CPrimitive，并构建索引
-     * 2. GInstance(CTransform)收集
-     *    遍历所有Node，找到每个Node对应的所有CPrimitive，并收集对应的CTransform (GInstance)
+     * 2. GInstance(CNode)收集
+     *    遍历所有Node，找到每个Node对应的所有CPrimitive，并收集对应的CNode (GInstance)
      * 3. DrawIndexedCmdData填充
      * 
      * 从这个地方，就可以看出来ECS的强大之处了
@@ -401,8 +401,7 @@ void CpuScene::InitializeMeshes() {
             const entt::entity entity = node_queue.front();
             node_queue.pop();
 
-            const ecs::CNode&      c_node      = r.get<ecs::CNode>(entity);
-            const ecs::CTransform& c_transform = r.get<ecs::CTransform>(entity);
+            const ecs::CNode& c_node = r.get<ecs::CNode>(entity);
 
             // next
             if (c_node.first_child_entt != entt::null) {
@@ -428,9 +427,8 @@ void CpuScene::InitializeMeshes() {
 
                     m_primitive_id_to_transform_entt_arrays[primitive_id].emplace_back(
                         GInstance{
-                            .world_transform =
-                                Transpose(c_transform.d_world_transform), // HLSL列主序，需要转置
-                            .primitive_id = primitive_id                  // 存储 Primitive ID 用于反向映射
+                            .world_transform = Transpose(c_node.d_world_transform), // HLSL列主序，需要转置
+                            .primitive_id    = primitive_id // 存储 Primitive ID 用于反向映射
                         }
                     );
                     m_map_transform_entity_to_instance_slots[entity].emplace_back(
@@ -551,8 +549,8 @@ void CpuScene::InitializeMeshes() {
 void CpuScene::UpdateMeshes() {
     auto& r = m_logical_scene.r();
 
-    auto view = r.view<const ecs::CTagNeedUpdateTransform, const ecs::CTransform>();
-    view.each([&](const auto entity, const ecs::CTransform& c_transform) {
+    auto view = r.view<const ecs::CTagNeedUpdateTransform, const ecs::CNode>();
+    view.each([&](const auto entity, const ecs::CNode& c_node) {
         auto instance_slots_it = m_map_transform_entity_to_instance_slots.find(entity);
         if (instance_slots_it == m_map_transform_entity_to_instance_slots.end()) {
             return;
@@ -567,7 +565,7 @@ void CpuScene::UpdateMeshes() {
             assert(instance_slot.flat_instance_idx < m_instance_buf.size());
 
             GInstance instance{
-                .world_transform = Transpose(c_transform.d_world_transform),
+                .world_transform = Transpose(c_node.d_world_transform),
                 .primitive_id    = instance_slot.primitive_id,
             };
 
