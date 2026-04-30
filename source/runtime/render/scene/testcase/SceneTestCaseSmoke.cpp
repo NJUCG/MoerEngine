@@ -2,7 +2,6 @@
  * 实现第一批 Scene testcase smoke cases，用来验证 testcase 框架和现有 Scene API
  */
 #include "scene/testcase/SceneTestCaseRegistry.h"
-#include "scene/testcase/SceneTestCaseRunner.h"
 
 #include "log/LogSystem.h"
 #include "math/Transform.h"
@@ -746,6 +745,9 @@ private:
 
 class CreateDestroyRenderableTestCase final : public SceneTestCaseBase {
 public:
+    explicit CreateDestroyRenderableTestCase(bool stress_create_enabled)
+        : m_stress_create_enabled(stress_create_enabled) {}
+
     // 返回 renderable 创建删除 testcase 的名称
     std::string_view Name() const override {
         return "CreateDestroyRenderable";
@@ -777,7 +779,7 @@ public:
         s_create_destroy_renderable_state = {};
         m_run_mode                        = ERunMode::Create;
         m_clone_root_offsets              = BuildRenderableCloneRootOffsets(
-            SceneTestCaseRunner::Get().IsCreateDestroyRenderableStressEnabled(), m_single_clone_root_offset
+            m_stress_create_enabled, m_single_clone_root_offset
         );
 
         const auto& cpu_scene = scene.cpu_scene();
@@ -1025,6 +1027,7 @@ private:
 
     ERunMode m_run_mode         = ERunMode::Create;
     bool     m_waiting_for_sync = false;
+    bool     m_stress_create_enabled = false;
 
     float3 m_single_clone_root_offset = float3(0.f, 0.f, 20.f);
 };
@@ -1054,9 +1057,9 @@ std::string_view GetSceneTestCaseName(ESceneTestCaseId test_case_id) {
     return "Unknown";
 }
 
-// 根据 testcase ID 创建对应 testcase 实例
-UniquePtr<ISceneTestCase> CreateSceneTestCase(ESceneTestCaseId test_case_id) {
-    switch (test_case_id) {
+// 根据 testcase 请求创建对应 testcase 实例
+UniquePtr<ISceneTestCase> CreateSceneTestCase(const SceneTestCaseRequest& request) {
+    switch (request.test_case_id) {
         case ESceneTestCaseId::FrameworkNoop:
             return MakeUnique<FrameworkNoopTestCase>();
         case ESceneTestCaseId::CreatePointLightOnce:
@@ -1070,7 +1073,9 @@ UniquePtr<ISceneTestCase> CreateSceneTestCase(ESceneTestCaseId test_case_id) {
         case ESceneTestCaseId::EntityWithNodeRejectInvalidOps:
             return MakeUnique<EntityWithNodeRejectInvalidOpsTestCase>();
         case ESceneTestCaseId::CreateDestroyRenderable:
-            return MakeUnique<CreateDestroyRenderableTestCase>();
+            return MakeUnique<CreateDestroyRenderableTestCase>(
+                request.renderable_stress_create_enabled
+            );
         default:
             return nullptr;
     }

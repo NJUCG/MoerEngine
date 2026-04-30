@@ -5,7 +5,6 @@
 
 #include "misc/STL.h"
 #include "scene/testcase/SceneTestCase.h"
-#include "scene/testcase/SceneTestCaseId.h"
 
 #include <chrono>
 
@@ -22,14 +21,8 @@ public:
     // 禁止拷贝赋值，保证 runner 只有一个实例
     SceneTestCaseRunner& operator=(const SceneTestCaseRunner&) = delete;
 
-    // 请求运行一个 Scene testcase
-    void RequestCase(ESceneTestCaseId test_case_id);
-
-    // 配置 renderable create/destroy testcase 的创建压力模式
-    void SetCreateDestroyRenderableStressEnabled(bool enabled);
-
-    // 查询 renderable create/destroy testcase 是否启用创建压力模式
-    bool IsCreateDestroyRenderableStressEnabled() const;
+    // 请求运行一个已经构造好的 Scene testcase
+    void RequestCase(UniquePtr<ISceneTestCase> test_case);
 
     // 查询当前是否有正在运行的 testcase
     bool HasActiveCase() const;
@@ -54,10 +47,9 @@ private:
     void StartPendingCase(Scene& scene);
 
 private:
-    ESceneTestCaseId                      m_pending_case_id = ESceneTestCaseId::None;
+    UniquePtr<ISceneTestCase>             m_pending_case;
     UniquePtr<ISceneTestCase>             m_active_case;
-    bool                                  m_create_destroy_renderable_stress_enabled = false;
-    std::uint64_t                         m_frame_index                              = 0;
+    std::uint64_t                         m_frame_index = 0;
     std::chrono::steady_clock::time_point m_start_time = std::chrono::steady_clock::now();
 };
 

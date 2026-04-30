@@ -4,7 +4,6 @@
 #include "scene/testcase/SceneTestCaseRunner.h"
 
 #include "log/LogSystem.h"
-#include "scene/testcase/SceneTestCaseRegistry.h"
 
 namespace Moer {
 
@@ -14,33 +13,25 @@ SceneTestCaseRunner& SceneTestCaseRunner::Get() {
     return s_runner;
 }
 
-// 将外部请求转成 pending testcase，已有 active/pending 时拒绝新请求
-void SceneTestCaseRunner::RequestCase(ESceneTestCaseId test_case_id) {
-    if (test_case_id == ESceneTestCaseId::None) {
+// 将外部构造好的 testcase 转成 pending testcase，已有 active/pending 时拒绝新请求
+void SceneTestCaseRunner::RequestCase(UniquePtr<ISceneTestCase> test_case) {
+    if (!test_case) {
         return;
     }
 
-    if (m_active_case || m_pending_case_id != ESceneTestCaseId::None) {
+    const std::string_view requested_name = test_case->Name();
+
+    if (m_active_case || m_pending_case) {
         LOG_WARNING(
             "SceneTestCase request '{}' ignored because '{}' is still running or pending.",
-            GetSceneTestCaseName(test_case_id),
-            m_active_case ? m_active_case->Name() : GetSceneTestCaseName(m_pending_case_id)
+            requested_name,
+            m_active_case ? m_active_case->Name() : m_pending_case->Name()
         );
         return;
     }
 
-    m_pending_case_id = test_case_id;
-    LOG_INFO("SceneTestCase request queued: {}.", GetSceneTestCaseName(test_case_id));
-}
-
-// 设置 renderable create/destroy testcase 的创建压力模式
-void SceneTestCaseRunner::SetCreateDestroyRenderableStressEnabled(bool enabled) {
-    m_create_destroy_renderable_stress_enabled = enabled;
-}
-
-// 查询 renderable create/destroy testcase 的创建压力模式
-bool SceneTestCaseRunner::IsCreateDestroyRenderableStressEnabled() const {
-    return m_create_destroy_renderable_stress_enabled;
+    m_pending_case = std::move(test_case);
+    LOG_INFO("SceneTestCase request queued: {}.", requested_name);
 }
 
 // 返回当前是否有正在运行的 testcase
@@ -50,12 +41,12 @@ bool SceneTestCaseRunner::HasActiveCase() const {
 
 // 返回当前是否有等待启动的 testcase
 bool SceneTestCaseRunner::HasPendingCase() const {
-    return m_pending_case_id != ESceneTestCaseId::None;
+    return m_pending_case != nullptr;
 }
 
 // 在 Scene dirty tag 采样前启动并推进 testcase 的写入阶段
 void SceneTestCaseRunner::PreTick(Scene& scene) {
-    if (!m_active_case && m_pending_case_id != ESceneTestCaseId::None) {
+    if (!m_active_case && m_pending_case) {
         StartPendingCase(scene);
     }
 
@@ -88,16 +79,13 @@ SceneTestCaseContext SceneTestCaseRunner::BuildContext() {
     return context;
 }
 
-// 从 pending ID 创建 testcase 实例并重置其初始状态
+// 启动当前等待中的 testcase 并重置其初始状态
 void SceneTestCaseRunner::StartPendingCase(Scene& scene) {
-    const ESceneTestCaseId test_case_id = m_pending_case_id;
-    m_pending_case_id                   = ESceneTestCaseId::None;
-
-    m_active_case = CreateSceneTestCase(test_case_id);
-    if (!m_active_case) {
-        LOG_ERROR("SceneTestCase '{}' is not implemented.", GetSceneTestCaseName(test_case_id));
+    if (!m_pending_case) {
         return;
     }
+
+    m_active_case = std::move(m_pending_case);
 
     m_start_time  = std::chrono::steady_clock::now();
     m_frame_index = 0;
