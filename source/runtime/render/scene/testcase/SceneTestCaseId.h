@@ -31,6 +31,12 @@ enum class ESceneTestCaseId : std::uint32_t {
 
     // 验证 renderable 创建、复制偏移和删除同步链路
     CreateDestroyRenderable,
+
+    // 调试创建 point light，并走 Scene sync 路径
+    DebugAddPointLight,
+
+    // 调试修改场景材质，并走 Scene sync 路径
+    DebugModifyMaterial,
 };
 
 } // namespace Moer

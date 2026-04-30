@@ -9,6 +9,7 @@
 #include "scene/SceneCreateInfo.h"
 
 #include <cmath>
+#include <unordered_set>
 
 namespace Moer {
 
@@ -27,6 +28,52 @@ bool IsNear(const float3& lhs, const float3& rhs, float epsilon = 1e-4f) {
 // 从 node 的 world transform 中读取世界坐标
 float3 GetWorldTranslation(const ecs::CNode& node) {
     return float3(node.d_world_transform.GetColumn(3));
+}
+
+struct DebugMaterialPreset {
+    float4           albedo_factor;
+    float3           emissive_factor;
+    float            roughness_factor;
+    float            metallic_factor;
+    std::string_view name;
+};
+
+DebugMaterialPreset GetDebugMaterialPreset(uint preset_index) {
+    switch (preset_index % 4) {
+        case 0:
+            return {float4(1.f, 0.05f, 0.05f, 1.f), float3(0.2f, 0.f, 0.f), 0.15f, 0.0f, "Red Highlight"};
+        case 1:
+            return {float4(0.05f, 1.f, 0.05f, 1.f), float3(0.f, 0.2f, 0.f), 0.15f, 0.0f, "Green Highlight"};
+        case 2:
+            return {float4(0.05f, 0.2f, 1.f, 1.f), float3(0.f, 0.f, 0.2f), 0.15f, 0.0f, "Blue Highlight"};
+        default:
+            return {float4(1.f, 1.f, 1.f, 1.f), float3(0.f, 0.f, 0.f), 1.0f, 0.0f, "Reset"};
+    }
+}
+
+Array<entt::entity> FindPrimitiveReferencedMaterialEntities(Scene& scene) {
+    auto& registry = scene.r();
+    auto  view     = registry.view<const ecs::CPrimitive>();
+
+    Array<entt::entity>              material_entities;
+    std::unordered_set<entt::entity> visited_materials;
+
+    for (entt::entity primitive_entity : view) {
+        const auto& primitive        = registry.get<ecs::CPrimitive>(primitive_entity);
+        const auto  material_entity  = primitive.material_entt;
+        const bool  has_valid_target = material_entity != entt::null && registry.valid(material_entity) &&
+                                       registry.all_of<ecs::CMaterial>(material_entity);
+        if (has_valid_target && visited_materials.emplace(material_entity).second) {
+            material_entities.emplace_back(material_entity);
+        }
+    }
+
+    return material_entities;
+}
+
+uint& DebugMaterialPresetCursor() {
+    static uint s_debug_material_preset_cursor = 0;
+    return s_debug_material_preset_cursor;
 }
 
 // 查找当前 scene 的 root node entity
@@ -312,6 +359,145 @@ private:
     Stage        m_stage            = Stage::CreateLight;
     float3       m_initial_position = float3(0.35f, 2.f, 0.f);
     float3       m_patched_position = float3(0.35f, 2.75f, 0.45f);
+};
+
+class DebugAddPointLightTestCase final : public SceneTestCaseBase {
+public:
+    DebugAddPointLightTestCase(const float3& position, const float3& color) :
+        m_position(position),
+        m_color(color) {}
+
+    // 返回调试 point light 创建 testcase 的名称
+    std::string_view Name() const override {
+        return "DebugAddPointLight";
+    }
+
+    // 重置创建状态
+    void Reset(Scene&) override {
+        m_finished     = false;
+        m_failed       = false;
+        m_light_entity = entt::null;
+        m_created      = false;
+    }
+
+    // 创建 point light，让本帧 Tick 采样 create tag
+    void PreTick(Scene& scene, const SceneTestCaseContext&) override {
+        if (m_created) {
+            return;
+        }
+
+        PointLightCreateInfo create_info{};
+        create_info.position  = m_position;
+        create_info.color     = m_color;
+        create_info.intensity = 10000.f;
+        create_info.name      = "SceneTestCase DebugAddPointLight";
+
+        m_light_entity = scene.CreatePointLight(create_info);
+        m_created      = true;
+    }
+
+    // 验证调试 point light 创建请求已被 Scene sync 消费
+    void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
+        auto& registry = scene.r();
+        Expect(m_light_entity != entt::null, "DebugAddPointLight returned entt::null.");
+        Expect(registry.valid(m_light_entity), "Debug point light entity is invalid.");
+        Expect(
+            registry.all_of<ecs::CLightPoint, ecs::CNode>(m_light_entity),
+            "Debug point light is missing CLightPoint or CNode."
+        );
+        Expect(tick_state.did_sync, "DebugAddPointLight should trigger scene sync.");
+        Expect(tick_state.created_light, "DebugAddPointLight should set created_light TickState.");
+        Expect(tick_state.updated_transform, "DebugAddPointLight should set updated_transform TickState.");
+
+        LOG_INFO(
+            "SceneTestCase DebugAddPointLight created point light at ({}, {}, {}) with color ({}, {}, {}).",
+            m_position.x,
+            m_position.y,
+            m_position.z,
+            m_color.x,
+            m_color.y,
+            m_color.z
+        );
+        Finish();
+    }
+
+private:
+    entt::entity m_light_entity = entt::null;
+    bool         m_created      = false;
+    float3       m_position     = float3(0.f, 2.f, 0.f);
+    float3       m_color        = float3(1.f, 0.2f, 0.05f);
+};
+
+class DebugModifyMaterialTestCase final : public SceneTestCaseBase {
+public:
+    // 返回调试材质修改 testcase 的名称
+    std::string_view Name() const override {
+        return "DebugModifyMaterial";
+    }
+
+    // 清理运行状态
+    void Reset(Scene&) override {
+        m_finished       = false;
+        m_failed         = false;
+        m_applied        = false;
+        m_material_count = 0;
+        m_preset_name    = {};
+    }
+
+    // 修改场景中 primitive 引用过的材质
+    void PreTick(Scene& scene, const SceneTestCaseContext&) override {
+        if (m_applied || m_finished) {
+            return;
+        }
+
+        const Array<entt::entity> material_entities = FindPrimitiveReferencedMaterialEntities(scene);
+        if (material_entities.empty()) {
+            LOG_WARNING(
+                "SceneTestCase DebugModifyMaterial failed: no material referenced by any primitive was found."
+            );
+            m_failed = true;
+            Finish();
+            return;
+        }
+
+        const DebugMaterialPreset preset = GetDebugMaterialPreset(DebugMaterialPresetCursor());
+        DebugMaterialPresetCursor()++;
+
+        for (entt::entity material_entity : material_entities) {
+            scene.Patch<ecs::CMaterial>(material_entity, [&](ecs::CMaterial& material) {
+                material.albedo_map_entt  = entt::null;
+                material.albedo_factor    = preset.albedo_factor;
+                material.emissive_factor  = preset.emissive_factor;
+                material.roughness_factor = preset.roughness_factor;
+                material.metallic_factor  = preset.metallic_factor;
+            });
+        }
+
+        m_applied        = true;
+        m_material_count = material_entities.size();
+        m_preset_name    = preset.name;
+    }
+
+    // 验证材质修改产生 Scene sync
+    void PostTick(Scene&, const Scene::TickState& tick_state) override {
+        if (m_finished) {
+            return;
+        }
+
+        Expect(tick_state.did_sync, "DebugModifyMaterial should trigger scene sync.");
+        Expect(tick_state.updated_material, "DebugModifyMaterial should set updated_material TickState.");
+        LOG_INFO(
+            "SceneTestCase DebugModifyMaterial applied preset '{}' to {} materials.",
+            m_preset_name,
+            m_material_count
+        );
+        Finish();
+    }
+
+private:
+    bool             m_applied        = false;
+    size_t           m_material_count = 0;
+    std::string_view m_preset_name;
 };
 
 class CreateDestroyPointLightTestCase final : public SceneTestCaseBase {
@@ -745,8 +931,8 @@ private:
 
 class CreateDestroyRenderableTestCase final : public SceneTestCaseBase {
 public:
-    explicit CreateDestroyRenderableTestCase(bool stress_create_enabled)
-        : m_stress_create_enabled(stress_create_enabled) {}
+    explicit CreateDestroyRenderableTestCase(bool stress_create_enabled) :
+        m_stress_create_enabled(stress_create_enabled) {}
 
     // 返回 renderable 创建删除 testcase 的名称
     std::string_view Name() const override {
@@ -778,9 +964,8 @@ public:
 
         s_create_destroy_renderable_state = {};
         m_run_mode                        = ERunMode::Create;
-        m_clone_root_offsets              = BuildRenderableCloneRootOffsets(
-            m_stress_create_enabled, m_single_clone_root_offset
-        );
+        m_clone_root_offsets =
+            BuildRenderableCloneRootOffsets(m_stress_create_enabled, m_single_clone_root_offset);
 
         const auto& cpu_scene = scene.cpu_scene();
         m_initial_instance_counts.clear();
@@ -1025,8 +1210,8 @@ private:
     Array<uint>         m_expected_instance_increments;
     Array<float3>       m_clone_root_offsets;
 
-    ERunMode m_run_mode         = ERunMode::Create;
-    bool     m_waiting_for_sync = false;
+    ERunMode m_run_mode              = ERunMode::Create;
+    bool     m_waiting_for_sync      = false;
     bool     m_stress_create_enabled = false;
 
     float3 m_single_clone_root_offset = float3(0.f, 0.f, 20.f);
@@ -1053,6 +1238,10 @@ std::string_view GetSceneTestCaseName(ESceneTestCaseId test_case_id) {
             return "EntityWithNodeRejectInvalidOps";
         case ESceneTestCaseId::CreateDestroyRenderable:
             return "CreateDestroyRenderable";
+        case ESceneTestCaseId::DebugAddPointLight:
+            return "DebugAddPointLight";
+        case ESceneTestCaseId::DebugModifyMaterial:
+            return "DebugModifyMaterial";
     }
     return "Unknown";
 }
@@ -1073,9 +1262,13 @@ UniquePtr<ISceneTestCase> CreateSceneTestCase(const SceneTestCaseRequest& reques
         case ESceneTestCaseId::EntityWithNodeRejectInvalidOps:
             return MakeUnique<EntityWithNodeRejectInvalidOpsTestCase>();
         case ESceneTestCaseId::CreateDestroyRenderable:
-            return MakeUnique<CreateDestroyRenderableTestCase>(
-                request.renderable_stress_create_enabled
+            return MakeUnique<CreateDestroyRenderableTestCase>(request.renderable_stress_create_enabled);
+        case ESceneTestCaseId::DebugAddPointLight:
+            return MakeUnique<DebugAddPointLightTestCase>(
+                request.add_light_position, request.add_light_color
             );
+        case ESceneTestCaseId::DebugModifyMaterial:
+            return MakeUnique<DebugModifyMaterialTestCase>();
         default:
             return nullptr;
     }

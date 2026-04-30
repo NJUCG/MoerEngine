@@ -9,7 +9,6 @@
 #include "GeometryPass.h"
 #include "LightingPass.h"
 #include "RasterResource.h"
-#include "RasterTestCase.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
 #include "RtaoDenoiserPass.h"
@@ -19,7 +18,7 @@
 #include "TonemappingPass.h"
 #include "debug/RenderDocApi.h"
 #include "misc/Timer.h"
-#include "scene/testcase/SceneTestCaseRegistry.h"
+#include "scene/testcase/SceneTestCaseDispatcher.h"
 #include "scene/testcase/SceneTestCaseRunner.h"
 #include "window/WindowContext.h"
 
@@ -251,20 +250,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         const float elapsed_time_seconds = GetElapsedTimeSeconds();
 
-        RasterTestCase::ProcessDebugSceneUpdateRequest(raster_config, scene);
-        RasterTestCase::ProcessDebugMaterialRequest(raster_config, scene);
-        RasterTestCase::ProcessRenderableTransformMotion(raster_config, scene, elapsed_time_seconds);
-        RasterTestCase::ProcessPointLightTransformMotion(raster_config, scene, elapsed_time_seconds);
+        ProcessSceneTestCaseRequests(editor_config->scene_test_case_config, scene, elapsed_time_seconds);
 
         auto& scene_test_case_runner = SceneTestCaseRunner::Get();
-        if (raster_config.debug_requested_scene_test_case != ESceneTestCaseId::None) {
-            SceneTestCaseRequest request{};
-            request.test_case_id                     = raster_config.debug_requested_scene_test_case;
-            request.renderable_stress_create_enabled =
-                raster_config.debug_scene_test_case_renderable_stress_create_enabled;
-            scene_test_case_runner.RequestCase(CreateSceneTestCase(request));
-            raster_config.debug_requested_scene_test_case = ESceneTestCaseId::None;
-        }
 
         const bool is_run_scene_test_case =
             scene_test_case_runner.HasActiveCase() || scene_test_case_runner.HasPendingCase();

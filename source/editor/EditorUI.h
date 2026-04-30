@@ -8,6 +8,7 @@
 
 #include "raster_ui/RasterUI.h"
 #include "raytracing_ui/RaytracingUI.h"
+#include "scene_testcase_ui/SceneTestCaseUI.h"
 
 namespace Moer {
 
@@ -48,21 +49,24 @@ public:
     void UnregisterUIFunc(std::string _name);
 
 public: // Sub UI
-    RasterUI     m_raster_ui;
-    RaytracingUI m_raytracing_ui;
+    RasterUI        m_raster_ui;
+    RaytracingUI    m_raytracing_ui;
+    SceneTestCaseUI m_scene_testcase_ui;
 
 private:
     void ResetState(); // reset m_b_need_reload, etc..
     void ShowSceneColor();
     void ShowConfig();
+    void ShowSceneTestCases();
 #if WITH_PROFILE
     void ShowMemoryProfiler(bool* p_open);
     void DrawPassAndChildren(const char* parent_name, int depth);
 #endif
 
 private:
-    bool   m_b_show_scene_color = true;
-    bool   m_b_show_config      = true;
+    bool   m_b_show_scene_color      = true;
+    bool   m_b_show_config           = true;
+    bool   m_b_show_scene_test_cases = true;
     float2 m_scene_color_resolution; // TODO: why float2? not uint2?
     float2 m_scene_color_pos;
     bool   m_b_show = true;

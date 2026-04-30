@@ -4,6 +4,7 @@
 #pragma once
 
 #include "misc/STL.h"
+#include "misc/Traits.h"
 #include "scene/testcase/SceneTestCase.h"
 #include "scene/testcase/SceneTestCaseId.h"
 
@@ -12,8 +13,11 @@
 namespace Moer {
 
 struct SceneTestCaseRequest {
-	ESceneTestCaseId test_case_id                     = ESceneTestCaseId::None;
-	bool             renderable_stress_create_enabled = false;
+    ESceneTestCaseId test_case_id                     = ESceneTestCaseId::None;
+    bool             renderable_stress_create_enabled = false;
+
+    float3 add_light_position = float3(0.f, 2.f, 0.f);
+    float3 add_light_color    = float3(1.f, 0.2f, 0.05f);
 };
 
 // 根据 testcase ID 返回可读名称

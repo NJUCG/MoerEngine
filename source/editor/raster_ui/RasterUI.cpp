@@ -579,61 +579,6 @@ void RasterUI::ShowConfig() {
 
         ImGui::Separator(); // 分割线
 
-        ImGui::SliderFloat3(
-            "TestCase Add Light Position", (float*)&m_config.debug_test_case_add_light_position, -2.0f, 2.0f
-        );
-        ImGui::ColorEdit3("TestCase Add Light Color", (float*)&m_config.debug_test_case_add_light_color);
-
-        if (ImGui::Button("TestCase Add Light")) {
-            m_config.debug_request_scene_update = true;
-        }
-
-        if (ImGui::Button("TestCase Modify Material")) {
-            m_config.debug_request_material_update = true;
-        }
-
-        if (ImGui::Button("SceneTestCase Noop")) {
-            m_config.debug_requested_scene_test_case = ESceneTestCaseId::FrameworkNoop;
-        }
-
-        if (ImGui::Button("SceneTestCase Create Point Light")) {
-            m_config.debug_requested_scene_test_case = ESceneTestCaseId::CreatePointLightOnce;
-        }
-
-        if (ImGui::Button("SceneTestCase Patch Point Light Transform")) {
-            m_config.debug_requested_scene_test_case = ESceneTestCaseId::PatchCreatedPointLightTransform;
-        }
-
-        if (ImGui::Button("SceneTestCase Create/Destroy Point Light")) {
-            m_config.debug_requested_scene_test_case = ESceneTestCaseId::CreateDestroyPointLight;
-        }
-
-        if (ImGui::Button("SceneTestCase EntityWithNode Flow")) {
-            m_config.debug_requested_scene_test_case = ESceneTestCaseId::EntityWithNodeStructuralFlow;
-        }
-
-        if (ImGui::Button("SceneTestCase EntityWithNode Invalid Ops")) {
-            m_config.debug_requested_scene_test_case = ESceneTestCaseId::EntityWithNodeRejectInvalidOps;
-        }
-
-        ImGui::Checkbox(
-            "SceneTestCase Renderable Stress Create (5x5-1)",
-            &m_config.debug_scene_test_case_renderable_stress_create_enabled
-        );
-
-        if (ImGui::Button("SceneTestCase Create/Destroy Renderable")) {
-            m_config.debug_requested_scene_test_case = ESceneTestCaseId::CreateDestroyRenderable;
-        }
-
-        ImGui::Checkbox(
-            "TestCase Move Renderables", &m_config.debug_test_case_renderable_transform_motion_enabled
-        );
-        ImGui::Checkbox(
-            "TestCase Move Point Lights", &m_config.debug_test_case_point_light_transform_motion_enabled
-        );
-
-        ImGui::Separator(); // 分割线
-
         ImGui::Checkbox("Enable FPS Limit", &m_config.debug_fps_limit_enable);
         if (m_config.debug_fps_limit_enable) {
             ImGui::SliderFloat("FPS Limit", &m_config.debug_fps_limit, 0.5f, 240.0f);

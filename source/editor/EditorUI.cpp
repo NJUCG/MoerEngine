@@ -28,7 +28,8 @@ EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfi
     m_ui_renderer(std::move(renderer)),
     m_config(editor_config),
     m_raster_ui(editor_config->raster_config),
-    m_raytracing_ui(editor_config->raytracing_config) {
+    m_raytracing_ui(editor_config->raytracing_config),
+    m_scene_testcase_ui(editor_config->scene_test_case_config) {
 
     // Load Config
     InitFromConfigManager();
@@ -298,6 +299,7 @@ void EditorUI::TickUI() {
 
             ImGui::MenuItem("Scene Color", nullptr, &m_b_show_scene_color);
             ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
+            ImGui::MenuItem("Scene TestCases", nullptr, &m_b_show_scene_test_cases);
             // ImGui::MenuItem("Inspector", nullptr, &m_m_b_show_inspector_window);
             // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
 #if WITH_PROFILE
@@ -316,8 +318,13 @@ void EditorUI::TickUI() {
     ResetState();
     ShowSceneColor();
     ShowConfig();
+    ShowSceneTestCases();
 
     m_ui_renderer->EndGUIFrame();
+}
+
+void EditorUI::ShowSceneTestCases() {
+    m_scene_testcase_ui.ShowWindow(&m_b_show_scene_test_cases);
 }
 
 void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output) {
