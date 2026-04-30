@@ -3,7 +3,6 @@
  */
 #include "scene/testcase/SceneTestCaseDispatcher.h"
 
-#include "math/Function.h"
 #include "misc/STL.h"
 #include "scene/LogicalComponents.h"
 #include "scene/Scene.h"
