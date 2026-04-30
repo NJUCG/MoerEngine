@@ -9,6 +9,29 @@
 
 namespace Moer::ecs {
 
+static void LogSceneApiError(std::string_view message) {
+    LOG_ERROR("[Scene API Error] {}", message);
+}
+
+static void SetEntityName(entt::registry& registry, entt::entity entity, std::string_view name) {
+    if (name.empty()) {
+        return;
+    }
+
+    registry.emplace_or_replace<ecs::CName>(entity).name = name;
+}
+
+static void RefreshSubtreeDepth(entt::registry& registry, entt::entity entity) {
+    auto&        node       = registry.get<ecs::CNode>(entity);
+    entt::entity child_entt = node.first_child_entt;
+    while (child_entt != entt::null) {
+        auto& child_node = registry.get<ecs::CNode>(child_entt);
+        child_node.depth = node.depth + 1;
+        RefreshSubtreeDepth(registry, child_entt);
+        child_entt = child_node.next_sibling_entt;
+    }
+}
+
 static entt::registry registry;
 
 entt::registry& LogicalScene::r() {
@@ -309,7 +332,7 @@ void LogicalScene::UDetachNodeFromParent(entt::entity child_entt, CNode& child_n
     }
 
     if (!r().valid(child_node.parent_entt) || !r().all_of<CNode>(child_node.parent_entt)) {
-        LOG_ERROR("Cannot detach node because parent node is invalid.");
+        LogSceneApiError("Cannot detach node because parent node is invalid.");
         child_node.parent_entt       = entt::null;
         child_node.prev_sibling_entt = entt::null;
         child_node.next_sibling_entt = entt::null;
@@ -346,6 +369,269 @@ void LogicalScene::UDetachNodeFromParent(entt::entity child_entt, CNode& child_n
     child_node.depth             = 0;
 }
 
+entt::entity LogicalScene::UGetRootNodeEntity() {
+    auto view = r().view<ecs::CTagRootNode>();
+    auto it   = view.begin();
+    if (it == view.end()) {
+        LogSceneApiError("Cannot find root node because no CTagRootNode exists in the scene.");
+        return entt::null;
+    }
+    return *it;
+}
+
+bool LogicalScene::UIsEntityWithNode(entt::entity entity) const {
+    return entity != entt::null && r().valid(entity) && r().all_of<ecs::CNode>(entity);
+}
+
+entt::entity LogicalScene::UCreateEntity(std::string_view name) {
+    entt::entity entity = r().create();
+    SetEntityName(r(), entity, name);
+    return entity;
+}
+
+entt::entity LogicalScene::UCreateEntityWithNode(const EntityWithNodeCreateInfo& create_info) {
+    entt::entity parent_node_entt = create_info.parent_node_entt;
+    if (parent_node_entt == entt::null) {
+        parent_node_entt = UGetRootNodeEntity();
+    }
+
+    if (!UIsEntityWithNode(parent_node_entt)) {
+        LogSceneApiError("Cannot create EntityWithNode because parent node is invalid or missing CNode.");
+        return entt::null;
+    }
+
+    entt::entity entity = r().create();
+    auto&        node   = r().emplace<ecs::CNode>(entity);
+    SetEntityName(r(), entity, create_info.name);
+
+    node.translation = create_info.translation;
+    node.rotation    = create_info.rotation;
+    node.scale       = create_info.scale;
+    node.is_dirty    = true;
+
+    auto& parent_node = r().get<ecs::CNode>(parent_node_entt);
+    UEmplaceNodeToParent(parent_node_entt, parent_node, entity, node);
+    return entity;
+}
+
+bool LogicalScene::USetLocalTransform(entt::entity entity, const Transform& local_transform) {
+    if (!UIsEntityWithNode(entity)) {
+        LogSceneApiError("Cannot set local transform because entity is invalid or missing CNode.");
+        return false;
+    }
+
+    if (!local_transform.IsAffine()) {
+        LogSceneApiError("Cannot set local transform because only affine Transform is supported.");
+        return false;
+    }
+
+    const auto affine = local_transform.AffineDecomposition();
+
+    auto& node       = r().get<ecs::CNode>(entity);
+    node.translation = affine.translation;
+    node.rotation    = affine.quaternion;
+    node.scale       = affine.scaling;
+    return true;
+}
+
+bool LogicalScene::UAttachToParent(
+    entt::entity child_entt,
+    entt::entity parent_entt,
+    entt::entity* old_parent_entt,
+    bool*         did_change
+) {
+    if (old_parent_entt) {
+        *old_parent_entt = entt::null;
+    }
+    if (did_change) {
+        *did_change = false;
+    }
+
+    if (!UIsEntityWithNode(child_entt) || !UIsEntityWithNode(parent_entt)) {
+        LogSceneApiError("Cannot attach node because child or parent is invalid or missing CNode.");
+        return false;
+    }
+    if (child_entt == parent_entt) {
+        LogSceneApiError("Cannot attach node to itself.");
+        return false;
+    }
+    if (r().all_of<ecs::CTagRootNode>(child_entt)) {
+        LogSceneApiError("Cannot attach root node to another parent.");
+        return false;
+    }
+
+    entt::entity current = parent_entt;
+    while (current != entt::null && r().valid(current) && r().all_of<ecs::CNode>(current)) {
+        if (current == child_entt) {
+            LogSceneApiError("Cannot attach node to its descendant.");
+            return false;
+        }
+        current = r().get<ecs::CNode>(current).parent_entt;
+    }
+
+    auto& child_node = r().get<ecs::CNode>(child_entt);
+    if (old_parent_entt) {
+        *old_parent_entt = child_node.parent_entt;
+    }
+    if (child_node.parent_entt == parent_entt) {
+        return true;
+    }
+
+    UDetachNodeFromParent(child_entt, child_node);
+
+    auto& parent_node = r().get<ecs::CNode>(parent_entt);
+    UEmplaceNodeToParent(parent_entt, parent_node, child_entt, child_node);
+    RefreshSubtreeDepth(r(), child_entt);
+
+    if (did_change) {
+        *did_change = true;
+    }
+    return true;
+}
+
+bool LogicalScene::UDetachFromParent(
+    entt::entity child_entt,
+    entt::entity* old_parent_entt,
+    bool*         did_change
+) {
+    if (old_parent_entt) {
+        *old_parent_entt = entt::null;
+    }
+    if (did_change) {
+        *did_change = false;
+    }
+
+    if (!UIsEntityWithNode(child_entt)) {
+        LogSceneApiError("Cannot detach node because entity is invalid or missing CNode.");
+        return false;
+    }
+    if (r().all_of<ecs::CTagRootNode>(child_entt)) {
+        LogSceneApiError("Cannot detach root node.");
+        return false;
+    }
+
+    const entt::entity root_entt = UGetRootNodeEntity();
+    if (!UIsEntityWithNode(root_entt)) {
+        return false;
+    }
+
+    auto& child_node = r().get<ecs::CNode>(child_entt);
+    if (old_parent_entt) {
+        *old_parent_entt = child_node.parent_entt;
+    }
+    if (child_node.parent_entt == root_entt) {
+        return true;
+    }
+
+    UDetachNodeFromParent(child_entt, child_node);
+
+    auto& root_node = r().get<ecs::CNode>(root_entt);
+    UEmplaceNodeToParent(root_entt, root_node, child_entt, child_node);
+    RefreshSubtreeDepth(r(), child_entt);
+
+    if (did_change) {
+        *did_change = true;
+    }
+    return true;
+}
+
+bool LogicalScene::UDestroyEntity(entt::entity entity, entt::entity* old_parent_entt) {
+    if (old_parent_entt) {
+        *old_parent_entt = entt::null;
+    }
+
+    if (entity == entt::null || !r().valid(entity)) {
+        LogSceneApiError("Cannot destroy entity because entity is invalid.");
+        return false;
+    }
+    if (r().all_of<ecs::CLight>(entity)) {
+        LogSceneApiError("Cannot destroy light entity through DestroyEntity. Use light-specific destroy API.");
+        return false;
+    }
+    if (r().all_of<ecs::CRenderable>(entity)) {
+        LogSceneApiError("Cannot destroy renderable entity through DestroyEntity yet.");
+        return false;
+    }
+    if (r().all_of<ecs::CTagRootNode>(entity)) {
+        LogSceneApiError("Cannot destroy root node.");
+        return false;
+    }
+
+    if (r().all_of<ecs::CNode>(entity)) {
+        auto& node = r().get<ecs::CNode>(entity);
+        if (node.first_child_entt != entt::null || node.child_count != 0) {
+            LogSceneApiError("Cannot destroy EntityWithNode because only leaf nodes are supported now.");
+            return false;
+        }
+
+        if (old_parent_entt) {
+            *old_parent_entt = node.parent_entt;
+        }
+        UDetachNodeFromParent(entity, node);
+    }
+
+    r().destroy(entity);
+    return true;
+}
+
+entt::entity LogicalScene::UCreatePointLight(const PointLightCreateInfo& create_info) {
+    entt::entity parent_node_entt = create_info.parent_node_entt;
+    if (parent_node_entt == entt::null) {
+        parent_node_entt = UGetRootNodeEntity();
+    }
+    if (parent_node_entt == entt::null || !r().valid(parent_node_entt) ||
+        !r().all_of<ecs::CNode>(parent_node_entt)) {
+        LogSceneApiError("Cannot create point light because parent node is invalid or missing CNode.");
+        return entt::null;
+    }
+
+    entt::entity light_entity = r().create();
+
+    auto& c_node  = r().emplace<ecs::CNode>(light_entity);
+    auto& c_light = r().emplace<ecs::CLight>(light_entity);
+    auto& c_point = r().emplace<ecs::CLightPoint>(light_entity);
+
+    r().emplace<ecs::CName>(light_entity).name = create_info.name;
+
+    c_node.translation = create_info.position;
+    c_node.is_dirty    = true;
+
+    c_light.type       = ELightType::Point;
+    c_point.color      = create_info.color;
+    c_point.intensity  = create_info.intensity;
+    c_point.is_dirty   = true;
+    c_point.d_position = create_info.position;
+
+    if (create_info.should_set_main_light) {
+        r().emplace_or_replace<ecs::CTagMainLight>(light_entity);
+    }
+
+    auto& parent_node = r().get<ecs::CNode>(parent_node_entt);
+    UEmplaceNodeToParent(parent_node_entt, parent_node, light_entity, c_node);
+
+    return light_entity;
+}
+
+bool LogicalScene::UCanDestroyPointLight(entt::entity light_entity) {
+    if (light_entity == entt::null || !r().valid(light_entity)) {
+        LogSceneApiError("Cannot destroy point light because entity is invalid.");
+        return false;
+    }
+
+    if (!r().all_of<ecs::CLight, ecs::CLightPoint, ecs::CNode>(light_entity)) {
+        LogSceneApiError("Cannot destroy point light because entity is missing point light components.");
+        return false;
+    }
+
+    const auto& node = r().get<ecs::CNode>(light_entity);
+    if (node.first_child_entt != entt::null || node.child_count != 0) {
+        LogSceneApiError("Cannot destroy point light because only leaf light nodes are supported now.");
+        return false;
+    }
+
+    return true;
+}
+
 void LogicalScene::UCreateDefaultCamera(entt::entity parent_node_id, bool shuold_create_main_camera) {
     // 创建默认摄像机实体
     entt::entity camera_entity = r().create();
@@ -359,7 +645,10 @@ void LogicalScene::UCreateDefaultCamera(entt::entity parent_node_id, bool shuold
     // CNode
     if (parent_node_id == entt::null) {
         // 挂在根节点下
-        parent_node_id = r().view<ecs::CTagRootNode>().front();
+        parent_node_id = UGetRootNodeEntity();
+        if (parent_node_id == entt::null) {
+            return;
+        }
     }
 
     auto& parent_node = r().get<ecs::CNode>(parent_node_id);
@@ -376,7 +665,10 @@ void LogicalScene::UCreateDefaultLights(entt::entity parent_node_id, bool should
 
     if (parent_node_id == entt::null) {
         // 挂在根节点下
-        parent_node_id = r().view<ecs::CTagRootNode>().front();
+        parent_node_id = UGetRootNodeEntity();
+        if (parent_node_id == entt::null) {
+            return;
+        }
     }
     auto& parent_node = r().get<ecs::CNode>(parent_node_id);
 

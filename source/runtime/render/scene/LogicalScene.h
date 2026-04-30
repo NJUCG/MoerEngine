@@ -2,6 +2,7 @@
 
 #include "LogicalComponents.h"
 #include "RenderAPI.h"
+#include "scene/SceneCreateInfo.h"
 #include "entt/entity/fwd.hpp"
 #include <entt/fwd.hpp>
 
@@ -79,6 +80,35 @@ public:
 
     // 从父节点的 child 链表中摘除指定节点
     void UDetachNodeFromParent(entt::entity child_entt, CNode& child_node);
+
+    entt::entity UGetRootNodeEntity();
+
+    bool UIsEntityWithNode(entt::entity entity) const;
+
+    entt::entity UCreateEntity(std::string_view name = {});
+
+    entt::entity UCreateEntityWithNode(const EntityWithNodeCreateInfo& create_info);
+
+    bool USetLocalTransform(entt::entity entity, const Transform& local_transform);
+
+    bool UAttachToParent(
+        entt::entity child_entt,
+        entt::entity parent_entt,
+        entt::entity* old_parent_entt = nullptr,
+        bool*         did_change       = nullptr
+    );
+
+    bool UDetachFromParent(
+        entt::entity child_entt,
+        entt::entity* old_parent_entt = nullptr,
+        bool*         did_change       = nullptr
+    );
+
+    bool UDestroyEntity(entt::entity entity, entt::entity* old_parent_entt = nullptr);
+
+    entt::entity UCreatePointLight(const PointLightCreateInfo& create_info);
+
+    bool UCanDestroyPointLight(entt::entity light_entity);
 
     /**
      * 创建默认摄像机entity，并将其挂在在指定node下

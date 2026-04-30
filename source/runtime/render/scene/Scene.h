@@ -5,13 +5,15 @@
 #include "LogicalScene.h"
 #include "RenderAPI.h"
 #include "SceneLoadInfoAsync.h"
+#include "scene/SceneCreateInfo.h"
+
 
 #include "scene/LogicalComponents.h"
-#include "scene/SceneLightApi.h"
 
 #include <cassert>
 #include <entt/entt.hpp>
 #include <filesystem>
+#include <string_view>
 #include <utility>
 
 namespace Moer {
@@ -39,6 +41,12 @@ class CommandList;
  * - 具体逻辑全部封装，内部管理
  * 
  * // TODO: 实现RingBuffer
+ * 
+ * 文件职责划分：
+ * - LogicalScene：负责具体 ECS 操作
+ * - Scene：负责对外接口声明与场景同步管理
+ * - SceneCreateInfo.h：负责 Scene API 的 CreateInfo 定义
+ * - SceneMutation.cpp：负责调用 LogicalScene，并维护同步数据与 Dirty 标记
  */
 class RENDER_API Scene {
 
@@ -152,6 +160,24 @@ public:
     // 标记组件修改带来的场景同步 dirty/tag，具体特化放在独立实现文件中。
     template<typename T>
     void MarkDirty(entt::entity entity);
+
+    // 创建普通 entity，不接入 scene node 树，也不触发 scene sync。
+    entt::entity CreateEntity(std::string_view name = {});
+
+    // 创建带 CNode 的 entity，并接入 parent 或 root node。
+    entt::entity CreateEntityWithNode(const EntityWithNodeCreateInfo& create_info);
+
+    // 修改已有 EntityWithNode 的 local transform，并标记 transform 同步。
+    bool SetLocalTransform(entt::entity entity, const Transform& local_transform);
+
+    // 将已有 EntityWithNode 重挂到新的 parent node 下。
+    bool AttachToParent(entt::entity child_entt, entt::entity parent_entt);
+
+    // 将已有 EntityWithNode 从当前 parent 下移除，并挂回 root node。
+    bool DetachFromParent(entt::entity child_entt);
+
+    // 删除普通 entity 或 leaf EntityWithNode，复杂 render-side entity 暂不支持。
+    bool DestroyEntity(entt::entity entity);
 
     // 创建运行时 PointLight，并标记为需要创建 render-side light slot。
     entt::entity CreatePointLight(const PointLightCreateInfo& create_info);

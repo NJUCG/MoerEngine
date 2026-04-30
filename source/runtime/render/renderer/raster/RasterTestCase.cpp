@@ -6,8 +6,8 @@
 #include "log/LogSystem.h"
 #include "math/Function.h"
 #include "scene/LogicalComponents.h"
+#include "scene/SceneCreateInfo.h"
 #include "scene/Scene.h"
-#include "scene/SceneLightApi.h"
 
 #include <cmath>
 #include <entt/entity/entity.hpp>

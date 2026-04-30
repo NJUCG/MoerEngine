@@ -608,6 +608,14 @@ void RasterUI::ShowConfig() {
             m_config.debug_requested_scene_test_case = ESceneTestCaseId::CreateDestroyPointLight;
         }
 
+        if (ImGui::Button("SceneTestCase EntityWithNode Flow")) {
+            m_config.debug_requested_scene_test_case = ESceneTestCaseId::EntityWithNodeStructuralFlow;
+        }
+
+        if (ImGui::Button("SceneTestCase EntityWithNode Invalid Ops")) {
+            m_config.debug_requested_scene_test_case = ESceneTestCaseId::EntityWithNodeRejectInvalidOps;
+        }
+
         ImGui::Checkbox(
             "TestCase Move Renderables", &m_config.debug_test_case_renderable_transform_motion_enabled
         );

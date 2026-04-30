@@ -1,10 +1,11 @@
 #pragma once
 
-#include "RenderAPI.h"
+#include "math/Quaternion.h"
 #include "misc/Traits.h"
 
 #include <entt/entity/entity.hpp>
 #include <string>
+#include <string_view>
 
 namespace Moer {
 
@@ -15,6 +16,14 @@ struct PointLightCreateInfo {
     std::string  name                  = "Runtime Point Light";
     entt::entity parent_node_entt      = entt::null;
     bool         should_set_main_light = false;
+};
+
+struct EntityWithNodeCreateInfo {
+    entt::entity     parent_node_entt = entt::null;
+    std::string_view name             = {};
+    float3           translation      = float3(0.f, 0.f, 0.f);
+    Quaternion       rotation         = Quaternion();
+    float3           scale            = float3(1.f, 1.f, 1.f);
 };
 
 } // namespace Moer

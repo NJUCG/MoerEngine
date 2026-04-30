@@ -23,8 +23,11 @@ enum class ESceneTestCaseId : std::uint32_t {
     // 创建 point light 后再删除，并验证删除同步链路
     CreateDestroyPointLight,
 
-    // 预留：验证未来 entity 与 transform component 结构性增删 API
-    CreateEntityAddRemoveTransform,
+    // 验证 EntityWithNode 创建、重挂、脱离和 leaf 删除主链路
+    EntityWithNodeStructuralFlow,
+
+    // 验证 EntityWithNode 结构性 API 拒绝关键非法操作
+    EntityWithNodeRejectInvalidOps,
 
     // 预留：验证未来 renderable 创建和删除 API
     CreateDestroyRenderable,
