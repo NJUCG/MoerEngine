@@ -90,6 +90,7 @@ struct RGPass {
 
 struct RGSetupPass {
     std::string name{};
+    // Empty callbacks are legal no-op slots for future compiled setup scheduling.
     std::function<void(RGSetupContext& setup)> execute{};
 };
 

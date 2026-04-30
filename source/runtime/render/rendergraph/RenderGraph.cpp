@@ -189,7 +189,6 @@ void RenderGraph::Dispatch(RHICommandList* cmd_list) {
     Compile();
     RGSetupContext setup_context(*this);
     for (auto& setup_pass : m_setup_passes) {
-        // Empty setup entries are skipped so future compile-time scheduling can reserve slots without a callback.
         if (setup_pass.execute) {
             setup_pass.execute(setup_context);
         }

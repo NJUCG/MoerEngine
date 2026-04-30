@@ -93,7 +93,7 @@ public:
     template<typename T>
     void AddPass(T* parameters, ERGPassFlags flags, typename RGPass::Execute&& execute) {
         AddPass(
-            "RGPass_" + std::to_string(m_passes.size()),
+            "UnnamedPass_" + std::to_string(m_passes.size()),
             parameters,
             flags,
             std::move(execute)
@@ -147,6 +147,7 @@ private:
     template<typename T>
     // Parameters optionally implement void DeclareRGAccess(RGParameterAccessCollector&) const.
     // RenderGraph calls it during AddPass to extract resource dependencies before Compile.
+    // Types without DeclareRGAccess are valid and declare no graph resource dependencies.
     void CollectParameterAccess(uint32_t pass_index, const T& parameters) {
         // Passes without graph resources omit this method.
         if constexpr (requires(const T& value, RGParameterAccessCollector& collector) {
