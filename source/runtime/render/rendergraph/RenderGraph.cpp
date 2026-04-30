@@ -167,7 +167,7 @@ uint32_t RenderGraph::AddPassInternal(
     assert(RGPassHasSingleExecutionDomain(flags));
     const uint32_t pass_index = static_cast<uint32_t>(m_passes.size());
     auto& pass = m_passes.emplace_back();
-    pass.name = std::string("RGPass_") + std::to_string(pass_index);
+    pass.name = std::string("RGPass_") + type.name();
     pass.parameters = parameters;
     pass.parameter_type = type;
     pass.parameter_size = size;
@@ -189,9 +189,7 @@ void RenderGraph::Dispatch(RHICommandList* cmd_list) {
     Compile();
     RGSetupContext setup_context(*this);
     for (auto& setup_pass : m_setup_passes) {
-        if (setup_pass.execute) {
-            setup_pass.execute(setup_context);
-        }
+        setup_pass.execute(setup_context);
     }
     if (cmd_list) {
         RGContext context(*this);

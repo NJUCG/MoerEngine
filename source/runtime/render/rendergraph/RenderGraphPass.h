@@ -25,7 +25,7 @@ private:
 
 class RGSetupContext {
 public:
-    // Provides graph access for CPU preparation tasks; resource access is declared by pass parameters.
+    // CPU preparation context. Do not declare resource access, record RHI commands, or submit work here.
     explicit RGSetupContext(RenderGraph& graph) : m_graph(graph) {}
 
     RenderGraph& Graph() const { return m_graph; }
@@ -64,6 +64,10 @@ public:
         buffer_accesses.push_back(view.ToAccess());
     }
 
+    const Moer::Array<RGTextureAccess>& Textures() const { return texture_accesses; }
+    const Moer::Array<RGBufferAccess>& Buffers() const { return buffer_accesses; }
+
+private:
     Moer::Array<RGTextureAccess> texture_accesses{};
     Moer::Array<RGBufferAccess>  buffer_accesses{};
 };
