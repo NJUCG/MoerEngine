@@ -367,6 +367,25 @@ void RenderGraph::ValidateSetup() const {
 
 void RenderGraph::BuildHazards() {
     m_compiled_plan.hazard_edges.clear();
+    const auto add_hazard = [this](
+                                uint32_t src,
+                                uint32_t dst,
+                                RenderGraphHandle resource,
+                                ERGResourceKind resource_kind
+                            ) {
+        const auto exists = std::any_of(
+            m_compiled_plan.hazard_edges.begin(),
+            m_compiled_plan.hazard_edges.end(),
+            [src, dst, resource, resource_kind](const RGCompiledHazardEdge& edge) {
+                return edge.src_pass == src && edge.dst_pass == dst && edge.resource == resource &&
+                       edge.resource_kind == resource_kind;
+            }
+        );
+        if (!exists) {
+            m_compiled_plan.hazard_edges.push_back(RGCompiledHazardEdge{src, dst, resource, resource_kind});
+        }
+    };
+
     for (uint32_t dst = 0; dst < m_passes.size(); ++dst) {
         const auto& dst_pass = m_passes[dst];
         for (uint32_t src = 0; src < dst; ++src) {
@@ -374,14 +393,14 @@ void RenderGraph::BuildHazards() {
             for (const auto& src_access : src_pass.texture_accesses) {
                 for (const auto& dst_access : dst_pass.texture_accesses) {
                     if (src_access.handle == dst_access.handle && src_access.range.Overlaps(dst_access.range) && RGAccessConflicts(src_access.mode, dst_access.mode)) {
-                        m_compiled_plan.hazard_edges.push_back(RGCompiledHazardEdge{src, dst, src_access.handle, ERGResourceKind::Texture});
+                        add_hazard(src, dst, src_access.handle, ERGResourceKind::Texture);
                     }
                 }
             }
             for (const auto& src_access : src_pass.buffer_accesses) {
                 for (const auto& dst_access : dst_pass.buffer_accesses) {
                     if (src_access.handle == dst_access.handle && src_access.range.Overlaps(dst_access.range) && RGAccessConflicts(src_access.mode, dst_access.mode)) {
-                        m_compiled_plan.hazard_edges.push_back(RGCompiledHazardEdge{src, dst, src_access.handle, ERGResourceKind::Buffer});
+                        add_hazard(src, dst, src_access.handle, ERGResourceKind::Buffer);
                     }
                 }
             }

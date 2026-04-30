@@ -207,7 +207,7 @@
     {
       "id": "CP-08",
       "title": "Freeze external pass and interop boundary contract",
-      "status": "in_progress",
+      "status": "todo",
       "priority": "critical",
       "problem": "The renderer may need native custom GPU work outside RHICommandList, raw RHI work before and after a graph, and multiple RenderGraph instances in one frame. Without an explicit contract, those paths would reintroduce hidden resource state and allocator lifetime bugs.",
       "what_must_be_true_after_this_checkpoint": [
@@ -243,6 +243,6 @@
   "implementation_notes": [
     "Implemented a latest-only RenderGraph construction surface with graph.Alloc<T>(), AddSetupPass(), AddPass(), Compile(), and Dispatch().",
     "Implemented graph-owned parameter lifetime tracking, explicit texture/buffer access declarations, import/export metadata, RGFrameContext receipts, and deterministic hazard-edge compilation.",
-    "Left barrier lowering, CopyScope handoff emission, RHIExecutor submit plans, platform external pass callbacks, GPU trace scope compilation, and focused RHI validation as unfinished checkpoints."
+    "Left barrier lowering, CopyScope handoff emission, RHIExecutor submit plans, platform external pass callbacks, GPU trace scope compilation, external pass interop, and focused RHI validation as unfinished checkpoints."
   ]
 }

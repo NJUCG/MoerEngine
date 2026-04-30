@@ -6,6 +6,9 @@
 namespace Moer {
 
 bool RGTextureRange::Overlaps(const RGTextureRange& other) const {
+    if (mip_count == 0 || array_count == 0 || other.mip_count == 0 || other.array_count == 0) {
+        return false;
+    }
     if (!EnumHasAnyFlag(aspect, other.aspect)) {
         return false;
     }
@@ -23,6 +26,9 @@ bool RGBufferRange::IsWholeResource() const {
 }
 
 bool RGBufferRange::Overlaps(const RGBufferRange& other) const {
+    if ((!IsWholeResource() && size == 0) || (!other.IsWholeResource() && other.size == 0)) {
+        return false;
+    }
     if (IsWholeResource() || other.IsWholeResource()) {
         return true;
     }
