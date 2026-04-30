@@ -152,11 +152,11 @@ void RenderGraph::ExportBuffer(RenderGraphHandle handle, Render::EBufferState fi
 
 void RenderGraph::AddSetupPass(std::string_view name, SetupExecute&& setup) {
     assert(m_phase == Phase::Setup);
-    assert(setup && "AddSetupPass requires a valid preparation callback");
     m_setup_passes.push_back(RGSetupPass{std::string(name), std::move(setup)});
 }
 
 uint32_t RenderGraph::AddPassInternal(
+    std::string name,
     void* parameters,
     std::type_index type,
     uint32_t size,
@@ -167,7 +167,7 @@ uint32_t RenderGraph::AddPassInternal(
     assert(RGPassHasSingleExecutionDomain(flags));
     const uint32_t pass_index = static_cast<uint32_t>(m_passes.size());
     auto& pass = m_passes.emplace_back();
-    pass.name = std::string("RGPass_") + type.name();
+    pass.name = std::move(name);
     pass.parameters = parameters;
     pass.parameter_type = type;
     pass.parameter_size = size;
@@ -189,7 +189,9 @@ void RenderGraph::Dispatch(RHICommandList* cmd_list) {
     Compile();
     RGSetupContext setup_context(*this);
     for (auto& setup_pass : m_setup_passes) {
-        setup_pass.execute(setup_context);
+        if (setup_pass.execute) {
+            setup_pass.execute(setup_context);
+        }
     }
     if (cmd_list) {
         RGContext context(*this);

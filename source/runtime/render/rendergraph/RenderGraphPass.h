@@ -25,7 +25,8 @@ private:
 
 class RGSetupContext {
 public:
-    // CPU preparation context. Do not declare resource access, record RHI commands, or submit work here.
+    // CPU preparation context for graph-owned setup work before pass execution.
+    // Do not declare resource access, record RHI commands, or submit work here.
     explicit RGSetupContext(RenderGraph& graph) : m_graph(graph) {}
 
     RenderGraph& Graph() const { return m_graph; }
