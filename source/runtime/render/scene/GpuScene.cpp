@@ -357,9 +357,10 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         buf_with_hdl.hdl = bdls->AllocateBuffer(buf_with_hdl.buf->GetView());
     }
 
-    // NOTE: UpdateBindlessArray 需要在 Graphics/Compute Queue 中执行，不能在 Copy Queue 中执行
-    // 这里只分配了 handle，实际的 bindless array 更新应该在后续的 Graphics Queue 命令中完成
-    // cmd_list.UpdateBindlessArray(bdls);
+    // NOTE: UpdateBindlessArray 需要在 Graphics/Compute Queue 中执行，不能在 Copy Queue 中执行。
+    // GpuScene 全量重建会重新分配 texture/buffer bindless handles，必须在本批 pending gfx 命令中发布，
+    // 否则后续 shader 会拿着新 handle 去读旧 descriptor heap 内容。
+    m_pending_cmd_lists.gfx_queue_cmd_list.UpdateBindlessArray(bdls);
 
     /**
      * MARK: Upload & Execute

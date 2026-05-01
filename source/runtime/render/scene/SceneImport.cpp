@@ -1,6 +1,7 @@
 #include "Scene.h"
 
 #include "log/LogSystem.h"
+#include "rhi/RHI.h"
 #include "scene/NodeNameUtils.h"
 #include "scene/loader/LoaderInterface.h"
 
@@ -291,8 +292,10 @@ Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::files
 
     // Import 会带来新的 texture/material entities，但当前增量同步链路不会在 GpuScene 中创建这些纹理。
     // 这里直接按最新 logical scene 重建一次 runtime scene，确保材质纹理句柄立即有效。
+    Render::RenderDevice::Get().WaitIdle();
     m_cpu_scene = MakeUnique<CpuScene>(*m_logical_scene);
     m_gpu_scene = MakeUnique<Render::GpuScene>(*m_cpu_scene, bindless_array());
+    m_has_pending_gpu_scene_commands = true;
     ClearSceneSyncTags(target_registry);
 
     import_result.success               = true;

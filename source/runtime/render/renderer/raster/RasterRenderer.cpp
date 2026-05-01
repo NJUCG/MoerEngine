@@ -258,7 +258,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             scene_test_case_runner.HasActiveCase() || scene_test_case_runner.HasPendingCase();
 
         const auto& scene_tick_state = scene.Tick(is_run_scene_test_case);
-        if (scene_tick_state) {
+        if (scene_tick_state || scene.HasPendingGpuSceneCommands()) {
             RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
         }
 

@@ -2,6 +2,7 @@
 
 #include "math/Function.h"
 #include "log/LogSystem.h"
+#include "rhi/RHI.h"
 
 #include <cmath>
 
@@ -31,6 +32,68 @@ static void MarkSceneMeshRebuild(Scene& scene) {
     }
 
     registry.emplace_or_replace<ecs::CTagNeedRebuildMesh>(*it);
+}
+
+static void ClearSceneSyncTags(entt::registry& registry) {
+    registry.clear<ecs::CTagNeedUpdateLight>();
+    registry.clear<ecs::CTagNeedUpdateMaterial>();
+    registry.clear<ecs::CTagNeedUpdateTransform>();
+    registry.clear<ecs::CTagNeedCreateLight>();
+    registry.clear<ecs::CTagNeedCreateMaterial>();
+    registry.clear<ecs::CTagNeedCreateTransform>();
+    registry.clear<ecs::CTagNeedDestroyLight>();
+    registry.clear<ecs::CTagNeedRebuildMesh>();
+}
+
+static void CollectNodeSubtreePostOrder(
+    const entt::registry& registry,
+    entt::entity          entity,
+    Array<entt::entity>&  out_entities
+) {
+    const auto& node = registry.get<ecs::CNode>(entity);
+
+    entt::entity child_entt = node.first_child_entt;
+    while (child_entt != entt::null) {
+        const entt::entity next_sibling_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
+        CollectNodeSubtreePostOrder(registry, child_entt, out_entities);
+        child_entt = next_sibling_entt;
+    }
+
+    out_entities.push_back(entity);
+}
+
+static void EnsureMainCameraExists(ecs::LogicalScene& logical_scene, entt::registry& registry) {
+    if (registry.view<ecs::CTagMainCamera>().front() != entt::null) {
+        return;
+    }
+
+    if (const entt::entity camera_entity = registry.view<ecs::CCamera>().front(); camera_entity != entt::null) {
+        registry.emplace<ecs::CTagMainCamera>(camera_entity);
+        return;
+    }
+
+    logical_scene.UCreateDefaultCamera();
+}
+
+static void EnsureMainLightExists(ecs::LogicalScene& logical_scene, entt::registry& registry) {
+    if (registry.view<ecs::CLightDirectional, ecs::CTagMainLight>().front() != entt::null ||
+        registry.view<ecs::CLightPoint, ecs::CTagMainLight>().front() != entt::null) {
+        return;
+    }
+
+    if (const entt::entity directional_light_entity = registry.view<ecs::CLightDirectional>().front();
+        directional_light_entity != entt::null) {
+        registry.emplace<ecs::CTagMainLight>(directional_light_entity);
+        return;
+    }
+
+    if (const entt::entity point_light_entity = registry.view<ecs::CLightPoint>().front();
+        point_light_entity != entt::null) {
+        registry.emplace<ecs::CTagMainLight>(point_light_entity);
+        return;
+    }
+
+    logical_scene.UCreateDefaultLights();
 }
 
 static PrimitiveCreateInfo BuildCubePrimitiveData(entt::entity material_entt) {
@@ -319,6 +382,44 @@ bool Scene::DestroyEntity(entt::entity entity) {
     }
 
     MarkSceneNodeDirtyIfValid(*this, old_parent_entt);
+    return true;
+}
+
+bool Scene::DestroyNodeSubtree(entt::entity entity) {
+    auto& registry = r();
+    if (entity == entt::null || !registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
+        LOG_ERROR("[Scene API Error] Cannot destroy node subtree because entity is invalid or missing CNode.");
+        return false;
+    }
+    if (registry.all_of<ecs::CTagRootNode>(entity)) {
+        LOG_ERROR("[Scene API Error] Cannot destroy root node subtree.");
+        return false;
+    }
+
+    Array<entt::entity> subtree_entities;
+    CollectNodeSubtreePostOrder(registry, entity, subtree_entities);
+
+    auto& root_node = registry.get<ecs::CNode>(entity);
+    logical_scene().UDetachNodeFromParent(entity, root_node);
+
+    for (entt::entity subtree_entity : subtree_entities) {
+        if (registry.valid(subtree_entity)) {
+            registry.destroy(subtree_entity);
+        }
+    }
+
+    EnsureMainCameraExists(logical_scene(), registry);
+    EnsureMainLightExists(logical_scene(), registry);
+
+    logical_scene().SUpdateAllNodeTransformAndAABB();
+    logical_scene().SUpdateAllLightData();
+
+    // 这里会整体替换 GpuScene，先等待飞行中的命令完成，避免销毁仍在使用的资源。
+    Render::RenderDevice::Get().WaitIdle();
+    m_cpu_scene = MakeUnique<CpuScene>(*m_logical_scene);
+    m_gpu_scene = MakeUnique<Render::GpuScene>(*m_cpu_scene, bindless_array());
+    m_has_pending_gpu_scene_commands = true;
+    ClearSceneSyncTags(registry);
     return true;
 }
 

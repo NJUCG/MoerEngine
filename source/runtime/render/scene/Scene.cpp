@@ -43,6 +43,7 @@ void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
 
     // 3. gpu scene
     this->m_gpu_scene = MakeUnique<Render::GpuScene>(*this->m_cpu_scene, this->bindless_array());
+    this->m_has_pending_gpu_scene_commands = true;
 
     // finish
     m_source_file_path = file_path;
@@ -138,6 +139,14 @@ Render::GpuScene::PendingCommandList&& Scene::PopPendingCommandList() {
     return std::move(m_gpu_scene->PopPendingCommandList());
 }
 
+bool Scene::HasPendingGpuSceneCommands() const {
+    return m_has_pending_gpu_scene_commands;
+}
+
+void Scene::ConsumePendingGpuSceneCommands() {
+    m_has_pending_gpu_scene_commands = false;
+}
+
 // 在 scene sync 完成后销毁所有 pending destroy light entity
 static void FinalizeDestroyedLights(Scene& scene) {
     auto& registry = scene.r();
@@ -228,6 +237,7 @@ void Scene::Reset() {
     m_gpu_scene.reset();
 
     m_scene_load_info.Reset();
+    m_has_pending_gpu_scene_commands = false;
 }
 
 // MARK: 一系列public getter
@@ -307,6 +317,11 @@ Render::BindlessArrayRef Scene::GetBindlessArray() {
 entt::entity Scene::GetMainCameraEntity() const {
     auto entity = r().view<ecs::CTagMainCamera>().front();
     if (entity == entt::null) {
+        entity = r().view<ecs::CCamera>().front();
+        if (entity != entt::null) {
+            LOG_WARNING("No main camera tag found in scene. Falling back to the first camera entity.");
+            return entity;
+        }
         LOG_ERROR("No main camera found in scene");
     }
     return entity;

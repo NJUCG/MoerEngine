@@ -94,6 +94,36 @@ bool IsSelectedNodeValid(Scene* scene, entt::entity entity) {
            scene->r().all_of<ecs::CNode>(entity);
 }
 
+struct NodeSubtreeStats {
+    uint32 node_count              = 0;
+    uint32 renderable_count        = 0;
+    uint32 camera_count            = 0;
+    uint32 light_count             = 0;
+    bool   contains_main_camera    = false;
+    bool   contains_main_light_tag = false;
+};
+
+void CollectNodeSubtreeStats(const entt::registry& registry, entt::entity entity, NodeSubtreeStats& stats) {
+    if (entity == entt::null || !registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
+        return;
+    }
+
+    stats.node_count += 1;
+    stats.renderable_count += registry.all_of<ecs::CRenderable>(entity) ? 1u : 0u;
+    stats.camera_count += registry.all_of<ecs::CCamera>(entity) ? 1u : 0u;
+    stats.light_count += registry.all_of<ecs::CLight>(entity) ? 1u : 0u;
+    stats.contains_main_camera = stats.contains_main_camera || registry.all_of<ecs::CTagMainCamera>(entity);
+    stats.contains_main_light_tag =
+        stats.contains_main_light_tag || registry.all_of<ecs::CTagMainLight>(entity);
+
+    entt::entity child_entt = registry.get<ecs::CNode>(entity).first_child_entt;
+    while (child_entt != entt::null) {
+        const entt::entity next_sibling_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
+        CollectNodeSubtreeStats(registry, child_entt, stats);
+        child_entt = next_sibling_entt;
+    }
+}
+
 } // namespace
 
 void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_node) {
@@ -159,6 +189,81 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         scene->Patch<ecs::CNode>(selected_node, [&](auto& mutable_node) {
             mutable_node.scale = scale;
         });
+    }
+
+    ImGui::Separator();
+
+    NodeSubtreeStats subtree_stats{};
+    CollectNodeSubtreeStats(scene->r(), selected_node, subtree_stats);
+
+    ImGui::TextDisabled(
+        "Subtree: %u nodes, %u renderables, %u cameras, %u lights",
+        subtree_stats.node_count,
+        subtree_stats.renderable_count,
+        subtree_stats.camera_count,
+        subtree_stats.light_count
+    );
+    if (subtree_stats.contains_main_camera) {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "This subtree contains the main camera.");
+    }
+    if (subtree_stats.contains_main_light_tag) {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "This subtree contains the main light tag.");
+    }
+
+    const bool can_delete_selected_node = !scene->r().all_of<ecs::CTagRootNode>(selected_node);
+    if (!can_delete_selected_node) {
+        ImGui::BeginDisabled();
+    }
+
+    if (ImGui::Button("Delete Node + Children...")) {
+        ImGui::OpenPopup("Confirm Delete Node Subtree");
+    }
+
+    if (!can_delete_selected_node) {
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("Root node cannot be deleted.");
+    }
+
+    if (ImGui::BeginPopupModal("Confirm Delete Node Subtree", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Delete '%s'?", node.name.c_str());
+        ImGui::TextWrapped("This will remove the selected node and all of its descendants from the scene.");
+        ImGui::Separator();
+        ImGui::Text(
+            "Affected: %u nodes, %u renderables, %u cameras, %u lights",
+            subtree_stats.node_count,
+            subtree_stats.renderable_count,
+            subtree_stats.camera_count,
+            subtree_stats.light_count
+        );
+        if (subtree_stats.contains_main_camera) {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
+                "The current main camera is inside this subtree. A default camera will be restored if needed."
+            );
+        }
+        if (subtree_stats.contains_main_light_tag) {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
+                "The current main light is inside this subtree. A default light will be restored if needed."
+            );
+        }
+        ImGui::Separator();
+
+        if (ImGui::Button("Delete", ImVec2(120.0f, 0.0f))) {
+            if (scene->DestroyNodeSubtree(selected_node)) {
+                selected_node           = entt::null;
+                m_rotation_cache_entity = entt::null;
+            }
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
     }
 
     ImGui::End();

@@ -161,6 +161,7 @@ void RasterTool::ExecuteScenePendingCommands(Scene& scene, RenderDevice& device,
     device.GetCopyQueue().Sync(copy_evt.timeline);
     gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
     gfx_queue.Sync();
+    scene.ConsumePendingGpuSceneCommands();
 }
 
 } // namespace Moer::Render::Raster

@@ -179,6 +179,8 @@ public:
 public:
     // Graphics API相关接口
     Render::GpuScene::PendingCommandList&& PopPendingCommandList();
+    bool HasPendingGpuSceneCommands() const;
+    void ConsumePendingGpuSceneCommands();
 
 public:
     // 修改已有组件并自动标记对应的场景同步 dirty/tag。
@@ -230,6 +232,9 @@ public:
     // 删除普通 entity 或 leaf EntityWithNode，复杂 render-side entity 暂不支持。
     bool DestroyEntity(entt::entity entity);
 
+    // 删除一个 node 及其所有子节点；当前通过重建 CpuScene/GpuScene 保证 render-side 数据正确。
+    bool DestroyNodeSubtree(entt::entity entity);
+
     // 删除 renderable 会在后续 Tick 中触发 mesh instance cache rebuild，当前先接受这部分开销
     bool DestroyRenderable(entt::entity renderable_entity);
 
@@ -257,6 +262,7 @@ private:
     SceneLoadInfoAsync    m_scene_load_info;
     TickState             m_last_tick_state;
     std::filesystem::path m_source_file_path;
+    bool                  m_has_pending_gpu_scene_commands = false;
 
 private:
     /**
