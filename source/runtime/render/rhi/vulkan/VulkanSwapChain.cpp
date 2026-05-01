@@ -148,14 +148,19 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         LOG_WARNING("Swapchain recreate skipped due to zero window size.");
         return;
     }
+
+    Sync();
+
     bool           b_recreate = handle != VK_NULL_HANDLE || _force_recreate;
     VkSwapchainKHR old_sc     = handle;
     VkInstance     instance   = device.GetInstance();
     //create surface by window handle
     assert(_info.window_handle != 0 && "Window handle is null when creating vulkan swapchain");
-    Moer::WindowContext::CreateVulkanSurface(
-        instance, (WindowHandle*)_info.window_handle, VK_NULL_HANDLE, &surface
-    );
+    if (surface == VK_NULL_HANDLE) {
+        Moer::WindowContext::CreateVulkanSurface(
+            instance, (WindowHandle*)_info.window_handle, VK_NULL_HANDLE, &surface
+        );
+    }
     //create swapchain
     VkSurfaceCapabilitiesKHR capabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.GetGpu(), surface, &capabilities);
@@ -271,6 +276,8 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     image_idx = 0;
 }
 VkSwapchain::~VkSwapchain() {
+    Sync();
+
     if (handle) {
         vkDestroySwapchainKHR(device.GetDevice(), handle, VK_NULL_HANDLE);
     }
@@ -319,8 +326,7 @@ void VkSwapchain::Present(VkQueue _queue, uint _index) {
     VkSemaphore finished_semaphores[] = {render_finished_fences[image_idx % render_finished_fences.size()]};
     // 如果启用了 VK_EXT_swapchain_maintenance1，则使用 present fence 优化队列同步；
     // 否则退回到兼容路径，不挂 VkSwapchainPresentFenceInfoEXT，避免验证层报扩展未启用。
-    const bool use_present_fence =
-        device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+    const bool use_present_fence = device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
 
     VkSwapchainPresentFenceInfoEXT present_fence_info{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
     if (use_present_fence) {
@@ -329,7 +335,7 @@ void VkSwapchain::Present(VkQueue _queue, uint _index) {
     }
 
     VkPresentInfoKHR present_info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-    present_info.pNext              = use_present_fence ? reinterpret_cast<void*>(&present_fence_info) : nullptr;
+    present_info.pNext = use_present_fence ? reinterpret_cast<void*>(&present_fence_info) : nullptr;
     present_info.waitSemaphoreCount = 1;
     present_info.pWaitSemaphores    = finished_semaphores;
     present_info.swapchainCount     = 1;
@@ -373,7 +379,8 @@ void VkSwapchain::Sync() {
     while (cur_present_cnt.load(std::memory_order_relaxed) > 0) {
         std::this_thread::yield();
     }
-    // wait for present queue
+    // Swapchain semaphores are signaled by graphics queue and waited by present queue.
+    vkQueueWaitIdle(device.GetGraphicsQueue());
     vkQueueWaitIdle(device.GetPresentQueue());
 }
 } // namespace Moer::Render

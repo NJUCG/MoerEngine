@@ -5,9 +5,15 @@
 #include "LogicalScene.h"
 #include "RenderAPI.h"
 #include "SceneLoadInfoAsync.h"
-#include "entt/entity/fwd.hpp"
+#include "scene/SceneCreateInfo.h"
+
 #include "scene/LogicalComponents.h"
+
+#include <cassert>
+#include <entt/entt.hpp>
 #include <filesystem>
+#include <string_view>
+#include <utility>
 
 namespace Moer {
 
@@ -16,8 +22,24 @@ class CommandList;
 }
 
 /**
- * MoerEngine场景
- * 
+ * Scene 是运行时场景总入口，负责把 LogicalScene / CpuScene / GpuScene 串起来。
+ *
+ * 结构:
+ * - LogicalScene: ECS 数据、节点树、导入后的逻辑结果
+ * - CpuScene: shader 需要的 CPU 连续缓冲和 entity->slot 映射
+ * - GpuScene: GPU 资源、bindless handle、待提交命令
+ *
+ * 改这里:
+ * - 加新的对外场景 API: Scene.h + SceneMutation.cpp
+ * - 改加载 / import / reset / cache 入口: Scene.cpp + SceneImport.cpp + loader 目录
+ * - 改每帧同步流程: Scene.cpp::Tick + CpuScene / GpuScene
+ *
+ * 用法:
+ * - 外部只通过 LoadSceneFromFile / Tick / Patch / Create* / Destroy* 操作场景
+ * - 不直接改 CpuScene / GpuScene，先改 LogicalScene 或 Scene API
+ *
+ * ===============================================================
+ *
  * 非RAII，需要手动管理生命周期
  * 
  * 场景共分为3大部分：LogicalScene, CpuScene, GpuScene
@@ -34,10 +56,73 @@ class CommandList;
  * - 具体逻辑全部封装，内部管理
  * 
  * // TODO: 实现RingBuffer
+ * 
+ * 文件职责划分：
+ * - LogicalScene：负责具体 ECS 操作
+ * - Scene：负责对外接口声明与场景同步管理
+ * - SceneCreateInfo.h：负责 Scene API 的 CreateInfo 定义
+ * - SceneMutation.cpp：负责实现 Scene mutation API，调用 LogicalScene，并维护同步数据与 Dirty 标记
+ * - scene/editing/SceneEditing：负责编辑器/工具层意图封装，把 UI 操作翻译为正式 Scene API 调用；不直接维护同步 tag
  */
 class RENDER_API Scene {
 
+    /**
+     * Runtime Scene Update Feature Checklist
+     *
+     * - Update
+     *   - Light【done】
+     *   - Material
+     *   - Transform【done】
+     *   - Mesh / Renderable
+     * - Add
+     *   - Light(PointLight)【done】
+     *   - Material
+     *   - Mesh / Renderable
+     *   - Entity / Node
+     * - Remove
+     *   - Light(PointLight)【done】
+     *   - Material
+     *   - Mesh / Renderable
+     *   - Entity / Node
+     * - Rebuild
+     *   - Material / Texture Handle
+     *   - Mesh / Primitive / Instance Buffer
+     *   - Raytracing BLAS / TLAS
+     * - Infrastructure
+     *   - Patch Entry【done】
+     *   - Dirty / NeedUpdate Tag【done】
+     *   - NeedCreate Tag【done】
+     *   - Per-frame Guarded Tick【done】
+     */
+
 public:
+    struct TickState {
+        bool did_sync          = false;
+        bool updated_light     = false;
+        bool updated_material  = false;
+        bool updated_transform = false;
+        bool created_light     = false;
+        bool created_material  = false;
+        bool created_transform = false;
+        bool destroyed_light   = false;
+        bool rebuilt_mesh      = false;
+
+        explicit operator bool() const {
+            return did_sync;
+        }
+    };
+
+    struct ImportSceneFromFileResult {
+        bool         success = false;
+        std::string  error_message;
+        entt::entity import_root_entt      = entt::null;
+        uint64       imported_entity_count = 0;
+
+        explicit operator bool() const {
+            return success;
+        }
+    };
+
     Scene();
     ~Scene() = default;
 
@@ -56,10 +141,20 @@ public:
      */
     void LoadSceneFromFile(const std::filesystem::path& file_path);
 
+    bool SaveStateCache() const;
+
+    bool ResetToSourceScene();
+
+    ImportSceneFromFileResult ImportSceneFromFileSync(const std::filesystem::path& file_path);
+
+    const std::filesystem::path& GetSourceFilePath() const;
+
     /**
-     * 每帧调用，更新CpuScene和GpuScene数据
+    * 每帧调用，有需要时更新CpuScene和GpuScene数据
      */
-    void Tick();
+    const TickState& Tick(bool is_run_test_case = false);
+
+    const TickState& GetLastTickState() const;
 
     /**
      * 重置所有场景数据
@@ -84,6 +179,70 @@ public:
 public:
     // Graphics API相关接口
     Render::GpuScene::PendingCommandList&& PopPendingCommandList();
+    bool HasPendingGpuSceneCommands() const;
+    void ConsumePendingGpuSceneCommands();
+
+public:
+    // 修改已有组件并自动标记对应的场景同步 dirty/tag。
+    template<typename T, typename Fn>
+    T& Patch(entt::entity entity, Fn&& fn) {
+        auto& registry = r();
+        assert(registry.valid(entity) && "Patch target entity is invalid");
+        assert(registry.all_of<T>(entity) && "Patch target entity does not have the component");
+
+        registry.patch<T>(entity, std::forward<Fn>(fn));
+        MarkDirty<T>(entity);
+        return registry.get<T>(entity);
+    }
+
+    // 标记组件修改带来的场景同步 dirty/tag，具体特化放在独立实现文件中。
+    template<typename T>
+    void MarkDirty(entt::entity entity);
+
+    // 创建普通 entity，不接入 scene node 树，也不触发 scene sync。
+    entt::entity CreateEntity(std::string_view name = {});
+
+    // 创建带 CNode 的 entity，并接入 parent 或 root node。
+    entt::entity CreateEntityWithNode(const EntityWithNodeCreateInfo& create_info);
+
+    // 创建带 CNode 和 CRenderable 的 entity，并复用已有 mesh 资源。
+    entt::entity CreateRenderableWithNode(const RenderableCreateInfo& create_info);
+
+    // 创建运行时 Material，并标记为需要创建 render-side material slot。
+    entt::entity CreateMaterial(const MaterialCreateInfo& create_info);
+
+    // 创建运行时 Primitive Data，并 append 到 CtxMegaBuffers。
+    entt::entity CreatePrimitive(const PrimitiveCreateInfo& create_info);
+
+    // 创建运行时 Mesh，第一版只做全量 mesh resource rebuild。
+    entt::entity CreateMesh(const MeshCreateInfo& create_info);
+
+    // 创建简单 procedural material + primitive + mesh + renderable。
+    CreateProceduralRenderableResult CreateProceduralRenderable(const ProceduralMeshCreateInfo& create_info);
+
+    // 修改已有 EntityWithNode 的 local transform，并标记 transform 同步。
+    bool SetLocalTransform(entt::entity entity, const Transform& local_transform);
+
+    // 将已有 EntityWithNode 重挂到新的 parent node 下。
+    bool AttachToParent(entt::entity child_entt, entt::entity parent_entt);
+
+    // 将已有 EntityWithNode 从当前 parent 下移除，并挂回 root node。
+    bool DetachFromParent(entt::entity child_entt);
+
+    // 删除普通 entity 或 leaf EntityWithNode，复杂 render-side entity 暂不支持。
+    bool DestroyEntity(entt::entity entity);
+
+    // 删除一个 node 及其所有子节点；当前通过重建 CpuScene/GpuScene 保证 render-side 数据正确。
+    bool DestroyNodeSubtree(entt::entity entity);
+
+    // 删除 renderable 会在后续 Tick 中触发 mesh instance cache rebuild，当前先接受这部分开销
+    bool DestroyRenderable(entt::entity renderable_entity);
+
+    // 创建运行时 PointLight，并标记为需要创建 render-side light slot。
+    entt::entity CreatePointLight(const PointLightCreateInfo& create_info);
+
+    // 删除 point light 会在后续 Tick 中触发 light cache rebuild，当前先接受这部分开销
+    bool DestroyPointLight(entt::entity light_entity);
 
 private:
     // 构造函数 初始化
@@ -100,7 +259,10 @@ private:
     UniquePtr<CpuScene>          m_cpu_scene;
     UniquePtr<Render::GpuScene>  m_gpu_scene;
 
-    SceneLoadInfoAsync m_scene_load_info;
+    SceneLoadInfoAsync    m_scene_load_info;
+    TickState             m_last_tick_state;
+    std::filesystem::path m_source_file_path;
+    bool                  m_has_pending_gpu_scene_commands = false;
 
 private:
     /**
@@ -109,6 +271,11 @@ private:
      * LoadSceneFromFileAsync 和 LoadSceneFromFile 的公共实现
      */
     void LoadSceneInternal(const std::filesystem::path& file_path);
+
+    // 判断当前 Scene 是否存在需要同步到 CpuScene/GpuScene 的 tag。
+    bool HasPendingSceneSync() const;
+
+    TickState BuildPendingTickState() const;
 
 public:
     /**
@@ -152,7 +319,19 @@ public:
     const ecs::CLightDirectional& GetMainDirectionalLight() const;
     const ecs::CLightPoint&       GetMainPointLight() const;
 
-    const ecs::CTransform& GetTransform(entt::entity entity) const;
+    const ecs::CNode& GetNode(entt::entity entity) const;
 };
+
+template<>
+RENDER_API void Scene::MarkDirty<ecs::CLightDirectional>(entt::entity entity);
+
+template<>
+RENDER_API void Scene::MarkDirty<ecs::CLightPoint>(entt::entity entity);
+
+template<>
+RENDER_API void Scene::MarkDirty<ecs::CMaterial>(entt::entity entity);
+
+template<>
+RENDER_API void Scene::MarkDirty<ecs::CNode>(entt::entity entity);
 
 } // namespace Moer

@@ -8,11 +8,21 @@
 namespace Moer::Render {
 
 /**
- * GPU Scene
- * 
- * RAII，构造时初始化，析构时释放（不提供手动Initialize/Destroy/Reset接口）
- * 
- * TODO: 析构函数（资源释放）
+ * GpuScene 持有真正的 GPU 资源，是 renderer 读取场景数据的入口。
+ *
+ * 结构:
+ * - Res: 纹理、buffer、ray tracing scene
+ * - m_map_texture_entity_to_bindless_handle: 逻辑纹理 -> bindless handle
+ * - PendingCommandList: copy/gfx queue 待执行命令
+ *
+ * 改这里:
+ * - 加新的 GPU 资源或 bindless 绑定: GpuScene.h / GpuScene.cpp
+ * - 改 CPU->GPU 数据布局: CpuScene.h + SharedSceneStruct.h + 各 pass
+ * - 改 import / runtime create 后的资源重建: SceneImport.cpp + GpuScene.cpp
+ *
+ * 用法:
+ * - Scene::Tick 后取 PopPendingCommandList() 提交给 RHI
+ * - renderer/pass 只读 res() / GetRaytracingScene()
  */
 class RENDER_API GpuScene {
 
@@ -23,8 +33,34 @@ public:
     GpuScene(const GpuScene&)            = delete;
     GpuScene& operator=(const GpuScene&) = delete;
 
-    void Update(const ecs::LogicalScene& logical_scene, CpuScene& cpu_scene);
+    void Update(const ecs::LogicalScene& logical_scene, CpuScene& cpu_scene, bool rebuilt_mesh);
 
+private:
+    /**
+     * MARK: Private Update Functions
+     */
+
+    // 同步 CPU light cache 到 GPU light buffer，必要时重建 bindless buffer。
+    void UpdateLightBuffer(CommandList& cmd_list);
+
+    // 同步 CPU material cache 到 GPU material buffer，必要时重建 bindless buffer。
+    void UpdateMaterialBuffer(CommandList& cmd_list);
+
+    // 同步 CPU instance cache 到 GPU instance buffer，必要时重建 bindless buffer。
+    void UpdateInstanceBuffer(CommandList& cmd_list);
+
+    // 同步 CPU draw command cache 到 GPU draw command buffer，必要时重建 bindless buffer。
+    void UpdateDrawCommandBuffer(CommandList& cmd_list);
+
+    // 同步 CPU primitive cache 和 mega buffers，必要时重建 bindless buffer。
+    void UpdatePrimitiveBuffer(CommandList& cmd_list);
+    void UpdatePositionMegaBuffer(CommandList& cmd_list);
+    void UpdatePackedNormalMegaBuffer(CommandList& cmd_list);
+    void UpdatePackedTangentMegaBuffer(CommandList& cmd_list);
+    void UpdateTexcoord0MegaBuffer(CommandList& cmd_list);
+    void UpdateIndexMegaBuffer(CommandList& cmd_list);
+
+public:
     /**
      * 便于抛出GpuScene Res接口
      */

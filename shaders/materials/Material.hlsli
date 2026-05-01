@@ -4,20 +4,21 @@
 #include "core/common/Bindless.hlsl"
 
 template <typename T>
-T GetTextureData(int bindless_handle, float2 uv, T default_value, T missing_value) {
+T SampleTextureAndApplyFactor(int bindless_handle, float2 uv, T factor, T missing_value) {
+  T sample_value = 1.0;
+
   if (bindless_handle >= 0) {
     // 可以通过禁用mipmap来消除mesh之间的描边
-    return TextureHandle(bindless_handle).Sample2D<T>(uv);
-    // return TextureHandle(bindless_handle).SampleLevel<T>(uv, 0.0);
+    sample_value = TextureHandle(bindless_handle).Sample2D<T>(uv);
+    // sample_value = TextureHandle(bindless_handle).SampleLevel<T>(uv, 0.0);
 
-  } else if (bindless_handle == -1) {
-    return default_value;
-
-  } else {
+  } else if (bindless_handle < -1) {
     // assert bindless_handle == -2
     // use -2 presents missing texture
-    return missing_value;
+    sample_value = missing_value;
   }
+
+  return sample_value * factor;
 }
 
 float3 GetNormalFromNormalMap(int normal_map, float2 uv, float3 normal, float3 tangent) {

@@ -9,11 +9,13 @@
 #include "EditorUIStyle.h"
 #include "scene/Scene.h"
 #include "scene/SceneGlobalEntry.h"
+#include "scene/NodeNameUtils.h"
+#include "scene_editing_ui/SceneFileDialog.h"
 
 // 3rd party (std)
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <nfd.hpp>
+#include <algorithm>
 #include <string_view>
 
 #if WITH_PROFILE
@@ -24,11 +26,34 @@ using namespace Moer::Render;
 
 namespace Moer {
 
+namespace {
+
+bool IsSelectedNodeValid(Scene* scene, entt::entity entity) {
+    return scene != nullptr && entity != entt::null && scene->r().valid(entity) &&
+           scene->r().all_of<ecs::CNode>(entity);
+}
+
+} // namespace
+
 EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
     m_ui_renderer(std::move(renderer)),
     m_config(editor_config),
     m_raster_ui(editor_config->raster_config),
-    m_raytracing_ui(editor_config->raytracing_config) {
+    m_raytracing_ui(editor_config->raytracing_config),
+    m_scene_editing_ui(editor_config->scene_test_case_config, m_b_need_reload) {
+
+    auto has_saved_window_settings = [](const char* window_name) {
+        return ImGui::FindWindowSettingsByID(ImHashStr(window_name)) != nullptr;
+    };
+
+    m_b_show_scene_color   = has_saved_window_settings("Scene Color");
+    m_b_show_hierarchy     = has_saved_window_settings("Hierarchy");
+    m_b_show_inspector     = has_saved_window_settings("Inspector");
+    m_b_show_config        = has_saved_window_settings("Configs");
+    m_b_show_scene_editing = has_saved_window_settings("Scene Editing");
+#if WITH_PROFILE
+    m_b_show_memory_profiler = has_saved_window_settings("Memory Profiler");
+#endif
 
     // Load Config
     InitFromConfigManager();
@@ -297,8 +322,10 @@ void EditorUI::TickUI() {
         if (ImGui::BeginMenu("Window")) {
 
             ImGui::MenuItem("Scene Color", nullptr, &m_b_show_scene_color);
+            ImGui::MenuItem("Hierarchy", nullptr, &m_b_show_hierarchy);
+            ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector);
             ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
-            // ImGui::MenuItem("Inspector", nullptr, &m_m_b_show_inspector_window);
+            ImGui::MenuItem("Scene Editing", nullptr, &m_b_show_scene_editing);
             // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
 #if WITH_PROFILE
             ImGui::MenuItem("Memory Profiler", nullptr, &m_b_show_memory_profiler);
@@ -315,9 +342,92 @@ void EditorUI::TickUI() {
 #endif
     ResetState();
     ShowSceneColor();
+    ShowHierarchy();
+    ShowInspector();
     ShowConfig();
+    ShowSceneEditing();
 
     m_ui_renderer->EndGUIFrame();
+}
+
+void EditorUI::ShowSceneEditing() {
+    m_scene_editing_ui.ShowWindow(&m_b_show_scene_editing);
+}
+
+void EditorUI::ShowHierarchy() {
+    if (!m_b_show_hierarchy) {
+        return;
+    }
+
+    Scene* scene = SceneGlobalEntry::Get().PeekScene();
+
+    if (!ImGui::Begin("Hierarchy", &m_b_show_hierarchy)) {
+        ImGui::End();
+        return;
+    }
+
+    if (scene == nullptr || !scene->IsReady()) {
+        ImGui::TextDisabled("scene加载中");
+        ImGui::End();
+        return;
+    }
+
+    if (!IsSelectedNodeValid(scene, m_selected_node)) {
+        m_selected_node = entt::null;
+    }
+
+    auto&             registry  = scene->r();
+    const entt::entity root_entt = scene->logical_scene().UGetRootNodeEntity();
+    if (root_entt == entt::null || !registry.all_of<ecs::CNode>(root_entt)) {
+        ImGui::TextDisabled("Root node not found.");
+        ImGui::End();
+        return;
+    }
+
+    auto draw_node = [&](auto& self, entt::entity entity, int depth) -> void {
+        const auto& node = registry.get<ecs::CNode>(entity);
+        const std::string     label       = ecs::GetNodeDisplayName(node, entity);
+        const bool            selected    = (m_selected_node == entity);
+        const bool            has_children = node.first_child_entt != entt::null;
+        ImGuiTreeNodeFlags    tree_flags  = ImGuiTreeNodeFlags_SpanAvailWidth |
+                                         ImGuiTreeNodeFlags_OpenOnArrow;
+
+        if (selected) {
+            tree_flags |= ImGuiTreeNodeFlags_Selected;
+        }
+        if (!has_children) {
+            tree_flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        }
+
+        ImGui::PushID(static_cast<int>(entt::to_integral(entity)));
+        ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+        const bool is_open = ImGui::TreeNodeEx(label.c_str(), tree_flags);
+        if (ImGui::IsItemClicked()) {
+            m_selected_node = entity;
+        }
+
+        if (has_children && is_open) {
+            entt::entity child_entt = node.first_child_entt;
+            while (child_entt != entt::null) {
+                self(self, child_entt, depth + 1);
+                child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    };
+
+    entt::entity child_entt = registry.get<ecs::CNode>(root_entt).first_child_entt;
+    while (child_entt != entt::null) {
+        draw_node(draw_node, child_entt, 0);
+        child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
+    }
+
+    ImGui::End();
+}
+
+void EditorUI::ShowInspector() {
+    m_inspector_ui.ShowWindow(&m_b_show_inspector, SceneGlobalEntry::Get().PeekScene(), m_selected_node);
 }
 
 void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output) {
@@ -330,12 +440,15 @@ void EditorUI::PresentWindows() {
 
 bool EditorUI::IsSeperateWindow() const {
     auto* current_window = ImGui::FindWindowByName("Scene Color");
+    if (!current_window) {
+        return false;
+    }
     return current_window->ParentWindow == nullptr;
 }
 
 TextureView EditorUI::GetWindowFrameBuffer() {
     auto* current_window = ImGui::FindWindowByName("Scene Color");
-    if (current_window->ParentWindow == nullptr) {
+    if (current_window && current_window->ParentWindow == nullptr && current_window->Viewport) {
         return m_ui_renderer->GetWindowFrameBuffer(current_window->Viewport);
     }
     return TextureView();
@@ -347,10 +460,14 @@ void EditorUI::ShowSceneColor() {
 
     const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
     if (!m_b_show_scene_color) {
+        m_b_scene_color_mouse_captured = false;
+        WindowInput::Get().is_active   = false;
         return;
     }
     if (!ImGui::Begin("Scene Color", &m_b_show_scene_color, window_flags)) {
         // Should not call ImGui::End() here
+        m_b_scene_color_mouse_captured = false;
+        WindowInput::Get().is_active   = false;
         return;
     }
 
@@ -395,16 +512,39 @@ void EditorUI::ShowSceneColor() {
     }
 
     // inject. Needs to be refactored (camera control)
-    // 只有在Cursor位于SceneColor窗口上时，才可以控制摄像机
-    uint2 mouse_pos = uint2(
-        ImGui::GetMousePos().x - ImGui::GetWindowPos().x, ImGui::GetMousePos().y - ImGui::GetWindowPos().y
-    );
-    static uint border = 4;
+    // 鼠标按下起点在SceneColor内时，才捕获本次拖拽并控制摄像机
+    static constexpr float border = 4.f;
 
-    WindowInput::Get().is_active = mouse_pos.x > m_scene_color_pos.x + border &&
-                                   mouse_pos.x < m_scene_color_pos.x + m_scene_color_resolution.x - border &&
-                                   mouse_pos.y > m_scene_color_pos.x + border &&
-                                   mouse_pos.y < m_scene_color_pos.y + m_scene_color_resolution.y - border;
+    const float  scene_color_top = menu_rect.Max.y + (m_b_separate_window ? 0.f : menu_bar);
+    const ImVec2 scene_color_min = ImVec2(window_rect.Min.x + border, scene_color_top + border);
+    const ImVec2 scene_color_max = ImVec2(
+        window_rect.Min.x + m_scene_color_resolution.x - border,
+        scene_color_top + m_scene_color_resolution.y - border
+    );
+    const ImVec2 mouse_pos = ImGui::GetMousePos();
+
+    const bool b_scene_color_hovered = mouse_pos.x > scene_color_min.x && mouse_pos.x < scene_color_max.x &&
+                                       mouse_pos.y > scene_color_min.y && mouse_pos.y < scene_color_max.y;
+
+    const bool b_mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                                 ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+                                 ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+    const bool b_mouse_down    = WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
+                                 WindowInput::Get().mouse_button_state[MouseButtons::Middle] ||
+                                 WindowInput::Get().mouse_button_state[MouseButtons::Right];
+
+    if (!b_mouse_down) {
+        m_b_scene_color_mouse_captured = false;
+    } else if (!m_b_scene_color_mouse_captured && b_mouse_clicked && b_scene_color_hovered) {
+        m_b_scene_color_mouse_captured     = true;
+        WindowInput::Get().is_cursor_dirty = true;
+        WindowInput::Get().cursor_delta_x  = 0.f;
+        WindowInput::Get().cursor_delta_y  = 0.f;
+    }
+
+    WindowInput::Get().is_active =
+        m_b_scene_color_mouse_captured ||
+        (b_scene_color_hovered && WindowInput::Get().key_button_switch_state[KeyButtons::F]);
 
     ImGui::End();
 }
@@ -458,7 +598,7 @@ void EditorUI::ShowConfig() {
         }
         if (last_selected_render_method != m_config->selected_render_method) {
             m_b_need_reload = true;
-            SetShowSubUI(false);
+            SetShowRenderConfigSubUI(false);
         }
     }
 
@@ -468,25 +608,20 @@ void EditorUI::ShowConfig() {
                                      m_config->scene_path :
                                      m_config->scene_path.substr(last_slash + 1);
         if (ImGui::Button("Open Scene")) {
-            NFD::UniquePath        selected_path = nullptr;
-            Array<nfdfilteritem_t> filters       = {
-                {"All Support Formats", "glb,gltf,fbx,obj,dae"},
-                {"glTF 2.0", "glb,gltf"},
-                {"FBX", "fbx"},
-                {"Wavefront", "obj"},
-                {"Moer Renderer Scene (WIP)", "json"},
-            };
-            nfdresult_t result = NFD::OpenDialog(selected_path, filters.data(), filters.size());
-            if (result == NFD_OKAY) {
-                LOG_INFO("User selected file: {}", selected_path.get());
+            std::string selected_path;
+            switch (OpenSceneFileDialog(selected_path)) {
+                case ESceneFileDialogResult::Selected:
+                LOG_INFO("User selected file: {}", selected_path);
 
                 // Prepare for reload
                 m_b_need_reload      = true;
-                m_config->scene_path = selected_path.get();
-            } else if (result == NFD_CANCEL) {
-                LOG_INFO("User pressed cancel.");
-            } else {
-                LOG_ERROR("NFD Error: {}", NFD_GetError());
+                m_config->scene_path = std::move(selected_path);
+                break;
+                case ESceneFileDialogResult::Cancelled:
+                    LOG_INFO("User pressed cancel.");
+                    break;
+                case ESceneFileDialogResult::Error:
+                    break;
             }
         }
         ImGui::SameLine();
@@ -506,7 +641,7 @@ void EditorUI::ShowConfig() {
         ImGui::TreePop();
     }
 
-    if (m_b_show_sub_ui) {
+    if (m_b_show_render_config_sub_ui) {
         ImGui::Separator();
         switch (m_config->selected_render_method) {
             case ERenderMethod::Raster:

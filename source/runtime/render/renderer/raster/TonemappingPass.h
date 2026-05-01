@@ -79,10 +79,15 @@ public:
 
         // Buffer
         histogram_buffer = context.device.CreateBuffer<uint>(
-            "raster histogram buffer", TONEMAPPING_HISTOGRAM_BIN_COUNT, EBufferUsageFlags::UNORDERED_ACCESS
+            "raster histogram buffer",
+            TONEMAPPING_HISTOGRAM_BIN_COUNT,
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER
         );
         exposure_buffer = context.device.CreateBuffer<uint>(
-            "raster exposure buffer", 1, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::CPU_VISIBLE
+            "raster exposure buffer",
+            1,
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER |
+                EBufferUsageFlags::CPU_VISIBLE
         );
     }
 

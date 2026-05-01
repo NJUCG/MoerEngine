@@ -3,12 +3,30 @@
 #include "LogicalComponents.h"
 #include "RenderAPI.h"
 #include "entt/entity/fwd.hpp"
-#include <entt/fwd.hpp>
+#include "scene/SceneCreateInfo.h"
+#include <entt/entt.hpp>
+
 
 namespace Moer::ecs {
 
 /**
- * Logical Scene
+ * LogicalScene 是场景的 ECS 层，只负责逻辑数据和 scene-side system。
+ *
+ * 结构:
+ * - 一个 entt::registry，组件定义在 LogicalComponents.h
+ * - S* 函数做批量同步和派生数据更新
+ * - U* 函数做单次工具操作，如建节点、挂接、删除
+ *
+ * 改这里:
+ * - 加组件或改字段: LogicalComponents.h
+ * - 改节点树 / derived data / 哈希构建: LogicalScene.cpp
+ * - 改外部场景 API 行为: SceneMutation.cpp + SceneImport.cpp
+ *
+ * 用法:
+ * - parser / cache / editor 先写 LogicalScene
+ * - 再由 Scene::Tick 把结果同步到 CpuScene / GpuScene
+ *
+ * ===============================================================
  * 
  * RAII，构造时初始化，析构时释放（不提供手动Initialize/Destroy/Reset接口）
  * 
@@ -34,11 +52,11 @@ namespace Moer::ecs {
  * MARK: LogicalScene & ECS
  * 
  * LogicalScene即MoerEngine场景数据的ECS System实现。
- * 换句话说，LogicalScene不能存储任何数据，只提供一系列函数(System)
+ * 换句话说，LogicalScene不能存储除Registry以外的任何数据，只提供一系列函数(System)
  * 
  * 所有函数默认直接操作当前LogicalScene对象内的entt::registry
  * 
- * 所有System均以 S 开头；所有的辅助函数均以 U (utility) 开头
+ * Update为外部统一更新入口；所有System均以 S 开头；所有的辅助函数均以 U (utility) 开头
  */
 class RENDER_API LogicalScene {
 
@@ -51,6 +69,9 @@ public:
     entt::registry&       r();
     const entt::registry& r() const;
 
+    // LogicalScene 外部统一更新入口
+    void Update();
+
     void SBuildPrimitiveHash();
 
     void SBuildMeshHash();
@@ -61,6 +82,9 @@ public:
     // SUpdateAllNodeTransformAndAABB 负责将Node的变换和AABB同步到整个场景
     void SUpdateAllNodeTransformAndAABB();
 
+    // SUpdateAllLightData 负责将Light依赖的Transform派生数据同步到Light组件
+    void SUpdateAllLightData();
+
     /**
      * 在指定parent下，添加一个child节点
      */
@@ -70,6 +94,48 @@ public:
         const entt::entity child_id,
         CNode&             child_node
     );
+
+    // 从父节点的 child 链表中摘除指定节点
+    void UDetachNodeFromParent(entt::entity child_entt, CNode& child_node);
+
+    entt::entity UGetRootNodeEntity();
+
+    bool UIsEntityWithNode(entt::entity entity) const;
+
+    entt::entity UCreateEntity(std::string_view name = {});
+
+    entt::entity UCreateEntityWithNode(const EntityWithNodeCreateInfo& create_info);
+
+    entt::entity UCreateRenderableWithNode(const RenderableCreateInfo& create_info);
+
+    entt::entity UCreateMaterial(const MaterialCreateInfo& create_info);
+
+    entt::entity UCreatePrimitive(const PrimitiveCreateInfo& create_info);
+
+    entt::entity UCreateMesh(const MeshCreateInfo& create_info);
+
+    bool USetLocalTransform(entt::entity entity, const Transform& local_transform);
+
+    bool UAttachToParent(
+        entt::entity  child_entt,
+        entt::entity  parent_entt,
+        entt::entity* old_parent_entt = nullptr,
+        bool*         did_change      = nullptr
+    );
+
+    bool UDetachFromParent(
+        entt::entity  child_entt,
+        entt::entity* old_parent_entt = nullptr,
+        bool*         did_change      = nullptr
+    );
+
+    bool UDestroyEntity(entt::entity entity, entt::entity* old_parent_entt = nullptr);
+
+    bool UDestroyRenderable(entt::entity entity, entt::entity* old_parent_entt = nullptr);
+
+    entt::entity UCreatePointLight(const PointLightCreateInfo& create_info);
+
+    bool UCanDestroyPointLight(entt::entity light_entity);
 
     /**
      * 创建默认摄像机entity，并将其挂在在指定node下
@@ -86,15 +152,8 @@ public:
      */
     void UCreateDefaultLights(entt::entity parent_node_id = entt::null, bool should_create_main_light = true);
 
-    /**
-     * 获取主方向光的方向
-     */
-    float3 GetDirectionalLightDirection(entt::entity entity) const;
-
-    /**
-     * 获取主点光源的位置
-     */
-    float3 GetPointLightPosition(entt::entity entity) const;
+private:
+    entt::registry m_registry;
 };
 
 } // namespace Moer::ecs

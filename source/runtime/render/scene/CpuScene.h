@@ -21,16 +21,21 @@ class GpuScene;
 } // namespace Render
 
 /**
- * CPU Scene
- * 
- * RAII，构造时初始化，析构时释放（不提供手动Initialize/Destroy/Reset接口）
- * 
- * 这个类主要负责以下2个功能：
- * - 存储所有准备上传到GPU的场景数据；
- * - 实现所有 LogicalScene -> CpuScene 的逻辑
- * 
- * TODO: LogicalScene数据变更时，增量更新CpuScene数据
- *       考虑使用 事件队列 或 观察者模式
+ * CpuScene 是 LogicalScene 和 GpuScene 之间的 CPU 缓冲层。
+ *
+ * 结构:
+ * - m_light_buf / m_material_buf / m_draw_cmd_buf / m_primitive_buf / m_instance_buf
+ * - 一组 entity->slot 映射，保证增量更新能定位到已有缓存
+ * - Initialize / Create / Update / Rebuild 四类同步逻辑
+ *
+ * 改这里:
+ * - 改 shader 结构或 buffer 布局: SharedSceneStruct.h + CpuScene.cpp
+ * - 改 dirty tag 规则: LogicalComponents.h + SceneMutation.cpp + CpuScene.cpp
+ * - 改材质和 mesh 的展开方式: CpuScene.cpp + GpuScene.cpp
+ *
+ * 用法:
+ * - 通常只由 Scene 构造和 Tick 驱动
+ * - 外部不要直接改内部 buffer，应该改 LogicalScene/Scene API
  */
 class RENDER_API CpuScene {
 
@@ -107,7 +112,13 @@ private:
     UnorderedMap<entt::entity, uint> m_map_light_entity_to_id;
 
     void InitializeLights();
+    // 创建带 CTagNeedCreateLight 的新 Light cache slot。
+    void CreateNeededLights();
     void UpdateLights();
+    // 检查本帧是否存在 light 删除请求
+    bool HasLightDestroyRequest() const;
+    // 当前通过全量重建 light cache 处理删除，优先保证结构正确性
+    void RebuildLightsExcludingPendingDestroy();
 
     // material & texture
     Array<GMaterial> m_material_buf;
@@ -116,6 +127,8 @@ private:
 
     // Material必须在Mesh之前初始化，因为Mesh需要Material ID
     void InitializeMaterials();
+    // 创建带 CTagNeedCreateMaterial 的新 Material cache slot。
+    void CreateNeededMaterials();
     void UpdateMaterials();
 
     // mesh
@@ -123,6 +136,13 @@ private:
     Array<GPrimitive>                 m_primitive_buf; // 1:1 GPrimitive & DrawIndexedCmdData
     // primitive_buf 与 draw_cmd_buf 是对应的，index相同则对应相同primitive
     Array<GInstance> m_instance_buf; // N:1 GPrimitive
+
+    struct InstanceSlot {
+        uint primitive_id              = UINT_MAX;
+        uint instance_idx_in_primitive = UINT_MAX;
+        uint flat_instance_idx         = UINT_MAX;
+    };
+
     /**
      * 从LogicalScene中获取MegaBuffers引用
      * 
@@ -135,13 +155,18 @@ private:
         return m_logical_scene.r().ctx().get<const ecs::CtxMegaBuffers>();
     }
 
-    UnorderedMap<entt::entity, uint> m_map_primitive_entity_to_id;
-    Array<Array<GInstance>>          m_primitive_id_to_transform_entt_arrays;
+    UnorderedMap<entt::entity, uint>                m_map_primitive_entity_to_id;
+    UnorderedMap<entt::entity, Array<InstanceSlot>> m_map_transform_entity_to_instance_slots;
+    Array<Array<GInstance>>                         m_primitive_id_to_transform_entt_arrays;
     Array<uint>
         m_primitive_id_to_first_instance_idx; // m_primitive_id_to_transform_entt_arrays的前缀和，表示每个Primitive对应的第一个Instance在m_instance_buf中的索引
 
     // Mesh必须在Materials之后初始化，因为Primitive需要Material ID
     void InitializeMeshes();
+    // 检查本帧是否存在 renderable 结构变化请求
+    bool HasMeshRebuildRequest() const;
+    // 当前通过全量重建 mesh instance cache 处理 renderable create/destroy，优先保证结构正确性
+    void RebuildMeshes();
     void UpdateMeshes();
 };
 

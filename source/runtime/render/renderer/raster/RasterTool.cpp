@@ -3,7 +3,9 @@
 #include "RasterConfig.h"
 #include "log/LogSystem.h"
 #include "misc/Timer.h"
+#include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "scene/Scene.h"
 
 #include <cassert>
 #include <source_location>
@@ -73,11 +75,7 @@ std::string_view RasterTool::GetShadowDrawProfileScopeName(uint cascade_index) {
     return s_shadow_draw_scope_names[cascade_index];
 }
 
-void RasterTool::LogDebugEverySeconds(
-    std::string_view str,
-    double           seconds,
-    std::source_location location
-) {
+void RasterTool::LogDebugEverySeconds(std::string_view str, double seconds, std::source_location location) {
     if (seconds <= 0.0) {
         LOG_DEBUG("{}", str);
         return;
@@ -154,6 +152,16 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
     }
 
     LogDebugEverySeconds(stream.str(), 1.0);
+}
+
+// 执行 Scene 同步阶段积累的 copy/gfx command list。
+void RasterTool::ExecuteScenePendingCommands(Scene& scene, RenderDevice& device, CommandQueue& gfx_queue) {
+    auto&& scene_cmd_list = scene.PopPendingCommandList();
+    auto   copy_evt       = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
+    device.GetCopyQueue().Sync(copy_evt.timeline);
+    gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
+    gfx_queue.Sync();
+    scene.ConsumePendingGpuSceneCommands();
 }
 
 } // namespace Moer::Render::Raster

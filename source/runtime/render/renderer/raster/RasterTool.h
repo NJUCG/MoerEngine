@@ -7,8 +7,13 @@
 #include <source_location>
 #include <string_view>
 
+namespace Moer {
+class Scene;
+}
+
 namespace Moer::Render {
 class CommandQueue;
+class RenderDevice;
 }
 
 namespace Moer::Render::Raster {
@@ -36,6 +41,8 @@ public:
     );
 
     static void TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config);
+
+    static void ExecuteScenePendingCommands(Scene& scene, RenderDevice& device, CommandQueue& gfx_queue);
 };
 
 } // namespace Moer::Render::Raster

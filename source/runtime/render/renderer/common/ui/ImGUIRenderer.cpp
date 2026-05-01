@@ -228,6 +228,7 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
         std::ifstream f(io.IniFilename);
         if (f.good()) {
             f.close();
+            ImGui::LoadIniSettingsFromDisk(io.IniFilename);
         } else {
             LOG_INFO(
                 "No existing imgui.ini file found, loading preset config: {}",
@@ -487,8 +488,9 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     if (render_buffers->arg_buffer == nullptr ||
         render_buffers->arg_buffer->GetNumElement() < total_cmd_cnt) {
         uint32_t new_size = 128 + total_cmd_cnt;
-        render_buffers->arg_buffer =
-            device.CreateBuffer<ImGUIArg>("GUI::ImGUI Arg Buffer", new_size, EBufferUsageFlags::TRANSFER_DST);
+        render_buffers->arg_buffer = device.CreateBuffer<ImGUIArg>(
+            "GUI::ImGUI Arg Buffer", new_size, EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::UNORDERED_ACCESS
+        );
     }
 
     ImVec2 clip_off = draw_data->DisplayPos; // (0,0) unless using multi-viewports

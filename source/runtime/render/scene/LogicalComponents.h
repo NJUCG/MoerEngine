@@ -26,17 +26,17 @@ namespace Moer::ecs {
 struct CTagMainCamera {};
 struct CCamera {
     // camera之前重写过，执行稳定，这里直接复用
-    // FIXME: 所以，目前camera会再存一份position等数据，没有和CTransform接入
+    // FIXME: 所以，目前camera会再存一份position等数据，没有和CNode接入
     // TODO: 统一为ECS格式
     Camera camera;
 };
 
 /**
  * MARK: Light
- * 
+ *
  * 通过CLight表示一个Entity是Light
- * 
- * Light的Position和Direction，通过CWorldTransform计算
+ *
+ * Light的Transform权威数据来自CNode，渲染侧常用的世界空间数据缓存在Light组件的derived字段中。
  */
 struct CTagMainLight {};
 struct CLight {
@@ -45,10 +45,16 @@ struct CLight {
 struct CLightDirectional {
     float3 color     = float3(1.f, 1.f, 1.f);
     float  intensity = 1.f;
+
+    bool   is_dirty    = true;
+    float3 d_direction = float3(0.f, 0.f, -1.f); // derived from CNode
 };
 struct CLightPoint {
     float3 color     = float3(1.f, 1.f, 1.f);
     float  intensity = 1.f;
+
+    bool   is_dirty   = true;
+    float3 d_position = float3(0.f, 0.f, 0.f); // derived from CNode
 };
 struct CLightAmbient {
     float3 color     = float3(1.f, 1.f, 1.f);
@@ -62,22 +68,12 @@ struct CLightEnvironment { // IBL
     // TODO
 };
 
-// MARK: Transform & Hieray
-
-struct CTransform {
-    float3     translation = float3(0.f, 0.f, 0.f);
-    Quaternion rotation    = Quaternion();
-    float3     scale       = float3(1.f, 1.f, 1.f);
-
-    bool is_dirty = true; // 是否需要更新 变换矩阵 & AABB
-
-    float4x4 d_world_transform = float4x4::Identity(); // derived
-    Box3D    d_aabb = Box3D(); // derived，AABB = 儿子CTransform的AABB * 自己的变换 + 挂载的CMesh的AABB
-};
+// MARK: Node & Hieray
 
 struct CTagRootNode {};
 
 // CNode应该被UEmplaceNodeToParent正确设置
+// CNode包含了Transform信息
 struct CNode {
     entt::entity parent_entt       = entt::null;
     entt::entity prev_sibling_entt = entt::null;
@@ -86,16 +82,23 @@ struct CNode {
     entt::entity last_child_entt   = entt::null;
     uint32       child_count       = 0;
     uint32       depth             = 0;
+
+    std::string name;
+
+    float3     translation = float3(0.f, 0.f, 0.f);
+    Quaternion rotation    = Quaternion();
+    float3     scale       = float3(1.f, 1.f, 1.f);
+
+    bool is_dirty = true; // 是否需要更新 变换矩阵 & AABB
+
+    float4x4 d_world_transform = float4x4::Identity(); // derived
+    Box3D    d_aabb            = Box3D(); // derived，AABB = 儿子CNode的AABB * 自己的变换 + 挂载的CMesh的AABB
 };
 
 struct CSceneMetaData {
     entt::entity root_node_entt = entt::null;
 
     std::string scene_path;
-};
-
-struct CName {
-    std::string name;
 };
 
 /**
@@ -149,6 +152,10 @@ struct CRenderable {
     entt::entity mesh_entt = entt::null;
 };
 
+struct CResourceName {
+    std::string name;
+};
+
 // MARK: Material & Texture
 
 struct CMaterial {
@@ -200,5 +207,29 @@ struct CtxMegaBuffers {
 
     Array<uint32> index;
 };
+
+/**
+ * Render Scene Sync Tag Components
+ *
+ * 用于标记 LogicalScene 到 CpuScene/GpuScene 的同步需求，按操作类型区分：
+ * - NeedUpdate：已有 render-side slot 的原地数据更新，不改变数组布局
+ * - NeedCreate：Logical entity 还没有 render-side slot，需要分配索引并创建缓存项
+ * - NeedDestroy：释放/失效 render-side slot
+ * - NeedRebuild：未来用于复杂结构变化的局部 cache 重建兜底
+ *
+ * 约束：NeedUpdate 不处理新增；新增必须走 NeedCreate，避免数据更新和结构变化混在一起。
+ */
+struct CTagNeedUpdateLight {};
+struct CTagNeedUpdateMaterial {};
+struct CTagNeedUpdateTransform {};
+
+struct CTagNeedCreateLight {};
+struct CTagNeedCreateMaterial {};
+struct CTagNeedCreateTransform {};
+
+struct CTagNeedDestroyLight {};
+
+// Mesh resource 结构变化兜底：覆盖 CPrimitive / CMesh / CRenderable instance cache / CtxMegaBuffers 的全量同步。
+struct CTagNeedRebuildMesh {};
 
 } // namespace Moer::ecs

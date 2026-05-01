@@ -576,7 +576,9 @@ void RasterUI::ShowConfig() {
 
     if (ImGui::TreeNode("Debug")) {
         ImGui::SliderFloat("Debug Param", &m_config.debug_param, 0.0f, 1.0f);
-        ImGui::Separator();
+
+        ImGui::Separator(); // 分割线
+
         ImGui::Checkbox("Enable FPS Limit", &m_config.debug_fps_limit_enable);
         if (m_config.debug_fps_limit_enable) {
             ImGui::SliderFloat("FPS Limit", &m_config.debug_fps_limit, 0.5f, 240.0f);

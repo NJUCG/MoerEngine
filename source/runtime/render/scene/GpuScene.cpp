@@ -1,13 +1,62 @@
 #include "GpuScene.h"
 
 #include "CpuScene.h"
-#include "log/LogSystem.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "scene/LogicalComponents.h"
+#include "scene/NodeNameUtils.h"
 
 namespace Moer::Render {
+
+static bool RecreateByteBufferIfNeeded(
+    BindlessArrayRef  bindless_array,
+    BufferWithHandle& target,
+    std::string_view  name,
+    uint64            required_byte_size,
+    EBufferUsageFlags usage
+) {
+    if (required_byte_size == 0) {
+        return false;
+    }
+    if (target.buf != nullptr && target.buf->GetByteSize() >= required_byte_size) {
+        return false;
+    }
+
+    auto& device = RenderDevice::Get();
+
+    if (target.hdl != 0) {
+        bindless_array->UnbindBuffer(target.hdl);
+        target.hdl = 0;
+    }
+
+    target.buf = device.CreateBuffer<byte>(name, static_cast<uint>(required_byte_size), usage);
+    target.hdl = bindless_array->AllocateBuffer(target.buf->GetView());
+    return true;
+}
+
+static void UploadByteBuffer(
+    CommandList&      cmd_list,
+    BindlessArrayRef  bindless_array,
+    BufferWithHandle& target,
+    std::string_view  name,
+    const void*       data,
+    uint64            required_byte_size,
+    EBufferUsageFlags usage
+) {
+    if (required_byte_size == 0) {
+        return;
+    }
+
+    const bool need_bindless_update =
+        RecreateByteBufferIfNeeded(bindless_array, target, name, required_byte_size, usage);
+
+    cmd_list.CopyFrom(std::span<byte>((byte*)data, required_byte_size), target.buf->GetView(), name);
+
+    if (need_bindless_update) {
+        cmd_list.UpdateBindlessArray(bindless_array);
+    }
+}
 
 /**
  * 这里存在着一点耦合问题：GpuScene需要修改CpuScene创建好的数据
@@ -42,16 +91,20 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
     const Sampler default_sampler = Sampler(ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_REPEAT);
 
     {
-        auto view = m_logical_scene.r().view<const ecs::CTexture, const ecs::CName>();
+        auto view = m_logical_scene.r().view<const ecs::CTexture>();
 
         m_res.texture_array.clear();
-        m_res.texture_array.reserve(view.size_hint());
 
         m_map_texture_entity_to_bindless_handle.clear();
 
         // Device创建TextureRef & 录制Copy命令
-        view.each([&](const auto entity, const ecs::CTexture& c_texture, const ecs::CName& c_name) {
+        view.each([&](const auto entity, const ecs::CTexture& c_texture) {
             TextureWithHandle tex_with_hdl{};
+            const auto*       resource_name = m_logical_scene.r().try_get<ecs::CResourceName>(entity);
+            const std::string texture_name =
+                (resource_name == nullptr || ecs::IsBlankName(resource_name->name)) ?
+                    ecs::MakeDebugName("Texture", entity) :
+                    resource_name->name;
 
             // 下文处的实现参考了重构前的 GpuScene.cpp: BuildTexturesInBatch()
             // TODO: 原函数中的Batch，意为分批上传数据，避免一个Command拷贝过多内容
@@ -59,7 +112,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
 
             // 1. Create Texture
             tex_with_hdl.tex = device.CreateTexture(
-                c_name.name,
+                texture_name,
                 Extent2D{c_texture.width, c_texture.height},
                 c_texture.format,
                 ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST,
@@ -304,9 +357,10 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         buf_with_hdl.hdl = bdls->AllocateBuffer(buf_with_hdl.buf->GetView());
     }
 
-    // NOTE: UpdateBindlessArray 需要在 Graphics/Compute Queue 中执行，不能在 Copy Queue 中执行
-    // 这里只分配了 handle，实际的 bindless array 更新应该在后续的 Graphics Queue 命令中完成
-    // cmd_list.UpdateBindlessArray(bdls);
+    // NOTE: UpdateBindlessArray 需要在 Graphics/Compute Queue 中执行，不能在 Copy Queue 中执行。
+    // GpuScene 全量重建会重新分配 texture/buffer bindless handles，必须在本批 pending gfx 命令中发布，
+    // 否则后续 shader 会拿着新 handle 去读旧 descriptor heap 内容。
+    m_pending_cmd_lists.gfx_queue_cmd_list.UpdateBindlessArray(bdls);
 
     /**
      * MARK: Upload & Execute
@@ -361,12 +415,239 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
     InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list); // gfx_queue交给主线程执行
 }
 
-void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene) {
-    auto& device = RenderDevice::Get();
+void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene, bool rebuilt_mesh) {
+    UpdateLightBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+    UpdateMaterialBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
 
-    // TODO: others
+    if (rebuilt_mesh) {
+        UpdateDrawCommandBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdatePrimitiveBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdateInstanceBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdatePositionMegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdatePackedNormalMegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdatePackedTangentMegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdateTexcoord0MegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+        UpdateIndexMegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
+
+        // Renderable 结构变化会改变 TLAS instance 数量，当前直接整批重建 RT scene
+        InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list);
+        return;
+    }
+
+    UpdateInstanceBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
 
     UpdateRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list); // gfx_queue交给主线程执行
+}
+
+// 同步 CPU light cache 到 GPU light buffer，必要时重建 bindless buffer。
+void GpuScene::UpdateLightBuffer(CommandList& cmd_list) {
+    const uint64 required_byte_size = m_cpu_scene.m_light_buf.size() * sizeof(GLight);
+    if (required_byte_size == 0) {
+        return;
+    }
+
+    bool need_bindless_update = false;
+    if (m_res.light_buf.buf == nullptr || m_res.light_buf.buf->GetByteSize() < required_byte_size) {
+        auto& device = RenderDevice::Get();
+
+        if (m_res.light_buf.hdl != 0) {
+            m_bindless_array->UnbindBuffer(m_res.light_buf.hdl);
+            m_res.light_buf.hdl = 0;
+        }
+
+        // TODO: debug 阶段 light 数量很小，先按当前需求大小重建；后续改为 capacity/chunk 策略和局部更新。
+        m_res.light_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::LightBuffer", required_byte_size, EBufferUsageFlags::UNORDERED_ACCESS
+        );
+        m_res.light_buf.hdl  = m_bindless_array->AllocateBuffer(m_res.light_buf.buf->GetView());
+        need_bindless_update = true;
+    }
+
+    cmd_list.CopyFrom(
+        std::span<byte>((byte*)m_cpu_scene.m_light_buf.data(), required_byte_size),
+        m_res.light_buf.buf->GetView(),
+        "CopyFrom GpuScene::LightBuffer"
+    );
+
+    if (need_bindless_update) {
+        cmd_list.UpdateBindlessArray(m_bindless_array);
+    }
+}
+
+void GpuScene::UpdateMaterialBuffer(CommandList& cmd_list) {
+    const uint64 required_byte_size = m_cpu_scene.m_material_buf.size() * sizeof(GMaterial);
+    if (required_byte_size == 0) {
+        return;
+    }
+
+    bool need_bindless_update = false;
+    if (m_res.material_buf.buf == nullptr || m_res.material_buf.buf->GetByteSize() < required_byte_size) {
+        auto& device = RenderDevice::Get();
+
+        if (m_res.material_buf.hdl != 0) {
+            m_bindless_array->UnbindBuffer(m_res.material_buf.hdl);
+            m_res.material_buf.hdl = 0;
+        }
+
+        m_res.material_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::MaterialBuffer", required_byte_size, EBufferUsageFlags::UNORDERED_ACCESS
+        );
+        m_res.material_buf.hdl = m_bindless_array->AllocateBuffer(m_res.material_buf.buf->GetView());
+        need_bindless_update   = true;
+    }
+
+    cmd_list.CopyFrom(
+        std::span<byte>((byte*)m_cpu_scene.m_material_buf.data(), required_byte_size),
+        m_res.material_buf.buf->GetView(),
+        "CopyFrom GpuScene::MaterialBuffer"
+    );
+
+    if (need_bindless_update) {
+        cmd_list.UpdateBindlessArray(m_bindless_array);
+    }
+}
+
+void GpuScene::UpdateDrawCommandBuffer(CommandList& cmd_list) {
+    const uint64 required_byte_size = m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData);
+    if (required_byte_size == 0) {
+        return;
+    }
+
+    bool need_bindless_update = false;
+    if (m_res.draw_cmd_buf.buf == nullptr || m_res.draw_cmd_buf.buf->GetByteSize() < required_byte_size) {
+        auto& device = RenderDevice::Get();
+
+        if (m_res.draw_cmd_buf.hdl != 0) {
+            m_bindless_array->UnbindBuffer(m_res.draw_cmd_buf.hdl);
+            m_res.draw_cmd_buf.hdl = 0;
+        }
+
+        m_res.draw_cmd_buf.buf = device.CreateBuffer<Render::DrawIndexedCmdData>(
+            "GpuScene::DrawCmdBuffer",
+            m_cpu_scene.m_draw_cmd_buf.size(),
+            EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER
+        );
+        m_res.draw_cmd_buf.hdl = m_bindless_array->AllocateBuffer(m_res.draw_cmd_buf.buf->GetView());
+        need_bindless_update   = true;
+    }
+
+    cmd_list.CopyFrom(
+        std::span<byte>(
+            (byte*)m_cpu_scene.m_draw_cmd_buf.data(),
+            m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData)
+        ),
+        m_res.draw_cmd_buf.buf->GetView(),
+        "CopyFrom GpuScene::DrawCmdBuffer"
+    );
+
+    if (need_bindless_update) {
+        cmd_list.UpdateBindlessArray(m_bindless_array);
+    }
+}
+
+void GpuScene::UpdateInstanceBuffer(CommandList& cmd_list) {
+    const uint64 required_byte_size = m_cpu_scene.m_instance_buf.size() * sizeof(GInstance);
+    if (required_byte_size == 0) {
+        return;
+    }
+
+    bool need_bindless_update = false;
+    if (m_res.instance_buf.buf == nullptr || m_res.instance_buf.buf->GetByteSize() < required_byte_size) {
+        auto& device = RenderDevice::Get();
+
+        if (m_res.instance_buf.hdl != 0) {
+            m_bindless_array->UnbindBuffer(m_res.instance_buf.hdl);
+            m_res.instance_buf.hdl = 0;
+        }
+
+        m_res.instance_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::InstanceBuffer", required_byte_size, EBufferUsageFlags::UNORDERED_ACCESS
+        );
+        m_res.instance_buf.hdl = m_bindless_array->AllocateBuffer(m_res.instance_buf.buf->GetView());
+        need_bindless_update   = true;
+    }
+
+    cmd_list.CopyFrom(
+        std::span<byte>((byte*)m_cpu_scene.m_instance_buf.data(), required_byte_size),
+        m_res.instance_buf.buf->GetView(),
+        "CopyFrom GpuScene::InstanceBuffer"
+    );
+
+    if (need_bindless_update) {
+        cmd_list.UpdateBindlessArray(m_bindless_array);
+    }
+}
+
+void GpuScene::UpdatePrimitiveBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.primitive_buf,
+        "GpuScene::PrimitiveBuffer",
+        m_cpu_scene.m_primitive_buf.data(),
+        m_cpu_scene.m_primitive_buf.size() * sizeof(GPrimitive),
+        EBufferUsageFlags::UNORDERED_ACCESS
+    );
+}
+
+void GpuScene::UpdatePositionMegaBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.position_buf,
+        "GpuScene::PositionMegaBuffer",
+        m_cpu_scene.mega_buf().position.data(),
+        m_cpu_scene.mega_buf().position.size() * sizeof(float3),
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+    );
+}
+
+void GpuScene::UpdatePackedNormalMegaBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.packed_normal_buf,
+        "GpuScene::NormalMegaBuffer",
+        m_cpu_scene.mega_buf().packed_normal.data(),
+        m_cpu_scene.mega_buf().packed_normal.size() * sizeof(uint32),
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+    );
+}
+
+void GpuScene::UpdatePackedTangentMegaBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.packed_tangent_buf,
+        "GpuScene::TangentMegaBuffer",
+        m_cpu_scene.mega_buf().packed_tangent.data(),
+        m_cpu_scene.mega_buf().packed_tangent.size() * sizeof(uint32),
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+    );
+}
+
+void GpuScene::UpdateTexcoord0MegaBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.texcoord0_buf,
+        "GpuScene::Texcoord0MegaBuffer",
+        m_cpu_scene.mega_buf().texcoord0.data(),
+        m_cpu_scene.mega_buf().texcoord0.size() * sizeof(float2),
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
+    );
+}
+
+void GpuScene::UpdateIndexMegaBuffer(CommandList& cmd_list) {
+    UploadByteBuffer(
+        cmd_list,
+        m_bindless_array,
+        m_res.index_buf,
+        "GpuScene::IndexMegaBuffer",
+        m_cpu_scene.mega_buf().index.data(),
+        m_cpu_scene.mega_buf().index.size() * sizeof(uint32),
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDEX_BUFFER
+    );
 }
 
 GpuScene::~GpuScene() noexcept {
@@ -395,7 +676,7 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
      *    - TLAS：每个 RaytracingScene 包含一个 TLAS（Top-Level Acceleration Structure）
      *            - TLAS 是顶层加速结构，包含所有 TLAS Instance
      *            - 场景中只有一个 TLAS（可能还有 prev_tlas 用于双缓冲）
-     *    - TLAS Instance：每个 (CPrimitive, CTransform) 对对应一个 TLAS Instance
+     *    - TLAS Instance：每个 (CPrimitive, CNode) 对对应一个 TLAS Instance
      *            - TLAS Instance 存储在 RaytracingScene::instances 数组中
      *            - TLAS Instance 顺序 = m_instance_buf 顺序 = GInstance[] 顺序
      *            - 每个 TLAS Instance 的 custom_index = 该 Instance 在 m_instance_buf 中的索引

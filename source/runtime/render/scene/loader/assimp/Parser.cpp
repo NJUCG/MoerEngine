@@ -15,6 +15,7 @@
 #include "misc/Timer.h"
 #include "misc/Traits.h"
 #include "scene/LogicalScene.h"
+#include "scene/NodeNameUtils.h"
 #include "scene/loader/io/ImageIO.h"
 #include "shaderheaders/shared/utils/Packing.h"
 #include "taskgraph/TaskGraph.h"
@@ -343,6 +344,21 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             );
         };
 
+        auto make_texture_resource_name = [&](const std::string& texture_path) -> std::string {
+            const int32 embedded_id = GetEmbeddedTextureId(texture_path);
+            if (embedded_id >= 0) {
+                const aiTexture* texture = ai_scene->mTextures[embedded_id];
+                if (texture != nullptr && texture->mFilename.length > 0) {
+                    return texture->mFilename.C_Str();
+                }
+                return "EmbeddedTexture" + std::to_string(embedded_id);
+            }
+
+            const std::filesystem::path texture_name_path(texture_path);
+            const std::string           filename = texture_name_path.filename().string();
+            return filename.empty() ? texture_path : filename;
+        };
+
         // 初始化CTexture
         auto update_c_texture = [&](ecs::CTexture& c_texture, const ImageReadDesc& image_desc) {
             // copy
@@ -375,9 +391,9 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
          * 同时，映射表也需要使用线程安全的数据结构
          */
         for (const auto& texture_path : all_needed_textures_set) {
-            const auto entity    = r.create();
-            auto&      c_texture = r.emplace<ecs::CTexture>(entity);
-            auto&      c_name    = r.emplace<ecs::CName>(entity);
+            const auto entity = r.create();
+            r.emplace<ecs::CTexture>(entity);
+            r.emplace<ecs::CResourceName>(entity, make_texture_resource_name(texture_path));
 
             tex_map[texture_path] = entity;
         }
@@ -393,9 +409,6 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
             const auto entity    = tex_map[texture_path];
             auto&      c_texture = r.get<ecs::CTexture>(entity);
-            auto&      c_name    = r.get<ecs::CName>(entity);
-
-            c_name.name = texture_path;
 
             update_c_texture(c_texture, image_desc);
 
@@ -799,8 +812,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         float4 look_at  = float4(camera->mLookAt.x, camera->mLookAt.y, camera->mLookAt.z, 0.0f);
         float4 up       = float4(camera->mUp.x, camera->mUp.y, camera->mUp.z, 0.0f);
 
-        const auto& c_transform    = r.get<ecs::CTransform>(node_entt);
-        Transform   node_transform = c_transform.d_world_transform;
+        const auto& c_node         = r.get<ecs::CNode>(node_entt);
+        Transform   node_transform = c_node.d_world_transform;
 
         float4 world_pos           = node_transform * position;
         float4 world_look_at       = node_transform * look_at;
@@ -850,11 +863,11 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
             // 应用 node 的 transform 到 light direction
             // direction 是向量，只需要应用 rotation（scale 不影响方向向量的方向，只影响长度）
-            const auto& c_transform    = r.get<ecs::CTransform>(node_entt);
+            const auto& c_node         = r.get<ecs::CNode>(node_entt);
             float3x3    world_rotation = float3x3{
-                float3(c_transform.d_world_transform.r0.xyz),
-                float3(c_transform.d_world_transform.r1.xyz),
-                float3(c_transform.d_world_transform.r2.xyz)
+                float3(c_node.d_world_transform.r0.xyz),
+                float3(c_node.d_world_transform.r1.xyz),
+                float3(c_node.d_world_transform.r2.xyz)
             };
             float3 world_dir = Normalizef(world_rotation * local_dir);
 
@@ -864,14 +877,14 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 ecs::CLightDirectional{.color = color3_to_float3(light->mColorDiffuse), .intensity = 1.0f}
             );
 
-            // 更新 CTransform 的 rotation，使得默认方向 (0, 0, -1) 旋转到 world_dir
+            // 更新 CNode 的 rotation，使得默认方向 (0, 0, -1) 旋转到 world_dir
             float3 origin_dir = float3(0.0f, 0.0f, -1.0f);
             if (Dotf(world_dir, origin_dir) < 0.9999f) {
                 Quaternion light_rot_quat = Quaternion(origin_dir, world_dir);
                 // 直接设置 rotation，因为 world_dir 已经应用了 node 的 transform
-                auto& c_transform_mut    = r.get<ecs::CTransform>(node_entt);
-                c_transform_mut.rotation = light_rot_quat;
-                c_transform_mut.is_dirty = true;
+                auto& c_node_mut    = r.get<ecs::CNode>(node_entt);
+                c_node_mut.rotation = light_rot_quat;
+                c_node_mut.is_dirty = true;
             }
 
         } else if (light->mType == aiLightSourceType::aiLightSource_POINT) {
@@ -881,8 +894,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
             // 应用 node 的 transform 到 light position
             // position 是点，需要应用完整的 transform（translation + rotation + scale）
-            const auto& c_transform = r.get<ecs::CTransform>(node_entt);
-            Transform   node_transform(c_transform.translation, c_transform.scale, c_transform.rotation);
+            const auto& c_node = r.get<ecs::CNode>(node_entt);
+            Transform   node_transform(c_node.translation, c_node.scale, c_node.rotation);
             float3      world_pos = node_transform * local_pos;
 
             // 存储应用了 node transform 后的位置
@@ -891,10 +904,10 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 ecs::CLightPoint{.color = color3_to_float3(light->mColorDiffuse), .intensity = 1.0f}
             );
 
-            // 更新 CTransform 的 translation 为 world_pos
-            auto& c_transform_mut       = r.get<ecs::CTransform>(node_entt);
-            c_transform_mut.translation = world_pos;
-            c_transform_mut.is_dirty    = true;
+            // 更新 CNode 的 translation 为 world_pos
+            auto& c_node_mut       = r.get<ecs::CNode>(node_entt);
+            c_node_mut.translation = world_pos;
+            c_node_mut.is_dirty    = true;
 
         } else if (light->mType == aiLightSourceType::aiLightSource_SPOT) {
             c_light.type = ELightType::Spot;
@@ -931,7 +944,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             ai_mat.Decompose(ai_scale, ai_rotation, ai_translation);
 
             out_translation         = float3(ai_translation.x, ai_translation.y, ai_translation.z);
-            out_rotation_quaternion = Quaternion(ai_rotation.x, ai_rotation.y, ai_rotation.z, ai_rotation.w);
+            out_rotation_quaternion = Quaternion(ai_rotation.w, ai_rotation.x, ai_rotation.y, ai_rotation.z);
             out_scale               = float3(ai_scale.x, ai_scale.y, ai_scale.z);
         };
 
@@ -941,7 +954,6 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             r.emplace<ecs::CTagRootNode>(root_node_entt);
 
             r.emplace<ecs::CNode>(root_node_entt);
-            r.emplace<ecs::CTransform>(root_node_entt);
 
             // root_node_entt的深度默认为0，之后的depth会在UEmplaceNodeYToX中计算
         }
@@ -962,25 +974,22 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             // y: current aiNode
             total_node_cnt++;
 
-            // here, assert (1) x has been created (2) has CNode (3) has CTransform
-            assert(
-                (r.all_of<ecs::CNode, ecs::CTransform>(x)) && "Entity has no CNode & CTransform components."
-            );
+            // here, assert (1) x has been created (2) has CNode
+            assert((r.all_of<ecs::CNode>(x)) && "Entity has no CNode component.");
 
             // get CNode
-            auto& c_node  = r.get<ecs::CNode>(x);
-            auto& c_trans = r.get<ecs::CTransform>(x);
+            auto& c_node = r.get<ecs::CNode>(x);
 
             // 基础数据
-            decompose_transform(y->mTransformation, c_trans.translation, c_trans.rotation, c_trans.scale);
+            decompose_transform(y->mTransformation, c_node.translation, c_node.rotation, c_node.scale);
             // transform
-            c_trans.d_world_transform = to_float4x4(y->mTransformation);
+            c_node.d_world_transform = to_float4x4(y->mTransformation);
             // 如果有parent，则更新world transform
             if (c_node.parent_entt != entt::null) {
-                const auto& parent_transform = r.get<ecs::CTransform>(c_node.parent_entt);
-                c_trans.d_world_transform    = parent_transform.d_world_transform * c_trans.d_world_transform;
+                const auto& parent_node  = r.get<ecs::CNode>(c_node.parent_entt);
+                c_node.d_world_transform = parent_node.d_world_transform * c_node.d_world_transform;
             }
-            c_trans.is_dirty = false;
+            c_node.is_dirty = false;
 
             /**
              * traverse children
@@ -997,8 +1006,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 child_entities.emplace_back(child_entity);
 
                 // add CNode to child
-                auto& c_child_node      = r.emplace<ecs::CNode>(child_entity);
-                auto& c_child_transform = r.emplace<ecs::CTransform>(child_entity);
+                auto& c_child_node = r.emplace<ecs::CNode>(child_entity);
 
                 out_logical_scene.UEmplaceNodeToParent(x, c_node, child_entity, c_child_node);
             }
@@ -1040,6 +1048,10 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 // empty node, transform only
             }
 
+            const std::string_view source_node_name =
+                r.all_of<ecs::CTagRootNode>(x) ? std::string_view{} : std::string_view(y->mName.C_Str());
+            ecs::EnsureNodeName(r, x, source_node_name);
+
             /**
              * recursive traverse
              */
@@ -1065,12 +1077,12 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
     // AABB计算分为两步
     // 1. 如果Mesh有更新，则把AABB向Mesh同步：SBuildMeshAABB
-    // 2. Node更新时，取Renderable对应的Mesh的AABB，在树上进行AABB合并：SUpdateAllNodeTransformAndAABB
+    // 2. Node更新时，取Renderable对应的Mesh的AABB，在树上进行AABB合并
     out_logical_scene.SBuildMeshAABB();
 
-    // 有camera和light，会修改CTransform的数据
-    // - 例如，平行光会把自己的direction叠加到对应transform的rotation上
-    out_logical_scene.SUpdateAllNodeTransformAndAABB();
+    // 有camera和light，会修改CNode的数据
+    // - 例如，平行光会把自己的direction叠加到对应node的rotation上
+    out_logical_scene.Update();
 
     {
         // log
@@ -1097,9 +1109,9 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
         //     ss << "\t\tNode " << (uint32)entity_id << ": mesh count: " << mesh_cnt;
 
-        //     if (r.all_of<ecs::CTransform>(entity_id)) {
-        //         const ecs::CTransform& c_transform = r.get<ecs::CTransform>(entity_id);
-        //         ss << ": transform: " << c_transform.d_world_transform.ToString(false, 3);
+        //     if (r.all_of<ecs::CNode>(entity_id)) {
+        //         const ecs::CNode& c_node = r.get<ecs::CNode>(entity_id);
+        //         ss << ": transform: " << c_node.d_world_transform.ToString(false, 3);
         //     }
 
         //     ss << "\n";

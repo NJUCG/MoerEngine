@@ -31,11 +31,21 @@ Scene* SceneGlobalEntry::GetScene() {
     return m_scene;
 }
 
+Scene* SceneGlobalEntry::PeekScene() {
+    std::lock_guard<std::mutex> lock(GetMutex());
+    return m_scene;
+}
+
 const Scene* SceneGlobalEntry::GetScene() const {
     std::lock_guard<std::mutex> lock(GetMutex());
     if (m_scene == nullptr) {
         LOG_ERROR("SceneGlobalEntry::GetScene() called but no Scene is bound");
     }
+    return m_scene;
+}
+
+const Scene* SceneGlobalEntry::PeekScene() const {
+    std::lock_guard<std::mutex> lock(GetMutex());
     return m_scene;
 }
 

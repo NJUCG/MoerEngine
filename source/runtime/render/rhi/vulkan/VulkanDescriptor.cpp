@@ -325,12 +325,18 @@ uint VulkanDescriptorHeap::GetSamplerDescIdx(Sampler _sampler) {
 
 uint VulkanDescriptorHeap::GetAccelDescIdx(VulkanAccelerationStructure* _as) {
     assert(_as != nullptr && "accel struct is nullptr");
+    assert(_as->handle != VK_NULL_HANDLE && "accel struct handle is null");
     if (_as->m_descriptor_idx >= 0) {
         return _as->m_descriptor_idx * accel_desc_stride;
     }
+    VkAccelerationStructureDeviceAddressInfoKHR address_info{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR
+    };
+    address_info.accelerationStructure = _as->handle;
     VkDescriptorGetInfoEXT desc_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
     desc_info.type                       = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    desc_info.data.accelerationStructure = _as->underlying_buffer->DeviceAddress();
+    desc_info.data.accelerationStructure =
+        vkGetAccelerationStructureDeviceAddressKHR(m_device->GetDevice(), &address_info);
     uint                        idx      = 0;
     std::lock_guard<std::mutex> lock(m_mutex);
     if (accel_free_list.empty()) {

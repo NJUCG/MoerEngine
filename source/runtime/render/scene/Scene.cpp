@@ -3,7 +3,13 @@
 #include "loader/LoaderInterface.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
+#include "scene/cache/SceneCache.h"
+#include "scene/cache/SceneCacheSerializer.h"
+#include "scene/testcase/SceneTestCaseRunner.h"
 #include "taskgraph/TaskGraph.h"
+
+#include <filesystem>
+#include <system_error>
 
 namespace Moer {
 
@@ -15,23 +21,32 @@ void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     // start
     this->m_scene_load_info.StartLoading();
 
+    m_gpu_scene.reset();
+    m_cpu_scene.reset();
+    m_logical_scene.reset();
+
     // 1. logical scene
-    this->m_logical_scene = MakeUnique<ecs::LogicalScene>();
-    bool result           = LoaderInterface::LoadSceneFromFile(*this->m_logical_scene, file_path);
+    SceneLoadRequest request{};
+    request.file_path        = file_path;
+    SceneImportResult result = LoaderInterface::LoadScene(request);
 
     // failed in LogicalScene loading
     if (!result) {
+        LOG_ERROR("Scene load failed: path={}", file_path.string());
         this->m_scene_load_info.Reset();
         return;
     }
+    this->m_logical_scene = std::move(result.logical_scene);
 
     // 2. cpu scene
     this->m_cpu_scene = MakeUnique<CpuScene>(*this->m_logical_scene);
 
     // 3. gpu scene
     this->m_gpu_scene = MakeUnique<Render::GpuScene>(*this->m_cpu_scene, this->bindless_array());
+    this->m_has_pending_gpu_scene_commands = true;
 
     // finish
+    m_source_file_path = file_path;
     this->m_scene_load_info.FinishLoading();
 }
 
@@ -43,6 +58,73 @@ void Scene::LoadSceneFromFileAsync(const std::filesystem::path& file_path) {
 
 void Scene::LoadSceneFromFile(const std::filesystem::path& file_path) {
     this->LoadSceneInternal(file_path);
+}
+
+bool Scene::SaveStateCache() const {
+    if (!m_logical_scene || !IsReady()) {
+        const std::string error = "Cannot save scene state cache because scene is not ready.";
+        LOG_WARNING("Scene State Cache save failed: {}", error);
+        return false;
+    }
+    if (m_source_file_path.empty()) {
+        const std::string error = "Cannot save scene state cache because source file path is empty.";
+        LOG_WARNING("Scene State Cache save failed: {}", error);
+        return false;
+    }
+
+    SceneCacheSourceIdentity source_identity{};
+    if (!SceneCache::BuildSourceIdentity(m_source_file_path, source_identity)) {
+        return false;
+    }
+
+    const std::filesystem::path state_cache_path =
+        SceneCache::GetCachePath(source_identity, ESceneCacheKind::State);
+    SceneCacheHeader header = SceneCache::CreateHeader(source_identity, ESceneCacheKind::State);
+
+    if (!SceneCacheSerializer::SaveLogicalScene(state_cache_path, header, *m_logical_scene)) {
+        LOG_WARNING("Scene State Cache save failed: path={}", state_cache_path.string());
+        return false;
+    }
+
+    LOG_INFO("Scene State Cache saved: path={}", state_cache_path.string());
+    return true;
+}
+
+bool Scene::ResetToSourceScene() {
+    if (m_source_file_path.empty()) {
+        const std::string error = "Cannot reset scene because source file path is empty.";
+        LOG_WARNING("Scene Reset failed: {}", error);
+        return false;
+    }
+
+    const std::filesystem::path source_file_path = m_source_file_path;
+
+    SceneCacheSourceIdentity source_identity{};
+    if (!SceneCache::BuildSourceIdentity(source_file_path, source_identity)) {
+        return false;
+    }
+
+    const std::filesystem::path state_cache_path =
+        SceneCache::GetCachePath(source_identity, ESceneCacheKind::State);
+    std::error_code ec;
+    if (std::filesystem::exists(state_cache_path, ec) && !ec) {
+        std::filesystem::remove(state_cache_path, ec);
+        if (ec) {
+            const std::string error = "Failed to delete state cache: " + state_cache_path.string();
+            LOG_WARNING("Scene Reset failed: {}, filesystem_error={}", error, ec.message());
+            return false;
+        }
+        LOG_INFO("Scene Reset deleted State Cache: path={}", state_cache_path.string());
+    } else {
+        LOG_INFO("Scene Reset found no State Cache to delete: path={}", state_cache_path.string());
+    }
+
+    LOG_INFO("Scene Reset is ready for reload: path={}", source_file_path.string());
+    return true;
+}
+
+const std::filesystem::path& Scene::GetSourceFilePath() const {
+    return m_source_file_path;
 }
 
 bool Scene::IsStartLoading() const {
@@ -57,8 +139,94 @@ Render::GpuScene::PendingCommandList&& Scene::PopPendingCommandList() {
     return std::move(m_gpu_scene->PopPendingCommandList());
 }
 
-void Scene::Tick() {
-    // TODO
+bool Scene::HasPendingGpuSceneCommands() const {
+    return m_has_pending_gpu_scene_commands;
+}
+
+void Scene::ConsumePendingGpuSceneCommands() {
+    m_has_pending_gpu_scene_commands = false;
+}
+
+// 在 scene sync 完成后销毁所有 pending destroy light entity
+static void FinalizeDestroyedLights(Scene& scene) {
+    auto& registry = scene.r();
+
+    Array<entt::entity> destroyed_lights;
+    auto view = registry.view<const ecs::CTagNeedDestroyLight, const ecs::CLightPoint, ecs::CNode>();
+    destroyed_lights.reserve(view.size_hint());
+    for (const auto entity : view) {
+        destroyed_lights.push_back(entity);
+    }
+
+    for (const entt::entity entity : destroyed_lights) {
+        if (!registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
+            continue;
+        }
+
+        auto& node = registry.get<ecs::CNode>(entity);
+        if (node.first_child_entt != entt::null || node.child_count != 0) {
+            LOG_ERROR("Cannot finalize destroyed point light because it still has children.");
+            registry.remove<ecs::CTagNeedDestroyLight>(entity);
+            continue;
+        }
+
+        scene.logical_scene().UDetachNodeFromParent(entity, node);
+        registry.destroy(entity);
+    }
+}
+
+const Scene::TickState& Scene::Tick(bool is_run_test_case) {
+    assert(m_logical_scene && m_cpu_scene && m_gpu_scene && "Scene is not ready");
+
+    if (is_run_test_case) {
+        SceneTestCaseRunner::Get().PreTick(*this);
+    }
+
+    m_last_tick_state = BuildPendingTickState();
+    if (m_last_tick_state) {
+        m_logical_scene->Update();
+
+        m_cpu_scene->Update();
+
+        m_gpu_scene->Update(*m_logical_scene, *m_cpu_scene, m_last_tick_state.rebuilt_mesh);
+
+        FinalizeDestroyedLights(*this);
+    }
+
+    if (is_run_test_case) {
+        SceneTestCaseRunner::Get().PostTick(*this, m_last_tick_state);
+    }
+
+    return m_last_tick_state;
+}
+
+const Scene::TickState& Scene::GetLastTickState() const {
+    return m_last_tick_state;
+}
+
+bool Scene::HasPendingSceneSync() const {
+    return BuildPendingTickState().did_sync;
+}
+
+Scene::TickState Scene::BuildPendingTickState() const {
+    TickState state{};
+    if (!m_logical_scene || !m_cpu_scene || !m_gpu_scene) {
+        return state;
+    }
+
+    const auto& registry    = r();
+    state.updated_light     = !registry.view<const ecs::CTagNeedUpdateLight>().empty();
+    state.updated_material  = !registry.view<const ecs::CTagNeedUpdateMaterial>().empty();
+    state.updated_transform = !registry.view<const ecs::CTagNeedUpdateTransform>().empty();
+    state.created_light     = !registry.view<const ecs::CTagNeedCreateLight>().empty();
+    state.created_material  = !registry.view<const ecs::CTagNeedCreateMaterial>().empty();
+    state.created_transform = !registry.view<const ecs::CTagNeedCreateTransform>().empty();
+    state.destroyed_light   = !registry.view<const ecs::CTagNeedDestroyLight>().empty();
+    state.rebuilt_mesh      = !registry.view<const ecs::CTagNeedRebuildMesh>().empty();
+    state.did_sync          = state.updated_light || state.updated_material || state.updated_transform ||
+                              state.created_light || state.created_material || state.created_transform ||
+                              state.destroyed_light || state.rebuilt_mesh;
+    return state;
 }
 
 void Scene::Reset() {
@@ -69,6 +237,7 @@ void Scene::Reset() {
     m_gpu_scene.reset();
 
     m_scene_load_info.Reset();
+    m_has_pending_gpu_scene_commands = false;
 }
 
 // MARK: 一系列public getter
@@ -148,6 +317,11 @@ Render::BindlessArrayRef Scene::GetBindlessArray() {
 entt::entity Scene::GetMainCameraEntity() const {
     auto entity = r().view<ecs::CTagMainCamera>().front();
     if (entity == entt::null) {
+        entity = r().view<ecs::CCamera>().front();
+        if (entity != entt::null) {
+            LOG_WARNING("No main camera tag found in scene. Falling back to the first camera entity.");
+            return entity;
+        }
         LOG_ERROR("No main camera found in scene");
     }
     return entity;
@@ -206,12 +380,12 @@ const ecs::CLightPoint& Scene::GetMainPointLight() const {
     return r().get<ecs::CLightPoint>(entity);
 }
 
-const ecs::CTransform& Scene::GetTransform(entt::entity entity) const {
-    if (entity == entt::null || !r().valid(entity) || !r().all_of<ecs::CTransform>(entity)) {
-        LOG_ERROR("Invalid entity or missing CTransform component");
-        assert(false && "Invalid entity for GetTransform");
+const ecs::CNode& Scene::GetNode(entt::entity entity) const {
+    if (entity == entt::null || !r().valid(entity) || !r().all_of<ecs::CNode>(entity)) {
+        LOG_ERROR("Invalid entity or missing CNode component");
+        assert(false && "Invalid entity for GetNode");
     }
-    return r().get<ecs::CTransform>(entity);
+    return r().get<ecs::CNode>(entity);
 }
 
 } // namespace Moer

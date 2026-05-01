@@ -38,7 +38,7 @@ RTContext::RTContext(
     neighbor_offset_buf  = device.CreateBuffer<byte>(
         "Raytracing::neighbor_offset_buf",
         is_ctx.GetNeighborOffsetCnt() * 2,
-        EBufferUsageFlags::UNORDERED_ACCESS,
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER,
         PF_R8G8_SNORM
     );
     // AllocateAndFreeBdlsIfNeeded(bindless_handles.neighbor_offset, neighbor_offset_buf->GetView());

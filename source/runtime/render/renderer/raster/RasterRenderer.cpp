@@ -18,8 +18,11 @@
 #include "TonemappingPass.h"
 #include "debug/RenderDocApi.h"
 #include "misc/Timer.h"
-#include "scene/LogicalComponents.h"
+#include "scene/testcase/SceneTestCaseDispatcher.h"
+#include "scene/testcase/SceneTestCaseRunner.h"
 #include "window/WindowContext.h"
+
+#include <chrono>
 
 #if WITH_CUDA
 #include "CudaPass.h"
@@ -27,6 +30,15 @@
 #endif
 
 namespace Moer::Render::Raster {
+
+namespace {
+
+float GetElapsedTimeSeconds() {
+    static const auto s_start_time = std::chrono::steady_clock::now();
+    return std::chrono::duration<float>(std::chrono::steady_clock::now() - s_start_time).count();
+}
+
+} // namespace
 
 RasterRenderer::RasterRenderer(
     uint2&                        _resolution,
@@ -222,11 +234,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     if (scene.IsReady()) {
 
         // 处理场景加载过程中遗留的命令
-        auto&& scene_cmd_list = scene.PopPendingCommandList();
-        auto   copy_evt       = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
-        device.GetCopyQueue().Sync(copy_evt.timeline);
-        gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
-        gfx_queue.Sync();
+        RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
 
         if (first_load) {
             first_load = false;
@@ -239,7 +247,22 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         }
 
         auto& raster_config = editor_config->raster_config;
-        auto& camera        = scene.GetMainCamera().camera;
+
+        const float elapsed_time_seconds = GetElapsedTimeSeconds();
+
+        ProcessSceneTestCaseRequests(editor_config->scene_test_case_config, scene, elapsed_time_seconds);
+
+        auto& scene_test_case_runner = SceneTestCaseRunner::Get();
+
+        const bool is_run_scene_test_case =
+            scene_test_case_runner.HasActiveCase() || scene_test_case_runner.HasPendingCase();
+
+        const auto& scene_tick_state = scene.Tick(is_run_scene_test_case);
+        if (scene_tick_state || scene.HasPendingGpuSceneCommands()) {
+            RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
+        }
+
+        auto& camera = scene.GetMainCamera().camera;
 
         {
             // Jitter Camera for SMAA T2x
@@ -255,6 +278,10 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         camera.Tick(editor_config);
 
         raster_context.Update(camera.GetDeltaTime());
+
+        if (scene_tick_state.updated_transform) {
+            raster_context.csm_data.shadow_cache_config_snapshot_valid = false;
+        }
 
         // others
         // FIXME: 统一update scene

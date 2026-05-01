@@ -2661,8 +2661,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         // Array<uint> instance_ids_to_update = temp_update_instance_ids;
         
         // RefitTLASAndScratchBuffer();
-        // temp_modified_instance_ids.clear();
-        return MakeUnique<UpdateRaytracingSceneCmd>(
+        auto cmd = MakeUnique<UpdateRaytracingSceneCmd>(
             std::move(related_geometries),
             uint64(this),
             uint64(instance_buffer.Get()),
@@ -2672,6 +2671,8 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             std::move(temp_update_instances),
             vk_instances.size(),
             b_full_refit || b_need_force_build);
+        temp_modified_instance_ids.clear();
+        return cmd;
     }
 
     void VulkanRaytracingScene::AdvanceFrame(){  

@@ -35,10 +35,20 @@ public:
     Scene* GetScene();
 
     /**
+     * 获取当前绑定的 Scene 对象，但不记录错误日志
+     */
+    Scene* PeekScene();
+
+    /**
      * 获取当前绑定的 Scene 对象（const 版本）
      * @return const Scene 指针，如果未绑定则返回 nullptr
      */
     const Scene* GetScene() const;
+
+    /**
+     * 获取当前绑定的 Scene 对象（const 版本），但不记录错误日志
+     */
+    const Scene* PeekScene() const;
 
 private:
     SceneGlobalEntry()  = default;
