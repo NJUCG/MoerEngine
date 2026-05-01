@@ -184,7 +184,7 @@ void SceneEditingUI::ShowWindow(bool* p_open) {
         ImGui::TreePop();
     }
 
-    if (ImGui::TreeNode("Smoke Cases")) {
+    if (ImGui::TreeNode("Test Cases")) {
         if (ImGui::Button("SceneTestCase Noop")) {
             m_test_case_config.requested_test_case = ESceneTestCaseId::FrameworkNoop;
         }
@@ -214,18 +214,9 @@ void SceneEditingUI::ShowWindow(bool* p_open) {
         if (ImGui::Button("SceneTestCase Create Procedural Renderable")) {
             m_test_case_config.requested_test_case = ESceneTestCaseId::CreateProceduralRenderable;
         }
-        ImGui::TreePop();
-    }
-
-    if (ImGui::TreeNode("Scene Actions TestCase")) {
         if (ImGui::Button("TestCase Modify Material")) {
             m_test_case_config.requested_test_case = ESceneTestCaseId::DebugModifyMaterial;
         }
-        ImGui::TreePop();
-    }
-
-    if (ImGui::TreeNode("Scene Motion")) {
-        ImGui::Checkbox("TestCase Move Renderables", &m_test_case_config.move_renderables_enabled);
         ImGui::Checkbox("TestCase Move Point Lights", &m_test_case_config.move_point_lights_enabled);
         ImGui::TreePop();
     }
