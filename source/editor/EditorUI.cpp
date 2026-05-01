@@ -42,6 +42,19 @@ EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfi
     m_raytracing_ui(editor_config->raytracing_config),
     m_scene_editing_ui(editor_config->scene_test_case_config, m_b_need_reload) {
 
+    auto has_saved_window_settings = [](const char* window_name) {
+        return ImGui::FindWindowSettingsByID(ImHashStr(window_name)) != nullptr;
+    };
+
+    m_b_show_scene_color   = has_saved_window_settings("Scene Color");
+    m_b_show_hierarchy     = has_saved_window_settings("Hierarchy");
+    m_b_show_inspector     = has_saved_window_settings("Inspector");
+    m_b_show_config        = has_saved_window_settings("Configs");
+    m_b_show_scene_editing = has_saved_window_settings("Scene Editing");
+#if WITH_PROFILE
+    m_b_show_memory_profiler = has_saved_window_settings("Memory Profiler");
+#endif
+
     // Load Config
     InitFromConfigManager();
 

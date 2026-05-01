@@ -228,6 +228,7 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
         std::ifstream f(io.IniFilename);
         if (f.good()) {
             f.close();
+            ImGui::LoadIniSettingsFromDisk(io.IniFilename);
         } else {
             LOG_INFO(
                 "No existing imgui.ini file found, loading preset config: {}",
