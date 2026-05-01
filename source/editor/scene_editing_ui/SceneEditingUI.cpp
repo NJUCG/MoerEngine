@@ -1,5 +1,7 @@
 #include "SceneEditingUI.h"
 
+#include "SceneFileDialog.h"
+
 #include "scene/Scene.h"
 #include "scene/SceneGlobalEntry.h"
 #include "scene/editing/SceneEditing.h"
@@ -30,8 +32,9 @@ static std::string_view GetProceduralShapeName(EProceduralPrimitiveShape shape) 
     return "Runtime UI Procedural Renderable";
 }
 
-SceneEditingUI::SceneEditingUI(SceneTestCaseConfig& test_case_config) :
-    m_test_case_config(test_case_config) {}
+SceneEditingUI::SceneEditingUI(SceneTestCaseConfig& test_case_config, bool& out_need_reload) :
+    m_test_case_config(test_case_config),
+    m_need_reload(out_need_reload) {}
 
 void SceneEditingUI::ShowWindow(bool* p_open) {
     if (!p_open || !*p_open) {
@@ -50,6 +53,51 @@ void SceneEditingUI::ShowWindow(bool* p_open) {
         ImGui::End();
         return;
     }
+
+    if (ImGui::Button("Save Cache")) {
+        if (scene->SaveStateCache()) {
+            m_last_scene_action_status = "State cache saved";
+        } else {
+            m_last_scene_action_status = "Save State failed. Check log.";
+        }
+    }
+
+    ImGui::BeginDisabled(!scene->IsReady() || scene->GetSourceFilePath().empty());
+    if (ImGui::Button("Load Cache")) {
+        m_need_reload              = true;
+        m_last_scene_action_status = "Load Cache requested";
+    }
+    ImGui::EndDisabled();
+
+    ImGui::BeginDisabled(!scene->IsReady() || scene->GetSourceFilePath().empty());
+    if (ImGui::Button("Reset Cache")) {
+        if (scene->ResetToSourceScene()) {
+            m_need_reload              = true;
+            m_last_scene_action_status = "Reset Cache requested";
+        } else {
+            m_last_scene_action_status = "Reset failed. Check log.";
+        }
+    }
+    ImGui::EndDisabled();
+
+    ImGui::BeginDisabled(!scene->IsReady());
+    if (ImGui::Button("Import Into Current Scene")) {
+        std::string selected_path;
+        if (OpenSceneFileDialog(selected_path) == ESceneFileDialogResult::Selected) {
+            const Scene::ImportSceneFromFileResult result = scene->ImportSceneFromFileSync(selected_path);
+            if (result) {
+                m_last_scene_action_status =
+                    "Imported scene entities: " + std::to_string(result.imported_entity_count);
+            } else {
+                m_last_scene_action_status = "Import failed: " + result.error_message;
+            }
+        }
+    }
+    ImGui::EndDisabled();
+    if (!m_last_scene_action_status.empty()) {
+        ImGui::TextDisabled("%s", m_last_scene_action_status.c_str());
+    }
+    ImGui::Separator();
 
     if (ImGui::TreeNode("Editing")) {
         if (ImGui::TreeNode("Lighting")) {
@@ -169,7 +217,7 @@ void SceneEditingUI::ShowWindow(bool* p_open) {
         ImGui::TreePop();
     }
 
-    if (ImGui::TreeNode("Scene Actions")) {
+    if (ImGui::TreeNode("Scene Actions TestCase")) {
         if (ImGui::Button("TestCase Modify Material")) {
             m_test_case_config.requested_test_case = ESceneTestCaseId::DebugModifyMaterial;
         }

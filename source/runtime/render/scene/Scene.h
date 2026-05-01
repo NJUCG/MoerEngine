@@ -7,7 +7,6 @@
 #include "SceneLoadInfoAsync.h"
 #include "scene/SceneCreateInfo.h"
 
-
 #include "scene/LogicalComponents.h"
 
 #include <cassert>
@@ -97,6 +96,17 @@ public:
         }
     };
 
+    struct ImportSceneFromFileResult {
+        bool         success = false;
+        std::string  error_message;
+        entt::entity import_root_entt      = entt::null;
+        uint64       imported_entity_count = 0;
+
+        explicit operator bool() const {
+            return success;
+        }
+    };
+
     Scene();
     ~Scene() = default;
 
@@ -114,6 +124,14 @@ public:
      * 同步从文件加载场景，阻塞直到加载完成
      */
     void LoadSceneFromFile(const std::filesystem::path& file_path);
+
+    bool SaveStateCache() const;
+
+    bool ResetToSourceScene();
+
+    ImportSceneFromFileResult ImportSceneFromFileSync(const std::filesystem::path& file_path);
+
+    const std::filesystem::path& GetSourceFilePath() const;
 
     /**
     * 每帧调用，有需要时更新CpuScene和GpuScene数据
@@ -182,9 +200,7 @@ public:
     entt::entity CreateMesh(const MeshCreateInfo& create_info);
 
     // 创建简单 procedural material + primitive + mesh + renderable。
-    CreateProceduralRenderableResult CreateProceduralRenderable(
-        const ProceduralMeshCreateInfo& create_info
-    );
+    CreateProceduralRenderableResult CreateProceduralRenderable(const ProceduralMeshCreateInfo& create_info);
 
     // 修改已有 EntityWithNode 的 local transform，并标记 transform 同步。
     bool SetLocalTransform(entt::entity entity, const Transform& local_transform);
@@ -222,8 +238,9 @@ private:
     UniquePtr<CpuScene>          m_cpu_scene;
     UniquePtr<Render::GpuScene>  m_gpu_scene;
 
-    SceneLoadInfoAsync m_scene_load_info;
-    TickState          m_last_tick_state;
+    SceneLoadInfoAsync    m_scene_load_info;
+    TickState             m_last_tick_state;
+    std::filesystem::path m_source_file_path;
 
 private:
     /**

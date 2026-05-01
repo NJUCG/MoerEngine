@@ -9,12 +9,13 @@ namespace Moer {
 
 class SceneEditingUI {
 public:
-    explicit SceneEditingUI(SceneTestCaseConfig& test_case_config);
+    SceneEditingUI(SceneTestCaseConfig& test_case_config, bool& out_need_reload);
 
     void ShowWindow(bool* p_open);
 
 private:
     SceneTestCaseConfig& m_test_case_config;
+    bool&                m_need_reload;
 
     int    m_procedural_shape_index = 0;
     float3 m_create_translation     = float3(0.f, 0.f, 0.f);
@@ -29,6 +30,7 @@ private:
 
     std::string m_last_create_status;
     std::string m_last_light_status;
+    std::string m_last_scene_action_status;
 };
 
 } // namespace Moer

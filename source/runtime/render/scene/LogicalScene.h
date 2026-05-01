@@ -2,9 +2,10 @@
 
 #include "LogicalComponents.h"
 #include "RenderAPI.h"
-#include "scene/SceneCreateInfo.h"
 #include "entt/entity/fwd.hpp"
-#include <entt/fwd.hpp>
+#include "scene/SceneCreateInfo.h"
+#include <entt/entt.hpp>
+
 
 namespace Moer::ecs {
 
@@ -35,7 +36,7 @@ namespace Moer::ecs {
  * MARK: LogicalScene & ECS
  * 
  * LogicalScene即MoerEngine场景数据的ECS System实现。
- * 换句话说，LogicalScene不能存储任何数据，只提供一系列函数(System)
+ * 换句话说，LogicalScene不能存储除Registry以外的任何数据，只提供一系列函数(System)
  * 
  * 所有函数默认直接操作当前LogicalScene对象内的entt::registry
  * 
@@ -100,16 +101,16 @@ public:
     bool USetLocalTransform(entt::entity entity, const Transform& local_transform);
 
     bool UAttachToParent(
-        entt::entity child_entt,
-        entt::entity parent_entt,
+        entt::entity  child_entt,
+        entt::entity  parent_entt,
         entt::entity* old_parent_entt = nullptr,
-        bool*         did_change       = nullptr
+        bool*         did_change      = nullptr
     );
 
     bool UDetachFromParent(
-        entt::entity child_entt,
+        entt::entity  child_entt,
         entt::entity* old_parent_entt = nullptr,
-        bool*         did_change       = nullptr
+        bool*         did_change      = nullptr
     );
 
     bool UDestroyEntity(entt::entity entity, entt::entity* old_parent_entt = nullptr);
@@ -134,6 +135,9 @@ public:
      * 若parent_node_id为entt::null，则创建在根节点CTagRootNode下
      */
     void UCreateDefaultLights(entt::entity parent_node_id = entt::null, bool should_create_main_light = true);
+
+private:
+    entt::registry m_registry;
 };
 
 } // namespace Moer::ecs

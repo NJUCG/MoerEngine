@@ -9,11 +9,11 @@
 #include "EditorUIStyle.h"
 #include "scene/Scene.h"
 #include "scene/SceneGlobalEntry.h"
+#include "scene_editing_ui/SceneFileDialog.h"
 
 // 3rd party (std)
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <nfd.hpp>
 #include <string_view>
 
 #if WITH_PROFILE
@@ -29,7 +29,7 @@ EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfi
     m_config(editor_config),
     m_raster_ui(editor_config->raster_config),
     m_raytracing_ui(editor_config->raytracing_config),
-    m_scene_editing_ui(editor_config->scene_test_case_config) {
+    m_scene_editing_ui(editor_config->scene_test_case_config, m_b_need_reload) {
 
     // Load Config
     InitFromConfigManager();
@@ -502,25 +502,20 @@ void EditorUI::ShowConfig() {
                                      m_config->scene_path :
                                      m_config->scene_path.substr(last_slash + 1);
         if (ImGui::Button("Open Scene")) {
-            NFD::UniquePath        selected_path = nullptr;
-            Array<nfdfilteritem_t> filters       = {
-                {"All Support Formats", "glb,gltf,fbx,obj,dae"},
-                {"glTF 2.0", "glb,gltf"},
-                {"FBX", "fbx"},
-                {"Wavefront", "obj"},
-                {"Moer Renderer Scene (WIP)", "json"},
-            };
-            nfdresult_t result = NFD::OpenDialog(selected_path, filters.data(), filters.size());
-            if (result == NFD_OKAY) {
-                LOG_INFO("User selected file: {}", selected_path.get());
+            std::string selected_path;
+            switch (OpenSceneFileDialog(selected_path)) {
+                case ESceneFileDialogResult::Selected:
+                LOG_INFO("User selected file: {}", selected_path);
 
                 // Prepare for reload
                 m_b_need_reload      = true;
-                m_config->scene_path = selected_path.get();
-            } else if (result == NFD_CANCEL) {
-                LOG_INFO("User pressed cancel.");
-            } else {
-                LOG_ERROR("NFD Error: {}", NFD_GetError());
+                m_config->scene_path = std::move(selected_path);
+                break;
+                case ESceneFileDialogResult::Cancelled:
+                    LOG_INFO("User pressed cancel.");
+                    break;
+                case ESceneFileDialogResult::Error:
+                    break;
             }
         }
         ImGui::SameLine();

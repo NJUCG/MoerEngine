@@ -3,8 +3,13 @@
 #include "loader/LoaderInterface.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
+#include "scene/cache/SceneCache.h"
+#include "scene/cache/SceneCacheSerializer.h"
 #include "scene/testcase/SceneTestCaseRunner.h"
 #include "taskgraph/TaskGraph.h"
+
+#include <filesystem>
+#include <system_error>
 
 namespace Moer {
 
@@ -16,15 +21,22 @@ void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     // start
     this->m_scene_load_info.StartLoading();
 
+    m_gpu_scene.reset();
+    m_cpu_scene.reset();
+    m_logical_scene.reset();
+
     // 1. logical scene
-    this->m_logical_scene = MakeUnique<ecs::LogicalScene>();
-    bool result           = LoaderInterface::LoadSceneFromFile(*this->m_logical_scene, file_path);
+    SceneLoadRequest request{};
+    request.file_path        = file_path;
+    SceneImportResult result = LoaderInterface::LoadScene(request);
 
     // failed in LogicalScene loading
     if (!result) {
+        LOG_ERROR("Scene load failed: path={}", file_path.string());
         this->m_scene_load_info.Reset();
         return;
     }
+    this->m_logical_scene = std::move(result.logical_scene);
 
     // 2. cpu scene
     this->m_cpu_scene = MakeUnique<CpuScene>(*this->m_logical_scene);
@@ -33,6 +45,7 @@ void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     this->m_gpu_scene = MakeUnique<Render::GpuScene>(*this->m_cpu_scene, this->bindless_array());
 
     // finish
+    m_source_file_path = file_path;
     this->m_scene_load_info.FinishLoading();
 }
 
@@ -44,6 +57,73 @@ void Scene::LoadSceneFromFileAsync(const std::filesystem::path& file_path) {
 
 void Scene::LoadSceneFromFile(const std::filesystem::path& file_path) {
     this->LoadSceneInternal(file_path);
+}
+
+bool Scene::SaveStateCache() const {
+    if (!m_logical_scene || !IsReady()) {
+        const std::string error = "Cannot save scene state cache because scene is not ready.";
+        LOG_WARNING("Scene State Cache save failed: {}", error);
+        return false;
+    }
+    if (m_source_file_path.empty()) {
+        const std::string error = "Cannot save scene state cache because source file path is empty.";
+        LOG_WARNING("Scene State Cache save failed: {}", error);
+        return false;
+    }
+
+    SceneCacheSourceIdentity source_identity{};
+    if (!SceneCache::BuildSourceIdentity(m_source_file_path, source_identity)) {
+        return false;
+    }
+
+    const std::filesystem::path state_cache_path =
+        SceneCache::GetCachePath(source_identity, ESceneCacheKind::State);
+    SceneCacheHeader header = SceneCache::CreateHeader(source_identity, ESceneCacheKind::State);
+
+    if (!SceneCacheSerializer::SaveLogicalScene(state_cache_path, header, *m_logical_scene)) {
+        LOG_WARNING("Scene State Cache save failed: path={}", state_cache_path.string());
+        return false;
+    }
+
+    LOG_INFO("Scene State Cache saved: path={}", state_cache_path.string());
+    return true;
+}
+
+bool Scene::ResetToSourceScene() {
+    if (m_source_file_path.empty()) {
+        const std::string error = "Cannot reset scene because source file path is empty.";
+        LOG_WARNING("Scene Reset failed: {}", error);
+        return false;
+    }
+
+    const std::filesystem::path source_file_path = m_source_file_path;
+
+    SceneCacheSourceIdentity source_identity{};
+    if (!SceneCache::BuildSourceIdentity(source_file_path, source_identity)) {
+        return false;
+    }
+
+    const std::filesystem::path state_cache_path =
+        SceneCache::GetCachePath(source_identity, ESceneCacheKind::State);
+    std::error_code ec;
+    if (std::filesystem::exists(state_cache_path, ec) && !ec) {
+        std::filesystem::remove(state_cache_path, ec);
+        if (ec) {
+            const std::string error = "Failed to delete state cache: " + state_cache_path.string();
+            LOG_WARNING("Scene Reset failed: {}, filesystem_error={}", error, ec.message());
+            return false;
+        }
+        LOG_INFO("Scene Reset deleted State Cache: path={}", state_cache_path.string());
+    } else {
+        LOG_INFO("Scene Reset found no State Cache to delete: path={}", state_cache_path.string());
+    }
+
+    LOG_INFO("Scene Reset is ready for reload: path={}", source_file_path.string());
+    return true;
+}
+
+const std::filesystem::path& Scene::GetSourceFilePath() const {
+    return m_source_file_path;
 }
 
 bool Scene::IsStartLoading() const {

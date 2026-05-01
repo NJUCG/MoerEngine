@@ -6,8 +6,9 @@
 #include "misc/Hash.h"
 #include "shaderheaders/shared/utils/Packing.h"
 
-#include <entt/entt.hpp>
 #include <cmath>
+#include <entt/entt.hpp>
+
 
 namespace Moer::ecs {
 
@@ -62,14 +63,12 @@ static void RefreshSubtreeDepth(entt::registry& registry, entt::entity entity) {
     }
 }
 
-static entt::registry registry;
-
 entt::registry& LogicalScene::r() {
-    return registry;
+    return m_registry;
 }
 
 const entt::registry& LogicalScene::r() const {
-    return registry;
+    return m_registry;
 }
 
 void LogicalScene::Update() {
@@ -78,11 +77,11 @@ void LogicalScene::Update() {
 }
 
 LogicalScene::LogicalScene() {
-    registry = entt::registry{};
+    m_registry = entt::registry{};
 }
 
 LogicalScene::~LogicalScene() {
-    registry.clear();
+    m_registry.clear();
 }
 
 void LogicalScene::SBuildPrimitiveHash() {
@@ -152,6 +151,8 @@ void LogicalScene::SBuildMeshAABB() {
 }
 
 void LogicalScene::SUpdateAllNodeTransformAndAABB() {
+
+    auto& registry = r();
 
     // 按深度排序节点，确保父节点在前，子节点在后
     // TODO: cache is sorted
@@ -460,10 +461,10 @@ entt::entity LogicalScene::UCreateRenderableWithNode(const RenderableCreateInfo&
         return entt::null;
     }
 
-    entt::entity entity      = r().create();
-    auto&        node        = r().emplace<ecs::CNode>(entity);
-    auto&        renderable  = r().emplace<ecs::CRenderable>(entity);
-    renderable.mesh_entt     = create_info.mesh_entt;
+    entt::entity entity     = r().create();
+    auto&        node       = r().emplace<ecs::CNode>(entity);
+    auto&        renderable = r().emplace<ecs::CRenderable>(entity);
+    renderable.mesh_entt    = create_info.mesh_entt;
 
     SetEntityName(r(), entity, create_info.name);
 
@@ -478,7 +479,7 @@ entt::entity LogicalScene::UCreateRenderableWithNode(const RenderableCreateInfo&
 }
 
 entt::entity LogicalScene::UCreateMaterial(const MaterialCreateInfo& create_info) {
-    entt::entity entity = r().create();
+    entt::entity entity   = r().create();
     auto&        material = r().emplace<ecs::CMaterial>(entity);
     SetEntityName(r(), entity, create_info.name);
 
@@ -536,26 +537,24 @@ entt::entity LogicalScene::UCreatePrimitive(const PrimitiveCreateInfo& create_in
 
     auto& mega_buffers = r().ctx().get<ecs::CtxMegaBuffers>();
 
-    entt::entity entity = r().create();
+    entt::entity entity    = r().create();
     auto&        primitive = r().emplace<ecs::CPrimitive>(entity);
     SetEntityName(r(), entity, create_info.name);
 
     primitive.vertex_count  = static_cast<uint32>(create_info.positions.size());
     primitive.index_count   = static_cast<uint32>(create_info.indices.size());
     primitive.material_entt = create_info.material_entt;
-    primitive.aabb          = create_info.has_aabb ? create_info.aabb : BuildPrimitiveDataAABB(create_info.positions);
+    primitive.aabb = create_info.has_aabb ? create_info.aabb : BuildPrimitiveDataAABB(create_info.positions);
 
-    primitive.position = MakePrimitiveBufferView(
-        static_cast<uint32>(mega_buffers.position.size()), sizeof(float3)
-    );
+    primitive.position =
+        MakePrimitiveBufferView(static_cast<uint32>(mega_buffers.position.size()), sizeof(float3));
     mega_buffers.position.insert(
         mega_buffers.position.end(), create_info.positions.begin(), create_info.positions.end()
     );
 
     if (!create_info.normals.empty()) {
-        primitive.packed_normal = MakePrimitiveBufferView(
-            static_cast<uint32>(mega_buffers.packed_normal.size()), sizeof(uint32)
-        );
+        primitive.packed_normal =
+            MakePrimitiveBufferView(static_cast<uint32>(mega_buffers.packed_normal.size()), sizeof(uint32));
         for (const float3& normal : create_info.normals) {
             mega_buffers.packed_normal.emplace_back(
                 Pack_Normal(SafeNormalizePrimitiveVector(normal, float3(0.f, 0.f, 1.f)))
@@ -566,9 +565,8 @@ entt::entity LogicalScene::UCreatePrimitive(const PrimitiveCreateInfo& create_in
     }
 
     if (!create_info.tangents.empty()) {
-        primitive.packed_tangent = MakePrimitiveBufferView(
-            static_cast<uint32>(mega_buffers.packed_tangent.size()), sizeof(uint32)
-        );
+        primitive.packed_tangent =
+            MakePrimitiveBufferView(static_cast<uint32>(mega_buffers.packed_tangent.size()), sizeof(uint32));
         for (const float3& tangent : create_info.tangents) {
             mega_buffers.packed_tangent.emplace_back(
                 Pack_Normal(SafeNormalizePrimitiveVector(tangent, float3(1.f, 0.f, 0.f)))
@@ -577,21 +575,23 @@ entt::entity LogicalScene::UCreatePrimitive(const PrimitiveCreateInfo& create_in
     }
 
     if (!create_info.texcoord0.empty()) {
-        primitive.texcoord0 = MakePrimitiveBufferView(
-            static_cast<uint32>(mega_buffers.texcoord0.size()), sizeof(float2)
-        );
+        primitive.texcoord0 =
+            MakePrimitiveBufferView(static_cast<uint32>(mega_buffers.texcoord0.size()), sizeof(float2));
         mega_buffers.texcoord0.insert(
             mega_buffers.texcoord0.end(), create_info.texcoord0.begin(), create_info.texcoord0.end()
         );
     }
 
     primitive.index = MakePrimitiveBufferView(static_cast<uint32>(mega_buffers.index.size()), sizeof(uint32));
-    mega_buffers.index.insert(mega_buffers.index.end(), create_info.indices.begin(), create_info.indices.end());
+    mega_buffers.index.insert(
+        mega_buffers.index.end(), create_info.indices.begin(), create_info.indices.end()
+    );
 
     SBuildPrimitiveHash();
 
     LOG_INFO(
-        "Runtime Primitive Data appended: vertices={}, indices={}, mega(position={}, normal={}, tangent={}, uv0={}, index={})",
+        "Runtime Primitive Data appended: vertices={}, indices={}, mega(position={}, normal={}, tangent={}, "
+        "uv0={}, index={})",
         create_info.positions.size(),
         create_info.indices.size(),
         mega_buffers.position.size(),
@@ -613,7 +613,9 @@ entt::entity LogicalScene::UCreateMesh(const MeshCreateInfo& create_info) {
     for (entt::entity primitive_entt : create_info.primitive_entts) {
         if (primitive_entt == entt::null || !r().valid(primitive_entt) ||
             !r().all_of<ecs::CPrimitive>(primitive_entt)) {
-            LogSceneApiError("Cannot create mesh because a primitive entity is invalid or missing CPrimitive.");
+            LogSceneApiError(
+                "Cannot create mesh because a primitive entity is invalid or missing CPrimitive."
+            );
             return entt::null;
         }
     }
@@ -652,8 +654,8 @@ bool LogicalScene::USetLocalTransform(entt::entity entity, const Transform& loca
 }
 
 bool LogicalScene::UAttachToParent(
-    entt::entity child_entt,
-    entt::entity parent_entt,
+    entt::entity  child_entt,
+    entt::entity  parent_entt,
     entt::entity* old_parent_entt,
     bool*         did_change
 ) {
@@ -707,7 +709,7 @@ bool LogicalScene::UAttachToParent(
 }
 
 bool LogicalScene::UDetachFromParent(
-    entt::entity child_entt,
+    entt::entity  child_entt,
     entt::entity* old_parent_entt,
     bool*         did_change
 ) {
@@ -762,7 +764,9 @@ bool LogicalScene::UDestroyEntity(entt::entity entity, entt::entity* old_parent_
         return false;
     }
     if (r().all_of<ecs::CLight>(entity)) {
-        LogSceneApiError("Cannot destroy light entity through DestroyEntity. Use light-specific destroy API.");
+        LogSceneApiError(
+            "Cannot destroy light entity through DestroyEntity. Use light-specific destroy API."
+        );
         return false;
     }
     if (r().all_of<ecs::CRenderable>(entity)) {
