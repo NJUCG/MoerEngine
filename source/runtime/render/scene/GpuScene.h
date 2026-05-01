@@ -8,11 +8,21 @@
 namespace Moer::Render {
 
 /**
- * GPU Scene
- * 
- * RAII，构造时初始化，析构时释放（不提供手动Initialize/Destroy/Reset接口）
- * 
- * TODO: 析构函数（资源释放）
+ * GpuScene 持有真正的 GPU 资源，是 renderer 读取场景数据的入口。
+ *
+ * 结构:
+ * - Res: 纹理、buffer、ray tracing scene
+ * - m_map_texture_entity_to_bindless_handle: 逻辑纹理 -> bindless handle
+ * - PendingCommandList: copy/gfx queue 待执行命令
+ *
+ * 改这里:
+ * - 加新的 GPU 资源或 bindless 绑定: GpuScene.h / GpuScene.cpp
+ * - 改 CPU->GPU 数据布局: CpuScene.h + SharedSceneStruct.h + 各 pass
+ * - 改 import / runtime create 后的资源重建: SceneImport.cpp + GpuScene.cpp
+ *
+ * 用法:
+ * - Scene::Tick 后取 PopPendingCommandList() 提交给 RHI
+ * - renderer/pass 只读 res() / GetRaytracingScene()
  */
 class RENDER_API GpuScene {
 

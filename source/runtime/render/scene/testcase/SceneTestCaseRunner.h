@@ -10,7 +10,23 @@
 
 namespace Moer {
 
-// SceneTestCaseRunner 是 Scene testcase 的全局单例调度器
+/**
+ * SceneTestCaseRunner 是 scene testcase 的全局调度器。
+ *
+ * 结构:
+ * - m_pending_case: 下一次要启动的 case
+ * - m_active_case: 当前正在跑的 case
+ * - frame/time: 给测试构造上下文
+ *
+ * 改这里:
+ * - 改 testcase 调度节奏: SceneTestCaseRunner.h / .cpp
+ * - 改 editor 请求入口: SceneTestCaseDispatcher.* + 相关 UI 入口
+ * - 改 testcase 列表: SceneTestCaseRegistry.* + 各具体 testcase 文件
+ *
+ * 用法:
+ * - 外部用 RequestCase() 提交 case
+ * - Scene::Tick 前后分别调用 PreTick() / PostTick()
+ */
 class SceneTestCaseRunner {
 public:
     // 获取唯一的 Scene testcase runner 实例

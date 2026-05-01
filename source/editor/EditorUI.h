@@ -15,6 +15,24 @@
 
 namespace Moer {
 
+/**
+ * EditorUI 是编辑器主界面的窗口协调器。
+ *
+ * 结构:
+ * - Scene Color / Hierarchy / Inspector / Config / SceneEditing 五类顶层窗口
+ * - RasterUI / RaytracingUI / InspectorUI / SceneEditingUI 四个子模块
+ * - 少量 editor 状态: 选中节点、scene color 区域、renderer reload 状态
+ *
+ * 改这里:
+ * - 改主窗口布局和 docking: EditorUI.cpp
+ * - 改 Inspector / SceneEditing 细节: inspector_ui 目录 + scene_editing_ui 目录
+ * - 改 renderer 配置面板: raster_ui 目录 + raytracing_ui 目录 + Editor.cpp 回调
+ *
+ * 用法:
+ * - 每帧先 TickUI() 组装 ImGui
+ * - 再 RenderGUI() 输出到 UI framebuffer
+ * - 独立平台窗口由 PresentWindows() 收尾
+ */
 class EditorUI {
 
 public:

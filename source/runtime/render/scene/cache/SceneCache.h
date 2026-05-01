@@ -27,9 +27,9 @@ struct RENDER_API SceneCacheSourceIdentity {
  * - SceneCacheHeader.h:         Metadata 布局
  * - SceneCacheSerializer.h/cpp: Data
  *
- * 使用时:
- * - 读缓存: 先 BuildSourceIdentity + GetCachePath + IsCacheValid，再调用 SceneCacheSerializer::LoadLogicalScene
- * - 写缓存: 先 BuildSourceIdentity + CreateHeader，再调用 SceneCacheSerializer::SaveLogicalScene
+ * 用法:
+ * - 读: BuildSourceIdentity -> GetCachePath -> IsCacheValid -> LoadLogicalScene
+ * - 写: BuildSourceIdentity -> CreateHeader -> SaveLogicalScene
  */
 class RENDER_API SceneCache {
 public:

@@ -10,7 +10,23 @@
 namespace Moer::ecs {
 
 /**
- * Logical Scene
+ * LogicalScene 是场景的 ECS 层，只负责逻辑数据和 scene-side system。
+ *
+ * 结构:
+ * - 一个 entt::registry，组件定义在 LogicalComponents.h
+ * - S* 函数做批量同步和派生数据更新
+ * - U* 函数做单次工具操作，如建节点、挂接、删除
+ *
+ * 改这里:
+ * - 加组件或改字段: LogicalComponents.h
+ * - 改节点树 / derived data / 哈希构建: LogicalScene.cpp
+ * - 改外部场景 API 行为: SceneMutation.cpp + SceneImport.cpp
+ *
+ * 用法:
+ * - parser / cache / editor 先写 LogicalScene
+ * - 再由 Scene::Tick 把结果同步到 CpuScene / GpuScene
+ *
+ * ===============================================================
  * 
  * RAII，构造时初始化，析构时释放（不提供手动Initialize/Destroy/Reset接口）
  * 

@@ -18,7 +18,22 @@ namespace ecs {
 class LogicalScene;
 }
 
-// 顺序写入 scene cache 二进制数据
+/**
+ * SceneCacheBinaryWriter 只做顺序二进制写入，不知道 scene 结构。
+ *
+ * 结构:
+ * - 一个 ofstream
+ * - 一个首个错误字符串
+ * - POD / string / array 三种基础写法
+ *
+ * 改这里:
+ * - 改基础二进制协议: SceneCacheSerializer.h
+ * - 改 scene payload 字段顺序: SceneCacheSerializer.cpp
+ *
+ * 用法:
+ * - 先 IsValid()，再按固定顺序 Write*
+ * - 调用层要保证读写顺序完全一致
+ */
 class RENDER_API SceneCacheBinaryWriter {
 public:
     // 打开一个用于写 cache 的二进制流
@@ -75,7 +90,22 @@ private:
     std::string   m_error;
 };
 
-// 顺序读取 scene cache 二进制数据
+/**
+ * SceneCacheBinaryReader 只做顺序二进制读取，不知道 scene 结构。
+ *
+ * 结构:
+ * - 一个 ifstream
+ * - 一个首个错误字符串
+ * - POD / string / array 三种基础读法
+ *
+ * 改这里:
+ * - 改基础二进制协议: SceneCacheSerializer.h
+ * - 改 scene payload 字段顺序: SceneCacheSerializer.cpp
+ *
+ * 用法:
+ * - 先 IsValid()，再按和 writer 完全一致的顺序 Read*
+ * - 一旦返回 false，优先看 GetError()
+ */
 class RENDER_API SceneCacheBinaryReader {
 public:
     // 打开一个用于读 cache 的二进制流
@@ -132,7 +162,23 @@ private:
     std::string   m_error;
 };
 
-// 负责 LogicalScene 与 cache payload 的互相转换
+/**
+ * SceneCacheSerializer 负责 LogicalScene <-> cache payload 的转换。
+ *
+ * 结构:
+ * - 写 entity 表、组件 payload、mega buffers
+ * - 维护 payload version 和兼容失败回退
+ * - 读写时都依赖 SceneCacheBinaryWriter / Reader
+ *
+ * 改这里:
+ * - 新增/删除可序列化组件: SceneCacheSerializer.cpp + LogicalComponents.h
+ * - 改 payload 布局时记得 bump version
+ * - 改 cache 入口行为: LoaderInterface.cpp + SceneCache.cpp
+ *
+ * 用法:
+ * - SaveLogicalScene() 写完整 cache
+ * - LoadLogicalScene() 失败时，上层应回退 parser
+ */
 class RENDER_API SceneCacheSerializer {
 public:
     // 把 LogicalScene 序列化为 cache 文件

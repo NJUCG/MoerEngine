@@ -22,8 +22,24 @@ class CommandList;
 }
 
 /**
- * MoerEngine场景
- * 
+ * Scene 是运行时场景总入口，负责把 LogicalScene / CpuScene / GpuScene 串起来。
+ *
+ * 结构:
+ * - LogicalScene: ECS 数据、节点树、导入后的逻辑结果
+ * - CpuScene: shader 需要的 CPU 连续缓冲和 entity->slot 映射
+ * - GpuScene: GPU 资源、bindless handle、待提交命令
+ *
+ * 改这里:
+ * - 加新的对外场景 API: Scene.h + SceneMutation.cpp
+ * - 改加载 / import / reset / cache 入口: Scene.cpp + SceneImport.cpp + loader 目录
+ * - 改每帧同步流程: Scene.cpp::Tick + CpuScene / GpuScene
+ *
+ * 用法:
+ * - 外部只通过 LoadSceneFromFile / Tick / Patch / Create* / Destroy* 操作场景
+ * - 不直接改 CpuScene / GpuScene，先改 LogicalScene 或 Scene API
+ *
+ * ===============================================================
+ *
  * 非RAII，需要手动管理生命周期
  * 
  * 场景共分为3大部分：LogicalScene, CpuScene, GpuScene

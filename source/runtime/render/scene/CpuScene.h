@@ -21,18 +21,21 @@ class GpuScene;
 } // namespace Render
 
 /**
- * CPU Scene
- * 
- * RAII，构造时初始化，析构时释放（不提供手动Initialize/Destroy/Reset接口）
- * 
- * 这个类主要负责以下2个功能：
- * - 存储所有准备上传到GPU的场景数据；
- * - 实现所有 LogicalScene -> CpuScene 的逻辑
- * 
- * 增量更新通过CTagNeedUpdate实现：
- * - 当CLight/CMaterial/CTransform被修改时，场景修改接口会添加CTagNeedUpdate标签
- * - UpdateLights/UpdateMaterials/UpdateMeshes通过view过滤出有CTagNeedUpdate的实体进行处理
- * - 处理完毕后清除CTagNeedUpdate标签
+ * CpuScene 是 LogicalScene 和 GpuScene 之间的 CPU 缓冲层。
+ *
+ * 结构:
+ * - m_light_buf / m_material_buf / m_draw_cmd_buf / m_primitive_buf / m_instance_buf
+ * - 一组 entity->slot 映射，保证增量更新能定位到已有缓存
+ * - Initialize / Create / Update / Rebuild 四类同步逻辑
+ *
+ * 改这里:
+ * - 改 shader 结构或 buffer 布局: SharedSceneStruct.h + CpuScene.cpp
+ * - 改 dirty tag 规则: LogicalComponents.h + SceneMutation.cpp + CpuScene.cpp
+ * - 改材质和 mesh 的展开方式: CpuScene.cpp + GpuScene.cpp
+ *
+ * 用法:
+ * - 通常只由 Scene 构造和 Tick 驱动
+ * - 外部不要直接改内部 buffer，应该改 LogicalScene/Scene API
  */
 class RENDER_API CpuScene {
 

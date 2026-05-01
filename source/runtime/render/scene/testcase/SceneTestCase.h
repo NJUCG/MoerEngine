@@ -16,6 +16,24 @@ struct SceneTestCaseContext {
     float         elapsed_time_seconds = 0.f;
 };
 
+/**
+ * ISceneTestCase 是逐帧场景测试的统一接口。
+ *
+ * 结构:
+ * - Reset(): 初始化内部状态
+ * - PreTick(): 在 Scene 采样 dirty tag 前写入改动
+ * - PostTick(): 在 Scene sync 后检查结果
+ * - IsFinished(): 告诉 runner 何时结束
+ *
+ * 改这里:
+ * - 改测试生命周期: SceneTestCase.h + SceneTestCaseRunner.cpp
+ * - 加新的 testcase: 新建 SceneTestCase*.cpp + SceneTestCaseRegistry.cpp
+ * - 改日志/名字/UI 展示: Name() + Registry/Dispatcher
+ *
+ * 用法:
+ * - 派生类只写测试逻辑，不直接管调度
+ * - 由 SceneTestCaseRunner 驱动每帧调用
+ */
 class ISceneTestCase {
 public:
     // 析构 testcase 基类，保证派生类能正确释放
