@@ -373,20 +373,33 @@ void EditorUI::ShowHierarchy() {
 
     auto draw_node = [&](auto& self, entt::entity entity, int depth) -> void {
         const auto& node = registry.get<ecs::CNode>(entity);
-        const std::string label = ecs::GetNodeDisplayName(node, entity);
-        const bool selected = (m_selected_node == entity);
+        const std::string     label       = ecs::GetNodeDisplayName(node, entity);
+        const bool            selected    = (m_selected_node == entity);
+        const bool            has_children = node.first_child_entt != entt::null;
+        ImGuiTreeNodeFlags    tree_flags  = ImGuiTreeNodeFlags_SpanAvailWidth |
+                                         ImGuiTreeNodeFlags_OpenOnArrow;
+
+        if (selected) {
+            tree_flags |= ImGuiTreeNodeFlags_Selected;
+        }
+        if (!has_children) {
+            tree_flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        }
 
         ImGui::PushID(static_cast<int>(entt::to_integral(entity)));
-        ImGui::Indent(depth * 16.0f);
-        if (ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_SpanAvailWidth)) {
+        ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+        const bool is_open = ImGui::TreeNodeEx(label.c_str(), tree_flags);
+        if (ImGui::IsItemClicked()) {
             m_selected_node = entity;
         }
-        ImGui::Unindent(depth * 16.0f);
 
-        entt::entity child_entt = node.first_child_entt;
-        while (child_entt != entt::null) {
-            self(self, child_entt, depth + 1);
-            child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
+        if (has_children && is_open) {
+            entt::entity child_entt = node.first_child_entt;
+            while (child_entt != entt::null) {
+                self(self, child_entt, depth + 1);
+                child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
+            }
+            ImGui::TreePop();
         }
         ImGui::PopID();
     };
