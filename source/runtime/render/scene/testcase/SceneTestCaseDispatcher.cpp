@@ -145,19 +145,6 @@ void DispatchRequestedSceneTestCase(SceneTestCaseConfig& config) {
 void ProcessSceneMotion(SceneTestCaseConfig& config, Scene& scene, float elapsed_time_seconds) {
     ProcessTransformMotionGroup(
         scene,
-        config.move_renderables_enabled,
-        elapsed_time_seconds,
-        RenderableMotionStates(),
-        [](entt::registry& registry) {
-            return registry.view<const ecs::CRenderable, const ecs::CNode>();
-        },
-        0x4d52524fu,
-        0.08f,
-        0.22f
-    );
-
-    ProcessTransformMotionGroup(
-        scene,
         config.move_point_lights_enabled,
         elapsed_time_seconds,
         PointLightMotionStates(),
