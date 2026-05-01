@@ -1,6 +1,7 @@
 #include "Scene.h"
 
 #include "log/LogSystem.h"
+#include "scene/NodeNameUtils.h"
 #include "scene/loader/LoaderInterface.h"
 
 #include <algorithm>
@@ -41,13 +42,13 @@ Array<entt::entity> CollectImportEntities(const entt::registry& registry, entt::
     CollectEntities<ecs::CPrimitive>(registry, entities, seen);
     CollectEntities<ecs::CMaterial>(registry, entities, seen);
     CollectEntities<ecs::CTexture>(registry, entities, seen);
+    CollectEntities<ecs::CResourceName>(registry, entities, seen);
     CollectEntities<ecs::CCamera>(registry, entities, seen);
     CollectEntities<ecs::CLight>(registry, entities, seen);
     CollectEntities<ecs::CLightDirectional>(registry, entities, seen);
     CollectEntities<ecs::CLightPoint>(registry, entities, seen);
     CollectEntities<ecs::CLightAmbient>(registry, entities, seen);
     CollectEntities<ecs::CLightEnvironment>(registry, entities, seen);
-    CollectEntities<ecs::CName>(registry, entities, seen);
 
     entities.erase(
         std::remove_if(
@@ -208,11 +209,6 @@ Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::files
     for (entt::entity source_entity : source_entities) {
         entt::entity target_entity = RemapEntity(remap, source_entity);
 
-        if (source_registry.all_of<ecs::CName>(source_entity)) {
-            target_registry.emplace<ecs::CName>(
-                target_entity, source_registry.get<ecs::CName>(source_entity)
-            );
-        }
         if (source_registry.all_of<ecs::CNode>(source_entity)) {
             ecs::CNode node        = source_registry.get<ecs::CNode>(source_entity);
             node.parent_entt       = RemapEntity(remap, node.parent_entt);
@@ -268,6 +264,11 @@ Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::files
                 target_entity, source_registry.get<ecs::CTexture>(source_entity)
             );
         }
+        if (source_registry.all_of<ecs::CResourceName>(source_entity)) {
+            target_registry.emplace<ecs::CResourceName>(
+                target_entity, source_registry.get<ecs::CResourceName>(source_entity)
+            );
+        }
         if (source_registry.all_of<ecs::CPrimitive>(source_entity)) {
             ecs::CPrimitive primitive = source_registry.get<ecs::CPrimitive>(source_entity);
             primitive.position        = OffsetBufferView(primitive.position, position_offset);
@@ -290,6 +291,8 @@ Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::files
             renderable.mesh_entt        = RemapEntity(remap, renderable.mesh_entt);
             target_registry.emplace<ecs::CRenderable>(target_entity, renderable);
         }
+
+        ecs::EnsureNodeName(target_registry, target_entity);
     }
 
     auto&       import_root_node      = target_registry.get<ecs::CNode>(import_root_entt);

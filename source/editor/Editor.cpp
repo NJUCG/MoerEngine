@@ -79,7 +79,7 @@ void Editor::Run() {
                 },
             .on_show_config_sub_ui =
                 [&editor_ui]() {
-                    editor_ui->SetShowSubUI(true);
+                    editor_ui->SetShowRenderConfigSubUI(true);
                 },
 
             // Raster

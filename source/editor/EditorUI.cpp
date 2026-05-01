@@ -9,11 +9,13 @@
 #include "EditorUIStyle.h"
 #include "scene/Scene.h"
 #include "scene/SceneGlobalEntry.h"
+#include "scene/NodeNameUtils.h"
 #include "scene_editing_ui/SceneFileDialog.h"
 
 // 3rd party (std)
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <algorithm>
 #include <string_view>
 
 #if WITH_PROFILE
@@ -23,6 +25,15 @@
 using namespace Moer::Render;
 
 namespace Moer {
+
+namespace {
+
+bool IsSelectedNodeValid(Scene* scene, entt::entity entity) {
+    return scene != nullptr && entity != entt::null && scene->r().valid(entity) &&
+           scene->r().all_of<ecs::CNode>(entity);
+}
+
+} // namespace
 
 EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
     m_ui_renderer(std::move(renderer)),
@@ -298,9 +309,10 @@ void EditorUI::TickUI() {
         if (ImGui::BeginMenu("Window")) {
 
             ImGui::MenuItem("Scene Color", nullptr, &m_b_show_scene_color);
+            ImGui::MenuItem("Hierarchy", nullptr, &m_b_show_hierarchy);
+            ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector);
             ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
             ImGui::MenuItem("Scene Editing", nullptr, &m_b_show_scene_editing);
-            // ImGui::MenuItem("Inspector", nullptr, &m_m_b_show_inspector_window);
             // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
 #if WITH_PROFILE
             ImGui::MenuItem("Memory Profiler", nullptr, &m_b_show_memory_profiler);
@@ -317,6 +329,8 @@ void EditorUI::TickUI() {
 #endif
     ResetState();
     ShowSceneColor();
+    ShowHierarchy();
+    ShowInspector();
     ShowConfig();
     ShowSceneEditing();
 
@@ -325,6 +339,69 @@ void EditorUI::TickUI() {
 
 void EditorUI::ShowSceneEditing() {
     m_scene_editing_ui.ShowWindow(&m_b_show_scene_editing);
+}
+
+void EditorUI::ShowHierarchy() {
+    if (!m_b_show_hierarchy) {
+        return;
+    }
+
+    Scene* scene = SceneGlobalEntry::Get().PeekScene();
+
+    if (!ImGui::Begin("Hierarchy", &m_b_show_hierarchy)) {
+        ImGui::End();
+        return;
+    }
+
+    if (scene == nullptr || !scene->IsReady()) {
+        ImGui::TextDisabled("scene加载中");
+        ImGui::End();
+        return;
+    }
+
+    if (!IsSelectedNodeValid(scene, m_selected_node)) {
+        m_selected_node = entt::null;
+    }
+
+    auto&             registry  = scene->r();
+    const entt::entity root_entt = scene->logical_scene().UGetRootNodeEntity();
+    if (root_entt == entt::null || !registry.all_of<ecs::CNode>(root_entt)) {
+        ImGui::TextDisabled("Root node not found.");
+        ImGui::End();
+        return;
+    }
+
+    auto draw_node = [&](auto& self, entt::entity entity, int depth) -> void {
+        const auto& node = registry.get<ecs::CNode>(entity);
+        const std::string label = ecs::GetNodeDisplayName(node, entity);
+        const bool selected = (m_selected_node == entity);
+
+        ImGui::PushID(static_cast<int>(entt::to_integral(entity)));
+        ImGui::Indent(depth * 16.0f);
+        if (ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_SpanAvailWidth)) {
+            m_selected_node = entity;
+        }
+        ImGui::Unindent(depth * 16.0f);
+
+        entt::entity child_entt = node.first_child_entt;
+        while (child_entt != entt::null) {
+            self(self, child_entt, depth + 1);
+            child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
+        }
+        ImGui::PopID();
+    };
+
+    entt::entity child_entt = registry.get<ecs::CNode>(root_entt).first_child_entt;
+    while (child_entt != entt::null) {
+        draw_node(draw_node, child_entt, 0);
+        child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
+    }
+
+    ImGui::End();
+}
+
+void EditorUI::ShowInspector() {
+    m_inspector_ui.ShowWindow(&m_b_show_inspector, SceneGlobalEntry::Get().PeekScene(), m_selected_node);
 }
 
 void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output) {
@@ -495,7 +572,7 @@ void EditorUI::ShowConfig() {
         }
         if (last_selected_render_method != m_config->selected_render_method) {
             m_b_need_reload = true;
-            SetShowSubUI(false);
+            SetShowRenderConfigSubUI(false);
         }
     }
 
@@ -538,7 +615,7 @@ void EditorUI::ShowConfig() {
         ImGui::TreePop();
     }
 
-    if (m_b_show_sub_ui) {
+    if (m_b_show_render_config_sub_ui) {
         ImGui::Separator();
         switch (m_config->selected_render_method) {
             case ERenderMethod::Raster:

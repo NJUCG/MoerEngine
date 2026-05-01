@@ -5,6 +5,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "scene/LogicalComponents.h"
+#include "scene/NodeNameUtils.h"
 
 namespace Moer::Render {
 
@@ -90,16 +91,20 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
     const Sampler default_sampler = Sampler(ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_REPEAT);
 
     {
-        auto view = m_logical_scene.r().view<const ecs::CTexture, const ecs::CName>();
+        auto view = m_logical_scene.r().view<const ecs::CTexture>();
 
         m_res.texture_array.clear();
-        m_res.texture_array.reserve(view.size_hint());
 
         m_map_texture_entity_to_bindless_handle.clear();
 
         // Device创建TextureRef & 录制Copy命令
-        view.each([&](const auto entity, const ecs::CTexture& c_texture, const ecs::CName& c_name) {
+        view.each([&](const auto entity, const ecs::CTexture& c_texture) {
             TextureWithHandle tex_with_hdl{};
+            const auto*       resource_name = m_logical_scene.r().try_get<ecs::CResourceName>(entity);
+            const std::string texture_name =
+                (resource_name == nullptr || ecs::IsBlankName(resource_name->name)) ?
+                    ecs::MakeDebugName("Texture", entity) :
+                    resource_name->name;
 
             // 下文处的实现参考了重构前的 GpuScene.cpp: BuildTexturesInBatch()
             // TODO: 原函数中的Batch，意为分批上传数据，避免一个Command拷贝过多内容
@@ -107,7 +112,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
 
             // 1. Create Texture
             tex_with_hdl.tex = device.CreateTexture(
-                c_name.name,
+                texture_name,
                 Extent2D{c_texture.width, c_texture.height},
                 c_texture.format,
                 ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST,

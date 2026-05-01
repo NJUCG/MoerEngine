@@ -83,6 +83,8 @@ struct CNode {
     uint32       child_count       = 0;
     uint32       depth             = 0;
 
+    std::string name;
+
     float3     translation = float3(0.f, 0.f, 0.f);
     Quaternion rotation    = Quaternion();
     float3     scale       = float3(1.f, 1.f, 1.f);
@@ -97,10 +99,6 @@ struct CSceneMetaData {
     entt::entity root_node_entt = entt::null;
 
     std::string scene_path;
-};
-
-struct CName {
-    std::string name;
 };
 
 /**
@@ -152,6 +150,10 @@ struct CMesh {
 
 struct CRenderable {
     entt::entity mesh_entt = entt::null;
+};
+
+struct CResourceName {
+    std::string name;
 };
 
 // MARK: Material & Texture

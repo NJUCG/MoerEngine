@@ -2,6 +2,7 @@
 
 #include "log/LogSystem.h"
 #include "scene/LogicalScene.h"
+#include "scene/NodeNameUtils.h"
 
 #include <entt/entt.hpp>
 #include <filesystem>
@@ -12,7 +13,7 @@ namespace Moer {
 
 namespace {
 
-constexpr uint32 k_logical_scene_payload_version = 1;
+constexpr uint32 k_logical_scene_payload_version = 3;
 constexpr uint64 k_null_entity_id                = std::numeric_limits<uint64>::max();
 
 enum ESceneCacheComponentFlag : uint64 {
@@ -33,6 +34,7 @@ enum ESceneCacheComponentFlag : uint64 {
     SceneCacheComponentRootNodeTag   = 1ull << 14,
     SceneCacheComponentMainCameraTag = 1ull << 15,
     SceneCacheComponentMainLightTag  = 1ull << 16,
+    SceneCacheComponentResourceName  = 1ull << 17,
 };
 
 struct LogicalScenePayloadHeader {
@@ -78,6 +80,19 @@ void CollectComponentEntities(
     }
 }
 
+void CollectNamedResourceEntities(
+    const entt::registry&       registry,
+    Array<entt::entity>&        entities,
+    UnorderedSet<entt::entity>& seen_entities
+) {
+    for (entt::entity entity : registry.view<ecs::CResourceName>()) {
+        const auto& resource_name = registry.get<ecs::CResourceName>(entity);
+        if (!ecs::IsBlankName(resource_name.name)) {
+            AddUniqueEntity(entities, seen_entities, entity);
+        }
+    }
+}
+
 // 汇总所有需要写入 cache 的实体
 Array<entt::entity> CollectSerializableEntities(const entt::registry& registry) {
     Array<entt::entity>        entities;
@@ -86,6 +101,7 @@ Array<entt::entity> CollectSerializableEntities(const entt::registry& registry) 
     CollectComponentEntities<ecs::CSceneMetaData>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CTagRootNode>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CNode>(registry, entities, seen_entities);
+    CollectNamedResourceEntities(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CRenderable>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CMesh>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CPrimitive>(registry, entities, seen_entities);
@@ -97,7 +113,6 @@ Array<entt::entity> CollectSerializableEntities(const entt::registry& registry) 
     CollectComponentEntities<ecs::CLightPoint>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CLightAmbient>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CLightEnvironment>(registry, entities, seen_entities);
-    CollectComponentEntities<ecs::CName>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CTagMainCamera>(registry, entities, seen_entities);
     CollectComponentEntities<ecs::CTagMainLight>(registry, entities, seen_entities);
 
@@ -205,8 +220,12 @@ bool ReadEntityRef(
 // 根据实体当前组件生成序列化标记
 uint64 BuildComponentFlags(const entt::registry& registry, entt::entity entity) {
     uint64 flags = 0;
-    if (registry.all_of<ecs::CName>(entity)) {
+    if (registry.all_of<ecs::CNode>(entity) && !ecs::IsBlankName(registry.get<ecs::CNode>(entity).name)) {
         flags |= SceneCacheComponentName;
+    }
+    if (registry.all_of<ecs::CResourceName>(entity) &&
+        !ecs::IsBlankName(registry.get<ecs::CResourceName>(entity).name)) {
+        flags |= SceneCacheComponentResourceName;
     }
     if (registry.all_of<ecs::CNode>(entity)) {
         flags |= SceneCacheComponentNode;
@@ -408,6 +427,14 @@ bool ReadTexture(SceneCacheBinaryReader& reader, ecs::CTexture& out_texture) {
            reader.ReadPod(out_texture.mip_level_count) && reader.ReadPod(out_texture.array_layer_count);
 }
 
+bool WriteResourceName(SceneCacheBinaryWriter& writer, const ecs::CResourceName& resource_name) {
+    return writer.WriteString(resource_name.name);
+}
+
+bool ReadResourceName(SceneCacheBinaryReader& reader, ecs::CResourceName& out_resource_name) {
+    return reader.ReadString(out_resource_name.name);
+}
+
 // 写入 primitive 组件及材质引用
 bool WritePrimitive(
     SceneCacheBinaryWriter&   writer,
@@ -526,7 +553,11 @@ bool WriteEntityPayload(
         return false;
     }
     if (HasFlag(component_flags, SceneCacheComponentName) &&
-        !writer.WriteString(registry.get<ecs::CName>(entity).name)) {
+        !writer.WriteString(registry.get<ecs::CNode>(entity).name)) {
+        return false;
+    }
+    if (HasFlag(component_flags, SceneCacheComponentResourceName) &&
+        !WriteResourceName(writer, registry.get<ecs::CResourceName>(entity))) {
         return false;
     }
     if (HasFlag(component_flags, SceneCacheComponentNode) &&
@@ -608,10 +639,16 @@ bool ReadEntityPayload(
 
     const entt::entity entity          = local_id_to_entity[local_index];
     const uint64       component_flags = entity_header.component_flags;
+    std::string        serialized_node_name;
+    ecs::CResourceName serialized_resource_name{};
 
     if (HasFlag(component_flags, SceneCacheComponentName)) {
-        auto& name = registry.emplace<ecs::CName>(entity);
-        if (!reader.ReadString(name.name)) {
+        if (!reader.ReadString(serialized_node_name)) {
+            return false;
+        }
+    }
+    if (HasFlag(component_flags, SceneCacheComponentResourceName)) {
+        if (!ReadResourceName(reader, serialized_resource_name)) {
             return false;
         }
     }
@@ -621,7 +658,11 @@ bool ReadEntityPayload(
             return false;
         }
         node.is_dirty = true;
+        node.name     = std::move(serialized_node_name);
         registry.emplace<ecs::CNode>(entity, node);
+    }
+    if (HasFlag(component_flags, SceneCacheComponentResourceName)) {
+        registry.emplace<ecs::CResourceName>(entity, std::move(serialized_resource_name));
     }
     if (HasFlag(component_flags, SceneCacheComponentSceneMeta)) {
         ecs::CSceneMetaData meta_data{};
@@ -713,6 +754,8 @@ bool ReadEntityPayload(
     if (HasFlag(component_flags, SceneCacheComponentMainLightTag)) {
         registry.emplace<ecs::CTagMainLight>(entity);
     }
+
+    ecs::EnsureNodeName(registry, entity);
 
     return true;
 }

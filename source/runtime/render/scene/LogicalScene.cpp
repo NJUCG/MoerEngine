@@ -1,6 +1,7 @@
 #include "LogicalScene.h"
 
 #include "LogicalComponents.h"
+#include "NodeNameUtils.h"
 #include "log/LogSystem.h"
 #include "math/Function.h"
 #include "misc/Hash.h"
@@ -17,11 +18,7 @@ static void LogSceneApiError(std::string_view message) {
 }
 
 static void SetEntityName(entt::registry& registry, entt::entity entity, std::string_view name) {
-    if (name.empty()) {
-        return;
-    }
-
-    registry.emplace_or_replace<ecs::CName>(entity).name = name;
+    ecs::EnsureNodeName(registry, entity, name);
 }
 
 static float3 SafeNormalizePrimitiveVector(const float3& value, const float3& fallback) {
@@ -845,8 +842,6 @@ entt::entity LogicalScene::UCreatePointLight(const PointLightCreateInfo& create_
     auto& c_light = r().emplace<ecs::CLight>(light_entity);
     auto& c_point = r().emplace<ecs::CLightPoint>(light_entity);
 
-    r().emplace<ecs::CName>(light_entity).name = create_info.name;
-
     c_node.translation = create_info.position;
     c_node.is_dirty    = true;
 
@@ -855,6 +850,8 @@ entt::entity LogicalScene::UCreatePointLight(const PointLightCreateInfo& create_
     c_point.intensity  = create_info.intensity;
     c_point.is_dirty   = true;
     c_point.d_position = create_info.position;
+
+    SetEntityName(r(), light_entity, create_info.name);
 
     if (create_info.should_set_main_light) {
         r().emplace_or_replace<ecs::CTagMainLight>(light_entity);
@@ -895,6 +892,7 @@ void LogicalScene::UCreateDefaultCamera(entt::entity parent_node_id, bool shuold
     if (shuold_create_main_camera) {
         r().emplace<ecs::CTagMainCamera>(camera_entity);
     }
+    SetEntityName(r(), camera_entity, {});
 
     // CNode
     if (parent_node_id == entt::null) {
@@ -948,6 +946,7 @@ void LogicalScene::UCreateDefaultLights(entt::entity parent_node_id, bool should
         auto& c_directional_light     = r().emplace<ecs::CLightDirectional>(main_light_entity);
         c_directional_light.color     = float3(0.9f, 0.65f, 0.4f);
         c_directional_light.intensity = 100.0f;
+        SetEntityName(r(), main_light_entity, {});
 
         auto& c_node    = r().get<ecs::CNode>(main_light_entity);
         c_node.rotation = Quaternion(

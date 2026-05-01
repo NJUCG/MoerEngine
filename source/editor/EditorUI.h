@@ -8,7 +8,10 @@
 
 #include "raster_ui/RasterUI.h"
 #include "raytracing_ui/RaytracingUI.h"
+#include "inspector_ui/InspectorUI.h"
 #include "scene_editing_ui/SceneEditingUI.h"
+
+#include <entt/entity/entity.hpp>
 
 namespace Moer {
 
@@ -38,8 +41,8 @@ public:
         return m_scene_color_resolution.x / m_scene_color_resolution.y;
     }
 
-    void SetShowSubUI(bool show) {
-        m_b_show_sub_ui = show;
+    void SetShowRenderConfigSubUI(bool show) {
+        m_b_show_render_config_sub_ui = show;
     }
 
     bool                IsSeperateWindow() const;
@@ -58,6 +61,8 @@ private:
     void ShowSceneColor();
     void ShowConfig();
     void ShowSceneEditing();
+    void ShowHierarchy();
+    void ShowInspector();
 #if WITH_PROFILE
     void ShowMemoryProfiler(bool* p_open);
     void DrawPassAndChildren(const char* parent_name, int depth);
@@ -65,6 +70,8 @@ private:
 
 private:
     bool   m_b_show_scene_color           = true;
+    bool   m_b_show_hierarchy             = true;
+    bool   m_b_show_inspector             = true;
     bool   m_b_show_config                = true;
     bool   m_b_show_scene_editing         = true;
     bool   m_b_scene_color_mouse_captured = false;
@@ -72,8 +79,11 @@ private:
     float2 m_scene_color_pos;
     bool   m_b_show = true;
 
-    bool m_b_need_reload = false;
-    bool m_b_show_sub_ui = true; // TODO: 【10.3 Refactor】这玩意是干什么的？
+    bool m_b_need_reload              = false;
+    bool m_b_show_render_config_sub_ui = true; // 当前 renderer 的专属配置面板是否可见。
+
+    // Hierarchy selection state
+    entt::entity m_selected_node = entt::null;
 
 #if WITH_PROFILE
     bool   m_b_show_memory_profiler = false;
@@ -84,6 +94,7 @@ private:
     SharedPtr<EditorConfig> m_config;
 
     UniquePtr<Render::UIRenderer> m_ui_renderer;
+    InspectorUI                   m_inspector_ui;
 
     // Custom Func
     UnorderedMap<std::string, std::function<void()>> m_show_func_map;

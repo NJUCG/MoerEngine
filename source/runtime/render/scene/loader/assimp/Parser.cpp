@@ -15,6 +15,7 @@
 #include "misc/Timer.h"
 #include "misc/Traits.h"
 #include "scene/LogicalScene.h"
+#include "scene/NodeNameUtils.h"
 #include "scene/loader/io/ImageIO.h"
 #include "shaderheaders/shared/utils/Packing.h"
 #include "taskgraph/TaskGraph.h"
@@ -343,6 +344,21 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             );
         };
 
+        auto make_texture_resource_name = [&](const std::string& texture_path) -> std::string {
+            const int32 embedded_id = GetEmbeddedTextureId(texture_path);
+            if (embedded_id >= 0) {
+                const aiTexture* texture = ai_scene->mTextures[embedded_id];
+                if (texture != nullptr && texture->mFilename.length > 0) {
+                    return texture->mFilename.C_Str();
+                }
+                return "EmbeddedTexture" + std::to_string(embedded_id);
+            }
+
+            const std::filesystem::path texture_name_path(texture_path);
+            const std::string           filename = texture_name_path.filename().string();
+            return filename.empty() ? texture_path : filename;
+        };
+
         // 初始化CTexture
         auto update_c_texture = [&](ecs::CTexture& c_texture, const ImageReadDesc& image_desc) {
             // copy
@@ -375,9 +391,9 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
          * 同时，映射表也需要使用线程安全的数据结构
          */
         for (const auto& texture_path : all_needed_textures_set) {
-            const auto entity    = r.create();
-            auto&      c_texture = r.emplace<ecs::CTexture>(entity);
-            auto&      c_name    = r.emplace<ecs::CName>(entity);
+            const auto entity = r.create();
+            r.emplace<ecs::CTexture>(entity);
+            r.emplace<ecs::CResourceName>(entity, make_texture_resource_name(texture_path));
 
             tex_map[texture_path] = entity;
         }
@@ -393,9 +409,6 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
             const auto entity    = tex_map[texture_path];
             auto&      c_texture = r.get<ecs::CTexture>(entity);
-            auto&      c_name    = r.get<ecs::CName>(entity);
-
-            c_name.name = texture_path;
 
             update_c_texture(c_texture, image_desc);
 
@@ -1034,6 +1047,10 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             } else {
                 // empty node, transform only
             }
+
+            const std::string_view source_node_name =
+                r.all_of<ecs::CTagRootNode>(x) ? std::string_view{} : std::string_view(y->mName.C_Str());
+            ecs::EnsureNodeName(r, x, source_node_name);
 
             /**
              * recursive traverse
