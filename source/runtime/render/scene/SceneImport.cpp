@@ -100,36 +100,15 @@ void AppendMegaBuffers(entt::registry& target_registry, const entt::registry& so
     target.index.insert(target.index.end(), source.index.begin(), source.index.end());
 }
 
-void MarkImportedSceneDirty(
-    Scene&                     scene,
-    const Array<entt::entity>& imported_entities,
-    entt::entity               import_root_entt
-) {
-    auto& registry = scene.r();
-    registry.emplace_or_replace<ecs::CTagNeedUpdateTransform>(import_root_entt);
-
-    for (entt::entity entity : imported_entities) {
-        if (registry.all_of<ecs::CNode>(entity)) {
-            registry.emplace_or_replace<ecs::CTagNeedUpdateTransform>(entity);
-        }
-        if (registry.all_of<ecs::CMaterial>(entity)) {
-            registry.emplace_or_replace<ecs::CTagNeedCreateMaterial>(entity);
-        }
-        if (registry.all_of<ecs::CLight>(entity)) {
-            registry.emplace_or_replace<ecs::CTagNeedCreateLight>(entity);
-        }
-        if (registry.all_of<ecs::CLightDirectional>(entity)) {
-            registry.get<ecs::CLightDirectional>(entity).is_dirty = true;
-        }
-        if (registry.all_of<ecs::CLightPoint>(entity)) {
-            registry.get<ecs::CLightPoint>(entity).is_dirty = true;
-        }
-    }
-
-    const entt::entity root = scene.logical_scene().UGetRootNodeEntity();
-    if (root != entt::null) {
-        registry.emplace_or_replace<ecs::CTagNeedRebuildMesh>(root);
-    }
+void ClearSceneSyncTags(entt::registry& registry) {
+    registry.clear<ecs::CTagNeedUpdateLight>();
+    registry.clear<ecs::CTagNeedUpdateMaterial>();
+    registry.clear<ecs::CTagNeedUpdateTransform>();
+    registry.clear<ecs::CTagNeedCreateLight>();
+    registry.clear<ecs::CTagNeedCreateMaterial>();
+    registry.clear<ecs::CTagNeedCreateTransform>();
+    registry.clear<ecs::CTagNeedDestroyLight>();
+    registry.clear<ecs::CTagNeedRebuildMesh>();
 }
 
 } // namespace
@@ -307,7 +286,14 @@ Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::files
     logical_scene().SBuildPrimitiveHash();
     logical_scene().SBuildMeshHash();
     logical_scene().SBuildMeshAABB();
-    MarkImportedSceneDirty(*this, imported_entities, import_root_entt);
+    logical_scene().SUpdateAllNodeTransformAndAABB();
+    logical_scene().SUpdateAllLightData();
+
+    // Import 会带来新的 texture/material entities，但当前增量同步链路不会在 GpuScene 中创建这些纹理。
+    // 这里直接按最新 logical scene 重建一次 runtime scene，确保材质纹理句柄立即有效。
+    m_cpu_scene = MakeUnique<CpuScene>(*m_logical_scene);
+    m_gpu_scene = MakeUnique<Render::GpuScene>(*m_cpu_scene, bindless_array());
+    ClearSceneSyncTags(target_registry);
 
     import_result.success               = true;
     import_result.import_root_entt      = import_root_entt;
