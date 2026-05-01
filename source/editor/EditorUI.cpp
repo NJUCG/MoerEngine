@@ -337,12 +337,15 @@ void EditorUI::PresentWindows() {
 
 bool EditorUI::IsSeperateWindow() const {
     auto* current_window = ImGui::FindWindowByName("Scene Color");
+    if (!current_window) {
+        return false;
+    }
     return current_window->ParentWindow == nullptr;
 }
 
 TextureView EditorUI::GetWindowFrameBuffer() {
     auto* current_window = ImGui::FindWindowByName("Scene Color");
-    if (current_window->ParentWindow == nullptr) {
+    if (current_window && current_window->ParentWindow == nullptr && current_window->Viewport) {
         return m_ui_renderer->GetWindowFrameBuffer(current_window->Viewport);
     }
     return TextureView();

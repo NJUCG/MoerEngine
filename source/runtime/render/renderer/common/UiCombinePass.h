@@ -92,7 +92,6 @@ public:
         TextureView  default_output_texture
     ) {
         if (is_seperate_window && input_window_frame_buffer.GetTexture()) {
-            // assert(false && "Has some bug here");
             assert(
                 sample_texture_pipelines.contains(input_window_frame_buffer.format) &&
                 "Unsupported format for SampleTexturePipeline"
@@ -117,7 +116,8 @@ public:
                     {SingleDrawParam(3, 1, 0, 0, 0)},
                     ColorAttachment(frame_buffer.GetTexture())
                 );
-            return frame_buffer.GetTexture();
+            // The Scene Color platform-window framebuffer is presented separately by the ImGui backend.
+            return default_output_texture.GetTexture();
         } else {
             assert(
                 combine_ui_pipelines.contains(default_output_texture.format) &&

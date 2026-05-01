@@ -156,9 +156,11 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     VkInstance     instance   = device.GetInstance();
     //create surface by window handle
     assert(_info.window_handle != 0 && "Window handle is null when creating vulkan swapchain");
-    Moer::WindowContext::CreateVulkanSurface(
-        instance, (WindowHandle*)_info.window_handle, VK_NULL_HANDLE, &surface
-    );
+    if (surface == VK_NULL_HANDLE) {
+        Moer::WindowContext::CreateVulkanSurface(
+            instance, (WindowHandle*)_info.window_handle, VK_NULL_HANDLE, &surface
+        );
+    }
     //create swapchain
     VkSurfaceCapabilitiesKHR capabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.GetGpu(), surface, &capabilities);
