@@ -1,24 +1,10 @@
+#include <array>
+
 #include "log/LogSystem.h"
 #include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Tests {
 namespace {
-
-struct RGTextureOnlyParams {
-    RGTextureView texture;
-
-    void DeclareRGAccess(RGParameterAccessCollector& collector) const {
-        collector.AddTexture(texture);
-    }
-};
-
-struct RGBufferOnlyParams {
-    RGBufferView buffer;
-
-    void DeclareRGAccess(RGParameterAccessCollector& collector) const {
-        collector.AddBuffer(buffer);
-    }
-};
 
 struct RGExecutionParams {
     RGTextureView texture;
@@ -29,6 +15,18 @@ struct RGExecutionParams {
     void DeclareRGAccess(RGParameterAccessCollector& collector) const {
         collector.AddTexture(texture);
         collector.AddBuffer(buffer);
+    }
+};
+
+struct RGAccessArrayParams {
+    std::array<RGTextureView, 2> textures{};
+    std::array<RGBufferView, 2>  buffers{};
+    uint32_t                    texture_count{0};
+    uint32_t                    buffer_count{0};
+
+    void DeclareRGAccess(RGParameterAccessCollector& collector) const {
+        collector.AddTextures(RGTextureAccessArray(textures.data(), texture_count));
+        collector.AddBuffers(RGBufferAccessArray(buffers.data(), buffer_count));
     }
 };
 
@@ -65,6 +63,10 @@ bool ValidatePassDomainHelpers() {
         RGPassQueue(ERGPassFlags::Compute) != EQueueType::Compute ||
         RGPassQueue(ERGPassFlags::Copy) != EQueueType::Copy) {
         LOG_ERROR(MOER_TEXT("RenderGraph pass domain mapped to the wrong queue"));
+        return false;
+    }
+    if (RGPassQueue(ERGPassFlags::Raytracing) != EQueueType::Ignore) {
+        LOG_ERROR(MOER_TEXT("RenderGraph raytracing domain must require explicit queue intent"));
         return false;
     }
     if (RGPassType(ERGPassFlags::Raytracing) != EPassType::Raytracing) {
@@ -143,9 +145,43 @@ int RunRenderGraphContractFoundationTest() {
         .queue = EQueueType::Compute
     };
 
-    graph.AddSetupPass("PrepareContractFoundation", [write_params](RGSetupContext& setup) {
+    auto* access_array_params = graph.Alloc<RGAccessArrayParams>();
+
+    graph.AddSetupPass("PrepareContractFoundation", [write_params, access_array_params, texture, buffer](RGSetupContext& setup) {
         (void)setup.Graph();
         write_params->prepared_value = 42;
+        access_array_params->textures[0] = RGTextureView{
+            .handle = texture,
+            .range = RGTextureRange{.aspect = ETextureAspectFlags::COLOR, .mip_min = 0, .mip_count = 1},
+            .access = ERGAccessMode::Read,
+            .state = ETextureState::SHADER_RESOURCE,
+            .queue = EQueueType::Graphics,
+            .bindless = true
+        };
+        access_array_params->textures[1] = RGTextureView{
+            .handle = texture,
+            .range = RGTextureRange{.aspect = ETextureAspectFlags::COLOR, .mip_min = 1, .mip_count = 1},
+            .access = ERGAccessMode::Read,
+            .state = ETextureState::SHADER_RESOURCE,
+            .queue = EQueueType::Graphics
+        };
+        access_array_params->texture_count = 2;
+        access_array_params->buffers[0] = RGBufferView{
+            .handle = buffer,
+            .range = RGBufferRange{.offset = 48, .size = 8},
+            .access = ERGAccessMode::Read,
+            .state = EBufferState::SHADER_RESOURCE,
+            .queue = EQueueType::Compute,
+            .bindless = true
+        };
+        access_array_params->buffers[1] = RGBufferView{
+            .handle = buffer,
+            .range = RGBufferRange{.offset = 96, .size = 16},
+            .access = ERGAccessMode::Read,
+            .state = EBufferState::SHADER_RESOURCE,
+            .queue = EQueueType::Compute
+        };
+        access_array_params->buffer_count = 2;
     });
     graph.AddPass("WriteContractResources", write_params, ERGPassFlags::Graphics, [write_params](RHICommandList&, RGContext context) {
         (void)context.Graph();
@@ -154,47 +190,7 @@ int RunRenderGraphContractFoundationTest() {
         }
     });
 
-    auto* texture_read_params = graph.Alloc<RGTextureOnlyParams>();
-    texture_read_params->texture = RGTextureView{
-        .handle = texture,
-        .range = RGTextureRange{.aspect = ETextureAspectFlags::COLOR, .mip_min = 0, .mip_count = 1},
-        .access = ERGAccessMode::Read,
-        .state = ETextureState::SHADER_RESOURCE,
-        .queue = EQueueType::Graphics,
-        .bindless = true
-    };
-    graph.AddPass("ReadWrittenTexture", texture_read_params, ERGPassFlags::Compute, [](RHICommandList&, RGContext) {});
-
-    auto* texture_read_disjoint_params = graph.Alloc<RGTextureOnlyParams>();
-    texture_read_disjoint_params->texture = RGTextureView{
-        .handle = texture,
-        .range = RGTextureRange{.aspect = ETextureAspectFlags::COLOR, .mip_min = 1, .mip_count = 1},
-        .access = ERGAccessMode::Read,
-        .state = ETextureState::SHADER_RESOURCE,
-        .queue = EQueueType::Graphics
-    };
-    graph.AddPass("ReadDisjointTextureMip", texture_read_disjoint_params, ERGPassFlags::Compute, [](RHICommandList&, RGContext) {});
-
-    auto* buffer_read_params = graph.Alloc<RGBufferOnlyParams>();
-    buffer_read_params->buffer = RGBufferView{
-        .handle = buffer,
-        .range = RGBufferRange{.offset = 48, .size = 8},
-        .access = ERGAccessMode::Read,
-        .state = EBufferState::SHADER_RESOURCE,
-        .queue = EQueueType::Compute,
-        .bindless = true
-    };
-    graph.AddPass("ReadWrittenBufferRange", buffer_read_params, ERGPassFlags::Compute, [](RHICommandList&, RGContext) {});
-
-    auto* buffer_read_disjoint_params = graph.Alloc<RGBufferOnlyParams>();
-    buffer_read_disjoint_params->buffer = RGBufferView{
-        .handle = buffer,
-        .range = RGBufferRange{.offset = 96, .size = 16},
-        .access = ERGAccessMode::Read,
-        .state = EBufferState::SHADER_RESOURCE,
-        .queue = EQueueType::Compute
-    };
-    graph.AddPass("ReadDisjointBufferRange", buffer_read_disjoint_params, ERGPassFlags::Compute, [](RHICommandList&, RGContext) {});
+    graph.AddPass("ReadAccessArrays", access_array_params, ERGPassFlags::Compute, [](RHICommandList&, RGContext) {});
 
     graph.ExportTexture(texture, ETextureState::SHADER_RESOURCE, EQueueType::Graphics);
     graph.ExportBuffer(buffer, EBufferState::SHADER_RESOURCE, EQueueType::Compute);
@@ -206,8 +202,12 @@ int RunRenderGraphContractFoundationTest() {
         return 1;
     }
     if (!HasHazard(plan, 0, 1, texture, ERGResourceKind::Texture) ||
-        !HasHazard(plan, 0, 3, buffer, ERGResourceKind::Buffer)) {
+        !HasHazard(plan, 0, 1, buffer, ERGResourceKind::Buffer)) {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation compiled wrong hazard edges"));
+        return 1;
+    }
+    if (write_params->prepared_value != 42 || write_params->execution_count != 0) {
+        LOG_ERROR(MOER_TEXT("RenderGraph setup did not run before Compile or execution ran too early"));
         return 1;
     }
 

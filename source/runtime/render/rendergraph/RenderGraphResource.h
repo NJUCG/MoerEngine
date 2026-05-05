@@ -2,12 +2,12 @@
 
 #include "RenderGraphHandle.h"
 #include "RenderAPI.h"
-#include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 
 #include <cstdint>
+#include <span>
 #include <string>
 
 namespace Moer {
@@ -64,7 +64,7 @@ struct RGTextureAccess {
     RGTextureRange          range{};
     ERGAccessMode           mode{ERGAccessMode::Read};
     Render::ETextureState   state{Render::ETextureState::SHADER_RESOURCE};
-    Render::EQueueType      queue{Render::EQueueType::Graphics};
+    Render::EQueueType      queue{Render::EQueueType::Ignore};
     bool                    bindless{false};
 };
 
@@ -73,7 +73,7 @@ struct RGBufferAccess {
     RGBufferRange          range{};
     ERGAccessMode          mode{ERGAccessMode::Read};
     Render::EBufferState   state{Render::EBufferState::SHADER_RESOURCE};
-    Render::EQueueType     queue{Render::EQueueType::Graphics};
+    Render::EQueueType     queue{Render::EQueueType::Ignore};
     bool                   bindless{false};
 };
 
@@ -82,7 +82,7 @@ struct RGTextureView {
     RGTextureRange         range{};
     ERGAccessMode          access{ERGAccessMode::Read};
     Render::ETextureState  state{Render::ETextureState::SHADER_RESOURCE};
-    Render::EQueueType     queue{Render::EQueueType::Graphics};
+    Render::EQueueType     queue{Render::EQueueType::Ignore};
     bool                   bindless{false};
 
     RENDER_API RGTextureAccess ToAccess() const;
@@ -93,11 +93,14 @@ struct RGBufferView {
     RGBufferRange         range{};
     ERGAccessMode         access{ERGAccessMode::Read};
     Render::EBufferState  state{Render::EBufferState::SHADER_RESOURCE};
-    Render::EQueueType    queue{Render::EQueueType::Graphics};
+    Render::EQueueType    queue{Render::EQueueType::Ignore};
     bool                  bindless{false};
 
     RENDER_API RGBufferAccess ToAccess() const;
 };
+
+using RGTextureAccessArray = std::span<const RGTextureView>;
+using RGBufferAccessArray  = std::span<const RGBufferView>;
 
 struct RGResource {
     std::string       name{};

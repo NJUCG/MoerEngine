@@ -103,15 +103,22 @@ public:
     template<typename T>
     void AddPass(std::string_view name, T* parameters, ERGPassFlags flags, typename RGPass::Execute&& execute) {
         assert(parameters && "RenderGraph pass parameters must be graph-owned");
-        const uint32_t pass_index = AddPassInternal(
+        AddPassInternal(
             std::string(name),
             parameters,
             std::type_index(typeid(T)),
             static_cast<uint32_t>(sizeof(T)),
             flags,
+            [](const void* raw_parameters, RGParameterAccessCollector& collector) {
+                const auto& typed_parameters = *static_cast<const T*>(raw_parameters);
+                if constexpr (requires(const T& value, RGParameterAccessCollector& access_collector) {
+                                  value.DeclareRGAccess(access_collector);
+                              }) {
+                    typed_parameters.DeclareRGAccess(collector);
+                }
+            },
             std::move(execute)
         );
-        CollectParameterAccess(pass_index, *parameters);
     }
 
     void Compile();
@@ -142,29 +149,13 @@ private:
         std::type_index type,
         uint32_t size,
         ERGPassFlags flags,
+        RGPass::CollectAccess&& collect_access,
         RGPass::Execute&& execute
     );
-    template<typename T>
-    // Parameters optionally implement void DeclareRGAccess(RGParameterAccessCollector&) const.
-    // RenderGraph calls it during AddPass to extract resource dependencies before Compile.
-    // Types without DeclareRGAccess are valid and declare no graph resource dependencies.
-    void CollectParameterAccess(uint32_t pass_index, const T& parameters) {
-        // Passes without graph resources omit this method.
-        if constexpr (requires(const T& value, RGParameterAccessCollector& collector) {
-                          value.DeclareRGAccess(collector);
-                      }) {
-            RGParameterAccessCollector collector{};
-            parameters.DeclareRGAccess(collector);
-            for (const auto& texture_access : collector.Textures()) {
-                AddTextureAccess(pass_index, texture_access);
-            }
-            for (const auto& buffer_access : collector.Buffers()) {
-                AddBufferAccess(pass_index, buffer_access);
-            }
-        }
-    }
     void AddTextureAccess(uint32_t pass_index, const RGTextureAccess& access);
     void AddBufferAccess(uint32_t pass_index, const RGBufferAccess& access);
+    void RunSetupPasses();
+    void CollectPassAccesses();
     RGResource& CheckedResource(RenderGraphHandle handle);
     const RGResource& CheckedResource(RenderGraphHandle handle) const;
     RenderGraphHandle AddResource(RGResource&& resource);
@@ -174,6 +165,7 @@ private:
     RGFrameContext& m_frame_context;
     uint64_t        m_graph_sequence{0};
     Phase           m_phase{Phase::Setup};
+    bool            m_setup_executed{false};
     Moer::Array<RGResource>    m_resources{};
     Moer::Array<RGSetupPass>   m_setup_passes{};
     Moer::Array<RGPass>        m_passes{};

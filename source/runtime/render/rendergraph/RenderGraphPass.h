@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <functional>
 #include <string>
-#include <type_traits>
 #include <typeindex>
 
 namespace Moer {
@@ -62,9 +61,21 @@ public:
         texture_accesses.push_back(view.ToAccess());
     }
 
+    void AddTextures(RGTextureAccessArray views) {
+        for (const RGTextureView& view : views) {
+            AddTexture(view);
+        }
+    }
+
     // Called by parameter DeclareRGAccess() implementations to register one buffer dependency.
     void AddBuffer(const RGBufferView& view) {
         buffer_accesses.push_back(view.ToAccess());
+    }
+
+    void AddBuffers(RGBufferAccessArray views) {
+        for (const RGBufferView& view : views) {
+            AddBuffer(view);
+        }
     }
 
     const Moer::Array<RGTextureAccess>& Textures() const { return texture_accesses; }
@@ -77,6 +88,7 @@ private:
 
 struct RGPass {
     using Execute = std::function<void(RHICommandList& cmd_list, RGContext context)>;
+    using CollectAccess = std::function<void(const void* parameters, RGParameterAccessCollector& collector)>;
 
     std::string               name{};
     void*                     parameters{nullptr};
@@ -84,6 +96,7 @@ struct RGPass {
     uint32_t                  parameter_size{0};
     ERGPassFlags              flags{ERGPassFlags::None};
     Execute                   execute{};
+    CollectAccess             collect_access{};
     Moer::Array<RGTextureAccess> texture_accesses{};
     Moer::Array<RGBufferAccess>  buffer_accesses{};
 };

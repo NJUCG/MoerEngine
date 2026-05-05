@@ -16,7 +16,7 @@
   "hard_rules": [
     {
       "id": "HR-ASYNC-01",
-      "rule": "AddSetupPass may run graph-owned preparation work before pass execution only. Resource access is declared by graph-owned pass parameters. AddSetupPass must not create RHI resources, update bindless arrays, record commands, or call RHIExecutor."
+      "rule": "AddSetupPass may run graph-owned preparation work before Compile only. Resource access is declared by graph-owned pass parameters and parsed after setup. AddSetupPass must not create RHI resources, update bindless arrays, record commands, or call RHIExecutor."
     },
     {
       "id": "HR-ASYNC-02",
@@ -59,10 +59,10 @@
       "priority": "critical",
       "problem": "Graph construction can run in parallel only if setup code is pure declaration work and cannot touch live RHI submission state.",
       "what_must_be_true_after_this_checkpoint": [
-        "AddSetupPass tasks prepare graph-owned CPU data before pass execution and do not declare resource access.",
+        "AddSetupPass tasks prepare graph-owned CPU data before Compile and do not declare resource access.",
         "Setup output is immutable input to Compile.",
         "Invalid setup behavior is rejected by API shape or debug assertions.",
-        "Setup does not depend on RHI command list lifetime, and compile reads resource access from pass parameters."
+        "Setup does not depend on RHI command list lifetime, and compile reads resource access from pass parameters after setup has finished."
       ],
       "files_likely_affected": [
         "source/runtime/render/rendergraph/RenderGraph.h",

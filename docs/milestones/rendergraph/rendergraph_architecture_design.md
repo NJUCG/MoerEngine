@@ -28,16 +28,20 @@ Hard constraints:
 
 Selected public shape:
 
-`DeclareRGAccess` must be a `const` method so RenderGraph can extract dependencies without mutating frozen parameter data.
+`DeclareRGAccess` must be a `const` method so RenderGraph can extract dependencies without mutating frozen parameter data. Pass parameters mirror the existing `ShaderPipeline` argument shape: single `RGTextureView` / `RGBufferView` fields for fixed resources, and separate dynamic `RGTextureAccessArray` / `RGBufferAccessArray` spans for variable resource lists. Texture and buffer arrays stay separate so compile can build dense typed access arrays without a mixed variant walk.
 
 ```cpp
 struct MyPassParameters {
     RGTextureView input;
     RGTextureView output;
+    RGTextureAccessArray sampled_inputs;
+    RGBufferAccessArray readback_buffers;
 
     void DeclareRGAccess(RGParameterAccessCollector& collector) const {
         collector.AddTexture(input);
         collector.AddTexture(output);
+        collector.AddTextures(sampled_inputs);
+        collector.AddBuffers(readback_buffers);
     }
 };
 
@@ -206,20 +210,22 @@ Reason: pass declarations are the only source of dependency and queue planning d
 
 State:
 
-- `RGSetupPass`: name and setup lambda that runs before pass execution.
-- `RGPass`: parameter pointer, pass flags, execution lambda, parameter-declared accesses, scope membership.
+- `RGSetupPass`: name and setup lambda that runs before Compile.
+- `RGPass`: parameter pointer, pass flags, execution lambda, post-setup parameter access extractor, parameter-declared accesses, scope membership.
 - Access arrays are structure-of-arrays for fast compile scans.
 
 Boundary:
 
-- `AddSetupPass` stores CPU preparation work that RG schedules before all pass execution lambdas.
+- `AddSetupPass` stores CPU preparation work that RG runs before Compile.
 - `AddPass` stores parameter pointer, flags, and one execution lambda.
 - `AddPass` does not accept setup callbacks, resource declaration callbacks, or queue transfer callbacks.
 
 Leaf operations:
 
 - Convert pass flags to one execution domain: Graphics, Compute, Copy, or Raytracing.
-- Extract each access from graph-owned pass parameters as `{pass_id, resource_id, range, access_mode, state, queue_intent, bindless_flag}`.
+- Extract each access after setup from graph-owned pass parameters as `{pass_id, resource_id, range, access_mode, state, queue_intent, bindless_flag}`.
+- Accept both fixed single-resource access fields and dynamic typed access arrays; texture arrays and buffer arrays are parsed separately.
+- Require explicit queue intent on every declared access. Raytracing pass flags do not imply a default RHI queue.
 - Reject a pass with zero execution domain or multiple execution domains.
 - Reject execution lambda mutation of graph structure by exposing only `RHICommandList&` and read-only `RGContext`.
 
@@ -524,7 +530,7 @@ Goal: prove the selected API can move from pass declaration to GPU execution wit
 Tree:
 
 - CPU declaration layer owns graph-local data construction and parameter resource-view assignment.
-- Setup layer owns preparation tasks that must run before pass execution lambdas.
+- Setup layer owns preparation tasks that must run before Compile.
 - Compile layer owns dependencies, barriers, queues, allocator decisions, scopes, and submit shape.
 - RG record layer owns abstract `RHICommandList` command generation.
 - RHIExecutor layer owns preprocess, backend translate, native command-list allocation, submit, and completion.
@@ -536,11 +542,11 @@ Simulation:
 2. Pass code calls `graph.Alloc<T>()`. The object is constructed in the setup arena; the returned pointer is stable until graph teardown and is registered for validation dumps.
 3. Pass code fills CPU parameters directly. RG resource views stored in those parameters are the source of resource dependencies.
 4. Pass code declares graph-level GPU scopes with `RG_EVENT_SCOPE(graph, name, ...)`. The scope registry stores logical begin/end intent before command-list segmentation exists.
-5. `AddSetupPass` stores a preparation lambda. In normal mode all setup lambdas execute before any pass execution lambda; in single-step debug mode the relevant setup work executes before the current pass boundary.
-6. Resource access is extracted from graph-owned pass parameters through `DeclareRGAccess(RGParameterAccessCollector&)`. `RGSetupContext` does not declare resource dependencies.
-7. `AddPass(param, flags, execution_lambda)` stores one execution lambda, one pass domain, and the parameter-declared RG resource views. It does not store a setup lambda, queue transfer callback, platform command-list callback, or submit callback.
+5. `AddSetupPass` stores a preparation lambda. In normal mode all setup lambdas execute before Compile; in single-step debug mode the relevant setup work executes before the current pass boundary is compiled.
+6. Resource access is extracted after setup from graph-owned pass parameters through `DeclareRGAccess(RGParameterAccessCollector&)`. `RGSetupContext` does not declare resource dependencies.
+7. `AddPass(param, flags, execution_lambda)` stores one execution lambda, one pass domain, and a type-erased access extractor for post-setup parameter parsing. It does not store a setup lambda, queue transfer callback, platform command-list callback, or submit callback.
 8. `AddExternalPass(..., PlatformCommandList, ...)` stores a separate external node with declared native capability requirements. It is not an ordinary `AddPass` and never receives `RHICommandList&`.
-9. `Dispatch()` freezes setup data and starts compile. No execution lambda has recorded GPU commands yet.
+9. `Dispatch()` runs setup work, freezes setup data, and starts compile. No execution lambda has recorded GPU commands yet.
 10. Compile normalizes access ranges, validates imports and first use, builds hazard edges, maps scopes to pass intervals, plans queue segments, selects physical resources, and inserts alias barriers.
 11. `RGBarrierCompiler` queries `RGBarrierPolicy` for backend read/read compatibility, write/write ordering, layout transition, queue ownership, and alias requirements. The result is still an RG submit plan with RHI barrier commands, not native API commands.
 12. Compile builds immutable segment records: prefix barriers, pass ids, external callback command slots, suffix barriers, waits/signals, resolved resource tables, scope emissions, and export receipts.
@@ -567,11 +573,11 @@ Single-step variant:
 1. The renderer creates one `RGFrameContext` and one or more frame-local `RenderGraph` instances.
 2. Pass code allocates parameter objects with `graph.Alloc<T>()` and writes CPU values directly.
 3. Pass code declares graph-level GPU scopes with `RG_EVENT_SCOPE(graph, name, ...)`.
-4. Pass parameters store `RGTextureView` / `RGBufferView` entries with access mode, range, state, queue intent, and bindless usage.
-5. `AddSetupPass` lambdas store CPU preparation work that RG runs before all pass execution lambdas.
-6. `AddPass` stores parameter pointer, flags, one execution lambda, and access declarations extracted from parameters.
+4. Pass parameters store `RGTextureView` / `RGBufferView` entries or dynamic `RGTextureAccessArray` / `RGBufferAccessArray` spans with access mode, range, state, queue intent, and bindless usage.
+5. `AddSetupPass` lambdas store CPU preparation work that RG runs before Compile.
+6. `AddPass` stores parameter pointer, flags, one execution lambda, and a type-erased access extractor for post-setup parameter parsing.
 7. `AddExternalPass`, when used, stores parameter pointer, `PlatformCommandList` kind, declared native capabilities, and one platform-command-list callback.
-8. `Dispatch()` freezes setup data, runs setup work before pass execution, and compiles from parameter-declared accesses.
+8. `Dispatch()` runs setup work, freezes setup data, and compiles from post-setup parameter-declared accesses.
 9. Compile builds dependencies, barriers, lifetimes, queue segments, external nodes, scope emissions, and submit plan.
 10. Record tasks create RHICommandLists, emit compiled barriers/scopes, and call execution lambdas.
 11. Dispatcher joins record tasks and submits command lists to RHIExecutor.
@@ -638,7 +644,7 @@ Single-step variant:
 
 ### API-Specific Barrier Flow
 
-1. Setup records API-neutral access states: resource, range, read/write mode, logical state, pass domain, queue intent, preserve/discard mode.
+1. Post-setup parameter parsing records API-neutral access states: resource, range, read/write mode, logical state, pass domain, explicit queue intent, preserve/discard mode.
 2. Common compile builds hazards and candidate transitions without knowing Vulkan layouts or D3D12 barrier layouts.
 3. `RGBarrierPolicy` classifies read/read compatibility and write/write ordering for the active backend.
 4. Common compile removes no-op intents, merges compatible intents, and keeps only required ordering or layout transitions.

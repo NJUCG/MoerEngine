@@ -3,7 +3,6 @@
 #include "misc/Assert.h"
 #include "misc/Hash.h"
 
-#include <algorithm>
 #include <unordered_set>
 #include <utility>
 
@@ -54,6 +53,9 @@ Render::EQueueType RGPassQueue(ERGPassFlags flags) {
     }
     if (EnumHasAnyFlag(flags, ERGPassFlags::Copy)) {
         return Render::EQueueType::Copy;
+    }
+    if (EnumHasAnyFlag(flags, ERGPassFlags::Raytracing)) {
+        return Render::EQueueType::Ignore;
     }
     return Render::EQueueType::Graphics;
 }
@@ -161,6 +163,7 @@ uint32_t RenderGraph::AddPassInternal(
     std::type_index type,
     uint32_t size,
     ERGPassFlags flags,
+    RGPass::CollectAccess&& collect_access,
     RGPass::Execute&& execute
 ) {
     assert(m_phase == Phase::Setup);
@@ -172,6 +175,7 @@ uint32_t RenderGraph::AddPassInternal(
     pass.parameter_type = type;
     pass.parameter_size = size;
     pass.flags = flags;
+    pass.collect_access = std::move(collect_access);
     pass.execute = std::move(execute);
     return pass_index;
 }
@@ -180,6 +184,8 @@ void RenderGraph::Compile() {
     if (m_phase != Phase::Setup) {
         return;
     }
+    RunSetupPasses();
+    CollectPassAccesses();
     ValidateSetup();
     BuildHazards();
     m_phase = Phase::Compiled;
@@ -187,12 +193,6 @@ void RenderGraph::Compile() {
 
 void RenderGraph::Dispatch(RHICommandList* cmd_list) {
     Compile();
-    RGSetupContext setup_context(*this);
-    for (auto& setup_pass : m_setup_passes) {
-        if (setup_pass.execute) {
-            setup_pass.execute(setup_context);
-        }
-    }
     if (cmd_list) {
         RGContext context(*this);
         for (auto& pass : m_passes) {
@@ -229,6 +229,7 @@ void RenderGraph::Reset() {
     m_setup_passes.clear();
     m_passes.clear();
     m_compiled_plan.hazard_edges.clear();
+    m_setup_executed = false;
     m_phase = Phase::Setup;
 }
 
@@ -237,6 +238,7 @@ void RenderGraph::AddTextureAccess(uint32_t pass_index, const RGTextureAccess& a
     const auto& resource = CheckedResource(access.handle);
     assert(resource.kind == ERGResourceKind::Texture);
     assert(access.state != Render::ETextureState::UNDEFINED);
+    assert(access.queue != Render::EQueueType::Ignore);
     m_passes[pass_index].texture_accesses.push_back(access);
 }
 
@@ -245,7 +247,40 @@ void RenderGraph::AddBufferAccess(uint32_t pass_index, const RGBufferAccess& acc
     const auto& resource = CheckedResource(access.handle);
     assert(resource.kind == ERGResourceKind::Buffer);
     assert(access.state != Render::EBufferState::UNDEFINED);
+    assert(access.queue != Render::EQueueType::Ignore);
     m_passes[pass_index].buffer_accesses.push_back(access);
+}
+
+void RenderGraph::RunSetupPasses() {
+    if (m_setup_executed) {
+        return;
+    }
+    RGSetupContext setup_context(*this);
+    for (auto& setup_pass : m_setup_passes) {
+        if (setup_pass.execute) {
+            setup_pass.execute(setup_context);
+        }
+    }
+    m_setup_executed = true;
+}
+
+void RenderGraph::CollectPassAccesses() {
+    for (uint32_t pass_index = 0; pass_index < m_passes.size(); ++pass_index) {
+        auto& pass = m_passes[pass_index];
+        pass.texture_accesses.clear();
+        pass.buffer_accesses.clear();
+        if (!pass.collect_access) {
+            continue;
+        }
+        RGParameterAccessCollector collector{};
+        pass.collect_access(pass.parameters, collector);
+        for (const RGTextureAccess& access : collector.Textures()) {
+            AddTextureAccess(pass_index, access);
+        }
+        for (const RGBufferAccess& access : collector.Buffers()) {
+            AddBufferAccess(pass_index, access);
+        }
+    }
 }
 
 RGResource& RenderGraph::CheckedResource(RenderGraphHandle handle) {

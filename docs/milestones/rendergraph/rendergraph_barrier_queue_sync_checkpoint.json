@@ -10,7 +10,7 @@
   "goal": "Move complex transition planning and cross-queue synchronization out of RHI preprocessing and into a deterministic RenderGraph compiler that emits batched barriers, reordered barriers, and an RHIExecutor submit dependency plan.",
   "entry_gate": [
     "The contract replacement checkpoint has frozen the resource declaration model.",
-    "Pass queue intent is known before compile.",
+    "Pass queue intent is explicitly declared by post-setup parameter access parsing before compile.",
     "Imported resources have known initial state and exported resources declare final state."
   ],
   "hard_rules": [
@@ -62,6 +62,7 @@
       "problem": "The graph must derive read-after-write, write-after-read, write-after-write, queue ownership, and aliasing hazards without backend command scanning.",
       "what_must_be_true_after_this_checkpoint": [
         "Each pass records incoming and outgoing resource state requirements from declarations.",
+        "Declared accesses come from fixed single-resource views and separated dynamic texture/buffer access arrays parsed after setup.",
         "Hazard edges are generated between conflicting intervals only.",
         "Read-read edges are not generated unless queue ownership or aliasing requires them.",
         "Bindless resources contribute edges only through explicitly declared underlying resources."
