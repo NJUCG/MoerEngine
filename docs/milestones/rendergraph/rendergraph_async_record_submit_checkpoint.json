@@ -16,7 +16,7 @@
   "hard_rules": [
     {
       "id": "HR-ASYNC-01",
-      "rule": "AddSetupPass may run graph-owned preparation work before Compile only. Resource access is declared by graph-owned pass parameters and parsed after setup. AddSetupPass must not create RHI resources, update bindless arrays, record commands, or call RHIExecutor."
+      "rule": "AddSetupPass may run graph-owned preparation work before Compile only. Resource access is declared by macro/template graph-owned pass parameters and parsed after setup. AddSetupPass must not create RHI resources, update bindless arrays, record commands, or call RHIExecutor."
     },
     {
       "id": "HR-ASYNC-02",
@@ -97,6 +97,7 @@
       "what_must_be_true_after_this_checkpoint": [
         "Compile assigns record groups by queue, pass ordering layer, and dependency compatibility.",
         "Each record task receives one RHICommandList, graph-owned parameters, and a read-only resolved resource table.",
+        "Each record task owns a GraphEventRef that marks command-list recording complete.",
         "Record tasks may run in parallel when compiled hazards and queue order allow it.",
         "RHICommandList ownership is single-writer and returned to the graph only after the task completes.",
         "Record tasks never receive backend platform command-list handles; platform external work is represented as typed RHI commands for backend translate.",
@@ -116,8 +117,9 @@
       "priority": "critical",
       "problem": "Parallel record is not enough; the graph must also submit command lists in a shape that lets RHIExecutor translate in parallel and submit with correct GPU ordering.",
       "what_must_be_true_after_this_checkpoint": [
-        "RenderGraph emits an ordered submit plan containing CommandLists, queue identity, host translate prerequisites, GPU wait/signal requirements, and present/export tails.",
-        "The main thread hands the compiled command-list batch to RHIExecutor::Submit.",
+        "RenderGraph emits an ordered submit plan containing CommandLists, queue identity, host translate prerequisites, GPU wait/signal requirements, record-complete GraphEventRefs, and present/export tails.",
+        "The main thread hands compiled command-list batches to RHIExecutor::Submit in AddPass order and may overlap later RG record with earlier RHI preprocess/translate.",
+        "RHIExecutor treats each command-list GraphEventRef as a TaskGraph/TaskPipe dependency before preprocess and translate inspect command data.",
         "RHIExecutor retains ownership of translate tasks, submission runtime, interrupt completion, and Sync semantics.",
         "RenderGraph does not bypass RHIExecutor or duplicate its translate scheduler."
       ],

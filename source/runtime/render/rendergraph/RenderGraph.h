@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <typeindex>
 #include <utility>
 
@@ -56,11 +57,11 @@ public:
     RenderGraph& operator=(const RenderGraph&) = delete;
     ~RenderGraph();
 
-    template<typename T>
-        requires std::is_default_constructible_v<T>
-    T* Alloc() {
+    template<typename T, typename... Args>
+        requires std::is_constructible_v<T, Args...>
+    T* Alloc(Args&&... args) {
         assert(m_phase == Phase::Setup && "RenderGraph parameters must be allocated during setup");
-        auto* value = MoerNew(T)();
+        auto* value = MoerNew(T)(std::forward<Args>(args)...);
         m_allocations.push_back(RGAllocation{
             .ptr = value,
             .destroy = [](void* ptr) { MoerDelete(static_cast<T*>(ptr)); },
@@ -90,35 +91,68 @@ public:
     using SetupExecute = std::function<void(RGSetupContext& setup)>;
     void AddSetupPass(std::string_view name, SetupExecute&& setup);
 
-    template<typename T>
-    void AddPass(T* parameters, ERGPassFlags flags, typename RGPass::Execute&& execute) {
+    template<typename T, typename Execute>
+    void AddPass(T* parameters, ERGPassFlags flags, Execute&& execute) {
         AddPass(
             "UnnamedPass_" + std::to_string(m_passes.size()),
             parameters,
             flags,
-            std::move(execute)
+            std::forward<Execute>(execute)
         );
     }
 
-    template<typename T>
-    void AddPass(std::string_view name, T* parameters, ERGPassFlags flags, typename RGPass::Execute&& execute) {
+    template<typename T, typename Execute>
+    void AddPass(std::string_view name, T* parameters, ERGPassFlags flags, Execute&& execute) {
         assert(parameters && "RenderGraph pass parameters must be graph-owned");
-        AddPassInternal(
-            std::string(name),
-            parameters,
-            std::type_index(typeid(T)),
-            static_cast<uint32_t>(sizeof(T)),
-            flags,
-            [](const void* raw_parameters, RGParameterAccessCollector& collector) {
-                const auto& typed_parameters = *static_cast<const T*>(raw_parameters);
-                if constexpr (requires(const T& value, RGParameterAccessCollector& access_collector) {
-                                  value.DeclareRGAccess(access_collector);
-                              }) {
-                    typed_parameters.DeclareRGAccess(collector);
-                }
-            },
-            std::move(execute)
+        using ExecuteType = std::remove_cvref_t<Execute>;
+        constexpr bool is_parallel_execute = std::is_invocable_v<ExecuteType&, RHICommandList&, RGContext>;
+        constexpr bool is_serial_execute   = std::is_invocable_v<ExecuteType&, RGContext>;
+        static_assert(
+            is_parallel_execute != is_serial_execute,
+            "AddPass lambda must be either [](RHICommandList&, RGContext) for parallel work or [](RGContext) for serial work"
         );
+        if constexpr (is_parallel_execute) {
+            assert(RGPassHasQueue(flags) && "Parallel RenderGraph passes require one queue flag");
+        } else {
+            assert(flags == ERGPassFlags::None && "Serial RenderGraph passes must not declare queue flags");
+        }
+
+        auto collect_access = [](const void* raw_parameters, RGParameterAccessCollector& collector) {
+            const auto& typed_parameters = *static_cast<const T*>(raw_parameters);
+            if constexpr (requires(const T& value, RGParameterAccessCollector& access_collector) {
+                              value.DeclareRGAccess(access_collector);
+                          }) {
+                typed_parameters.DeclareRGAccess(collector);
+            }
+        };
+
+        if constexpr (is_parallel_execute) {
+            RGPass::ParallelExecute parallel_execute = std::forward<Execute>(execute);
+            AddPassInternal(
+                std::string(name),
+                parameters,
+                std::type_index(typeid(T)),
+                static_cast<uint32_t>(sizeof(T)),
+                flags,
+                ERGPassExecutionMode::Parallel,
+                std::move(collect_access),
+                std::move(parallel_execute),
+                {}
+            );
+        } else {
+            RGPass::SerialExecute serial_execute = std::forward<Execute>(execute);
+            AddPassInternal(
+                std::string(name),
+                parameters,
+                std::type_index(typeid(T)),
+                static_cast<uint32_t>(sizeof(T)),
+                flags,
+                ERGPassExecutionMode::Serial,
+                std::move(collect_access),
+                {},
+                std::move(serial_execute)
+            );
+        }
     }
 
     void Compile();
@@ -149,8 +183,10 @@ private:
         std::type_index type,
         uint32_t size,
         ERGPassFlags flags,
+        ERGPassExecutionMode execution_mode,
         RGPass::CollectAccess&& collect_access,
-        RGPass::Execute&& execute
+        RGPass::ParallelExecute&& parallel_execute,
+        RGPass::SerialExecute&& serial_execute
     );
     void AddTextureAccess(uint32_t pass_index, const RGTextureAccess& access);
     void AddBufferAccess(uint32_t pass_index, const RGBufferAccess& access);

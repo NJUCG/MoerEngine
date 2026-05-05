@@ -92,8 +92,8 @@
       "priority": "critical",
       "problem": "Barrier correctness cannot be inferred from arbitrary RHICommandList commands without rebuilding the same complex backend tracker. RenderGraph needs explicit pass declarations.",
       "what_must_be_true_after_this_checkpoint": [
-        "Texture accesses are declared by pass parameters using fixed RGTextureView fields or separated RGTextureAccessArray spans with handle, mip range, array range, aspect, read/write mode, usage state, and queue intent.",
-        "Buffer accesses are declared by pass parameters using fixed RGBufferView fields or separated RGBufferAccessArray spans with handle, byte range, read/write mode, usage state, and queue intent.",
+        "Texture accesses are declared by pass parameters using macro-declared fixed RGTextureView fields or graph-allocated dynamic RGTextureAccessArray objects with handle, mip range, array range, aspect, read/write mode, usage state, and queue intent.",
+        "Buffer accesses are declared by pass parameters using macro-declared fixed RGBufferView fields or graph-allocated dynamic RGBufferAccessArray objects with handle, byte range, read/write mode, usage state, and queue intent.",
         "External resources are imported with known initial state and exported with required final state.",
         "Bindless resource usage is explicit through the same access declarations."
       ],
@@ -111,12 +111,12 @@
       "priority": "critical",
       "problem": "RenderGraph must compile queue placement and synchronization. If pass lambdas choose queues implicitly during record, the graph cannot own cross-queue correctness.",
       "what_must_be_true_after_this_checkpoint": [
-        "Each pass has one declared execution domain: Graphics, Compute, Copy, or Raytracing.",
-        "AddPass accepts graph-owned parameters, pass flags, and exactly one execution lambda with the shape [](RHICommandList& cmd_list, RGContext context) { ... }.",
+        "Each parallel pass has one declared queue flag: Graphics, Compute, or Copy. Raytracing is not a RenderGraph pass flag; users choose the queue explicitly.",
+        "AddPass accepts graph-owned parameters, pass flags, and exactly one execution lambda. Lambda arguments statically select parallel [](RHICommandList& cmd_list, RGContext context) or serial [](RGContext context) execution.",
         "The AddPass lambda records abstract RHI commands only and never receives a platform command-list handle.",
         "Preparation work is registered through AddSetupPass and runs before Compile instead of being used for resource access declaration.",
         "Copy passes compile to CopyScope or executor-derived copy submit work; users do not manually author queue transfers.",
-        "Queue intent is part of compile input and is frozen before command recording starts; Raytracing pass flags require explicit declared queue intent instead of mapping to a default RHI queue.",
+        "Queue intent is part of compile input and is frozen before command recording starts; serial passes use ERGPassFlags::None and declare no GPU resource access.",
         "Execution lambdas receive only graph-owned parameters, resolved context data, and the RHICommandList selected by the compiled plan."
       ],
       "files_likely_affected": [
@@ -231,7 +231,7 @@
   ],
   "stage_exit_gate": [
     "The new RenderGraph boundary is explicit enough to implement without preserving the old skeleton.",
-    "Parameter-owned RG resource view declarations cover fixed single resources, separated dynamic texture/buffer access arrays, subresource, buffer range, bindless, explicit queue intent, imports, and exports.",
+    "Parameter-owned RG resource view declarations cover macro-declared fixed single resources, graph-allocated dynamic texture/buffer access arrays, subresource, buffer range, bindless, explicit queue intent, imports, and exports.",
     "The public API shape is graph.Alloc<T>(), RG_EVENT_SCOPE(...), AddSetupPass(...), AddPass(param, flags, execution_lambda), and Dispatch().",
     "External pass and raw RHI/RenderGraph interop boundaries are explicit before implementation starts.",
     "Raw RHI simplification rules are frozen before backend tracker cleanup starts.",
@@ -243,7 +243,7 @@
   ],
   "implementation_notes": [
     "Implemented a latest-only RenderGraph construction surface with graph.Alloc<T>(), AddSetupPass(), AddPass(), Compile(), and Dispatch().",
-    "Implemented graph-owned parameter lifetime tracking, parameter-owned explicit texture/buffer access declarations including fixed single views and separated dynamic access arrays, import/export metadata, RGFrameContext receipts, and deterministic hazard-edge compilation.",
+    "Implemented graph-owned parameter lifetime tracking, macro/template parameter-owned explicit texture/buffer access declarations including fixed single views and graph-allocated dynamic access arrays, serial/parallel AddPass lambda selection, import/export metadata, RGFrameContext receipts, and deterministic hazard-edge compilation.",
     "Added RenderGraphContractFoundation to TestRHITranslate and required its structured marker in the Windows validation scripts.",
     "Left barrier lowering, CopyScope handoff emission, RHIExecutor submit plans, platform external pass callbacks, GPU trace scope compilation, external pass interop, and focused RHI validation as unfinished checkpoints."
   ]

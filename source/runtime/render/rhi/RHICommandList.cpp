@@ -283,6 +283,7 @@ CmdSubmit CommandList::Submit() {
             submit_delete_resources
         )
     );
+    submit.record_complete_event = std::move(record_complete_event);
     submit.translate_execution_class = translate_execution_class;
     submit.b_tick_profiling   = submit_tick_profiling;
     submit.b_delete_resources = submit_delete_resources;
@@ -292,6 +293,7 @@ CmdSubmit CommandList::Submit() {
     submit_signal_events.clear();
     query_tokens.clear();
     gpu_events.clear();
+    record_complete_event = nullptr;
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
     submit_tick_profiling   = false;
     submit_delete_resources = false;
@@ -758,6 +760,12 @@ CommandList& CommandList::Signal(Fence* _fence, uint64 _signal_value) {
 CommandList& CommandList::SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class) {
     EnsureNoActiveCopyScope("CommandList::SetTranslateExecutionClass");
     translate_execution_class = _execution_class;
+    return *this;
+}
+
+CommandList& CommandList::SetRecordCompleteEvent(GraphEventRef _event) {
+    EnsureNoActiveCopyScope("CommandList::SetRecordCompleteEvent");
+    record_complete_event = std::move(_event);
     return *this;
 }
 

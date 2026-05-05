@@ -1426,9 +1426,11 @@ int RunCommandListQueueBindingTest() {
 
 int RunTranslateExecutionClassRoundTripTest() {
     const RHITranslateFence translate_fence = RHITranslateFence::Create();
+    GraphEventRef record_complete_event = GraphEvent::CreateGraphEvent();
 
     CommandList cmd(EQueueType::Graphics);
     cmd.SetTranslateExecutionClass(ERHITranslateExecutionClass::SerialControl);
+    cmd.SetRecordCompleteEvent(record_complete_event);
     cmd.LambdaCommand([] {});
     cmd.TranslateFence(translate_fence);
 
@@ -1453,9 +1455,42 @@ int RunTranslateExecutionClassRoundTripTest() {
         LOG_ERROR(MOER_TEXT("Translate fence event did not round-trip through CommandList::Submit"));
         return 1;
     }
+    if (submit.record_complete_event.Get() != record_complete_event.Get()) {
+        LOG_ERROR(MOER_TEXT("Record-complete event did not round-trip through CommandList::Submit"));
+        return 1;
+    }
 
+    record_complete_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
     translate_fence.event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
     LOG_INFO(MOER_TEXT("Translate execution control round-trip test passed"));
+    return 0;
+}
+
+int RunRecordCompleteDependencyTest() {
+    std::atomic_uint32_t lambda_counter{0};
+    GraphEventRef record_complete_event = GraphEvent::CreateGraphEvent();
+
+    CommandList cmd(EQueueType::Graphics);
+    cmd.SetRecordCompleteEvent(record_complete_event);
+    cmd.LambdaCommand([&lambda_counter]() {
+        lambda_counter.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    Array<CommandList> frame_cmds{};
+    frame_cmds.emplace_back(std::move(cmd));
+
+    LambdaTask::Dispatch([record_complete_event]() {
+        record_complete_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+    });
+    RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (lambda_counter.load(std::memory_order_relaxed) != 1u) {
+        LOG_ERROR(MOER_TEXT("Record-complete dependency command did not translate exactly once"));
+        return 1;
+    }
+
+    LOG_INFO(MOER_TEXT("Record-complete dependency test passed"));
     return 0;
 }
 
@@ -2614,6 +2649,11 @@ int main(int argc, char** argv) {
     );
     if (translate_metadata_ret != 0) {
         return shutdown_and_return(translate_metadata_ret);
+    }
+
+    const int record_complete_ret = RunNamedTestCase("RecordCompleteDependency", RunRecordCompleteDependencyTest);
+    if (record_complete_ret != 0) {
+        return shutdown_and_return(record_complete_ret);
     }
 
     const int translate_lambda_ret =

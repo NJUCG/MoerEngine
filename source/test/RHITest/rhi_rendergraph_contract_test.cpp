@@ -1,5 +1,3 @@
-#include <array>
-
 #include "log/LogSystem.h"
 #include "rendergraph/RenderGraph.h"
 
@@ -7,27 +5,23 @@ namespace Moer::Render::Tests {
 namespace {
 
 struct RGExecutionParams {
-    RGTextureView texture;
-    RGBufferView  buffer;
+    DEFINE_RG_TEXTURE_ACCESS(texture);
+    DEFINE_RG_BUFFER_ACCESS(buffer);
     uint32_t      prepared_value{0};
     uint32_t      execution_count{0};
 
-    void DeclareRGAccess(RGParameterAccessCollector& collector) const {
-        collector.AddTexture(texture);
-        collector.AddBuffer(buffer);
-    }
+    DEFINE_RG_PARAMETER_ACCESS(texture, buffer);
 };
 
 struct RGAccessArrayParams {
-    std::array<RGTextureView, 2> textures{};
-    std::array<RGBufferView, 2>  buffers{};
-    uint32_t                    texture_count{0};
-    uint32_t                    buffer_count{0};
+    DEFINE_RG_TEXTURE_ACCESS_ARRAY(textures);
+    DEFINE_RG_BUFFER_ACCESS_ARRAY(buffers);
 
-    void DeclareRGAccess(RGParameterAccessCollector& collector) const {
-        collector.AddTextures(RGTextureAccessArray(textures.data(), texture_count));
-        collector.AddBuffers(RGBufferAccessArray(buffers.data(), buffer_count));
-    }
+    DEFINE_RG_PARAMETER_ACCESS(textures, buffers);
+};
+
+struct RGSerialParams {
+    uint32_t execution_count{0};
 };
 
 bool HasHazard(
@@ -47,30 +41,23 @@ bool HasHazard(
 }
 
 bool ValidatePassDomainHelpers() {
-    if (!RGPassHasSingleExecutionDomain(ERGPassFlags::Graphics) ||
-        !RGPassHasSingleExecutionDomain(ERGPassFlags::Compute) ||
-        !RGPassHasSingleExecutionDomain(ERGPassFlags::Copy) ||
-        !RGPassHasSingleExecutionDomain(ERGPassFlags::Raytracing)) {
-        LOG_ERROR(MOER_TEXT("Single RenderGraph pass domain was rejected"));
+    if (!RGPassHasValidQueueFlags(ERGPassFlags::None) ||
+        !RGPassHasQueue(ERGPassFlags::Graphics) ||
+        !RGPassHasQueue(ERGPassFlags::Compute) ||
+        !RGPassHasQueue(ERGPassFlags::Copy)) {
+        LOG_ERROR(MOER_TEXT("RenderGraph pass queue flags were rejected"));
         return false;
     }
-    if (RGPassHasSingleExecutionDomain(ERGPassFlags::None) ||
-        RGPassHasSingleExecutionDomain(ERGPassFlags::Graphics | ERGPassFlags::Compute)) {
-        LOG_ERROR(MOER_TEXT("Invalid RenderGraph pass domain was accepted"));
+    if (RGPassHasQueue(ERGPassFlags::None) ||
+        RGPassHasValidQueueFlags(ERGPassFlags::Graphics | ERGPassFlags::Compute)) {
+        LOG_ERROR(MOER_TEXT("Invalid RenderGraph pass queue flags were accepted"));
         return false;
     }
-    if (RGPassQueue(ERGPassFlags::Graphics) != EQueueType::Graphics ||
+    if (RGPassQueue(ERGPassFlags::None) != EQueueType::Ignore ||
+        RGPassQueue(ERGPassFlags::Graphics) != EQueueType::Graphics ||
         RGPassQueue(ERGPassFlags::Compute) != EQueueType::Compute ||
         RGPassQueue(ERGPassFlags::Copy) != EQueueType::Copy) {
-        LOG_ERROR(MOER_TEXT("RenderGraph pass domain mapped to the wrong queue"));
-        return false;
-    }
-    if (RGPassQueue(ERGPassFlags::Raytracing) != EQueueType::Ignore) {
-        LOG_ERROR(MOER_TEXT("RenderGraph raytracing domain must require explicit queue intent"));
-        return false;
-    }
-    if (RGPassType(ERGPassFlags::Raytracing) != EPassType::Raytracing) {
-        LOG_ERROR(MOER_TEXT("RenderGraph raytracing domain mapped to the wrong pass type"));
+        LOG_ERROR(MOER_TEXT("RenderGraph pass queue flags mapped to the wrong queue"));
         return false;
     }
     return true;
@@ -146,48 +133,52 @@ int RunRenderGraphContractFoundationTest() {
     };
 
     auto* access_array_params = graph.Alloc<RGAccessArrayParams>();
+    auto* serial_params = graph.Alloc<RGSerialParams>();
 
     graph.AddSetupPass("PrepareContractFoundation", [write_params, access_array_params, texture, buffer](RGSetupContext& setup) {
-        (void)setup.Graph();
         write_params->prepared_value = 42;
-        access_array_params->textures[0] = RGTextureView{
+        access_array_params->textures = setup.Graph().Alloc<RGTextureAccessArray>(2);
+        access_array_params->buffers = setup.Graph().Alloc<RGBufferAccessArray>(2);
+
+        access_array_params->textures->AddAccess(RGTextureView{
             .handle = texture,
             .range = RGTextureRange{.aspect = ETextureAspectFlags::COLOR, .mip_min = 0, .mip_count = 1},
             .access = ERGAccessMode::Read,
             .state = ETextureState::SHADER_RESOURCE,
             .queue = EQueueType::Graphics,
             .bindless = true
-        };
-        access_array_params->textures[1] = RGTextureView{
+        });
+        access_array_params->textures->AddAccess(RGTextureView{
             .handle = texture,
             .range = RGTextureRange{.aspect = ETextureAspectFlags::COLOR, .mip_min = 1, .mip_count = 1},
             .access = ERGAccessMode::Read,
-            .state = ETextureState::SHADER_RESOURCE,
             .queue = EQueueType::Graphics
-        };
-        access_array_params->texture_count = 2;
-        access_array_params->buffers[0] = RGBufferView{
+        }, ETextureState::SHADER_RESOURCE);
+        access_array_params->buffers->AddAccess(RGBufferView{
             .handle = buffer,
             .range = RGBufferRange{.offset = 48, .size = 8},
             .access = ERGAccessMode::Read,
             .state = EBufferState::SHADER_RESOURCE,
             .queue = EQueueType::Compute,
             .bindless = true
-        };
-        access_array_params->buffers[1] = RGBufferView{
+        });
+        access_array_params->buffers->AddAccess(RGBufferView{
             .handle = buffer,
             .range = RGBufferRange{.offset = 96, .size = 16},
             .access = ERGAccessMode::Read,
-            .state = EBufferState::SHADER_RESOURCE,
             .queue = EQueueType::Compute
-        };
-        access_array_params->buffer_count = 2;
+        }, EBufferState::SHADER_RESOURCE);
     });
     graph.AddPass("WriteContractResources", write_params, ERGPassFlags::Graphics, [write_params](RHICommandList&, RGContext context) {
         (void)context.Graph();
         if (write_params->prepared_value == 42) {
             ++write_params->execution_count;
         }
+    });
+
+    graph.AddPass("SerialContractFence", serial_params, ERGPassFlags::None, [serial_params](RGContext context) {
+        (void)context.Graph();
+        ++serial_params->execution_count;
     });
 
     graph.AddPass("ReadAccessArrays", access_array_params, ERGPassFlags::Compute, [](RHICommandList&, RGContext) {});
@@ -201,19 +192,21 @@ int RunRenderGraphContractFoundationTest() {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation expected 2 hazards, got {}"), plan.hazard_edges.size());
         return 1;
     }
-    if (!HasHazard(plan, 0, 1, texture, ERGResourceKind::Texture) ||
-        !HasHazard(plan, 0, 1, buffer, ERGResourceKind::Buffer)) {
+    if (!HasHazard(plan, 0, 2, texture, ERGResourceKind::Texture) ||
+        !HasHazard(plan, 0, 2, buffer, ERGResourceKind::Buffer)) {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation compiled wrong hazard edges"));
         return 1;
     }
-    if (write_params->prepared_value != 42 || write_params->execution_count != 0) {
+    if (write_params->prepared_value != 42 || write_params->execution_count != 0 ||
+        serial_params->execution_count != 0) {
         LOG_ERROR(MOER_TEXT("RenderGraph setup did not run before Compile or execution ran too early"));
         return 1;
     }
 
     RHICommandList command_list(EQueueType::Graphics);
     graph.Dispatch(&command_list);
-    if (write_params->prepared_value != 42 || write_params->execution_count != 1) {
+    if (write_params->prepared_value != 42 || write_params->execution_count != 1 ||
+        serial_params->execution_count != 1) {
         LOG_ERROR(MOER_TEXT("RenderGraph setup or execution lambda order is invalid"));
         return 1;
     }

@@ -463,6 +463,7 @@ struct CmdSubmit {
     Array<SignalEvent> signal_events;
     Array<QueryToken>  query_tokens;
     Array<GPUEvent>    gpu_events;
+    GraphEventRef      record_complete_event{nullptr};
     ERHITranslateExecutionClass translate_execution_class{ERHITranslateExecutionClass::Parallel};
     bool               b_sync{false}; //force sync queue timeline
     bool               b_tick_profiling{false};
@@ -505,6 +506,7 @@ struct CmdSubmit {
         signal_events      = std::move(_other.signal_events);
         query_tokens       = std::move(_other.query_tokens);
         gpu_events         = std::move(_other.gpu_events);
+        record_complete_event = std::move(_other.record_complete_event);
         cached_args        = std::move(_other.cached_args);
         segments           = std::move(_other.segments);
         translate_execution_class = _other.translate_execution_class;
@@ -520,6 +522,7 @@ struct CmdSubmit {
         signal_events      = std::move(_other.signal_events);
         query_tokens       = std::move(_other.query_tokens);
         gpu_events         = std::move(_other.gpu_events);
+        record_complete_event = std::move(_other.record_complete_event);
         cached_args        = std::move(_other.cached_args);
         segments           = std::move(_other.segments);
         translate_execution_class = _other.translate_execution_class;
@@ -1596,6 +1599,7 @@ public:
     RENDER_API CommandList& Wait(WaitEvent _event);
     RENDER_API CommandList& Signal(Fence* _fence, uint64 _signal_value);
     RENDER_API CommandList& SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class);
+    RENDER_API CommandList& SetRecordCompleteEvent(GraphEventRef _event);
     RENDER_API CommandList& DeleteResources();
     RENDER_API CommandList& TickProfiling();
     RENDER_API CommandList& TickFrame();
@@ -1705,6 +1709,7 @@ private:
     Array<SignalEvent>           submit_signal_events;
     TCachedArgArray              cached_args;
     Array<QueryToken>            query_tokens;
+    GraphEventRef                record_complete_event{nullptr};
     ERHITranslateExecutionClass  translate_execution_class{ERHITranslateExecutionClass::Parallel};
     bool                         submit_tick_profiling{false};
     bool                         submit_delete_resources{false};

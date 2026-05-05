@@ -37,39 +37,39 @@ void RGFrameContext::Reset(uint64_t frame_sequence) {
     m_receipts.clear();
 }
 
-bool RGPassHasSingleExecutionDomain(ERGPassFlags flags) {
+bool RGPassHasQueue(ERGPassFlags flags) {
     uint32_t count = 0;
     count += EnumHasAnyFlag(flags, ERGPassFlags::Graphics) ? 1 : 0;
     count += EnumHasAnyFlag(flags, ERGPassFlags::Compute) ? 1 : 0;
     count += EnumHasAnyFlag(flags, ERGPassFlags::Copy) ? 1 : 0;
-    count += EnumHasAnyFlag(flags, ERGPassFlags::Raytracing) ? 1 : 0;
     return count == 1;
 }
 
+bool RGPassHasValidQueueFlags(ERGPassFlags flags) {
+    return flags == ERGPassFlags::None || RGPassHasQueue(flags);
+}
+
 Render::EQueueType RGPassQueue(ERGPassFlags flags) {
-    assert(RGPassHasSingleExecutionDomain(flags));
+    assert(RGPassHasValidQueueFlags(flags));
+    if (flags == ERGPassFlags::None) {
+        return Render::EQueueType::Ignore;
+    }
     if (EnumHasAnyFlag(flags, ERGPassFlags::Compute)) {
         return Render::EQueueType::Compute;
     }
     if (EnumHasAnyFlag(flags, ERGPassFlags::Copy)) {
         return Render::EQueueType::Copy;
     }
-    if (EnumHasAnyFlag(flags, ERGPassFlags::Raytracing)) {
-        return Render::EQueueType::Ignore;
-    }
     return Render::EQueueType::Graphics;
 }
 
 EPassType RGPassType(ERGPassFlags flags) {
-    assert(RGPassHasSingleExecutionDomain(flags));
+    assert(RGPassHasQueue(flags));
     if (EnumHasAnyFlag(flags, ERGPassFlags::Compute)) {
         return EPassType::Compute;
     }
     if (EnumHasAnyFlag(flags, ERGPassFlags::Copy)) {
         return EPassType::Copy;
-    }
-    if (EnumHasAnyFlag(flags, ERGPassFlags::Raytracing)) {
-        return EPassType::Raytracing;
     }
     return EPassType::Graphics;
 }
@@ -163,11 +163,17 @@ uint32_t RenderGraph::AddPassInternal(
     std::type_index type,
     uint32_t size,
     ERGPassFlags flags,
+    ERGPassExecutionMode execution_mode,
     RGPass::CollectAccess&& collect_access,
-    RGPass::Execute&& execute
+    RGPass::ParallelExecute&& parallel_execute,
+    RGPass::SerialExecute&& serial_execute
 ) {
     assert(m_phase == Phase::Setup);
-    assert(RGPassHasSingleExecutionDomain(flags));
+    assert(RGPassHasValidQueueFlags(flags));
+    assert(
+        (execution_mode == ERGPassExecutionMode::Parallel && RGPassHasQueue(flags)) ||
+        (execution_mode == ERGPassExecutionMode::Serial && flags == ERGPassFlags::None)
+    );
     const uint32_t pass_index = static_cast<uint32_t>(m_passes.size());
     auto& pass = m_passes.emplace_back();
     pass.name = std::move(name);
@@ -175,8 +181,10 @@ uint32_t RenderGraph::AddPassInternal(
     pass.parameter_type = type;
     pass.parameter_size = size;
     pass.flags = flags;
+    pass.execution_mode = execution_mode;
     pass.collect_access = std::move(collect_access);
-    pass.execute = std::move(execute);
+    pass.parallel_execute = std::move(parallel_execute);
+    pass.serial_execute = std::move(serial_execute);
     return pass_index;
 }
 
@@ -193,10 +201,14 @@ void RenderGraph::Compile() {
 
 void RenderGraph::Dispatch(RHICommandList* cmd_list) {
     Compile();
-    if (cmd_list) {
-        RGContext context(*this);
-        for (auto& pass : m_passes) {
-            pass.execute(*cmd_list, context);
+    RGContext context(*this);
+    for (auto& pass : m_passes) {
+        if (pass.execution_mode == ERGPassExecutionMode::Serial) {
+            pass.serial_execute(context);
+            continue;
+        }
+        if (cmd_list) {
+            pass.parallel_execute(*cmd_list, context);
         }
     }
 
@@ -308,8 +320,15 @@ void RenderGraph::ValidateSetup() const {
     Moer::Array<bool> has_buffer_write_before_pass(m_resources.size(), false);
 
     for (const auto& pass : m_passes) {
-        assert(pass.execute && "Every RGPass must have one AddPass execution lambda");
-        assert(RGPassHasSingleExecutionDomain(pass.flags));
+        assert(RGPassHasValidQueueFlags(pass.flags));
+        if (pass.execution_mode == ERGPassExecutionMode::Serial) {
+            assert(pass.serial_execute && "Serial RGPass must have one serial execution lambda");
+            assert(pass.flags == ERGPassFlags::None);
+            assert(pass.texture_accesses.empty() && pass.buffer_accesses.empty());
+        } else {
+            assert(pass.parallel_execute && "Parallel RGPass must have one parallel execution lambda");
+            assert(RGPassHasQueue(pass.flags));
+        }
         for (const auto& access : pass.texture_accesses) {
             const auto& resource = CheckedResource(access.handle);
             assert(resource.kind == ERGResourceKind::Texture);

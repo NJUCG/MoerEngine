@@ -70,7 +70,8 @@
       "problem": "The new parameter-driven RenderGraph surface needs a focused test before later barrier, queue, external pass, and debug checkpoints build on top of it.",
       "what_must_be_true_after_this_checkpoint": [
         "TestRHITranslate includes RenderGraphContractFoundation as a focused RenderGraph contract test case.",
-        "The test validates single pass-domain helpers, explicit raytracing queue-intent requirement, canonical range overlap rules, graph-owned parameter access collection for fixed views and separated dynamic access arrays, deterministic hazard compilation, setup-before-compile ordering, and RGFrameContext export receipts.",
+        "The test validates queue-only pass flags, serial None-flag passes, canonical range overlap rules, macro/template graph-owned parameter access collection for fixed views and graph-allocated dynamic access arrays, deterministic hazard compilation, setup-before-compile ordering, and RGFrameContext export receipts.",
+        "TestRHITranslate includes RecordCompleteDependency to validate command-list record-complete GraphEventRef propagation into RHIExecutor preprocess/translate dependencies.",
         "The test is validated through testscripts/windows/test_rhi_translate.ps1 and testscripts/windows/test_all.ps1, both of which require the RenderGraphContractFoundation marker."
       ],
       "files_likely_affected": [

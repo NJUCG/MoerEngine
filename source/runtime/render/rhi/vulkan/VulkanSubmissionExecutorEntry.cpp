@@ -10,6 +10,20 @@ struct PendingPreprocessBatch {
     uint64            trace_frame{0};
 };
 
+static GraphEventArray CollectRecordCompleteDependencies(const Array<ExecutorOp>& ops) {
+    GraphEventArray dependencies{};
+    for (const ExecutorOp& op : ops) {
+        const auto* submit_op = std::get_if<ExecutorSubmitOp>(&op);
+        if (submit_op == nullptr) {
+            continue;
+        }
+        for (const CmdSubmit& submit : submit_op->submits) {
+            AppendUniqueDependency(dependencies, submit.record_complete_event);
+        }
+    }
+    return dependencies;
+}
+
 static GraphEventRef CreateCompletedExecutorEvent() {
     GraphEventRef event = GraphEvent::CreateGraphEvent();
     event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
@@ -32,6 +46,7 @@ public:
         }
 
         auto request         = std::make_shared<PendingPreprocessBatch>();
+        GraphEventArray record_complete_dependencies = CollectRecordCompleteDependencies(ops);
         request->ops         = std::move(ops);
         request->op_seq_base = op_seq_base;
         request->trace_frame = trace_frame;
@@ -63,7 +78,7 @@ public:
                     submission_runtime
                 );
             },
-            {},
+            std::move(record_complete_dependencies),
             EThread::AnyThread_NormalPri
         );
     }

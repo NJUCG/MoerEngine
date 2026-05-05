@@ -99,8 +99,59 @@ struct RGBufferView {
     RENDER_API RGBufferAccess ToAccess() const;
 };
 
-using RGTextureAccessArray = std::span<const RGTextureView>;
-using RGBufferAccessArray  = std::span<const RGBufferView>;
+class RGTextureAccessArray {
+public:
+    explicit RGTextureAccessArray(uint32_t capacity = 0) {
+        m_views.reserve(capacity);
+    }
+
+    void AddAccess(const RGTextureView& view) {
+        m_views.push_back(view);
+    }
+
+    void AddAccess(RGTextureView view, Render::ETextureState state) {
+        view.state = state;
+        AddAccess(view);
+    }
+
+    std::span<const RGTextureView> Views() const {
+        return std::span<const RGTextureView>(m_views.data(), m_views.size());
+    }
+
+    uint32_t Size() const {
+        return static_cast<uint32_t>(m_views.size());
+    }
+
+private:
+    Moer::Array<RGTextureView> m_views{};
+};
+
+class RGBufferAccessArray {
+public:
+    explicit RGBufferAccessArray(uint32_t capacity = 0) {
+        m_views.reserve(capacity);
+    }
+
+    void AddAccess(const RGBufferView& view) {
+        m_views.push_back(view);
+    }
+
+    void AddAccess(RGBufferView view, Render::EBufferState state) {
+        view.state = state;
+        AddAccess(view);
+    }
+
+    std::span<const RGBufferView> Views() const {
+        return std::span<const RGBufferView>(m_views.data(), m_views.size());
+    }
+
+    uint32_t Size() const {
+        return static_cast<uint32_t>(m_views.size());
+    }
+
+private:
+    Moer::Array<RGBufferView> m_views{};
+};
 
 struct RGResource {
     std::string       name{};

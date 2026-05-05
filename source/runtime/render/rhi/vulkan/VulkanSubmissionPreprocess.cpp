@@ -1478,6 +1478,10 @@ static PreprocessTranslateStore PreprocessFrameOps(
 
                     AppendUniqueDependency(
                         translate_info.task_dependencies,
+                        submit.record_complete_event
+                    );
+                    AppendUniqueDependency(
+                        translate_info.task_dependencies,
                         dependency_state.last_fence_event
                     );
                     if (submit.translate_execution_class != ERHITranslateExecutionClass::Parallel) {
