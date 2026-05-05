@@ -92,11 +92,11 @@
     },
     {
       "id": "AR-06",
-      "rule": "AddSetupPass and Compile may run off-thread, but setup functions may only declare resources and pass metadata. They must not mutate RHI runtime state."
+      "rule": "AddSetupPass and Compile may run off-thread, but setup functions are preparation tasks executed before pass execution lambdas. Resource access is declared by graph-owned pass parameters through RG resource views. Setup functions must not mutate RHI runtime state."
     },
     {
       "id": "AR-07",
-      "rule": "RenderGraph owns a frame-local CPU allocator for graph nodes, RGResource descriptors, access declarations, pass parameter blobs, compiled artifacts, and resolved resource tables. Allocation is phase-owned: setup data freezes before compile, compiled data freezes before record, and record workers receive read-only resolved data."
+      "rule": "RenderGraph owns a frame-local CPU allocator for graph nodes, RGResource descriptors, pass parameter blobs with RG resource views, compiled artifacts, and resolved resource tables. Allocation is phase-owned: setup data freezes before compile, compiled data freezes before record, and record workers receive read-only resolved data."
     },
     {
       "id": "AR-08",
@@ -143,7 +143,7 @@
     {
       "id": "contract_replacement",
       "title": "Freeze RenderGraph contract and replace the legacy skeleton",
-      "status": "planned",
+      "status": "in_progress",
       "checkpoint_file": "docs/milestones/rendergraph/rendergraph_contract_replacement_checkpoint.json",
       "exit_gate": [
         "The RenderGraph ownership boundary is frozen in writing.",
@@ -232,5 +232,20 @@
     "When contract replacement implementation starts, run testscripts/windows/test_rhi_translate.ps1 for focused RHI/RenderGraph transition and queue tests.",
     "Run testscripts/windows/test_all.ps1 after each milestone-sized implementation landing.",
     "Do not add an ad-hoc validation script for milestone JSON files."
-  ]
+  ],
+  "implementation_progress": {
+    "contract_replacement": {
+      "status": "in_progress",
+      "implemented_checkpoint_scope": [
+        "CP-01 legacy RenderGraph surface replacement foundation",
+        "CP-02 explicit texture/buffer access declaration foundation",
+        "CP-03 single execution-domain AddPass foundation",
+        "CP-06 graph-owned parameter allocation foundation"
+      ],
+      "notes": [
+        "The old RHIGraphicsCommandList-era Builder/AddGraphicPass skeleton is replaced in source/runtime/render/rendergraph.",
+        "The current implementation compiles deterministic resource hazard metadata from declared accesses; full barrier lowering, queue handoff compilation, external platform passes, GPU scopes, and RHIExecutor submit orchestration remain later checkpoints."
+      ]
+    }
+  }
 }

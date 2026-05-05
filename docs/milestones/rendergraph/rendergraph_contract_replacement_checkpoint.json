@@ -1,11 +1,11 @@
 {
   "project": "RenderGraph Roadmap",
-  "planning_only": true,
+  "planning_only": false,
   "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
   "stage": {
     "id": "contract_replacement",
     "title": "Freeze RenderGraph contract and replace the legacy skeleton",
-    "status": "planned"
+    "status": "in_progress"
   },
   "goal": "Define the latest-only RenderGraph contract before implementation starts. This stage makes RenderGraph the owner of precise resource declarations and removes the old skeleton from the target architecture instead of adapting it.",
   "design_artifact": "docs/milestones/rendergraph/rendergraph_architecture_design.md",
@@ -41,7 +41,7 @@
     },
     {
       "id": "HR-CONTRACT-07",
-      "rule": "Do not add a separate setup lambda to AddPass. AddPass has one execution lambda only; setup belongs to AddSetupPass and parameters belong to graph.Alloc<T>()."
+      "rule": "Do not add a separate setup lambda to AddPass. AddPass has one execution lambda only; preparation work belongs to AddSetupPass, and resource access belongs to graph-owned parameters through RG resource views."
     },
     {
       "id": "HR-CONTRACT-08",
@@ -68,7 +68,7 @@
     {
       "id": "CP-01",
       "title": "Replace legacy RenderGraph surface in the target design",
-      "status": "todo",
+      "status": "done",
       "priority": "critical",
       "problem": "The current RenderGraph code is a commented legacy skeleton with RHIGraphicsCommandList-era concepts. Building around it would keep stale ownership and fake compatibility alive.",
       "what_must_be_true_after_this_checkpoint": [
@@ -88,12 +88,12 @@
     {
       "id": "CP-02",
       "title": "Freeze resource access declaration model",
-      "status": "todo",
+      "status": "done",
       "priority": "critical",
       "problem": "Barrier correctness cannot be inferred from arbitrary RHICommandList commands without rebuilding the same complex backend tracker. RenderGraph needs explicit pass declarations.",
       "what_must_be_true_after_this_checkpoint": [
-        "Texture accesses declare handle, mip range, array range, aspect, read/write mode, usage state, and queue intent.",
-        "Buffer accesses declare handle, byte range, read/write mode, usage state, and queue intent.",
+        "Texture accesses are declared by pass parameters using RGTextureView with handle, mip range, array range, aspect, read/write mode, usage state, and queue intent.",
+        "Buffer accesses are declared by pass parameters using RGBufferView with handle, byte range, read/write mode, usage state, and queue intent.",
         "External resources are imported with known initial state and exported with required final state.",
         "Bindless resource usage is explicit through the same access declarations."
       ],
@@ -107,14 +107,14 @@
     {
       "id": "CP-03",
       "title": "Freeze pass execution and queue model",
-      "status": "todo",
+      "status": "in_progress",
       "priority": "critical",
       "problem": "RenderGraph must compile queue placement and synchronization. If pass lambdas choose queues implicitly during record, the graph cannot own cross-queue correctness.",
       "what_must_be_true_after_this_checkpoint": [
         "Each pass has one declared execution domain: Graphics, Compute, Copy, or Raytracing.",
         "AddPass accepts graph-owned parameters, pass flags, and exactly one execution lambda with the shape [](RHICommandList& cmd_list, RGContext context) { ... }.",
         "The AddPass lambda records abstract RHI commands only and never receives a platform command-list handle.",
-        "Setup work is registered through AddSetupPass and a setup context instead of a second AddPass setup lambda.",
+        "Preparation work is registered through AddSetupPass and runs before all pass execution lambdas instead of being used for resource access declaration.",
         "Copy passes compile to CopyScope or executor-derived copy submit work; users do not manually author queue transfers.",
         "Queue intent is part of compile input and is frozen before command recording starts.",
         "Execution lambdas receive only graph-owned parameters, resolved context data, and the RHICommandList selected by the compiled plan."
@@ -165,11 +165,11 @@
     {
       "id": "CP-06",
       "title": "Freeze RG allocator and parameter lifetime model",
-      "status": "todo",
+      "status": "done",
       "priority": "critical",
       "problem": "RenderGraph setup, compile, and parallel record need stable graph-owned memory. Caller-owned stack objects or ad-hoc heap allocation would make pass parameters, RGResource objects, and compiled plans unsafe across async phases.",
       "what_must_be_true_after_this_checkpoint": [
-        "RenderGraph owns a frame-local CPU allocator for PassNode, RGResource, access declarations, graph.Alloc<T>() parameter objects, compiled plan objects, and resolved resource tables.",
+        "RenderGraph owns a frame-local CPU allocator for PassNode, RGResource, graph.Alloc<T>() parameter objects with RG resource views, compiled plan objects, and resolved resource tables.",
         "Setup-phase allocations are mutable only until Compile starts, then treated as frozen input.",
         "Compile-phase allocations produce immutable artifacts consumed by record tasks without graph mutation locks.",
         "Record tasks receive read-only resolved resource tables and graph-owned parameter data with graph lifetime.",
@@ -230,7 +230,7 @@
   ],
   "stage_exit_gate": [
     "The new RenderGraph boundary is explicit enough to implement without preserving the old skeleton.",
-    "Resource access declarations cover subresource, buffer range, bindless, queue intent, imports, and exports.",
+    "Parameter-owned RG resource view declarations cover subresource, buffer range, bindless, queue intent, imports, and exports.",
     "The public API shape is graph.Alloc<T>(), RG_EVENT_SCOPE(...), AddSetupPass(...), AddPass(param, flags, execution_lambda), and Dispatch().",
     "External pass and raw RHI/RenderGraph interop boundaries are explicit before implementation starts.",
     "Raw RHI simplification rules are frozen before backend tracker cleanup starts.",
@@ -239,5 +239,10 @@
   "validation": [
     "Planning-only checkpoint; no build script is required now.",
     "When implementation lands, use testscripts/windows/test_rhi_translate.ps1 first and testscripts/windows/test_all.ps1 after milestone-sized changes."
+  ],
+  "implementation_notes": [
+    "Implemented a latest-only RenderGraph construction surface with graph.Alloc<T>(), AddSetupPass(), AddPass(), Compile(), and Dispatch().",
+    "Implemented graph-owned parameter lifetime tracking, parameter-owned explicit texture/buffer access declarations, import/export metadata, RGFrameContext receipts, and deterministic hazard-edge compilation.",
+    "Left barrier lowering, CopyScope handoff emission, RHIExecutor submit plans, platform external pass callbacks, GPU trace scope compilation, external pass interop, and focused RHI validation as unfinished checkpoints."
   ]
 }

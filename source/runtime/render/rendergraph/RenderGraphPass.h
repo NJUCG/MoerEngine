@@ -1,88 +1,97 @@
 #pragma once
-#include "DepdencyGraph.h"
-#include "rhi/RHICommand.h"
 
+#include "RenderGraphResource.h"
+#include "misc/STL.h"
+
+#include <cstdint>
 #include <functional>
+#include <string>
+#include <type_traits>
+#include <typeindex>
 
 namespace Moer {
+
 class RenderGraph;
-// class RHIGraphicsCommandList;
-enum class RENDER_GRAPH_PASS_TYPE : uint8_t {
-    UNDEFINED  = 0,
-    GRAPHICS   = 1,
-    COMPUTE    = 1 << 1,
-    RAYTRACING = 1 << 2,
-    ALL        = GRAPHICS | COMPUTE | RAYTRACING,
+
+class RGContext {
+public:
+    explicit RGContext(RenderGraph& graph) : m_graph(graph) {}
+
+    RenderGraph& Graph() const { return m_graph; }
+
+private:
+    RenderGraph& m_graph;
 };
 
-// struct RenderPassSettings {
-//     RENDER_GRAPH_PASS_TYPE type = RENDER_GRAPH_PASS_TYPE::UNDEFINED;
-// };
+class RGSetupContext {
+public:
+    // CPU preparation context for graph-owned setup work before pass execution.
+    // Do not declare resource access, record RHI commands, or submit work here.
+    explicit RGSetupContext(RenderGraph& graph) : m_graph(graph) {}
 
-struct RenderPassContext {
-    RenderGraph&            graph;
-    RHIGraphicsCommandList* cmd_list;
-    Extent3D                render_extent;
-    EPassType               pass_type;
+    RenderGraph& Graph() const { return m_graph; }
+
+private:
+    RenderGraph& m_graph;
 };
 
-// class RENDER_API {
-//
-// };
+enum class ERGPassFlags : uint8_t {
+    None       = 0,
+    Graphics   = 1 << 0,
+    Compute    = 1 << 1,
+    Copy       = 1 << 2,
+    Raytracing = 1 << 3
+};
 
-using GraphicsExecute   = std::function<void(RenderPassContext& _context)>;
-using ComputeExecute    = std::function<void(RenderPassContext& _context)>;
-using RaytracingExecute = std::function<void(RenderPassContext& _context)>;
-using CopyExecute       = std::function<void(RenderPassContext& _context)>;
+constexpr ERGPassFlags operator|(ERGPassFlags lhs, ERGPassFlags rhs) {
+    return static_cast<ERGPassFlags>(static_cast<uint8_t>(lhs) | static_cast<uint8_t>(rhs));
+}
 
-class RenderGraphPass {
+constexpr bool EnumHasAnyFlag(ERGPassFlags value, ERGPassFlags flag) {
+    return (static_cast<uint8_t>(value) & static_cast<uint8_t>(flag)) != 0;
+}
+
+Render::EQueueType RGPassQueue(ERGPassFlags flags);
+EPassType          RGPassType(ERGPassFlags flags);
+bool               RGPassHasSingleExecutionDomain(ERGPassFlags flags);
+
+class RGParameterAccessCollector {
 public:
-    // virtual void execute() = 0;
-
-    virtual ~RenderGraphPass() = default;
-
-public:
-    explicit RenderGraphPass(GraphicsExecute&& _execute) noexcept : m_execute(std::move(_execute)) {}
-
-    void Execute(RenderPassContext& _data) {
-        m_execute(_data);
+    // Called by parameter DeclareRGAccess() implementations to register one texture dependency.
+    void AddTexture(const RGTextureView& view) {
+        texture_accesses.push_back(view.ToAccess());
     }
 
-    // RenderPassContext& getData() { return data; }
+    // Called by parameter DeclareRGAccess() implementations to register one buffer dependency.
+    void AddBuffer(const RGBufferView& view) {
+        buffer_accesses.push_back(view.ToAccess());
+    }
 
-protected:
-    // RenderPassContext data;
-    GraphicsExecute m_execute;
+    const Moer::Array<RGTextureAccess>& Textures() const { return texture_accesses; }
+    const Moer::Array<RGBufferAccess>& Buffers() const { return buffer_accesses; }
+
+private:
+    Moer::Array<RGTextureAccess> texture_accesses{};
+    Moer::Array<RGBufferAccess>  buffer_accesses{};
 };
 
-// template<typename Data, typename Execute>
-// class RenderGraphPass : public RenderGraphPassBase {
-//     Data    data;
-//     Execute mExecute;
-//
-// public:
-//     explicit RenderGraphPass(Execute&& execute) noexcept
-//         : mExecute(std::move(execute)) {
-//     }
-//
-//     void execute() override {
-//         mExecute();
-//     }
-//
-//     Data& getData() { return data; }
-// };
+struct RGPass {
+    using Execute = std::function<void(RHICommandList& cmd_list, RGContext context)>;
 
-// using GraphicRenderGraphPass    = RenderGraphPass<RenderPassSettings, GraphicsExecute>;
-// using ComputeRenderGraphPass    = RenderGraphPass<RenderPassSettings, ComputeExecute>;
-// using RaytracingRenderGraphPass = RenderGraphPass<RenderPassSettings, RaytracingExecute>;
+    std::string               name{};
+    void*                     parameters{nullptr};
+    std::type_index           parameter_type{typeid(void)};
+    uint32_t                  parameter_size{0};
+    ERGPassFlags              flags{ERGPassFlags::None};
+    Execute                   execute{};
+    Moer::Array<RGTextureAccess> texture_accesses{};
+    Moer::Array<RGBufferAccess>  buffer_accesses{};
+};
 
-// class RENDER_API GraphicsPass : public PassNode {
-//
-// };
-//
-// class RENDER_API ComputePass : public PassNode {
-// };
-//
-// class RENDER_API RayTracingPass : public PassNode {
-// };
+struct RGSetupPass {
+    std::string name{};
+    // Empty callbacks are legal no-op slots for future compiled setup scheduling.
+    std::function<void(RGSetupContext& setup)> execute{};
+};
+
 } // namespace Moer

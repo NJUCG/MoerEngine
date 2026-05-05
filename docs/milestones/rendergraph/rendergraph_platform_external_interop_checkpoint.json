@@ -80,7 +80,7 @@
         "External passes use a separate AddExternalPass-style API and do not receive RHICommandList&.",
         "Only PlatformCommandList external pass kind is accepted in the initial implementation.",
         "External callbacks receive RGPlatformCommandListContext with the platform command-list handle and resolved native resource handles.",
-        "External pass setup uses the same explicit resource access declarations as normal passes.",
+        "External pass parameters use the same explicit RG resource view access declarations as normal passes.",
         "Compile validates backend support for platform command-list handle, native resource handles, memory sharing mode, and command-list queue type.",
         "External callbacks cannot allocate graph resources, mutate graph structure, submit RHICommandLists, or signal/wait independent GPU timelines.",
         "RenderGraph record tasks do not execute external callbacks; they emit typed RHI platform callback commands."
