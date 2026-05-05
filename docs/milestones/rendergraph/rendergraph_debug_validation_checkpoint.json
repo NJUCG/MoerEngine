@@ -63,6 +63,29 @@
       ]
     },
     {
+      "id": "CP-00A",
+      "title": "Maintain RenderGraph contract foundation test",
+      "status": "done",
+      "priority": "critical",
+      "problem": "The new parameter-driven RenderGraph surface needs a focused test before later barrier, queue, external pass, and debug checkpoints build on top of it.",
+      "what_must_be_true_after_this_checkpoint": [
+        "TestRHITranslate includes RenderGraphContractFoundation as a focused RenderGraph contract test case.",
+        "The test validates single pass-domain helpers, canonical range overlap rules, graph-owned parameter access collection, deterministic hazard compilation, setup-before-execution ordering, and RGFrameContext export receipts.",
+        "The test is validated through testscripts/windows/test_rhi_translate.ps1 and testscripts/windows/test_all.ps1, both of which require the RenderGraphContractFoundation marker."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphResource.h",
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/test/RHITest/rhi_rendergraph_contract_test.cpp",
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "testscripts/windows/test_rhi_translate.ps1",
+        "testscripts/windows/test_all.ps1",
+        "testscripts/README.md"
+      ]
+    },
+    {
       "id": "CP-01",
       "title": "Implement debug cvar snapshot and scope guard",
       "status": "todo",

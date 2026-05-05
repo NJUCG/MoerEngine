@@ -51,9 +51,9 @@ constexpr bool EnumHasAnyFlag(ERGPassFlags value, ERGPassFlags flag) {
     return (static_cast<uint8_t>(value) & static_cast<uint8_t>(flag)) != 0;
 }
 
-Render::EQueueType RGPassQueue(ERGPassFlags flags);
-EPassType          RGPassType(ERGPassFlags flags);
-bool               RGPassHasSingleExecutionDomain(ERGPassFlags flags);
+RENDER_API Render::EQueueType RGPassQueue(ERGPassFlags flags);
+RENDER_API EPassType          RGPassType(ERGPassFlags flags);
+RENDER_API bool               RGPassHasSingleExecutionDomain(ERGPassFlags flags);
 
 class RGParameterAccessCollector {
 public:

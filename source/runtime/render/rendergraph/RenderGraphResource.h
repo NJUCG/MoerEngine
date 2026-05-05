@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderGraphHandle.h"
+#include "RenderAPI.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -34,7 +35,7 @@ struct RGTextureRange {
     uint32_t            array_count{1};
 
     // Overlaps when aspect flags intersect and mip/array intervals both intersect.
-    bool Overlaps(const RGTextureRange& other) const;
+    RENDER_API bool Overlaps(const RGTextureRange& other) const;
 };
 
 struct RGBufferRange {
@@ -42,9 +43,9 @@ struct RGBufferRange {
     uint64_t size{0};
 
     // {0, 0} represents the whole buffer.
-    bool IsWholeResource() const;
+    RENDER_API bool IsWholeResource() const;
     // Whole-buffer ranges overlap every valid range; partial ranges overlap when byte intervals intersect.
-    bool Overlaps(const RGBufferRange& other) const;
+    RENDER_API bool Overlaps(const RGBufferRange& other) const;
 };
 
 enum class ERGResourceKind : uint8_t {
@@ -84,7 +85,7 @@ struct RGTextureView {
     Render::EQueueType     queue{Render::EQueueType::Graphics};
     bool                   bindless{false};
 
-    RGTextureAccess ToAccess() const;
+    RENDER_API RGTextureAccess ToAccess() const;
 };
 
 struct RGBufferView {
@@ -95,7 +96,7 @@ struct RGBufferView {
     Render::EQueueType    queue{Render::EQueueType::Graphics};
     bool                  bindless{false};
 
-    RGBufferAccess ToAccess() const;
+    RENDER_API RGBufferAccess ToAccess() const;
 };
 
 struct RGResource {
@@ -114,7 +115,7 @@ struct RGResource {
     Render::EBufferState  final_buffer_state{Render::EBufferState::UNDEFINED};
 };
 
-bool RGAccessWrites(ERGAccessMode mode);
-bool RGAccessConflicts(ERGAccessMode lhs, ERGAccessMode rhs);
+RENDER_API bool RGAccessWrites(ERGAccessMode mode);
+RENDER_API bool RGAccessConflicts(ERGAccessMode lhs, ERGAccessMode rhs);
 
 } // namespace Moer

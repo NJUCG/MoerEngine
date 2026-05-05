@@ -148,13 +148,14 @@
     {
       "id": "CP-05",
       "title": "Lock validation contract",
-      "status": "todo",
+      "status": "done",
       "priority": "high",
       "problem": "RenderGraph implementation will touch RHI scheduling and resource lifetime. Validation must reuse existing project scripts and avoid ad-hoc test wrappers.",
       "what_must_be_true_after_this_checkpoint": [
-        "Focused RHI/RenderGraph tests are planned under TestRHITranslate and run through testscripts/windows/test_rhi_translate.ps1.",
+        "Focused RHI/RenderGraph tests are implemented under TestRHITranslate and run through testscripts/windows/test_rhi_translate.ps1.",
         "Milestone-sized changes run testscripts/windows/test_all.ps1.",
-        "No standalone RenderGraph validation script is introduced."
+        "No standalone RenderGraph validation script is introduced.",
+        "testscripts/windows/test_rhi_translate.ps1 and testscripts/windows/test_all.ps1 require the RenderGraphContractFoundation testcase marker."
       ],
       "files_likely_affected": [
         "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
@@ -243,6 +244,7 @@
   "implementation_notes": [
     "Implemented a latest-only RenderGraph construction surface with graph.Alloc<T>(), AddSetupPass(), AddPass(), Compile(), and Dispatch().",
     "Implemented graph-owned parameter lifetime tracking, parameter-owned explicit texture/buffer access declarations, import/export metadata, RGFrameContext receipts, and deterministic hazard-edge compilation.",
+    "Added RenderGraphContractFoundation to TestRHITranslate and required its structured marker in the Windows validation scripts.",
     "Left barrier lowering, CopyScope handoff emission, RHIExecutor submit plans, platform external pass callbacks, GPU trace scope compilation, external pass interop, and focused RHI validation as unfinished checkpoints."
   ]
 }

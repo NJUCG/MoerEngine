@@ -103,7 +103,7 @@ Use the Windows RHI script for focused RenderGraph and RHI command-list changes:
 .\testscripts\windows\test_rhi_translate.ps1 -Config Release
 ```
 
-The script resolves the configured build directory, builds `TestRHITranslate`, runs `target/bin/<Config>/TestRHITranslate.exe`, scans the log for Vulkan validation blockers, parses every `[TESTCASE][PASS|FAIL|SKIP]` marker, and requires the `RHICommandListRGBaseline` marker to be present. Logs and `summary.txt` are written to `logs/run_YYYYMMDD_HHMMSS/`.
+The script resolves the configured build directory, builds `TestRHITranslate`, runs `target/bin/<Config>/TestRHITranslate.exe`, scans the log for Vulkan validation blockers, parses every `[TESTCASE][PASS|FAIL|SKIP]` marker, and requires the `RHICommandListRGBaseline` and `RenderGraphContractFoundation` markers to be present. Logs and `summary.txt` are written to `logs/run_YYYYMMDD_HHMMSS/`.
 
 After a milestone-sized RenderGraph landing, run the aggregate Windows flow:
 

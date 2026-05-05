@@ -50,6 +50,7 @@
 
 namespace Moer::Render::Tests {
 int RunRHICommandListRGBaselineTest();
+int RunRenderGraphContractFoundationTest();
 }
 
 namespace {
@@ -2633,6 +2634,14 @@ int main(int argc, char** argv) {
     );
     if (rg_baseline_ret != 0) {
         return shutdown_and_return(rg_baseline_ret);
+    }
+
+    const int rg_contract_ret = RunNamedTestCase(
+        "RenderGraphContractFoundation",
+        TestCases::RunRenderGraphContractFoundationTest
+    );
+    if (rg_contract_ret != 0) {
+        return shutdown_and_return(rg_contract_ret);
     }
 
     const int multi_cmd_order_ret =

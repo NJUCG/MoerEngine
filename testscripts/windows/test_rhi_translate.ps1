@@ -58,7 +58,7 @@ do {
     }
 
     $structuredCases = Get-StructuredTestCaseResults -LogFile $Log
-    $requiredCases = @("RHICommandListRGBaseline")
+    $requiredCases = @("RHICommandListRGBaseline", "RenderGraphContractFoundation")
     $missingRequiredCases = @()
     if (@($structuredCases).Count -eq 0) {
         Register-Subtest -Group $Label -Name "StructuredTestcaseMarkers" -Status "FAILED" -Reason "no structured testcase markers found"

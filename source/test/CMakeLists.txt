@@ -171,6 +171,7 @@ set(test_target TestRHITranslate)
 add_executable(${test_target}
     RHITest/rhi_translate_multiqueue_test.cpp
     RHITest/rhi_commandlist_rg_baseline_test.cpp
+    RHITest/rhi_rendergraph_contract_test.cpp
     ${moer_source_dir}/profiler/ProfileSession.cpp
 )
 target_include_directories(${test_target}
