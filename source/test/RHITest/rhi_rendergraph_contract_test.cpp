@@ -98,11 +98,10 @@ int RunRenderGraphContractFoundationTest() {
         return 1;
     }
 
-    RGFrameContext frame_context(7);
-    RenderGraph    graph(frame_context);
+    RenderGraph graph;
 
     const RenderGraphHandle texture = graph.CreateTexture(
-        "rg_contract_texture",
+        MOER_TEXT("rg_contract_texture"),
         RGTextureDesc{
             .extent = Extent3D(16, 16, 1),
             .format = PF_R8G8B8A8_UNORM,
@@ -112,7 +111,7 @@ int RunRenderGraphContractFoundationTest() {
         }
     );
     const RenderGraphHandle buffer = graph.CreateBuffer(
-        "rg_contract_buffer",
+        MOER_TEXT("rg_contract_buffer"),
         RGBufferDesc{.size = 256, .usage = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC}
     );
 
@@ -135,7 +134,7 @@ int RunRenderGraphContractFoundationTest() {
     auto* access_array_params = graph.Alloc<RGAccessArrayParams>();
     auto* serial_params = graph.Alloc<RGSerialParams>();
 
-    graph.AddSetupPass("PrepareContractFoundation", [write_params, access_array_params, texture, buffer](RGSetupContext& setup) {
+    graph.AddSetupPass(MOER_TEXT("PrepareContractFoundation"), [write_params, access_array_params, texture, buffer](RGSetupContext& setup) {
         write_params->prepared_value = 42;
         access_array_params->textures = setup.Graph().Alloc<RGTextureAccessArray>(2);
         access_array_params->buffers = setup.Graph().Alloc<RGBufferAccessArray>(2);
@@ -169,23 +168,25 @@ int RunRenderGraphContractFoundationTest() {
             .queue = EQueueType::Compute
         }, EBufferState::SHADER_RESOURCE);
     });
-    graph.AddPass("WriteContractResources", write_params, ERGPassFlags::Graphics, [write_params](RHICommandList&, RGContext context) {
+    graph.AddPass(MOER_TEXT("WriteContractResources"), write_params, ERGPassFlags::Graphics, [write_params](RHICommandList&, RGContext context) {
         (void)context.Graph();
         if (write_params->prepared_value == 42) {
             ++write_params->execution_count;
         }
     });
 
-    graph.AddPass("SerialContractFence", serial_params, ERGPassFlags::None, [serial_params](RGContext context) {
+    graph.AddPass(MOER_TEXT("SerialContractFence"), serial_params, ERGPassFlags::None, [serial_params](RGContext context) {
         (void)context.Graph();
         ++serial_params->execution_count;
     });
 
-    graph.AddPass("ReadAccessArrays", access_array_params, ERGPassFlags::Compute, [](RHICommandList&, RGContext) {});
+    graph.AddPass(MOER_TEXT("ReadAccessArrays"), access_array_params, ERGPassFlags::Compute, [](RHICommandList&, RGContext) {});
 
     graph.ExportTexture(texture, ETextureState::SHADER_RESOURCE, EQueueType::Graphics);
     graph.ExportBuffer(buffer, EBufferState::SHADER_RESOURCE, EQueueType::Compute);
-    graph.Compile();
+
+    RHICommandList command_list(EQueueType::Graphics);
+    graph.Dispatch(&command_list);
 
     const RGCompiledPlan& plan = graph.GetCompiledPlan();
     if (plan.hazard_edges.size() != 2) {
@@ -197,30 +198,9 @@ int RunRenderGraphContractFoundationTest() {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation compiled wrong hazard edges"));
         return 1;
     }
-    if (write_params->prepared_value != 42 || write_params->execution_count != 0 ||
-        serial_params->execution_count != 0) {
-        LOG_ERROR(MOER_TEXT("RenderGraph setup did not run before Compile or execution ran too early"));
-        return 1;
-    }
-
-    RHICommandList command_list(EQueueType::Graphics);
-    graph.Dispatch(&command_list);
     if (write_params->prepared_value != 42 || write_params->execution_count != 1 ||
         serial_params->execution_count != 1) {
         LOG_ERROR(MOER_TEXT("RenderGraph setup or execution lambda order is invalid"));
-        return 1;
-    }
-
-    const RGFrameReceipt* texture_receipt = frame_context.FindReceipt(texture);
-    const RGFrameReceipt* buffer_receipt = frame_context.FindReceipt(buffer);
-    if (texture_receipt == nullptr || texture_receipt->texture_state != ETextureState::SHADER_RESOURCE ||
-        texture_receipt->owner_queue != EQueueType::Graphics) {
-        LOG_ERROR(MOER_TEXT("RenderGraph texture export receipt is invalid"));
-        return 1;
-    }
-    if (buffer_receipt == nullptr || buffer_receipt->buffer_state != EBufferState::SHADER_RESOURCE ||
-        buffer_receipt->owner_queue != EQueueType::Compute) {
-        LOG_ERROR(MOER_TEXT("RenderGraph buffer export receipt is invalid"));
         return 1;
     }
 

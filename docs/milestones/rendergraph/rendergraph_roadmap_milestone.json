@@ -120,15 +120,15 @@
     },
     {
       "id": "AR-13",
-      "rule": "Raw RHI -> RenderGraph -> raw RHI and multiple RenderGraph sequences communicate only through RGFrameContext import/export receipts containing final state, owner queue, and completion boundary. Do not rely on hidden backend tracker side effects."
+      "rule": "Raw RHI -> RenderGraph -> raw RHI and multiple RenderGraph sequences communicate through RHIExecutor ordering plus RHI resource persistent state written only by preprocess. RenderGraph exports imported resources by emitting a final internal SetTrackedState command."
     },
     {
       "id": "AR-14",
-      "rule": "CPU graph allocators and transient alias allocators are per RenderGraph instance. RGGlobalResourcePool is shared through RGFrameContext and can only hand out resources whose retire boundary is complete and whose pool key matches required native interop capability."
+      "rule": "CPU graph allocators and transient alias allocators are per RenderGraph instance. RGGlobalResourcePool is device-owned and can only hand out resources whose retire boundary is complete and whose pool key matches required native interop capability."
     },
     {
       "id": "AR-15",
-      "rule": "Single-step debug mode is controlled by console variables sampled outside the RenderGraph scope. In single-step mode, pass declaration immediately records, submits through RHIExecutor, waits for GPU completion, and publishes a boundary receipt; the mode cannot switch while a graph is active."
+      "rule": "Single-step debug mode is controlled by console variables sampled outside the RenderGraph scope. In single-step mode, pass declaration immediately records, submits through RHIExecutor, waits for GPU completion, and emits tracked-state updates for exported resources; the mode cannot switch while a graph is active."
     },
     {
       "id": "AR-16",
@@ -193,8 +193,8 @@
       "checkpoint_file": "docs/milestones/rendergraph/rendergraph_platform_external_interop_checkpoint.json",
       "exit_gate": [
         "Platform-command-list external passes participate in the same dependency, barrier, lifetime, and RHIExecutor completion model as RHI passes.",
-        "Raw RHI work before and after RenderGraph uses explicit import/export receipts without global flushes.",
-        "Multiple RenderGraph instances in one frame share RGFrameContext and the global pool while keeping graph-local CPU and transient allocators isolated.",
+        "Raw RHI work before and after RenderGraph uses RHI resource persistent state and explicit RHIExecutor ordering without global flushes.",
+        "Multiple RenderGraph instances in one frame share device-level pools while keeping graph-local CPU and transient allocators isolated.",
         "External/native interop resources obey allocator eligibility, native capability keys, and completion boundaries."
       ]
     },

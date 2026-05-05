@@ -578,6 +578,7 @@ private:
     EQueueType            src_queue;
     EQueueType            dst_queue;
     bool                  b_queue_transition = false;
+    EBarrierTrackedState  tracked_state{EBarrierTrackedState::Update};
 
 public:
     BarrierCmd& ReadTexture(const TextureView& _view, ETextureState _dst_state, EPassType _pass_type) {
@@ -639,12 +640,14 @@ public:
         uint       _read_buf_cnt,
         uint       _write_buf_cnt,
         EQueueType _src_queue,
-        EQueueType _dst_queue
+        EQueueType _dst_queue,
+        EBarrierTrackedState _tracked_state = EBarrierTrackedState::Update
     ) :
         Command(EType::Barrier),
         src_queue(_src_queue),
         dst_queue(_dst_queue),
-        b_queue_transition(_src_queue != _dst_queue) {
+        b_queue_transition(_src_queue != _dst_queue),
+        tracked_state(_tracked_state) {
         read_textures.reserve(_read_tex_cnt);
         write_textures.reserve(_write_tex_cnt);
         read_buffers.reserve(_read_buf_cnt);
@@ -674,6 +677,34 @@ public:
     }
     const EQueueType GetDstQueue() const {
         return dst_queue;
+    }
+    bool ShouldUpdateTrackedState() const {
+        return tracked_state == EBarrierTrackedState::Update;
+    }
+};
+
+struct SetTrackedStateCmd : public Command {
+private:
+    Array<TrackedTextureState> textures;
+    Array<TrackedBufferState>  buffers;
+
+public:
+    SetTrackedStateCmd(
+        Array<TrackedTextureState>&& _textures,
+        Array<TrackedBufferState>&&  _buffers
+    ) :
+        Command(EType::SetTrackedState),
+        textures(std::move(_textures)),
+        buffers(std::move(_buffers)) {}
+
+    EQueueType GetQueueType() const override {
+        return EQueueType::Ignore;
+    }
+    const Array<TrackedTextureState>& Textures() const {
+        return textures;
+    }
+    const Array<TrackedBufferState>& Buffers() const {
+        return buffers;
     }
 };
 

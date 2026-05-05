@@ -5,10 +5,10 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "string/String.h"
 
 #include <cstdint>
 #include <span>
-#include <string>
 
 namespace Moer {
 
@@ -154,7 +154,7 @@ private:
 };
 
 struct RGResource {
-    std::string       name{};
+    String            name{};
     ERGResourceKind   kind{ERGResourceKind::Texture};
     bool              imported{false};
     bool              exported{false};
@@ -163,8 +163,6 @@ struct RGResource {
     Render::TextureRef imported_texture{};
     Render::BufferRef  imported_buffer{};
     Render::EQueueType owner_queue{Render::EQueueType::Graphics};
-    Render::ETextureState initial_texture_state{Render::ETextureState::UNDEFINED};
-    Render::EBufferState  initial_buffer_state{Render::EBufferState::UNDEFINED};
     Render::ETextureState final_texture_state{Render::ETextureState::UNDEFINED};
     Render::EBufferState  final_buffer_state{Render::EBufferState::UNDEFINED};
 };

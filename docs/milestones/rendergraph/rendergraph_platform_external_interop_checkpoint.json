@@ -25,7 +25,7 @@
     },
     {
       "id": "HR-EXTERNAL-03",
-      "rule": "Raw RHI -> RenderGraph -> raw RHI sequencing must use import/export receipts with state, owner queue, and completion boundary. Do not depend on backend tracker side effects."
+      "rule": "Raw RHI -> RenderGraph -> raw RHI sequencing must use RHIExecutor ordering plus RHI resource persistent state written only by preprocess. Do not depend on graph-owned cross-work state."
     },
     {
       "id": "HR-EXTERNAL-04",
@@ -33,7 +33,7 @@
     },
     {
       "id": "HR-EXTERNAL-05",
-      "rule": "RGGlobalResourcePool is shared through RGFrameContext and may only check out resources whose retire boundary is complete and whose pool key matches required native interop capabilities."
+      "rule": "RGGlobalResourcePool is device-owned and may only check out resources whose retire boundary is complete and whose pool key matches required native interop capabilities."
     },
     {
       "id": "HR-EXTERNAL-06",
@@ -51,15 +51,15 @@
   "checkpoints": [
     {
       "id": "CP-01",
-      "title": "Implement RGFrameContext and boundary receipts",
+      "title": "Implement RHI tracked-state boundaries",
       "status": "todo",
       "priority": "critical",
       "problem": "Raw RHI work, external native work, and multiple graph dispatches need a shared boundary owner. Without one, resource state would leak through backend trackers or global flushes.",
       "what_must_be_true_after_this_checkpoint": [
-        "RGFrameContext stores frame sequence id, graph sequence ids, latest exported whole-resource state, owner queue, and completion boundary per resource.",
-        "Raw RHI submit receipts can be registered as graph import sources.",
-        "RenderGraph Dispatch publishes a receipt for exported resources and completion boundaries.",
-        "Importing an incomplete producer boundary creates an explicit wait or compile error.",
+        "RHI resources store latest persistent state, owner queue, and last access kind.",
+        "Raw RHI and RenderGraph both update resource persistent state only through preprocess-visible RHI commands.",
+        "RenderGraph Dispatch emits a final internal SetTrackedState command for exported imported resources.",
+        "Importing an incomplete producer boundary relies on explicit RHIExecutor waits or record-complete dependencies.",
         "The boundary model does not require a global Flush between raw RHI and RenderGraph work."
       ],
       "files_likely_affected": [
@@ -125,11 +125,11 @@
       "priority": "critical",
       "problem": "The renderer may need to issue raw RHI work, dispatch a graph, then continue with raw RHI work. That sequence must be explicit and must not require backend command scanning to rediscover state.",
       "what_must_be_true_after_this_checkpoint": [
-        "Raw RHI work before a graph exports resource state and completion boundary into RGFrameContext.",
-        "Graph imports from raw RHI receipts with explicit state and owner queue.",
+        "Raw RHI work before a graph updates RHI resource persistent state through preprocess-visible commands.",
+        "Graph imports RHI resources whose source state is resolved by preprocess from persistent state.",
         "Graph exports can be consumed by later raw RHI command lists with no hidden tracker dependency.",
         "Queue waits/signals are compiled at the boundary instead of forcing a device-wide flush.",
-        "Debug validation rejects raw RHI reuse of graph outputs without an export receipt."
+        "Debug validation rejects raw RHI reuse of graph outputs without declared tracked-state export intent."
       ],
       "files_likely_affected": [
         "source/runtime/render/rendergraph/RenderGraph.h",
@@ -145,9 +145,9 @@
       "priority": "high",
       "problem": "Multiple systems may build separate graphs in one frame. They need safe sequencing and shared global pool access without cross-graph mutation of graph-local allocators.",
       "what_must_be_true_after_this_checkpoint": [
-        "Every graph in the frame is constructed with the same RGFrameContext.",
+        "Every graph in the frame keeps independent CPU graph state.",
         "Each graph owns its own setup allocator, compile allocator, scratch allocator, and transient alias allocator.",
-        "Graph A to graph B resource flow requires A export receipt and B import declaration.",
+        "Graph A to graph B resource flow requires A tracked-state export and B import declaration.",
         "Independent graphs can dispatch independently when they do not import each other's resources or contend for incomplete pooled resources.",
         "Cross-graph transient aliasing remains unsupported unless those workloads are compiled as one graph."
       ],
@@ -199,8 +199,8 @@
   ],
   "stage_exit_gate": [
     "Platform-command-list external passes are explicit graph nodes with declared resources and native capabilities.",
-    "Raw RHI and RenderGraph exchange resources through receipts rather than hidden backend state.",
-    "Multiple RenderGraph instances in one frame share RGFrameContext and the global pool while keeping graph-local allocators isolated.",
+    "Raw RHI and RenderGraph exchange resources through RHI persistent state rather than graph-owned cross-work state.",
+    "Multiple RenderGraph instances in one frame share device-level pools while keeping graph-local allocators isolated.",
     "Allocator reuse waits on RHIExecutor completion for command lists that contain external passes."
   ],
   "validation": [

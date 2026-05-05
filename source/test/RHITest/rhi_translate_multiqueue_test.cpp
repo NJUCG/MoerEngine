@@ -1466,6 +1466,56 @@ int RunTranslateExecutionClassRoundTripTest() {
     return 0;
 }
 
+int RunTrackedStateCommandRoundTripTest() {
+    BarrierCmd sync_only_barrier(
+        0,
+        0,
+        0,
+        0,
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EBarrierTrackedState::Skip
+    );
+    if (sync_only_barrier.ShouldUpdateTrackedState()) {
+        LOG_ERROR(MOER_TEXT("Barrier tracked-state skip flag did not round-trip"));
+        return 1;
+    }
+
+    Array<TrackedTextureState> textures{};
+    Array<TrackedBufferState> buffers{};
+    buffers.emplace_back(TrackedBufferState{
+        .buffer = BufferView(nullptr, 0, 0, 1),
+        .state = EBufferState::SHADER_RESOURCE,
+        .owner_queue = EQueueType::Compute,
+        .access_write = true
+    });
+
+    CommandList cmd(EQueueType::Graphics);
+    cmd.SetTrackedState(std::move(textures), std::move(buffers));
+
+    CmdSubmit submit = cmd.Submit();
+    if (submit.cmds.size() != 1 || submit.cmds.front()->Type() != Command::EType::SetTrackedState) {
+        LOG_ERROR(MOER_TEXT("SetTrackedState did not round-trip through CommandList::Submit"));
+        return 1;
+    }
+
+    const auto* tracked_state_cmd = static_cast<const SetTrackedStateCmd*>(submit.cmds.front().get());
+    if (!tracked_state_cmd->Textures().empty() || tracked_state_cmd->Buffers().size() != 1) {
+        LOG_ERROR(MOER_TEXT("SetTrackedState command stored the wrong resource count"));
+        return 1;
+    }
+
+    const TrackedBufferState& tracked_buffer = tracked_state_cmd->Buffers().front();
+    if (tracked_buffer.state != EBufferState::SHADER_RESOURCE ||
+        tracked_buffer.owner_queue != EQueueType::Compute || !tracked_buffer.access_write) {
+        LOG_ERROR(MOER_TEXT("SetTrackedState command stored the wrong buffer state"));
+        return 1;
+    }
+
+    LOG_INFO(MOER_TEXT("Tracked-state command round-trip test passed"));
+    return 0;
+}
+
 int RunRecordCompleteDependencyTest() {
     std::atomic_uint32_t lambda_counter{0};
     GraphEventRef record_complete_event = GraphEvent::CreateGraphEvent();
@@ -2649,6 +2699,14 @@ int main(int argc, char** argv) {
     );
     if (translate_metadata_ret != 0) {
         return shutdown_and_return(translate_metadata_ret);
+    }
+
+    const int tracked_state_ret = RunNamedTestCase(
+        "TrackedStateCommandRoundTrip",
+        RunTrackedStateCommandRoundTripTest
+    );
+    if (tracked_state_ret != 0) {
+        return shutdown_and_return(tracked_state_ret);
     }
 
     const int record_complete_ret = RunNamedTestCase("RecordCompleteDependency", RunRecordCompleteDependencyTest);

@@ -82,6 +82,8 @@ struct ResourceAccessDigestEntry {
     bool read{false};
     bool write{false};
     bool last_access_write{false};
+    bool update_tracked_state{true};
+    std::optional<EQueueType> owner_queue{};
     std::optional<EBufferState>  buffer_state{};
     std::optional<ETextureState> texture_state{};
 };

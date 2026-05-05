@@ -492,6 +492,8 @@ struct VkCmdPreprocessor {
             case Command::EType::Barrier:
                 Visit(static_cast<const BarrierCmd*>(_cmd));
                 break;
+            case Command::EType::SetTrackedState:
+                break;
             case Command::EType::QueueTransfer:
                 Visit(static_cast<const QueueTransferCmd*>(_cmd));
                 break;
@@ -1399,6 +1401,8 @@ public:
                 break;
             case Command::EType::Barrier:
                 Visit(static_cast<const BarrierCmd&>(*_cmd));
+                break;
+            case Command::EType::SetTrackedState:
                 break;
             case Command::EType::QueueTransfer:
                 Visit(static_cast<const QueueTransferCmd&>(*_cmd));

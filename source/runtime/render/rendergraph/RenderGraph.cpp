@@ -8,35 +8,6 @@
 
 namespace Moer {
 
-uint64_t RGFrameContext::NextGraphSequence() {
-    return m_next_graph_sequence++;
-}
-
-void RGFrameContext::PublishReceipt(const RGFrameReceipt& receipt) {
-    for (auto& current : m_receipts) {
-        if (current.resource == receipt.resource) {
-            current = receipt;
-            return;
-        }
-    }
-    m_receipts.push_back(receipt);
-}
-
-const RGFrameReceipt* RGFrameContext::FindReceipt(RenderGraphHandle resource) const {
-    for (const auto& receipt : m_receipts) {
-        if (receipt.resource == resource) {
-            return &receipt;
-        }
-    }
-    return nullptr;
-}
-
-void RGFrameContext::Reset(uint64_t frame_sequence) {
-    m_frame_sequence = frame_sequence;
-    m_next_graph_sequence = 0;
-    m_receipts.clear();
-}
-
 bool RGPassHasQueue(ERGPassFlags flags) {
     uint32_t count = 0;
     count += EnumHasAnyFlag(flags, ERGPassFlags::Graphics) ? 1 : 0;
@@ -74,64 +45,56 @@ EPassType RGPassType(ERGPassFlags flags) {
     return EPassType::Graphics;
 }
 
-RenderGraph::RenderGraph(RGFrameContext& frame_context) :
-    m_frame_context(frame_context),
-    m_graph_sequence(frame_context.NextGraphSequence()) {}
-
 RenderGraph::~RenderGraph() {
     Reset();
 }
 
-RenderGraphHandle RenderGraph::CreateTexture(std::string_view name, const RGTextureDesc& desc) {
+RenderGraphHandle RenderGraph::CreateTexture(StringView name, const RGTextureDesc& desc) {
     assert(m_phase == Phase::Setup);
     RGResource resource{};
-    resource.name = std::string(name);
+    resource.name = String(name);
     resource.kind = ERGResourceKind::Texture;
     resource.texture_desc = desc;
     return AddResource(std::move(resource));
 }
 
-RenderGraphHandle RenderGraph::CreateBuffer(std::string_view name, const RGBufferDesc& desc) {
+RenderGraphHandle RenderGraph::CreateBuffer(StringView name, const RGBufferDesc& desc) {
     assert(m_phase == Phase::Setup);
     RGResource resource{};
-    resource.name = std::string(name);
+    resource.name = String(name);
     resource.kind = ERGResourceKind::Buffer;
     resource.buffer_desc = desc;
     return AddResource(std::move(resource));
 }
 
 RenderGraphHandle RenderGraph::ImportTexture(
-    std::string_view name,
+    StringView name,
     Render::TextureRef texture,
-    Render::ETextureState initial_state,
     Render::EQueueType owner_queue
 ) {
     assert(m_phase == Phase::Setup);
-    assert(texture && initial_state != Render::ETextureState::UNDEFINED);
+    assert(texture);
     RGResource resource{};
-    resource.name = std::string(name);
+    resource.name = String(name);
     resource.kind = ERGResourceKind::Texture;
     resource.imported = true;
     resource.imported_texture = texture;
-    resource.initial_texture_state = initial_state;
     resource.owner_queue = owner_queue;
     return AddResource(std::move(resource));
 }
 
 RenderGraphHandle RenderGraph::ImportBuffer(
-    std::string_view name,
+    StringView name,
     Render::BufferRef buffer,
-    Render::EBufferState initial_state,
     Render::EQueueType owner_queue
 ) {
     assert(m_phase == Phase::Setup);
-    assert(buffer && initial_state != Render::EBufferState::UNDEFINED);
+    assert(buffer);
     RGResource resource{};
-    resource.name = std::string(name);
+    resource.name = String(name);
     resource.kind = ERGResourceKind::Buffer;
     resource.imported = true;
     resource.imported_buffer = buffer;
-    resource.initial_buffer_state = initial_state;
     resource.owner_queue = owner_queue;
     return AddResource(std::move(resource));
 }
@@ -139,6 +102,7 @@ RenderGraphHandle RenderGraph::ImportBuffer(
 void RenderGraph::ExportTexture(RenderGraphHandle handle, Render::ETextureState final_state, Render::EQueueType owner_queue) {
     auto& resource = CheckedResource(handle);
     assert(resource.kind == ERGResourceKind::Texture);
+    assert(final_state != Render::ETextureState::UNDEFINED);
     resource.exported = true;
     resource.final_texture_state = final_state;
     resource.owner_queue = owner_queue;
@@ -147,18 +111,19 @@ void RenderGraph::ExportTexture(RenderGraphHandle handle, Render::ETextureState 
 void RenderGraph::ExportBuffer(RenderGraphHandle handle, Render::EBufferState final_state, Render::EQueueType owner_queue) {
     auto& resource = CheckedResource(handle);
     assert(resource.kind == ERGResourceKind::Buffer);
+    assert(final_state != Render::EBufferState::UNDEFINED);
     resource.exported = true;
     resource.final_buffer_state = final_state;
     resource.owner_queue = owner_queue;
 }
 
-void RenderGraph::AddSetupPass(std::string_view name, SetupExecute&& setup) {
+void RenderGraph::AddSetupPass(StringView name, SetupExecute&& setup) {
     assert(m_phase == Phase::Setup);
-    m_setup_passes.push_back(RGSetupPass{std::string(name), std::move(setup)});
+    m_setup_passes.push_back(RGSetupPass{String(name), std::move(setup)});
 }
 
 uint32_t RenderGraph::AddPassInternal(
-    std::string name,
+    String name,
     void* parameters,
     std::type_index type,
     uint32_t size,
@@ -212,22 +177,81 @@ void RenderGraph::Dispatch(RHICommandList* cmd_list) {
         }
     }
 
-    for (uint32_t resource_index = 0; resource_index < m_resources.size(); ++resource_index) {
-        const auto& resource = m_resources[resource_index];
-        if (!resource.exported) {
-            continue;
-        }
-        const auto handle = RenderGraphHandle(static_cast<RenderGraphHandle::Index>(resource_index));
-        m_frame_context.PublishReceipt(RGFrameReceipt{
-            .resource = handle,
-            .owner_queue = resource.owner_queue,
-            .texture_state = resource.final_texture_state,
-            .buffer_state = resource.final_buffer_state,
-            .completion_value = m_graph_sequence
-        });
+    if (cmd_list != nullptr) {
+        EmitFinalTrackedStates(*cmd_list);
     }
 
     m_phase = Phase::Dispatched;
+}
+
+void RenderGraph::EmitFinalTrackedStates(RHICommandList& cmd_list) const {
+    Moer::Array<Render::TrackedTextureState> textures{};
+    Moer::Array<Render::TrackedBufferState> buffers{};
+
+    auto texture_access_write = [this](RenderGraphHandle handle) {
+        bool access_write = false;
+        for (const RGPass& pass : m_passes) {
+            for (const RGTextureAccess& access : pass.texture_accesses) {
+                if (access.handle == handle) {
+                    access_write = RGAccessWrites(access.mode);
+                }
+            }
+        }
+        return access_write;
+    };
+    auto buffer_access_write = [this](RenderGraphHandle handle) {
+        bool access_write = false;
+        for (const RGPass& pass : m_passes) {
+            for (const RGBufferAccess& access : pass.buffer_accesses) {
+                if (access.handle == handle) {
+                    access_write = RGAccessWrites(access.mode);
+                }
+            }
+        }
+        return access_write;
+    };
+
+    for (uint32_t resource_index = 0; resource_index < m_resources.size(); ++resource_index) {
+        const auto& resource = m_resources[resource_index];
+        if (!resource.exported || !resource.imported) {
+            continue;
+        }
+
+        const auto handle = RenderGraphHandle(static_cast<RenderGraphHandle::Index>(resource_index));
+        if (resource.kind == ERGResourceKind::Texture) {
+            auto* texture = resource.imported_texture.Get();
+            if (texture == nullptr) {
+                continue;
+            }
+            textures.emplace_back(Render::TrackedTextureState{
+                .texture = Render::TextureView(
+                    texture,
+                    texture->GetFormat(),
+                    0,
+                    static_cast<uint8>(texture->GetNumMips())
+                ),
+                .state = resource.final_texture_state,
+                .owner_queue = resource.owner_queue,
+                .access_write = texture_access_write(handle)
+            });
+            continue;
+        }
+
+        auto* buffer = resource.imported_buffer.Get();
+        if (buffer == nullptr) {
+            continue;
+        }
+        buffers.emplace_back(Render::TrackedBufferState{
+            .buffer = buffer->GetView(),
+            .state = resource.final_buffer_state,
+            .owner_queue = resource.owner_queue,
+            .access_write = buffer_access_write(handle)
+        });
+    }
+
+    if (!textures.empty() || !buffers.empty()) {
+        cmd_list.SetTrackedState(std::move(textures), std::move(buffers));
+    }
 }
 
 void RenderGraph::Reset() {
@@ -335,8 +359,7 @@ void RenderGraph::ValidateSetup() const {
             if (!RGAccessWrites(access.mode) && !resource.imported && !has_texture_write_before_pass[access.handle.index]) {
                 MOER_ASSERT(
                     false,
-                    "Graph-created texture `{}` (handle {}) read before any pass writes to it",
-                    resource.name,
+                    "Graph-created texture handle {} read before any pass writes to it",
                     access.handle.index
                 );
             }
@@ -350,8 +373,7 @@ void RenderGraph::ValidateSetup() const {
             if (!RGAccessWrites(access.mode) && !resource.imported && !has_buffer_write_before_pass[access.handle.index]) {
                 MOER_ASSERT(
                     false,
-                    "Graph-created buffer `{}` (handle {}) read before any pass writes to it",
-                    resource.name,
+                    "Graph-created buffer handle {} read before any pass writes to it",
                     access.handle.index
                 );
             }

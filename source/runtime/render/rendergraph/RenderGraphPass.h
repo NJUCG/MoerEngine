@@ -2,10 +2,10 @@
 
 #include "RenderGraphResource.h"
 #include "misc/STL.h"
+#include "string/String.h"
 
 #include <cstdint>
 #include <functional>
-#include <string>
 #include <typeindex>
 
 namespace Moer {
@@ -132,7 +132,7 @@ struct RGPass {
     using SerialExecute = std::function<void(RGContext context)>;
     using CollectAccess = std::function<void(const void* parameters, RGParameterAccessCollector& collector)>;
 
-    std::string               name{};
+    String                    name{};
     void*                     parameters{nullptr};
     std::type_index           parameter_type{typeid(void)};
     uint32_t                  parameter_size{0};
@@ -146,7 +146,7 @@ struct RGPass {
 };
 
 struct RGSetupPass {
-    std::string name{};
+    String name{};
     // Empty callbacks are legal no-op slots for future compiled setup scheduling.
     std::function<void(RGSetupContext& setup)> execute{};
 };

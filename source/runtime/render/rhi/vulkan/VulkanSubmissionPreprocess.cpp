@@ -149,7 +149,7 @@ static void TraceDigest(
     for (const auto& [resource_key, access] : digest) {
         RHITRACE_LOG(
             verbose,
-            "[RHITrace][PreprocessDigest] submit=({}, {}) queue={} segment={} resource_type={} name={} handle=0x{:x} read={} write={} last_write={} buffer_state={} texture_state={}",
+            "[RHITrace][PreprocessDigest] submit=({}, {}) queue={} segment={} resource_type={} name={} handle=0x{:x} read={} write={} last_write={} update_tracked_state={} owner={} buffer_state={} texture_state={}",
             key.op_seq,
             key.submit_idx,
             QueueTypeName(queue),
@@ -160,6 +160,8 @@ static void TraceDigest(
             access.read,
             access.write,
             access.last_access_write,
+            access.update_tracked_state,
+            access.owner_queue.has_value() ? QueueTypeName(access.owner_queue.value()) : "<segment>",
             access.buffer_state.has_value() ? int(access.buffer_state.value()) : -1,
             access.texture_state.has_value() ? int(access.texture_state.value()) : -1
         );
@@ -328,7 +330,9 @@ static void MergeDigestEntry(
     bool                         read,
     bool                         write,
     std::optional<EBufferState>  buffer_state,
-    std::optional<ETextureState> texture_state
+    std::optional<ETextureState> texture_state,
+    bool                         update_tracked_state = true,
+    std::optional<EQueueType>    owner_queue = std::nullopt
 ) {
     if (key.handle == 0) {
         return;
@@ -337,6 +341,8 @@ static void MergeDigestEntry(
     entry.read |= read;
     entry.write |= write;
     entry.last_access_write = write;
+    entry.update_tracked_state = update_tracked_state;
+    entry.owner_queue = owner_queue;
     if (buffer_state.has_value()) {
         entry.buffer_state = buffer_state;
     }
@@ -357,6 +363,8 @@ static void MergeDigest(
         dst_entry.read |= entry.read;
         dst_entry.write |= entry.write;
         dst_entry.last_access_write = entry.last_access_write;
+        dst_entry.update_tracked_state = entry.update_tracked_state;
+        dst_entry.owner_queue = entry.owner_queue;
         if (entry.buffer_state.has_value()) {
             dst_entry.buffer_state = entry.buffer_state;
         }
@@ -457,15 +465,30 @@ private:
         return GetStoreOp(action) == EAttachmentStoreOp::STORE;
     }
 
-    void MarkReadBuffer(ResourceAccessDigest& digest, uint64 handle, EBufferState state) const {
-        MergeDigestEntry(digest, MakeBufferKey(handle), true, false, state, std::nullopt);
+    void MarkReadBuffer(
+        ResourceAccessDigest& digest,
+        uint64                handle,
+        EBufferState          state,
+        bool                  update_tracked_state = true
+    ) const {
+        MergeDigestEntry(digest, MakeBufferKey(handle), true, false, state, std::nullopt, update_tracked_state);
     }
 
-    void MarkWriteBuffer(ResourceAccessDigest& digest, uint64 handle, EBufferState state) const {
-        MergeDigestEntry(digest, MakeBufferKey(handle), false, true, state, std::nullopt);
+    void MarkWriteBuffer(
+        ResourceAccessDigest& digest,
+        uint64                handle,
+        EBufferState          state,
+        bool                  update_tracked_state = true
+    ) const {
+        MergeDigestEntry(digest, MakeBufferKey(handle), false, true, state, std::nullopt, update_tracked_state);
     }
 
-    void MarkReadTexture(ResourceAccessDigest& digest, uint64 handle, ETextureState state) const {
+    void MarkReadTexture(
+        ResourceAccessDigest& digest,
+        uint64                handle,
+        ETextureState         state,
+        bool                  update_tracked_state = true
+    ) const {
         MarkReadTextureWithRange(
             digest,
             handle,
@@ -473,11 +496,17 @@ private:
             0,
             kRemainingSubresource,
             0,
-            kRemainingSubresource
+            kRemainingSubresource,
+            update_tracked_state
         );
     }
 
-    void MarkWriteTexture(ResourceAccessDigest& digest, uint64 handle, ETextureState state) const {
+    void MarkWriteTexture(
+        ResourceAccessDigest& digest,
+        uint64                handle,
+        ETextureState         state,
+        bool                  update_tracked_state = true
+    ) const {
         MarkWriteTextureWithRange(
             digest,
             handle,
@@ -485,7 +514,8 @@ private:
             0,
             kRemainingSubresource,
             0,
-            kRemainingSubresource
+            kRemainingSubresource,
+            update_tracked_state
         );
     }
 
@@ -496,12 +526,21 @@ private:
         uint8                 mip_level,
         uint8                 mip_count,
         uint8                 array_layer,
-        uint8                 array_count
+        uint8                 array_count,
+        bool                  update_tracked_state = true
     ) const {
         ForEachTextureSubresourceKey(
             MakeTextureKeyWithRange(handle, mip_level, mip_count, array_layer, array_count),
             [&](const ResourceKey& subresource_key) {
-                MergeDigestEntry(digest, subresource_key, true, false, std::nullopt, state);
+                MergeDigestEntry(
+                    digest,
+                    subresource_key,
+                    true,
+                    false,
+                    std::nullopt,
+                    state,
+                    update_tracked_state
+                );
             }
         );
     }
@@ -513,12 +552,62 @@ private:
         uint8                 mip_level,
         uint8                 mip_count,
         uint8                 array_layer,
-        uint8                 array_count
+        uint8                 array_count,
+        bool                  update_tracked_state = true
     ) const {
         ForEachTextureSubresourceKey(
             MakeTextureKeyWithRange(handle, mip_level, mip_count, array_layer, array_count),
             [&](const ResourceKey& subresource_key) {
-                MergeDigestEntry(digest, subresource_key, false, true, std::nullopt, state);
+                MergeDigestEntry(
+                    digest,
+                    subresource_key,
+                    false,
+                    true,
+                    std::nullopt,
+                    state,
+                    update_tracked_state
+                );
+            }
+        );
+    }
+
+    void MarkTrackedBufferState(
+        ResourceAccessDigest&      digest,
+        const TrackedBufferState&  state
+    ) const {
+        const ResourceKey key = MakeBufferKey(GetHandle(state.buffer));
+        if (key.handle == 0) {
+            return;
+        }
+        auto& entry = digest[key];
+        entry.last_access_write = state.access_write;
+        entry.update_tracked_state = true;
+        entry.owner_queue = state.owner_queue;
+        entry.buffer_state = state.state;
+    }
+
+    void MarkTrackedTextureState(
+        ResourceAccessDigest&       digest,
+        const TrackedTextureState&  state
+    ) const {
+        const ResourceKey key = MakeTextureKeyWithRange(
+            GetHandle(state.texture),
+            state.texture.mip_level,
+            state.texture.num_mips,
+            state.texture.array_layer,
+            state.texture.num_array
+        );
+        if (key.handle == 0) {
+            return;
+        }
+        ForEachTextureSubresourceKey(
+            key,
+            [&](const ResourceKey& subresource_key) {
+                auto& entry = digest[subresource_key];
+                entry.last_access_write = state.access_write;
+                entry.update_tracked_state = true;
+                entry.owner_queue = state.owner_queue;
+                entry.texture_state = state.state;
             }
         );
     }
@@ -943,11 +1032,12 @@ private:
             }
             case Command::EType::Barrier: {
                 const auto* barrier_cmd = static_cast<const BarrierCmd*>(&cmd);
+                const bool update_tracked_state = barrier_cmd->ShouldUpdateTrackedState();
                 for (const auto& buffer : barrier_cmd->ReadBuffers()) {
-                    MarkReadBuffer(digest, buffer.handle, buffer.state);
+                    MarkReadBuffer(digest, buffer.handle, buffer.state, update_tracked_state);
                 }
                 for (const auto& buffer : barrier_cmd->WriteBuffers()) {
-                    MarkWriteBuffer(digest, buffer.handle, buffer.state);
+                    MarkWriteBuffer(digest, buffer.handle, buffer.state, update_tracked_state);
                 }
                 for (const auto& texture : barrier_cmd->ReadTextures()) {
                     MarkReadTextureWithRange(
@@ -955,7 +1045,8 @@ private:
                         static_cast<uint8>(texture.mip_level),
                         static_cast<uint8>(texture.mip_cnt),
                         static_cast<uint8>(texture.array_layer),
-                        static_cast<uint8>(texture.array_count)
+                        static_cast<uint8>(texture.array_count),
+                        update_tracked_state
                     );
                 }
                 for (const auto& texture : barrier_cmd->WriteTextures()) {
@@ -964,8 +1055,19 @@ private:
                         static_cast<uint8>(texture.mip_level),
                         static_cast<uint8>(texture.mip_cnt),
                         static_cast<uint8>(texture.array_layer),
-                        static_cast<uint8>(texture.array_count)
+                        static_cast<uint8>(texture.array_count),
+                        update_tracked_state
                     );
+                }
+                break;
+            }
+            case Command::EType::SetTrackedState: {
+                const auto* tracked_state_cmd = static_cast<const SetTrackedStateCmd*>(&cmd);
+                for (const TrackedTextureState& texture : tracked_state_cmd->Textures()) {
+                    MarkTrackedTextureState(digest, texture);
+                }
+                for (const TrackedBufferState& buffer : tracked_state_cmd->Buffers()) {
+                    MarkTrackedBufferState(digest, buffer);
                 }
                 break;
             }
@@ -1377,10 +1479,16 @@ static void ApplyDigestToState(
     ResourceStateSnapshot&      state_snapshot
 ) {
     for (const auto& [resource_key, access] : digest) {
+        if (!access.update_tracked_state) {
+            continue;
+        }
+
         auto apply_to_state = [&](const ResourceKey& canonical_key) {
             auto& resource_state = state_snapshot[canonical_key];
             const bool was_known = resource_state.known;
-            const bool materialize_unknown_state = resource_state.known || access.write;
+            const bool materialize_unknown_state = resource_state.known || access.write ||
+                                                    access.buffer_state.has_value() ||
+                                                    access.texture_state.has_value();
             if (materialize_unknown_state) {
                 resource_state.known = true;
 
@@ -1395,8 +1503,9 @@ static void ApplyDigestToState(
                 resource_state.has_writer = access.last_access_write;
             }
 
-            if (materialize_unknown_state && (access.read || access.write)) {
-                resource_state.owner_queue = queue;
+            if (materialize_unknown_state) {
+                const EQueueType owner_queue = access.owner_queue.value_or(queue);
+                resource_state.owner_queue = owner_queue;
                 resource_state.last_submission = submit_key;
             }
 

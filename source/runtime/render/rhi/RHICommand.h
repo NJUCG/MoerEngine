@@ -55,6 +55,7 @@ public:
         BuildTLAS,
         TraceRay,
         Barrier,
+        SetTrackedState,
         QueueTransfer,
         SetDrawState,
         SetGeometryPassDrawState,
@@ -72,9 +73,10 @@ public:
         "UploadBuffer",    "CopyBackBuffer",      "BufferToBuffer", "BufferToTexture",
         "TextureToBuffer", "UploadTexture",       "TextureToTexture", "CopyBackTexture",
         "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
-        "Barrier",         "QueueTransfer",       "SetDrawState",   "SetGeometryPassDrawState",
-        "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Scope",
-        "Query",           "Custom",              "CopyScope",      "BufferOverlap"
+        "Barrier",         "SetTrackedState",     "QueueTransfer",  "SetDrawState",
+        "SetGeometryPassDrawState", "MultiDraw",  "UpdateBindlessArray", "ClearResource",
+        "Scope",           "Query",               "Custom",         "CopyScope",
+        "BufferOverlap"
     };
 
 private:
@@ -572,6 +574,25 @@ struct ReadBuffer {
 struct WriteBuffer {
     BufferView   buffer;
     EBufferState state;
+};
+
+enum class EBarrierTrackedState : uint8_t {
+    Update,
+    Skip
+};
+
+struct TrackedTextureState {
+    TextureView    texture{};
+    ETextureState  state{ETextureState::UNDEFINED};
+    EQueueType     owner_queue{EQueueType::Ignore};
+    bool           access_write{false};
+};
+
+struct TrackedBufferState {
+    BufferView    buffer{};
+    EBufferState  state{EBufferState::UNDEFINED};
+    EQueueType    owner_queue{EQueueType::Ignore};
+    bool          access_write{false};
 };
 
 struct DrawBatchElement {
@@ -1488,13 +1509,24 @@ public:
 
     template<typename... T>
     void Barriers(EQueueType _src_queue, EQueueType _dst_queue, EPassType _pass, T... _args) {
+        Barriers(_src_queue, _dst_queue, _pass, EBarrierTrackedState::Update, _args...);
+    }
+
+    template<typename... T>
+    void Barriers(
+        EQueueType            _src_queue,
+        EQueueType            _dst_queue,
+        EPassType             _pass,
+        EBarrierTrackedState  _tracked_state,
+        T...                  _args
+    ) {
         constexpr uint read_tex_cnt  = GetReadTextureCnt<T...>::value;
         constexpr uint write_tex_cnt = GetWriteTextureCnt<T...>::value;
         constexpr uint read_buf_cnt  = GetReadBufferCnt<T...>::value;
         constexpr uint write_buf_cnt = GetWriteBufferCnt<T...>::value;
         static_assert(read_tex_cnt + write_tex_cnt + read_buf_cnt + write_buf_cnt > 0, "no barriers");
 
-        BeginBarriers(read_tex_cnt, write_tex_cnt, read_buf_cnt, write_buf_cnt, _src_queue, _dst_queue);
+        BeginBarriers(read_tex_cnt, write_tex_cnt, read_buf_cnt, write_buf_cnt, _src_queue, _dst_queue, _tracked_state);
         (InnerBarrier(_args, _pass), ...);
         EndBarriers();
     }
@@ -1504,9 +1536,10 @@ public:
         EQueueType            _dst_queue,
         EPassType             _pass,
         Array<ReadTexture>&&  _read_tex,
-        Array<WriteTexture>&& _write_tex
+        Array<WriteTexture>&& _write_tex,
+        EBarrierTrackedState  _tracked_state = EBarrierTrackedState::Update
     ) {
-        BeginBarriers(_read_tex.size(), _write_tex.size(), 0, 0, _src_queue, _dst_queue);
+        BeginBarriers(_read_tex.size(), _write_tex.size(), 0, 0, _src_queue, _dst_queue, _tracked_state);
         for (auto& tex : _read_tex) {
             InnerBarrier(tex, _pass);
         }
@@ -1521,9 +1554,10 @@ public:
         EQueueType           _dst_queue,
         EPassType            _pass,
         Array<ReadBuffer>&&  _read_buf,
-        Array<WriteBuffer>&& _write_buf
+        Array<WriteBuffer>&& _write_buf,
+        EBarrierTrackedState _tracked_state = EBarrierTrackedState::Update
     ) {
-        BeginBarriers(0, 0, _read_buf.size(), _write_buf.size(), _src_queue, _dst_queue);
+        BeginBarriers(0, 0, _read_buf.size(), _write_buf.size(), _src_queue, _dst_queue, _tracked_state);
         for (auto& buf : _read_buf) {
             InnerBarrier(buf, _pass);
         }
@@ -1537,9 +1571,10 @@ public:
         EQueueType           _src_queue,
         EQueueType           _dst_queue,
         EPassType            _pass,
-        Array<ReadTexture>&& _read_tex
+        Array<ReadTexture>&& _read_tex,
+        EBarrierTrackedState _tracked_state = EBarrierTrackedState::Update
     ) {
-        BeginBarriers(_read_tex.size(), 0, 0, 0, _src_queue, _dst_queue);
+        BeginBarriers(_read_tex.size(), 0, 0, 0, _src_queue, _dst_queue, _tracked_state);
         for (auto& tex : _read_tex) {
             InnerBarrier(tex, _pass);
         }
@@ -1550,9 +1585,10 @@ public:
         EQueueType            _src_queue,
         EQueueType            _dst_queue,
         EPassType             _pass,
-        Array<WriteTexture>&& _write_tex
+        Array<WriteTexture>&& _write_tex,
+        EBarrierTrackedState  _tracked_state = EBarrierTrackedState::Update
     ) {
-        BeginBarriers(0, _write_tex.size(), 0, 0, _src_queue, _dst_queue);
+        BeginBarriers(0, _write_tex.size(), 0, 0, _src_queue, _dst_queue, _tracked_state);
         for (auto& tex : _write_tex) {
             InnerBarrier(tex, _pass);
         }
@@ -1568,6 +1604,10 @@ public:
         EQueueType             _dst_queue,
         Array<ExportTexture>&& _textures_to_export,
         Array<ExportBuffer>&&  _buffers_to_export
+    );
+    RENDER_API CommandList& SetTrackedState(
+        Array<TrackedTextureState>&& _textures,
+        Array<TrackedBufferState>&&  _buffers
     );
 
 #pragma region[ raytracing ]
@@ -1669,7 +1709,8 @@ private:
         uint       _read_buf_cnt,
         uint       _write_buf_cnt,
         EQueueType _src_queue,
-        EQueueType _dst_queue
+        EQueueType _dst_queue,
+        EBarrierTrackedState _tracked_state
     );
     RENDER_API void InnerBarrier(ReadBuffer _buffer, EPassType _pass) {
         InnerReadBuffer(_buffer.buffer, _buffer.state, _pass);

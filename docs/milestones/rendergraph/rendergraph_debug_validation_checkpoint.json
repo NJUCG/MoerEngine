@@ -25,7 +25,7 @@
     },
     {
       "id": "HR-DEBUG-03",
-      "rule": "In single-step mode, AddPass records, submits through RHIExecutor, waits for GPU completion, and publishes a boundary receipt before returning."
+      "rule": "In single-step mode, AddPass records, submits through RHIExecutor, waits for GPU completion, and emits tracked-state updates for exported resources before returning."
     },
     {
       "id": "HR-DEBUG-04",
@@ -33,7 +33,7 @@
     },
     {
       "id": "HR-DEBUG-05",
-      "rule": "Validation output must include graph parameters, RG resources, resolved RHI resources, barriers, fences, queue handoffs, external platform-command-list nodes, and boundary receipts when enabled."
+      "rule": "Validation output must include graph parameters, RG resources, resolved RHI resources, barriers, fences, queue handoffs, external platform-command-list nodes, and tracked-state boundaries when enabled."
     }
   ],
   "checkpoints": [
@@ -70,7 +70,7 @@
       "problem": "The new parameter-driven RenderGraph surface needs a focused test before later barrier, queue, external pass, and debug checkpoints build on top of it.",
       "what_must_be_true_after_this_checkpoint": [
         "TestRHITranslate includes RenderGraphContractFoundation as a focused RenderGraph contract test case.",
-        "The test validates queue-only pass flags, serial None-flag passes, canonical range overlap rules, macro/template graph-owned parameter access collection for fixed views and graph-allocated dynamic access arrays, deterministic hazard compilation, setup-before-compile ordering, and RGFrameContext export receipts.",
+        "The test validates queue-only pass flags, serial None-flag passes, canonical range overlap rules, macro/template graph-owned parameter access collection for fixed views and graph-allocated dynamic access arrays, deterministic hazard compilation, and Dispatch-owned setup/compile ordering.",
         "TestRHITranslate includes RecordCompleteDependency to validate command-list record-complete GraphEventRef propagation into RHIExecutor preprocess/translate dependencies.",
         "The test is validated through testscripts/windows/test_rhi_translate.ps1 and testscripts/windows/test_all.ps1, both of which require the RenderGraphContractFoundation marker."
       ],
@@ -114,7 +114,7 @@
       "problem": "Synchronization and resource-state bugs are hard to isolate when the graph batches barriers and records passes in parallel. A debug path should expose one pass boundary at a time.",
       "what_must_be_true_after_this_checkpoint": [
         "In single-step mode, AddSetupPass executes declaration work immediately.",
-        "In single-step mode, AddPass validates that required setup declarations exist, compiles a one-pass plan from the current boundary state, records one RHICommandList, submits through RHIExecutor, waits for GPU completion, and publishes a boundary receipt before returning.",
+        "In single-step mode, AddPass validates that required setup declarations exist, compiles a one-pass plan from current graph-local state, records one RHICommandList, submits through RHIExecutor, waits for GPU completion, and emits tracked-state updates for exported resources before returning.",
         "Platform-command-list external passes emit an immediate RHI platform callback command; backend translate executes the callback and the same per-pass GPU wait synchronizes it.",
         "Single-step mode disables async setup, async compile, parallel record, cross-pass barrier batching, and transient aliasing across future passes.",
         "Normal mode output is unchanged when the cvar is disabled."
@@ -154,7 +154,7 @@
         "Validation can print barrier batches as text tables with pass id, resource id, range, source state, destination state, access, stage, queue, and insertion point.",
         "Validation can print fence and queue handoff tables with producer segment, consumer segment, wait token, signal token, queue ids, and resource ranges.",
         "Validation emits DOT files for pass/resource dependency graph and barrier/fence synchronization graph.",
-        "External platform-command-list nodes, raw RHI receipts, multi-graph import/export edges, and present/export tails appear in the graph output.",
+        "External platform-command-list nodes, raw RHI tracked-state boundaries, multi-graph import/export edges, and present/export tails appear in the graph output.",
         "Dumping is side-effect free and can run after compile or after single-step pass execution."
       ],
       "files_likely_affected": [
@@ -186,8 +186,8 @@
   ],
   "stage_exit_gate": [
     "Single-step debug mode is selected before graph scope and cannot switch mid-graph.",
-    "Each AddPass in single-step mode records, submits, GPU-syncs, and publishes a boundary receipt before returning.",
-    "Validation dumps include graph parameters, RG resources, resolved RHI resources, barriers, fences, queue handoffs, external nodes, and boundary receipts.",
+    "Each AddPass in single-step mode records, submits, GPU-syncs, and emits tracked-state updates for exported resources before returning.",
+    "Validation dumps include graph parameters, RG resources, resolved RHI resources, barriers, fences, queue handoffs, external nodes, and tracked-state boundaries.",
     "Validation graph output is deterministic and side-effect free."
   ],
   "validation": [

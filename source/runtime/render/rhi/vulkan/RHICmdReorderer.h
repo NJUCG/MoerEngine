@@ -1561,6 +1561,9 @@ public:
             case Command::EType::Barrier:
                 VisitCmd(static_cast<const BarrierCmd*>(_cmd));
                 break;
+            case Command::EType::SetTrackedState:
+                AddCmd(_cmd, layer_offset);
+                break;
             case Command::EType::QueueTransfer:
                 VisitCmd(static_cast<const QueueTransferCmd*>(_cmd));
                 break;

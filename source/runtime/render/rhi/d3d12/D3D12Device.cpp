@@ -1291,6 +1291,8 @@ struct D3D12CommandPreprocessVisitor {
             case Command::EType::Barrier:
                 Visit(static_cast<const BarrierCmd&>(*_cmd));
                 break;
+            case Command::EType::SetTrackedState:
+                break;
             case Command::EType::ShaderDispatch:
                 Visit(static_cast<const DispatchCmd&>(*_cmd));
                 break;
@@ -1436,6 +1438,8 @@ struct D3D12CommandVisitor {
                 break;
             case Command::EType::Barrier:
                 break; // no-op
+            case Command::EType::SetTrackedState:
+                break;
             case Command::EType::ShaderDispatch:
                 Visit(static_cast<const DispatchCmd&>(*_cmd));
                 break;

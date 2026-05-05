@@ -21,8 +21,8 @@ Hard constraints:
 - Native custom work that does not record through `RHICommandList`, such as NVAPI or DirectML-style command-list extensions, is represented as a typed external pass with explicit resource access. The initial supported external pass kind is platform-command-list interaction only.
 - Platform-command-list external pass callbacks are stored as typed RHI commands during RG record and executed during backend translate/platform record. RG does not execute those callbacks directly.
 - Direct GPU runtime external passes that submit or synchronize outside the platform command list are out of scope for the initial design.
-- Raw RHI work before or after RenderGraph crosses the graph boundary only through explicit import/export receipts containing whole-resource state, owner queue, and completion boundary.
-- Multiple RenderGraph instances in one frame share a frame context and global pool, but each graph keeps its own CPU allocator and transient alias allocator. Cross-graph resource flow is explicit export/import, not hidden state sharing.
+- Raw RHI work before or after RenderGraph crosses the graph boundary through RHIExecutor ordering plus RHI resource persistent state updated by preprocess.
+- Multiple RenderGraph instances in one frame share device-level pools only through completion-checked pool ownership; each graph keeps its own CPU allocator and transient alias allocator.
 - Debug single-step mode is controlled by console variables sampled outside the graph scope. It cannot be toggled while a RenderGraph is being constructed or dispatched.
 - Validation dumps are read-only outputs from frozen setup data or compiled plans. They must not mutate graph state or change scheduling.
 
@@ -118,7 +118,7 @@ Reason: one frame needs one owner for pass ordering, resource lifetime, barriers
 
 Children:
 
-- `RGFrameContext`: owns frame-sequence interop state shared by raw RHI work and multiple RenderGraph instances.
+- RHI tracked-state boundary: persistent resource state lives on RHI resources and is read/written only by the RHI preprocess TaskPipe.
 - `RGFrameAllocator`: owns frame-local CPU memory.
 - `RGResourceRegistry`: owns logical texture, buffer, import, export, and view descriptors.
 - `RGPassRegistry`: owns setup passes, execution passes, parameter pointers, parameter-declared access views, and pass flags.
@@ -133,31 +133,30 @@ Children:
 - `RGDebugController`: snapshots debug console variables and selects normal or single-step execution.
 - `RGValidationLayer`: validates and dumps parameters, resources, barriers, fences, and formatted graph outputs.
 
-### RGFrameContext
+### RHI Tracked-State Boundary
 
-Reason: raw RHI work, external native work, and multiple RenderGraph instances can appear in one frame and need one explicit boundary owner.
+Reason: raw RHI work, external native work, and multiple RenderGraph instances can appear in one frame without a graph-level state owner. The only cross-work state is the RHI resource persistent state visible to preprocess.
 
 State:
 
-- Frame sequence id and graph sequence ids.
-- Latest exported whole-resource state and owner queue for resources that leave a graph.
-- Completion boundaries returned by RHIExecutor, including command lists that contain platform-command-list external passes.
-- Shared `RGGlobalResourcePool` reference for the RHI device.
-- Debug validation table that records which boundary last owns each imported/exported resource.
+- Persistent texture/buffer state stored on RHI resources.
+- Owner queue and last access kind stored with the persistent state.
+- RHIExecutor completion boundaries owned by command-list submission, not by RenderGraph.
+- Optional final `SetTrackedState` command emitted by RenderGraph after graph work.
 
 Boundary:
 
-- Renderers create one `RGFrameContext` per frame.
-- Every `RenderGraph` in the frame is constructed with that context.
-- Raw RHI code can consume only exported receipts or explicitly declared imported states.
-- The context does not merge independent graphs. Cross-graph dependencies are explicit export/import edges.
+- RenderGraph never stores cross-graph resource state.
+- Raw RHI and RenderGraph both communicate through ordinary RHI submissions and RHI resource persistent state.
+- Preprocess is the only TaskPipe that reads or writes persistent resource state.
+- Cross-graph ordering is expressed by RHIExecutor submission order, waits, and record-complete dependencies.
 
 Leaf operations:
 
-- Register a raw RHI submit receipt as a graph import source.
-- Publish a graph dispatch receipt for later raw RHI or RenderGraph imports.
-- Reject importing a resource whose previous producer boundary is incomplete unless a wait is compiled.
-- Reject hidden reuse of graph-local transient resources across two graph instances.
+- Load unknown resource state from RHI persistent state during preprocess seed construction.
+- Use first-use barriers to transition unknown/current RHI state into declared graph access state.
+- Emit a final internal tracked-state pass that records exported states through `CommandList::SetTrackedState`.
+- Keep RG-internal barriers as synchronization-only commands by clearing their tracked-state update flag.
 
 ### RGFrameAllocator
 
@@ -189,7 +188,7 @@ Reason: RenderGraph needs stable logical resources before physical allocation an
 State:
 
 - `RGTextureDesc`, `RGBufferDesc` for created resources.
-- Imported RHI handles with declared initial state, queue owner, and external lifetime flag.
+- Imported RHI handles with queue owner and external lifetime flag. Concrete source state remains in RHI resource persistent state.
 - Export requests with required final state and owner.
 - View descriptors keyed by logical resource, subresource range, format override, and usage.
 
@@ -295,7 +294,7 @@ State:
 
 - Snapshot of `RenderGraph.Debug.SingleStep` and validation dump console variables.
 - Graph debug mode epoch captured before graph construction starts.
-- Single-step boundary receipt after each executed pass.
+- Single-step tracked-state update after each executed pass.
 
 Console variables:
 
@@ -307,7 +306,7 @@ Console variables:
 
 Boundary:
 
-- Console variables are sampled when a `RenderGraph` begins construction or when `RGFrameContext` opens a graph scope.
+- Console variables are sampled when a `RenderGraph` begins construction.
 - Changing debug mode while a graph is active is rejected or deferred to the next graph.
 - Single-step mode is a debug-only execution mode and is not a scheduling model for shipping frame execution.
 
@@ -315,7 +314,7 @@ Leaf operations:
 
 - In normal mode, compile and record follow the asynchronous path.
 - In single-step mode, `AddSetupPass` executes declaration work immediately.
-- In single-step mode, `AddPass` immediately compiles the pass against the current boundary state, records one command list, submits through RHIExecutor, waits for GPU completion, and publishes a new boundary receipt.
+- In single-step mode, `AddPass` immediately compiles the pass against current graph-local state, records one command list, submits through RHIExecutor, waits for GPU completion, and emits tracked-state updates for exported resources.
 - In single-step mode, external platform-command-list passes record into the same immediate command-list segment and sync through the same RHIExecutor boundary.
 - Disable async setup, async compile, parallel record, transient aliasing across later passes, and cross-pass barrier batching in single-step mode.
 
@@ -341,7 +340,7 @@ Leaf operations:
 - Print RG resource descriptors, import/export state, lifetime interval, alias slot, pool eligibility, and resolved RHI resource identity.
 - Print resolved RHI resource data: debug name, backend handle class, usage flags, last known whole-resource state, owner queue, and pool entry id when available.
 - Dump barrier and fence plans as deterministic text tables plus a formatted DOT graph.
-- Include external platform-command-list nodes, raw RHI boundary receipts, and multi-graph import/export edges in the graph output.
+- Include external platform-command-list nodes, raw RHI tracked-state boundaries, and multi-graph import/export edges in the graph output.
 
 ### RGScopeRegistry
 
@@ -455,7 +454,7 @@ Transient allocator state:
 
 Boundary:
 
-- The global pool stores physical resources across frames and is shared by all graphs through `RGFrameContext`.
+- The global pool stores physical resources across frames and is shared by device-level pool ownership, with persistent state stored on the RHI resources themselves.
 - The transient allocator stores one graph's frame-local logical aliasing decisions.
 - Imported resources never enter either pool.
 - Bindless-visible resources enter pools only when descriptor lifetime is graph-owned and invalidated before return.
@@ -504,7 +503,7 @@ State:
 
 - Dispatch options: synchronous or task-graph assisted setup/compile/record.
 - Present request, if any, attached to final graphics submit.
-- Dispatch receipt containing exported resource states, owner queues, and completion boundaries.
+- Final tracked-state command list entry containing exported resource states and owner queues.
 
 Boundary:
 
@@ -519,7 +518,7 @@ Leaf operations:
 - Spawn record tasks for independent segments.
 - Join record tasks.
 - Submit ordered command-list batch to `RHIExecutor::Submit`.
-- Publish dispatch receipt into `RGFrameContext`.
+- Emit the final internal `SetTrackedState` pass for exported imported resources.
 - Optionally call `RHIExecutor::Flush` according to dispatch flags.
 
 ## Flow Simulation
@@ -539,7 +538,7 @@ Tree:
 
 Simulation:
 
-1. The renderer opens `RGFrameContext`, samples debug and validation cvars, then constructs a `RenderGraph` with graph-local allocators.
+1. The renderer samples debug and validation cvars, then constructs a `RenderGraph` with graph-local allocators.
 2. Pass code calls `graph.Alloc<T>()`. The object is constructed in the setup arena; the returned pointer is stable until graph teardown and is registered for validation dumps.
 3. Pass code fills CPU parameters directly. RG resource views stored in those parameters are the source of resource dependencies.
 4. Pass code declares graph-level GPU scopes with `RG_EVENT_SCOPE(graph, name, ...)`. The scope registry stores logical begin/end intent before command-list segmentation exists.
@@ -550,28 +549,28 @@ Simulation:
 9. `Dispatch()` runs setup work, freezes setup data, and starts compile. No execution lambda has recorded GPU commands yet.
 10. Compile normalizes access ranges, validates imports and first use, builds hazard edges, maps scopes to pass intervals, plans queue segments, selects physical resources, and inserts alias barriers.
 11. `RGBarrierCompiler` queries `RGBarrierPolicy` for backend read/read compatibility, write/write ordering, layout transition, queue ownership, and alias requirements. The result is still an RG submit plan with RHI barrier commands, not native API commands.
-12. Compile builds immutable segment records: prefix barriers, pass ids, external callback command slots, suffix barriers, waits/signals, resolved resource tables, scope emissions, record-complete events, and export receipts.
+12. Compile builds immutable segment records: prefix barriers, pass ids, external callback command slots, suffix barriers, waits/signals, resolved resource tables, scope emissions, record-complete events, and final tracked-state updates.
 13. `RGRecorder` creates one record task per parallel segment. Each task owns one `RHICommandList`, attaches a `GraphEventRef` record-complete event, reads only the compiled segment data, and writes abstract RHI commands linearly.
 14. For normal parallel passes, the record task invokes the stored execution lambda as `[](RHICommandList& cmd_list, RGContext context)`. Serial passes use `[](RGContext context)` and execute as ordered CPU graph boundaries without GPU resource access. `RGContext` resolves only the resources declared by pass parameter views. The lambda cannot mutate graph structure or access native platform command lists.
 15. For `PlatformCommandList` external passes, the record task emits one typed `RHIPlatformCommandCallback` command between compiled barriers. It captures callback metadata and resolved native resource requirements but does not execute the callback.
 16. The dispatcher submits command-list batches to `RHIExecutor` in AddPass order and may overlap later RG record with earlier RHI preprocess/translate. RenderGraph does not call backend queues directly.
-17. RHIExecutor waits on each command list's record-complete `GraphEventRef` through TaskGraph/TaskPipe dependencies before preprocess or translate inspects command data. It then preprocesses abstract command lists for submit grouping, dependency waits/signals, event stream metadata, and backend translate work. It consumes RG-provided barriers instead of rediscovering subresource hazards.
+17. RHIExecutor waits on each command list's record-complete `GraphEventRef` through TaskGraph/TaskPipe dependencies before preprocess or translate inspects command data. It then preprocesses abstract command lists for submit grouping, dependency waits/signals, event stream metadata, persistent resource-state updates, and backend translate work. It consumes RG-provided barriers instead of rediscovering subresource hazards.
 18. Backend translate allocates native command lists, lowers RHI barriers through backend code, and visits each RHI command.
 19. Ordinary RHI draw/dispatch/copy commands become native API commands such as Vulkan or D3D12 command-list records.
 20. `RHIPlatformCommandCallback` is visited only after the native command list and backend resource handles are valid. The backend builds `RGPlatformCommandListContext`, invokes the user callback, restores or invalidates backend state as required, and then continues translating following commands.
 21. RHIExecutor submits native command lists with compiled queue waits/signals. The GPU sees only ordered backend submissions and never sees graph setup objects.
-22. On completion, RHIExecutor publishes completion boundaries. RenderGraph dispatch publishes export receipts into `RGFrameContext` with final whole-resource state, owner queue, and completion token.
-23. Global pool return, transient backing retirement, later raw RHI work, and later RenderGraph imports consume those receipts. No hidden backend tracker state is required to continue the frame.
+22. Before the graph command list ends, RenderGraph emits a final internal `SetTrackedState` command for exported imported resources. RHI preprocess writes those states into the resources' persistent state.
+23. Global pool return, transient backing retirement, later raw RHI work, and later RenderGraph imports consume RHI resource persistent state plus RHIExecutor ordering. No graph-level cross-work state table is required to continue the frame.
 
 Single-step variant:
 
-- The same layers are used, but `AddPass` compiles a one-pass plan, records one `RHICommandList`, submits through RHIExecutor, waits for GPU completion, and publishes a boundary receipt before returning.
+- The same layers are used, but single-step dispatch compiles a one-pass plan internally, records one `RHICommandList`, submits through RHIExecutor, waits for GPU completion, and writes final tracked state before returning.
 - The variant deliberately disables async compile, parallel record, future-pass transient aliasing, and cross-pass barrier batching so every pass boundary can be inspected.
 - `PlatformCommandList` external passes still execute only during backend translate; single-step only changes when the containing command list is submitted and waited.
 
 ### Primary Frame Flow
 
-1. The renderer creates one `RGFrameContext` and one or more frame-local `RenderGraph` instances.
+1. The renderer creates one or more frame-local `RenderGraph` instances. Cross-graph resource state stays in RHI resource persistent state.
 2. Pass code allocates parameter objects with `graph.Alloc<T>()` and writes CPU values directly.
 3. Pass code declares graph-level GPU scopes with `RG_EVENT_SCOPE(graph, name, ...)`.
 4. Pass parameters store macro-declared `RGTextureView` / `RGBufferView` entries or dynamic RG-allocated `RGTextureAccessArray` / `RGBufferAccessArray` objects with access mode, range, state, queue intent, and bindless usage.
@@ -582,32 +581,32 @@ Single-step variant:
 9. Compile builds dependencies, barriers, lifetimes, queue segments, external nodes, scope emissions, and submit plan.
 10. Record tasks create RHICommandLists, attach record-complete events, emit compiled barriers/scopes, and call parallel execution lambdas.
 11. Dispatcher submits command-list batches to RHIExecutor in AddPass order and may overlap later RG record with earlier RHI preprocess/translate.
-12. Dispatch publishes an export receipt to `RGFrameContext`.
+12. Dispatch emits the final internal `SetTrackedState` command for exported imported resources.
 13. RHIExecutor waits on record-complete events through TaskGraph/TaskPipe dependencies, preprocesses, translates, invokes platform-command-list external callbacks during backend platform record, submits, resolves GPU events, and owns frame boundary convergence for RHI work.
 
 ### Resource State Flow
 
-1. Imported resources enter with explicit initial state and owner.
+1. Imported resources enter RenderGraph without a graph-level initial state. Preprocess loads the current RHI persistent state when the first RHI barrier or access is inspected.
 2. Created transient resources enter as unknown and can first materialize on write, clear, upload, or discard.
-3. First read of unknown resource is a compile error.
-4. Each pass access updates graph-local subresource or buffer-range state.
+3. First read of an uncreated graph resource is a compile error.
+4. Each pass access updates graph-local compile state only. RG-internal barriers are synchronization-only RHI barrier commands and do not write persistent resource state.
 5. Queue ownership changes become explicit submit waits/signals plus import/export barriers.
-6. Exported resources publish canonical whole-resource final state for raw RHI frame-boundary tracking.
+6. Exported imported resources publish canonical final state through the final internal `SetTrackedState` command. Only RHI preprocess writes the persistent resource state.
 
 ### Raw RHI / RenderGraph Interop Flow
 
-1. Raw RHI work before a graph submits through RHIExecutor and produces a submit receipt with completion boundary, final whole-resource state, and owner queue for exported resources.
-2. The graph imports those resources through `RGFrameContext`; import state becomes the graph-local initial state.
-3. Compile inserts waits and acquire/import barriers when the raw RHI producer boundary is not already complete.
-4. Graph work runs and exports resources needed by later raw RHI work or later graphs.
-5. Later raw RHI command lists consume the graph dispatch receipt and start from the exported whole-resource state.
-6. No implicit global flush is inserted between raw RHI and graph work. Ordering is represented by compiled waits/signals and submit receipts.
+1. Raw RHI work before a graph submits through RHIExecutor and lets preprocess update persistent resource state from ordinary accesses, tracked-state commands, or barriers that opt into tracked-state writes.
+2. The graph imports those RHI resources without copying state into RG-owned frame context.
+3. Compile emits first-use barriers from unknown/current RHI state to declared graph access state. The actual source state is resolved by RHI preprocess from the resource persistent state.
+4. Graph work runs and exports resources needed by later raw RHI work or later graphs through a final internal `SetTrackedState` command.
+5. Later raw RHI command lists start from the RHI resource persistent state written by preprocess, so raw RHI can be submitted between two graph dispatches.
+6. No implicit global flush is inserted between raw RHI and graph work. Ordering is represented by RHIExecutor submission order, waits/signals, and record-complete dependencies.
 
 ### Multiple RenderGraph Flow
 
-1. Every graph in the frame shares one `RGFrameContext` and one device-level `RGGlobalResourcePool`.
+1. Every graph owns its own CPU graph state and can share device-level pooled physical resources only through explicit pool ownership.
 2. Each graph owns its own setup allocator, compile allocator, scratch allocator, and transient alias allocator.
-3. A resource produced by graph A and consumed by graph B must be exported by A and imported by B with a receipt boundary.
+3. A resource produced by graph A and consumed by graph B must be exported by A through `SetTrackedState` and imported by B as an RHI resource whose persistent state is visible to preprocess.
 4. Independent graphs may dispatch independently if they do not import each other's resources and do not contend for incomplete pooled resources.
 5. Cross-graph transient aliasing is not inferred. If two workloads need one shared alias plan, they must be compiled as one graph.
 6. The global pool may serve multiple graphs only through completion-checked checkout. A resource returned by graph A is not available to graph B until its retire boundary is satisfied.
@@ -629,7 +628,7 @@ Single-step variant:
 1. `RGDebugController` snapshots `RenderGraph.Debug.SingleStep` before graph construction starts.
 2. If single-step mode is disabled, graph execution follows the normal setup, compile, record, and submit path.
 3. If single-step mode is enabled, queued `AddSetupPass` preparation work runs before the current pass execution boundary.
-4. Each `AddPass` compiles parameter-declared accesses for the current pass against the current boundary state, records one command list, submits through RHIExecutor, waits for GPU completion, and publishes a new boundary receipt.
+4. Each `AddPass` compiles parameter-declared accesses for the current pass against current graph-local state, records one command list, submits through RHIExecutor, waits for GPU completion, and emits tracked-state updates for exported resources.
 5. Each `PlatformCommandList` external pass emits an immediate platform callback RHI command; backend translate invokes the callback and the same per-pass GPU wait synchronizes it.
 6. Single-step mode disables async compile, parallel record, transient aliasing across future passes, and cross-pass barrier batching so the failing pass boundary is visible.
 7. Console variable changes inside an active graph are ignored until the next graph or rejected by debug validation.
@@ -774,12 +773,12 @@ Algorithm:
 
 Algorithm:
 
-1. Convert every raw RHI receipt, graph export receipt, and external pass completion into `RGBoundaryToken`.
-2. For each graph import, find the latest token for the imported resource in `RGFrameContext`.
-3. Validate the imported state, owner queue, and completion boundary are explicit.
-4. Insert wait/acquire work when the producer token may still be in flight.
-5. For every graph export, publish final whole-resource state, owner queue, and completion boundary into the dispatch receipt.
-6. Reject hidden boundary transitions when the caller attempts raw RHI -> graph -> raw RHI reuse without import/export metadata.
+1. Treat imported RHI resources as unknown graph-local state whose concrete source state is resolved by RHI preprocess from resource persistent state.
+2. Compile first-use barriers from unknown/current state to declared pass access state.
+3. Keep RG-internal barriers synchronization-only by setting the RHI barrier tracked-state flag to skip persistent writes.
+4. For every exported imported resource, append a final internal `SetTrackedState` command with whole-resource final state, owner queue, and last access kind.
+5. Let RHIExecutor ordering and resource persistent state handle raw RHI -> graph -> raw RHI and graph -> raw RHI -> graph sequences.
+6. Reject hidden boundary transitions when the caller attempts reuse without declared RG accesses or explicit RHI commands.
 
 ### External Pass Compiler
 
@@ -804,10 +803,10 @@ Algorithm:
 2. Store the snapshot in `RGDebugController`; do not read the cvar again until the next graph.
 3. On `AddSetupPass`, store preparation work in graph-owned setup order.
 4. On `AddPass`, extract resource access from parameters and validate that required parameter views exist for the pass.
-5. Compile a one-pass plan from the current `RGFrameContext` boundary and existing graph-local state.
+5. Compile a one-pass plan from existing graph-local state plus RHI persistent state resolved during preprocess.
 6. Record one RHICommandList, including barriers, scopes, validation markers, and platform callback RHI command if present.
 7. Submit through RHIExecutor and wait for GPU completion before returning from `AddPass`.
-8. Publish the pass output as a boundary receipt for the next declared pass.
+8. Emit tracked-state updates for pass outputs needed by later raw RHI or graph work.
 9. Reject attempts to toggle single-step mode while a graph scope is active.
 
 ### Validation Dump Compiler
@@ -887,7 +886,7 @@ Tradeoff:
 - Allow debug cvars to switch single-step mode inside an active graph: rejected because half the graph would be compiled under one execution model and half under another.
 - Make validation graph dumps influence scheduling: rejected because diagnostics must be observational.
 - Transparently share transient aliases across independent RenderGraph instances: rejected because it requires whole-frame lifetime compilation; callers should compile one graph when they need cross-workload alias optimization.
-- Let raw RHI and RenderGraph exchange resources through backend tracker side effects: rejected because resource state boundaries must be explicit import/export receipts.
+- Let raw RHI and RenderGraph exchange resources through graph-owned cross-work state tables: rejected because cross-RG state belongs to RHI resource persistent state and must be read/written only by preprocess.
 - Model graph GPU scopes as a CommandList-local stack: rejected because one logical scope can span multiple compiled command lists.
 - Add a RenderGraph submission backend: rejected because RHIExecutor already owns translate scheduling, submit runtime, interrupt handling, and profiling completion.
 - Preserve raw RHI subresource persistent tracking: rejected because it keeps the main source of resource tracking complexity in the backend.
@@ -904,10 +903,10 @@ Tradeoff:
 8. Implement barrier batch compiler and queue handoff plan.
 9. Implement transient resource lifetime and alias allocation.
 10. Implement global resource pool checkout, lazy state metadata, delayed return, and discard first-use handling.
-11. Implement `RGFrameContext`, import/export receipts, and raw RHI boundary tokens.
+11. Implement RHI `SetTrackedState`, barrier tracked-state flags, and preprocess-only persistent state updates for raw RHI / RenderGraph interop.
 12. Implement typed RHI platform callback command and backend visitor execution hook.
 13. Implement platform-command-list external pass nodes with native capability validation.
-14. Implement multi-graph sequencing through `RGFrameContext` without cross-graph transient aliasing.
+14. Implement multi-graph sequencing through RHIExecutor ordering and RHI resource persistent state without cross-graph transient aliasing.
 15. Implement scope registry and scope compiler.
 16. Implement record scheduler and single-writer RHICommandList recording.
 17. Implement dispatcher submission through RHIExecutor.

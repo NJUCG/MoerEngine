@@ -769,6 +769,15 @@ CommandList& CommandList::SetRecordCompleteEvent(GraphEventRef _event) {
     return *this;
 }
 
+CommandList& CommandList::SetTrackedState(
+    Array<TrackedTextureState>&& _textures,
+    Array<TrackedBufferState>&&  _buffers
+) {
+    EnsureNoActiveCopyScope("CommandList::SetTrackedState");
+    commands.emplace_back(MakeUnique<SetTrackedStateCmd>(std::move(_textures), std::move(_buffers)));
+    return *this;
+}
+
 CommandList& CommandList::DeleteResources() {
     EnsureNoActiveCopyScope("CommandList::DeleteResources");
     submit_delete_resources = true;
@@ -800,12 +809,19 @@ void CommandList::BeginBarriers(
     uint       _read_buf_cnt,
     uint       _write_buf_cnt,
     EQueueType _src_queue,
-    EQueueType _dst_queue
+    EQueueType _dst_queue,
+    EBarrierTrackedState _tracked_state
 ) {
     EnsureNoActiveCopyScope("CommandList::BeginBarriers");
     commands.push_back(
         MakeUnique<BarrierCmd>(
-            _read_tex_cnt, _write_tex_cnt, _read_buf_cnt, _write_buf_cnt, _src_queue, _dst_queue
+            _read_tex_cnt,
+            _write_tex_cnt,
+            _read_buf_cnt,
+            _write_buf_cnt,
+            _src_queue,
+            _dst_queue,
+            _tracked_state
         )
     );
     current_barriers = commands.back().get();

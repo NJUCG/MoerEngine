@@ -53,7 +53,7 @@
     },
     {
       "id": "HR-CONTRACT-10",
-      "rule": "Do not rely on hidden backend tracker state when sequencing raw RHI, RenderGraph, and later raw RHI work. Boundary state must be carried by import/export receipts."
+      "rule": "Do not rely on hidden graph-owned cross-work state when sequencing raw RHI, RenderGraph, and later raw RHI work. Boundary state must live in RHI resource persistent state and be read/written only by preprocess."
     },
     {
       "id": "HR-CONTRACT-11",
@@ -216,8 +216,8 @@
         "Initial external pass support is limited to platform-command-list interaction; direct GPU runtime submit/sync is rejected.",
         "External passes declare resource reads/writes, native platform command-list requirements, native resource handle requirements, and queue type before Compile.",
         "RG record emits platform-command-list external work as a typed RHI command; backend translate executes the native callback when the platform command list exists.",
-        "Raw RHI -> RenderGraph -> raw RHI sequencing uses explicit import/export receipts with whole-resource state, owner queue, and completion boundary.",
-        "Multiple RenderGraph instances share RGFrameContext for receipts and global pool access, but keep CPU graph allocation and transient alias allocation per graph.",
+        "Raw RHI -> RenderGraph -> raw RHI sequencing uses RHIExecutor ordering and RHI resource persistent state updated by explicit tracked-state commands or opted-in RHI barriers.",
+        "Multiple RenderGraph instances share device-level pool ownership, but keep CPU graph allocation and transient alias allocation per graph.",
         "Cross-graph transient aliasing is not implicit; workloads that require one alias plan must be compiled as one graph."
       ],
       "files_likely_affected": [
@@ -242,8 +242,8 @@
     "When implementation lands, use testscripts/windows/test_rhi_translate.ps1 first and testscripts/windows/test_all.ps1 after milestone-sized changes."
   ],
   "implementation_notes": [
-    "Implemented a latest-only RenderGraph construction surface with graph.Alloc<T>(), AddSetupPass(), AddPass(), Compile(), and Dispatch().",
-    "Implemented graph-owned parameter lifetime tracking, macro/template parameter-owned explicit texture/buffer access declarations including fixed single views and graph-allocated dynamic access arrays, serial/parallel AddPass lambda selection, import/export metadata, RGFrameContext receipts, and deterministic hazard-edge compilation.",
+    "Implemented a latest-only RenderGraph construction surface with graph.Alloc<T>(), AddSetupPass(), AddPass(), and Dispatch(); Compile is internal to Dispatch.",
+    "Implemented graph-owned parameter lifetime tracking, macro/template parameter-owned explicit texture/buffer access declarations including fixed single views and graph-allocated dynamic access arrays, serial/parallel AddPass lambda selection, import/export metadata, final tracked-state emission, and deterministic hazard-edge compilation.",
     "Added RenderGraphContractFoundation to TestRHITranslate and required its structured marker in the Windows validation scripts.",
     "Left barrier lowering, CopyScope handoff emission, RHIExecutor submit plans, platform external pass callbacks, GPU trace scope compilation, external pass interop, and focused RHI validation as unfinished checkpoints."
   ]
