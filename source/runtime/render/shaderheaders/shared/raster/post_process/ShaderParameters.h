@@ -150,6 +150,16 @@ struct SsrPipelineBindlessParam {
     uint  gbuffer_metal_rough_ao;
 };
 
+// 1. 该struct中的数据都会被传到Shader中
+// 2. 该struct是C++端和Shader端(HLSL)共享的，所以我们只需要定义一次，就可以在两个语言中共享。
+// 3. 该struct通过PushConstants传入Shader，适合存储每帧变化的数据
+struct DofPipelineBindlessParam {
+    uint input_color_tex;
+    // ==============================
+    // TODO(lab2-dof): Shader参数，从 Renderer (DofPass.h) 中获取传入数据，在 Shader (Dof.hlsl) 中使用
+    // ==============================
+};
+
 struct SmaaSharedPipelineBindlessParam {
     float4x4 clip2world;
     float4x4 clip2prev_clip; // = previous_view_projection * current_inverse_view_projection

@@ -458,6 +458,16 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Dof
+    if (ImGui::TreeNode("Dof (Depth of Field)")) {
+
+        // ==============================
+        // TODO(lab2-dof): 实现UI，通过IMGUI组件修改RasterConfig (m_config) 中的相关变量
+        // ==============================
+
+        ImGui::TreePop();
+    }
+
     // MARK: Denoiser
     if (ImGui::TreeNode(
             "Denoiser",
