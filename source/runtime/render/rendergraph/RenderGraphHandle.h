@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <limits>
-namespace Moer {
+namespace Moer::Render {
 class RenderGraphHandle {
 public:
     using Index   = uint16_t;
@@ -19,9 +19,9 @@ public:
     explicit RenderGraphHandle(Index index) noexcept : index(index) {}
 
     // index to the resource handle
-    static constexpr uint16_t UNINITIALIZED = std::numeric_limits<Index>::max();
+    static constexpr uint16_t uninitialized = std::numeric_limits<Index>::max();
 
-    Index   index   = UNINITIALIZED; // index to a ResourceSlot
+    Index   index   = uninitialized; // index to a ResourceSlot
     Version version = 0;
 
     // protected:
@@ -42,7 +42,7 @@ public:
     }
 
     bool IsInitialized() const noexcept {
-        return index != UNINITIALIZED;
+        return index != uninitialized;
     }
 
     operator bool() const noexcept {
@@ -50,7 +50,7 @@ public:
     }
 
     void Clear() noexcept {
-        index   = UNINITIALIZED;
+        index   = uninitialized;
         version = 0;
     }
 
@@ -66,4 +66,4 @@ public:
         return !operator==(rhs);
     }
 };
-} // namespace Moer
+} // namespace Moer::Render

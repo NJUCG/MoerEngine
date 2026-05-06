@@ -29,26 +29,6 @@ using ComPtr = Microsoft::WRL::ComPtr<T>; // maybe use custom comptr?
 
 namespace Moer::Render {
 
-inline std::wstring StringWiden(std::string_view utf8str) {
-    if (utf8str.empty())
-        return std::wstring();
-    int          cbMultiByte = static_cast<int>(utf8str.size());
-    int          req         = ::MultiByteToWideChar(CP_UTF8, 0, utf8str.data(), cbMultiByte, nullptr, 0);
-    std::wstring res(req, 0);
-    ::MultiByteToWideChar(CP_UTF8, 0, utf8str.data(), cbMultiByte, &res[0], req);
-    return res;
-}
-
-inline std::string StringNarrow(std::wstring_view wstr) {
-    if (wstr.empty())
-        return std::string();
-    int cbMultiByte = static_cast<int>(wstr.size());
-    int req = ::WideCharToMultiByte(CP_UTF8, 0, wstr.data(), cbMultiByte, nullptr, 0, nullptr, nullptr);
-    std::string res(req, 0);
-    ::WideCharToMultiByte(CP_UTF8, 0, wstr.data(), cbMultiByte, &res[0], req, nullptr, nullptr);
-    return res;
-}
-
 inline uint64_t AlignUpToPowerOfTwo(uint64_t value, uint64_t alignment) {
     const uint64_t mask = alignment - 1;
     return (value + mask) & ~mask;
@@ -502,12 +482,12 @@ public:
     D3D12GpuGlobalAllocator(D3D12Device* _device);
 
     Allocation AllocateBufferHeap(
-        std::string_view _name, // name?
+        StringView       _name,
         uint64           _byte_size,
         D3D12_HEAP_TYPE  _heap_type = D3D12_HEAP_TYPE_DEFAULT
     );
     Allocation AllocateTextureHeap(
-        std::string_view _name,
+        StringView       _name,
         uint64           _byte_size,
         uint64           _alignment  = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
         bool             _is_rtv_dsv = false
@@ -547,7 +527,7 @@ public:
 
     void            Destroy() override;                             // from Texxture.RHIResource
     uint            GetMipByteSize(uint _mip_idx) const override;   // from Texture
-    RENDER_API void SetName(const std::string_view _name) override; // from Texture
+    RENDER_API void SetName(StringView _name) override; // from Texture
 };
 
 // not for readback/upload
@@ -584,7 +564,7 @@ public:
     }
 
     void            Destroy() override; // from Buffer.RHIResource, mainly called by CountableRef
-    RENDER_API void SetName(const std::string_view _name) override; // from Buffer
+    RENDER_API void SetName(StringView _name) override; // from Buffer
 
     DescriptorIndex CreateSrv(const BufferView& _range, ED3D12ShaderVariableType _type);
     DescriptorIndex CreateUav(const BufferView& _range, ED3D12ShaderVariableType _type);
@@ -1096,23 +1076,9 @@ public:
     PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
     PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders) override;
 
-    TextureRef CreateTexture(
-        std::string_view   _name,
-        ETextureDimension  _dimension,
-        Extent3D           _size,
-        EPixelFormat       _format,
-        ETextureUsageFlags _usage,
-        uint32_t           _mip_cnt,
-        uint               _array_size
-    ) override;
+    TextureRef CreateTexture(StringView _name, const TextureInfo& _info) override;
 
-    BufferRef CreateBuffer(
-        std::string_view  _name,
-        uint              _element_cnt,
-        uint              _byte_stride,
-        EBufferUsageFlags _usage,
-        EPixelFormat      _format
-    ) override;
+    BufferRef CreateBuffer(StringView _name, const BufferInfo& _info) override;
 
     BindlessArrayRef CreateBindlessArray(uint _max_size) override;
     FenceRef         CreateFence() override;
@@ -1151,7 +1117,7 @@ public:
     //    return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
     //}
 
-    //void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
+    //void SetResourceName(uint64 _object, VkObjectType _object_type, StringView _name);
 
 private:
     D3D12RHIConfig        config;

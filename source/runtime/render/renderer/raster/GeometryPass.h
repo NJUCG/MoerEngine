@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "math/Function.h"
 #include "misc/STL.h"
@@ -37,7 +37,7 @@ public:
 
         RHIDepthStencilStateInfo ds_info =
             RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>();
-        //TODO：开启深度模板测试提高性能
+        //TODO锛氬紑鍚繁搴︽ā鏉挎祴璇曟彁楂樻€ц兘
         // ds_info.b_enable_front_face_stencil = true;
         // ds_info.front_face_pass_stencil_op  = EStencilOp::SO_REPLACE;
         // ds_info.b_enable_back_face_stencil  = true;
@@ -127,8 +127,7 @@ public:
         if (use_gpu_culling) {
             const auto& visibility = context.gpu_culling_buffers.geometry;
 
-            draw.DrawIndirect(
-                "Geometry Pass",
+            draw.DrawIndirect(MOER_TEXT("Geometry Pass"),
                 rect2d,
                 {},
                 IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
@@ -145,8 +144,7 @@ public:
             return;
         }
 
-        draw.DrawIndirect(
-            "Geometry Pass",
+        draw.DrawIndirect(MOER_TEXT("Geometry Pass"),
             rect2d,
             {},
             IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},

@@ -14,7 +14,7 @@ VisualizePass::VisualizePass(RenderDevice& _device, ShaderManager& _manager) :
     visualize_pipeline =
         _manager.Compute<VisualizePipeline>("pipelines/raytracing/passes/VisualizePass.hlsl");
     visualize_params_buffer = device.CreateBuffer<Moer::byte>(
-        "Raytracing::VisualizeBuffer", sizeof(VisualizeParams), EBufferUsageFlags::CONSTANT_BUFFER
+        MOER_TEXT("Raytracing::VisualizeBuffer"), sizeof(VisualizeParams), EBufferUsageFlags::CONSTANT_BUFFER
     );
 }
 
@@ -54,7 +54,8 @@ void VisualizePass::Process(
             _bdls_array
         )
         .Dispatch(
-            uint3(div_ceil(params.output_size.x, 16), div_ceil(params.output_size.y, 16), 1), "Visualize"
+            uint3(div_ceil(params.output_size.x, 16), div_ceil(params.output_size.y, 16), 1),
+            MOER_TEXT("Visualize")
         );
 }
 } // namespace Moer::Render::Raytracing

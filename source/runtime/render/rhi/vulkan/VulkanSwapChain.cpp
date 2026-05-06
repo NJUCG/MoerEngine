@@ -21,6 +21,7 @@
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
+#include "string/Format.h"
 #include "vulkan/vulkan_core.h"
 #include <atomic>
 #include <mutex>
@@ -265,7 +266,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             device.SetResourceName(
                 uint64(image_ready_fences[i]),
                 VK_OBJECT_TYPE_SEMAPHORE,
-                "ImageReadySemaphore_" + std::to_string(i)
+                Printf(MOER_TEXT("ImageReadySemaphore_{}"), i)
             );
             vkCreateSemaphore(
                 device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &render_finished_fences[i]
@@ -273,7 +274,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             device.SetResourceName(
                 uint64(render_finished_fences[i]),
                 VK_OBJECT_TYPE_SEMAPHORE,
-                "RenderFinishedSemaphore_" + std::to_string(i)
+                Printf(MOER_TEXT("RenderFinishedSemaphore_{}"), i)
             );
         }
     }
@@ -287,7 +288,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         for (uint i = 0; i < max_frames_in_flight; i++) {
             vkCreateFence(device.GetDevice(), &fence_info, VK_NULL_HANDLE, &in_flight_fences[i]);
             device.SetResourceName(
-                uint64(in_flight_fences[i]), VK_OBJECT_TYPE_FENCE, "InFlightFence_" + std::to_string(i)
+                uint64(in_flight_fences[i]), VK_OBJECT_TYPE_FENCE, Printf(MOER_TEXT("InFlightFence_{}"), i)
             );
         }
     } else if (!in_flight_fences.empty()) {

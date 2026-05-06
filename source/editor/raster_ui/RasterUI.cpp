@@ -1,8 +1,7 @@
 #include "RasterUI.h"
 
 #include "config/ConfigManager.h"
-
-#include <string_view>
+#include "string/StringConvert.h"
 
 namespace Moer {
 
@@ -32,14 +31,18 @@ void RasterUI::ShowConfig(Synapse::Context& ui) {
         ui.DrawLastItemBorder();
     };
 
+    Utf8String selected_frame_buffer_name = PlatformToUtf8(
+        m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index].GetTexture()->GetName()
+    );
     if (ui.TreeNode(
             "Output Frame Buffer",
             "Output: [%s]",
-            m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index].GetTexture()->GetName().data()
+            selected_frame_buffer_name.c_str()
         )) {
         for (uint i = 0; i < m_frame_buffer_and_name_array.size(); i++) {
+            Utf8String frame_buffer_name = PlatformToUtf8(m_frame_buffer_and_name_array[i].GetTexture()->GetName());
             if (ui.Selectable(
-                    m_frame_buffer_and_name_array[i].GetTexture()->GetName().data(),
+                    frame_buffer_name.c_str(),
                     m_config.selected_frame_buffer_index == i
                 )) {
                 m_config.selected_frame_buffer_index = i;
@@ -602,7 +605,7 @@ void RasterUI::RegisterFrameBuffers(const Array<Render::TextureView>& frame_buff
 }
 
 uint RasterUI::GetDefaultSelectedFrameBufferIndex() const {
-    const std::string default_selected_frame_buffer_name = "tonemapping_output";
+    constexpr StringView default_selected_frame_buffer_name = MOER_TEXT("tonemapping_output");
 
     for (uint i = 0; i < m_frame_buffer_and_name_array.size(); ++i) {
         if (m_frame_buffer_and_name_array[i].GetTexture()->GetName() == default_selected_frame_buffer_name) {

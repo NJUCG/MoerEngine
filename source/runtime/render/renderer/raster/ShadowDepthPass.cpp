@@ -13,6 +13,7 @@
 #include "shader/ShaderMutation.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include "string/Format.h"
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 
 #include <sstream>
@@ -401,7 +402,7 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
             AssetTool::CreateRasterResource<TexDepthTag>(
                 shadow_map_texture,
                 context.device,
-                std::format("ShadowMapTexture_{}", i),
+                Printf(MOER_TEXT("ShadowMapTexture_{}"), i),
                 sm_size,
                 tex_cfg,
                 false
@@ -411,7 +412,7 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
 
             LOG_DEBUG(
                 MOER_TEXT("Create ShadowMap Texture: {}, size ({}, {}), bindless handle: {}"),
-                std::format("ShadowMapTexture_{}", i),
+                Printf(MOER_TEXT("ShadowMapTexture_{}"), i),
                 ui_config.shadow_csm_sm_size,
                 ui_config.shadow_csm_sm_size,
                 shadow_map_texture.hdl
@@ -438,7 +439,7 @@ void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
                 cube_res.tex = nullptr;
             }
 
-            cube_res.name = std::format("PointShadowCube_{}", i);
+            cube_res.name = Printf(MOER_TEXT("PointShadowCube_{}"), i);
 
             // 格式：复用 CSM 的深度格式 (通常是 D32_FLOAT)
             // 用途：既要被采样 (SAMPLED)，又要作为深度附件写入 (DEPTH_STENCIL_ATTACHMENT)
@@ -684,7 +685,7 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
             context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
             use_gpu_culling,
-            std::format("Shadow Depth Pass - {}", cascade_index),
+            Printf(MOER_TEXT("Shadow Depth Pass - {}"), cascade_index),
             cascade_index
         );
 
@@ -793,7 +794,7 @@ void ShadowDepthPass::RenderPointShadows(
             Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
             face_view,
             false,
-            std::format("PointShadow L{} F{}", light_idx, face),
+            Printf(MOER_TEXT("PointShadow L{} F{}"), light_idx, face),
             std::nullopt
         );
     }
@@ -806,7 +807,7 @@ void ShadowDepthPass::RenderShadow(
     const Rect2D&       rect,
     TextureView         depth_view,
     bool                use_gpu_culling,
-    std::string_view    pass_name,
+    StringView          pass_name,
     std::optional<uint> csm_profile_layer
 ) {
     GeometryPassBindlessParam param;

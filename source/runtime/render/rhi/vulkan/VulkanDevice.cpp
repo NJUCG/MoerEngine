@@ -13,8 +13,9 @@
 #include "VulkanUtil.h"
 #include "plugin/VulkanCooperativeSupport.h"
 #include "plugin/VulkanNrdPlugin.h"
+#include "string/Format.h"
+#include "string/StringConvert.h"
 #include "vulkanextension/VulkanExtension.h"
-#include <string_view>
 
 #include "log/LogSystem.h"
 // #include "misc/MacroUtils.h"
@@ -308,14 +309,6 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(gpu, &props);
 
-        // // 以下代码用于Debug AMD GPU
-        // // 笔记本等多 GPU 场景：名称含 "RTX" 时跳过（例如 RTX 5070 Laptop），便于强制走 A 卡等其它适配器
-        // const std::string_view gpu_name(props.deviceName);
-        // if (gpu_name.find("NVIDIA") != std::string_view::npos) {
-        //     LOG_INFO(MOER_TEXT("SelectGpu: skipping '{}' (name contains '5070')."), props.deviceName);
-        //     continue;
-        // }
-
         uint8 priority = 0;
         switch (props.deviceType) {
             case VK_PHYSICAL_DEVICE_TYPE_OTHER:
@@ -355,8 +348,7 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
 
             auto gpu_extensions = VulkanDevice::GetGpuExtensions(gpu);
 
-            std::string log_msg;
-            log_msg += std::string("GPU '") + props.deviceName + "':\n";
+            Utf8String log_msg = Utf8Printf("GPU '{}':\n", static_cast<const char*>(props.deviceName));
 
             bool has_missing = false;
             for (const auto& extension : extensions_required) {
@@ -365,7 +357,8 @@ VkPhysicalDevice VulkanDevice::SelectGpu(uint32 _api_version) {
 
                 if (!gpu_extensions.contains(required_name.data()) && !is_optional) {
                     has_missing = true;
-                    log_msg += std::string(required_name) + "\n";
+                    log_msg += Utf8StringView(required_name.data(), required_name.size());
+                    log_msg += Utf8StringView("\n");
                 }
             }
 
@@ -523,12 +516,12 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
 
     gfx_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
-    SetResourceName(uint64(m_graphics_queue), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
+    SetResourceName(uint64(m_graphics_queue), VK_OBJECT_TYPE_QUEUE, MOER_TEXT("GraphicsQueue"));
     compute_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
-    SetResourceName(uint64(m_compute_queue), VK_OBJECT_TYPE_QUEUE, "ComputeQueue");
+    SetResourceName(uint64(m_compute_queue), VK_OBJECT_TYPE_QUEUE, MOER_TEXT("ComputeQueue"));
     // transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
     copy_queue = MakeUnique<VkCopyQueue>(*this);
-    SetResourceName(uint64(m_transfer_queue), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
+    SetResourceName(uint64(m_transfer_queue), VK_OBJECT_TYPE_QUEUE, MOER_TEXT("TransferQueue"));
 
     if (m_graphics_queue == m_transfer_queue) {
         LOG_WARNING(
@@ -1919,41 +1912,16 @@ CopyQueue& VulkanDevice::GetCopyQueue() {
     return *copy_queue;
 }
 
-TextureRef VulkanDevice::CreateTexture(
-    std::string_view   _name,
-    ETextureDimension  _dimension,
-    Extent3D           _size,
-    EPixelFormat       _format,
-    ETextureUsageFlags _usage,
-    uint32_t           _mip_cnt,
-    uint32_t           _array_size
-) {
-
-    bool        b_depth = uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
-    TextureInfo info{
-        _dimension,
-        _usage,
-        _format,
-        b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
-        _size,
-        uint8(_mip_cnt),
-        uint8((_dimension == ETextureDimension::TEX_CUBE ? 6 : 1) * _array_size),
-        1
-    };
-    info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
-    info.debug_name   = _name;
-
+TextureRef VulkanDevice::CreateTexture(StringView _name, const TextureInfo& _info) {
+    TextureInfo info = _info;
+    if (!info.debug_name.has_value()) {
+        info.debug_name = String(_name);
+    }
     return TextureRef{MoerNew(VulkanTexture)(info, this)};
 }
 
-BufferRef VulkanDevice::CreateBuffer(
-    std::string_view  _name,
-    uint              _element_cnt,
-    uint              _byte_stride,
-    EBufferUsageFlags _usage,
-    EPixelFormat      _format
-) {
-    BufferInfo info{_element_cnt, _byte_stride, _usage, _format};
+BufferRef VulkanDevice::CreateBuffer(StringView _name, const BufferInfo& _info) {
+    BufferInfo info = _info;
     return BufferRef{MoerNew(VulkanBuffer)(_name, info, *this)};
 }
 
@@ -2006,17 +1974,18 @@ const VkSampler VulkanDevice::GetSampler(Sampler _sampler) const {
     return immutable_samplers[idx];
 }
 
-void VulkanDevice::SetResourceName(uint64 _handle, VkObjectType _type, const std::string_view _name) {
+void VulkanDevice::SetResourceName(uint64 _handle, VkObjectType _type, StringView _name) {
 
     VkDebugUtilsObjectNameInfoEXT name_info{VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
+    Utf8String utf8_name = PlatformToUtf8(_name);
     name_info.objectType   = _type;
     name_info.objectHandle = _handle;
-    name_info.pObjectName  = _name.data();
+    name_info.pObjectName  = utf8_name.c_str();
     vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
 }
 
-RuntimePlugin* VulkanDevice::LoadPlugin(std::string_view _name) {
-    auto ite = exts.find(_name.data());
+RuntimePlugin* VulkanDevice::LoadPlugin(StringView _name) {
+    auto ite = exts.find(String(_name));
     if (ite == exts.end())
         return nullptr;
     auto& v = ite->second;
@@ -2046,7 +2015,7 @@ void VulkanDevice::LoadDefaultExtensions() {
 
 #if WITH_NRD
     exts.try_emplace(
-        Moer::Render::Ext::NRDPlugin::name.data(),
+        Moer::Render::Ext::NRDPlugin::name,
         [](VulkanDevice* _device) -> RuntimePlugin* {
             return MoerNew(Moer::Render::Ext::VkNRDPlugin(_device));
         },

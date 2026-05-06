@@ -1157,8 +1157,8 @@ int RunProfilerMain(int argc, const char** argv) {
     RenderDevice::Init(
         DeviceInitInfo{
             .rhi_type        = ERHIType::Vulkan,
-            .name            = "MoerProfiler",
-            .rhi_api_version = "1.3",
+            .name            = MOER_TEXT("MoerProfiler"),
+            .rhi_api_version = MOER_TEXT("1.3"),
         }
     );
 
@@ -1178,11 +1178,11 @@ int RunProfilerMain(int argc, const char** argv) {
             .size              = {resolution.x, resolution.y},
             .back_buffer_count = profiler_back_buffer_count,
             .preferred_format  = PF_R8G8B8A8_SRGB,
-            .debug_name        = "Profiler Presentation Surface",
+            .debug_name        = MOER_TEXT("Profiler Presentation Surface"),
         }
     );
     TextureRef   output =
-        device.CreateTexture("ProfilerOutput", Extent2D(resolution.x, resolution.y), presentation_surface->GetFormat(), ETextureUsageFlags::COLOR_ATTACHMENT);
+        device.CreateTexture(MOER_TEXT("ProfilerOutput"), Extent2D(resolution.x, resolution.y), presentation_surface->GetFormat(), ETextureUsageFlags::COLOR_ATTACHMENT);
 
     auto ui_renderer = MakeUnique<Render::UIRenderer>(device);
     Synapse::Context synapse_context{};
@@ -1234,7 +1234,7 @@ int RunProfilerMain(int argc, const char** argv) {
             resolution = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
             presentation_surface->Resize({resolution.x, resolution.y});
             output = device.CreateTexture(
-                "ProfilerOutput",
+                MOER_TEXT("ProfilerOutput"),
                 Extent2D(resolution.x, resolution.y),
                 presentation_surface->GetFormat(),
                 ETextureUsageFlags::COLOR_ATTACHMENT

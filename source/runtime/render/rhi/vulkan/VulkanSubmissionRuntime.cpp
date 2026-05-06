@@ -305,7 +305,7 @@ SubmissionPresentResult SubmissionPresentContext::Present(
     auto* swapchain_texture = ResourceCast(swapchain->GetSwapchainImage(image_index).texture);
 
     cmd_list.Begin();
-    cmd_list.BeginLabel("Submission Present", {0.0f, 1.0f, 1.0f, 1.0f});
+    cmd_list.BeginLabel(MOER_TEXT("Submission Present"), {0.0f, 1.0f, 1.0f, 1.0f});
     tracker.SetPassType(EPassType::Graphics);
 
     TrackerSeed        present_seed{};
@@ -362,7 +362,7 @@ SubmissionPresentResult SubmissionPresentContext::Present(
     tracker.ResolveBarriers();
     tracker.DispatchBarriers(cmd_list);
 
-    cmd_list.InsertLabel("Copy Present Image", {0.0f, 0.0f, 0.0f, 1.0f});
+    cmd_list.InsertLabel(MOER_TEXT("Copy Present Image"), {0.0f, 0.0f, 0.0f, 1.0f});
     cmd_list.CopyTexture(
         src_texture,
         swapchain_texture,

@@ -11,7 +11,7 @@
 namespace Moer::Render {
 
 struct GPUEventNode {
-    std::string name;
+    String      name;
     EQueueType  queue;
     uint32      depth;
     uint64      start_ns;
@@ -57,7 +57,7 @@ private:
 
     struct CompletedGPUEvent {
         GPUEvent::EType type;
-        std::string     name;
+        String          name;
         EQueueType      queue;
         uint32          depth;
         uint64          enqueue_order;

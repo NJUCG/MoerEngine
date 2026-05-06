@@ -36,7 +36,7 @@ RTContext::RTContext(
 
     RenderDevice& device = RenderDevice::Get();
     neighbor_offset_buf  = device.CreateBuffer<byte>(
-        "Raytracing::neighbor_offset_buf",
+        MOER_TEXT("Raytracing::neighbor_offset_buf"),
         is_ctx.GetNeighborOffsetCnt() * 2,
         EBufferUsageFlags::UNORDERED_ACCESS,
         PF_R8G8_SNORM
@@ -59,117 +59,117 @@ void RTContext::SetBindlessHandles(const GpuScene::Res& gpu_scene_res) {
 void RTContext::FillFrameResources(uint2 _resolution) {
     RenderDevice& device = RenderDevice::Get();
     frame_rt.view_depth  = device.CreateTexture(
-        "view_depth",
+        MOER_TEXT("view_depth"),
         Extent2D(_resolution),
         PF_R32_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.diffuse_albedo = device.CreateTexture(
-        "diffuse_albedo",
+        MOER_TEXT("diffuse_albedo"),
         Extent2D(_resolution),
         PF_R32_UINT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.specular_roughness = device.CreateTexture(
-        "specular_roughness",
+        MOER_TEXT("specular_roughness"),
         Extent2D(_resolution),
         PF_R32_UINT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.normal = device.CreateTexture(
-        "normal",
+        MOER_TEXT("normal"),
         Extent2D(_resolution),
         PF_R32_UINT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.emission = device.CreateTexture(
-        "emission",
+        MOER_TEXT("emission"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.motion = device.CreateTexture(
-        "motion",
+        MOER_TEXT("motion"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.clip_depth = device.CreateTexture(
-        "clip_depth",
+        MOER_TEXT("clip_depth"),
         Extent2D(_resolution),
         PF_R32_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
 
     frame_rt.prev_view_depth = device.CreateTexture(
-        "prev_view_depth",
+        MOER_TEXT("prev_view_depth"),
         Extent2D(_resolution),
         PF_R32_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.prev_diffuse_albedo = device.CreateTexture(
-        "prev_diffuse_albedo",
+        MOER_TEXT("prev_diffuse_albedo"),
         Extent2D(_resolution),
         PF_R32_UINT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.prev_specular_roughness = device.CreateTexture(
-        "prev_specular_roughness",
+        MOER_TEXT("prev_specular_roughness"),
         Extent2D(_resolution),
         PF_R32_UINT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.prev_normal = device.CreateTexture(
-        "prev_normal",
+        MOER_TEXT("prev_normal"),
         Extent2D(_resolution),
         PF_R32_UINT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.prev_luminance = device.CreateTexture(
-        "prev_luminance",
+        MOER_TEXT("prev_luminance"),
         Extent2D(_resolution),
         PF_R16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
 
     frame_rt.normal_roughness = device.CreateTexture(
-        "normal_roughness",
+        MOER_TEXT("normal_roughness"),
         Extent2D(_resolution),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.diffuse_lighting = device.CreateTexture(
-        "diffuse_lighting",
+        MOER_TEXT("diffuse_lighting"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.prev_diffuse_lighting = device.CreateTexture(
-        "prev_diffuse_lighting",
+        MOER_TEXT("prev_diffuse_lighting"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.specular_lighting = device.CreateTexture(
-        "specular_lighting",
+        MOER_TEXT("specular_lighting"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.prev_specular_lighting = device.CreateTexture(
-        "prev_specular_lighting",
+        MOER_TEXT("prev_specular_lighting"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.temporal_sample_pos = device.CreateTexture(
-        "temporal_sample_pos",
+        MOER_TEXT("temporal_sample_pos"),
         Extent2D(_resolution),
         PF_R16G16_SINT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.gradients = device.CreateTexture(
-        "gradients",
+        MOER_TEXT("gradients"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
@@ -177,26 +177,26 @@ void RTContext::FillFrameResources(uint2 _resolution) {
         2
     );
     frame_rt.restir_luminance = device.CreateTexture(
-        "restir_luminance",
+        MOER_TEXT("restir_luminance"),
         Extent2D(_resolution),
         PF_R16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.denoised_diffuse_lighting = device.CreateTexture(
-        "denoised_diffuse_lighting",
+        MOER_TEXT("denoised_diffuse_lighting"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.denoised_specular_lighting = device.CreateTexture(
-        "denoised_specular_lighting",
+        MOER_TEXT("denoised_specular_lighting"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
 
     frame_rt.debug_color = device.CreateTexture(
-        "debug_color",
+        MOER_TEXT("debug_color"),
         Extent2D(_resolution),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED |
@@ -204,33 +204,33 @@ void RTContext::FillFrameResources(uint2 _resolution) {
     );
     // frame_rt.final_color = device.CreateTexture("final_color", Extent2D(_resolution), PF_R8G8B8A8_SRGB, ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED);
     frame_rt.ldr_color = device.CreateTexture(
-        "ldr_color",
+        MOER_TEXT("ldr_color"),
         Extent2D(_resolution),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::COLOR_ATTACHMENT |
             ETextureUsageFlags::SAMPLED
     );
     frame_rt.hdr_color = device.CreateTexture(
-        "hdr_color",
+        MOER_TEXT("hdr_color"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.feedback_color_ping = device.CreateTexture(
-        "feedback_color",
+        MOER_TEXT("feedback_color"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
     frame_rt.feedback_color_pong = device.CreateTexture(
-        "rw_feedback_color",
+        MOER_TEXT("rw_feedback_color"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SNORM,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
     );
 
     frame_rt.resolved_color = device.CreateTexture(
-        "resolved_color",
+        MOER_TEXT("resolved_color"),
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
@@ -278,7 +278,7 @@ void RTContext::FillLowDiscrepancySequence(CommandList& _cmd_list) {
     param.num_samples    = is_ctx.GetNeighborOffsetCnt();
     sd_utils.GenerateLowDiscrepancySequence(_cmd_list, param, neighbor_offset_buf->GetView());
     b_has_neighbor_offset = true;
-    // _cmd_list.Compute(sd_utils.gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), "GenerateLowDiscrepancySequence");
+    // _cmd_list.Compute(sd_utils.gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), MOER_TEXT("GenerateLowDiscrepancySequence"));
 }
 
 void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _cmd_list) {
@@ -286,13 +286,13 @@ void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _
     uint2         extent = _env_tex.tex->GetExtent().xy;
     RenderDevice& device = RenderDevice::Get();
 
-    // env_pdf_tex 需要完整的 mip 链（SamplePdfMip 从最高 mip 向下采样），
-    // 不能使用原始 env map 的 mip 数量（通常只有 1 级）
+    // env_pdf_tex needs a full mip chain because SamplePdfMip walks down from the top mip.
+    // The source env map usually has only one mip and cannot define this chain.
     uint full_mip_count = uint(std::floor(std::log2(float(std::max(extent.x, extent.y))))) + 1;
 
     env_pdf_mips.clear();
     env_pdf_tex = device.CreateTexture(
-        "env_pdf_tex",
+        MOER_TEXT("env_pdf_tex"),
         Extent2D(extent.x, extent.y),
         PF_R16_SFLOAT,
         ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
@@ -326,7 +326,7 @@ void RTContext::CreateBuffersIfNeeded(
 
     if (!task_buf || task_num > task_buf->GetNumElement()) {
         task_buf = device.CreateBuffer<PrepareLightsTask>(
-            "Raytracing::task_buf", task_num, EBufferUsageFlags::UNORDERED_ACCESS
+            MOER_TEXT("Raytracing::task_buf"), task_num, EBufferUsageFlags::UNORDERED_ACCESS
         );
     }
 
@@ -336,15 +336,15 @@ void RTContext::CreateBuffersIfNeeded(
 
     uint max_local_lights  = max_emissive_triangles + max_prim_lights;
     uint light_buf_element = max_local_lights * 2;
-    // light_buf_element 必须大于 0（即使没有光源，也需要至少 1 个元素用于双缓冲）
+    // Keep at least one double-buffered light element even when the scene has no lights.
     assert(light_buf_element > 0 && "light_buf_element must be greater than 0");
 
     if (!light_mapping_buf || light_buf_element > light_data_buf->GetNumElement()) {
         light_mapping_buf = device.CreateBuffer<uint>(
-            "Raytracing::light_mapping_buf", light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS
+            MOER_TEXT("Raytracing::light_mapping_buf"), light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS
         );
         light_data_buf = device.CreateBuffer<PolymorphicLightInfo>(
-            "Raytracing::light_data_buf", light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS
+            MOER_TEXT("Raytracing::light_data_buf"), light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS
         );
 
         AllocateAndFreeBdlsIfNeeded(bindless_handles.light_index, light_mapping_buf->GetView());
@@ -352,25 +352,24 @@ void RTContext::CreateBuffersIfNeeded(
     }
 
     if (!prim_light_buf || max_prim_lights > prim_light_buf->GetNumElement()) {
-        // max_prim_lights 可以为 0（没有场景光源），但 buffer 大小必须至少为 1
+        // max_prim_lights can be zero, but the buffer must still contain one element.
         uint prim_light_buf_size = max_prim_lights > 0 ? max_prim_lights : 1u;
         prim_light_buf           = device.CreateBuffer<PolymorphicLightInfo>(
-            "Raytracing::prim_light_buf", prim_light_buf_size, EBufferUsageFlags::UNORDERED_ACCESS
+            MOER_TEXT("Raytracing::prim_light_buf"), prim_light_buf_size, EBufferUsageFlags::UNORDERED_ACCESS
         );
     }
 
-    // 创建 primitive_to_light buffer（primitive_id -> light_offset 映射）
-    // _max_primitives 必须大于 0（场景必须至少有一个 primitive）
+    // primitive_to_light maps primitive_id to light_offset.
+    // The scene must contain at least one primitive.
     assert(_max_primitives > 0 && "_max_primitives must be greater than 0");
     if (!primitive_to_light_buf || _max_primitives > primitive_to_light_buf->GetNumElement()) {
         primitive_to_light_buf = device.CreateBuffer<uint>(
-            "Raytracing::primitive_to_light_buf", _max_primitives, EBufferUsageFlags::UNORDERED_ACCESS
+            MOER_TEXT("Raytracing::primitive_to_light_buf"), _max_primitives, EBufferUsageFlags::UNORDERED_ACCESS
         );
         AllocateAndFreeBdlsIfNeeded(bindless_handles.primitive_to_light, primitive_to_light_buf->GetView());
     }
     {
-        // 计算 texture 尺寸
-        // light_buf_element 已经通过上面的 assert 确保 > 0
+        // Compute the light PDF texture dimensions. light_buf_element was asserted non-zero above.
         uint texture_width  = RoundUpToPowerOf2(uint(ceil(sqrt(double(light_buf_element)))));
         uint texture_height = RoundUpToPowerOf2(uint(ceil(double(light_buf_element) / texture_width)));
         assert(texture_width > 0 && texture_height > 0 && "Texture dimensions must be greater than 0");
@@ -380,7 +379,7 @@ void RTContext::CreateBuffersIfNeeded(
             texture_width != local_light_pdf_tex->GetExtent().x) {
             local_light_pdf_mips.clear();
             local_light_pdf_tex = device.CreateTexture(
-                "local_light_pdf_tex",
+                MOER_TEXT("local_light_pdf_tex"),
                 Extent2D(texture_width, texture_height),
                 PF_R16_SFLOAT,
                 ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED,
@@ -479,7 +478,7 @@ void RTContext::Tick(Camera& _camera, float2 _jitter) {
                     s_num_restirdi_reservoir_buffer >
                 light_reservoir_buf->GetNumElement()) {
             light_reservoir_buf = device.CreateBuffer<DI::PackedReservoir>(
-                "Raytracing::light_reservoir_buf",
+                MOER_TEXT("Raytracing::light_reservoir_buf"),
                 is_ctx.GetReSTIRDIRuntimeConfig().reservoir_buffer_params.block_array_pitch *
                     s_num_restirdi_reservoir_buffer,
                 EBufferUsageFlags::UNORDERED_ACCESS
@@ -489,13 +488,13 @@ void RTContext::Tick(Camera& _camera, float2 _jitter) {
         if (!ris_buf ||
             2 * std::max(is_ctx.GetSegmentAllocator().GetTotalSize(), 1u) > ris_buf->GetNumElement()) {
             ris_buf = device.CreateBuffer<uint>(
-                "Raytracing::ris_buf",
+                MOER_TEXT("Raytracing::ris_buf"),
                 2 * std::max(is_ctx.GetSegmentAllocator().GetTotalSize(), 1u),
                 EBufferUsageFlags::UNORDERED_ACCESS
             );
 
             ris_light_data_buf = device.CreateBuffer<uint4>(
-                "Raytracing::ris_light_data_buf",
+                MOER_TEXT("Raytracing::ris_light_data_buf"),
                 2 * std::max(is_ctx.GetSegmentAllocator().GetTotalSize(), 1u),
                 EBufferUsageFlags::UNORDERED_ACCESS
             );

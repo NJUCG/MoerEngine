@@ -1,4 +1,4 @@
-ï»¿#pragma once
+#pragma once
 
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
@@ -22,7 +22,7 @@ public:
 class LightingPass {
 public:
     LightingPass(RasterContext& context) {
-        //TODOï¼š å¼€å¯æ·±åº¦æ¨¡æ¿æµ‹è¯•æé«˜æ€§èƒ½
+        //TODO£º ¿ªÆôÉî¶ÈÄ£°å²âÊÔÌá¸ßĞÔÄÜ
         //RHIDepthStencilStateInfo ds_info = RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE>();
 
         // ds_info.b_enable_front_face_stencil = true;
@@ -64,14 +64,13 @@ public:
 
         //context.cmd_list.SetStencilReference(1, 1);
 
-        //æœªæ¥å¸Œæœ›èƒ½ç”¨è¯¥Attachmentè¿›è¡Œæ·±åº¦æ¨¡æ¿æµ‹è¯•
+        //Î´À´Ï£ÍûÄÜÓÃ¸ÃAttachment½øĞĞÉî¶ÈÄ£°å²âÊÔ
         DepthAttachment depth_attachment =
             DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture());
         depth_attachment.action = AC_DS_LOAD_STORE;
 
         context.cmd_list.Gfx(pbr_pipeline, context.lighting_data_buffer.buf, context.bdls, pass_param)
-            .Draw(
-                "Lighting Pass",
+            .Draw(MOER_TEXT("Lighting Pass"),
                 context.textures.lighting_output.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 //depth_attachment,

@@ -117,7 +117,7 @@ public:
     // 创建CMV数据
     void CreateMotionVectorData(RasterContext& context) {
         camera_mv_data_in_gpu.buf = context.device.CreateBuffer<byte>(
-            "Raster::CameraMotionVectorData",
+            MOER_TEXT("Raster::CameraMotionVectorData"),
             sizeof(CameraMotionVectorData),
             EBufferUsageFlags::UNORDERED_ACCESS
         );
@@ -192,7 +192,7 @@ public:
 
         uint2 res = uint2(context.textures.ao_output.GetSize());
         context.cmd_list.Compute(ao_composite_pipeline, param, context.textures.ao_output.tex, context.bdls)
-            .Dispatch(uint3((res.x + 7u) / 8u, (res.y + 7u) / 8u, 1), "AO Composite Pass");
+            .Dispatch(uint3((res.x + 7u) / 8u, (res.y + 7u) / 8u, 1), MOER_TEXT("AO Composite Pass"));
     }
 
     void ProcessAo(
@@ -219,8 +219,7 @@ public:
         param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
 
         context.cmd_list.Gfx(ao_pipeline, context.bdls, param)
-            .Draw(
-                "AO Pass",
+            .Draw(MOER_TEXT("AO Pass"),
                 tex_set.ao_only.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(tex_set.ao_only.tex),
@@ -266,7 +265,7 @@ public:
                 context.rt_scene()->GetTlas(),
                 context.bdls
             )
-            .Dispatch(uint3((res.x + 7u) / 8u, (res.y + 7u) / 8u, 1), "RTAO Compute Pass");
+            .Dispatch(uint3((res.x + 7u) / 8u, (res.y + 7u) / 8u, 1), MOER_TEXT("RTAO Compute Pass"));
     }
 
     void ProcessSsdo(
@@ -298,8 +297,7 @@ public:
         param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
 
         context.cmd_list.Gfx(ssdo_pipeline, context.bdls, param)
-            .Draw(
-                "SSDO Pass",
+            .Draw(MOER_TEXT("SSDO Pass"),
                 tex_set.ao_only.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(tex_set.ao_only.tex),

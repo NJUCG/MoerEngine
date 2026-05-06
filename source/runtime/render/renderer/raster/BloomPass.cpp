@@ -1,8 +1,9 @@
-﻿#include "BloomPass.h"
+#include "BloomPass.h"
 
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
+#include "string/Format.h"
 
 namespace Moer::Render::Raster {
 BloomPass::BloomPass(RasterContext& context) {
@@ -59,8 +60,7 @@ BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, Textur
     //Prefilter Pass
     context.cmd_list
         .Gfx(prefilter_pipeline, input_texture.tex->GetView(0, 1), linear_sampler, prefilter_param)
-        .Draw(
-            "Bloom Prefilter Pass",
+        .Draw(MOER_TEXT("Bloom Prefilter Pass"),
             context.textures.bloom_downsample_chain.GetRect2D(0),
             std::move(RasterTool::GetFullScreenDrawDatas()),
             ColorAttachment{
@@ -86,7 +86,7 @@ BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, Textur
                 downsample_param
             )
             .Draw(
-                std::format("Downsample Pass #{}", i),
+                Printf(MOER_TEXT("Downsample Pass #{}"), i),
                 context.textures.bloom_downsample_chain.GetRect2D(i),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment{context.textures.bloom_downsample_chain.tex, AC_LOAD_STORE, float4(0), i}
@@ -114,7 +114,7 @@ BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, Textur
                 upsample_param
             )
             .Draw(
-                std::format("Bloom Upsample Pass #{}", i),
+                Printf(MOER_TEXT("Bloom Upsample Pass #{}"), i),
                 context.textures.bloom_upsample_chain.GetRect2D(i),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment{
@@ -133,8 +133,7 @@ BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, Textur
             linear_sampler,
             apply_param
         )
-        .Draw(
-            "Apply Bloom to Scene",
+        .Draw(MOER_TEXT("Apply Bloom to Scene"),
             input_texture.GetRect2D(),
             std::move(RasterTool::GetFullScreenDrawDatas()),
             ColorAttachment{

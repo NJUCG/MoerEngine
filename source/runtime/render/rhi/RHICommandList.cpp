@@ -1,4 +1,4 @@
-//
+﻿//
 // Created by 17152 on 2023/9/21.
 //
 #include "PixelFormat.h"
@@ -11,6 +11,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include "string/StringConvert.h"
 #include <atomic>
 namespace Moer::Render {
 
@@ -151,7 +152,7 @@ CommandList::CommandList(EQueueType _queue_type) : queue_type(_queue_type) {
     }
 }
 
-void CommandList::EnsureNoActiveCopyScope(std::string_view _api_name) const {
+void CommandList::EnsureNoActiveCopyScope(StringView _api_name) const {
     if (!b_copy_scope_active) {
         return;
     }
@@ -232,22 +233,30 @@ CommandList::DrawDispatcher::DrawDispatcher(RasterPipeline& _pso, CommandList& _
 
 void CommandList::ComputeDispatcher::Dispatch(
     uint3            _group_count,
-    std::string_view _name,
+    StringView _name,
     ProfileSection   _section
 ) {
-    cmd_list.EnsureNoActiveCopyScope("ComputeDispatcher::Dispatch");
-    MOER_ASSERT(pso.handle.IsValid(), "Compute dispatch requires a valid PSO: {}", _name);
+    cmd_list.EnsureNoActiveCopyScope(MOER_TEXT("ComputeDispatcher::Dispatch"));
+    MOER_ASSERT(
+        pso.handle.IsValid(),
+        "Compute dispatch requires a valid PSO: {}",
+        PlatformToUtf8(_name).Native()
+    );
     cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count));
     cmd_list.commands.back()->name = _name;
 }
 
 void CommandList::ComputeDispatcher::DispatchIndirect(
     BufferView       _indirect,
-    std::string_view _name,
+    StringView _name,
     ProfileSection   _section
 ) {
-    cmd_list.EnsureNoActiveCopyScope("ComputeDispatcher::DispatchIndirect");
-    MOER_ASSERT(pso.handle.IsValid(), "Indirect compute dispatch requires a valid PSO: {}", _name);
+    cmd_list.EnsureNoActiveCopyScope(MOER_TEXT("ComputeDispatcher::DispatchIndirect"));
+    MOER_ASSERT(
+        pso.handle.IsValid(),
+        "Indirect compute dispatch requires a valid PSO: {}",
+        PlatformToUtf8(_name).Native()
+    );
     cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _indirect));
     cmd_list.commands.back()->name = _name;
 }
@@ -308,8 +317,8 @@ bool CommandList::IsEmpty() const {
            !submit_tick_profiling && !submit_delete_resources;
 }
 
-void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::CopyFrom");
+void CommandList::CopyFrom(BufferView _src, BufferView _dst, StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     commands.push_back(
         MakeUnique<CopyBufferCmd>(
             reinterpret_cast<uint64>(_src.GetBuffer()),
@@ -321,8 +330,8 @@ void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _n
         )
     );
 }
-void CommandList::CopyFrom(TextureView _src, TextureView _dst, std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::CopyFrom");
+void CommandList::CopyFrom(TextureView _src, TextureView _dst, StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     commands.push_back(
         MakeUnique<CopyTextureCmd>(
             _src.texture->GetFormat(),
@@ -337,8 +346,8 @@ void CommandList::CopyFrom(TextureView _src, TextureView _dst, std::string_view 
         )
     );
 }
-void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::CopyFrom");
+void CommandList::CopyFrom(TextureView _src, BufferView _dst, StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     commands.push_back(
         MakeUnique<CopyTextureToBufferCmd>(
             _src.texture->GetFormat(),
@@ -353,8 +362,8 @@ void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _
         )
     );
 }
-void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::CopyFrom");
+void CommandList::CopyFrom(BufferView _src, TextureView _dst, StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     commands.push_back(
         MakeUnique<CopyBufferToTextureCmd>(
             _dst.texture->GetFormat(),
@@ -371,8 +380,8 @@ void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _
 }
 
 // Be careful with the Lifetime of the data!
-void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::CopyFrom");
+void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     uint3 extent = uint3(
         std::max(uint(_texture.extent.x) >> _texture.mip_level, 1u),
         std::max(uint(_texture.extent.y) >> _texture.mip_level, 1u),
@@ -393,8 +402,8 @@ void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::str
 }
 
 // Be careful with the Lifetime of the data!
-void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::CopyFrom");
+void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     if (_data.size() == 0) {
         return;
     }
@@ -409,20 +418,20 @@ void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::strin
     );
 }
 
-void CommandList::CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name) {
+void CommandList::CopyFrom(BufferView _src, std::span<byte> _data, StringView _name) {
     (void)ReadbackCopy(_src, _data, _name);
 }
 
-void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
+void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, StringView _name) {
     (void)ReadbackCopy(_src, _data, _name);
 }
 
 GraphEventRef CommandList::ReadbackCopy(
     BufferView       _src,
     std::span<byte>  _data,
-    std::string_view _name
+    StringView _name
 ) {
-    EnsureNoActiveCopyScope("CommandList::CopyFrom");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     if (_src.GetBuffer() == nullptr || _data.empty()) {
         GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
         empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
@@ -445,9 +454,9 @@ GraphEventRef CommandList::ReadbackCopy(
 GraphEventRef CommandList::ReadbackCopy(
     TextureView      _src,
     std::span<byte>  _data,
-    std::string_view _name
+    StringView _name
 ) {
-    EnsureNoActiveCopyScope("CommandList::CopyFrom");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     bool b_valid_size = _data.size() > 0 && _src.GetTexture();
     if (!b_valid_size) {
         GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
@@ -473,8 +482,8 @@ GraphEventRef CommandList::ReadbackCopy(
     return completion_event;
 }
 
-void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::CopyFrom");
+void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     if (_data.size() == 0) {
         return;
     }
@@ -489,8 +498,8 @@ void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_vie
     );
 }
 
-void CommandList::CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::CopyFrom");
+void CommandList::CopyFrom(Array<byte>&& _data, TextureView _dst, StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     if (_data.size() == 0) {
         return;
     }
@@ -513,14 +522,14 @@ void CommandList::SetRenderCmds(
     ArrayArguments&&                _args,
     RenderPassInfo&&                _info,
     Array<MeshDrawData>&&           _mesh_data,
-    std::optional<std::string_view> _name
+    std::optional<StringView> _name
 ) {
-    EnsureNoActiveCopyScope("CommandList::SetRenderCmds");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetRenderCmds"));
     if (_handle.IsValid() == false) {
         LOG_ERROR(
             MOER_TEXT("Attempt to dispatch a compute with invalid PSO. Please check if the PSO is created ")
             "successfully. PSO name: \"{}\"",
-            _name.value_or("Unnamed PSO")
+            _name.value_or(MOER_TEXT("Unnamed PSO"))
         );
     }
 
@@ -535,22 +544,22 @@ void CommandList::SetRenderCmds(
 void CommandList::SetMultiRenderCmds(
     RenderPassInfo&& _pass_info,
     DrawBatch&&      _batch,
-    std::string_view _name
+    StringView _name
 ) {
-    EnsureNoActiveCopyScope("CommandList::SetMultiRenderCmds");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetMultiRenderCmds"));
     commands.push_back(MakeUnique<MultiDrawCmd>(std::move(_batch), std::move(_pass_info), _name));
 }
 
 // Specialized for Geometry Pass
 // void
-// CommandList::SetRenderGeometryPassCmds(ArrayArguments&& _args, RenderPassInfo&& _info, UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map, std::string_view _name
+// CommandList::SetRenderGeometryPassCmds(ArrayArguments&& _args, RenderPassInfo&& _info, UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map, StringView _name
 //                                        //
 // ) {
 //     commands.push_back(MakeUnique<SetGeometryPassDrawStateCmd>(std::move(_args), std::move(_info), std::move(_mesh_data_array_map), _name));
 // }
 
 void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
-    EnsureNoActiveCopyScope("CommandList::UpdateBindlessArray");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::UpdateBindlessArray"));
     assert(_array && "Bindless array is null");
 
     // One-shot deferred GPU initialization on first use
@@ -562,33 +571,33 @@ void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
 }
 
 void CommandList::ClearResource(BufferView _buffer, uint _value) {
-    EnsureNoActiveCopyScope("CommandList::ClearResource");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::ClearResource"));
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_buffer, _value));
 }
 
 void CommandList::ClearResource(TextureView _texture, float4 _color) {
-    EnsureNoActiveCopyScope("CommandList::ClearResource");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::ClearResource"));
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _color));
 }
 
 void CommandList::ClearResource(TextureView _texture, uint _value) {
-    EnsureNoActiveCopyScope("CommandList::ClearResource");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::ClearResource"));
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _value));
 }
 
-void CommandList::PushScope(std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::PushScope");
+void CommandList::PushScope(StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::PushScope"));
     commands.push_back(MakeUnique<ScopeCmd>(_name, true, false));
     scope_stack.push(_name);
 }
 
-QueryToken CommandList::CreateQueryToken(QueryKind _kind, std::string_view _name) {
+QueryToken CommandList::CreateQueryToken(QueryKind _kind, StringView _name) {
     const uint64_t query_id = g_query_token_id.fetch_add(1, std::memory_order_relaxed);
-    return QueryToken(query_id, _kind, std::string(_name), QueryFuture::Create());
+    return QueryToken(query_id, _kind, String(_name), QueryFuture::Create());
 }
 
-QueryToken CommandList::BeginTimestampQuery(std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::BeginTimestampQuery");
+QueryToken CommandList::BeginTimestampQuery(StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BeginTimestampQuery"));
     QueryToken token = CreateQueryToken(QueryKind::Timestamp, _name);
     query_tokens.emplace_back(token);
     commands.push_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::BeginTimestamp, _name));
@@ -596,7 +605,7 @@ QueryToken CommandList::BeginTimestampQuery(std::string_view _name) {
 }
 
 void CommandList::EndTimestampQuery(const QueryToken& _token) {
-    EnsureNoActiveCopyScope("CommandList::EndTimestampQuery");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::EndTimestampQuery"));
     if (!_token.Valid()) {
         return;
     }
@@ -604,13 +613,13 @@ void CommandList::EndTimestampQuery(const QueryToken& _token) {
         MakeUnique<QueryCmd>(
             _token,
             QueryCmd::EOp::EndTimestamp,
-            _token.name.empty() ? Command::typenames[(uint)Command::EType::Query] : _token.name
+            _token.name.empty() ? Command::typenames[(uint)Command::EType::Query] : StringView(_token.name)
         )
     );
 }
 
-QueryToken CommandList::BeginOcclusionQuery(std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::BeginOcclusionQuery");
+QueryToken CommandList::BeginOcclusionQuery(StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BeginOcclusionQuery"));
     QueryToken token = CreateQueryToken(QueryKind::Occlusion, _name);
     query_tokens.emplace_back(token);
     commands.push_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::BeginOcclusion, _name));
@@ -618,7 +627,7 @@ QueryToken CommandList::BeginOcclusionQuery(std::string_view _name) {
 }
 
 void CommandList::EndOcclusionQuery(const QueryToken& _token) {
-    EnsureNoActiveCopyScope("CommandList::EndOcclusionQuery");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::EndOcclusionQuery"));
     if (!_token.Valid()) {
         return;
     }
@@ -626,19 +635,20 @@ void CommandList::EndOcclusionQuery(const QueryToken& _token) {
         MakeUnique<QueryCmd>(
             _token,
             QueryCmd::EOp::EndOcclusion,
-            _token.name.empty() ? Command::typenames[(uint)Command::EType::Query] : _token.name
+            _token.name.empty() ? Command::typenames[(uint)Command::EType::Query] : StringView(_token.name)
         )
     );
 }
 
-void CommandList::PushScopeWithTimeScope(std::string_view _name) {
+void CommandList::PushScopeWithTimeScope(StringView _name) {
     PushScope(_name);
     timed_scope_query_stack.push(BeginTimestampQuery(_name));
 #if MOER_TRACE_ENABLED && MOER_TRACE_GPU_ENABLED
+    Utf8String trace_scope_name = PlatformToUtf8(_name);
     gpu_trace_scope_tokens.push(
         Moer::Trace::BeginSpan(
             Moer::Trace::SpanDesc{
-                .name      = _name,
+                .name      = trace_scope_name,
                 .category  = "GPU.CPU.Record",
                 .track_type = Moer::Trace::TrackType::CPUThread
             }
@@ -648,7 +658,7 @@ void CommandList::PushScopeWithTimeScope(std::string_view _name) {
 }
 
 void CommandList::PopScope() {
-    EnsureNoActiveCopyScope("CommandList::PopScope");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::PopScope"));
     assert(!scope_stack.empty() && "PopScope called with empty scope stack");
     if (scope_stack.empty()) {
         return;
@@ -679,12 +689,12 @@ void CommandList::PopScopeWithTimeScope() {
 #pragma region[ raytracing ]
 
 void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _geometries) {
-    EnsureNoActiveCopyScope("CommandList::BuildAccelerationStructures");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BuildAccelerationStructures"));
     commands.emplace_back(MakeUnique<BuildAccelerationStructuresCmd>(std::move(_geometries)));
 }
 
 void CommandList::UpdateRaytracingScene(RaytracingSceneRef _scene) {
-    EnsureNoActiveCopyScope("CommandList::UpdateRaytracingScene");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::UpdateRaytracingScene"));
     commands.emplace_back(_scene->UpdateScene());
 }
 
@@ -699,14 +709,14 @@ void CommandList::UpdateRaytracingScene(RaytracingSceneRef _scene) {
 
 #pragma region[ custom commands ]
 
-void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _name) {
-    EnsureNoActiveCopyScope("CommandList::AddCustomCommand");
+void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, StringView _name) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::AddCustomCommand"));
     commands.push_back(std::move(_cmd));
     commands.back()->name = _name;
 }
 
 CommandList& CommandList::TranslateFence(RHITranslateFence _fence) {
-    EnsureNoActiveCopyScope("CommandList::TranslateFence");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::TranslateFence"));
     if (!_fence.event) {
         LOG_ERROR(MOER_TEXT("CommandList::TranslateFence requires a valid GraphEventRef-backed fence"));
         assert(false && "TranslateFence requires a valid event");
@@ -719,9 +729,9 @@ CommandList& CommandList::TranslateFence(RHITranslateFence _fence) {
 
 CommandList& CommandList::LambdaCommand(
     std::function<void()>&& _callback,
-    std::string_view        _name
+    StringView        _name
 ) {
-    EnsureNoActiveCopyScope("CommandList::LambdaCommand");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::LambdaCommand"));
     if (!_callback) {
         LOG_ERROR(MOER_TEXT("CommandList::LambdaCommand requires a valid callback"));
         assert(false && "LambdaCommand requires a valid callback");
@@ -735,36 +745,36 @@ CommandList& CommandList::LambdaCommand(
 #pragma endregion
 
 void CommandList::AddCallback(std::function<void()>&& _callback) {
-    EnsureNoActiveCopyScope("CommandList::AddCallback");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::AddCallback"));
     callbacks.emplace_back(std::move(_callback));
 }
 
 CommandList& CommandList::Wait(Fence* _fence, uint64 _wait_value) {
-    EnsureNoActiveCopyScope("CommandList::Wait");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::Wait"));
     submit_wait_events.emplace_back(uint64(_fence), _wait_value);
     return *this;
 }
 
 CommandList& CommandList::Wait(WaitEvent _event) {
-    EnsureNoActiveCopyScope("CommandList::Wait");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::Wait"));
     submit_wait_events.emplace_back(_event);
     return *this;
 }
 
 CommandList& CommandList::Signal(Fence* _fence, uint64 _signal_value) {
-    EnsureNoActiveCopyScope("CommandList::Signal");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::Signal"));
     submit_signal_events.emplace_back(uint64(_fence), _signal_value);
     return *this;
 }
 
 CommandList& CommandList::SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class) {
-    EnsureNoActiveCopyScope("CommandList::SetTranslateExecutionClass");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetTranslateExecutionClass"));
     translate_execution_class = _execution_class;
     return *this;
 }
 
 CommandList& CommandList::SetRecordCompleteEvent(GraphEventRef _event) {
-    EnsureNoActiveCopyScope("CommandList::SetRecordCompleteEvent");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetRecordCompleteEvent"));
     record_complete_event = std::move(_event);
     return *this;
 }
@@ -773,25 +783,25 @@ CommandList& CommandList::SetTrackedState(
     Array<TrackedTextureState>&& _textures,
     Array<TrackedBufferState>&&  _buffers
 ) {
-    EnsureNoActiveCopyScope("CommandList::SetTrackedState");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetTrackedState"));
     commands.emplace_back(MakeUnique<SetTrackedStateCmd>(std::move(_textures), std::move(_buffers)));
     return *this;
 }
 
 CommandList& CommandList::DeleteResources() {
-    EnsureNoActiveCopyScope("CommandList::DeleteResources");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::DeleteResources"));
     submit_delete_resources = true;
     return *this;
 }
 
 CommandList& CommandList::TickProfiling() {
-    EnsureNoActiveCopyScope("CommandList::TickProfiling");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::TickProfiling"));
     submit_tick_profiling = true;
     return *this;
 }
 
 CommandList& CommandList::TickFrame() {
-    EnsureNoActiveCopyScope("CommandList::TickFrame");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::TickFrame"));
     if (!commands.empty() && IsFrameTickCommand(commands.back().get())) {
         LOG_ERROR(MOER_TEXT("CommandList::TickFrame can only be recorded once per CommandList"));
         assert(false && "TickFrame must not be recorded twice");
@@ -812,7 +822,7 @@ void CommandList::BeginBarriers(
     EQueueType _dst_queue,
     EBarrierTrackedState _tracked_state
 ) {
-    EnsureNoActiveCopyScope("CommandList::BeginBarriers");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BeginBarriers"));
     commands.push_back(
         MakeUnique<BarrierCmd>(
             _read_tex_cnt,
@@ -860,38 +870,6 @@ void CommandList::ImportResourcesFromQueue(
     (void)_buffers_to_import;
     LOG_ERROR(MOER_TEXT("CommandList::ImportResourcesFromQueue has been removed. Use CopyScope."));
     assert(false && "CommandList::ImportResourcesFromQueue has been removed");
-    return;
-    {
-        // 空资源检测
-        for (uint i = 0; i < _textures_to_import.size(); ++i) {
-            const auto& texture_to_import = _textures_to_import[i];
-            if (texture_to_import.texture.GetTexture() == nullptr) {
-                LOG_WARNING(
-                    MOER_TEXT("ImportResourcesFromQueue got empty texture at index {}. src_queue={}"),
-                    i,
-                    static_cast<uint>(_src_queue)
-                );
-            }
-        }
-        for (uint i = 0; i < _buffers_to_import.size(); ++i) {
-            const auto& buffer_to_import = _buffers_to_import[i];
-            if (buffer_to_import.buffer.GetBuffer() == nullptr ||
-                buffer_to_import.buffer.GetByteSize() == 0) {
-                LOG_WARNING(
-                    MOER_TEXT("ImportResourcesFromQueue got empty buffer at index {}. src_queue={}"),
-                    i,
-                    static_cast<uint>(_src_queue)
-                );
-            }
-        }
-    }
-
-    // QueueTransferCmd cmd(_src_queue, std::move(_textures_to_import));
-    commands.emplace_back(
-        MakeUnique<QueueTransferCmd>(
-            _src_queue, std::move(_textures_to_import), std::move(_buffers_to_import)
-        )
-    );
 }
 
 void CommandList::ExportResourcesToQueue(
@@ -904,37 +882,6 @@ void CommandList::ExportResourcesToQueue(
     (void)_buffers_to_export;
     LOG_ERROR(MOER_TEXT("CommandList::ExportResourcesToQueue has been removed. Use CopyScope."));
     assert(false && "CommandList::ExportResourcesToQueue has been removed");
-    return;
-    {
-        // 空资源检测
-        for (uint i = 0; i < _textures_to_export.size(); ++i) {
-            const auto& texture_to_export = _textures_to_export[i];
-            if (texture_to_export.texture.GetTexture() == nullptr) {
-                LOG_WARNING(
-                    MOER_TEXT("ExportResourcesToQueue got empty texture at index {}. dst_queue={}"),
-                    i,
-                    static_cast<uint>(_dst_queue)
-                );
-            }
-        }
-        for (uint i = 0; i < _buffers_to_export.size(); ++i) {
-            const auto& buffer_to_export = _buffers_to_export[i];
-            if (buffer_to_export.buffer.GetBuffer() == nullptr ||
-                buffer_to_export.buffer.GetByteSize() == 0) {
-                LOG_WARNING(
-                    MOER_TEXT("ExportResourcesToQueue got empty buffer at index {}. dst_queue={}"),
-                    i,
-                    static_cast<uint>(_dst_queue)
-                );
-            }
-        }
-    }
-
-    commands.emplace_back(
-        MakeUnique<QueueTransferCmd>(
-            _dst_queue, std::move(_textures_to_export), std::move(_buffers_to_export)
-        )
-    );
 }
 
 ArrayArgReference CommandList::RegisterArgs(ArrayArguments&& _args) {
@@ -943,7 +890,7 @@ ArrayArgReference CommandList::RegisterArgs(ArrayArguments&& _args) {
 }
 
 void CommandList::PushGPUEvent(GPUEvent&& event) {
-    EnsureNoActiveCopyScope("CommandList::PushGPUEvent");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::PushGPUEvent"));
     gpu_events.push_back(std::move(event));
 }
 
@@ -953,9 +900,7 @@ Array<GPUEvent> CommandList::StealGPUEvents() {
     return result;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// §2.3  CopyCommandScope
-// ─────────────────────────────────────────────────────────────────────────────
+// CopyCommandScope
 
 CopyCommandScope CommandList::BeginCopyScope() {
     assert(
@@ -975,7 +920,7 @@ CopyCommandScope CommandList::BeginCopyScope() {
 }
 
 void CommandList::BeginBufferOverlap(BufferView _buffer) {
-    EnsureNoActiveCopyScope("CommandList::BeginBufferOverlap");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BeginBufferOverlap"));
     if (_buffer.GetBuffer() == nullptr) {
         LOG_ERROR(MOER_TEXT("BeginBufferOverlap requires a valid buffer"));
         assert(false && "BeginBufferOverlap requires a valid buffer");
@@ -992,7 +937,7 @@ void CommandList::BeginBufferOverlap(BufferView _buffer) {
 }
 
 void CommandList::EndBufferOverlap(BufferView _buffer) {
-    EnsureNoActiveCopyScope("CommandList::EndBufferOverlap");
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::EndBufferOverlap"));
     if (!b_buffer_overlap_active) {
         LOG_ERROR(MOER_TEXT("EndBufferOverlap called without matching BeginBufferOverlap"));
         assert(false && "EndBufferOverlap called without matching BeginBufferOverlap");
@@ -1009,17 +954,17 @@ void CommandList::EndBufferOverlap(BufferView _buffer) {
     buffer_overlap_handle   = 0;
 }
 
-// CopyCommandScope private constructor — called only by CommandList::BeginCopyScope
+// CopyCommandScope private constructor, called only by CommandList::BeginCopyScope.
 CopyCommandScope::CopyCommandScope(CommandList& _cmd_list) : cmd_list(&_cmd_list) {}
 
-// Move constructor — transfers ownership (the moved-from object becomes a no-op sentinel)
+// Move constructor transfers ownership; the moved-from object becomes a no-op sentinel.
 CopyCommandScope::CopyCommandScope(CopyCommandScope&& other) noexcept :
     cmd_list(other.cmd_list),
     copy_commands(std::move(other.copy_commands)) {
     other.cmd_list = nullptr;
 }
 
-// Destructor — inserts the scope-end marker and closes the scope
+// Destructor inserts the scope-end marker and closes the scope.
 CopyCommandScope::~CopyCommandScope() {
     if (cmd_list) {
         cmd_list->FinalizeCopyScope(std::move(copy_commands));
@@ -1046,7 +991,7 @@ void CopyCommandScope::PushCopyCommand(UniquePtr<Command>&& _cmd) {
 // executor translator detects them and routes the enclosed commands to the
 // copy queue command buffer with auto-generated acquire/release barriers.
 
-void CopyCommandScope::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
+void CopyCommandScope::CopyFrom(BufferView _src, BufferView _dst, StringView _name) {
     PushCopyCommand(MakeUnique<CopyBufferCmd>(
         reinterpret_cast<uint64>(_src.GetBuffer()),
         reinterpret_cast<uint64>(_dst.GetBuffer()),
@@ -1056,7 +1001,7 @@ void CopyCommandScope::CopyFrom(BufferView _src, BufferView _dst, std::string_vi
         _name
     ));
 }
-void CopyCommandScope::CopyFrom(TextureView _src, TextureView _dst, std::string_view _name) {
+void CopyCommandScope::CopyFrom(TextureView _src, TextureView _dst, StringView _name) {
     PushCopyCommand(MakeUnique<CopyTextureCmd>(
         _src.texture->GetFormat(),
         reinterpret_cast<uint64>(_src.texture),
@@ -1069,7 +1014,7 @@ void CopyCommandScope::CopyFrom(TextureView _src, TextureView _dst, std::string_
         _name
     ));
 }
-void CopyCommandScope::CopyFrom(TextureView _src, BufferView _dst, std::string_view _name) {
+void CopyCommandScope::CopyFrom(TextureView _src, BufferView _dst, StringView _name) {
     PushCopyCommand(MakeUnique<CopyTextureToBufferCmd>(
         _src.texture->GetFormat(),
         reinterpret_cast<uint64>(_src.texture),
@@ -1082,7 +1027,7 @@ void CopyCommandScope::CopyFrom(TextureView _src, BufferView _dst, std::string_v
         _name
     ));
 }
-void CopyCommandScope::CopyFrom(BufferView _src, TextureView _dst, std::string_view _name) {
+void CopyCommandScope::CopyFrom(BufferView _src, TextureView _dst, StringView _name) {
     PushCopyCommand(MakeUnique<CopyBufferToTextureCmd>(
         _dst.texture->GetFormat(),
         reinterpret_cast<uint64>(_src.GetBuffer()),
@@ -1095,7 +1040,7 @@ void CopyCommandScope::CopyFrom(BufferView _src, TextureView _dst, std::string_v
         _name
     ));
 }
-void CopyCommandScope::CopyFrom(std::span<byte> _data, BufferView _dst, std::string_view _name) {
+void CopyCommandScope::CopyFrom(std::span<byte> _data, BufferView _dst, StringView _name) {
     if (_data.empty()) {
         return;
     }
@@ -1107,7 +1052,7 @@ void CopyCommandScope::CopyFrom(std::span<byte> _data, BufferView _dst, std::str
         _name
     ));
 }
-void CopyCommandScope::CopyFrom(std::span<byte> _data, TextureView _dst, std::string_view _name) {
+void CopyCommandScope::CopyFrom(std::span<byte> _data, TextureView _dst, StringView _name) {
     if (_data.empty()) {
         return;
     }
@@ -1127,7 +1072,7 @@ void CopyCommandScope::CopyFrom(std::span<byte> _data, TextureView _dst, std::st
         _name
     ));
 }
-void CopyCommandScope::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name) {
+void CopyCommandScope::CopyFrom(Array<byte>&& _data, BufferView _dst, StringView _name) {
     if (_data.empty()) {
         return;
     }
@@ -1139,7 +1084,7 @@ void CopyCommandScope::CopyFrom(Array<byte>&& _data, BufferView _dst, std::strin
         _name
     ));
 }
-void CopyCommandScope::CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_view _name) {
+void CopyCommandScope::CopyFrom(Array<byte>&& _data, TextureView _dst, StringView _name) {
     if (_data.empty()) {
         return;
     }
@@ -1154,17 +1099,17 @@ void CopyCommandScope::CopyFrom(Array<byte>&& _data, TextureView _dst, std::stri
         _name
     ));
 }
-void CopyCommandScope::CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name) {
+void CopyCommandScope::CopyFrom(BufferView _src, std::span<byte> _data, StringView _name) {
     (void)ReadbackCopy(_src, _data, _name);
 }
-void CopyCommandScope::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
+void CopyCommandScope::CopyFrom(TextureView _src, std::span<byte> _data, StringView _name) {
     (void)ReadbackCopy(_src, _data, _name);
 }
 
 GraphEventRef CopyCommandScope::ReadbackCopy(
     BufferView       _src,
     std::span<byte>  _data,
-    std::string_view _name
+    StringView _name
 ) {
     if (_src.GetBuffer() == nullptr || _data.empty()) {
         GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
@@ -1186,7 +1131,7 @@ GraphEventRef CopyCommandScope::ReadbackCopy(
 GraphEventRef CopyCommandScope::ReadbackCopy(
     TextureView      _src,
     std::span<byte>  _data,
-    std::string_view _name
+    StringView _name
 ) {
     if (_data.empty() || !_src.GetTexture()) {
         GraphEventRef empty_event = GraphEvent::CreateGraphEvent();

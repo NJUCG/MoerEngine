@@ -5,6 +5,7 @@
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
 #include "rhi/RHICommon.h"
+#include "string/StringConvert.h"
 #include "vulkan/vulkan_core.h"
 
 namespace Moer::Render {
@@ -23,8 +24,8 @@ public:
     VkQueueFlags GetQueueType() const {
         return queue_type;
     }
-    std::string_view GetQueueName() const {
-        return VK_TYPE_TO_STRING(VkQueueFlagBits, (VkQueueFlagBits)queue_type);
+    String GetQueueName() const {
+        return Utf8ToPlatform(Utf8StringView(VK_TYPE_TO_STRING(VkQueueFlagBits, (VkQueueFlagBits)queue_type)));
     }
 };
 enum class EVkInternalBufferUsage {
@@ -36,7 +37,7 @@ enum class EVkInternalBufferUsage {
 };
 struct VkTmpBufferAllocator : VulkanDeviceObject {
     VkTmpBufferAllocator(VulkanDevice* _device);
-    uint64 Allocate(uint64 _size, std::string_view _name);
+    uint64 Allocate(uint64 _size, StringView _name);
     uint64 Allocate(uint64 _size, EVkInternalBufferUsage _usage);
     void   DeAllocate(uint64 _handle);
 };
@@ -171,7 +172,7 @@ private:
         Chunk                 Allocate(uint64 _size);
         void                  Reset();
         void                  Dispose();
-        std::string           GetStackBufferName();
+        String                GetStackBufferName();
     };
     Array<VulkanBuffer*> large_buffers;
     VkTmpBufferAllocator allocator;

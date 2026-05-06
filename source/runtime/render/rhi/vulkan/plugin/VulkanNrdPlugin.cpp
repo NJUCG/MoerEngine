@@ -177,7 +177,7 @@ public:
         ResetResourceSnapshot();
     }
 
-    void Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) override;
+    void Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, StringView _name) override;
 
     void Reinitialize(uint16 _frame_width, uint16 _frame_height) override {
         ResetIntegrationState();
@@ -426,7 +426,7 @@ public:
 void VkNRDPluginInterface::Denoise(
     CommandList& _cmd_list,
     const nrd::Denoiser _denoiser,
-    std::string_view _name
+    StringView _name
 ) {
     _cmd_list.AddCustomCommand(MakeUnique<VkNrdPluginDenoiseCmd>(*this, _denoiser), _name);
 }

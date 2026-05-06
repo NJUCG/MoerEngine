@@ -1,8 +1,7 @@
 #include "VulkanCooperativeSupport.h"
 
 #include "log/LogSystem.h"
-
-#include <string>
+#include "string/StringConvert.h"
 
 namespace Moer::Render {
 
@@ -33,15 +32,15 @@ CooperativeVectorModeInfo BuildCooperativeVectorModeInfo(const VkCooperativeVect
     return info;
 }
 
-std::string
+String
 BuildUnsupportedCooperativeExtensionList(const VulkanOptionalDeviceExtensions& _optional_extensions) {
-    std::string unsupported_extensions;
+    String unsupported_extensions;
 
-    const auto append_extension = [&](std::string_view _extension_name) {
+    const auto append_extension = [&](const char* _extension_name) {
         if (!unsupported_extensions.empty()) {
-            unsupported_extensions += ", ";
+            unsupported_extensions += MOER_TEXT(", ");
         }
-        unsupported_extensions += _extension_name;
+        unsupported_extensions += Utf8ToPlatform(Utf8StringView(_extension_name));
     };
 
     if (!_optional_extensions.SupportsCooperativeMatrix()) {
@@ -80,7 +79,7 @@ void LogCooperativeSupportSummary(
     const VulkanOptionalDeviceExtensions& _optional_extensions,
     const VulkanOptionalDeviceProperties& _optional_properties
 ) {
-    const std::string unsupported_extensions = BuildUnsupportedCooperativeExtensionList(_optional_extensions);
+    const String unsupported_extensions = BuildUnsupportedCooperativeExtensionList(_optional_extensions);
     if (!unsupported_extensions.empty()) {
         LOG_INFO(
             MOER_TEXT("VulkanRHI: Cooperative extensions are not supported: {}. Cooperative-related passes in raster ")

@@ -560,11 +560,11 @@ public:
     VulkanBuffer() = delete;
     virtual ~VulkanBuffer();
     virtual void Destroy() override;
-    void         SetName(const std::string_view _name) override;
+    void         SetName(StringView _name) override;
 
-    VulkanBuffer(std::string_view _name, const BufferInfo& _info, VulkanDevice& _device);
+    VulkanBuffer(StringView _name, const BufferInfo& _info, VulkanDevice& _device);
     VulkanBuffer(
-        std::string_view  _name,
+        StringView        _name,
         const BufferInfo& _info,
         VulkanDevice&     _device,
         VkBuffer          _handle,
@@ -666,7 +666,7 @@ public:
         VkResourceDescriptorInfoEXT& _out_resource_info
     );
 
-    void          SetName(const std::string_view _name) override;
+    void          SetName(StringView _name) override;
     bool          b_has_preferred_state : 1 = false;
     bool          b_present : 1             = false;
     VkImageLayout GetPreferredLayout() {

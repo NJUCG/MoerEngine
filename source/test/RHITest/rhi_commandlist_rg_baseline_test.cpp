@@ -241,7 +241,7 @@ bool RecordRaytracingCoverageIfSupported(
         .mode     = ERaytracingBuildMode::BUILD,
     }});
     command_list.UpdateRaytracingScene(scene);
-    command_list.Compute(*ray_query_pipeline, scene->GetTlas()).Dispatch(1u, "RGBaselineRayQuery");
+    command_list.Compute(*ray_query_pipeline, scene->GetTlas()).Dispatch(1u, MOER_TEXT("RGBaselineRayQuery"));
     return true;
 }
 
@@ -251,63 +251,63 @@ int RunRHICommandListRGBaselineTest() {
     auto& device = RenderDevice::Get();
 
     auto src_buffer = device.CreateBuffer<uint32_t>(
-        "rg_baseline_src",
+        MOER_TEXT("rg_baseline_src"),
         baseline_element_count,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::UNORDERED_ACCESS
     );
     auto compute_buffer = device.CreateBuffer<uint32_t>(
-        "rg_baseline_compute",
+        MOER_TEXT("rg_baseline_compute"),
         baseline_element_count,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::UNORDERED_ACCESS
     );
     auto copied_compute_buffer = device.CreateBuffer<uint32_t>(
-        "rg_baseline_copied_compute",
+        MOER_TEXT("rg_baseline_copied_compute"),
         baseline_element_count,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::UNORDERED_ACCESS
     );
     auto pixel_upload_buffer = device.CreateBuffer<uint32_t>(
-        "rg_baseline_pixel_upload_buffer",
+        MOER_TEXT("rg_baseline_pixel_upload_buffer"),
         baseline_pixel_count,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC
     );
     auto scratch_buffer = device.CreateBuffer<uint32_t>(
-        "rg_baseline_scratch",
+        MOER_TEXT("rg_baseline_scratch"),
         baseline_element_count,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::UNORDERED_ACCESS
     );
     auto vertex_buffer = device.CreateBuffer<float3>(
-        "rg_baseline_rt_vertices",
+        MOER_TEXT("rg_baseline_rt_vertices"),
         3,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
             EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT | EBufferUsageFlags::VERTEX_BUFFER
     );
     auto index_buffer = device.CreateBuffer<uint32_t>(
-        "rg_baseline_rt_indices",
+        MOER_TEXT("rg_baseline_rt_indices"),
         3,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
             EBufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT | EBufferUsageFlags::INDEX_BUFFER
     );
 
     auto upload_texture = device.CreateTexture(
-        "rg_baseline_upload_texture",
+        MOER_TEXT("rg_baseline_upload_texture"),
         Extent2D(baseline_texture_size, baseline_texture_size),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::SAMPLED
     );
     auto copied_texture = device.CreateTexture(
-        "rg_baseline_copied_texture",
+        MOER_TEXT("rg_baseline_copied_texture"),
         Extent2D(baseline_texture_size, baseline_texture_size),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::SAMPLED
     );
     auto buffer_texture = device.CreateTexture(
-        "rg_baseline_buffer_texture",
+        MOER_TEXT("rg_baseline_buffer_texture"),
         Extent2D(baseline_texture_size, baseline_texture_size),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::SAMPLED
     );
     auto raster_target = device.CreateTexture(
-        "rg_baseline_raster_target",
+        MOER_TEXT("rg_baseline_raster_target"),
         Extent2D(baseline_texture_size, baseline_texture_size),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC
@@ -348,24 +348,24 @@ int RunRHICommandListRGBaselineTest() {
     CommandList setup_cmd(EQueueType::Graphics);
     {
         auto copy_scope = setup_cmd.BeginCopyScope();
-        copy_scope.CopyFrom(ToByteSpan(src_values), src_buffer->GetView(), "RGBaselineUploadSourceBuffer");
-        copy_scope.CopyFrom(ToByteSpan(upload_texture_bytes), upload_texture->GetView(), "RGBaselineUploadTexture");
-        copy_scope.CopyFrom(ToByteSpan(upload_texture_bytes), pixel_upload_buffer->GetView(), "RGBaselineUploadPixelBuffer");
-        copy_scope.CopyFrom(ToByteSpan(rt_vertices), vertex_buffer->GetView(), "RGBaselineUploadRTVertices");
-        copy_scope.CopyFrom(ToByteSpan(rt_indices), index_buffer->GetView(), "RGBaselineUploadRTIndices");
+        copy_scope.CopyFrom(ToByteSpan(src_values), src_buffer->GetView(), MOER_TEXT("RGBaselineUploadSourceBuffer"));
+        copy_scope.CopyFrom(ToByteSpan(upload_texture_bytes), upload_texture->GetView(), MOER_TEXT("RGBaselineUploadTexture"));
+        copy_scope.CopyFrom(ToByteSpan(upload_texture_bytes), pixel_upload_buffer->GetView(), MOER_TEXT("RGBaselineUploadPixelBuffer"));
+        copy_scope.CopyFrom(ToByteSpan(rt_vertices), vertex_buffer->GetView(), MOER_TEXT("RGBaselineUploadRTVertices"));
+        copy_scope.CopyFrom(ToByteSpan(rt_indices), index_buffer->GetView(), MOER_TEXT("RGBaselineUploadRTIndices"));
     }
-    setup_cmd.PushScopeWithTimeScope("RGBaseline.SetupCopy");
+    setup_cmd.PushScopeWithTimeScope(MOER_TEXT("RGBaseline.SetupCopy"));
     setup_cmd.ClearResource(scratch_buffer->GetView(), 0u);
     setup_cmd.ClearResource(compute_buffer->GetView(), 0u);
     setup_cmd.ClearResource(copied_compute_buffer->GetView(), 0u);
     setup_cmd.ClearResource(raster_target->GetView(), float4(0.0f, 0.0f, 0.0f, 1.0f));
-    setup_cmd.CopyFrom(upload_texture->GetView(), copied_texture->GetView(), "RGBaselineTextureToTexture");
-    setup_cmd.CopyFrom(pixel_upload_buffer->GetView(), buffer_texture->GetView(), "RGBaselineBufferToTexture");
+    setup_cmd.CopyFrom(upload_texture->GetView(), copied_texture->GetView(), MOER_TEXT("RGBaselineTextureToTexture"));
+    setup_cmd.CopyFrom(pixel_upload_buffer->GetView(), buffer_texture->GetView(), MOER_TEXT("RGBaselineBufferToTexture"));
     setup_cmd.PopScopeWithTimeScope();
 
     CommandList compute_cmd(EQueueType::Graphics);
-    compute_cmd.PushScopeWithTimeScope("RGBaseline.ComputePass");
-    auto compute_query = compute_cmd.BeginTimestampQuery("RGBaselineComputeTimestamp");
+    compute_cmd.PushScopeWithTimeScope(MOER_TEXT("RGBaseline.ComputePass"));
+    auto compute_query = compute_cmd.BeginTimestampQuery(MOER_TEXT("RGBaselineComputeTimestamp"));
     compute_cmd
         .Compute(
             compute_pipeline,
@@ -378,13 +378,13 @@ int RunRHICommandListRGBaselineTest() {
             src_buffer->GetView(),
             compute_buffer->GetView()
         )
-        .Dispatch((baseline_element_count + 63u) / 64u, "RGBaselineComputeDispatch");
+        .Dispatch((baseline_element_count + 63u) / 64u, MOER_TEXT("RGBaselineComputeDispatch"));
     compute_cmd.EndTimestampQuery(compute_query);
-    compute_cmd.CopyFrom(compute_buffer->GetView(), copied_compute_buffer->GetView(), "RGBaselineBufferToBuffer");
+    compute_cmd.CopyFrom(compute_buffer->GetView(), copied_compute_buffer->GetView(), MOER_TEXT("RGBaselineBufferToBuffer"));
     compute_cmd.PopScopeWithTimeScope();
 
     CommandList graphics_cmd(EQueueType::Graphics);
-    graphics_cmd.PushScopeWithTimeScope("RGBaseline.GraphicsPass");
+    graphics_cmd.PushScopeWithTimeScope(MOER_TEXT("RGBaseline.GraphicsPass"));
     Array<SingleDrawParam> draw_params;
     draw_params.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
     graphics_cmd
@@ -395,7 +395,7 @@ int RunRHICommandListRGBaselineTest() {
             }
         )
         .Draw(
-            "RGBaselineFullscreenDraw",
+            MOER_TEXT("RGBaselineFullscreenDraw"),
             Rect2D(0, 0, baseline_texture_size, baseline_texture_size),
             std::move(draw_params),
             ColorAttachment(raster_target)
@@ -403,7 +403,7 @@ int RunRHICommandListRGBaselineTest() {
     graphics_cmd.PopScopeWithTimeScope();
 
     CommandList raytracing_cmd(EQueueType::Graphics);
-    raytracing_cmd.PushScopeWithTimeScope("RGBaseline.RaytracingPass");
+    raytracing_cmd.PushScopeWithTimeScope(MOER_TEXT("RGBaseline.RaytracingPass"));
     RaytracingGeometryRef retained_raytracing_geometry;
     RaytracingSceneRef retained_raytracing_scene;
     const bool raytracing_recorded = RecordRaytracingCoverageIfSupported(
@@ -417,26 +417,26 @@ int RunRHICommandListRGBaselineTest() {
     raytracing_cmd.PopScopeWithTimeScope();
 
     CommandList readback_cmd(EQueueType::Graphics);
-    readback_cmd.PushScopeWithTimeScope("RGBaseline.ReadbackPass");
+    readback_cmd.PushScopeWithTimeScope(MOER_TEXT("RGBaseline.ReadbackPass"));
     GraphEventRef compute_readback_event = readback_cmd.ReadbackCopy(
         copied_compute_buffer->GetView(),
         ToByteSpan(readback_compute),
-        "RGBaselineReadbackComputeBuffer"
+        MOER_TEXT("RGBaselineReadbackComputeBuffer")
     );
     GraphEventRef copied_texture_event = readback_cmd.ReadbackCopy(
         copied_texture->GetView(),
         ToByteSpan(copied_texture_readback),
-        "RGBaselineReadbackCopiedTexture"
+        MOER_TEXT("RGBaselineReadbackCopiedTexture")
     );
     GraphEventRef buffer_texture_event = readback_cmd.ReadbackCopy(
         buffer_texture->GetView(),
         ToByteSpan(buffer_texture_readback),
-        "RGBaselineReadbackBufferTexture"
+        MOER_TEXT("RGBaselineReadbackBufferTexture")
     );
     GraphEventRef raster_readback_event = readback_cmd.ReadbackCopy(
         raster_target->GetView(),
         ToByteSpan(raster_readback),
-        "RGBaselineReadbackRasterTarget"
+        MOER_TEXT("RGBaselineReadbackRasterTarget")
     );
     readback_cmd.PopScopeWithTimeScope();
 

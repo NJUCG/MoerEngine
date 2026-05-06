@@ -159,13 +159,13 @@ constexpr uint32_t kPresentIterations = 8;
 
 GPUEvent MakeResolvedGpuEvent(
     GPUEvent::EType type,
-    std::string_view name,
+    StringView name,
     uint32 depth,
     uint64 timestamp_ns
 ) {
     return GPUEvent{
         .type = type,
-        .name = std::string(name),
+        .name = String(name),
         .query = {},
         .depth = depth,
         .timestamp_ns = timestamp_ns,
@@ -867,9 +867,9 @@ int RunGpuEventStreamProfileDumpTest() {
     stream.ResetForTesting();
 
     Array<GPUEvent> events;
-    events.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginGPU, "GpuDumpScope", 0, 100));
-    events.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndGPU, "GpuDumpScope", 0, 180));
-    events.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::FrameBoundary, "FrameBoundary", 0, 200));
+    events.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginGPU, MOER_TEXT("GpuDumpScope"), 0, 100));
+    events.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndGPU, MOER_TEXT("GpuDumpScope"), 0, 180));
+    events.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::FrameBoundary, MOER_TEXT("FrameBoundary"), 0, 200));
     stream.InjectResolvedSubmitForTesting(std::move(events), EQueueType::Graphics);
     stream.EndFrame();
     stream.FlushToProfiler();
@@ -1570,29 +1570,29 @@ int RunRHITranslateMultiQueueReadbackTest() {
     auto& device = RenderDevice::Get();
 
     auto src = device.CreateBuffer<uint32_t>(
-        "translate_src",
+        MOER_TEXT("translate_src"),
         kElementCount,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
             EBufferUsageFlags::TRANSFER_SRC
     );
     auto mid = device.CreateBuffer<uint32_t>(
-        "translate_mid",
+        MOER_TEXT("translate_mid"),
         kElementCount,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC
     );
     auto dst = device.CreateBuffer<uint32_t>(
-        "translate_dst",
+        MOER_TEXT("translate_dst"),
         kElementCount,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC
     );
     auto indices_stage0 = device.CreateBuffer<IndicePair>(
-        "translate_indices_stage0",
+        MOER_TEXT("translate_indices_stage0"),
         kElementCount,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
             EBufferUsageFlags::TRANSFER_SRC
     );
     auto indices_stage1 = device.CreateBuffer<IndicePair>(
-        "translate_indices_stage1",
+        MOER_TEXT("translate_indices_stage1"),
         kElementCount,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
             EBufferUsageFlags::TRANSFER_SRC
@@ -1630,12 +1630,12 @@ int RunRHITranslateMultiQueueReadbackTest() {
         CommandList compute_stage0_cmd(EQueueType::Graphics);
         compute_stage0_cmd
             .Compute(shuffle_pipeline, shuffle_args, indices_stage0->GetView(), src->GetView(), mid->GetView())
-            .Dispatch((kElementCount + 63u) / 64u, "TranslateStage0Dispatch");
+            .Dispatch((kElementCount + 63u) / 64u, MOER_TEXT("TranslateStage0Dispatch"));
 
         CommandList compute_stage1_cmd(EQueueType::Graphics);
         compute_stage1_cmd
             .Compute(shuffle_pipeline, shuffle_args, indices_stage1->GetView(), mid->GetView(), dst->GetView())
-            .Dispatch((kElementCount + 63u) / 64u, "TranslateStage1Dispatch");
+            .Dispatch((kElementCount + 63u) / 64u, MOER_TEXT("TranslateStage1Dispatch"));
 
         std::fill(readback_data.begin(), readback_data.end(), 0u);
         CommandList readback_cmd(EQueueType::Graphics);
@@ -1664,7 +1664,7 @@ int RunRHITranslateMultiQueueReadbackTest() {
 int RunMultiCommandListSubmitOrderingTest() {
     auto& device = RenderDevice::Get();
     auto buffer = device.CreateBuffer<uint32_t>(
-        "translate_multicmd_submit_order",
+        MOER_TEXT("translate_multicmd_submit_order"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC
     );
@@ -1702,7 +1702,7 @@ int RunMultiCommandListSubmitOrderingTest() {
 int RunSerialControlTranslateOrderingTest() {
     auto& device = RenderDevice::Get();
     auto buffer = device.CreateBuffer<uint32_t>(
-        "translate_serial_control_order",
+        MOER_TEXT("translate_serial_control_order"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC
     );
@@ -1742,13 +1742,13 @@ int RunSerialControlTranslateOrderingTest() {
 int RunGraphicsCopyScopeRoundTripTest() {
     auto& device = RenderDevice::Get();
     auto scratch_buffer = device.CreateBuffer<uint32_t>(
-        "copyscope_graphics_roundtrip_scratch",
+        MOER_TEXT("copyscope_graphics_roundtrip_scratch"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
             EBufferUsageFlags::UNORDERED_ACCESS
     );
     auto transfer_buffer = device.CreateBuffer<uint32_t>(
-        "copyscope_graphics_roundtrip",
+        MOER_TEXT("copyscope_graphics_roundtrip"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
             EBufferUsageFlags::UNORDERED_ACCESS
@@ -1793,19 +1793,19 @@ int RunBindlessBufferReadbackTest() {
 
     auto bindless_array = device.CreateBindlessArray();
     auto src_a = device.CreateBuffer<uint32_t>(
-        "bindless_src_a",
+        MOER_TEXT("bindless_src_a"),
         kElementCount,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
             EBufferUsageFlags::TRANSFER_SRC
     );
     auto src_b = device.CreateBuffer<uint32_t>(
-        "bindless_src_b",
+        MOER_TEXT("bindless_src_b"),
         kElementCount,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
             EBufferUsageFlags::TRANSFER_SRC
     );
     auto output = device.CreateBuffer<uint32_t>(
-        "bindless_readback_output",
+        MOER_TEXT("bindless_readback_output"),
         kElementCount,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
             EBufferUsageFlags::TRANSFER_SRC
@@ -1844,7 +1844,7 @@ int RunBindlessBufferReadbackTest() {
         };
 
         cmd.Compute(pipeline, args, output->GetView(), bindless_array)
-            .Dispatch((kElementCount + 63u) / 64u, "BindlessBufferReadbackDispatch");
+            .Dispatch((kElementCount + 63u) / 64u, MOER_TEXT("BindlessBufferReadbackDispatch"));
 
         GraphEventRef readback_event =
             cmd.ReadbackCopy(output->GetView(), ToByteSpan(readback_values));
@@ -1882,7 +1882,7 @@ int RunBindlessTextureReadbackTest() {
 
     auto bindless_array = device.CreateBindlessArray();
     auto output = device.CreateBuffer<uint32_t>(
-        "bindless_texture_readback_output",
+        MOER_TEXT("bindless_texture_readback_output"),
         8u,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
             EBufferUsageFlags::TRANSFER_SRC
@@ -1925,7 +1925,7 @@ int RunBindlessTextureReadbackTest() {
     };
 
     auto mip_texture = device.CreateTexture(
-        "bindless_texture_mip",
+        MOER_TEXT("bindless_texture_mip"),
         Extent2D(2u, 2u),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED,
@@ -1959,7 +1959,7 @@ int RunBindlessTextureReadbackTest() {
         };
 
         cmd.Compute(pipeline, args, output->GetView(), bindless_array)
-            .Dispatch(1u, "BindlessTextureMipDispatch");
+            .Dispatch(1u, MOER_TEXT("BindlessTextureMipDispatch"));
 
         Array<CommandList> frame_cmds{};
         frame_cmds.emplace_back(std::move(cmd));
@@ -1971,7 +1971,7 @@ int RunBindlessTextureReadbackTest() {
     }
 
     auto sampler_texture = device.CreateTexture(
-        "bindless_texture_sampler",
+        MOER_TEXT("bindless_texture_sampler"),
         Extent2D(2u, 1u),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED
@@ -2009,7 +2009,7 @@ int RunBindlessTextureReadbackTest() {
         };
 
         cmd.Compute(pipeline, args, output->GetView(), bindless_array)
-            .Dispatch(1u, "BindlessTextureSamplerDispatch");
+            .Dispatch(1u, MOER_TEXT("BindlessTextureSamplerDispatch"));
 
         Array<CommandList> frame_cmds{};
         frame_cmds.emplace_back(std::move(cmd));
@@ -2021,13 +2021,13 @@ int RunBindlessTextureReadbackTest() {
     }
 
     auto update_texture_a = device.CreateTexture(
-        "bindless_texture_update_a",
+        MOER_TEXT("bindless_texture_update_a"),
         Extent2D(1u, 1u),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED
     );
     auto update_texture_b = device.CreateTexture(
-        "bindless_texture_update_b",
+        MOER_TEXT("bindless_texture_update_b"),
         Extent2D(1u, 1u),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED
@@ -2059,7 +2059,7 @@ int RunBindlessTextureReadbackTest() {
             .mip1 = 0.0f,
         };
         cmd.Compute(pipeline, dispatch_a_args, output->GetView(), bindless_array)
-            .Dispatch(1u, "BindlessTextureUpdateDispatchA");
+            .Dispatch(1u, MOER_TEXT("BindlessTextureUpdateDispatchA"));
 
         rebound_handle = bindless_array->AllocateTexture(update_texture_b->GetView(), update_sampler);
 
@@ -2078,7 +2078,7 @@ int RunBindlessTextureReadbackTest() {
             .mip1 = 0.0f,
         };
         cmd.Compute(pipeline, dispatch_b_args, output->GetView(), bindless_array)
-            .Dispatch(1u, "BindlessTextureUpdateDispatchB");
+            .Dispatch(1u, MOER_TEXT("BindlessTextureUpdateDispatchB"));
 
         Array<CommandList> frame_cmds{};
         frame_cmds.emplace_back(std::move(cmd));
@@ -2105,7 +2105,7 @@ int RunMultiBindlessArrayReadbackTest() {
     auto bindless_array_a = device.CreateBindlessArray();
     auto bindless_array_b = device.CreateBindlessArray();
     auto output = device.CreateBuffer<uint32_t>(
-        "multi_bindless_array_readback_output",
+        MOER_TEXT("multi_bindless_array_readback_output"),
         4u,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
             EBufferUsageFlags::TRANSFER_SRC
@@ -2116,13 +2116,13 @@ int RunMultiBindlessArrayReadbackTest() {
     );
 
     auto texture_a = device.CreateTexture(
-        "multi_bindless_array_texture_a",
+        MOER_TEXT("multi_bindless_array_texture_a"),
         Extent2D(1u, 1u),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED
     );
     auto texture_b = device.CreateTexture(
-        "multi_bindless_array_texture_b",
+        MOER_TEXT("multi_bindless_array_texture_b"),
         Extent2D(1u, 1u),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED
@@ -2179,15 +2179,15 @@ int RunMultiBindlessArrayReadbackTest() {
 
         cmd.UpdateBindlessArray(bindless_array_a);
         cmd.Compute(pipeline, args_a, output->GetView(), bindless_array_a)
-            .Dispatch(1u, "MultiBindlessArrayDispatchA");
+            .Dispatch(1u, MOER_TEXT("MultiBindlessArrayDispatchA"));
 
         cmd.UpdateBindlessArray(bindless_array_b);
         cmd.Compute(pipeline, args_b, output->GetView(), bindless_array_b)
-            .Dispatch(1u, "MultiBindlessArrayDispatchB");
+            .Dispatch(1u, MOER_TEXT("MultiBindlessArrayDispatchB"));
 
         cmd.UpdateBindlessArray(bindless_array_a);
         cmd.Compute(pipeline, args_a_again, output->GetView(), bindless_array_a)
-            .Dispatch(1u, "MultiBindlessArrayDispatchARepeat");
+            .Dispatch(1u, MOER_TEXT("MultiBindlessArrayDispatchARepeat"));
 
         Array<CommandList> frame_cmds{};
         frame_cmds.emplace_back(std::move(cmd));
@@ -2234,13 +2234,13 @@ int RunMultiBindlessArrayReadbackTest() {
 int RunMultiCopyScopeOrderingTest() {
     auto& device = RenderDevice::Get();
     auto buffer_a = device.CreateBuffer<uint32_t>(
-        "copyscope_multi_scope_a",
+        MOER_TEXT("copyscope_multi_scope_a"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
             EBufferUsageFlags::UNORDERED_ACCESS
     );
     auto buffer_b = device.CreateBuffer<uint32_t>(
-        "copyscope_multi_scope_b",
+        MOER_TEXT("copyscope_multi_scope_b"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
             EBufferUsageFlags::UNORDERED_ACCESS
@@ -2292,7 +2292,7 @@ int RunMultiCopyScopeOrderingTest() {
 int RunCopyScopeUnknownFirstUseTest() {
     auto& device = RenderDevice::Get();
     auto buffer = device.CreateBuffer<uint32_t>(
-        "copyscope_unknown_first_use",
+        MOER_TEXT("copyscope_unknown_first_use"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC
     );
@@ -2330,7 +2330,7 @@ int RunGpuEventStreamHierarchyTest() {
     GPUEventStream::Get().ResetForTesting();
 
     auto buffer = device.CreateBuffer<uint32_t>(
-        "gpu_event_stream_buffer",
+        MOER_TEXT("gpu_event_stream_buffer"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC
     );
@@ -2340,10 +2340,10 @@ int RunGpuEventStreamHierarchyTest() {
 
     CommandList graphics_cmd(EQueueType::Graphics);
     {
-        GPU_PROFILE_EVENT_SCOPE(graphics_cmd, "FrameOuter");
+        GPU_PROFILE_EVENT_SCOPE(graphics_cmd, MOER_TEXT("FrameOuter"));
         graphics_cmd.ClearResource(buffer->GetView(), 0x11u);
         {
-            GPU_PROFILE_EVENT_SCOPE(graphics_cmd, "FrameInner");
+            GPU_PROFILE_EVENT_SCOPE(graphics_cmd, MOER_TEXT("FrameInner"));
             graphics_cmd.ClearResource(buffer->GetView(), 0x55u);
         }
     }
@@ -2401,16 +2401,16 @@ int RunGpuEventStreamCrossSubmitAggregationTest() {
     stream.ResetForTesting();
 
     Array<GPUEvent> first_submit{};
-    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginGPU, "GPU", 0, 100));
-    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginEvent, "FrameOuter", 1, 110));
+    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginGPU, MOER_TEXT("GPU"), 0, 100));
+    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginEvent, MOER_TEXT("FrameOuter"), 1, 110));
     stream.InjectResolvedSubmitForTesting(std::move(first_submit), EQueueType::Graphics);
 
     Array<GPUEvent> second_submit{};
-    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginEvent, "FrameInner", 2, 120));
-    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndEvent, "", 2, 170));
-    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndEvent, "", 1, 190));
-    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndGPU, "", 0, 200));
-    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::FrameBoundary, "FrameBoundary", 0, 210));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginEvent, MOER_TEXT("FrameInner"), 2, 120));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndEvent, MOER_TEXT(""), 2, 170));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndEvent, MOER_TEXT(""), 1, 190));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndGPU, MOER_TEXT(""), 0, 200));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::FrameBoundary, MOER_TEXT("FrameBoundary"), 0, 210));
     stream.InjectResolvedSubmitForTesting(std::move(second_submit), EQueueType::Graphics);
     stream.EndFrame();
 
@@ -2443,14 +2443,14 @@ int RunGpuEventStreamBoundaryValidationTest() {
     stream.ResetForTesting();
 
     Array<GPUEvent> first_submit{};
-    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginGPU, "GPU", 0, 300));
-    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginEvent, "CrossBoundary", 1, 320));
+    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginGPU, MOER_TEXT("GPU"), 0, 300));
+    first_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::BeginEvent, MOER_TEXT("CrossBoundary"), 1, 320));
     stream.InjectResolvedSubmitForTesting(std::move(first_submit), EQueueType::Graphics);
 
     Array<GPUEvent> second_submit{};
-    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::FrameBoundary, "FrameBoundary", 0, 360));
-    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndEvent, "", 1, 390));
-    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndGPU, "", 0, 420));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::FrameBoundary, MOER_TEXT("FrameBoundary"), 0, 360));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndEvent, MOER_TEXT(""), 1, 390));
+    second_submit.emplace_back(MakeResolvedGpuEvent(GPUEvent::EType::EndGPU, MOER_TEXT(""), 0, 420));
     stream.InjectResolvedSubmitForTesting(std::move(second_submit), EQueueType::Graphics);
     stream.EndFrame();
 
@@ -2491,7 +2491,7 @@ int RunPresentWithCopyScopeTests() {
     };
     SwapchainRef swapchain = device.CreateSwapchain(swapchain_ci);
     TextureRef   output    = device.CreateTexture(
-        "translate_present_copyscope_output",
+        MOER_TEXT("translate_present_copyscope_output"),
         Extent2D(kWidth, kHeight),
         swapchain->format,
         ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
@@ -2559,14 +2559,14 @@ int RunPresentTests() {
     };
     SwapchainRef swapchain = device.CreateSwapchain(swapchain_ci);
     TextureRef   output    = device.CreateTexture(
-        "translate_present_output",
+        MOER_TEXT("translate_present_output"),
         Extent2D(kWidth, kHeight),
         swapchain->format,
         ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
     );
 
     auto graphics_buffer = device.CreateBuffer<uint32_t>(
-        "translate_present_graphics_buf",
+        MOER_TEXT("translate_present_graphics_buf"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
     );
@@ -2651,8 +2651,8 @@ int main(int argc, char** argv) {
 
     DeviceInitInfo info{
         .rhi_type = ERHIType::Vulkan,
-        .name = "TestRHITranslate",
-        .rhi_api_version = "1.3",
+        .name = MOER_TEXT("TestRHITranslate"),
+        .rhi_api_version = MOER_TEXT("1.3"),
     };
 
     if (info.rhi_type != ERHIType::Vulkan) {

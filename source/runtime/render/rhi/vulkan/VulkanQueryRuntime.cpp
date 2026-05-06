@@ -3,7 +3,7 @@
 #include "../RHIImpl.h"
 #include "VulkanDevice.h"
 #include "log/LogSystem.h"
-#include <format>
+#include "string/Format.h"
 
 namespace Moer::Render {
 
@@ -444,7 +444,7 @@ void VulkanQueryRuntime::ResolveCompleted(uint64 _timeline) {
     }
 }
 
-void VulkanQueryRuntime::ResolveAsError(std::span<const QueryToken> _tokens, std::string_view _reason) {
+void VulkanQueryRuntime::ResolveAsError(std::span<const QueryToken> _tokens, StringView _reason) {
     for (const auto& token : _tokens) {
         if (!token.Valid()) {
             continue;
@@ -455,7 +455,7 @@ void VulkanQueryRuntime::ResolveAsError(std::span<const QueryToken> _tokens, std
         result.name     = token.name;
         result.status   = QueryStatus::Error;
         if (!_reason.empty()) {
-            result.name = std::format("{} ({})", token.name, _reason);
+            result.name = Printf(MOER_TEXT("{} ({})"), token.name, _reason);
         }
         token.Resolve(std::move(result));
     }

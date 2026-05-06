@@ -4,6 +4,7 @@
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
+#include "string/Format.h"
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
 
@@ -145,7 +146,7 @@ BufferView VulkanAllocator::AllocateUploadBuffer(uint64 _size, uint _alignment) 
         VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
         return {buffer, handle.offset, _size, 1u};
     }
-    auto          handle = allocator.Allocate(_size, std::format("VkBackend::LargeUploadBuffer_{}", _size));
+    auto          handle = allocator.Allocate(_size, Printf(MOER_TEXT("VkBackend::LargeUploadBuffer_{}"), _size));
     VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
     large_buffers.push_back(buffer);
     return {buffer, 0, _size, 1u};
@@ -158,7 +159,7 @@ BufferView VulkanAllocator::AllocateReadbackBuffer(uint64 _size, uint _alignment
         VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle.handle);
         return {buffer, handle.offset, _size, 1u};
     }
-    auto          handle = allocator.Allocate(_size, std::format("VkBackend::LargeReadbackBuffer_{}", _size));
+    auto          handle = allocator.Allocate(_size, Printf(MOER_TEXT("VkBackend::LargeReadbackBuffer_{}"), _size));
     VulkanBuffer* buffer = reinterpret_cast<VulkanBuffer*>(handle);
     large_buffers.push_back(buffer);
 
@@ -193,7 +194,7 @@ void VulkanAllocator::Reset() {
 }
 
 VkTmpBufferAllocator::VkTmpBufferAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device) {}
-uint64 VkTmpBufferAllocator::Allocate(uint64 _size, std::string_view _name) {
+uint64 VkTmpBufferAllocator::Allocate(uint64 _size, StringView _name) {
     VkBufferCreateInfo buffer_info = {
         .sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext                 = nullptr,
@@ -295,12 +296,12 @@ uint64 VkTmpBufferAllocator::Allocate(uint64 _size, EVkInternalBufferUsage _usag
         nullptr
     ));
 
-    static constexpr std::string_view usage_str[] = {
-        "VkBackend::Upload",
-        "VkBackend::Readback",
-        "VkBackend::Scratch",
-        "VkBackend::ShaderBuffer",
-        "VkBackend::ShaderBuffer_Constant"
+    static constexpr StringView usage_str[] = {
+        MOER_TEXT("VkBackend::Upload"),
+        MOER_TEXT("VkBackend::Readback"),
+        MOER_TEXT("VkBackend::Scratch"),
+        MOER_TEXT("VkBackend::ShaderBuffer"),
+        MOER_TEXT("VkBackend::ShaderBuffer_Constant")
     };
     VulkanBuffer* vk_buffer = MoerNew(VulkanBuffer)(
         usage_str[uint(_usage)],
@@ -428,8 +429,8 @@ void VulkanAllocator::StackAllocator::Dispose() {
     allocated_buffers.clear();
 }
 
-std::string VulkanAllocator::StackAllocator::GetStackBufferName() {
-    return std::format("VkBackend::StackAllocBuffer_{}", stack_memory_id++);
+String VulkanAllocator::StackAllocator::GetStackBufferName() {
+    return Printf(MOER_TEXT("VkBackend::StackAllocBuffer_{}"), stack_memory_id++);
 }
 
 VulkanAllocator::ShaderBufferAllocator::ShaderBufferAllocator(

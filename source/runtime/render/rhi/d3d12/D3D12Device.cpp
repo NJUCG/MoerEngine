@@ -1,12 +1,11 @@
 #include "D3D12Device.h"
 
-#include <string_view>
-
 #include "log/LogSystem.h"
 #include "rhi/RHIResourceInitilizer.h"
 
 #include "Core.h"
 #include "shader/ShaderResourceManager.h"
+#include "string/Format.h"
 #include "taskgraph/ThreadManager.h"
 
 #include "../vulkan/RHICmdReorderer.h"
@@ -524,40 +523,18 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
     return PipelineHandle{.handle = reinterpret_cast<uint64>(pso), .binding_infos = std::move(binding_infos)};
 }
 
-TextureRef D3D12Device::CreateTexture(
-    std::string_view   _name,
-    ETextureDimension  _dimension,
-    Extent3D           _size,
-    EPixelFormat       _format,
-    ETextureUsageFlags _usage,
-    uint32_t           _mip_cnt,
-    uint               _array_size
-) {
-    bool        b_depth = uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
-    TextureInfo info{
-        _dimension,
-        _usage,
-        _format,
-        b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
-        _size,
-        uint8(_mip_cnt),
-        uint8(_dimension == ETextureDimension::TEX_CUBE ? 6 : _array_size),
-        1
-    }; // TODO ? msaa tex
-    info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
-    info.debug_name   = _name;
-    return TextureRef{MoerNew(D3D12Texture)(this, info)};
+TextureRef D3D12Device::CreateTexture(StringView _name, const TextureInfo& _info) {
+    TextureInfo info = _info;
+    if (!info.debug_name.has_value()) {
+        info.debug_name = String(_name);
+    }
+    auto* texture = MoerNew(D3D12Texture)(this, info);
+    texture->SetName(info.debug_name.value());
+    return TextureRef{texture};
 }
 
-BufferRef D3D12Device::CreateBuffer(
-    std::string_view  _name,
-    uint              _element_cnt,
-    uint              _byte_stride,
-    EBufferUsageFlags _usage,
-    EPixelFormat      _format
-) {
-    BufferInfo info{_element_cnt, _byte_stride, _usage, _format};
-    // _format unused now
+BufferRef D3D12Device::CreateBuffer(StringView _name, const BufferInfo& _info) {
+    BufferInfo info = _info;
     auto* buffer = MoerNew(D3D12Buffer)(this, info);
     buffer->SetName(_name);
     return BufferRef{buffer};
@@ -804,7 +781,7 @@ D3D12Buffer::D3D12Buffer(D3D12Device* _device, const BufferInfo& _info) :
     DASSERT(false == EnumHasAnyFlag(_info.usage, EBufferUsageFlags::CPU_VISIBLE));
     auto* allocator = _device->GetGpuGlobalAllocator();
 
-    allocation = allocator->AllocateBufferHeap("default-buffer-name", GetByteSize(), D3D12_HEAP_TYPE_DEFAULT);
+    allocation = allocator->AllocateBufferHeap(MOER_TEXT("default-buffer-name"), GetByteSize(), D3D12_HEAP_TYPE_DEFAULT);
 
     D3D12_RESOURCE_DESC1 resourceDesc = CD3DX12_RESOURCE_DESC1::Buffer(GetByteSize());
     if (EnumHasAnyFlag(
@@ -842,9 +819,10 @@ D3D12Buffer::~D3D12Buffer() {}
 void D3D12Buffer::Destroy() {
     MoerDelete(this);
 }
-void D3D12Buffer::SetName(const std::string_view _name) {
+void D3D12Buffer::SetName(StringView _name) {
     debug_name.emplace(_name);
-    allocation.resource->SetName(StringWiden(_name).c_str());
+    String name(_name);
+    allocation.resource->SetName(name.c_str());
 }
 
 DescriptorIndex D3D12Buffer::CreateSrv(const BufferView& _range, ED3D12ShaderVariableType _type) {
@@ -957,7 +935,7 @@ static bool IsPowerOfTwo(uint64 _value) {
 }
 
 Allocation D3D12GpuGlobalAllocator::AllocateBufferHeap(
-    std::string_view _name,
+    StringView       _name,
     uint64           _byte_size,
     D3D12_HEAP_TYPE  _heap_type
 ) {
@@ -973,12 +951,12 @@ Allocation D3D12GpuGlobalAllocator::AllocateBufferHeap(
     Allocation alloc;
     DX_CHECK_HRESULT(d3d12Allocator->AllocateMemory(&desc, &info, &alloc.alloc));
     alloc.alloc->SetPrivateData(device); // sometime useful
-    alloc.alloc->SetName(StringWiden(_name).c_str());
+    alloc.alloc->SetName(String(_name).c_str());
     return alloc;
 }
 
 Allocation D3D12GpuGlobalAllocator::AllocateTextureHeap(
-    std::string_view _name,
+    StringView       _name,
     uint64           _byte_size,
     uint64           _alignment,
     bool             _is_rtv_dsv
@@ -997,7 +975,7 @@ Allocation D3D12GpuGlobalAllocator::AllocateTextureHeap(
     Allocation alloc;
     DX_CHECK_HRESULT(d3d12Allocator->AllocateMemory(&desc, &info, &alloc.alloc));
     alloc.alloc->SetPrivateData(device); // sometime useful
-    alloc.alloc->SetName(StringWiden(_name).c_str());
+    alloc.alloc->SetName(String(_name).c_str());
     return alloc;
 }
 
@@ -1499,7 +1477,7 @@ D3D12GraphicsCommandQueue::D3D12GraphicsCommandQueue(D3D12Device* _device, EQueu
     DX_CHECK_HRESULT(
         device->Native()->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(queue.ReleaseAndGetAddressOf()))
     );
-    queue->SetName(StringWiden("GraphicsCommandQueue").c_str());
+    queue->SetName(String(MOER_TEXT("GraphicsCommandQueue")).c_str());
     execute_runnable = MoerNew(ExecuteRunnable)(*this);
     execute_thread   = RunnableThread::Create(
         execute_runnable,
@@ -1528,7 +1506,7 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     if (!_submit.query_tokens.empty()) {
         QueryResult error_result{};
         error_result.status = QueryStatus::Error;
-        error_result.name   = "Query is not implemented on D3D12 backend";
+        error_result.name   = MOER_TEXT("Query is not implemented on D3D12 backend");
         for (const auto& token : _submit.query_tokens) {
             if (!token.Valid()) {
                 continue;
@@ -2121,13 +2099,12 @@ void D3D12BuddyAllocator::Initialize() {
 
     // Create the underlying buffer
     underlying_buffer = CreateLargeStagingBuffer(device, heap_type, total_byte_size);
-    underlying_buffer->Native()->SetName(StringWiden(
-                                             std::format(
-                                                 "D3D12BuddyAllocator-back-buffer-{}",
-                                                 heap_type == D3D12_HEAP_TYPE_UPLOAD ? "upload" : "readback"
-                                             )
-    )
-                                             .c_str());
+    underlying_buffer->Native()->SetName(
+        Printf(
+            MOER_TEXT("D3D12BuddyAllocator-back-buffer-{}"),
+            heap_type == D3D12_HEAP_TYPE_UPLOAD ? MOER_TEXT("upload") : MOER_TEXT("readback")
+        ).c_str()
+    );
     DX_CHECK_HRESULT(underlying_buffer->Native()->Map(0, nullptr, reinterpret_cast<void**>(&ptr_mapped)));
 }
 uint32 D3D12BuddyAllocator::GetSizeToAllocate(uint32 _size, uint32 _alignment) {
@@ -2356,7 +2333,7 @@ D3D12Texture::D3D12Texture(D3D12Device* _device, const TextureInfo& _info) :
 
     const auto allocateInfo = device->Native()->GetResourceAllocationInfo2(0, 1, &resourceDesc, nullptr);
     allocation              = allocator->AllocateTextureHeap(
-        "default-texture-name", allocateInfo.SizeInBytes, allocateInfo.Alignment, is_rtv_dsv
+        MOER_TEXT("default-texture-name"), allocateInfo.SizeInBytes, allocateInfo.Alignment, is_rtv_dsv
     );
     DX_CHECK_HRESULT(device->Native()->CreatePlacedResource2(
         allocation.alloc->GetHeap(),
@@ -2390,9 +2367,10 @@ uint D3D12Texture::GetMipByteSize(uint _mip_level) const {
            ) /
            8;
 }
-void D3D12Texture::SetName(const std::string_view _name) {
+void D3D12Texture::SetName(StringView _name) {
     debug_name.emplace(_name);
-    allocation.resource->SetName(StringWiden(_name).c_str());
+    String name(_name);
+    allocation.resource->SetName(name.c_str());
 }
 
 namespace D3D12EnumTranslation {

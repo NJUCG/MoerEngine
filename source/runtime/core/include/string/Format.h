@@ -163,14 +163,6 @@ inline PlatformString::native_view_type ToPlatformFormatArg(PlatformStringView t
     return PlatformString::native_view_type(text.data(), text.size());
 }
 
-inline PlatformString::native_view_type ToPlatformFormatArg(PlatformStringView& text) {
-    return PlatformString::native_view_type(text.data(), text.size());
-}
-
-inline PlatformString::native_view_type ToPlatformFormatArg(const PlatformStringView& text) {
-    return PlatformString::native_view_type(text.data(), text.size());
-}
-
 inline PlatformString::native_view_type ToPlatformFormatArg(const PlatformString& text) {
     return PlatformString::native_view_type(text.data(), text.size());
 }
@@ -184,14 +176,6 @@ inline PlatformString::native_view_type ToPlatformFormatArg(PlatformString&& tex
 }
 
 inline PlatformString::native_view_type ToPlatformFormatArg(WideStringView text) {
-    return PlatformString::native_view_type(text.data(), text.size());
-}
-
-inline PlatformString::native_view_type ToPlatformFormatArg(WideStringView& text) {
-    return PlatformString::native_view_type(text.data(), text.size());
-}
-
-inline PlatformString::native_view_type ToPlatformFormatArg(const WideStringView& text) {
     return PlatformString::native_view_type(text.data(), text.size());
 }
 
@@ -249,8 +233,64 @@ inline decltype(auto) ToPlatformFormatArg(T&& value) {
     return std::forward<T>(value);
 }
 
+inline Utf8String::native_view_type ToUtf8FormatArg(Utf8StringView text) {
+    return Utf8String::native_view_type(text.data(), text.size());
+}
+
+inline Utf8String::native_view_type ToUtf8FormatArg(const Utf8String& text) {
+    return Utf8String::native_view_type(text.data(), text.size());
+}
+
+inline Utf8String::native_view_type ToUtf8FormatArg(Utf8String& text) {
+    return Utf8String::native_view_type(text.data(), text.size());
+}
+
+inline Utf8String::storage_type ToUtf8FormatArg(Utf8String&& text) {
+    return std::move(text.Native());
+}
+
+inline Utf8String::native_view_type ToUtf8FormatArg(AsciiStringView text) {
+    return Utf8String::native_view_type(text.data(), text.size());
+}
+
+inline Utf8String::native_view_type ToUtf8FormatArg(const AsciiString& text) {
+    return Utf8String::native_view_type(text.data(), text.size());
+}
+
+inline Utf8String::native_view_type ToUtf8FormatArg(AsciiString& text) {
+    return Utf8String::native_view_type(text.data(), text.size());
+}
+
+inline Utf8String::storage_type ToUtf8FormatArg(AsciiString&& text) {
+    return Utf8String::storage_type(text.data(), text.size());
+}
+
+inline Utf8String::storage_type ToUtf8FormatArg(PlatformStringView text) {
+    return PlatformToUtf8(text).Native();
+}
+
+inline Utf8String::storage_type ToUtf8FormatArg(const PlatformString& text) {
+    return PlatformToUtf8(PlatformStringView(text)).Native();
+}
+
+inline Utf8String::storage_type ToUtf8FormatArg(PlatformString& text) {
+    return PlatformToUtf8(PlatformStringView(text)).Native();
+}
+
+inline Utf8String::storage_type ToUtf8FormatArg(PlatformString&& text) {
+    return PlatformToUtf8(PlatformStringView(text)).Native();
+}
+
+template<typename T>
+inline decltype(auto) ToUtf8FormatArg(T&& value) {
+    return std::forward<T>(value);
+}
+
 template<typename T>
 using PlatformFormatArgType = std::remove_cvref_t<decltype(ToPlatformFormatArg(std::declval<T>()))>;
+
+template<typename T>
+using Utf8FormatArgType = std::remove_cvref_t<decltype(ToUtf8FormatArg(std::declval<T>()))>;
 
 #if defined(_MSC_VER) && _MSC_VER < 1930
 template<typename CharT, typename... Args>
@@ -266,7 +306,7 @@ template<typename... Args>
 using FormatString = Detail::BasicFormatString<PlatformChar, Detail::PlatformFormatArgType<Args>...>;
 
 template<typename... Args>
-using Utf8FormatString = Detail::BasicFormatString<Char8, std::type_identity_t<Args>...>;
+using Utf8FormatString = Detail::BasicFormatString<Char8, Detail::Utf8FormatArgType<Args>...>;
 
 template<typename... Args>
 String Printf(FormatString<Args...> fmt, Args&&... args) {
@@ -280,7 +320,12 @@ String Printf(FormatString<Args...> fmt, Args&&... args) {
 
 template<typename... Args>
 Utf8String Utf8Printf(Utf8FormatString<Args...> fmt, Args&&... args) {
-    return Utf8String(std::format(fmt, std::forward<Args>(args)...));
+    return Utf8String(std::apply(
+        [&](auto&&... converted_args) {
+            return std::format(fmt, std::forward<decltype(converted_args)>(converted_args)...);
+        },
+        std::make_tuple(Detail::ToUtf8FormatArg(std::forward<Args>(args))...)
+    ));
 }
 
 } // namespace Moer

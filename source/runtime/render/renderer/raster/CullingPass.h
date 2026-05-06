@@ -3,8 +3,7 @@
 /**
  * GPU Frustum Culling Pass
  * 
- * 使用 Compute Shader 生成 pass 专属的可见实例列表和间接绘制命令。
- */
+ * 使用 Compute Shader 生成 pass 专属的可见实例列表和间接绘制命令�? */
 
 #include "math/Function.h"
 #include "misc/STL.h"
@@ -35,7 +34,6 @@ class FrustumCullPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(FrustumCullPipeline);
 
-    // 注意：参数名必须与 shader 中的变量名一致
     DEFINE_SHADER_BUFFER(source_draw_commands);
     DEFINE_SHADER_BUFFER(primitives);
     DEFINE_SHADER_BUFFER(instances);
@@ -64,8 +62,8 @@ public:
     struct CullStatistics {
         uint32_t total_instances_before = 0; // 裁剪前的总实例数
         uint32_t total_instances_after  = 0; // 裁剪后的总实例数
-        uint32_t visible_draws          = 0; // 可见的 Draw 数量
-        uint32_t total_draws            = 0; // 总 Draw 数量
+        uint32_t visible_draws          = 0; // 可见�?Draw 数量
+        uint32_t total_draws            = 0; // �?Draw 数量
     };
 
 public:
@@ -83,7 +81,7 @@ public:
         const GpuScene::Res&              gpu_scene_res,
         GpuCullingBuffers::VisibilitySet& visibility_set,
         CullStatistics*                   out_stats          = nullptr,
-        std::string_view                  profile_scope_name = {}
+        StringView                        profile_scope_name = {}
     ) {
         const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
@@ -101,7 +99,7 @@ public:
         const GpuScene::Res&              gpu_scene_res,
         GpuCullingBuffers::VisibilitySet& visibility_set,
         CullStatistics*                   out_stats          = nullptr,
-        std::string_view                  profile_scope_name = {}
+        StringView                        profile_scope_name = {}
     ) {
         const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
@@ -145,14 +143,14 @@ private:
         const FrustumCullParams&          params,
         GpuCullingBuffers::VisibilitySet& visibility_set,
         CullStatistics*                   out_stats,
-        std::string_view                  profile_scope_name
+        StringView                        profile_scope_name
     ) {
         const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
         const uint instance_count =
             static_cast<uint>(gpu_scene_res.instance_buf.buf->GetByteSize() / sizeof(GInstance));
 
         visibility_set.EnsureCapacity(
-            context.device, context.bdls, context.cmd_list, "Raster::GpuCulling", draw_count, instance_count
+            context.device, context.bdls, context.cmd_list, MOER_TEXT("Raster::GpuCulling"), draw_count, instance_count
         );
 
         if (out_stats) {
@@ -186,7 +184,7 @@ private:
                 visibility_set.counter_buf->GetView(),                 // UAV: counters
                 params                                                 // Push constant: cull_params
             )
-            .Dispatch(uint3(dispatch_count, 1, 1), "FrustumCulling");
+            .Dispatch(uint3(dispatch_count, 1, 1), MOER_TEXT("FrustumCulling"));
 
         if (!profile_scope_name.empty()) {
             context.cmd_list.PopScopeWithTimeScope();

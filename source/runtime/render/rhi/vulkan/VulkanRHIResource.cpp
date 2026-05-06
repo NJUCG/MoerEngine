@@ -38,14 +38,14 @@
 #pragma region utils definition
 namespace Moer::Render {
 
-static constexpr std::string_view s_tlas_underlying_buffer_name = "VkRaytracing::TLASUnderlyingBuffer";
-static constexpr std::string_view s_blas_underlying_buffer_name = "VkRaytracing::BLASUnderlyingBuffer";
-static constexpr std::string_view s_blas_scratch_buffer_name    = "VkRaytracing::BLASScratchBuffer";
-static constexpr std::string_view s_tlas_scratch_buffer_name    = "VkRaytracing::TLASScratchBuffer";
-static constexpr std::string_view s_tlas_instance_buffer_name   = "VkRaytracing::TLASInstanceBuffer";
-static constexpr std::string_view s_bdls_array_name             = "VkBindless::BindlessArrayBuffer";
-static constexpr std::string_view s_bdls_array_buffer_name      = "VkBindless::BindlessBuffuerBuffer";
-static constexpr std::string_view s_bdls_array_image_name       = "VkBindless::BindlessImageBuffer";
+static constexpr StringView s_tlas_underlying_buffer_name = MOER_TEXT("VkRaytracing::TLASUnderlyingBuffer");
+static constexpr StringView s_blas_underlying_buffer_name = MOER_TEXT("VkRaytracing::BLASUnderlyingBuffer");
+static constexpr StringView s_blas_scratch_buffer_name    = MOER_TEXT("VkRaytracing::BLASScratchBuffer");
+static constexpr StringView s_tlas_scratch_buffer_name    = MOER_TEXT("VkRaytracing::TLASScratchBuffer");
+static constexpr StringView s_tlas_instance_buffer_name   = MOER_TEXT("VkRaytracing::TLASInstanceBuffer");
+static constexpr StringView s_bdls_array_name             = MOER_TEXT("VkBindless::BindlessArrayBuffer");
+static constexpr StringView s_bdls_array_buffer_name      = MOER_TEXT("VkBindless::BindlessBuffuerBuffer");
+static constexpr StringView s_bdls_array_image_name       = MOER_TEXT("VkBindless::BindlessImageBuffer");
 static constexpr uint32 s_bindless_sampler_index_bits           = 8;
 static constexpr uint32 s_bindless_sampler_index_mask           = (1u << s_bindless_sampler_index_bits) - 1u;
 static constexpr uint32 s_bindless_texture_index_shift          = s_bindless_sampler_index_bits;
@@ -1684,7 +1684,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 MOER_TEXT("Invalid texture extent: ({}, {}). Texture name: {}"),
                 _info.extent.x,
                 _info.extent.y,
-                _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown"
+                _info.debug_name.has_value() ? StringView(*_info.debug_name) : MOER_TEXT("Unknown")
             );
             assert(false && "Texture extent cannot be zero");
         }
@@ -1716,10 +1716,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         VmaAllocator allocator = m_device->GetVmaAllocator();
         VkResult     result    = vmaCreateImage(allocator, &image_create_info, &alloc_create_info, &m_alloc.image, &m_alloc.alloc, nullptr);
         if (result != VK_SUCCESS) {
-            std::string texture_name = _info.debug_name.has_value() ? _info.debug_name->c_str() : "Unknown";
+            StringView texture_name = _info.debug_name.has_value() ? StringView(*_info.debug_name) : MOER_TEXT("Unknown");
             LOG_CRITICAL(
                 MOER_TEXT("Failed to create texture '{}': extent=({},{}), format={}, mips={}, layers={}, ")
-                "VkResult={}",
+                MOER_TEXT("VkResult={}"),
                 texture_name,
                 _info.extent.x,
                 _info.extent.y,
@@ -1731,9 +1731,9 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             VK_CHECK_RESULT(result);
         }
         if(!_info.debug_name.has_value()){
-            SetName("UserTexture");
+            SetName(MOER_TEXT("UserTexture"));
         }else{
-            SetName(_info.debug_name->c_str());
+            SetName(*_info.debug_name);
         }
     }
 
@@ -1829,7 +1829,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         }
     }
 
-    VulkanBuffer::VulkanBuffer(std::string_view _name,const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device) {
+    VulkanBuffer::VulkanBuffer(StringView _name,const BufferInfo& _info, VulkanDevice& _device): Buffer(_info), VulkanDeviceObject(&_device) {
         VkBufferCreateInfo buffer_create_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         buffer_create_info.size  = _info.size * _info.stride;
         buffer_create_info.usage = VulkanEnumTranslator::METoVKBufferUsageFlags(_info.usage) |
@@ -1863,7 +1863,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
     uint64 VulkanBuffer::DeviceAddress() const { return m_device_address; }
 
-    VulkanBuffer::VulkanBuffer(std::string_view _name, const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy, bool _get_address): Buffer(_info), VulkanDeviceObject(&_device) {
+    VulkanBuffer::VulkanBuffer(StringView _name, const BufferInfo& _info, VulkanDevice& _device, VkBuffer _handle, VmaAllocation _alloc, bool _defer_destroy, bool _get_address): Buffer(_info), VulkanDeviceObject(&_device) {
         m_alloc.buffer    = _handle;
         m_alloc.alloc     = _alloc;
         b_deferred_delete = _defer_destroy;
@@ -3335,7 +3335,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         MoerDelete(this);
     }
 
-    void VulkanBuffer::SetName(const std::string_view _name) {
+    void VulkanBuffer::SetName(StringView _name) {
         debug_name = _name;
         m_device->SetResourceName(uint64(m_alloc.buffer), VK_OBJECT_TYPE_BUFFER, _name);
     }
@@ -3348,7 +3348,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         MoerDelete(this);
     }
 
-    void VulkanTexture::SetName(const std::string_view _name) {
+    void VulkanTexture::SetName(StringView _name) {
         debug_name = _name;
         m_device->SetResourceName(uint64(m_alloc.image), VK_OBJECT_TYPE_IMAGE, _name);
     }

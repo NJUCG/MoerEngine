@@ -82,23 +82,9 @@ public:
     PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
     PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders) override;
 
-    TextureRef CreateTexture(
-        std::string_view   _name,
-        ETextureDimension  _dimension,
-        Extent3D           _size,
-        EPixelFormat       _format,
-        ETextureUsageFlags _usage,
-        uint32_t           _mip_cnt,
-        uint               _array_size
-    ) override;
+    TextureRef CreateTexture(StringView _name, const TextureInfo& _info) override;
 
-    BufferRef CreateBuffer(
-        std::string_view  _name,
-        uint              _element_cnt,
-        uint              _byte_stride,
-        EBufferUsageFlags _usage,
-        EPixelFormat      _format
-    ) override;
+    BufferRef CreateBuffer(StringView _name, const BufferInfo& _info) override;
 
     BindlessArrayRef CreateBindlessArray(uint _max_size) override;
     FenceRef         CreateFence() override;
@@ -149,12 +135,12 @@ public:
         return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
     }
 
-    void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
+    void SetResourceName(uint64 _object, VkObjectType _object_type, StringView _name);
     void CopyData(const BufferView& _dst, const void* _data, uint64 _size);
     void CopyData(void* _dst, const BufferView& _src, uint64 _size);
 
 public:
-    RuntimePlugin* LoadPlugin(std::string_view _name) override;
+    RuntimePlugin* LoadPlugin(StringView _name) override;
 
     struct Ext {
         using Ctor = std::function<RuntimePlugin*(VulkanDevice*)>;
@@ -176,7 +162,7 @@ public:
 
 private:
     std::mutex                     ext_mutex;
-    UnorderedMap<std::string, Ext> exts;
+    UnorderedMap<String, Ext> exts;
     CooperativeExtensionInfo       m_cooperative_extension_info{};
 
     void LoadDefaultExtensions();

@@ -4,9 +4,8 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
+#include "string/String.h"
 #include "window/WindowContext.h"
-
-#include <string>
 
 namespace Moer::Render {
 
@@ -15,7 +14,7 @@ struct PresentationSurfaceDesc {
     Extent2D           size;
     uint               back_buffer_count = 2;
     EPixelFormat       preferred_format  = PF_R8G8B8A8_SRGB;
-    std::string        debug_name         = "PresentationSurface";
+    String             debug_name         = MOER_TEXT("PresentationSurface");
 };
 
 class RENDER_API PresentationSurface {
@@ -42,7 +41,7 @@ private:
     SwapchainCreateInfo  swapchain_info;
     SwapchainRef         swapchain;
     TextureRef           frame_buffer;
-    std::string          debug_name;
+    String               debug_name;
 };
 
 } // namespace Moer::Render

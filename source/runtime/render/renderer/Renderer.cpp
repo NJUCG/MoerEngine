@@ -1,10 +1,11 @@
 #include "renderer/Renderer.h"
 
 // Runtime
-#include "renderer/common/RuntimeAssets.h"
 #include "config/ConfigManager.h"
 #include "misc/Timer.h"
 #include "renderer/EditorConfig.h"
+#include "renderer/common/RuntimeAssets.h"
+#include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHI.h"
 #include "scene/Scene.h"
 #include "scene/SceneGlobalEntry.h"
@@ -35,7 +36,7 @@ Renderer::Renderer(
                 .size              = {resolution.x, resolution.y},
                 .back_buffer_count = 2,
                 .preferred_format  = PF_R8G8B8A8_SRGB,
-                .debug_name        = "Main Presentation Surface",
+                .debug_name        = MOER_TEXT("Main Presentation Surface"),
             }
         );
     }
@@ -86,6 +87,8 @@ Renderer::EWindowState Renderer::TickWindowContext(const EngineHooks& hooks) {
     if (time >= max_frame_in_flight) {
         timeline->Wait(time - max_frame_in_flight);
     }
+    PooledTexturePool::Global().Tick();
+    PooledBufferPool::Global().Tick();
 
     int w_width, w_height;
     WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
@@ -111,8 +114,9 @@ void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {
         static LoopedTimer timer(2.0);
         if (timer.Tick()) { // 每隔1s触发一次
             LOG_WARNING(
-                MOER_TEXT("Don't find scene or scene format isn't supported. Please load a valid scene. Latest ")
-                "attempted scene: {}",
+                MOER_TEXT(
+                    "Don't find scene or scene format isn't supported. Please load a valid scene. Latest "
+                ) "attempted scene: {}",
                 config.scene_path
             );
         }

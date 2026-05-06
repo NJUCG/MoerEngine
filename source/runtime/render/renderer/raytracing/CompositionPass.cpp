@@ -22,7 +22,7 @@ CompositionPass::CompositionPass(RenderDevice& _device, ShaderManager& _manager)
     ));
 
     gbuffer_constants = device.CreateBuffer<Moer::byte>(
-        "CompositionPass::constant_buffer", sizeof(CompositingConstants), EBufferUsageFlags::CONSTANT_BUFFER
+        MOER_TEXT("CompositionPass::constant_buffer"), sizeof(CompositingConstants), EBufferUsageFlags::CONSTANT_BUFFER
     );
 }
 
@@ -68,7 +68,7 @@ void CompositionPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         )
         .Dispatch(
             uint3(ceil(constants.main_view.rect.x / 8), ceil(constants.main_view.rect.y / 8), 1),
-            "CompositionPass"
+            MOER_TEXT("CompositionPass")
         );
 }
 } // namespace Moer::Render::Raytracing

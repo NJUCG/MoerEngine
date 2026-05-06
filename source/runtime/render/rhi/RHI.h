@@ -34,8 +34,8 @@ struct RHIInfo {
 };
 struct DeviceInitInfo {
     ERHIType         rhi_type;
-    std::string_view name;
-    std::string_view rhi_api_version;
+    Moer::String     name;
+    Moer::String     rhi_api_version;
 };
 namespace Moer::Render {
 
@@ -94,7 +94,7 @@ protected:
 
 template<typename T>
 concept DeviceExt =
-    std::is_base_of_v<RuntimePlugin, T> && std::is_same_v<const std::string_view, decltype(T::name)>;
+    std::is_base_of_v<RuntimePlugin, T> && std::is_same_v<const StringView, decltype(T::name)>;
 
 class RenderDevice {
 public:
@@ -109,13 +109,15 @@ public:
             NumericType<TElement> || user_trivial_type_v<TElement>
         )
     BufferRef CreateBuffer(
-        std::string_view  _name,
+        StringView        _name,
         uint              _element_cnt,
         EBufferUsageFlags _usage,
         EPixelFormat      _format = PF_UNDEFINED
     ) {
         return CreateBuffer(_name, _element_cnt, sizeof(TElement), _usage, _format);
     }
+
+    RENDER_API BufferRef CreateBuffer(StringView _name, const BufferInfo& _info);
 
     RENDER_API BufferRef CreateStagingBuffer(uint64_t _byte_size);
 
@@ -136,7 +138,7 @@ public:
     );
 
     RENDER_API TextureRef CreateTexture(
-        std::string_view   _name,
+        StringView         _name,
         Extent3D           _size,
         EPixelFormat       _format,
         ETextureUsageFlags _usage,
@@ -144,8 +146,10 @@ public:
         uint32_t           _array_size = 1
     );
 
+    RENDER_API TextureRef CreateTexture(StringView _name, const TextureInfo& _info);
+
     RENDER_API TextureRef CreateCubeMap(
-        std::string_view   _name,
+        StringView         _name,
         Extent2D           _size,
         EPixelFormat       _format,
         ETextureUsageFlags _usage,
@@ -153,7 +157,7 @@ public:
     );
 
     RENDER_API DepthBufferRef CreateDepthBuffer(
-        std::string_view   _name,
+        StringView         _name,
         Extent2D           _size,
         EPixelFormat       _format,
         uint32_t           _array_size = 1,
@@ -217,7 +221,7 @@ protected:
 
 private:
     RENDER_API BufferRef CreateBuffer(
-        std::string_view  _name,
+        StringView        _name,
         uint              _element_cnt,
         uint              _stride,
         EBufferUsageFlags _usage,

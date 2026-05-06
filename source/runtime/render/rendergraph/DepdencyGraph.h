@@ -1,7 +1,7 @@
 #pragma once
 
-namespace Moer {
+namespace Moer::Render {
 
 struct DepdencyGraph final {};
 
-} // namespace Moer
+} // namespace Moer::Render

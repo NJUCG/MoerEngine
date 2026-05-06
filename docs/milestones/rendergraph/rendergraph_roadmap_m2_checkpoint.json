@@ -1,0 +1,162 @@
+{
+  "project": "RenderGraph Roadmap",
+  "planning_only": true,
+  "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
+  "stage": {
+    "id": "M2",
+    "title": "Implement barrier compiler and queue synchronization plan",
+    "status": "planned"
+  },
+  "goal": "Move complex transition planning and cross-queue synchronization out of RHI preprocessing and into a deterministic RenderGraph compiler that emits batched barriers, reordered barriers, and an RHIExecutor submit dependency plan.",
+  "entry_gate": [
+    "M1 resource declaration model is frozen.",
+    "Pass queue intent is known before compile.",
+    "Imported resources have known initial state and exported resources declare final state."
+  ],
+  "hard_rules": [
+    {
+      "id": "HR-M2-01",
+      "rule": "Do not infer RenderGraph dependencies by scanning recorded RHICommandList contents. Compile from pass declarations."
+    },
+    {
+      "id": "HR-M2-02",
+      "rule": "Do not emit per-resource barriers immediately when they can be batched at pass or queue boundaries."
+    },
+    {
+      "id": "HR-M2-03",
+      "rule": "Do not let one compiled queue segment import from multiple source queues. Split the segment instead."
+    },
+    {
+      "id": "HR-M2-04",
+      "rule": "Do not keep a parallel RenderGraph submit path beside RHIExecutor."
+    },
+    {
+      "id": "HR-M2-05",
+      "rule": "Do not expose backend transition helpers through AddSetupPass or AddPass. API differences are handled by the RenderGraph barrier compiler and backend barrier policy."
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Build canonical resource interval keys",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Barrier compilation needs a canonical key space for whole resources, texture subresources, and buffer ranges before hazards can be analyzed deterministically.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Texture interval keys normalize aspect, mip range, and array range.",
+        "Buffer interval keys normalize byte ranges and whole-buffer access.",
+        "Whole-resource access and partial-range access have explicit conflict rules.",
+        "Alias-capable transient resources are represented separately from imported persistent resources."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraphResource.h",
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rhi/RHIResource.h"
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Compile pass hazards from declared accesses",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "The graph must derive read-after-write, write-after-read, write-after-write, queue ownership, and aliasing hazards without backend command scanning.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Each pass records incoming and outgoing resource state requirements from declarations.",
+        "Hazard edges are generated between conflicting intervals only.",
+        "Read-read edges are not generated unless queue ownership or aliasing requires them.",
+        "Bindless resources contribute edges only through explicitly declared underlying resources."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/DepdencyGraph.h",
+        "source/runtime/render/rendergraph/PassNode.h",
+        "source/runtime/render/rendergraph/RenderGraph.cpp"
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Implement barrier batching and reorder",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Naive per-edge barriers recreate backend tracker noise and increase command stream cost. The compiler must batch and reorder barriers without crossing semantic boundaries.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Barriers are grouped by queue, pass boundary, resource type, and compatible source/destination states.",
+        "Redundant read-read and same-state transitions are removed only when backend read compatibility and layout classes allow removal.",
+        "Write-write transitions keep ordering only when previous contents are observable, writes are partial or overlapping, ordering class requires it, or cross-queue final value must be deterministic.",
+        "Barrier reorder is deterministic and never moves a barrier across a conflicting resource access or queue handoff.",
+        "Compiled barriers are emitted as queue-local RHI Barriers or CopyScope boundary work, not as user-authored QueueTransfer commands."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rhi/RHICommand.h",
+        "source/runtime/render/rhi/RHICommandList.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanQueue.cpp"
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Compile cross-queue synchronization",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Cross-queue ownership and GPU ordering currently require Vulkan preprocess inference. RenderGraph should emit explicit queue-stage handoff and submit dependencies before RHI translation starts.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Queue segments are split so each import has one source queue and each export has one destination queue.",
+        "Compiled queue handoffs include release/acquire state, source queue, destination queue, and dependent submit ordering.",
+        "RHIExecutor receives an ordered submit plan that can translate in parallel and submit with resolved GPU waits.",
+        "Present source resources are exported to the required Graphics/TRANSFER final state before present."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.h",
+        "source/runtime/render/rhi/RHIExecutor.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionPreprocess.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanTranslateAssembly.cpp",
+        "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp"
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Implement backend barrier policy layer",
+      "status": "todo",
+      "priority": "critical",
+      "problem": "Vulkan, D3D12, and future APIs differ in read/read layout compatibility, write/write ordering requirements, queue ownership transfer, and alias barrier semantics. A single generic transition helper would either over-synchronize or leak backend rules into RenderGraph passes.",
+      "what_must_be_true_after_this_checkpoint": [
+        "RenderGraph compiles API-neutral barrier intents before backend lowering.",
+        "Backend policy classifies read compatibility, write ordering, layout transition, queue ownership, and alias requirements.",
+        "Read/read merges only when backend compatibility class matches; otherwise compile emits layout-only transition when required.",
+        "Write/write ordering is kept only when previous contents are observable, writes are partial or overlapping, ordering class requires it, or cross-queue final value must be deterministic.",
+        "Backend-specific lowering is isolated behind policy methods and is not exposed to AddSetupPass or AddPass users."
+      ],
+      "files_likely_affected": [
+        "source/runtime/render/rendergraph/RenderGraph.cpp",
+        "source/runtime/render/rendergraph/RenderGraphPass.h",
+        "source/runtime/render/rhi/RHICommand.h",
+        "source/runtime/render/rhi/vulkan/VulkanResourceTracker.cpp",
+        "source/runtime/render/rhi/d3d12/D3D12Device.cpp"
+      ]
+    },
+    {
+      "id": "CP-06",
+      "title": "Add focused barrier and queue validation cases",
+      "status": "todo",
+      "priority": "high",
+      "problem": "Barrier compilers fail silently without coverage for overlap, queue transfer, bindless explicit access, and present handoff cases.",
+      "what_must_be_true_after_this_checkpoint": [
+        "Focused tests cover texture subresource hazards, buffer range hazards, barrier batching, queue split, and present handoff.",
+        "Focused tests cover bindless explicit resource access and reject hidden dependency assumptions.",
+        "Tests run through testscripts/windows/test_rhi_translate.ps1."
+      ],
+      "files_likely_affected": [
+        "source/test/RHITest/rhi_translate_multiqueue_test.cpp",
+        "testscripts/windows/test_rhi_translate.ps1"
+      ]
+    }
+  ],
+  "stage_exit_gate": [
+    "RenderGraph emits deterministic queue-local barriers and cross-queue handoffs from declarations.",
+    "Vulkan preprocess no longer needs to own RenderGraph-level subresource, buffer-range, or bindless resource inference for RenderGraph-generated work.",
+    "Focused RHI/RenderGraph tests cover the compiled barrier plan."
+  ],
+  "validation": [
+    "Run testscripts/windows/test_rhi_translate.ps1 after implementation changes in this stage.",
+    "Run testscripts/windows/test_all.ps1 after the stage-sized landing."
+  ]
+}

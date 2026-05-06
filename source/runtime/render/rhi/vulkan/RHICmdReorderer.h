@@ -419,30 +419,31 @@ public:
         return std::max(_layer, (int64)layer_offset);
     }
 
-    static const char* ResourceTypeName(ResourceType _type) {
+    static StringView ResourceTypeName(ResourceType _type) {
         switch (_type) {
             case ResourceType::Texture_Buffer:
-                return "TextureBuffer";
+                return MOER_TEXT("TextureBuffer");
             case ResourceType::Mesh:
-                return "Mesh";
+                return MOER_TEXT("Mesh");
             case ResourceType::Bindless:
-                return "Bindless";
+                return MOER_TEXT("Bindless");
             case ResourceType::Accel:
-                return "Accel";
+                return MOER_TEXT("Accel");
             default:
-                return "Unknown";
+                return MOER_TEXT("Unknown");
         }
     }
 
-    static std::string_view ResourceName(const ResourceHandle* _handle) {
+    static StringView ResourceName(const ResourceHandle* _handle) {
         if (_handle == nullptr) {
-            return "<null>";
+            return MOER_TEXT("<null>");
         }
-        return _handle->type == ResourceType::Texture_Buffer ? "<texture-or-buffer>" : "<non-resource>";
+        return _handle->type == ResourceType::Texture_Buffer ? MOER_TEXT("<texture-or-buffer>") :
+                                                               MOER_TEXT("<non-resource>");
     }
 
     void TraceResourceLayer(
-        std::string_view _op,
+        StringView _op,
         const ResourceHandle* _handle,
         const Range& _range,
         int64 _layer
@@ -546,7 +547,7 @@ public:
                 range_handle->EmplaceReadLayer(_range, layer);
             }
         }
-        TraceResourceLayer("Read", _handle, _range, layer);
+        TraceResourceLayer(MOER_TEXT("Read"), _handle, _range, layer);
         return layer;
     }
 
@@ -575,7 +576,7 @@ public:
                 range_handle->EmplaceReadLayer(_range, _layer);
             }
         }
-        TraceResourceLayer("RecordRead", _handle, _range, _layer);
+        TraceResourceLayer(MOER_TEXT("RecordRead"), _handle, _range, _layer);
     }
 
     void RecordWrite(ResourceHandle* _handle, Range _range, int64 _layer) {
@@ -598,7 +599,7 @@ public:
                 range_handle->EmplaceWriteLayer(_range, _layer);
             }
         }
-        TraceResourceLayer("RecordWrite", _handle, _range, _layer);
+        TraceResourceLayer(MOER_TEXT("RecordWrite"), _handle, _range, _layer);
     }
 
     int64 SetWrite(ResourceHandle* _handle, const Range& _range) {
@@ -626,7 +627,7 @@ public:
                 m_write_resources.emplace(_handle->handle);
             }
         }
-        TraceResourceLayer("Write", _handle, _range, layer);
+        TraceResourceLayer(MOER_TEXT("Write"), _handle, _range, layer);
         return layer;
     }
 
@@ -956,13 +957,7 @@ public:
                     range_handle,
                     Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array)
                 );
-                assert(
-                    layer == 0 &&
-                    std::format(
-                        "Import Texture {} should be the first command", handle.GetTexture()->GetName()
-                    )
-                        .c_str()
-                );
+                assert(layer == 0);
             }
 
             for (const auto& barrier : _cmd->ImportBuffers()) {
@@ -971,11 +966,7 @@ public:
                     GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer)
                 );
                 layer = GetLastLayerRead(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()));
-                assert(
-                    layer == 0 &&
-                    std::format("Import Buffer {} should be the first command", handle.GetBuffer()->GetName())
-                        .c_str()
-                );
+                assert(layer == 0);
             }
 
             for (const auto& barrier : _cmd->ImportTextures()) {

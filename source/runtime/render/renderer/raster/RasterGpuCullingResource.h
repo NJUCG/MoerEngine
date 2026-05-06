@@ -4,9 +4,6 @@
 #include "rhi/RHICommand.h"
 #include "shaderheaders/shared/raster/culling/ShaderParameters.h"
 
-#include <string>
-#include <string_view>
-
 namespace Moer::Render::Raster {
 
 // Groups the per-pass buffers used by GPU frustum culling and counted indirect draws.
@@ -30,7 +27,7 @@ struct GpuCullingBuffers {
             RenderDevice&     device,
             BindlessArrayRef& bdls,
             CommandList&      cmd_list,
-            std::string_view  debug_name_prefix,
+            StringView        debug_name_prefix,
             uint              draw_count,
             uint              instance_count
         ) {
@@ -40,8 +37,10 @@ struct GpuCullingBuffers {
             bool need_bindless_update = false;
 
             if (draw_cmd_buf == nullptr || max_draw_count < target_draw_count) {
+                String draw_command_name(debug_name_prefix);
+                draw_command_name.append(MOER_TEXT("::DrawCommands"));
                 draw_cmd_buf = device.CreateBuffer<DrawIndexedCmdData>(
-                    std::string(debug_name_prefix) + "::DrawCommands",
+                    draw_command_name,
                     target_draw_count,
                     EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER
                 );
@@ -54,8 +53,10 @@ struct GpuCullingBuffers {
                     visible_instance_id_buf.hdl = 0;
                 }
 
+                String visible_instance_name(debug_name_prefix);
+                visible_instance_name.append(MOER_TEXT("::VisibleInstanceIds"));
                 visible_instance_id_buf.buf = device.CreateBuffer<uint>(
-                    std::string(debug_name_prefix) + "::VisibleInstanceIds",
+                    visible_instance_name,
                     target_instance_count,
                     EBufferUsageFlags::UNORDERED_ACCESS
                 );
@@ -65,8 +66,10 @@ struct GpuCullingBuffers {
             }
 
             if (counter_buf == nullptr) {
+                String counter_name(debug_name_prefix);
+                counter_name.append(MOER_TEXT("::Counters"));
                 counter_buf = device.CreateBuffer<GpuCullingCounterData>(
-                    std::string(debug_name_prefix) + "::Counters",
+                    counter_name,
                     1,
                     EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER
                 );

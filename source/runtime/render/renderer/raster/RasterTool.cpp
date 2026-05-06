@@ -13,18 +13,18 @@
 namespace Moer::Render::Raster {
 
 namespace {
-constexpr StaticArray<std::string_view, CSM_MAX_CASCADES> s_shadow_culling_scope_names = {
-    "Raster Shadow Culling CSM0",
-    "Raster Shadow Culling CSM1",
-    "Raster Shadow Culling CSM2",
-    "Raster Shadow Culling CSM3"
+constexpr StaticArray<StringView, CSM_MAX_CASCADES> s_shadow_culling_scope_names = {
+    MOER_TEXT("Raster Shadow Culling CSM0"),
+    MOER_TEXT("Raster Shadow Culling CSM1"),
+    MOER_TEXT("Raster Shadow Culling CSM2"),
+    MOER_TEXT("Raster Shadow Culling CSM3")
 };
 
-constexpr StaticArray<std::string_view, CSM_MAX_CASCADES> s_shadow_draw_scope_names = {
-    "Raster Shadow Draw CSM0",
-    "Raster Shadow Draw CSM1",
-    "Raster Shadow Draw CSM2",
-    "Raster Shadow Draw CSM3"
+constexpr StaticArray<StringView, CSM_MAX_CASCADES> s_shadow_draw_scope_names = {
+    MOER_TEXT("Raster Shadow Draw CSM0"),
+    MOER_TEXT("Raster Shadow Draw CSM1"),
+    MOER_TEXT("Raster Shadow Draw CSM2"),
+    MOER_TEXT("Raster Shadow Draw CSM3")
 };
 
 std::string BuildDebugLogSiteKey(std::source_location location) {
@@ -42,33 +42,33 @@ Array<SingleDrawParam> RasterTool::GetFullScreenDrawDatas() {
 }
 
 // 返回整个阴影深度阶段使用的 profiling scope 名称。
-std::string_view RasterTool::GetShadowDepthPassProfileScopeName() {
-    return "Raster ShadowDepthPass";
+StringView RasterTool::GetShadowDepthPassProfileScopeName() {
+    return MOER_TEXT("Raster ShadowDepthPass");
 }
 
 // 返回整个几何阶段使用的 profiling scope 名称。
-std::string_view RasterTool::GetGeometryPassProfileScopeName() {
-    return "Raster GeometryPass";
+StringView RasterTool::GetGeometryPassProfileScopeName() {
+    return MOER_TEXT("Raster GeometryPass");
 }
 
 // 返回主相机视角几何剔除 dispatch 使用的 profiling scope 名称。
-std::string_view RasterTool::GetGeometryCullingProfileScopeName() {
-    return "Raster Geometry Culling";
+StringView RasterTool::GetGeometryCullingProfileScopeName() {
+    return MOER_TEXT("Raster Geometry Culling");
 }
 
 // 返回几何阶段绘制提交使用的 profiling scope 名称。
-std::string_view RasterTool::GetGeometryDrawProfileScopeName() {
-    return "Raster Geometry Draw";
+StringView RasterTool::GetGeometryDrawProfileScopeName() {
+    return MOER_TEXT("Raster Geometry Draw");
 }
 
 // 返回某个级联阴影视锥剔除 dispatch 使用的 profiling scope 名称。
-std::string_view RasterTool::GetShadowCullingProfileScopeName(uint cascade_index) {
+StringView RasterTool::GetShadowCullingProfileScopeName(uint cascade_index) {
     assert(cascade_index < CSM_MAX_CASCADES);
     return s_shadow_culling_scope_names[cascade_index];
 }
 
 // 返回某个级联阴影绘制提交使用的 profiling scope 名称。
-std::string_view RasterTool::GetShadowDrawProfileScopeName(uint cascade_index) {
+StringView RasterTool::GetShadowDrawProfileScopeName(uint cascade_index) {
     assert(cascade_index < CSM_MAX_CASCADES);
     return s_shadow_draw_scope_names[cascade_index];
 }
@@ -99,7 +99,7 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
         return;
     }
 
-    auto find_gpu_time = [&profile_data](std::string_view name) -> double {
+    auto find_gpu_time = [&profile_data](StringView name) -> double {
         for (const auto& entry : profile_data.gpu_entries) {
             if (entry.name == name) {
                 return entry.time;
@@ -108,9 +108,9 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
         return -1.0;
     };
 
-    auto sum_gpu_times = [&find_gpu_time](std::span<const std::string_view> names) -> double {
+    auto sum_gpu_times = [&find_gpu_time](std::span<const StringView> names) -> double {
         double total = 0.0;
-        for (std::string_view name : names) {
+        for (StringView name : names) {
             const double time = find_gpu_time(name);
             if (time >= 0.0) {
                 total += time;
@@ -123,7 +123,7 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
     stream.setf(std::ios::fixed);
     stream.precision(3);
 
-    const double graphics_exec      = find_gpu_time("Graphics Exec");
+    const double graphics_exec      = find_gpu_time(MOER_TEXT("Graphics Exec"));
     const double shadow_culling_sum = sum_gpu_times(s_shadow_culling_scope_names);
     const double shadow_draw_sum    = sum_gpu_times(s_shadow_draw_scope_names);
     const double geometry_culling   = find_gpu_time(GetGeometryCullingProfileScopeName());

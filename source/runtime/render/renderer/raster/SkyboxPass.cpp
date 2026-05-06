@@ -41,8 +41,7 @@ void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, 
     depth_att.action = EAttachmentAction::AC_DS_LOAD_STORE;
 
     context.cmd_list.Gfx(skybox_pipeline, context.bdls, skybox_param)
-        .Draw(
-            "Skybox Pass",
+        .Draw(MOER_TEXT("Skybox Pass"),
             context.textures.lighting_output.GetRect2D(),
             std::move(RasterTool::GetFullScreenDrawDatas()),
             depth_att,

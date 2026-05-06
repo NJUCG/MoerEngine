@@ -34,16 +34,16 @@ ToneMappingPass::ToneMappingPass(
                                      .Build<ToneMappingPassPipeline>(std::move(pso_info));
 
     tone_mapping_constants = device.CreateBuffer<Moer::byte>(
-        "tone_mapping_constants", sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER
+        MOER_TEXT("tone_mapping_constants"), sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER
     );
     tone_mapping_constants2 = device.CreateBuffer<Moer::byte>(
-        "tone_mapping_constants2", sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER
+        MOER_TEXT("tone_mapping_constants2"), sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER
     );
     histogram_buffer = device.CreateBuffer<uint>(
-        "histogram_buffer", _info.histogram_bins, EBufferUsageFlags::UNORDERED_ACCESS
+        MOER_TEXT("histogram_buffer"), _info.histogram_bins, EBufferUsageFlags::UNORDERED_ACCESS
     );
-    histogram_buffer->SetName("histogram_buffer");
-    exposure_buffer = device.CreateBuffer<uint>("exposure_buffer", 1, EBufferUsageFlags::UNORDERED_ACCESS);
+    histogram_buffer->SetName(MOER_TEXT("histogram_buffer"));
+    exposure_buffer = device.CreateBuffer<uint>(MOER_TEXT("exposure_buffer"), 1, EBufferUsageFlags::UNORDERED_ACCESS);
 
     if (_info.color_lut) {
         color_lut = _info.color_lut;
@@ -54,13 +54,13 @@ ToneMappingPass::ToneMappingPass(
     }
 
     indirect_buffer = device.CreateBuffer<byte>(
-        "ToneMapping::IndirectBuffer",
+        MOER_TEXT("ToneMapping::IndirectBuffer"),
         sizeof(DrawCmdData) + sizeof(DrawIndexedCmdData),
         EBufferUsageFlags::INDIRECT_BUFFER
     );
     count_buffer =
-        device.CreateBuffer<uint>("ToneMapping::CountBuffer", 1, EBufferUsageFlags::INDIRECT_BUFFER);
-    index_buffer = device.CreateBuffer<uint>("ToneMapping::IndexBuffer", 3, EBufferUsageFlags::INDEX_BUFFER);
+        device.CreateBuffer<uint>(MOER_TEXT("ToneMapping::CountBuffer"), 1, EBufferUsageFlags::INDIRECT_BUFFER);
+    index_buffer = device.CreateBuffer<uint>(MOER_TEXT("ToneMapping::IndexBuffer"), 3, EBufferUsageFlags::INDEX_BUFFER);
 }
 static constexpr float g_min_log_luminance = -10; // TODO: figure out how to set these properly
 static constexpr float g_max_log_luminamce = 4;
@@ -74,7 +74,7 @@ void ToneMappingPass::Process(
 ) {
     bool b_enable_lut = _params.enable_color_lut && color_lut_size > 0;
 
-    _cmd_list.PushScopeWithTimeScope("ToneMappingPass");
+    _cmd_list.PushScopeWithTimeScope(MOER_TEXT("ToneMappingPass"));
     ToneMappingParams params{};
     params.log_luminance_scale          = 1.f / (g_max_log_luminamce - g_min_log_luminance);
     params.log_luminance_bias           = -g_min_log_luminance * params.log_luminance_scale;
@@ -166,7 +166,7 @@ void ToneMappingPass::Render(
          * DrawIndirect，关键的 `GetView(0, sizeof(DrawCmdData))`
          * => 意味着使用DrawCmdData结构体
          * 
-         * 潇神的小作业😭
+         * Keep indirect buffer view offsets aligned with the selected draw command structure.
          */
 
         uint count = 1;
@@ -214,8 +214,7 @@ void ToneMappingPass::Render(
             //     ColorAttachment(_target)
             // );
             ////////////////////////////////////////////// DrawIndirect without index using cpu count
-            .DrawIndirect(
-                "ToneMapping",
+            .DrawIndirect(MOER_TEXT("ToneMapping"),
                 Rect2D(0, 0, _target->GetExtent().x, _target->GetExtent().y),
                 {}, // Vertex Buffer
                 0,  // Vertex Count. 0 for draw, struct for draw indexed
@@ -240,8 +239,7 @@ void ToneMappingPass::Render(
                 color_lut,
                 linear_clamp_sampler
             )
-            .Draw(
-                "ToneMapping",
+            .Draw(MOER_TEXT("ToneMapping"),
                 Rect2D(0, 0, _target->GetExtent().x, _target->GetExtent().y),
                 std::move(get_full_screen_draw_datas()),
                 ColorAttachment(_target)
@@ -262,13 +260,13 @@ void ToneMappingPass::ComputeHistogram(CommandList& _cmd_list, TextureRef _src_t
     _cmd_list.Compute(histogram_pipeline, tone_mapping_constants, _src_tex, histogram_buffer)
         .Dispatch(
             uint3((_src_tex->GetExtent().x + 15) / 16, (_src_tex->GetExtent().y + 15) / 16, 1),
-            "Calculate Histogram"
+            MOER_TEXT("Calculate Histogram")
         );
 }
 
 void ToneMappingPass::ComputeExposure(CommandList& _cmd_list, Params _params) {
     _cmd_list.Compute(exposure_pipeline, tone_mapping_constants, histogram_buffer, exposure_buffer)
-        .Dispatch(uint3(1, 1, 1), "Calculate Exposure");
+        .Dispatch(uint3(1, 1, 1), MOER_TEXT("Calculate Exposure"));
 }
 
 void ToneMappingPass::AdvanceFrame(float _elapsed_time) {

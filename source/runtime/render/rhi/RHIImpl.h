@@ -48,7 +48,7 @@ public:
         uint64           _offset,
         uint64           _byte_size,
         const void*      _data,
-        std::string_view _name = typenames[uint(EType::UploadBuffer)]
+        StringView _name = typenames[uint(EType::UploadBuffer)]
     ) :
         Command(EType::UploadBuffer, _name),
         handle(_handle),
@@ -61,7 +61,7 @@ public:
         uint64           _offset,
         uint64           _byte_size,
         Array<byte>&&    _data,
-        std::string_view _name = typenames[uint(EType::UploadBuffer)]
+        StringView _name = typenames[uint(EType::UploadBuffer)]
     ) :
         Command(EType::UploadBuffer, _name),
         handle(_handle),
@@ -113,7 +113,7 @@ public:
         uint64           _byte_size,
         void* const      _data,
         GraphEventRef    _completion_event = nullptr,
-        std::string_view _name = typenames[uint(EType::CopyBackBuffer)]
+        StringView _name = typenames[uint(EType::CopyBackBuffer)]
     ) :
         Command(EType::CopyBackBuffer, _name),
         handle(_handle),
@@ -163,7 +163,7 @@ public:
         uint3            _size,
         std::span<byte>  _data,
         GraphEventRef    _completion_event = nullptr,
-        std::string_view _name = typenames[uint(EType::CopyBackTexture)]
+        StringView _name = typenames[uint(EType::CopyBackTexture)]
     ) :
         Command(EType::CopyBackTexture, _name),
         handle(_handle),
@@ -217,7 +217,7 @@ public:
         uint64           _src_offset,
         uint64           _dst_offset,
         uint64           _byte_size,
-        std::string_view _name = typenames[uint(EType::CopyBackBuffer)]
+        StringView _name = typenames[uint(EType::CopyBackBuffer)]
     ) :
         Command(EType::BufferToBuffer, _name),
         src_handle(_src_handle),
@@ -271,7 +271,7 @@ public:
         uint3            _src_offset,
         uint3            _dst_offset,
         uint3            _size,
-        std::string_view _name = typenames[uint(EType::TextureToTexture)]
+        StringView _name = typenames[uint(EType::TextureToTexture)]
     ) :
         Command(EType::TextureToTexture, _name),
         format(_format),
@@ -337,7 +337,7 @@ public:
         uint3            _size,
         uint             _mip_level,
         uint32           _array_layer,
-        std::string_view _name = typenames[uint(EType::BufferToTexture)]
+        StringView _name = typenames[uint(EType::BufferToTexture)]
     ) :
         Command(EType::BufferToTexture, _name),
         format(_format),
@@ -406,7 +406,7 @@ public:
         uint3            _size,
         uint             _mip_level,
         uint             _array_layer,
-        std::string_view _name = typenames[uint(EType::TextureToBuffer)]
+        StringView _name = typenames[uint(EType::TextureToBuffer)]
     ) :
         Command(EType::TextureToBuffer, _name),
         format(_format),
@@ -473,7 +473,7 @@ public:
         uint3            _offset,
         uint3            _size,
         const void*      _data,
-        std::string_view _name = typenames[uint(EType::UploadTexture)]
+        StringView _name = typenames[uint(EType::UploadTexture)]
     ) :
         Command(EType::UploadTexture, _name),
         format(_format),
@@ -497,7 +497,7 @@ public:
         uint3            _offset,
         uint3            _size,
         Array<byte>&&    _data,
-        std::string_view _name = typenames[uint(EType::UploadTexture)]
+        StringView _name = typenames[uint(EType::UploadTexture)]
     ) :
         Command(EType::UploadTexture, _name),
         format(_format),
@@ -791,7 +791,7 @@ public:
         Array<std::pair<uint, uint>>&&    _buffer_indices_dat,
         Array<byte>&&                     _texture_data,
         Array<std::pair<uint, uint>>&&    _texture_indices_dat,
-        std::string_view                  _name = typenames[uint(EType::UpdateBindlessArray)]
+        StringView                        _name = typenames[uint(EType::UpdateBindlessArray)]
     ) :
         Command(EType::UpdateBindlessArray, _name),
         array(_array),
@@ -871,7 +871,7 @@ public:
     ClearResourceCmd(
         BufferView       _buffer,
         uint             _value,
-        std::string_view _name = typenames[uint(EType::ClearResource)]
+        StringView _name = typenames[uint(EType::ClearResource)]
     ) :
         Command(EType::ClearResource, _name),
         resource(_buffer),
@@ -879,7 +879,7 @@ public:
     ClearResourceCmd(
         TextureView      _texture,
         float4           _value,
-        std::string_view _name = typenames[uint(EType::ClearResource)]
+        StringView _name = typenames[uint(EType::ClearResource)]
     ) :
         Command(EType::ClearResource, _name),
         resource(_texture),
@@ -887,7 +887,7 @@ public:
     ClearResourceCmd(
         TextureView      _texture,
         uint             _value,
-        std::string_view _name = typenames[uint(EType::ClearResource)]
+        StringView _name = typenames[uint(EType::ClearResource)]
     ) :
         Command(EType::ClearResource, _name),
         resource(_texture),
@@ -974,7 +974,7 @@ public:
         ArrayArguments&&      _args,
         RenderPassInfo&&      _info,
         Array<MeshDrawData>&& _draw_data,
-        std::string_view      _name = typenames[uint(EType::SetDrawState)]
+        StringView            _name = typenames[uint(EType::SetDrawState)]
     ) :
         Command(EType::SetDrawState, _name),
         args(std::move(_args)),
@@ -1103,7 +1103,7 @@ public:
 //Between BeginRendering() And EndRendering()
 struct MultiDrawCmd : public Command {
 public:
-    MultiDrawCmd(DrawBatch&& _batch, RenderPassInfo&& _info, std::string_view _name) :
+    MultiDrawCmd(DrawBatch&& _batch, RenderPassInfo&& _info, StringView _name) :
         Command(EType::MultiDraw, _name),
         draw_batch(std::move(_batch)),
         render_pass_info(std::move(_info)) {
@@ -1255,7 +1255,7 @@ private:
 //         ArrayArguments&&                                             _args,
 //         RenderPassInfo&&                                             _info,
 //         UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
-//         std::string_view                                             _name
+//         StringView                                                   _name
 //     ) : Command(EType::SetGeometryPassDrawState, _name),
 //         args(std::move(_args)),
 //         render_pass_info(std::move(_info)),
@@ -1368,7 +1368,7 @@ public:
         TShaderArgArray&& _args,
         PipelineHandle&   _handle,
         uint3             _param,
-        std::string_view  _name = typenames[uint(EType::ShaderDispatch)]
+        StringView        _name = typenames[uint(EType::ShaderDispatch)]
     ) :
         Command(EType::ShaderDispatch, _name),
         param(_param),
@@ -1378,7 +1378,7 @@ public:
         TShaderArgArray&& _args,
         PipelineHandle&   _handle,
         BufferView        _indirect,
-        std::string_view  _name = typenames[uint(EType::ShaderDispatch)]
+        StringView        _name = typenames[uint(EType::ShaderDispatch)]
     ) :
         Command(EType::ShaderDispatch, _name),
         pipeline(&_handle),
@@ -1418,7 +1418,7 @@ public:
         ArrayArguments&& _args,
         PipelineHandle   _handle,
         uint3            _param,
-        std::string_view _name = typenames[uint(EType::TraceRay)]
+        StringView _name = typenames[uint(EType::TraceRay)]
     ) :
         Command(EType::TraceRay, _name),
         param(_param),
@@ -1428,7 +1428,7 @@ public:
         ArrayArguments&& _args,
         PipelineHandle   _handle,
         BufferView       _param,
-        std::string_view _name = typenames[uint(EType::TraceRay)]
+        StringView _name = typenames[uint(EType::TraceRay)]
     ) :
         Command(EType::TraceRay, _name),
         pipeline(_handle),
@@ -1468,7 +1468,7 @@ private:
 public:
     BuildAccelerationStructuresCmd(
         const Array<AccelerationStructureBuildParam>& _params,
-        std::string_view                              _name = typenames[uint(EType::BuildAccel)]
+        StringView                                    _name = typenames[uint(EType::BuildAccel)]
     ) :
         Command(EType::BuildAccel, _name),
         params(_params) {
@@ -1476,7 +1476,7 @@ public:
     }
     BuildAccelerationStructuresCmd(
         Array<AccelerationStructureBuildParam>&& _params,
-        std::string_view                         _name = typenames[uint(EType::BuildAccel)]
+        StringView                               _name = typenames[uint(EType::BuildAccel)]
     ) :
         Command(EType::BuildAccel, _name),
         params(std::move(_params)) {
@@ -1547,7 +1547,7 @@ public:
         Array<byte>&&                  _instance_data,
         uint                           _instance_cnt,
         bool                           _full_refit,
-        std::string_view               _name = typenames[uint(EType::BuildTLAS)]
+        StringView                     _name = typenames[uint(EType::BuildTLAS)]
     ) :
         related_geometries(std::move(_related_geoms)),
         scene_handle(_scene_handle),
@@ -1636,7 +1636,7 @@ public:
     QueryCmd(
         QueryToken      _token,
         EOp             _op,
-        std::string_view _name = typenames[uint(EType::Query)]
+        StringView _name = typenames[uint(EType::Query)]
     ) :
         Command(EType::Query, _name),
         token(std::move(_token)),
@@ -1662,7 +1662,7 @@ private:
 //command for push/pop debug scope
 struct ScopeCmd : public Command {
 public:
-    ScopeCmd(std::string_view _name, bool _push, bool _query_timestamp) :
+    ScopeCmd(StringView _name, bool _push, bool _query_timestamp) :
         Command(EType::Scope, _name),
         b_push(_push),
         scope_name(_name),
@@ -1688,7 +1688,7 @@ public:
 private:
     bool             b_push            = false;
     bool             b_query_timestamp = false;
-    std::string_view scope_name;
+    String scope_name;
 };
 
 struct CustomCmd : public Command {
@@ -1704,13 +1704,13 @@ public:
         CUSTOM_CMD_END = 0xffu,
     };
 
-    static constexpr std::string_view custom_cmd_names[] = {
-        "CUSTOM_CMD_NONE",
-        "CUSTOM_RASTER",
-        "CUSTOM_DISPATCH",
-        "CUSTOM_TRANSLATE_FENCE",
-        "CUSTOM_TRANSLATE_LAMBDA",
-        "CUSTOM_FRAME_TICK",
+    static constexpr StringView custom_cmd_names[] = {
+        MOER_TEXT("CUSTOM_CMD_NONE"),
+        MOER_TEXT("CUSTOM_RASTER"),
+        MOER_TEXT("CUSTOM_DISPATCH"),
+        MOER_TEXT("CUSTOM_TRANSLATE_FENCE"),
+        MOER_TEXT("CUSTOM_TRANSLATE_LAMBDA"),
+        MOER_TEXT("CUSTOM_FRAME_TICK"),
     };
 
 private:
@@ -1722,7 +1722,7 @@ public:
     explicit CustomCmd(CustomCmdId _id) :
         custom_id(_id),
         Command(EType::Custom, custom_cmd_names[uint(_id)]) {}
-    explicit CustomCmd(CustomCmdId _id, std::string_view _name) :
+    explicit CustomCmd(CustomCmdId _id, StringView _name) :
         custom_id(_id),
         Command(EType::Custom, _name) {}
     virtual ~CustomCmd() = default;
@@ -1759,7 +1759,7 @@ public:
 
 struct TranslateFenceCmd : public CustomCmd {
     explicit TranslateFenceCmd(RHITranslateFence _fence) :
-        CustomCmd(CustomCmdId::CUSTOM_TRANSLATE_FENCE, "TranslateFence"),
+        CustomCmd(CustomCmdId::CUSTOM_TRANSLATE_FENCE, MOER_TEXT("TranslateFence")),
         fence(std::move(_fence)) {}
 
     EQueueType GetQueueType() const override {
@@ -1777,7 +1777,7 @@ private:
 struct TranslateLambdaCmd : public CustomCmd {
     explicit TranslateLambdaCmd(
         std::function<void()>&& _callback,
-        std::string_view        _name = "LambdaCommand"
+        StringView              _name = MOER_TEXT("LambdaCommand")
     ) :
         CustomCmd(CustomCmdId::CUSTOM_TRANSLATE_LAMBDA, _name),
         callback(std::move(_callback)) {}
@@ -1795,7 +1795,7 @@ private:
 };
 
 struct FrameTickCmd : public CustomCmd {
-    FrameTickCmd() : CustomCmd(CustomCmdId::CUSTOM_FRAME_TICK, "FrameTick") {}
+    FrameTickCmd() : CustomCmd(CustomCmdId::CUSTOM_FRAME_TICK, MOER_TEXT("FrameTick")) {}
 
     EQueueType GetQueueType() const override {
         return EQueueType::Ignore;
@@ -1818,7 +1818,7 @@ struct FrameTickCmd : public CustomCmd {
  */
 struct CopyScopeCmd : public Command {
     explicit CopyScopeCmd(Array<UniquePtr<Command>>&& _commands) :
-        Command(EType::CopyScope, "CopyScope"),
+        Command(EType::CopyScope, MOER_TEXT("CopyScope")),
         commands(std::move(_commands)) {}
 
     EQueueType GetQueueType() const override {
@@ -1843,7 +1843,7 @@ private:
 
 struct BufferOverlapCmd : public Command {
     BufferOverlapCmd(uint64 _buffer_handle, bool _begin) :
-        Command(EType::BufferOverlap, _begin ? "BeginBufferOverlap" : "EndBufferOverlap"),
+        Command(EType::BufferOverlap, _begin ? MOER_TEXT("BeginBufferOverlap") : MOER_TEXT("EndBufferOverlap")),
         buffer_handle(_buffer_handle),
         begin(_begin) {}
 
@@ -1873,26 +1873,47 @@ public:
 
 public:
     virtual FenceRef  CreateFence() = 0;
-    virtual BufferRef CreateBuffer(
-        std::string_view  _name,
+    BufferRef CreateBuffer(
+        StringView        _name,
         uint              _element_cnt,
         uint              _byte_stride,
         EBufferUsageFlags _usage,
         EPixelFormat      _format
-    ) = 0;
+    ) {
+        return CreateBuffer(_name, BufferInfo{_element_cnt, _byte_stride, _usage, _format});
+    }
 
-    virtual TextureRef CreateTexture(
-        std::string_view   _name,
+    virtual BufferRef CreateBuffer(StringView _name, const BufferInfo& _info) = 0;
+
+    TextureRef CreateTexture(
+        StringView         _name,
         ETextureDimension  _dimension,
         Extent3D           _size,
         EPixelFormat       _format,
         ETextureUsageFlags _usage,
         uint32_t           _mip_cnt    = 1,
         uint               _array_size = 1
-    ) = 0;
+    ) {
+        bool b_depth = uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
+        TextureInfo info{
+            _dimension,
+            _usage,
+            _format,
+            b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
+            _size,
+            uint8(_mip_cnt),
+            uint8((_dimension == ETextureDimension::TEX_CUBE ? 6 : 1) * _array_size),
+            1
+        };
+        info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
+        info.debug_name   = String(_name);
+        return CreateTexture(_name, info);
+    }
+
+    virtual TextureRef CreateTexture(StringView _name, const TextureInfo& _info) = 0;
 
     DepthBufferRef CreateDepthBuffer(
-        std::string_view   _name,
+        StringView         _name,
         Extent2D           _size,
         EPixelFormat       _format,
         uint32_t           _array_size = 1,
@@ -1928,7 +1949,7 @@ public:
     CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) = 0; //gfx
     virtual PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders)        = 0; //compute
 
-    virtual RuntimePlugin* LoadPlugin(std::string_view _name) {
+    virtual RuntimePlugin* LoadPlugin(StringView _name) {
         return nullptr;
     }
 

@@ -6,6 +6,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "scene/LogicalComponents.h"
+#include "string/StringConvert.h"
 
 namespace Moer::Render {
 
@@ -64,8 +65,9 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 //       原函数没有实现这个功能，所以此处也暂不实现
 
                 // 1. Create Texture
+                String texture_name = Utf8ToPlatform(Utf8StringView(c_name.name.data(), c_name.name.size()));
                 tex_with_hdl.tex = device.CreateTexture(
-                    c_name.name,
+                    texture_name,
                     Extent2D{c_texture.width, c_texture.height},
                     c_texture.format,
                     ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST,
@@ -131,62 +133,62 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
          */
 
         m_res.light_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::LightBuffer",
+            MOER_TEXT("GpuScene::LightBuffer"),
             m_cpu_scene.m_light_buf.size() * sizeof(GLight),
             EBufferUsageFlags::UNORDERED_ACCESS
         );
 
         m_res.material_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::MaterialBuffer",
+            MOER_TEXT("GpuScene::MaterialBuffer"),
             m_cpu_scene.m_material_buf.size() * sizeof(GMaterial),
             EBufferUsageFlags::UNORDERED_ACCESS
         );
 
         // 这里不设置为byte，是为了GeometryPass中可以直接获取 命令的数量(cpu count)、DrawIndexedCmdData的stride
         m_res.draw_cmd_buf.buf = device.CreateBuffer<Render::DrawIndexedCmdData>(
-            "GpuScene::DrawCmdBuffer",
+            MOER_TEXT("GpuScene::DrawCmdBuffer"),
             m_cpu_scene.m_draw_cmd_buf.size(),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDIRECT_BUFFER
         );
 
         m_res.primitive_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::PrimitiveBuffer",
+            MOER_TEXT("GpuScene::PrimitiveBuffer"),
             m_cpu_scene.m_primitive_buf.size() * sizeof(GPrimitive),
             EBufferUsageFlags::UNORDERED_ACCESS
         );
 
         m_res.instance_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::InstanceBuffer",
+            MOER_TEXT("GpuScene::InstanceBuffer"),
             m_cpu_scene.m_instance_buf.size() * sizeof(GInstance),
             EBufferUsageFlags::UNORDERED_ACCESS
         );
 
         m_res.position_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::PositionMegaBuffer",
+            MOER_TEXT("GpuScene::PositionMegaBuffer"),
             m_cpu_scene.mega_buf().position.size() * sizeof(float3),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
         );
 
         m_res.packed_normal_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::NormalMegaBuffer",
+            MOER_TEXT("GpuScene::NormalMegaBuffer"),
             m_cpu_scene.mega_buf().packed_normal.size() * sizeof(uint32),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
         );
 
         m_res.packed_tangent_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::TangentMegaBuffer",
+            MOER_TEXT("GpuScene::TangentMegaBuffer"),
             m_cpu_scene.mega_buf().packed_tangent.size() * sizeof(uint32),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
         );
 
         m_res.texcoord0_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::Texcoord0MegaBuffer",
+            MOER_TEXT("GpuScene::Texcoord0MegaBuffer"),
             m_cpu_scene.mega_buf().texcoord0.size() * sizeof(float2),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::VERTEX_BUFFER
         );
 
         m_res.index_buf.buf = device.CreateBuffer<byte>(
-            "GpuScene::IndexMegaBuffer",
+            MOER_TEXT("GpuScene::IndexMegaBuffer"),
             m_cpu_scene.mega_buf().index.size() * sizeof(uint32),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::INDEX_BUFFER
         );
@@ -202,7 +204,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 (byte*)m_cpu_scene.m_light_buf.data(), m_cpu_scene.m_light_buf.size() * sizeof(GLight)
             ),
             m_res.light_buf.buf->GetView(),
-            "CopyFrom GpuScene::LightBuffer"
+            MOER_TEXT("CopyFrom GpuScene::LightBuffer")
         );
 
         copy_scope.CopyFrom(
@@ -210,7 +212,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 (byte*)m_cpu_scene.m_material_buf.data(), m_cpu_scene.m_material_buf.size() * sizeof(GMaterial)
             ),
             m_res.material_buf.buf->GetView(),
-            "CopyFrom GpuScene::MaterialBuffer"
+            MOER_TEXT("CopyFrom GpuScene::MaterialBuffer")
         );
 
         copy_scope.CopyFrom(
@@ -219,7 +221,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData)
             ),
             m_res.draw_cmd_buf.buf->GetView(),
-            "CopyFrom GpuScene::DrawCmdBuffer"
+            MOER_TEXT("CopyFrom GpuScene::DrawCmdBuffer")
         );
 
         copy_scope.CopyFrom(
@@ -227,7 +229,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 (byte*)m_cpu_scene.m_primitive_buf.data(), m_cpu_scene.m_primitive_buf.size() * sizeof(GPrimitive)
             ),
             m_res.primitive_buf.buf->GetView(),
-            "CopyFrom GpuScene::PrimitiveBuffer"
+            MOER_TEXT("CopyFrom GpuScene::PrimitiveBuffer")
         );
 
         copy_scope.CopyFrom(
@@ -235,7 +237,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 (byte*)m_cpu_scene.m_instance_buf.data(), m_cpu_scene.m_instance_buf.size() * sizeof(GInstance)
             ),
             m_res.instance_buf.buf->GetView(),
-            "CopyFrom GpuScene::InstanceBuffer"
+            MOER_TEXT("CopyFrom GpuScene::InstanceBuffer")
         );
 
         copy_scope.CopyFrom(
@@ -244,7 +246,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 m_cpu_scene.mega_buf().position.size() * sizeof(float3)
             ),
             m_res.position_buf.buf->GetView(),
-            "CopyFrom GpuScene::PositionMegaBuffer"
+            MOER_TEXT("CopyFrom GpuScene::PositionMegaBuffer")
         );
 
         copy_scope.CopyFrom(
@@ -253,7 +255,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 m_cpu_scene.mega_buf().packed_normal.size() * sizeof(uint32)
             ),
             m_res.packed_normal_buf.buf->GetView(),
-            "CopyFrom GpuScene::NormalMegaBuffer"
+            MOER_TEXT("CopyFrom GpuScene::NormalMegaBuffer")
         );
 
         copy_scope.CopyFrom(
@@ -262,7 +264,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 m_cpu_scene.mega_buf().packed_tangent.size() * sizeof(uint32)
             ),
             m_res.packed_tangent_buf.buf->GetView(),
-            "CopyFrom GpuScene::TangentMegaBuffer"
+            MOER_TEXT("CopyFrom GpuScene::TangentMegaBuffer")
         );
 
         copy_scope.CopyFrom(
@@ -271,7 +273,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 m_cpu_scene.mega_buf().texcoord0.size() * sizeof(float2)
             ),
             m_res.texcoord0_buf.buf->GetView(),
-            "CopyFrom GpuScene::Texcoord0MegaBuffer"
+            MOER_TEXT("CopyFrom GpuScene::Texcoord0MegaBuffer")
         );
 
         copy_scope.CopyFrom(
@@ -279,7 +281,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                 (byte*)m_cpu_scene.mega_buf().index.data(), m_cpu_scene.mega_buf().index.size() * sizeof(uint32)
             ),
             m_res.index_buf.buf->GetView(),
-            "CopyFrom GpuScene::IndexMegaBuffer"
+            MOER_TEXT("CopyFrom GpuScene::IndexMegaBuffer")
         );
 
         /**
@@ -489,7 +491,7 @@ void GpuScene::RestoreDrawCommands(CommandList& cmd_list) {
             m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData)
         ),
         m_res.draw_cmd_buf.buf->GetView(),
-        "RestoreDrawCommands"
+        MOER_TEXT("RestoreDrawCommands")
     );
 }
 

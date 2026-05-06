@@ -25,7 +25,7 @@ TextureRef RenderDevice::CreateTexture(
 ) {
     ETextureDimension dim = _array_size > 1 ? ETextureDimension::TEX_2D_ARRAY : ETextureDimension::TEX_2D;
 
-    return impl->CreateTexture("User2DTexture", dim, _size, _format, _usage, _mip_cnt, _array_size);
+    return impl->CreateTexture(MOER_TEXT("User2DTexture"), dim, _size, _format, _usage, _mip_cnt, _array_size);
 }
 
 TextureRef RenderDevice::CreateTexture(
@@ -39,11 +39,11 @@ TextureRef RenderDevice::CreateTexture(
         _size.z > 1 ? ETextureDimension::TEX_3D :
                       (_array_size > 1 ? ETextureDimension::TEX_2D_ARRAY : ETextureDimension::TEX_2D);
 
-    return impl->CreateTexture("UserTexture", dim, _size, _format, _usage, _mip_cnt, _array_size);
+    return impl->CreateTexture(MOER_TEXT("UserTexture"), dim, _size, _format, _usage, _mip_cnt, _array_size);
 }
 
 TextureRef RenderDevice::CreateTexture(
-    std::string_view   _name,
+    StringView         _name,
     Extent3D           _size,
     EPixelFormat       _format,
     ETextureUsageFlags _usage,
@@ -57,8 +57,12 @@ TextureRef RenderDevice::CreateTexture(
     return impl->CreateTexture(_name, dim, _size, _format, _usage, _mip_cnt, _array_size);
 }
 
+TextureRef RenderDevice::CreateTexture(StringView _name, const TextureInfo& _info) {
+    return impl->CreateTexture(_name, _info);
+}
+
 TextureRef RenderDevice::CreateCubeMap(
-    std::string_view   _name,
+    StringView         _name,
     Extent2D           _size,
     EPixelFormat       _format,
     ETextureUsageFlags _usage,
@@ -69,7 +73,7 @@ TextureRef RenderDevice::CreateCubeMap(
 }
 
 DepthBufferRef RenderDevice::CreateDepthBuffer(
-    std::string_view   _name,
+    StringView         _name,
     Extent2D           _size,
     EPixelFormat       _format,
     uint32_t           _array_size,
@@ -91,13 +95,17 @@ SwapchainRef RenderDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
 }
 
 BufferRef RenderDevice::CreateBuffer(
-    std::string_view  _name,
+    StringView        _name,
     uint              _element_cnt,
     uint              _stride,
     EBufferUsageFlags _usage,
     EPixelFormat      _format
 ) {
     return impl->CreateBuffer(_name, _element_cnt, _stride, _usage, _format);
+}
+
+BufferRef RenderDevice::CreateBuffer(StringView _name, const BufferInfo& _info) {
+    return impl->CreateBuffer(_name, _info);
 }
 
 IOInterfaceRef RenderDevice::CreateIOInterface(CopyQueue& _copy_queue) {

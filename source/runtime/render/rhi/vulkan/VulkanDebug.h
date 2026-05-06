@@ -8,8 +8,7 @@
 #include "math/Base.h"
 
 #include "VulkanPlatform.h"
-
-#include <string>
+#include "string/String.h"
 
 namespace Moer { namespace RHI { namespace Vulkan {
 
@@ -36,11 +35,10 @@ struct DebugUtils {
     static PFN_vkSetDebugUtilsObjectNameEXT  vkSetDebugUtilsObjectNameEXT;
 
     static void Setup(VkInstance instance);
-    static void CmdBeginLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color);
-    static void CmdInsertLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color);
+    static void CmdBeginLabel(VkCommandBuffer cmd_buffer, StringView caption, Moer::Vector4f color);
+    static void CmdInsertLabel(VkCommandBuffer cmd_buffer, StringView caption, Moer::Vector4f color);
     static void CmdEndLabel(VkCommandBuffer cmd_buffer);
-    static void
-    SetObjectName(VkDevice device, uint64_t object, VkObjectType object_type, const std::string& name);
+    static void SetObjectName(VkDevice device, uint64_t object, VkObjectType object_type, StringView name);
 };
 
 }}} // namespace Moer::RHI::Vulkan

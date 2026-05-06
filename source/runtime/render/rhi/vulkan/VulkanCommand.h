@@ -10,7 +10,6 @@
 #include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
-#include <string_view>
 
 namespace Moer::Render {
 class VulkanDevice;
@@ -163,10 +162,10 @@ public:
     );
 
     //Debug
-    void BeginLabel(std::string_view _label, float4 _color);
+    void BeginLabel(StringView _label, float4 _color);
     void EndLabel();
 
-    void InsertLabel(std::string_view _label, float4 _color);
+    void InsertLabel(StringView _label, float4 _color);
 
     VkCommandBuffer GetHandle() const {
         return command_buffer;

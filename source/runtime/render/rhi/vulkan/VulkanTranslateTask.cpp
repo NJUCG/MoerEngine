@@ -2,9 +2,8 @@
 
 #include "VulkanDevice.h"
 #include "log/LogSystem.h"
+#include "string/Format.h"
 #include "taskgraph/TaskGraph.h"
-
-#include <format>
 
 namespace Moer::Render {
 
@@ -40,8 +39,8 @@ TranslateResult DispatchSingleTranslate(
         default:
             return VulkanTranslateTask::MakeFailed(
                 queue_type,
-                std::format(
-                    "VulkanTranslateTask::DispatchBatch invalid queue: {}",
+                Printf(
+                    MOER_TEXT("VulkanTranslateTask::DispatchBatch invalid queue: {}"),
                     static_cast<uint32>(queue_type)
                 )
             );
@@ -60,7 +59,7 @@ TranslateResult VulkanTranslateTask::DispatchSingle(
     return DispatchSingleTranslate(queue_type, std::move(submit), std::move(initial_seed));
 }
 
-TranslateResult VulkanTranslateTask::MakeFailed(EQueueType queue, std::string error) {
+TranslateResult VulkanTranslateTask::MakeFailed(EQueueType queue, String error) {
     TranslateResult result{};
     result.queue              = queue;
     result.translate_complete = CreateCompletedTranslateEvent();

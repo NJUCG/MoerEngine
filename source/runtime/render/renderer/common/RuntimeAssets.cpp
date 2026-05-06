@@ -3,6 +3,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
+#include "string/StringConvert.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/ThreadManager.h"
@@ -77,8 +78,12 @@ void RuntimeAssets::RecordTextureUploads() {
                         if (file) {
                             ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
 
+                            std::string texture_name_utf8 = entry.path().filename().string();
+                            String      texture_name = Utf8ToPlatform(
+                                Utf8StringView(texture_name_utf8.data(), texture_name_utf8.size())
+                            );
                             TextureRef texture = RenderDevice::Get().CreateTexture(
-                                entry.path().filename().string(),
+                                texture_name,
                                 Extent2D(width, height),
                                 PF_R8G8B8A8_UNORM,
                                 ETextureUsageFlags::SAMPLED
@@ -89,7 +94,7 @@ void RuntimeAssets::RecordTextureUploads() {
                             deferred_callbacks.emplace_back([data]() {
                                 stbi_image_free(data);
                             });
-                            register_image(texture, entry.path().filename().string());
+                            register_image(texture, texture_name_utf8);
                         }
                     } else if (entry.path().extension() == ".exr") {
                         //load exr
@@ -104,8 +109,12 @@ void RuntimeAssets::RecordTextureUploads() {
                                 FreeEXRErrorMessage(err); // release memory of error message.
                             }
                         }
+                        std::string texture_name_utf8 = entry.path().filename().string();
+                        String      texture_name = Utf8ToPlatform(
+                            Utf8StringView(texture_name_utf8.data(), texture_name_utf8.size())
+                        );
                         TextureRef texture = RenderDevice::Get().CreateTexture(
-                            entry.path().filename().string(),
+                            texture_name,
                             Extent2D(width, height),
                             PF_R32G32B32A32_SFLOAT,
                             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
@@ -121,7 +130,7 @@ void RuntimeAssets::RecordTextureUploads() {
                         deferred_callbacks.emplace_back([data]() {
                             free(data);
                         });
-                        register_image(texture, entry.path().filename().string());
+                        register_image(texture, texture_name_utf8);
                         default_env_map_name = textures.find(entry.path().filename().string())->first;
                     }
                 }

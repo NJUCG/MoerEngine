@@ -1,4 +1,4 @@
-﻿#include "LightingPass.h"
+#include "LightingPass.h"
 
 #include "Configs.h"
 #include "rhi/RHI.h"
@@ -40,7 +40,7 @@ LightingPass::LightingPass(ShaderManager& _manager) {
 
     auto& device    = RenderDevice::Get();
     resample_params = device.CreateBuffer<byte>(
-        "Raytracing::resample_params", sizeof(ResampleConstants), EBufferUsageFlags::CONSTANT_BUFFER
+        MOER_TEXT("Raytracing::resample_params"), sizeof(ResampleConstants), EBufferUsageFlags::CONSTANT_BUFFER
     );
 }
 
@@ -87,7 +87,7 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     upload_data.resize(sizeof(ResampleConstants));
     std::memcpy(upload_data.data(), &constants, sizeof(ResampleConstants));
-    _cmd_list.PushScopeWithTimeScope("LightingPass");
+    _cmd_list.PushScopeWithTimeScope(MOER_TEXT("LightingPass"));
     _cmd_list.CopyFrom(std::move(upload_data), resample_params->GetView());
     bool b_current_frame = _rt_ctx.b_current_frame;
 
@@ -114,10 +114,10 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             is_ctx.GetLocalLightRISBufferParams().tile_cnt
         );
         // _cmd_list.Compute(presample_light_pipeline, DI_BINDING_ARGS(_rt_ctx))
-        //     .Dispatch(uint3(dispatch_size, 1), "PresampleLight");
+        //     .Dispatch(uint3(dispatch_size, 1), MOER_TEXT("PresampleLight"));
 
         _cmd_list.Compute(presample_light_pipeline, arg_ref)
-            .Dispatch(uint3(dispatch_size, 1), "PresampleLight");
+            .Dispatch(uint3(dispatch_size, 1), MOER_TEXT("PresampleLight"));
     }
 
     if (is_ctx.GetLightBufferParams().env_light.light_cnt) {
@@ -126,20 +126,20 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             is_ctx.GetEnvLightRISBufferParams().tile_cnt
         );
         // _cmd_list.Compute(presample_env_map_pipeline, DI_BINDING_ARGS(_rt_ctx))
-        //     .Dispatch(uint3(dispatch_size, 1), "PresampleEnvMap");
+        //     .Dispatch(uint3(dispatch_size, 1), MOER_TEXT("PresampleEnvMap"));
 
         _cmd_list.Compute(presample_env_map_pipeline, arg_ref)
-            .Dispatch(uint3(dispatch_size, 1), "PresampleEnvMap");
+            .Dispatch(uint3(dispatch_size, 1), MOER_TEXT("PresampleEnvMap"));
     }
 
     if (is_ctx.GetLightBufferParams().local_light_region.light_cnt) {
         uint2 dispatch_size =
             uint2(div_ceil(is_ctx.GetGridRuntimeConfig().num_light_slot, DI_PRESAMPLE_GRID_SIZE), 1);
         // _cmd_list.Compute(presample_light_grid_pipeline, DI_BINDING_ARGS(_rt_ctx))
-        //     .Dispatch(uint3(dispatch_size, 1), "PresampleLightGrid");
+        //     .Dispatch(uint3(dispatch_size, 1), MOER_TEXT("PresampleLightGrid"));
 
         _cmd_list.Compute(presample_light_grid_pipeline, arg_ref)
-            .Dispatch(uint3(dispatch_size, 1), "PresampleLightGrid");
+            .Dispatch(uint3(dispatch_size, 1), MOER_TEXT("PresampleLightGrid"));
     }
 
     //direct lighting
@@ -148,15 +148,15 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         dispatch_size.x     = div_ceil(dispatch_size.x, DI_SCREEN_TILE_SIZE);
         dispatch_size.y     = div_ceil(dispatch_size.y, DI_SCREEN_TILE_SIZE);
         _cmd_list.Compute(generate_initial_sample_pipeline, arg_ref)
-            .Dispatch(uint3(dispatch_size, 1), "GenerateInitialSample");
+            .Dispatch(uint3(dispatch_size, 1), MOER_TEXT("GenerateInitialSample"));
 
         _cmd_list.Compute(temporal_resmaple_pipeline, arg_ref)
-            .Dispatch(uint3(dispatch_size, 1), "TemporalResample");
+            .Dispatch(uint3(dispatch_size, 1), MOER_TEXT("TemporalResample"));
 
         _cmd_list.Compute(spatial_resample_pipeline, arg_ref)
-            .Dispatch(uint3(dispatch_size, 1), "SpatialResample");
+            .Dispatch(uint3(dispatch_size, 1), MOER_TEXT("SpatialResample"));
 
-        _cmd_list.Compute(di_shade_sample_pipeline, arg_ref).Dispatch(uint3(dispatch_size, 1), "ShadeSample");
+        _cmd_list.Compute(di_shade_sample_pipeline, arg_ref).Dispatch(uint3(dispatch_size, 1), MOER_TEXT("ShadeSample"));
     }
 
     _cmd_list.PopScopeWithTimeScope();

@@ -19,6 +19,7 @@
 #include "rhi/RHIResource.h"
 #include "taskgraph/TaskGraph.h"
 #include "trace/Trace.h"
+#include "string/Format.h"
 
 #include "VulkanCustomCommand.h"
 #include "shader/ShaderPipeline.h"
@@ -96,10 +97,10 @@ void EraseIf(Array<T>& values, Pred&& pred) {
     );
 }
 
-void ResolveQueryTokensAsError(std::span<const QueryToken> tokens, std::string_view reason) {
+void ResolveQueryTokensAsError(std::span<const QueryToken> tokens, StringView reason) {
     QueryResult error_result{};
     error_result.status = QueryStatus::Error;
-    error_result.name   = std::string(reason);
+    error_result.name   = String(reason);
 
     for (const QueryToken& token : tokens) {
         if (!token.Valid()) {
@@ -111,7 +112,7 @@ void ResolveQueryTokensAsError(std::span<const QueryToken> tokens, std::string_v
     }
 }
 
-void StripUnsupportedTimestampQueries(CmdSubmit& submit, std::string_view reason) {
+void StripUnsupportedTimestampQueries(CmdSubmit& submit, StringView reason) {
     Array<QueryToken> rejected_tokens{};
     rejected_tokens.reserve(submit.query_tokens.size());
     EraseIf(submit.query_tokens, [&](const QueryToken& token) {
@@ -1649,7 +1650,7 @@ public:
                 pass_info.color_attachments[i].target->GetHeight() < tex_min_height) {
                 LOG_ERROR(
                     MOER_TEXT("Render target size is smaller than render area! target size: {}x{}, render area size: ")
-                    "{}x{}. Tex Name: {}. Command Name: {}",
+                    MOER_TEXT("{}x{}. Tex Name: {}. Command Name: {}"),
                     pass_info.color_attachments[i].target->GetWidth(),
                     pass_info.color_attachments[i].target->GetHeight(),
                     tex_min_width,
@@ -2421,7 +2422,7 @@ public:
 
         //recording bindless array updates
         if (b_array) {
-            cmd_list.BeginLabel("UpdateBindlessArray", {0.0f, 1.0f, 0.0f, 1.0f});
+            cmd_list.BeginLabel(MOER_TEXT("UpdateBindlessArray"), {0.0f, 1.0f, 0.0f, 1.0f});
             cmd_list.SetPso(shuffle_sd.handle);
             ComponentShuffleShader::Arg arg;
 
@@ -2568,7 +2569,7 @@ public:
                                   geometry->build_sizes_info.buildScratchSize :
                                   geometry->build_sizes_info.updateScratchSize;
         }
-        cmd_list.BeginLabel(std::format("BuildBLAS {}", build_infos.size()), {});
+        cmd_list.BeginLabel(Printf(MOER_TEXT("BuildBLAS {}"), build_infos.size()), {});
         cmd_list.BuildAccelerationStructures(build_infos, build_ranges);
         cmd_list.EndLabel();
     }
@@ -2703,7 +2704,9 @@ public:
         build_info.scratchData.deviceAddress =
             Moer::AlignUp(scratch_buffer->DeviceAddress(), scratch_alignment);
 
-        cmd_list.BeginLabel(std::format("UpdateTLAS with {} instances", _cmd.InstanceCount()), {});
+        cmd_list.BeginLabel(
+            Printf(MOER_TEXT("UpdateTLAS with {} instances"), _cmd.InstanceCount()), {}
+        );
         vkCmdBuildAccelerationStructuresKHR(cmd_list.GetHandle(), 1, &build_info, &range);
         cmd_list.EndLabel();
     }
@@ -2863,7 +2866,7 @@ void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
     if (submit_result != VK_SUCCESS) {
         LOG_ERROR(
             MOER_TEXT("[VkNativeQueue] vkQueueSubmit2 FAILED! result={}, queue={:#x}, type={}, ")
-            "wait_count={}, signal_count={}",
+            MOER_TEXT("wait_count={}, signal_count={}"),
             (int)submit_result,
             (uint64)queue,
             (int)type,
@@ -2929,9 +2932,10 @@ void VkCommandQueue::Wait(WaitEvent _evt) {
     }
 }
 
-void VkNativeQueue::BeginLabel(std::string_view _label, float4 _color) {
+void VkNativeQueue::BeginLabel(StringView _label, float4 _color) {
+    Utf8String label_name = PlatformToUtf8(_label);
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
-    label.pLabelName = _label.data();
+    label.pLabelName = label_name.c_str();
     label.color[0]   = _color.x;
     label.color[1]   = _color.y;
     label.color[2]   = _color.z;
@@ -2943,9 +2947,10 @@ void VkNativeQueue::EndLabel() {
     vkQueueEndDebugUtilsLabelEXT(queue);
 }
 
-void VkNativeQueue::InsertLabel(std::string_view _label, float4 _color) {
+void VkNativeQueue::InsertLabel(StringView _label, float4 _color) {
+    Utf8String label_name = PlatformToUtf8(_label);
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
-    label.pLabelName = _label.data();
+    label.pLabelName = label_name.c_str();
     label.color[0]   = _color.x;
     label.color[1]   = _color.y;
     label.color[2]   = _color.z;
@@ -3024,26 +3029,24 @@ void ProfilerStorage::CollectProfiling() {
     pending_samples = std::move(unresolved);
 }
 
-void ProfilerStorage::BeginProfilerSession(VulkanCmdList& _cmd_list, std::string_view _name) {
+void ProfilerStorage::BeginProfilerSession(VulkanCmdList& _cmd_list, StringView _name) {
     if (!active) {
         return;
     }
 
     const uint64_t query_id = g_profiler_internal_query_id.fetch_add(1, std::memory_order_relaxed);
-    QueryToken     token(
-            query_id, QueryKind::Timestamp, std::string(_name), QueryFuture::Create()
-    );
+    QueryToken     token(query_id, QueryKind::Timestamp, String(_name), QueryFuture::Create());
     query_runtime.BeginTimestamp(_cmd_list, token);
-    active_scope_queries[std::string(_name)].emplace_back(token);
+    active_scope_queries[String(_name)].emplace_back(token);
 }
 
-void ProfilerStorage::EndProfilerSession(VulkanCmdList& _cmd_list, std::string_view _name) {
+void ProfilerStorage::EndProfilerSession(VulkanCmdList& _cmd_list, StringView _name) {
     if (!active) {
         return;
     }
 
-    const std::string key{_name};
-    auto              iter = active_scope_queries.find(key);
+    const String key{_name};
+    auto         iter = active_scope_queries.find(key);
     if (iter == active_scope_queries.end() || iter->second.empty()) {
         return;
     }
@@ -3077,7 +3080,7 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
     TRACE_SCOPE_CAT("VkCommandQueue.Translate", "Queue");
     std::unique_lock<std::mutex> translate_lock(translate_state_mtx);
     if (!queue.SupportsTimestampQueries()) {
-        StripUnsupportedTimestampQueries(_submit, "timestamp query unsupported on queue");
+        StripUnsupportedTimestampQueries(_submit, MOER_TEXT("timestamp query unsupported on queue"));
     }
     struct PreparedCmdBatch {
         CmdSubmit               submit;
@@ -3166,23 +3169,23 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
     MOER_TRACE_GPU_ENABLED
         EmitResolvedGpuTraceEvents(cached_gpu_samples);
 #endif
-        profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
+        profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), MOER_TEXT("Graphics Exec"));
     }
 
     if (queue.GetType() != EQueueType::Copy) {
             vk_allocator.GetCmdList().SetDescriptorBinder(vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors());
     }
 
-    std::string_view queue_label = queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
-                                   queue.GetType() == EQueueType::Compute  ? "Compute Exec" :
-                                                                             "Copy Exec";
+    StringView queue_label = queue.GetType() == EQueueType::Graphics ? MOER_TEXT("Graphics Exec") :
+                             queue.GetType() == EQueueType::Compute  ? MOER_TEXT("Compute Exec") :
+                                                                       MOER_TEXT("Copy Exec");
     vk_allocator.GetCmdList().BeginLabel(queue_label, {1.0f, 0.0f, 0.0f, 1.0f});
 
     Timer preprocess_timer{};
     uint  layer_count = 0;
     for (const CmdReorderer::LinkedCommandList& cmd_list : prepared.reorderer->m_cmd_lists) {
         if (layer_count == 0) {
-            vk_allocator.GetCmdList().BeginLabel("Begin Layers", {0.0f, 0.0f, 1.0f, 1.0f});
+            vk_allocator.GetCmdList().BeginLabel(MOER_TEXT("Begin Layers"), {0.0f, 0.0f, 1.0f, 1.0f});
         }
         if (cmd_list.head == nullptr) {
             continue;
@@ -3205,7 +3208,7 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
         recorded.preprocess_time_ms += preprocess_timer.ElapsedMilliseconds();
 
         vk_allocator.GetCmdList().InsertLabel(
-            std::format("Layer {}", layer_count++), {0.0f, 0.0f, 1.0f, 1.0f}
+            Printf(MOER_TEXT("Layer {}"), layer_count++), {0.0f, 0.0f, 1.0f, 1.0f}
         );
         for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
             RHITRACE_LOG(
@@ -3224,7 +3227,7 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
     }
 
     if (recorded.submit->b_tick_profiling && queue.SupportsTimestampQueries()) {
-        profiler_storage.EndProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
+        profiler_storage.EndProfilerSession(vk_allocator.GetCmdList(), MOER_TEXT("Graphics Exec"));
     }
     vk_allocator.GetCmdList().EndLabel();
     vk_allocator.GetCmdList().End();
@@ -3275,7 +3278,7 @@ VkCommandQueue::SubmitRecordedForRuntime(
 
     if (!_recorded.has_cmd || !_recorded.submit.has_value() || _recorded.submit->cmds.empty()) {
         if (_recorded.submit.has_value() && !_recorded.submit->query_tokens.empty()) {
-            query_runtime.ResolveAsError(_recorded.submit->query_tokens, "submit without commands");
+            query_runtime.ResolveAsError(_recorded.submit->query_tokens, MOER_TEXT("submit without commands"));
             _recorded.submit->gpu_events.clear();
         }
         if (_recorded.allocator) {
@@ -3359,8 +3362,8 @@ VkCommandQueue::SubmitRecordedForRuntime(
 
     if (_recorded.submit->b_tick_profiling) {
         std::lock_guard<std::mutex> translate_lock(translate_state_mtx);
-        profiler_storage.RegisterCpuTimestamp("Command Reorder", _recorded.reorder_time_ms);
-        profiler_storage.RegisterCpuTimestamp("Command Preprocess", _recorded.preprocess_time_ms);
+        profiler_storage.RegisterCpuTimestamp(MOER_TEXT("Command Reorder"), _recorded.reorder_time_ms);
+        profiler_storage.RegisterCpuTimestamp(MOER_TEXT("Command Preprocess"), _recorded.preprocess_time_ms);
         profiler_storage.AdvanceFrame();
     }
     return result;
@@ -3414,7 +3417,7 @@ void VkCommandQueue::EmitResolvedGpuTraceEvents(const Array<ProfilerStorage::Res
 
     const uint64_t    track_id =
         Moer::Trace::MakeGpuQueueTrackId(0u, static_cast<uint32_t>(queue.GetType()));
-    const std::string track_name = std::format("GPU0/Queue({})", QueueTypeName(queue.GetType()));
+    const Utf8String track_name = Utf8Printf("GPU0/Queue({})", QueueTypeName(queue.GetType()));
 
     auto tick_to_ns = [&](uint64_t tick) -> uint64_t {
         if (tick < gpu_trace_tick_anchor) {
@@ -3436,16 +3439,17 @@ void VkCommandQueue::EmitResolvedGpuTraceEvents(const Array<ProfilerStorage::Res
             end_ns = begin_ns;
         }
 
+        Utf8String sample_name = PlatformToUtf8(sample.name);
         Moer::Trace::EmitScope(
             Moer::Trace::EmitScopeDesc{
-                .name        = sample.name,
+            .name        = std::string_view(sample_name.Native()),
                 .category    = "GPU",
                 .track_type  = Moer::Trace::TrackType::GPUQueue,
                 .track_id    = track_id,
                 .depth       = 0,
                 .ts_begin_ns = begin_ns,
                 .ts_end_ns   = end_ns,
-                .track_name  = track_name
+                .track_name  = std::string_view(track_name.Native())
             }
         );
     }
@@ -3583,7 +3587,7 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
 VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer* _reordered) {
     std::unique_lock<std::mutex> translate_lock(translate_mutex);
     if (!queue.SupportsTimestampQueries()) {
-        StripUnsupportedTimestampQueries(_evt, "timestamp query unsupported on queue");
+        StripUnsupportedTimestampQueries(_evt, MOER_TEXT("timestamp query unsupported on queue"));
     }
 
     VulkanRecordedSubmit recorded{};
@@ -3631,7 +3635,7 @@ VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer
     );
 
     vk_cmd_list.Begin();
-    vk_cmd_list.BeginLabel("Copy", {0.0f, 1.0f, 1.0f, 1.0f});
+    vk_cmd_list.BeginLabel(MOER_TEXT("Copy"), {0.0f, 1.0f, 1.0f, 1.0f});
     const auto& cmd_lists = reorder->m_cmd_lists;
     for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
         if (cmd_list.head == nullptr) {
@@ -3679,7 +3683,7 @@ VkCopyQueue::SubmitRecordedForRuntime(
     assert(signal_value > last_frame && "runtime signal value must be monotonic per queue");
     if (!_recorded.has_cmd || !_recorded.allocator) {
         if (_recorded.submit.has_value() && !_recorded.submit->query_tokens.empty()) {
-            ResolveQueryTokensAsError(_recorded.submit->query_tokens, "submit without commands");
+            ResolveQueryTokensAsError(_recorded.submit->query_tokens, MOER_TEXT("submit without commands"));
             _recorded.submit->gpu_events.clear();
         }
         if (signal_value > 1) {
@@ -3790,7 +3794,7 @@ void VkCopyQueue::Complete(uint64 _timeline) {
         if (spin_count == 10'000'000) {
             LOG_ERROR(
                 MOER_TEXT("[CopyQueue] Complete: STILL WAITING after 10M spins! ")
-                "_timeline={}, executed_frame={}",
+                MOER_TEXT("_timeline={}, executed_frame={}"),
                 _timeline,
                 executed_frame.load()
             );

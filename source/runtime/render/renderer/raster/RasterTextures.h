@@ -138,7 +138,7 @@ struct RasterTextures {
 #define X(TYPE, NAME, TEXTYPE, CONFIG)                                                  \
     {                                                                                   \
         TexConfig cfg = (CONFIG);                                                       \
-        AssetTool::CreateRasterResource<TEXTYPE>(this->NAME, device, #NAME, size, cfg); \
+        AssetTool::CreateRasterResource<TEXTYPE>(this->NAME, device, MOER_TEXT_STRINGIZE(NAME), size, cfg); \
     }
         RASTER_TEXTURES_TABLE
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
@@ -150,7 +150,7 @@ struct RasterTextures {
 #define X(TYPE, NAME, TEXTYPE, CONFIG)                                                                    \
     {                                                                                                     \
         TexConfig cfg = (CONFIG);                                                                         \
-        AssetTool::CreateRasterResource<TEXTYPE>(this->NAME##_half, device, #NAME "_half", half_size, cfg); \
+        AssetTool::CreateRasterResource<TEXTYPE>(this->NAME##_half, device, MOER_TEXT_STRINGIZE(NAME) MOER_TEXT("_half"), half_size, cfg); \
     }
             RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
@@ -162,7 +162,7 @@ struct RasterTextures {
     {                                                                                \
         TexConfig cfg = (CONFIG);                                                    \
         if (cfg.is_asset) {                                                          \
-            AssetTool::LoadTexture<TEXTYPE>(device, cmd_list, NAME.tex, cfg, #NAME); \
+            AssetTool::LoadTexture<TEXTYPE>(device, cmd_list, NAME.tex, cfg, MOER_TEXT_STRINGIZE(NAME)); \
         }                                                                            \
     }
         RASTER_TEXTURES_TABLE
@@ -221,7 +221,7 @@ struct RasterTextures {
         // 去除 output
         bool b_has_erased = false;
         for (auto it = views.begin(); it != views.end(); ++it) {
-            if (it->GetTexture()->GetName() == "output") {
+            if (it->GetTexture()->GetName() == MOER_TEXT("output")) {
                 b_has_erased = true;
                 views.erase(it);
                 break;

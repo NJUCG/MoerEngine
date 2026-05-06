@@ -65,7 +65,7 @@ void ShaderUtils::GenerateLowDiscrepancySequence(
 ) {
     assert(_param.num_dimensions == 2);
     assert(_param.num_samples * _param.num_dimensions <= _output.GetByteSize());
-    // _cmd_list.Compute(gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), "GenerateLowDiscrepancySequence");
+    // _cmd_list.Compute(gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), MOER_TEXT("GenerateLowDiscrepancySequence"));
 
     Array<int8> data(_param.num_samples * 2);
     int         R    = 250;
@@ -110,7 +110,7 @@ void ShaderUtils::GenerateMipPdf(
         param.src_size       = uint2(width, height);
 
         _cmd_list.Compute(generate_mip_pdf_pipeline, _env_map, _integrated_mips, param)
-            .Dispatch(uint3(DivCeil(width, 32), DivCeil(height, 32), 1), "GenerateMipPdf");
+            .Dispatch(uint3(DivCeil(width, 32), DivCeil(height, 32), 1), MOER_TEXT("GenerateMipPdf"));
         width  = std::max(1u, width >> 5);
         height = std::max(1u, height >> 5);
     }
@@ -123,20 +123,13 @@ void ShaderUtils::GenerateMips(CommandList& _cmd_list, std::span<TextureView> _m
     uint height = _mips[0].extent.y;
 
     if (_mips.size() > 5) {
-        /**
-         * FIXME:
-         * 注意到，这里每次都会将所有mips全部传入RHI中，所以如果mips > 5的话，那么每个mip都会被重复传入RHI中
-         * 目前不确定这里是否会引发bug，需要进一步测试
-         * 
-         * 确认后/修复后，请删除本段代码
-         */
-        static bool b_first_time = true; // 只警告一次
+        static bool b_first_time = true;
         if (b_first_time) {
             b_first_time = false;
             LOG_WARNING(
                 MOER_TEXT("Here may be a bug when total mips > 5. GenerateMips for {} will be called. mip_level={}, ")
-                "extent={},{}",
-                _mips[0].GetTexture()->GetName(),
+                MOER_TEXT("extent={},{}"),
+                String(_mips[0].GetTexture()->GetName()),
                 _mips[0].mip_level,
                 _mips[0].extent.x,
                 _mips[0].extent.y
@@ -149,7 +142,7 @@ void ShaderUtils::GenerateMips(CommandList& _cmd_list, std::span<TextureView> _m
         param.src_mip_level  = i;
         param.src_size       = uint2(width, height);
         _cmd_list.Compute(generate_mips_pipeline, _mips, param)
-            .Dispatch(uint3(DivCeil(width, 32), DivCeil(height, 32), 1), "GenerateMips");
+            .Dispatch(uint3(DivCeil(width, 32), DivCeil(height, 32), 1), MOER_TEXT("GenerateMips"));
         width  = std::max(1u, width >> 5);
         height = std::max(1u, height >> 5);
     }
@@ -171,8 +164,7 @@ void ShaderUtils::ShowTexture(
                 _src_tex->GetView(0, _src_tex->GetNumMips()),
                 _bdls
             )
-        .Draw(
-            "ShowTexture",
+        .Draw(MOER_TEXT("ShowTexture"),
             Rect2D(0, 0, _dst_texture->GetExtent().x, _dst_texture->GetExtent().y),
             {},
             3,
@@ -197,8 +189,7 @@ void ShaderUtils::SampleTextureRaster(
     auto& sample_texture_pipeline = sample_texture_pipeline_map[_format];
 
     _cmd_list.Gfx(sample_texture_pipeline, _src_tex, linear_clamp_sampler)
-        .Draw(
-            "SampleTexture",
+        .Draw(MOER_TEXT("SampleTexture"),
             Rect2D(0, 0, _dst_texture.extent.x, _dst_texture.extent.y),
             {},
             3,
@@ -218,7 +209,7 @@ void ShaderUtils::SampleTextureCS(
     _cmd_list.Compute(sample_texture_cs_pipeline, _src_tex, linear_clamp_sampler, _dst_texture)
         .Dispatch(
             uint3(DivCeil(_dst_texture.extent.x, 16), DivCeil(_dst_texture.extent.y, 16), 1),
-            "SampleTextureCS"
+            MOER_TEXT("SampleTextureCS")
         );
 }
 

@@ -10,12 +10,12 @@
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIIO.h"
+#include "string/StringConvert.h"
 #include "vulkan/vulkan_core.h"
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <span>
-#include <string_view>
 namespace Moer::Render {
 static constexpr uint s_queue_max_frame_in_flight = 3;
 static constexpr uint s_query_max_storage         = 8 * 64;
@@ -53,9 +53,9 @@ public:
     // 必须通过同一把 mutex 互斥 vkQueueSubmit2，否则违反 Vulkan 线程安全要求。
     void SetSubmitMutex(std::mutex* _mutex) { submit_mutex = _mutex; }
 
-    void BeginLabel(std::string_view _label, float4 _color);
+    void BeginLabel(StringView _label, float4 _color);
     void EndLabel();
-    void InsertLabel(std::string_view _label, float4 _color);
+    void InsertLabel(StringView _label, float4 _color);
 
 private:
     Array<VkSemaphoreSubmitInfo> wait_infos;
@@ -75,8 +75,8 @@ struct ProfilerStorage {
     bool IsActive() const {
         return active;
     }
-    void RegisterCpuTimestamp(std::string_view _name, double _timestamp) {
-        cpu_timestamps[cur_frame][_name] = _timestamp;
+    void RegisterCpuTimestamp(StringView _name, double _timestamp) {
+        cpu_timestamps[cur_frame][String(_name)] = _timestamp;
     }
     void AdvanceFrame() {
         cur_frame = (cur_frame + 1) % s_queue_max_frame_in_flight;
@@ -95,17 +95,17 @@ struct ProfilerStorage {
         //cpu timestamp
         data.cpu_entries.reserve(cpu_timestamps[last_frame].size());
         for (auto& [name, timestamp] : cpu_timestamps[last_frame]) {
-            data.cpu_entries.emplace_back(name.data(), timestamp);
+            data.cpu_entries.emplace_back(name, timestamp);
         }
         return data;
     }
 
-    void BeginProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
-    void EndProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
+    void BeginProfilerSession(VulkanCmdList& _cmd, StringView _name);
+    void EndProfilerSession(VulkanCmdList& _cmd, StringView _name);
     void VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_cmd);
 
     struct ResolvedGpuSample {
-        std::string name{};
+        String name{};
         uint64_t    begin_tick{0};
         uint64_t    end_tick{0};
     };
@@ -116,7 +116,7 @@ struct ProfilerStorage {
     bool active = false;
     VulkanQueryRuntime& query_runtime;
     float               timestamp_period = 0.0f;
-    StaticArray<UnorderedMap<std::string_view, double>, s_queue_max_frame_in_flight> cpu_timestamps;
+    StaticArray<UnorderedMap<String, double>, s_queue_max_frame_in_flight> cpu_timestamps;
 
     struct Sample {
         uint64_t                      accumulated_ns;
@@ -142,12 +142,12 @@ struct ProfilerStorage {
     };
 
     struct PendingSample {
-        std::string name{};
+        String name{};
         QueryToken  token{};
     };
 
-    UnorderedMap<std::string, Sample>            name2sample;
-    UnorderedMap<std::string, Array<QueryToken>> active_scope_queries;
+    UnorderedMap<String, Sample>            name2sample;
+    UnorderedMap<String, Array<QueryToken>> active_scope_queries;
     Array<PendingSample>                         pending_samples{};
     Array<ResolvedGpuSample>                     resolved_gpu_samples{};
 

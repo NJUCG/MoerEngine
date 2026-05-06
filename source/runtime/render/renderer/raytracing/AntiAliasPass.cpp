@@ -1,4 +1,4 @@
-﻿#include "AntiAliasPass.h"
+#include "AntiAliasPass.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/postprocess/ShaderParameters.h"
@@ -25,7 +25,7 @@ AntialiasPass::AntialiasPass(
     resolved_color(_info.resolved_color),
     hdr_color(_info.hdr_color) {
     constant_buffer = _device.CreateBuffer<Moer::byte>(
-        "PostProcess::TAAConstantBuffer", sizeof(TAAParams), EBufferUsageFlags::CONSTANT_BUFFER
+        MOER_TEXT("PostProcess::TAAConstantBuffer"), sizeof(TAAParams), EBufferUsageFlags::CONSTANT_BUFFER
     );
 }
 
@@ -51,7 +51,7 @@ void AntialiasPass::Process(
     params.pqc                    = std::clamp(_param.max_radiance, 1e-4f, 1e8f);
     params.inv_pqc                = 1.f / params.pqc;
 
-    _cmd_list.PushScopeWithTimeScope("AntiAliasPass");
+    _cmd_list.PushScopeWithTimeScope(MOER_TEXT("AntiAliasPass"));
     Array<Moer::byte> upload_data(sizeof(TAAParams));
     upload_data.assign((Moer::byte*)&params, (Moer::byte*)&params + sizeof(TAAParams));
 
@@ -71,7 +71,7 @@ void AntialiasPass::Process(
             _output,
             feedback_color_pong
         )
-        .Dispatch(uint3(grid_size.x, grid_size.y, 1), "TAAPass");
+        .Dispatch(uint3(grid_size.x, grid_size.y, 1), MOER_TEXT("TAAPass"));
 
     _cmd_list.PopScopeWithTimeScope();
 }

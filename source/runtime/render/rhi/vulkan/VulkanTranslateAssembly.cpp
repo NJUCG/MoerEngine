@@ -3,10 +3,10 @@
 namespace Moer::Render {
 
 struct AutoGpuEventTokenFactory {
-    static QueryToken CreateTimestampToken(std::string_view name) {
+    static QueryToken CreateTimestampToken(StringView name) {
         static std::atomic<uint64_t> next_auto_query_id{1ull << 62u};
         const uint64_t token_id = next_auto_query_id.fetch_add(1, std::memory_order_relaxed);
-        return QueryToken(token_id, QueryKind::Timestamp, std::string(name), QueryFuture::Create());
+        return QueryToken(token_id, QueryKind::Timestamp, String(name), QueryFuture::Create());
     }
 };
 
@@ -21,7 +21,7 @@ static bool HasGpuEventType(const CmdSubmit& submit, GPUEvent::EType type) {
 static void AppendTimestampPair(
     Array<UniquePtr<Command>>& commands,
     const QueryToken&          token,
-    std::string_view           name
+    StringView                 name
 ) {
     commands.emplace_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::BeginTimestamp, name));
     commands.emplace_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::EndTimestamp, name));
@@ -50,13 +50,13 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
     QueryToken frame_bound_token{};
 
     if (inject_command_list_span) {
-        begin_token = AutoGpuEventTokenFactory::CreateTimestampToken("AutoBeginCommandList");
-        end_token   = AutoGpuEventTokenFactory::CreateTimestampToken("AutoEndCommandList");
+        begin_token = AutoGpuEventTokenFactory::CreateTimestampToken(MOER_TEXT("AutoBeginCommandList"));
+        end_token   = AutoGpuEventTokenFactory::CreateTimestampToken(MOER_TEXT("AutoEndCommandList"));
         submit.query_tokens.emplace_back(begin_token);
         submit.query_tokens.emplace_back(end_token);
     }
     if (inject_frame_bound) {
-        frame_bound_token = AutoGpuEventTokenFactory::CreateTimestampToken("AutoFrameBound");
+        frame_bound_token = AutoGpuEventTokenFactory::CreateTimestampToken(MOER_TEXT("AutoFrameBound"));
         submit.query_tokens.emplace_back(frame_bound_token);
     }
 
@@ -89,16 +89,16 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
     }
 
     if (inject_command_list_span) {
-        AppendTimestampPair(rebuilt_commands, begin_token, "AutoBeginCommandList");
+        AppendTimestampPair(rebuilt_commands, begin_token, MOER_TEXT("AutoBeginCommandList"));
     }
     for (size_t cmd_index = body_begin; cmd_index < body_end; ++cmd_index) {
         rebuilt_commands.emplace_back(std::move(submit.cmds[cmd_index]));
     }
     if (inject_command_list_span) {
-        AppendTimestampPair(rebuilt_commands, end_token, "AutoEndCommandList");
+        AppendTimestampPair(rebuilt_commands, end_token, MOER_TEXT("AutoEndCommandList"));
     }
     if (inject_frame_bound) {
-        AppendTimestampPair(rebuilt_commands, frame_bound_token, "AutoFrameBound");
+        AppendTimestampPair(rebuilt_commands, frame_bound_token, MOER_TEXT("AutoFrameBound"));
     }
     for (size_t cmd_index = body_end; cmd_index < submit.cmds.size(); ++cmd_index) {
         rebuilt_commands.emplace_back(std::move(submit.cmds[cmd_index]));
@@ -114,7 +114,7 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
     if (inject_command_list_span) {
         rebuilt_events.emplace_back(GPUEvent{
             .type = GPUEvent::EType::BeginGPU,
-            .name = "GPU",
+            .name = MOER_TEXT("GPU"),
             .query = begin_token,
             .depth = 0,
             .timestamp_ns = 0
@@ -126,7 +126,7 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
     if (inject_command_list_span) {
         rebuilt_events.emplace_back(GPUEvent{
             .type = GPUEvent::EType::EndGPU,
-            .name = "",
+            .name = MOER_TEXT(""),
             .query = end_token,
             .depth = 0,
             .timestamp_ns = 0
@@ -135,7 +135,7 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
     if (inject_frame_bound) {
         rebuilt_events.emplace_back(GPUEvent{
             .type = GPUEvent::EType::FrameBoundary,
-            .name = "FrameBound",
+            .name = MOER_TEXT("FrameBound"),
             .query = frame_bound_token,
             .depth = 0,
             .timestamp_ns = 0
@@ -491,7 +491,7 @@ static void DispatchTranslatePipelineBatch(
                         std::move(runtime_state->translate_results[current.translate_index]) :
                         VulkanTranslateTask::MakeFailed(
                             current.queue,
-                            "translate result index mismatch during submit task dispatch"
+                            MOER_TEXT("translate result index mismatch during submit task dispatch")
                         );
 
                 if (translate_output.valid && !translate_output.recorded_submit.has_value()) {

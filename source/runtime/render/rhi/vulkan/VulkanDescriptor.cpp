@@ -24,8 +24,8 @@ const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
 };
 
 namespace Moer::Render {
-static constexpr std::string_view s_ring_desc_buffer_name        = "VkDescriporHeap::RingDescriptorBuffer";
-static constexpr std::string_view s_sampler_heap_buffer_name     = "VkDescriptorHeap::SamplerHeapBuffer";
+static constexpr StringView s_ring_desc_buffer_name              = MOER_TEXT("VkDescriporHeap::RingDescriptorBuffer");
+static constexpr StringView s_sampler_heap_buffer_name           = MOER_TEXT("VkDescriptorHeap::SamplerHeapBuffer");
 static constexpr uint32           s_offline_buffer_desc_capacity = 10086;
 static constexpr uint32           s_offline_image_desc_capacity  = 10086;
 static constexpr uint32           s_offline_accel_desc_capacity  = 10086;

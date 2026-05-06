@@ -12,6 +12,7 @@
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "string/String.h"
 
 #include <atomic>
 #include <cassert>
@@ -20,12 +21,10 @@
 #include <mutex>
 #include <span>
 #include <stdint.h>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <variant>
 
-static constexpr std::string_view default_name = "NoName";
+static constexpr Moer::StringView default_name = MOER_TEXT("NoName");
 
 namespace Moer::Render {
 
@@ -222,11 +221,11 @@ struct BufferWithHandle {
     uint      hdl = 0;
 };
 
-// 如果texture的名字不是编译期决定的，则需要找一个地方存名字。否则string_view会出现悬垂指针
+// Dynamic resource names must be owned to avoid dangling views.
 struct DepthBufferWithHandleAndName {
     DepthBufferRef tex;
     uint           hdl = 0;
-    std::string    name;
+    String         name;
 };
 
 }; // namespace Moer::Render
@@ -509,6 +508,8 @@ struct BufferInfo {
     bool IsNull() const {
         return usage == EBufferUsageFlags::NONE && size == stride && size == 0;
     }
+
+    bool operator==(const BufferInfo& other) const = default;
 };
 
 class Buffer : public RHIResource {
@@ -532,8 +533,11 @@ public:
     EBufferUsageFlags GetUsage() const {
         return info.usage;
     }
-    const std::string_view GetName() const {
-        return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data());
+    const BufferInfo& GetInfo() const {
+        return info;
+    }
+    StringView GetName() const {
+        return debug_name.has_value() ? StringView(debug_name.value()) : default_name;
     }
     BufferPersistentState GetPersistentState() const {
         std::lock_guard<std::mutex> lock(persistent_state_mutex);
@@ -546,7 +550,7 @@ public:
 
     RENDER_API BufferView GetView(uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
     RENDER_API BufferView GetView(EPixelFormat _fmt, uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
-    virtual RENDER_API void SetName(const std::string_view _name) = 0;
+    virtual RENDER_API void SetName(StringView _name) = 0;
 
 protected:
     /**
@@ -554,7 +558,7 @@ protected:
 	 *
 	 */
     Buffer() : RHIResource(RRT_BUFFER) {}
-    std::optional<std::string> debug_name;
+    std::optional<String>      debug_name;
     mutable std::mutex         persistent_state_mutex{};
     BufferPersistentState      persistent_state{};
 
@@ -676,7 +680,7 @@ struct TextureInfo {
 
     ETextureAspectFlags aspect_flags = ETextureAspectFlags::COLOR;
 
-    std::optional<std::string> debug_name;
+    std::optional<String> debug_name;
 
     bool operator==(const TextureInfo& _other) const {
         return dimension == _other.dimension && usage == _other.usage && format == _other.format &&
@@ -730,8 +734,11 @@ public:
         return uint3(info.extent.x, info.extent.y, info.depth);
     }
     virtual uint           GetMipByteSize(uint _mip_idx) const = 0;
-    const std::string_view GetName() const {
-        return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data());
+    const TextureInfo& GetInfo() const {
+        return info;
+    }
+    StringView GetName() const {
+        return debug_name.has_value() ? StringView(debug_name.value()) : default_name;
     }
     TexturePersistentState GetPersistentState(uint8 _mip_level, uint8 _array_layer) const {
         std::lock_guard<std::mutex> lock(persistent_state_mutex);
@@ -774,10 +781,10 @@ public:
     }
     RENDER_API TextureView  GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
     RENDER_API TextureView  GetView(EPixelFormat _format, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
-    virtual RENDER_API void SetName(const std::string_view _name) = 0;
+    virtual RENDER_API void SetName(StringView _name) = 0;
 
 protected:
-    std::optional<std::string> debug_name;
+    std::optional<String> debug_name;
     mutable std::mutex         persistent_state_mutex{};
     Array<TexturePersistentState> persistent_subresource_states{};
 
@@ -848,13 +855,13 @@ public:
     uint3 GetExtent() const {
         return tex_handle->GetExtent();
     }
-    const std::string_view GetName() const {
+    StringView GetName() const {
         return tex_handle->GetName();
     }
     RENDER_API TextureView GetView() {
         return tex_handle->GetView();
     }
-    RENDER_API void SetName(const std::string_view _name) {
+    RENDER_API void SetName(StringView _name) {
         tex_handle->SetName(_name);
     }
 

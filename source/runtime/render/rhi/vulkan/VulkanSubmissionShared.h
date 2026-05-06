@@ -48,7 +48,7 @@ struct TranslateResult {
     std::optional<VulkanRecordedSubmit> recorded_submit{};
     GraphEventRef translate_complete{nullptr};
     bool          valid{true};
-    std::string   error{};
+    String        error{};
 };
 
 struct QueueTranslateInfo {
@@ -62,7 +62,7 @@ struct QueueTranslateInfo {
     GraphEventRef   completion_event{nullptr};
     ERHITranslateExecutionClass execution_class{ERHITranslateExecutionClass::Parallel};
     bool         valid{true};
-    std::string  error{};
+    String       error{};
 
     QueueTranslateInfo(
         SubmissionKey in_key,
@@ -119,7 +119,7 @@ struct SubmitPresentStage {
     bool               has_source_texture_state{false};
     ResourceStateValue source_texture_state{};
     bool               valid{true};
-    std::string        error{};
+    String             error{};
 
     SubmitPresentStage(uint64 in_op_seq, ExecutorPresentOp&& in_present) :
         op_seq(in_op_seq),

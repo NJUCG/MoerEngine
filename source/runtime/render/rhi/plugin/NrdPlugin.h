@@ -101,7 +101,7 @@ public:
 
     virtual void Begin() = 0;
 
-    virtual void Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) = 0;
+    virtual void Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, StringView _name) = 0;
 
     virtual void Reinitialize(uint16 _frame_width, uint16 _frame_height) = 0;
 
@@ -182,7 +182,7 @@ protected:
 class NRDPlugin : public RuntimePlugin {
 public:
     ~NRDPlugin()                        = default;
-    static constexpr std::string_view name = "NRDPlugin";
+    static constexpr StringView name = MOER_TEXT("NRDPlugin");
 
     virtual UniquePtr<NRDInterface>
     CreateInterface(uint8 _max_frame_in_flight = 0, uint16 _frame_width = 0, uint16 _frame_height = 0) = 0;

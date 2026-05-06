@@ -9,6 +9,7 @@
 #include "rhi/vulkan/VulkanDevice.h"
 #include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderResourceManager.h"
+#include "string/StringConvert.h"
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
 
@@ -66,8 +67,11 @@ void Engine::Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen)
         std::move(
             DeviceInitInfo{
                 .rhi_type        = rhi_type,
-                .name            = "MoerEngine",
-                .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.api_version,
+                .name            = MOER_TEXT("MoerEngine"),
+                .rhi_api_version = Utf8ToPlatform(Utf8StringView(
+                    ConfigManager::GetInstance().GetConfig().engine.rhi.api_version.data(),
+                    ConfigManager::GetInstance().GetConfig().engine.rhi.api_version.size()
+                )),
             }
         )
     );

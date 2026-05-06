@@ -12,7 +12,7 @@ public:
         TrackerSeed&& initial_seed
     );
     static Array<TranslateResult> DispatchBatch(Array<QueueTranslateInfo>&& inputs);
-    static TranslateResult MakeFailed(EQueueType queue, std::string error);
+    static TranslateResult MakeFailed(EQueueType queue, String error);
     static void ResetSchedulerState();
 };
 

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "math/Function.h"
 #include "scene/camera/Camera.h"
@@ -88,22 +88,23 @@ public:
  *   Pass 2: Blending Weight Calculation -> antialiasing_temporal_texture_2  (blendTex)
  *   Pass 3: Neighborhood Blending       -> antialiasing_temporal_texture_34 (double buffer) (currentColorTex & previousColorTex)
  *   Pass 4: Resolve                     -> antialiasing_output
- *   注：SMAA T2x需要启用Reprojection才可以防止ghosting。Reprojection需要一个velocityTex，在这里我直接将velocityTex写入edgesTex的后两个通道
- *   注2：实际上，因为目前帧数为500+fps，所以看不到ghosting；可以在主循环中sleep 0.1s并且设置shader中的SMAAReprojection为0来得到一个ghosting的结果
- * 
- * 关于不同抗锯齿模式的说明
- *   切换抗锯齿时，多余的Pass不会被执行，应该不会有额外的性能开销
- * 
- * 关于SMAA实现的一些说明
- *   SMAA是通过直接集成论文仓库中的代码实现的（https://github.com/iryoku/smaa）
- *   原始代码不兼容bindless rhi，所以我将仓库中原始的代码封装了一下，并从bindless rhi中提取出了texture和sampler
- *   这部分可能破坏rhi的一些封装，具体见下面的GetSamplerIdx函数，除了这一点外，c++部分没有其他不优雅的代码
- *   shader部分和bindless rhi的耦合性特别高，如果修改bindless框架的话，大概率shader也要一起修改
- * Imporant: 所以如果修改了bindless框架，然后画面黑屏的话，请先将抗锯齿设置为FXAA(aa_mode = 2)，可以快速解决问题
- * 
- * 关于SMAA T2x的说明
- *   1. T2x使用了Temporal Supersampling，需要让相机抖动。可以通过camera->SetJitteredMatrix()来设置JitteredMatrix，这个矩阵会作用在ViewMatrix上
- *   2. 目前SMAA T2x效果和SMAA 1x类似，没有明显优势；不确定是场景问题还是实现问题
+ *   Note: SMAA T2x needs reprojection to prevent ghosting. Reprojection needs velocityTex,
+ *   which is currently packed into the later channels of edgesTex.
+ *   Note 2: Ghosting is hard to observe at 500+ fps; adding a 0.1s loop sleep and setting
+ *   SMAAReprojection to 0 in the shader can produce a visible ghosting reference.
+ *
+ * Mode switching note:
+ *   Several passes may be skipped when the AA mode changes, so stale resources must not be assumed valid.
+ *
+ * SMAA implementation notes:
+ *   The implementation is adapted from https://github.com/iryoku/smaa.
+ *   The original code does not use bindless RHI, so texture and sampler fetching is wrapped for this engine.
+ *   The shader side is tightly coupled to the bindless RHI layout; bindless layout changes require matching shader updates.
+ *   If bindless changes break this path, switch temporarily to FXAA (aa_mode = 2) to unblock rendering.
+ *
+ * SMAA T2x notes:
+ *   1. T2x uses temporal supersampling and needs camera jitter through camera->SetJitteredMatrix().
+ *   2. Current SMAA T2x quality is close to SMAA 1x; this may be a shader or integration issue.
  *   FIXME: fix jitter in SMAA T2x when SMAA_REPROJECTION is enabled
  */
 class AaPass {
@@ -204,7 +205,7 @@ public:
 
         // smaa area tex
         smaa_area_tex.tex = context.device.CreateTexture(
-            "smaa_area_tex",
+            MOER_TEXT("smaa_area_tex"),
             Extent2D(SMAA_AREATEX_WIDTH, SMAA_AREATEX_HEIGHT),
             PF_R8G8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
@@ -219,7 +220,7 @@ public:
 
         // smaa search tex
         smaa_search_tex.tex = context.device.CreateTexture(
-            "smaa_search_tex",
+            MOER_TEXT("smaa_search_tex"),
             Extent2D(SMAA_SEARCHTEX_WIDTH, SMAA_SEARCHTEX_HEIGHT),
             PF_R8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
@@ -263,8 +264,7 @@ public:
         param_fxaa_precomputed.input_image = input_image.hdl;
 
         context.cmd_list.Gfx(fxaa_precompute_pipeline, context.bdls, param_fxaa_precomputed)
-            .Draw(
-                "FXAA Precompute Pass",
+            .Draw(MOER_TEXT("FXAA Precompute Pass"),
                 context.textures.aa_texture_1.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.aa_texture_1.tex)
@@ -277,8 +277,7 @@ public:
         param_fxaa.inv_resolution = float2(1.0) / float2(context.textures.aa_output.GetSize());
 
         context.cmd_list.Gfx(fxaa_pipeline, context.bdls, param_fxaa)
-            .Draw(
-                "FXAA Pass",
+            .Draw(MOER_TEXT("FXAA Pass"),
                 context.textures.aa_output.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.aa_output.tex)
@@ -293,17 +292,10 @@ public:
         const Camera&       camera,
         TextureWithHandle   input_image
     ) {
-        // TODO: optimize the following code
-        //           以下是我会写出这段代码的原因：
-        //       SMAA官方提供了一段代码SMAA.hlsl，只需要一些简单的修改，就可以让我们快速将SMAA集成到MoerEngine中
-        //       但是SMAA.hlsl并不支持我们的bindless后的rhi，所以我修改了SMAA.hlsl，并试图提取出了独立的texture和sampler
-        //       因此，我需要texture index和sampler index
-        //       texture index直接使用context.bdls->AllocateTexture就可以解决
-        //       sampler index是通过VulkanDevice::GetSamplerIdx()得到的，但这个函数所在的头文件并不能被include（因为不位于include目录下）
-        //       那么为了获取sampler index，我们有两种方案 1. 复制GetSamplerIdx的实现；2. 通过AllocateTexture得到handle后再解压出sampler index
-        //       第一种方案可能导致代码不一致，而第二种方案过于不可控，而且我不确定是否有潜在的性能开销，所以我同时写了两种方案，并且写下了这段说明
-        //       目前使用第一种
-        //       有更好的方案的话，直接修改下面这段代码即可
+        // TODO: simplify sampler index extraction when bindless sampler metadata is exposed directly.
+        // SMAA.hlsl was adapted from the official implementation and now fetches textures and samplers
+        // through bindless RHI. Texture indices come from AllocateTexture; sampler indices are currently
+        // reconstructed locally to match VulkanDevice::GetSamplerIdx().
         auto GetSamplerIdx = [&](const Sampler& sampler) {
             // method 1
             uint filter  = uint(sampler.filter);
@@ -352,16 +344,14 @@ public:
         }();
 
         context.cmd_list.Gfx(smaa_edge_detection_pipeline, context.bdls, smaa_shared_param)
-            .Draw(
-                "SMAA Edge Detection Pass",
+            .Draw(MOER_TEXT("SMAA Edge Detection Pass"),
                 context.textures.aa_texture_1.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.aa_texture_1.tex)
             );
 
         context.cmd_list.Gfx(smaa_blending_weight_pipeline, context.bdls, smaa_shared_param)
-            .Draw(
-                "SMAA Blending Weight Calculation Pass",
+            .Draw(MOER_TEXT("SMAA Blending Weight Calculation Pass"),
                 context.textures.aa_texture_2.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.aa_texture_2.tex)
@@ -369,24 +359,21 @@ public:
 
         if (ui_config.aa_mode == EAaMode::SMAA_1X) {
             context.cmd_list.Gfx(smaa_neighborhood_blending_pipeline, context.bdls, smaa_shared_param)
-                .Draw(
-                    "SMAA Neighborhood Blending Pass",
+                .Draw(MOER_TEXT("SMAA Neighborhood Blending Pass"),
                     context.textures.aa_output.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(context.textures.aa_output.tex)
                 );
         } else if (ui_config.aa_mode == EAaMode::SMAA_T2X) {
             context.cmd_list.Gfx(smaa_t2x_neighborhood_blending_pipeline, context.bdls, smaa_shared_param)
-                .Draw(
-                    "SMAA T2x Neighborhood Blending Pass",
+                .Draw(MOER_TEXT("SMAA T2x Neighborhood Blending Pass"),
                     context.textures.aa_texture_3.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(aa_texture_34[frame_parity]->tex)
                 );
 
             context.cmd_list.Gfx(smaa_t2x_resolve_pipeline, context.bdls, smaa_shared_param)
-                .Draw(
-                    "SMAA T2x Resolve Pass",
+                .Draw(MOER_TEXT("SMAA T2x Resolve Pass"),
                     context.textures.aa_output.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(context.textures.aa_output.tex)

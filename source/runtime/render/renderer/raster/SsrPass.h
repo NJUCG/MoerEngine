@@ -77,8 +77,7 @@ public:
         param.gbuffer_metal_rough_ao         = context.textures.metal_rough_ao.hdl;
 
         context.cmd_list.Gfx(ssr_pipeline, context.bdls, param)
-            .Draw(
-                "SSR Pass",
+            .Draw(MOER_TEXT("SSR Pass"),
                 context.textures.ssr_output.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(context.textures.ssr_output.tex)

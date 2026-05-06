@@ -4,6 +4,7 @@
 #include "rhi/RHIResource.h"
 #include <config/ConfigManager.h>
 #include <shader/ShaderResourceManager.h>
+#include <string/Format.h>
 #include <stb_image.h>
 
 namespace Moer::Render::Raster {
@@ -139,7 +140,7 @@ public:
         CommandList&           cmd_list,
         DepthBufferRef&        out_tex,
         const TexConfig&       cfg,
-        const std::string_view name = "defaultname"
+        StringView             name = MOER_TEXT("defaultname")
     ) {}
 
     template<typename Tag>
@@ -149,7 +150,7 @@ public:
         CommandList&           cmd_list,
         TextureRef&            out_tex,
         const TexConfig&       cfg,
-        const std::string_view name = "defaultname"
+        StringView             name = MOER_TEXT("defaultname")
     ) {
 
         std::string filepath =
@@ -164,7 +165,7 @@ public:
 
         out_tex = device.CreateTexture(name, Extent2D(width, height), cfg.format, cfg.usage, cfg.mip_cnt);
 
-        UploadTextureData(cmd_list, out_tex, data, width, height, name.data());
+        UploadTextureData(cmd_list, out_tex, data, width, height, name);
 
         LOG_DEBUG(MOER_TEXT("Load 2D Texture: {}, size ({}, {}) from \"{}\""), name, width, height, filepath);
     }
@@ -176,7 +177,7 @@ public:
         CommandList&           cmd_list,
         TextureRef&            out_tex,
         const TexConfig&       cfg,
-        const std::string_view name = "defaultname"
+        StringView             name = MOER_TEXT("defaultname")
     ) {
 
         const std::array<std::string, 6> skybox_faces = {
@@ -202,7 +203,7 @@ public:
             }
 
             UploadTextureData(
-                cmd_list, skybox_view.Slice(i), data, width, height, std::format("Skybox Cubemap #{}", i)
+                cmd_list, skybox_view.Slice(i), data, width, height, Printf(MOER_TEXT("Skybox Cubemap #{}"), i)
             );
 
             LOG_DEBUG(
@@ -220,7 +221,7 @@ public:
     static void CreateRasterResource(
         T_Holder&        target,
         RenderDevice&    device,
-        std::string_view name,
+        StringView       name,
         const uint2&     size,
         TexConfig&       cfg,
         bool             is_verbose = true
@@ -351,7 +352,7 @@ private:
         ubyte*             data,
         int                width,
         int                height,
-        const std::string& debug_name
+        StringView         debug_name
     ) {
         cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * 4), target, debug_name);
         cmd_list.AddCallback([data]() {

@@ -14,25 +14,24 @@ namespace Moer::Render {
 
 template<>
 VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
-    using std::string;
     MOER_ASSERT(_info.rhi_type == ERHIType::Vulkan, "ResolveConfigAs<VulkanRHIConfig> requires Vulkan");
 
     VulkanRHIConfig config;
 
-    std::string_view api = _info.rhi_api_version;
+    StringView api = _info.rhi_api_version;
 
     api = api.substr(0, 3); // 1.0, 1.1, 1.2, 1.3
-    if (api == "1.0")
+    if (api == MOER_TEXT("1.0"))
         config.api_version = VK_API_VERSION_1_0;
-    else if (api == "1.1")
+    else if (api == MOER_TEXT("1.1"))
         config.api_version = VK_API_VERSION_1_1;
-    else if (api == "1.2")
+    else if (api == MOER_TEXT("1.2"))
         config.api_version = VK_API_VERSION_1_2;
-    else if (api == "1.3")
+    else if (api == MOER_TEXT("1.3"))
         config.api_version = VK_API_VERSION_1_3;
     else {
         LOG_ERROR(MOER_TEXT("Unsupported vulkan api version: {}"), api);
-        MOER_ASSERT(false, "Unsupported vulkan api version: {}", api);
+        MOER_ASSERT(false, "Unsupported vulkan api version");
     }
 
     return config;

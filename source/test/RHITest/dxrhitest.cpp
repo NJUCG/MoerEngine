@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
     Diagnostics::ResetEnsureFailures();
 
     TaskSystem::Init();
-    DeviceInitInfo info{.rhi_type = ERHIType::D3D12, .name = "DXRHITest"};
+    DeviceInitInfo info{.rhi_type = ERHIType::D3D12, .name = MOER_TEXT("DXRHITest")};
     //DeviceInitInfo info{
     //    .type = ERHIType::Vulkan,
     //    .name = "DXRHITest",
@@ -121,27 +121,27 @@ int main(int argc, char** argv) {
         ShaderCompiler::Init();
 
         auto cb0 = device.CreateBuffer<Moer::byte>(
-            "cb0", sizeof(S0), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST
+            MOER_TEXT("cb0"), sizeof(S0), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST
         );
         auto cb1 = device.CreateBuffer<Moer::byte>(
-            "cb1", sizeof(S1), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST
+            MOER_TEXT("cb1"), sizeof(S1), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST
         );
-        auto sb0 = device.CreateBuffer<float4>("sb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto sb0 = device.CreateBuffer<float4>(MOER_TEXT("sb0"), 1024, EBufferUsageFlags::TRANSFER_DST);
         auto sb1 = device.CreateBuffer<S1>(
-            "sb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
+            MOER_TEXT("sb1"), 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
         );
-        auto rb0 = device.CreateBuffer<uint>("rb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto rb0 = device.CreateBuffer<uint>(MOER_TEXT("rb0"), 1024, EBufferUsageFlags::TRANSFER_DST);
         auto rb1 = device.CreateBuffer<float>(
-            "rb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
+            MOER_TEXT("rb1"), 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
         );
-        auto tb0 = device.CreateBuffer<float>("tb0", 1024, EBufferUsageFlags::TRANSFER_DST);
+        auto tb0 = device.CreateBuffer<float>(MOER_TEXT("tb0"), 1024, EBufferUsageFlags::TRANSFER_DST);
         auto tb1 = device.CreateBuffer<float>(
-            "tb1", 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
+            MOER_TEXT("tb1"), 128, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST
         );
         BufferRef buf_arr[kNumBuffArr];
         for (int i = 0; i < kNumBuffArr; ++i) {
             buf_arr[i] = device.CreateBuffer<float>(
-                std::format("buf_array_{}", i), 9, EBufferUsageFlags::TRANSFER_DST
+                Printf(MOER_TEXT("buf_array_{}"), i), 9, EBufferUsageFlags::TRANSFER_DST
             );
         }
 

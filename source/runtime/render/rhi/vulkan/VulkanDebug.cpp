@@ -4,6 +4,7 @@
 
 #include "VulkanDebug.h"
 #include "log/LogSystem.h"
+#include "string/StringConvert.h"
 #include <sstream>
 
 namespace Moer { namespace RHI { namespace Vulkan {
@@ -99,28 +100,30 @@ void DebugUtils::Setup(VkInstance instance) {
     );
 }
 
-void DebugUtils::CmdBeginLabel(VkCommandBuffer cmd_buffer, const std::string& caption, Moer::Vector4f color) {
+void DebugUtils::CmdBeginLabel(VkCommandBuffer cmd_buffer, StringView caption, Moer::Vector4f color) {
     if (!vkCmdBeginDebugUtilsLabelEXT) {
         return;
     }
+    Utf8String caption_utf8 = PlatformToUtf8(caption);
     VkDebugUtilsLabelEXT label_info{};
     label_info.sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
-    label_info.pLabelName = caption.c_str();
+    label_info.pLabelName = caption_utf8.c_str();
     memcpy(label_info.color, &color[0], sizeof(float) * 4);
     vkCmdBeginDebugUtilsLabelEXT(cmd_buffer, &label_info);
 }
 
 void DebugUtils::CmdInsertLabel(
     VkCommandBuffer    cmd_buffer,
-    const std::string& caption,
+    StringView         caption,
     Moer::Vector4f     color
 ) {
     if (!vkCmdInsertDebugUtilsLabelEXT) {
         return;
     }
+    Utf8String caption_utf8 = PlatformToUtf8(caption);
     VkDebugUtilsLabelEXT label_info{};
     label_info.sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
-    label_info.pLabelName = caption.c_str();
+    label_info.pLabelName = caption_utf8.c_str();
     memcpy(label_info.color, &color[0], sizeof(float) * 4);
     vkCmdInsertDebugUtilsLabelEXT(cmd_buffer, &label_info);
 }
@@ -136,16 +139,17 @@ void DebugUtils::SetObjectName(
     VkDevice           device,
     uint64_t           object,
     VkObjectType       object_type,
-    const std::string& name
+    StringView         name
 ) {
     if (!vkSetDebugUtilsObjectNameEXT) {
         return;
     }
+    Utf8String name_utf8 = PlatformToUtf8(name);
     VkDebugUtilsObjectNameInfoEXT name_info{};
     name_info.sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
     name_info.objectType   = object_type;
     name_info.objectHandle = object;
-    name_info.pObjectName  = name.c_str();
+    name_info.pObjectName  = name_utf8.c_str();
     vkSetDebugUtilsObjectNameEXT(device, &name_info);
 }
 

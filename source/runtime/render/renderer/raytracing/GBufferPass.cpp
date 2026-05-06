@@ -1,4 +1,4 @@
-#include "GBufferPass.h"
+﻿#include "GBufferPass.h"
 
 #include "RTResource.h"
 #include "scene/Scene.h"
@@ -12,7 +12,7 @@ GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager) :
     manager(_manager) {
 
     gbuffer_constants = device.CreateBuffer<Moer::byte>(
-        "Raytracing::gbuffer_constants", sizeof(GBufferConstants), EBufferUsageFlags::CONSTANT_BUFFER
+        MOER_TEXT("Raytracing::gbuffer_constants"), sizeof(GBufferConstants), EBufferUsageFlags::CONSTANT_BUFFER
     );
     RTGBufferMacros gbuffer_macros{};
     gbuffer_macros.SetMutation<RaytracingGBufferPipeline::PRINT_TEST>(true);
@@ -36,7 +36,7 @@ void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     GBufferPassParams         params{};
     RaytracingBindlessHandles bindless_handles = _rt_ctx.GetBindlessHandles();
 
-    // 场景结构数据
+    // 鍦烘櫙缁撴瀯鏁版嵁
     params.instance_buf_hdl  = bindless_handles.instance_buf_hdl;
     params.primitive_buf_hdl = bindless_handles.primitive_buf_hdl;
     params.material_buf_hdl  = bindless_handles.material_buf_hdl;
@@ -55,7 +55,7 @@ void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     FrameResources& frame_rt        = _rt_ctx.frame_rt;
     bool            b_current_frame = _rt_ctx.b_current_frame;
-    _cmd_list.PushScopeWithTimeScope("GBufferPass");
+    _cmd_list.PushScopeWithTimeScope(MOER_TEXT("GBufferPass"));
     _cmd_list.CopyFrom(std::move(upload_data), gbuffer_constants->GetView());
 
     _cmd_list
@@ -75,7 +75,7 @@ void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         )
         .Dispatch(
             uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1),
-            "RaytracingGbuffer"
+            MOER_TEXT("RaytracingGbuffer")
         );
 
     _cmd_list
@@ -88,7 +88,7 @@ void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         )
         .Dispatch(
             uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1),
-            "PostProcessGBuffer"
+            MOER_TEXT("PostProcessGBuffer")
         );
 
     _cmd_list.PopScopeWithTimeScope();

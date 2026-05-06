@@ -3,6 +3,8 @@
 #include "misc/Assert.h"
 #include "profile/ProfileDump.h"
 #include "profile/ProfileDumpTemplates.h"
+#include "string/Format.h"
+#include "string/StringConvert.h"
 #include "trace/Trace.h"
 #include <algorithm>
 #include <cassert>
@@ -258,12 +260,12 @@ ResolvedGPUFrame ResolveFrameFromPrefix(
             if (boundary_index != kInvalidIndex) {
                 if (log_as_error) {
                     LOG_ERROR(
-                        "GPUEventStream found multiple frame boundaries in frame {} before EndFrame resolution",
+                        MOER_TEXT("GPUEventStream found multiple frame boundaries in frame {} before EndFrame resolution"),
                         frame_index
                     );
                 } else {
                     LOG_WARNING(
-                        "GPUEventStream found multiple frame boundaries in frame {} before EndFrame resolution",
+                        MOER_TEXT("GPUEventStream found multiple frame boundaries in frame {} before EndFrame resolution"),
                         frame_index
                     );
                 }
@@ -278,13 +280,13 @@ ResolvedGPUFrame ResolveFrameFromPrefix(
         if (boundary_index != kInvalidIndex) {
             if (log_as_error) {
                 LOG_ERROR(
-                    "GPUEventStream found event '{}' after frame boundary in frame {}",
+                    MOER_TEXT("GPUEventStream found event '{}' after frame boundary in frame {}"),
                     event.name,
                     frame_index
                 );
             } else {
                 LOG_WARNING(
-                    "GPUEventStream found event '{}' after frame boundary in frame {}",
+                    MOER_TEXT("GPUEventStream found event '{}' after frame boundary in frame {}"),
                     event.name,
                     frame_index
                 );
@@ -295,9 +297,9 @@ ResolvedGPUFrame ResolveFrameFromPrefix(
 
     if (boundary_index == kInvalidIndex) {
         if (log_as_error) {
-            LOG_ERROR("GPUEventStream sealed frame {} without any FrameBoundary event", frame_index);
+            LOG_ERROR(MOER_TEXT("GPUEventStream sealed frame {} without any FrameBoundary event"), frame_index);
         } else {
-            LOG_WARNING("GPUEventStream sealed frame {} without any FrameBoundary event", frame_index);
+            LOG_WARNING(MOER_TEXT("GPUEventStream sealed frame {} without any FrameBoundary event"), frame_index);
         }
         return MakeInvalidFrame(frame_index, 0);
     }
@@ -321,17 +323,18 @@ void EmitFrameToTrace(const ResolvedGPUFrame& frame) {
     }
     ForEachQueueRoot(frame.queue_roots, [](EQueueType queue, const Array<GPUEventNode>& roots) {
         const uint64 track_id = Moer::Trace::MakeGpuQueueTrackId(0u, QueueTrackIndex(queue));
-        std::string track_name = std::string("GPU0/Queue(") + QueueTypeName(queue) + ")";
+        Utf8String track_name = Utf8Printf("GPU0/Queue({})", QueueTypeName(queue));
         VisitNodes(roots, [&](const GPUEventNode& node) {
+            Utf8String node_name = PlatformToUtf8(node.name);
             Moer::Trace::EmitScope(Moer::Trace::EmitScopeDesc{
-                .name        = node.name,
+                .name        = std::string_view(node_name.Native()),
                 .category    = "GPU",
                 .track_type  = Moer::Trace::TrackType::GPUQueue,
                 .track_id    = track_id,
                 .depth       = node.depth,
                 .ts_begin_ns = node.start_ns,
                 .ts_end_ns   = node.end_ns,
-                .track_name  = track_name,
+                .track_name  = std::string_view(track_name.Native()),
             });
         });
     });
@@ -344,10 +347,11 @@ void EmitFrameToProfileDump(const ResolvedGPUFrame& frame) {
 
     ForEachQueueRoot(frame.queue_roots, [&](EQueueType queue, const Array<GPUEventNode>& roots) {
         VisitNodes(roots, [&](const GPUEventNode& node) {
+            Utf8String node_name = PlatformToUtf8(node.name);
             DUMP_STREAM(Moer::ProfileDump::Templates::GpuScopeTemplate)
                 << frame.frame_index
                 << QueueTypeName(queue)
-                << node.name
+                << std::string_view(node_name.Native())
                 << node.start_ns
                 << node.end_ns
                 << node.depth
@@ -361,7 +365,7 @@ void AppendFrameText(std::ostringstream& stream, const GPUEventNode& node) {
     for (uint32 indent = 0; indent < node.depth + 1; ++indent) {
         stream << "  ";
     }
-    stream << node.name
+    stream << PlatformToUtf8(node.name).Native()
            << " [queue=" << QueueTypeName(node.queue)
            << ", start_ns=" << node.start_ns
            << ", end_ns=" << node.end_ns

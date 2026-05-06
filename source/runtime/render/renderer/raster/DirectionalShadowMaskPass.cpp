@@ -28,8 +28,7 @@ void DirectionalShadowMaskPass::Process(
 
     context.cmd_list
         .Gfx(directional_shadow_mask_pipeline, context.lighting_data_buffer.buf, context.bdls, param)
-        .Draw(
-            "Directional Shadow Mask Pass",
+        .Draw(MOER_TEXT("Directional Shadow Mask Pass"),
             context.textures.shadow_mask.GetRect2D(),
             std::move(RasterTool::GetFullScreenDrawDatas()),
             ColorAttachment(context.textures.shadow_mask.tex)

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "math/Function.h"
 #include "scene/camera/Camera.h"
@@ -11,7 +11,7 @@
 
 namespace Moer::Render::Raster {
 
-// 注意，ComputePipeline不支持隐式LOD采样，所以没法使用Bindless
+// ע�⣬ComputePipeline��֧����ʽLOD����������û��ʹ��Bindless
 class TonemappingHistogramPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(TonemappingHistogramPipeline);
@@ -49,10 +49,10 @@ public:
 /**
  * MARK: Tonemapping Pass
  * 
- * 注：Gamma矫正使用硬件sRGB实现，不需要在Shader中手动进行Gamma矫正
+ * ע��Gamma����ʹ��Ӳ��sRGBʵ�֣�����Ҫ��Shader���ֶ�����Gamma����
  * 
- * 创建光源或者实现曝光时，请参考 光源强度单位参考表
- * - 详见 source\runtime\render\scene\light\LightComponent.cpp: LightComponent::CreateDefaultLightComponents
+ * ������Դ����ʵ���ع�ʱ����ο� ��Դǿ�ȵ�λ�ο���
+ * - ��� source\runtime\render\scene\light\LightComponent.cpp: LightComponent::CreateDefaultLightComponents
  */
 class TonemappingPass {
 public:
@@ -79,10 +79,10 @@ public:
 
         // Buffer
         histogram_buffer = context.device.CreateBuffer<uint>(
-            "raster histogram buffer", TONEMAPPING_HISTOGRAM_BIN_COUNT, EBufferUsageFlags::UNORDERED_ACCESS
+            MOER_TEXT("raster histogram buffer"), TONEMAPPING_HISTOGRAM_BIN_COUNT, EBufferUsageFlags::UNORDERED_ACCESS
         );
         exposure_buffer = context.device.CreateBuffer<uint>(
-            "raster exposure buffer", 1, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::CPU_VISIBLE
+            MOER_TEXT("raster exposure buffer"), 1, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::CPU_VISIBLE
         );
     }
 
@@ -124,7 +124,7 @@ public:
             param.resolution     = input_res;
             param.resolution_inv = float2(1.f / input_res.x, 1.f / input_res.y);
 
-            // 这个参数是共用的
+            // ��������ǹ��õ�
             param.exposure_ev = std::exp2f(ui_config.tonemapping_exposure_ev);
 
             param.reinhard_enabled = ui_config.tonemapping_reinhard_enabled ? 1 : 0;
@@ -135,7 +135,7 @@ public:
         // Reset
         {
             context.cmd_list.ClearResource(histogram_buffer->GetView(), 0);
-            // 需要last_exposure，所以不能清零
+            // ��Ҫlast_exposure�����Բ�������
             // context.cmd_list.ClearResource(exposure_buffer->GetView(), 0);
         }
 
@@ -148,22 +148,21 @@ public:
                         (input_res.y - 1) / TONEMAPPING_HISTOGRAM_GROUP_Y + 1,
                         1
                     ),
-                    "Tonemapping Histogram Pass"
+                    MOER_TEXT("Tonemapping Histogram Pass")
                 );
         }
 
         // Exposure Pass
         {
             context.cmd_list.Compute(tonemapping_exposure_pipeline, param, histogram_buffer, exposure_buffer)
-                .Dispatch(uint3(1, 1, 1), "Tonemapping Exposure Pass");
+                .Dispatch(uint3(1, 1, 1), MOER_TEXT("Tonemapping Exposure Pass"));
         }
 
         // Tonemapping Pass
         {
             context.cmd_list
                 .Gfx(tonemapping_pipeline, param, input_image.tex, exposure_buffer, histogram_buffer)
-                .Draw(
-                    "Tonemapping Pass",
+                .Draw(MOER_TEXT("Tonemapping Pass"),
                     context.textures.tonemapping_output.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(context.textures.tonemapping_output.tex)

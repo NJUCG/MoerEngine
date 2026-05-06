@@ -18,7 +18,6 @@
 #include <misc/STL.h>
 #include <optional>
 #include <span>
-#include <string_view>
 #include <condition_variable>
 #include <mutex>
 #include <memory>
@@ -35,8 +34,8 @@ public:
 namespace Moer::Render {
 
 struct ProfileSection {
-    std::string_view name;
-    explicit ProfileSection(const char* _name) : name(_name) {}
+    StringView name;
+    explicit ProfileSection(StringView _name) : name(_name) {}
 };
 
 struct Command {
@@ -69,14 +68,14 @@ public:
         BufferOverlap
     };
 
-    static constexpr std::string_view typenames[] = {
-        "UploadBuffer",    "CopyBackBuffer",      "BufferToBuffer", "BufferToTexture",
-        "TextureToBuffer", "UploadTexture",       "TextureToTexture", "CopyBackTexture",
-        "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
-        "Barrier",         "SetTrackedState",     "QueueTransfer",  "SetDrawState",
-        "SetGeometryPassDrawState", "MultiDraw",  "UpdateBindlessArray", "ClearResource",
-        "Scope",           "Query",               "Custom",         "CopyScope",
-        "BufferOverlap"
+    static constexpr StringView typenames[] = {
+        MOER_TEXT("UploadBuffer"),    MOER_TEXT("CopyBackBuffer"),      MOER_TEXT("BufferToBuffer"), MOER_TEXT("BufferToTexture"),
+        MOER_TEXT("TextureToBuffer"), MOER_TEXT("UploadTexture"),       MOER_TEXT("TextureToTexture"), MOER_TEXT("CopyBackTexture"),
+        MOER_TEXT("ShaderDispatch"),  MOER_TEXT("BuildAccel"),          MOER_TEXT("BuildTLAS"),      MOER_TEXT("TraceRay"),
+        MOER_TEXT("Barrier"),         MOER_TEXT("SetTrackedState"),     MOER_TEXT("QueueTransfer"),  MOER_TEXT("SetDrawState"),
+        MOER_TEXT("SetGeometryPassDrawState"), MOER_TEXT("MultiDraw"),  MOER_TEXT("UpdateBindlessArray"), MOER_TEXT("ClearResource"),
+        MOER_TEXT("Scope"),           MOER_TEXT("Query"),               MOER_TEXT("Custom"),         MOER_TEXT("CopyScope"),
+        MOER_TEXT("BufferOverlap")
     };
 
 private:
@@ -84,7 +83,7 @@ private:
 
 public:
     explicit Command(EType _type) : type(_type), name(typenames[uint(_type)]) {}
-    explicit Command(EType _type, std::string_view _name) : type(_type), name(_name) {}
+    explicit Command(EType _type, StringView _name) : type(_type), name(_name) {}
     virtual ~Command()                      = default;
     virtual EQueueType GetQueueType() const = 0;
 
@@ -92,7 +91,7 @@ public:
     EType Type() const {
         return type;
     }
-    std::string name;
+    String name;
 };
 
 struct WaitEvent {
@@ -165,7 +164,7 @@ struct QueryResult {
     QueryKind kind{QueryKind::Timestamp};
     QueryStatus status{QueryStatus::Pending};
     uint64_t query_id{0};
-    std::string name{};
+    String name{};
     std::variant<std::monostate, TimestampQueryResult, OcclusionQueryResult> payload{};
 };
 
@@ -283,7 +282,7 @@ private:
 struct QueryToken {
     uint64_t   id{0};
     QueryKind  kind{QueryKind::Timestamp};
-    std::string name{};
+    String name{};
 
     QueryToken() = default;
 
@@ -309,7 +308,7 @@ struct QueryToken {
     }
 
 private:
-    QueryToken(uint64_t _id, QueryKind _kind, std::string _name, QueryFuture _future) :
+    QueryToken(uint64_t _id, QueryKind _kind, String _name, QueryFuture _future) :
         id(_id),
         kind(_kind),
         name(std::move(_name)),
@@ -334,7 +333,7 @@ struct GPUEvent {
     };
 
     EType       type;
-    std::string name;
+    String      name;
     QueryToken  query;
     uint32      depth{0};
     uint64      timestamp_ns{0};
@@ -546,13 +545,13 @@ struct CmdSubmit {
         query_tokens(std::move(_query_tokens)),
         gpu_events(std::move(_gpu_events)) {}
 
-    std::string ToString() const {
-        std::string str = "Commands: [";
+    String ToString() const {
+        String str = MOER_TEXT("Commands: [");
         for (auto& cmd : cmds) {
             str += cmd->name;
-            str += ", ";
+            str += MOER_TEXT(", ");
         }
-        str += "]";
+        str += MOER_TEXT("]");
         return str;
     }
 };
@@ -706,62 +705,62 @@ public:
     void CopyFrom(
         BufferView       _src,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::BufferToBuffer]
+        StringView _name = Command::typenames[(uint)Command::EType::BufferToBuffer]
     );
     void CopyFrom(
         TextureView      _src,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::TextureToTexture]
+        StringView _name = Command::typenames[(uint)Command::EType::TextureToTexture]
     );
     void CopyFrom(
         TextureView      _src,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::TextureToBuffer]
+        StringView _name = Command::typenames[(uint)Command::EType::TextureToBuffer]
     );
     void CopyFrom(
         BufferView       _src,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::BufferToTexture]
+        StringView _name = Command::typenames[(uint)Command::EType::BufferToTexture]
     );
     void CopyFrom(
         std::span<byte>  _data,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+        StringView _name = Command::typenames[(uint)Command::EType::UploadBuffer]
     );
     void CopyFrom(
         std::span<byte>  _data,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+        StringView _name = Command::typenames[(uint)Command::EType::UploadTexture]
     );
     void CopyFrom(
         Array<byte>&&    _data,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+        StringView _name = Command::typenames[(uint)Command::EType::UploadBuffer]
     );
     void CopyFrom(
         Array<byte>&&    _data,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+        StringView _name = Command::typenames[(uint)Command::EType::UploadTexture]
     );
     void CopyFrom(
         BufferView       _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+        StringView _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
     );
     void CopyFrom(
         TextureView      _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+        StringView _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
     GraphEventRef ReadbackCopy(
         BufferView       _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+        StringView _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
     );
     GraphEventRef ReadbackCopy(
         TextureView      _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+        StringView _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
 
 private:
@@ -867,7 +866,7 @@ public:
         // Named Draw with mesh data list and depth attachment
         template<typename... TRenderTarget>
         void Draw(
-            std::string_view      _name,
+            StringView            _name,
             Rect2D                _rect,
             Array<MeshDrawData>&& _mesh_data,
             DepthAttachment       _depth,
@@ -882,7 +881,7 @@ public:
         // Named Draw with mesh data and draw list and depth attachment
         template<typename... TRenderTarget>
         void Draw(
-            std::string_view         _name,
+            StringView               _name,
             Rect2D                   _rect,
             std::span<VertexBuffer>  _vtx,
             IndexBuffer              _idx,
@@ -901,7 +900,7 @@ public:
         // Named Draw with mesh data and draw list
         template<typename... TRenderTarget>
         void Draw(
-            std::string_view         _name,
+            StringView               _name,
             Rect2D                   _rect,
             std::span<VertexBuffer>  _vtx,
             IndexBuffer              _idx,
@@ -919,7 +918,7 @@ public:
         // Named Draw with draw list and depth attachment
         template<typename... TRenderTarget>
         void Draw(
-            std::string_view         _name,
+            StringView               _name,
             Rect2D                   _rect,
             Array<SingleDrawParam>&& _mesh_data,
             DepthAttachment          _depth,
@@ -938,7 +937,7 @@ public:
         // Named Draw with draw list
         template<typename... TRenderTarget>
         void Draw(
-            std::string_view         _name,
+            StringView               _name,
             Rect2D                   _rect,
             Array<SingleDrawParam>&& _mesh_data,
             TRenderTarget&&... _render_targets
@@ -958,7 +957,7 @@ public:
         // Named Draw with mesh data and draw list and depth attachment
         template<typename... TRenderTarget>
         void Draw(
-            std::string_view         _name,
+            StringView               _name,
             Rect2D                   _rect,
             std::span<VertexBuffer>  _vtx,
             uint                     _vtx_cnt,
@@ -979,7 +978,7 @@ public:
         // Named Draw with mesh data and draw list
         template<typename... TRenderTarget>
         void Draw(
-            std::string_view         _name,
+            StringView               _name,
             Rect2D                   _rect,
             std::span<VertexBuffer>  _vtx,
             uint                     _vtx_cnt,
@@ -1001,7 +1000,7 @@ public:
         // Named Draw with mesh data list
         template<typename... TRenderTarget>
         void Draw(
-            std::string_view      _name,
+            StringView            _name,
             Rect2D                _rect,
             Array<MeshDrawData>&& _mesh_data,
             TRenderTarget&&... _render_targets
@@ -1018,7 +1017,7 @@ public:
         // Named Draw Indirect with mesh data and draw list
         template<typename... TRenderTarget>
         void DrawIndirect(
-            std::string_view        _name,
+            StringView              _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
             IndexBuffer             _idx,
@@ -1042,7 +1041,7 @@ public:
         // Named Draw Indirect with mesh data and draw list and depth attachment
         template<typename... TRenderTarget>
         void DrawIndirect(
-            std::string_view        _name,
+            StringView              _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
             IndexBuffer             _idx,
@@ -1065,7 +1064,7 @@ public:
         // Named Draw Indirect with mesh data and draw list and depth attachment and count buffer
         template<typename... TRenderTarget>
         void DrawIndirect(
-            std::string_view        _name,
+            StringView              _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
             IndexBuffer             _idx,
@@ -1089,7 +1088,7 @@ public:
         // Named Draw Indirect with mesh data and draw list and count buffer
         template<typename... TRenderTarget>
         void DrawIndirect(
-            std::string_view        _name,
+            StringView              _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
             IndexBuffer             _idx,
@@ -1113,7 +1112,7 @@ public:
 
         template<typename... TRenderTarget>
         void DrawIndirect(
-            std::string_view        _name,
+            StringView              _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
             uint                    _vtx_cnt,
@@ -1136,7 +1135,7 @@ public:
 
         template<typename... TRenderTarget>
         void DrawIndirect(
-            std::string_view        _name,
+            StringView              _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
             uint                    _vtx_cnt,
@@ -1160,7 +1159,7 @@ public:
 
         template<typename... TRenderTarget>
         void DrawIndirect(
-            std::string_view        _name,
+            StringView              _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
             uint                    _vtx_cnt,
@@ -1183,7 +1182,7 @@ public:
 
         template<typename... TRenderTarget>
         void DrawIndirect(
-            std::string_view        _name,
+            StringView              _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
             uint                    _vtx_cnt,
@@ -1241,7 +1240,7 @@ public:
     private:
         RenderPassInfo   pass_info;
         DrawBatch        draw_batch;
-        std::string_view name;
+        StringView name;
     };
     // struct RENDER_API DrawGeometryPassDispatcher {
     //     DrawGeometryPassDispatcher(CommandList& _cmd_list);
@@ -1249,7 +1248,7 @@ public:
 
     //     template<typename... TRenderTarget>
     //     void Draw(
-    //         std::string_view                                             _name,
+    //         StringView                                                   _name,
     //         Rect2D                                                       _rect,
     //         UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data_array_map,
     //         DepthAttachment                                              _depth,
@@ -1275,33 +1274,33 @@ public:
     struct RENDER_API ComputeDispatcher {
         void Dispatch(
             Vector2ui        _group_count,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
-            ProfileSection   _section = ProfileSection("Other")
+            StringView _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            ProfileSection   _section = ProfileSection(MOER_TEXT("Other"))
         ) {
             Dispatch(uint3(_group_count, 1), _name, _section);
         }
         void Dispatch(
             Vector3ui        _group_count,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
-            ProfileSection   _section = ProfileSection("Other")
+            StringView _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            ProfileSection   _section = ProfileSection(MOER_TEXT("Other"))
         );
         void Dispatch(
             uint             _group_cnt,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
-            ProfileSection   _section = ProfileSection("Other")
+            StringView _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            ProfileSection   _section = ProfileSection(MOER_TEXT("Other"))
         ) {
             Dispatch(Vector3ui(_group_cnt, 1, 1), _name, _section);
         }
         void DispatchIndirect(
             BufferView,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
-            ProfileSection   _section = ProfileSection("Other")
+            StringView _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            ProfileSection   _section = ProfileSection(MOER_TEXT("Other"))
         );
         ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
         ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list);
         ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArgReference _args);
         // template<typename T>
-        // ComputeDispatcher& SetParam(std::string_view _name, T&& _param) {
+        // ComputeDispatcher& SetParam(StringView _name, T&& _param) {
         //     arg_setter.SetParam(_name, std::forward<T>(_param));
         //     b_set_params = true;
         //     return *this;
@@ -1350,13 +1349,13 @@ public:
     }
 
     template<typename... TRenderTarget>
-    MutiDrawDispatcher Gfx(std::string_view _name, Rect2D _rect, TRenderTarget&&... _attachments) {
+    MutiDrawDispatcher Gfx(StringView _name, Rect2D _rect, TRenderTarget&&... _attachments) {
         return MutiDrawDispatcher(*this, _rect, std::forward<TRenderTarget>(_attachments)...);
     }
 
     template<typename... TRenderTarget>
     MutiDrawDispatcher
-    Gfx(std::string_view _name, Rect2D _rect, DepthAttachment _depth, TRenderTarget&&... _attachments) {
+    Gfx(StringView _name, Rect2D _rect, DepthAttachment _depth, TRenderTarget&&... _attachments) {
         return MutiDrawDispatcher(*this, _rect, _depth, std::forward<TRenderTarget>(_attachments)...);
     }
 
@@ -1394,62 +1393,62 @@ public:
     RENDER_API void CopyFrom(
         BufferView       _src,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::BufferToBuffer]
+        StringView       _name = Command::typenames[(uint)Command::EType::BufferToBuffer]
     );
     RENDER_API void CopyFrom(
         TextureView      _src,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::TextureToTexture]
+        StringView       _name = Command::typenames[(uint)Command::EType::TextureToTexture]
     );
     RENDER_API void CopyFrom(
         TextureView      _src,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::TextureToBuffer]
+        StringView       _name = Command::typenames[(uint)Command::EType::TextureToBuffer]
     );
     RENDER_API void CopyFrom(
         BufferView       _src,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::BufferToTexture]
+        StringView       _name = Command::typenames[(uint)Command::EType::BufferToTexture]
     );
     RENDER_API void CopyFrom(
         std::span<byte>  _data,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+        StringView       _name = Command::typenames[(uint)Command::EType::UploadBuffer]
     );
     RENDER_API void CopyFrom(
         std::span<byte>  _data,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+        StringView       _name = Command::typenames[(uint)Command::EType::UploadTexture]
     );
     RENDER_API void CopyFrom(
         Array<byte>&&    _data,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+        StringView       _name = Command::typenames[(uint)Command::EType::UploadBuffer]
     );
     RENDER_API void CopyFrom(
         Array<byte>&&    _data,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+        StringView       _name = Command::typenames[(uint)Command::EType::UploadTexture]
     );
     RENDER_API void CopyFrom(
         BufferView       _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+        StringView       _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
     );
     RENDER_API void CopyFrom(
         TextureView      _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+        StringView       _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
     RENDER_API GraphEventRef ReadbackCopy(
         BufferView       _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+        StringView       _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
     );
     RENDER_API GraphEventRef ReadbackCopy(
         TextureView      _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+        StringView       _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
 
     RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
@@ -1458,19 +1457,19 @@ public:
     RENDER_API void ClearResource(TextureView _texture, float4 _color);
     RENDER_API void ClearResource(TextureView _texture, uint32_t _value);
 
-    RENDER_API void PushScope(std::string_view _name);
+    RENDER_API void PushScope(StringView _name);
     RENDER_API void PopScope();
 
-    RENDER_API void PushScopeWithTimeScope(std::string_view _name);
+    RENDER_API void PushScopeWithTimeScope(StringView _name);
     RENDER_API void PopScopeWithTimeScope();
 
     RENDER_API QueryToken BeginTimestampQuery(
-        std::string_view _name = Command::typenames[(uint)Command::EType::Query]
+        StringView _name = Command::typenames[(uint)Command::EType::Query]
     );
     RENDER_API void EndTimestampQuery(const QueryToken& _token);
 
     RENDER_API QueryToken BeginOcclusionQuery(
-        std::string_view _name = Command::typenames[(uint)Command::EType::Query]
+        StringView _name = Command::typenames[(uint)Command::EType::Query]
     );
     RENDER_API void EndOcclusionQuery(const QueryToken& _token);
 
@@ -1622,14 +1621,14 @@ public:
 
     RENDER_API void AddCustomCommand(
         UniquePtr<Command>&& _cmd,
-        std::string_view     _name = Command::typenames[(uint)Command::EType::Custom]
+        StringView           _name = Command::typenames[(uint)Command::EType::Custom]
     );
 
     RENDER_API CommandList& TranslateFence(RHITranslateFence _fence);
 
     RENDER_API CommandList& LambdaCommand(
         std::function<void()>&& _callback,
-        std::string_view        _name = "LambdaCommand"
+        StringView              _name = MOER_TEXT("LambdaCommand")
     );
 
 #pragma endregion
@@ -1640,6 +1639,9 @@ public:
     RENDER_API CommandList& Signal(Fence* _fence, uint64 _signal_value);
     RENDER_API CommandList& SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class);
     RENDER_API CommandList& SetRecordCompleteEvent(GraphEventRef _event);
+    GraphEventRef GetRecordCompleteEvent() const {
+        return record_complete_event;
+    }
     RENDER_API CommandList& DeleteResources();
     RENDER_API CommandList& TickProfiling();
     RENDER_API CommandList& TickFrame();
@@ -1676,31 +1678,31 @@ private:
         ArrayArguments&& _args,
         RenderPassInfo&&,
         Array<MeshDrawData>&&,
-        std::optional<std::string_view> _name = std::nullopt
+        std::optional<StringView> _name = std::nullopt
     );
     // void SubmitArgs(ShaderPipeline&, Arguments&&);
     // void SubmitConstants(ShaderPipeline&, Array<uint>&&);
-    RENDER_API void SetMultiRenderCmds(RenderPassInfo&&, DrawBatch&&, std::string_view _name);
+    RENDER_API void SetMultiRenderCmds(RenderPassInfo&&, DrawBatch&&, StringView _name);
     // Specialized for Geometry Pass
     // RENDER_API void SetRenderGeometryPassCmds(
     //     ArrayArguments&&                                             _args,
     //     RenderPassInfo&&                                             _info,
     //     UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
-    //     std::string_view                                             _name);
+    //     StringView                                                   _name);
 
     // Specialized for Geometry Pass
     RENDER_API void SetRenderGeometryPassCmds(
         ArrayArguments&&                                             _args,
         RenderPassInfo&&                                             _info,
         UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
-        std::string_view                                             _name
+        StringView                                                   _name
     );
 
     RENDER_API void SetRenderShadowDepthPassCmds(
         ArrayArguments&&                                             _args,
         RenderPassInfo&&                                             _info,
         UnorderedMap<VertexAttributesBitmask, Array<MeshDrawData>>&& _mesh_data,
-        std::string_view                                             _name
+        StringView                                                   _name
     );
 
     RENDER_API void BeginBarriers(
@@ -1736,8 +1738,8 @@ private:
     RENDER_API void TraceRayIndirect(PipelineHandle _pipeline, BufferView _buffer);
 #pragma endregion
 
-    QueryToken CreateQueryToken(QueryKind _kind, std::string_view _name);
-    void       EnsureNoActiveCopyScope(std::string_view _api_name) const;
+    QueryToken CreateQueryToken(QueryKind _kind, StringView _name);
+    void       EnsureNoActiveCopyScope(StringView _api_name) const;
     void       FinalizeCopyScope(Array<UniquePtr<Command>>&& _commands);
 
     RENDER_API void PushGPUEvent(GPUEvent&& event);
@@ -1755,7 +1757,7 @@ private:
     bool                         submit_tick_profiling{false};
     bool                         submit_delete_resources{false};
     EQueueType                   queue_type{EQueueType::Graphics};
-    Stack<std::string_view>      scope_stack;
+    Stack<String>                scope_stack;
     Stack<QueryToken>            timed_scope_query_stack;
 #if MOER_TRACE_ENABLED && MOER_TRACE_GPU_ENABLED
     Stack<Moer::Trace::SpanToken> gpu_trace_scope_tokens;
@@ -1769,7 +1771,7 @@ private:
 
 class RENDER_API GpuScopeSpan {
 public:
-    GpuScopeSpan(CommandList& _cmd_list, std::string_view _name) : cmd_list(&_cmd_list) {
+    GpuScopeSpan(CommandList& _cmd_list, StringView _name) : cmd_list(&_cmd_list) {
         cmd_list->PushScopeWithTimeScope(_name);
     }
     ~GpuScopeSpan() {
@@ -1787,7 +1789,7 @@ private:
 
 class RENDER_API TimestampQuerySpan {
 public:
-    TimestampQuerySpan(CommandList& _cmd_list, std::string_view _name) :
+    TimestampQuerySpan(CommandList& _cmd_list, StringView _name) :
         cmd_list(&_cmd_list),
         token(_cmd_list.BeginTimestampQuery(_name)) {}
 
@@ -1807,7 +1809,7 @@ private:
 
 class RENDER_API OcclusionQuerySpan {
 public:
-    OcclusionQuerySpan(CommandList& _cmd_list, std::string_view _name) :
+    OcclusionQuerySpan(CommandList& _cmd_list, StringView _name) :
         cmd_list(&_cmd_list),
         token(_cmd_list.BeginOcclusionQuery(_name)) {}
 
@@ -1827,10 +1829,10 @@ private:
 
 class RENDER_API GPUEventScope {
 public:
-    GPUEventScope(CommandList& _cmd_list, std::string_view _name) : cmd_list(&_cmd_list) {
+    GPUEventScope(CommandList& _cmd_list, StringView _name) : cmd_list(&_cmd_list) {
         cmd_list->PushGPUEvent(GPUEvent{
             .type = GPUEvent::EType::BeginEvent,
-            .name = std::string(_name),
+            .name = String(_name),
             .query = cmd_list->BeginTimestampQuery(),
             .depth = ++cmd_list->event_depth,
             .timestamp_ns = 0
@@ -1841,7 +1843,7 @@ public:
         if (cmd_list) {
             cmd_list->PushGPUEvent(GPUEvent{
                 .type = GPUEvent::EType::EndEvent,
-                .name = "",
+                .name = String(),
                 .query = cmd_list->BeginTimestampQuery(),
                 .depth = cmd_list->event_depth--,
                 .timestamp_ns = 0
@@ -1859,7 +1861,7 @@ private:
 #define GPU_PROFILE_EVENT_BEGIN(cmd_list, name) \
     (cmd_list).PushGPUEvent(GPUEvent{ \
         .type = GPUEvent::EType::BeginEvent, \
-        .name = std::string(name), \
+        .name = String(name), \
         .query = (cmd_list).BeginTimestampQuery(), \
         .depth = ++(cmd_list).event_depth, \
         .timestamp_ns = 0 \
@@ -1868,7 +1870,7 @@ private:
 #define GPU_PROFILE_EVENT_END(cmd_list) \
     (cmd_list).PushGPUEvent(GPUEvent{ \
         .type = GPUEvent::EType::EndEvent, \
-        .name = "", \
+        .name = String(), \
         .query = (cmd_list).BeginTimestampQuery(), \
         .depth = (cmd_list).event_depth--, \
         .timestamp_ns = 0 \
@@ -1911,6 +1913,10 @@ public:
         ERHIExecSubmitFlags  flags   = ERHIExecSubmitFlags::FlushGPU,
         RHIPresentRequest*   present = nullptr
     );
+    void SubmitRecording(
+        Array<SharedPtr<CommandList>>&& command_lists,
+        ERHIExecSubmitFlags             flags = ERHIExecSubmitFlags::FlushGPU
+    );
     void Flush(ERHIFlushDepth depth = ERHIFlushDepth::SubmitGPU);
     void Sync(ERHISyncDepth depth = ERHISyncDepth::RHI);
     void Sync(Swapchain* swapchain);
@@ -1922,11 +1928,12 @@ private:
     std::mutex                   submit_mutex;
     std::shared_ptr<RHIBackendExecutor> backend_executor{};
     Array<CommandList>           pending_command_lists{};
+    Array<SharedPtr<CommandList>> pending_recording_command_lists{};
     std::optional<RHIPresentRequest> pending_present{};
 };
 
 struct ProfileResultEntry {
-    std::string name;
+    String name;
     double      time;
 };
 

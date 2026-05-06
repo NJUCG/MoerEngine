@@ -1,4 +1,4 @@
-ï»¿#pragma once
+#pragma once
 
 #include "math/Function.h"
 #include "scene/camera/Camera.h"
@@ -22,8 +22,8 @@ public:
 /**
  * MARK: BilateralFilterDenoiser Pass
  * 
- * è¿™ä¸ªPassä¸»è¦æ˜¯ä¸ºäº†è§£å†³TensorRT Passç½‘ç»œäº§ç”Ÿçš„å™ªç‚¹ï¼›
- * æ³¨æ„ï¼Œè¿™ä¸ªpassé‡ç”¨äº†ao_outputä½œä¸ºè¾“å‡º
+ * Õâ¸öPassÖ÷ÒªÊÇÎªÁË½â¾öTensorRT PassÍøÂç²úÉúµÄÔëµã£»
+ * ×¢Òâ£¬Õâ¸öpassÖØÓÃÁËao_output×÷ÎªÊä³ö
  */
 class BilateralFilterDenoiserPass {
 public:
@@ -41,7 +41,7 @@ public:
     TextureWithHandle
     Process(RasterContext& context, const RasterConfig& ui_config, TextureWithHandle input_image) {
         if (ui_config.denoiser_mode == EDenoiserMode::NONE) {
-            return input_image; // ç›´æ¥è¿”å›è¾“å…¥
+            return input_image; // Ö±½Ó·µ»ØÊäÈë
         }
 
         BilateralFilterDenoiserPipelineBindlessParam param;
@@ -53,8 +53,7 @@ public:
         param.input_image          = input_image.hdl;
 
         context.cmd_list.Gfx(m_bfd_pipeline, context.bdls, param)
-            .Draw(
-                "BilateralFilterDenoiser Pass",
+            .Draw(MOER_TEXT("BilateralFilterDenoiser Pass"),
                 m_output_image.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(m_output_image.tex)

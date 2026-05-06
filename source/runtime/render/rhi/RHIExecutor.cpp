@@ -85,6 +85,34 @@ void RHIExecutor::Submit(
     }
 }
 
+void RHIExecutor::SubmitRecording(
+    Array<SharedPtr<CommandList>>&& command_lists,
+    ERHIExecSubmitFlags             flags
+) {
+    {
+        std::lock_guard<std::mutex> lock(submit_mutex);
+        for (SharedPtr<CommandList>& command_list : command_lists) {
+            if (!command_list) {
+                continue;
+            }
+            const EQueueType queue_type = command_list->GetQueueType();
+            if (queue_type != EQueueType::Graphics && queue_type != EQueueType::Compute) {
+                LOG_ERROR(
+                    MOER_TEXT("RHIExecutor::SubmitRecording only accepts Graphics or Compute command lists, got={}"),
+                    static_cast<uint32>(queue_type)
+                );
+                assert(false && "RHIExecutor only accepts Graphics or Compute command lists");
+                return;
+            }
+            pending_recording_command_lists.emplace_back(std::move(command_list));
+        }
+    }
+
+    if (EnumHasAnyFlag(flags, ERHIExecSubmitFlags::FlushGPU)) {
+        Flush(ERHIFlushDepth::SubmitGPU);
+    }
+}
+
 void RHIExecutor::Flush(ERHIFlushDepth depth) {
     {
         std::lock_guard<std::mutex> lock(submit_mutex);
@@ -142,6 +170,20 @@ void RHIExecutor::ShutDown() {
 }
 
 void RHIExecutor::EnqueuePendingLocked() {
+    for (SharedPtr<CommandList>& recording_command_list : pending_recording_command_lists) {
+        if (!recording_command_list) {
+            continue;
+        }
+        if (GraphEventRef record_complete_event = recording_command_list->GetRecordCompleteEvent();
+            record_complete_event && !record_complete_event->IsComplete()) {
+            record_complete_event->Wait(EThread::UNKNOWN_THREAD);
+        }
+        if (!recording_command_list->IsEmpty()) {
+            pending_command_lists.emplace_back(std::move(*recording_command_list));
+        }
+    }
+    pending_recording_command_lists.clear();
+
     RHIBackendSubmissionBatch batch{};
     batch.submits.reserve(pending_command_lists.size());
 

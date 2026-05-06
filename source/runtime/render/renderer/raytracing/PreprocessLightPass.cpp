@@ -55,16 +55,16 @@ void PrepareLightPass::CountEmissiveInstances(uint& _num_emissive_meshes, uint& 
 
     auto& r = scene.r();
 
-    // 遍历所有有 CRenderable 的 entity
+    // Count every renderable entity.
     r.view<const ecs::CRenderable>().each([&](const auto entity, const ecs::CRenderable& c_renderable) {
-        // 获取 CMesh
+        // Fetch the mesh component.
         if (!r.valid(c_renderable.mesh_entt) || !r.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
             return; // Skip invalid mesh
         }
 
         const ecs::CMesh& c_mesh = r.get<ecs::CMesh>(c_renderable.mesh_entt);
 
-        // 遍历该 Mesh 的所有 Primitive
+        // Iterate over every primitive in the mesh.
         for (const entt::entity primitive_entt : c_mesh.primitive_entts) {
             if (!r.valid(primitive_entt) || !r.all_of<ecs::CPrimitive>(primitive_entt)) {
                 continue; // Skip invalid primitive
@@ -72,14 +72,13 @@ void PrepareLightPass::CountEmissiveInstances(uint& _num_emissive_meshes, uint& 
 
             const ecs::CPrimitive& c_primitive = r.get<ecs::CPrimitive>(primitive_entt);
 
-            // 获取材质
+            // Fetch the material.
             if (!r.valid(c_primitive.material_entt) || !r.all_of<ecs::CMaterial>(c_primitive.material_entt)) {
                 continue; // Skip invalid material
             }
 
             const ecs::CMaterial& c_material = r.get<ecs::CMaterial>(c_primitive.material_entt);
 
-            // 检查 emissive_factor 是否为非零
             if (c_material.emissive_factor != float3(0.f)) {
                 _num_emissive_meshes++;
                 _num_emissive_triangles += c_primitive.index_count / 3;
@@ -225,7 +224,6 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
         case Moer::ELightType::Directional: {
             const auto& c_light_dir = r.get<ecs::CLightDirectional>(entity);
 
-            // 0.533度是太阳的视角直径（默认值，因为新系统中没有 angular_size 字段）
             float angular_size = 0.533f;
 
             float half_angular_size_rad = Angle::DegreeToRadian(std::max(angular_size, 0.1f));
@@ -241,7 +239,7 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
             _info.color_type_flags = (uint)EPolyLightType::ELDirectional << g_poly_morphic_light_type_shift;
             PackPolyLightColor(radiance, _info);
 
-            // 从 LogicalScene 获取方向光的方向
+            // Fetch the directional light direction from LogicalScene.
             float3 direction = scene.GetLogicalScene().GetDirectionalLightDirection(entity);
             _info.direction1 = PackNormalizedVector(Normalizef(direction));
             _info.scalars    = Fp32ToFp16(half_angular_size_rad) | (Fp32ToFp16(solid_angle) << 16);
@@ -264,7 +262,6 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
 
             PackPolyLightColor(flux, _info);
 
-            // 从 LogicalScene 获取点光的位置
             _info.center = scene.GetLogicalScene().GetPointLightPosition(entity);
             break;
         }
@@ -290,7 +287,6 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     uint light_buf_offset = 0;
 
-    // 1. 遍历所有 CPrimitive，处理自发光三角形
     UnorderedMap<uint, uint> primitive_to_light_offset_map;
 
     auto& r = scene.r();
@@ -332,7 +328,6 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         task.index_start_idx    = c_primitive.index.is_valid ? c_primitive.index.start_idx : 0;
         task.first_instance_idx = scene.GetCpuScene().GetFirstInstanceIndex(primitive_id);
 
-        // 记录映射关系（对应原始代码的 geo_instance_to_light[first_geom_instance_idx + i] = light_buf_offset）
         primitive_to_light_offset_map[primitive_id]   = light_buf_offset;
         instance_light_buffer_offsets[primitive_hash] = light_buf_offset;
 
@@ -340,10 +335,8 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         tasks.emplace_back(task);
     });
 
-    uint num_prim_lights = light_buf_offset; // 记录自发光三角形的数量
-
-    // 2. 将 primitive_to_light_offset_map 转换为数组
-
+    uint num_prim_lights = light_buf_offset;
+    // Convert primitive_to_light_offset_map to an indexed array.
     uint max_primitive_id = 0;
     if (!primitive_to_light_offset_map.empty()) {
         for (const auto& [primitive_id, light_offset] : primitive_to_light_offset_map) {
@@ -353,7 +346,6 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     uint num_primitives = scene.GetCpuScene().GetPrimitiveCount();
     max_primitive_id    = std::max(max_primitive_id, num_primitives > 0 ? num_primitives - 1 : 0);
 
-    // 创建数组（primitive_id -> light_offset 映射）
     Array<uint> primitive_to_light(max_primitive_id + 1, s_invalid_light_idx);
     for (const auto& [primitive_id, light_offset] : primitive_to_light_offset_map) {
         if (primitive_id <= max_primitive_id) {
@@ -618,8 +610,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         }
     }
 
-    // 处理环境光（直接从 RTContext 获取数据，绕过 ECS）
-    // 注意：rt_ctx.env_map 未被赋值（是 renderer 局部变量），用 env_pdf_tex 获取尺寸
+    // Handle env lighting from RTContext directly. rt_ctx.env_map is not assigned here, so use env_pdf_tex for dimensions.
     if (_rt_ctx.scene_params.enable_env_map && _rt_ctx.env_pdf_tex) {
         PolymorphicLightInfo light_info{};
         light_info.color_type_flags = (uint)EPolyLightType::ELEnv << g_poly_morphic_light_type_shift;
@@ -628,12 +619,12 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         PackPolyLightColor(color_scale, light_info);
 
         light_info.direction1 = _rt_ctx.scene_params.env_map_handle;
-        uint3 env_extent      = _rt_ctx.env_pdf_tex->GetExtent(); // env_pdf_tex 与 env_map 同尺寸
+        uint3 env_extent      = _rt_ctx.env_pdf_tex->GetExtent();
         light_info.direction2 = env_extent.x | (env_extent.y << 16);
         light_info.scalars    = Fp32ToFp16(_rt_ctx.scene_params.env_map_rotation);
         light_info.scalars |= g_poly_morphic_light_env_is_scalar_bit;
 
-        constexpr uint64 env_light_key = ~0ull; // 固定 key，用于跨帧追踪
+        constexpr uint64 env_light_key = ~0ull;
         auto             pre_iter      = primitive_light_buffer_offsets.find(env_light_key);
 
         PrepareLightsTask task{};
@@ -653,44 +644,44 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     timer.Stop();
     auto time = timer.ElapsedMilliseconds();
 
-    // 4. 上传数据到 GPU
+    // Upload data to the GPU.
 
-    _cmd_list.PushScopeWithTimeScope("PrepareLights");
+    _cmd_list.PushScopeWithTimeScope(MOER_TEXT("PrepareLights"));
 
-    // 上传 primitive_to_light
+    // Upload primitive_to_light.
     if (!primitive_to_light.empty()) {
         _cmd_list.CopyFrom(
             std::span<byte>((byte*)primitive_to_light.data(), primitive_to_light.size() * sizeof(uint)),
             _rt_ctx.primitive_to_light_buf->GetView(),
-            "Upload primitive_to_light"
+            MOER_TEXT("Upload primitive_to_light")
         );
     }
 
-    // 上传 tasks
+    // Upload tasks.
     _cmd_list.CopyFrom(
         std::span<byte>((byte*)tasks.data(), tasks.size() * sizeof(PrepareLightsTask)),
         _rt_ctx.task_buf->GetView(0, tasks.size() * sizeof(PrepareLightsTask)),
-        "Upload tasks"
+        MOER_TEXT("Upload tasks")
     );
 
-    // 上传 prim_light_infos
+    // Upload prim_light_infos.
     if (!prim_light_infos.empty()) {
         _cmd_list.CopyFrom(
             std::span<byte>(
                 (byte*)prim_light_infos.data(), prim_light_infos.size() * sizeof(PolymorphicLightInfo)
             ),
             _rt_ctx.prim_light_buf->GetView(),
-            "Upload prim light infos"
+            MOER_TEXT("Upload prim light infos")
         );
     }
 
-    // 清除资源
+    // Clear resources.
     _cmd_list.ClearResource(_rt_ctx.light_mapping_buf->GetView(), 0u);
     _cmd_list.ClearResource(
         _rt_ctx.local_light_pdf_tex->GetView(0, _rt_ctx.local_light_pdf_tex->GetNumMips()), float4(0.f)
     );
 
-    // 5. 设置 Shader 参数并 Dispatch
+    // Set shader parameters and dispatch.
 
     PrepareLightsParams param{};
     param.num_tasks = tasks.size();
@@ -725,15 +716,15 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             _rt_ctx.task_buf->GetView(),
             _rt_ctx.GetBindlessArray()
         )
-        .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1), "PrepareLights");
+        .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1), MOER_TEXT("PrepareLights"));
 
     _rt_ctx.sd_utils.GenerateMips(_cmd_list, _rt_ctx.local_light_pdf_mips);
 
-    // 保持数据在回调中存活（对应原始代码）
+    // Keep upload data alive through the callback.
     _cmd_list.AddCallback([primitive_to_light(std::move(primitive_to_light)),
                            prim_light_infos(std::move(prim_light_infos)),
                            tasks(std::move(tasks))]() {
-        // 保持数据在回调中存活，直到 GPU 完成使用
+        // Data lifetime is extended until the callback is released.
     });
 
     _cmd_list.PopScopeWithTimeScope();

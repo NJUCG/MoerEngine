@@ -31,9 +31,7 @@ public:
 /**
  * MARK: RtaoDenoiser Pass
  * 
- * 时序降噪：读取当前帧 ao_only 和历史 accumulate，
- * 输出降噪后的 accumulate，再通过 Copy Pass 写回 ao_only。
- */
+ * 时序降噪：读取当前帧 ao_only 和历�?accumulate�? * 输出降噪后的 accumulate，再通过 Copy Pass 写回 ao_only�? */
 class RtaoDenoiserPass {
 public:
     RtaoDenoiserPass(RasterContext& context) :
@@ -67,7 +65,7 @@ public:
         // AO不为RTAO或RTAO_AO_ONLY => return
         if (ui_config.ao_mode != EAoMode::RTAO && ui_config.ao_mode != EAoMode::RTAO_AO_ONLY)
             return ao_only_idx;
-        // 没有开启降噪 => return
+        // 没有开启降�?=> return
         if (!ui_config.rtao_denoiser_enable)
             return ao_only_idx;
 
@@ -115,8 +113,7 @@ public:
         param.is_motion_weighting_enable = ui_config.rtao_denoiser_motion_weighting_enable;
 
         context.cmd_list.Gfx(rtao_denoiser_pso, context.bdls, param)
-            .Draw(
-                "RtaoDenoiser Pass",
+            .Draw(MOER_TEXT("RtaoDenoiser Pass"),
                 img_denoiser_history_write.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(img_denoiser_history_write.tex)
@@ -127,8 +124,7 @@ public:
         copy_param.input_image = img_denoiser_history_write.hdl;
 
         context.cmd_list.Gfx(copy_pso, context.bdls, copy_param)
-            .Draw(
-                "RtaoDenoiser Copy Pass",
+            .Draw(MOER_TEXT("RtaoDenoiser Copy Pass"),
                 img_ao_only.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment(img_ao_only.tex)

@@ -3,9 +3,9 @@
 #include "misc/STL.h"
 #include "RasterConfig.h"
 #include "rhi/RHICommandDrawData.h"
+#include "string/String.h"
 
 #include <source_location>
-#include <string_view>
 
 namespace Moer::Render {
 class CommandQueue;
@@ -17,17 +17,17 @@ class RasterTool {
 public:
     static Array<SingleDrawParam> GetFullScreenDrawDatas();
 
-    static std::string_view GetShadowDepthPassProfileScopeName();
+    static StringView GetShadowDepthPassProfileScopeName();
 
-    static std::string_view GetGeometryPassProfileScopeName();
+    static StringView GetGeometryPassProfileScopeName();
 
-    static std::string_view GetGeometryCullingProfileScopeName();
+    static StringView GetGeometryCullingProfileScopeName();
 
-    static std::string_view GetGeometryDrawProfileScopeName();
+    static StringView GetGeometryDrawProfileScopeName();
 
-    static std::string_view GetShadowCullingProfileScopeName(uint cascade_index);
+    static StringView GetShadowCullingProfileScopeName(uint cascade_index);
 
-    static std::string_view GetShadowDrawProfileScopeName(uint cascade_index);
+    static StringView GetShadowDrawProfileScopeName(uint cascade_index);
 
     static void LogDebugEverySeconds(
         std::string_view      str,

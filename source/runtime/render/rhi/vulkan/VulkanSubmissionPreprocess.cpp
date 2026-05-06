@@ -125,18 +125,18 @@ static const char* ResourceTypeName(ETrackedResourceType type) {
     }
 }
 
-static std::string_view ResourceName(const ResourceKey& key) {
+static StringView ResourceName(const ResourceKey& key) {
     switch (key.type) {
         case ETrackedResourceType::Buffer: {
             auto* buffer = reinterpret_cast<const Buffer*>(key.handle);
-            return buffer != nullptr ? buffer->GetName() : "<null>";
+            return buffer != nullptr ? buffer->GetName() : MOER_TEXT("<null>");
         }
         case ETrackedResourceType::Texture: {
             auto* texture = reinterpret_cast<const Texture*>(key.handle);
-            return texture != nullptr ? texture->GetName() : "<null>";
+            return texture != nullptr ? texture->GetName() : MOER_TEXT("<null>");
         }
         default:
-            return "<non-resource>";
+            return MOER_TEXT("<non-resource>");
     }
 }
 

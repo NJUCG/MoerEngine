@@ -24,3 +24,4 @@ using PlatformChar = Char8;
 
 #define MOER_TEXT(literal)       MOER_PLATFORM_TEXT_LITERAL(literal)
 #define MOER_ASCII_TEXT(literal) literal
+#define MOER_TEXT_STRINGIZE(value) MOER_PLATFORM_TEXT_LITERAL(#value)

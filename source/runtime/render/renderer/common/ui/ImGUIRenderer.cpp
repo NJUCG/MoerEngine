@@ -12,6 +12,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "renderer/common/PresentationSurface.h"
+#include "string/Format.h"
 
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -314,7 +315,7 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
     {
         Array<std::byte> transparent_pixels(256);
         transparent_texture = rd_device.CreateTexture(
-            "ImGUI::TransparentTexture",
+            MOER_TEXT("ImGUI::TransparentTexture"),
             Extent2D(1, 1),
             PF_R8G8B8A8_UNORM,
             ETextureUsageFlags::SAMPLED
@@ -349,7 +350,12 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
         uint32_t       upload_pitch = Moer::AlignUp(width * 4, alignment);
         uint32_t       upload_size  = height * upload_pitch;
         TextureRef     font_tex =
-            rd_device.CreateTexture("ImGUI::FontTexture", Extent2D(width, height), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED);
+            rd_device.CreateTexture(
+                MOER_TEXT("ImGUI::FontTexture"),
+                Extent2D(width, height),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::SAMPLED
+            );
         FenceRef       upload_fence = rd_device.CreateFence();
 
         CommandList cmd_list;
@@ -597,7 +603,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
         // render_buffers->vertex_buffer->DeRef();
         uint32_t new_size          = 4096 + total_size_vert;
         render_buffers->vtx_buffer = device.CreateBuffer<ImDrawVert>(
-            "GUI::ImGUI Vertex Buffer",
+            MOER_TEXT("GUI::ImGUI Vertex Buffer"),
             new_size,
             EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST
         );
@@ -609,7 +615,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
         }
         uint32_t new_size          = 8192 + total_size_idx;
         render_buffers->idx_buffer = device.CreateBuffer<ImDrawIdx>(
-            "GUI::ImGUI Index Buffer",
+            MOER_TEXT("GUI::ImGUI Index Buffer"),
             new_size,
             EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST
         );
@@ -642,8 +648,9 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     if (render_buffers->arg_buffer == nullptr ||
         render_buffers->arg_buffer->GetNumElement() < total_cmd_cnt) {
         uint32_t new_size = 128 + total_cmd_cnt;
-        render_buffers->arg_buffer =
-            device.CreateBuffer<ImGUIArg>("GUI::ImGUI Arg Buffer", new_size, EBufferUsageFlags::TRANSFER_DST);
+        render_buffers->arg_buffer = device.CreateBuffer<ImGUIArg>(
+            MOER_TEXT("GUI::ImGUI Arg Buffer"), new_size, EBufferUsageFlags::TRANSFER_DST
+        );
     }
 
     ImVec2 clip_off = draw_data->DisplayPos; // (0,0) unless using multi-viewports
@@ -750,8 +757,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
             render_backend.bindless_array,
             constant
         )
-        .Draw(
-            "ImGui Draws",
+        .Draw(MOER_TEXT("ImGui Draws"),
             {0,
              0,
              (uint)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x),
@@ -807,7 +813,7 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
             .size              = {(uint)_viewport->Size.x, (uint)_viewport->Size.y},
             .back_buffer_count = backend_data.num_frames_in_flight,
             .preferred_format  = PF_R8G8B8A8_SRGB,
-            .debug_name        = std::format("ImGui Window {}", viewport_data->viewport_index),
+            .debug_name        = Printf(MOER_TEXT("ImGui Window {}"), viewport_data->viewport_index),
         }
     );
     viewport_data->surface->EnsureFrameBuffer(
@@ -858,7 +864,7 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
                 .size              = new_size,
                 .back_buffer_count = GetGUIBackendData()->num_frames_in_flight,
                 .preferred_format  = PF_R8G8B8A8_SRGB,
-                .debug_name        = std::format("ImGui Window {}", viewport_data->viewport_index),
+                .debug_name        = Printf(MOER_TEXT("ImGui Window {}"), viewport_data->viewport_index),
             }
         );
     } else {

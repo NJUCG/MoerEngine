@@ -14,6 +14,8 @@
 #include "RasterGpuCullingResource.h"
 #include "RasterTextures.h"
 
+#include "string/String.h"
+
 #include <cstdint>
 
 namespace Moer::Render::Raster {
@@ -22,7 +24,7 @@ struct PointLightShadowData {
     struct ShadowCubeResource {
         TextureRef  tex; // CubeMap (ArrayLayers=6)
         uint        handle;
-        std::string name;
+        String      name;
         float       far_plane;  // 存下来，Shader 里做深度线性化时需要用到 (Far)
         float       near_plane; // 存下来 (Near)
     };
@@ -97,7 +99,7 @@ public:
         struct ShadowCube {
             TextureRef  tex;        // CubeMap 资源
             uint        handle = 0; // Bindless Handle
-            std::string name;       // Debug Name
+            String      name;       // Debug Name
 
             // 存储投影参数，供 Lighting Pass 做深度线性化或 VSM 计算
             float  near_plane = 0.1f;
@@ -145,7 +147,7 @@ private:
         ubyte*             data,
         int                width,
         int                height,
-        const std::string& debug_name
+        StringView         debug_name
     ) const {
         cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * 4), target, debug_name);
         cmd_list.AddCallback([data]() {
@@ -190,7 +192,7 @@ public:
 
         //GPU Side
         lighting_data_buffer.buf = device.CreateBuffer<byte>(
-            "Raster::LightData",
+            MOER_TEXT("Raster::LightData"),
             sizeof(LightingData),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::CONSTANT_BUFFER
         );

@@ -14,7 +14,7 @@
 #include "VulkanPipelineResourceCache.h"
 #include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
-#include <string_view>
+#include "string/StringConvert.h"
 
 #include "VulkanAllocator.h"
 #include "Core.h"
@@ -170,7 +170,7 @@ VulkanCmdList::VulkanCmdList(VulkanCmdAllocator* _alloc, VulkanDevice& _device) 
     _device.SetResourceName(
         (uint64)command_buffer,
         VK_OBJECT_TYPE_COMMAND_BUFFER,
-        std::format("CommandBuffer_{}", allocator->GetQueueName())
+        Printf(MOER_TEXT("CommandBuffer_{}"), allocator->GetQueueName())
     );
 }
 
@@ -301,9 +301,9 @@ void VulkanCmdList::CopyBufferToTexture(
         const uint3 texture_extent = _dst->GetExtent();
         LOG_ERROR(
             MOER_TEXT("[CopyBufferToTexture] Size mismatch. Texture='{}' Handle={:#x} Format={} Mip={} ArrayLayer={} ")
-            "TextureExtent=({}, {}, {}) CopyOffset=({}, {}, {}) CopyExtent=({}, {}, {}) "
-            "IncomingSize={} ExactExpected={} LegacyTexelCount={} DstMipByteSize={} "
-            "DeltaToExact={} DeltaToLegacy={} LegacyMatch={}",
+            MOER_TEXT("TextureExtent=({}, {}, {}) CopyOffset=({}, {}, {}) CopyExtent=({}, {}, {}) ")
+            MOER_TEXT("IncomingSize={} ExactExpected={} LegacyTexelCount={} DstMipByteSize={} ")
+            MOER_TEXT("DeltaToExact={} DeltaToLegacy={} LegacyMatch={}"),
             _dst->GetName(),
             (uint64)_dst->GetHandle(),
             uint32(_dst->GetFormat()),
@@ -898,11 +898,12 @@ void VulkanCmdList::BuildAccelerationStructures(
     );
 }
 
-void VulkanCmdList::BeginLabel(std::string_view _label, float4 _color) {
+void VulkanCmdList::BeginLabel(StringView _label, float4 _color) {
+    Utf8String label_name = PlatformToUtf8(_label);
     VkDebugUtilsLabelEXT label = {
         .sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
         .pNext      = nullptr,
-        .pLabelName = _label.data(),
+        .pLabelName = label_name.c_str(),
         .color      = {_color.x, _color.y, _color.z, _color.w}
     };
     vkCmdBeginDebugUtilsLabelEXT(command_buffer, &label);
@@ -912,11 +913,12 @@ void VulkanCmdList::EndLabel() {
     vkCmdEndDebugUtilsLabelEXT(command_buffer);
 }
 
-void VulkanCmdList::InsertLabel(std::string_view _label, float4 _color) {
+void VulkanCmdList::InsertLabel(StringView _label, float4 _color) {
+    Utf8String label_name = PlatformToUtf8(_label);
     VkDebugUtilsLabelEXT label = {
         .sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
         .pNext      = nullptr,
-        .pLabelName = _label.data(),
+        .pLabelName = label_name.c_str(),
         .color      = {_color.x, _color.y, _color.z, _color.w}
     };
     vkCmdInsertDebugUtilsLabelEXT(command_buffer, &label);

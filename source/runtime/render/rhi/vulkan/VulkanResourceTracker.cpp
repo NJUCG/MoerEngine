@@ -8,9 +8,8 @@
 #include "log/LogSystem.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
+#include "string/StringConvert.h"
 #include "vulkan/vulkan_core.h"
-
-#include <string_view>
 
 namespace Moer::Render {
 namespace {
@@ -31,12 +30,12 @@ static const char* QueueTypeName(EQueueType queue_type) {
     }
 }
 
-static std::string_view BufferName(const VulkanBuffer* buffer) {
-    return buffer != nullptr ? buffer->GetName() : "<null>";
+static Utf8String BufferName(const VulkanBuffer* buffer) {
+    return buffer != nullptr ? PlatformToUtf8(buffer->GetName()) : Utf8String("<null>");
 }
 
-static std::string_view TextureName(const VulkanTexture* texture) {
-    return texture != nullptr ? texture->GetName() : "<null>";
+static Utf8String TextureName(const VulkanTexture* texture) {
+    return texture != nullptr ? PlatformToUtf8(texture->GetName()) : Utf8String("<null>");
 }
 
 static const char* VkLayoutStr(VkImageLayout layout) {

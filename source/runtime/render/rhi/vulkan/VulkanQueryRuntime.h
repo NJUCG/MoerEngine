@@ -87,7 +87,7 @@ public:
     void FinalizeSubmit(uint64 _timeline, VkCommandBuffer _owner_cmd);
     void ResolveCompleted(uint64 _timeline);
 
-    void ResolveAsError(std::span<const QueryToken> _tokens, std::string_view _reason);
+    void ResolveAsError(std::span<const QueryToken> _tokens, StringView _reason);
 
     float GetTimestampPeriod() const {
         return timestamp_period;
@@ -103,7 +103,7 @@ private:
     struct QueryRecord {
         QueryToken token{};
         QueryKind  kind{QueryKind::Timestamp};
-        std::string name{};
+        String name{};
 
         std::optional<PoolSlot> begin_slot{};
         std::optional<PoolSlot> end_slot{};
