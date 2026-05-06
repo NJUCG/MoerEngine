@@ -35,7 +35,7 @@ enable_shadow = true
 # - 阴影，CSM层级数量：4 => 1
 # - 阴影，ShadowMap分辨率：4096 => 2048
 # - 抗锯齿：SMAA_1X => FXAA Simplified
-low_quality_mode = false
+low_quality_mode = true
 
 [engine.scene]
 # 注：Toml中使用单引号包裹路径，可以避免反斜杠被识别为转义符
