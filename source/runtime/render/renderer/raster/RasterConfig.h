@@ -238,6 +238,11 @@ struct RasterConfig {
     bool                 cooperative_ops_enabled = false;
     CooperativeOpsStatus cooperative_ops_status{};
 
+    // MARK: Dof
+    // ==============================
+    // TODO(lab2-dof): 实现景深相关的配置项，从 UI (RasterUI.cpp) 获取输入，将结果传递给 Renderer (DofPass.h)
+    // ==============================
+
     // MARK: Denoiser
     EDenoiserMode denoiser_mode                     = EDenoiserMode::NONE;
     float         denoiser_bfd_spatial_sigma_square = 20.0f;  // [1, 200]

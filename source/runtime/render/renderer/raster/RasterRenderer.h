@@ -16,6 +16,7 @@ class RtaoDenoiserPass;
 class BilateralFilterDenoiserPass;
 class SsrPass;
 class CooperativeOpsPass;
+class DofPass;
 class AaPass;
 class BloomPass;
 class TonemappingPass;
@@ -74,6 +75,7 @@ private:
     UniquePtr<BilateralFilterDenoiserPass> bfd_pass;
     UniquePtr<SsrPass>                     ssr_pass;
     UniquePtr<CooperativeOpsPass>          cooperative_ops_pass;
+    UniquePtr<DofPass>                     dof_pass;
     UniquePtr<AaPass>                      aa_pass;
     UniquePtr<BloomPass>                   bloom_pass;
     UniquePtr<TonemappingPass>             tonemapping_pass;
