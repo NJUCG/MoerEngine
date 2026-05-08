@@ -354,6 +354,7 @@ Shader可以实现无数种有趣、漂亮的动态效果。你可以在 [Shader
      // 以下均为【新增代码】
      // MARK: Dof
      if (ImGui::TreeNode("Dof (Depth of Field)")) {
+         ImGui::SliderFloat("Debug Param", &m_config.dof_debug_param, 0.0f, 1.0f);
          ImGui::SliderFloat("Intensity", &m_config.dof_intensity, 0.0f, 3.0f);
          ImGui::SliderFloat("Focus Plane Distance", &m_config.focus_plane_distance, 0.0f, 20.0f);
          ImGui::SliderFloat("Focus Plane Range", &m_config.focus_plane_range, 0.0f, 5.0f);
