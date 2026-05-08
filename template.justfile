@@ -35,14 +35,14 @@ default: generate build run
 # MARK: internal functions
 
 _rm path:
-    if (Test-Path "{{path}}") { Remove-Item -Force "{{path}}" }
+    if (Test-Path "{{path}}") { Remove-Item -Force -Recurse "{{path}}" }
 
 _rm_exe config="Debug" exe="MoerEditor":
     if (Test-Path "{{dir_bin}}{{config}}/{{exe}}{{exe_suffix}}") { Remove-Item -Force "{{dir_bin}}{{config}}/{{exe}}{{exe_suffix}}" }
 
 _generate:
-    cmake -B build
-    # cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+    # cmake -B build
+    cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 
 _build config="Debug" threads="30" target="MoerEditor":
     cmake --build build -j{{threads}} --config {{config}} --target {{target}}

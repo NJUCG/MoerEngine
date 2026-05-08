@@ -32,7 +32,10 @@
     cp template.MoerEngine.toml MoerEngine.toml
     
     # 构建
-    cmake -B build
+    # Clang + ninja
+    cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+    # # MSVC
+    # cmake -B build
     cmake --build build -j16 # change 16 to your cpu core count
     
     # 运行
