@@ -43,7 +43,13 @@ processing_image = tonemapping_pass->Process(raster_context, raster_config, proc
 
 ### 1.2 添加一个后处理Pass
 
-熟悉一个项目最好的方式，就是直接上手改。以下是操作步骤：
+熟悉一个项目最好的方式，就是直接上手改。
+
+为了让你更好地理解引擎的结构，接下来的操作步骤默认在主分支上执行。这样可以确保，你可以在一个没有框架的主分支上，完成从无到有的景深Pass实现；或者添加一个自己的、新的Pass。
+
+我们也提供了一个景深算法的实现框架，你可以将代码切换到 `lab/lab2-dof` 分支。这样，你就可以 **忽略接下来的许多操作**，不需要自己新建文件，只需要完成（复制并黏贴）TODO部分的代码，即可完成最基础的景深效果。
+
+以下是操作步骤：
 
 1. 创建Pass源码
 
@@ -435,7 +441,7 @@ $$虚化程度(COC, Circle\ of\ Confusion) = \Large\frac{像素到摄像机的�
   
       float3 color = TextureHandle(param.input_color_tex).Sample2D<float4>(uv).rgb;
   
-      // 深度：值域为 [0, 1]，近处为0，无限远处为1
+      // 深度：值域为 [0, 1]，近处为1，无限远处为0
       // - 另外，MoerEngine使用了Reverse-Z技术。如果你接触过其他渲染器，你会发现此处0和1的对应关系跟通常渲染器不同
       float depth = TextureHandle(param.depth_tex).Sample2D<float>(uv);
   
@@ -503,7 +509,7 @@ float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
 
         float coc_magnitude = max(abs(signed_delta) - focus_range, 0.0) / focus_range * param.dof_intensity;
 
-        // 焦平面附近 coc = 0，远景 coc > 0，近景 coc < 0
+        // 焦平面附近 coc = 0，背景 coc > 0，前景 coc < 0
         coc = sign(signed_delta) * coc_magnitude;
     }
 
@@ -559,7 +565,7 @@ float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
 - 我们的虚化均使用正方形的采样核，这会使得虚化效果不够拟真。如下图所示：
   - ![image-20260505234834491](./DofExample/image-20260505234834491.png)
 
-- 我们目前在同一个纹理中计算前景和后景，这使得前后景的模糊会互相影响。下面这张图的例子，就是聚焦在前景、景深强度拉到最高，这个时候，**前景柱子的黑色就会扩散到远景中，导致远景错误变暗**。这个错误的原因，就是在对远景的像素进行虚化的时候，直接从近景中采样颜色。而这是不符合现实情况的。
+- 我们目前在同一个纹理中计算前景和背景，这使得前背景的模糊会互相影响。下面这张图的例子，就是聚焦在前景、景深强度拉到最高，这个时候，**前景柱子的黑色就会扩散到背景中，导致背景错误变暗**。这个错误的原因，就是在对背景的像素进行虚化的时候，直接从前景中采样颜色。而这是不符合现实情况的。
   - ![image-20260506003232901](./DofExample/image-20260506003232901.png)
 
 以上内容，都是我们可以做的修复和优化。
