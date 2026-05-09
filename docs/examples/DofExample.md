@@ -485,7 +485,7 @@ float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
 
     float3 color = TextureHandle(param.input_color_tex).Sample2D<float4>(uv).rgb;
 
-    // 深度：值域为 [0, 1]，近处为0，无限远处为1
+    // 深度：值域为 [0, 1]，近处为1，无限远处为0
     // - 另外，MoerEngine使用了Reverse-Z技术。如果你接触过其他渲染器，你会发现此处0和1的对应关系跟通常渲染器不同
     float depth = TextureHandle(param.depth_tex).Sample2D<float>(uv);
 
