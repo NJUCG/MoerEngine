@@ -49,6 +49,7 @@ add_custom_command(
 set_target_properties(dxc PROPERTIES
     IMPORTED_IMPLIB ${MOER_DXC_IMPORT_LIBRARY}
     IMPORTED_LOCATION ${MOER_DXC_DLL}
+    INTERFACE_INCLUDE_DIRECTORIES "${MOER_DXC_INCLUDE_DIR}"
 )
 add_dependencies(dxc copy_dll_dxc)
 set_target_folder(dxc ${third_party_folder})
