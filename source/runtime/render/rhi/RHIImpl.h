@@ -6,7 +6,6 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/GraphTask.h"
@@ -1193,8 +1192,6 @@ private:
 //         evaluate_mesh_task = LambdaTask::Create([this]() {
 //             // TODO: 检查一下是否所有MeshData可以直接全部塞进一个vertex buffer和一个index buffer里
 //             for (const auto& [bitmask, mesh_data_array] : mesh_data_array_map) {
-
-//                 pipeline_map.emplace(bitmask, GeometryPassPsoManager::Get().GetPso(bitmask).handle);
 
 //                 for (const auto& mesh : mesh_data_array) {
 //                     for (const auto& vtx_view : mesh.vtx_views) {

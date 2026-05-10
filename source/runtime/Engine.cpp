@@ -5,7 +5,6 @@
 #include "misc/MMemory.h"
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
-#include "shader/GeometryPassPsoManager.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
@@ -147,8 +146,6 @@ void Engine::Run(const EngineHooks& hooks) {
 }
 
 void Engine::ShutDown() {
-    GeometryPassPsoManager::ShutDown(); // 如果这个单例没有Get过，则ShutDown时不会消耗额外资源
-
     m_runtime_assets.reset(); // 释放RuntimeAssets资源
 
     WindowContext::ShutDown();
