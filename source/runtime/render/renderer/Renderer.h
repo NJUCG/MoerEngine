@@ -12,7 +12,7 @@ namespace Moer::Render {
 
 struct EngineHooks {
     // Common
-    std::function<void(void)>                     on_tick_ui;
+    std::function<void(Scene&)>                   on_tick_ui;
     std::function<void(CommandList&, TextureRef)> on_render_gui;
     std::function<void(void)>                     on_present_windows;
     std::function<bool(void)>                     on_is_need_reload;

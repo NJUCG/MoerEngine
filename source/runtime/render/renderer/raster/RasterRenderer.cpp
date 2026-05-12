@@ -220,7 +220,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
     // MARK: 2. Tick UI
     if (hooks.on_tick_ui) {
-        hooks.on_tick_ui();
+        hooks.on_tick_ui(scene);
     }
 
     if (hooks.on_raster_register_frame_buffers) {

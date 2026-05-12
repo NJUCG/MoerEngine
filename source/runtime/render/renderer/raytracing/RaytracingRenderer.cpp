@@ -235,7 +235,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         }
 
         if (hooks.on_tick_ui) {
-            hooks.on_tick_ui();
+            hooks.on_tick_ui(scene);
         }
 
         timer.Stop();

@@ -7,11 +7,13 @@
 
 namespace Moer {
 
+class Scene;
+
 class SceneEditingUI {
 public:
     SceneEditingUI(SceneTestCaseConfig& test_case_config, bool& out_need_reload);
 
-    void ShowWindow(bool* p_open);
+    void ShowWindow(bool* p_open, Scene& scene);
 
 private:
     SceneTestCaseConfig& m_test_case_config;

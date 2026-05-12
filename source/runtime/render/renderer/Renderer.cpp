@@ -6,7 +6,6 @@
 #include "renderer/EditorConfig.h"
 #include "rhi/RHI.h"
 #include "scene/Scene.h"
-#include "scene/SceneGlobalEntry.h"
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowContext.h"
 
@@ -37,8 +36,6 @@ Renderer::Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, co
         // FIXME: 异步版有bug，会在gfx_queue.Execute()卡死，并且会卡住整台机器一分钟
         // scene.LoadSceneFromFileAsync(_config->scene_path);
         scene.LoadSceneFromFile(_config->scene_path);
-
-        SceneGlobalEntry::Get().BindScene(&scene);
     }
     // Other vars
     {

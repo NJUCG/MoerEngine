@@ -34,8 +34,8 @@ void Editor::Run() {
         EngineHooks{
             // Common
             .on_tick_ui =
-                [&editor_ui]() {
-                    editor_ui->TickUI();
+                [&editor_ui](Scene& scene) {
+                    editor_ui->TickUI(scene);
                 },
             .on_render_gui =
                 [&editor_ui](CommandList& cmd_list, TextureRef output_image) {

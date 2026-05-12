@@ -3,7 +3,6 @@
 #include "SceneFileDialog.h"
 
 #include "scene/Scene.h"
-#include "scene/SceneGlobalEntry.h"
 #include "scene/editing/SceneEditing.h"
 
 #include <imgui.h>
@@ -36,42 +35,34 @@ SceneEditingUI::SceneEditingUI(SceneTestCaseConfig& test_case_config, bool& out_
     m_test_case_config(test_case_config),
     m_need_reload(out_need_reload) {}
 
-void SceneEditingUI::ShowWindow(bool* p_open) {
+void SceneEditingUI::ShowWindow(bool* p_open, Scene& scene) {
     if (!p_open || !*p_open) {
         return;
     }
-
-    Scene* scene = SceneGlobalEntry::Get().PeekScene();
 
     if (!ImGui::Begin("Scene Editing", p_open)) {
         ImGui::End();
         return;
     }
 
-    if (scene == nullptr) {
-        ImGui::TextDisabled("scene加载中");
-        ImGui::End();
-        return;
-    }
-
     if (ImGui::Button("Save Cache")) {
-        if (scene->SaveStateCache()) {
+        if (scene.SaveStateCache()) {
             m_last_scene_action_status = "State cache saved";
         } else {
             m_last_scene_action_status = "Save State failed. Check log.";
         }
     }
 
-    ImGui::BeginDisabled(!scene->IsReady() || scene->GetSourceFilePath().empty());
+    ImGui::BeginDisabled(!scene.IsReady() || scene.GetSourceFilePath().empty());
     if (ImGui::Button("Load Cache")) {
         m_need_reload              = true;
         m_last_scene_action_status = "Load Cache requested";
     }
     ImGui::EndDisabled();
 
-    ImGui::BeginDisabled(!scene->IsReady() || scene->GetSourceFilePath().empty());
+    ImGui::BeginDisabled(!scene.IsReady() || scene.GetSourceFilePath().empty());
     if (ImGui::Button("Reset Cache")) {
-        if (scene->ResetToSourceScene()) {
+        if (scene.ResetToSourceScene()) {
             m_need_reload              = true;
             m_last_scene_action_status = "Reset Cache requested";
         } else {
@@ -80,11 +71,11 @@ void SceneEditingUI::ShowWindow(bool* p_open) {
     }
     ImGui::EndDisabled();
 
-    ImGui::BeginDisabled(!scene->IsReady());
+    ImGui::BeginDisabled(!scene.IsReady());
     if (ImGui::Button("Import Into Current Scene")) {
         std::string selected_path;
         if (OpenSceneFileDialog(selected_path) == ESceneFileDialogResult::Selected) {
-            const Scene::ImportSceneFromFileResult result = scene->ImportSceneFromFileSync(selected_path);
+            const Scene::ImportSceneFromFileResult result = scene.ImportSceneFromFileSync(selected_path);
             if (result) {
                 m_last_scene_action_status =
                     "Imported scene entities: " + std::to_string(result.imported_entity_count);
@@ -102,14 +93,14 @@ void SceneEditingUI::ShowWindow(bool* p_open) {
     if (ImGui::TreeNode("Editing")) {
         if (ImGui::TreeNode("Lighting")) {
             float3 main_directional_light_direction = float3(0.f, 0.f, -1.f);
-            if (SceneEditing::TryGetMainDirectionalLightDirection(*scene, main_directional_light_direction)) {
+            if (SceneEditing::TryGetMainDirectionalLightDirection(scene, main_directional_light_direction)) {
                 if (ImGui::SliderFloat3(
                         "MainDirectionalLight Direction",
                         (float*)&main_directional_light_direction,
                         -1.0f,
                         1.0f
                     )) {
-                    SceneEditing::SetMainDirectionalLightDirection(*scene, main_directional_light_direction);
+                    SceneEditing::SetMainDirectionalLightDirection(scene, main_directional_light_direction);
                 }
             } else {
                 ImGui::TextDisabled("MainDirectionalLight not found.");
@@ -128,7 +119,7 @@ void SceneEditingUI::ShowWindow(bool* p_open) {
             );
             if (ImGui::Button("Add Point Light")) {
                 if (SceneEditing::AddPointLight(
-                        *scene,
+                        scene,
                         m_add_point_light_position,
                         m_add_point_light_color,
                         m_add_point_light_intensity
@@ -166,8 +157,7 @@ void SceneEditingUI::ShowWindow(bool* p_open) {
                 create_info.material.roughness_factor = m_create_roughness;
                 create_info.material.metallic_factor  = m_create_metallic;
 
-                const CreateProceduralRenderableResult result =
-                    scene->CreateProceduralRenderable(create_info);
+                const CreateProceduralRenderableResult result = scene.CreateProceduralRenderable(create_info);
                 if (result) {
                     m_last_create_status = "Created renderable entity " +
                                            std::to_string(entt::to_integral(result.renderable_entt));

@@ -6,14 +6,16 @@
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHIResource.h"
 
+#include "inspector_ui/InspectorUI.h"
 #include "raster_ui/RasterUI.h"
 #include "raytracing_ui/RaytracingUI.h"
-#include "inspector_ui/InspectorUI.h"
 #include "scene_editing_ui/SceneEditingUI.h"
 
 #include <entt/entity/entity.hpp>
 
 namespace Moer {
+
+class Scene;
 
 /**
  * EditorUI 是编辑器主界面的窗口协调器。
@@ -29,7 +31,7 @@ namespace Moer {
  * - 改 renderer 配置面板: raster_ui 目录 + raytracing_ui 目录 + Editor.cpp 回调
  *
  * 用法:
- * - 每帧先 TickUI() 组装 ImGui
+ * - 每帧先 TickUI(scene) 组装 ImGui
  * - 再 RenderGUI() 输出到 UI framebuffer
  * - 独立平台窗口由 PresentWindows() 收尾
  */
@@ -39,7 +41,7 @@ public:
     EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config);
     ~EditorUI() = default;
     void InitFromConfigManager(); // will be called by Constructor
-    void TickUI();
+    void TickUI(Scene& scene);
     void RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output);
     void PresentWindows();
 
@@ -77,10 +79,10 @@ public: // Sub UI
 private:
     void ResetState(); // reset m_b_need_reload, etc..
     void ShowSceneColor();
-    void ShowConfig();
-    void ShowSceneEditing();
-    void ShowHierarchy();
-    void ShowInspector();
+    void ShowConfig(Scene& scene);
+    void ShowSceneEditing(Scene& scene);
+    void ShowHierarchy(Scene& scene);
+    void ShowInspector(Scene& scene);
 #if WITH_PROFILE
     void ShowMemoryProfiler(bool* p_open);
     void DrawPassAndChildren(const char* parent_name, int depth);
@@ -97,7 +99,7 @@ private:
     float2 m_scene_color_pos;
     bool   m_b_show = true;
 
-    bool m_b_need_reload              = false;
+    bool m_b_need_reload               = false;
     bool m_b_show_render_config_sub_ui = true; // 当前 renderer 的专属配置面板是否可见。
 
     // Hierarchy selection state

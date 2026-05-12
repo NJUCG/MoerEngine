@@ -7,16 +7,17 @@
 
 // Editor
 #include "EditorUIStyle.h"
-#include "scene/Scene.h"
-#include "scene/SceneGlobalEntry.h"
 #include "scene/NodeNameUtils.h"
+#include "scene/Scene.h"
 #include "scene_editing_ui/SceneFileDialog.h"
 
+
 // 3rd party (std)
+#include <algorithm>
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <algorithm>
 #include <string_view>
+
 
 #if WITH_PROFILE
 #include "Profile.h"
@@ -253,7 +254,7 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
 }
 #endif
 
-void EditorUI::TickUI() {
+void EditorUI::TickUI(Scene& scene) {
 
     // 注：Resolution表示整个窗口的大小（不包含windows标题栏）；SceneColor只表示场景渲染区域的大小
     // 更新SceneColor的分辨率
@@ -342,42 +343,40 @@ void EditorUI::TickUI() {
 #endif
     ResetState();
     ShowSceneColor();
-    ShowHierarchy();
-    ShowInspector();
-    ShowConfig();
-    ShowSceneEditing();
+    ShowHierarchy(scene);
+    ShowInspector(scene);
+    ShowConfig(scene);
+    ShowSceneEditing(scene);
 
     m_ui_renderer->EndGUIFrame();
 }
 
-void EditorUI::ShowSceneEditing() {
-    m_scene_editing_ui.ShowWindow(&m_b_show_scene_editing);
+void EditorUI::ShowSceneEditing(Scene& scene) {
+    m_scene_editing_ui.ShowWindow(&m_b_show_scene_editing, scene);
 }
 
-void EditorUI::ShowHierarchy() {
+void EditorUI::ShowHierarchy(Scene& scene) {
     if (!m_b_show_hierarchy) {
         return;
     }
-
-    Scene* scene = SceneGlobalEntry::Get().PeekScene();
 
     if (!ImGui::Begin("Hierarchy", &m_b_show_hierarchy)) {
         ImGui::End();
         return;
     }
 
-    if (scene == nullptr || !scene->IsReady()) {
+    if (!scene.IsReady()) {
         ImGui::TextDisabled("scene加载中");
         ImGui::End();
         return;
     }
 
-    if (!IsSelectedNodeValid(scene, m_selected_node)) {
+    if (!IsSelectedNodeValid(&scene, m_selected_node)) {
         m_selected_node = entt::null;
     }
 
-    auto&             registry  = scene->r();
-    const entt::entity root_entt = scene->logical_scene().UGetRootNodeEntity();
+    auto&              registry  = scene.r();
+    const entt::entity root_entt = scene.logical_scene().UGetRootNodeEntity();
     if (root_entt == entt::null || !registry.all_of<ecs::CNode>(root_entt)) {
         ImGui::TextDisabled("Root node not found.");
         ImGui::End();
@@ -385,12 +384,11 @@ void EditorUI::ShowHierarchy() {
     }
 
     auto draw_node = [&](auto& self, entt::entity entity, int depth) -> void {
-        const auto& node = registry.get<ecs::CNode>(entity);
-        const std::string     label       = ecs::GetNodeDisplayName(node, entity);
-        const bool            selected    = (m_selected_node == entity);
-        const bool            has_children = node.first_child_entt != entt::null;
-        ImGuiTreeNodeFlags    tree_flags  = ImGuiTreeNodeFlags_SpanAvailWidth |
-                                         ImGuiTreeNodeFlags_OpenOnArrow;
+        const auto&        node         = registry.get<ecs::CNode>(entity);
+        const std::string  label        = ecs::GetNodeDisplayName(node, entity);
+        const bool         selected     = (m_selected_node == entity);
+        const bool         has_children = node.first_child_entt != entt::null;
+        ImGuiTreeNodeFlags tree_flags   = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow;
 
         if (selected) {
             tree_flags |= ImGuiTreeNodeFlags_Selected;
@@ -426,8 +424,8 @@ void EditorUI::ShowHierarchy() {
     ImGui::End();
 }
 
-void EditorUI::ShowInspector() {
-    m_inspector_ui.ShowWindow(&m_b_show_inspector, SceneGlobalEntry::Get().PeekScene(), m_selected_node);
+void EditorUI::ShowInspector(Scene& scene) {
+    m_inspector_ui.ShowWindow(&m_b_show_inspector, &scene, m_selected_node);
 }
 
 void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output) {
@@ -549,7 +547,7 @@ void EditorUI::ShowSceneColor() {
     ImGui::End();
 }
 
-void EditorUI::ShowConfig() {
+void EditorUI::ShowConfig(Scene& scene) {
     ImGuiIO&         io           = ImGui::GetIO();
     ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
 
@@ -568,15 +566,8 @@ void EditorUI::ShowConfig() {
 
     /////////////////////////////////////////////////// Begin Disabled Here
     // 避免场景加载一半，切换场景或渲染器，导致崩溃
-    Scene* scene = SceneGlobalEntry::Get().GetScene();
-
-    bool is_scene_found_but_not_ready = false;
-    if (scene) {
-        is_scene_found_but_not_ready = !scene->IsReady() && scene->IsStartLoading();
-    } else {
-        LOG_WARNING("Please bind a scene by `SceneGlobalEntry::Get().BindScene(scene)`");
-    }
-    ImGui::BeginDisabled(is_scene_found_but_not_ready);
+    const bool is_scene_loading = !scene.IsReady() && scene.IsStartLoading();
+    ImGui::BeginDisabled(is_scene_loading);
 
     // Render Method
     {
@@ -611,12 +602,12 @@ void EditorUI::ShowConfig() {
             std::string selected_path;
             switch (OpenSceneFileDialog(selected_path)) {
                 case ESceneFileDialogResult::Selected:
-                LOG_INFO("User selected file: {}", selected_path);
+                    LOG_INFO("User selected file: {}", selected_path);
 
-                // Prepare for reload
-                m_b_need_reload      = true;
-                m_config->scene_path = std::move(selected_path);
-                break;
+                    // Prepare for reload
+                    m_b_need_reload      = true;
+                    m_config->scene_path = std::move(selected_path);
+                    break;
                 case ESceneFileDialogResult::Cancelled:
                     LOG_INFO("User pressed cancel.");
                     break;
@@ -658,7 +649,7 @@ void EditorUI::ShowConfig() {
     ImGui::Separator();
 
     ImGui::EndDisabled();
-    if (is_scene_found_but_not_ready) {
+    if (is_scene_loading) {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Scene is loading... Please wait.");
     }
     /////////////////////////////////////////////////// End Disabled Here
