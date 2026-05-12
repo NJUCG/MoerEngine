@@ -10,13 +10,11 @@
 #include "scene/Scene.h"
 #include "scene_editing_ui/SceneFileDialog.h"
 
-
 // 3rd party (std)
 #include <algorithm>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <string_view>
-
 
 #if WITH_PROFILE
 #include "Profile.h"

@@ -25,6 +25,12 @@ bool IsNear(const float3& lhs, const float3& rhs, float epsilon = 1e-4f) {
     return IsNear(lhs.x, rhs.x, epsilon) && IsNear(lhs.y, rhs.y, epsilon) && IsNear(lhs.z, rhs.z, epsilon);
 }
 
+bool IsNear(const Quaternion& lhs, const Quaternion& rhs, float epsilon = 1e-4f) {
+    const float dot =
+        lhs.vec.x * rhs.vec.x + lhs.vec.y * rhs.vec.y + lhs.vec.z * rhs.vec.z + lhs.vec.w * rhs.vec.w;
+    return std::abs(1.f - std::abs(dot)) <= epsilon;
+}
+
 // 从 node 的 world transform 中读取世界坐标
 float3 GetWorldTranslation(const ecs::CNode& node) {
     return float3(node.d_world_transform.GetColumn(3));
@@ -148,37 +154,6 @@ Array<float3> BuildRenderableCloneRootOffsets(bool stress_create_enabled, const 
     return offsets;
 }
 
-class SceneTestCaseBase : public ISceneTestCase {
-public:
-    // 返回 testcase 是否已经完成
-    bool IsFinished() const override {
-        return m_finished;
-    }
-
-protected:
-    // 检查条件并在失败时记录错误
-    bool Expect(bool condition, std::string_view message) {
-        if (condition) {
-            return true;
-        }
-
-        m_failed = true;
-        LOG_ERROR("SceneTestCase '{}' failed: {}", Name(), message);
-        return false;
-    }
-
-    // 标记 testcase 完成，并在成功时输出通过日志
-    void Finish() {
-        if (!m_failed) {
-            LOG_INFO("SceneTestCase '{}' passed.", Name());
-        }
-        m_finished = true;
-    }
-
-    bool m_finished = false;
-    bool m_failed   = false;
-};
-
 class FrameworkNoopTestCase final : public SceneTestCaseBase {
 public:
     // 返回空运行验证 testcase 的名称
@@ -188,8 +163,7 @@ public:
 
     // 清空完成和失败状态
     void Reset(Scene&) override {
-        m_finished = false;
-        m_failed   = false;
+        ResetBaseState();
     }
 
     // 保持空操作，用来验证 scene.Tick(true) 没有额外副作用
@@ -211,8 +185,7 @@ public:
 
     // 清理保存的 light entity 和运行状态
     void Reset(Scene&) override {
-        m_finished     = false;
-        m_failed       = false;
+        ResetBaseState();
         m_light_entity = entt::null;
         m_created      = false;
     }
@@ -262,8 +235,7 @@ public:
 
     // 重置 create 和 patch 两个阶段的状态
     void Reset(Scene&) override {
-        m_finished     = false;
-        m_failed       = false;
+        ResetBaseState();
         m_light_entity = entt::null;
         m_stage        = Stage::CreateLight;
     }
@@ -370,8 +342,7 @@ public:
 
     // 清理运行状态
     void Reset(Scene&) override {
-        m_finished       = false;
-        m_failed         = false;
+        ResetBaseState();
         m_applied        = false;
         m_material_count = 0;
         m_preset_name    = {};
@@ -385,10 +356,7 @@ public:
 
         const Array<entt::entity> material_entities = FindPrimitiveReferencedMaterialEntities(scene);
         if (material_entities.empty()) {
-            LOG_WARNING(
-                "SceneTestCase DebugModifyMaterial failed: no material referenced by any primitive was found."
-            );
-            m_failed = true;
+            Expect(false, "No material referenced by any primitive was found.");
             Finish();
             return;
         }
@@ -442,8 +410,7 @@ public:
 
     // 第一次触发只创建 point light，下一次触发再执行删除
     void Reset(Scene& scene) override {
-        m_finished         = false;
-        m_failed           = false;
+        ResetBaseState();
         m_light_entity     = entt::null;
         m_waiting_for_sync = false;
 
@@ -549,8 +516,7 @@ public:
 
     // 记录 root 基线并重置结构测试状态
     void Reset(Scene& scene) override {
-        m_finished                 = false;
-        m_failed                   = false;
+        ResetBaseState();
         m_parent_a                 = entt::null;
         m_parent_b                 = entt::null;
         m_child                    = entt::null;
@@ -755,8 +721,7 @@ public:
 
     // 重置非法操作 testcase 状态
     void Reset(Scene&) override {
-        m_finished               = false;
-        m_failed                 = false;
+        ResetBaseState();
         m_parent                 = entt::null;
         m_child                  = entt::null;
         m_attach_cycle_result    = true;
@@ -874,8 +839,7 @@ public:
 
     // 第一次触发只创建 renderable 副本，下一次触发再执行删除
     void Reset(Scene& scene) override {
-        m_finished = false;
-        m_failed   = false;
+        ResetBaseState();
 
         m_waiting_for_sync = false;
 
@@ -1157,11 +1121,10 @@ public:
     }
 
     void Reset(Scene& scene) override {
-        m_finished = false;
-        m_failed   = false;
+        ResetBaseState();
 
-        m_waiting_for_sync       = false;
-        m_result                 = {};
+        m_waiting_for_sync        = false;
+        m_result                  = {};
         m_initial_primitive_count = scene.cpu_scene().GetPrimitiveCount();
         m_initial_material_count  = scene.r().view<const ecs::CMaterial>().size();
     }
@@ -1183,7 +1146,9 @@ public:
         create_info.material.metallic_factor  = 0.f;
 
         m_result = scene.CreateProceduralRenderable(create_info);
-        if (!Expect(static_cast<bool>(m_result), "CreateProceduralRenderable should return a valid result.")) {
+        if (!Expect(
+                static_cast<bool>(m_result), "CreateProceduralRenderable should return a valid result."
+            )) {
             Finish();
             return;
         }
@@ -1207,7 +1172,8 @@ public:
             "Procedural material entity should be valid."
         );
         Expect(
-            registry.valid(m_result.primitive_entt) && registry.all_of<ecs::CPrimitive>(m_result.primitive_entt),
+            registry.valid(m_result.primitive_entt) &&
+                registry.all_of<ecs::CPrimitive>(m_result.primitive_entt),
             "Procedural primitive entity should be valid."
         );
         Expect(
@@ -1248,6 +1214,256 @@ private:
     bool                             m_waiting_for_sync        = false;
 };
 
+class SetNodePropertiesTestCase final : public SceneTestCaseBase {
+public:
+    std::string_view Name() const override {
+        return "SetNodeProperties";
+    }
+
+    void Reset(Scene&) override {
+        ResetBaseState();
+        m_node_entity = entt::null;
+        m_stage       = Stage::CreateNode;
+    }
+
+    void PreTick(Scene& scene, const SceneTestCaseContext&) override {
+        if (m_stage == Stage::CreateNode) {
+            EntityWithNodeCreateInfo create_info{};
+            create_info.name        = m_initial_name;
+            create_info.translation = m_initial_translation;
+            create_info.scale       = m_initial_scale;
+
+            m_node_entity = scene.CreateEntityWithNode(create_info);
+            m_stage       = Stage::WaitCreateSync;
+            return;
+        }
+
+        if (m_stage == Stage::EditNode) {
+            const bool set_name_result        = scene.SetNodeName(m_node_entity, m_target_name);
+            const bool set_translation_result = scene.SetNodeTranslation(m_node_entity, m_target_translation);
+            const bool set_rotation_result    = scene.SetNodeRotation(m_node_entity, m_target_rotation);
+            const bool set_scale_result       = scene.SetNodeScale(m_node_entity, m_target_scale);
+
+            Expect(set_name_result, "SetNodeName should succeed for a valid node.");
+            Expect(set_translation_result, "SetNodeTranslation should succeed for a valid node.");
+            Expect(set_rotation_result, "SetNodeRotation should succeed for a valid node.");
+            Expect(set_scale_result, "SetNodeScale should succeed for a valid node.");
+
+            if (m_failed) {
+                Finish();
+                return;
+            }
+
+            m_stage = Stage::WaitEditSync;
+            return;
+        }
+
+        if (m_stage == Stage::Cleanup) {
+            Expect(scene.DestroyEntity(m_node_entity), "DestroyEntity cleanup should succeed.");
+            if (m_failed) {
+                Finish();
+                return;
+            }
+
+            m_stage = Stage::WaitCleanupSync;
+        }
+    }
+
+    void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
+        if (m_stage == Stage::WaitCreateSync) {
+            Scene::NodeLocalTransform local_transform{};
+            std::string               node_name;
+
+            Expect(tick_state.did_sync, "SetNodeProperties setup should trigger scene sync.");
+            Expect(tick_state.updated_transform, "SetNodeProperties setup should update transform data.");
+            Expect(scene.IsValidNodeEntity(m_node_entity), "Created node should be valid.");
+            Expect(scene.TryGetNodeName(m_node_entity, node_name), "Created node should expose its name.");
+            Expect(
+                node_name == m_initial_name, "Created node name does not match the requested initial name."
+            );
+            Expect(
+                scene.TryGetNodeLocalTransform(m_node_entity, local_transform),
+                "Created node should expose its local transform."
+            );
+            Expect(
+                IsNear(local_transform.translation, m_initial_translation),
+                "Created node local translation is incorrect."
+            );
+            Expect(IsNear(local_transform.scale, m_initial_scale), "Created node local scale is incorrect.");
+
+            m_stage = Stage::EditNode;
+            return;
+        }
+
+        if (m_stage == Stage::WaitEditSync) {
+            Scene::NodeLocalTransform local_transform{};
+            std::string               node_name;
+
+            Expect(tick_state.did_sync, "SetNodeProperties should trigger scene sync.");
+            Expect(tick_state.updated_transform, "SetNodeProperties should update transform data.");
+            Expect(scene.TryGetNodeName(m_node_entity, node_name), "Edited node should expose its name.");
+            Expect(node_name == m_target_name, "Edited node name does not match the requested value.");
+            Expect(
+                scene.TryGetNodeLocalTransform(m_node_entity, local_transform),
+                "Edited node should expose its local transform."
+            );
+            Expect(
+                IsNear(local_transform.translation, m_target_translation),
+                "Edited node local translation is incorrect."
+            );
+            Expect(
+                IsNear(local_transform.rotation, m_target_rotation),
+                "Edited node local rotation is incorrect."
+            );
+            Expect(IsNear(local_transform.scale, m_target_scale), "Edited node local scale is incorrect.");
+
+            m_stage = Stage::Cleanup;
+            return;
+        }
+
+        if (m_stage == Stage::WaitCleanupSync) {
+            Expect(tick_state.did_sync, "SetNodeProperties cleanup should trigger scene sync.");
+            Expect(!scene.IsValidNodeEntity(m_node_entity), "Cleanup node should be invalid.");
+            Finish();
+        }
+    }
+
+private:
+    enum class Stage {
+        CreateNode,
+        WaitCreateSync,
+        EditNode,
+        WaitEditSync,
+        Cleanup,
+        WaitCleanupSync,
+    };
+
+    entt::entity m_node_entity = entt::null;
+    Stage        m_stage       = Stage::CreateNode;
+
+    std::string m_initial_name        = "SceneTestCase Editable Node";
+    std::string m_target_name         = "SceneTestCase Edited Node";
+    float3      m_initial_translation = float3(-2.f, 0.5f, 0.f);
+    float3      m_target_translation  = float3(-1.25f, 2.f, 0.75f);
+    float3      m_initial_scale       = float3(1.f, 1.f, 1.f);
+    float3      m_target_scale        = float3(1.5f, 0.75f, 2.f);
+    Quaternion  m_target_rotation     = Quaternion(float3(0.f, 0.f, -1.f), float3(1.f, 0.f, 0.f));
+};
+
+class DestroyNodeSubtreeTestCase final : public SceneTestCaseBase {
+public:
+    std::string_view Name() const override {
+        return "DestroyNodeSubtree";
+    }
+
+    void Reset(Scene& scene) override {
+        ResetBaseState();
+        m_root                     = scene.GetRootNodeEntity();
+        m_parent                   = entt::null;
+        m_child                    = entt::null;
+        m_grandchild               = entt::null;
+        m_initial_root_child_count = scene.GetNodeChildCount(m_root);
+        m_stage                    = Stage::CreateHierarchy;
+    }
+
+    void PreTick(Scene& scene, const SceneTestCaseContext&) override {
+        if (m_stage == Stage::CreateHierarchy) {
+            EntityWithNodeCreateInfo parent_info{};
+            parent_info.name        = "SceneTestCase Subtree Parent";
+            parent_info.translation = m_parent_translation;
+            m_parent                = scene.CreateEntityWithNode(parent_info);
+
+            EntityWithNodeCreateInfo child_info{};
+            child_info.parent_node_entt = m_parent;
+            child_info.name             = "SceneTestCase Subtree Child";
+            child_info.translation      = m_child_translation;
+            m_child                     = scene.CreateEntityWithNode(child_info);
+
+            EntityWithNodeCreateInfo grandchild_info{};
+            grandchild_info.parent_node_entt = m_child;
+            grandchild_info.name             = "SceneTestCase Subtree Grandchild";
+            grandchild_info.translation      = m_grandchild_translation;
+            m_grandchild                     = scene.CreateEntityWithNode(grandchild_info);
+
+            m_stage = Stage::WaitCreateSync;
+            return;
+        }
+
+        if (m_stage == Stage::DestroyHierarchy) {
+            Expect(
+                scene.DestroyNodeSubtree(m_parent), "DestroyNodeSubtree should succeed for a test subtree."
+            );
+            if (m_failed) {
+                Finish();
+                return;
+            }
+
+            m_stage = Stage::WaitDestroySync;
+        }
+    }
+
+    void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
+        if (m_stage == Stage::WaitCreateSync) {
+            Expect(tick_state.did_sync, "DestroyNodeSubtree setup should trigger scene sync.");
+            Expect(tick_state.updated_transform, "DestroyNodeSubtree setup should update transform data.");
+            Expect(scene.IsValidNodeEntity(m_root), "Scene root node should remain valid.");
+            Expect(scene.IsValidNodeEntity(m_parent), "Subtree parent should be valid after creation.");
+            Expect(scene.IsValidNodeEntity(m_child), "Subtree child should be valid after creation.");
+            Expect(
+                scene.IsValidNodeEntity(m_grandchild), "Subtree grandchild should be valid after creation."
+            );
+            Expect(
+                scene.GetNodeChildCount(m_root) == m_initial_root_child_count + 1,
+                "Root child count should increase by one after adding the subtree root."
+            );
+            Expect(scene.GetNodeChildCount(m_parent) == 1, "Subtree parent should own exactly one child.");
+            Expect(scene.GetNodeChildCount(m_child) == 1, "Subtree child should own exactly one child.");
+
+            m_stage = Stage::DestroyHierarchy;
+            return;
+        }
+
+        if (m_stage == Stage::WaitDestroySync) {
+            Expect(
+                !tick_state.did_sync,
+                "DestroyNodeSubtree should rebuild scene immediately instead of using tag-driven Tick sync."
+            );
+            Expect(
+                scene.HasPendingGpuSceneCommands(),
+                "DestroyNodeSubtree should leave pending GPU scene commands after immediate rebuild."
+            );
+            Expect(!scene.IsValidNodeEntity(m_parent), "Destroyed subtree parent should be invalid.");
+            Expect(!scene.IsValidNodeEntity(m_child), "Destroyed subtree child should be invalid.");
+            Expect(!scene.IsValidNodeEntity(m_grandchild), "Destroyed subtree grandchild should be invalid.");
+            Expect(
+                scene.GetNodeChildCount(m_root) == m_initial_root_child_count,
+                "Root child count should return to its initial baseline after subtree destroy."
+            );
+            Finish();
+        }
+    }
+
+private:
+    enum class Stage {
+        CreateHierarchy,
+        WaitCreateSync,
+        DestroyHierarchy,
+        WaitDestroySync,
+    };
+
+    entt::entity m_root       = entt::null;
+    entt::entity m_parent     = entt::null;
+    entt::entity m_child      = entt::null;
+    entt::entity m_grandchild = entt::null;
+
+    uint  m_initial_root_child_count = 0;
+    Stage m_stage                    = Stage::CreateHierarchy;
+
+    float3 m_parent_translation     = float3(2.f, 0.f, -2.f);
+    float3 m_child_translation      = float3(0.f, 1.f, 0.f);
+    float3 m_grandchild_translation = float3(0.f, 0.5f, 1.f);
+};
+
 } // namespace
 
 // 根据 testcase ID 返回日志可读名称
@@ -1255,6 +1471,8 @@ std::string_view GetSceneTestCaseName(ESceneTestCaseId test_case_id) {
     switch (test_case_id) {
         case ESceneTestCaseId::None:
             return "None";
+        case ESceneTestCaseId::SuiteSaveStateCache:
+            return "SuiteSaveStateCache";
         case ESceneTestCaseId::FrameworkNoop:
             return "FrameworkNoop";
         case ESceneTestCaseId::CreatePointLightOnce:
@@ -1271,10 +1489,36 @@ std::string_view GetSceneTestCaseName(ESceneTestCaseId test_case_id) {
             return "CreateDestroyRenderable";
         case ESceneTestCaseId::CreateProceduralRenderable:
             return "CreateProceduralRenderable";
+        case ESceneTestCaseId::SetNodeProperties:
+            return "SetNodeProperties";
+        case ESceneTestCaseId::DestroyNodeSubtree:
+            return "DestroyNodeSubtree";
         case ESceneTestCaseId::DebugModifyMaterial:
             return "DebugModifyMaterial";
+        case ESceneTestCaseId::SuiteLoadStateCache:
+            return "SuiteLoadStateCache";
     }
     return "Unknown";
+}
+
+const Array<ESceneTestCaseId>& GetAllSceneTestCaseIds() {
+    static const Array<ESceneTestCaseId> s_all_case_ids = {
+        ESceneTestCaseId::SuiteSaveStateCache,
+        ESceneTestCaseId::FrameworkNoop,
+        ESceneTestCaseId::CreatePointLightOnce,
+        ESceneTestCaseId::PatchCreatedPointLightTransform,
+        ESceneTestCaseId::CreateDestroyPointLight,
+        ESceneTestCaseId::EntityWithNodeStructuralFlow,
+        ESceneTestCaseId::EntityWithNodeRejectInvalidOps,
+        ESceneTestCaseId::CreateDestroyRenderable,
+        ESceneTestCaseId::CreateProceduralRenderable,
+        ESceneTestCaseId::SetNodeProperties,
+        ESceneTestCaseId::DestroyNodeSubtree,
+        ESceneTestCaseId::DebugModifyMaterial,
+        ESceneTestCaseId::SuiteLoadStateCache,
+    };
+
+    return s_all_case_ids;
 }
 
 // 根据 testcase 请求创建对应 testcase 实例
@@ -1296,6 +1540,10 @@ UniquePtr<ISceneTestCase> CreateSceneTestCase(const SceneTestCaseRequest& reques
             return MakeUnique<CreateDestroyRenderableTestCase>(request.renderable_stress_create_enabled);
         case ESceneTestCaseId::CreateProceduralRenderable:
             return MakeUnique<CreateProceduralRenderableTestCase>();
+        case ESceneTestCaseId::SetNodeProperties:
+            return MakeUnique<SetNodePropertiesTestCase>();
+        case ESceneTestCaseId::DestroyNodeSubtree:
+            return MakeUnique<DestroyNodeSubtreeTestCase>();
         case ESceneTestCaseId::DebugModifyMaterial:
             return MakeUnique<DebugModifyMaterialTestCase>();
         default:

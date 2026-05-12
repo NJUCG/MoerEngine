@@ -4,6 +4,7 @@
 
 #include "scene/Scene.h"
 #include "scene/editing/SceneEditing.h"
+#include "scene/testcase/SceneTestSuiteRunner.h"
 
 #include <imgui.h>
 
@@ -175,6 +176,39 @@ void SceneEditingUI::ShowWindow(bool* p_open, Scene& scene) {
     }
 
     if (ImGui::TreeNode("Test Cases")) {
+        const SceneTestSuiteStatus& suite_status = SceneTestSuiteRunner::Get().GetStatus();
+
+        ImGui::BeginDisabled(suite_status.is_running);
+        if (ImGui::Button("Run All Scene Tests")) {
+            m_test_case_config.request_run_all_scene_tests = true;
+        }
+        ImGui::EndDisabled();
+
+        if (suite_status.total_case_count > 0) {
+            ImGui::TextDisabled(
+                "Suite Progress: %u / %u | Passed: %u | Failed: %u",
+                suite_status.completed_case_count,
+                suite_status.total_case_count,
+                suite_status.passed_case_count,
+                suite_status.failed_case_count
+            );
+            if (!suite_status.current_case_name.empty()) {
+                ImGui::TextDisabled("Current Case: %s", suite_status.current_case_name.c_str());
+            }
+            if (!suite_status.last_failed_case_name.empty()) {
+                ImGui::TextColored(
+                    ImVec4(1.0f, 0.65f, 0.2f, 1.0f),
+                    "Last Failed: %s",
+                    suite_status.last_failed_case_name.c_str()
+                );
+                if (!suite_status.last_failed_summary.empty()) {
+                    ImGui::TextWrapped("Reason: %s", suite_status.last_failed_summary.c_str());
+                }
+            }
+            ImGui::Separator();
+        }
+
+        ImGui::BeginDisabled(suite_status.is_running);
         if (ImGui::Button("SceneTestCase Noop")) {
             m_test_case_config.requested_test_case = ESceneTestCaseId::FrameworkNoop;
         }
@@ -207,6 +241,8 @@ void SceneEditingUI::ShowWindow(bool* p_open, Scene& scene) {
         if (ImGui::Button("TestCase Modify Material")) {
             m_test_case_config.requested_test_case = ESceneTestCaseId::DebugModifyMaterial;
         }
+        ImGui::EndDisabled();
+
         ImGui::Checkbox("TestCase Move Point Lights", &m_test_case_config.move_point_lights_enabled);
         ImGui::TreePop();
     }

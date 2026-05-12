@@ -8,6 +8,7 @@
 #include "scene/Scene.h"
 #include "scene/testcase/SceneTestCaseRegistry.h"
 #include "scene/testcase/SceneTestCaseRunner.h"
+#include "scene/testcase/SceneTestSuiteRunner.h"
 
 #include <cmath>
 
@@ -138,14 +139,26 @@ void DispatchRequestedSceneTestCase(SceneTestCaseConfig& config) {
     request.test_case_id                     = config.requested_test_case;
     request.renderable_stress_create_enabled = config.renderable_stress_create_enabled;
 
-    SceneTestCaseRunner::Get().RequestCase(CreateSceneTestCase(request));
+    SceneTestCaseRunner::Get().RequestCase(request.test_case_id, CreateSceneTestCase(request));
     config.requested_test_case = ESceneTestCaseId::None;
 }
 
+void DispatchRequestedSceneTestSuite(SceneTestCaseConfig& config) {
+    if (!config.request_run_all_scene_tests) {
+        return;
+    }
+
+    SceneTestSuiteRunner::Get().RequestRunAll(config.renderable_stress_create_enabled);
+    config.request_run_all_scene_tests = false;
+}
+
 void ProcessSceneMotion(SceneTestCaseConfig& config, Scene& scene, float elapsed_time_seconds) {
+    const bool enable_point_light_motion =
+        config.move_point_lights_enabled && !SceneTestSuiteRunner::Get().IsRunning();
+
     ProcessTransformMotionGroup(
         scene,
-        config.move_point_lights_enabled,
+        enable_point_light_motion,
         elapsed_time_seconds,
         PointLightMotionStates(),
         [](entt::registry& registry) {
@@ -165,6 +178,8 @@ void ProcessSceneTestCaseRequests(
     float                elapsed_time_seconds
 ) {
     DispatchRequestedSceneTestCase(scene_test_case_config);
+    DispatchRequestedSceneTestSuite(scene_test_case_config);
+    SceneTestSuiteRunner::Get().TickDispatch(scene);
     ProcessSceneMotion(scene_test_case_config, scene, elapsed_time_seconds);
 }
 

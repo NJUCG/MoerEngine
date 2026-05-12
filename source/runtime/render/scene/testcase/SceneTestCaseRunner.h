@@ -38,13 +38,22 @@ public:
     SceneTestCaseRunner& operator=(const SceneTestCaseRunner&) = delete;
 
     // 请求运行一个已经构造好的 Scene testcase
-    void RequestCase(UniquePtr<ISceneTestCase> test_case);
+    bool RequestCase(ESceneTestCaseId test_case_id, UniquePtr<ISceneTestCase> test_case);
 
     // 查询当前是否有正在运行的 testcase
     bool HasActiveCase() const;
 
     // 查询当前是否有等待启动的 testcase
     bool HasPendingCase() const;
+
+    // 查询当前是否有已完成但尚未消费的执行结果
+    bool HasCompletedResult() const;
+
+    // 取走最近一次执行完成的结果
+    bool ConsumeCompletedResult(SceneTestCaseRunResult& out_result);
+
+    // 清理未消费的旧执行结果
+    void ClearCompletedResult();
 
     // 在 Scene 采样 dirty tag 之前推进 testcase
     void PreTick(Scene& scene);
@@ -64,9 +73,13 @@ private:
 
 private:
     UniquePtr<ISceneTestCase>             m_pending_case;
+    ESceneTestCaseId                      m_pending_case_id = ESceneTestCaseId::None;
     UniquePtr<ISceneTestCase>             m_active_case;
-    std::uint64_t                         m_frame_index = 0;
-    std::chrono::steady_clock::time_point m_start_time = std::chrono::steady_clock::now();
+    ESceneTestCaseId                      m_active_case_id = ESceneTestCaseId::None;
+    UniquePtr<SceneTestCaseRunResult>     m_completed_result;
+    std::uint64_t                         m_active_case_begin_frame = 0;
+    std::uint64_t                         m_frame_index             = 0;
+    std::chrono::steady_clock::time_point m_start_time              = std::chrono::steady_clock::now();
 };
 
 } // namespace Moer

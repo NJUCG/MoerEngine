@@ -11,6 +11,9 @@ enum class ESceneTestCaseId : std::uint32_t {
     // 不运行任何 Scene testcase
     None,
 
+    // Suite-only：批量运行前保存当前 Scene State Cache。
+    SuiteSaveStateCache,
+
     // 验证 scene.Tick(true) 在无写入时没有副作用
     FrameworkNoop,
 
@@ -35,8 +38,17 @@ enum class ESceneTestCaseId : std::uint32_t {
     // 验证 procedural material / primitive / mesh / renderable 创建链路
     CreateProceduralRenderable,
 
+    // 验证具名 Node setter API 能正确修改名称和局部变换
+    SetNodeProperties,
+
+    // 验证 DestroyNodeSubtree 会删除整棵 node 子树
+    DestroyNodeSubtree,
+
     // 调试修改场景材质，并走 Scene sync 路径
     DebugModifyMaterial,
+
+    // Suite-only：批量运行结束后请求 reload，并从已保存的 State Cache 恢复场景。
+    SuiteLoadStateCache,
 };
 
 } // namespace Moer

@@ -117,6 +117,7 @@ Scene::Scene() {
 
 void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     // start
+    this->m_scene_load_info.Reset();
     this->m_scene_load_info.StartLoading();
 
     m_gpu_scene.reset();
