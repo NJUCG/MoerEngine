@@ -9,6 +9,7 @@
 #include "scene/SceneCreateInfo.h"
 
 #include <cmath>
+#include <filesystem>
 #include <unordered_set>
 
 namespace Moer {
@@ -80,6 +81,12 @@ Array<entt::entity> FindPrimitiveReferencedMaterialEntities(Scene& scene) {
 uint& DebugMaterialPresetCursor() {
     static uint s_debug_material_preset_cursor = 0;
     return s_debug_material_preset_cursor;
+}
+
+const std::filesystem::path& GetImportSceneTestFilePath() {
+    static const std::filesystem::path s_import_scene_test_file_path =
+        std::filesystem::path("asset") / "scenes" / "mizuki" / "mizuki.gltf";
+    return s_import_scene_test_file_path;
 }
 
 // 查找当前 scene 的 root node entity
@@ -1742,6 +1749,157 @@ private:
     float3 m_grandchild_translation = float3(0.f, 0.5f, 1.f);
 };
 
+class ImportSceneFromFileTestCase final : public SceneTestCaseBase {
+public:
+    std::string_view Name() const override {
+        return "ImportSceneFromFile";
+    }
+
+    void Reset(Scene& scene) override {
+        ResetBaseState();
+        m_root                     = scene.GetRootNodeEntity();
+        m_import_root              = entt::null;
+        m_import_result            = {};
+        m_initial_root_child_count = scene.GetNodeChildCount(m_root);
+        m_stage                    = EStage::ImportScene;
+    }
+
+    void PreTick(Scene& scene, const SceneTestCaseContext&) override {
+        if (m_stage == EStage::ImportScene) {
+            const auto& import_scene_path = GetImportSceneTestFilePath();
+            if (!Expect(
+                    std::filesystem::exists(import_scene_path),
+                    "Import fixture scene file should exist under asset/scenes/mizuki."
+                )) {
+                Finish();
+                return;
+            }
+
+            m_import_result = scene.ImportSceneFromFileSync(import_scene_path);
+            if (!m_import_result) {
+                const std::string_view failure_message =
+                    m_import_result.error_message.empty() ?
+                        std::string_view("ImportSceneFromFileSync should succeed for the mizuki fixture.") :
+                        std::string_view(m_import_result.error_message);
+                Expect(false, failure_message);
+                Finish();
+                return;
+            }
+
+            m_import_root = m_import_result.import_root_entt;
+            m_stage       = EStage::WaitImportTick;
+            return;
+        }
+
+        if (m_stage == EStage::CleanupImport) {
+            Expect(
+                scene.DestroyNodeSubtree(m_import_root),
+                "DestroyNodeSubtree should succeed for the imported fixture root."
+            );
+            if (m_failed) {
+                Finish();
+                return;
+            }
+
+            m_stage = EStage::WaitCleanupTick;
+        }
+    }
+
+    void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
+        if (m_stage == EStage::WaitImportTick) {
+            Scene::NodeSubtreeStats import_stats{};
+            std::string             import_root_name;
+
+            Expect(
+                !tick_state.did_sync,
+                "ImportSceneFromFileSync should rebuild scene immediately instead of using tag-driven Tick "
+                "sync."
+            );
+            Expect(
+                scene.HasPendingGpuSceneCommands(),
+                "ImportSceneFromFileSync should leave pending GPU scene commands after immediate rebuild."
+            );
+            Expect(
+                m_import_result.import_root_entt != entt::null, "Import should return a valid import root."
+            );
+            Expect(
+                m_import_result.imported_entity_count > 0,
+                "Import should report at least one imported entity from the mizuki fixture."
+            );
+            Expect(scene.IsValidNodeEntity(m_root), "Scene root should remain valid after import.");
+            Expect(scene.IsValidNodeEntity(m_import_root), "Imported fixture root should be a valid node.");
+            Expect(
+                scene.GetNodeChildCount(m_root) == m_initial_root_child_count + 1,
+                "Import should append exactly one new direct child under the scene root."
+            );
+            Expect(
+                scene.TryGetNodeName(m_import_root, import_root_name),
+                "Imported fixture root should expose its generated node name."
+            );
+            Expect(
+                import_root_name == "Imported: mizuki.gltf",
+                "Imported fixture root name should match the generated import prefix."
+            );
+            Expect(
+                scene.GetNodeChildCount(m_import_root) > 0,
+                "Imported fixture root should own at least one imported child node."
+            );
+
+            import_stats = scene.GetNodeSubtreeStats(m_import_root);
+            Expect(
+                import_stats.node_count > 1, "Imported fixture subtree should contain imported child nodes."
+            );
+            Expect(
+                import_stats.renderable_count > 0,
+                "Imported fixture subtree should contain at least one renderable node."
+            );
+            Expect(
+                m_import_result.imported_entity_count >= static_cast<uint64>(import_stats.node_count - 1),
+                "Imported entity count should cover the imported node subtree, excluding the wrapper root."
+            );
+
+            m_stage = EStage::CleanupImport;
+            return;
+        }
+
+        if (m_stage == EStage::WaitCleanupTick) {
+            Expect(
+                !tick_state.did_sync,
+                "Import fixture cleanup should rebuild scene immediately instead of using tag-driven Tick "
+                "sync."
+            );
+            Expect(
+                scene.HasPendingGpuSceneCommands(),
+                "Import fixture cleanup should leave pending GPU scene commands after immediate rebuild."
+            );
+            Expect(
+                !scene.IsValidNodeEntity(m_import_root),
+                "Imported fixture root should be invalid after cleanup."
+            );
+            Expect(
+                scene.GetNodeChildCount(m_root) == m_initial_root_child_count,
+                "Scene root child count should return to its initial baseline after import cleanup."
+            );
+            Finish();
+        }
+    }
+
+private:
+    enum class EStage {
+        ImportScene,
+        WaitImportTick,
+        CleanupImport,
+        WaitCleanupTick,
+    };
+
+    entt::entity                     m_root        = entt::null;
+    entt::entity                     m_import_root = entt::null;
+    Scene::ImportSceneFromFileResult m_import_result{};
+
+    uint   m_initial_root_child_count = 0;
+    EStage m_stage                    = EStage::ImportScene;
+};
+
 } // namespace
 
 // 根据 testcase ID 返回日志可读名称
@@ -1775,6 +1933,8 @@ std::string_view GetSceneTestCaseName(ESceneTestCaseId test_case_id) {
             return "DestroyNodeSubtree";
         case ESceneTestCaseId::DebugModifyMaterial:
             return "DebugModifyMaterial";
+        case ESceneTestCaseId::ImportSceneFromFile:
+            return "ImportSceneFromFile";
         case ESceneTestCaseId::SuiteLoadStateCache:
             return "SuiteLoadStateCache";
     }
@@ -1796,6 +1956,7 @@ const Array<ESceneTestCaseId>& GetAllSceneTestCaseIds() {
         ESceneTestCaseId::QueryNodeAndLocalTransform,
         ESceneTestCaseId::DestroyNodeSubtree,
         ESceneTestCaseId::DebugModifyMaterial,
+        ESceneTestCaseId::ImportSceneFromFile,
         ESceneTestCaseId::SuiteLoadStateCache,
     };
 
@@ -1829,6 +1990,8 @@ UniquePtr<ISceneTestCase> CreateSceneTestCase(const SceneTestCaseRequest& reques
             return MakeUnique<DestroyNodeSubtreeTestCase>();
         case ESceneTestCaseId::DebugModifyMaterial:
             return MakeUnique<DebugModifyMaterialTestCase>();
+        case ESceneTestCaseId::ImportSceneFromFile:
+            return MakeUnique<ImportSceneFromFileTestCase>();
         default:
             return nullptr;
     }

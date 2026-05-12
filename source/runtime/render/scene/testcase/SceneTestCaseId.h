@@ -50,6 +50,9 @@ enum class ESceneTestCaseId : std::uint32_t {
     // 调试修改场景材质，并走 Scene sync 路径
     DebugModifyMaterial,
 
+    // 验证同步 ImportSceneFromFileSync 能导入 fixture scene 并接入当前 scene
+    ImportSceneFromFile,
+
     // Suite-only：批量运行结束后请求 reload，并从已保存的 State Cache 恢复场景。
     SuiteLoadStateCache,
 };

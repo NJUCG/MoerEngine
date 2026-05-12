@@ -241,6 +241,9 @@ void SceneEditingUI::ShowWindow(bool* p_open, Scene& scene) {
         if (ImGui::Button("TestCase Modify Material")) {
             m_test_case_config.requested_test_case = ESceneTestCaseId::DebugModifyMaterial;
         }
+        if (ImGui::Button("SceneTestCase Import Scene")) {
+            m_test_case_config.requested_test_case = ESceneTestCaseId::ImportSceneFromFile;
+        }
         ImGui::EndDisabled();
 
         ImGui::Checkbox("TestCase Move Point Lights", &m_test_case_config.move_point_lights_enabled);
