@@ -20,7 +20,7 @@ namespace Moer::ecs {
  * 改这里:
  * - 加组件或改字段: LogicalComponents.h
  * - 改节点树 / derived data / 哈希构建: LogicalScene.cpp
- * - 改外部场景 API 行为: SceneMutation.cpp + SceneImport.cpp
+ * - 改外部场景 API 行为: SceneModify.cpp + SceneLifeCycle.cpp
  *
  * 用法:
  * - parser / cache / editor 先写 LogicalScene
@@ -98,7 +98,7 @@ public:
     // 从父节点的 child 链表中摘除指定节点
     void UDetachNodeFromParent(entt::entity child_entt, CNode& child_node);
 
-    entt::entity UGetRootNodeEntity();
+    entt::entity UGetRootNodeEntity() const;
 
     bool UIsEntityWithNode(entt::entity entity) const;
 

@@ -30,41 +30,51 @@ class CommandList;
  * - GpuScene: GPU 资源、bindless handle、待提交命令
  *
  * 改这里:
- * - 加新的对外场景 API: Scene.h + SceneMutation.cpp
- * - 改加载 / import / reset / cache 入口: Scene.cpp + SceneImport.cpp + loader 目录
- * - 改每帧同步流程: Scene.cpp::Tick + CpuScene / GpuScene
+ * - 加新的对外场景 API: Scene.h + SceneQuery.cpp / SceneModify.cpp
+ * - 改加载 / import / reset / cache 入口: SceneLifeCycle.cpp + loader 目录
+ * - 改每帧同步流程: SceneTickSync.cpp + CpuScene / GpuScene
+ * - 改 CPU / GPU Scene 或 Logical Scene bridge: SceneAccess.cpp
  *
  * 用法:
  * - 外部只通过 LoadSceneFromFile / Tick / Patch / Create* / Destroy* 操作场景
  * - 不直接改 CpuScene / GpuScene，先改 LogicalScene 或 Scene API
+ * - Editor / tooling 优先依赖 Scene 和 scene/editing/SceneEditing，不直接碰 registry / LogicalScene
  *
  * ===============================================================
  *
- * 非RAII，需要手动管理生命周期
- * 
- * 场景共分为3大部分：LogicalScene, CpuScene, GpuScene
- * - LogicalScene：场景的逻辑数据，使用ECS存储，适合运行时修改
- * - CpuScene：场景的CPU渲染数据，存储一系列准备upload到gpu的数据
- * - GpuScene：场景的GPU渲染数据，存储一系列gpu handle和view
- * 
- * Scene类作为三者的管理者，负责三者之间的数据同步和转换
- * - LogicalScene完全对外界暴露，外界可以自由修改
- * - CpuScene不允许外部修改、读取
- * - GpuScene不允许外部修改；外部可以读取数据
- * 
- * 每帧，通过Tick()来更新CpuScene和GpuScene的数据
- * - 具体逻辑全部封装，内部管理
- * 
- * // TODO: 实现RingBuffer
- * 
+ * 因为class Scene过于复杂，所以我们将Scene.cpp实现拆分为多个cpp文件：
+ *
  * 文件职责划分：
- * - LogicalScene：负责具体 ECS 操作
- * - Scene：负责对外接口声明与场景同步管理
+ * - Scene.h：正式 runtime scene 接口，负责生命周期、tick/sync、通用 query/mutation、renderer bridge
+ * - LogicalScene：内部 ECS / system 实现层
  * - SceneCreateInfo.h：负责 Scene API 的 CreateInfo 定义
- * - SceneMutation.cpp：负责实现 Scene mutation API，调用 LogicalScene，并维护同步数据与 Dirty 标记
+ * - Scene.cpp拆分：
+ *   - SceneLifeCycle.cpp：负责生命周期 API，包括 load / import / reset / cache
+ *   - SceneTickSync.cpp：负责 Tick / sync 主流程与 pending command 管理
+ *   - SceneQuery.cpp：负责 Scene query API
+ *   - SceneModify.cpp：负责 Scene 修改 API，调用 LogicalScene，并维护同步数据与 Dirty 标记
+ *   - SceneAccess.cpp：负责 CPU / GPU Scene API 与 Logical Scene API
  * - scene/editing/SceneEditing：负责编辑器/工具层意图封装，把 UI 操作翻译为正式 Scene API 调用；不直接维护同步 tag
+ *
+ * 边界约束：
+ * - Scene 是 Editor / Python / MCP 这类前端调用方应该优先依赖的正式入口
+ * - LogicalScene / registry 仍存在，但属于 runtime 内部实现层
+ * - logical_scene() / r() / GetRegistry() 这类接口仅保留给 runtime 内部和迁移阶段，不应继续向前端扩散
  */
 class RENDER_API Scene {
+
+    /*
+     * Scene 类目录：
+     * 1. Runtime Scene Update Feature Checklist
+     * 2. 类型
+     * 3. 生命周期 API / 私有 Helpers【实现位于：SceneLifeCycle.cpp】
+     * 4. 场景 Tick / 同步 API / 私有 Helpers【实现位于：SceneTickSync.cpp】
+     * 5. 场景查询 API【实现位于：SceneQuery.cpp】
+     * 6. 场景修改 API【实现位于：SceneModify.cpp】
+     * 7. CPU / GPU Scene API【实现位于：SceneAccess.cpp】
+     * 8. Logical Scene API【实现位于：SceneAccess.cpp】
+     * 9. 私有 State
+     */
 
     /**
      * Runtime Scene Update Feature Checklist
@@ -96,6 +106,10 @@ class RENDER_API Scene {
      */
 
 public:
+    ////////////
+    // MARK: 类型
+    ////////////
+
     struct TickState {
         bool did_sync          = false;
         bool updated_light     = false;
@@ -123,11 +137,31 @@ public:
         }
     };
 
+    struct NodeLocalTransform {
+        float3     translation = float3(0.f, 0.f, 0.f);
+        Quaternion rotation    = Quaternion();
+        float3     scale       = float3(1.f, 1.f, 1.f);
+    };
+
+    struct NodeSubtreeStats {
+        uint32 node_count              = 0;
+        uint32 renderable_count        = 0;
+        uint32 camera_count            = 0;
+        uint32 light_count             = 0;
+        bool   contains_main_camera    = false;
+        bool   contains_main_light_tag = false;
+    };
+
     Scene();
     ~Scene() = default;
 
     Scene(const Scene&)            = delete;
     Scene& operator=(const Scene&) = delete;
+
+public:
+    ///////////////////////
+    // MARK: 生命周期 API
+    ///////////////////////
 
     /**
      * 异步从文件加载场景
@@ -150,21 +184,11 @@ public:
     const std::filesystem::path& GetSourceFilePath() const;
 
     /**
-    * 每帧调用，有需要时更新CpuScene和GpuScene数据
-     */
-    const TickState& Tick(bool is_run_test_case = false);
-
-    const TickState& GetLastTickState() const;
-
-    /**
      * 重置所有场景数据
      * 
      * 之后，需要手动调用 LoadSceneFromFileAsync 重新加载场景
      */
     void Reset();
-
-public:
-    // 场景加载状态相关接口
 
     /**
      * 场景是否开始加载
@@ -176,14 +200,92 @@ public:
      */
     bool IsReady() const;
 
-public:
-    // Graphics API相关接口
-    Render::GpuScene::PendingCommandList&& PopPendingCommandList();
-    bool HasPendingGpuSceneCommands() const;
-    void ConsumePendingGpuSceneCommands();
+private:
+    ////////////////////////////
+    // MARK: 生命周期 私有 Helpers
+    ////////////////////////////
+
+    /**
+     * 内部实现：从文件加载场景（同步执行）
+     * 
+     * LoadSceneFromFileAsync 和 LoadSceneFromFile 的公共实现
+     */
+    void LoadSceneInternal(const std::filesystem::path& file_path);
 
 public:
-    // 修改已有组件并自动标记对应的场景同步 dirty/tag。
+    ///////////////////////////
+    // MARK: 场景 Tick / 同步 API
+    ///////////////////////////
+
+    /**
+    * 每帧调用，有需要时更新CpuScene和GpuScene数据
+     */
+    const TickState& Tick(bool is_run_test_case = false);
+
+    const TickState& GetLastTickState() const;
+
+    Render::GpuScene::PendingCommandList&& PopPendingCommandList();
+    bool                                   HasPendingGpuSceneCommands() const;
+    void                                   ConsumePendingGpuSceneCommands();
+
+private:
+    /////////////////////////////////
+    // MARK: 场景 Tick / 同步 私有 Helpers
+    /////////////////////////////////
+
+    TickState BuildPendingTickState() const;
+
+public:
+    ///////////////////////
+    // MARK: 场景查询 API
+    ///////////////////////
+
+    entt::entity GetRootNodeEntity() const;
+    bool         IsValidNodeEntity(entt::entity entity) const;
+    bool         IsRootNode(entt::entity entity) const;
+    uint32       GetNodeChildCount(entt::entity entity) const;
+
+    template<typename Fn>
+    void ForEachNodeChild(entt::entity parent, Fn&& fn) const {
+        if (!IsValidNodeEntity(parent)) {
+            return;
+        }
+
+        const auto&  registry   = r();
+        entt::entity child_entt = registry.get<ecs::CNode>(parent).first_child_entt;
+        while (child_entt != entt::null) {
+            if (!registry.valid(child_entt) || !registry.all_of<ecs::CNode>(child_entt)) {
+                return;
+            }
+
+            const entt::entity next_sibling_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
+            std::forward<Fn>(fn)(child_entt);
+            child_entt = next_sibling_entt;
+        }
+    }
+
+    std::string      GetNodeDisplayName(entt::entity entity) const;
+    NodeSubtreeStats GetNodeSubtreeStats(entt::entity entity) const;
+    bool             TryGetNodeName(entt::entity entity, std::string& out_name) const;
+    bool             TryGetNodeLocalTransform(entt::entity entity, NodeLocalTransform& out_transform) const;
+
+    entt::entity GetMainCameraEntity() const;
+    entt::entity GetMainDirectionalLightEntity() const;
+    entt::entity GetMainPointLightEntity() const;
+
+    ecs::CCamera&                 GetMainCamera();
+    const ecs::CLightDirectional& GetMainDirectionalLight() const;
+    const ecs::CLightPoint&       GetMainPointLight() const;
+
+    const ecs::CNode& GetNode(entt::entity entity) const;
+
+public:
+    //////////////////////////
+    // MARK: 场景修改 API
+    //////////////////////////
+
+    // 低层 patch 入口，主要给 runtime 内部和受控迁移点使用。
+    // editor / tooling 在有具名 API 时，应优先调用具名 Scene API 或 SceneEditing。
     template<typename T, typename Fn>
     T& Patch(entt::entity entity, Fn&& fn) {
         auto& registry = r();
@@ -195,9 +297,13 @@ public:
         return registry.get<T>(entity);
     }
 
-    // 标记组件修改带来的场景同步 dirty/tag，具体特化放在独立实现文件中。
     template<typename T>
     void MarkDirty(entt::entity entity);
+
+    bool SetNodeName(entt::entity entity, std::string_view name);
+    bool SetNodeTranslation(entt::entity entity, const float3& value);
+    bool SetNodeRotation(entt::entity entity, const Quaternion& value);
+    bool SetNodeScale(entt::entity entity, const float3& value);
 
     // 创建普通 entity，不接入 scene node 树，也不触发 scene sync。
     entt::entity CreateEntity(std::string_view name = {});
@@ -244,53 +350,10 @@ public:
     // 删除 point light 会在后续 Tick 中触发 light cache rebuild，当前先接受这部分开销
     bool DestroyPointLight(entt::entity light_entity);
 
-private:
-    // 构造函数 初始化
-    /**
-     * Bindless Array Reference
-     * 
-     * m_bindless_array这里的初始化逻辑比较奇怪，需要提前初始化
-     * 另外，滥用Ref导致BindlessArray生命周期管理不清晰。这个是历史遗留问题，难以修改
-     */
-    Render::BindlessArrayRef m_bindless_array;
-
-    // LoadiSceneFromFileAsync 初始化
-    UniquePtr<ecs::LogicalScene> m_logical_scene;
-    UniquePtr<CpuScene>          m_cpu_scene;
-    UniquePtr<Render::GpuScene>  m_gpu_scene;
-
-    SceneLoadInfoAsync    m_scene_load_info;
-    TickState             m_last_tick_state;
-    std::filesystem::path m_source_file_path;
-    bool                  m_has_pending_gpu_scene_commands = false;
-
-private:
-    /**
-     * 内部实现：从文件加载场景（同步执行）
-     * 
-     * LoadSceneFromFileAsync 和 LoadSceneFromFile 的公共实现
-     */
-    void LoadSceneInternal(const std::filesystem::path& file_path);
-
-    // 判断当前 Scene 是否存在需要同步到 CpuScene/GpuScene 的 tag。
-    bool HasPendingSceneSync() const;
-
-    TickState BuildPendingTickState() const;
-
 public:
-    /**
-     * MARK: 一系列public getter
-     */
-
-    ecs::LogicalScene&       logical_scene();
-    const ecs::LogicalScene& logical_scene() const;
-    ecs::LogicalScene&       GetLogicalScene();
-    const ecs::LogicalScene& GetLogicalScene() const;
-
-    entt::registry&       r();
-    const entt::registry& r() const;
-    entt::registry&       GetRegistry();
-    const entt::registry& GetRegistry() const;
+    ///////////////////////////
+    // MARK: CPU / GPU Scene API
+    ///////////////////////////
 
     const Render::GpuScene::Res& gpu_scene_res() const;
     const Render::GpuScene::Res& GetGpuSceneRes() const;
@@ -307,19 +370,43 @@ public:
     Render::BindlessArrayRef GetBindlessArray();
 
 public:
+    ///////////////////////////////////////////
+    // MARK: Logical Scene API
+    ///////////////////////////////////////////
+
+    // 这组接口直接暴露了 Scene 的内部实现层。
+    // 它们保留给 runtime 内部模块和迁移阶段使用，不应继续向 Editor / tooling 扩散。
+    ecs::LogicalScene&       logical_scene();
+    const ecs::LogicalScene& logical_scene() const;
+    ecs::LogicalScene&       GetLogicalScene();
+    const ecs::LogicalScene& GetLogicalScene() const;
+
+    entt::registry&       r();
+    const entt::registry& r() const;
+    entt::registry&       GetRegistry();
+    const entt::registry& GetRegistry() const;
+
+private:
+    //////////////////////
+    // MARK: 私有 State
+    //////////////////////
+
     /**
-     * MARK: 封装一些常用逻辑
+     * Bindless Array Reference
+     * 
+     * m_bindless_array这里的初始化逻辑比较奇怪，需要提前初始化
+     * 另外，滥用Ref导致BindlessArray生命周期管理不清晰。这个是历史遗留问题，难以修改
      */
+    Render::BindlessArrayRef m_bindless_array;
 
-    entt::entity GetMainCameraEntity() const;
-    entt::entity GetMainDirectionalLightEntity() const;
-    entt::entity GetMainPointLightEntity() const;
+    UniquePtr<ecs::LogicalScene> m_logical_scene;
+    UniquePtr<CpuScene>          m_cpu_scene;
+    UniquePtr<Render::GpuScene>  m_gpu_scene;
 
-    ecs::CCamera&                 GetMainCamera();
-    const ecs::CLightDirectional& GetMainDirectionalLight() const;
-    const ecs::CLightPoint&       GetMainPointLight() const;
-
-    const ecs::CNode& GetNode(entt::entity entity) const;
+    SceneLoadInfoAsync    m_scene_load_info;
+    TickState             m_last_tick_state;
+    std::filesystem::path m_source_file_path;
+    bool                  m_has_pending_gpu_scene_commands = false;
 };
 
 template<>

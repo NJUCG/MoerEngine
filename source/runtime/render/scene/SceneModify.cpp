@@ -1,18 +1,17 @@
 #include "Scene.h"
+#include "SceneInternal.h"
 
-#include "math/Function.h"
 #include "log/LogSystem.h"
+#include "math/Function.h"
 #include "rhi/RHI.h"
 
 #include <cmath>
 
 namespace Moer {
 
-// 如果你对SceneMutation.cpp有疑问，请参考Scene的类注释
+// 如果你对SceneModify.cpp有疑问，请参考Scene的类注释
 
-///////////////
-// Scene Mutation
-///////////////
+namespace {
 
 static void MarkSceneNodeDirtyIfValid(Scene& scene, entt::entity entity) {
     auto& registry = scene.r();
@@ -32,17 +31,6 @@ static void MarkSceneMeshRebuild(Scene& scene) {
     }
 
     registry.emplace_or_replace<ecs::CTagNeedRebuildMesh>(*it);
-}
-
-static void ClearSceneSyncTags(entt::registry& registry) {
-    registry.clear<ecs::CTagNeedUpdateLight>();
-    registry.clear<ecs::CTagNeedUpdateMaterial>();
-    registry.clear<ecs::CTagNeedUpdateTransform>();
-    registry.clear<ecs::CTagNeedCreateLight>();
-    registry.clear<ecs::CTagNeedCreateMaterial>();
-    registry.clear<ecs::CTagNeedCreateTransform>();
-    registry.clear<ecs::CTagNeedDestroyLight>();
-    registry.clear<ecs::CTagNeedRebuildMesh>();
 }
 
 static void CollectNodeSubtreePostOrder(
@@ -67,7 +55,8 @@ static void EnsureMainCameraExists(ecs::LogicalScene& logical_scene, entt::regis
         return;
     }
 
-    if (const entt::entity camera_entity = registry.view<ecs::CCamera>().front(); camera_entity != entt::null) {
+    if (const entt::entity camera_entity = registry.view<ecs::CCamera>().front();
+        camera_entity != entt::null) {
         registry.emplace<ecs::CTagMainCamera>(camera_entity);
         return;
     }
@@ -104,12 +93,11 @@ static PrimitiveCreateInfo BuildCubePrimitiveData(entt::entity material_entt) {
     info.material_entt = material_entt;
 
     info.positions = {
-        float3(-h, -h, h), float3(h, -h, h),  float3(h, h, h),   float3(-h, h, h),
-        float3(h, -h, -h), float3(-h, -h, -h), float3(-h, h, -h), float3(h, h, -h),
-        float3(h, -h, h),  float3(h, -h, -h), float3(h, h, -h),  float3(h, h, h),
-        float3(-h, -h, -h), float3(-h, -h, h), float3(-h, h, h),  float3(-h, h, -h),
-        float3(-h, h, h),  float3(h, h, h),   float3(h, h, -h),  float3(-h, h, -h),
-        float3(-h, -h, -h), float3(h, -h, -h), float3(h, -h, h),  float3(-h, -h, h),
+        float3(-h, -h, h),  float3(h, -h, h),  float3(h, h, h),    float3(-h, h, h),  float3(h, -h, -h),
+        float3(-h, -h, -h), float3(-h, h, -h), float3(h, h, -h),   float3(h, -h, h),  float3(h, -h, -h),
+        float3(h, h, -h),   float3(h, h, h),   float3(-h, -h, -h), float3(-h, -h, h), float3(-h, h, h),
+        float3(-h, h, -h),  float3(-h, h, h),  float3(h, h, h),    float3(h, h, -h),  float3(-h, h, -h),
+        float3(-h, -h, -h), float3(h, -h, -h), float3(h, -h, h),   float3(-h, -h, h),
     };
 
     info.normals = {
@@ -122,11 +110,10 @@ static PrimitiveCreateInfo BuildCubePrimitiveData(entt::entity material_entt) {
     };
 
     info.texcoord0 = {
-        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
-        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
-        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
-        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
-        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
+        float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f), float2(0.f, 0.f),
+        float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f), float2(0.f, 0.f), float2(1.f, 0.f),
+        float2(1.f, 1.f), float2(0.f, 1.f), float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f),
+        float2(0.f, 1.f), float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
         float2(0.f, 0.f), float2(1.f, 0.f), float2(1.f, 1.f), float2(0.f, 1.f),
     };
 
@@ -156,14 +143,12 @@ static PrimitiveCreateInfo BuildFacetedSpherePrimitiveData(entt::entity material
     info.material_entt = material_entt;
 
     auto sphere_point = [](uint32 latitude, uint32 longitude) {
-        const float theta     = pi * static_cast<float>(latitude) / static_cast<float>(latitude_segments);
-        const float phi       = 2.f * pi * static_cast<float>(longitude) / static_cast<float>(longitude_segments);
+        const float theta = pi * static_cast<float>(latitude) / static_cast<float>(latitude_segments);
+        const float phi   = 2.f * pi * static_cast<float>(longitude) / static_cast<float>(longitude_segments);
         const float sin_theta = std::sin(theta);
 
         return float3(
-            radius * sin_theta * std::cos(phi),
-            radius * std::cos(theta),
-            radius * sin_theta * std::sin(phi)
+            radius * sin_theta * std::cos(phi), radius * std::cos(theta), radius * sin_theta * std::sin(phi)
         );
     };
 
@@ -215,10 +200,8 @@ static PrimitiveCreateInfo BuildFacetedSpherePrimitiveData(entt::entity material
     return info;
 }
 
-static PrimitiveCreateInfo BuildProceduralPrimitiveData(
-    EProceduralPrimitiveShape shape,
-    entt::entity              material_entt
-) {
+static PrimitiveCreateInfo
+BuildProceduralPrimitiveData(EProceduralPrimitiveShape shape, entt::entity material_entt) {
     switch (shape) {
         case EProceduralPrimitiveShape::Cube:
             return BuildCubePrimitiveData(material_entt);
@@ -228,9 +211,59 @@ static PrimitiveCreateInfo BuildProceduralPrimitiveData(
     return BuildCubePrimitiveData(material_entt);
 }
 
+} // namespace
+
+////////////////////////
+// MARK: 场景修改 API
+////////////////////////
+
 // 创建普通 entity，不接入 scene node 树，也不触发 scene sync
 entt::entity Scene::CreateEntity(std::string_view name) {
     return logical_scene().UCreateEntity(name);
+}
+
+bool Scene::SetNodeName(entt::entity entity, std::string_view name) {
+    if (!IsValidNodeEntity(entity)) {
+        return false;
+    }
+
+    Patch<ecs::CNode>(entity, [&](ecs::CNode& c_node) {
+        c_node.name = std::string(name);
+    });
+    return true;
+}
+
+bool Scene::SetNodeTranslation(entt::entity entity, const float3& value) {
+    if (!IsValidNodeEntity(entity)) {
+        return false;
+    }
+
+    Patch<ecs::CNode>(entity, [&](ecs::CNode& c_node) {
+        c_node.translation = value;
+    });
+    return true;
+}
+
+bool Scene::SetNodeRotation(entt::entity entity, const Quaternion& value) {
+    if (!IsValidNodeEntity(entity)) {
+        return false;
+    }
+
+    Patch<ecs::CNode>(entity, [&](ecs::CNode& c_node) {
+        c_node.rotation = value;
+    });
+    return true;
+}
+
+bool Scene::SetNodeScale(entt::entity entity, const float3& value) {
+    if (!IsValidNodeEntity(entity)) {
+        return false;
+    }
+
+    Patch<ecs::CNode>(entity, [&](ecs::CNode& c_node) {
+        c_node.scale = value;
+    });
+    return true;
 }
 
 // 创建带 CNode 的 entity，并接入 parent 或 root node
@@ -283,9 +316,8 @@ entt::entity Scene::CreateMesh(const MeshCreateInfo& create_info) {
 }
 
 // 创建简单 procedural material + primitive + mesh + renderable。
-CreateProceduralRenderableResult Scene::CreateProceduralRenderable(
-    const ProceduralMeshCreateInfo& create_info
-) {
+CreateProceduralRenderableResult
+Scene::CreateProceduralRenderable(const ProceduralMeshCreateInfo& create_info) {
     CreateProceduralRenderableResult result{};
 
     MaterialCreateInfo material_info = create_info.material;
@@ -298,8 +330,9 @@ CreateProceduralRenderableResult Scene::CreateProceduralRenderable(
         return result;
     }
 
-    PrimitiveCreateInfo primitive_info = BuildProceduralPrimitiveData(create_info.shape, result.material_entt);
-    result.primitive_entt             = CreatePrimitive(primitive_info);
+    PrimitiveCreateInfo primitive_info =
+        BuildProceduralPrimitiveData(create_info.shape, result.material_entt);
+    result.primitive_entt = CreatePrimitive(primitive_info);
     if (result.primitive_entt == entt::null) {
         return result;
     }
@@ -388,7 +421,9 @@ bool Scene::DestroyEntity(entt::entity entity) {
 bool Scene::DestroyNodeSubtree(entt::entity entity) {
     auto& registry = r();
     if (entity == entt::null || !registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
-        LOG_ERROR("[Scene API Error] Cannot destroy node subtree because entity is invalid or missing CNode.");
+        LOG_ERROR(
+            "[Scene API Error] Cannot destroy node subtree because entity is invalid or missing CNode."
+        );
         return false;
     }
     if (registry.all_of<ecs::CTagRootNode>(entity)) {
@@ -416,10 +451,10 @@ bool Scene::DestroyNodeSubtree(entt::entity entity) {
 
     // 这里会整体替换 GpuScene，先等待飞行中的命令完成，避免销毁仍在使用的资源。
     Render::RenderDevice::Get().WaitIdle();
-    m_cpu_scene = MakeUnique<CpuScene>(*m_logical_scene);
-    m_gpu_scene = MakeUnique<Render::GpuScene>(*m_cpu_scene, bindless_array());
+    m_cpu_scene                      = MakeUnique<CpuScene>(*m_logical_scene);
+    m_gpu_scene                      = MakeUnique<Render::GpuScene>(*m_cpu_scene, bindless_array());
     m_has_pending_gpu_scene_commands = true;
-    ClearSceneSyncTags(registry);
+    SceneInternal::ClearSceneSyncTags(registry);
     return true;
 }
 

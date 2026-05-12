@@ -7,7 +7,6 @@
 
 // Editor
 #include "EditorUIStyle.h"
-#include "scene/NodeNameUtils.h"
 #include "scene/Scene.h"
 #include "scene_editing_ui/SceneFileDialog.h"
 
@@ -26,15 +25,6 @@
 using namespace Moer::Render;
 
 namespace Moer {
-
-namespace {
-
-bool IsSelectedNodeValid(Scene* scene, entt::entity entity) {
-    return scene != nullptr && entity != entt::null && scene->r().valid(entity) &&
-           scene->r().all_of<ecs::CNode>(entity);
-}
-
-} // namespace
 
 EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
     m_ui_renderer(std::move(renderer)),
@@ -371,23 +361,21 @@ void EditorUI::ShowHierarchy(Scene& scene) {
         return;
     }
 
-    if (!IsSelectedNodeValid(&scene, m_selected_node)) {
+    if (!scene.IsValidNodeEntity(m_selected_node)) {
         m_selected_node = entt::null;
     }
 
-    auto&              registry  = scene.r();
-    const entt::entity root_entt = scene.logical_scene().UGetRootNodeEntity();
-    if (root_entt == entt::null || !registry.all_of<ecs::CNode>(root_entt)) {
+    const entt::entity root_entt = scene.GetRootNodeEntity();
+    if (!scene.IsValidNodeEntity(root_entt)) {
         ImGui::TextDisabled("Root node not found.");
         ImGui::End();
         return;
     }
 
-    auto draw_node = [&](auto& self, entt::entity entity, int depth) -> void {
-        const auto&        node         = registry.get<ecs::CNode>(entity);
-        const std::string  label        = ecs::GetNodeDisplayName(node, entity);
+    auto draw_node = [&](auto& self, entt::entity entity) -> void {
+        const std::string  label        = scene.GetNodeDisplayName(entity);
         const bool         selected     = (m_selected_node == entity);
-        const bool         has_children = node.first_child_entt != entt::null;
+        const bool         has_children = scene.GetNodeChildCount(entity) > 0;
         ImGuiTreeNodeFlags tree_flags   = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow;
 
         if (selected) {
@@ -405,21 +393,17 @@ void EditorUI::ShowHierarchy(Scene& scene) {
         }
 
         if (has_children && is_open) {
-            entt::entity child_entt = node.first_child_entt;
-            while (child_entt != entt::null) {
-                self(self, child_entt, depth + 1);
-                child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
-            }
+            scene.ForEachNodeChild(entity, [&](entt::entity child_entt) {
+                self(self, child_entt);
+            });
             ImGui::TreePop();
         }
         ImGui::PopID();
     };
 
-    entt::entity child_entt = registry.get<ecs::CNode>(root_entt).first_child_entt;
-    while (child_entt != entt::null) {
-        draw_node(draw_node, child_entt, 0);
-        child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
-    }
+    scene.ForEachNodeChild(root_entt, [&](entt::entity child_entt) {
+        draw_node(draw_node, child_entt);
+    });
 
     ImGui::End();
 }

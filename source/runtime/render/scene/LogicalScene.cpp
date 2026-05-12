@@ -397,7 +397,7 @@ void LogicalScene::UDetachNodeFromParent(entt::entity child_entt, CNode& child_n
     child_node.depth             = 0;
 }
 
-entt::entity LogicalScene::UGetRootNodeEntity() {
+entt::entity LogicalScene::UGetRootNodeEntity() const {
     auto view = r().view<ecs::CTagRootNode>();
     auto it   = view.begin();
     if (it == view.end()) {

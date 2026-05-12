@@ -1,14 +1,18 @@
 #include "Scene.h"
+#include "SceneInternal.h"
 
+#include "loader/LoaderInterface.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
 #include "scene/NodeNameUtils.h"
-#include "scene/loader/LoaderInterface.h"
+#include "scene/cache/SceneCache.h"
+#include "scene/cache/SceneCacheSerializer.h"
+#include "taskgraph/TaskGraph.h"
 
 #include <algorithm>
 #include <entt/entt.hpp>
 #include <filesystem>
-
+#include <system_error>
 
 namespace Moer {
 
@@ -101,18 +105,121 @@ void AppendMegaBuffers(entt::registry& target_registry, const entt::registry& so
     target.index.insert(target.index.end(), source.index.begin(), source.index.end());
 }
 
-void ClearSceneSyncTags(entt::registry& registry) {
-    registry.clear<ecs::CTagNeedUpdateLight>();
-    registry.clear<ecs::CTagNeedUpdateMaterial>();
-    registry.clear<ecs::CTagNeedUpdateTransform>();
-    registry.clear<ecs::CTagNeedCreateLight>();
-    registry.clear<ecs::CTagNeedCreateMaterial>();
-    registry.clear<ecs::CTagNeedCreateTransform>();
-    registry.clear<ecs::CTagNeedDestroyLight>();
-    registry.clear<ecs::CTagNeedRebuildMesh>();
+} // namespace
+
+///////////////////////
+// MARK: 生命周期 API
+///////////////////////
+
+Scene::Scene() {
+    m_bindless_array = Render::RenderDevice::Get().CreateBindlessArray();
 }
 
-} // namespace
+void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
+    // start
+    this->m_scene_load_info.StartLoading();
+
+    m_gpu_scene.reset();
+    m_cpu_scene.reset();
+    m_logical_scene.reset();
+
+    // 1. logical scene
+    SceneLoadRequest request{};
+    request.file_path        = file_path;
+    SceneImportResult result = LoaderInterface::LoadScene(request);
+
+    // failed in LogicalScene loading
+    if (!result) {
+        LOG_ERROR("Scene load failed: path={}", file_path.string());
+        this->m_scene_load_info.Reset();
+        return;
+    }
+    this->m_logical_scene = std::move(result.logical_scene);
+
+    // 2. cpu scene
+    this->m_cpu_scene = MakeUnique<CpuScene>(*this->m_logical_scene);
+
+    // 3. gpu scene
+    this->m_gpu_scene = MakeUnique<Render::GpuScene>(*this->m_cpu_scene, this->bindless_array());
+    this->m_has_pending_gpu_scene_commands = true;
+
+    // finish
+    m_source_file_path = file_path;
+    this->m_scene_load_info.FinishLoading();
+}
+
+void Scene::LoadSceneFromFileAsync(const std::filesystem::path& file_path) {
+    LambdaTask::Dispatch([this, file_path]() {
+        this->LoadSceneInternal(file_path);
+    });
+}
+
+void Scene::LoadSceneFromFile(const std::filesystem::path& file_path) {
+    this->LoadSceneInternal(file_path);
+}
+
+bool Scene::SaveStateCache() const {
+    if (!m_logical_scene || !IsReady()) {
+        const std::string error = "Cannot save scene state cache because scene is not ready.";
+        LOG_WARNING("Scene State Cache save failed: {}", error);
+        return false;
+    }
+    if (m_source_file_path.empty()) {
+        const std::string error = "Cannot save scene state cache because source file path is empty.";
+        LOG_WARNING("Scene State Cache save failed: {}", error);
+        return false;
+    }
+
+    SceneCacheSourceIdentity source_identity{};
+    if (!SceneCache::BuildSourceIdentity(m_source_file_path, source_identity)) {
+        return false;
+    }
+
+    const std::filesystem::path state_cache_path =
+        SceneCache::GetCachePath(source_identity, ESceneCacheKind::State);
+    SceneCacheHeader header = SceneCache::CreateHeader(source_identity, ESceneCacheKind::State);
+
+    if (!SceneCacheSerializer::SaveLogicalScene(state_cache_path, header, *m_logical_scene)) {
+        LOG_WARNING("Scene State Cache save failed: path={}", state_cache_path.string());
+        return false;
+    }
+
+    LOG_INFO("Scene State Cache saved: path={}", state_cache_path.string());
+    return true;
+}
+
+bool Scene::ResetToSourceScene() {
+    if (m_source_file_path.empty()) {
+        const std::string error = "Cannot reset scene because source file path is empty.";
+        LOG_WARNING("Scene Reset failed: {}", error);
+        return false;
+    }
+
+    const std::filesystem::path source_file_path = m_source_file_path;
+
+    SceneCacheSourceIdentity source_identity{};
+    if (!SceneCache::BuildSourceIdentity(source_file_path, source_identity)) {
+        return false;
+    }
+
+    const std::filesystem::path state_cache_path =
+        SceneCache::GetCachePath(source_identity, ESceneCacheKind::State);
+    std::error_code ec;
+    if (std::filesystem::exists(state_cache_path, ec) && !ec) {
+        std::filesystem::remove(state_cache_path, ec);
+        if (ec) {
+            const std::string error = "Failed to delete state cache: " + state_cache_path.string();
+            LOG_WARNING("Scene Reset failed: {}, filesystem_error={}", error, ec.message());
+            return false;
+        }
+        LOG_INFO("Scene Reset deleted State Cache: path={}", state_cache_path.string());
+    } else {
+        LOG_INFO("Scene Reset found no State Cache to delete: path={}", state_cache_path.string());
+    }
+
+    LOG_INFO("Scene Reset is ready for reload: path={}", source_file_path.string());
+    return true;
+}
 
 Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::filesystem::path& file_path) {
     ImportSceneFromFileResult import_result{};
@@ -293,10 +400,10 @@ Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::files
     // Import 会带来新的 texture/material entities，但当前增量同步链路不会在 GpuScene 中创建这些纹理。
     // 这里直接按最新 logical scene 重建一次 runtime scene，确保材质纹理句柄立即有效。
     Render::RenderDevice::Get().WaitIdle();
-    m_cpu_scene = MakeUnique<CpuScene>(*m_logical_scene);
-    m_gpu_scene = MakeUnique<Render::GpuScene>(*m_cpu_scene, bindless_array());
+    m_cpu_scene                      = MakeUnique<CpuScene>(*m_logical_scene);
+    m_gpu_scene                      = MakeUnique<Render::GpuScene>(*m_cpu_scene, bindless_array());
     m_has_pending_gpu_scene_commands = true;
-    ClearSceneSyncTags(target_registry);
+    SceneInternal::ClearSceneSyncTags(target_registry);
 
     import_result.success               = true;
     import_result.import_root_entt      = import_root_entt;
@@ -309,6 +416,29 @@ Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::files
         import_result.imported_entity_count
     );
     return import_result;
+}
+
+const std::filesystem::path& Scene::GetSourceFilePath() const {
+    return m_source_file_path;
+}
+
+void Scene::Reset() {
+    m_bindless_array = nullptr;
+
+    m_logical_scene.reset();
+    m_cpu_scene.reset();
+    m_gpu_scene.reset();
+
+    m_scene_load_info.Reset();
+    m_has_pending_gpu_scene_commands = false;
+}
+
+bool Scene::IsStartLoading() const {
+    return m_scene_load_info.IsSceneStartLoading();
+}
+
+bool Scene::IsReady() const {
+    return m_scene_load_info.IsSceneReady();
 }
 
 } // namespace Moer

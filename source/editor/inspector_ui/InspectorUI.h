@@ -19,7 +19,7 @@ class Scene;
  *
  * 改这里:
  * - 加新的 inspector 字段: InspectorUI.cpp + 对应组件定义
- * - 改节点编辑规则: Scene::Patch / LogicalComponents.h / SceneMutation.cpp
+ * - 改节点编辑规则: Scene 节点编辑 API / LogicalComponents.h / SceneModify.cpp
  * - 改显示文案或布局: InspectorUI.cpp
  *
  * 用法:
