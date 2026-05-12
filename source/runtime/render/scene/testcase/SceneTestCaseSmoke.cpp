@@ -1807,8 +1807,9 @@ public:
 
     void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
         if (m_stage == EStage::WaitImportTick) {
-            Scene::NodeSubtreeStats import_stats{};
-            std::string             import_root_name;
+            Scene::NodeSubtreeStats   import_stats{};
+            Scene::NodeLocalTransform import_root_local_transform{};
+            std::string               import_root_name;
 
             Expect(
                 !tick_state.did_sync,
@@ -1837,8 +1838,27 @@ public:
                 "Imported fixture root should expose its generated node name."
             );
             Expect(
+                scene.TryGetNodeLocalTransform(m_import_root, import_root_local_transform),
+                "Imported fixture root should expose the preserved source root local transform."
+            );
+            Expect(
                 import_root_name == "Imported: mizuki.gltf",
                 "Imported fixture root name should match the generated import prefix."
+            );
+            Expect(
+                IsNear(import_root_local_transform.translation, float3(0.f, 0.f, 0.f)),
+                "Imported fixture root translation should preserve the source root local translation."
+            );
+            Expect(
+                IsNear(import_root_local_transform.scale, float3(0.25f, 0.25f, 0.25f)),
+                "Imported fixture root scale should preserve the mizuki fixture root scale."
+            );
+            Expect(
+                IsNear(
+                    import_root_local_transform.rotation,
+                    Quaternion(float3(1.f, 0.f, 0.f), Angle::MakeFromDegree(-90.f))
+                ),
+                "Imported fixture root rotation should preserve the mizuki fixture root rotation."
             );
             Expect(
                 scene.GetNodeChildCount(m_import_root) > 0,

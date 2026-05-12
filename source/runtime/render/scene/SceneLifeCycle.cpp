@@ -385,6 +385,9 @@ Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::files
 
     auto&       import_root_node      = target_registry.get<ecs::CNode>(import_root_entt);
     const auto& source_root_node      = source_registry.get<ecs::CNode>(source_root_entt);
+    import_root_node.translation      = source_root_node.translation;
+    import_root_node.rotation         = source_root_node.rotation;
+    import_root_node.scale            = source_root_node.scale;
     import_root_node.first_child_entt = RemapEntity(remap, source_root_node.first_child_entt);
     import_root_node.last_child_entt  = RemapEntity(remap, source_root_node.last_child_entt);
     import_root_node.child_count      = source_root_node.child_count;
