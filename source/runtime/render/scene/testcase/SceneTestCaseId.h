@@ -41,6 +41,9 @@ enum class ESceneTestCaseId : std::uint32_t {
     // 验证具名 Node setter API 能正确修改名称和局部变换
     SetNodeProperties,
 
+    // 验证普通 entity / node query / SetLocalTransform 相关 API
+    QueryNodeAndLocalTransform,
+
     // 验证 DestroyNodeSubtree 会删除整棵 node 子树
     DestroyNodeSubtree,
 
