@@ -25,6 +25,10 @@ class Scene;
  * 用法:
  * - 由 EditorUI::ShowInspector() 调用 ShowWindow()
  * - 外部传入 Scene 和当前选中 entt::entity，不自己持有场景
+ *
+ * 边界约束:
+ * - 只通过 Scene query/edit API 读取和写回选中节点属性
+ * - 不直接访问 registry / LogicalScene；如果能力不够，应先补 Scene 正式 API
  */
 class InspectorUI {
 public:

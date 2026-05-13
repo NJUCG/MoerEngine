@@ -9,6 +9,17 @@ namespace Moer {
 
 class Scene;
 
+/**
+ * SceneEditingUI 负责 scene 编辑相关窗口内容。
+ *
+ * 结构:
+ * - Editing：常用正式编辑入口，如 Lighting / Primitive
+ * - Test & Debug：Scene testcase 与长期 debug switch
+ *
+ * 边界约束:
+ * - 只通过 Scene 正式 API、SceneEditing helper 和 SceneTestCaseConfig 驱动行为
+ * - 不直接访问 registry / LogicalScene；缺能力时优先补 Scene / SceneEditing 接口
+ */
 class SceneEditingUI {
 public:
     explicit SceneEditingUI(SceneTestCaseConfig& test_case_config);

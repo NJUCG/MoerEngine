@@ -35,6 +35,10 @@ class Scene;
  * - 每帧先 TickUI(scene) 组装 ImGui
  * - 再 RenderGUI() 输出到 UI framebuffer
  * - 独立平台窗口由 PresentWindows() 收尾
+ *
+ * 边界约束:
+ * - 这里只负责窗口编排、菜单和 editor 级状态，不直接改 runtime 内部实现层
+ * - Scene 相关 UI 应优先通过 Scene 正式 API 或 SceneEditing 完成，不直接访问 registry / LogicalScene
  */
 class EditorUI {
 
