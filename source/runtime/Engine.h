@@ -36,9 +36,9 @@ private:
     UniquePtr<RuntimeAssets> m_runtime_assets;
 
     UniquePtr<scripting::ScriptHost> m_script_host;
-    UniquePtr<Render::Renderer> m_renderer;
+    UniquePtr<Render::Renderer>      m_renderer;
 
-    bool has_shutdown = false;
+    bool m_has_shutdown = false;
 };
 
 } // namespace Moer

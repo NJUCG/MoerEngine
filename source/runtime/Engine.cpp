@@ -2,8 +2,6 @@
 
 // Runtime
 #include "config/ConfigManager.h"
-#include "misc/MMemory.h"
-#include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "scripting/PythonRuntimeConfig.h"
 #include "scripting/ScriptHost.h"
@@ -32,7 +30,7 @@ static bool ContainsNonAscii(const std::filesystem::path& p);
 Engine::Engine() {}
 
 Engine::~Engine() {
-    assert(has_shutdown && "Engine::ShutDown() was not called before Engine destruction!");
+    assert(m_has_shutdown && "Engine::ShutDown() was not called before Engine destruction!");
 }
 
 void Engine::Init(int argc, const char** argv) {
@@ -163,7 +161,7 @@ void Engine::ShutDown() {
     RenderDevice::Dispose();
     TaskSystem::ShutDown();
 
-    has_shutdown = true;
+    m_has_shutdown = true;
 }
 
 void Engine::Init3rdParty() {
