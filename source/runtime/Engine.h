@@ -2,6 +2,10 @@
 
 #include "renderer/Renderer.h"
 
+namespace Moer::scripting {
+class ScriptHost;
+}
+
 namespace Moer {
 
 class EditorUI;
@@ -31,6 +35,7 @@ private:
     SharedPtr<EditorConfig>  m_editor_config;
     UniquePtr<RuntimeAssets> m_runtime_assets;
 
+    UniquePtr<scripting::ScriptHost> m_script_host;
     UniquePtr<Render::Renderer> m_renderer;
 
     bool has_shutdown = false;

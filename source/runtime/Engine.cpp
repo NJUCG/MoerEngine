@@ -5,6 +5,8 @@
 #include "misc/MMemory.h"
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
+#include "scripting/PythonRuntimeConfig.h"
+#include "scripting/ScriptHost.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
@@ -114,6 +116,9 @@ void Engine::Init(int argc, const char** argv) {
 
     m_runtime_assets =
         MakeUnique<RuntimeAssets>(ConfigManager::GetInstance().GetEditorResourcePath(), RenderDevice::Get());
+
+    m_script_host = MakeUnique<scripting::ScriptHost>(scripting::PythonRuntimeConfig::Default());
+    m_script_host->Start();
 }
 
 void Engine::Run(const EngineHooks& hooks) {
@@ -146,6 +151,11 @@ void Engine::Run(const EngineHooks& hooks) {
 }
 
 void Engine::ShutDown() {
+    if (m_script_host) {
+        m_script_host->Stop();
+        m_script_host.reset();
+    }
+
     m_runtime_assets.reset(); // 释放RuntimeAssets资源
 
     WindowContext::ShutDown();
