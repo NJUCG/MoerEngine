@@ -12,7 +12,10 @@ endif()
 
 # ShaderMake for NRD
 if (WIN32)
-	set(REDIST_DXC "${MOER_DXC_EXECUTABLE}")
+	get_target_property(REDIST_DXC dxc DXC_TARGET_EXECUTABLE)
+	if (NOT REDIST_DXC)
+		message(FATAL_ERROR "Target property DXC_TARGET_EXECUTABLE is missing on target 'dxc'.")
+	endif()
     message(STATUS "REDIST_DXC=${REDIST_DXC}")
 else()
 	message(FATAL_ERROR "The vendored DXC package currently only supports Windows x64.")
