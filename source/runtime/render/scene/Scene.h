@@ -363,10 +363,16 @@ public:
      */
     void RestoreDrawCommands(Render::CommandList& cmd_list);
 
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
     const CpuScene& cpu_scene() const;
+
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
     const CpuScene& GetCpuScene() const;
 
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
     Render::BindlessArrayRef bindless_array();
+
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
     Render::BindlessArrayRef GetBindlessArray();
 
 public:
@@ -374,16 +380,28 @@ public:
     // MARK: Logical Scene API
     ///////////////////////////////////////////
 
-    // 这组接口直接暴露了 Scene 的内部实现层。
-    // 它们保留给 runtime 内部模块和迁移阶段使用，不应继续向 Editor / tooling 扩散。
-    ecs::LogicalScene&       logical_scene();
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
+    ecs::LogicalScene& logical_scene();
+
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
     const ecs::LogicalScene& logical_scene() const;
-    ecs::LogicalScene&       GetLogicalScene();
+
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
+    ecs::LogicalScene& GetLogicalScene();
+
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
     const ecs::LogicalScene& GetLogicalScene() const;
 
-    entt::registry&       r();
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
+    entt::registry& r();
+
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
     const entt::registry& r() const;
-    entt::registry&       GetRegistry();
+
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
+    entt::registry& GetRegistry();
+
+    // Editor / 外部代码 不应该调用此接口，推荐通过Scene API操作场景
     const entt::registry& GetRegistry() const;
 
 private:
