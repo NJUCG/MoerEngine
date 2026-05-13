@@ -11,13 +11,17 @@ class Scene;
 
 class SceneEditingUI {
 public:
-    SceneEditingUI(SceneTestCaseConfig& test_case_config, bool& out_need_reload);
+    explicit SceneEditingUI(SceneTestCaseConfig& test_case_config);
 
     void ShowWindow(bool* p_open, Scene& scene);
 
 private:
+    void ShowEditingSection(Scene& scene);
+    void ShowLightingSection(Scene& scene);
+    void ShowPrimitiveSection(Scene& scene);
+    void ShowTestAndDebugSection();
+
     SceneTestCaseConfig& m_test_case_config;
-    bool&                m_need_reload;
 
     int    m_procedural_shape_index = 0;
     float3 m_create_translation     = float3(0.f, 0.f, 0.f);
@@ -32,7 +36,6 @@ private:
 
     std::string m_last_create_status;
     std::string m_last_light_status;
-    std::string m_last_scene_action_status;
 };
 
 } // namespace Moer

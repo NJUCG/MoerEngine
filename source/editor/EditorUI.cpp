@@ -24,12 +24,45 @@ using namespace Moer::Render;
 
 namespace Moer {
 
+namespace {
+
+std::string GetSceneFileName(std::string_view scene_path) {
+    if (scene_path.empty()) {
+        return "No Scene";
+    }
+
+    const size_t last_slash = scene_path.find_last_of("\\/");
+    return last_slash == std::string::npos ? std::string(scene_path) :
+                                             std::string(scene_path.substr(last_slash + 1));
+}
+
+std::string TruncateMenuValue(std::string_view value) {
+    constexpr size_t k_max_display_length      = 15;
+    constexpr size_t k_truncated_prefix_length = 10;
+
+    if (value.size() <= k_max_display_length) {
+        return std::string(value);
+    }
+
+    return std::string(value.substr(0, k_truncated_prefix_length)) + "...";
+}
+
+std::string BuildFileMenuLabel(std::string_view scene_path) {
+    return "File: [" + TruncateMenuValue(GetSceneFileName(scene_path)) + "]";
+}
+
+std::string BuildRenderMethodMenuLabel(ERenderMethod render_method) {
+    return "Render Method: [" + std::string(k_render_method_names[static_cast<uint>(render_method)]) + "]";
+}
+
+} // namespace
+
 EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
     m_ui_renderer(std::move(renderer)),
     m_config(editor_config),
     m_raster_ui(editor_config->raster_config),
     m_raytracing_ui(editor_config->raytracing_config),
-    m_scene_editing_ui(editor_config->scene_test_case_config, m_b_need_reload) {
+    m_scene_editing_ui(editor_config->scene_test_case_config) {
 
     auto has_saved_window_settings = [](const char* window_name) {
         return ImGui::FindWindowSettingsByID(ImHashStr(window_name)) != nullptr;
@@ -244,6 +277,8 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
 
 void EditorUI::TickUI(Scene& scene) {
 
+    ResetState();
+
     // 注：Resolution表示整个窗口的大小（不包含windows标题栏）；SceneColor只表示场景渲染区域的大小
     // 更新SceneColor的分辨率
     m_config->aspect_ratio = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
@@ -292,22 +327,37 @@ void EditorUI::TickUI(Scene& scene) {
         ImGui::PopStyleVar(2);
 
     // Submit the DockSpace
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO&   io               = ImGui::GetIO();
+    const bool is_scene_loading = !scene.IsReady() && scene.IsStartLoading();
     if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
         ImGuiID dockspace_id = ImGui::GetID("Docking Main");
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
     }
     if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("Menu")) {
-            // if (ImGui::MenuItem("Reload Current Level")) {
-            // }
-            // if (ImGui::MenuItem("Save Current Level")) {
-            // }
-            if (ImGui::MenuItem("Exit")) {
-                exit(0);
+        ShowFileMenu(scene, is_scene_loading);
+
+        const auto        last_selected_render_method = m_config->selected_render_method;
+        const std::string render_method_menu_label =
+            BuildRenderMethodMenuLabel(m_config->selected_render_method);
+        if (ImGui::BeginMenu(render_method_menu_label.c_str())) {
+            for (int i = 0; i < IM_ARRAYSIZE(k_render_method_names); i++) {
+                const bool is_selected = (m_config->selected_render_method == static_cast<ERenderMethod>(i));
+                if (ImGui::MenuItem(
+                        k_render_method_names[i].data(), nullptr, is_selected, !is_scene_loading
+                    )) {
+                    m_config->selected_render_method = static_cast<ERenderMethod>(i);
+                }
+                if (is_selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
             }
             ImGui::EndMenu();
         }
+        if (last_selected_render_method != m_config->selected_render_method) {
+            m_b_need_reload = true;
+            SetShowRenderConfigSubUI(false);
+        }
+
         if (ImGui::BeginMenu("Window")) {
 
             ImGui::MenuItem("Scene Color", nullptr, &m_b_show_scene_color);
@@ -329,7 +379,6 @@ void EditorUI::TickUI(Scene& scene) {
         ShowMemoryProfiler(&m_b_show_memory_profiler);
     }
 #endif
-    ResetState();
     ShowSceneColor();
     ShowHierarchy(scene);
     ShowInspector(scene);
@@ -341,6 +390,78 @@ void EditorUI::TickUI(Scene& scene) {
 
 void EditorUI::ShowSceneEditing(Scene& scene) {
     m_scene_editing_ui.ShowWindow(&m_b_show_scene_editing, scene);
+}
+
+void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
+    const std::string file_menu_label = BuildFileMenuLabel(m_config->scene_path);
+    if (!ImGui::BeginMenu(file_menu_label.c_str())) {
+        return;
+    }
+
+    if (ImGui::MenuItem("Open Scene...", nullptr, false, !is_scene_loading)) {
+        std::string selected_path;
+        switch (OpenSceneFileDialog(selected_path)) {
+            case ESceneFileDialogResult::Selected:
+                LOG_INFO("User selected file: {}", selected_path);
+                m_b_need_reload           = true;
+                m_config->scene_path      = std::move(selected_path);
+                m_last_file_action_status = "Open Scene requested";
+                break;
+            case ESceneFileDialogResult::Cancelled:
+                LOG_INFO("User pressed cancel.");
+                break;
+            case ESceneFileDialogResult::Error:
+                m_last_file_action_status = "Open Scene failed. Check log.";
+                break;
+        }
+    }
+
+    if (ImGui::MenuItem("Import Into Current Scene...", nullptr, false, scene.IsReady())) {
+        std::string selected_path;
+        if (OpenSceneFileDialog(selected_path) == ESceneFileDialogResult::Selected) {
+            const Scene::ImportSceneFromFileResult result = scene.ImportSceneFromFileSync(selected_path);
+            if (result) {
+                m_last_file_action_status =
+                    "Imported scene entities: " + std::to_string(result.imported_entity_count);
+            } else {
+                m_last_file_action_status = "Import failed: " + result.error_message;
+            }
+        }
+    }
+
+    if (ImGui::BeginMenu("Scene Cache")) {
+        if (ImGui::MenuItem("Save State Cache")) {
+            if (scene.SaveStateCache()) {
+                m_last_file_action_status = "State cache saved";
+            } else {
+                m_last_file_action_status = "Save State failed. Check log.";
+            }
+        }
+
+        const bool can_restore_source_scene = scene.IsReady() && !scene.GetSourceFilePath().empty();
+
+        if (ImGui::MenuItem("Load State Cache", nullptr, false, can_restore_source_scene)) {
+            m_b_need_reload           = true;
+            m_last_file_action_status = "Load Cache requested";
+        }
+
+        if (ImGui::MenuItem("Reset To Source Scene", nullptr, false, can_restore_source_scene)) {
+            if (scene.ResetToSourceScene()) {
+                m_b_need_reload           = true;
+                m_last_file_action_status = "Reset Cache requested";
+            } else {
+                m_last_file_action_status = "Reset failed. Check log.";
+            }
+        }
+
+        ImGui::EndMenu();
+    }
+
+    ImGui::Separator();
+    if (ImGui::MenuItem("Exit")) {
+        exit(0);
+    }
+    ImGui::EndMenu();
 }
 
 void EditorUI::ShowHierarchy(Scene& scene) {
@@ -551,54 +672,8 @@ void EditorUI::ShowConfig(Scene& scene) {
     const bool is_scene_loading = !scene.IsReady() && scene.IsStartLoading();
     ImGui::BeginDisabled(is_scene_loading);
 
-    // Render Method
-    {
-        auto last_selected_render_method = m_config->selected_render_method;
-        if (ImGui::BeginCombo(
-                "Render Method",
-                k_render_method_names[static_cast<uint>(m_config->selected_render_method)].data()
-            )) {
-            for (int i = 0; i < IM_ARRAYSIZE(k_render_method_names); i++) {
-                const bool is_selected = (m_config->selected_render_method == static_cast<ERenderMethod>(i));
-                if (ImGui::Selectable(k_render_method_names[i].data(), is_selected)) {
-                    m_config->selected_render_method = static_cast<ERenderMethod>(i);
-                }
-                if (is_selected) {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
-        }
-        if (last_selected_render_method != m_config->selected_render_method) {
-            m_b_need_reload = true;
-            SetShowRenderConfigSubUI(false);
-        }
-    }
-
-    { // Scene Path
-        size_t      last_slash = m_config->scene_path.find_last_of("/\\");
-        std::string scene_name = (last_slash == std::string::npos) ?
-                                     m_config->scene_path :
-                                     m_config->scene_path.substr(last_slash + 1);
-        if (ImGui::Button("Open Scene")) {
-            std::string selected_path;
-            switch (OpenSceneFileDialog(selected_path)) {
-                case ESceneFileDialogResult::Selected:
-                    LOG_INFO("User selected file: {}", selected_path);
-
-                    // Prepare for reload
-                    m_b_need_reload      = true;
-                    m_config->scene_path = std::move(selected_path);
-                    break;
-                case ESceneFileDialogResult::Cancelled:
-                    LOG_INFO("User pressed cancel.");
-                    break;
-                case ESceneFileDialogResult::Error:
-                    break;
-            }
-        }
-        ImGui::SameLine();
-        ImGui::Text("Current: [%s]", scene_name.c_str());
+    if (!m_last_file_action_status.empty()) {
+        ImGui::TextDisabled("File Action: %s", m_last_file_action_status.c_str());
     }
 
     if (ImGui::TreeNode("Camera")) {

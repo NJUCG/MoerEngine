@@ -12,6 +12,7 @@
 #include "scene_editing_ui/SceneEditingUI.h"
 
 #include <entt/entity/entity.hpp>
+#include <string>
 
 namespace Moer {
 
@@ -78,6 +79,7 @@ public: // Sub UI
 
 private:
     void ResetState(); // reset m_b_need_reload, etc..
+    void ShowFileMenu(Scene& scene, bool is_scene_loading);
     void ShowSceneColor();
     void ShowConfig(Scene& scene);
     void ShowSceneEditing(Scene& scene);
@@ -101,6 +103,7 @@ private:
 
     bool m_b_need_reload               = false;
     bool m_b_show_render_config_sub_ui = true; // 当前 renderer 的专属配置面板是否可见。
+    std::string m_last_file_action_status;
 
     // Hierarchy selection state
     entt::entity m_selected_node = entt::null;
