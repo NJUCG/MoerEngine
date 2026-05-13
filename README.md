@@ -124,6 +124,7 @@ MoerEngine源代码采用Apache-2.0 License授权。
 * [NRI](https://github.com/NVIDIA-RTX/NRI): MIT License
 * [perfetto](https://github.com/google/perfetto): Apache-2.0 license
 * [pybind11](https://github.com/pybind/pybind11): BSD 3-Clause License
+* [Python3.12](https://www.python.org/): Python Software Foundation License Version 2（仓库内附带的 Windows 二进制与相关附加声明见 `3rdparty/python312/x64/LICENSE.txt`）
 * [smaa](https://github.com/iryoku/smaa): MIT License
 * [spdlog](https://github.com/gabime/spdlog): MIT License
 * [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross): Apache-2.0 License
