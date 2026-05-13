@@ -60,6 +60,12 @@ class CommandList;
  * - Scene 是 Editor / Python / MCP 这类前端调用方应该优先依赖的正式入口
  * - LogicalScene / registry 仍存在，但属于 runtime 内部实现层
  * - logical_scene() / r() / GetRegistry() 这类接口仅保留给 runtime 内部和迁移阶段，不应继续向前端扩散
+ * 
+ * 【重要！】关于 pybind11
+ * - 实现新的 Scene Query / Modify API 时，优先直接把正式 Scene API 设计成 pybind11 可绑定
+ * - 简单值类型优先使用 STL 返回值 / 参数，避免继续扩散 `bool + out 参数` 这类不友好签名
+ * - 复杂结果优先把正式 public struct / DTO 设计为可直接绑定，而不是在 scripting 层额外补 wrapper
+ * - 当前不满足规范的旧 API，在实际接入脚本白名单时逐个整改原签名，不急着一次性全量重构
  */
 class RENDER_API Scene {
 
