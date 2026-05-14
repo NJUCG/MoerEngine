@@ -141,6 +141,24 @@ void BindNodeLocalTransform(py::module_& module) {
         .def_readwrite("scale", &Scene::NodeLocalTransform::scale);
 }
 
+void BindImportSceneFromFileResult(py::module_& module) {
+    py::class_<Scene::ImportSceneFromFileResult> result_class(module, "SceneImportResult");
+    result_class.attr("__doc__") = "Result of synchronously importing a scene file into the current scene.";
+    result_class.def(py::init<>())
+        .def_readwrite("success", &Scene::ImportSceneFromFileResult::success)
+        .def_readwrite("error_message", &Scene::ImportSceneFromFileResult::error_message)
+        .def_property_readonly(
+            "import_root_entity",
+            [](const Scene::ImportSceneFromFileResult& value) {
+                return value.import_root_entt;
+            }
+        )
+        .def_readwrite("imported_entity_count", &Scene::ImportSceneFromFileResult::imported_entity_count)
+        .def("__bool__", [](const Scene::ImportSceneFromFileResult& value) {
+            return static_cast<bool>(value);
+        });
+}
+
 void BindSceneApi(py::module_& module) {
     py::class_<MainThreadCommandQueue> scene_api_class(module, "SceneApi");
     scene_api_class.attr("__doc__") = "Access the current runtime scene. Entity values are Python int "
@@ -194,6 +212,16 @@ void BindSceneApi(py::module_& module) {
             },
             py::arg("entity"),
             "Return the node local transform for a valid node entity handle, or None if invalid."
+        )
+        .def(
+            "import_scene_from_file",
+            [](MainThreadCommandQueue& command_queue, const std::string& file_path) {
+                return CallScene(command_queue, [&file_path](Scene& scene) {
+                    return scene.ImportSceneFromFileSync(file_path);
+                });
+            },
+            py::arg("file_path"),
+            "Synchronously import a scene file into the current scene and return the import result."
         )
         .def(
             "set_node_name",
@@ -259,6 +287,7 @@ PYBIND11_EMBEDDED_MODULE(moer, module) {
     Moer::scripting::BindFloat4(module);
     Moer::scripting::BindQuaternion(module);
     Moer::scripting::BindNodeLocalTransform(module);
+    Moer::scripting::BindImportSceneFromFileResult(module);
     Moer::scripting::BindSceneApi(module);
 
     module.def(
