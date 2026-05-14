@@ -234,6 +234,10 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             assert(false);
         }
 
+        if (hooks.on_tick_scripting) {
+            hooks.on_tick_scripting(scene);
+        }
+
         if (hooks.on_tick_ui) {
             hooks.on_tick_ui(scene);
         }

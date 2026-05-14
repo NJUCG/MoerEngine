@@ -12,6 +12,7 @@
 #include <cassert>
 #include <entt/entt.hpp>
 #include <filesystem>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -63,7 +64,9 @@ class CommandList;
  * 
  * 【重要！】关于 pybind11
  * - 实现新的 Scene Query / Modify API 时，优先直接把正式 Scene API 设计成 pybind11 可绑定
- * - 简单值类型优先使用 STL 返回值 / 参数，避免继续扩散 `bool + out 参数` 这类不友好签名
+ * - 数学值类型优先直接绑定到 pybind11，不要为了脚本接入把正式 API 改写成 STL 过渡层
+ * - `entt::entity` 继续作为正式 API 类型；Python 侧通过 pybind11 type_caster 映射为 entity id / handle
+ * - 避免继续扩散 `bool + out 参数` 这类不友好签名
  * - 复杂结果优先把正式 public struct / DTO 设计为可直接绑定，而不是在 scripting 层额外补 wrapper
  * - 当前不满足规范的旧 API，在实际接入脚本白名单时逐个整改原签名，不急着一次性全量重构
  */
@@ -270,10 +273,10 @@ public:
         }
     }
 
-    std::string      GetNodeDisplayName(entt::entity entity) const;
-    NodeSubtreeStats GetNodeSubtreeStats(entt::entity entity) const;
-    bool             TryGetNodeName(entt::entity entity, std::string& out_name) const;
-    bool             TryGetNodeLocalTransform(entt::entity entity, NodeLocalTransform& out_transform) const;
+    std::string                       GetNodeDisplayName(entt::entity entity) const;
+    NodeSubtreeStats                  GetNodeSubtreeStats(entt::entity entity) const;
+    bool                              TryGetNodeName(entt::entity entity, std::string& out_name) const;
+    std::optional<NodeLocalTransform> TryGetNodeLocalTransform(entt::entity entity) const;
 
     entt::entity GetMainCameraEntity() const;
     entt::entity GetMainDirectionalLightEntity() const;

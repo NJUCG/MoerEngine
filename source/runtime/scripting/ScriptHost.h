@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scripting/MainThreadCommandQueue.h"
 #include "scripting/PythonRuntimeConfig.h"
 #include "scripting/ScriptExecutionRequest.h"
 #include "scripting/ScriptExecutionResult.h"
@@ -10,7 +11,12 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <thread>
+
+namespace Moer {
+class Scene;
+}
 
 namespace Moer::scripting {
 
@@ -33,6 +39,10 @@ public:
     void Stop();
     // 提交一段脚本并异步返回执行结果
     std::future<ScriptExecutionResult> SubmitSnippet(ScriptExecutionRequest request);
+    // 在主线程稳定帧阶段处理 pending scene 命令
+    void ProcessMainThreadCommands(Scene& scene);
+    // 在 scene 不可用时取消所有 pending scene 命令
+    void CancelPendingSceneCommands(std::string_view reason);
 
 private:
     // 表示一个排队等待执行的脚本任务
@@ -42,6 +52,7 @@ private:
     void WorkerMain(std::promise<std::string> startup_promise);
 
     PythonRuntimeConfig                           m_runtime_config;
+    MainThreadCommandQueue                        m_main_thread_command_queue;
     std::thread                                   m_worker_thread;
     std::condition_variable                       m_condition;
     std::deque<std::unique_ptr<PendingExecution>> m_pending_executions;

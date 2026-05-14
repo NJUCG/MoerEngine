@@ -2,8 +2,10 @@
 
 #include "log/LogSystem.h"
 #include "scripting/PythonRuntime.h"
+#include "scripting/ScriptingModule.h"
 
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace Moer::scripting {
@@ -19,6 +21,28 @@ ScriptExecutionResult MakeScriptHostError(std::string_view message) {
     ScriptExecutionResult result;
     result.exception_text = std::string(message);
     return result;
+}
+
+void BootstrapSceneBindings(PythonRuntime& runtime) {
+    ScriptExecutionRequest bootstrap_request;
+    bootstrap_request.source_name = "<moer-bootstrap>";
+    bootstrap_request.code        = "import moer\nscene = moer.scene()\n";
+
+    ScriptExecutionResult bootstrap_result = runtime.ExecuteSnippet(bootstrap_request);
+    if (bootstrap_result.success) {
+        return;
+    }
+
+    std::string message = "Failed to bootstrap moer scene bindings.";
+    if (!bootstrap_result.exception_text.empty()) {
+        message += " ";
+        message += bootstrap_result.exception_text;
+    } else if (!bootstrap_result.stderr_text.empty()) {
+        message += " ";
+        message += bootstrap_result.stderr_text;
+    }
+
+    throw std::runtime_error(message);
 }
 
 } // namespace
@@ -67,6 +91,8 @@ void ScriptHost::Stop() {
         m_stop_requested = true;
     }
 
+    m_main_thread_command_queue.CancelPending("ScriptHost stopped before scene command execution.");
+
     m_condition.notify_all();
     m_worker_thread.join();
 
@@ -106,12 +132,23 @@ std::future<ScriptExecutionResult> ScriptHost::SubmitSnippet(ScriptExecutionRequ
     return execution_future;
 }
 
+void ScriptHost::ProcessMainThreadCommands(Scene& scene) {
+    m_main_thread_command_queue.ProcessPendingCommands(scene);
+}
+
+void ScriptHost::CancelPendingSceneCommands(std::string_view reason) {
+    m_main_thread_command_queue.CancelPending(reason);
+}
+
 void ScriptHost::WorkerMain(std::promise<std::string> startup_promise) {
     PythonRuntime runtime;
     bool          startup_value_sent = false;
 
     try {
         runtime.Initialize(m_runtime_config);
+        SetActiveSceneCommandQueue(&m_main_thread_command_queue);
+        BootstrapSceneBindings(runtime);
+
         {
             std::lock_guard lock(m_mutex);
             m_is_running = true;
@@ -161,6 +198,8 @@ void ScriptHost::WorkerMain(std::promise<std::string> startup_promise) {
 
         LOG_ERROR("ScriptHost worker failed: {}", ex.what());
     }
+
+    ClearActiveSceneCommandQueue();
 
     if (runtime.IsInitialized()) {
         runtime.Finalize();

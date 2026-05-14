@@ -20,6 +20,8 @@ target_include_directories(${target_name}
 
 target_link_libraries(${target_name}
     PUBLIC Moer::Core
+    PRIVATE Moer::Render
+    PRIVATE EnTT::EnTT
     PUBLIC pybind11::headers
     PUBLIC python312_embed
 )

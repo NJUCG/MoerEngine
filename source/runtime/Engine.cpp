@@ -120,6 +120,12 @@ void Engine::Init(int argc, const char** argv) {
 }
 
 void Engine::Run(const EngineHooks& hooks) {
+    EngineHooks runtime_hooks       = hooks;
+    runtime_hooks.on_tick_scripting = [this](Scene& scene) {
+        if (m_script_host) {
+            m_script_host->ProcessMainThreadCommands(scene);
+        }
+    };
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         LOG_INFO(
@@ -128,20 +134,27 @@ void Engine::Run(const EngineHooks& hooks) {
         );
 
         if (m_editor_config->selected_render_method == ERenderMethod::Raster) {
-            m_renderer =
-                MakeUnique<Raster::RasterRenderer>(m_editor_config->GetResolution(), m_editor_config, hooks);
+            m_renderer = MakeUnique<Raster::RasterRenderer>(
+                m_editor_config->GetResolution(), m_editor_config, runtime_hooks
+            );
 
         } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
             // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);
             m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
-                m_editor_config->GetResolution(), m_editor_config, hooks, *m_runtime_assets
+                m_editor_config->GetResolution(), m_editor_config, runtime_hooks, *m_runtime_assets
             );
 
         } else {
             assert(false && "Unknown render method");
         }
 
-        m_renderer->Run(m_editor_config, hooks);
+        m_renderer->Run(m_editor_config, runtime_hooks);
+
+        if (m_script_host) {
+            m_script_host->CancelPendingSceneCommands(
+                "Scene became unavailable during renderer switch or shutdown."
+            );
+        }
 
         // Switch Renderer
         m_renderer.reset();
@@ -150,6 +163,7 @@ void Engine::Run(const EngineHooks& hooks) {
 
 void Engine::ShutDown() {
     if (m_script_host) {
+        m_script_host->CancelPendingSceneCommands("Scene became unavailable during engine shutdown.");
         m_script_host->Stop();
         m_script_host.reset();
     }

@@ -119,11 +119,10 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         return;
     }
 
-    std::string               node_name;
-    std::string               node_display_name;
-    Scene::NodeLocalTransform local_transform{};
-    if (!scene->TryGetNodeName(selected_node, node_name) ||
-        !scene->TryGetNodeLocalTransform(selected_node, local_transform)) {
+    std::string node_name;
+    std::string node_display_name;
+    auto        local_transform = scene->TryGetNodeLocalTransform(selected_node);
+    if (!scene->TryGetNodeName(selected_node, node_name) || !local_transform.has_value()) {
         selected_node           = entt::null;
         m_rotation_cache_entity = entt::null;
         ImGui::TextDisabled("No node selected.");
@@ -135,7 +134,7 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
 
     if (m_rotation_cache_entity != selected_node) {
         m_rotation_cache_entity = selected_node;
-        m_rotation_euler        = EulerDegreesFromQuaternion(local_transform.rotation);
+        m_rotation_euler        = EulerDegreesFromQuaternion(local_transform->rotation);
     }
 
     std::array<char, 256> name_buffer{};
@@ -147,7 +146,7 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         scene->SetNodeName(selected_node, name_buffer.data());
     }
 
-    float3 translation = local_transform.translation;
+    float3 translation = local_transform->translation;
     if (ImGui::DragFloat3("Position", (float*)&translation, 0.05f)) {
         scene->SetNodeTranslation(selected_node, translation);
     }
@@ -157,7 +156,7 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         scene->SetNodeRotation(selected_node, QuaternionFromEulerDegrees(m_rotation_euler));
     }
 
-    float3 scale = local_transform.scale;
+    float3 scale = local_transform->scale;
     if (ImGui::DragFloat3("Scale", (float*)&scale, 0.05f)) {
         scene->SetNodeScale(selected_node, scale);
     }

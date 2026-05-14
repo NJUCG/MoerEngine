@@ -216,7 +216,7 @@ public:
     // 验证 point light 创建请求已被本帧 TickState 捕获
     void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
         auto& registry = scene.r();
-        Expect(m_light_entity != entt::null, "CreatePointLight returned entt::null.");
+        Expect(m_light_entity != entt::null, "CreatePointLight should not return entt::null.");
         Expect(registry.valid(m_light_entity), "Created point light entity is invalid.");
         Expect(
             registry.all_of<ecs::CLightPoint, ecs::CNode>(m_light_entity),
@@ -281,7 +281,7 @@ public:
     void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
         if (m_stage == Stage::WaitCreateSync) {
             auto& registry = scene.r();
-            Expect(m_light_entity != entt::null, "Created point light entity should not be entt::null.");
+            Expect(m_light_entity != entt::null, "Created point light entity must not be entt::null.");
             Expect(
                 registry.valid(m_light_entity),
                 "Created point light entity should be valid before patch stage."
@@ -980,7 +980,7 @@ public:
 
         if (m_run_mode == ERunMode::Create) {
             auto& registry = scene.r();
-            Expect(tick_state.did_sync, "Renderable clone creation should trigger scene sync.");
+            Expect(tick_state.did_sync, "Creating renderable clones should trigger scene sync.");
             Expect(tick_state.rebuilt_mesh, "Renderable clone creation should rebuild mesh instance cache.");
             Expect(
                 m_clone_roots.size() == m_clone_root_offsets.size(),
@@ -1278,8 +1278,8 @@ public:
 
     void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
         if (m_stage == Stage::WaitCreateSync) {
-            Scene::NodeLocalTransform local_transform{};
-            std::string               node_name;
+            auto        local_transform = scene.TryGetNodeLocalTransform(m_node_entity);
+            std::string node_name;
 
             Expect(tick_state.did_sync, "SetNodeProperties setup should trigger scene sync.");
             Expect(tick_state.updated_transform, "SetNodeProperties setup should update transform data.");
@@ -1288,41 +1288,35 @@ public:
             Expect(
                 node_name == m_initial_name, "Created node name does not match the requested initial name."
             );
+            Expect(local_transform.has_value(), "Created node should expose its local transform.");
             Expect(
-                scene.TryGetNodeLocalTransform(m_node_entity, local_transform),
-                "Created node should expose its local transform."
-            );
-            Expect(
-                IsNear(local_transform.translation, m_initial_translation),
+                IsNear(local_transform->translation, m_initial_translation),
                 "Created node local translation is incorrect."
             );
-            Expect(IsNear(local_transform.scale, m_initial_scale), "Created node local scale is incorrect.");
+            Expect(IsNear(local_transform->scale, m_initial_scale), "Created node local scale is incorrect.");
 
             m_stage = Stage::EditNode;
             return;
         }
 
         if (m_stage == Stage::WaitEditSync) {
-            Scene::NodeLocalTransform local_transform{};
-            std::string               node_name;
+            auto        local_transform = scene.TryGetNodeLocalTransform(m_node_entity);
+            std::string node_name;
 
             Expect(tick_state.did_sync, "SetNodeProperties should trigger scene sync.");
             Expect(tick_state.updated_transform, "SetNodeProperties should update transform data.");
             Expect(scene.TryGetNodeName(m_node_entity, node_name), "Edited node should expose its name.");
             Expect(node_name == m_target_name, "Edited node name does not match the requested value.");
+            Expect(local_transform.has_value(), "Edited node should expose its local transform.");
             Expect(
-                scene.TryGetNodeLocalTransform(m_node_entity, local_transform),
-                "Edited node should expose its local transform."
-            );
-            Expect(
-                IsNear(local_transform.translation, m_target_translation),
+                IsNear(local_transform->translation, m_target_translation),
                 "Edited node local translation is incorrect."
             );
             Expect(
-                IsNear(local_transform.rotation, m_target_rotation),
+                IsNear(local_transform->rotation, m_target_rotation),
                 "Edited node local rotation is incorrect."
             );
-            Expect(IsNear(local_transform.scale, m_target_scale), "Edited node local scale is incorrect.");
+            Expect(IsNear(local_transform->scale, m_target_scale), "Edited node local scale is incorrect.");
 
             m_stage = Stage::Cleanup;
             return;
@@ -1439,9 +1433,9 @@ public:
 
     void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
         if (m_stage == EStage::WaitPlainEntityTick) {
-            auto&                     registry = scene.r();
-            std::string               plain_node_name;
-            Scene::NodeLocalTransform plain_local_transform{};
+            auto&       registry = scene.r();
+            std::string plain_node_name;
+            auto        plain_local_transform = scene.TryGetNodeLocalTransform(m_plain_entity);
 
             Expect(m_plain_entity != entt::null, "CreateEntity should return a valid entity.");
             Expect(registry.valid(m_plain_entity), "Plain entity should remain valid after creation.");
@@ -1453,8 +1447,7 @@ public:
                 "TryGetNodeName should fail for a plain entity."
             );
             Expect(
-                !scene.TryGetNodeLocalTransform(m_plain_entity, plain_local_transform),
-                "TryGetNodeLocalTransform should fail for a plain entity."
+                !plain_local_transform.has_value(), "TryGetNodeLocalTransform should fail for a plain entity."
             );
 
             m_stage = EStage::CreateHierarchy;
@@ -1550,24 +1543,21 @@ public:
         }
 
         if (m_stage == EStage::WaitLocalTransformSync) {
-            Scene::NodeLocalTransform local_transform{};
+            auto local_transform = scene.TryGetNodeLocalTransform(m_child_a);
 
             Expect(tick_state.did_sync, "SetLocalTransform should trigger scene sync.");
             Expect(tick_state.updated_transform, "SetLocalTransform should update transform data.");
+            Expect(local_transform.has_value(), "TryGetNodeLocalTransform should succeed for child A.");
             Expect(
-                scene.TryGetNodeLocalTransform(m_child_a, local_transform),
-                "TryGetNodeLocalTransform should succeed for child A."
-            );
-            Expect(
-                IsNear(local_transform.translation, m_target_translation),
+                IsNear(local_transform->translation, m_target_translation),
                 "SetLocalTransform should update local translation."
             );
             Expect(
-                IsNear(local_transform.rotation, m_target_rotation),
+                IsNear(local_transform->rotation, m_target_rotation),
                 "SetLocalTransform should update local rotation."
             );
             Expect(
-                IsNear(local_transform.scale, m_target_scale), "SetLocalTransform should update local scale."
+                IsNear(local_transform->scale, m_target_scale), "SetLocalTransform should update local scale."
             );
             Expect(
                 IsNear(
@@ -1691,7 +1681,7 @@ public:
         if (m_stage == Stage::WaitCreateSync) {
             Expect(tick_state.did_sync, "DestroyNodeSubtree setup should trigger scene sync.");
             Expect(tick_state.updated_transform, "DestroyNodeSubtree setup should update transform data.");
-            Expect(scene.IsValidNodeEntity(m_root), "Scene root node should remain valid.");
+            Expect(scene.IsValidNodeEntity(m_root), "Scene root node should remain valid after creation.");
             Expect(scene.IsValidNodeEntity(m_parent), "Subtree parent should be valid after creation.");
             Expect(scene.IsValidNodeEntity(m_child), "Subtree child should be valid after creation.");
             Expect(
@@ -1807,9 +1797,8 @@ public:
 
     void PostTick(Scene& scene, const Scene::TickState& tick_state) override {
         if (m_stage == EStage::WaitImportTick) {
-            Scene::NodeSubtreeStats   import_stats{};
-            Scene::NodeLocalTransform import_root_local_transform{};
-            std::string               import_root_name;
+            Scene::NodeSubtreeStats import_stats{};
+            std::string             import_root_name;
 
             Expect(
                 !tick_state.did_sync,
@@ -1827,6 +1816,8 @@ public:
                 m_import_result.imported_entity_count > 0,
                 "Import should report at least one imported entity from the mizuki fixture."
             );
+            auto import_root_local_transform = scene.TryGetNodeLocalTransform(m_import_root);
+
             Expect(scene.IsValidNodeEntity(m_root), "Scene root should remain valid after import.");
             Expect(scene.IsValidNodeEntity(m_import_root), "Imported fixture root should be a valid node.");
             Expect(
@@ -1838,7 +1829,7 @@ public:
                 "Imported fixture root should expose its generated node name."
             );
             Expect(
-                scene.TryGetNodeLocalTransform(m_import_root, import_root_local_transform),
+                import_root_local_transform.has_value(),
                 "Imported fixture root should expose the preserved source root local transform."
             );
             Expect(
@@ -1846,16 +1837,16 @@ public:
                 "Imported fixture root name should match the generated import prefix."
             );
             Expect(
-                IsNear(import_root_local_transform.translation, float3(0.f, 0.f, 0.f)),
+                IsNear(import_root_local_transform->translation, float3(0.f, 0.f, 0.f)),
                 "Imported fixture root translation should preserve the source root local translation."
             );
             Expect(
-                IsNear(import_root_local_transform.scale, float3(0.25f, 0.25f, 0.25f)),
+                IsNear(import_root_local_transform->scale, float3(0.25f, 0.25f, 0.25f)),
                 "Imported fixture root scale should preserve the mizuki fixture root scale."
             );
             Expect(
                 IsNear(
-                    import_root_local_transform.rotation,
+                    import_root_local_transform->rotation,
                     Quaternion(float3(1.f, 0.f, 0.f), Angle::MakeFromDegree(-90.f))
                 ),
                 "Imported fixture root rotation should preserve the mizuki fixture root rotation."

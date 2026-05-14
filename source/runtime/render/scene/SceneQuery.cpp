@@ -88,16 +88,17 @@ bool Scene::TryGetNodeName(entt::entity entity, std::string& out_name) const {
     return true;
 }
 
-bool Scene::TryGetNodeLocalTransform(entt::entity entity, NodeLocalTransform& out_transform) const {
+std::optional<Scene::NodeLocalTransform> Scene::TryGetNodeLocalTransform(entt::entity entity) const {
     if (!IsValidNodeEntity(entity)) {
-        return false;
+        return std::nullopt;
     }
 
-    const auto& node          = r().get<ecs::CNode>(entity);
-    out_transform.translation = node.translation;
-    out_transform.rotation    = node.rotation;
-    out_transform.scale       = node.scale;
-    return true;
+    const auto& node = r().get<ecs::CNode>(entity);
+    return NodeLocalTransform{
+        .translation = node.translation,
+        .rotation    = node.rotation,
+        .scale       = node.scale,
+    };
 }
 
 /////////////////////////////
