@@ -1,5 +1,9 @@
 import moer
 
+# ScriptHost bootstraps `scene` before user code runs, but binding it here keeps
+# static analysis aligned with the runtime contract.
+scene = moer.scene()
+
 
 def dump_transform(label, transform):
     if transform is None:

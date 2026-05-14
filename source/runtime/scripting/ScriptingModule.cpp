@@ -1,5 +1,8 @@
 #include "scripting/ScriptingModule.h"
 
+// 修改这里的 pybind11 绑定时，也要同步维护同目录下的 stubs/moer/__init__.pyi。
+// 这份 stub 主要给 VS Code / Pylance 做静态补全和签名提示，不参与运行时 import。
+
 #if defined(_DEBUG)
 #define MOER_SCRIPTING_MODULE_RESTORE_DEBUG 1
 #undef _DEBUG

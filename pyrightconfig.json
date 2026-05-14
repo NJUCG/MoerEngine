@@ -1,0 +1,5 @@
+{
+    "stubPath": "source/runtime/scripting/stubs",
+    "typeCheckingMode": "basic",
+    "reportMissingModuleSource": "none"
+}
