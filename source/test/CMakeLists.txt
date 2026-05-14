@@ -1,6 +1,7 @@
 set(moer_test_folder "test")
 
 add_subdirectory(math)
+add_subdirectory(scripting)
 
 set(test_target TestEngineOnly)
 add_executable(${test_target} "TestEngineOnly.cpp")
