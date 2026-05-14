@@ -16,6 +16,7 @@
 #include <pybind11/stl.h>
 
 #include "math/Quaternion.h"
+#include "math/Transform.h"
 #include "misc/Traits.h"
 #include "render/scene/Scene.h"
 #include "scripting/SceneCall.h"
@@ -132,6 +133,81 @@ void BindQuaternion(py::module_& module) {
         });
 }
 
+void BindAlphaMode(py::module_& module) {
+    py::enum_<EAlphaMode>(module, "EAlphaMode")
+        .value("Opaque", EAlphaMode::Opaque)
+        .value("Mask", EAlphaMode::Mask)
+        .value("Blend", EAlphaMode::Blend);
+}
+
+void BindProceduralPrimitiveShape(py::module_& module) {
+    py::enum_<EProceduralPrimitiveShape>(module, "EProceduralPrimitiveShape")
+        .value("Cube", EProceduralPrimitiveShape::Cube)
+        .value("FacetedSphere", EProceduralPrimitiveShape::FacetedSphere);
+}
+
+void BindTransform(py::module_& module) {
+    py::class_<Transform> transform_class(module, "Transform");
+    transform_class.attr("__doc__") = "Affine transform value.";
+    transform_class.def(py::init<>())
+        .def(
+            py::init<const float3&, const float3&, const Quaternion&>(),
+            py::arg("translation"),
+            py::arg("scale"),
+            py::arg("rotation")
+        )
+        .def_property(
+            "translation",
+            [](const Transform& value) {
+                return value.AffineDecomposition().translation;
+            },
+            [](Transform& value, const float3& translation) {
+                const AffineTransformation affine = value.AffineDecomposition();
+                value                             = Transform(translation, affine.scaling, affine.quaternion);
+            }
+        )
+        .def_property(
+            "scale",
+            [](const Transform& value) {
+                return value.AffineDecomposition().scaling;
+            },
+            [](Transform& value, const float3& scale) {
+                const AffineTransformation affine = value.AffineDecomposition();
+                value                             = Transform(affine.translation, scale, affine.quaternion);
+            }
+        )
+        .def_property(
+            "rotation",
+            [](const Transform& value) {
+                return value.AffineDecomposition().quaternion;
+            },
+            [](Transform& value, const Quaternion& rotation) {
+                const AffineTransformation affine = value.AffineDecomposition();
+                value                             = Transform(affine.translation, affine.scaling, rotation);
+            }
+        )
+        .def("is_affine", &Transform::IsAffine)
+        .def("__repr__", [](const Transform& value) {
+            if (!value.IsAffine()) {
+                return std::string("Transform(non_affine)");
+            }
+
+            const AffineTransformation affine = value.AffineDecomposition();
+            return std::format(
+                "Transform(translation={}, scale={}, rotation={})",
+                affine.translation.ToString(),
+                affine.scaling.ToString(),
+                std::format(
+                    "Quaternion(w={}, x={}, y={}, z={})",
+                    affine.quaternion.vec.w,
+                    affine.quaternion.vec.x,
+                    affine.quaternion.vec.y,
+                    affine.quaternion.vec.z
+                )
+            );
+        });
+}
+
 void BindNodeLocalTransform(py::module_& module) {
     py::class_<Scene::NodeLocalTransform> transform_class(module, "NodeLocalTransform");
     transform_class.attr("__doc__") = "Node local transform value.";
@@ -139,6 +215,18 @@ void BindNodeLocalTransform(py::module_& module) {
         .def_readwrite("translation", &Scene::NodeLocalTransform::translation)
         .def_readwrite("rotation", &Scene::NodeLocalTransform::rotation)
         .def_readwrite("scale", &Scene::NodeLocalTransform::scale);
+}
+
+void BindNodeSubtreeStats(py::module_& module) {
+    py::class_<Scene::NodeSubtreeStats> subtree_stats_class(module, "NodeSubtreeStats");
+    subtree_stats_class.attr("__doc__") = "Statistics for a node subtree.";
+    subtree_stats_class.def(py::init<>())
+        .def_readwrite("node_count", &Scene::NodeSubtreeStats::node_count)
+        .def_readwrite("renderable_count", &Scene::NodeSubtreeStats::renderable_count)
+        .def_readwrite("camera_count", &Scene::NodeSubtreeStats::camera_count)
+        .def_readwrite("light_count", &Scene::NodeSubtreeStats::light_count)
+        .def_readwrite("contains_main_camera", &Scene::NodeSubtreeStats::contains_main_camera)
+        .def_readwrite("contains_main_light_tag", &Scene::NodeSubtreeStats::contains_main_light_tag);
 }
 
 void BindImportSceneFromFileResult(py::module_& module) {
@@ -159,11 +247,144 @@ void BindImportSceneFromFileResult(py::module_& module) {
         });
 }
 
+void BindPointLightCreateInfo(py::module_& module) {
+    py::class_<PointLightCreateInfo> create_info_class(module, "PointLightCreateInfo");
+    create_info_class.attr("__doc__") = "CreateInfo for a runtime point light.";
+    create_info_class.def(py::init<>())
+        .def_readwrite("position", &PointLightCreateInfo::position)
+        .def_readwrite("color", &PointLightCreateInfo::color)
+        .def_readwrite("intensity", &PointLightCreateInfo::intensity)
+        .def_readwrite("name", &PointLightCreateInfo::name)
+        .def_property(
+            "parent_node_entity",
+            [](const PointLightCreateInfo& value) {
+                return value.parent_node_entt;
+            },
+            [](PointLightCreateInfo& value, entt::entity entity) {
+                value.parent_node_entt = entity;
+            }
+        )
+        .def_readwrite("should_set_main_light", &PointLightCreateInfo::should_set_main_light);
+}
+
+void BindEntityWithNodeCreateInfo(py::module_& module) {
+    py::class_<EntityWithNodeCreateInfo> create_info_class(module, "EntityWithNodeCreateInfo");
+    create_info_class.attr("__doc__") = "CreateInfo for an entity with a scene node.";
+    create_info_class.def(py::init<>())
+        .def_property(
+            "parent_node_entity",
+            [](const EntityWithNodeCreateInfo& value) {
+                return value.parent_node_entt;
+            },
+            [](EntityWithNodeCreateInfo& value, entt::entity entity) {
+                value.parent_node_entt = entity;
+            }
+        )
+        .def_readwrite("name", &EntityWithNodeCreateInfo::name)
+        .def_readwrite("translation", &EntityWithNodeCreateInfo::translation)
+        .def_readwrite("rotation", &EntityWithNodeCreateInfo::rotation)
+        .def_readwrite("scale", &EntityWithNodeCreateInfo::scale);
+}
+
+void BindMaterialCreateInfo(py::module_& module) {
+    py::class_<MaterialCreateInfo> create_info_class(module, "MaterialCreateInfo");
+    create_info_class.attr("__doc__") = "CreateInfo for a runtime material.";
+    create_info_class.def(py::init<>())
+        .def_readwrite("name", &MaterialCreateInfo::name)
+        .def_readwrite("albedo_factor", &MaterialCreateInfo::albedo_factor)
+        .def_readwrite("emissive_factor", &MaterialCreateInfo::emissive_factor)
+        .def_readwrite("metallic_factor", &MaterialCreateInfo::metallic_factor)
+        .def_readwrite("roughness_factor", &MaterialCreateInfo::roughness_factor)
+        .def_readwrite("alpha_mode", &MaterialCreateInfo::alpha_mode)
+        .def_readwrite("alpha_cutoff", &MaterialCreateInfo::alpha_cutoff);
+}
+
+void BindProceduralMeshCreateInfo(py::module_& module) {
+    py::class_<ProceduralMeshCreateInfo> create_info_class(module, "ProceduralMeshCreateInfo");
+    create_info_class.attr("__doc__") = "CreateInfo for a runtime procedural renderable.";
+    create_info_class.def(py::init<>())
+        .def_readwrite("shape", &ProceduralMeshCreateInfo::shape)
+        .def_property(
+            "parent_node_entity",
+            [](const ProceduralMeshCreateInfo& value) {
+                return value.parent_node_entt;
+            },
+            [](ProceduralMeshCreateInfo& value, entt::entity entity) {
+                value.parent_node_entt = entity;
+            }
+        )
+        .def_readwrite("name", &ProceduralMeshCreateInfo::name)
+        .def_readwrite("translation", &ProceduralMeshCreateInfo::translation)
+        .def_readwrite("rotation", &ProceduralMeshCreateInfo::rotation)
+        .def_readwrite("scale", &ProceduralMeshCreateInfo::scale)
+        .def_readwrite("material", &ProceduralMeshCreateInfo::material);
+}
+
+void BindCreateProceduralRenderableResult(py::module_& module) {
+    py::class_<CreateProceduralRenderableResult> result_class(module, "CreateProceduralRenderableResult");
+    result_class.attr("__doc__") = "Result of creating a runtime procedural renderable.";
+    result_class.def(py::init<>())
+        .def_property_readonly(
+            "material_entity",
+            [](const CreateProceduralRenderableResult& value) {
+                return value.material_entt;
+            }
+        )
+        .def_property_readonly(
+            "primitive_entity",
+            [](const CreateProceduralRenderableResult& value) {
+                return value.primitive_entt;
+            }
+        )
+        .def_property_readonly(
+            "mesh_entity",
+            [](const CreateProceduralRenderableResult& value) {
+                return value.mesh_entt;
+            }
+        )
+        .def_property_readonly(
+            "renderable_entity",
+            [](const CreateProceduralRenderableResult& value) {
+                return value.renderable_entt;
+            }
+        )
+        .def("__bool__", [](const CreateProceduralRenderableResult& value) {
+            return static_cast<bool>(value);
+        });
+}
+
 void BindSceneApi(py::module_& module) {
     py::class_<MainThreadCommandQueue> scene_api_class(module, "SceneApi");
     scene_api_class.attr("__doc__") = "Access the current runtime scene. Entity values are Python int "
                                       "handles and are not stable across scene reloads.";
     scene_api_class
+        .def(
+            "get_source_file_path",
+            [](MainThreadCommandQueue& command_queue) {
+                return CallScene(command_queue, [](Scene& scene) {
+                    return scene.GetSourceFilePath().generic_string();
+                });
+            },
+            "Return the current source scene path."
+        )
+        .def(
+            "is_start_loading",
+            [](MainThreadCommandQueue& command_queue) {
+                return CallScene(command_queue, [](Scene& scene) {
+                    return scene.IsStartLoading();
+                });
+            },
+            "Return whether the scene has started loading."
+        )
+        .def(
+            "is_ready",
+            [](MainThreadCommandQueue& command_queue) {
+                return CallScene(command_queue, [](Scene& scene) {
+                    return scene.IsReady();
+                });
+            },
+            "Return whether the scene is fully loaded and ready."
+        )
         .def(
             "get_root_node_entity",
             [](MainThreadCommandQueue& command_queue) {
@@ -194,6 +415,26 @@ void BindSceneApi(py::module_& module) {
             "Alias for is_valid_node_entity; use it before reusing a long-lived entity handle."
         )
         .def(
+            "is_root_node",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity) {
+                return CallScene(command_queue, [entity](Scene& scene) {
+                    return scene.IsRootNode(entity);
+                });
+            },
+            py::arg("entity"),
+            "Return whether the entity is the scene root node."
+        )
+        .def(
+            "get_node_child_count",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity) {
+                return CallScene(command_queue, [entity](Scene& scene) {
+                    return scene.GetNodeChildCount(entity);
+                });
+            },
+            py::arg("entity"),
+            "Return the direct child count for a node entity."
+        )
+        .def(
             "get_node_display_name",
             [](MainThreadCommandQueue& command_queue, entt::entity entity) {
                 return CallScene(command_queue, [entity](Scene& scene) {
@@ -202,6 +443,30 @@ void BindSceneApi(py::module_& module) {
             },
             py::arg("entity"),
             "Return the display name for a node entity handle."
+        )
+        .def(
+            "get_node_subtree_stats",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity) {
+                return CallScene(command_queue, [entity](Scene& scene) {
+                    return scene.GetNodeSubtreeStats(entity);
+                });
+            },
+            py::arg("entity"),
+            "Return aggregate statistics for the node subtree."
+        )
+        .def(
+            "try_get_node_name",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity) -> std::optional<std::string> {
+                return CallScene(command_queue, [entity](Scene& scene) -> std::optional<std::string> {
+                    std::string out_name;
+                    if (!scene.TryGetNodeName(entity, out_name)) {
+                        return std::nullopt;
+                    }
+                    return out_name;
+                });
+            },
+            py::arg("entity"),
+            "Return the authored node name for a valid node entity handle, or None if invalid."
         )
         .def(
             "try_get_node_local_transform",
@@ -222,6 +487,73 @@ void BindSceneApi(py::module_& module) {
             },
             py::arg("file_path"),
             "Synchronously import a scene file into the current scene and return the import result."
+        )
+        .def(
+            "get_main_camera_entity",
+            [](MainThreadCommandQueue& command_queue) {
+                return CallScene(command_queue, [](Scene& scene) {
+                    return scene.GetMainCameraEntity();
+                });
+            },
+            "Return the main camera entity handle."
+        )
+        .def(
+            "get_main_directional_light_entity",
+            [](MainThreadCommandQueue& command_queue) {
+                return CallScene(command_queue, [](Scene& scene) {
+                    return scene.GetMainDirectionalLightEntity();
+                });
+            },
+            "Return the main directional light entity handle."
+        )
+        .def(
+            "get_main_point_light_entity",
+            [](MainThreadCommandQueue& command_queue) {
+                return CallScene(command_queue, [](Scene& scene) {
+                    return scene.GetMainPointLightEntity();
+                });
+            },
+            "Return the main point light entity handle."
+        )
+        .def(
+            "create_entity",
+            [](MainThreadCommandQueue& command_queue, const std::string& name) {
+                return CallScene(command_queue, [name](Scene& scene) {
+                    return scene.CreateEntity(name);
+                });
+            },
+            py::arg("name") = std::string(),
+            "Create a plain runtime entity without a scene node."
+        )
+        .def(
+            "create_entity_with_node",
+            [](MainThreadCommandQueue& command_queue, const EntityWithNodeCreateInfo& create_info) {
+                return CallScene(command_queue, [create_info](Scene& scene) {
+                    return scene.CreateEntityWithNode(create_info);
+                });
+            },
+            py::arg("create_info"),
+            "Create a runtime entity with a scene node."
+        )
+        .def(
+            "create_point_light",
+            [](MainThreadCommandQueue& command_queue, const PointLightCreateInfo& create_info) {
+                return CallScene(command_queue, [create_info](Scene& scene) {
+                    return scene.CreatePointLight(create_info);
+                });
+            },
+            py::arg("create_info"),
+            "Create a runtime point light."
+        )
+        .def(
+            "create_procedural_renderable",
+            [](MainThreadCommandQueue& command_queue, const ProceduralMeshCreateInfo& create_info) {
+                return CallScene(command_queue, [create_info](Scene& scene) {
+                    return scene.CreateProceduralRenderable(create_info);
+                });
+            },
+            py::arg("create_info"),
+            "Create a runtime procedural renderable and return all created entity handles."
         )
         .def(
             "set_node_name",
@@ -266,6 +598,78 @@ void BindSceneApi(py::module_& module) {
             py::arg("entity"),
             py::arg("value"),
             "Set the local scale for a valid node entity handle."
+        )
+        .def(
+            "set_local_transform",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity, const Transform& value) {
+                return CallScene(command_queue, [entity, value](Scene& scene) {
+                    return scene.SetLocalTransform(entity, value);
+                });
+            },
+            py::arg("entity"),
+            py::arg("value"),
+            "Set the local transform for a valid node entity handle."
+        )
+        .def(
+            "attach_to_parent",
+            [](MainThreadCommandQueue& command_queue, entt::entity child_entity, entt::entity parent_entity) {
+                return CallScene(command_queue, [child_entity, parent_entity](Scene& scene) {
+                    return scene.AttachToParent(child_entity, parent_entity);
+                });
+            },
+            py::arg("child_entity"),
+            py::arg("parent_entity"),
+            "Attach an existing node entity to a new parent node."
+        )
+        .def(
+            "detach_from_parent",
+            [](MainThreadCommandQueue& command_queue, entt::entity child_entity) {
+                return CallScene(command_queue, [child_entity](Scene& scene) {
+                    return scene.DetachFromParent(child_entity);
+                });
+            },
+            py::arg("child_entity"),
+            "Detach an existing node entity from its parent and reattach it to the root node."
+        )
+        .def(
+            "destroy_entity",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity) {
+                return CallScene(command_queue, [entity](Scene& scene) {
+                    return scene.DestroyEntity(entity);
+                });
+            },
+            py::arg("entity"),
+            "Destroy a plain entity or a leaf node entity."
+        )
+        .def(
+            "destroy_node_subtree",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity) {
+                return CallScene(command_queue, [entity](Scene& scene) {
+                    return scene.DestroyNodeSubtree(entity);
+                });
+            },
+            py::arg("entity"),
+            "Destroy a node and all of its descendants."
+        )
+        .def(
+            "destroy_renderable",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity) {
+                return CallScene(command_queue, [entity](Scene& scene) {
+                    return scene.DestroyRenderable(entity);
+                });
+            },
+            py::arg("entity"),
+            "Destroy a renderable entity."
+        )
+        .def(
+            "destroy_point_light",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity) {
+                return CallScene(command_queue, [entity](Scene& scene) {
+                    return scene.DestroyPointLight(entity);
+                });
+            },
+            py::arg("entity"),
+            "Destroy a runtime point light."
         );
 }
 
@@ -285,9 +689,18 @@ PYBIND11_EMBEDDED_MODULE(moer, module) {
     Moer::scripting::BindFloat2(module);
     Moer::scripting::BindFloat3(module);
     Moer::scripting::BindFloat4(module);
+    Moer::scripting::BindAlphaMode(module);
+    Moer::scripting::BindProceduralPrimitiveShape(module);
     Moer::scripting::BindQuaternion(module);
+    Moer::scripting::BindTransform(module);
     Moer::scripting::BindNodeLocalTransform(module);
+    Moer::scripting::BindNodeSubtreeStats(module);
     Moer::scripting::BindImportSceneFromFileResult(module);
+    Moer::scripting::BindPointLightCreateInfo(module);
+    Moer::scripting::BindEntityWithNodeCreateInfo(module);
+    Moer::scripting::BindMaterialCreateInfo(module);
+    Moer::scripting::BindProceduralMeshCreateInfo(module);
+    Moer::scripting::BindCreateProceduralRenderableResult(module);
     Moer::scripting::BindSceneApi(module);
 
     module.def(
