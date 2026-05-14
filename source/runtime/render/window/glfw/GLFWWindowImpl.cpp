@@ -314,6 +314,10 @@ void GLFWWindowImpl::SetTitle(WindowHandle* _window, const char* _new_title) {
     glfwSetWindowTitle((GLFWwindow*)_window->window, _new_title);
 }
 
+void GLFWWindowImpl::RequestClose(WindowHandle* _window) {
+    glfwSetWindowShouldClose((GLFWwindow*)_window->window, GLFW_TRUE);
+}
+
 bool GLFWWindowImpl::ShouldClose(WindowHandle* _window) const {
     return glfwWindowShouldClose((GLFWwindow*)_window->window);
 }

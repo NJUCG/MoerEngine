@@ -18,6 +18,7 @@ public:
 
     void Init(int argc, const char** argv);
     void Run(const Render::EngineHooks& hooks);
+    void RequestExit();
     void ShutDown();
 
     uint2& GetResolution() {

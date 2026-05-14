@@ -178,9 +178,9 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     };
 
     auto refresh_scene_runtime_refs = [&]() {
-        const auto& gpu_scene_res = scene.GetGpuSceneRes();
+        const auto& gpu_scene_res    = scene.GetGpuSceneRes();
         const bool  rt_scene_changed = rt_scene.Get() != gpu_scene_res.rt_scene.Get();
-        rt_scene = gpu_scene_res.rt_scene;
+        rt_scene                     = gpu_scene_res.rt_scene;
         rt_ctx->SetBindlessHandles(gpu_scene_res);
         rt_ctx->SetRaytracingScene(rt_scene);
         if (rt_scene_changed) {
@@ -236,6 +236,10 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         if (hooks.on_tick_scripting) {
             hooks.on_tick_scripting(scene);
+        }
+
+        if (hooks.on_tick_test) {
+            hooks.on_tick_test(scene);
         }
 
         if (hooks.on_tick_ui) {
@@ -637,6 +641,20 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         if (hooks.on_ui_combine_pass) {
             hooks.on_ui_combine_pass(ui_combine_pass.get(), cmd_list, final_color, ui_frame_buffer, output);
+        } else {
+            // Without editor UI composition, use the copy path directly instead of sampling an uninitialized
+            // UI buffer through the combine shader.
+            ui_combine_pass->Process(
+                cmd_list,
+                true,
+                resolution,
+                float2(0.f, 0.f),
+                float2(static_cast<float>(resolution.x), static_cast<float>(resolution.y)),
+                TextureView(output),
+                rt_ctx->frame_rt.ldr_color,
+                {},
+                output
+            );
         }
 
         if (hooks.on_render_gui) {

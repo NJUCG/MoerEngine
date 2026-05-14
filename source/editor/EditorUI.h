@@ -45,7 +45,6 @@ class EditorUI {
 public:
     EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config);
     ~EditorUI() = default;
-    void InitFromConfigManager(); // will be called by Constructor
     void TickUI(Scene& scene);
     void RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output);
     void PresentWindows();

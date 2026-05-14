@@ -1,7 +1,6 @@
 #include "EditorUI.h"
 
 // Runtime
-#include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "window/WindowInput.h"
 
@@ -9,6 +8,7 @@
 #include "EditorUIStyle.h"
 #include "scene/Scene.h"
 #include "scene_editing_ui/SceneFileDialog.h"
+#include "window/WindowContext.h"
 
 // 3rd party (std)
 #include <algorithm>
@@ -77,31 +77,8 @@ EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfi
     m_b_show_memory_profiler = has_saved_window_settings("Memory Profiler");
 #endif
 
-    // Load Config
-    InitFromConfigManager();
-
     // Init Style
     EditorUIStyle::ApplyDefaultStyle();
-}
-
-void EditorUI::InitFromConfigManager() {
-    auto config = ConfigManager::GetInstance().GetConfig();
-
-    // render method
-    if (config.engine.render.default_render_method == "Raster") {
-        m_config->selected_render_method = ERenderMethod::Raster;
-    } else if (config.engine.render.default_render_method == "Raytracing") {
-        m_config->selected_render_method = ERenderMethod::Raytracing;
-    } else {
-        LOG_WARNING(
-            "Invalid default render method: {}. Use Raster instead.",
-            config.engine.render.default_render_method
-        );
-        m_config->selected_render_method = ERenderMethod::Raster;
-    }
-
-    // scene path
-    m_config->scene_path = config.engine.scene.scene_path;
 }
 
 #if WITH_PROFILE
@@ -279,10 +256,6 @@ void EditorUI::TickUI(Scene& scene) {
 
     ResetState();
 
-    // 注：Resolution表示整个窗口的大小（不包含windows标题栏）；SceneColor只表示场景渲染区域的大小
-    // 更新SceneColor的分辨率
-    m_config->aspect_ratio = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
-
     m_ui_renderer->BeginGUIFrame();
 
     static bool               opt_fullscreen  = true;
@@ -459,7 +432,7 @@ void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
 
     ImGui::Separator();
     if (ImGui::MenuItem("Exit")) {
-        exit(0);
+        WindowContext::RequestClose(WindowContext::GetMainWindow());
     }
     ImGui::EndMenu();
 }
@@ -561,14 +534,18 @@ void EditorUI::ShowSceneColor() {
 
     const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
     if (!m_b_show_scene_color) {
-        m_b_scene_color_mouse_captured = false;
-        WindowInput::Get().is_active   = false;
+        m_b_scene_color_mouse_captured              = false;
+        WindowInput::Get().is_active                = false;
+        WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
+        WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
         return;
     }
     if (!ImGui::Begin("Scene Color", &m_b_show_scene_color, window_flags)) {
         // Should not call ImGui::End() here
-        m_b_scene_color_mouse_captured = false;
-        WindowInput::Get().is_active   = false;
+        m_b_scene_color_mouse_captured              = false;
+        WindowInput::Get().is_active                = false;
+        WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
+        WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
         return;
     }
 
@@ -611,6 +588,15 @@ void EditorUI::ShowSceneColor() {
         m_scene_color_resolution = {scene_size.x, scene_size.y};
         m_scene_color_pos        = {local_pos.x, local_pos.y};
     }
+
+    WindowInput::Get().m_scene_color_resolution = uint2(
+        m_scene_color_resolution.x > 0.f ? static_cast<uint>(m_scene_color_resolution.x) : 0u,
+        m_scene_color_resolution.y > 0.f ? static_cast<uint>(m_scene_color_resolution.y) : 0u
+    );
+    WindowInput::Get().m_scene_color_pos = uint2(
+        m_scene_color_pos.x > 0.f ? static_cast<uint>(m_scene_color_pos.x) : 0u,
+        m_scene_color_pos.y > 0.f ? static_cast<uint>(m_scene_color_pos.y) : 0u
+    );
 
     // inject. Needs to be refactored (camera control)
     // 鼠标按下起点在SceneColor内时，才捕获本次拖拽并控制摄像机
@@ -677,14 +663,22 @@ void EditorUI::ShowConfig(Scene& scene) {
     }
 
     if (ImGui::TreeNode("Camera")) {
-
         ImGui::SliderFloat("Speed (log10)", &m_config->camera_speed_log10, -1.f, 2.6f);
+
+        ImGui::Checkbox("Override Projection", &m_config->camera_projection_override_enabled);
+
+        if (!m_config->camera_projection_override_enabled) {
+            ImGui::TextDisabled("Using scene camera projection.");
+        }
+
+        ImGui::BeginDisabled(!m_config->camera_projection_override_enabled);
         ImGui::SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
 
         ImGui::SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 0.99f);
         ImGui::SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
         m_config->camera_near_clip_log10 =
             std::min(m_config->camera_near_clip_log10, m_config->camera_far_clip_log10 - 0.1f);
+        ImGui::EndDisabled();
 
         ImGui::TreePop();
     }

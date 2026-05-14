@@ -58,8 +58,8 @@ typedef enum {
 struct RENDER_API WindowInput {
     // inject
     bool  is_active = true; // camera input is captured by SceneColor or active through the F toggle
-    uint2 m_scene_color_resolution;
-    uint2 m_scene_color_pos;
+    uint2 m_scene_color_resolution = uint2(0u, 0u);
+    uint2 m_scene_color_pos        = uint2(0u, 0u);
 
     // cursor
     float cursor_last_x  = 0.0f;

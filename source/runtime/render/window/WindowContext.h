@@ -80,6 +80,7 @@ public:
     static bool          GetFocusMode(WindowHandle*);
     static WindowHandle* GetMainWindow();
     static void          SetTitle(WindowHandle*, const char* newTitle);
+    static void          RequestClose(WindowHandle*);
     static bool          ShouldClose(WindowHandle*);
     //for dx12 win32 window
     static void* GetNativeWindow(WindowHandle*);

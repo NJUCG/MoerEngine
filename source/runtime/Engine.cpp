@@ -27,6 +27,22 @@ static UniquePtr<NFD::Guard> nfd_guard = nullptr;
 
 static bool ContainsNonAscii(const std::filesystem::path& p);
 
+namespace {
+
+ERenderMethod ParseDefaultRenderMethod(std::string_view render_method_name) {
+    if (render_method_name == "Raster") {
+        return ERenderMethod::Raster;
+    }
+    if (render_method_name == "Raytracing") {
+        return ERenderMethod::Raytracing;
+    }
+
+    LOG_WARNING("Invalid default render method: {}. Use Raster instead.", render_method_name);
+    return ERenderMethod::Raster;
+}
+
+} // namespace
+
 Engine::Engine() {}
 
 Engine::~Engine() {
@@ -52,12 +68,13 @@ void Engine::Init(int argc, const char** argv) {
     }
 
     ConfigManager::GetInstance().Init(path);
+    const auto& config = ConfigManager::GetInstance().GetConfig();
 
     // Init TaskSystem
     TaskSystem::Init();
 
     // Init RenderDevice
-    std::string rhi_type_str = ConfigManager::GetInstance().GetConfig().engine.rhi.type;
+    std::string rhi_type_str = config.engine.rhi.type;
     std::transform(rhi_type_str.begin(), rhi_type_str.end(), rhi_type_str.begin(), ::tolower);
 
     ERHIType rhi_type = [&]() {
@@ -70,10 +87,7 @@ void Engine::Init(int argc, const char** argv) {
             return ERHIType::D3D12;
         }
 
-        LOG_WARNING(
-            "Unknown RHI type '{}', fallback to Vulkan",
-            ConfigManager::GetInstance().GetConfig().engine.rhi.type
-        );
+        LOG_WARNING("Unknown RHI type '{}', fallback to Vulkan", config.engine.rhi.type);
         return ERHIType::Vulkan;
     }();
 
@@ -82,7 +96,7 @@ void Engine::Init(int argc, const char** argv) {
             DeviceInitInfo{
                 .rhi_type        = rhi_type,
                 .name            = "MoerEngine",
-                .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.api_version,
+                .rhi_api_version = config.engine.rhi.api_version,
             }
         )
     );
@@ -90,13 +104,13 @@ void Engine::Init(int argc, const char** argv) {
     ShaderManager::Get(); // Explicit Init ShaderManager
 
     m_editor_config = MakeShared<EditorConfig>();
+    m_editor_config->selected_render_method =
+        ParseDefaultRenderMethod(config.engine.render.default_render_method);
+    m_editor_config->scene_path = config.engine.scene.scene_path;
 
     // Init WindowContext
-    m_editor_config->SetResolution(
-        ConfigManager::GetInstance().GetConfig().editor.width,
-        ConfigManager::GetInstance().GetConfig().editor.height
-    );
-    bool b_fullscreen = ConfigManager::GetInstance().GetConfig().editor.fullscreen;
+    m_editor_config->SetResolution(config.editor.width, config.editor.height);
+    bool b_fullscreen = config.editor.fullscreen;
     LOG_INFO(
         "Editor Window Resolution : {}x{}; Fullscreen : {}",
         m_editor_config->GetResolution().x,
@@ -159,6 +173,10 @@ void Engine::Run(const EngineHooks& hooks) {
         // Switch Renderer
         m_renderer.reset();
     }
+}
+
+void Engine::RequestExit() {
+    WindowContext::RequestClose(WindowContext::GetMainWindow());
 }
 
 void Engine::ShutDown() {

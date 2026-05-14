@@ -223,6 +223,10 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         hooks.on_tick_scripting(scene);
     }
 
+    if (hooks.on_tick_test) {
+        hooks.on_tick_test(scene);
+    }
+
     if (hooks.on_tick_ui) {
         hooks.on_tick_ui(scene);
     }
@@ -353,6 +357,20 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
                 cmd_list,
                 raster_context.GetSelectedFrameBufferView(raster_config.selected_frame_buffer_index),
                 raster_context.textures.ui_frame_buffer.tex,
+                raster_context.textures.output.tex
+            );
+        } else {
+            // Without editor UI composition, use the copy path directly instead of sampling an uninitialized
+            // UI buffer through the combine shader.
+            default_output_texture = ui_combine_pass->Process(
+                cmd_list,
+                true,
+                resolution,
+                float2(0.f, 0.f),
+                float2(static_cast<float>(resolution.x), static_cast<float>(resolution.y)),
+                TextureView(raster_context.textures.output.tex),
+                processing_image.tex,
+                {},
                 raster_context.textures.output.tex
             );
         }
