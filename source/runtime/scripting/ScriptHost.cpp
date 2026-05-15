@@ -11,13 +11,21 @@
 namespace Moer::scripting {
 
 struct ScriptHost::PendingExecution {
+    explicit PendingExecution(ScriptExecutionRequest request);
+
+    ScriptExecutionFuture GetFuture();
+
+    void Execute(PythonRuntime& runtime, SessionRegistry& session_registry);
+
+    void Cancel(std::string_view reason);
+
     ScriptExecutionRequest              request;
     std::promise<ScriptExecutionResult> promise;
 };
 
 namespace {
 
-ScriptExecutionResult MakeScriptHostError(std::string_view message) {
+ScriptExecutionResult MakeScriptExecutionError(std::string_view message) {
     ScriptExecutionResult result;
     result.exception_text = std::string(message);
     return result;
@@ -45,7 +53,55 @@ void BootstrapSceneBindings(PythonRuntime& runtime) {
     throw std::runtime_error(message);
 }
 
+ScriptExecutionResult ExecuteRequest(
+    PythonRuntime&                runtime,
+    SessionRegistry&              session_registry,
+    const ScriptExecutionRequest& request
+) {
+    if (request.execution_kind != EScriptExecutionKind::ExecSnippet) {
+        return MakeScriptExecutionError("Unsupported ScriptExecutionRequest execution kind.");
+    }
+
+    switch (request.session_policy) {
+        case EScriptSessionPolicy::SharedGlobal: {
+            ScriptSession& session = session_registry.GetSharedGlobalSession();
+            return runtime.ExecuteSnippet(request, session.RequireGlobals());
+        }
+
+        case EScriptSessionPolicy::NamedSession: {
+            if (request.session_id.empty()) {
+                return MakeScriptExecutionError("NamedSession policy requires a non-empty session_id.");
+            }
+
+            ScriptSession& session = session_registry.GetOrCreateNamedSession(request.session_id);
+            return runtime.ExecuteSnippet(request, session.RequireGlobals());
+        }
+
+        case EScriptSessionPolicy::Stateless: {
+            ScriptSession session = session_registry.CreateStatelessSession();
+            return runtime.ExecuteSnippet(request, session.RequireGlobals());
+        }
+    }
+
+    return MakeScriptExecutionError("Unsupported ScriptExecutionRequest session policy.");
+}
+
 } // namespace
+
+ScriptHost::PendingExecution::PendingExecution(ScriptExecutionRequest request) :
+    request(std::move(request)) {}
+
+ScriptExecutionFuture ScriptHost::PendingExecution::GetFuture() {
+    return ScriptExecutionFuture(promise.get_future());
+}
+
+void ScriptHost::PendingExecution::Execute(PythonRuntime& runtime, SessionRegistry& session_registry) {
+    promise.set_value(ExecuteRequest(runtime, session_registry, request));
+}
+
+void ScriptHost::PendingExecution::Cancel(std::string_view reason) {
+    promise.set_value(MakeScriptExecutionError(reason));
+}
 
 ScriptHost::ScriptHost(PythonRuntimeConfig runtime_config) : m_runtime_config(std::move(runtime_config)) {}
 
@@ -105,23 +161,20 @@ void ScriptHost::Stop() {
     }
 
     for (auto& pending_execution : pending_executions) {
-        pending_execution->promise.set_value(
-            MakeScriptHostError("ScriptHost stopped before request execution.")
-        );
+        pending_execution->Cancel("ScriptHost stopped before request execution.");
     }
 
     LOG_INFO("ScriptHost stopped.");
 }
 
-std::future<ScriptExecutionResult> ScriptHost::SubmitSnippet(ScriptExecutionRequest request) {
-    auto pending_execution     = std::make_unique<PendingExecution>();
-    auto execution_future      = pending_execution->promise.get_future();
-    pending_execution->request = std::move(request);
+ScriptExecutionFuture ScriptHost::Submit(ScriptExecutionRequest request) {
+    auto pending_execution = std::make_unique<PendingExecution>(std::move(request));
+    auto execution_future  = pending_execution->GetFuture();
 
     {
         std::lock_guard lock(m_mutex);
         if (!m_worker_thread.joinable() || !m_is_running || m_stop_requested) {
-            pending_execution->promise.set_value(MakeScriptHostError("ScriptHost is not running."));
+            pending_execution->Cancel("ScriptHost is not running.");
             return execution_future;
         }
 
@@ -148,6 +201,7 @@ void ScriptHost::WorkerMain(std::promise<std::string> startup_promise) {
         runtime.Initialize(m_runtime_config);
         SetActiveSceneCommandQueue(&m_main_thread_command_queue);
         BootstrapSceneBindings(runtime);
+        m_session_registry.Reset(runtime.GetSharedGlobals(), runtime.CopySharedGlobals());
 
         {
             std::lock_guard lock(m_mutex);
@@ -176,7 +230,7 @@ void ScriptHost::WorkerMain(std::promise<std::string> startup_promise) {
                 m_pending_executions.pop_front();
             }
 
-            pending_execution->promise.set_value(runtime.ExecuteSnippet(pending_execution->request));
+            pending_execution->Execute(runtime, m_session_registry);
         }
     } catch (const std::exception& ex) {
         std::deque<std::unique_ptr<PendingExecution>> pending_executions;
@@ -188,7 +242,7 @@ void ScriptHost::WorkerMain(std::promise<std::string> startup_promise) {
         }
 
         for (auto& pending_execution : pending_executions) {
-            pending_execution->promise.set_value(MakeScriptHostError(ex.what()));
+            pending_execution->Cancel(ex.what());
         }
 
         if (!startup_value_sent) {
@@ -197,6 +251,10 @@ void ScriptHost::WorkerMain(std::promise<std::string> startup_promise) {
         }
 
         LOG_ERROR("ScriptHost worker failed: {}", ex.what());
+    }
+
+    if (runtime.IsInitialized()) {
+        m_session_registry.Clear();
     }
 
     ClearActiveSceneCommandQueue();

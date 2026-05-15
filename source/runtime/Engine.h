@@ -1,10 +1,8 @@
 #pragma once
 
 #include "renderer/Renderer.h"
+#include "scripting/ScriptExecutionFuture.h"
 #include "scripting/ScriptExecutionRequest.h"
-#include "scripting/ScriptExecutionResult.h"
-
-#include <future>
 
 namespace Moer::scripting {
 class ScriptHost;
@@ -23,7 +21,7 @@ public:
     void Init(int argc, const char** argv);
     void Run(const Render::EngineHooks& hooks);
     void RequestExit();
-    std::future<scripting::ScriptExecutionResult> SubmitScriptSnippet(
+    scripting::ScriptExecutionFuture SubmitScriptExecution(
         scripting::ScriptExecutionRequest request
     );
     void ShutDown();

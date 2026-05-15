@@ -55,3 +55,15 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_scripting_test_folder})
 moer_add_test_script_copy_target(${test_target} "scene_api_all_260514.py")
+
+set(test_target TestScriptingSessionPolicy)
+add_executable(${test_target} "TestScriptingSessionPolicy.cpp")
+target_include_directories(${test_target}
+    PRIVATE
+        $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+)
+target_link_libraries(${test_target}
+    PRIVATE Moer::scripting
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_scripting_test_folder})

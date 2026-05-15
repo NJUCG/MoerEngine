@@ -5,8 +5,12 @@
 #include "scripting/ScriptExecutionResult.h"
 #include "scripting/ScriptingApi.h"
 
+#include <pybind11/pytypes.h>
+
 #include <memory>
 #include <thread>
+
+namespace py = pybind11;
 
 namespace Moer::scripting {
 
@@ -29,8 +33,14 @@ public:
     void Finalize();
     // 返回当前解释器是否已经完成初始化
     bool IsInitialized() const;
-    // 在当前运行时中执行一段脚本并返回执行结果
+    // 在默认 SharedGlobal 上下文中执行一段脚本并返回执行结果
     ScriptExecutionResult ExecuteSnippet(const ScriptExecutionRequest& request);
+    // 在指定的 Python globals 上执行一段脚本并返回执行结果
+    ScriptExecutionResult ExecuteSnippet(const ScriptExecutionRequest& request, const py::dict& globals);
+    // 返回当前 SharedGlobal 对应的 globals 句柄
+    py::dict GetSharedGlobals() const;
+    // 复制当前 SharedGlobal，供新 session 作为初始上下文使用
+    py::dict CopySharedGlobals() const;
 
 private:
     // 持有解释器内部状态的私有实现类型
@@ -38,6 +48,9 @@ private:
 
     // 校验当前调用线程是否拥有解释器访问权
     void EnsureOwnerThread() const;
+    // 在已经获取 GIL 的前提下，在给定 globals 上执行脚本
+    ScriptExecutionResult
+    ExecuteSnippetOnGlobals(const ScriptExecutionRequest& request, const py::dict& globals);
 
     PythonRuntimeConfig    m_config;
     std::thread::id        m_owner_thread_id{};

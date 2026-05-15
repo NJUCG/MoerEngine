@@ -179,18 +179,18 @@ void Engine::RequestExit() {
     WindowContext::RequestClose(WindowContext::GetMainWindow());
 }
 
-std::future<scripting::ScriptExecutionResult> Engine::SubmitScriptSnippet(
+scripting::ScriptExecutionFuture Engine::SubmitScriptExecution(
     scripting::ScriptExecutionRequest request
 ) {
     if (m_script_host) {
-        return m_script_host->SubmitSnippet(std::move(request));
+        return m_script_host->Submit(std::move(request));
     }
 
     std::promise<scripting::ScriptExecutionResult> promise;
     scripting::ScriptExecutionResult               result;
     result.exception_text = "ScriptHost is not available.";
     promise.set_value(std::move(result));
-    return promise.get_future();
+    return scripting::ScriptExecutionFuture(promise.get_future());
 }
 
 void Engine::ShutDown() {

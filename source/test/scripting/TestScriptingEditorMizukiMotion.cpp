@@ -25,13 +25,13 @@ enum class ETestPhase {
 };
 
 struct TestState {
-    ETestPhase                                          phase = ETestPhase::WaitingSceneReady;
-    std::future<Moer::scripting::ScriptExecutionResult> script_future;
-    Clock::time_point                                   phase_start_time      = {};
-    int                                                 last_countdown_second = -1;
-    int                                                 exit_code             = 0;
-    bool                                                exit_requested        = false;
-    bool                                                script_finished       = false;
+    ETestPhase                             phase = ETestPhase::WaitingSceneReady;
+    Moer::scripting::ScriptExecutionFuture script_future;
+    Clock::time_point                      phase_start_time      = {};
+    int                                    last_countdown_second = -1;
+    int                                    exit_code             = 0;
+    bool                                   exit_requested        = false;
+    bool                                   script_finished       = false;
 };
 
 std::filesystem::path ResolveExecutableDir(const char* argv0) {
@@ -122,7 +122,7 @@ int main(int argc, const char** argv) {
                 Moer::scripting::ScriptExecutionRequest request;
                 request.source_name = script_path.filename().string();
                 request.code        = std::move(script_code);
-                state.script_future = editor.GetEngine().SubmitScriptSnippet(std::move(request));
+                state.script_future = editor.GetEngine().SubmitScriptExecution(std::move(request));
                 state.phase         = ETestPhase::WaitingScriptResult;
                 std::cout << "[cpp] Submitted script: " << script_path << std::endl;
                 return;

@@ -153,25 +153,71 @@ bool PythonRuntime::IsInitialized() const {
 }
 
 ScriptExecutionResult PythonRuntime::ExecuteSnippet(const ScriptExecutionRequest& request) {
-    ScriptExecutionResult result;
-
     if (!m_is_initialized) {
+        ScriptExecutionResult result;
         result.exception_text = "PythonRuntime is not initialized.";
         return result;
     }
 
     EnsureOwnerThread();
 
-    try {
-        py::gil_scoped_acquire guard;
+    py::gil_scoped_acquire guard;
+    return ExecuteSnippetOnGlobals(request, m_state->globals);
+}
 
+ScriptExecutionResult
+PythonRuntime::ExecuteSnippet(const ScriptExecutionRequest& request, const py::dict& globals) {
+    if (!m_is_initialized) {
+        ScriptExecutionResult result;
+        result.exception_text = "PythonRuntime is not initialized.";
+        return result;
+    }
+
+    EnsureOwnerThread();
+
+    py::gil_scoped_acquire guard;
+    return ExecuteSnippetOnGlobals(request, globals);
+}
+
+py::dict PythonRuntime::GetSharedGlobals() const {
+    if (!m_is_initialized) {
+        throw std::runtime_error("PythonRuntime is not initialized.");
+    }
+
+    EnsureOwnerThread();
+
+    py::gil_scoped_acquire guard;
+    return m_state->globals;
+}
+
+py::dict PythonRuntime::CopySharedGlobals() const {
+    if (!m_is_initialized) {
+        throw std::runtime_error("PythonRuntime is not initialized.");
+    }
+
+    EnsureOwnerThread();
+
+    py::gil_scoped_acquire guard;
+    return m_state->globals.attr("copy")().cast<py::dict>();
+}
+
+ScriptExecutionResult
+PythonRuntime::ExecuteSnippetOnGlobals(const ScriptExecutionRequest& request, const py::dict& globals) {
+    ScriptExecutionResult result;
+
+    if (!globals) {
+        result.exception_text = "PythonRuntime globals is empty.";
+        return result;
+    }
+
+    try {
         py::object io_module     = py::module_::import("io");
         py::object stdout_buffer = io_module.attr("StringIO")();
         py::object stderr_buffer = io_module.attr("StringIO")();
 
         py::dict locals;
         locals["__moer_code__"]    = request.code;
-        locals["__moer_globals__"] = m_state->globals;
+        locals["__moer_globals__"] = globals;
         locals["__moer_stdout__"]  = stdout_buffer;
         locals["__moer_stderr__"]  = stderr_buffer;
 

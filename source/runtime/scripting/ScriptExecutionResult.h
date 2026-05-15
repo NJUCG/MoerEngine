@@ -14,4 +14,10 @@ struct SCRIPTING_API ScriptExecutionResult {
     std::string exception_text;
 };
 
+// 预留给后续流式输出回调的最小输出事件结构
+struct SCRIPTING_API ScriptOutputChunk {
+    bool        is_stderr = false;
+    std::string text;
+};
+
 } // namespace Moer::scripting
