@@ -23,3 +23,7 @@
 	path = 3rdparty/pybind11
 	url = https://github.com/pybind/pybind11.git
 	shallow = true
+[submodule "3rdparty/libhv"]
+	path = 3rdparty/libhv
+	url = https://github.com/ithewei/libhv.git
+	shallow = true

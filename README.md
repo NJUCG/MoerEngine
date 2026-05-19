@@ -116,6 +116,7 @@ MoerEngine源代码采用Apache-2.0 License授权。
 * [glfw](https://github.com/glfw/glfw): Zlib License
 * [imgui](https://github.com/ocornut/imgui): MIT License
 * [JSON for Modern C++](https://github.com/nlohmann/json): MIT License
+* [libhv](https://github.com/ithewei/libhv): BSD-3-Clause License
 * [meshoptimizer](https://github.com/zeux/meshoptimizer): MIT License
 * [metis](https://github.com/KarypisLab/METIS/): Apache-2.0 License
 * [minhook](https://github.com/TsudaKageyu/minhook): BSD 2-Clause License
