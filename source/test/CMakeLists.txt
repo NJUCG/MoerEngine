@@ -106,6 +106,23 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(test_target TestRemoteEngineLoopbackDemo)
+add_executable(${test_target} "TestRemoteEngineLoopbackDemo.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Runtime
+    PRIVATE hv
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_custom_target(${test_target}_copy_remote_engine_loopback_demo_py
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${test_target}>/test"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/remote_engine_loopback_demo.py"
+        "$<TARGET_FILE_DIR:${test_target}>/test/remote_engine_loopback_demo.py"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/remote_engine_loopback_demo.py"
+)
+add_dependencies(${test_target} ${test_target}_copy_remote_engine_loopback_demo_py)
+set_target_properties(${test_target}_copy_remote_engine_loopback_demo_py PROPERTIES FOLDER ${moer_test_folder})
+
 # add_executable(MeshProcessTest "MeshProcessTest.cpp")
 # target_include_directories(MeshProcessTest 
 #     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
