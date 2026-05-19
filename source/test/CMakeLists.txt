@@ -81,6 +81,31 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(test_target TestRemoteDisabledByConfig)
+add_executable(${test_target} "TestRemoteDisabledByConfig.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::remote
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
+set(test_target TestRemoteHttpExecuteSmoke)
+add_executable(${test_target} "TestRemoteHttpExecuteSmoke.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::remote
+    PRIVATE Moer::scripting
+    PRIVATE hv
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
+set(test_target TestRemoteWebSocketEventSmoke)
+add_executable(${test_target} "TestRemoteWebSocketEventSmoke.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::remote
+    PRIVATE Moer::scripting
+    PRIVATE hv
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 # add_executable(MeshProcessTest "MeshProcessTest.cpp")
 # target_include_directories(MeshProcessTest 
 #     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>

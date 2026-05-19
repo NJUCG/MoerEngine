@@ -8,7 +8,17 @@ set(WITH_HTTP_SERVER ON)
 set(WITH_HTTP_CLIENT ON)
 set(WITH_OPENSSL OFF)
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libhv)
+set(moer_libhv_source_dir ${CMAKE_CURRENT_SOURCE_DIR}/libhv)
+set(moer_libhv_build_source_dir ${CMAKE_CURRENT_BINARY_DIR}/libhv-src)
+
+# 此处是因为libhv会修改本身代码文件，所以我们将libhv拷贝后再进行编译
+file(REMOVE_RECURSE ${moer_libhv_build_source_dir})
+file(COPY ${moer_libhv_source_dir}/ DESTINATION ${moer_libhv_build_source_dir}
+    PATTERN ".git" EXCLUDE
+    PATTERN "build" EXCLUDE
+)
+
+add_subdirectory(${moer_libhv_build_source_dir} ${CMAKE_CURRENT_BINARY_DIR}/libhv-build)
 
 if(TARGET hv)
     set_target_properties(hv PROPERTIES
@@ -33,3 +43,5 @@ unset(WITH_HTTP)
 unset(WITH_HTTP_SERVER)
 unset(WITH_HTTP_CLIENT)
 unset(WITH_OPENSSL)
+unset(moer_libhv_source_dir)
+unset(moer_libhv_build_source_dir)

@@ -2,12 +2,15 @@
 
 // Runtime
 #include "config/ConfigManager.h"
+#include "remote/RemoteConfig.h"
+#include "remote/RemoteModule.h"
 #include "rhi/RHI.h"
 #include "scripting/PythonRuntimeConfig.h"
 #include "scripting/ScriptHost.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
+
 
 // Editor
 #include "renderer/common/RuntimeAssets.h"
@@ -131,6 +134,18 @@ void Engine::Init(int argc, const char** argv) {
 
     m_script_host = MakeUnique<scripting::ScriptHost>(scripting::PythonRuntimeConfig::Default());
     m_script_host->Start();
+
+    // 初始化 RemoteModule
+    auto remote_config = remote::MakeRemoteConfigFromGlobalConfig(config);
+    const bool remote_enabled_by_config = remote_config.enable;
+    auto       submit_fn                = [this](scripting::ScriptExecutionRequest request) {
+        return SubmitScriptExecution(std::move(request));
+    };
+
+    m_remote_module = MakeUnique<remote::RemoteModule>(std::move(remote_config), std::move(submit_fn));
+    if (remote_enabled_by_config && !m_remote_module->SetEnabled(true)) {
+        LOG_WARNING("Remote module failed to start. Continue running without remote access.");
+    }
 }
 
 void Engine::Run(const EngineHooks& hooks) {
@@ -179,9 +194,23 @@ void Engine::RequestExit() {
     WindowContext::RequestClose(WindowContext::GetMainWindow());
 }
 
-scripting::ScriptExecutionFuture Engine::SubmitScriptExecution(
-    scripting::ScriptExecutionRequest request
-) {
+bool Engine::SetRemoteEnabled(bool enabled) {
+    if (!m_remote_module) {
+        return false;
+    }
+
+    return m_remote_module->SetEnabled(enabled);
+}
+
+bool Engine::IsRemoteEnabled() const {
+    return m_remote_module && m_remote_module->IsEnabled();
+}
+
+bool Engine::IsRemoteRunning() const {
+    return m_remote_module && m_remote_module->IsRunning();
+}
+
+scripting::ScriptExecutionFuture Engine::SubmitScriptExecution(scripting::ScriptExecutionRequest request) {
     if (m_script_host) {
         return m_script_host->Submit(std::move(request));
     }
@@ -194,6 +223,11 @@ scripting::ScriptExecutionFuture Engine::SubmitScriptExecution(
 }
 
 void Engine::ShutDown() {
+    if (m_remote_module) {
+        m_remote_module->Stop();
+        m_remote_module.reset();
+    }
+
     if (m_script_host) {
         m_script_host->CancelPendingSceneCommands("Scene became unavailable during engine shutdown.");
         m_script_host->Stop();

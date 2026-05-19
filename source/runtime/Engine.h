@@ -8,6 +8,10 @@ namespace Moer::scripting {
 class ScriptHost;
 }
 
+namespace Moer::remote {
+class RemoteModule;
+}
+
 namespace Moer {
 
 class EditorUI;
@@ -21,6 +25,9 @@ public:
     void Init(int argc, const char** argv);
     void Run(const Render::EngineHooks& hooks);
     void RequestExit();
+    bool SetRemoteEnabled(bool enabled);
+    bool IsRemoteEnabled() const;
+    bool IsRemoteRunning() const;
     scripting::ScriptExecutionFuture SubmitScriptExecution(
         scripting::ScriptExecutionRequest request
     );
@@ -42,6 +49,7 @@ private:
     UniquePtr<RuntimeAssets> m_runtime_assets;
 
     UniquePtr<scripting::ScriptHost> m_script_host;
+    UniquePtr<remote::RemoteModule>  m_remote_module;
     UniquePtr<Render::Renderer>      m_renderer;
 
     bool m_has_shutdown = false;
