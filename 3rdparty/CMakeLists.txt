@@ -133,3 +133,4 @@ if (WITH_NRD)
 endif()
 
 include(SPIRV-Cross.cmake)
+include(libhv.cmake)

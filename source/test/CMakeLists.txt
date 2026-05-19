@@ -63,6 +63,24 @@ target_link_libraries(${pipe_test_target}
 )
 set_target_properties(${pipe_test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+if (NOT TARGET hv)
+    message(FATAL_ERROR "TestRemoteHttpSmoke requires hv from 3rdparty/libhv.cmake")
+endif()
+
+set(test_target TestRemoteHttpSmoke)
+add_executable(${test_target} "TestRemoteHttpSmoke.cpp")
+target_link_libraries(${test_target}
+    PRIVATE hv
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
+set(test_target TestRemoteWebSocketSmoke)
+add_executable(${test_target} "TestRemoteWebSocketSmoke.cpp")
+target_link_libraries(${test_target}
+    PRIVATE hv
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 # add_executable(MeshProcessTest "MeshProcessTest.cpp")
 # target_include_directories(MeshProcessTest 
 #     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
