@@ -1,5 +1,6 @@
 #pragma once
 
+#include "remote/RemoteModuleController.h"
 #include "renderer/Renderer.h"
 #include "scripting/ScriptExecutionFuture.h"
 #include "scripting/ScriptExecutionRequest.h"
@@ -25,13 +26,12 @@ public:
     void Init(int argc, const char** argv);
     void Run(const Render::EngineHooks& hooks);
     void RequestExit();
-    bool SetRemoteEnabled(bool enabled);
-    bool IsRemoteEnabled() const;
-    bool IsRemoteRunning() const;
-    scripting::ScriptExecutionFuture SubmitScriptExecution(
-        scripting::ScriptExecutionRequest request
-    );
-    void ShutDown();
+
+    // 提供给 Editor 等外部系统的 Remote 控制句柄
+    remote::RemoteModuleController GetRemoteModuleController() const;
+
+    scripting::ScriptExecutionFuture SubmitScriptExecution(scripting::ScriptExecutionRequest request);
+    void                             ShutDown();
 
     uint2& GetResolution() {
         return m_editor_config->GetResolution();

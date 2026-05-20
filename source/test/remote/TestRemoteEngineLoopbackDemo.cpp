@@ -216,7 +216,9 @@ int main(int argc, const char** argv) {
     engine.Init(argc, argv);
     engine.GetEditorConfig()->selected_render_method = Moer::ERenderMethod::Raster;
 
-    if (!engine.SetRemoteEnabled(true)) {
+    const auto remote_controller = engine.GetRemoteModuleController();
+
+    if (!remote_controller.SetEnabled(true)) {
         std::cerr << "Failed to enable RemoteModule for loopback demo." << std::endl;
         engine.ShutDown();
         return 2;

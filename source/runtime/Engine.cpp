@@ -194,20 +194,12 @@ void Engine::RequestExit() {
     WindowContext::RequestClose(WindowContext::GetMainWindow());
 }
 
-bool Engine::SetRemoteEnabled(bool enabled) {
+remote::RemoteModuleController Engine::GetRemoteModuleController() const {
     if (!m_remote_module) {
-        return false;
+        return remote::RemoteModuleController();
     }
 
-    return m_remote_module->SetEnabled(enabled);
-}
-
-bool Engine::IsRemoteEnabled() const {
-    return m_remote_module && m_remote_module->IsEnabled();
-}
-
-bool Engine::IsRemoteRunning() const {
-    return m_remote_module && m_remote_module->IsRunning();
+    return m_remote_module->GetController();
 }
 
 scripting::ScriptExecutionFuture Engine::SubmitScriptExecution(scripting::ScriptExecutionRequest request) {

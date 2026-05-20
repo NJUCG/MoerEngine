@@ -2,6 +2,7 @@
 
 #include "Core.h"
 #include "misc/Traits.h"
+#include "remote/RemoteModuleController.h"
 #include "renderer/EditorConfig.h"
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHIResource.h"
@@ -43,7 +44,11 @@ class Scene;
 class EditorUI {
 
 public:
-    EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config);
+    EditorUI(
+        UniquePtr<Render::UIRenderer>         renderer,
+        SharedPtr<EditorConfig>               editor_config,
+        const remote::RemoteModuleController& remote_controller
+    );
     ~EditorUI() = default;
     void TickUI(Scene& scene);
     void RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output);
@@ -104,8 +109,8 @@ private:
     float2 m_scene_color_pos;
     bool   m_b_show = true;
 
-    bool m_b_need_reload               = false;
-    bool m_b_show_render_config_sub_ui = true; // 当前 renderer 的专属配置面板是否可见。
+    bool        m_b_need_reload               = false;
+    bool        m_b_show_render_config_sub_ui = true; // 当前 renderer 的专属配置面板是否可见。
     std::string m_last_file_action_status;
 
     // Hierarchy selection state
@@ -117,7 +122,8 @@ private:
     float2 m_memory_profiler_resolution{300, 200};
 #endif
 
-    SharedPtr<EditorConfig> m_config;
+    SharedPtr<EditorConfig>        m_config;
+    remote::RemoteModuleController m_remote_controller;
 
     UniquePtr<Render::UIRenderer> m_ui_renderer;
     InspectorUI                   m_inspector_ui;

@@ -57,9 +57,14 @@ std::string BuildRenderMethodMenuLabel(ERenderMethod render_method) {
 
 } // namespace
 
-EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
+EditorUI::EditorUI(
+    UniquePtr<Render::UIRenderer>         renderer,
+    SharedPtr<EditorConfig>               editor_config,
+    const remote::RemoteModuleController& remote_controller
+) :
     m_ui_renderer(std::move(renderer)),
     m_config(editor_config),
+    m_remote_controller(remote_controller),
     m_raster_ui(editor_config->raster_config),
     m_raytracing_ui(editor_config->raytracing_config),
     m_scene_editing_ui(editor_config->scene_test_case_config) {
@@ -678,6 +683,18 @@ void EditorUI::ShowConfig(Scene& scene) {
         ImGui::SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
         m_config->camera_near_clip_log10 =
             std::min(m_config->camera_near_clip_log10, m_config->camera_far_clip_log10 - 0.1f);
+        ImGui::EndDisabled();
+
+        ImGui::TreePop();
+    }
+
+    const bool remote_enabled = m_remote_controller.IsEnabled();
+    if (ImGui::TreeNode("Remote", "Remote Module: [%s]", remote_enabled ? "Running" : "Closed")) {
+
+        ImGui::BeginDisabled(!m_remote_controller.IsValid());
+        if (ImGui::Button(remote_enabled ? "Disable" : "Enable")) {
+            m_remote_controller.SetEnabled(!remote_enabled);
+        }
         ImGui::EndDisabled();
 
         ImGui::TreePop();
