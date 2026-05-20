@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Core.h"
 #include "misc/Traits.h"
 #include "remote/RemoteModuleController.h"
 #include "renderer/EditorConfig.h"
@@ -11,6 +10,7 @@
 #include "raster_ui/RasterUI.h"
 #include "raytracing_ui/RaytracingUI.h"
 #include "scene_editing_ui/SceneEditingUI.h"
+#include "subui/RemoteExamplesUI.h"
 
 #include <entt/entity/entity.hpp>
 #include <string>
@@ -84,6 +84,7 @@ public: // Sub UI
     RasterUI       m_raster_ui;
     RaytracingUI   m_raytracing_ui;
     SceneEditingUI m_scene_editing_ui;
+    RemoteExamplesUI m_remote_examples_ui;
 
 private:
     void ResetState(); // reset m_b_need_reload, etc..

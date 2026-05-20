@@ -24,6 +24,10 @@ before_transform = scene.try_get_node_local_transform(root)
 print(f"[py] before name = {before_name}")
 dump_transform("before", before_transform)
 
+found_before = scene.find_node_entity_by_name(before_name)
+print(f"[py] found before entity = {found_before}")
+assert found_before == root, "find_node_entity_by_name should resolve the current root display name"
+
 assert before_transform is not None, "Root node local transform is not available"
 assert scene.set_node_name(root, "ScriptedRoot"), "set_node_name failed"
 assert scene.set_node_translation(root, moer.float3(1.0, 2.0, 3.0)), "set_node_translation failed"
@@ -34,4 +38,9 @@ after_name = scene.get_node_display_name(root)
 after_transform = scene.try_get_node_local_transform(root)
 print(f"[py] after name = {after_name}")
 dump_transform("after", after_transform)
+
+found_after = scene.find_node_entity_by_name("ScriptedRoot")
+print(f"[py] found after entity = {found_after}")
+assert found_after == root, "find_node_entity_by_name should resolve the renamed root"
+
 print("[py] scene control smoke done")

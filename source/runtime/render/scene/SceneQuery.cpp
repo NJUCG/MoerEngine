@@ -32,6 +32,27 @@ void CollectNodeSubtreeStatsRecursive(
     }
 }
 
+entt::entity FindNodeEntityByNameRecursive(const Scene& scene, entt::entity entity, std::string_view name) {
+    if (!scene.IsValidNodeEntity(entity)) {
+        return entt::null;
+    }
+
+    const auto& node = scene.GetNode(entity);
+    if (node.name == name || ecs::GetNodeDisplayName(node, entity) == name) {
+        return entity;
+    }
+
+    entt::entity matched_entity = entt::null;
+    scene.ForEachNodeChild(entity, [&](entt::entity child_entt) {
+        if (matched_entity != entt::null) {
+            return;
+        }
+
+        matched_entity = FindNodeEntityByNameRecursive(scene, child_entt, name);
+    });
+    return matched_entity;
+}
+
 } // namespace
 
 ///////////////////////
@@ -67,6 +88,14 @@ std::string Scene::GetNodeDisplayName(entt::entity entity) const {
 
     const auto& node = r().get<ecs::CNode>(entity);
     return ecs::GetNodeDisplayName(node, entity);
+}
+
+entt::entity Scene::FindNodeEntityByName(std::string_view name) const {
+    if (!m_logical_scene || name.empty()) {
+        return entt::null;
+    }
+
+    return FindNodeEntityByNameRecursive(*this, GetRootNodeEntity(), name);
 }
 
 Scene::NodeSubtreeStats Scene::GetNodeSubtreeStats(entt::entity entity) const {

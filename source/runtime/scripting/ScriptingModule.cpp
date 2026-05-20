@@ -445,6 +445,16 @@ void BindSceneApi(py::module_& module) {
             "Return the display name for a node entity handle."
         )
         .def(
+            "find_node_entity_by_name",
+            [](MainThreadCommandQueue& command_queue, const std::string& name) {
+                return CallScene(command_queue, [name](Scene& scene) {
+                    return scene.FindNodeEntityByName(name);
+                });
+            },
+            py::arg("name"),
+            "Return the first node entity whose authored name or display name exactly matches name, or entt::null when not found."
+        )
+        .def(
             "get_node_subtree_stats",
             [](MainThreadCommandQueue& command_queue, entt::entity entity) {
                 return CallScene(command_queue, [entity](Scene& scene) {

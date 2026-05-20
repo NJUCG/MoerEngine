@@ -274,6 +274,8 @@ public:
     }
 
     std::string                       GetNodeDisplayName(entt::entity entity) const;
+    // 按节点名字查找第一个匹配的 node entity，未找到时返回 entt::null
+    entt::entity                      FindNodeEntityByName(std::string_view name) const;
     NodeSubtreeStats                  GetNodeSubtreeStats(entt::entity entity) const;
     bool                              TryGetNodeName(entt::entity entity, std::string& out_name) const;
     std::optional<NodeLocalTransform> TryGetNodeLocalTransform(entt::entity entity) const;

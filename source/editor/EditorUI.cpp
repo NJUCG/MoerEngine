@@ -361,6 +361,7 @@ void EditorUI::TickUI(Scene& scene) {
     ShowHierarchy(scene);
     ShowInspector(scene);
     ShowConfig(scene);
+    m_remote_examples_ui.ShowWindow(m_remote_controller);
     ShowSceneEditing(scene);
 
     m_ui_renderer->EndGUIFrame();
@@ -690,12 +691,25 @@ void EditorUI::ShowConfig(Scene& scene) {
 
     const bool remote_enabled = m_remote_controller.IsEnabled();
     if (ImGui::TreeNode("Remote", "Remote Module: [%s]", remote_enabled ? "Running" : "Closed")) {
-
         ImGui::BeginDisabled(!m_remote_controller.IsValid());
         if (ImGui::Button(remote_enabled ? "Disable" : "Enable")) {
             m_remote_controller.SetEnabled(!remote_enabled);
         }
         ImGui::EndDisabled();
+
+        if (remote_enabled) {
+            const auto remote_config = m_remote_controller.GetConfigSnapshot();
+
+            ImGui::Text("Bind Address: %s", remote_config.bind_address.c_str());
+            ImGui::Text("HTTP Port: %u", remote_config.http_port);
+            ImGui::Text("WebSocket Port: %u", remote_config.websocket_port);
+
+            if (ImGui::Button("Open Remote Examples")) {
+                m_remote_examples_ui.Open();
+            }
+        } else {
+            m_remote_examples_ui.Close();
+        }
 
         ImGui::TreePop();
     }
