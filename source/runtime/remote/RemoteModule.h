@@ -15,6 +15,9 @@ class RemoteHttpServer;
 class RemoteWebSocketServer;
 
 // 统一持有并编排 Remote 子系统各个组件的顶层模块
+//
+// TODO: MoerEngine Python cli
+// TODO: MoerEngine Web UI
 class REMOTE_API RemoteModule {
 public:
     RemoteModule(RemoteConfig config, RemoteSubmitScriptExecutionFn submit_fn);

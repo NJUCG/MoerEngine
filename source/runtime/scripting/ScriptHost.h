@@ -22,6 +22,10 @@ class Scene;
 namespace Moer::scripting {
 
 // 管理脚本线程、任务队列和异步执行结果
+//
+// TODO: 脚本执行取消
+// - 说明：允许外部停止长时间运行的脚本请求
+// - 路径：补齐 ScriptExecutionFuture、ScriptHost、remote service 的 cancel 链路，并增加对应 HTTP 接口
 class SCRIPTING_API ScriptHost {
 public:
     // 使用给定运行时配置创建脚本宿主对象

@@ -9,6 +9,10 @@
 namespace Moer::scripting {
 
 // 提供 future-like 的脚本执行结果访问接口，并为后续取消等能力预留扩展点
+//
+// TODO: 脚本执行取消
+// - 说明：允许外部停止长时间运行的脚本请求
+// - 路径：补齐 ScriptExecutionFuture、ScriptHost、remote service 的 cancel 链路，并增加对应 HTTP 接口
 class SCRIPTING_API ScriptExecutionFuture {
 public:
     ScriptExecutionFuture() = default;

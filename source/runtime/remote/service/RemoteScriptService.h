@@ -34,6 +34,10 @@ struct REMOTE_API RemoteExecuteScriptResponse {
 };
 
 // 串联请求转换、脚本提交、状态记录和事件广播的核心服务
+//
+// TODO: 脚本执行取消
+// - 说明：允许外部停止长时间运行的脚本请求
+// - 路径：补齐 ScriptExecutionFuture、ScriptHost、remote service 的 cancel 链路，并增加对应 HTTP 接口
 class REMOTE_API RemoteScriptService {
 public:
     // 使用脚本提交回调和共享基础设施构造服务对象

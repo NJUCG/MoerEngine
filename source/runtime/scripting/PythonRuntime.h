@@ -15,6 +15,10 @@ namespace py = pybind11;
 namespace Moer::scripting {
 
 // 封装嵌入式 Python 解释器的初始化、关闭和脚本执行能力
+//
+// TODO: 增量 stdout / stderr
+// - 说明：脚本执行过程中实时返回输出，而不是结束后一次性汇总
+// - 路径：PythonRuntime 将当前 StringIO 改为可持续写入的 writer，执行层接收输出 chunk 后再向外转发
 class SCRIPTING_API PythonRuntime {
 public:
     // 构造一个尚未初始化的 Python 运行时对象
