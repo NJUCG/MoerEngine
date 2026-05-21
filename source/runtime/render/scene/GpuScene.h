@@ -18,7 +18,7 @@ namespace Moer::Render {
  * 改这里:
  * - 加新的 GPU 资源或 bindless 绑定: GpuScene.h / GpuScene.cpp
  * - 改 CPU->GPU 数据布局: CpuScene.h + SharedSceneStruct.h + 各 pass
- * - 改 import / runtime create 后的资源重建: SceneImport.cpp + GpuScene.cpp
+ * - 改 import / runtime create 后的资源重建: SceneLifeCycle.cpp + GpuScene.cpp
  *
  * 用法:
  * - Scene::Tick 后取 PopPendingCommandList() 提交给 RHI

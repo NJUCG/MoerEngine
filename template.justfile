@@ -7,6 +7,7 @@
 # - just gbr                  => 以Debug模式 生成、构建、运行MoerEditor
 # - just gbr Release TestEnTT => 以Release模式 生成、构建、运行测试用例TestEnTT
 # - just br Debug             => 以Debug模式 构建、运行MoerEditor
+# - just list                 => 列举 just br Debug xxx 中可用的可执行目标 xxx
 # - just r Release            => 以Release模式 运行MoerEditor
 # - just clean                => 清除build和target目录
 #
@@ -44,6 +45,9 @@ _generate:
     # cmake -B build
     cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 
+_list_targets:
+    @powershell -NoProfile -ExecutionPolicy Bypass -File "./tools/cmake/list_executable_targets.ps1" -SourceDir "." -BuildDir "{{dir_build}}"
+
 _build config="Debug" threads="30" target="MoerEditor":
     cmake --build build -j{{threads}} --config {{config}} --target {{target}}
 
@@ -66,6 +70,8 @@ clean-exe config="Debug": (_rm_exe config)
 clean: (_rm dir_build) (_rm dir_target)
 
 generate: (_generate)
+
+list: (_list_targets)
 
 build config="Debug" exe="MoerEditor" threads=default_threads: (_build config threads exe)
 

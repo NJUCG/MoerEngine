@@ -3,10 +3,12 @@
  */
 #pragma once
 
+#include "log/LogSystem.h"
 #include "scene/Scene.h"
 #include "scene/testcase/SceneTestCaseId.h"
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace Moer {
@@ -14,6 +16,15 @@ namespace Moer {
 struct SceneTestCaseContext {
     std::uint64_t frame_index          = 0;
     float         elapsed_time_seconds = 0.f;
+};
+
+struct SceneTestCaseRunResult {
+    ESceneTestCaseId test_case_id = ESceneTestCaseId::None;
+    std::string      case_name;
+    std::uint64_t    begin_frame = 0;
+    std::uint64_t    end_frame   = 0;
+    bool             passed      = false;
+    std::string      failure_summary;
 };
 
 /**
@@ -53,6 +64,63 @@ public:
 
     // 返回 testcase 是否已经完成
     virtual bool IsFinished() const = 0;
+
+    // 返回 testcase 当前是否已经失败
+    virtual bool HasFailed() const {
+        return false;
+    }
+
+    // 返回 testcase 的失败摘要；成功或未失败时可为空
+    virtual std::string_view FailureSummary() const {
+        return {};
+    }
+};
+
+class SceneTestCaseBase : public ISceneTestCase {
+public:
+    bool IsFinished() const override {
+        return m_finished;
+    }
+
+    bool HasFailed() const override {
+        return m_failed;
+    }
+
+    std::string_view FailureSummary() const override {
+        return m_failure_summary;
+    }
+
+protected:
+    bool Expect(bool condition, std::string_view message) {
+        if (condition) {
+            return true;
+        }
+
+        m_failed = true;
+        if (m_failure_summary.empty()) {
+            m_failure_summary = message;
+        }
+        LOG_ERROR("SceneTestCase '{}' failed: {}", Name(), message);
+        return false;
+    }
+
+    void Finish() {
+        if (!m_failed) {
+            LOG_INFO("SceneTestCase '{}' passed.", Name());
+        }
+        m_finished = true;
+    }
+
+    void ResetBaseState() {
+        m_finished = false;
+        m_failed   = false;
+        m_failure_summary.clear();
+    }
+
+protected:
+    bool        m_finished = false;
+    bool        m_failed   = false;
+    std::string m_failure_summary;
 };
 
 } // namespace Moer

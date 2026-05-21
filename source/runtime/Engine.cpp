@@ -2,12 +2,15 @@
 
 // Runtime
 #include "config/ConfigManager.h"
-#include "misc/MMemory.h"
-#include "renderer/common/UIRenderer.h"
+#include "remote/RemoteConfig.h"
+#include "remote/RemoteModule.h"
 #include "rhi/RHI.h"
+#include "scripting/PythonRuntimeConfig.h"
+#include "scripting/ScriptHost.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
+
 
 // Editor
 #include "renderer/common/RuntimeAssets.h"
@@ -27,10 +30,26 @@ static UniquePtr<NFD::Guard> nfd_guard = nullptr;
 
 static bool ContainsNonAscii(const std::filesystem::path& p);
 
+namespace {
+
+ERenderMethod ParseDefaultRenderMethod(std::string_view render_method_name) {
+    if (render_method_name == "Raster") {
+        return ERenderMethod::Raster;
+    }
+    if (render_method_name == "Raytracing") {
+        return ERenderMethod::Raytracing;
+    }
+
+    LOG_WARNING("Invalid default render method: {}. Use Raster instead.", render_method_name);
+    return ERenderMethod::Raster;
+}
+
+} // namespace
+
 Engine::Engine() {}
 
 Engine::~Engine() {
-    assert(has_shutdown && "Engine::ShutDown() was not called before Engine destruction!");
+    assert(m_has_shutdown && "Engine::ShutDown() was not called before Engine destruction!");
 }
 
 void Engine::Init(int argc, const char** argv) {
@@ -52,12 +71,13 @@ void Engine::Init(int argc, const char** argv) {
     }
 
     ConfigManager::GetInstance().Init(path);
+    const auto& config = ConfigManager::GetInstance().GetConfig();
 
     // Init TaskSystem
     TaskSystem::Init();
 
     // Init RenderDevice
-    std::string rhi_type_str = ConfigManager::GetInstance().GetConfig().engine.rhi.type;
+    std::string rhi_type_str = config.engine.rhi.type;
     std::transform(rhi_type_str.begin(), rhi_type_str.end(), rhi_type_str.begin(), ::tolower);
 
     ERHIType rhi_type = [&]() {
@@ -70,10 +90,7 @@ void Engine::Init(int argc, const char** argv) {
             return ERHIType::D3D12;
         }
 
-        LOG_WARNING(
-            "Unknown RHI type '{}', fallback to Vulkan",
-            ConfigManager::GetInstance().GetConfig().engine.rhi.type
-        );
+        LOG_WARNING("Unknown RHI type '{}', fallback to Vulkan", config.engine.rhi.type);
         return ERHIType::Vulkan;
     }();
 
@@ -82,7 +99,7 @@ void Engine::Init(int argc, const char** argv) {
             DeviceInitInfo{
                 .rhi_type        = rhi_type,
                 .name            = "MoerEngine",
-                .rhi_api_version = ConfigManager::GetInstance().GetConfig().engine.rhi.api_version,
+                .rhi_api_version = config.engine.rhi.api_version,
             }
         )
     );
@@ -90,13 +107,13 @@ void Engine::Init(int argc, const char** argv) {
     ShaderManager::Get(); // Explicit Init ShaderManager
 
     m_editor_config = MakeShared<EditorConfig>();
+    m_editor_config->selected_render_method =
+        ParseDefaultRenderMethod(config.engine.render.default_render_method);
+    m_editor_config->scene_path = config.engine.scene.scene_path;
 
     // Init WindowContext
-    m_editor_config->SetResolution(
-        ConfigManager::GetInstance().GetConfig().editor.width,
-        ConfigManager::GetInstance().GetConfig().editor.height
-    );
-    bool b_fullscreen = ConfigManager::GetInstance().GetConfig().editor.fullscreen;
+    m_editor_config->SetResolution(config.editor.width, config.editor.height);
+    bool b_fullscreen = config.editor.fullscreen;
     LOG_INFO(
         "Editor Window Resolution : {}x{}; Fullscreen : {}",
         m_editor_config->GetResolution().x,
@@ -114,9 +131,30 @@ void Engine::Init(int argc, const char** argv) {
 
     m_runtime_assets =
         MakeUnique<RuntimeAssets>(ConfigManager::GetInstance().GetEditorResourcePath(), RenderDevice::Get());
+
+    m_script_host = MakeUnique<scripting::ScriptHost>(scripting::PythonRuntimeConfig::Default());
+    m_script_host->Start();
+
+    // 初始化 RemoteModule
+    auto remote_config = remote::MakeRemoteConfigFromGlobalConfig(config);
+    const bool remote_enabled_by_config = remote_config.enable;
+    auto       submit_fn                = [this](scripting::ScriptExecutionRequest request) {
+        return SubmitScriptExecution(std::move(request));
+    };
+
+    m_remote_module = MakeUnique<remote::RemoteModule>(std::move(remote_config), std::move(submit_fn));
+    if (remote_enabled_by_config && !m_remote_module->SetEnabled(true)) {
+        LOG_WARNING("Remote module failed to start. Continue running without remote access.");
+    }
 }
 
 void Engine::Run(const EngineHooks& hooks) {
+    EngineHooks runtime_hooks       = hooks;
+    runtime_hooks.on_tick_scripting = [this](Scene& scene) {
+        if (m_script_host) {
+            m_script_host->ProcessMainThreadCommands(scene);
+        }
+    };
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         LOG_INFO(
@@ -125,27 +163,69 @@ void Engine::Run(const EngineHooks& hooks) {
         );
 
         if (m_editor_config->selected_render_method == ERenderMethod::Raster) {
-            m_renderer =
-                MakeUnique<Raster::RasterRenderer>(m_editor_config->GetResolution(), m_editor_config, hooks);
+            m_renderer = MakeUnique<Raster::RasterRenderer>(
+                m_editor_config->GetResolution(), m_editor_config, runtime_hooks
+            );
 
         } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
             // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);
             m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
-                m_editor_config->GetResolution(), m_editor_config, hooks, *m_runtime_assets
+                m_editor_config->GetResolution(), m_editor_config, runtime_hooks, *m_runtime_assets
             );
 
         } else {
             assert(false && "Unknown render method");
         }
 
-        m_renderer->Run(m_editor_config, hooks);
+        m_renderer->Run(m_editor_config, runtime_hooks);
+
+        if (m_script_host) {
+            m_script_host->CancelPendingSceneCommands(
+                "Scene became unavailable during renderer switch or shutdown."
+            );
+        }
 
         // Switch Renderer
         m_renderer.reset();
     }
 }
 
+void Engine::RequestExit() {
+    WindowContext::RequestClose(WindowContext::GetMainWindow());
+}
+
+remote::RemoteModuleController Engine::GetRemoteModuleController() const {
+    if (!m_remote_module) {
+        return remote::RemoteModuleController();
+    }
+
+    return m_remote_module->GetController();
+}
+
+scripting::ScriptExecutionFuture Engine::SubmitScriptExecution(scripting::ScriptExecutionRequest request) {
+    if (m_script_host) {
+        return m_script_host->Submit(std::move(request));
+    }
+
+    std::promise<scripting::ScriptExecutionResult> promise;
+    scripting::ScriptExecutionResult               result;
+    result.exception_text = "ScriptHost is not available.";
+    promise.set_value(std::move(result));
+    return scripting::ScriptExecutionFuture(promise.get_future());
+}
+
 void Engine::ShutDown() {
+    if (m_remote_module) {
+        m_remote_module->Stop();
+        m_remote_module.reset();
+    }
+
+    if (m_script_host) {
+        m_script_host->CancelPendingSceneCommands("Scene became unavailable during engine shutdown.");
+        m_script_host->Stop();
+        m_script_host.reset();
+    }
+
     m_runtime_assets.reset(); // 释放RuntimeAssets资源
 
     WindowContext::ShutDown();
@@ -153,7 +233,7 @@ void Engine::ShutDown() {
     RenderDevice::Dispose();
     TaskSystem::ShutDown();
 
-    has_shutdown = true;
+    m_has_shutdown = true;
 }
 
 void Engine::Init3rdParty() {

@@ -1,21 +1,19 @@
 #include "EditorUI.h"
 
 // Runtime
-#include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "window/WindowInput.h"
 
 // Editor
 #include "EditorUIStyle.h"
 #include "scene/Scene.h"
-#include "scene/SceneGlobalEntry.h"
-#include "scene/NodeNameUtils.h"
 #include "scene_editing_ui/SceneFileDialog.h"
+#include "window/WindowContext.h"
 
 // 3rd party (std)
+#include <algorithm>
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <algorithm>
 #include <string_view>
 
 #if WITH_PROFILE
@@ -28,19 +26,48 @@ namespace Moer {
 
 namespace {
 
-bool IsSelectedNodeValid(Scene* scene, entt::entity entity) {
-    return scene != nullptr && entity != entt::null && scene->r().valid(entity) &&
-           scene->r().all_of<ecs::CNode>(entity);
+std::string GetSceneFileName(std::string_view scene_path) {
+    if (scene_path.empty()) {
+        return "No Scene";
+    }
+
+    const size_t last_slash = scene_path.find_last_of("\\/");
+    return last_slash == std::string::npos ? std::string(scene_path) :
+                                             std::string(scene_path.substr(last_slash + 1));
+}
+
+std::string TruncateMenuValue(std::string_view value) {
+    constexpr size_t k_max_display_length      = 15;
+    constexpr size_t k_truncated_prefix_length = 10;
+
+    if (value.size() <= k_max_display_length) {
+        return std::string(value);
+    }
+
+    return std::string(value.substr(0, k_truncated_prefix_length)) + "...";
+}
+
+std::string BuildFileMenuLabel(std::string_view scene_path) {
+    return "File: [" + TruncateMenuValue(GetSceneFileName(scene_path)) + "]";
+}
+
+std::string BuildRenderMethodMenuLabel(ERenderMethod render_method) {
+    return "Render Method: [" + std::string(k_render_method_names[static_cast<uint>(render_method)]) + "]";
 }
 
 } // namespace
 
-EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
+EditorUI::EditorUI(
+    UniquePtr<Render::UIRenderer>         renderer,
+    SharedPtr<EditorConfig>               editor_config,
+    const remote::RemoteModuleController& remote_controller
+) :
     m_ui_renderer(std::move(renderer)),
     m_config(editor_config),
+    m_remote_controller(remote_controller),
     m_raster_ui(editor_config->raster_config),
     m_raytracing_ui(editor_config->raytracing_config),
-    m_scene_editing_ui(editor_config->scene_test_case_config, m_b_need_reload) {
+    m_scene_editing_ui(editor_config->scene_test_case_config) {
 
     auto has_saved_window_settings = [](const char* window_name) {
         return ImGui::FindWindowSettingsByID(ImHashStr(window_name)) != nullptr;
@@ -55,31 +82,8 @@ EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfi
     m_b_show_memory_profiler = has_saved_window_settings("Memory Profiler");
 #endif
 
-    // Load Config
-    InitFromConfigManager();
-
     // Init Style
     EditorUIStyle::ApplyDefaultStyle();
-}
-
-void EditorUI::InitFromConfigManager() {
-    auto config = ConfigManager::GetInstance().GetConfig();
-
-    // render method
-    if (config.engine.render.default_render_method == "Raster") {
-        m_config->selected_render_method = ERenderMethod::Raster;
-    } else if (config.engine.render.default_render_method == "Raytracing") {
-        m_config->selected_render_method = ERenderMethod::Raytracing;
-    } else {
-        LOG_WARNING(
-            "Invalid default render method: {}. Use Raster instead.",
-            config.engine.render.default_render_method
-        );
-        m_config->selected_render_method = ERenderMethod::Raster;
-    }
-
-    // scene path
-    m_config->scene_path = config.engine.scene.scene_path;
 }
 
 #if WITH_PROFILE
@@ -253,11 +257,9 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
 }
 #endif
 
-void EditorUI::TickUI() {
+void EditorUI::TickUI(Scene& scene) {
 
-    // 注：Resolution表示整个窗口的大小（不包含windows标题栏）；SceneColor只表示场景渲染区域的大小
-    // 更新SceneColor的分辨率
-    m_config->aspect_ratio = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
+    ResetState();
 
     m_ui_renderer->BeginGUIFrame();
 
@@ -303,22 +305,37 @@ void EditorUI::TickUI() {
         ImGui::PopStyleVar(2);
 
     // Submit the DockSpace
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO&   io               = ImGui::GetIO();
+    const bool is_scene_loading = !scene.IsReady() && scene.IsStartLoading();
     if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
         ImGuiID dockspace_id = ImGui::GetID("Docking Main");
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
     }
     if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("Menu")) {
-            // if (ImGui::MenuItem("Reload Current Level")) {
-            // }
-            // if (ImGui::MenuItem("Save Current Level")) {
-            // }
-            if (ImGui::MenuItem("Exit")) {
-                exit(0);
+        ShowFileMenu(scene, is_scene_loading);
+
+        const auto        last_selected_render_method = m_config->selected_render_method;
+        const std::string render_method_menu_label =
+            BuildRenderMethodMenuLabel(m_config->selected_render_method);
+        if (ImGui::BeginMenu(render_method_menu_label.c_str())) {
+            for (int i = 0; i < IM_ARRAYSIZE(k_render_method_names); i++) {
+                const bool is_selected = (m_config->selected_render_method == static_cast<ERenderMethod>(i));
+                if (ImGui::MenuItem(
+                        k_render_method_names[i].data(), nullptr, is_selected, !is_scene_loading
+                    )) {
+                    m_config->selected_render_method = static_cast<ERenderMethod>(i);
+                }
+                if (is_selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
             }
             ImGui::EndMenu();
         }
+        if (last_selected_render_method != m_config->selected_render_method) {
+            m_b_need_reload = true;
+            SetShowRenderConfigSubUI(false);
+        }
+
         if (ImGui::BeginMenu("Window")) {
 
             ImGui::MenuItem("Scene Color", nullptr, &m_b_show_scene_color);
@@ -340,57 +357,124 @@ void EditorUI::TickUI() {
         ShowMemoryProfiler(&m_b_show_memory_profiler);
     }
 #endif
-    ResetState();
     ShowSceneColor();
-    ShowHierarchy();
-    ShowInspector();
-    ShowConfig();
-    ShowSceneEditing();
+    ShowHierarchy(scene);
+    ShowInspector(scene);
+    ShowConfig(scene);
+    m_remote_examples_ui.ShowWindow(m_remote_controller);
+    ShowSceneEditing(scene);
 
     m_ui_renderer->EndGUIFrame();
 }
 
-void EditorUI::ShowSceneEditing() {
-    m_scene_editing_ui.ShowWindow(&m_b_show_scene_editing);
+void EditorUI::ShowSceneEditing(Scene& scene) {
+    m_scene_editing_ui.ShowWindow(&m_b_show_scene_editing, scene);
 }
 
-void EditorUI::ShowHierarchy() {
-    if (!m_b_show_hierarchy) {
+void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
+    const std::string file_menu_label = BuildFileMenuLabel(m_config->scene_path);
+    if (!ImGui::BeginMenu(file_menu_label.c_str())) {
         return;
     }
 
-    Scene* scene = SceneGlobalEntry::Get().PeekScene();
+    if (ImGui::MenuItem("Open Scene...", nullptr, false, !is_scene_loading)) {
+        std::string selected_path;
+        switch (OpenSceneFileDialog(selected_path)) {
+            case ESceneFileDialogResult::Selected:
+                LOG_INFO("User selected file: {}", selected_path);
+                m_b_need_reload           = true;
+                m_config->scene_path      = std::move(selected_path);
+                m_last_file_action_status = "Open Scene requested";
+                break;
+            case ESceneFileDialogResult::Cancelled:
+                LOG_INFO("User pressed cancel.");
+                break;
+            case ESceneFileDialogResult::Error:
+                m_last_file_action_status = "Open Scene failed. Check log.";
+                break;
+        }
+    }
+
+    if (ImGui::MenuItem("Import Into Current Scene...", nullptr, false, scene.IsReady())) {
+        std::string selected_path;
+        if (OpenSceneFileDialog(selected_path) == ESceneFileDialogResult::Selected) {
+            const Scene::ImportSceneFromFileResult result = scene.ImportSceneFromFileSync(selected_path);
+            if (result) {
+                m_last_file_action_status =
+                    "Imported scene entities: " + std::to_string(result.imported_entity_count);
+            } else {
+                m_last_file_action_status = "Import failed: " + result.error_message;
+            }
+        }
+    }
+
+    if (ImGui::BeginMenu("Scene Cache")) {
+        if (ImGui::MenuItem("Save State Cache")) {
+            if (scene.SaveStateCache()) {
+                m_last_file_action_status = "State cache saved";
+            } else {
+                m_last_file_action_status = "Save State failed. Check log.";
+            }
+        }
+
+        const bool can_restore_source_scene = scene.IsReady() && !scene.GetSourceFilePath().empty();
+
+        if (ImGui::MenuItem("Load State Cache", nullptr, false, can_restore_source_scene)) {
+            m_b_need_reload           = true;
+            m_last_file_action_status = "Load Cache requested";
+        }
+
+        if (ImGui::MenuItem("Reset To Source Scene", nullptr, false, can_restore_source_scene)) {
+            if (scene.ResetToSourceScene()) {
+                m_b_need_reload           = true;
+                m_last_file_action_status = "Reset Cache requested";
+            } else {
+                m_last_file_action_status = "Reset failed. Check log.";
+            }
+        }
+
+        ImGui::EndMenu();
+    }
+
+    ImGui::Separator();
+    if (ImGui::MenuItem("Exit")) {
+        WindowContext::RequestClose(WindowContext::GetMainWindow());
+    }
+    ImGui::EndMenu();
+}
+
+void EditorUI::ShowHierarchy(Scene& scene) {
+    if (!m_b_show_hierarchy) {
+        return;
+    }
 
     if (!ImGui::Begin("Hierarchy", &m_b_show_hierarchy)) {
         ImGui::End();
         return;
     }
 
-    if (scene == nullptr || !scene->IsReady()) {
+    if (!scene.IsReady()) {
         ImGui::TextDisabled("scene加载中");
         ImGui::End();
         return;
     }
 
-    if (!IsSelectedNodeValid(scene, m_selected_node)) {
+    if (!scene.IsValidNodeEntity(m_selected_node)) {
         m_selected_node = entt::null;
     }
 
-    auto&             registry  = scene->r();
-    const entt::entity root_entt = scene->logical_scene().UGetRootNodeEntity();
-    if (root_entt == entt::null || !registry.all_of<ecs::CNode>(root_entt)) {
+    const entt::entity root_entt = scene.GetRootNodeEntity();
+    if (!scene.IsValidNodeEntity(root_entt)) {
         ImGui::TextDisabled("Root node not found.");
         ImGui::End();
         return;
     }
 
-    auto draw_node = [&](auto& self, entt::entity entity, int depth) -> void {
-        const auto& node = registry.get<ecs::CNode>(entity);
-        const std::string     label       = ecs::GetNodeDisplayName(node, entity);
-        const bool            selected    = (m_selected_node == entity);
-        const bool            has_children = node.first_child_entt != entt::null;
-        ImGuiTreeNodeFlags    tree_flags  = ImGuiTreeNodeFlags_SpanAvailWidth |
-                                         ImGuiTreeNodeFlags_OpenOnArrow;
+    auto draw_node = [&](auto& self, entt::entity entity) -> void {
+        const std::string  label        = scene.GetNodeDisplayName(entity);
+        const bool         selected     = (m_selected_node == entity);
+        const bool         has_children = scene.GetNodeChildCount(entity) > 0;
+        ImGuiTreeNodeFlags tree_flags   = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow;
 
         if (selected) {
             tree_flags |= ImGuiTreeNodeFlags_Selected;
@@ -407,27 +491,23 @@ void EditorUI::ShowHierarchy() {
         }
 
         if (has_children && is_open) {
-            entt::entity child_entt = node.first_child_entt;
-            while (child_entt != entt::null) {
-                self(self, child_entt, depth + 1);
-                child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
-            }
+            scene.ForEachNodeChild(entity, [&](entt::entity child_entt) {
+                self(self, child_entt);
+            });
             ImGui::TreePop();
         }
         ImGui::PopID();
     };
 
-    entt::entity child_entt = registry.get<ecs::CNode>(root_entt).first_child_entt;
-    while (child_entt != entt::null) {
-        draw_node(draw_node, child_entt, 0);
-        child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
-    }
+    scene.ForEachNodeChild(root_entt, [&](entt::entity child_entt) {
+        draw_node(draw_node, child_entt);
+    });
 
     ImGui::End();
 }
 
-void EditorUI::ShowInspector() {
-    m_inspector_ui.ShowWindow(&m_b_show_inspector, SceneGlobalEntry::Get().PeekScene(), m_selected_node);
+void EditorUI::ShowInspector(Scene& scene) {
+    m_inspector_ui.ShowWindow(&m_b_show_inspector, &scene, m_selected_node);
 }
 
 void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output) {
@@ -460,14 +540,18 @@ void EditorUI::ShowSceneColor() {
 
     const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
     if (!m_b_show_scene_color) {
-        m_b_scene_color_mouse_captured = false;
-        WindowInput::Get().is_active   = false;
+        m_b_scene_color_mouse_captured              = false;
+        WindowInput::Get().is_active                = false;
+        WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
+        WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
         return;
     }
     if (!ImGui::Begin("Scene Color", &m_b_show_scene_color, window_flags)) {
         // Should not call ImGui::End() here
-        m_b_scene_color_mouse_captured = false;
-        WindowInput::Get().is_active   = false;
+        m_b_scene_color_mouse_captured              = false;
+        WindowInput::Get().is_active                = false;
+        WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
+        WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
         return;
     }
 
@@ -511,6 +595,15 @@ void EditorUI::ShowSceneColor() {
         m_scene_color_pos        = {local_pos.x, local_pos.y};
     }
 
+    WindowInput::Get().m_scene_color_resolution = uint2(
+        m_scene_color_resolution.x > 0.f ? static_cast<uint>(m_scene_color_resolution.x) : 0u,
+        m_scene_color_resolution.y > 0.f ? static_cast<uint>(m_scene_color_resolution.y) : 0u
+    );
+    WindowInput::Get().m_scene_color_pos = uint2(
+        m_scene_color_pos.x > 0.f ? static_cast<uint>(m_scene_color_pos.x) : 0u,
+        m_scene_color_pos.y > 0.f ? static_cast<uint>(m_scene_color_pos.y) : 0u
+    );
+
     // inject. Needs to be refactored (camera control)
     // 鼠标按下起点在SceneColor内时，才捕获本次拖拽并控制摄像机
     static constexpr float border = 4.f;
@@ -549,7 +642,7 @@ void EditorUI::ShowSceneColor() {
     ImGui::End();
 }
 
-void EditorUI::ShowConfig() {
+void EditorUI::ShowConfig(Scene& scene) {
     ImGuiIO&         io           = ImGui::GetIO();
     ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
 
@@ -568,75 +661,55 @@ void EditorUI::ShowConfig() {
 
     /////////////////////////////////////////////////// Begin Disabled Here
     // 避免场景加载一半，切换场景或渲染器，导致崩溃
-    Scene* scene = SceneGlobalEntry::Get().GetScene();
+    const bool is_scene_loading = !scene.IsReady() && scene.IsStartLoading();
+    ImGui::BeginDisabled(is_scene_loading);
 
-    bool is_scene_found_but_not_ready = false;
-    if (scene) {
-        is_scene_found_but_not_ready = !scene->IsReady() && scene->IsStartLoading();
-    } else {
-        LOG_WARNING("Please bind a scene by `SceneGlobalEntry::Get().BindScene(scene)`");
-    }
-    ImGui::BeginDisabled(is_scene_found_but_not_ready);
-
-    // Render Method
-    {
-        auto last_selected_render_method = m_config->selected_render_method;
-        if (ImGui::BeginCombo(
-                "Render Method",
-                k_render_method_names[static_cast<uint>(m_config->selected_render_method)].data()
-            )) {
-            for (int i = 0; i < IM_ARRAYSIZE(k_render_method_names); i++) {
-                const bool is_selected = (m_config->selected_render_method == static_cast<ERenderMethod>(i));
-                if (ImGui::Selectable(k_render_method_names[i].data(), is_selected)) {
-                    m_config->selected_render_method = static_cast<ERenderMethod>(i);
-                }
-                if (is_selected) {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
-        }
-        if (last_selected_render_method != m_config->selected_render_method) {
-            m_b_need_reload = true;
-            SetShowRenderConfigSubUI(false);
-        }
-    }
-
-    { // Scene Path
-        size_t      last_slash = m_config->scene_path.find_last_of("/\\");
-        std::string scene_name = (last_slash == std::string::npos) ?
-                                     m_config->scene_path :
-                                     m_config->scene_path.substr(last_slash + 1);
-        if (ImGui::Button("Open Scene")) {
-            std::string selected_path;
-            switch (OpenSceneFileDialog(selected_path)) {
-                case ESceneFileDialogResult::Selected:
-                LOG_INFO("User selected file: {}", selected_path);
-
-                // Prepare for reload
-                m_b_need_reload      = true;
-                m_config->scene_path = std::move(selected_path);
-                break;
-                case ESceneFileDialogResult::Cancelled:
-                    LOG_INFO("User pressed cancel.");
-                    break;
-                case ESceneFileDialogResult::Error:
-                    break;
-            }
-        }
-        ImGui::SameLine();
-        ImGui::Text("Current: [%s]", scene_name.c_str());
+    if (!m_last_file_action_status.empty()) {
+        ImGui::TextDisabled("File Action: %s", m_last_file_action_status.c_str());
     }
 
     if (ImGui::TreeNode("Camera")) {
-
         ImGui::SliderFloat("Speed (log10)", &m_config->camera_speed_log10, -1.f, 2.6f);
+
+        ImGui::Checkbox("Override Projection", &m_config->camera_projection_override_enabled);
+
+        if (!m_config->camera_projection_override_enabled) {
+            ImGui::TextDisabled("Using scene camera projection.");
+        }
+
+        ImGui::BeginDisabled(!m_config->camera_projection_override_enabled);
         ImGui::SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
 
         ImGui::SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 0.99f);
         ImGui::SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
         m_config->camera_near_clip_log10 =
             std::min(m_config->camera_near_clip_log10, m_config->camera_far_clip_log10 - 0.1f);
+        ImGui::EndDisabled();
+
+        ImGui::TreePop();
+    }
+
+    const bool remote_enabled = m_remote_controller.IsEnabled();
+    if (ImGui::TreeNode("Remote", "Remote Module: [%s]", remote_enabled ? "Running" : "Closed")) {
+        ImGui::BeginDisabled(!m_remote_controller.IsValid());
+        if (ImGui::Button(remote_enabled ? "Disable" : "Enable")) {
+            m_remote_controller.SetEnabled(!remote_enabled);
+        }
+        ImGui::EndDisabled();
+
+        if (remote_enabled) {
+            const auto remote_config = m_remote_controller.GetConfigSnapshot();
+
+            ImGui::Text("Bind Address: %s", remote_config.bind_address.c_str());
+            ImGui::Text("HTTP Port: %u", remote_config.http_port);
+            ImGui::Text("WebSocket Port: %u", remote_config.websocket_port);
+
+            if (ImGui::Button("Open Remote Examples")) {
+                m_remote_examples_ui.Open();
+            }
+        } else {
+            m_remote_examples_ui.Close();
+        }
 
         ImGui::TreePop();
     }
@@ -658,7 +731,7 @@ void EditorUI::ShowConfig() {
     ImGui::Separator();
 
     ImGui::EndDisabled();
-    if (is_scene_found_but_not_ready) {
+    if (is_scene_loading) {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Scene is loading... Please wait.");
     }
     /////////////////////////////////////////////////// End Disabled Here

@@ -1,7 +1,6 @@
 #include "Editor.h"
 
 #include "Engine.h"
-#include "config/ConfigManager.h"
 
 #include "EditorUI.h"
 
@@ -23,34 +22,40 @@ void Editor::Init(int argc, const char** argv) {
 }
 
 void Editor::Run() {
-    // init
-    auto   ui_renderer = MakeUnique<Render::UIRenderer>(RenderDevice::Get());
-    uint2& resolution  = m_engine->GetResolution();
+    Run(ExtraHooks{});
+}
 
-    auto editor_ui = MakeUnique<EditorUI>(std::move(ui_renderer), m_engine->GetEditorConfig());
+void Editor::Run(const ExtraHooks& extra_hooks) {
+    // init
+    m_editor_ui = MakeUnique<EditorUI>(
+        MakeUnique<Render::UIRenderer>(RenderDevice::Get()),
+        m_engine->GetEditorConfig(),
+        m_engine->GetRemoteModuleController()
+    );
 
     // run
     m_engine->Run(
         EngineHooks{
             // Common
+            .on_tick_test = extra_hooks.on_tick_test,
             .on_tick_ui =
-                [&editor_ui]() {
-                    editor_ui->TickUI();
+                [this](Scene& scene) {
+                    m_editor_ui->TickUI(scene);
                 },
             .on_render_gui =
-                [&editor_ui](CommandList& cmd_list, TextureRef output_image) {
-                    editor_ui->RenderGUI(cmd_list, output_image);
+                [this](CommandList& cmd_list, TextureRef output_image) {
+                    m_editor_ui->RenderGUI(cmd_list, output_image);
                 },
             .on_present_windows =
-                [&editor_ui]() {
-                    editor_ui->PresentWindows();
+                [this]() {
+                    m_editor_ui->PresentWindows();
                 },
             .on_is_need_reload =
-                [&editor_ui]() {
-                    return editor_ui->IsNeedReload();
+                [this]() {
+                    return m_editor_ui->IsNeedReload();
                 },
             .on_ui_combine_pass =
-                [&editor_ui](
+                [this](
                     UiCombinePass* ui_combine_pass,
                     CommandList&   cmd_list,
                     TextureView    input_color_texture,
@@ -59,33 +64,33 @@ void Editor::Run() {
                 ) {
                     return ui_combine_pass->Process(
                         cmd_list,
-                        editor_ui->IsSeperateWindow(),
-                        editor_ui->GetConfig()->GetResolution(),
-                        editor_ui->GetSceneColorPos(),
-                        editor_ui->GetSceneColorResolution(),
-                        editor_ui->GetWindowFrameBuffer(),
+                        m_editor_ui->IsSeperateWindow(),
+                        m_editor_ui->GetConfig()->GetResolution(),
+                        m_editor_ui->GetSceneColorPos(),
+                        m_editor_ui->GetSceneColorResolution(),
+                        m_editor_ui->GetWindowFrameBuffer(),
                         input_color_texture,
                         input_ui_texture,
                         default_output_texture
                     );
                 },
             .on_register_ui_func =
-                [&editor_ui](std::string name, std::function<void(void)> lambda) {
-                    editor_ui->RegisterUIFunc(name, std::move(lambda));
+                [this](std::string name, std::function<void(void)> lambda) {
+                    m_editor_ui->RegisterUIFunc(name, std::move(lambda));
                 },
             .on_unregister_ui_func =
-                [&editor_ui](std::string name) {
-                    editor_ui->UnregisterUIFunc(name);
+                [this](std::string name) {
+                    m_editor_ui->UnregisterUIFunc(name);
                 },
             .on_show_config_sub_ui =
-                [&editor_ui]() {
-                    editor_ui->SetShowRenderConfigSubUI(true);
+                [this]() {
+                    m_editor_ui->SetShowRenderConfigSubUI(true);
                 },
 
             // Raster
             .on_raster_register_frame_buffers =
-                [&editor_ui](const Array<TextureView>& textures) {
-                    editor_ui->m_raster_ui.RegisterFrameBuffers(textures);
+                [this](const Array<TextureView>& textures) {
+                    m_editor_ui->m_raster_ui.RegisterFrameBuffers(textures);
                 }
         }
     );
@@ -97,6 +102,14 @@ void Editor::Run() {
 void Editor::ShutDown() {
     m_engine->ShutDown();
     m_engine.reset();
+}
+
+Engine& Editor::GetEngine() {
+    return *m_engine;
+}
+
+const Engine& Editor::GetEngine() const {
+    return *m_engine;
 }
 
 } // namespace Moer

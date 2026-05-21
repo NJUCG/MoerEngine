@@ -19,12 +19,16 @@ class Scene;
  *
  * 改这里:
  * - 加新的 inspector 字段: InspectorUI.cpp + 对应组件定义
- * - 改节点编辑规则: Scene::Patch / LogicalComponents.h / SceneMutation.cpp
+ * - 改节点编辑规则: Scene 节点编辑 API / LogicalComponents.h / SceneModify.cpp
  * - 改显示文案或布局: InspectorUI.cpp
  *
  * 用法:
  * - 由 EditorUI::ShowInspector() 调用 ShowWindow()
  * - 外部传入 Scene 和当前选中 entt::entity，不自己持有场景
+ *
+ * 边界约束:
+ * - 只通过 Scene query/edit API 读取和写回选中节点属性
+ * - 不直接访问 registry / LogicalScene；如果能力不够，应先补 Scene 正式 API
  */
 class InspectorUI {
 public:

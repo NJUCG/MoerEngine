@@ -30,7 +30,7 @@ class GpuScene;
  *
  * 改这里:
  * - 改 shader 结构或 buffer 布局: SharedSceneStruct.h + CpuScene.cpp
- * - 改 dirty tag 规则: LogicalComponents.h + SceneMutation.cpp + CpuScene.cpp
+ * - 改 dirty tag 规则: LogicalComponents.h + SceneModify.cpp + CpuScene.cpp
  * - 改材质和 mesh 的展开方式: CpuScene.cpp + GpuScene.cpp
  *
  * 用法:

@@ -11,7 +11,6 @@
 #include <string>
 #include <string_view>
 
-
 namespace Moer {
 
 enum class EProceduralPrimitiveShape : std::uint32_t {
@@ -29,34 +28,34 @@ struct PointLightCreateInfo {
 };
 
 struct EntityWithNodeCreateInfo {
-    entt::entity     parent_node_entt = entt::null;
-    std::string_view name             = {};
-    float3           translation      = float3(0.f, 0.f, 0.f);
-    Quaternion       rotation         = Quaternion();
-    float3           scale            = float3(1.f, 1.f, 1.f);
+    entt::entity parent_node_entt = entt::null;
+    std::string  name             = {};
+    float3       translation      = float3(0.f, 0.f, 0.f);
+    Quaternion   rotation         = Quaternion();
+    float3       scale            = float3(1.f, 1.f, 1.f);
 };
 
 struct RenderableCreateInfo {
-    entt::entity     mesh_entt        = entt::null;
-    entt::entity     parent_node_entt = entt::null;
-    std::string_view name             = {};
-    float3           translation      = float3(0.f, 0.f, 0.f);
-    Quaternion       rotation         = Quaternion();
-    float3           scale            = float3(1.f, 1.f, 1.f);
+    entt::entity mesh_entt        = entt::null;
+    entt::entity parent_node_entt = entt::null;
+    std::string  name             = {};
+    float3       translation      = float3(0.f, 0.f, 0.f);
+    Quaternion   rotation         = Quaternion();
+    float3       scale            = float3(1.f, 1.f, 1.f);
 };
 
 struct MaterialCreateInfo {
-    std::string_view name             = {};
-    float4           albedo_factor    = float4(1.f, 1.f, 1.f, 1.f);
-    float3           emissive_factor  = float3(0.f, 0.f, 0.f);
-    float            metallic_factor  = 0.f;
-    float            roughness_factor = 1.f;
-    EAlphaMode       alpha_mode       = EAlphaMode::Opaque;
-    float            alpha_cutoff     = 0.5f;
+    std::string name             = {};
+    float4      albedo_factor    = float4(1.f, 1.f, 1.f, 1.f);
+    float3      emissive_factor  = float3(0.f, 0.f, 0.f);
+    float       metallic_factor  = 0.f;
+    float       roughness_factor = 1.f;
+    EAlphaMode  alpha_mode       = EAlphaMode::Opaque;
+    float       alpha_cutoff     = 0.5f;
 };
 
 struct PrimitiveCreateInfo {
-    std::string_view name = {};
+    std::string name = {};
 
     Array<float3> positions;
     Array<float3> normals;
@@ -71,18 +70,18 @@ struct PrimitiveCreateInfo {
 };
 
 struct MeshCreateInfo {
-    std::string_view    name = {};
+    std::string         name = {};
     Array<entt::entity> primitive_entts;
 };
 
 struct ProceduralMeshCreateInfo {
     EProceduralPrimitiveShape shape = EProceduralPrimitiveShape::Cube;
 
-    entt::entity     parent_node_entt = entt::null;
-    std::string_view name             = "Runtime Procedural Renderable";
-    float3           translation      = float3(0.f, 0.f, 0.f);
-    Quaternion       rotation         = Quaternion();
-    float3           scale            = float3(1.f, 1.f, 1.f);
+    entt::entity parent_node_entt = entt::null;
+    std::string  name             = "Runtime Procedural Renderable";
+    float3       translation      = float3(0.f, 0.f, 0.f);
+    Quaternion   rotation         = Quaternion();
+    float3       scale            = float3(1.f, 1.f, 1.f);
 
     MaterialCreateInfo material;
 };

@@ -1,6 +1,17 @@
 #pragma once
 
+#include "remote/RemoteModuleController.h"
 #include "renderer/Renderer.h"
+#include "scripting/ScriptExecutionFuture.h"
+#include "scripting/ScriptExecutionRequest.h"
+
+namespace Moer::scripting {
+class ScriptHost;
+}
+
+namespace Moer::remote {
+class RemoteModule;
+}
 
 namespace Moer {
 
@@ -14,7 +25,13 @@ public:
 
     void Init(int argc, const char** argv);
     void Run(const Render::EngineHooks& hooks);
-    void ShutDown();
+    void RequestExit();
+
+    // 提供给 Editor 等外部系统的 Remote 控制句柄
+    remote::RemoteModuleController GetRemoteModuleController() const;
+
+    scripting::ScriptExecutionFuture SubmitScriptExecution(scripting::ScriptExecutionRequest request);
+    void                             ShutDown();
 
     uint2& GetResolution() {
         return m_editor_config->GetResolution();
@@ -31,9 +48,11 @@ private:
     SharedPtr<EditorConfig>  m_editor_config;
     UniquePtr<RuntimeAssets> m_runtime_assets;
 
-    UniquePtr<Render::Renderer> m_renderer;
+    UniquePtr<scripting::ScriptHost> m_script_host;
+    UniquePtr<remote::RemoteModule>  m_remote_module;
+    UniquePtr<Render::Renderer>      m_renderer;
 
-    bool has_shutdown = false;
+    bool m_has_shutdown = false;
 };
 
 } // namespace Moer

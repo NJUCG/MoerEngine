@@ -19,6 +19,9 @@ struct SceneTestCaseRequest {
 // 根据 testcase ID 返回可读名称
 std::string_view GetSceneTestCaseName(ESceneTestCaseId test_case_id);
 
+// 返回按固定顺序排列的全部 Scene testcase ID
+const Array<ESceneTestCaseId>& GetAllSceneTestCaseIds();
+
 // 根据 testcase 请求创建对应 testcase 实例
 UniquePtr<ISceneTestCase> CreateSceneTestCase(const SceneTestCaseRequest& request);
 

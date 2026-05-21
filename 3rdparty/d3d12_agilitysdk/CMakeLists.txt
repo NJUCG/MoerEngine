@@ -128,7 +128,7 @@ target_link_libraries(d3d12_agilitysdk_d3dx12 PRIVATE d3d12_agilitysdk)
 
 
 
-# # modified 'copy_dll' function from 'cmake/functions.cmake'
+# # modified 'copy_dll' function from 'tools/cmake/functions.cmake'
 # function(deploy_agilitysdk target_name )
 #     if(NOT TARGET copy_dll_${target_name})
 #         add_custom_target(copy_dll_${target_name})

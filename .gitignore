@@ -1,6 +1,8 @@
 # 1. IDE Files
 .vscode/*
 !/.vscode/template.launch.json
+!/.vscode/template.settings.json
+!/.vscode/mcp.json
 !/.vscode/c_cpp_properties.json
 /.vs/*
 /.idea/*
@@ -12,33 +14,22 @@
 /.cache/
 build_vs2022
 cmake-build-*/
-*.MOERSCENE
+
+# 2.1 Python Cache
+__pycache__/
 
 # 3. User Config Files
-imgui.ini
-justfile
-EnableFeatures.cmake
-MoerEngine.toml
+/imgui.ini
+/justfile
+/EnableFeatures.cmake
+/MoerEngine.toml
 
 # 4. Vibe Coding
 /.cursor/
 
 # 5. Logs
-logs/
-log*.txt
-debug-*.log
+/logs/
+/log*.txt
+/*.log
 .VSCodeCounter/
-docs/temp
-rhi_docs/01-overview.md
-rhi_docs/02-core-abstractions.md
-rhi_docs/03-command-lists-and-queues.md
-rhi_docs/04-resource-states-and-barriers.md
-rhi_docs/05-pipelines-and-shader-binding.md
-rhi_docs/06-backend-vulkan.md
-rhi_docs/07-backend-d3d12.md
-rhi_docs/08-raytracing.md
-rhi_docs/09-io-copy-and-extensions.md
-rhi_docs/10-command-recording-and-reorder.md
-rhi_docs/11-reorder-deep-dive.md
-rhi_docs/12-vulkan-bindless-array.md
-rhi_docs/README.md
+/docs/temp

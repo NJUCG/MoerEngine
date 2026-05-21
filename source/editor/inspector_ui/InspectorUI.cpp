@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 namespace Moer {
 
@@ -89,41 +90,6 @@ float3 EulerDegreesFromQuaternion(const Quaternion& quaternion) {
     });
 }
 
-bool IsSelectedNodeValid(Scene* scene, entt::entity entity) {
-    return scene != nullptr && entity != entt::null && scene->r().valid(entity) &&
-           scene->r().all_of<ecs::CNode>(entity);
-}
-
-struct NodeSubtreeStats {
-    uint32 node_count              = 0;
-    uint32 renderable_count        = 0;
-    uint32 camera_count            = 0;
-    uint32 light_count             = 0;
-    bool   contains_main_camera    = false;
-    bool   contains_main_light_tag = false;
-};
-
-void CollectNodeSubtreeStats(const entt::registry& registry, entt::entity entity, NodeSubtreeStats& stats) {
-    if (entity == entt::null || !registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
-        return;
-    }
-
-    stats.node_count += 1;
-    stats.renderable_count += registry.all_of<ecs::CRenderable>(entity) ? 1u : 0u;
-    stats.camera_count += registry.all_of<ecs::CCamera>(entity) ? 1u : 0u;
-    stats.light_count += registry.all_of<ecs::CLight>(entity) ? 1u : 0u;
-    stats.contains_main_camera = stats.contains_main_camera || registry.all_of<ecs::CTagMainCamera>(entity);
-    stats.contains_main_light_tag =
-        stats.contains_main_light_tag || registry.all_of<ecs::CTagMainLight>(entity);
-
-    entt::entity child_entt = registry.get<ecs::CNode>(entity).first_child_entt;
-    while (child_entt != entt::null) {
-        const entt::entity next_sibling_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
-        CollectNodeSubtreeStats(registry, child_entt, stats);
-        child_entt = next_sibling_entt;
-    }
-}
-
 } // namespace
 
 void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_node) {
@@ -142,8 +108,8 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         return;
     }
 
-    if (!IsSelectedNodeValid(scene, selected_node)) {
-        selected_node          = entt::null;
+    if (!scene->IsValidNodeEntity(selected_node)) {
+        selected_node           = entt::null;
         m_rotation_cache_entity = entt::null;
     }
 
@@ -153,48 +119,51 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         return;
     }
 
-    const auto& node = scene->r().get<ecs::CNode>(selected_node);
+    std::string node_name;
+    std::string node_display_name;
+    auto        local_transform = scene->TryGetNodeLocalTransform(selected_node);
+    if (!scene->TryGetNodeName(selected_node, node_name) || !local_transform.has_value()) {
+        selected_node           = entt::null;
+        m_rotation_cache_entity = entt::null;
+        ImGui::TextDisabled("No node selected.");
+        ImGui::End();
+        return;
+    }
+
+    node_display_name = scene->GetNodeDisplayName(selected_node);
+
     if (m_rotation_cache_entity != selected_node) {
         m_rotation_cache_entity = selected_node;
-        m_rotation_euler        = EulerDegreesFromQuaternion(node.rotation);
+        m_rotation_euler        = EulerDegreesFromQuaternion(local_transform->rotation);
     }
 
     std::array<char, 256> name_buffer{};
-    std::snprintf(name_buffer.data(), name_buffer.size(), "%s", node.name.c_str());
+    std::snprintf(name_buffer.data(), name_buffer.size(), "%s", node_name.c_str());
 
     ImGui::TextDisabled("Entity %u", static_cast<uint32>(entt::to_integral(selected_node)));
 
     if (ImGui::InputText("Name", name_buffer.data(), name_buffer.size())) {
-        scene->Patch<ecs::CNode>(selected_node, [&](auto& mutable_node) {
-            mutable_node.name = name_buffer.data();
-        });
+        scene->SetNodeName(selected_node, name_buffer.data());
     }
 
-    float3 translation = node.translation;
+    float3 translation = local_transform->translation;
     if (ImGui::DragFloat3("Position", (float*)&translation, 0.05f)) {
-        scene->Patch<ecs::CNode>(selected_node, [&](auto& mutable_node) {
-            mutable_node.translation = translation;
-        });
+        scene->SetNodeTranslation(selected_node, translation);
     }
 
     if (ImGui::DragFloat3("Rotation", (float*)&m_rotation_euler, 0.2f)) {
         m_rotation_euler = WrapEulerDegrees(m_rotation_euler);
-        scene->Patch<ecs::CNode>(selected_node, [&](auto& mutable_node) {
-            mutable_node.rotation = QuaternionFromEulerDegrees(m_rotation_euler);
-        });
+        scene->SetNodeRotation(selected_node, QuaternionFromEulerDegrees(m_rotation_euler));
     }
 
-    float3 scale = node.scale;
+    float3 scale = local_transform->scale;
     if (ImGui::DragFloat3("Scale", (float*)&scale, 0.05f)) {
-        scene->Patch<ecs::CNode>(selected_node, [&](auto& mutable_node) {
-            mutable_node.scale = scale;
-        });
+        scene->SetNodeScale(selected_node, scale);
     }
 
     ImGui::Separator();
 
-    NodeSubtreeStats subtree_stats{};
-    CollectNodeSubtreeStats(scene->r(), selected_node, subtree_stats);
+    const Scene::NodeSubtreeStats subtree_stats = scene->GetNodeSubtreeStats(selected_node);
 
     ImGui::TextDisabled(
         "Subtree: %u nodes, %u renderables, %u cameras, %u lights",
@@ -210,7 +179,7 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "This subtree contains the main light tag.");
     }
 
-    const bool can_delete_selected_node = !scene->r().all_of<ecs::CTagRootNode>(selected_node);
+    const bool can_delete_selected_node = !scene->IsRootNode(selected_node);
     if (!can_delete_selected_node) {
         ImGui::BeginDisabled();
     }
@@ -225,7 +194,7 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
     }
 
     if (ImGui::BeginPopupModal("Confirm Delete Node Subtree", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Delete '%s'?", node.name.c_str());
+        ImGui::Text("Delete '%s'?", node_display_name.c_str());
         ImGui::TextWrapped("This will remove the selected node and all of its descendants from the scene.");
         ImGui::Separator();
         ImGui::Text(

@@ -14,9 +14,9 @@ SceneTestCaseRunner& SceneTestCaseRunner::Get() {
 }
 
 // 将外部构造好的 testcase 转成 pending testcase，已有 active/pending 时拒绝新请求
-void SceneTestCaseRunner::RequestCase(UniquePtr<ISceneTestCase> test_case) {
-    if (!test_case) {
-        return;
+bool SceneTestCaseRunner::RequestCase(ESceneTestCaseId test_case_id, UniquePtr<ISceneTestCase> test_case) {
+    if (!test_case || test_case_id == ESceneTestCaseId::None) {
+        return false;
     }
 
     const std::string_view requested_name = test_case->Name();
@@ -27,11 +27,14 @@ void SceneTestCaseRunner::RequestCase(UniquePtr<ISceneTestCase> test_case) {
             requested_name,
             m_active_case ? m_active_case->Name() : m_pending_case->Name()
         );
-        return;
+        return false;
     }
 
-    m_pending_case = std::move(test_case);
+    m_completed_result.reset();
+    m_pending_case_id = test_case_id;
+    m_pending_case    = std::move(test_case);
     LOG_INFO("SceneTestCase request queued: {}.", requested_name);
+    return true;
 }
 
 // 返回当前是否有正在运行的 testcase
@@ -42,6 +45,24 @@ bool SceneTestCaseRunner::HasActiveCase() const {
 // 返回当前是否有等待启动的 testcase
 bool SceneTestCaseRunner::HasPendingCase() const {
     return m_pending_case != nullptr;
+}
+
+bool SceneTestCaseRunner::HasCompletedResult() const {
+    return m_completed_result != nullptr;
+}
+
+bool SceneTestCaseRunner::ConsumeCompletedResult(SceneTestCaseRunResult& out_result) {
+    if (!m_completed_result) {
+        return false;
+    }
+
+    out_result = std::move(*m_completed_result);
+    m_completed_result.reset();
+    return true;
+}
+
+void SceneTestCaseRunner::ClearCompletedResult() {
+    m_completed_result.reset();
 }
 
 // 在 Scene dirty tag 采样前启动并推进 testcase 的写入阶段
@@ -65,8 +86,18 @@ void SceneTestCaseRunner::PostTick(Scene& scene, const Scene::TickState& tick_st
 
     m_active_case->PostTick(scene, tick_state);
     if (m_active_case->IsFinished()) {
+        auto result             = MakeUnique<SceneTestCaseRunResult>();
+        result->test_case_id    = m_active_case_id;
+        result->case_name       = std::string(m_active_case->Name());
+        result->begin_frame     = m_active_case_begin_frame;
+        result->end_frame       = m_frame_index == 0 ? 0 : (m_frame_index - 1);
+        result->passed          = !m_active_case->HasFailed();
+        result->failure_summary = std::string(m_active_case->FailureSummary());
+        m_completed_result      = std::move(result);
+
         LOG_INFO("SceneTestCase finished: {}.", m_active_case->Name());
         m_active_case.reset();
+        m_active_case_id = ESceneTestCaseId::None;
     }
 }
 
@@ -85,10 +116,13 @@ void SceneTestCaseRunner::StartPendingCase(Scene& scene) {
         return;
     }
 
-    m_active_case = std::move(m_pending_case);
+    m_active_case     = std::move(m_pending_case);
+    m_active_case_id  = m_pending_case_id;
+    m_pending_case_id = ESceneTestCaseId::None;
 
-    m_start_time  = std::chrono::steady_clock::now();
-    m_frame_index = 0;
+    m_start_time              = std::chrono::steady_clock::now();
+    m_frame_index             = 0;
+    m_active_case_begin_frame = 0;
     m_active_case->Reset(scene);
     LOG_INFO("SceneTestCase started: {}.", m_active_case->Name());
 }

@@ -7,15 +7,32 @@
 
 namespace Moer {
 
+class Scene;
+
+/**
+ * SceneEditingUI 负责 scene 编辑相关窗口内容。
+ *
+ * 结构:
+ * - Editing：常用正式编辑入口，如 Lighting / Primitive
+ * - Test & Debug：Scene testcase 与长期 debug switch
+ *
+ * 边界约束:
+ * - 只通过 Scene 正式 API、SceneEditing helper 和 SceneTestCaseConfig 驱动行为
+ * - 不直接访问 registry / LogicalScene；缺能力时优先补 Scene / SceneEditing 接口
+ */
 class SceneEditingUI {
 public:
-    SceneEditingUI(SceneTestCaseConfig& test_case_config, bool& out_need_reload);
+    explicit SceneEditingUI(SceneTestCaseConfig& test_case_config);
 
-    void ShowWindow(bool* p_open);
+    void ShowWindow(bool* p_open, Scene& scene);
 
 private:
+    void ShowEditingSection(Scene& scene);
+    void ShowLightingSection(Scene& scene);
+    void ShowPrimitiveSection(Scene& scene);
+    void ShowTestAndDebugSection();
+
     SceneTestCaseConfig& m_test_case_config;
-    bool&                m_need_reload;
 
     int    m_procedural_shape_index = 0;
     float3 m_create_translation     = float3(0.f, 0.f, 0.f);
@@ -30,7 +47,6 @@ private:
 
     std::string m_last_create_status;
     std::string m_last_light_status;
-    std::string m_last_scene_action_status;
 };
 
 } // namespace Moer

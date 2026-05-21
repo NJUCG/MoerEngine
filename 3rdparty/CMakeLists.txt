@@ -2,8 +2,10 @@
 set(third_party_folder "3rdparty")
 
 # include(vulkan.cmake)
-include(${moer_root_dir}/cmake/functions.cmake)
+include(${moer_root_dir}/tools/cmake/functions.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/dxc.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/pybind11.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/python312.cmake)
 
 # spdlog
 set(SPDLOG_USE_STD_FORMAT ON)
@@ -131,3 +133,4 @@ if (WITH_NRD)
 endif()
 
 include(SPIRV-Cross.cmake)
+include(libhv.cmake)
