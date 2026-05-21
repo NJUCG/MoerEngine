@@ -229,6 +229,22 @@ void BindNodeSubtreeStats(py::module_& module) {
         .def_readwrite("contains_main_light_tag", &Scene::NodeSubtreeStats::contains_main_light_tag);
 }
 
+void BindEntityComponentFlags(py::module_& module) {
+    py::class_<Scene::EntityComponentFlags> component_flags_class(module, "EntityComponentFlags");
+    component_flags_class.attr("__doc__") = "Lightweight component and tag flags for an entity handle.";
+    component_flags_class.def(py::init<>())
+        .def_readwrite("is_valid_entity", &Scene::EntityComponentFlags::is_valid_entity)
+        .def_readwrite("is_node", &Scene::EntityComponentFlags::is_node)
+        .def_readwrite("is_root_node", &Scene::EntityComponentFlags::is_root_node)
+        .def_readwrite("is_renderable", &Scene::EntityComponentFlags::is_renderable)
+        .def_readwrite("is_camera", &Scene::EntityComponentFlags::is_camera)
+        .def_readwrite("is_light", &Scene::EntityComponentFlags::is_light)
+        .def_readwrite("is_directional_light", &Scene::EntityComponentFlags::is_directional_light)
+        .def_readwrite("is_point_light", &Scene::EntityComponentFlags::is_point_light)
+        .def_readwrite("is_main_camera", &Scene::EntityComponentFlags::is_main_camera)
+        .def_readwrite("is_main_light", &Scene::EntityComponentFlags::is_main_light);
+}
+
 void BindImportSceneFromFileResult(py::module_& module) {
     py::class_<Scene::ImportSceneFromFileResult> result_class(module, "SceneImportResult");
     result_class.attr("__doc__") = "Result of synchronously importing a scene file into the current scene.";
@@ -408,11 +424,11 @@ void BindSceneApi(py::module_& module) {
             "is_valid_entity",
             [](MainThreadCommandQueue& command_queue, entt::entity entity) {
                 return CallScene(command_queue, [entity](Scene& scene) {
-                    return scene.IsValidNodeEntity(entity);
+                    return scene.IsValidEntity(entity);
                 });
             },
             py::arg("entity"),
-            "Alias for is_valid_node_entity; use it before reusing a long-lived entity handle."
+            "Return whether the entity handle currently resolves to a live scene entity."
         )
         .def(
             "is_root_node",
@@ -435,6 +451,37 @@ void BindSceneApi(py::module_& module) {
             "Return the direct child count for a node entity."
         )
         .def(
+            "get_node_child_entity",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity, uint32 child_index) {
+                return CallScene(command_queue, [entity, child_index](Scene& scene) {
+                    return scene.GetNodeChildEntity(entity, child_index);
+                });
+            },
+            py::arg("entity"),
+            py::arg("child_index"),
+            "Return the direct child node entity at child_index, or entt::null when out of range."
+        )
+        .def(
+            "list_node_children",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity) {
+                return CallScene(command_queue, [entity](Scene& scene) {
+                    return scene.ListNodeChildren(entity);
+                });
+            },
+            py::arg("entity"),
+            "Return a Python list containing the direct child node entity handles."
+        )
+        .def(
+            "get_entity_component_flags",
+            [](MainThreadCommandQueue& command_queue, entt::entity entity) {
+                return CallScene(command_queue, [entity](Scene& scene) {
+                    return scene.GetEntityComponentFlags(entity);
+                });
+            },
+            py::arg("entity"),
+            "Return lightweight component and tag flags for an entity handle."
+        )
+        .def(
             "get_node_display_name",
             [](MainThreadCommandQueue& command_queue, entt::entity entity) {
                 return CallScene(command_queue, [entity](Scene& scene) {
@@ -452,7 +499,8 @@ void BindSceneApi(py::module_& module) {
                 });
             },
             py::arg("name"),
-            "Return the first node entity whose authored name or display name exactly matches name, or entt::null when not found."
+            "Return the first node entity whose authored name or display name exactly matches name, or "
+            "entt::null when not found."
         )
         .def(
             "get_node_subtree_stats",
@@ -705,6 +753,7 @@ PYBIND11_EMBEDDED_MODULE(moer, module) {
     Moer::scripting::BindTransform(module);
     Moer::scripting::BindNodeLocalTransform(module);
     Moer::scripting::BindNodeSubtreeStats(module);
+    Moer::scripting::BindEntityComponentFlags(module);
     Moer::scripting::BindImportSceneFromFileResult(module);
     Moer::scripting::BindPointLightCreateInfo(module);
     Moer::scripting::BindEntityWithNodeCreateInfo(module);

@@ -15,6 +15,7 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace Moer {
 
@@ -161,6 +162,19 @@ public:
         bool   contains_main_light_tag = false;
     };
 
+    struct EntityComponentFlags {
+        bool is_valid_entity      = false;
+        bool is_node              = false;
+        bool is_root_node         = false;
+        bool is_renderable        = false;
+        bool is_camera            = false;
+        bool is_light             = false;
+        bool is_directional_light = false;
+        bool is_point_light       = false;
+        bool is_main_camera       = false;
+        bool is_main_light        = false;
+    };
+
     Scene();
     ~Scene() = default;
 
@@ -249,10 +263,14 @@ public:
     // MARK: 场景查询 API
     ///////////////////////
 
-    entt::entity GetRootNodeEntity() const;
-    bool         IsValidNodeEntity(entt::entity entity) const;
-    bool         IsRootNode(entt::entity entity) const;
-    uint32       GetNodeChildCount(entt::entity entity) const;
+    entt::entity              GetRootNodeEntity() const;
+    bool                      IsValidEntity(entt::entity entity) const;
+    bool                      IsValidNodeEntity(entt::entity entity) const;
+    bool                      IsRootNode(entt::entity entity) const;
+    uint32                    GetNodeChildCount(entt::entity entity) const;
+    entt::entity              GetNodeChildEntity(entt::entity entity, uint32 child_index) const;
+    std::vector<entt::entity> ListNodeChildren(entt::entity entity) const;
+    EntityComponentFlags      GetEntityComponentFlags(entt::entity entity) const;
 
     template<typename Fn>
     void ForEachNodeChild(entt::entity parent, Fn&& fn) const {
@@ -273,7 +291,7 @@ public:
         }
     }
 
-    std::string                       GetNodeDisplayName(entt::entity entity) const;
+    std::string GetNodeDisplayName(entt::entity entity) const;
     // 按节点名字查找第一个匹配的 node entity，未找到时返回 entt::null
     entt::entity                      FindNodeEntityByName(std::string_view name) const;
     NodeSubtreeStats                  GetNodeSubtreeStats(entt::entity entity) const;

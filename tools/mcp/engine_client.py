@@ -11,6 +11,18 @@ DEFAULT_REMOTE_BASE_URL = "http://127.0.0.1:18080"
 DEFAULT_REMOTE_TIMEOUT_SECONDS = 30.0
 
 
+def _build_remote_startup_hint(base_url: str) -> str:
+    return (
+        f"MoerEngine remote at {base_url} is not reachable. "
+        "If the engine is not running on this development machine, start it with "
+        "./target/bin/Debug/MoerEditor.exe or just r."
+    )
+
+
+def _build_remote_unreachable_message(base_url: str, detail: str) -> str:
+    return f"MoerEngine remote request failed: {detail}. {_build_remote_startup_hint(base_url)}"
+
+
 # Wrap transport and response failures from the engine remote HTTP bridge
 class EngineClientError(RuntimeError):
     pass
@@ -19,7 +31,8 @@ class EngineClientError(RuntimeError):
 # Talk to the existing runtime/remote HTTP endpoints used by MCP tools
 class EngineClient:
     def __init__(self, base_url: str, timeout_seconds: float = DEFAULT_REMOTE_TIMEOUT_SECONDS) -> None:
-        self._client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_seconds)
+        self._base_url = base_url.rstrip("/")
+        self._client = httpx.Client(base_url=self._base_url, timeout=timeout_seconds)
 
     # Query the remote service health and bind information
     def get_remote_status(self) -> dict[str, Any]:
@@ -63,6 +76,14 @@ class EngineClient:
             detail = exc.response.text.strip()
             raise EngineClientError(
                 f"MoerEngine remote returned HTTP {exc.response.status_code}: {detail}"
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise EngineClientError(
+                _build_remote_unreachable_message(self._base_url, str(exc) or "timed out")
+            ) from exc
+        except httpx.ConnectError as exc:
+            raise EngineClientError(
+                _build_remote_unreachable_message(self._base_url, str(exc))
             ) from exc
         except httpx.HTTPError as exc:
             raise EngineClientError(f"MoerEngine remote request failed: {exc}") from exc

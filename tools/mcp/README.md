@@ -59,18 +59,27 @@
 
 ## 2. 当前工具状态
 
-当前 4 个工具里，只有前 2 个已经接了真实行为：
+当前 4 个工具都已经接了真实行为：
 
 1. `engine_ping`
    已接通 `GET /api/remote/status`
 2. `python_execute`
    已接通 `POST /api/script/execute`
 3. `scene_summary`
-   仍是占位实现
+   已接通真实 scene 摘要查询
 4. `scene_query`
-   仍是占位实现
+   已接通真实 scene 定点查询
 
-换句话说，当前 MCP 已经是“能真实控制引擎”的状态，但 scene 查询面还没做完。
+当前第一阶段查询语义如下：
+
+1. `scene_summary`
+   返回 scene ready、source path、root subtree stats、main camera/light、root 前几层预览
+2. `scene_query`
+   支持按 `entity`、`name_exact`、`name_contains` 查询
+3. `scene_query`
+   返回 entity/type tags/transform/child count/subtree stats/children preview
+
+换句话说，当前 MCP 已经不只是“能控制引擎”，也已经具备“稳定查看场景状态”的第一版能力。
 
 ---
 
@@ -175,7 +184,10 @@ MCP tools/call
 3. `scene.try_get_node_local_transform(...)`
 4. `scene.get_node_subtree_stats(...)`
 5. `scene.get_node_child_count(...)`
-6. `scene.find_node_entity_by_name(...)`
+6. `scene.get_node_child_entity(...)`
+7. `scene.list_node_children(...)`
+8. `scene.find_node_entity_by_name(...)`
+9. `scene.get_entity_component_flags(...)`
 
 ### 4.3 Main 节点入口
 
@@ -220,26 +232,28 @@ MCP tools/call
 8. `moer.MaterialCreateInfo`
 9. `moer.NodeLocalTransform`
 10. `moer.NodeSubtreeStats`
+11. `moer.EntityComponentFlags`
 
 ---
 
 ## 5. 当前明显缺口
 
-当前 Scene Python API 还不够完整，这也是 `scene_summary` / `scene_query` 还没接真的主要原因。
+当前 `scene_summary` / `scene_query` 已经可用，但 Scene Python API 仍然不算完整。
 
 当前已知缺口包括：
 
-1. 没有按索引或迭代方式枚举 child node entity 的接口
-2. 只有 `get_node_child_count(...)`，没有 `get_node_child_entity(...)`
-3. 没有直接列举场景中 renderable entity 的接口
-4. 没有从 root 递归遍历整棵 scene graph 的现成 Python API
-5. 没有通用“按条件查实体”的高层查询接口
+1. 没有直接列举场景中 renderable / camera / light 的全量正式 API
+2. 没有通用“按组件 / 类型 / 谓词过滤”的高层 Scene Query API
+3. 当前 `scene_query` 主要还是脚本层 DFS + 轻量过滤，适合定点查找，不适合复杂 DSL
+4. 没有专门的 scene summary DTO 或缓存层，更深更大的摘要会带来更高脚本返回成本
+5. 长时间动画、streaming、cancel 仍然受当前 blocking remote 模型限制
 
 这意味着当前最稳的控制路径仍然是：
 
-1. 已知 entity 时直接改
-2. 已知名字时 `find_node_entity_by_name(...)`
-3. 需要明确目标时，优先创建 procedural renderable 再操作
+1. `scene_summary` 用来快速拿全局上下文
+2. `scene_query` 用来做按 entity / name 的定点定位
+3. 已知 entity 时直接改
+4. 需要明确目标时，优先创建 procedural renderable 再操作
 
 ---
 
@@ -253,10 +267,13 @@ MCP tools/call
 4. 通过 `python_execute` 对 procedural cube 做单次平移成功
 5. 通过 `python_execute` 批量创建多组 cube 成功
 6. `NamedSession` 中的状态可以被下一次 MCP 调用复用
+7. `scene_summary` 可以返回 root subtree stats、main camera/light 和受限层级的 root preview
+8. `scene_query(name_exact="RootNode")` 可以返回 root node 的完整结构化摘要
+9. `scene_query(name_contains="MCP Batch")` 可以返回之前创建的 procedural cube，并正确给出 `truncated`
 
 这些验证说明：
 
-**当前 MCP 已经足够支撑“短时脚本控制引擎”的工作流。**
+**当前 MCP 已经足够支撑“短时脚本控制 + 第一阶段场景查询”的工作流。**
 
 ---
 
@@ -288,6 +305,6 @@ MCP tools/call
 
 1. 不要把 pip 依赖装回 `3rdparty/python312/x64/Lib/site-packages`
 2. 继续通过 `launcher.py` + `.cache/mcp` 管理运行期依赖
-3. 在 scene 查询面没有补全前，不要高估 `scene_summary` / `scene_query` 的可实现深度
+3. `scene_summary` / `scene_query` 已可用，但目前仍是第一阶段实现，不要把它们误当成完整 scene DSL
 4. 任何长时间脚本都要先考虑当前 blocking HTTP 模型是否合适
 5. 如果要做动画、streaming、cancel，优先从 `runtime/remote` 的模型能力补起，而不是只在 MCP 层绕工作流

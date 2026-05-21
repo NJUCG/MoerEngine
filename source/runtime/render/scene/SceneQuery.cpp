@@ -66,8 +66,12 @@ entt::entity Scene::GetRootNodeEntity() const {
     return m_logical_scene->UGetRootNodeEntity();
 }
 
+bool Scene::IsValidEntity(entt::entity entity) const {
+    return m_logical_scene && entity != entt::null && r().valid(entity);
+}
+
 bool Scene::IsValidNodeEntity(entt::entity entity) const {
-    return m_logical_scene && entity != entt::null && r().valid(entity) && r().all_of<ecs::CNode>(entity);
+    return IsValidEntity(entity) && r().all_of<ecs::CNode>(entity);
 }
 
 bool Scene::IsRootNode(entt::entity entity) const {
@@ -79,6 +83,63 @@ uint32 Scene::GetNodeChildCount(entt::entity entity) const {
         return 0;
     }
     return r().get<ecs::CNode>(entity).child_count;
+}
+
+entt::entity Scene::GetNodeChildEntity(entt::entity entity, uint32 child_index) const {
+    if (!IsValidNodeEntity(entity)) {
+        return entt::null;
+    }
+
+    const auto&  registry   = r();
+    entt::entity child_entt = registry.get<ecs::CNode>(entity).first_child_entt;
+    uint32       child_i    = 0;
+    while (child_entt != entt::null) {
+        if (!registry.valid(child_entt) || !registry.all_of<ecs::CNode>(child_entt)) {
+            return entt::null;
+        }
+
+        if (child_i == child_index) {
+            return child_entt;
+        }
+
+        child_entt = registry.get<ecs::CNode>(child_entt).next_sibling_entt;
+        child_i += 1;
+    }
+
+    return entt::null;
+}
+
+std::vector<entt::entity> Scene::ListNodeChildren(entt::entity entity) const {
+    std::vector<entt::entity> children;
+    if (!IsValidNodeEntity(entity)) {
+        return children;
+    }
+
+    children.reserve(GetNodeChildCount(entity));
+    ForEachNodeChild(entity, [&](entt::entity child_entt) {
+        children.push_back(child_entt);
+    });
+    return children;
+}
+
+Scene::EntityComponentFlags Scene::GetEntityComponentFlags(entt::entity entity) const {
+    EntityComponentFlags flags{};
+    if (!IsValidEntity(entity)) {
+        return flags;
+    }
+
+    const auto& registry       = r();
+    flags.is_valid_entity      = true;
+    flags.is_node              = registry.all_of<ecs::CNode>(entity);
+    flags.is_root_node         = registry.all_of<ecs::CTagRootNode>(entity);
+    flags.is_renderable        = registry.all_of<ecs::CRenderable>(entity);
+    flags.is_camera            = registry.all_of<ecs::CCamera>(entity);
+    flags.is_light             = registry.all_of<ecs::CLight>(entity);
+    flags.is_directional_light = registry.all_of<ecs::CLightDirectional>(entity);
+    flags.is_point_light       = registry.all_of<ecs::CLightPoint>(entity);
+    flags.is_main_camera       = registry.all_of<ecs::CTagMainCamera>(entity);
+    flags.is_main_light        = registry.all_of<ecs::CTagMainLight>(entity);
+    return flags;
 }
 
 std::string Scene::GetNodeDisplayName(entt::entity entity) const {
