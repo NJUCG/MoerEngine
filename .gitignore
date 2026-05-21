@@ -15,6 +15,9 @@
 build_vs2022
 cmake-build-*/
 
+# 2.1 Python Cache
+__pycache__/
+
 # 3. User Config Files
 /imgui.ini
 /justfile
