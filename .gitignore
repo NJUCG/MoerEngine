@@ -2,6 +2,7 @@
 .vscode/*
 !/.vscode/template.launch.json
 !/.vscode/template.settings.json
+!/.vscode/mcp.json
 !/.vscode/c_cpp_properties.json
 /.vs/*
 /.idea/*

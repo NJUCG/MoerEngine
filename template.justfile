@@ -46,7 +46,7 @@ _generate:
     cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 
 _list_targets:
-    @powershell -NoProfile -ExecutionPolicy Bypass -File "./cmake/list_executable_targets.ps1" -SourceDir "." -BuildDir "{{dir_build}}"
+    @powershell -NoProfile -ExecutionPolicy Bypass -File "./tools/cmake/list_executable_targets.ps1" -SourceDir "." -BuildDir "{{dir_build}}"
 
 _build config="Debug" threads="30" target="MoerEditor":
     cmake --build build -j{{threads}} --config {{config}} --target {{target}}
