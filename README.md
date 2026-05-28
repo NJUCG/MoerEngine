@@ -142,6 +142,7 @@ MoerEngine源代码采用Apache-2.0 License授权。
 * D3D12MemoryAllocator: MIT License
 * DirectXShaderCompiler: University of Illinois/NCSA Open Source License
 * [glfw](https://github.com/glfw/glfw): Zlib License
+* [GKlib](https://github.com/KarypisLab/GKlib): Apache-2.0 License
 * [imgui](https://github.com/ocornut/imgui): MIT License
 * [JSON for Modern C++](https://github.com/nlohmann/json): MIT License
 * [libhv](https://github.com/ithewei/libhv): BSD-3-Clause License

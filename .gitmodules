@@ -27,3 +27,15 @@
 	path = 3rdparty/libhv
 	url = https://github.com/ithewei/libhv.git
 	shallow = true
+[submodule "3rdparty/meshoptimizer"]
+	path = 3rdparty/meshoptimizer
+	url = https://github.com/zeux/meshoptimizer.git
+	shallow = true
+[submodule "3rdparty/metis"]
+	path = 3rdparty/metis
+	url = https://github.com/KarypisLab/METIS.git
+	shallow = true
+[submodule "3rdparty/gklib"]
+	path = 3rdparty/gklib
+	url = https://github.com/KarypisLab/GKlib.git
+	shallow = true

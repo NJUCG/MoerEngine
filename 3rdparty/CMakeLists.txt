@@ -70,9 +70,6 @@ target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clan
 set_target_folder(mimalloc-static ${third_party_folder}/mimalloc)
 
 # message(STATUS "Found mimalloc installed at: ${MIMALLOC_LIBRARY_DIR} (${MIMALLOC_VERSION_DIR})")
-# mesh process
-add_subdirectory(MeshProcess)
-set_target_folder(MeshProcess ${third_party_folder})
 
 # volk
 if (WIN32)
@@ -128,6 +125,18 @@ set_target_folder(entt ${third_party_folder}/entt)
 # gtl
 include(gtl.cmake)
 set_target_folder(gtl ${third_party_folder}/gtl)
+
+# gklib
+include(gklib.cmake)
+set_target_folder(GKlib ${third_party_folder}/gklib)
+
+# meshoptimizer
+include(meshoptimizer.cmake)
+set_target_folder(meshoptimizer ${third_party_folder}/meshoptimizer)
+
+# metis
+include(metis.cmake)
+set_target_folder(metis ${third_party_folder}/metis)
 
 if (WITH_NRD)
     # NRI, NRD, SPIRV-Cross
