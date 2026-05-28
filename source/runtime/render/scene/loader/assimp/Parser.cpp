@@ -135,7 +135,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     auto& uv0_buf   = mega_bufs.texcoord0;
     auto& idx_buf   = mega_bufs.index;
 
-    // MARK: Prepare Buffers
+    // MARK: 准备Mesh&Bufs
 
     {
         // 先遍历一遍所有mesh，初始化每个buf大小

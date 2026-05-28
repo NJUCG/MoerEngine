@@ -6,8 +6,8 @@
 #include "scene/cache/SceneCache.h"
 #include "scene/cache/SceneCacheSerializer.h"
 #include "scene/loader/assimp/Parser.h"
-#include <entt/entt.hpp>
 #include <chrono>
+#include <entt/entt.hpp>
 #include <filesystem>
 
 namespace Moer {
@@ -33,10 +33,10 @@ void ClearLogicalScene(ecs::LogicalScene& logical_scene) {
 }
 
 bool TryLoadSceneCache(
-    ecs::LogicalScene&                out_logical_scene,
-    const SceneCacheSourceIdentity&   source_identity,
-    ESceneCacheKind                   cache_kind,
-    std::filesystem::path&            out_cache_path
+    ecs::LogicalScene&              out_logical_scene,
+    const SceneCacheSourceIdentity& source_identity,
+    ESceneCacheKind                 cache_kind,
+    std::filesystem::path&          out_cache_path
 ) {
     out_cache_path = SceneCache::GetCachePath(source_identity, cache_kind);
 
@@ -45,7 +45,7 @@ bool TryLoadSceneCache(
         return false;
     }
 
-    const auto  cache_read_start = std::chrono::steady_clock::now();
+    const auto cache_read_start = std::chrono::steady_clock::now();
     if (SceneCacheSerializer::LoadLogicalScene(out_cache_path, out_logical_scene, &cache_header)) {
         LOG_INFO(
             "Scene {} Cache hit: path={}, read_time_ms={:.2f}, payload_size={} bytes",
@@ -83,8 +83,8 @@ SceneImportResult LoaderInterface::LoadScene(const SceneLoadRequest& request) {
     result.logical_scene = MakeUnique<ecs::LogicalScene>();
 
     ESceneLoadSource source = ESceneLoadSource::None;
-    result.success       = LoaderInterface::LoadSceneFromFileCommon(*result.logical_scene, request, &source);
-    result.source        = source;
+    result.success = LoaderInterface::LoadSceneFromFileCommon(*result.logical_scene, request, &source);
+    result.source  = source;
 
     if (!result.success) {
         result.logical_scene.reset();
@@ -127,10 +127,7 @@ bool LoaderInterface::LoadSceneFromFileCommon(
             if (request.use_state_cache) {
                 std::filesystem::path state_cache_path;
                 if (TryLoadSceneCache(
-                        out_logical_scene,
-                        source_identity,
-                        ESceneCacheKind::State,
-                        state_cache_path
+                        out_logical_scene, source_identity, ESceneCacheKind::State, state_cache_path
                     )) {
                     if (out_source) {
                         *out_source = ToLoadSource(ESceneCacheKind::State);
@@ -140,10 +137,7 @@ bool LoaderInterface::LoadSceneFromFileCommon(
             }
             if (request.use_origin_cache) {
                 if (TryLoadSceneCache(
-                        out_logical_scene,
-                        source_identity,
-                        ESceneCacheKind::Origin,
-                        origin_cache_path
+                        out_logical_scene, source_identity, ESceneCacheKind::Origin, origin_cache_path
                     )) {
                     if (out_source) {
                         *out_source = ToLoadSource(ESceneCacheKind::Origin);
@@ -155,7 +149,9 @@ bool LoaderInterface::LoadSceneFromFileCommon(
     }
 
     const auto parser_start = std::chrono::steady_clock::now();
-    bool       result       = scene_load_function_maps[ext](out_logical_scene, file_path);
+
+    // Load data from original file using parser
+    bool result = scene_load_function_maps[ext](out_logical_scene, file_path);
 
     if (!result) {
         LOG_ERROR("Loading Logical Scene - Failed to load scene from file: {}", file_path.string());
@@ -173,9 +169,9 @@ bool LoaderInterface::LoadSceneFromFileCommon(
     );
 
     if (is_cache_enabled && has_source_identity && request.allow_write_origin_cache) {
-        const auto       cache_write_start = std::chrono::steady_clock::now();
-        origin_cache_path                    = SceneCache::GetCachePath(source_identity, ESceneCacheKind::Origin);
-        SceneCacheHeader origin_header     = SceneCache::CreateHeader(source_identity, ESceneCacheKind::Origin);
+        const auto cache_write_start   = std::chrono::steady_clock::now();
+        origin_cache_path              = SceneCache::GetCachePath(source_identity, ESceneCacheKind::Origin);
+        SceneCacheHeader origin_header = SceneCache::CreateHeader(source_identity, ESceneCacheKind::Origin);
         if (SceneCacheSerializer::SaveLogicalScene(origin_cache_path, origin_header, out_logical_scene)) {
             LOG_INFO(
                 "Scene Origin Cache written: path={}, write_time_ms={:.2f}",
