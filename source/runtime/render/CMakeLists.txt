@@ -42,6 +42,7 @@ target_link_libraries(${target_name}
     PUBLIC smaa
     PUBLIC gtl
     PUBLIC EnTT::EnTT
+    PUBLIC meshoptimizer
     PUBLIC Moer::Core
     PRIVATE spirv-cross-cpp
     # dx, maybe add a option based on platform
