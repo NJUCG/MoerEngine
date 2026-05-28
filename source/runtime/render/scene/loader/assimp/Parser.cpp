@@ -162,9 +162,24 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     // MARK: Load Meshes
     gtl::flat_hash_map<const aiMesh*, Array<entt::entity>> mesh_entity_map;
     {
-        uint32 vtx_cnt     = 0;
-        uint32 idx_cnt     = 0;
-        uint32 cluster_cnt = 0;
+        uint32 source_vtx_cnt = 0;
+        uint32 source_idx_cnt = 0;
+        uint32 vtx_cnt        = 0;
+        uint32 idx_cnt        = 0;
+        uint32 cluster_cnt    = 0;
+
+        struct MeshClusterStats {
+            uint32 source_mesh_index   = 0;
+            uint32 source_vertex_count = 0;
+            uint32 source_index_count  = 0;
+
+            uint32 cluster_count        = 0;
+            uint32 cluster_vertex_count = 0;
+            uint32 cluster_index_count  = 0;
+        };
+
+        Array<MeshClusterStats> mesh_cluster_stats;
+        mesh_cluster_stats.reserve(ai_scene->mNumMeshes);
 
         const ClusterBuilder cluster_builder;
 
@@ -239,6 +254,15 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         for (uint i = 0; i < ai_scene->mNumMeshes; i++) {
             auto* mesh = ai_scene->mMeshes[i];
 
+            MeshClusterStats mesh_stats{
+                .source_mesh_index   = i,
+                .source_vertex_count = mesh->mNumVertices,
+                .source_index_count  = mesh->mNumFaces * 3
+            };
+
+            source_vtx_cnt += mesh_stats.source_vertex_count;
+            source_idx_cnt += mesh_stats.source_index_count;
+
             // TODO: Support TexCoord1
             if (mesh->HasTextureCoords(1)) {
                 static bool first_time = true;
@@ -258,10 +282,16 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 const auto primitive_entity = emit_cluster_primitive(cluster);
                 primitive_entities.emplace_back(primitive_entity);
 
+                mesh_stats.cluster_count += 1;
+                mesh_stats.cluster_vertex_count += static_cast<uint32>(cluster.positions.size());
+                mesh_stats.cluster_index_count += static_cast<uint32>(cluster.indices.size());
+
                 vtx_cnt += static_cast<uint32>(cluster.positions.size());
                 idx_cnt += static_cast<uint32>(cluster.indices.size());
                 cluster_cnt += 1;
             }
+
+            mesh_cluster_stats.emplace_back(mesh_stats);
         }
 
         LOG_INFO(
@@ -271,6 +301,51 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             vtx_cnt,
             idx_cnt
         );
+
+        {
+            std::stringstream cluster_ss;
+            const double      avg_cluster_per_mesh =
+                ai_scene->mNumMeshes > 0 ? double(cluster_cnt) / double(ai_scene->mNumMeshes) : 0.0;
+            const double avg_cluster_vertex_count =
+                cluster_cnt > 0 ? double(vtx_cnt) / double(cluster_cnt) : 0.0;
+            const double avg_cluster_index_count =
+                cluster_cnt > 0 ? double(idx_cnt) / double(cluster_cnt) : 0.0;
+            const double vertex_duplication_ratio =
+                source_vtx_cnt > 0 ? double(vtx_cnt) / double(source_vtx_cnt) : 0.0;
+            const double index_duplication_ratio =
+                source_idx_cnt > 0 ? double(idx_cnt) / double(source_idx_cnt) : 0.0;
+
+            cluster_ss << "\nCluster Build Stats:\n";
+            cluster_ss << "\tSource Mesh Count: " << ai_scene->mNumMeshes << "\n";
+            cluster_ss << "\tCluster Primitive Count: " << cluster_cnt << "\n";
+            cluster_ss << "\tAvg Clusters Per Mesh: " << avg_cluster_per_mesh << "\n";
+            cluster_ss << "\tAvg Cluster Vertex Count: " << avg_cluster_vertex_count << "\n";
+            cluster_ss << "\tAvg Cluster Index Count: " << avg_cluster_index_count << "\n";
+            cluster_ss << "\tVertex Duplication Ratio: " << vertex_duplication_ratio << "x"
+                       << " (source=" << source_vtx_cnt << ", cluster=" << vtx_cnt << ")\n";
+            cluster_ss << "\tIndex Duplication Ratio: " << index_duplication_ratio << "x"
+                       << " (source=" << source_idx_cnt << ", cluster=" << idx_cnt << ")\n";
+
+            for (const auto& mesh_stats : mesh_cluster_stats) {
+                const double avg_mesh_cluster_vertex_count =
+                    mesh_stats.cluster_count > 0 ?
+                        double(mesh_stats.cluster_vertex_count) / double(mesh_stats.cluster_count) :
+                        0.0;
+                const double avg_mesh_cluster_index_count =
+                    mesh_stats.cluster_count > 0 ?
+                        double(mesh_stats.cluster_index_count) / double(mesh_stats.cluster_count) :
+                        0.0;
+
+                cluster_ss << "\tMesh[" << mesh_stats.source_mesh_index
+                           << "]: source_vertices=" << mesh_stats.source_vertex_count
+                           << ", source_indices=" << mesh_stats.source_index_count
+                           << ", clusters=" << mesh_stats.cluster_count
+                           << ", avg_cluster_vertices=" << avg_mesh_cluster_vertex_count
+                           << ", avg_cluster_indices=" << avg_mesh_cluster_index_count << "\n";
+            }
+
+            LOG_INFO("{}", cluster_ss.str());
+        }
     }
 
     // MARK: Build Primitive Hash

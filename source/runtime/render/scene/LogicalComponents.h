@@ -104,8 +104,8 @@ struct CSceneMetaData {
 /**
  * MARK: Mesh etc.
  * 
- * - Primitive: 表示最小的可渲染单元
- * - Mesh: 可以包含多个Primitive
+ * - Primitive: 表示最小的可渲染单元；当前默认导入路径下实际承载一个Cluster Leaf
+ * - Mesh: 可以包含多个Primitive / Cluster Leaf
  * - Renderable: 绑定Mesh到Entity上，表示该Entity是可渲染的
  * 
  * - Primitive是MoerEngine最小的去重单元
@@ -133,7 +133,7 @@ struct CPrimitive {
     uint32     index_count = 0;
     BufferView index; // index buffer的stride是uint，而非uint3
 
-    Box3D aabb = Box3D(); // 以Mesh为单位的AABB
+    Box3D aabb = Box3D(); // 当前语义下是Cluster Leaf级别的AABB
 
     entt::entity material_entt = entt::null;
 
