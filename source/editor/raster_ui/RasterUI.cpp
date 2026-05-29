@@ -58,7 +58,25 @@ void RasterUI::ShowConfig() {
     // MARK: Geometry & Culling
     if (ImGui::TreeNode("Geometry & Culling")) {
 
-        ImGui::Checkbox("Enable GPU Frustum Culling", &m_config.enable_frustum_culling);
+        auto toggle_button = [](const char* label, bool& value) {
+            ImGui::PushStyleColor(
+                ImGuiCol_Button, value ? IM_COL32(70, 130, 95, 255) : IM_COL32(65, 65, 65, 255)
+            );
+            ImGui::PushStyleColor(
+                ImGuiCol_ButtonHovered, value ? IM_COL32(85, 155, 115, 255) : IM_COL32(85, 85, 85, 255)
+            );
+            ImGui::PushStyleColor(
+                ImGuiCol_ButtonActive, value ? IM_COL32(55, 105, 80, 255) : IM_COL32(45, 45, 45, 255)
+            );
+            if (ImGui::Button(label, ImVec2(120.0f, 0.0f))) {
+                value = !value;
+            }
+            ImGui::PopStyleColor(3);
+        };
+
+        toggle_button("Frustum Cull", m_config.enable_frustum_culling);
+
+        toggle_button("Occlusion Cull", m_config.enable_occlusion_culling);
 
         // Culling Statistics
         if (m_config.enable_frustum_culling) {
@@ -69,17 +87,70 @@ void RasterUI::ShowConfig() {
             if (m_config.culling_stats.total_instances_before == 0) {
                 ImGui::TextDisabled("  Waiting for data...");
             } else {
-                const auto& stats      = m_config.culling_stats;
-                uint32_t    culled     = stats.total_instances_before - stats.total_instances_after;
-                float       culled_pct = 100.0f * float(culled) / float(stats.total_instances_before);
+                const auto& stats = m_config.culling_stats;
                 ImGui::Text(
-                    "Instances: %u / %u visible (%u culled, %.1f%%)",
+                    "Instances: %u / %u visible (frustum %u, occlusion %u)",
                     stats.total_instances_after,
                     stats.total_instances_before,
-                    culled,
-                    culled_pct
+                    stats.frustum_culled_instances,
+                    stats.occlusion_culled_instances
                 );
-                ImGui::ProgressBar(culled_pct / 100.0f, ImVec2(150, 0));
+
+                ImVec2 bar_size(ImGui::GetContentRegionAvail().x, 18.0f);
+                bar_size.x = bar_size.x < 150.0f ? 150.0f : bar_size.x;
+
+                ImVec2      bar_min = ImGui::GetCursorScreenPos();
+                ImVec2      bar_max(bar_min.x + bar_size.x, bar_min.y + bar_size.y);
+                ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+                ImGui::InvisibleButton("##CullingRatioBar", bar_size);
+
+                const float total           = float(stats.total_instances_before);
+                const float frustum_width   = bar_size.x * float(stats.frustum_culled_instances) / total;
+                const float occlusion_width = bar_size.x * float(stats.occlusion_culled_instances) / total;
+                float       rendered_width  = bar_size.x - frustum_width - occlusion_width;
+                if (rendered_width < 0.0f) {
+                    rendered_width = 0.0f;
+                }
+
+                const ImU32 frustum_color   = IM_COL32(220, 95, 80, 255);
+                const ImU32 occlusion_color = IM_COL32(225, 170, 75, 255);
+                const ImU32 rendered_color  = IM_COL32(80, 155, 120, 255);
+
+                float cursor_x = bar_min.x;
+                draw_list->AddRectFilled(
+                    ImVec2(cursor_x, bar_min.y),
+                    ImVec2(cursor_x + frustum_width, bar_max.y),
+                    frustum_color,
+                    0.0f
+                );
+                cursor_x += frustum_width;
+                draw_list->AddRectFilled(
+                    ImVec2(cursor_x, bar_min.y),
+                    ImVec2(cursor_x + occlusion_width, bar_max.y),
+                    occlusion_color,
+                    0.0f
+                );
+                cursor_x += occlusion_width;
+                draw_list->AddRectFilled(
+                    ImVec2(cursor_x, bar_min.y),
+                    ImVec2(cursor_x + rendered_width, bar_max.y),
+                    rendered_color,
+                    0.0f
+                );
+                draw_list->AddRect(bar_min, bar_max, IM_COL32(255, 255, 255, 90), 3.0f);
+
+                ImGui::PushStyleColor(ImGuiCol_Text, frustum_color);
+                ImGui::TextUnformatted("Frustum");
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Text, occlusion_color);
+                ImGui::TextUnformatted("Occlusion");
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Text, rendered_color);
+                ImGui::TextUnformatted("Rendered");
+                ImGui::PopStyleColor();
             }
             ImGui::Unindent();
             ImGui::Separator();

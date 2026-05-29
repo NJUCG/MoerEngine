@@ -18,6 +18,9 @@ namespace Moer::Render {
 namespace Moer {
 #endif
 
+static const uint CULL_MAX_HIZ_MIPS              = 16u;
+static const uint CULL_FLAG_ENABLE_HIZ_OCCLUSION = 1u << 0u;
+
 // Defines the shared counter layout used by GPU culling readback and shaders.
 struct GpuCullingCounterData {
     uint draw_count;
@@ -26,19 +29,21 @@ struct GpuCullingCounterData {
     uint total_instances_after;
     uint visible_draws;
     uint total_draws;
-    uint reserved0;
-    uint reserved1;
+    uint frustum_culled_instances;
+    uint occlusion_culled_instances;
 };
 
 struct CullParams {
     uint draw_count;
     uint flags;
     uint hiz_mip_count;
-    uint hiz_mip_handles[16];
+    uint hiz_mip_handles[CULL_MAX_HIZ_MIPS];
 };
 
 struct CullData {
-    float4 frustum_planes[6];
+    float4   frustum_planes[6];
+    float4x4 previous_view_proj;
+    uint4    hiz_info;
 };
 
 struct HiZBuildParam {

@@ -148,7 +148,9 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
     if (raster_config.enable_frustum_culling && culling_stats.total_instances_before > 0) {
         stream << " | CullStats inst=" << culling_stats.total_instances_after << "/"
                << culling_stats.total_instances_before << " draws=" << culling_stats.visible_draws << "/"
-               << culling_stats.total_draws << " ratio=" << culling_stats.GetCullingRatio() * 100.0f << "%";
+               << culling_stats.total_draws << " frustum=" << culling_stats.frustum_culled_instances
+               << " occlusion=" << culling_stats.occlusion_culled_instances
+               << " ratio=" << culling_stats.GetCullingRatio() * 100.0f << "%";
     }
 
     LogDebugEverySeconds(stream.str(), 1.0);

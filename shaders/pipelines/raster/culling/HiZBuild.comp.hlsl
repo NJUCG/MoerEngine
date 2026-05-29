@@ -11,9 +11,9 @@
 
 float reduce_depth(float4 depth) {
 #if HIZ_REVERSE_Z
-    return max(max(depth.x, depth.y), max(depth.z, depth.w));
-#else
     return min(min(depth.x, depth.y), min(depth.z, depth.w));
+#else
+    return max(max(depth.x, depth.y), max(depth.z, depth.w));
 #endif
 }
 

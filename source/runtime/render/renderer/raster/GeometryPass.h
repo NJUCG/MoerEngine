@@ -71,24 +71,34 @@ public:
     }
 
     void Process(RasterContext& context, RasterConfig& ui_config, const Camera& camera) {
-        const auto& gpu_scene_res   = context.scene.gpu_scene_res();
-        const bool  use_gpu_culling = ui_config.enable_frustum_culling;
+        const auto& gpu_scene_res          = context.scene.gpu_scene_res();
+        const bool  use_gpu_culling        = ui_config.enable_frustum_culling;
+        const bool  use_occlusion_culling  = use_gpu_culling && ui_config.enable_occlusion_culling &&
+                                            context.hiz_data.previous_valid &&
+                                            context.textures.hiz_previous.tex != nullptr &&
+                                            context.hiz_data.mip_count > 0;
 
         if (use_gpu_culling) {
             CullingPass::CullStatistics stats;
+            CullingPass::CullingOptions  culling_options{false};
+            culling_options.enable_hiz_occlusion = use_occlusion_culling;
+
             m_culling_pass.Process(
                 context,
                 camera,
                 gpu_scene_res,
                 context.gpu_culling_buffers.geometry,
                 &stats,
-                RasterTool::GetGeometryCullingProfileScopeName()
+                RasterTool::GetGeometryCullingProfileScopeName(),
+                culling_options
             );
 
-            ui_config.culling_stats.total_instances_before = stats.total_instances_before;
-            ui_config.culling_stats.total_instances_after  = stats.total_instances_after;
-            ui_config.culling_stats.visible_draws          = stats.visible_draws;
-            ui_config.culling_stats.total_draws            = stats.total_draws;
+            ui_config.culling_stats.total_instances_before      = stats.total_instances_before;
+            ui_config.culling_stats.total_instances_after       = stats.total_instances_after;
+            ui_config.culling_stats.visible_draws               = stats.visible_draws;
+            ui_config.culling_stats.total_draws                 = stats.total_draws;
+            ui_config.culling_stats.frustum_culled_instances    = stats.frustum_culled_instances;
+            ui_config.culling_stats.occlusion_culled_instances  = stats.occlusion_culled_instances;
         } else {
             ui_config.culling_stats = RasterConfig::CullingStats{};
         }

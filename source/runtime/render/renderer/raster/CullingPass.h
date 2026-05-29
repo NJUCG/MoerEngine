@@ -20,6 +20,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace Moer::Render::Raster {
@@ -53,23 +54,67 @@ public:
     );
 };
 
+class HiZOcclusionCullPipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(HiZOcclusionCullPipeline);
+
+    // 注意：参数名必须与 shader 中的变量名一致
+    DEFINE_SHADER_BUFFER(source_draw_commands);
+    DEFINE_SHADER_BUFFER(primitives);
+    DEFINE_SHADER_BUFFER(instances);
+    DEFINE_SHADER_BUFFER(visible_instance_ids);
+    DEFINE_SHADER_BUFFER(draw_commands);
+    DEFINE_SHADER_BUFFER(counters);
+    DEFINE_SHADER_BUFFER(cull_data);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT_STRUCT(CullParams, cull_params);
+
+    DEFINE_SHADER_ARGS(
+        source_draw_commands,
+        primitives,
+        instances,
+        visible_instance_ids,
+        draw_commands,
+        counters,
+        cull_data,
+        bdls,
+        cull_params
+    );
+
+    MUTATION_BOOL(ENABLE_HIZ_OCCLUSION);
+    MUTATION_SET(MutationSet, ENABLE_HIZ_OCCLUSION);
+};
+
 /**
  * Frustum Culling Pass
  */
 class CullingPass {
 public:
+    struct CullingOptions {
+        bool enable_hiz_occlusion;
+    };
+
     // Stores the CPU-visible counters copied back from the GPU culling pass.
     struct CullStatistics {
-        uint32_t total_instances_before = 0; // 裁剪前的总实例数
-        uint32_t total_instances_after  = 0; // 裁剪后的总实例数
-        uint32_t visible_draws          = 0; // 可见的 Draw 数量
-        uint32_t total_draws            = 0; // 总 Draw 数量
+        uint32_t total_instances_before     = 0; // 裁剪前的总实例数
+        uint32_t total_instances_after      = 0; // 裁剪后的总实例数
+        uint32_t visible_draws              = 0; // 可见的 Draw 数量
+        uint32_t total_draws                = 0; // 总 Draw 数量
+        uint32_t frustum_culled_instances   = 0; // 被视锥剔除的实例数
+        uint32_t occlusion_culled_instances = 0; // 被Hi-Z遮挡剔除的实例数
     };
 
 public:
     // Creates the compute pipeline used to build per-pass visibility buffers.
     CullingPass(RasterContext& context) {
-        m_pso              = ShaderManager::Get().Compute<CullPipeline>("pipelines/raster/culling/Cull.comp.hlsl");
+        m_pso = ShaderManager::Get().Compute<CullPipeline>("pipelines/raster/culling/Cull.comp.hlsl");
+
+        HiZOcclusionCullPipeline::MutationSet occlusion_mutation_set{};
+        occlusion_mutation_set.SetMutation<HiZOcclusionCullPipeline::ENABLE_HIZ_OCCLUSION>(true);
+        m_hiz_occlusion_pso = ShaderManager::Get().Compute<HiZOcclusionCullPipeline>(
+            "pipelines/raster/culling/Cull.comp.hlsl", occlusion_mutation_set
+        );
+
         m_cull_data_buffer = context.device.CreateBuffer<byte>(
             "Raster::GpuCulling::CullData", sizeof(CullData), EBufferUsageFlags::CONSTANT_BUFFER
         );
@@ -82,7 +127,8 @@ public:
         const GpuScene::Res&              gpu_scene_res,
         GpuCullingBuffers::VisibilitySet& visibility_set,
         CullStatistics*                   out_stats          = nullptr,
-        std::string_view                  profile_scope_name = {}
+        std::string_view                  profile_scope_name = {},
+        CullingOptions                    options            = CullingOptions{false}
     ) {
         const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
@@ -90,6 +136,8 @@ public:
         CullData   data{};
         params.draw_count = draw_count;
         camera.GetPlanes(data.frustum_planes);
+
+        FillHiZOcclusionParams(context, options, params, data);
 
         Process(context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name);
     }
@@ -101,7 +149,8 @@ public:
         const GpuScene::Res&              gpu_scene_res,
         GpuCullingBuffers::VisibilitySet& visibility_set,
         CullStatistics*                   out_stats          = nullptr,
-        std::string_view                  profile_scope_name = {}
+        std::string_view                  profile_scope_name = {},
+        CullingOptions                    options            = CullingOptions{false}
     ) {
         const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
@@ -110,6 +159,8 @@ public:
         params.draw_count = draw_count;
         ExtractFrustumPlanes(view_proj, data.frustum_planes);
 
+        FillHiZOcclusionParams(context, options, params, data);
+
         Process(context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name);
     }
 
@@ -117,11 +168,43 @@ private:
     // Converts the raw GPU counters into UI-facing culling statistics.
     static CullStatistics ToStatistics(const GpuCullingCounterData& counters) {
         CullStatistics stats{};
-        stats.total_instances_before = counters.total_instances_before;
-        stats.total_instances_after  = counters.total_instances_after;
-        stats.visible_draws          = counters.visible_draws;
-        stats.total_draws            = counters.total_draws;
+        stats.total_instances_before     = counters.total_instances_before;
+        stats.total_instances_after      = counters.total_instances_after;
+        stats.visible_draws              = counters.visible_draws;
+        stats.total_draws                = counters.total_draws;
+        stats.frustum_culled_instances   = counters.frustum_culled_instances;
+        stats.occlusion_culled_instances = counters.occlusion_culled_instances;
         return stats;
+    }
+
+    static bool CanUseHiZOcclusion(const RasterContext& context, const CullingOptions& options) {
+        return options.enable_hiz_occlusion && context.hiz_data.previous_valid &&
+               context.textures.hiz_previous.tex != nullptr && context.hiz_data.mip_count > 0;
+    }
+
+    // 将上一帧Hi-Z资源写入 push constants，并把上一帧view-proj写入 cbuffer
+    static void FillHiZOcclusionParams(
+        RasterContext&        context,
+        const CullingOptions& options,
+        CullParams&           params,
+        CullData&             data
+    ) {
+        if (!CanUseHiZOcclusion(context, options)) {
+            return;
+        }
+
+        const uint  hiz_mip_count = std::min(context.hiz_data.mip_count, CULL_MAX_HIZ_MIPS);
+        const uint2 hiz_size      = context.textures.hiz_previous.GetSize(0);
+
+        params.flags |= CULL_FLAG_ENABLE_HIZ_OCCLUSION;
+        params.hiz_mip_count = hiz_mip_count;
+
+        for (uint mip = 0; mip < hiz_mip_count; ++mip) {
+            params.hiz_mip_handles[mip] = context.textures.hiz_previous.GetMipHandle(mip);
+        }
+
+        data.previous_view_proj = Transpose(context.hiz_data.previous_view_proj);
+        data.hiz_info           = uint4(hiz_size.x, hiz_size.y, hiz_mip_count, 0u);
     }
 
     // Extracts normalized frustum planes from a view-projection matrix.
@@ -182,19 +265,36 @@ private:
             context.cmd_list.PushScopeWithTimeScope(profile_scope_name);
         }
 
-        context.cmd_list
-            .Compute(
-                m_pso,
-                gpu_scene_res.draw_cmd_buf.buf->GetView(),             // SRV: source_draw_commands
-                gpu_scene_res.primitive_buf.buf->GetView(),            // SRV: primitives
-                gpu_scene_res.instance_buf.buf->GetView(),             // SRV: instances
-                visibility_set.visible_instance_id_buf.buf->GetView(), // UAV: visible_instance_ids
-                visibility_set.draw_cmd_buf->GetView(),                // UAV: draw_commands
-                visibility_set.counter_buf->GetView(),                 // UAV: counters
-                m_cull_data_buffer->GetView(),                         // CBV: cull_data
-                params                                                 // Push constant: cull_params
-            )
-            .Dispatch(uint3(dispatch_count, 1, 1), "Culling");
+        if ((params.flags & CULL_FLAG_ENABLE_HIZ_OCCLUSION) != 0u) {
+            context.cmd_list
+                .Compute(
+                    m_hiz_occlusion_pso,
+                    gpu_scene_res.draw_cmd_buf.buf->GetView(),             // SRV: source_draw_commands
+                    gpu_scene_res.primitive_buf.buf->GetView(),            // SRV: primitives
+                    gpu_scene_res.instance_buf.buf->GetView(),             // SRV: instances
+                    visibility_set.visible_instance_id_buf.buf->GetView(), // UAV: visible_instance_ids
+                    visibility_set.draw_cmd_buf->GetView(),                // UAV: draw_commands
+                    visibility_set.counter_buf->GetView(),                 // UAV: counters
+                    m_cull_data_buffer->GetView(),                         // CBV: cull_data
+                    context.bdls,                                          // Bindless heap for Hi-Z mip views
+                    params                                                 // Push constant: cull_params
+                )
+                .Dispatch(uint3(dispatch_count, 1, 1), "Hi-Z Occlusion Culling");
+        } else {
+            context.cmd_list
+                .Compute(
+                    m_pso,
+                    gpu_scene_res.draw_cmd_buf.buf->GetView(),             // SRV: source_draw_commands
+                    gpu_scene_res.primitive_buf.buf->GetView(),            // SRV: primitives
+                    gpu_scene_res.instance_buf.buf->GetView(),             // SRV: instances
+                    visibility_set.visible_instance_id_buf.buf->GetView(), // UAV: visible_instance_ids
+                    visibility_set.draw_cmd_buf->GetView(),                // UAV: draw_commands
+                    visibility_set.counter_buf->GetView(),                 // UAV: counters
+                    m_cull_data_buffer->GetView(),                         // CBV: cull_data
+                    params                                                 // Push constant: cull_params
+                )
+                .Dispatch(uint3(dispatch_count, 1, 1), "Culling");
+        }
 
         if (!profile_scope_name.empty()) {
             context.cmd_list.PopScopeWithTimeScope();
@@ -207,9 +307,10 @@ private:
     }
 
 private:
-    CullPipeline          m_pso;
-    BufferRef             m_cull_data_buffer;
-    GpuCullingCounterData m_readback_counters{};
+    CullPipeline             m_pso;
+    HiZOcclusionCullPipeline m_hiz_occlusion_pso;
+    BufferRef                m_cull_data_buffer;
+    GpuCullingCounterData    m_readback_counters{};
 };
 
 } // namespace Moer::Render::Raster

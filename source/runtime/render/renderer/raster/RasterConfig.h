@@ -137,20 +137,41 @@ struct RasterConfig {
     // MARK: Geometry
 
     bool  geometry_enable_alpha_test             = true;
-    float geometry_alpha_test_blend_pixel_cutoff = 0.5f; // 当AlphaMode为BLEND时，低于该值的像素会被丢弃
-    bool  enable_frustum_culling                 = true; // GPU视锥剔除
+    float geometry_alpha_test_blend_pixel_cutoff = 0.5f;  // 当AlphaMode为BLEND时，低于该值的像素会被丢弃
+    bool  enable_frustum_culling                 = true;  // GPU视锥剔除
+    bool  enable_occlusion_culling               = false; // GPU Hi-Z遮挡剔除
 
     // MARK: Culling Statistics (只读，由GPU更新)
     struct CullingStats {
-        uint total_instances_before = 0;
-        uint total_instances_after  = 0;
-        uint visible_draws          = 0;
-        uint total_draws            = 0;
+        uint total_instances_before     = 0;
+        uint total_instances_after      = 0;
+        uint visible_draws              = 0;
+        uint total_draws                = 0;
+        uint frustum_culled_instances   = 0;
+        uint occlusion_culled_instances = 0;
 
         float GetCullingRatio() const {
             if (total_instances_before == 0)
                 return 0.0f;
             return 1.0f - (float)total_instances_after / (float)total_instances_before;
+        }
+
+        float GetFrustumCullingRatio() const {
+            if (total_instances_before == 0)
+                return 0.0f;
+            return (float)frustum_culled_instances / (float)total_instances_before;
+        }
+
+        float GetOcclusionCullingRatio() const {
+            if (total_instances_before == 0)
+                return 0.0f;
+            return (float)occlusion_culled_instances / (float)total_instances_before;
+        }
+
+        float GetRenderedRatio() const {
+            if (total_instances_before == 0)
+                return 0.0f;
+            return (float)total_instances_after / (float)total_instances_before;
         }
     } culling_stats;
 
