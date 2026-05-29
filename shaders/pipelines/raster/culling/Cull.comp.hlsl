@@ -1,5 +1,5 @@
 /**
- * Frustum Culling Compute Shader
+ * Culling Compute Shader
  * 
  * 每个线程处理一个 Primitive 对应的源 Draw Command，
  * 为当前 pass 生成紧凑的可见实例索引和新的间接绘制命令。
@@ -9,31 +9,25 @@
 #include "shared/rhi/CommandDrawData.h"
 #include "shared/scene/SharedSceneStruct.h"
 
-// Packs the normalized frustum planes and draw count for one culling dispatch.
-struct CullParams {
-    float4 frustum_planes[6];  // World space frustum planes (nx, ny, nz, d)
-    uint   draw_count;
-    uint   _pad[3];
-};
-
-[[vk::push_constant]] ConstantBuffer<CullParams> cull_params;
+[[vk::push_constant]] ConstantBuffer<Moer::CullParams> cull_params;
 
 [[vk::binding(0, 0)]] StructuredBuffer<Moer::DrawIndexedCmdData> source_draw_commands;
-[[vk::binding(1, 0)]] StructuredBuffer<Moer::GPrimitive>     primitives;
-[[vk::binding(2, 0)]] StructuredBuffer<Moer::GInstance>      instances;
-[[vk::binding(3, 0)]] RWStructuredBuffer<uint>               visible_instance_ids;
+[[vk::binding(1, 0)]] StructuredBuffer<Moer::GPrimitive> primitives;
+[[vk::binding(2, 0)]] StructuredBuffer<Moer::GInstance> instances;
+[[vk::binding(3, 0)]] RWStructuredBuffer<uint> visible_instance_ids;
 [[vk::binding(4, 0)]] RWStructuredBuffer<Moer::DrawIndexedCmdData> draw_commands;
 [[vk::binding(5, 0)]] RWStructuredBuffer<Moer::GpuCullingCounterData> counters;
+[[vk::binding(6, 0)]] ConstantBuffer<Moer::CullData> cull_data;
 
 // Tests whether a world-space AABB intersects the current frustum conservatively.
-bool AABBInsideFrustum(float3 aabb_min, float3 aabb_max, float4 planes[6]) {
+bool AABBInsideFrustum(float3 aabb_min, float3 aabb_max) {
     float3 center = (aabb_min + aabb_max) * 0.5;
     float3 extent = (aabb_max - aabb_min) * 0.5;
     
     [unroll]
     for (int i = 0; i < 6; i++) {
-        float3 normal = planes[i].xyz;
-        float  distance = planes[i].w;
+        float3 normal = cull_data.frustum_planes[i].xyz;
+        float  distance = cull_data.frustum_planes[i].w;
         
         // 计算 AABB 在平面法线方向上的投影半径
         float radius = dot(extent, abs(normal));
@@ -93,7 +87,7 @@ void main(uint tid : SV_DispatchThreadID) {
         TransformAABB(inst.world_transform, prim.aabb_min, prim.aabb_max, world_min, world_max);
         
         // 视锥测试
-        if (AABBInsideFrustum(world_min, world_max, cull_params.frustum_planes)) {
+        if (AABBInsideFrustum(world_min, world_max)) {
             visible_count++;
         }
     }
@@ -120,7 +114,7 @@ void main(uint tid : SV_DispatchThreadID) {
         float3 world_min, world_max;
         TransformAABB(inst.world_transform, prim.aabb_min, prim.aabb_max, world_min, world_max);
 
-        if (AABBInsideFrustum(world_min, world_max, cull_params.frustum_planes)) {
+        if (AABBInsideFrustum(world_min, world_max)) {
             visible_instance_ids[visible_instance_offset + write_offset] = first_inst + i;
             write_offset++;
         }

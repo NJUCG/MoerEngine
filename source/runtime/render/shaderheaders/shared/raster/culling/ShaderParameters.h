@@ -30,6 +30,17 @@ struct GpuCullingCounterData {
     uint reserved1;
 };
 
+struct CullParams {
+    uint draw_count;
+    uint flags;
+    uint hiz_mip_count;
+    uint hiz_mip_handles[16];
+};
+
+struct CullData {
+    float4 frustum_planes[6];
+};
+
 struct HiZBuildParam {
     uint2 src_size;
     uint2 dst_size;

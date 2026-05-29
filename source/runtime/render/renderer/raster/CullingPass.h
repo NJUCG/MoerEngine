@@ -1,7 +1,7 @@
 #pragma once
 
 /**
- * GPU Frustum Culling Pass
+ * GPU Culling Pass
  * 
  * 使用 Compute Shader 生成 pass 专属的可见实例列表和间接绘制命令。
  */
@@ -14,26 +14,22 @@
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
-#include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
+#include "shaderheaders/shared/raster/culling/ShaderParameters.h"
+#include "shaderheaders/shared/scene/SharedSceneStruct.h"
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
 
+#include <cstring>
+
 namespace Moer::Render::Raster {
 
-// Packs the frustum planes and draw count consumed by the culling compute shader.
-struct FrustumCullParams {
-    float4 frustum_planes[6]; // World space frustum planes
-    uint   draw_count;
-    uint   _pad[3];
-};
-
 /**
- * Frustum Culling Pipeline
+ * Culling Pipeline
  */
-class FrustumCullPipeline : public ComputePipeline {
+class CullPipeline : public ComputePipeline {
 public:
-    DEFINE_COMPUTE_PIPELINE_CLASS(FrustumCullPipeline);
+    DEFINE_COMPUTE_PIPELINE_CLASS(CullPipeline);
 
     // 注意：参数名必须与 shader 中的变量名一致
     DEFINE_SHADER_BUFFER(source_draw_commands);
@@ -42,7 +38,8 @@ public:
     DEFINE_SHADER_BUFFER(visible_instance_ids);
     DEFINE_SHADER_BUFFER(draw_commands);
     DEFINE_SHADER_BUFFER(counters);
-    DEFINE_SHADER_CONSTANT_STRUCT(FrustumCullParams, cull_params);
+    DEFINE_SHADER_BUFFER(cull_data);
+    DEFINE_SHADER_CONSTANT_STRUCT(CullParams, cull_params);
 
     DEFINE_SHADER_ARGS(
         source_draw_commands,
@@ -51,6 +48,7 @@ public:
         visible_instance_ids,
         draw_commands,
         counters,
+        cull_data,
         cull_params
     );
 };
@@ -71,8 +69,9 @@ public:
 public:
     // Creates the compute pipeline used to build per-pass visibility buffers.
     CullingPass(RasterContext& context) {
-        m_pso = ShaderManager::Get().Compute<FrustumCullPipeline>(
-            "pipelines/raster/culling/FrustumCull.comp.hlsl"
+        m_pso              = ShaderManager::Get().Compute<CullPipeline>("pipelines/raster/culling/Cull.comp.hlsl");
+        m_cull_data_buffer = context.device.CreateBuffer<byte>(
+            "Raster::GpuCulling::CullData", sizeof(CullData), EBufferUsageFlags::CONSTANT_BUFFER
         );
     }
 
@@ -87,11 +86,12 @@ public:
     ) {
         const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
-        FrustumCullParams params{};
+        CullParams params{};
+        CullData   data{};
         params.draw_count = draw_count;
-        camera.GetPlanes(params.frustum_planes);
+        camera.GetPlanes(data.frustum_planes);
 
-        Process(context, gpu_scene_res, params, visibility_set, out_stats, profile_scope_name);
+        Process(context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name);
     }
 
     // Builds a visibility set from an explicit view-projection matrix.
@@ -105,11 +105,12 @@ public:
     ) {
         const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
-        FrustumCullParams params{};
+        CullParams params{};
+        CullData   data{};
         params.draw_count = draw_count;
-        ExtractFrustumPlanes(view_proj, params.frustum_planes);
+        ExtractFrustumPlanes(view_proj, data.frustum_planes);
 
-        Process(context, gpu_scene_res, params, visibility_set, out_stats, profile_scope_name);
+        Process(context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name);
     }
 
 private:
@@ -142,7 +143,8 @@ private:
     void Process(
         RasterContext&                    context,
         const GpuScene::Res&              gpu_scene_res,
-        const FrustumCullParams&          params,
+        const CullParams&                 params,
+        const CullData&                   data,
         GpuCullingBuffers::VisibilitySet& visibility_set,
         CullStatistics*                   out_stats,
         std::string_view                  profile_scope_name
@@ -171,6 +173,11 @@ private:
 
         const uint dispatch_count = (params.draw_count + 63) / 64;
 
+        // CopyFrom(span) 只保存指针，不能传入栈上的 CullData
+        Array<byte> cull_data_upload(sizeof(CullData));
+        std::memcpy(cull_data_upload.data(), &data, sizeof(CullData));
+        context.cmd_list.CopyFrom(std::move(cull_data_upload), m_cull_data_buffer->GetView());
+
         if (!profile_scope_name.empty()) {
             context.cmd_list.PushScopeWithTimeScope(profile_scope_name);
         }
@@ -184,9 +191,10 @@ private:
                 visibility_set.visible_instance_id_buf.buf->GetView(), // UAV: visible_instance_ids
                 visibility_set.draw_cmd_buf->GetView(),                // UAV: draw_commands
                 visibility_set.counter_buf->GetView(),                 // UAV: counters
+                m_cull_data_buffer->GetView(),                         // CBV: cull_data
                 params                                                 // Push constant: cull_params
             )
-            .Dispatch(uint3(dispatch_count, 1, 1), "FrustumCulling");
+            .Dispatch(uint3(dispatch_count, 1, 1), "Culling");
 
         if (!profile_scope_name.empty()) {
             context.cmd_list.PopScopeWithTimeScope();
@@ -199,7 +207,8 @@ private:
     }
 
 private:
-    FrustumCullPipeline   m_pso;
+    CullPipeline          m_pso;
+    BufferRef             m_cull_data_buffer;
     GpuCullingCounterData m_readback_counters{};
 };
 
