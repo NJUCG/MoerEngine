@@ -7,6 +7,7 @@
 #include "CooperativeOpsPass.h"
 #include "DirectionalShadowMaskPass.h"
 #include "GeometryPass.h"
+#include "HiZBuildPass.h"
 #include "LightingPass.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
@@ -59,6 +60,7 @@ RasterRenderer::RasterRenderer(
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
+    hiz_build_pass               = MakeUnique<HiZBuildPass>(raster_context);
     shadow_depth_pass            = MakeUnique<ShadowDepthPass>(raster_context);
     directional_shadow_mask_pass = MakeUnique<DirectionalShadowMaskPass>(raster_context);
     geometry_pass                = MakeUnique<GeometryPass>(raster_context);
@@ -289,6 +291,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         if (scene_tick_state.updated_transform) {
             raster_context.csm_data.shadow_cache_config_snapshot_valid = false;
+            raster_context.InvalidateHiZHistory();
         }
 
         // others
@@ -307,6 +310,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryPassProfileScopeName());
         geometry_pass->Process(raster_context, raster_config, camera);
         cmd_list.PopScopeWithTimeScope();
+
+        hiz_build_pass->Process(raster_context, raster_config);
+        raster_context.CommitHiZHistory(camera.GetViewProjectionMatrix());
 
         // Directional Shadow Mask Pass
         directional_shadow_mask_pass->Process(raster_context, raster_config, camera);

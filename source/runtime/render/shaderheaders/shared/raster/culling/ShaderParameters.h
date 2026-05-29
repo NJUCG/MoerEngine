@@ -30,6 +30,12 @@ struct GpuCullingCounterData {
     uint reserved1;
 };
 
+struct HiZBuildParam {
+    uint2 src_size;
+    uint2 dst_size;
+    uint  is_mip0;
+};
+
 #ifdef __cplusplus
 }
 #else
