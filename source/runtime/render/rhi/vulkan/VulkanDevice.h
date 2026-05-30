@@ -2,6 +2,7 @@
 #define VULKAN_DEVICE_H
 
 #include "PixelFormat.h"
+#include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "taskgraph/Event.h"
 
@@ -117,6 +118,9 @@ public:
 
     // 判断当前物理设备是否为 AMD（基于 vendorID）
     bool IsAmdGpu() const;
+    bool IsValidationLayerEnabled() const {
+        return m_validation_layer_enabled;
+    }
 
 public:
     void           EnqueueDeferredRelease(RHIResource* _object);
@@ -138,6 +142,8 @@ public:
     void SetResourceName(uint64 _object, VkObjectType _object_type, StringView _name);
     void CopyData(const BufferView& _dst, const void* _data, uint64 _size);
     void CopyData(void* _dst, const BufferView& _src, uint64 _size);
+    VkFence AcquireHostFence();
+    void    RecycleHostFence(VkFence fence);
 
 public:
     RuntimePlugin* LoadPlugin(StringView _name) override;
@@ -248,6 +254,10 @@ public:
     }
 
 private:
+    struct HostFenceSlot {
+        VkFence handle{VK_NULL_HANDLE};
+    };
+
     VkInstance            m_instance                  = VK_NULL_HANDLE;
     VkPhysicalDevice      m_gpu                       = VK_NULL_HANDLE;
     VkDevice              m_device                    = VK_NULL_HANDLE;
@@ -260,6 +270,7 @@ private:
     EventRef              init_event{};
 
     VulkanDeviceInfo m_device_info{};
+    bool             m_validation_layer_enabled = false;
 
     VkDebugUtilsMessengerEXT m_debug_utils_messenger = VK_NULL_HANDLE;
 
@@ -272,6 +283,7 @@ private:
     // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
     std::mutex                                m_shared_queue_submit_mutex;
     LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};
+    LockFreeQueueBase<HostFenceSlot, false>   host_fence_pool{};
     static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
     StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
     PFN_vkCmdBindResourceHeapEXT               m_vk_cmd_bind_resource_heap{nullptr};
@@ -308,6 +320,7 @@ private:
 
     void CreateInternalShaders();
     void DestroyInternalShaders();
+    void DestroyHostFencePool();
 
     void Destroy();
 

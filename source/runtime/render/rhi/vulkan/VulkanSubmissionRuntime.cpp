@@ -2,7 +2,9 @@
 
 #include "VulkanInterruptRuntime.h"
 #include "VulkanDevice.h"
+#include "VulkanQueue.h"
 #include "VulkanRHITrace.h"
+#include "VulkanThreadHeartbeat.h"
 #include "log/LogSystem.h"
 #include "rhi/GPUEventStream.h"
 #include "rhi/RHIImpl.h"
@@ -143,22 +145,6 @@ size_t QueueTypeIndex(EQueueType queue) {
     return index;
 }
 
-Array<WaitEvent> CollapseWaitsByTimelineMax(std::span<const ResolvedSyncPoint> resolved_waits) {
-    UnorderedMap<uint64, uint64> max_value_by_handle{};
-    max_value_by_handle.reserve(resolved_waits.size());
-    for (const ResolvedSyncPoint& wait : resolved_waits) {
-        auto& max_value = max_value_by_handle[wait.timeline_handle];
-        max_value       = std::max(max_value, wait.value);
-    }
-
-    Array<WaitEvent> final_waits{};
-    final_waits.reserve(max_value_by_handle.size());
-    for (const auto& [timeline_handle, value] : max_value_by_handle) {
-        final_waits.emplace_back(WaitEvent{timeline_handle, value});
-    }
-    return final_waits;
-}
-
 Array<WaitEvent> CollapseWaitEventsByTimelineMax(std::span<const WaitEvent> wait_events) {
     UnorderedMap<uint64, uint64> max_value_by_handle{};
     max_value_by_handle.reserve(wait_events.size());
@@ -216,7 +202,6 @@ struct SubmissionPresentContext::Impl {
     }
 
     UniquePtr<VulkanPresentor> AcquirePresentor() {
-        std::lock_guard<std::mutex> lock(presentor_mutex);
         auto presentor = UniquePtr<VulkanPresentor>(presentors.Pop());
         if (presentor) {
             return presentor;
@@ -254,8 +239,6 @@ struct SubmissionPresentContext::Impl {
     VkNativeQueue                      native_queue;
     VulkanFenceRef                     timeline = nullptr;
     std::atomic_uint64_t               last_submitted_timeline{0};
-    std::mutex                         submit_mutex{};
-    std::mutex                         presentor_mutex{};
     GraphEventRef                      completion_boundary{nullptr};
     UnorderedMap<Swapchain*, GraphEventRef> completion_boundary_by_swapchain{};
     LockFreeQueueBase<VulkanPresentor, false> presentors{};
@@ -286,8 +269,6 @@ SubmissionPresentResult SubmissionPresentContext::Present(
     const bool use_present_fence =
         impl->command_queue.vk_device.GetOptionalExtensions().m_has_khr_swapchain_maintenance1;
 
-    std::unique_lock<std::mutex> queue_submit_lock(impl->command_queue.GetSubmitMutex());
-    std::unique_lock<std::mutex> lock(impl->submit_mutex);
     impl->WaitForReusablePresentSlot(*swapchain);
 
     auto  presentor = impl->AcquirePresentor();
@@ -344,7 +325,7 @@ SubmissionPresentResult SubmissionPresentContext::Present(
             src_texture->GetName()
         );
     }
-    auto src_to_transfer = tracker.ReadTexture(src_texture, ETextureState::TRANSFER);
+    auto src_to_transfer = tracker.ReadTexture(src_texture, ETextureState::TRANSFER_SRC);
     tracker.EmitLocalTransition(
         src_texture,
         static_cast<VkAccessFlagBits2>(std::get<0>(src_to_transfer)),
@@ -357,7 +338,7 @@ SubmissionPresentResult SubmissionPresentContext::Present(
     );
     tracker.EmitLocalTransition(
         swapchain_texture,
-        tracker.WriteTexture(swapchain_texture, ETextureState::TRANSFER)
+        tracker.WriteTexture(swapchain_texture, ETextureState::TRANSFER_DST)
     );
     tracker.ResolveBarriers();
     tracker.DispatchBarriers(cmd_list);
@@ -413,6 +394,10 @@ SubmissionPresentResult SubmissionPresentContext::Present(
     present_info.pSwapchains        = &swapchain->handle;
     present_info.pImageIndices      = &image_index;
 
+    VulkanQueueAccessScope present_queue_access_scope(
+        impl->command_queue.vk_device.GetPresentQueue(),
+        MOER_TEXT("vkQueuePresentKHR")
+    );
     VkResult present_vk_result =
         vkQueuePresentKHR(impl->command_queue.vk_device.GetPresentQueue(), &present_info);
     if (present_vk_result != VK_SUCCESS && present_vk_result != VK_SUBOPTIMAL_KHR &&
@@ -425,15 +410,17 @@ SubmissionPresentResult SubmissionPresentContext::Present(
     }
     impl->native_queue.Signal(impl->timeline.Get(), completion_value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     impl->native_queue.SubmitEmpty(queue_completion_fence);
+    const VkFence host_completion_fence = use_present_fence ? in_flight_fence : queue_completion_fence;
+    if (host_completion_fence != VK_NULL_HANDLE) {
+        out_host_fence.handle = host_completion_fence;
+        out_host_fence.owned  = false;
+    }
     ++swapchain->image_idx;
 
     present_result.submitted         = true;
     present_result.completion        = WaitEvent{uint64(impl->timeline.Get()), completion_value};
     present_result.timeline_value    = completion_value;
     present_result.presentor         = std::move(presentor);
-    out_host_fence.device            = impl->command_queue.vk_device.GetDevice();
-    out_host_fence.handle            = use_present_fence ? in_flight_fence : queue_completion_fence;
-    out_host_fence.owned             = false;
     return present_result;
 }
 
@@ -450,7 +437,6 @@ void SubmissionPresentContext::ResolvePresentCompletion(
     }
     presentor->VulkanAllocatorBase::Complete(impl->timeline.Get(), timeline_value);
     presentor->Reset();
-    std::lock_guard<std::mutex> lock(impl->presentor_mutex);
     impl->presentors.Push(presentor.release());
 }
 
@@ -526,6 +512,29 @@ void VulkanSubmissionRuntime::Enqueue(Array<SubmitInfo>&& submits, Array<SubmitP
     batch.kind             = SubmissionBatch::EKind::Submit;
     batch.submits          = std::move(submits);
     batch.present_ops      = std::move(present_ops);
+    batch.root_rhi_boundary.host_event = GraphEvent::CreateGraphEvent();
+    {
+        std::lock_guard<std::mutex> lock(submission_mutex);
+        submission_queue.emplace_back(std::move(batch));
+    }
+    submission_cv.notify_one();
+}
+
+void VulkanSubmissionRuntime::Enqueue(
+    Array<std::shared_ptr<TranslateBatch>>&& translate_batches,
+    Array<SubmitPresentStage>&&              present_ops
+) {
+    if (translate_batches.empty() && present_ops.empty()) {
+        return;
+    }
+    assert(b_enable.load(std::memory_order_acquire) && "Enqueue is not allowed after shutdown begins");
+    if (!b_enable.load(std::memory_order_acquire)) {
+        return;
+    }
+    SubmissionBatch batch{};
+    batch.kind = SubmissionBatch::EKind::Submit;
+    batch.translate_batches = std::move(translate_batches);
+    batch.present_ops = std::move(present_ops);
     batch.root_rhi_boundary.host_event = GraphEvent::CreateGraphEvent();
     {
         std::lock_guard<std::mutex> lock(submission_mutex);
@@ -624,7 +633,6 @@ GraphEventRef VulkanSubmissionRuntime::EnqueueOrderedSwapchainSyncRequest(Swapch
 
 GraphEventRef VulkanSubmissionRuntime::EnqueueDrainRequestUnchecked() {
     GraphEventRef batch_completion = GraphEvent::CreateGraphEvent();
-    GraphEventRef wait_event       = CreateCompletionWaitEvent(batch_completion);
     SubmissionBatch batch{};
     batch.kind             = SubmissionBatch::EKind::Drain;
     batch.completion_event = batch_completion;
@@ -633,7 +641,7 @@ GraphEventRef VulkanSubmissionRuntime::EnqueueDrainRequestUnchecked() {
         submission_queue.emplace_back(std::move(batch));
     }
     submission_cv.notify_one();
-    return wait_event;
+    return batch_completion;
 }
 
 void VulkanSubmissionRuntime::Shutdown() {
@@ -688,11 +696,60 @@ OrderedBatchRuntimeState VulkanSubmissionRuntime::InitOrderedBatchRuntimeState(S
     return state;
 }
 
+void VulkanSubmissionRuntime::MaterializeTranslateBatches(SubmissionBatch& batch) {
+    if (batch.translate_batches.empty()) {
+        return;
+    }
+
+    Array<SubmitInfo> submit_infos{};
+    for (const std::shared_ptr<TranslateBatch>& translate_batch : batch.translate_batches) {
+        if (!translate_batch) {
+            continue;
+        }
+
+        if (GraphEventRef boundary = translate_batch->translate_pipe.Close(); boundary) {
+            boundary->Wait(EThread::UNKNOWN_THREAD);
+        }
+
+        std::lock_guard<std::mutex> batch_lock(translate_batch->mutex);
+        std::optional<size_t> last_submit_info_index{};
+        submit_infos.reserve(submit_infos.size() + translate_batch->entries.size());
+        for (TranslateBatchEntry& entry : translate_batch->entries) {
+            if (!entry.submit.has_value()) {
+                continue;
+            }
+
+            SubmitInfo submit_info = std::move(entry.submit.value());
+            if (!submit_info.translate_result.translate_complete) {
+                submit_info.translate_result.translate_complete = entry.translate_event;
+            }
+            submit_info.submit_seq = next_submit_seq++;
+            submit_infos.emplace_back(std::move(submit_info));
+            last_submit_info_index = submit_infos.size() - 1;
+        }
+
+        if (last_submit_info_index.has_value() && translate_batch->allocator_cache != nullptr) {
+            SubmitInfo& last_submit = submit_infos[last_submit_info_index.value()];
+            if (last_submit.translate_result.recorded_submit.has_value()) {
+                last_submit.translate_result.recorded_submit->allocator_owner = std::move(translate_batch->allocator_cache);
+            }
+        }
+    }
+
+    batch.submits = std::move(submit_infos);
+    batch.translate_batches.clear();
+}
+
 void VulkanSubmissionRuntime::RunOrderedSubmitBatch(SubmissionBatch& batch) {
+    auto& thread_heartbeat = VulkanThreadHeartbeat::Get();
+    thread_heartbeat.PulseCurrent(MOER_TEXT("RunOrderedSubmitBatch.MaterializeTranslateBatches"));
+    MaterializeTranslateBatches(batch);
     OrderedBatchRuntimeState state = InitOrderedBatchRuntimeState(batch);
     while (state.next_submit_index < state.submits.size()) {
+        thread_heartbeat.PulseCurrent(MOER_TEXT("RunOrderedSubmitBatch.ScanBatchReadiness"));
         ScanBatchReadiness(state);
         const uint32 old_submit_index = state.next_submit_index;
+        thread_heartbeat.PulseCurrent(MOER_TEXT("RunOrderedSubmitBatch.FlushPendingReady"));
         const uint32 flushed_count    = FlushPendingReady(state);
         if (state.next_submit_index == old_submit_index && flushed_count == 0) {
             LOG_ERROR(
@@ -707,12 +764,14 @@ void VulkanSubmissionRuntime::RunOrderedSubmitBatch(SubmissionBatch& batch) {
 
     RootRhiBoundary batch_tail_boundary = state.root_rhi_boundary;
     if (!state.submits.empty()) {
+        thread_heartbeat.PulseCurrent(MOER_TEXT("RunOrderedSubmitBatch.BuildBatchTailBoundary"));
         batch_tail_boundary = BuildBatchTailBoundary(state);
         batch_tail_boundary.host_event = state.root_rhi_boundary.host_event;
         pending_rhi_boundary           = batch_tail_boundary;
     }
 
     if (!batch.present_ops.empty()) {
+        thread_heartbeat.PulseCurrent(MOER_TEXT("RunOrderedSubmitBatch.ExecutePresentStages"));
         ExecutePresentStages(batch.present_ops, batch_tail_boundary.gpu_waits);
     }
 }
@@ -764,12 +823,12 @@ void VulkanSubmissionRuntime::ScanBatchReadiness(OrderedBatchRuntimeState& state
             continue;
         }
 
-        Array<ResolvedSyncPoint> resolved_syncpoints{};
-        if (!TryResolveWaitSyncPoints(submit.wait_syncpoints, resolved_syncpoints)) {
+        Array<WaitEvent> resolved_waits{};
+        if (!TryResolveWaitSyncPoints(submit.wait_syncpoints, resolved_waits)) {
             continue;
         }
 
-        cache.resolved_waits = BuildResolvedWaits(state, submit, resolved_syncpoints);
+        cache.resolved_waits = BuildResolvedWaits(state, submit, resolved_waits);
         cache.ready          = true;
     }
 }
@@ -806,64 +865,88 @@ uint32 VulkanSubmissionRuntime::FlushPendingReady(OrderedBatchRuntimeState& stat
         switch (submit.queue) {
             case EQueueType::Graphics:
             case EQueueType::Compute: {
+                VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("FlushPendingReady.SubmitRecorded.Graphics"));
                 auto& queue = static_cast<VkCommandQueue&>(
                     RenderDevice::Get().GetCommandQueue(submit.queue)
                 );
-                auto result = queue.SubmitRecordedForRuntime(
-                    std::move(submit.translate_result.recorded_submit.value()),
-                    cache.resolved_waits,
-                    signal_value
-                );
-                if (!result.gpu_events.empty()) {
-                    GPUEventStream::Get().EnqueueSubmit(
-                        std::move(result.gpu_events),
-                        submit.queue,
-                        result.completion
-                    );
-                    if (result.has_frame_boundary_event) {
-                        GPUEventStream::Get().EndFrame();
+                auto& recorded_submit = submit.translate_result.recorded_submit.value();
+                if (recorded_submit.payloads.empty()) {
+                    if (task_completion_event) {
+                        task_completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
                     }
+                    submitted = true;
+                    break;
                 }
-                if (result.scheduled_completion) {
-                    interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
-                        submit.key.op_seq,
-                        task_completion_event,
-                        SubmissionQueueCompletionPayload(queue, std::move(result))
-                    ));
-                    queue.AppendCompletionBoundary(task_completion_event);
-                } else if (task_completion_event) {
-                    task_completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+
+                uint64 current_signal_value = signal_value;
+                for (size_t payload_index = 0; payload_index < recorded_submit.payloads.size(); ++payload_index) {
+                    auto runtime_payload = queue.SubmitPayloadForRuntime(
+                        std::move(recorded_submit.payloads[payload_index]),
+                        payload_index == 0 ? std::span<const WaitEvent>(cache.resolved_waits) : std::span<const WaitEvent>{},
+                        current_signal_value
+                    );
+                    if (!runtime_payload->gpu_events.empty()) {
+                        GPUEventStream::Get().EnqueueSubmit(
+                            std::move(runtime_payload->gpu_events),
+                            submit.queue,
+                            runtime_payload->completion
+                        );
+                        if (runtime_payload->has_frame_boundary_event) {
+                            GPUEventStream::Get().EndFrame();
+                        }
+                    }
+                    runtime_payload->op_seq = submit.key.op_seq;
+                    runtime_payload->pending_since = VulkanSubmitPayload::Clock::now();
+                    runtime_payload->pending_warn_count = 0;
+                    runtime_payload->completion_event =
+                        payload_index + 1 == recorded_submit.payloads.size() ? task_completion_event : nullptr;
+                    interrupt_runtime.EnqueuePayload(std::move(runtime_payload));
+                    ++current_signal_value;
                 }
+                queue.AppendCompletionBoundary(task_completion_event);
+                queue_state.next_signal_value = current_signal_value;
                 submitted = true;
                 break;
             }
             case EQueueType::Copy: {
+                VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("FlushPendingReady.SubmitRecorded.Copy"));
                 auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-                auto result = copy_queue.SubmitRecordedForRuntime(
-                    std::move(submit.translate_result.recorded_submit.value()),
-                    cache.resolved_waits,
-                    signal_value
-                );
-                if (!result.gpu_events.empty()) {
-                    GPUEventStream::Get().EnqueueSubmit(
-                        std::move(result.gpu_events),
-                        submit.queue,
-                        WaitEvent{result.completion.handle, result.completion.timeline}
-                    );
-                    if (result.has_frame_boundary_event) {
-                        GPUEventStream::Get().EndFrame();
+                auto& recorded_submit = submit.translate_result.recorded_submit.value();
+                if (recorded_submit.payloads.empty()) {
+                    if (task_completion_event) {
+                        task_completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
                     }
+                    submitted = true;
+                    break;
                 }
-                if (result.scheduled_completion) {
-                    interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
-                        submit.key.op_seq,
-                        task_completion_event,
-                        SubmissionCopyQueueCompletionPayload(copy_queue, std::move(result))
-                    ));
-                    copy_queue.AppendCompletionBoundary(task_completion_event);
-                } else if (task_completion_event) {
-                    task_completion_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+
+                uint64 current_signal_value = signal_value;
+                for (size_t payload_index = 0; payload_index < recorded_submit.payloads.size(); ++payload_index) {
+                    auto runtime_payload = copy_queue.SubmitPayloadForRuntime(
+                        std::move(recorded_submit.payloads[payload_index]),
+                        payload_index == 0 ? std::span<const WaitEvent>(cache.resolved_waits) : std::span<const WaitEvent>{},
+                        current_signal_value
+                    );
+                    if (!runtime_payload->gpu_events.empty()) {
+                        GPUEventStream::Get().EnqueueSubmit(
+                            std::move(runtime_payload->gpu_events),
+                            submit.queue,
+                            runtime_payload->completion
+                        );
+                        if (runtime_payload->has_frame_boundary_event) {
+                            GPUEventStream::Get().EndFrame();
+                        }
+                    }
+                    runtime_payload->op_seq = submit.key.op_seq;
+                    runtime_payload->pending_since = VulkanSubmitPayload::Clock::now();
+                    runtime_payload->pending_warn_count = 0;
+                    runtime_payload->completion_event =
+                        payload_index + 1 == recorded_submit.payloads.size() ? task_completion_event : nullptr;
+                    interrupt_runtime.EnqueuePayload(std::move(runtime_payload));
+                    ++current_signal_value;
                 }
+                copy_queue.AppendCompletionBoundary(task_completion_event);
+                queue_state.next_signal_value = current_signal_value;
                 submitted = true;
                 break;
             }
@@ -882,14 +965,9 @@ uint32 VulkanSubmissionRuntime::FlushPendingReady(OrderedBatchRuntimeState& stat
             break;
         }
 
-        queue_state.next_signal_value += 1;
         PublishResolvedSyncPoint(
             submit.signal_syncpoint,
-            ResolvedSyncPoint{
-                .queue = submit.queue,
-                .timeline_handle = queue_state.timeline_handle,
-                .value = signal_value,
-            }
+            WaitEvent{queue_state.timeline_handle, queue_state.next_signal_value - 1}
         );
 
         cache.submitted = true;
@@ -950,31 +1028,41 @@ std::optional<WaitEvent> VulkanSubmissionRuntime::ExecutePresentStage(
 
     const WaitEvent present_completion = present_result.completion;
     GraphEventRef present_completion_event = GraphEvent::CreateGraphEvent();
-    interrupt_runtime.EnqueueTask(SubmissionCompletionTask::Create(
-        present_stage.op_seq,
-        present_completion_event,
-        SubmissionPresentCompletionPayload(
-            context,
-            host_fence,
-            std::move(present_result)
-        )
-    ));
+    auto payload = MakeUnique<VulkanSubmitPayload>();
+    payload->type = EVulkanSubmitPayloadType::Present;
+    payload->queue_type = present_stage.present.queue;
+    payload->present_context = &context;
+    payload->presentor = std::move(present_result.presentor);
+    payload->completion = present_completion;
+    payload->timeline_value = present_result.timeline_value;
+    payload->host_fence = host_fence.handle;
+    payload->owns_host_fence = host_fence.owned;
+    payload->op_seq = present_stage.op_seq;
+    payload->pending_since = VulkanSubmitPayload::Clock::now();
+    payload->completion_event = present_completion_event;
+    interrupt_runtime.EnqueuePayload(std::move(payload));
     context.AppendCompletionBoundary(present_stage.present.swapchain.Get(), present_completion_event);
     return present_completion;
 }
 
 bool VulkanSubmissionRuntime::TryResolveWaitSyncPoints(
-    std::span<const SyncPointId> wait_syncpoints,
-    Array<ResolvedSyncPoint>&    out_resolved_waits
+    std::span<const SyncPointRef> wait_syncpoints,
+    Array<WaitEvent>&             out_resolved_waits
 ) const {
     out_resolved_waits.clear();
     out_resolved_waits.reserve(wait_syncpoints.size());
-    for (const SyncPointId syncpoint_id : wait_syncpoints) {
-        const auto iter = scheduler_state.resolved_syncpoints.find(syncpoint_id);
-        if (iter == scheduler_state.resolved_syncpoints.end()) {
+    for (const SyncPointRef& syncpoint : wait_syncpoints) {
+        if (!syncpoint) {
+            LOG_ERROR(MOER_TEXT("Ordered submit carries a null SyncPoint wait"));
+            assert(false && "wait syncpoint must be valid");
             return false;
         }
-        out_resolved_waits.emplace_back(iter->second);
+
+        WaitEvent resolved_wait{};
+        if (!syncpoint->TryGetResolvedWaitEvent(resolved_wait)) {
+            return false;
+        }
+        out_resolved_waits.emplace_back(resolved_wait);
     }
     return true;
 }
@@ -982,9 +1070,9 @@ bool VulkanSubmissionRuntime::TryResolveWaitSyncPoints(
 Array<WaitEvent> VulkanSubmissionRuntime::BuildResolvedWaits(
     const OrderedBatchRuntimeState&  state,
     const SubmitInfo&                submit,
-    std::span<const ResolvedSyncPoint> resolved_waits
+    std::span<const WaitEvent>      resolved_waits
 ) const {
-    Array<WaitEvent> wait_events = CollapseWaitsByTimelineMax(resolved_waits);
+    Array<WaitEvent> wait_events = CollapseWaitEventsByTimelineMax(resolved_waits);
     if (submit.wait_syncpoints.empty() && RootRhiBoundaryHasGpuWaits(state.root_rhi_boundary)) {
         wait_events.insert(
             wait_events.end(),
@@ -997,15 +1085,16 @@ Array<WaitEvent> VulkanSubmissionRuntime::BuildResolvedWaits(
 }
 
 void VulkanSubmissionRuntime::PublishResolvedSyncPoint(
-    SyncPointId              syncpoint_id,
-    const ResolvedSyncPoint& resolved_syncpoint
+    const SyncPointRef& syncpoint,
+    WaitEvent           resolved_wait
 ) {
-    const auto [_, inserted] =
-        scheduler_state.resolved_syncpoints.emplace(syncpoint_id, resolved_syncpoint);
-    if (!inserted) {
-        LOG_ERROR(MOER_TEXT("SyncPoint {} was published more than once"), syncpoint_id);
-        assert(false && "syncpoint must only be published once");
+    if (!syncpoint) {
+        LOG_ERROR(MOER_TEXT("Ordered submit carries a null SyncPoint signal"));
+        assert(false && "signal syncpoint must be valid");
+        return;
     }
+
+    syncpoint->Publish(resolved_wait);
 }
 
 RootRhiBoundary VulkanSubmissionRuntime::BuildBatchTailBoundary(
@@ -1014,8 +1103,19 @@ RootRhiBoundary VulkanSubmissionRuntime::BuildBatchTailBoundary(
     Array<WaitEvent> batch_tail_waits{};
     batch_tail_waits.reserve(state.submits.size());
     for (const SubmitInfo& submit : state.submits) {
-        const auto syncpoint_iter = scheduler_state.resolved_syncpoints.find(submit.signal_syncpoint);
-        if (syncpoint_iter == scheduler_state.resolved_syncpoints.end()) {
+        if (!submit.signal_syncpoint) {
+            LOG_ERROR(
+                MOER_TEXT("Batch tail is missing signal SyncPoint for ordered submit seq={} ({}, {})"),
+                submit.submit_seq,
+                submit.key.op_seq,
+                submit.key.submit_idx
+            );
+            assert(false && "submitted work must carry a valid signal syncpoint");
+            continue;
+        }
+
+        WaitEvent resolved_wait{};
+        if (!submit.signal_syncpoint->TryGetResolvedWaitEvent(resolved_wait)) {
             LOG_ERROR(
                 MOER_TEXT("Batch tail is missing published syncpoint for ordered submit seq={} ({}, {})"),
                 submit.submit_seq,
@@ -1025,8 +1125,7 @@ RootRhiBoundary VulkanSubmissionRuntime::BuildBatchTailBoundary(
             assert(false && "submitted work must publish its exported syncpoint");
             continue;
         }
-        const ResolvedSyncPoint& resolved = syncpoint_iter->second;
-        batch_tail_waits.emplace_back(WaitEvent{resolved.timeline_handle, resolved.value});
+        batch_tail_waits.emplace_back(resolved_wait);
     }
 
     RootRhiBoundary boundary{};
@@ -1035,7 +1134,11 @@ RootRhiBoundary VulkanSubmissionRuntime::BuildBatchTailBoundary(
 }
 
 void VulkanSubmissionRuntime::RunSubmissionThread() {
+    auto& thread_heartbeat = VulkanThreadHeartbeat::Get();
+    auto  heartbeat_handle =
+        thread_heartbeat.Register(MOER_TEXT("SubmissionThread"), MOER_TEXT("WaitBatch"));
     while (true) {
+        thread_heartbeat.Pulse(heartbeat_handle, MOER_TEXT("WaitBatch"));
         SubmissionBatch batch{};
         {
             std::unique_lock<std::mutex> lock(submission_mutex);
@@ -1043,6 +1146,7 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
                 return !b_enable.load(std::memory_order_acquire) || !submission_queue.empty();
             });
             if (!b_enable.load(std::memory_order_acquire) && submission_queue.empty()) {
+                thread_heartbeat.Unregister(heartbeat_handle);
                 return;
             }
             batch = std::move(submission_queue.front());
@@ -1050,11 +1154,14 @@ void VulkanSubmissionRuntime::RunSubmissionThread() {
         }
         assert(!BatchKindRequiresCompletionEvent(batch.kind) || batch.completion_event != nullptr);
         if (batch.kind == SubmissionBatch::EKind::Submit) {
+            thread_heartbeat.Pulse(heartbeat_handle, MOER_TEXT("RunOrderedSubmitBatch"));
             BindSubmitBatchRootBoundary(batch);
             RunOrderedSubmitBatch(batch);
         }
 
+        thread_heartbeat.Pulse(heartbeat_handle, MOER_TEXT("AttachSyncDependencies"));
         AttachSyncDependencies(batch);
+        thread_heartbeat.Pulse(heartbeat_handle, MOER_TEXT("FinishBatchCompletion"));
         FinishBatchCompletion(batch);
     }
 }

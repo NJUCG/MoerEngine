@@ -47,9 +47,5 @@ void main() {
       if (adaption_speed > 0.0f) {
         target_exposure += diff * exp2(-params.frame_time * adaption_speed);
       }
-      if(params.frame_time <= 0.0f) {
-        printf("target exposure is %f, old exposure %f frame time %f\n",target_exposure, old_exposure, params.frame_time);
-      }
-
       exposure[0] = asuint(target_exposure);
     }

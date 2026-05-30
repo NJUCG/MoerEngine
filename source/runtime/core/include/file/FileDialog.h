@@ -15,11 +15,11 @@ enum class EOpenFileStatus : uint8_t {
 };
 
 struct Filter {
-    Utf8StringView name;
-    Utf8StringView pattern;
+    AsciiStringView name;
+    AsciiStringView pattern;
 };
 
-using OpenFileCallback = void (*)(Utf8StringView selected_path, void* user_data);
+using OpenFileCallback = void (*)(StringView selected_path, void* user_data);
 
 struct OpenFileRequest {
     std::span<const Filter> filters{};

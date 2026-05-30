@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <mutex>
 #include <utility>
 
 const float default_pool_size[VK_DESCRIPTOR_TYPE_RANGE_SIZE] = {
@@ -476,14 +477,21 @@ public:
 
     void FreeBufferDescIdx(uint _idx) {
         std::lock_guard<std::mutex> lock(mutex);
+        m_offline_buffer_metadata[_idx] = {};
+        m_offline_buffer_metadata[_idx].resource_info.type = VK_DESCRIPTOR_TYPE_MAX_ENUM;
         m_offline_buffer_descs.free_list.push_back(_idx);
+        ClearOfflineBufferDescriptor(uint32(_idx));
     }
 
-    uint GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout) {
+    uint GetImageDescIdx(
+        const TextureView* _in_image,
+        VkImageLayout      _layout,
+        VkDescriptorType   _descriptor_type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
+    ) {
         auto* texture = ResourceCast(_in_image->texture);
         assert(texture != nullptr && "texture is nullptr");
         uint8 layer_count = _in_image->num_array == 0 ? 1 : _in_image->num_array;
-        VkTextureDescKey key{_layout, _in_image->mip_level, _in_image->num_mips, _in_image->array_layer, layer_count};
+        VkTextureDescKey key{_descriptor_type, _layout, _in_image->mip_level, _in_image->num_mips, _in_image->array_layer, layer_count};
         auto             res = texture->m_descriptor_indices.try_emplace(key, -1);
         if (!res.second) {
             return res.first->second * image_desc_stride;
@@ -493,7 +501,13 @@ public:
         {
             VkImageDescriptorInfoEXT    native_image_info{VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT};
             VkResourceDescriptorInfoEXT native_resource_info{VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT};
-            texture->BuildNativeImageDescriptorInfo(*_in_image, _layout, native_image_info, native_resource_info);
+            texture->BuildNativeImageDescriptorInfo(
+                *_in_image,
+                _layout,
+                _descriptor_type,
+                native_image_info,
+                native_resource_info
+            );
 
             VkDescriptorImageInfo image_info{
                 .imageView = texture->GetView(
@@ -539,7 +553,10 @@ public:
 
     void FreeImageDescIdx(uint _idx) {
         std::lock_guard<std::mutex> lock(mutex);
+        m_offline_image_metadata[_idx] = {};
+        m_offline_image_metadata[_idx].resource_info.type = VK_DESCRIPTOR_TYPE_MAX_ENUM;
         m_offline_image_descs.free_list.push_back(_idx);
+        ClearOfflineImageDescriptor(uint32(_idx));
     }
 
     uint GetSamplerDescIdx(Sampler _sampler) {
@@ -587,7 +604,10 @@ public:
 
     uint FreeAccelDescIdx(uint _idx) {
         std::lock_guard<std::mutex> lock(mutex);
+        m_offline_accel_metadata[_idx] = {};
+        m_offline_accel_metadata[_idx].resource_info.type = VK_DESCRIPTOR_TYPE_MAX_ENUM;
         m_offline_accel_descs.free_list.push_back(_idx);
+        ClearOfflineAccelDescriptor(uint32(_idx));
         return 0;
     }
 
@@ -610,6 +630,10 @@ public:
     void WriteOfflineBufferDescriptor(uint64 _src_offset, void* _dst) const {
         const uint32 index = uint32(_src_offset / buffer_desc_stride);
         const VulkanOfflineBufferDescriptor& metadata = m_offline_buffer_metadata[index];
+        if (metadata.resource_info.type == VK_DESCRIPTOR_TYPE_MAX_ENUM) {
+            memset(_dst, 0, heap_manager.resource_heap_stride);
+            return;
+        }
         VkHostAddressRangeEXT dst_range = MakeHostRange(_dst, device.GetPhysicalDescriptorSize(metadata.resource_info.type));
         VK_CHECK_RESULT(device.WriteResourceDescriptors(1, &metadata.resource_info, &dst_range));
     }
@@ -617,6 +641,10 @@ public:
     void WriteOfflineImageDescriptor(uint64 _src_offset, void* _dst) const {
         const uint32 index = uint32(_src_offset / image_desc_stride);
         const VulkanOfflineImageDescriptor& metadata = m_offline_image_metadata[index];
+        if (metadata.resource_info.type == VK_DESCRIPTOR_TYPE_MAX_ENUM) {
+            memset(_dst, 0, heap_manager.resource_heap_stride);
+            return;
+        }
         VkHostAddressRangeEXT dst_range = MakeHostRange(_dst, device.GetPhysicalDescriptorSize(metadata.resource_info.type));
         VK_CHECK_RESULT(device.WriteResourceDescriptors(1, &metadata.resource_info, &dst_range));
     }
@@ -631,6 +659,10 @@ public:
     void WriteOfflineAccelDescriptor(uint64 _src_offset, void* _dst) const {
         const uint32 index = uint32(_src_offset / accel_desc_stride);
         const VulkanOfflineAccelDescriptor& metadata = m_offline_accel_metadata[index];
+        if (metadata.resource_info.type == VK_DESCRIPTOR_TYPE_MAX_ENUM) {
+            memset(_dst, 0, heap_manager.resource_heap_stride);
+            return;
+        }
         VkHostAddressRangeEXT dst_range = MakeHostRange(_dst, device.GetPhysicalDescriptorSize(metadata.resource_info.type));
         VK_CHECK_RESULT(device.WriteResourceDescriptors(1, &metadata.resource_info, &dst_range));
     }
@@ -749,6 +781,30 @@ private:
         heap_manager.ForEachResourceHeap([&](VulkanResourceHeapStorage& heap) {
             const uint64 offset = uint64(heap_manager.resource_heap_accel_base_index + _idx) * heap_manager.resource_heap_stride;
             WriteOfflineAccelDescriptor(uint64(_idx) * accel_desc_stride, heap.map_ptr + offset);
+            heap_manager.FlushMappedResourceHeapRange(heap, offset, heap_manager.resource_heap_stride);
+        });
+    }
+
+    void ClearOfflineBufferDescriptor(uint32 _idx) const {
+        heap_manager.ForEachResourceHeap([&](VulkanResourceHeapStorage& heap) {
+            const uint64 offset = uint64(heap_manager.resource_heap_buffer_base_index + _idx) * heap_manager.resource_heap_stride;
+            memset(heap.map_ptr + offset, 0, heap_manager.resource_heap_stride);
+            heap_manager.FlushMappedResourceHeapRange(heap, offset, heap_manager.resource_heap_stride);
+        });
+    }
+
+    void ClearOfflineImageDescriptor(uint32 _idx) const {
+        heap_manager.ForEachResourceHeap([&](VulkanResourceHeapStorage& heap) {
+            const uint64 offset = uint64(heap_manager.resource_heap_image_base_index + _idx) * heap_manager.resource_heap_stride;
+            memset(heap.map_ptr + offset, 0, heap_manager.resource_heap_stride);
+            heap_manager.FlushMappedResourceHeapRange(heap, offset, heap_manager.resource_heap_stride);
+        });
+    }
+
+    void ClearOfflineAccelDescriptor(uint32 _idx) const {
+        heap_manager.ForEachResourceHeap([&](VulkanResourceHeapStorage& heap) {
+            const uint64 offset = uint64(heap_manager.resource_heap_accel_base_index + _idx) * heap_manager.resource_heap_stride;
+            memset(heap.map_ptr + offset, 0, heap_manager.resource_heap_stride);
             heap_manager.FlushMappedResourceHeapRange(heap, offset, heap_manager.resource_heap_stride);
         });
     }
@@ -917,6 +973,7 @@ public:
     }
 
     VulkanDescriptorBinder BeginPushDescriptors() {
+        std::lock_guard<std::mutex> manager_lock(manager_mutex);
         const auto [heap_index, range] = AcquireRecordingRange();
         auto& heap_storage             = heap_manager.GetResourceHeap(heap_index);
 
@@ -942,6 +999,8 @@ public:
             return _binder;
         }
 
+        std::lock_guard<std::mutex> manager_lock(manager_mutex);
+
         assert(s_active_descriptor_binder == _binder.state.get() && "Descriptor binder/thread mismatch");
         s_active_descriptor_binder = nullptr;
 
@@ -955,6 +1014,7 @@ public:
         if (!_binder.IsValid()) {
             return;
         }
+        std::lock_guard<std::mutex> manager_lock(manager_mutex);
         VulkanOnlineHeapState& heap = GetHeapState(_binder.resource_heap_index);
         std::lock_guard<std::mutex> lock(heap.mutex);
         InsertFreeRange(heap, VulkanDescriptorFreeRange{_binder.base_offset, _binder.leased_size});
@@ -975,86 +1035,86 @@ public:
                 assert(false && "Descriptor heap online range overflow");
                 return 0;
             }
-                if (binder.next_offset.compare_exchange_weak(
-                        current,
-                        next,
-                        std::memory_order_acq_rel,
-                        std::memory_order_acquire
-                    )) {
-                            memset(binder.heap_storage->map_ptr + current, 0, _size);
-                    return current;
-                }
+            if (binder.next_offset.compare_exchange_weak(
+                    current,
+                    next,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )) {
+                memset(binder.heap_storage->map_ptr + current, 0, _size);
+                return current;
             }
         }
+    }
 
-        VulkanBindlessRingCacheEntry CacheBindlessArray(const VulkanBindlessArray& _array) {
-            VulkanDescriptorBinderState& binder = GetActiveBinder();
-            const uint64 handle                 = uint64(&_array);
-            const uint64 version                = _array.GetDescriptorVersion();
-            std::lock_guard<std::mutex> lock(binder.bindless_cache_mutex);
-            auto& entry = binder.bindless_ring_cache[handle];
-            if (entry.version == version) {
-                return entry;
-            }
-
-            const auto& heap_props         = device.GetOptionalProperties().descriptor_heap_properties;
-            const uint64 buffer_alignment  = std::max(heap_props.bufferDescriptorAlignment, heap_props.resourceHeapAlignment);
-            const uint64 image_alignment   = std::max(heap_props.imageDescriptorAlignment, heap_props.resourceHeapAlignment);
-            const uint64 array_desc_stride = Moer::AlignUp(uint64(heap_manager.heap_buffer_desc_stride), buffer_alignment);
-            const uint64 buffer_size       = Moer::AlignUp(uint64(_array.GetMaxSize()) * array_desc_stride, buffer_alignment);
-            const uint64 texture_size      = Moer::AlignUp(
-                uint64(_array.GetMaxSize()) * heap_manager.heap_image_desc_stride,
-                image_alignment
-            );
-
-            entry.version      = version;
-            entry.array_offset = AllocateOnlineDescriptorRange(array_desc_stride);
-            memset(binder.heap_storage->map_ptr + entry.array_offset, 0, array_desc_stride);
-            {
-                VkResourceDescriptorInfoEXT resource_info{VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT};
-                VkDeviceAddressRangeEXT     address_range{
-                    .address = _array.bindless_array_buffer->DeviceAddress(),
-                    .size = _array.bindless_array_buffer->GetByteSize(),
-                };
-                resource_info.type               = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                resource_info.data.pAddressRange = &address_range;
-                VkHostAddressRangeEXT dst_range = MakeHostRange(
-                    binder.heap_storage->map_ptr + entry.array_offset,
-                    device.GetPhysicalDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                );
-                VK_CHECK_RESULT(device.WriteResourceDescriptors(1, &resource_info, &dst_range));
-            }
-
-            entry.buffer_offset = AllocateOnlineDescriptorRange(buffer_size);
-            memset(binder.heap_storage->map_ptr + entry.buffer_offset, 0, buffer_size);
-            entry.texture_offset = AllocateOnlineDescriptorRange(texture_size);
-            memset(binder.heap_storage->map_ptr + entry.texture_offset, 0, texture_size);
-
-            const auto& handles          = _array.handles;
-            const auto& resource_offsets = _array.GetOfflineResourceDescriptorOffsets();
-            for (uint32 array_index = 0; array_index < handles.size(); ++array_index) {
-                const auto& bindless_handle = handles[array_index];
-                if (bindless_handle.slot == 0) {
-                    continue;
-                }
-                if (bindless_handle.type == VulkanBindlessArray::Buffer) {
-                    offline_manager.WriteOfflineBufferDescriptor(
-                        resource_offsets[array_index],
-                        binder.heap_storage->map_ptr + entry.buffer_offset + uint64(bindless_handle.slot) * array_desc_stride
-                    );
-                    continue;
-                }
-                if (bindless_handle.type == VulkanBindlessArray::Texture) {
-                    offline_manager.WriteOfflineImageDescriptor(
-                        resource_offsets[array_index],
-                        binder.heap_storage->map_ptr + entry.texture_offset +
-                            uint64(bindless_handle.slot) * heap_manager.heap_image_desc_stride
-                    );
-                }
-            }
-
+    VulkanBindlessRingCacheEntry CacheBindlessArray(const VulkanBindlessArray& _array) {
+        VulkanDescriptorBinderState& binder = GetActiveBinder();
+        const uint64 handle                 = uint64(&_array);
+        const uint64 version                = _array.GetDescriptorVersion();
+        std::lock_guard<std::mutex> lock(binder.bindless_cache_mutex);
+        auto& entry = binder.bindless_ring_cache[handle];
+        if (entry.version == version) {
             return entry;
         }
+
+        const auto& heap_props         = device.GetOptionalProperties().descriptor_heap_properties;
+        const uint64 buffer_alignment  = std::max(heap_props.bufferDescriptorAlignment, heap_props.resourceHeapAlignment);
+        const uint64 image_alignment   = std::max(heap_props.imageDescriptorAlignment, heap_props.resourceHeapAlignment);
+        const uint64 array_desc_stride = Moer::AlignUp(uint64(heap_manager.heap_buffer_desc_stride), buffer_alignment);
+        const uint64 buffer_size       = Moer::AlignUp(uint64(_array.GetMaxSize()) * array_desc_stride, buffer_alignment);
+        const uint64 texture_size      = Moer::AlignUp(
+            uint64(_array.GetMaxSize()) * heap_manager.heap_image_desc_stride,
+            image_alignment
+        );
+
+        entry.version      = version;
+        entry.array_offset = AllocateOnlineDescriptorRange(array_desc_stride);
+        memset(binder.heap_storage->map_ptr + entry.array_offset, 0, array_desc_stride);
+        {
+            VkResourceDescriptorInfoEXT resource_info{VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT};
+            VkDeviceAddressRangeEXT     address_range{
+                .address = _array.bindless_array_buffer->DeviceAddress(),
+                .size = _array.bindless_array_buffer->GetByteSize(),
+            };
+            resource_info.type               = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            resource_info.data.pAddressRange = &address_range;
+            VkHostAddressRangeEXT dst_range = MakeHostRange(
+                binder.heap_storage->map_ptr + entry.array_offset,
+                device.GetPhysicalDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+            );
+            VK_CHECK_RESULT(device.WriteResourceDescriptors(1, &resource_info, &dst_range));
+        }
+
+        entry.buffer_offset = AllocateOnlineDescriptorRange(buffer_size);
+        memset(binder.heap_storage->map_ptr + entry.buffer_offset, 0, buffer_size);
+        entry.texture_offset = AllocateOnlineDescriptorRange(texture_size);
+        memset(binder.heap_storage->map_ptr + entry.texture_offset, 0, texture_size);
+
+        const auto& handles          = _array.handles;
+        const auto& resource_offsets = _array.GetOfflineResourceDescriptorOffsets();
+        for (uint32 array_index = 0; array_index < handles.size(); ++array_index) {
+            const auto& bindless_handle = handles[array_index];
+            if (bindless_handle.slot == 0) {
+                continue;
+            }
+            if (bindless_handle.type == VulkanBindlessArray::Buffer) {
+                offline_manager.WriteOfflineBufferDescriptor(
+                    resource_offsets[array_index],
+                    binder.heap_storage->map_ptr + entry.buffer_offset + uint64(bindless_handle.slot) * array_desc_stride
+                );
+                continue;
+            }
+            if (bindless_handle.type == VulkanBindlessArray::Texture) {
+                offline_manager.WriteOfflineImageDescriptor(
+                    resource_offsets[array_index],
+                    binder.heap_storage->map_ptr + entry.texture_offset +
+                        uint64(bindless_handle.slot) * heap_manager.heap_image_desc_stride
+                );
+            }
+        }
+
+        return entry;
+    }
 
         void PushUniformDesc(uint64 _src_offset, uint64 _set_offset) {
             VulkanDescriptorBinderState& binder = GetActiveBinder();
@@ -1183,6 +1243,7 @@ public:
         VulkanDevice&                            device;
         VulkanHeapManager&                       heap_manager;
         VulkanOfflineDescriptorManager&          offline_manager;
+        std::mutex                               manager_mutex;
         Array<UniquePtr<VulkanOnlineHeapState>>  heap_states{};
     };
 
@@ -1246,8 +1307,12 @@ public:
         m_offline_manager->FreeBufferDescIdx(_idx);
     }
 
-    uint VulkanDescriptorHeap::GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout) {
-        return m_offline_manager->GetImageDescIdx(_in_image, _layout);
+    uint VulkanDescriptorHeap::GetImageDescIdx(
+        const TextureView* _in_image,
+        VkImageLayout      _layout,
+        VkDescriptorType   _descriptor_type
+    ) {
+        return m_offline_manager->GetImageDescIdx(_in_image, _layout, _descriptor_type);
     }
 
     void VulkanDescriptorHeap::FreeImageDescIdx(uint _idx) {

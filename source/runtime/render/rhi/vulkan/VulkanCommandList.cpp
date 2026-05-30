@@ -661,7 +661,11 @@ void VulkanCmdList::UploadPushConstants(PipelineHandle& _pso_handle, std::span<c
 }
 
 VkImageLayout GetSamplerImageLayout(const TextureView& _view) {
-    return uint(_view.GetTexture()->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) ?
+    auto* texture = ResourceCast(_view.GetTexture());
+    if (texture->GetPreferredLayout() == VK_IMAGE_LAYOUT_GENERAL) {
+        return VK_IMAGE_LAYOUT_GENERAL;
+    }
+    return uint(texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) ?
                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
@@ -748,8 +752,9 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                     uint desc_size = std::min(writer.descriptorCount, uint(textures.size()));
                                     for (uint j = 0; j < desc_size; ++j) {
                                         VkImageLayout layout = GetSamplerImageLayout(textures[j]);
-                                        uint64        src_handle =
-                                            descriptor_heap.GetImageDescIdx(&textures[j], layout);
+                                        uint64        src_handle = descriptor_heap.GetImageDescIdx(
+                                            &textures[j], layout, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
+                                        );
                                         descriptor_heap.PushImageDesc(
                                             src_handle,
                                             set_base_offset + binding_info.offset + j * binding_info.descriptor_stride
@@ -761,7 +766,9 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                     GetSamplerImageLayout(std::get<TextureView>(_args[set_info.param_idx]));
 
                                 uint64 src_handle = descriptor_heap.GetImageDescIdx(
-                                    &std::get<TextureView>(_args[set_info.param_idx]), layout
+                                    &std::get<TextureView>(_args[set_info.param_idx]),
+                                    layout,
+                                    VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
                                 );
                                 descriptor_heap.PushImageDesc(
                                     src_handle, set_base_offset + binding_info.offset
@@ -775,7 +782,7 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                     uint desc_size = std::min(writer.descriptorCount, uint(textures.size()));
                                     for (uint j = 0; j < desc_size; ++j) {
                                         uint64 src_handle = descriptor_heap.GetImageDescIdx(
-                                            &textures[j], VK_IMAGE_LAYOUT_GENERAL
+                                            &textures[j], VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
                                         );
                                         descriptor_heap.PushImageDesc(
                                             src_handle,
@@ -785,7 +792,9 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                                     break;
                                 }
                                 uint64 src_handle = descriptor_heap.GetImageDescIdx(
-                                    &std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_GENERAL
+                                    &std::get<TextureView>(_args[set_info.param_idx]),
+                                    VK_IMAGE_LAYOUT_GENERAL,
+                                    VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
                                 );
                                 descriptor_heap.PushImageDesc(
                                     src_handle, set_base_offset + binding_info.offset

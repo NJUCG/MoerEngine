@@ -158,6 +158,7 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
         }
         // other layers, not fully implemented
     }
+    m_validation_layer_enabled = b_validation_layer_enabled;
     instance_create_info.enabledLayerCount   = instance_layers_loaded.size();
     instance_create_info.ppEnabledLayerNames = instance_layers_loaded.data();
 
@@ -747,6 +748,39 @@ void VulkanDevice::CreateInternalResources() {
     CreateDescriptorHeap();
 }
 
+VkFence VulkanDevice::AcquireHostFence() {
+    HostFenceSlot* slot = host_fence_pool.Pop();
+    if (slot != nullptr) {
+        VkFence fence = slot->handle;
+        delete slot;
+        return fence;
+    }
+
+    VkFenceCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+    VkFence created_fence = VK_NULL_HANDLE;
+    VK_CHECK_RESULT(vkCreateFence(m_device, &create_info, nullptr, &created_fence));
+    return created_fence;
+}
+
+void VulkanDevice::RecycleHostFence(VkFence fence) {
+    if (fence == VK_NULL_HANDLE || m_device == VK_NULL_HANDLE) {
+        return;
+    }
+    VK_CHECK_RESULT(vkResetFences(m_device, 1, &fence));
+    auto* slot   = new HostFenceSlot();
+    slot->handle = fence;
+    host_fence_pool.Push(slot);
+}
+
+void VulkanDevice::DestroyHostFencePool() {
+    while (HostFenceSlot* slot = host_fence_pool.Pop()) {
+        vkDestroyFence(m_device, slot->handle, VK_NULL_HANDLE);
+        delete slot;
+    }
+}
+
 void VulkanDevice::DestroyInternalResources() {
     DestroyImmutableSamplers();
     DestroyDescriptorHeap();
@@ -810,6 +844,7 @@ void VulkanDevice::Destroy() {
     FlushDeferredReleases();
     DestroyInternalResources();
     FlushDeferredReleases();
+    DestroyHostFencePool();
     if (m_allocator != VK_NULL_HANDLE) {
         vmaDestroyAllocator(m_allocator);
         m_allocator = VK_NULL_HANDLE;
@@ -1117,7 +1152,7 @@ void VulkanDevice::FlushDebugMessages() const {
 }
 
 void VulkanDevice::WaitIdle() {
-    RHIExecutor::Get().Flush(ERHIFlushDepth::SubmitGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     vkDeviceWaitIdle(m_device);
 
     if (gfx_queue) {

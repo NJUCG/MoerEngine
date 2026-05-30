@@ -552,122 +552,160 @@ public:
 using ResourceState = std::variant<EBufferRuntimeUsageFlags, ETextureStateFlags>;
 
 struct TextureBarrier {
-    uint64        handle;
-    ETextureState state;
-    EPassType     pass_type;
-    uint          mip_level : 8;
-    uint          mip_cnt : 8;
-    uint          array_layer : 8;
-    uint          array_count : 8;
+    uint64                    handle;
+    BarrierState              src_state;
+    BarrierState              dst_state;
+    std::optional<ETextureState> tracked_state;
+    bool                      access_write{false};
+    uint                      mip_level : 8;
+    uint                      mip_cnt : 8;
+    uint                      array_layer : 8;
+    uint                      array_count : 8;
 };
 
 struct BufferBarrier {
+    uint64                   handle;
+    BarrierState             src_state;
+    BarrierState             dst_state;
+    std::optional<EBufferState> tracked_state;
+    bool                     access_write{false};
+    uint64                   offset{};
+    uint64                   byte_size{};
+};
+
+struct BindlessArrayBarrier {
     uint64       handle;
     EBufferState state;
     EPassType    pass_type;
-    uint64       offset{};
-    uint64       byte_size{};
 };
+
+struct AccelerationStructureBarrier {
+    uint64       handle;
+    EBufferState state;
+    EPassType    pass_type;
+};
+
 struct BarrierCmd : public Command {
 private:
     BarrierCmd() : Command(EType::Barrier) {}
-    Array<TextureBarrier> read_textures;
-    Array<TextureBarrier> write_textures;
-    Array<BufferBarrier>  read_buffers;
-    Array<BufferBarrier>  write_buffers;
+    Array<TextureBarrier> textures;
+    Array<BufferBarrier>  buffers;
+    Array<BindlessArrayBarrier> read_bindless_arrays;
+    Array<BindlessArrayBarrier> write_bindless_arrays;
+    Array<AccelerationStructureBarrier> read_acceleration_structures;
+    Array<AccelerationStructureBarrier> write_acceleration_structures;
     EQueueType            src_queue;
     EQueueType            dst_queue;
     bool                  b_queue_transition = false;
-    EBarrierTrackedState  tracked_state{EBarrierTrackedState::Update};
+    ETrackedStateUpdateMode tracked_state{ETrackedStateUpdateMode::Update};
 
 public:
-    BarrierCmd& ReadTexture(const TextureView& _view, ETextureState _dst_state, EPassType _pass_type) {
-        read_textures.emplace_back(
-            TextureBarrier{
-                reinterpret_cast<uint64>(_view.texture),
-                _dst_state,
-                _pass_type,
-                _view.mip_level,
-                _view.num_mips,
-                _view.array_layer,
-                _view.num_array
-            }
+    BarrierCmd& AddBarrier(const BarrierCreateInfo& barrier) {
+        std::visit(
+            [this, &barrier](auto&& resource) {
+                using TResource = std::decay_t<decltype(resource)>;
+                if constexpr (std::is_same_v<TResource, TextureView>) {
+                    const std::optional<ETextureState> tracked_texture_state =
+                        TryGetTrackedTextureState(barrier.dst_state);
+                    if (tracked_state == ETrackedStateUpdateMode::Update) {
+                        assert(tracked_texture_state.has_value() && "texture barrier dst_state must map to tracked state");
+                    }
+                    textures.emplace_back(TextureBarrier{
+                        reinterpret_cast<uint64>(resource.texture),
+                        barrier.src_state,
+                        barrier.dst_state,
+                        tracked_texture_state,
+                        BarrierStateWrites(barrier.dst_state),
+                        resource.mip_level,
+                        resource.num_mips,
+                        resource.array_layer,
+                        resource.num_array,
+                    });
+                } else if constexpr (std::is_same_v<TResource, BufferView>) {
+                    const std::optional<EBufferState> tracked_buffer_state =
+                        TryGetTrackedBufferState(barrier.dst_state);
+                    if (tracked_state == ETrackedStateUpdateMode::Update) {
+                        assert(tracked_buffer_state.has_value() && "buffer barrier dst_state must map to tracked state");
+                    }
+                    buffers.emplace_back(BufferBarrier{
+                        reinterpret_cast<uint64>(resource.GetBuffer()),
+                        barrier.src_state,
+                        barrier.dst_state,
+                        tracked_buffer_state,
+                        BarrierStateWrites(barrier.dst_state),
+                        resource.GetByteOffset(),
+                        resource.GetByteSize(),
+                    });
+                }
+            },
+            barrier.resource
         );
         return *this;
     }
-    BarrierCmd& WriteTexture(const TextureView& _view, ETextureState _dst_state, EPassType _pass_type) {
-        write_textures.emplace_back(
-            TextureBarrier{
-                reinterpret_cast<uint64>(_view.texture),
-                _dst_state,
-                _pass_type,
-                _view.mip_level,
-                _view.num_mips,
-                _view.array_layer,
-                _view.num_array
-            }
+
+    BarrierCmd& ReadBindlessArray(BindlessArrayRef _array, EBufferState _dst_state, EPassType _pass_type) {
+        read_bindless_arrays.emplace_back(
+            BindlessArrayBarrier{reinterpret_cast<uint64>(_array.Get()), _dst_state, _pass_type}
         );
         return *this;
     }
-    BarrierCmd& ReadBuffer(const BufferView& _view, EBufferState _dst_state, EPassType _pass_type) {
-        read_buffers.emplace_back(
-            BufferBarrier{
-                reinterpret_cast<uint64>(_view.GetBuffer()),
-                _dst_state,
-                _pass_type,
-                _view.GetByteOffset(),
-                _view.GetByteSize()
-            }
+
+    BarrierCmd& WriteBindlessArray(BindlessArrayRef _array, EBufferState _dst_state, EPassType _pass_type) {
+        write_bindless_arrays.emplace_back(
+            BindlessArrayBarrier{reinterpret_cast<uint64>(_array.Get()), _dst_state, _pass_type}
         );
         return *this;
     }
-    BarrierCmd& WriteBuffer(const BufferView& _view, EBufferState _dst_state, EPassType _pass_type) {
-        write_buffers.emplace_back(
-            BufferBarrier{
-                reinterpret_cast<uint64>(_view.GetBuffer()),
-                _dst_state,
-                _pass_type,
-                _view.GetByteOffset(),
-                _view.GetByteSize()
-            }
+
+    BarrierCmd& ReadAccelerationStructure(uint64 _handle, EBufferState _dst_state, EPassType _pass_type) {
+        read_acceleration_structures.emplace_back(
+            AccelerationStructureBarrier{_handle, _dst_state, _pass_type}
+        );
+        return *this;
+    }
+
+    BarrierCmd& WriteAccelerationStructure(uint64 _handle, EBufferState _dst_state, EPassType _pass_type) {
+        write_acceleration_structures.emplace_back(
+            AccelerationStructureBarrier{_handle, _dst_state, _pass_type}
         );
         return *this;
     }
 
     BarrierCmd(
-        uint       _read_tex_cnt,
-        uint       _write_tex_cnt,
-        uint       _read_buf_cnt,
-        uint       _write_buf_cnt,
-        EQueueType _src_queue,
-        EQueueType _dst_queue,
-        EBarrierTrackedState _tracked_state = EBarrierTrackedState::Update
+        uint                    _barrier_cnt,
+        EQueueType              _src_queue,
+        EQueueType              _dst_queue,
+        ETrackedStateUpdateMode _tracked_state = ETrackedStateUpdateMode::Update
     ) :
         Command(EType::Barrier),
         src_queue(_src_queue),
         dst_queue(_dst_queue),
         b_queue_transition(_src_queue != _dst_queue),
         tracked_state(_tracked_state) {
-        read_textures.reserve(_read_tex_cnt);
-        write_textures.reserve(_write_tex_cnt);
-        read_buffers.reserve(_read_buf_cnt);
-        write_buffers.reserve(_write_buf_cnt);
+        textures.reserve(_barrier_cnt);
+        buffers.reserve(_barrier_cnt);
     }
 
     EQueueType GetQueueType() const override {
         return EQueueType::Graphics;
     }
-    const auto& ReadTextures() const {
-        return read_textures;
+    const auto& Textures() const {
+        return textures;
     }
-    const auto& WriteTextures() const {
-        return write_textures;
+    const auto& Buffers() const {
+        return buffers;
     }
-    const auto& ReadBuffers() const {
-        return read_buffers;
+    const auto& ReadBindlessArrays() const {
+        return read_bindless_arrays;
     }
-    const auto& WriteBuffers() const {
-        return write_buffers;
+    const auto& WriteBindlessArrays() const {
+        return write_bindless_arrays;
+    }
+    const auto& ReadAccelerationStructures() const {
+        return read_acceleration_structures;
+    }
+    const auto& WriteAccelerationStructures() const {
+        return write_acceleration_structures;
     }
     const bool IsQueueTransition() const {
         return b_queue_transition;
@@ -679,7 +717,7 @@ public:
         return dst_queue;
     }
     bool ShouldUpdateTrackedState() const {
-        return tracked_state == EBarrierTrackedState::Update;
+        return tracked_state == ETrackedStateUpdateMode::Update;
     }
 };
 
@@ -956,7 +994,7 @@ struct BufferRange {
 struct SetDrawStateCmd : public Command {
 public:
 private:
-    mutable PipelineHandle*            pipeline{};
+    PipelineHandle                     pipeline{};
     RenderPassInfo                     render_pass_info;
     Array<MeshDrawData>                mesh_data;
     ArrayArguments                     args;
@@ -978,7 +1016,7 @@ public:
     ) :
         Command(EType::SetDrawState, _name),
         args(std::move(_args)),
-        pipeline(&_pipeline),
+        pipeline(_pipeline),
         render_pass_info(std::move(_info)),
         mesh_data(std::move(_draw_data)) {
         evaluate_mesh_task =
@@ -1035,7 +1073,7 @@ public:
     }
 
     auto& Pipeline() const {
-        return *pipeline;
+        return pipeline;
     }
     const auto& RenderPassInfo() const {
         return render_pass_info;
@@ -1357,7 +1395,7 @@ public:
 
 private:
     // const PipelineHandle& pipeline;
-    mutable PipelineHandle* pipeline = nullptr;
+    PipelineHandle pipeline{};
     DispatchParam           param;
     // ArrayArguments          args;
     TShaderArgArray args;
@@ -1372,7 +1410,7 @@ public:
     ) :
         Command(EType::ShaderDispatch, _name),
         param(_param),
-        pipeline(&_handle),
+        pipeline(_handle),
         args(std::move(_args)) {}
     DispatchCmd(
         TShaderArgArray&& _args,
@@ -1381,7 +1419,7 @@ public:
         StringView        _name = typenames[uint(EType::ShaderDispatch)]
     ) :
         Command(EType::ShaderDispatch, _name),
-        pipeline(&_handle),
+        pipeline(_handle),
         param(DispatchIndirectParam{_indirect}),
         args(std::move(_args)) {}
 
@@ -1396,7 +1434,7 @@ public:
         return _args_cache[std::get<ArrayArgReference>(args).handle];
     }
     auto& Pipeline() const {
-        return *pipeline;
+        return pipeline;
     }
     auto Param() const {
         return param;

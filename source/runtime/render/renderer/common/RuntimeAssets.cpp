@@ -3,13 +3,12 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
-#include "string/StringConvert.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
-#include "taskgraph/ThreadManager.h"
 #include "tinyexr.h"
 #include <atomic>
 #include <cassert>
+#include <fstream>
 #include <functional>
 #include <stb_image.h>
 
@@ -36,20 +35,41 @@ RuntimeAssets::~RuntimeAssets() {
     }
 }
 
-Render::TextureRef RuntimeAssets::GetTexture(std::string_view _name) const {
-    auto it = textures.find(std::string(_name));
+Render::TextureRef RuntimeAssets::GetTexture(StringView _name) const {
+    auto it = textures.find(String(_name));
     if (it != textures.end()) {
         return it->second;
     }
     return nullptr;
 }
 
-Render::BufferRef RuntimeAssets::GetBuffer(std::string_view _name) const {
+Render::BufferRef RuntimeAssets::GetBuffer(StringView _name) const {
+    (void)_name;
     return nullptr;
 }
 
 Render::TextureRef RuntimeAssets::GetDefaultEnvMap() const {
     return GetTexture(default_env_map_name);
+}
+
+Array<std::byte> RuntimeAssets::LoadFileBytes(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return {};
+    }
+
+    const std::streamoff file_size = file.tellg();
+    if (file_size <= 0) {
+        return {};
+    }
+
+    Array<std::byte> bytes(static_cast<size_t>(file_size));
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!file) {
+        return {};
+    }
+    return bytes;
 }
 
 void RuntimeAssets::RecordTextureUploads() {
@@ -58,10 +78,15 @@ void RuntimeAssets::RecordTextureUploads() {
     {
         auto texture_path = assets_path / "textures";
 
-        auto register_image = [this](TextureRef _tex, const std::string& _name) {
+        auto register_image = [this](TextureRef _tex, StringView _name) {
             //register image
             auto& image = this->textures[_name];
             image       = _tex;
+        };
+
+        auto make_texture_name = [](const std::filesystem::path& path) {
+            const auto& native_name = path.filename().native();
+            return String(StringView(native_name.data(), native_name.size()));
         };
 
         CommandList                   cmd_list(EQueueType::Graphics);
@@ -70,49 +95,71 @@ void RuntimeAssets::RecordTextureUploads() {
             {
                 CopyCommandScope copy_scope = cmd_list.BeginCopyScope();
                 for (auto& entry : std::filesystem::directory_iterator(texture_path)) {
-                    LOG_INFO(MOER_TEXT("Load texture {}"), entry.path().string());
-                    if (entry.path().extension() == ".png") {
-                        FILE* file = nullptr;
-                        fopen_s(&file, entry.path().string().c_str(), "rb");
-                        int width, height, channels;
-                        if (file) {
-                            ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
-
-                            std::string texture_name_utf8 = entry.path().filename().string();
-                            String      texture_name = Utf8ToPlatform(
-                                Utf8StringView(texture_name_utf8.data(), texture_name_utf8.size())
-                            );
-                            TextureRef texture = RenderDevice::Get().CreateTexture(
-                                texture_name,
-                                Extent2D(width, height),
-                                PF_R8G8B8A8_UNORM,
-                                ETextureUsageFlags::SAMPLED
-                            );
-                            copy_scope.CopyFrom(
-                                std::span<Moer::byte>((Moer::byte*)data, width * height * 4), texture
-                            );
-                            deferred_callbacks.emplace_back([data]() {
-                                stbi_image_free(data);
-                            });
-                            register_image(texture, texture_name_utf8);
+                    const String texture_path_text = String(entry.path().native());
+                    LOG_INFO(MOER_TEXT("Load texture {}"), texture_path_text);
+                    if (entry.path().extension() == MOER_TEXT(".png")) {
+                        const Array<std::byte> file_bytes = LoadFileBytes(entry.path());
+                        if (file_bytes.empty()) {
+                            continue;
                         }
-                    } else if (entry.path().extension() == ".exr") {
-                        //load exr
-                        int         width = 0, height = 0, channels = 0;
+
+                        int width = 0;
+                        int height = 0;
+                        int channels = 0;
+                        ubyte* data = stbi_load_from_memory(
+                            reinterpret_cast<const stbi_uc*>(file_bytes.data()),
+                            static_cast<int>(file_bytes.size()),
+                            &width,
+                            &height,
+                            &channels,
+                            4
+                        );
+                        if (!data) {
+                            continue;
+                        }
+
+                        const String texture_name = make_texture_name(entry.path());
+
+                        TextureRef texture = RenderDevice::Get().CreateTexture(
+                            texture_name,
+                            Extent2D(width, height),
+                            PF_R8G8B8A8_UNORM,
+                            ETextureUsageFlags::SAMPLED
+                        );
+                        copy_scope.CopyFrom(
+                            std::span<Moer::byte>((Moer::byte*)data, width * height * 4), texture
+                        );
+                        deferred_callbacks.emplace_back([data]() {
+                            stbi_image_free(data);
+                        });
+                        register_image(texture, texture_name);
+                    } else if (entry.path().extension() == MOER_TEXT(".exr")) {
+                        const Array<std::byte> file_bytes = LoadFileBytes(entry.path());
+                        if (file_bytes.empty()) {
+                            continue;
+                        }
+
+                        int         width = 0;
+                        int         height = 0;
                         float*      data = nullptr;
                         const char* err  = nullptr;
-                        auto        ret =
-                            LoadEXR(&data, &width, &height, entry.path().string().c_str(), &err);
+                        const int ret = LoadEXRFromMemory(
+                            &data,
+                            &width,
+                            &height,
+                            reinterpret_cast<const unsigned char*>(file_bytes.data()),
+                            static_cast<size_t>(file_bytes.size()),
+                            &err
+                        );
                         if (ret != TINYEXR_SUCCESS) {
                             if (err) {
-                                fprintf(stderr, "ERR : %s\n", err);
-                                FreeEXRErrorMessage(err); // release memory of error message.
+                                LOG_ERROR(MOER_TEXT("Failed to decode EXR {}: {}"), texture_path_text, err);
+                                FreeEXRErrorMessage(err);
                             }
+                            continue;
                         }
-                        std::string texture_name_utf8 = entry.path().filename().string();
-                        String      texture_name = Utf8ToPlatform(
-                            Utf8StringView(texture_name_utf8.data(), texture_name_utf8.size())
-                        );
+
+                        const String texture_name = make_texture_name(entry.path());
                         TextureRef texture = RenderDevice::Get().CreateTexture(
                             texture_name,
                             Extent2D(width, height),
@@ -130,8 +177,8 @@ void RuntimeAssets::RecordTextureUploads() {
                         deferred_callbacks.emplace_back([data]() {
                             free(data);
                         });
-                        register_image(texture, texture_name_utf8);
-                        default_env_map_name = textures.find(entry.path().filename().string())->first;
+                        register_image(texture, texture_name);
+                        default_env_map_name = texture_name;
                     }
                 }
             }

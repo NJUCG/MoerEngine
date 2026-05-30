@@ -1,11 +1,12 @@
 #ifndef MOER_ANTIALIASPASS_H
 #define MOER_ANTIALIASPASS_H
 
-#include "RTResource.h"
+#include "RaytracingGraphResources.h"
 #include "RaytracingConfig.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
+#include "shaderheaders/shared/postprocess/ShaderParameters.h"
 
 namespace Moer::Render::Raytracing {
 
@@ -40,22 +41,42 @@ public:
         TextureRef hdr_color;
     };
 
+    struct PreparedCommand {
+        TAAParams params{};
+        uint3     dispatch_groups{};
+    };
+
+    struct RecordResources {
+        TextureRef input;
+        TextureRef output;
+        TextureRef motion;
+        TextureRef feedback_read;
+        TextureRef feedback_write;
+    };
+
     AntialiasPass(RenderDevice& _device, class ShaderManager& _manager, Scene& _scene, CreateInfo _info);
 
-    void Process(
-        CommandList& _cmd_list,
-        RTContext&   _rt_ctx,
-        Params       _params,
-        bool         _prev_view_valid,
-        TextureRef   _input,
-        TextureRef   _output
+    void AddPass(
+        RenderGraph&                  _graph,
+        const RTGraphFrameResources&  _rg,
+        const RTContext&              _rt_ctx,
+        Params                        _params,
+        bool                          _prev_view_valid,
+        TextureRef                    _input,
+        TextureRef                    _output
     );
     void   AdvanceFrame();
     void   SetJitter(EJitter _jitter_mode);
     float2 GetPixelOffset();
+    const TextureRef& FeedbackReadTexture() const;
+    const TextureRef& FeedbackWriteTexture() const;
 
 private:
-private:
+    PreparedCommand Prepare(Params _params, bool _prev_view_valid, TextureRef _input, TextureRef _output);
+    RecordResources CaptureResources(TextureRef _input, TextureRef _output) const;
+    void RecordConstantsUpload(CommandList& _cmd_list, const PreparedCommand& _command);
+    void RecordTAA(CommandList& _cmd_list, const PreparedCommand& _command, const RecordResources& _resources);
+
     ShaderManager& manager;
     Scene&         scene;
     TAAPipeline    taa_pipeline;

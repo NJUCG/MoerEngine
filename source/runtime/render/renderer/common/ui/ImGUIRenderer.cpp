@@ -154,12 +154,26 @@ struct ImGUIData {
     UnorderedMap<EPixelFormat, GUIPipelineBdls> rast_psos;
 
     TextureRef font_texture;
+    Array<BufferRef> retired_buffers;
     // Render buffers for main window
     uint32_t num_frames_in_flight;
 
     ImGUIRenderBackend* render_backend = nullptr;
     ImGUIData() {}
 };
+
+static void RetireGuiBuffer(ImGUIData& data, BufferRef& buffer) {
+    if (buffer) {
+        data.retired_buffers.emplace_back(std::move(buffer));
+    }
+    buffer = nullptr;
+}
+
+static void RetireRenderBuffers(ImGUIData& data, GuiFrameRenderBuffers& render_buffers) {
+    RetireGuiBuffer(data, render_buffers.vtx_buffer);
+    RetireGuiBuffer(data, render_buffers.idx_buffer);
+    RetireGuiBuffer(data, render_buffers.arg_buffer);
+}
 const ImWchar* FontTypeToRange(EFontType _font_range_type) {
     using namespace Moer;
     static const ImWchar icons_ranges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
@@ -406,9 +420,17 @@ ImGUIRenderBackend::~ImGUIRenderBackend() {
         //delete main viewport data
         ImGuiViewport*   main_viewport = ImGui::GetMainViewport();
         GuiViewportData* viewport_data = (GuiViewportData*)main_viewport->RendererUserData;
+        if (data && viewport_data) {
+            for (GuiFrameRenderBuffers& render_buffers : viewport_data->render_buffers) {
+                RetireRenderBuffers(*data, render_buffers);
+            }
+        }
         MoerDelete(viewport_data);
         main_viewport->RendererUserData = nullptr;
     }
+
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+    device.WaitIdle();
 
     io.BackendRendererName     = nullptr;
     io.BackendRendererUserData = nullptr;
@@ -435,6 +457,19 @@ const ImGuiIOInputSnapshot& ImGUIRenderBackend::GetInputSnapshot() const {
     return input_snapshot;
 }
 
+static void PrepareDrawDataTextures(ImGUIRenderBackend& render_backend, ImDrawData* draw_data) {
+    if (draw_data == nullptr) {
+        return;
+    }
+
+    for (int list_idx = 0; list_idx < draw_data->CmdListsCount; ++list_idx) {
+        const ImDrawList* draw_list = draw_data->CmdLists[list_idx];
+        for (const ImDrawCmd& cmd : draw_list->CmdBuffer) {
+            render_backend.ResolveTextureHandle(static_cast<uint64_t>(cmd.GetTexID()));
+        }
+    }
+}
+
 void ImGUIRenderBackend::RegisterImage(Texture* _texture, Sampler _sampler) {
     auto iter = registered_images.try_emplace(_texture, 0);
     if (iter.second) {
@@ -448,12 +483,10 @@ void ImGUIRenderBackend::UnRegisterImage(Texture* _texture) {}
 void ImGUIRenderBackend::RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
     ImGuiIO& io = ImGui::GetIO();
     DrainRenderOutputUpdates();
-    _cmd_list.UpdateBindlessArray(bindless_array);
 
     // if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f)
     //     return;
 
-    ImDrawData* draw_data = ImGui::GetDrawData();
     // if (!draw_data)
     //     return;
 
@@ -462,6 +495,8 @@ void ImGUIRenderBackend::RenderGUI(CommandList& _cmd_list, const TextureView& _f
         main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f;
 
     if (!b_window_minimized) {
+        PrepareDrawDataTextures(*this, main_draw_data);
+        _cmd_list.UpdateBindlessArray(bindless_array);
         auto& rd_device = RenderDevice::Get();
         GUIRender(main_draw_data, _framebuffer, _cmd_list);
     }
@@ -567,7 +602,7 @@ uint ImGUIRenderBackend::ResolveTextureHandle(uint64_t texture_id) {
 
 } // namespace Moer::Render
 
-void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers);
+void DestroyRenderBuffers(ImGUIData& _backend_data, GuiFrameRenderBuffers* _render_buffers);
 
 uint32_t GuiViewportData::viewport_count = 0;
 
@@ -597,10 +632,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
 
     if (render_buffers->vtx_buffer == nullptr ||
         render_buffers->vtx_buffer->GetNumElement() < total_size_vert) {
-        //delete the old one and create new
-        if (render_buffers->vtx_buffer != nullptr) {
-        }
-        // render_buffers->vertex_buffer->DeRef();
+        RetireGuiBuffer(backend_data, render_buffers->vtx_buffer);
         uint32_t new_size          = 4096 + total_size_vert;
         render_buffers->vtx_buffer = device.CreateBuffer<ImDrawVert>(
             MOER_TEXT("GUI::ImGUI Vertex Buffer"),
@@ -610,9 +642,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     }
     if (render_buffers->idx_buffer == nullptr ||
         render_buffers->idx_buffer->GetNumElement() < total_size_idx) {
-
-        if (render_buffers->idx_buffer != nullptr) {
-        }
+        RetireGuiBuffer(backend_data, render_buffers->idx_buffer);
         uint32_t new_size          = 8192 + total_size_idx;
         render_buffers->idx_buffer = device.CreateBuffer<ImDrawIdx>(
             MOER_TEXT("GUI::ImGUI Index Buffer"),
@@ -647,6 +677,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     args.reserve(total_cmd_cnt);
     if (render_buffers->arg_buffer == nullptr ||
         render_buffers->arg_buffer->GetNumElement() < total_cmd_cnt) {
+        RetireGuiBuffer(backend_data, render_buffers->arg_buffer);
         uint32_t new_size = 128 + total_cmd_cnt;
         render_buffers->arg_buffer = device.CreateBuffer<ImGUIArg>(
             MOER_TEXT("GUI::ImGUI Arg Buffer"), new_size, EBufferUsageFlags::TRANSFER_DST
@@ -785,10 +816,8 @@ void GuiInitPlatformInterface() {
     platform_io.Renderer_SwapBuffers   = GuiSwapbuffer;
 }
 
-void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
-    _render_buffers->vtx_buffer = nullptr;
-    _render_buffers->idx_buffer = nullptr;
-    _render_buffers->arg_buffer = nullptr;
+void DestroyRenderBuffers(ImGUIData& _backend_data, GuiFrameRenderBuffers* _render_buffers) {
+    RetireRenderBuffers(_backend_data, *_render_buffers);
 }
 
 void GuiCreateWindow(ImGuiViewport* _viewport) {
@@ -833,7 +862,7 @@ void GuiDestroyWindow(ImGuiViewport* _viewport) {
             viewport_data->surface = nullptr;
         }
         for (uint32_t i = 0; i < backend_data.num_frames_in_flight; i++)
-            DestroyRenderBuffers(&viewport_data->render_buffers[i]);
+            DestroyRenderBuffers(backend_data, &viewport_data->render_buffers[i]);
         MoerDelete(viewport_data);
     }
     _viewport->RendererUserData = nullptr;

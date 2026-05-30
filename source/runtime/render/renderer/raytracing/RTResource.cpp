@@ -269,16 +269,28 @@ void RTContext::SetResolution(uint2 _resolution) {
     b_current_frame = true;
 }
 
-void RTContext::FillLowDiscrepancySequence(CommandList& _cmd_list) {
+RTContext::LowDiscrepancySequenceCommand RTContext::PrepareLowDiscrepancySequence() {
     if (b_has_neighbor_offset) {
+        return {};
+    }
+
+    LowDiscrepancySequenceCommand command{};
+    command.enabled              = true;
+    command.param.num_dimensions = 2;
+    command.param.num_samples    = is_ctx.GetNeighborOffsetCnt();
+    command.output               = neighbor_offset_buf->GetView();
+    b_has_neighbor_offset        = true;
+    return command;
+}
+
+void RTContext::RecordLowDiscrepancySequence(
+    CommandList&                          _cmd_list,
+    const LowDiscrepancySequenceCommand& _command
+) {
+    if (!_command.enabled) {
         return;
     }
-    GenLowDiscrepancySequenceParam param;
-    param.num_dimensions = 2;
-    param.num_samples    = is_ctx.GetNeighborOffsetCnt();
-    sd_utils.GenerateLowDiscrepancySequence(_cmd_list, param, neighbor_offset_buf->GetView());
-    b_has_neighbor_offset = true;
-    // _cmd_list.Compute(sd_utils.gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), MOER_TEXT("GenerateLowDiscrepancySequence"));
+    sd_utils.GenerateLowDiscrepancySequence(_cmd_list, _command.param, _command.output);
 }
 
 void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _cmd_list) {
@@ -392,7 +404,11 @@ void RTContext::CreateBuffersIfNeeded(
 
             AllocateAndFreeBdlsIfNeeded(
                 bindless_handles.local_light_pdf,
-                local_light_pdf_tex->GetView(0, local_light_pdf_tex->GetNumMips()),
+                local_light_pdf_tex->GetView(
+                    local_light_pdf_tex->GetFormat(),
+                    0,
+                    static_cast<uint8>(local_light_pdf_tex->GetNumMips())
+                ),
                 Sampler{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE}
             );
         }
@@ -430,7 +446,8 @@ void RTContext::Tick(Camera& _camera, float2 _jitter) {
     auto& device = RenderDevice::Get();
     prev_view    = main_view;
 
-    float2 delta = 2.f / float2(frame_rt.ldr_color->GetExtent().xy);
+    float2 render_extent = float2(frame_rt.ldr_color->GetExtent().xy);
+    float2 delta         = 2.f / render_extent;
 
     main_view.view2world = Transpose(_camera.GetToWorldMatrix());
     main_view.world2view = Transpose(_camera.GetViewMatrix());
@@ -461,8 +478,7 @@ void RTContext::Tick(Camera& _camera, float2 _jitter) {
     // main_view.clip2world        = Transpose(_camera->GetViewProjectionMatrixInv());
     main_view.frustum  = _camera.GetFrustum();
     main_view.near_far = float2(_camera.GetNearClip(), _camera.GetFarClip());
-    main_view.rect =
-        float2(is_ctx.GetReSTIRDIConfig().render_width, is_ctx.GetReSTIRDIConfig().render_height);
+    main_view.rect              = render_extent;
     main_view.inv_rect          = float2(1.f / main_view.rect.x, 1.f / main_view.rect.y);
     main_view.dir_or_pos        = float4(_camera.GetPosition(), 1.f);
     main_view.clip2window_scale = float2(0.5f * main_view.rect.x, -0.5f * main_view.rect.y);
@@ -503,8 +519,8 @@ void RTContext::Tick(Camera& _camera, float2 _jitter) {
 }
 
 void RTContext::LoadDefaultResources(RuntimeAssets& _rt_res) {
-    TextureRef white = _rt_res.GetTexture("white.png");
-    TextureRef black = _rt_res.GetTexture("black.png");
+    TextureRef white = _rt_res.GetTexture(MOER_TEXT("white.png"));
+    TextureRef black = _rt_res.GetTexture(MOER_TEXT("black.png"));
 
     default_res.white_tex = white;
     default_res.black_tex = black;

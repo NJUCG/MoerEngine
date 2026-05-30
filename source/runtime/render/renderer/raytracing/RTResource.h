@@ -63,6 +63,12 @@ struct DefaultResources {
 
 struct RTContext {
 
+    struct LowDiscrepancySequenceCommand {
+        bool                            enabled = false;
+        GenLowDiscrepancySequenceParam param{};
+        BufferView                      output{};
+    };
+
     struct Config {
         float4      reblur_diffuse_hit_dist_params;
         float4      reblur_specular_hit_dist_params;
@@ -83,7 +89,8 @@ public:
         rt_scene = _rt_scene;
     }
 
-    void FillLowDiscrepancySequence(CommandList& _cmd_list);
+    LowDiscrepancySequenceCommand PrepareLowDiscrepancySequence();
+    void RecordLowDiscrepancySequence(CommandList& _cmd_list, const LowDiscrepancySequenceCommand& _command);
 
     void CreateEnvMapResources(TextureWithHandle _env_map, CommandList& _cmd_list);
 

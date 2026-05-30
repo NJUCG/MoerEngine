@@ -270,6 +270,13 @@ CmdSubmit CommandList::Submit() {
         LOG_ERROR(MOER_TEXT("CommandList::Submit called while a BufferOverlap scope is still active"));
         assert(false && "CommandList::Submit called while a BufferOverlap scope is still active");
     }
+    if (queue_type != EQueueType::Graphics && preprocess_mode == ERHISubmitPreprocessMode::InferStateAndSync) {
+        LOG_ERROR(
+            MOER_TEXT("Auto-inferred RHICommandList submissions are Graphics-only, queue={}"),
+            static_cast<uint32>(queue_type)
+        );
+        assert(false && "Auto-inferred RHICommandList submissions are Graphics-only");
+    }
     CmdSubmit submit(
         std::move(commands),
         std::move(callbacks),
@@ -279,6 +286,8 @@ CmdSubmit CommandList::Submit() {
     );
     submit.wait_events        = std::move(submit_wait_events);
     submit.signal_events      = std::move(submit_signal_events);
+    submit.wait_sync_points   = std::move(submit_wait_sync_points);
+    submit.signal_sync_points = std::move(submit_signal_sync_points);
     submit.segments           = BuildSubmitSegments(
         submit.cmds,
         queue_type,
@@ -293,6 +302,9 @@ CmdSubmit CommandList::Submit() {
         )
     );
     submit.record_complete_event = std::move(record_complete_event);
+    submit.preprocess_mode    = preprocess_mode;
+    submit.explicit_tracked_textures = std::move(explicit_tracked_textures);
+    submit.explicit_tracked_buffers = std::move(explicit_tracked_buffers);
     submit.translate_execution_class = translate_execution_class;
     submit.b_tick_profiling   = submit_tick_profiling;
     submit.b_delete_resources = submit_delete_resources;
@@ -300,9 +312,14 @@ CmdSubmit CommandList::Submit() {
     callbacks.clear();
     submit_wait_events.clear();
     submit_signal_events.clear();
+    submit_wait_sync_points.clear();
+    submit_signal_sync_points.clear();
     query_tokens.clear();
     gpu_events.clear();
     record_complete_event = nullptr;
+    preprocess_mode = ERHISubmitPreprocessMode::InferStateAndSync;
+    explicit_tracked_textures.clear();
+    explicit_tracked_buffers.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
     submit_tick_profiling   = false;
     submit_delete_resources = false;
@@ -426,7 +443,7 @@ void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, StringView _
     (void)ReadbackCopy(_src, _data, _name);
 }
 
-GraphEventRef CommandList::ReadbackCopy(
+SyncPointRef CommandList::ReadbackCopy(
     BufferView       _src,
     std::span<byte>  _data,
     StringView _name
@@ -435,7 +452,7 @@ GraphEventRef CommandList::ReadbackCopy(
     if (_src.GetBuffer() == nullptr || _data.empty()) {
         GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
         empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-        return empty_event;
+        return SyncPoint::Create(ESyncPointMode::GPUCPU, empty_event);
     }
     GraphEventRef completion_event = GraphEvent::CreateGraphEvent();
     commands.push_back(
@@ -448,10 +465,10 @@ GraphEventRef CommandList::ReadbackCopy(
             _name
         )
     );
-    return completion_event;
+    return SyncPoint::Create(ESyncPointMode::GPUCPU, completion_event);
 }
 
-GraphEventRef CommandList::ReadbackCopy(
+SyncPointRef CommandList::ReadbackCopy(
     TextureView      _src,
     std::span<byte>  _data,
     StringView _name
@@ -461,7 +478,7 @@ GraphEventRef CommandList::ReadbackCopy(
     if (!b_valid_size) {
         GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
         empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-        return empty_event;
+        return SyncPoint::Create(ESyncPointMode::GPUCPU, empty_event);
     }
     uint mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
     b_valid_size &= mip_size <= _data.size();
@@ -479,7 +496,7 @@ GraphEventRef CommandList::ReadbackCopy(
             _name
         )
     );
-    return completion_event;
+    return SyncPoint::Create(ESyncPointMode::GPUCPU, completion_event);
 }
 
 void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, StringView _name) {
@@ -695,7 +712,16 @@ void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildPa
 
 void CommandList::UpdateRaytracingScene(RaytracingSceneRef _scene) {
     EnsureNoActiveCopyScope(MOER_TEXT("CommandList::UpdateRaytracingScene"));
-    commands.emplace_back(_scene->UpdateScene());
+    UniquePtr<Command> command = _scene->UpdateScene();
+    if (command) {
+        commands.emplace_back(std::move(command));
+    }
+}
+
+void CommandList::UpdateRaytracingScene(UniquePtr<Command>&& _prepared_update) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::UpdateRaytracingScene"));
+    assert(_prepared_update && _prepared_update->Type() == Command::EType::BuildTLAS);
+    commands.emplace_back(std::move(_prepared_update));
 }
 
 #pragma endregion
@@ -767,9 +793,36 @@ CommandList& CommandList::Signal(Fence* _fence, uint64 _signal_value) {
     return *this;
 }
 
+CommandList& CommandList::Wait(SyncPointRef _sync_point) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::Wait"));
+    if (_sync_point) {
+        submit_wait_sync_points.emplace_back(std::move(_sync_point));
+    }
+    return *this;
+}
+
+CommandList& CommandList::Signal(SyncPointRef _sync_point) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::Signal"));
+    if (_sync_point) {
+        submit_signal_sync_points.emplace_back(std::move(_sync_point));
+    }
+    return *this;
+}
+
 CommandList& CommandList::SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class) {
     EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetTranslateExecutionClass"));
     translate_execution_class = _execution_class;
+    return *this;
+}
+
+CommandList& CommandList::SetExplicitTrackedState(
+    Array<TrackedTextureState>&& tracked_textures,
+    Array<TrackedBufferState>&&  tracked_buffers
+) {
+    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetExplicitTrackedState"));
+    preprocess_mode = ERHISubmitPreprocessMode::ExplicitStateNoSync;
+    explicit_tracked_textures = std::move(tracked_textures);
+    explicit_tracked_buffers = std::move(tracked_buffers);
     return *this;
 }
 
@@ -813,22 +866,182 @@ CommandList& CommandList::TickFrame() {
     return *this;
 }
 
+namespace {
+ERHIPipelineStageFlags GetShaderBarrierStage(EPassType pass_type) {
+    switch (pass_type) {
+        case EPassType::Graphics:
+            return ERHIPipelineStageFlags::PS_ALL_GRAPHICS;
+        case EPassType::Compute:
+            return ERHIPipelineStageFlags::PS_COMPUTE_SHADER;
+        case EPassType::Raytracing:
+            return ERHIPipelineStageFlags::PS_RAY_TRACING_SHADER;
+        case EPassType::Copy:
+            return ERHIPipelineStageFlags::PS_TRANSFER;
+        default:
+            assert(false && "unsupported pass type");
+            return ERHIPipelineStageFlags::PS_NONE;
+    }
+}
+}
+
+BarrierState MakeBarrierState(ETextureState state, EPassType pass_type) {
+    switch (state) {
+        case ETextureState::UNDEFINED:
+            return {.stage = ERHIPipelineStageFlags::PS_NONE,
+                    .access = ERHIAccessFlags::UNDEFINED};
+        case ETextureState::TRANSFER_SRC:
+            return {.stage = ERHIPipelineStageFlags::PS_TRANSFER,
+                    .access = ERHIAccessFlags::TRANSFER_READ};
+        case ETextureState::TRANSFER_DST:
+            return {.stage = ERHIPipelineStageFlags::PS_TRANSFER,
+                    .access = ERHIAccessFlags::TRANSFER_WRITE};
+        case ETextureState::SHADER_RESOURCE:
+            return {.stage = GetShaderBarrierStage(pass_type),
+                    .access = ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_RESOURCE_VIEW};
+        case ETextureState::SAMPLED:
+            return {.stage = GetShaderBarrierStage(pass_type),
+                    .access = ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_SAMPLED_READ};
+        case ETextureState::RENDER_TARGET:
+            return {.stage = ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT,
+                    .access = ERHIAccessFlags::COLOR_ATTACHMENT_READ | ERHIAccessFlags::COLOR_ATTACHMENT_WRITE};
+        case ETextureState::DEPTH_STENCIL_READ:
+            return {.stage = ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS |
+                             ERHIPipelineStageFlags::PS_LATE_FRAGMENT_TESTS,
+                    .access = ERHIAccessFlags::DEPTH_STENCIL_READ};
+        case ETextureState::DEPTH_STENCIL_WRITE:
+            return {.stage = ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS |
+                             ERHIPipelineStageFlags::PS_LATE_FRAGMENT_TESTS,
+                    .access = ERHIAccessFlags::DEPTH_STENCIL_WRITE};
+        case ETextureState::UNORDERED_ACCESS:
+            return {.stage = GetShaderBarrierStage(pass_type),
+                    .access = ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE |
+                              ERHIAccessFlags::UNORDERED_ACCESS_VIEW};
+        default:
+            assert(false && "unsupported texture state");
+            return {};
+    }
+}
+
+BarrierState MakeBarrierState(EBufferState state, EPassType pass_type) {
+    switch (state) {
+        case EBufferState::UNDEFINED:
+            return {.stage = ERHIPipelineStageFlags::PS_NONE,
+                    .access = ERHIAccessFlags::UNDEFINED};
+        case EBufferState::TRANSFER_SRC:
+            return {.stage = ERHIPipelineStageFlags::PS_TRANSFER,
+                    .access = ERHIAccessFlags::TRANSFER_READ};
+        case EBufferState::TRANSFER_DST:
+            return {.stage = ERHIPipelineStageFlags::PS_TRANSFER,
+                    .access = ERHIAccessFlags::TRANSFER_WRITE};
+        case EBufferState::VERTEX_BUFFER:
+            return {.stage = ERHIPipelineStageFlags::PS_VERTEX_INPUT,
+                    .access = ERHIAccessFlags::VERTEX_ATTRIBUTE_READ};
+        case EBufferState::INDEX_BUFFER:
+            return {.stage = ERHIPipelineStageFlags::PS_VERTEX_INPUT,
+                    .access = ERHIAccessFlags::INDEX_READ};
+        case EBufferState::INDIRECT_ARGUMENT:
+            return {.stage = ERHIPipelineStageFlags::PS_DRAW_INDIRECT,
+                    .access = ERHIAccessFlags::INDIRECT_COMMAND_READ};
+        case EBufferState::SHADER_RESOURCE:
+            return {.stage = GetShaderBarrierStage(pass_type),
+                    .access = ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_RESOURCE_VIEW};
+        case EBufferState::UNORDERED_ACCESS:
+            return {.stage = GetShaderBarrierStage(pass_type),
+                    .access = ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_WRITE |
+                              ERHIAccessFlags::UNORDERED_ACCESS_VIEW};
+        case EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT:
+            return {.stage = ERHIPipelineStageFlags::PS_ACCELERATION_STRUCTURE_BUILD,
+                    .access = ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT |
+                              ERHIAccessFlags::SHADER_READ};
+        case EBufferState::ACCELERATION_STRUCTURE_READ:
+            return {.stage = ERHIPipelineStageFlags::PS_RAY_TRACING_SHADER,
+                    .access = ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT};
+        case EBufferState::ACCELERATION_STRUCTURE_WRITE:
+            return {.stage = ERHIPipelineStageFlags::PS_ACCELERATION_STRUCTURE_BUILD,
+                    .access = ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT};
+        default:
+            assert(false && "unsupported buffer state");
+            return {};
+    }
+}
+
+std::optional<ETextureState> TryGetTrackedTextureState(const BarrierState& state) {
+    if (state.access == ERHIAccessFlags::UNDEFINED) {
+        return ETextureState::UNDEFINED;
+    }
+    if ((state.access & ERHIAccessFlags::TRANSFER_READ) != ERHIAccessFlags::UNDEFINED) {
+        return ETextureState::TRANSFER_SRC;
+    }
+    if ((state.access & ERHIAccessFlags::TRANSFER_WRITE) != ERHIAccessFlags::UNDEFINED) {
+        return ETextureState::TRANSFER_DST;
+    }
+    if ((state.access & ERHIAccessFlags::COLOR_ATTACHMENT_WRITE) != ERHIAccessFlags::UNDEFINED) {
+        return ETextureState::RENDER_TARGET;
+    }
+    if ((state.access & ERHIAccessFlags::DEPTH_STENCIL_WRITE) != ERHIAccessFlags::UNDEFINED) {
+        return ETextureState::DEPTH_STENCIL_WRITE;
+    }
+    if ((state.access & ERHIAccessFlags::DEPTH_STENCIL_READ) != ERHIAccessFlags::UNDEFINED) {
+        return ETextureState::DEPTH_STENCIL_READ;
+    }
+    if ((state.access & ERHIAccessFlags::SHADER_SAMPLED_READ) != ERHIAccessFlags::UNDEFINED) {
+        return ETextureState::SAMPLED;
+    }
+    if (BarrierStateWrites(state)) {
+        return ETextureState::UNORDERED_ACCESS;
+    }
+    if ((state.access & ERHIAccessFlags::SHADER_READ) != ERHIAccessFlags::UNDEFINED ||
+        (state.access & ERHIAccessFlags::SHADER_RESOURCE_VIEW) != ERHIAccessFlags::UNDEFINED) {
+        return ETextureState::SHADER_RESOURCE;
+    }
+    return std::nullopt;
+}
+
+std::optional<EBufferState> TryGetTrackedBufferState(const BarrierState& state) {
+    if (state.access == ERHIAccessFlags::UNDEFINED) {
+        return EBufferState::UNDEFINED;
+    }
+    if ((state.access & ERHIAccessFlags::TRANSFER_WRITE) != ERHIAccessFlags::UNDEFINED) {
+        return EBufferState::TRANSFER_DST;
+    }
+    if ((state.access & ERHIAccessFlags::TRANSFER_READ) != ERHIAccessFlags::UNDEFINED) {
+        return EBufferState::TRANSFER_SRC;
+    }
+    if ((state.access & ERHIAccessFlags::VERTEX_ATTRIBUTE_READ) != ERHIAccessFlags::UNDEFINED) {
+        return EBufferState::VERTEX_BUFFER;
+    }
+    if ((state.access & ERHIAccessFlags::INDEX_READ) != ERHIAccessFlags::UNDEFINED) {
+        return EBufferState::INDEX_BUFFER;
+    }
+    if ((state.access & ERHIAccessFlags::INDIRECT_COMMAND_READ) != ERHIAccessFlags::UNDEFINED) {
+        return EBufferState::INDIRECT_ARGUMENT;
+    }
+    if ((state.access & ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT) != ERHIAccessFlags::UNDEFINED) {
+        return EBufferState::ACCELERATION_STRUCTURE_WRITE;
+    }
+    if ((state.access & ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT) != ERHIAccessFlags::UNDEFINED) {
+        return EBufferState::ACCELERATION_STRUCTURE_READ;
+    }
+    if (BarrierStateWrites(state)) {
+        return EBufferState::UNORDERED_ACCESS;
+    }
+    if ((state.access & ERHIAccessFlags::SHADER_READ) != ERHIAccessFlags::UNDEFINED ||
+        (state.access & ERHIAccessFlags::SHADER_RESOURCE_VIEW) != ERHIAccessFlags::UNDEFINED) {
+        return EBufferState::SHADER_RESOURCE;
+    }
+    return std::nullopt;
+}
+
 void CommandList::BeginBarriers(
-    uint       _read_tex_cnt,
-    uint       _write_tex_cnt,
-    uint       _read_buf_cnt,
-    uint       _write_buf_cnt,
-    EQueueType _src_queue,
-    EQueueType _dst_queue,
-    EBarrierTrackedState _tracked_state
+    uint                    _barrier_cnt,
+    EQueueType              _src_queue,
+    EQueueType              _dst_queue,
+    ETrackedStateUpdateMode _tracked_state
 ) {
     EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BeginBarriers"));
     commands.push_back(
         MakeUnique<BarrierCmd>(
-            _read_tex_cnt,
-            _write_tex_cnt,
-            _read_buf_cnt,
-            _write_buf_cnt,
+            _barrier_cnt,
             _src_queue,
             _dst_queue,
             _tracked_state
@@ -837,23 +1050,47 @@ void CommandList::BeginBarriers(
     current_barriers = commands.back().get();
 }
 
-void CommandList::InnerReadBuffer(BufferView _buffer, EBufferState _state, EPassType _pass) {
-    BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->ReadBuffer(_buffer.buffer, _state, _pass);
-}
-void CommandList::InnerWriteBuffer(BufferView _buffer, EBufferState _state, EPassType _pass) {
-    BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->WriteBuffer(_buffer.buffer, _state, _pass);
+void CommandList::InnerBarrier(const BarrierCreateInfo& barrier) {
+    BarrierCmd* barrier_cmd = static_cast<BarrierCmd*>(current_barriers);
+    barrier_cmd->AddBarrier(barrier);
 }
 
-void CommandList::InnerReadTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
+void CommandList::InnerReadBindlessArray(BindlessArrayRef _array, EBufferState _state, EPassType _pass) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->ReadTexture(_texture.texture, _state, _pass);
+    barrier->ReadBindlessArray(_array, _state, _pass);
 }
 
-void CommandList::InnerWriteTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
+void CommandList::InnerWriteBindlessArray(BindlessArrayRef _array, EBufferState _state, EPassType _pass) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->WriteTexture(_texture.texture, _state, _pass);
+    barrier->WriteBindlessArray(_array, _state, _pass);
+}
+
+void CommandList::InnerReadRaytracingGeometry(
+    RaytracingGeometryRef _geometry,
+    EBufferState          _state,
+    EPassType             _pass
+) {
+    BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
+    barrier->ReadAccelerationStructure(reinterpret_cast<uint64>(_geometry.Get()), _state, _pass);
+}
+
+void CommandList::InnerWriteRaytracingGeometry(
+    RaytracingGeometryRef _geometry,
+    EBufferState          _state,
+    EPassType             _pass
+) {
+    BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
+    barrier->WriteAccelerationStructure(reinterpret_cast<uint64>(_geometry.Get()), _state, _pass);
+}
+
+void CommandList::InnerReadRaytracingTlas(RaytracingTlasRef _tlas, EBufferState _state, EPassType _pass) {
+    BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
+    barrier->ReadAccelerationStructure(reinterpret_cast<uint64>(_tlas.Get()), _state, _pass);
+}
+
+void CommandList::InnerWriteRaytracingTlas(RaytracingTlasRef _tlas, EBufferState _state, EPassType _pass) {
+    BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
+    barrier->WriteAccelerationStructure(reinterpret_cast<uint64>(_tlas.Get()), _state, _pass);
 }
 
 void CommandList::EndBarriers() {
@@ -1106,7 +1343,7 @@ void CopyCommandScope::CopyFrom(TextureView _src, std::span<byte> _data, StringV
     (void)ReadbackCopy(_src, _data, _name);
 }
 
-GraphEventRef CopyCommandScope::ReadbackCopy(
+SyncPointRef CopyCommandScope::ReadbackCopy(
     BufferView       _src,
     std::span<byte>  _data,
     StringView _name
@@ -1114,7 +1351,7 @@ GraphEventRef CopyCommandScope::ReadbackCopy(
     if (_src.GetBuffer() == nullptr || _data.empty()) {
         GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
         empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-        return empty_event;
+        return SyncPoint::Create(ESyncPointMode::GPUCPU, empty_event);
     }
     GraphEventRef completion_event = GraphEvent::CreateGraphEvent();
     PushCopyCommand(MakeUnique<CopyBackBufferCmd>(
@@ -1125,10 +1362,10 @@ GraphEventRef CopyCommandScope::ReadbackCopy(
         completion_event,
         _name
     ));
-    return completion_event;
+    return SyncPoint::Create(ESyncPointMode::GPUCPU, completion_event);
 }
 
-GraphEventRef CopyCommandScope::ReadbackCopy(
+SyncPointRef CopyCommandScope::ReadbackCopy(
     TextureView      _src,
     std::span<byte>  _data,
     StringView _name
@@ -1136,7 +1373,7 @@ GraphEventRef CopyCommandScope::ReadbackCopy(
     if (_data.empty() || !_src.GetTexture()) {
         GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
         empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-        return empty_event;
+        return SyncPoint::Create(ESyncPointMode::GPUCPU, empty_event);
     }
     uint mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
     assert(mip_size <= _data.size() && "Fatal: Copy back data size is less than texture mip size");
@@ -1150,7 +1387,7 @@ GraphEventRef CopyCommandScope::ReadbackCopy(
         completion_event,
         _name
     ));
-    return completion_event;
+    return SyncPoint::Create(ESyncPointMode::GPUCPU, completion_event);
 }
 
 } // namespace Moer::Render

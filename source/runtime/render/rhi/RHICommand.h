@@ -103,9 +103,92 @@ struct SignalEvent {
     uint64 value;
 };
 
+enum class ESyncPointMode : uint8_t {
+    GPU = 0,
+    GPUCPU = 1,
+};
+
+class SyncPoint;
+using SyncPointRef = CountableRef<SyncPoint>;
+
+class SyncPoint {
+public:
+    COUNTABLE_IMPLEMENTATION_AUTO_DESTROY
+
+    static SyncPointRef Create(
+        ESyncPointMode mode = ESyncPointMode::GPUCPU,
+        GraphEventRef  host_completion_event = nullptr
+    ) {
+        return SyncPointRef(MoerNew(SyncPoint)(mode, std::move(host_completion_event)));
+    }
+
+    ESyncPointMode Mode() const {
+        return mode;
+    }
+
+    bool IsPublished() const {
+        std::scoped_lock lock(mutex);
+        return published;
+    }
+
+    bool TryGetResolvedWaitEvent(WaitEvent& out_wait_event) const {
+        std::scoped_lock lock(mutex);
+        if (!published) {
+            return false;
+        }
+        out_wait_event = resolved_wait_event;
+        return true;
+    }
+
+    void Publish(WaitEvent wait_event) {
+        std::scoped_lock lock(mutex);
+        MOER_ASSERT(!published, "SyncPoint must be published exactly once");
+        published = true;
+        resolved_wait_event = wait_event;
+    }
+
+    const GraphEventRef& HostCompletionEvent() const {
+        return host_completion_event;
+    }
+
+    void WaitHost() const {
+        MOER_ASSERT(mode == ESyncPointMode::GPUCPU, "GPU-only SyncPoint cannot be host waited");
+        if (host_completion_event) {
+            host_completion_event->Wait();
+            return;
+        }
+
+        WaitEvent wait_event{};
+        {
+            std::scoped_lock lock(mutex);
+            MOER_ASSERT(published, "SyncPoint must be published before host wait");
+            wait_event = resolved_wait_event;
+        }
+        auto* fence = reinterpret_cast<Fence*>(wait_event.timeline_handle);
+        MOER_ASSERT(fence != nullptr, "Published SyncPoint wait handle must be a valid fence");
+        fence->Wait(wait_event.value);
+    }
+
+private:
+    explicit SyncPoint(ESyncPointMode in_mode, GraphEventRef in_host_completion_event) :
+        mode(in_mode),
+        host_completion_event(std::move(in_host_completion_event)) {}
+
+    ESyncPointMode       mode{ESyncPointMode::GPUCPU};
+    mutable std::mutex   mutex{};
+    bool                 published{false};
+    WaitEvent            resolved_wait_event{};
+    GraphEventRef        host_completion_event{nullptr};
+};
+
 enum class ERHITranslateExecutionClass : uint8_t {
     Parallel = 0,
     SerialControl = 1,
+};
+
+enum class ERHISubmitPreprocessMode : uint8_t {
+    InferStateAndSync = 0,
+    ExplicitStateNoSync = 1,
 };
 
 struct RHISubmitSegment {
@@ -454,6 +537,21 @@ struct DispatchMeshData {
         return DispatchMeshData{IndirectDrawParam{_buffer, _count_buffer, _max_cnt, _stride}};
     }
 };
+
+struct TrackedTextureState {
+    TextureView    texture{};
+    ETextureState  state{ETextureState::UNDEFINED};
+    EQueueType     owner_queue{EQueueType::Ignore};
+    bool           access_write{false};
+};
+
+struct TrackedBufferState {
+    BufferView    buffer{};
+    EBufferState  state{EBufferState::UNDEFINED};
+    EQueueType    owner_queue{EQueueType::Ignore};
+    bool          access_write{false};
+};
+
 struct CmdSubmit {
     Array<UniquePtr<Command>>        cmds;
     Array<std::function<void(void)>> callbacks;
@@ -462,9 +560,14 @@ struct CmdSubmit {
 
     Array<WaitEvent>   wait_events;
     Array<SignalEvent> signal_events;
+    Array<SyncPointRef> wait_sync_points{};
+    Array<SyncPointRef> signal_sync_points{};
     Array<QueryToken>  query_tokens;
     Array<GPUEvent>    gpu_events;
     GraphEventRef      record_complete_event{nullptr};
+    ERHISubmitPreprocessMode preprocess_mode{ERHISubmitPreprocessMode::InferStateAndSync};
+    Array<TrackedTextureState> explicit_tracked_textures{};
+    Array<TrackedBufferState>  explicit_tracked_buffers{};
     ERHITranslateExecutionClass translate_execution_class{ERHITranslateExecutionClass::Parallel};
     bool               b_sync{false}; //force sync queue timeline
     bool               b_tick_profiling{false};
@@ -482,6 +585,16 @@ struct CmdSubmit {
 
     CmdSubmit&& Signal(Fence* _fence, uint64 _signal_value) {
         signal_events.emplace_back(uint64(_fence), _signal_value);
+        return std::move(*this);
+    }
+
+    CmdSubmit&& Wait(SyncPointRef _sync_point) {
+        wait_sync_points.emplace_back(std::move(_sync_point));
+        return std::move(*this);
+    }
+
+    CmdSubmit&& Signal(SyncPointRef _sync_point) {
+        signal_sync_points.emplace_back(std::move(_sync_point));
         return std::move(*this);
     }
 
@@ -505,9 +618,14 @@ struct CmdSubmit {
         callbacks          = std::move(_other.callbacks);
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
+        wait_sync_points   = std::move(_other.wait_sync_points);
+        signal_sync_points = std::move(_other.signal_sync_points);
         query_tokens       = std::move(_other.query_tokens);
         gpu_events         = std::move(_other.gpu_events);
         record_complete_event = std::move(_other.record_complete_event);
+        preprocess_mode    = _other.preprocess_mode;
+        explicit_tracked_textures = std::move(_other.explicit_tracked_textures);
+        explicit_tracked_buffers = std::move(_other.explicit_tracked_buffers);
         cached_args        = std::move(_other.cached_args);
         segments           = std::move(_other.segments);
         translate_execution_class = _other.translate_execution_class;
@@ -521,9 +639,14 @@ struct CmdSubmit {
         callbacks          = std::move(_other.callbacks);
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
+        wait_sync_points   = std::move(_other.wait_sync_points);
+        signal_sync_points = std::move(_other.signal_sync_points);
         query_tokens       = std::move(_other.query_tokens);
         gpu_events         = std::move(_other.gpu_events);
         record_complete_event = std::move(_other.record_complete_event);
+        preprocess_mode    = _other.preprocess_mode;
+        explicit_tracked_textures = std::move(_other.explicit_tracked_textures);
+        explicit_tracked_buffers = std::move(_other.explicit_tracked_buffers);
         cached_args        = std::move(_other.cached_args);
         segments           = std::move(_other.segments);
         translate_execution_class = _other.translate_execution_class;
@@ -556,42 +679,89 @@ struct CmdSubmit {
     }
 };
 
-struct ReadTexture {
-    TextureView   texture;
-    ETextureState state;
-};
-struct WriteTexture {
-    TextureView   texture;
-    ETextureState state;
+struct ReadBindlessArray {
+    BindlessArrayRef array;
+    EBufferState     state;
 };
 
-struct ReadBuffer {
-    BufferView   buffer;
-    EBufferState state;
+struct WriteBindlessArray {
+    BindlessArrayRef array;
+    EBufferState     state;
 };
 
-struct WriteBuffer {
-    BufferView   buffer;
-    EBufferState state;
+struct ReadRaytracingGeometry {
+    RaytracingGeometryRef geometry;
+    EBufferState          state;
 };
 
-enum class EBarrierTrackedState : uint8_t {
+struct WriteRaytracingGeometry {
+    RaytracingGeometryRef geometry;
+    EBufferState          state;
+};
+
+struct ReadRaytracingTlas {
+    RaytracingTlasRef tlas;
+    EBufferState      state;
+};
+
+struct WriteRaytracingTlas {
+    RaytracingTlasRef tlas;
+    EBufferState      state;
+};
+
+struct BarrierState {
+    ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
+    ERHIAccessFlags        access{ERHIAccessFlags::UNDEFINED};
+
+    auto operator<=>(const BarrierState&) const = default;
+};
+
+inline constexpr bool BarrierStateWrites(const BarrierState& state) {
+    return (state.access & ERHIAccessFlags::SHADER_WRITE) != ERHIAccessFlags::UNDEFINED ||
+           (state.access & ERHIAccessFlags::COLOR_ATTACHMENT_WRITE) != ERHIAccessFlags::UNDEFINED ||
+           (state.access & ERHIAccessFlags::DEPTH_STENCIL_WRITE) != ERHIAccessFlags::UNDEFINED ||
+           (state.access & ERHIAccessFlags::TRANSFER_WRITE) != ERHIAccessFlags::UNDEFINED ||
+           (state.access & ERHIAccessFlags::MEMORY_WRITE) != ERHIAccessFlags::UNDEFINED ||
+           (state.access & ERHIAccessFlags::CPU_WRITE_BIT) != ERHIAccessFlags::UNDEFINED ||
+           (state.access & ERHIAccessFlags::UNORDERED_ACCESS_VIEW) != ERHIAccessFlags::UNDEFINED;
+}
+
+RENDER_API BarrierState MakeBarrierState(ETextureState state, EPassType pass_type);
+RENDER_API BarrierState MakeBarrierState(EBufferState state, EPassType pass_type);
+RENDER_API std::optional<ETextureState> TryGetTrackedTextureState(const BarrierState& state);
+RENDER_API std::optional<EBufferState> TryGetTrackedBufferState(const BarrierState& state);
+
+struct BarrierCreateInfo {
+    std::variant<TextureView, BufferView> resource;
+    BarrierState                          src_state{};
+    BarrierState                          dst_state{};
+
+    static BarrierCreateInfo Transition(TextureView texture, BarrierState src_state, BarrierState dst_state) {
+        return BarrierCreateInfo{.resource = texture, .src_state = src_state, .dst_state = dst_state};
+    }
+
+    static BarrierCreateInfo Transition(BufferView buffer, BarrierState src_state, BarrierState dst_state) {
+        return BarrierCreateInfo{.resource = buffer, .src_state = src_state, .dst_state = dst_state};
+    }
+
+    static BarrierCreateInfo
+    Transition(TextureView texture, ETextureState src_state, ETextureState dst_state, EPassType pass_type) {
+        return Transition(texture, MakeBarrierState(src_state, pass_type), MakeBarrierState(dst_state, pass_type));
+    }
+
+    static BarrierCreateInfo
+    Transition(BufferView buffer, EBufferState src_state, EBufferState dst_state, EPassType pass_type) {
+        return Transition(buffer, MakeBarrierState(src_state, pass_type), MakeBarrierState(dst_state, pass_type));
+    }
+};
+
+// Controls whether a BarrierCmd contributes to the command stream's logical tracked state.
+// It does not suppress the backend's local barrier planning for the recorded command itself.
+// Use Skip for intermediate subresource transitions, then finalize the externally visible state
+// with SetTrackedState once the pass finishes its internal barrier sequence.
+enum class ETrackedStateUpdateMode : uint8_t {
     Update,
     Skip
-};
-
-struct TrackedTextureState {
-    TextureView    texture{};
-    ETextureState  state{ETextureState::UNDEFINED};
-    EQueueType     owner_queue{EQueueType::Ignore};
-    bool           access_write{false};
-};
-
-struct TrackedBufferState {
-    BufferView    buffer{};
-    EBufferState  state{EBufferState::UNDEFINED};
-    EQueueType    owner_queue{EQueueType::Ignore};
-    bool          access_write{false};
 };
 
 struct DrawBatchElement {
@@ -752,12 +922,12 @@ public:
         std::span<byte>  _data,
         StringView _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
-    GraphEventRef ReadbackCopy(
+    SyncPointRef ReadbackCopy(
         BufferView       _src,
         std::span<byte>  _data,
         StringView _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
     );
-    GraphEventRef ReadbackCopy(
+    SyncPointRef ReadbackCopy(
         TextureView      _src,
         std::span<byte>  _data,
         StringView _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
@@ -1440,12 +1610,12 @@ public:
         std::span<byte>  _data,
         StringView       _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
-    RENDER_API GraphEventRef ReadbackCopy(
+    RENDER_API SyncPointRef ReadbackCopy(
         BufferView       _src,
         std::span<byte>  _data,
         StringView       _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
     );
-    RENDER_API GraphEventRef ReadbackCopy(
+    RENDER_API SyncPointRef ReadbackCopy(
         TextureView      _src,
         std::span<byte>  _data,
         StringView       _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
@@ -1486,111 +1656,89 @@ public:
         static constexpr uint32_t value = std::is_same_v<T, First> + CountType<T, Rest...>::value;
     };
 
-    template<typename... Args>
-    struct GetReadTextureCnt {
-        static constexpr uint32_t value = CountType<ReadTexture, Args...>::value;
-    };
+    void Barriers(std::span<const BarrierCreateInfo> barriers, EQueueType src_queue, EQueueType dst_queue) {
+        Barriers(barriers, src_queue, dst_queue, ETrackedStateUpdateMode::Update);
+    }
 
-    template<typename... Args>
-    struct GetWriteTextureCnt {
-        static constexpr uint32_t value = CountType<WriteTexture, Args...>::value;
-    };
+    void Barriers(
+        std::initializer_list<BarrierCreateInfo> barriers,
+        EQueueType                               src_queue,
+        EQueueType                               dst_queue
+    ) {
+        Barriers(std::span<const BarrierCreateInfo>(barriers.begin(), barriers.size()), src_queue, dst_queue);
+    }
 
-    template<typename... Args>
-    struct GetReadBufferCnt {
-        static constexpr uint32_t value = CountType<ReadBuffer, Args...>::value;
-    };
+    void Barriers(
+        std::span<const BarrierCreateInfo> barriers,
+        EQueueType                         src_queue,
+        EQueueType                         dst_queue,
+        ETrackedStateUpdateMode            tracked_state
+    ) {
+        assert(!barriers.empty() && "no barriers");
+        BeginBarriers(static_cast<uint>(barriers.size()), src_queue, dst_queue, tracked_state);
+        for (const BarrierCreateInfo& barrier : barriers) {
+            InnerBarrier(barrier);
+        }
+        EndBarriers();
+    }
 
-    template<typename... Args>
-    struct GetWriteBufferCnt {
-        static constexpr uint32_t value = CountType<WriteBuffer, Args...>::value;
-    };
+    void Barriers(
+        std::initializer_list<BarrierCreateInfo> barriers,
+        EQueueType                               src_queue,
+        EQueueType                               dst_queue,
+        ETrackedStateUpdateMode                  tracked_state
+    ) {
+        Barriers(
+            std::span<const BarrierCreateInfo>(barriers.begin(), barriers.size()),
+            src_queue,
+            dst_queue,
+            tracked_state
+        );
+    }
+
+    void Barriers(std::span<const BarrierCreateInfo> barriers) {
+        Barriers(barriers, queue_type, queue_type, ETrackedStateUpdateMode::Update);
+    }
+
+    void Barriers(std::initializer_list<BarrierCreateInfo> barriers) {
+        Barriers(std::span<const BarrierCreateInfo>(barriers.begin(), barriers.size()));
+    }
+
+    void Barriers(
+        std::span<const BarrierCreateInfo> barriers,
+        ETrackedStateUpdateMode            tracked_state
+    ) {
+        Barriers(barriers, queue_type, queue_type, tracked_state);
+    }
+
+    void Barriers(
+        std::initializer_list<BarrierCreateInfo> barriers,
+        ETrackedStateUpdateMode                  tracked_state
+    ) {
+        Barriers(std::span<const BarrierCreateInfo>(barriers.begin(), barriers.size()), tracked_state);
+    }
 
     template<typename... T>
-    void Barriers(EQueueType _src_queue, EQueueType _dst_queue, EPassType _pass, T... _args) {
-        Barriers(_src_queue, _dst_queue, _pass, EBarrierTrackedState::Update, _args...);
+    void Barriers(EQueueType src_queue, EQueueType dst_queue, EPassType pass_type, T... args) {
+        Barriers(src_queue, dst_queue, pass_type, ETrackedStateUpdateMode::Update, args...);
     }
 
     template<typename... T>
     void Barriers(
-        EQueueType            _src_queue,
-        EQueueType            _dst_queue,
-        EPassType             _pass,
-        EBarrierTrackedState  _tracked_state,
-        T...                  _args
+        EQueueType              src_queue,
+        EQueueType              dst_queue,
+        EPassType               pass_type,
+        ETrackedStateUpdateMode tracked_state,
+        T...                    args
     ) {
-        constexpr uint read_tex_cnt  = GetReadTextureCnt<T...>::value;
-        constexpr uint write_tex_cnt = GetWriteTextureCnt<T...>::value;
-        constexpr uint read_buf_cnt  = GetReadBufferCnt<T...>::value;
-        constexpr uint write_buf_cnt = GetWriteBufferCnt<T...>::value;
-        static_assert(read_tex_cnt + write_tex_cnt + read_buf_cnt + write_buf_cnt > 0, "no barriers");
-
-        BeginBarriers(read_tex_cnt, write_tex_cnt, read_buf_cnt, write_buf_cnt, _src_queue, _dst_queue, _tracked_state);
-        (InnerBarrier(_args, _pass), ...);
-        EndBarriers();
-    }
-
-    void TextureBarriers(
-        EQueueType            _src_queue,
-        EQueueType            _dst_queue,
-        EPassType             _pass,
-        Array<ReadTexture>&&  _read_tex,
-        Array<WriteTexture>&& _write_tex,
-        EBarrierTrackedState  _tracked_state = EBarrierTrackedState::Update
-    ) {
-        BeginBarriers(_read_tex.size(), _write_tex.size(), 0, 0, _src_queue, _dst_queue, _tracked_state);
-        for (auto& tex : _read_tex) {
-            InnerBarrier(tex, _pass);
-        }
-        for (auto& tex : _write_tex) {
-            InnerBarrier(tex, _pass);
-        }
-        EndBarriers();
-    }
-
-    void BufferBarriers(
-        EQueueType           _src_queue,
-        EQueueType           _dst_queue,
-        EPassType            _pass,
-        Array<ReadBuffer>&&  _read_buf,
-        Array<WriteBuffer>&& _write_buf,
-        EBarrierTrackedState _tracked_state = EBarrierTrackedState::Update
-    ) {
-        BeginBarriers(0, 0, _read_buf.size(), _write_buf.size(), _src_queue, _dst_queue, _tracked_state);
-        for (auto& buf : _read_buf) {
-            InnerBarrier(buf, _pass);
-        }
-        for (auto& buf : _write_buf) {
-            InnerBarrier(buf, _pass);
-        }
-        EndBarriers();
-    }
-
-    void TextureBarriers(
-        EQueueType           _src_queue,
-        EQueueType           _dst_queue,
-        EPassType            _pass,
-        Array<ReadTexture>&& _read_tex,
-        EBarrierTrackedState _tracked_state = EBarrierTrackedState::Update
-    ) {
-        BeginBarriers(_read_tex.size(), 0, 0, 0, _src_queue, _dst_queue, _tracked_state);
-        for (auto& tex : _read_tex) {
-            InnerBarrier(tex, _pass);
-        }
-        EndBarriers();
-    }
-
-    void TextureBarriers(
-        EQueueType            _src_queue,
-        EQueueType            _dst_queue,
-        EPassType             _pass,
-        Array<WriteTexture>&& _write_tex,
-        EBarrierTrackedState  _tracked_state = EBarrierTrackedState::Update
-    ) {
-        BeginBarriers(0, _write_tex.size(), 0, 0, _src_queue, _dst_queue, _tracked_state);
-        for (auto& tex : _write_tex) {
-            InnerBarrier(tex, _pass);
-        }
+        static_assert(
+            ((std::is_same_v<T, ReadBindlessArray> || std::is_same_v<T, WriteBindlessArray> ||
+              std::is_same_v<T, ReadRaytracingGeometry> || std::is_same_v<T, WriteRaytracingGeometry> ||
+              std::is_same_v<T, ReadRaytracingTlas> || std::is_same_v<T, WriteRaytracingTlas>) && ...),
+            "Use BarrierCreateInfo for texture/buffer barriers"
+        );
+        BeginBarriers(0, src_queue, dst_queue, tracked_state);
+        (InnerBarrier(args, pass_type), ...);
         EndBarriers();
     }
 
@@ -1614,6 +1762,7 @@ public:
     RENDER_API void BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _params);
 
     RENDER_API void UpdateRaytracingScene(RaytracingSceneRef _scene);
+    RENDER_API void UpdateRaytracingScene(UniquePtr<Command>&& _prepared_update);
 
 #pragma endregion
 
@@ -1637,7 +1786,13 @@ public:
     RENDER_API CommandList& Wait(Fence* _fence, uint64 _wait_value);
     RENDER_API CommandList& Wait(WaitEvent _event);
     RENDER_API CommandList& Signal(Fence* _fence, uint64 _signal_value);
+    RENDER_API CommandList& Wait(SyncPointRef _sync_point);
+    RENDER_API CommandList& Signal(SyncPointRef _sync_point);
     RENDER_API CommandList& SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class);
+    RENDER_API CommandList& SetExplicitTrackedState(
+        Array<TrackedTextureState>&& tracked_textures,
+        Array<TrackedBufferState>&&  tracked_buffers
+    );
     RENDER_API CommandList& SetRecordCompleteEvent(GraphEventRef _event);
     GraphEventRef GetRecordCompleteEvent() const {
         return record_complete_event;
@@ -1706,31 +1861,36 @@ private:
     );
 
     RENDER_API void BeginBarriers(
-        uint       _read_tex_cnt,
-        uint       _write_tex_cnt,
-        uint       _read_buf_cnt,
-        uint       _write_buf_cnt,
-        EQueueType _src_queue,
-        EQueueType _dst_queue,
-        EBarrierTrackedState _tracked_state
+        uint                    barrier_count,
+        EQueueType              src_queue,
+        EQueueType              dst_queue,
+        ETrackedStateUpdateMode tracked_state
     );
-    RENDER_API void InnerBarrier(ReadBuffer _buffer, EPassType _pass) {
-        InnerReadBuffer(_buffer.buffer, _buffer.state, _pass);
+    RENDER_API void InnerBarrier(const BarrierCreateInfo& barrier);
+    RENDER_API void InnerBarrier(ReadBindlessArray array, EPassType pass) {
+        InnerReadBindlessArray(array.array, array.state, pass);
     }
-    RENDER_API void InnerBarrier(WriteBuffer _buffer, EPassType _pass) {
-        InnerWriteBuffer(_buffer.buffer, _buffer.state, _pass);
+    RENDER_API void InnerBarrier(WriteBindlessArray array, EPassType pass) {
+        InnerWriteBindlessArray(array.array, array.state, pass);
     }
-    RENDER_API void InnerBarrier(ReadTexture _texture, EPassType _pass) {
-        InnerReadTexture(_texture.texture, _texture.state, _pass);
+    RENDER_API void InnerBarrier(ReadRaytracingGeometry geometry, EPassType pass) {
+        InnerReadRaytracingGeometry(geometry.geometry, geometry.state, pass);
     }
-    RENDER_API void InnerBarrier(WriteTexture _texture, EPassType _pass) {
-        InnerWriteTexture(_texture.texture, _texture.state, _pass);
+    RENDER_API void InnerBarrier(WriteRaytracingGeometry geometry, EPassType pass) {
+        InnerWriteRaytracingGeometry(geometry.geometry, geometry.state, pass);
     }
-
-    RENDER_API void InnerReadBuffer(BufferView _buffer, EBufferState _state, EPassType _pass);
-    RENDER_API void InnerWriteBuffer(BufferView _buffer, EBufferState _state, EPassType _pass);
-    RENDER_API void InnerReadTexture(TextureView _texture, ETextureState _state, EPassType _pass);
-    RENDER_API void InnerWriteTexture(TextureView _texture, ETextureState _state, EPassType _pass);
+    RENDER_API void InnerBarrier(ReadRaytracingTlas tlas, EPassType pass) {
+        InnerReadRaytracingTlas(tlas.tlas, tlas.state, pass);
+    }
+    RENDER_API void InnerBarrier(WriteRaytracingTlas tlas, EPassType pass) {
+        InnerWriteRaytracingTlas(tlas.tlas, tlas.state, pass);
+    }
+    RENDER_API void InnerReadBindlessArray(BindlessArrayRef array, EBufferState state, EPassType pass);
+    RENDER_API void InnerWriteBindlessArray(BindlessArrayRef array, EBufferState state, EPassType pass);
+    RENDER_API void InnerReadRaytracingGeometry(RaytracingGeometryRef geometry, EBufferState state, EPassType pass);
+    RENDER_API void InnerWriteRaytracingGeometry(RaytracingGeometryRef geometry, EBufferState state, EPassType pass);
+    RENDER_API void InnerReadRaytracingTlas(RaytracingTlasRef tlas, EBufferState state, EPassType pass);
+    RENDER_API void InnerWriteRaytracingTlas(RaytracingTlasRef tlas, EBufferState state, EPassType pass);
     RENDER_API void EndBarriers();
 
 #pragma region[ raytracing ]
@@ -1750,9 +1910,14 @@ private:
     Array<std::function<void()>> callbacks;
     Array<WaitEvent>             submit_wait_events;
     Array<SignalEvent>           submit_signal_events;
+    Array<SyncPointRef>          submit_wait_sync_points;
+    Array<SyncPointRef>          submit_signal_sync_points;
     TCachedArgArray              cached_args;
     Array<QueryToken>            query_tokens;
     GraphEventRef                record_complete_event{nullptr};
+    ERHISubmitPreprocessMode     preprocess_mode{ERHISubmitPreprocessMode::InferStateAndSync};
+    Array<TrackedTextureState>   explicit_tracked_textures{};
+    Array<TrackedBufferState>    explicit_tracked_buffers{};
     ERHITranslateExecutionClass  translate_execution_class{ERHITranslateExecutionClass::Parallel};
     bool                         submit_tick_profiling{false};
     bool                         submit_delete_resources{false};
@@ -1922,13 +2087,36 @@ public:
     void Sync(Swapchain* swapchain);
     static void ShutDown();
 private:
+    struct PendingCommandListEntry {
+        enum class EKind : uint8_t {
+            Recorded,
+            Recording
+        };
+
+        EKind                  kind{EKind::Recorded};
+        CommandList            recorded{};
+        SharedPtr<CommandList> recording{};
+
+        explicit PendingCommandListEntry(CommandList&& command_list) :
+            kind(EKind::Recorded),
+            recorded(std::move(command_list)) {}
+
+        explicit PendingCommandListEntry(SharedPtr<CommandList>&& command_list) :
+            kind(EKind::Recording),
+            recording(std::move(command_list)) {}
+
+        PendingCommandListEntry(PendingCommandListEntry&&) noexcept = default;
+        PendingCommandListEntry& operator=(PendingCommandListEntry&&) noexcept = default;
+        PendingCommandListEntry(const PendingCommandListEntry&) = delete;
+        PendingCommandListEntry& operator=(const PendingCommandListEntry&) = delete;
+    };
+
     std::shared_ptr<RHIBackendExecutor> GetBackendExecutorLocked();
     std::shared_ptr<RHIBackendExecutor> TryGetBackendExecutorLocked() const;
     void EnqueuePendingLocked();
     std::mutex                   submit_mutex;
     std::shared_ptr<RHIBackendExecutor> backend_executor{};
-    Array<CommandList>           pending_command_lists{};
-    Array<SharedPtr<CommandList>> pending_recording_command_lists{};
+    Array<PendingCommandListEntry> pending_command_lists{};
     std::optional<RHIPresentRequest> pending_present{};
 };
 

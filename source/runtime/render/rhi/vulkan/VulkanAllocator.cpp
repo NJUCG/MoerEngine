@@ -2,6 +2,7 @@
 #include "PixelFormat.h"
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
+#include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
 #include "string/Format.h"
@@ -26,25 +27,178 @@ void ExecuteCompletionEvents(Array<GraphEventRef>& completion_events) {
     completion_events.clear();
 }
 
+bool PayloadHasWork(const VulkanSubmitPayload& payload) {
+    return payload.cmd_list != nullptr || !payload.wait_events.empty() || !payload.signal_events.empty() ||
+           payload.query_submission.has_value() || payload.allocator_owner != nullptr ||
+           payload.presentor != nullptr || !payload.callbacks.empty() || !payload.completion_events.empty() ||
+           !payload.gpu_events.empty() || payload.profiler_submit_data.has_value();
+}
+
 } // namespace
 
 // VulkanAllocatorBase
 VulkanAllocatorBase::VulkanAllocatorBase(VulkanDevice* _device, EQueueType _type) :
     VulkanDeviceObject(_device),
+    allocator_queue_type(_type),
     tracker(_type) {
     cmd_allocator.emplace(_device, _type);
     cmd_list.emplace(&cmd_allocator.value(), *_device);
 }
 
 VulkanAllocatorBase::~VulkanAllocatorBase() {
+    extra_cmd_lists.clear();
+    active_cmd_list = nullptr;
     cmd_list.reset();
     cmd_allocator.reset();
     on_complete.clear();
     completion_events.clear();
+    submit_on_complete.clear();
+    submit_completion_events.clear();
     tracker.Reset();
+    current_payload.reset();
+    pending_payloads.clear();
+}
+
+VulkanSubmitPayload& VulkanAllocatorBase::GetOrCreateCurrentPayload(
+    EVulkanSubmitPayloadType payload_type,
+    EQueueType               queue_type
+) {
+    if (!current_payload) {
+        current_payload            = MakeUnique<VulkanSubmitPayload>();
+        current_payload->type      = payload_type;
+        current_payload->phase     = EVulkanSubmitPayloadPhase::Recording;
+        current_payload->queue_type = queue_type;
+    }
+    return *current_payload;
+}
+
+bool VulkanAllocatorBase::CurrentPayloadHasWork() const {
+    return current_payload != nullptr && PayloadHasWork(*current_payload);
+}
+
+void VulkanAllocatorBase::CloseCurrentPayload() {
+    if (!current_payload) {
+        return;
+    }
+    active_cmd_list = nullptr;
+    if (!PayloadHasWork(*current_payload)) {
+        current_payload.reset();
+        return;
+    }
+    current_payload->phase = EVulkanSubmitPayloadPhase::Closed;
+    pending_payloads.emplace_back(std::move(current_payload));
+}
+
+VulkanSubmitPayload& VulkanAllocatorBase::BeginPayload(
+    EVulkanSubmitPayloadType payload_type,
+    EQueueType               queue_type
+) {
+    if (current_payload && current_payload->phase == EVulkanSubmitPayloadPhase::Signal) {
+        CloseCurrentPayload();
+    }
+    auto& payload = GetOrCreateCurrentPayload(payload_type, queue_type);
+    payload.type       = payload_type;
+    payload.queue_type = queue_type;
+    if (payload.phase != EVulkanSubmitPayloadPhase::Wait) {
+        payload.phase = EVulkanSubmitPayloadPhase::Recording;
+    }
+    return payload;
+}
+
+VulkanSubmitPayload& VulkanAllocatorBase::GetCurrentPayload(
+    EVulkanSubmitPayloadType payload_type,
+    EQueueType               queue_type
+) {
+    auto& payload = GetOrCreateCurrentPayload(payload_type, queue_type);
+    payload.type       = payload_type;
+    payload.queue_type = queue_type;
+    return payload;
+}
+
+VulkanCmdList& VulkanAllocatorBase::BeginSubmitContext() {
+    submit_on_complete.clear();
+    submit_completion_events.clear();
+
+    VulkanSubmitPayload& payload = BeginPayload(
+        allocator_queue_type == EQueueType::Copy ? EVulkanSubmitPayloadType::Copy : EVulkanSubmitPayloadType::Queue,
+        allocator_queue_type
+    );
+
+    VulkanCmdList* selected_cmd_list = nullptr;
+    if (next_cmd_list_index == 0) {
+        selected_cmd_list = &cmd_list.value();
+    } else {
+        const uint32 extra_index = next_cmd_list_index - 1;
+        if (extra_index >= extra_cmd_lists.size()) {
+            extra_cmd_lists.emplace_back(MakeUnique<VulkanCmdList>(&cmd_allocator.value(), *m_device));
+        }
+        selected_cmd_list = extra_cmd_lists[extra_index].get();
+    }
+
+    ++next_cmd_list_index;
+    active_cmd_list = selected_cmd_list;
+    payload.cmd_list = active_cmd_list;
+    if (payload.phase != EVulkanSubmitPayloadPhase::Wait) {
+        payload.phase = EVulkanSubmitPayloadPhase::Recording;
+    }
+    return *active_cmd_list;
+}
+
+void VulkanAllocatorBase::EndSubmitContext() {
+    if (current_payload) {
+        current_payload->callbacks.insert(
+            current_payload->callbacks.end(),
+            std::make_move_iterator(submit_on_complete.begin()),
+            std::make_move_iterator(submit_on_complete.end())
+        );
+        current_payload->completion_events.insert(
+            current_payload->completion_events.end(),
+            std::make_move_iterator(submit_completion_events.begin()),
+            std::make_move_iterator(submit_completion_events.end())
+        );
+    }
+    submit_on_complete.clear();
+    submit_completion_events.clear();
+    active_cmd_list = nullptr;
+}
+
+void VulkanAllocatorBase::AddSubmitWait(
+    WaitEvent                event,
+    EVulkanSubmitPayloadType payload_type,
+    EQueueType               queue_type
+) {
+    if (current_payload && current_payload->phase != EVulkanSubmitPayloadPhase::Wait && CurrentPayloadHasWork()) {
+        CloseCurrentPayload();
+    }
+    auto& payload = GetOrCreateCurrentPayload(payload_type, queue_type);
+    payload.type       = payload_type;
+    payload.queue_type = queue_type;
+    payload.phase      = EVulkanSubmitPayloadPhase::Wait;
+    payload.wait_events.emplace_back(event);
+}
+
+void VulkanAllocatorBase::AddSubmitSignal(
+    SignalEvent              event,
+    EVulkanSubmitPayloadType payload_type,
+    EQueueType               queue_type
+) {
+    auto& payload = GetOrCreateCurrentPayload(payload_type, queue_type);
+    payload.type       = payload_type;
+    payload.queue_type = queue_type;
+    payload.signal_events.emplace_back(event);
+    payload.phase = EVulkanSubmitPayloadPhase::Signal;
+}
+
+Array<UniquePtr<VulkanSubmitPayload>> VulkanAllocatorBase::ReleasePendingPayloads() {
+    CloseCurrentPayload();
+    Array<UniquePtr<VulkanSubmitPayload>> payloads = std::move(pending_payloads);
+    pending_payloads.clear();
+    return payloads;
 }
 
 void VulkanAllocatorBase::ResetCmdList() {
+    active_cmd_list = nullptr;
+    next_cmd_list_index = 0;
     vkResetCommandPool(m_device->GetDevice(), cmd_allocator->GetHandle(), 0);
 }
 
@@ -60,6 +214,8 @@ void VulkanAllocatorBase::Complete(VulkanFence* _fence, uint64 _wait_val) {
 
 void VulkanAllocatorBase::Reset() {
     ResetCmdList();
+    current_payload.reset();
+    pending_payloads.clear();
 }
 
 // VulkanPresentor
@@ -125,8 +281,7 @@ VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type) :
     upload_allocator(&allocator, small_block_size, 1.5),
     readback_allocator(&allocator, small_block_size, 1.5),
     scratch_allocator(_device, &allocator),
-    shader_buffer_allocator(_device, &allocator),
-    timestamp_pool(*_device, VK_QUERY_TYPE_TIMESTAMP, 1000) {}
+    shader_buffer_allocator(_device, &allocator) {}
 
 VulkanAllocator::~VulkanAllocator() {
     upload_allocator.Dispose();
@@ -191,6 +346,8 @@ void VulkanAllocator::Complete(VulkanFence* _fence, uint64 _wait_val) {
 void VulkanAllocator::Reset() {
     ResetBufferAlloc();
     ResetCmdList();
+    current_payload.reset();
+    pending_payloads.clear();
 }
 
 VkTmpBufferAllocator::VkTmpBufferAllocator(VulkanDevice* _device) : VulkanDeviceObject(_device) {}

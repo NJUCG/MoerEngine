@@ -346,47 +346,73 @@ bool RasterRenderer::RunSingle(
         cmd_list.PopScopeWithTimeScope();
 
         // Directional Shadow Mask Pass
+        cmd_list.PushScopeWithTimeScope(MOER_TEXT("Directional Shadow Mask Pass"));
         directional_shadow_mask_pass->Process(raster_context, raster_config, camera);
+        cmd_list.PopScopeWithTimeScope();
 
         // Lighting Pass
+        cmd_list.PushScopeWithTimeScope(MOER_TEXT("Lighting Pass"));
         lighting_pass->Process(raster_context, raster_config, camera);
+        cmd_list.PopScopeWithTimeScope();
 
         //Env&Atmo Pass
+        cmd_list.PushScopeWithTimeScope(MOER_TEXT("Skybox Pass"));
         skybox_pass->Process(raster_context, raster_config, camera);
+        cmd_list.PopScopeWithTimeScope();
 
         // Post Process Passes
         // - Ambient Occlusion
+        cmd_list.PushScopeWithTimeScope(MOER_TEXT("Ambient Occlusion Pass"));
         auto ao_result = ao_pass->Process(raster_context, raster_config, camera, time);
+        cmd_list.PopScopeWithTimeScope();
 
+        cmd_list.PushScopeWithTimeScope(MOER_TEXT("RTAO Denoiser Pass"));
         rtao_denoiser_pass->ProcessInPlace(raster_context, raster_config, ao_result.ao_only_idx);
+        cmd_list.PopScopeWithTimeScope();
+        cmd_list.PushScopeWithTimeScope(MOER_TEXT("Ambient Occlusion Composite Pass"));
         ao_pass->CompositeAo(raster_context, raster_config, ao_result.ao_only);
+        cmd_list.PopScopeWithTimeScope();
 
         TextureWithHandle processing_image = raster_context.textures.ao_output;
 
         // - CUDA Pass
 #if WITH_CUDA
         if (raster_config.ai_is_cuda_enabled) {
+        cmd_list.PushScopeWithTimeScope(MOER_TEXT("TensorRT Pass"));
             processing_image = tensor_rt_pass->Process(raster_context, raster_config, ao_result.ao_only_idx);
+        cmd_list.PopScopeWithTimeScope();
         }
 #endif
 
         // - Denoiser Pass (Bilateral Filter)
+    cmd_list.PushScopeWithTimeScope(MOER_TEXT("Bilateral Denoiser Pass"));
         processing_image = bfd_pass->Process(raster_context, raster_config, processing_image);
+    cmd_list.PopScopeWithTimeScope();
 
         // - Screen Space Reflection
+    cmd_list.PushScopeWithTimeScope(MOER_TEXT("Screen Space Reflection Pass"));
         processing_image = ssr_pass->Process(raster_context, raster_config, camera, processing_image);
+    cmd_list.PopScopeWithTimeScope();
 
         // - Cooperative Ops
+    cmd_list.PushScopeWithTimeScope(MOER_TEXT("Cooperative Ops Pass"));
         processing_image = cooperative_ops_pass->Process(raster_context, raster_config, processing_image);
+    cmd_list.PopScopeWithTimeScope();
 
         // - Anti-aliasing
+    cmd_list.PushScopeWithTimeScope(MOER_TEXT("Anti Aliasing Pass"));
         processing_image = aa_pass->Process(raster_context, raster_config, camera, processing_image);
+    cmd_list.PopScopeWithTimeScope();
 
         // - Bloom Pass
+    cmd_list.PushScopeWithTimeScope(MOER_TEXT("Bloom Pass"));
         processing_image = bloom_pass->Process(raster_context, raster_config, processing_image);
+    cmd_list.PopScopeWithTimeScope();
 
         // - Tonemapping Pass
+    cmd_list.PushScopeWithTimeScope(MOER_TEXT("Tonemapping Pass"));
         processing_image = tonemapping_pass->Process(raster_context, raster_config, processing_image);
+    cmd_list.PopScopeWithTimeScope();
 
         TextureView scene_output = raster_context.GetSelectedFrameBufferView(raster_config.selected_frame_buffer_index);
         if (editor_config->play_mode_enabled) {

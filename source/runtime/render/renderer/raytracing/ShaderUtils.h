@@ -100,9 +100,14 @@ public:
     void GenerateMipPdf(
         CommandList&           _cmd_list,
         const TextureView&     _env_map,
-        std::span<TextureView> _integrated_mips
+        std::span<TextureView> _integrated_mips,
+        ETextureState          _final_state = ETextureState::SHADER_RESOURCE
     );
-    void GenerateMips(CommandList& _cmd_list, std::span<TextureView> _mips);
+    void GenerateMips(
+        CommandList&           _cmd_list,
+        std::span<TextureView> _mips,
+        ETextureState          _final_state = ETextureState::SHADER_RESOURCE
+    );
     void ShowTexture(
         CommandList&             _cmd_list,
         BindlessArrayRef         _bdls,

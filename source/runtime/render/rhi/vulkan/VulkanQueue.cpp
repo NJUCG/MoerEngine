@@ -7,11 +7,11 @@
 #include "VulkanDevice.h"
 #include "VulkanRHITrace.h"
 #include "VulkanRHIResource.h"
+#include "VulkanThreadHeartbeat.h"
 #include "misc/Alignment.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
 #include "misc/Traits.h"
-#include "rhi/GPUEventStream.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIIO.h"
@@ -31,11 +31,31 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
-#include <limits>
 #include <variant>
+#include <functional>
 namespace Moer::Render {
 
 namespace {
+
+struct QueueAccessState {
+    uint64 owner_thread_id{0};
+    uint32 depth{0};
+    String operation{};
+};
+
+std::mutex& GetQueueAccessStateMutex() {
+    static std::mutex mutex{};
+    return mutex;
+}
+
+UnorderedMap<uint64, QueueAccessState>& GetQueueAccessStates() {
+    static UnorderedMap<uint64, QueueAccessState> states{};
+    return states;
+}
+
+uint64 CurrentThreadAccessId() {
+    return static_cast<uint64>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+}
 
 bool HasFrameBoundaryEvent(std::span<const GPUEvent> gpu_events) {
     return std::any_of(gpu_events.begin(), gpu_events.end(), [](const GPUEvent& event) {
@@ -43,6 +63,56 @@ bool HasFrameBoundaryEvent(std::span<const GPUEvent> gpu_events) {
     });
 }
 
+}
+
+VulkanQueueAccessScope::VulkanQueueAccessScope(VkQueue in_queue, StringView operation) :
+    queue(in_queue),
+    thread_id(CurrentThreadAccessId()) {
+    if (queue == VK_NULL_HANDLE) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(GetQueueAccessStateMutex());
+    QueueAccessState&           state = GetQueueAccessStates()[uint64(queue)];
+    if (state.depth > 0 && state.owner_thread_id != thread_id) {
+        LOG_ERROR(
+            MOER_TEXT("[QueueAccess] concurrent VkQueue access detected: queue={:#x}, op={}, ")
+            MOER_TEXT("thread={}, owner_thread={}, owner_op={}, depth={}"
+            ),
+            uint64(queue),
+            operation,
+            thread_id,
+            state.owner_thread_id,
+            state.operation,
+            state.depth
+        );
+    }
+
+    state.owner_thread_id = thread_id;
+    state.depth += 1;
+    state.operation = String(operation);
+    active = true;
+}
+
+VulkanQueueAccessScope::~VulkanQueueAccessScope() {
+    if (!active || queue == VK_NULL_HANDLE) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(GetQueueAccessStateMutex());
+    auto&                       states = GetQueueAccessStates();
+    const auto                  iter = states.find(uint64(queue));
+    if (iter == states.end()) {
+        return;
+    }
+
+    QueueAccessState& state = iter->second;
+    if (state.depth > 0) {
+        state.depth -= 1;
+    }
+    if (state.depth == 0) {
+        states.erase(iter);
+    }
 }
 
 #pragma region[ utils ]
@@ -83,6 +153,46 @@ static uint64_t SteadyNowNs() {
                std::chrono::steady_clock::now().time_since_epoch()
     )
         .count();
+}
+
+EVulkanSubmitPayloadType ResolveSubmitPayloadType(EQueueType queue_type) {
+    return queue_type == EQueueType::Copy ? EVulkanSubmitPayloadType::Copy : EVulkanSubmitPayloadType::Queue;
+}
+
+void AppendSubmitTailToPayload(CmdSubmit& submit, VulkanSubmitPayload& payload) {
+    payload.callbacks.insert(
+        payload.callbacks.end(),
+        std::make_move_iterator(submit.callbacks.begin()),
+        std::make_move_iterator(submit.callbacks.end())
+    );
+    payload.signal_events.insert(
+        payload.signal_events.end(),
+        std::make_move_iterator(submit.signal_events.begin()),
+        std::make_move_iterator(submit.signal_events.end())
+    );
+    payload.gpu_events.insert(
+        payload.gpu_events.end(),
+        std::make_move_iterator(submit.gpu_events.begin()),
+        std::make_move_iterator(submit.gpu_events.end())
+    );
+    payload.has_frame_boundary_event = payload.has_frame_boundary_event || HasFrameBoundaryEvent(payload.gpu_events);
+}
+
+UniquePtr<VulkanSubmitPayload> BuildStandalonePayload(CmdSubmit& submit, EQueueType queue_type) {
+    auto payload         = MakeUnique<VulkanSubmitPayload>();
+    payload->type        = ResolveSubmitPayloadType(queue_type);
+    payload->queue_type  = queue_type;
+    payload->tick_profiling = submit.b_tick_profiling;
+    payload->wait_events = std::move(submit.wait_events);
+    AppendSubmitTailToPayload(submit, *payload);
+    return payload;
+}
+
+void AttachRecordedAllocatorOwner(VulkanRecordedSubmit& recorded) {
+    if (!recorded.allocator_owner || recorded.payloads.empty()) {
+        return;
+    }
+    recorded.payloads.back()->allocator_owner = std::move(recorded.allocator_owner);
 }
 
 bool IsTimestampQueryOp(QueryCmd::EOp op) {
@@ -297,7 +407,7 @@ struct VkCmdPreprocessor {
         }
         if (!to_read_textures.empty()) {
             for (const auto& key : to_read_textures) {
-                auto access = tracker.ReadTexture(key.texture, ETextureState::SAMPLE, pass_type);
+                auto access = tracker.ReadTexture(key.texture, ETextureState::SAMPLED, pass_type);
                 tracker.RecordState(
                     key.texture,
                     std::get<0>(access),
@@ -335,6 +445,140 @@ struct VkCmdPreprocessor {
         );
         tracker.RecordState(
             vk_bindless_array->bindless_array_buffer, VK_ACCESS_2_SHADER_READ_BIT, _pipeline_stages
+        );
+    }
+
+    static VkPipelineStageFlags2 ShaderStagesForPass(EPassType pass_type) {
+        switch (pass_type) {
+            case EPassType::Graphics:
+                return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            case EPassType::Compute:
+                return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            case EPassType::Raytracing:
+                return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            case EPassType::Copy:
+            default:
+                return VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        }
+    }
+
+    static std::tuple<VkAccessFlags2, VkPipelineStageFlags2> BindlessArrayState(
+        const BindlessArrayBarrier& barrier,
+        bool                        write,
+        bool                        descriptor_buffer
+    ) {
+        const VkPipelineStageFlags2 stages = ShaderStagesForPass(barrier.pass_type);
+        if (write) {
+            return {VK_ACCESS_2_SHADER_WRITE_BIT, stages};
+        }
+        return {
+            descriptor_buffer ? VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT : VK_ACCESS_2_SHADER_READ_BIT,
+            stages
+        };
+    }
+
+    void RecordBindlessBarrier(const BindlessArrayBarrier& barrier, bool write) {
+        auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(barrier.handle);
+        if (vk_bindless_array == nullptr) {
+            return;
+        }
+        auto record_buffer = [&](VulkanBuffer* buffer, bool descriptor_buffer) {
+            if (buffer == nullptr) {
+                return;
+            }
+            tracker.RecordState(buffer, BindlessArrayState(barrier, write, descriptor_buffer));
+        };
+        record_buffer(vk_bindless_array->bindless_array_buffer, false);
+        record_buffer(vk_bindless_array->bindless_texture_descs, true);
+        record_buffer(vk_bindless_array->bindless_buffer_descs, true);
+    }
+
+    void EmitBindlessQueueTransition(
+        const BindlessArrayBarrier& barrier,
+        bool                        write,
+        uint                        src_queue_family,
+        uint                        dst_queue_family
+    ) {
+        auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(barrier.handle);
+        if (vk_bindless_array == nullptr) {
+            return;
+        }
+        auto emit_buffer = [&](VulkanBuffer* buffer, bool descriptor_buffer) {
+            if (buffer == nullptr) {
+                return;
+            }
+            tracker.EmitLocalTransition(
+                buffer,
+                BindlessArrayState(barrier, write, descriptor_buffer),
+                src_queue_family,
+                dst_queue_family
+            );
+        };
+        emit_buffer(vk_bindless_array->bindless_array_buffer, false);
+        emit_buffer(vk_bindless_array->bindless_texture_descs, true);
+        emit_buffer(vk_bindless_array->bindless_buffer_descs, true);
+    }
+
+    void ForEachAccelBackingBuffer(uint64 handle, std::function<void(VulkanBuffer*)> func) {
+        if (handle == 0) {
+            return;
+        }
+        auto* resource = reinterpret_cast<RHIResource*>(handle);
+        if (resource == nullptr) {
+            return;
+        }
+        switch (resource->GetResourceType()) {
+            case RRT_RAYTRACING_TLAS: {
+                auto* tlas = reinterpret_cast<VulkanAccelerationStructure*>(handle);
+                func(tlas->underlying_buffer.Get());
+                break;
+            }
+            case RRT_RAYTRACING_GEOMETRY: {
+                auto* geometry = reinterpret_cast<VulkanRaytracingGeometry*>(handle);
+                func(geometry->GetUnderlyingBuffer());
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    void RecordAccelBarrier(const AccelerationStructureBarrier& barrier, bool write) {
+        ForEachAccelBackingBuffer(
+            barrier.handle,
+            [&](VulkanBuffer* buffer) {
+                if (buffer == nullptr) {
+                    return;
+                }
+                tracker.RecordState(
+                    buffer,
+                    write ? tracker.WriteBuffer(buffer, barrier.state, barrier.pass_type) :
+                            tracker.ReadBuffer(buffer, barrier.state, barrier.pass_type)
+                );
+            }
+        );
+    }
+
+    void EmitAccelQueueTransition(
+        const AccelerationStructureBarrier& barrier,
+        bool                                write,
+        uint                                src_queue_family,
+        uint                                dst_queue_family
+    ) {
+        ForEachAccelBackingBuffer(
+            barrier.handle,
+            [&](VulkanBuffer* buffer) {
+                if (buffer == nullptr) {
+                    return;
+                }
+                tracker.EmitLocalTransition(
+                    buffer,
+                    write ? tracker.WriteBuffer(buffer, barrier.state, barrier.pass_type) :
+                            tracker.ReadBuffer(buffer, barrier.state, barrier.pass_type),
+                    src_queue_family,
+                    dst_queue_family
+                );
+            }
         );
     }
 
@@ -384,6 +628,173 @@ struct VkCmdPreprocessor {
         }
     }
 
+    static VkPipelineStageFlags2 GetVkBarrierStageFlags(ERHIPipelineStageFlags stages) {
+        VkPipelineStageFlags2 result = VK_PIPELINE_STAGE_2_NONE;
+        if ((stages & ERHIPipelineStageFlags::PS_TOP_OF_PIPE) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_DRAW_INDIRECT) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_VERTEX_INPUT) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_VERTEX_SHADER) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_TESSELLATION_CONTROL_SHADER) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_TESSELLATION_EVALUATION_SHADER) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_GEOMETRY_SHADER) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_FRAGMENT_SHADER) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_LATE_FRAGMENT_TESTS) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_COMPUTE_SHADER) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_TRANSFER) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_BOTTOM_OF_PIPE) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_HOST) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_HOST_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_ALL_GRAPHICS) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_ALL_COMMANDS) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_ACCELERATION_STRUCTURE_BUILD) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_RAY_TRACING_SHADER) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_TASK_SHADER) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT;
+        }
+        if ((stages & ERHIPipelineStageFlags::PS_MESH_SHADER) != ERHIPipelineStageFlags::PS_NONE) {
+            result |= VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
+        }
+        return result;
+    }
+
+    static VkAccessFlags2 GetVkBarrierAccessFlags(ERHIAccessFlags access) {
+        VkAccessFlags2 result = VK_ACCESS_2_NONE;
+        if ((access & ERHIAccessFlags::INDIRECT_COMMAND_READ) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::INDEX_READ) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_INDEX_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::VERTEX_ATTRIBUTE_READ) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::UNIFORM_READ) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_UNIFORM_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::INPUT_ATTACHMENT_READ) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::SHADER_READ) != ERHIAccessFlags::UNDEFINED ||
+            (access & ERHIAccessFlags::SHADER_SAMPLED_READ) != ERHIAccessFlags::UNDEFINED ||
+            (access & ERHIAccessFlags::SHADER_RESOURCE_VIEW) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_SHADER_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::SHADER_WRITE) != ERHIAccessFlags::UNDEFINED ||
+            (access & ERHIAccessFlags::UNORDERED_ACCESS_VIEW) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_SHADER_WRITE_BIT;
+        }
+        if ((access & ERHIAccessFlags::COLOR_ATTACHMENT_READ) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::COLOR_ATTACHMENT_WRITE) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        }
+        if ((access & ERHIAccessFlags::DEPTH_STENCIL_READ) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::DEPTH_STENCIL_WRITE) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        }
+        if ((access & ERHIAccessFlags::TRANSFER_READ) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_TRANSFER_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::TRANSFER_WRITE) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        }
+        if ((access & ERHIAccessFlags::MEMORY_READ) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_MEMORY_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::MEMORY_WRITE) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_MEMORY_WRITE_BIT;
+        }
+        if ((access & ERHIAccessFlags::CPU_READ_BIT) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_HOST_READ_BIT;
+        }
+        if ((access & ERHIAccessFlags::CPU_WRITE_BIT) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_HOST_WRITE_BIT;
+        }
+        if ((access & ERHIAccessFlags::ACCELERATION_STRUCTURE_READ_BIT) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        }
+        if ((access & ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT) != ERHIAccessFlags::UNDEFINED) {
+            result |= VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        }
+        return result;
+    }
+
+    static VkImageLayout GetVkBarrierLayout(const BarrierState& state, VulkanTexture* texture) {
+        if (state.access == ERHIAccessFlags::UNDEFINED) {
+            return VK_IMAGE_LAYOUT_UNDEFINED;
+        }
+        if ((state.access & ERHIAccessFlags::TRANSFER_WRITE) != ERHIAccessFlags::UNDEFINED) {
+            return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        }
+        if ((state.access & ERHIAccessFlags::TRANSFER_READ) != ERHIAccessFlags::UNDEFINED) {
+            return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        }
+        if ((state.access & ERHIAccessFlags::COLOR_ATTACHMENT_WRITE) != ERHIAccessFlags::UNDEFINED ||
+            (state.access & ERHIAccessFlags::COLOR_ATTACHMENT_READ) != ERHIAccessFlags::UNDEFINED) {
+            return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+        if ((state.access & ERHIAccessFlags::DEPTH_STENCIL_WRITE) != ERHIAccessFlags::UNDEFINED) {
+            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        }
+        if ((state.access & ERHIAccessFlags::DEPTH_STENCIL_READ) != ERHIAccessFlags::UNDEFINED) {
+            return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        }
+        if (BarrierStateWrites(state)) {
+            return VK_IMAGE_LAYOUT_GENERAL;
+        }
+        if ((state.access & ERHIAccessFlags::SHADER_READ) != ERHIAccessFlags::UNDEFINED ||
+            (state.access & ERHIAccessFlags::SHADER_SAMPLED_READ) != ERHIAccessFlags::UNDEFINED ||
+            (state.access & ERHIAccessFlags::SHADER_RESOURCE_VIEW) != ERHIAccessFlags::UNDEFINED) {
+            if (texture != nullptr && texture->GetPreferredLayout() == VK_IMAGE_LAYOUT_GENERAL) {
+                return VK_IMAGE_LAYOUT_GENERAL;
+            }
+            return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        return VK_IMAGE_LAYOUT_GENERAL;
+    }
+
     void VisitArgs(const TArg& _arg, VulkanShaderResourceState _flag, VkPipelineStageFlagBits2 _pipelines) {
         if (_pipelines == VK_PIPELINE_STAGE_2_NONE)
             return;
@@ -402,10 +813,15 @@ struct VkCmdPreprocessor {
                     if (_flag.resource_type == SRT_INVALID)
                         return;
                     auto* vk_texture = ResourceCast(_arg.GetTexture());
+                    VkImageLayout layout = GetTextureLayout(_flag);
+                    if (layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+                        vk_texture->GetPreferredLayout() == VK_IMAGE_LAYOUT_GENERAL) {
+                        layout = VK_IMAGE_LAYOUT_GENERAL;
+                    }
                     tracker.RecordState(
                         vk_texture,
                         GetTextureAccess(_flag),
-                        GetTextureLayout(_flag),
+                        layout,
                         _pipelines,
                         _arg.mip_level,
                         _arg.num_mips,
@@ -432,8 +848,25 @@ struct VkCmdPreprocessor {
                 }
 
                 else if constexpr (std::is_same_v<T, BindlessArrayRef>) {
-                    // HandleBindless(_arg, _pipelines);
-                    assert(false && "Bindless array not supported");
+                    VulkanBindlessArray* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_arg.Get());
+                    if (vk_bindless_array == nullptr) {
+                        return;
+                    }
+                    tracker.RecordState(
+                        vk_bindless_array->bindless_array_buffer,
+                        VK_ACCESS_2_SHADER_READ_BIT,
+                        _pipelines
+                    );
+                    tracker.RecordState(
+                        vk_bindless_array->bindless_texture_descs,
+                        VK_ACCESS_2_SHADER_READ_BIT,
+                        _pipelines
+                    );
+                    tracker.RecordState(
+                        vk_bindless_array->bindless_buffer_descs,
+                        VK_ACCESS_2_SHADER_READ_BIT,
+                        _pipelines
+                    );
                 } else if constexpr (std::is_same_v<T, RaytracingTlasRef>) {
                     VulkanAccelerationStructure* vk_as = ResourceCast(_arg.Get());
                     tracker.RecordState(
@@ -494,6 +927,7 @@ struct VkCmdPreprocessor {
                 Visit(static_cast<const BarrierCmd*>(_cmd));
                 break;
             case Command::EType::SetTrackedState:
+                Visit(static_cast<const SetTrackedStateCmd*>(_cmd));
                 break;
             case Command::EType::QueueTransfer:
                 Visit(static_cast<const QueueTransferCmd*>(_cmd));
@@ -526,6 +960,143 @@ struct VkCmdPreprocessor {
                 assert(false && "Invalid command type");
         }
         return false;
+    }
+
+    bool VisitExplicitCmd(const Command* _cmd) {
+        assert(_cmd != nullptr);
+        switch (_cmd->Type()) {
+            case Command::EType::UploadBuffer:
+                VisitExplicitUploadBuffer(static_cast<const UploadBufferCmd*>(_cmd));
+                break;
+            case Command::EType::UploadTexture:
+                VisitExplicitUploadTexture(static_cast<const UploadTextureCmd*>(_cmd));
+                break;
+            case Command::EType::CopyBackBuffer:
+                VisitExplicitCopyBackBuffer(static_cast<const CopyBackBufferCmd*>(_cmd));
+                break;
+            case Command::EType::CopyBackTexture:
+                VisitExplicitCopyBackTexture(static_cast<const CopyBackTextureCmd*>(_cmd));
+                break;
+            case Command::EType::BuildAccel:
+                VisitExplicitBuildAccelerationStructures(static_cast<const BuildAccelerationStructuresCmd*>(_cmd));
+                break;
+            case Command::EType::BuildTLAS:
+                VisitExplicitUpdateRaytracingScene(static_cast<const UpdateRaytracingSceneCmd*>(_cmd));
+                break;
+            case Command::EType::Barrier:
+                Visit(static_cast<const BarrierCmd*>(_cmd));
+                break;
+            case Command::EType::QueueTransfer:
+                Visit(static_cast<const QueueTransferCmd*>(_cmd));
+                break;
+            case Command::EType::BufferOverlap:
+                {
+                    const auto* overlap_cmd = static_cast<const BufferOverlapCmd*>(_cmd);
+                    auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(overlap_cmd->BufferHandle());
+                    tracker.SetBufferOverlap(vk_buffer, overlap_cmd->IsBegin());
+                }
+                break;
+            default:
+                break;
+        }
+        return false;
+    }
+
+    void VisitExplicitUploadBuffer(const UploadBufferCmd* _cmd) {
+        auto data_span  = _cmd->Data();
+        auto tmp_buffer = allocator.AllocateUploadBuffer(_cmd->ByteSize(), 16);
+        device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
+        _cmd->staging_buffer = tmp_buffer;
+
+        tracker.RegisterFlushBufferRange(
+            _cmd->staging_buffer,
+            VK_ACCESS_2_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            VK_ACCESS_2_HOST_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_HOST_BIT
+        );
+    }
+
+    void VisitExplicitUploadTexture(const UploadTextureCmd* _cmd) {
+        auto data_span  = _cmd->Data();
+        auto tmp_buffer = allocator.AllocateUploadBuffer(data_span.size_bytes(), 16);
+        device.CopyData(tmp_buffer, data_span.data(), data_span.size_bytes());
+        _cmd->staging_buffer = tmp_buffer;
+
+        tracker.RegisterFlushBufferRange(
+            _cmd->staging_buffer,
+            VK_ACCESS_2_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            VK_ACCESS_2_HOST_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_HOST_BIT
+        );
+    }
+
+    void VisitExplicitCopyBackBuffer(const CopyBackBufferCmd* _cmd) {
+        auto tmp_buffer      = allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
+        _cmd->staging_buffer = tmp_buffer;
+        tracker.RegisterFlushBufferRange(
+            _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
+        );
+    }
+
+    void VisitExplicitCopyBackTexture(const CopyBackTextureCmd* _cmd) {
+        auto tmp_buffer      = allocator.AllocateReadbackBuffer(_cmd->Data().size_bytes(), 16);
+        _cmd->staging_buffer = tmp_buffer;
+        tracker.RegisterFlushBufferRange(
+            _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
+        );
+    }
+
+    void VisitExplicitBuildAccelerationStructures(const BuildAccelerationStructuresCmd* _cmd) {
+        const Array<AccelerationStructureBuildParam>& params  = _cmd->Params();
+        BufferView&                                   scratch = _cmd->Scratch();
+        if (!scratch.GetBuffer()) {
+            uint64 scratch_size      = 0;
+            uint64 scratch_alignment = 256u;
+
+            for (const AccelerationStructureBuildParam& param : params) {
+                auto* vk_geo = ResourceCast(param.geometry.Get());
+                scratch_size = Moer::AlignUp(scratch_size, scratch_alignment);
+                scratch_size += param.mode == ERaytracingBuildMode::BUILD ?
+                                    vk_geo->build_sizes_info.buildScratchSize :
+                                    vk_geo->build_sizes_info.updateScratchSize;
+            }
+            scratch_size += scratch_alignment;
+
+            scratch = allocator.AllocateScratch(scratch_size);
+        }
+        tracker.RecordState(
+            ResourceCast(scratch.GetBuffer()),
+            {VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
+        );
+    }
+
+    void VisitExplicitUpdateRaytracingScene(const UpdateRaytracingSceneCmd* _cmd) {
+        if (_cmd->InstancesToUpdate().empty() && !_cmd->ForceUpdate()) {
+            return;
+        }
+        VulkanBuffer* instance_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->InstanceBufferHandle());
+        VulkanBuffer* scratch_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd->ScratchBufferHandle());
+
+        if (_cmd->ForceUpdate() && _cmd->InstancesToUpdate().empty()) {
+            tracker.RecordState(
+                instance_buffer,
+                {VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
+            );
+        } else {
+            tracker.RecordState(
+                instance_buffer, {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT}
+            );
+        }
+        tracker.RecordState(
+            scratch_buffer,
+            {VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR}
+        );
     }
 
     void Visit(const UploadBufferCmd* _cmd) {
@@ -627,8 +1198,6 @@ struct VkCmdPreprocessor {
         auto tmp_buffer      = allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
-        auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(_cmd->Handle());
-        tracker.RecordState(vk_buffer, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         tracker.RegisterFlushBufferRange(
             _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
         );
@@ -638,14 +1207,6 @@ struct VkCmdPreprocessor {
         auto tmp_buffer      = allocator.AllocateReadbackBuffer(_cmd->Data().size_bytes(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
-        auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
-        tracker.RecordState(
-            vk_texture,
-            VK_ACCESS_2_TRANSFER_READ_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->MipLevel()
-        );
         tracker.RegisterFlushBufferRange(
             _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
         );
@@ -657,9 +1218,9 @@ struct VkCmdPreprocessor {
                 using T = std::decay_t<decltype(_arg)>;
                 if constexpr (std::is_same_v<T, uint3>) {
                     return;
-                } else if constexpr (std::is_same_v<T, BufferView>) {
+                } else if constexpr (std::is_same_v<T, DispatchIndirectParam>) {
                     tracker.RecordState(
-                        reinterpret_cast<VulkanBuffer*>(_arg.GetBuffer()),
+                        reinterpret_cast<VulkanBuffer*>(_arg.indirect.GetBuffer()),
                         VK_ACCESS_2_SHADER_READ_BIT,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                     );
@@ -800,48 +1361,40 @@ struct VkCmdPreprocessor {
     void Visit(const BarrierCmd* _cmd) {
         if (!_cmd->IsQueueTransition()) {
 
-            for (auto& barrier : _cmd->ReadBuffers()) {
+            for (const auto& barrier : _cmd->Buffers()) {
                 auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
                 tracker.RecordState(
-                    vk_buffer, tracker.ReadBuffer(vk_buffer, barrier.state, barrier.pass_type)
+                    vk_buffer,
+                    static_cast<VkAccessFlagBits2>(GetVkBarrierAccessFlags(barrier.dst_state.access)),
+                    static_cast<VkPipelineStageFlagBits2>(GetVkBarrierStageFlags(barrier.dst_state.stage))
                 );
             }
-            for (auto& barrier : _cmd->WriteBuffers()) {
-                auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
-                tracker.RecordState(
-                    vk_buffer, tracker.WriteBuffer(vk_buffer, barrier.state, barrier.pass_type)
-                );
+            for (auto& barrier : _cmd->ReadBindlessArrays()) {
+                RecordBindlessBarrier(barrier, false);
+            }
+            for (auto& barrier : _cmd->WriteBindlessArrays()) {
+                RecordBindlessBarrier(barrier, true);
+            }
+            for (auto& barrier : _cmd->ReadAccelerationStructures()) {
+                RecordAccelBarrier(barrier, false);
+            }
+            for (auto& barrier : _cmd->WriteAccelerationStructures()) {
+                RecordAccelBarrier(barrier, true);
             }
 
-            for (auto& barrier : _cmd->ReadTextures()) {
+            for (const auto& barrier : _cmd->Textures()) {
                 auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-                auto  access     = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
                 tracker.RecordState(
                     vk_texture,
-                    std::get<0>(access),
-                    std::get<1>(access),
-                    std::get<2>(access),
+                    static_cast<VkAccessFlagBits2>(GetVkBarrierAccessFlags(barrier.dst_state.access)),
+                    GetVkBarrierLayout(barrier.dst_state, vk_texture),
+                    static_cast<VkPipelineStageFlagBits2>(GetVkBarrierStageFlags(barrier.dst_state.stage)),
                     static_cast<uint8>(barrier.mip_level),
                     static_cast<uint8>(barrier.mip_cnt),
                     static_cast<uint8>(barrier.array_layer),
                     static_cast<uint8>(barrier.array_count)
                 );
             }
-            for (auto& barrier : _cmd->WriteTextures()) {
-                auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-                auto  access     = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
-                tracker.RecordState(
-                    vk_texture,
-                    std::get<0>(access),
-                    std::get<1>(access),
-                    std::get<2>(access),
-                    static_cast<uint8>(barrier.mip_level),
-                    static_cast<uint8>(barrier.mip_cnt),
-                    static_cast<uint8>(barrier.array_layer),
-                    static_cast<uint8>(barrier.array_count)
-                );
-            }
-
             return;
         }
 
@@ -870,33 +1423,36 @@ struct VkCmdPreprocessor {
         src_queue_family = get_queue_idx(_cmd->GetSrcQueue());
         dst_queue_family = get_queue_idx(_cmd->GetDstQueue());
 
-        for (auto& barrier : _cmd->ReadBuffers()) {
+        for (const auto& barrier : _cmd->Buffers()) {
             auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
             tracker.EmitLocalTransition(
                 vk_buffer,
-                tracker.ReadBuffer(vk_buffer, barrier.state, barrier.pass_type),
+                static_cast<VkAccessFlagBits2>(GetVkBarrierAccessFlags(barrier.dst_state.access)),
+                static_cast<VkPipelineStageFlagBits2>(GetVkBarrierStageFlags(barrier.dst_state.stage)),
                 src_queue_family,
                 dst_queue_family
             );
         }
-        for (auto& barrier : _cmd->WriteBuffers()) {
-            auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
-            tracker.EmitLocalTransition(
-                vk_buffer,
-                tracker.WriteBuffer(vk_buffer, barrier.state, barrier.pass_type),
-                src_queue_family,
-                dst_queue_family
-            );
+        for (auto& barrier : _cmd->ReadBindlessArrays()) {
+            EmitBindlessQueueTransition(barrier, false, src_queue_family, dst_queue_family);
+        }
+        for (auto& barrier : _cmd->WriteBindlessArrays()) {
+            EmitBindlessQueueTransition(barrier, true, src_queue_family, dst_queue_family);
+        }
+        for (auto& barrier : _cmd->ReadAccelerationStructures()) {
+            EmitAccelQueueTransition(barrier, false, src_queue_family, dst_queue_family);
+        }
+        for (auto& barrier : _cmd->WriteAccelerationStructures()) {
+            EmitAccelQueueTransition(barrier, true, src_queue_family, dst_queue_family);
         }
 
-        for (auto& barrier : _cmd->ReadTextures()) {
+        for (const auto& barrier : _cmd->Textures()) {
             auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-            auto  access     = tracker.ReadTexture(vk_texture, barrier.state, barrier.pass_type);
             tracker.EmitLocalTransition(
                 vk_texture,
-                std::get<0>(access),
-                std::get<1>(access),
-                std::get<2>(access),
+            static_cast<VkAccessFlagBits2>(GetVkBarrierAccessFlags(barrier.dst_state.access)),
+                GetVkBarrierLayout(barrier.dst_state, vk_texture),
+            static_cast<VkPipelineStageFlagBits2>(GetVkBarrierStageFlags(barrier.dst_state.stage)),
                 static_cast<uint8>(barrier.mip_level),
                 static_cast<uint8>(barrier.mip_cnt),
                 static_cast<uint8>(barrier.array_layer),
@@ -905,24 +1461,27 @@ struct VkCmdPreprocessor {
                 dst_queue_family
             );
         }
-        for (auto& barrier : _cmd->WriteTextures()) {
-            auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
-            auto  access     = tracker.WriteTexture(vk_texture, barrier.state, barrier.pass_type);
-            tracker.EmitLocalTransition(
-                vk_texture,
-                std::get<0>(access),
-                std::get<1>(access),
-                std::get<2>(access),
-                static_cast<uint8>(barrier.mip_level),
-                static_cast<uint8>(barrier.mip_cnt),
-                static_cast<uint8>(barrier.array_layer),
-                static_cast<uint8>(barrier.array_count),
-                src_queue_family,
-                dst_queue_family
-            );
-        }
-
         //queue transition
+    }
+
+    void Visit(const SetTrackedStateCmd* _cmd) {
+        for (const TrackedTextureState& texture : _cmd->Textures()) {
+            auto* vk_texture = ResourceCast(texture.texture.GetTexture());
+            tracker.SetTrackedState(
+                vk_texture,
+                texture.state,
+                texture.owner_queue,
+                texture.access_write,
+                texture.texture.mip_level,
+                texture.texture.num_mips,
+                texture.texture.array_layer,
+                texture.texture.num_array
+            );
+        }
+        for (const TrackedBufferState& buffer : _cmd->Buffers()) {
+            auto* vk_buffer = ResourceCast(buffer.buffer.GetBuffer());
+            tracker.SetTrackedState(vk_buffer, buffer.state, buffer.owner_queue, buffer.access_write);
+        }
     }
 
     void Visit(const QueueTransferCmd* _cmd) {
@@ -1404,6 +1963,7 @@ public:
                 Visit(static_cast<const BarrierCmd&>(*_cmd));
                 break;
             case Command::EType::SetTrackedState:
+                Visit(static_cast<const SetTrackedStateCmd&>(*_cmd));
                 break;
             case Command::EType::QueueTransfer:
                 Visit(static_cast<const QueueTransferCmd&>(*_cmd));
@@ -1578,8 +2138,8 @@ public:
         cmd_list.BeginLabel(_cmd.name, dispatch_color);
         const auto& param = _cmd.Param();
 
-        PipelineHandle& pso = _cmd.Pipeline();
-        cmd_list.SetPso(_cmd.Pipeline());
+        PipelineHandle pso = _cmd.Pipeline();
+        cmd_list.SetPso(pso);
         const auto& args = _cmd.Args(cached_args);
 
         cmd_list.BindDescriptors(pso, args);
@@ -1628,6 +2188,26 @@ public:
         // }
     }
 
+    void Visit(const SetTrackedStateCmd& _cmd) {
+        for (const TrackedTextureState& texture : _cmd.Textures()) {
+            auto* vk_texture = ResourceCast(texture.texture.GetTexture());
+            tracker.SetTrackedState(
+                vk_texture,
+                texture.state,
+                texture.owner_queue,
+                texture.access_write,
+                texture.texture.mip_level,
+                texture.texture.num_mips,
+                texture.texture.array_layer,
+                texture.texture.num_array
+            );
+        }
+        for (const TrackedBufferState& buffer : _cmd.Buffers()) {
+            auto* vk_buffer = ResourceCast(buffer.buffer.GetBuffer());
+            tracker.SetTrackedState(vk_buffer, buffer.state, buffer.owner_queue, buffer.access_write);
+        }
+    }
+
     void Visit(const SetDrawStateCmd& _cmd) {
 
         static float4 draw_color = {0.0f, 1.0f, 0.0f, 1.0f};
@@ -1635,7 +2215,7 @@ public:
         state = EState::Draw;
 
         const auto&     args = _cmd.Args();
-        PipelineHandle& pso  = _cmd.Pipeline();
+        PipelineHandle pso   = _cmd.Pipeline();
 
         const auto& pass_info = _cmd.RenderPassInfo();
 
@@ -2522,11 +3102,36 @@ public:
         profiler->VisitQueryCmd(cmd_list, _cmd);
     }
 
+    void InsertAccelerationStructureScratchBarrier(VulkanBuffer* scratch_buffer) {
+        if (scratch_buffer == nullptr) {
+            return;
+        }
+
+        VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        barrier.srcAccessMask       = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+                                      VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        barrier.dstAccessMask       = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+                                      VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        barrier.srcStageMask        = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        barrier.dstStageMask        = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer              = scratch_buffer->GetHandle();
+        barrier.offset              = 0;
+        barrier.size                = VK_WHOLE_SIZE;
+
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.bufferMemoryBarrierCount = 1;
+        dependency.pBufferMemoryBarriers    = &barrier;
+        vkCmdPipelineBarrier2(cmd_list.GetHandle(), &dependency);
+    }
+
     void Visit(const BuildAccelerationStructuresCmd& _cmd) {
         const Array<AccelerationStructureBuildParam>& build_params = _cmd.Params();
 
         Array<VkAccelerationStructureBuildGeometryInfoKHR> build_infos;
         Array<VkAccelerationStructureBuildRangeInfoKHR*>   build_ranges;
+        Array<VulkanBuffer*>                               dst_as_buffers;
 
         uint64 scratch_alignment =
             m_device->GetOptionalProperties()
@@ -2540,12 +3145,14 @@ public:
 
         build_infos.reserve(build_params.size());
         build_ranges.reserve(build_params.size());
+        dst_as_buffers.reserve(build_params.size());
 
         uint64 scratch_offset = 0;
 
         for (const auto& build_param : build_params) {
             VulkanRaytracingGeometry* geometry = ResourceCast(build_param.geometry.Get());
             build_ranges.emplace_back(geometry->build_ranges.data());
+            dst_as_buffers.emplace_back(geometry->GetUnderlyingBuffer());
 
             VkAccelerationStructureBuildGeometryInfoKHR build_info{
                 VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR
@@ -2558,7 +3165,6 @@ public:
             build_info.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
             build_info.geometryCount = geometry->build_geometries.size();
             build_info.pGeometries   = geometry->build_geometries.data();
-            build_info.mode = VulkanEnumTranslator::METoVKBuildAccelerationStructureMode(build_param.mode);
             build_info.flags =
                 VulkanEnumTranslator::METoVKAccelerationStructureBuildType(geometry->GetInfo().build_flags);
             build_info.scratchData.deviceAddress = scratch_address + scratch_offset;
@@ -2570,23 +3176,27 @@ public:
                                   geometry->build_sizes_info.updateScratchSize;
         }
         cmd_list.BeginLabel(Printf(MOER_TEXT("BuildBLAS {}"), build_infos.size()), {});
+        InsertAccelerationStructureScratchBarrier(scratch_buf);
+        for (VulkanBuffer* dst_as_buffer : dst_as_buffers) {
+            InsertAccelerationStructureScratchBarrier(dst_as_buffer);
+        }
         cmd_list.BuildAccelerationStructures(build_infos, build_ranges);
         cmd_list.EndLabel();
     }
 
     void Visit(const UpdateRaytracingSceneCmd& _cmd) {
+        if (_cmd.InstancesToUpdate().empty() && !_cmd.ForceUpdate()) {
+            return;
+        }
+
         const auto& to_update = _cmd.InstancesToUpdate();
 
         VulkanBuffer* instance_buffer     = reinterpret_cast<VulkanBuffer*>(_cmd.InstanceBufferHandle());
         VulkanBuffer* scratch_buffer      = reinterpret_cast<VulkanBuffer*>(_cmd.ScratchBufferHandle());
         VulkanAccelerationStructure* tlas = reinterpret_cast<VulkanAccelerationStructure*>(_cmd.TlasHandle());
 
-        if (to_update.size() == 0 && !_cmd.ForceUpdate()) {
-            return;
-        }
-        // VulkanRaytracingScene* scene   = reinterpret_cast<VulkanRaytracingScene*>(_cmd.Handle());
-
-        // Calculate 16-byte aligned offset for TLAS instance data (Vulkan spec requirement)
+        InsertAccelerationStructureScratchBarrier(scratch_buffer);
+        InsertAccelerationStructureScratchBarrier(tlas->underlying_buffer);
         constexpr uint64 kInstanceDataAlignment = 256; // 256-byte for AMD GPU compatibility
         uint64           raw_device_address     = instance_buffer->DeviceAddress();
         uint64           aligned_device_address = Moer::AlignUp(raw_device_address, kInstanceDataAlignment);
@@ -2814,6 +3424,7 @@ VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : type(_ty
             assert(false && "Invalid queue type");
     }
     supports_timestamp_queries = _device.SupportsTimestampQueries(_type);
+    validation_layer_enabled   = _device.IsValidationLayerEnabled();
     assert(queue != VK_NULL_HANDLE && "Invalid queue type!");
 }
 
@@ -2836,7 +3447,10 @@ void VkNativeQueue::SubmitEmpty(VkFence _fence) {
     submit_info.pSignalSemaphoreInfos    = signal_infos.data();
     submit_info.commandBufferInfoCount   = 0;
     submit_info.pCommandBufferInfos      = VK_NULL_HANDLE;
+    VulkanQueueAccessScope queue_access_scope(queue, MOER_TEXT("vkQueueSubmit2.Empty"));
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("NativeQueue.SubmitEmpty.BeforeVkQueueSubmit2"));
     vkQueueSubmit2(queue, 1, &submit_info, _fence);
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("NativeQueue.SubmitEmpty.AfterVkQueueSubmit2"));
     wait_infos.clear();
     signal_infos.clear();
 }
@@ -2862,7 +3476,10 @@ void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
     submit_info.commandBufferInfoCount   = 1;
     submit_info.pCommandBufferInfos      = &cmd_info;
 
+    VulkanQueueAccessScope queue_access_scope(queue, MOER_TEXT("vkQueueSubmit2"));
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("NativeQueue.Submit.BeforeVkQueueSubmit2"));
     VkResult submit_result = vkQueueSubmit2(queue, 1, &submit_info, _fence);
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("NativeQueue.Submit.AfterVkQueueSubmit2"));
     if (submit_result != VK_SUCCESS) {
         LOG_ERROR(
             MOER_TEXT("[VkNativeQueue] vkQueueSubmit2 FAILED! result={}, queue={:#x}, type={}, ")
@@ -2933,6 +3550,9 @@ void VkCommandQueue::Wait(WaitEvent _evt) {
 }
 
 void VkNativeQueue::BeginLabel(StringView _label, float4 _color) {
+    if (validation_layer_enabled) {
+        return;
+    }
     Utf8String label_name = PlatformToUtf8(_label);
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
     label.pLabelName = label_name.c_str();
@@ -2944,10 +3564,16 @@ void VkNativeQueue::BeginLabel(StringView _label, float4 _color) {
 }
 
 void VkNativeQueue::EndLabel() {
+    if (validation_layer_enabled) {
+        return;
+    }
     vkQueueEndDebugUtilsLabelEXT(queue);
 }
 
 void VkNativeQueue::InsertLabel(StringView _label, float4 _color) {
+    if (validation_layer_enabled) {
+        return;
+    }
     Utf8String label_name = PlatformToUtf8(_label);
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
     label.pLabelName = label_name.c_str();
@@ -2980,7 +3606,7 @@ void ProfilerStorage::CollectProfiling() {
     resolved_gpu_samples.clear();
     resolved_gpu_samples.reserve(name2sample.size());
 
-    Array<PendingSample> unresolved{};
+    Array<PendingProfilerSample> unresolved{};
     unresolved.reserve(pending_samples.size());
 
     for (auto& pending : pending_samples) {
@@ -3029,6 +3655,30 @@ void ProfilerStorage::CollectProfiling() {
     pending_samples = std::move(unresolved);
 }
 
+ProfilerSubmitData ProfilerStorage::DrainSubmitData() {
+    ProfilerSubmitData submit_data{};
+    submit_data.cpu_timestamps = std::move(cpu_timestamps[cur_frame]);
+    cpu_timestamps[cur_frame].clear();
+    submit_data.pending_samples = std::move(pending_samples);
+    pending_samples.clear();
+    active_scope_queries.clear();
+    return submit_data;
+}
+
+void ProfilerStorage::MergeSubmitData(ProfilerSubmitData&& submit_data) {
+    auto& frame_cpu_timestamps = cpu_timestamps[cur_frame];
+    for (auto& [name, timestamp] : submit_data.cpu_timestamps) {
+        frame_cpu_timestamps[std::move(name)] = timestamp;
+    }
+    if (!submit_data.pending_samples.empty()) {
+        pending_samples.insert(
+            pending_samples.end(),
+            std::make_move_iterator(submit_data.pending_samples.begin()),
+            std::make_move_iterator(submit_data.pending_samples.end())
+        );
+    }
+}
+
 void ProfilerStorage::BeginProfilerSession(VulkanCmdList& _cmd_list, StringView _name) {
     if (!active) {
         return;
@@ -3058,7 +3708,7 @@ void ProfilerStorage::EndProfilerSession(VulkanCmdList& _cmd_list, StringView _n
     }
 
     query_runtime.EndTimestamp(_cmd_list, token);
-    pending_samples.emplace_back(PendingSample{.name = key, .token = token});
+    pending_samples.emplace_back(PendingProfilerSample{.name = key, .token = token});
 }
 
 void ProfilerStorage::VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_cmd) {
@@ -3069,19 +3719,24 @@ void ProfilerStorage::VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_
     if (_query_cmd.Token().kind == QueryKind::Timestamp &&
         _query_cmd.Op() == QueryCmd::EOp::EndTimestamp) {
         pending_samples.emplace_back(
-            PendingSample{.name = _query_cmd.Token().name, .token = _query_cmd.Token()}
+            PendingProfilerSample{.name = _query_cmd.Token().name, .token = _query_cmd.Token()}
         );
     }
 }
 #pragma endregion
 
 #pragma region[ VkCommandQueue ]
-VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered, TrackerSeed seed) {
+VulkanRecordedSubmit VkCommandQueue::Translate(
+    CmdSubmit&& _submit,
+    const CmdReorderer* _reordered,
+    TrackerSeed seed,
+    VulkanAllocator* allocator_override
+) {
     TRACE_SCOPE_CAT("VkCommandQueue.Translate", "Queue");
-    std::unique_lock<std::mutex> translate_lock(translate_state_mtx);
     if (!queue.SupportsTimestampQueries()) {
         StripUnsupportedTimestampQueries(_submit, MOER_TEXT("timestamp query unsupported on queue"));
     }
+    const bool explicit_submit = _submit.preprocess_mode == ERHISubmitPreprocessMode::ExplicitStateNoSync;
     struct PreparedCmdBatch {
         CmdSubmit               submit;
         FunctionTable           function_table;
@@ -3107,7 +3762,9 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
         .reorder_time_ms = 0.0,
         .has_cmd = false
     };
-    if (_reordered != nullptr) {
+    if (explicit_submit) {
+        prepared.has_cmd = !prepared.submit.cmds.empty();
+    } else if (_reordered != nullptr) {
         prepared.reorderer = _reordered;
         prepared.has_cmd   = !prepared.reorderer->m_cmd_lists.empty();
     } else {
@@ -3125,29 +3782,55 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
     }
 
     VulkanRecordedSubmit         recorded{};
-    recorded.allocator = std::move(GetAllocator());
+    UniquePtr<VulkanAllocator>   owned_allocator{};
+    VulkanAllocator*             translate_allocator = allocator_override;
+    if (translate_allocator == nullptr) {
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.GetAllocator"));
+        owned_allocator     = std::move(GetAllocator());
+        translate_allocator = owned_allocator.get();
+    }
+    recorded.allocator_owner = std::move(owned_allocator);
     recorded.submit.emplace(std::move(prepared.submit));
     recorded.has_cmd   = prepared.has_cmd;
     recorded.reorder_time_ms = prepared.reorder_time_ms;
     if (!recorded.has_cmd) {
+        if (!recorded.submit->query_tokens.empty()) {
+            query_runtime.ResolveAsError(recorded.submit->query_tokens, MOER_TEXT("submit without commands"));
+            recorded.submit->gpu_events.clear();
+        }
+        auto payload = BuildStandalonePayload(*recorded.submit, queue.GetType());
+        recorded.payloads.emplace_back(std::move(payload));
+        AttachRecordedAllocatorOwner(recorded);
         return recorded;
     }
 
-    auto& vk_allocator = *recorded.allocator;
+    auto& vk_allocator = *translate_allocator;
     auto& tracker      = vk_allocator.GetTracker();
+    tracker.Reset();
+    for (auto& wait_event : recorded.submit->wait_events) {
+        vk_allocator.AddSubmitWait(wait_event, ResolveSubmitPayloadType(queue.GetType()), queue.GetType());
+    }
+    recorded.submit->wait_events.clear();
 
     // §9.3: Initialize tracker src states from preprocess seed (§7.2 seed_tracker).
     if (!seed.textures.empty() || !seed.buffers.empty()) {
         tracker.InitFromSeed(seed);
     }
 
+    VulkanCmdList& active_cmd_list = vk_allocator.BeginSubmitContext();
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.BeginSubmitContext"));
+    UniquePtr<ProfilerStorage> local_profiler{};
+    if (queue.SupportsTimestampQueries()) {
+        local_profiler = MakeUnique<ProfilerStorage>(query_runtime);
+    }
+
     VkCmdVisitor visitor(
         vk_device,
         vk_allocator,
         tracker,
-        vk_allocator.GetCmdList(),
+        active_cmd_list,
         recorded.submit->cached_args,
-        queue.SupportsTimestampQueries() ? &profiler_storage : nullptr,
+        local_profiler.get(),
         queue.GetType()
     );
     VkCmdPreprocessor preprocessor(
@@ -3159,81 +3842,117 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
         queue.GetType()
     );
 
-    vk_allocator.GetCmdList().Begin();
-    query_runtime.BeginRecord(vk_allocator.GetCmdList(), recorded.submit->query_tokens);
-    if (recorded.submit->b_tick_profiling && queue.SupportsTimestampQueries()) {
-        profiler_storage.CollectProfiling();
-        cached_profiler_entry = profiler_storage.GetProfilerEntry();
-        cached_gpu_samples    = profiler_storage.GetResolvedGpuSamples();
-#if defined(MOER_TRACE_ENABLED) && MOER_TRACE_ENABLED && defined(MOER_TRACE_GPU_ENABLED) && \
-    MOER_TRACE_GPU_ENABLED
-        EmitResolvedGpuTraceEvents(cached_gpu_samples);
-#endif
-        profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), MOER_TEXT("Graphics Exec"));
+    active_cmd_list.Begin();
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.CommandBufferBegin"));
+    query_runtime.BeginRecord(active_cmd_list, recorded.submit->query_tokens);
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.QueryBeginRecord"));
+    if (recorded.submit->b_tick_profiling && local_profiler) {
+        local_profiler->BeginProfilerSession(active_cmd_list, MOER_TEXT("Graphics Exec"));
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.ProfilerBeginSession"));
     }
 
     if (queue.GetType() != EQueueType::Copy) {
-            vk_allocator.GetCmdList().SetDescriptorBinder(vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors());
+        active_cmd_list.SetDescriptorBinder(vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors());
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.BeginPushDescriptors"));
     }
 
     StringView queue_label = queue.GetType() == EQueueType::Graphics ? MOER_TEXT("Graphics Exec") :
                              queue.GetType() == EQueueType::Compute  ? MOER_TEXT("Compute Exec") :
                                                                        MOER_TEXT("Copy Exec");
-    vk_allocator.GetCmdList().BeginLabel(queue_label, {1.0f, 0.0f, 0.0f, 1.0f});
+    active_cmd_list.BeginLabel(queue_label, {1.0f, 0.0f, 0.0f, 1.0f});
 
     Timer preprocess_timer{};
     uint  layer_count = 0;
-    for (const CmdReorderer::LinkedCommandList& cmd_list : prepared.reorderer->m_cmd_lists) {
-        if (layer_count == 0) {
-            vk_allocator.GetCmdList().BeginLabel(MOER_TEXT("Begin Layers"), {0.0f, 0.0f, 1.0f, 1.0f});
-        }
-        if (cmd_list.head == nullptr) {
-            continue;
-        }
-        preprocess_timer.Start();
-        for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-            RHITRACE_LOG(
-                verbose,
-                "[RHITrace][Preprocess][{}][Layer {}] cmd_type={} name={}",
-                QueueTypeName(queue.GetType()),
-                layer_count,
-                uint(cmdnode->cmd->Type()),
-                cmdnode->cmd->name
-            );
-            preprocessor.VisitCmd(cmdnode->cmd);
-        }
-        tracker.ResolveBarriers();
-        tracker.DispatchBarriers(vk_allocator.GetCmdList());
-        preprocess_timer.Stop();
-        recorded.preprocess_time_ms += preprocess_timer.ElapsedMilliseconds();
-
-        vk_allocator.GetCmdList().InsertLabel(
-            Printf(MOER_TEXT("Layer {}"), layer_count++), {0.0f, 0.0f, 1.0f, 1.0f}
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.ProcessCommands"));
+    if (explicit_submit) {
+        active_cmd_list.BeginLabel(MOER_TEXT("Begin Layers"), {0.0f, 0.0f, 1.0f, 1.0f});
+        RHITRACE_LOG(
+            basic,
+            "[RHITrace][ExplicitTranslate] queue={} commands={} reorder=false",
+            QueueTypeName(queue.GetType()),
+            recorded.submit->cmds.size()
         );
-        for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+        for (const auto& cmd : recorded.submit->cmds) {
             RHITRACE_LOG(
                 verbose,
-                "[RHITrace][ExecuteCmd][{}][Layer {}] cmd_type={} name={}",
+                "[RHITrace][Preprocess][{}][Linear] cmd_type={} name={}",
                 QueueTypeName(queue.GetType()),
-                layer_count - 1,
-                uint(cmdnode->cmd->Type()),
-                cmdnode->cmd->name
+                uint(cmd->Type()),
+                cmd->name
             );
-            visitor.VisitCmd(cmdnode->cmd);
+            preprocess_timer.Start();
+            preprocessor.VisitExplicitCmd(cmd.get());
+            tracker.ResolveBarriers();
+            tracker.DispatchBarriers(active_cmd_list);
+            preprocess_timer.Stop();
+            recorded.preprocess_time_ms += preprocess_timer.ElapsedMilliseconds();
+
+            active_cmd_list.InsertLabel(MOER_TEXT("Layer 0"), {0.0f, 0.0f, 1.0f, 1.0f});
+            RHITRACE_LOG(
+                verbose,
+                "[RHITrace][ExecuteCmd][{}][Linear] cmd_type={} name={}",
+                QueueTypeName(queue.GetType()),
+                uint(cmd->Type()),
+                cmd->name
+            );
+            visitor.VisitCmd(cmd.get());
+        }
+        layer_count = 1;
+    } else {
+        for (const CmdReorderer::LinkedCommandList& cmd_list : prepared.reorderer->m_cmd_lists) {
+            if (layer_count == 0) {
+                active_cmd_list.BeginLabel(MOER_TEXT("Begin Layers"), {0.0f, 0.0f, 1.0f, 1.0f});
+            }
+            if (cmd_list.head == nullptr) {
+                continue;
+            }
+            preprocess_timer.Start();
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                RHITRACE_LOG(
+                    verbose,
+                    "[RHITrace][Preprocess][{}][Layer {}] cmd_type={} name={}",
+                    QueueTypeName(queue.GetType()),
+                    layer_count,
+                    uint(cmdnode->cmd->Type()),
+                    cmdnode->cmd->name
+                );
+                preprocessor.VisitCmd(cmdnode->cmd);
+            }
+            tracker.ResolveBarriers();
+            tracker.DispatchBarriers(active_cmd_list);
+            preprocess_timer.Stop();
+            recorded.preprocess_time_ms += preprocess_timer.ElapsedMilliseconds();
+
+            active_cmd_list.InsertLabel(
+                Printf(MOER_TEXT("Layer {}"), layer_count++), {0.0f, 0.0f, 1.0f, 1.0f}
+            );
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                RHITRACE_LOG(
+                    verbose,
+                    "[RHITrace][ExecuteCmd][{}][Layer {}] cmd_type={} name={}",
+                    QueueTypeName(queue.GetType()),
+                    layer_count - 1,
+                    uint(cmdnode->cmd->Type()),
+                    cmdnode->cmd->name
+                );
+                visitor.VisitCmd(cmdnode->cmd);
+            }
         }
     }
     if (layer_count > 0) {
-        vk_allocator.GetCmdList().EndLabel();
+        active_cmd_list.EndLabel();
     }
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.ProcessCommandsDone"));
 
-    if (recorded.submit->b_tick_profiling && queue.SupportsTimestampQueries()) {
-        profiler_storage.EndProfilerSession(vk_allocator.GetCmdList(), MOER_TEXT("Graphics Exec"));
+    if (recorded.submit->b_tick_profiling && local_profiler) {
+        local_profiler->EndProfilerSession(active_cmd_list, MOER_TEXT("Graphics Exec"));
     }
-    vk_allocator.GetCmdList().EndLabel();
-    vk_allocator.GetCmdList().End();
+    active_cmd_list.EndLabel();
+    active_cmd_list.End();
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.CommandBufferEnd"));
 
     if (queue.GetType() != EQueueType::Copy) {
-        VulkanDescriptorBinder descriptor_binder = vk_allocator.GetCmdList().ReleaseDescriptorBinder();
+        VulkanDescriptorBinder descriptor_binder = active_cmd_list.ReleaseDescriptorBinder();
         descriptor_binder = vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(std::move(descriptor_binder));
         if (descriptor_binder.IsValid()) {
             VulkanDescriptorHeap& descriptor_heap = vk_device.GetGlobalDescriptorHeap();
@@ -3248,6 +3967,18 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
         }
     }
     tracker.Reset();
+    vk_allocator.EndSubmitContext();
+    if (local_profiler) {
+        if (recorded.submit->b_tick_profiling) {
+            local_profiler->RegisterCpuTimestamp(MOER_TEXT("Command Reorder"), recorded.reorder_time_ms);
+            local_profiler->RegisterCpuTimestamp(MOER_TEXT("Command Preprocess"), recorded.preprocess_time_ms);
+        }
+        auto& tail_payload = vk_allocator.GetCurrentPayload(
+            ResolveSubmitPayloadType(queue.GetType()),
+            queue.GetType()
+        );
+        tail_payload.profiler_submit_data = local_profiler->DrainSubmitData();
+    }
 
     Array<RHIResource*> deleted_resources;
     vk_device.deferred_release_queue.PopAll(deleted_resources);
@@ -3257,76 +3988,44 @@ VulkanRecordedSubmit VkCommandQueue::Translate(CmdSubmit&& _submit, const CmdReo
         }
     });
 
+    for (auto& signal_event : recorded.submit->signal_events) {
+        vk_allocator.AddSubmitSignal(signal_event, ResolveSubmitPayloadType(queue.GetType()), queue.GetType());
+    }
+    recorded.submit->signal_events.clear();
+
+    auto& tail_payload = vk_allocator.GetCurrentPayload(
+        ResolveSubmitPayloadType(queue.GetType()),
+        queue.GetType()
+    );
+    tail_payload.tick_profiling = recorded.submit->b_tick_profiling;
+    AppendSubmitTailToPayload(*recorded.submit, tail_payload);
+    recorded.payloads = vk_allocator.ReleasePendingPayloads();
+    AttachRecordedAllocatorOwner(recorded);
+
     return recorded;
 }
 
-VulkanQueueRuntimeSubmitResult
-VkCommandQueue::SubmitRecordedForRuntime(
-    VulkanRecordedSubmit&&    _recorded,
-    std::span<const WaitEvent> runtime_waits,
-    uint64                    signal_value,
-    VkFence                   _submit_fence
+UniquePtr<VulkanSubmitPayload>
+VkCommandQueue::SubmitPayloadForRuntime(
+    UniquePtr<VulkanSubmitPayload>&& payload,
+    std::span<const WaitEvent>       runtime_waits,
+    uint64                           signal_value,
+    VkFence                          _submit_fence
 ) {
     TRACE_SCOPE_CAT("VkCommandQueue.SubmitRecorded", "Queue");
-    VulkanQueueRuntimeSubmitResult result{};
-    std::unique_lock<std::mutex> lock(exec_mtx);
+    assert(payload != nullptr && "submit payload must be valid");
     assert(signal_value > 0 && "runtime signal value must be positive");
     assert(signal_value > last_frame && "runtime signal value must be monotonic per queue");
 
     auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT :
                                                              VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-
-    if (!_recorded.has_cmd || !_recorded.submit.has_value() || _recorded.submit->cmds.empty()) {
-        if (_recorded.submit.has_value() && !_recorded.submit->query_tokens.empty()) {
-            query_runtime.ResolveAsError(_recorded.submit->query_tokens, MOER_TEXT("submit without commands"));
-            _recorded.submit->gpu_events.clear();
-        }
-        if (_recorded.allocator) {
-            allocators.Push(_recorded.allocator.release());
-        }
-
-        if (signal_value > 1) {
-            queue.Wait(timeline, signal_value - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        }
-        for (const WaitEvent& evt : runtime_waits) {
-            queue.Wait(
-                reinterpret_cast<VulkanFence*>(evt.timeline_handle),
-                evt.value,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-            );
-        }
-        if (_recorded.submit.has_value()) {
-            for (auto& evt : _recorded.submit->wait_events) {
-                queue.Wait(
-                    reinterpret_cast<VulkanFence*>(evt.timeline_handle),
-                    evt.value,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-                );
-            }
-            for (auto& evt : _recorded.submit->signal_events) {
-                queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
-            }
-        }
-        queue.Signal(timeline, signal_value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        queue.SubmitEmpty(_submit_fence);
-        last_frame = signal_value;
-        result.completion     = WaitEvent{uint64(timeline), signal_value};
-        result.timeline_value = signal_value;
-
-        const bool has_submit = _recorded.submit.has_value();
-        if (has_submit) {
-            result.callbacks            = std::move(_recorded.submit->callbacks);
-            result.signal_events        = std::move(_recorded.submit->signal_events);
-            result.has_frame_boundary_event = HasFrameBoundaryEvent(_recorded.submit->gpu_events);
-            result.gpu_events           = std::move(_recorded.submit->gpu_events);
-            result.scheduled_completion =
-                !result.callbacks.empty() || !result.signal_events.empty() || !result.gpu_events.empty();
-        }
-        return result;
+    VkFence submit_fence = _submit_fence;
+    const bool owns_submit_fence = submit_fence == VK_NULL_HANDLE;
+    if (owns_submit_fence) {
+        submit_fence = vk_device.AcquireHostFence();
     }
-
-    auto& vk_allocator = *_recorded.allocator;
     if (signal_value > 1) {
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("SubmitRecorded.WaitPreviousSignal"));
         queue.Wait(timeline, signal_value - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     }
     for (const WaitEvent& evt : runtime_waits) {
@@ -3336,7 +4035,7 @@ VkCommandQueue::SubmitRecordedForRuntime(
             VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
         );
     }
-    for (auto& evt : _recorded.submit->wait_events) {
+    for (const WaitEvent& evt : payload->wait_events) {
         queue.Wait(
             reinterpret_cast<VulkanFence*>(evt.timeline_handle),
             evt.value,
@@ -3344,29 +4043,31 @@ VkCommandQueue::SubmitRecordedForRuntime(
         );
     }
     queue.Signal(timeline, signal_value, end_tag);
-    for (auto& evt : _recorded.submit->signal_events) {
-        queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
+    if (payload->cmd_list != nullptr) {
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("SubmitRecorded.QueueSubmit"));
+        queue.Submit(*payload->cmd_list, submit_fence);
+        payload->query_submission = query_runtime.FinalizeSubmit(signal_value, payload->cmd_list->GetHandle());
+    } else {
+        queue.SubmitEmpty(submit_fence);
     }
-    queue.Submit(vk_allocator.GetCmdList(), _submit_fence);
-    query_runtime.FinalizeSubmit(signal_value, vk_allocator.GetCmdList().GetHandle());
-    executed_queue.Enqueue(signal_value);
     last_frame                  = signal_value;
-    result.completion           = WaitEvent{uint64(timeline), signal_value};
-    result.timeline_value       = signal_value;
-    result.allocator            = std::move(_recorded.allocator);
-    result.callbacks            = std::move(_recorded.submit->callbacks);
-    result.signal_events        = std::move(_recorded.submit->signal_events);
-    result.has_frame_boundary_event = HasFrameBoundaryEvent(_recorded.submit->gpu_events);
-    result.gpu_events           = std::move(_recorded.submit->gpu_events);
-    result.scheduled_completion = true;
+    payload->completion         = WaitEvent{uint64(timeline), signal_value};
+    payload->timeline_value     = signal_value;
+    payload->host_fence         = submit_fence;
+    payload->owns_host_fence    = owns_submit_fence;
+    payload->queue_owner        = this;
+    payload->scheduled_completion = true;
 
-    if (_recorded.submit->b_tick_profiling) {
-        std::lock_guard<std::mutex> translate_lock(translate_state_mtx);
-        profiler_storage.RegisterCpuTimestamp(MOER_TEXT("Command Reorder"), _recorded.reorder_time_ms);
-        profiler_storage.RegisterCpuTimestamp(MOER_TEXT("Command Preprocess"), _recorded.preprocess_time_ms);
+    if (payload->profiler_submit_data.has_value()) {
+        profiler_storage.MergeSubmitData(std::move(payload->profiler_submit_data.value()));
+    }
+    if (payload->profiler_submit_data.has_value()) {
+        payload->profiler_submit_data.reset();
+    }
+    if (payload->tick_profiling) {
         profiler_storage.AdvanceFrame();
     }
-    return result;
+    return payload;
 }
 
 WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
@@ -3387,95 +4088,24 @@ void VkCommandQueue::Sync() {
     Complete(last_frame);
 }
 
-#if defined(MOER_TRACE_ENABLED) && MOER_TRACE_ENABLED && defined(MOER_TRACE_GPU_ENABLED) && \
-    MOER_TRACE_GPU_ENABLED
-void VkCommandQueue::EmitResolvedGpuTraceEvents(const Array<ProfilerStorage::ResolvedGpuSample>& _samples) {
-    if (_samples.empty() || !Moer::Trace::IsRecording()) {
-        return;
-    }
-    const float timestamp_period = query_runtime.GetTimestampPeriod();
-    if (timestamp_period <= 0.0f) {
-        return;
-    }
-
-    uint64_t first_tick = std::numeric_limits<uint64_t>::max();
-    for (const auto& sample : _samples) {
-        if (sample.end_tick < sample.begin_tick) {
-            continue;
-        }
-        first_tick = std::min(first_tick, sample.begin_tick);
-    }
-    if (first_tick == std::numeric_limits<uint64_t>::max()) {
-        return;
-    }
-
-    if (!gpu_trace_anchor_valid || first_tick < gpu_trace_tick_anchor) {
-        gpu_trace_tick_anchor    = first_tick;
-        gpu_trace_time_anchor_ns = SteadyNowNs();
-        gpu_trace_anchor_valid   = true;
-    }
-
-    const uint64_t    track_id =
-        Moer::Trace::MakeGpuQueueTrackId(0u, static_cast<uint32_t>(queue.GetType()));
-    const Utf8String track_name = Utf8Printf("GPU0/Queue({})", QueueTypeName(queue.GetType()));
-
-    auto tick_to_ns = [&](uint64_t tick) -> uint64_t {
-        if (tick < gpu_trace_tick_anchor) {
-            return gpu_trace_time_anchor_ns;
-        }
-        const long double delta_ticks = static_cast<long double>(tick - gpu_trace_tick_anchor);
-        const long double delta_ns    = delta_ticks * static_cast<long double>(timestamp_period);
-        return gpu_trace_time_anchor_ns + static_cast<uint64_t>(std::max<long double>(0.0, delta_ns));
-    };
-
-    for (const auto& sample : _samples) {
-        if (sample.end_tick < sample.begin_tick) {
-            continue;
-        }
-
-        uint64_t begin_ns = tick_to_ns(sample.begin_tick);
-        uint64_t end_ns   = tick_to_ns(sample.end_tick);
-        if (end_ns < begin_ns) {
-            end_ns = begin_ns;
-        }
-
-        Utf8String sample_name = PlatformToUtf8(sample.name);
-        Moer::Trace::EmitScope(
-            Moer::Trace::EmitScopeDesc{
-            .name        = std::string_view(sample_name.Native()),
-                .category    = "GPU",
-                .track_type  = Moer::Trace::TrackType::GPUQueue,
-                .track_id    = track_id,
-                .depth       = 0,
-                .ts_begin_ns = begin_ns,
-                .ts_end_ns   = end_ns,
-                .track_name  = std::string_view(track_name.Native())
-            }
-        );
-    }
-}
-#endif
-
 ProfileData VkCommandQueue::GetProfilerEntry() {
-    std::lock_guard<std::mutex> lock(translate_state_mtx);
     return profiler_storage.GetProfilerEntry();
 }
 
 UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
-    std::lock_guard<std::mutex> alloc_lock(alloc_mtx);
-    if (executed_queue.Full()) {
-        Complete(executed_queue.Front());
-    }
     auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
     if (allocator) {
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.GetAllocator.Reuse"));
         // allocator->ResetCmdList();
         return std::move(allocator);
     }
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.GetAllocator.OverflowCreate"));
     return MakeUnique<VulkanAllocator>(&vk_device, queue.GetType());
 }
 
 void VkCommandQueue::Complete(uint64 _timeline) {
     while (executed_frame < _timeline) {
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.GetAllocator.HostWait"));
         timeline->HostWait(_timeline);
         std::this_thread::yield();
     }
@@ -3494,10 +4124,13 @@ void VkCommandQueue::MarkExecutionComplete(uint64 _timeline) {
 void VkCommandQueue::ResolveAllocatorCompletion(UniquePtr<VulkanAllocator>&& _allocator, uint64 _timeline) {
     if (_allocator) {
         _allocator->Complete(timeline, _timeline);
-        query_runtime.ResolveCompleted(_timeline);
         _allocator->Reset();
         allocators.Push(_allocator.release());
     }
+}
+
+void VkCommandQueue::ResolveQueryCompletion(VulkanQueryRuntime::SubmissionState&& _submission) {
+    query_runtime.ResolveCompleted(std::move(_submission));
 }
 
 void VkCommandQueue::AppendCompletionBoundary(const GraphEventRef& completion_event) {
@@ -3584,8 +4217,11 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
 }
 
 //TODO:看看barrier
-VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer* _reordered) {
-    std::unique_lock<std::mutex> translate_lock(translate_mutex);
+VulkanRecordedSubmit VkCopyQueue::Translate(
+    CmdSubmit&& _evt,
+    const CmdReorderer* _reordered,
+    VulkanAllocator* allocator_override
+) {
     if (!queue.SupportsTimestampQueries()) {
         StripUnsupportedTimestampQueries(_evt, MOER_TEXT("timestamp query unsupported on queue"));
     }
@@ -3593,8 +4229,15 @@ VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer
     VulkanRecordedSubmit recorded{};
     recorded.submit.emplace(std::move(_evt));
     if (recorded.submit->cmds.empty()) {
+        if (!recorded.submit->query_tokens.empty()) {
+            ResolveQueryTokensAsError(recorded.submit->query_tokens, MOER_TEXT("submit without commands"));
+            recorded.submit->gpu_events.clear();
+        }
+        auto payload = BuildStandalonePayload(*recorded.submit, EQueueType::Copy);
+        recorded.payloads.emplace_back(std::move(payload));
         return recorded;
     }
+    const bool explicit_submit = recorded.submit->preprocess_mode == ERHISubmitPreprocessMode::ExplicitStateNoSync;
 
     FunctionTable function_table{
         .is_resource_write       = &IsBufferTextureWrite,
@@ -3604,22 +4247,39 @@ VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer
     };
     UniquePtr<CmdReorderer> owned_reorder{};
     const CmdReorderer*     reorder = _reordered;
-    if (reorder == nullptr) {
+    if (explicit_submit) {
+        reorder = nullptr;
+    } else if (reorder == nullptr) {
         owned_reorder = MakeUnique<CmdReorderer>(function_table, recorded.submit->cached_args);
         for (const auto& cmd : recorded.submit->cmds) {
             owned_reorder->AcceptCmd(cmd.get());
         }
         reorder = owned_reorder.get();
     }
-    recorded.has_cmd = (reorder != nullptr) && !reorder->m_cmd_lists.empty();
+    recorded.has_cmd = explicit_submit ? !recorded.submit->cmds.empty() :
+                                         (reorder != nullptr) && !reorder->m_cmd_lists.empty();
     if (!recorded.has_cmd) {
         return recorded;
     }
 
-    auto allocator     = GetAllocator();
-    auto& vk_allocator = *allocator;
-    auto& vk_cmd_list  = vk_allocator.GetCmdList();
+    UniquePtr<VulkanAllocator> owned_allocator{};
+    VulkanAllocator*           translate_allocator = allocator_override;
+    if (translate_allocator == nullptr) {
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.Translate.GetAllocator"));
+        owned_allocator     = GetAllocator();
+        translate_allocator = owned_allocator.get();
+    }
+    recorded.allocator_owner = std::move(owned_allocator);
+
+    auto& vk_allocator = *translate_allocator;
+    for (auto& wait_event : recorded.submit->wait_events) {
+        vk_allocator.AddSubmitWait(wait_event, EVulkanSubmitPayloadType::Copy, EQueueType::Copy);
+    }
+    recorded.submit->wait_events.clear();
+    auto& vk_cmd_list  = vk_allocator.BeginSubmitContext();
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.Translate.BeginSubmitContext"));
     auto& vk_tracker   = vk_allocator.GetTracker();
+    vk_tracker.Reset();
 
     VkCmdPreprocessor preprocessor(
         device, vk_tracker, vk_allocator, {}, recorded.submit->cached_args, EQueueType::Copy
@@ -3635,126 +4295,121 @@ VulkanRecordedSubmit VkCopyQueue::Translate(CmdSubmit&& _evt, const CmdReorderer
     );
 
     vk_cmd_list.Begin();
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.Translate.CommandBufferBegin"));
     vk_cmd_list.BeginLabel(MOER_TEXT("Copy"), {0.0f, 1.0f, 1.0f, 1.0f});
-    const auto& cmd_lists = reorder->m_cmd_lists;
-    for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
-        if (cmd_list.head == nullptr) {
-            continue;
-        }
-        for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.Translate.ProcessCommands"));
+    if (explicit_submit) {
+        RHITRACE_LOG(
+            basic,
+            "[RHITrace][ExplicitTranslate] queue={} commands={} reorder=false",
+            QueueTypeName(EQueueType::Copy),
+            recorded.submit->cmds.size()
+        );
+        for (const auto& cmd : recorded.submit->cmds) {
             RHITRACE_LOG(
                 verbose,
-                "[RHITrace][Preprocess][Copy] cmd_type={} name={}",
-                uint(cmdnode->cmd->Type()),
-                cmdnode->cmd->name
+                "[RHITrace][Preprocess][Copy][Linear] cmd_type={} name={}",
+                uint(cmd->Type()),
+                cmd->name
             );
-            preprocessor.VisitCmd(cmdnode->cmd);
-        }
-        vk_tracker.ResolveBarriers();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-        for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+            preprocessor.VisitExplicitCmd(cmd.get());
+            vk_tracker.ResolveBarriers();
+            vk_tracker.DispatchBarriers(vk_cmd_list);
             RHITRACE_LOG(
                 verbose,
-                "[RHITrace][ExecuteCmd][Copy] cmd_type={} name={}",
-                uint(cmdnode->cmd->Type()),
-                cmdnode->cmd->name
+                "[RHITrace][ExecuteCmd][Copy][Linear] cmd_type={} name={}",
+                uint(cmd->Type()),
+                cmd->name
             );
-            visitor.VisitCmd(cmdnode->cmd);
+            visitor.VisitCmd(cmd.get());
+        }
+    } else {
+        const auto& cmd_lists = reorder->m_cmd_lists;
+        for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
+            if (cmd_list.head == nullptr) {
+                continue;
+            }
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                RHITRACE_LOG(
+                    verbose,
+                    "[RHITrace][Preprocess][Copy] cmd_type={} name={}",
+                    uint(cmdnode->cmd->Type()),
+                    cmdnode->cmd->name
+                );
+                preprocessor.VisitCmd(cmdnode->cmd);
+            }
+            vk_tracker.ResolveBarriers();
+            vk_tracker.DispatchBarriers(vk_cmd_list);
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                RHITRACE_LOG(
+                    verbose,
+                    "[RHITrace][ExecuteCmd][Copy] cmd_type={} name={}",
+                    uint(cmdnode->cmd->Type()),
+                    cmdnode->cmd->name
+                );
+                visitor.VisitCmd(cmdnode->cmd);
+            }
         }
     }
 
     vk_cmd_list.EndLabel();
     vk_cmd_list.End();
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.Translate.CommandBufferEnd"));
     vk_tracker.Reset();
-    recorded.allocator = std::move(allocator);
+    vk_allocator.EndSubmitContext();
+    for (auto& signal_event : recorded.submit->signal_events) {
+        vk_allocator.AddSubmitSignal(signal_event, EVulkanSubmitPayloadType::Copy, EQueueType::Copy);
+    }
+    recorded.submit->signal_events.clear();
+    auto& tail_payload = vk_allocator.GetCurrentPayload(EVulkanSubmitPayloadType::Copy, EQueueType::Copy);
+    tail_payload.tick_profiling = recorded.submit->b_tick_profiling;
+    AppendSubmitTailToPayload(*recorded.submit, tail_payload);
+    recorded.payloads = vk_allocator.ReleasePendingPayloads();
+    AttachRecordedAllocatorOwner(recorded);
     return recorded;
 }
 
-VulkanCopyQueueRuntimeSubmitResult
-VkCopyQueue::SubmitRecordedForRuntime(
-    VulkanRecordedSubmit&&    _recorded,
-    std::span<const WaitEvent> runtime_waits,
-    uint64                    signal_value,
-    VkFence                   _submit_fence
+UniquePtr<VulkanSubmitPayload>
+VkCopyQueue::SubmitPayloadForRuntime(
+    UniquePtr<VulkanSubmitPayload>&& payload,
+    std::span<const WaitEvent>       runtime_waits,
+    uint64                           signal_value,
+    VkFence                          _submit_fence
 ) {
-    VulkanCopyQueueRuntimeSubmitResult result{};
-    std::unique_lock<std::mutex> lk(exec_mutex);
+    assert(payload != nullptr && "submit payload must be valid");
     assert(signal_value > 0 && "runtime signal value must be positive");
     assert(signal_value > last_frame && "runtime signal value must be monotonic per queue");
-    if (!_recorded.has_cmd || !_recorded.allocator) {
-        if (_recorded.submit.has_value() && !_recorded.submit->query_tokens.empty()) {
-            ResolveQueryTokensAsError(_recorded.submit->query_tokens, MOER_TEXT("submit without commands"));
-            _recorded.submit->gpu_events.clear();
-        }
-        if (signal_value > 1) {
-            queue.Wait(timeline, signal_value - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        }
-        for (const WaitEvent& evt : runtime_waits) {
-            queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
-        }
-        if (_recorded.submit.has_value()) {
-            for (auto& evt : _recorded.submit->wait_events) {
-                queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
-            }
-            for (auto& evt : _recorded.submit->signal_events) {
-                queue.Signal(
-                    reinterpret_cast<VulkanFence*>(evt.timeline_handle),
-                    evt.value,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-                );
-            }
-        }
-        queue.Signal(timeline, signal_value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        queue.SubmitEmpty(_submit_fence);
-        last_frame                  = signal_value;
-        result.completion           = IOWaitEvt{uint64(timeline.Get()), signal_value};
-        result.timeline_value       = signal_value;
-        if (_recorded.submit.has_value()) {
-            result.signal_events.reserve(_recorded.submit->signal_events.size());
-            for (const auto& evt : _recorded.submit->signal_events) {
-                result.signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
-            }
-            result.callbacks = std::move(_recorded.submit->callbacks);
-            result.has_frame_boundary_event = HasFrameBoundaryEvent(_recorded.submit->gpu_events);
-            result.gpu_events = std::move(_recorded.submit->gpu_events);
-            result.scheduled_completion =
-                !result.callbacks.empty() || !result.signal_events.empty() || !result.gpu_events.empty();
-        }
-        return result;
-    }
 
-    auto& vk_allocator = *_recorded.allocator;
+    VkFence submit_fence = _submit_fence;
+    const bool owns_submit_fence = submit_fence == VK_NULL_HANDLE;
+    if (owns_submit_fence) {
+        submit_fence = device.AcquireHostFence();
+    }
     if (signal_value > 1) {
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.SubmitRecorded.WaitPreviousSignal"));
         queue.Wait(timeline, signal_value - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     }
     for (const WaitEvent& evt : runtime_waits) {
         queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
     }
-    for (auto& evt : _recorded.submit->wait_events) {
+    for (const WaitEvent& evt : payload->wait_events) {
         queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
     }
     queue.Signal(timeline, signal_value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-    for (auto& evt : _recorded.submit->signal_events) {
-        queue.Signal(
-            reinterpret_cast<VulkanFence*>(evt.timeline_handle),
-            evt.value,
-            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-        );
+    if (payload->cmd_list != nullptr) {
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.SubmitRecorded.QueueSubmit"));
+        queue.Submit(*payload->cmd_list, submit_fence);
+    } else {
+        queue.SubmitEmpty(submit_fence);
     }
-    queue.Submit(vk_allocator.GetCmdList(), _submit_fence);
     last_frame                  = signal_value;
-    result.completion           = IOWaitEvt{uint64(timeline.Get()), signal_value};
-    result.timeline_value       = signal_value;
-    result.allocator            = std::move(_recorded.allocator);
-    result.callbacks            = std::move(_recorded.submit->callbacks);
-    result.has_frame_boundary_event = HasFrameBoundaryEvent(_recorded.submit->gpu_events);
-    result.gpu_events           = std::move(_recorded.submit->gpu_events);
-    result.scheduled_completion = true;
-    result.signal_events.reserve(_recorded.submit->signal_events.size());
-    for (const auto& evt : _recorded.submit->signal_events) {
-        result.signal_events.emplace_back(IOSignalEvt{evt.timeline_handle, evt.value});
-    }
-    return result;
+    payload->completion         = WaitEvent{uint64(timeline.Get()), signal_value};
+    payload->timeline_value     = signal_value;
+    payload->host_fence         = submit_fence;
+    payload->owns_host_fence    = owns_submit_fence;
+    payload->copy_queue_owner   = this;
+    payload->scheduled_completion = true;
+    return payload;
 }
 
 IOWaitEvt VkCopyQueue::Execute(CmdSubmit&& _evt) {
@@ -3773,21 +4428,20 @@ FenceRef VkCopyQueue::GetFenceHandle() {
 }
 
 UniquePtr<VulkanAllocator> VkCopyQueue::GetAllocator() {
-    std::lock_guard<std::mutex> alloc_lock(alloc_mtx);
-    if (last_frame >= VulkanDevice::cmd_alloc_limits) {
-        Complete(last_frame - VulkanDevice::cmd_alloc_limits + 1);
-    }
     auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
     if (allocator) {
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.Translate.GetAllocator.Reuse"));
         // allocator->ResetCmdList();
         return std::move(allocator);
     }
+    VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.Translate.GetAllocator.OverflowCreate"));
     return MakeUnique<VulkanAllocator>(&device, EQueueType::Copy);
 }
 
 void VkCopyQueue::Complete(uint64 _timeline) {
     uint64 spin_count = 0;
     while (executed_frame < _timeline) {
+        VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.Translate.GetAllocator.HostWait"));
         timeline->HostWait(_timeline);
         std::this_thread::yield();
         ++spin_count;

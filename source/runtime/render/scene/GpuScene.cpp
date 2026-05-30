@@ -375,17 +375,29 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
     BufferRef index_buf_ref    = m_res.index_buf.buf;
 
     Array<AccelerationStructureBuildParam> build_params;
+    Array<RaytracingGeometryRef>           built_geometries;
 
     m_res.rt_scene = device.CreateRaytracingScene();
 
     // 与 Raster 一致：按 primitive_id 建 BLAS，TLAS Instance 顺序 = m_instance_buf 顺序
     const uint primitive_count = cpu_scene.GetPrimitiveCount();
+    Array<bool> primitive_has_rt_instance(primitive_count, false);
+    for (uint primitive_id = 0; primitive_id < primitive_count; ++primitive_id) {
+        primitive_has_rt_instance[primitive_id] = cpu_scene.GetInstanceCountForPrimitive(primitive_id) != 0;
+    }
+
     m_primitive_id_to_blas.clear();
     m_primitive_id_to_blas.resize(primitive_count);
+    build_params.reserve(primitive_count);
+    built_geometries.reserve(primitive_count);
 
     r.view<const ecs::CPrimitive>().each([&](const auto primitive_entt, const ecs::CPrimitive& c_primitive) {
         const uint primitive_id = cpu_scene.GetPrimitiveId(primitive_entt);
         if (primitive_id == UINT_MAX || primitive_id >= primitive_count) {
+            return;
+        }
+
+        if (!primitive_has_rt_instance[primitive_id]) {
             return;
         }
 
@@ -423,6 +435,7 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
         RaytracingGeometryRef blas           = device.CreateRaytracingGeometry(rt_geo_info);
         m_primitive_id_to_blas[primitive_id] = blas;
         build_params.push_back({blas, ERaytracingBuildMode::BUILD});
+        built_geometries.push_back(blas);
     });
 
     // TLAS：按 primitive_id 升序、再按 instance_idx，与 m_instance_buf 顺序一致
@@ -447,7 +460,47 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
         }
     }
 
-    cmd_list.BuildAccelerationStructures(std::move(build_params));
+    if (!build_params.empty()) {
+        Array<BarrierCreateInfo> build_input_barriers{};
+        build_input_barriers.reserve(2);
+        build_input_barriers.push_back(BarrierCreateInfo::Transition(
+            position_buf_ref->GetView(),
+            EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT,
+            EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT,
+            EPassType::Raytracing
+        ));
+        build_input_barriers.push_back(BarrierCreateInfo::Transition(
+            index_buf_ref->GetView(),
+            EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT,
+            EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT,
+            EPassType::Raytracing
+        ));
+        cmd_list.Barriers(
+            std::span<const BarrierCreateInfo>(build_input_barriers.data(), build_input_barriers.size()),
+            EQueueType::Graphics,
+            EQueueType::Graphics
+        );
+
+        for (const RaytracingGeometryRef& geometry : built_geometries) {
+            cmd_list.Barriers(
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                EPassType::Raytracing,
+                WriteRaytracingGeometry{geometry, EBufferState::ACCELERATION_STRUCTURE_WRITE}
+            );
+        }
+
+        cmd_list.BuildAccelerationStructures(std::move(build_params));
+
+        for (const RaytracingGeometryRef& geometry : built_geometries) {
+            cmd_list.Barriers(
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                EPassType::Raytracing,
+                ReadRaytracingGeometry{geometry, EBufferState::ACCELERATION_STRUCTURE_READ}
+            );
+        }
+    }
     cmd_list.UpdateRaytracingScene(m_res.rt_scene);
 
     // 这里不应该提交命令！

@@ -74,13 +74,10 @@ float2 GetEnvMotion(Moer::ViewParam _view, Moer::ViewParam _prev_view, float2 _p
 }
 
 float3 ViewdepthToWorldPos(Moer::ViewParam _view, int2 _pixel_pos, float _view_depth) {
-    float2 uv       = (float2(_pixel_pos) + 0.5f) * _view.inv_rect;
-    float4 clip_pos = float4(uv.x * 2.f - 1.f, 1.f - uv.y * 2.f, 0.5f, 1.f);
-    float4 view_pos = mul(_view.clip2view, clip_pos);
-    view_pos.xy /= view_pos.z;
-    view_pos.zw = float2(1.f, 1.f);
-    view_pos.xyz *= -_view_depth;
-    return mul(_view.view2world, view_pos).xyz;
+    RayDesc primary_ray = SetupPrimaryRay(uint2(_pixel_pos), _view);
+    float3 view_direction = mul(_view.world2view, float4(primary_ray.Direction, 0.0f)).xyz;
+    float ray_t = -_view_depth / view_direction.z;
+    return primary_ray.Origin + primary_ray.Direction * ray_t;
 }
 
 float3

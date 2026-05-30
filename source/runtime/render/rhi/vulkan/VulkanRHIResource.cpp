@@ -1784,6 +1784,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     void VulkanTexture::BuildNativeImageDescriptorInfo(
         const TextureView&          _view,
         VkImageLayout               _layout,
+        VkDescriptorType            _descriptor_type,
         VkImageDescriptorInfoEXT&   _out_image_info,
         VkResourceDescriptorInfoEXT&_out_resource_info
     ) {
@@ -1805,8 +1806,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
         _out_resource_info.sType = VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT;
         _out_resource_info.pNext = nullptr;
-        _out_resource_info.type  = _layout == VK_IMAGE_LAYOUT_GENERAL ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE :
-                                                                        VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        _out_resource_info.type  = _descriptor_type;
         _out_resource_info.data.pImage = &_out_image_info;
     }
 
@@ -1953,14 +1953,19 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         bindless_buffer_desc_data.resize(bindless_buffer_descs->GetByteSize());
         memset(bindless_buffer_desc_data.data(), 0, bindless_buffer_desc_data.size());
 
+        const uint64 texture_descriptor_stride =
+            m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
         buffer_ci.usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        buffer_ci.size  = _max_size * m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
+        buffer_ci.size  = Moer::AlignUp(
+            texture_offset_in_buffer + uint64(_max_size) * texture_descriptor_stride,
+            texture_descriptor_stride
+        );
         current_handle   = VK_NULL_HANDLE;
         alloc           = VK_NULL_HANDLE;
         VK_CHECK_RESULT(vmaCreateBuffer(m_device->GetVmaAllocator(), &buffer_ci, &alloc_ci, &current_handle, &alloc, nullptr));
 
-        buffer_info.size = _max_size;
-        buffer_info.stride = m_device->GetOptionalProperties().descriptor_buffer_properties.sampledImageDescriptorSize;
+        buffer_info.size = buffer_ci.size / texture_descriptor_stride;
+        buffer_info.stride = uint32(texture_descriptor_stride);
         bindless_texture_descs = MoerNew(VulkanBuffer)(s_bdls_array_image_name, buffer_info, *m_device, current_handle, alloc, false, true);
     bindless_texture_desc_data.resize(bindless_texture_descs->GetByteSize());
     memset(bindless_texture_desc_data.data(), 0, bindless_texture_desc_data.size());
@@ -2370,11 +2375,12 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         if (_texture.num_array > 0) {
             view = view.Slice(_texture.array_layer, _texture.num_array);
         }
-        const VkImageLayout layout =
-            uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0 ?
-                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        offline_resource_desc_offsets[slot_idx] = g_heap.GetImageDescIdx(&view, layout);
+        VkImageLayout layout = vk_texture->GetPreferredLayout();
+        if (layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+            uint(vk_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0) {
+            layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        }
+        offline_resource_desc_offsets[slot_idx] = g_heap.GetImageDescIdx(&view, layout, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
         offline_sampler_indices[slot_idx] = m_device->GetSamplerIdx(_sampler);
         std::unique_lock<std::mutex> lk(mtx);
 
@@ -2653,9 +2659,9 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 geometry.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
                 geometry.geometry.triangles.vertexFormat = g_platform_pixel_formats[_info.vertex_format].format;
                 geometry.geometry.triangles.vertexStride = segment.vertex_stride;
+                assert(segment.vertex_count > 0 && "Raytracing geometry segment must contain vertices");
                 geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset;
-                // 下一个变量maxVertex，定义了允许的最大顶点索引值。此处应为 first_vertex + vertex_count
-                geometry.geometry.triangles.maxVertex = segment.first_vertex - segment.vertex_count;
+                geometry.geometry.triangles.maxVertex = segment.first_vertex + segment.vertex_count - 1;
                 geometry.geometry.triangles.indexType = VulkanEnumTranslator::METoVKIndexType(_info.index_type);
                 geometry.geometry.triangles.indexData.deviceAddress = idx_addr + segment.index_offset; 
                 geometry.geometry.triangles.transformData.deviceAddress = 0;
@@ -2881,81 +2887,82 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     }
 
     UniquePtr<Command> VulkanRaytracingScene::UpdateScene(){
+        const bool has_instance_updates = !temp_update_instance_ids.empty();
+        const bool needs_instance_buffer_refit = instance_capacity < instances.size();
+        const bool needs_initial_build = !tlas || !scratch_buffer;
+        if (instances.empty() || (!has_instance_updates && !needs_instance_buffer_refit && !needs_initial_build)) {
+            return nullptr;
+        }
 
         related_geometries.clear();
         temp_update_instances.clear();
 
-                //update gpu buffer
+        if (tlas) {
+            if (prev_tlas.Get() == tlas.Get()) {
+                tlas = spare_tlas;
+                size_infos = spare_size_infos;
+                spare_tlas = nullptr;
+                spare_size_infos = {};
+            } else if (prev_tlas) {
+                std::swap(prev_tlas, tlas);
+                std::swap(prev_size_infos, size_infos);
+            } else {
+                prev_tlas = tlas;
+                prev_size_infos = size_infos;
+                tlas = nullptr;
+                size_infos = {};
+            }
+        }
+
         bool b_full_refit = false;
-        if (instance_capacity < instances.size()){
+        if (needs_instance_buffer_refit) {
             RefitInstanceBuffer();
             b_full_refit = true;
         }
-        bool b_need_force_build = RefitTLASAndScratchBuffer();
 
-        // for(auto prev_idx : prev_modified_instance_ids){
-        //     if(!temp_modified_instance_ids.contains(prev_idx)){
-        //         temp_update_instance_ids.push_back(prev_idx);
-        //     }
-        // }
-        if(!prev_modified_instance_ids.empty()){
-            b_need_force_build = true;
-        }
+        const bool b_need_force_build = RefitTLASAndScratchBuffer();
 
-        prev_modified_instance_ids.clear();
-
-
-        // b_current_full_refit |= b_full_refit;
-
-        // if(b_prev_full_refit){
-        //     b_full_refit = true;
-        //     b_prev_full_refit = false;
-        // }
-
-        if(b_full_refit){
-            temp_update_instances.reserve(instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
-            std::span<byte> temp_span((byte*)vk_instances.data(), vk_instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
-
+        if (b_full_refit) {
             temp_update_instance_ids.clear();
-            for(uint i = 0; i < instances.size(); i++){
+            temp_update_instance_ids.reserve(instances.size());
+            for (uint i = 0; i < instances.size(); ++i) {
                 temp_update_instance_ids.push_back(i);
             }
-
         }
-        
-        {
 
-            temp_update_instances.resize(temp_update_instance_ids.size() * sizeof(VkAccelerationStructureInstanceKHR));
-            //update cpu size vk_instance datas
-            for (const auto& idx : temp_update_instance_ids) {
-                VulkanRaytracingGeometry* geometry = ResourceCast(instances[idx].geom);
-                assert(geometry && "Invalid geometry");
-                const Array<RaytracingSegment>& segments = geometry->GetInfo().segments;
-                VkAccelerationStructureInstanceKHR& vk_instance = vk_instances[idx];
-                const RaytracingInstance& instance = instances[idx];
-                vk_instance.instanceCustomIndex = instance.custom_index;
-                vk_instance.mask = instance.visible_mask;
-                vk_instance.instanceShaderBindingTableRecordOffset = instance.material_ref.sbt_offset;
-                vk_instance.flags = METoRTInstanceFlags(segments[instance.segment_idx], instance);
-                vk_instance.accelerationStructureReference = geometry->blas_address;
-                std::memcpy(&vk_instance.transform, &instance.transform, sizeof(vk_instance.transform));
+        temp_update_instances.resize(temp_update_instance_ids.size() * sizeof(VkAccelerationStructureInstanceKHR));
+        for (uint update_index = 0; update_index < temp_update_instance_ids.size(); ++update_index) {
+            const uint idx = temp_update_instance_ids[update_index];
+            VulkanRaytracingGeometry* geometry = ResourceCast(instances[idx].geom);
+            assert(geometry && "Invalid geometry");
+            const Array<RaytracingSegment>& segments = geometry->GetInfo().segments;
+            VkAccelerationStructureInstanceKHR& vk_instance = vk_instances[idx];
+            const RaytracingInstance& instance = instances[idx];
+            vk_instance.instanceCustomIndex = instance.custom_index;
+            vk_instance.mask = instance.visible_mask;
+            vk_instance.instanceShaderBindingTableRecordOffset = instance.material_ref.sbt_offset;
+            vk_instance.flags = METoRTInstanceFlags(segments[instance.segment_idx], instance);
+            vk_instance.accelerationStructureReference = geometry->blas_address;
+            std::memcpy(&vk_instance.transform, &instance.transform, sizeof(vk_instance.transform));
+            std::memcpy(
+                temp_update_instances.data() + update_index * sizeof(VkAccelerationStructureInstanceKHR),
+                &vk_instance,
+                sizeof(VkAccelerationStructureInstanceKHR)
+            );
+        }
 
-                uint indice = &idx - &temp_update_instance_ids[0];
-                std::memcpy(temp_update_instances.data() + indice * sizeof(VkAccelerationStructureInstanceKHR), &vk_instance, sizeof(VkAccelerationStructureInstanceKHR));
-
-                auto pair = related_geometries.try_emplace(uint64(geometry), 1);
-                if(!pair.second){
-                    related_geometries[uint64(geometry)]++;
-                }
+        for (const RaytracingInstance& instance : instances) {
+            VulkanRaytracingGeometry* geometry = ResourceCast(instance.geom);
+            if (geometry == nullptr) {
+                continue;
+            }
+            auto pair = related_geometries.try_emplace(uint64(geometry), 1);
+            if (!pair.second) {
+                ++pair.first->second;
             }
         }
 
-
-        //maybe we should calculate relative blas here
-        // Array<uint> instance_ids_to_update = temp_update_instance_ids;
-        
-        // RefitTLASAndScratchBuffer();
-        // temp_modified_instance_ids.clear();
+        b_tlas_update_pending = true;
         return MakeUnique<UpdateRaytracingSceneCmd>(
             std::move(related_geometries),
             uint64(this),
@@ -2968,19 +2975,21 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             b_full_refit || b_need_force_build);
     }
 
-    void VulkanRaytracingScene::AdvanceFrame(){  
-        
-        assert(prev_modified_instance_ids.empty() && "There are still modified instances not updated, call UpdateScene() first");
-        
-        prev_modified_instance_ids.swap( temp_modified_instance_ids);
-        b_current_full_refit = false;
+    void VulkanRaytracingScene::AdvanceFrame(){
+        if (b_tlas_update_pending) {
+            temp_modified_instance_ids.clear();
+            temp_update_instance_ids.clear();
+            b_tlas_update_pending = false;
+        }
 
-        std::swap(prev_instance_capacity, instance_capacity);
-        prev_size_infos.build_scratch_size = size_infos.build_scratch_size;
-        prev_size_infos.update_scratch_size = size_infos.update_scratch_size;
-        std::swap(prev_size_infos, size_infos);
-
-        std::swap(prev_tlas, tlas);
+        if (tlas) {
+            if (prev_tlas.Get() != tlas.Get()) {
+                spare_tlas = prev_tlas;
+                spare_size_infos = prev_size_infos;
+            }
+            prev_tlas = tlas;
+            prev_size_infos = size_infos;
+        }
     }
 
     RaytracingTlasRef VulkanRaytracingScene::GetTlas() const{
@@ -3209,7 +3218,8 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         std::unique_lock<std::mutex> _(cv_m);
         while (current_value < _value) {
             std::this_thread::yield();
-            cv.wait(_); }
+            cv.wait(_);
+        }
     }
 
     void VulkanFence::Notify(uint64_t _value) {

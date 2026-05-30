@@ -15,6 +15,8 @@ struct QueryCmd;
 
 class VulkanQueryRuntime {
 public:
+    struct SubmissionState;
+
     class IQueryPoolBackend {
     public:
         virtual ~IQueryPoolBackend() = default;
@@ -84,8 +86,8 @@ public:
     void BeginOcclusion(VulkanCmdList& _cmd_list, const QueryToken& _token);
     void EndOcclusion(VulkanCmdList& _cmd_list, const QueryToken& _token);
 
-    void FinalizeSubmit(uint64 _timeline, VkCommandBuffer _owner_cmd);
-    void ResolveCompleted(uint64 _timeline);
+    std::optional<SubmissionState> FinalizeSubmit(uint64 _timeline, VkCommandBuffer _owner_cmd);
+    void                          ResolveCompleted(SubmissionState&& _submission);
 
     void ResolveAsError(std::span<const QueryToken> _tokens, StringView _reason);
 
@@ -94,9 +96,14 @@ public:
     }
 
 private:
+    struct PoolInstance {
+        UniquePtr<IQueryPoolBackend> backend{};
+        uint32                       next_query{0};
+    };
+
     struct PoolSlot {
         QueryKind kind{QueryKind::Timestamp};
-        uint32    pool_index{0};
+        PoolInstance* pool{nullptr};
         uint32    query_index{0};
     };
 
@@ -110,31 +117,33 @@ private:
         std::optional<PoolSlot> occlusion_slot{};
     };
 
-    struct PoolInstance {
-        UniquePtr<IQueryPoolBackend> backend{};
-        uint32                       next_query{0};
-        uint32                       pending_slot_uses{0};
-        std::thread::id              owner_thread{};
-        VkCommandBuffer              owner_cmd{VK_NULL_HANDLE};
-        bool                         in_use{false};
+public:
+    struct SubmissionState {
+        uint64                      timeline{0};
+        Array<QueryRecord>          records{};
+        Array<UniquePtr<PoolInstance>> timestamp_pools{};
+        Array<UniquePtr<PoolInstance>> occlusion_pools{};
+
+        bool HasAllocatedPools() const {
+            return !timestamp_pools.empty() || !occlusion_pools.empty();
+        }
+
+        bool HasWork() const {
+            return !records.empty() || HasAllocatedPools();
+        }
     };
 
+private:
+
     struct RecordContext {
-        std::thread::id owner_thread{};
         VkCommandBuffer owner_cmd{VK_NULL_HANDLE};
 
-        int active_timestamp_pool{-1};
-        int active_occlusion_pool{-1};
+        PoolInstance* active_timestamp_pool{nullptr};
+        PoolInstance* active_occlusion_pool{nullptr};
+        SubmissionState submission{};
 
         UnorderedMap<uint64, QueryRecord> records{};
         UnorderedMap<uint64, QueryToken>  issued_tokens{};
-        Array<PoolSlot>                   used_slots{};
-    };
-
-    struct PendingSubmission {
-        uint64            timeline{0};
-        Array<QueryRecord> records{};
-        Array<PoolSlot>    used_slots{};
     };
 
 private:
@@ -145,27 +154,24 @@ private:
     uint64 ResolveTimestampTick(const PoolSlot& _slot);
     uint64 ResolveOcclusionSamples(const PoolSlot& _slot);
 
-    void MarkSlotPendingUse(const PoolSlot& _slot, int _delta);
-    void RecyclePoolIfPossible(const PoolSlot& _slot);
-
-    Array<PoolInstance>& GetPools(QueryKind _kind);
-    int&                 GetActivePoolIndex(RecordContext& _ctx, QueryKind _kind);
-    uint32               GetInitialPoolSize(QueryKind _kind) const;
-    UniquePtr<IQueryPoolBackend> CreateBackend(QueryKind _kind, uint32 _capacity);
+    Array<UniquePtr<PoolInstance>>& GetAvailablePools(QueryKind _kind);
+    Array<UniquePtr<PoolInstance>>& GetSubmissionPools(SubmissionState& _submission, QueryKind _kind);
+    PoolInstance*&                  GetActivePool(RecordContext& _ctx, QueryKind _kind);
+    UniquePtr<IQueryPoolBackend>    CreateBackend(QueryKind _kind, uint32 _capacity);
+    UniquePtr<PoolInstance>         AcquirePoolChunk(QueryKind _kind);
+    void                            RecycleSubmissionPools(SubmissionState& _submission);
 
 private:
-    static constexpr uint32 k_initial_timestamp_pool_size = 2048;
-    static constexpr uint32 k_initial_occlusion_pool_size = 1024;
+    static constexpr uint32 k_query_pool_chunk_size = 256;
 
     VulkanDevice& device;
     float         timestamp_period{0.0f};
 
-    Array<PoolInstance> timestamp_pools{};
-    Array<PoolInstance> occlusion_pools{};
+    Array<UniquePtr<PoolInstance>> available_timestamp_pools{};
+    Array<UniquePtr<PoolInstance>> available_occlusion_pools{};
     UnorderedMap<QueryKind, PoolBackendFactory> backend_factories{};
 
     UnorderedMap<VkCommandBuffer, RecordContext> active_contexts{};
-    Array<PendingSubmission>                     pending_submissions{};
 
     mutable std::mutex runtime_mtx{};
 };

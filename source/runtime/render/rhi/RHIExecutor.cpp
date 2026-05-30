@@ -72,7 +72,7 @@ void RHIExecutor::Submit(
             if (command_list.IsEmpty()) {
                 continue;
             }
-            pending_command_lists.emplace_back(std::move(command_list));
+            pending_command_lists.emplace_back(PendingCommandListEntry(std::move(command_list)));
         }
 
         if (present != nullptr && present->source.texture != nullptr) {
@@ -104,7 +104,7 @@ void RHIExecutor::SubmitRecording(
                 assert(false && "RHIExecutor only accepts Graphics or Compute command lists");
                 return;
             }
-            pending_recording_command_lists.emplace_back(std::move(command_list));
+            pending_command_lists.emplace_back(PendingCommandListEntry(std::move(command_list)));
         }
     }
 
@@ -114,23 +114,27 @@ void RHIExecutor::SubmitRecording(
 }
 
 void RHIExecutor::Flush(ERHIFlushDepth depth) {
+    std::shared_ptr<RHIBackendExecutor> backend;
     {
         std::lock_guard<std::mutex> lock(submit_mutex);
         EnqueuePendingLocked();
-        if (backend_executor) {
-            backend_executor->Flush(depth);
-        }
+        backend = backend_executor;
+    }
+    if (backend) {
+        backend->Flush(depth);
     }
 }
 
 void RHIExecutor::Sync(ERHISyncDepth depth) {
     GraphEventRef event = nullptr;
+    std::shared_ptr<RHIBackendExecutor> backend;
     {
         std::lock_guard<std::mutex> lock(submit_mutex);
         EnqueuePendingLocked();
-        if (backend_executor) {
-            event = backend_executor->Sync(depth);
-        }
+        backend = backend_executor;
+    }
+    if (backend) {
+        event = backend->Sync(depth);
     }
     if (event) {
         event->Wait();
@@ -145,12 +149,14 @@ void RHIExecutor::Sync(Swapchain* swapchain) {
     }
 
     GraphEventRef event = nullptr;
+    std::shared_ptr<RHIBackendExecutor> backend;
     {
         std::lock_guard<std::mutex> lock(submit_mutex);
         EnqueuePendingLocked();
-        if (backend_executor) {
-            event = backend_executor->Sync(swapchain);
-        }
+        backend = backend_executor;
+    }
+    if (backend) {
+        event = backend->Sync(swapchain);
     }
     if (event) {
         event->Wait();
@@ -159,42 +165,45 @@ void RHIExecutor::Sync(Swapchain* swapchain) {
 
 void RHIExecutor::ShutDown() {
     auto& executor = Get();
+    std::shared_ptr<RHIBackendExecutor> backend;
     {
         std::lock_guard<std::mutex> lock(executor.submit_mutex);
         executor.EnqueuePendingLocked();
-        if (executor.backend_executor) {
-            executor.backend_executor->ShutDown();
-            executor.backend_executor.reset();
-        }
+        backend = std::move(executor.backend_executor);
+        executor.backend_executor.reset();
+    }
+    if (backend) {
+        backend->ShutDown();
     }
 }
 
 void RHIExecutor::EnqueuePendingLocked() {
-    for (SharedPtr<CommandList>& recording_command_list : pending_recording_command_lists) {
-        if (!recording_command_list) {
-            continue;
-        }
-        if (GraphEventRef record_complete_event = recording_command_list->GetRecordCompleteEvent();
-            record_complete_event && !record_complete_event->IsComplete()) {
-            record_complete_event->Wait(EThread::UNKNOWN_THREAD);
-        }
-        if (!recording_command_list->IsEmpty()) {
-            pending_command_lists.emplace_back(std::move(*recording_command_list));
-        }
-    }
-    pending_recording_command_lists.clear();
-
     RHIBackendSubmissionBatch batch{};
     batch.submits.reserve(pending_command_lists.size());
 
     std::optional<EQueueType> last_non_empty_queue{};
-    for (auto& command_list : pending_command_lists) {
-        if (command_list.IsEmpty()) {
+    for (PendingCommandListEntry& entry : pending_command_lists) {
+        CommandList* command_list = nullptr;
+        if (entry.kind == PendingCommandListEntry::EKind::Recorded) {
+            command_list = &entry.recorded;
+        } else {
+            if (!entry.recording) {
+                continue;
+            }
+            if (GraphEventRef record_complete_event = entry.recording->GetRecordCompleteEvent();
+                record_complete_event && !record_complete_event->IsComplete()) {
+                record_complete_event->Wait(EThread::UNKNOWN_THREAD);
+            }
+            command_list = entry.recording.get();
+        }
+
+        if (command_list->IsEmpty()) {
             continue;
         }
-        const EQueueType queue = command_list.GetQueueType();
+        const EQueueType queue = command_list->GetQueueType();
         last_non_empty_queue   = queue;
-        batch.submits.emplace_back(queue, command_list.Submit());
+        CmdSubmit submit = command_list->Submit();
+        batch.submits.emplace_back(queue, std::move(submit));
     }
     pending_command_lists.clear();
 

@@ -599,14 +599,16 @@ private:
 };
 
 struct VkTextureDescKey {
-    VkImageLayout layout;
-    uint8         mip_level;
-    uint8         mip_cnt;
-    uint8         array_layer;
-    uint8         array_count;
+    VkDescriptorType descriptor_type;
+    VkImageLayout    layout;
+    uint8            mip_level;
+    uint8            mip_cnt;
+    uint8            array_layer;
+    uint8            array_count;
 
     bool operator==(const VkTextureDescKey& _other) const {
-        return layout == _other.layout && mip_level == _other.mip_level && mip_cnt == _other.mip_cnt &&
+        return descriptor_type == _other.descriptor_type && layout == _other.layout &&
+               mip_level == _other.mip_level && mip_cnt == _other.mip_cnt &&
                array_layer == _other.array_layer && array_count == _other.array_count;
     }
 
@@ -615,6 +617,7 @@ struct VkTextureDescKey {
             uint64 packed = uint64(uint32_t(_key.layout)) | (uint64(_key.mip_level) << 32) |
                             (uint64(_key.mip_cnt) << 40) | (uint64(_key.array_layer) << 48) |
                             (uint64(_key.array_count) << 56);
+            packed ^= uint64(uint32_t(_key.descriptor_type)) << 24;
             return std::hash<uint64>()(packed);
         }
     };
@@ -662,6 +665,7 @@ public:
     void BuildNativeImageDescriptorInfo(
         const TextureView&         _view,
         VkImageLayout              _layout,
+        VkDescriptorType           _descriptor_type,
         VkImageDescriptorInfoEXT&  _out_image_info,
         VkResourceDescriptorInfoEXT& _out_resource_info
     );
@@ -690,10 +694,12 @@ public:
         uint          _mip_level,
         uint          _mip_idx,
         VkImageLayout _layout,
+        VkDescriptorType _descriptor_type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
         uint          _array_layer = 0,
         uint          _array_count = 1
     ) {
         VkTextureDescKey key = {
+            _descriptor_type,
             _layout,
             uint8(_mip_level),
             uint8(_mip_idx),
@@ -884,6 +890,9 @@ struct VulkanAccelerationStructure : public RaytracingTlas {
     VulkanAccelerationStructure(VulkanDevice& _device, VulkanRaytracingScene& _src_scene);
     virtual ~VulkanAccelerationStructure() override;
     void Destroy() override;
+    VulkanBuffer* GetUnderlyingBuffer() const override {
+        return underlying_buffer.Get();
+    }
 
     VkAccelerationStructureKHR handle            = VK_NULL_HANDLE;
     VkDeviceAddress tlas_device_address = 0;
@@ -903,7 +912,7 @@ public:
         return acc;
     }
 
-    inline VulkanBuffer* GetUnderlyingBuffer() const {
+    inline VulkanBuffer* GetUnderlyingBuffer() const override {
         return underlying_buffer;
     }
     Array<VkAccelerationStructureGeometryKHR>       build_geometries;
@@ -947,15 +956,15 @@ public:
 
     Array<byte> temp_update_instances;
 
-    Set<uint> prev_modified_instance_ids;
-
 public:
     RaytracingSizeInfos size_infos{};
     RaytracingSizeInfos prev_size_infos{};
+    RaytracingSizeInfos spare_size_infos{};
 
 private:
     VulkanAccelRef  tlas           = nullptr;
     VulkanAccelRef  prev_tlas      = nullptr;
+    VulkanAccelRef  spare_tlas     = nullptr;
     VulkanBufferRef scratch_buffer = nullptr;
 
     VulkanBufferRef instance_buffer = nullptr;
@@ -989,11 +998,10 @@ public:
 
     std::mutex                 geom_mutex;
     UnorderedMap<uint64, uint> related_geometries;
-    bool                       b_current_full_refit = false;
+    bool                       b_tlas_update_pending = false;
 
 private:
     uint instance_capacity      = 1000;
-    uint prev_instance_capacity = 1000;
     uint exponent               = 2;
     uint instance_offset        = 1;
 };

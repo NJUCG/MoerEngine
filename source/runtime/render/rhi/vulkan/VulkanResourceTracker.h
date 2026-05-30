@@ -216,6 +216,17 @@ public:
 
     // §9.3: Initialize tracker src states from preprocess seed (no global state access).
     void InitFromSeed(const TrackerSeed& seed);
+    void SetTrackedState(VulkanBuffer* buffer, EBufferState state, EQueueType owner_queue, bool access_write);
+    void SetTrackedState(
+        VulkanTexture* texture,
+        ETextureState  state,
+        EQueueType     owner_queue,
+        bool           access_write,
+        uint8          mip_level,
+        uint8          mip_count,
+        uint8          array_layer,
+        uint8          array_count
+    );
 
     void ResolveBarriers();
 

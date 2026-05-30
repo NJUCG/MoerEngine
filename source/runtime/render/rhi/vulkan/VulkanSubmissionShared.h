@@ -1,13 +1,15 @@
 #pragma once
 
+#include "VulkanAllocator.h"
 #include "VulkanQueue.h"
+#include "taskgraph/TaskPipe.h"
 
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
 namespace Moer::Render {
-
-using SyncPointId = uint64;
 
 struct SubmissionKey {
     uint64 op_seq{0};
@@ -48,7 +50,7 @@ struct TranslateResult {
     std::optional<VulkanRecordedSubmit> recorded_submit{};
     GraphEventRef translate_complete{nullptr};
     bool          valid{true};
-    String        error{};
+    std::string   error{};
 };
 
 struct QueueTranslateInfo {
@@ -62,7 +64,7 @@ struct QueueTranslateInfo {
     GraphEventRef   completion_event{nullptr};
     ERHITranslateExecutionClass execution_class{ERHITranslateExecutionClass::Parallel};
     bool         valid{true};
-    String       error{};
+    std::string  error{};
 
     QueueTranslateInfo(
         SubmissionKey in_key,
@@ -102,12 +104,10 @@ struct ExecutorPresentOp {
 };
 
 struct SubmissionHostFence {
-    VkDevice device{VK_NULL_HANDLE};
     VkFence  handle{VK_NULL_HANDLE};
     bool     owned{false};
 
     void Reset() {
-        device = VK_NULL_HANDLE;
         handle = VK_NULL_HANDLE;
         owned  = false;
     }
@@ -119,7 +119,7 @@ struct SubmitPresentStage {
     bool               has_source_texture_state{false};
     ResourceStateValue source_texture_state{};
     bool               valid{true};
-    String             error{};
+    std::string        error{};
 
     SubmitPresentStage(uint64 in_op_seq, ExecutorPresentOp&& in_present) :
         op_seq(in_op_seq),
@@ -137,18 +137,12 @@ struct RootRhiBoundary {
     Array<WaitEvent> gpu_waits{};
 };
 
-struct ResolvedSyncPoint {
-    EQueueType queue{EQueueType::Ignore};
-    uint64     timeline_handle{0};
-    uint64     value{0};
-};
-
 struct SubmitInfo {
     SubmissionKey                    key{};
     uint64                           submit_seq{0};
     EQueueType                       queue{EQueueType::Ignore};
-    SyncPointId                      signal_syncpoint{0};
-    Array<SyncPointId>               wait_syncpoints{};
+    SyncPointRef                     signal_syncpoint{};
+    Array<SyncPointRef>              wait_syncpoints{};
     Array<GraphEventRef>             interrupt_completion_events{};
     TranslateResult                  translate_result{};
 
@@ -156,7 +150,7 @@ struct SubmitInfo {
         SubmissionKey   in_key,
         uint64          in_submit_seq,
         EQueueType      in_queue,
-        SyncPointId     in_signal_syncpoint,
+        SyncPointRef    in_signal_syncpoint,
         TranslateResult&& in_translate_result
     ) :
         key(in_key),
@@ -170,6 +164,22 @@ struct SubmitInfo {
     SubmitInfo& operator=(SubmitInfo&&) noexcept = default;
     SubmitInfo(const SubmitInfo&)                = delete;
     SubmitInfo& operator=(const SubmitInfo&)     = delete;
+};
+
+struct TranslateBatchEntry {
+    GraphEventRef             translate_event{nullptr};
+    std::optional<SubmitInfo> submit{};
+};
+
+struct TranslateBatch {
+    std::mutex                  mutex{};
+    EQueueType                  queue{EQueueType::Ignore};
+    ERHITranslateExecutionClass execution_class{ERHITranslateExecutionClass::Parallel};
+    uint32                      command_count{0};
+    uint64                      trace_frame{0};
+    TaskPipe                    translate_pipe{};
+    Array<TranslateBatchEntry>  entries{};
+    UniquePtr<VulkanAllocator>  allocator_cache{};
 };
 
 } // namespace Moer::Render

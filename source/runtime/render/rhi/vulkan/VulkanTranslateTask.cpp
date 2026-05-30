@@ -18,7 +18,8 @@ GraphEventRef CreateCompletedTranslateEvent() {
 TranslateResult DispatchSingleTranslate(
     EQueueType   queue_type,
     CmdSubmit&&  submit,
-    TrackerSeed&& initial_seed
+    TrackerSeed&& initial_seed,
+    VulkanAllocator* allocator_override
 ) {
     TranslateResult result{};
     result.queue              = queue_type;
@@ -28,21 +29,24 @@ TranslateResult DispatchSingleTranslate(
         case EQueueType::Graphics:
         case EQueueType::Compute: {
             auto& queue = static_cast<VkCommandQueue&>(RenderDevice::Get().GetCommandQueue(queue_type));
-            result.recorded_submit = queue.Translate(std::move(submit), nullptr, std::move(initial_seed));
+            result.recorded_submit = queue.Translate(
+                std::move(submit),
+                nullptr,
+                std::move(initial_seed),
+                allocator_override
+            );
             break;
         }
         case EQueueType::Copy: {
             auto& queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-            result.recorded_submit = queue.Translate(std::move(submit), nullptr);
+            result.recorded_submit = queue.Translate(std::move(submit), nullptr, allocator_override);
             break;
         }
         default:
             return VulkanTranslateTask::MakeFailed(
                 queue_type,
-                Printf(
-                    MOER_TEXT("VulkanTranslateTask::DispatchBatch invalid queue: {}"),
-                    static_cast<uint32>(queue_type)
-                )
+                std::string("VulkanTranslateTask::DispatchBatch invalid queue: ") +
+                    std::to_string(static_cast<uint32>(queue_type))
             );
     }
 
@@ -54,12 +58,18 @@ TranslateResult DispatchSingleTranslate(
 TranslateResult VulkanTranslateTask::DispatchSingle(
     EQueueType   queue_type,
     CmdSubmit&&  submit,
-    TrackerSeed&& initial_seed
+    TrackerSeed&& initial_seed,
+    VulkanAllocator* allocator_override
 ) {
-    return DispatchSingleTranslate(queue_type, std::move(submit), std::move(initial_seed));
+    return DispatchSingleTranslate(
+        queue_type,
+        std::move(submit),
+        std::move(initial_seed),
+        allocator_override
+    );
 }
 
-TranslateResult VulkanTranslateTask::MakeFailed(EQueueType queue, String error) {
+TranslateResult VulkanTranslateTask::MakeFailed(EQueueType queue, std::string error) {
     TranslateResult result{};
     result.queue              = queue;
     result.translate_complete = CreateCompletedTranslateEvent();

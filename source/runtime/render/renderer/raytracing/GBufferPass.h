@@ -1,7 +1,7 @@
 #ifndef MOER_RENDER_GBUFFER_PASS_H
 #define MOER_RENDER_GBUFFER_PASS_H
 
-#include "RTResource.h"
+#include "RaytracingGraphResources.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
@@ -62,16 +62,40 @@ public:
 
 class GBufferPass {
 public:
+    struct PreparedCommand {
+        GBufferPassParams params{};
+        GBufferConstants  constants{};
+        uint3             dispatch_groups{};
+    };
+
+    struct RecordResources {
+        TextureRef         view_depth;
+        TextureRef         diffuse_albedo;
+        TextureRef         specular_roughness;
+        TextureRef         normal;
+        TextureRef         emission;
+        TextureRef         motion;
+        TextureRef         clip_depth;
+        TextureRef         normal_roughness;
+        RaytracingTlasRef  tlas;
+        BindlessArrayRef   bindless_array;
+    };
+
     GBufferPass(class RenderDevice& _device, class ShaderManager& _manager);
-    void Process(class CommandList& _cmd_list, RTContext& _rt_ctx);
+    void AddPasses(RenderGraph& _graph, const RTGraphFrameResources& _rg, const RTContext& _rt_ctx);
+
+private:
+    PreparedCommand Prepare(const RTContext& _rt_ctx) const;
+    static RecordResources CaptureResources(const RTContext& _rt_ctx);
+    void RecordConstantsUpload(CommandList& _cmd_list, const PreparedCommand& _command);
+    void RecordTraceGBuffer(CommandList& _cmd_list, const PreparedCommand& _command, const RecordResources& _resources);
+    void RecordPostProcessGBuffer(CommandList& _cmd_list, const PreparedCommand& _command, const RecordResources& _resources);
 
 private:
     class RenderDevice&  device;
     class ShaderManager& manager;
 
-    BufferRef        gbuffer_constants;
-    GBufferConstants constants{};
-    Array<byte>      upload_data;
+    BufferRef gbuffer_constants;
 
     RaytracingGBufferPipeline  gbuffer_pass_pipeline;
     PostProcessGBufferPipeline post_process_pipeline;

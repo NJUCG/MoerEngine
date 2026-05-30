@@ -1,6 +1,6 @@
 #ifndef MOER_LIGHTING_PASS_H
 #define MOER_LIGHTING_PASS_H
-#include "RTResource.h"
+#include "RaytracingGraphResources.h"
 #include "rhi/RHI.h"
 #include "shader/ShaderPipeline.h"
 namespace Moer {
@@ -103,13 +103,48 @@ public:
 
 class LightingPass {
 public:
+    struct PreparedCommand {
+        ResampleConstants constants{};
+        bool              has_local_lights = false;
+        bool              has_env_lights   = false;
+        uint3             presample_light_dispatch{};
+        uint3             presample_env_dispatch{};
+        uint3             presample_grid_dispatch{};
+        uint3             screen_dispatch{};
+    };
+
+    struct RecordResources {
+        RaytracingTlasRef  tlas;
+        RaytracingTlasRef  prev_tlas;
+        BufferRef          light_reservoir_buf;
+        TextureRef         diffuse_lighting;
+        TextureRef         specular_lighting;
+        TextureRef         temporal_sample_pos;
+        TextureRef         gradients;
+        TextureRef         restir_luminance;
+        TextureRef         prev_diffuse_lighting;
+        BufferRef          ris_buf;
+        BufferRef          ris_light_data_buf;
+        BufferRef          neighbor_offset_buf;
+        BindlessArrayRef   bindless_array;
+    };
+
     LightingPass(class ShaderManager& _manager);
 
-    void Process(CommandList& _cmd_list, RTContext& _rt_ctx);
+    void AddPasses(RenderGraph& _graph, const RTGraphFrameResources& _rg, const RTContext& _rt_ctx);
 
 private:
-    ResampleConstants constants;
-    Array<byte>       upload_data;
+    enum class ELightingDispatch : uint8_t;
+
+    PreparedCommand Prepare(const RTContext& _rt_ctx) const;
+    static RecordResources CaptureResources(const RTContext& _rt_ctx);
+    void RecordConstantsUpload(CommandList& _cmd_list, const PreparedCommand& _command);
+    void RecordDispatch(
+        CommandList&           _cmd_list,
+        const PreparedCommand& _command,
+        const RecordResources& _resources,
+        ELightingDispatch      _dispatch
+    );
 
     PresampleLightPipeline        presample_light_pipeline;
     PresampleEnvMapPipeline       presample_env_map_pipeline;

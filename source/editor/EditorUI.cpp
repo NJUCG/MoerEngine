@@ -3,6 +3,7 @@
 // Runtime
 #include "file/FileDialog.h"
 #include "log/LogSystem.h"
+#include "string/StringConvert.h"
 #include "trace/Trace.h"
 #include "window/WindowInput.h"
 
@@ -48,9 +49,13 @@ void ClearCameraInput(WindowInput& input) {
     input.reset_speed     = false;
 }
 
+void StoreSelectedPlatformPath(StringView selected_path, void* user_data) {
+    *static_cast<String*>(user_data) = String(selected_path);
+}
+
 bool LaunchProfilerProcess(const std::filesystem::path& capture_path = {}) {
 #if defined(_WIN32)
-    wchar_t module_path[MAX_PATH]{};
+    PlatformChar module_path[MAX_PATH]{};
     const DWORD module_length = GetModuleFileNameW(nullptr, module_path, static_cast<DWORD>(std::size(module_path)));
     if (module_length == 0 || module_length >= std::size(module_path)) {
         LOG_WARNING(MOER_TEXT("Failed to resolve MoerEditor executable path."));
@@ -58,24 +63,25 @@ bool LaunchProfilerProcess(const std::filesystem::path& capture_path = {}) {
     }
 
     const std::filesystem::path editor_path   = std::filesystem::path(module_path);
-    const std::filesystem::path profiler_path = editor_path.parent_path() / L"MoerProfiler.exe";
-    std::wstring parameters{};
+    const std::filesystem::path profiler_path = editor_path.parent_path() / std::filesystem::path(MOER_TEXT("MoerProfiler.exe"));
+    String parameters{};
     if (!capture_path.empty()) {
-        parameters.reserve(capture_path.wstring().size() + 2);
-        parameters.push_back(L'"');
-        parameters += capture_path.wstring();
-        parameters.push_back(L'"');
+        const String capture_path_text = String(capture_path.native());
+        parameters.reserve(capture_path_text.size() + 2);
+        parameters.push_back(MOER_TEXT('"'));
+        parameters += capture_path_text;
+        parameters.push_back(MOER_TEXT('"'));
     }
     HINSTANCE result = ShellExecuteW(
         nullptr,
-        L"open",
+        MOER_TEXT("open"),
         profiler_path.c_str(),
         parameters.empty() ? nullptr : parameters.c_str(),
         profiler_path.parent_path().c_str(),
         SW_SHOWNORMAL
     );
     if (reinterpret_cast<intptr_t>(result) <= 32) {
-        LOG_WARNING(MOER_TEXT("Failed to launch MoerProfiler: {}"), profiler_path.string());
+        LOG_WARNING(MOER_TEXT("Failed to launch MoerProfiler: {}"), String(profiler_path.native()));
         return false;
     }
     return true;
@@ -88,21 +94,19 @@ bool LaunchProfilerProcess(const std::filesystem::path& capture_path = {}) {
 
 void OpenProfilerCapturePicker() {
     static constexpr std::array<FileDialog::Filter, 3> capture_filters = {{
-        {"Profiler Capture", "mpd,mrtc,csv,bin"},
-        {"Trace CSV", "csv"},
-        {"All Files", "*"},
+        {MOER_ASCII_TEXT("Profiler Capture"), MOER_ASCII_TEXT("mpd,mrtc,csv,bin")},
+        {MOER_ASCII_TEXT("Trace CSV"), MOER_ASCII_TEXT("csv")},
+        {MOER_ASCII_TEXT("All Files"), MOER_ASCII_TEXT("*")},
     }};
 
-    Utf8String selected_path{};
+    String selected_path{};
     const FileDialog::EOpenFileStatus result = FileDialog::OpenFile(FileDialog::OpenFileRequest{
         .filters = capture_filters,
-        .callback = [](Utf8StringView selected_file_path, void* user_data) {
-            *static_cast<Utf8String*>(user_data) = Utf8String(selected_file_path);
-        },
+        .callback = StoreSelectedPlatformPath,
         .user_data = &selected_path,
     });
     if (result == FileDialog::EOpenFileStatus::Success) {
-        LaunchProfilerProcess(std::filesystem::path(selected_path.c_str()));
+        LaunchProfilerProcess(std::filesystem::path(selected_path.Native()));
     } else if (result == FileDialog::EOpenFileStatus::Error) {
         LOG_WARNING(MOER_TEXT("Failed to open profiler capture picker."));
     }
@@ -365,35 +369,33 @@ void EditorUI::ShowConfig() {
                                      m_config->scene_path.substr(last_slash + 1);
         if (ui.Button("Open Scene")) {
             static constexpr std::array<FileDialog::Filter, 5> scene_filters = {{{
-                "All Support Formats",
-                "glb,gltf,fbx,obj,dae"
+                MOER_ASCII_TEXT("All Support Formats"),
+                MOER_ASCII_TEXT("glb,gltf,fbx,obj,dae")
             }, {
-                "glTF 2.0",
-                "glb,gltf"
+                MOER_ASCII_TEXT("glTF 2.0"),
+                MOER_ASCII_TEXT("glb,gltf")
             }, {
-                "FBX",
-                "fbx"
+                MOER_ASCII_TEXT("FBX"),
+                MOER_ASCII_TEXT("fbx")
             }, {
-                "Wavefront",
-                "obj"
+                MOER_ASCII_TEXT("Wavefront"),
+                MOER_ASCII_TEXT("obj")
             }, {
-                "Moer Renderer Scene (WIP)",
-                "json"
+                MOER_ASCII_TEXT("Moer Renderer Scene (WIP)"),
+                MOER_ASCII_TEXT("json")
             }}};
-            Utf8String selected_scene_path{};
+            String selected_scene_path{};
             const FileDialog::EOpenFileStatus result = FileDialog::OpenFile(FileDialog::OpenFileRequest{
                 .filters = scene_filters,
-                .callback = [](Utf8StringView selected_path, void* user_data) {
-                    *static_cast<Utf8String*>(user_data) = Utf8String(selected_path);
-                },
+                .callback = StoreSelectedPlatformPath,
                 .user_data = &selected_scene_path,
             });
             if (result == FileDialog::EOpenFileStatus::Success) {
-                LOG_INFO(MOER_TEXT("User selected file: {}"), selected_scene_path.c_str());
+                LOG_INFO(MOER_TEXT("User selected file: {}"), selected_scene_path);
 
                 // Prepare for reload
                 m_b_need_reload      = true;
-                m_config->scene_path = std::string(selected_scene_path.data(), selected_scene_path.size());
+                m_config->scene_path = PlatformToUtf8(selected_scene_path).Native();
             } else if (result == FileDialog::EOpenFileStatus::Cancelled) {
                 LOG_INFO(MOER_TEXT("User pressed cancel."));
             }

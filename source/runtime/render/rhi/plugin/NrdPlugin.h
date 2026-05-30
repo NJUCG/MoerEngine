@@ -12,6 +12,8 @@
 
 #include "rhi/RHI.h"
 
+#include <optional>
+
 #if WITH_NRD
 
 // NRI
@@ -105,6 +107,12 @@ public:
 
     virtual void Reinitialize(uint16 _frame_width, uint16 _frame_height) = 0;
 
+    virtual bool HasPendingTranslateWork() const = 0;
+
+    uint8 MaxFrameInFlight() const {
+        return nrd.max_frame_in_flight;
+    }
+
 public:
     enum struct EResourceSlot : uint8 {
         // Reblur/Relax
@@ -147,7 +155,18 @@ protected:
     void SetDefaultDenoiserSettings(const nrd::Identifier _denoiser_id);
     void SetDefaultCommonSettings(uint16 _frame_width, uint16 _frame_height);
 
-protected:
+    const nrd::CommonSettings& PendingCommonSettings() const {
+        return nrd_common_settings;
+    }
+
+    const std::optional<nrd::ReblurSettings>& PendingReblurSettings(nrd::Denoiser type) const {
+        return reblur_settings[static_cast<size_t>(type)];
+    }
+
+    const std::optional<nrd::RelaxSettings>& PendingRelaxSettings(nrd::Denoiser type) const {
+        return relax_settings[static_cast<size_t>(type)];
+    }
+
     nrd::CommonSettings nrd_common_settings = {};
 
     struct NRDEntry {
@@ -177,6 +196,8 @@ protected:
         {};
 
     UnorderedMap<uint64, nri::CommandBuffer*> cmd_lists_on_use = {};
+    StaticArray<std::optional<nrd::ReblurSettings>, uint8(nrd::Denoiser::MAX_NUM)> reblur_settings = {};
+    StaticArray<std::optional<nrd::RelaxSettings>, uint8(nrd::Denoiser::MAX_NUM)>  relax_settings = {};
 };
 
 class NRDPlugin : public RuntimePlugin {

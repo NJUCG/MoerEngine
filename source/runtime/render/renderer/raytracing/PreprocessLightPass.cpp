@@ -6,6 +6,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "scene/Scene.h"
+#include "ShaderUtils.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 
@@ -14,6 +15,42 @@
 #include <ranges>
 
 namespace Moer::Render::Raytracing {
+
+namespace {
+
+struct RGPrepareLightsUploadParams {
+    DEFINE_RG_BUFFER_ACCESS(primitive_to_light, EBufferState::TRANSFER_DST);
+    DEFINE_RG_BUFFER_ACCESS(tasks, EBufferState::TRANSFER_DST);
+    DEFINE_RG_BUFFER_ACCESS(prim_lights, EBufferState::TRANSFER_DST);
+    DEFINE_RG_PARAMETER_ACCESS(primitive_to_light, tasks, prim_lights);
+};
+
+struct RGPrepareLightsClearParams {
+    DEFINE_RG_BUFFER_ACCESS(light_mapping, EBufferState::TRANSFER_DST);
+    DEFINE_RG_TEXTURE_ACCESS(local_light_pdf, ETextureState::TRANSFER_DST);
+    DEFINE_RG_PARAMETER_ACCESS(light_mapping, local_light_pdf);
+};
+
+struct RGPrepareLightsDispatchParams {
+    DEFINE_RG_BUFFER_ACCESS(light_data, EBufferState::UNORDERED_ACCESS);
+    DEFINE_RG_BUFFER_ACCESS(light_mapping, EBufferState::UNORDERED_ACCESS);
+    DEFINE_RG_TEXTURE_ACCESS(local_light_pdf, ETextureState::UNORDERED_ACCESS);
+    DEFINE_RG_BUFFER_ACCESS(prim_lights, EBufferState::SHADER_RESOURCE);
+    DEFINE_RG_BUFFER_ACCESS(tasks, EBufferState::SHADER_RESOURCE);
+    DEFINE_RG_BUFFER_ACCESS(primitive_to_light, EBufferState::SHADER_RESOURCE);
+    DEFINE_RG_PARAMETER_ACCESS(light_data, light_mapping, local_light_pdf, prim_lights, tasks, primitive_to_light);
+};
+
+struct RGPrepareLightsGenerateMipsParams {
+    DEFINE_RG_TEXTURE_ACCESS(local_light_pdf, ETextureState::UNORDERED_ACCESS);
+    DEFINE_RG_PARAMETER_ACCESS(local_light_pdf);
+};
+
+bool HasUploadWork(const PrepareLightPass::PreparedCommand& command) {
+    return !command.primitive_to_light.empty() || !command.tasks.empty() || !command.prim_light_infos.empty();
+}
+
+} // namespace
 
 template<typename T>
 struct CachelineStruct {
@@ -278,7 +315,7 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
     return true;
 }
 
-void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
+PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(RTContext& _rt_ctx) {
 
     TRACE_SCOPE_CAT("Raytracing.ProcessLights", "Frame");
 
@@ -642,46 +679,6 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     }
 
     timer.Stop();
-    auto time = timer.ElapsedMilliseconds();
-
-    // Upload data to the GPU.
-
-    _cmd_list.PushScopeWithTimeScope(MOER_TEXT("PrepareLights"));
-
-    // Upload primitive_to_light.
-    if (!primitive_to_light.empty()) {
-        _cmd_list.CopyFrom(
-            std::span<byte>((byte*)primitive_to_light.data(), primitive_to_light.size() * sizeof(uint)),
-            _rt_ctx.primitive_to_light_buf->GetView(),
-            MOER_TEXT("Upload primitive_to_light")
-        );
-    }
-
-    // Upload tasks.
-    _cmd_list.CopyFrom(
-        std::span<byte>((byte*)tasks.data(), tasks.size() * sizeof(PrepareLightsTask)),
-        _rt_ctx.task_buf->GetView(0, tasks.size() * sizeof(PrepareLightsTask)),
-        MOER_TEXT("Upload tasks")
-    );
-
-    // Upload prim_light_infos.
-    if (!prim_light_infos.empty()) {
-        _cmd_list.CopyFrom(
-            std::span<byte>(
-                (byte*)prim_light_infos.data(), prim_light_infos.size() * sizeof(PolymorphicLightInfo)
-            ),
-            _rt_ctx.prim_light_buf->GetView(),
-            MOER_TEXT("Upload prim light infos")
-        );
-    }
-
-    // Clear resources.
-    _cmd_list.ClearResource(_rt_ctx.light_mapping_buf->GetView(), 0u);
-    _cmd_list.ClearResource(
-        _rt_ctx.local_light_pdf_tex->GetView(0, _rt_ctx.local_light_pdf_tex->GetNumMips()), float4(0.f)
-    );
-
-    // Set shader parameters and dispatch.
 
     PrepareLightsParams param{};
     param.num_tasks = tasks.size();
@@ -705,30 +702,162 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         num_is_env_lights
     );
 
+    b_odd_frame = !b_odd_frame;
+
+    PreparedCommand command{};
+    command.primitive_to_light   = std::move(primitive_to_light);
+    command.tasks                = std::move(tasks);
+    command.prim_light_infos     = std::move(prim_light_infos);
+    command.params               = param;
+    command.dispatch_light_count = light_buf_offset;
+    return command;
+}
+
+PrepareLightPass::RecordResources PrepareLightPass::CaptureResources(RTContext& _rt_ctx) {
+    return RecordResources{
+        .primitive_to_light_buf = _rt_ctx.primitive_to_light_buf,
+        .task_buf               = _rt_ctx.task_buf,
+        .prim_light_buf         = _rt_ctx.prim_light_buf,
+        .light_mapping_buf      = _rt_ctx.light_mapping_buf,
+        .light_data_buf         = _rt_ctx.light_data_buf,
+        .local_light_pdf_tex    = _rt_ctx.local_light_pdf_tex,
+        .local_light_pdf_mips   = _rt_ctx.local_light_pdf_mips,
+        .bindless_array         = _rt_ctx.GetBindlessArray(),
+        .shader_utils           = &_rt_ctx.sd_utils
+    };
+}
+
+void PrepareLightPass::RecordUploads(
+    CommandList&           _cmd_list,
+    const PreparedCommand& _command,
+    const RecordResources& _resources
+) {
+    if (!_command.primitive_to_light.empty()) {
+        _cmd_list.CopyFrom(
+            std::span<byte>(
+                (byte*)_command.primitive_to_light.data(),
+                _command.primitive_to_light.size() * sizeof(uint)
+            ),
+            _resources.primitive_to_light_buf->GetView(),
+            MOER_TEXT("Upload primitive_to_light")
+        );
+    }
+
+    if (!_command.tasks.empty()) {
+        _cmd_list.CopyFrom(
+            std::span<byte>((byte*)_command.tasks.data(), _command.tasks.size() * sizeof(PrepareLightsTask)),
+            _resources.task_buf->GetView(0, _command.tasks.size() * sizeof(PrepareLightsTask)),
+            MOER_TEXT("Upload tasks")
+        );
+    }
+
+    if (!_command.prim_light_infos.empty()) {
+        _cmd_list.CopyFrom(
+            std::span<byte>(
+                (byte*)_command.prim_light_infos.data(),
+                _command.prim_light_infos.size() * sizeof(PolymorphicLightInfo)
+            ),
+            _resources.prim_light_buf->GetView(),
+            MOER_TEXT("Upload prim light infos")
+        );
+    }
+}
+
+void PrepareLightPass::RecordClears(CommandList& _cmd_list, const RecordResources& _resources) {
+    const TextureView full_local_light_pdf = _resources.local_light_pdf_tex->GetView(
+        _resources.local_light_pdf_tex->GetFormat(),
+        0,
+        static_cast<uint8>(_resources.local_light_pdf_tex->GetNumMips())
+    );
+    _cmd_list.ClearResource(_resources.light_mapping_buf->GetView(), 0u);
+    _cmd_list.ClearResource(full_local_light_pdf, float4(0.f));
+}
+
+void PrepareLightPass::RecordPrepareLights(
+    CommandList&           _cmd_list,
+    const PreparedCommand& _command,
+    const RecordResources& _resources
+) {
     _cmd_list
         .Compute(
             prepare_light_pipeline,
-            param,
-            _rt_ctx.light_data_buf->GetView(),
-            _rt_ctx.light_mapping_buf->GetView(),
-            _rt_ctx.local_light_pdf_tex->GetView(),
-            _rt_ctx.prim_light_buf->GetView(),
-            _rt_ctx.task_buf->GetView(),
-            _rt_ctx.GetBindlessArray()
+            _command.params,
+            _resources.light_data_buf->GetView(),
+            _resources.light_mapping_buf->GetView(),
+            _resources.local_light_pdf_tex->GetView(),
+            _resources.prim_light_buf->GetView(),
+            _resources.task_buf->GetView(),
+            _resources.bindless_array
         )
-        .Dispatch(uint3((light_buf_offset + 255) / 256, 1, 1), MOER_TEXT("PrepareLights"));
+        .Dispatch(uint3((_command.dispatch_light_count + 255) / 256, 1, 1), MOER_TEXT("PrepareLights"));
+}
 
-    _rt_ctx.sd_utils.GenerateMips(_cmd_list, _rt_ctx.local_light_pdf_mips);
+void PrepareLightPass::RecordGenerateMips(CommandList& _cmd_list, RecordResources& _resources) {
+    std::span<TextureView> mips(_resources.local_light_pdf_mips.data(), _resources.local_light_pdf_mips.size());
+    _resources.shader_utils->GenerateMips(_cmd_list, mips, ETextureState::SHADER_RESOURCE);
+}
 
-    // Keep upload data alive through the callback.
-    _cmd_list.AddCallback([primitive_to_light(std::move(primitive_to_light)),
-                           prim_light_infos(std::move(prim_light_infos)),
-                           tasks(std::move(tasks))]() {
-        // Data lifetime is extended until the callback is released.
-    });
+void PrepareLightPass::AddPasses(RenderGraph& _graph, const RTGraphFrameResources& _rg, RTContext& _rt_ctx) {
+    auto* command   = _graph.Alloc<PreparedCommand>(Prepare(_rt_ctx));
+    auto* resources = _graph.Alloc<RecordResources>(CaptureResources(_rt_ctx));
 
-    _cmd_list.PopScopeWithTimeScope();
-    b_odd_frame = !b_odd_frame;
+    if (HasUploadWork(*command)) {
+        auto* upload_params                 = _graph.Alloc<RGPrepareLightsUploadParams>();
+        upload_params->primitive_to_light   = RGBufferView{.buffer = _rg.primitive_to_light_buf};
+        upload_params->tasks                = RGBufferView{.buffer = _rg.task_buf};
+        upload_params->prim_lights          = RGBufferView{.buffer = _rg.prim_light_buf};
+        _graph.AddPass(
+            MOER_TEXT("RT.PrepareLights.Upload"),
+            upload_params,
+            ERGPassFlags::Graphics,
+            [this, command, resources](RHICommandList& cmd_list, RGContext) {
+                RecordUploads(cmd_list, *command, *resources);
+            }
+        );
+    }
+
+    auto* clear_params            = _graph.Alloc<RGPrepareLightsClearParams>();
+    clear_params->light_mapping   = RGBufferView{.buffer = _rg.light_mapping_buf};
+    clear_params->local_light_pdf = RTWholeTextureView(_rg.local_light_pdf_tex);
+    _graph.AddPass(
+        MOER_TEXT("RT.PrepareLights.Clear"),
+        clear_params,
+        ERGPassFlags::Graphics,
+        [this, resources](RHICommandList& cmd_list, RGContext) {
+            RecordClears(cmd_list, *resources);
+        }
+    );
+
+    if (command->dispatch_light_count > 0) {
+        auto* dispatch_params               = _graph.Alloc<RGPrepareLightsDispatchParams>();
+        dispatch_params->light_data         = RGBufferView{.buffer = _rg.light_data_buf};
+        dispatch_params->light_mapping      = RGBufferView{.buffer = _rg.light_mapping_buf};
+        dispatch_params->local_light_pdf    = RTWholeTextureView(_rg.local_light_pdf_tex);
+        dispatch_params->prim_lights        = RGBufferView{.buffer = _rg.prim_light_buf};
+        dispatch_params->tasks              = RGBufferView{.buffer = _rg.task_buf};
+        dispatch_params->primitive_to_light = RGBufferView{.buffer = _rg.primitive_to_light_buf};
+        _graph.AddPass(
+            MOER_TEXT("RT.PrepareLights.Dispatch"),
+            dispatch_params,
+            kRTGraphComputePassFlags,
+            [this, command, resources](RHICommandList& cmd_list, RGContext) {
+                RecordPrepareLights(cmd_list, *command, *resources);
+            }
+        );
+    }
+
+    if (!resources->local_light_pdf_mips.empty()) {
+        auto* mip_params            = _graph.Alloc<RGPrepareLightsGenerateMipsParams>();
+        mip_params->local_light_pdf = RTWholeTextureView(_rg.local_light_pdf_tex);
+        _graph.AddPass(
+            MOER_TEXT("RT.PrepareLights.GenerateMips"),
+            mip_params,
+            kRTGraphComputePassFlags,
+            [this, resources](RHICommandList& cmd_list, RGContext) {
+                RecordGenerateMips(cmd_list, *resources);
+            }
+        );
+    }
 }
 
 } // namespace Moer::Render::Raytracing

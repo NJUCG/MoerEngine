@@ -39,16 +39,17 @@ void VulkanQueryRuntime::RegisterPoolBackendFactory(QueryKind _kind, PoolBackend
     backend_factories[_kind] = std::move(_factory);
 }
 
-Array<VulkanQueryRuntime::PoolInstance>& VulkanQueryRuntime::GetPools(QueryKind _kind) {
-    return _kind == QueryKind::Timestamp ? timestamp_pools : occlusion_pools;
+Array<UniquePtr<VulkanQueryRuntime::PoolInstance>>& VulkanQueryRuntime::GetAvailablePools(QueryKind _kind) {
+    return _kind == QueryKind::Timestamp ? available_timestamp_pools : available_occlusion_pools;
 }
 
-int& VulkanQueryRuntime::GetActivePoolIndex(RecordContext& _ctx, QueryKind _kind) {
+Array<UniquePtr<VulkanQueryRuntime::PoolInstance>>&
+VulkanQueryRuntime::GetSubmissionPools(SubmissionState& _submission, QueryKind _kind) {
+    return _kind == QueryKind::Timestamp ? _submission.timestamp_pools : _submission.occlusion_pools;
+}
+
+VulkanQueryRuntime::PoolInstance*& VulkanQueryRuntime::GetActivePool(RecordContext& _ctx, QueryKind _kind) {
     return _kind == QueryKind::Timestamp ? _ctx.active_timestamp_pool : _ctx.active_occlusion_pool;
-}
-
-uint32 VulkanQueryRuntime::GetInitialPoolSize(QueryKind _kind) const {
-    return _kind == QueryKind::Timestamp ? k_initial_timestamp_pool_size : k_initial_occlusion_pool_size;
 }
 
 UniquePtr<VulkanQueryRuntime::IQueryPoolBackend>
@@ -65,6 +66,50 @@ VulkanQueryRuntime::CreateBackend(QueryKind _kind, uint32 _capacity) {
         return nullptr;
     }
     return iter->second(device, _capacity);
+}
+
+UniquePtr<VulkanQueryRuntime::PoolInstance> VulkanQueryRuntime::AcquirePoolChunk(QueryKind _kind) {
+    auto& available_pools = GetAvailablePools(_kind);
+    if (!available_pools.empty()) {
+        UniquePtr<PoolInstance> pool = std::move(available_pools.back());
+        available_pools.pop_back();
+        pool->next_query = 0;
+        return pool;
+    }
+
+    UniquePtr<PoolInstance> pool = MakeUnique<PoolInstance>();
+    pool->backend = CreateBackend(_kind, k_query_pool_chunk_size);
+    if (!pool->backend) {
+        LOG_ERROR(MOER_TEXT("Failed to create query pool backend for kind {}, falling back to built-in backend."), uint32(_kind));
+        if (_kind == QueryKind::Timestamp) {
+            pool->backend = UniquePtr<IQueryPoolBackend>(
+                MakeUnique<VulkanTimestampPoolBackend>(device, k_query_pool_chunk_size)
+            );
+        } else {
+            pool->backend = UniquePtr<IQueryPoolBackend>(
+                MakeUnique<VulkanOcclusionPoolBackend>(device, k_query_pool_chunk_size)
+            );
+        }
+    }
+    pool->next_query = 0;
+    return pool;
+}
+
+void VulkanQueryRuntime::RecycleSubmissionPools(SubmissionState& _submission) {
+    auto recycle_kind = [this](QueryKind _kind, Array<UniquePtr<PoolInstance>>& submission_pools) {
+        auto& available_pools = GetAvailablePools(_kind);
+        for (auto& pool : submission_pools) {
+            if (!pool) {
+                continue;
+            }
+            pool->next_query = 0;
+            available_pools.emplace_back(std::move(pool));
+        }
+        submission_pools.clear();
+    };
+
+    recycle_kind(QueryKind::Timestamp, _submission.timestamp_pools);
+    recycle_kind(QueryKind::Occlusion, _submission.occlusion_pools);
 }
 
 VulkanQueryRuntime::QueryRecord&
@@ -89,102 +134,17 @@ VulkanQueryRuntime::RecordContext* VulkanQueryRuntime::FindActiveContext(VkComma
 }
 
 VulkanQueryRuntime::PoolSlot VulkanQueryRuntime::AcquireSlot(QueryKind _kind, RecordContext& _ctx) {
-    auto& pools           = GetPools(_kind);
-    int&  active_pool_idx = GetActivePoolIndex(_ctx, _kind);
-
-    auto try_recycle = [](PoolInstance& _pool) {
-        if (!_pool.backend) {
-            return;
-        }
-        if (_pool.next_query >= _pool.backend->Capacity() && _pool.pending_slot_uses == 0) {
-            _pool.next_query = 0;
-        }
-    };
-
-    auto pool_matches_owner = [&](const PoolInstance& _pool) {
-        return _pool.owner_thread == _ctx.owner_thread && _pool.owner_cmd == _ctx.owner_cmd;
-    };
-
-    auto reuse_pool_for_owner = [&](PoolInstance& _pool) {
-        _pool.owner_thread = _ctx.owner_thread;
-        _pool.owner_cmd    = _ctx.owner_cmd;
-        _pool.next_query   = 0;
-        _pool.in_use       = true;
-    };
-
-    if (active_pool_idx >= 0 && active_pool_idx < static_cast<int>(pools.size())) {
-        PoolInstance& active_pool = pools[active_pool_idx];
-        if (!pool_matches_owner(active_pool)) {
-            LOG_WARNING(MOER_TEXT("Query pool owner mismatch, allocating a dedicated pool for this command buffer."));
-            active_pool_idx = -1;
-        } else {
-            try_recycle(active_pool);
-            if (active_pool.backend && active_pool.next_query < active_pool.backend->Capacity()) {
-                active_pool.in_use = true;
-                return PoolSlot{
-                    .kind = _kind, .pool_index = uint32(active_pool_idx), .query_index = active_pool.next_query++
-                };
-            }
-            active_pool_idx = -1;
-        }
+    PoolInstance*& active_pool = GetActivePool(_ctx, _kind);
+    if (active_pool == nullptr || !active_pool->backend || active_pool->next_query >= active_pool->backend->Capacity()) {
+        UniquePtr<PoolInstance> pool = AcquirePoolChunk(_kind);
+        active_pool = pool.get();
+        GetSubmissionPools(_ctx.submission, _kind).emplace_back(std::move(pool));
     }
 
-    if (active_pool_idx < 0) {
-        for (int i = 0; i < static_cast<int>(pools.size()); ++i) {
-            PoolInstance& pool = pools[i];
-            if (!pool_matches_owner(pool)) {
-                continue;
-            }
-            try_recycle(pool);
-            if (pool.backend && pool.next_query < pool.backend->Capacity()) {
-                pool.in_use       = true;
-                active_pool_idx   = i;
-                return PoolSlot{.kind = _kind, .pool_index = uint32(i), .query_index = pool.next_query++};
-            }
-        }
-
-        for (int i = 0; i < static_cast<int>(pools.size()); ++i) {
-            PoolInstance& pool = pools[i];
-            if (!pool.backend || pool.in_use || pool.pending_slot_uses != 0) {
-                continue;
-            }
-
-            reuse_pool_for_owner(pool);
-            active_pool_idx = i;
-            return PoolSlot{.kind = _kind, .pool_index = uint32(i), .query_index = pool.next_query++};
-        }
-
-        const uint32 initial_capacity = GetInitialPoolSize(_kind);
-        const uint32 last_capacity =
-            !pools.empty() && pools.back().backend ? pools.back().backend->Capacity() : initial_capacity;
-        const uint32 new_capacity =
-            pools.empty() ? initial_capacity : std::max(initial_capacity, last_capacity * 2);
-
-        PoolInstance instance{};
-        instance.backend      = CreateBackend(_kind, new_capacity);
-        if (!instance.backend) {
-            LOG_ERROR(MOER_TEXT("Failed to create query pool backend for kind {}, falling back to built-in backend."), uint32(_kind));
-            if (_kind == QueryKind::Timestamp) {
-                instance.backend = UniquePtr<IQueryPoolBackend>(
-                    MakeUnique<VulkanTimestampPoolBackend>(device, new_capacity)
-                );
-            } else {
-                instance.backend = UniquePtr<IQueryPoolBackend>(
-                    MakeUnique<VulkanOcclusionPoolBackend>(device, new_capacity)
-                );
-            }
-        }
-        instance.next_query   = 0;
-        instance.owner_thread = _ctx.owner_thread;
-        instance.owner_cmd    = _ctx.owner_cmd;
-        instance.in_use       = true;
-        pools.emplace_back(std::move(instance));
-        active_pool_idx = static_cast<int>(pools.size() - 1);
-    }
-
-    PoolInstance& selected_pool = pools[active_pool_idx];
     return PoolSlot{
-        .kind = _kind, .pool_index = uint32(active_pool_idx), .query_index = selected_pool.next_query++
+        .kind = _kind,
+        .pool = active_pool,
+        .query_index = active_pool->next_query++
     };
 }
 
@@ -192,10 +152,7 @@ void VulkanQueryRuntime::BeginRecord(VulkanCmdList& _cmd_list, std::span<const Q
     std::scoped_lock lock(runtime_mtx);
 
     RecordContext context{};
-    context.owner_thread = std::this_thread::get_id();
     context.owner_cmd    = _cmd_list.GetHandle();
-    context.active_timestamp_pool = -1;
-    context.active_occlusion_pool = -1;
     context.issued_tokens.reserve(_issued_tokens.size());
     for (const auto& token : _issued_tokens) {
         if (!token.Valid()) {
@@ -212,21 +169,9 @@ void VulkanQueryRuntime::EndRecord() {
         return;
     }
 
-    auto release_ctx = [&](const RecordContext& _ctx) {
-        for (auto& pool : timestamp_pools) {
-            if (pool.owner_thread == _ctx.owner_thread && pool.owner_cmd == _ctx.owner_cmd) {
-                pool.in_use = false;
-            }
-        }
-        for (auto& pool : occlusion_pools) {
-            if (pool.owner_thread == _ctx.owner_thread && pool.owner_cmd == _ctx.owner_cmd) {
-                pool.in_use = false;
-            }
-        }
-    };
-    for (const auto& [owner_cmd, ctx] : active_contexts) {
+    for (auto& [owner_cmd, ctx] : active_contexts) {
         (void)owner_cmd;
-        release_ctx(ctx);
+        RecycleSubmissionPools(ctx.submission);
     }
     active_contexts.clear();
 }
@@ -258,12 +203,10 @@ void VulkanQueryRuntime::BeginTimestamp(VulkanCmdList& _cmd_list, const QueryTok
     QueryRecord& record = GetOrCreateRecord(*context, _token);
     record.kind         = QueryKind::Timestamp;
     PoolSlot slot       = AcquireSlot(QueryKind::Timestamp, *context);
-    auto&    pool       = timestamp_pools[slot.pool_index];
-    auto&    native_pool = pool.backend->NativePool();
+    auto&    native_pool = slot.pool->backend->NativePool();
     _cmd_list.ResetQueryPool(native_pool, slot.query_index, 1);
     _cmd_list.WriteTimeStamp(native_pool, slot.query_index, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
     record.begin_slot = slot;
-    context->used_slots.emplace_back(slot);
 }
 
 void VulkanQueryRuntime::EndTimestamp(VulkanCmdList& _cmd_list, const QueryToken& _token) {
@@ -276,12 +219,10 @@ void VulkanQueryRuntime::EndTimestamp(VulkanCmdList& _cmd_list, const QueryToken
     QueryRecord& record = GetOrCreateRecord(*context, _token);
     record.kind         = QueryKind::Timestamp;
     PoolSlot slot       = AcquireSlot(QueryKind::Timestamp, *context);
-    auto&    pool       = timestamp_pools[slot.pool_index];
-    auto&    native_pool = pool.backend->NativePool();
+    auto&    native_pool = slot.pool->backend->NativePool();
     _cmd_list.ResetQueryPool(native_pool, slot.query_index, 1);
     _cmd_list.WriteTimeStamp(native_pool, slot.query_index, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
     record.end_slot = slot;
-    context->used_slots.emplace_back(slot);
 }
 
 void VulkanQueryRuntime::BeginOcclusion(VulkanCmdList& _cmd_list, const QueryToken& _token) {
@@ -294,12 +235,10 @@ void VulkanQueryRuntime::BeginOcclusion(VulkanCmdList& _cmd_list, const QueryTok
     QueryRecord& record = GetOrCreateRecord(*context, _token);
     record.kind         = QueryKind::Occlusion;
     PoolSlot slot       = AcquireSlot(QueryKind::Occlusion, *context);
-    auto&    pool       = occlusion_pools[slot.pool_index];
-    auto&    native_pool = pool.backend->NativePool();
+    auto&    native_pool = slot.pool->backend->NativePool();
     _cmd_list.ResetQueryPool(native_pool, slot.query_index, 1);
     _cmd_list.BeginQuery(native_pool, slot.query_index, VK_QUERY_CONTROL_PRECISE_BIT);
     record.occlusion_slot = slot;
-    context->used_slots.emplace_back(slot);
 }
 
 void VulkanQueryRuntime::EndOcclusion(VulkanCmdList& _cmd_list, const QueryToken& _token) {
@@ -315,24 +254,21 @@ void VulkanQueryRuntime::EndOcclusion(VulkanCmdList& _cmd_list, const QueryToken
         return;
     }
     const PoolSlot slot = record.occlusion_slot.value();
-    if (slot.pool_index >= occlusion_pools.size()) {
+    if (slot.pool == nullptr || !slot.pool->backend) {
         return;
     }
-    auto& backend = occlusion_pools[slot.pool_index].backend;
-    if (!backend) {
-        return;
-    }
-    _cmd_list.EndQuery(backend->NativePool(), slot.query_index);
+    _cmd_list.EndQuery(slot.pool->backend->NativePool(), slot.query_index);
 }
 
-void VulkanQueryRuntime::FinalizeSubmit(uint64 _timeline, VkCommandBuffer _owner_cmd) {
+std::optional<VulkanQueryRuntime::SubmissionState>
+VulkanQueryRuntime::FinalizeSubmit(uint64 _timeline, VkCommandBuffer _owner_cmd) {
     std::scoped_lock lock(runtime_mtx);
     if (_owner_cmd == VK_NULL_HANDLE) {
-        return;
+        return std::nullopt;
     }
     const auto iter = active_contexts.find(_owner_cmd);
     if (iter == active_contexts.end()) {
-        return;
+        return std::nullopt;
     }
     RecordContext context = std::move(iter->second);
     active_contexts.erase(iter);
@@ -347,133 +283,69 @@ void VulkanQueryRuntime::FinalizeSubmit(uint64 _timeline, VkCommandBuffer _owner
         }
     }
 
-    PendingSubmission submission{};
-    submission.timeline = _timeline;
-    submission.records.reserve(context.records.size());
+    context.submission.timeline = _timeline;
+    context.submission.records.reserve(context.records.size());
     for (auto& [id, record] : context.records) {
-        submission.records.emplace_back(std::move(record));
+        context.submission.records.emplace_back(std::move(record));
     }
-    submission.used_slots = std::move(context.used_slots);
-    pending_submissions.emplace_back(std::move(submission));
-
-    for (const auto& slot : pending_submissions.back().used_slots) {
-        auto& pools = GetPools(slot.kind);
-        if (slot.pool_index >= pools.size()) {
-            continue;
-        }
-        pools[slot.pool_index].pending_slot_uses += 1;
-    }
-
-    for (auto& pool : timestamp_pools) {
-        if (pool.owner_thread == context.owner_thread && pool.owner_cmd == context.owner_cmd) {
-            pool.in_use = false;
-        }
-    }
-    for (auto& pool : occlusion_pools) {
-        if (pool.owner_thread == context.owner_thread && pool.owner_cmd == context.owner_cmd) {
-            pool.in_use = false;
-        }
-    }
+    return std::move(context.submission);
 }
 
-void VulkanQueryRuntime::ResolveCompleted(uint64 _timeline) {
-    Array<PendingSubmission> resolved_submissions{};
-    {
-        std::scoped_lock lock(runtime_mtx);
-        auto             iter = pending_submissions.begin();
-        while (iter != pending_submissions.end()) {
-            if (iter->timeline <= _timeline) {
-                resolved_submissions.emplace_back(std::move(*iter));
-                iter = pending_submissions.erase(iter);
+void VulkanQueryRuntime::ResolveCompleted(SubmissionState&& _submission) {
+    for (auto& record : _submission.records) {
+        QueryResult result{};
+        result.kind     = record.kind;
+        result.query_id = record.token.id;
+        result.name     = record.name;
+        result.status   = QueryStatus::Ready;
+
+        if (record.kind == QueryKind::Timestamp) {
+            if (!record.begin_slot.has_value() && !record.end_slot.has_value()) {
+                result.status = QueryStatus::Error;
             } else {
-                ++iter;
-            }
-        }
-    }
-
-    for (auto& submission : resolved_submissions) {
-        for (auto& record : submission.records) {
-            QueryResult result{};
-            result.kind     = record.kind;
-            result.query_id = record.token.id;
-            result.name     = record.name;
-            result.status   = QueryStatus::Ready;
-
-            if (record.kind == QueryKind::Timestamp) {
-                    if (!record.begin_slot.has_value() && !record.end_slot.has_value()) {
+                const uint64 begin_tick = record.begin_slot.has_value()
+                                              ? ResolveTimestampTick(record.begin_slot.value())
+                                              : ResolveTimestampTick(record.end_slot.value());
+                const uint64 end_tick   = record.end_slot.has_value()
+                                            ? ResolveTimestampTick(record.end_slot.value())
+                                            : begin_tick;
+                if (end_tick < begin_tick) {
                     result.status = QueryStatus::Error;
                 } else {
-                        const uint64 begin_tick = record.begin_slot.has_value()
-                                                      ? ResolveTimestampTick(record.begin_slot.value())
-                                                      : ResolveTimestampTick(record.end_slot.value());
-                        const uint64 end_tick   = record.end_slot.has_value()
-                                                    ? ResolveTimestampTick(record.end_slot.value())
-                                                    : begin_tick;
-                    if (end_tick < begin_tick) {
-                        result.status = QueryStatus::Error;
-                    } else {
-                        result.payload = TimestampQueryResult{
-                            .begin_tick = begin_tick,
-                            .end_tick   = end_tick,
-                            .tick_period_ns = double(timestamp_period),
-                            .duration_ns = double(end_tick - begin_tick) * double(timestamp_period)
-                        };
-                    }
-                }
-            } else if (record.kind == QueryKind::Occlusion) {
-                if (!record.occlusion_slot.has_value()) {
-                    result.status = QueryStatus::Error;
-                } else {
-                    const uint64 sample_count = ResolveOcclusionSamples(record.occlusion_slot.value());
-                    result.payload            = OcclusionQueryResult{
-                                   .sample_count = sample_count,
-                                   .visible      = sample_count > 0
+                    result.payload = TimestampQueryResult{
+                        .begin_tick = begin_tick,
+                        .end_tick = end_tick,
+                        .tick_period_ns = double(timestamp_period),
+                        .duration_ns = double(end_tick - begin_tick) * double(timestamp_period)
                     };
                 }
-            } else {
-                result.status = QueryStatus::Error;
             }
-
-            record.token.Resolve(std::move(result));
+        } else if (record.kind == QueryKind::Occlusion) {
+            if (!record.occlusion_slot.has_value()) {
+                result.status = QueryStatus::Error;
+            } else {
+                const uint64 sample_count = ResolveOcclusionSamples(record.occlusion_slot.value());
+                result.payload = OcclusionQueryResult{
+                    .sample_count = sample_count,
+                    .visible = sample_count > 0
+                };
+            }
+        } else {
+            result.status = QueryStatus::Error;
         }
 
-        for (const auto& slot : submission.used_slots) {
-            MarkSlotPendingUse(slot, -1);
-            RecyclePoolIfPossible(slot);
-        }
+        record.token.Resolve(std::move(result));
     }
-}
 
-void VulkanQueryRuntime::ResolveAsError(std::span<const QueryToken> _tokens, StringView _reason) {
-    for (const auto& token : _tokens) {
-        if (!token.Valid()) {
-            continue;
-        }
-        QueryResult result{};
-        result.kind     = token.kind;
-        result.query_id = token.id;
-        result.name     = token.name;
-        result.status   = QueryStatus::Error;
-        if (!_reason.empty()) {
-            result.name = Printf(MOER_TEXT("{} ({})"), token.name, _reason);
-        }
-        token.Resolve(std::move(result));
-    }
+    std::scoped_lock lock(runtime_mtx);
+    RecycleSubmissionPools(_submission);
 }
 
 uint64 VulkanQueryRuntime::ResolveTimestampTick(const PoolSlot& _slot) {
-    VkQueryPool query_pool = VK_NULL_HANDLE;
-    {
-        std::scoped_lock lock(runtime_mtx);
-        if (_slot.pool_index >= timestamp_pools.size()) {
-            return 0;
-        }
-        auto& backend = timestamp_pools[_slot.pool_index].backend;
-        if (!backend) {
-            return 0;
-        }
-        query_pool = backend->NativePool().GetHandle();
+    if (_slot.pool == nullptr || !_slot.pool->backend) {
+        return 0;
     }
+    VkQueryPool query_pool = _slot.pool->backend->NativePool().GetHandle();
     uint64 tick = 0;
     VkResult result = vkGetQueryPoolResults(
         device.GetDevice(),
@@ -492,18 +364,10 @@ uint64 VulkanQueryRuntime::ResolveTimestampTick(const PoolSlot& _slot) {
 }
 
 uint64 VulkanQueryRuntime::ResolveOcclusionSamples(const PoolSlot& _slot) {
-    VkQueryPool query_pool = VK_NULL_HANDLE;
-    {
-        std::scoped_lock lock(runtime_mtx);
-        if (_slot.pool_index >= occlusion_pools.size()) {
-            return 0;
-        }
-        auto& backend = occlusion_pools[_slot.pool_index].backend;
-        if (!backend) {
-            return 0;
-        }
-        query_pool = backend->NativePool().GetHandle();
+    if (_slot.pool == nullptr || !_slot.pool->backend) {
+        return 0;
     }
+    VkQueryPool query_pool = _slot.pool->backend->NativePool().GetHandle();
     uint64 samples = 0;
     VkResult result  = vkGetQueryPoolResults(
         device.GetDevice(),
@@ -521,30 +385,20 @@ uint64 VulkanQueryRuntime::ResolveOcclusionSamples(const PoolSlot& _slot) {
     return samples;
 }
 
-void VulkanQueryRuntime::MarkSlotPendingUse(const PoolSlot& _slot, int _delta) {
-    std::scoped_lock lock(runtime_mtx);
-    auto& pools = GetPools(_slot.kind);
-    if (_slot.pool_index >= pools.size()) {
-        return;
-    }
-    PoolInstance& pool = pools[_slot.pool_index];
-    if (_delta > 0) {
-        pool.pending_slot_uses += uint32(_delta);
-    } else {
-        const uint32 delta = uint32(-_delta);
-        pool.pending_slot_uses = pool.pending_slot_uses > delta ? pool.pending_slot_uses - delta : 0;
-    }
-}
-
-void VulkanQueryRuntime::RecyclePoolIfPossible(const PoolSlot& _slot) {
-    std::scoped_lock lock(runtime_mtx);
-    auto& pools = GetPools(_slot.kind);
-    if (_slot.pool_index >= pools.size()) {
-        return;
-    }
-    PoolInstance& pool = pools[_slot.pool_index];
-    if (pool.backend && pool.pending_slot_uses == 0 && pool.next_query >= pool.backend->Capacity()) {
-        pool.next_query = 0;
+void VulkanQueryRuntime::ResolveAsError(std::span<const QueryToken> _tokens, StringView _reason) {
+    for (const auto& token : _tokens) {
+        if (!token.Valid()) {
+            continue;
+        }
+        QueryResult result{};
+        result.kind     = token.kind;
+        result.query_id = token.id;
+        result.name     = token.name;
+        result.status   = QueryStatus::Error;
+        if (!_reason.empty()) {
+            result.name = Printf(MOER_TEXT("{} ({})"), token.name, _reason);
+        }
+        token.Resolve(std::move(result));
     }
 }
 

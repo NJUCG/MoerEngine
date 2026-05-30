@@ -83,6 +83,7 @@ struct TraceRuntimeState {
     std::mutex csv_mutex{};
     std::ofstream csv_file{};
     bool csv_header_written{false};
+    bool csv_path_auto_generated{false};
 };
 
 TraceRuntimeState& G() {
@@ -92,6 +93,82 @@ TraceRuntimeState& G() {
 
 uint64_t NowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch()).count();
+}
+
+std::string BuildDefaultCsvPath() {
+    const std::filesystem::path trace_dir = ConfigManager::GetInstance().GetWorkspacePath() / "trace";
+    std::filesystem::create_directories(trace_dir);
+
+    using clock = std::chrono::system_clock;
+    const auto now = clock::now();
+    const auto tt  = clock::to_time_t(now);
+    std::tm    tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+
+    const int millis = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000
+    );
+
+    char base_name[128]{};
+    std::snprintf(
+        base_name,
+        sizeof(base_name),
+        "trace_stream_%04d%02d%02d_%02d%02d%02d_%03d",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec,
+        millis
+    );
+
+    std::filesystem::path candidate = trace_dir / (std::string(base_name) + ".csv");
+    for (uint32_t suffix = 1; std::filesystem::exists(candidate); ++suffix) {
+        char unique_name[160]{};
+        std::snprintf(unique_name, sizeof(unique_name), "%s_%u", base_name, suffix);
+        candidate = trace_dir / (std::string(unique_name) + ".csv");
+    }
+    return candidate.string();
+}
+
+bool EnsureCsvFileOpenLocked(TraceRuntimeState& state) {
+    if (!state.config.enable_csv) {
+        return false;
+    }
+    if (state.csv_file.is_open()) {
+        return true;
+    }
+
+    std::filesystem::path csv_path = state.config.csv_path;
+    if (csv_path.empty()) {
+        csv_path = BuildDefaultCsvPath();
+        state.config.csv_path = csv_path.string();
+        state.csv_path_auto_generated = true;
+    }
+
+    std::filesystem::create_directories(csv_path.parent_path());
+    const bool has_existing_content =
+        std::filesystem::exists(csv_path) && std::filesystem::file_size(csv_path) > 0;
+    state.csv_file.open(csv_path, std::ios::out | std::ios::app);
+    state.csv_header_written = has_existing_content;
+    if (!state.csv_file.is_open()) {
+        LOG_WARNING(MOER_TEXT("Trace CSV output cannot be opened: {}"), csv_path.string());
+        return false;
+    }
+    return true;
+}
+
+void CloseCsvFileLocked(TraceRuntimeState& state) {
+    if (!state.csv_file.is_open()) {
+        return;
+    }
+    state.csv_file.flush();
+    state.csv_file.close();
 }
 
 uint64_t MakeSessionId(uint64_t start_ts_ns) {
@@ -197,11 +274,14 @@ void PushEvent(TraceEvent&& event) {
 
 void WriteCsvRow(const TraceEvent& event) {
     auto& state = G();
-    if (!state.config.enable_csv || !state.csv_file.is_open()) {
+    if (!state.config.enable_csv || !state.recording.load(std::memory_order_relaxed)) {
         return;
     }
 
     std::lock_guard<std::mutex> lock(state.csv_mutex);
+    if (!EnsureCsvFileOpenLocked(state)) {
+        return;
+    }
     if (!state.csv_header_written) {
         state.csv_file << MOER_ASCII_TEXT("#moer_trace_csv_version=1\n")
                        << MOER_ASCII_TEXT("#session_id=") << state.session_id << MOER_ASCII_TEXT("\n")
@@ -364,19 +444,9 @@ bool Init(const Config& config) {
     state.recording.store(config.start_recording, std::memory_order_release);
     state.connected.store(false, std::memory_order_release);
 
-    if (state.config.enable_csv) {
-        std::filesystem::path csv_path = state.config.csv_path;
-        if (csv_path.empty()) {
-            csv_path = ConfigManager::GetInstance().GetWorkspacePath() / "trace" / "trace_stream.csv";
-        }
-        state.config.csv_path = csv_path.string();
-        std::filesystem::create_directories(csv_path.parent_path());
-        bool has_existing_content = std::filesystem::exists(csv_path) && std::filesystem::file_size(csv_path) > 0;
-        state.csv_file.open(csv_path, std::ios::out | std::ios::app);
-        state.csv_header_written = has_existing_content;
-        if (!state.csv_file.is_open()) {
-            LOG_WARNING(MOER_TEXT("Trace CSV output cannot be opened: {}"), csv_path.string());
-        }
+    if (state.config.enable_csv && state.recording.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::mutex> lock(state.csv_mutex);
+        EnsureCsvFileOpenLocked(state);
     }
 
     state.sender_runnable = MoerNew(TraceSenderRunnable)();
@@ -410,10 +480,7 @@ void Shutdown() {
     }
     {
         std::lock_guard<std::mutex> lock(state.csv_mutex);
-        if (state.csv_file.is_open()) {
-            state.csv_file.flush();
-            state.csv_file.close();
-        }
+        CloseCsvFileLocked(state);
     }
 
     {
@@ -441,6 +508,16 @@ void StartRecording() {
     }
     state.session_start_ts_ns = NowNs();
     state.session_id          = MakeSessionId(state.session_start_ts_ns);
+    {
+        std::lock_guard<std::mutex> lock(state.csv_mutex);
+        CloseCsvFileLocked(state);
+        state.csv_header_written = false;
+        if (state.csv_path_auto_generated) {
+            state.config.csv_path.clear();
+            state.csv_path_auto_generated = false;
+        }
+        EnsureCsvFileOpenLocked(state);
+    }
     state.recording.store(true, std::memory_order_release);
 #endif
 }
@@ -454,6 +531,10 @@ void StopRecording() {
         return;
     }
     state.recording.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(state.csv_mutex);
+        CloseCsvFileLocked(state);
+    }
 #endif
 }
 
@@ -585,6 +666,9 @@ void EmitScope(const EmitScopeDesc& desc) {
     (void)desc;
     return;
 #else
+    if (!G().recording.load(std::memory_order_relaxed)) {
+        return;
+    }
     TraceEvent event{};
     event.event_id      = G().event_id_seed.fetch_add(1, std::memory_order_relaxed);
     event.session_id    = G().session_id;
@@ -640,6 +724,9 @@ void EmitCounter(std::string_view name, double value, std::string_view category,
     (void)args;
     return;
 #else
+    if (!G().recording.load(std::memory_order_relaxed)) {
+        return;
+    }
     TraceEvent event{};
     event.event_id      = G().event_id_seed.fetch_add(1, std::memory_order_relaxed);
     event.session_id    = G().session_id;
@@ -668,6 +755,7 @@ void EnableCsvExport(std::string_view csv_path) {
     std::lock_guard<std::mutex> lock(state.csv_mutex);
     state.config.enable_csv = true;
     state.config.csv_path   = std::string(csv_path);
+    state.csv_path_auto_generated = false;
 #endif
 }
 

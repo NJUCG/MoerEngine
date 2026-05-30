@@ -1,31 +1,17 @@
 #include "file/File.h"
 
 #include "misc/STL.h"
-#include "string/StringConvert.h"
 
 #include <filesystem>
 #include <fstream>
 
 namespace Moer::File {
-namespace {
-
-std::filesystem::path ToLocalPath(Utf8StringView path) {
-#if defined(_WIN32) || defined(_WIN64)
-    const WideString wide_path = Utf8ToWide(path);
-    return std::filesystem::path(std::wstring_view(wide_path.data(), wide_path.size()));
-#else
-    return std::filesystem::path(std::string_view(path.data(), path.size()));
-#endif
-}
-
-} // namespace
-
 EReadFileStatus ReadBinaryFile(const ReadBinaryRequest& request) {
     if (request.path.empty()) {
         return EReadFileStatus::NotFound;
     }
 
-    std::ifstream file(ToLocalPath(request.path), std::ios::binary | std::ios::ate);
+    std::ifstream file(std::filesystem::path(request.path.Native()), std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         return EReadFileStatus::NotFound;
     }

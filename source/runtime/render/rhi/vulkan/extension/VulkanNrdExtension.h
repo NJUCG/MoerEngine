@@ -23,6 +23,11 @@ public:
         uint16                  _frame_width  = 0,
         uint16                  _frame_height = 0
     ) override;
+
+private:
+    void CollectRetiredInterfaces();
+
+    Array<UniquePtr<NRDInterface>> retired_interfaces{};
 };
 
 } // namespace Moer::Render::Ext

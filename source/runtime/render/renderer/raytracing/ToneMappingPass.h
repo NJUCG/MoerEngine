@@ -1,7 +1,7 @@
 #ifndef MOER_TONE_MAPPING_PASS_H
 #define MOER_TONE_MAPPING_PASS_H
 
-#include "RTResource.h"
+#include "RaytracingGraphResources.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
@@ -67,6 +67,17 @@ public:
         bool  enable_tone_mapping       = true;
     };
 
+    struct PreparedCommand {
+        ToneMappingParams params{};
+        bool              reset_exposure = false;
+    };
+
+    struct RecordResources {
+        TextureRef src_tex;
+        TextureRef target;
+        TextureRef color_lut;
+    };
+
 public:
     ToneMappingPass(
         class RenderDevice&  _device,
@@ -74,27 +85,25 @@ public:
         Scene&               _scene,
         CreateInfo           _info
     );
-    void Process(
-        class CommandList& _cmd_list,
-        RTContext&         _rt_ctx,
-        Params             _params,
-        TextureRef         _src_tex,
-        TextureRef         _target
+    void AddPasses(
+        RenderGraph&                 _graph,
+        const RTGraphFrameResources& _rg,
+        const RTContext&             _rt_ctx,
+        Params                       _params,
+        TextureRef                   _src_tex,
+        TextureRef                   _target
     );
     void AdvanceFrame(float _frame_time);
 
 private:
-    void ComputeExposure(CommandList& _cmd_list, Params _params);
+    PreparedCommand Prepare(Params _params, TextureRef _src_tex);
+    RecordResources CaptureResources(TextureRef _src_tex, TextureRef _target) const;
+    void RecordConstantsUpload(CommandList& _cmd_list, const PreparedCommand& _command);
+    void ComputeExposure(CommandList& _cmd_list);
     void ComputeHistogram(CommandList& _cmd_list, TextureRef _src_tex);
     void ResetHistogram(CommandList& _cmd_list);
     void ResetExposure(CommandList& _cmd_list);
-    void Render(
-        CommandList& _cmd_list,
-        RTContext&   _rt_ctx,
-        Params       _params,
-        TextureRef   _src_tex,
-        TextureRef   _target
-    );
+    void Render(CommandList& _cmd_list, TextureRef _src_tex, TextureRef _target, TextureRef _color_lut);
     class RenderDevice&  device;
     class ShaderManager& manager;
     Scene&               scene;
@@ -108,7 +117,6 @@ private:
     BufferRef         histogram_buffer;
     BufferRef         exposure_buffer;
     TextureRef        color_lut;
-    Array<byte>       upload_data;
     bool              b_enabled = false;
 
     ToneMappingPassPipeline tone_mapping_pass_pipeline;

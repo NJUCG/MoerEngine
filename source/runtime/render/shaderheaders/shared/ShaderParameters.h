@@ -78,6 +78,9 @@ enum EFinalColor {
     EFC_MATERIAL,
     EFC_INSTANCE,
     EFC_POSITION,
+    EFC_CAMERA_POSITION,
+    EFC_PRIMARY_RAY,
+    EFC_VIEW_PARAM,
     EFC_CUSTOM,
     EFC_NUM
 };
@@ -162,6 +165,11 @@ struct GBufferPassParams {
     uint packed_tangent_buf_hdl; // CtxMegaBuffers.packed_tangent
     uint texcoord0_buf_hdl;      // CtxMegaBuffers.texcoord0
     uint index_buf_hdl;          // CtxMegaBuffers.index
+
+    uint debug_normal_sample;
+    uint debug_padding0;
+    uint debug_padding1;
+    uint debug_padding2;
 };
 
 struct RaytracingBindlessHandles {
@@ -261,9 +269,8 @@ struct CompositingConstants {
 };
 
 struct VisualizeParams {
-    ViewParam                 main_view;
-    RaytracingBindlessHandles bindless_handles;
-    Grid::Params              grid_params;
+    ViewParam    main_view;
+    Grid::Params grid_params;
 
     uint2  output_size;
     float2 resolution_scale;

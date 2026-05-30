@@ -69,16 +69,16 @@ void NRDInterface::UpdateCommonSettings(
     );
     memcpy(nrd_common_settings.worldToViewMatrix, &_view, sizeof(nrd_common_settings.worldToViewMatrix));
     memcpy(nrd_common_settings.viewToClipMatrix, &_proj, sizeof(nrd_common_settings.viewToClipMatrix));
-    nrd.integration.SetCommonSettings(nrd_common_settings);
 }
 
 void NRDInterface::SetCommonSettings(const nrd::CommonSettings& _settings) {
-    nrd.integration.SetCommonSettings(_settings);
+    nrd_common_settings = _settings;
 }
 
 void NRDInterface::SetDenoiserSettings(const nrd::Denoiser _type, const nrd::ReblurSettings& _settings) {
     assert(_type < nrd::Denoiser::RELAX_DIFFUSE && "Denoiser type is not reblur");
-    nrd.integration.SetDenoiserSettings(nrd::Identifier(_type), &_settings);
+    reblur_settings[static_cast<size_t>(_type)] = _settings;
+    relax_settings[static_cast<size_t>(_type)].reset();
 }
 
 void NRDInterface::SetDenoiserSettings(const nrd::Denoiser _type, const nrd::RelaxSettings& _settings) {
@@ -86,7 +86,8 @@ void NRDInterface::SetDenoiserSettings(const nrd::Denoiser _type, const nrd::Rel
         _type >= nrd::Denoiser::RELAX_DIFFUSE && _type < nrd::Denoiser::SIGMA_SHADOW &&
         "Denoiser type is not relax"
     );
-    nrd.integration.SetDenoiserSettings(nrd::Identifier(_type), &_settings);
+    relax_settings[static_cast<size_t>(_type)] = _settings;
+    reblur_settings[static_cast<size_t>(_type)].reset();
 }
 
 void NRDInterface::SetDefaultDenoiserSettings(const nrd::Identifier _denoiser_id) {
@@ -96,7 +97,7 @@ void NRDInterface::SetDefaultDenoiserSettings(const nrd::Identifier _denoiser_id
         reblur_settings.enableAntiFirefly         = true;
         reblur_settings.diffusePrepassBlurRadius  = 30.0f;
         reblur_settings.specularPrepassBlurRadius = 30.0f;
-        nrd.integration.SetDenoiserSettings(_denoiser_id, &reblur_settings);
+        SetDenoiserSettings(static_cast<nrd::Denoiser>(_denoiser_id), reblur_settings);
     } else if (_denoiser_id < nrd::Identifier(nrd::Denoiser::SIGMA_SHADOW)) {
         auto relax_settings                                      = nrd::RelaxSettings();
         relax_settings.diffuseMaxFastAccumulatedFrameNum         = 1;
@@ -106,7 +107,7 @@ void NRDInterface::SetDefaultDenoiserSettings(const nrd::Identifier _denoiser_id
         relax_settings.enableAntiFirefly                         = true;
         relax_settings.diffusePrepassBlurRadius                  = 30.0f;
         relax_settings.specularPrepassBlurRadius                 = 30.0f;
-        nrd.integration.SetDenoiserSettings(_denoiser_id, &relax_settings);
+        SetDenoiserSettings(static_cast<nrd::Denoiser>(_denoiser_id), relax_settings);
     } else {
         // not implemented
     }

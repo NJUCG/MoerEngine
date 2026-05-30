@@ -7,8 +7,10 @@
 #include <array>
 #include <condition_variable>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <span>
+#include <thread>
 
 namespace Moer::Render {
 
@@ -62,6 +64,7 @@ struct SubmissionBatch {
 
     EKind                              kind{EKind::Submit};
     Array<SubmitInfo>                  submits{};
+    Array<std::shared_ptr<TranslateBatch>> translate_batches{};
     Array<SubmitPresentStage>          present_ops{};
     RootRhiBoundary                    root_rhi_boundary{};
     ERHISyncDepth                      sync_depth{ERHISyncDepth::RHI};
@@ -97,8 +100,7 @@ struct OrderedBatchRuntimeState {
 };
 
 struct SubmissionSchedulerState {
-    UnorderedMap<SyncPointId, ResolvedSyncPoint> resolved_syncpoints{};
-    SubmissionQueueStateSet                      queue_states{};
+    SubmissionQueueStateSet queue_states{};
 };
 
 class VulkanSubmissionRuntime {
@@ -112,6 +114,7 @@ public:
     VulkanSubmissionRuntime& operator=(VulkanSubmissionRuntime&&) noexcept = delete;
 
     void Enqueue(Array<SubmitInfo>&& submits, Array<SubmitPresentStage>&& present_ops);
+    void Enqueue(Array<std::shared_ptr<TranslateBatch>>&& translate_batches, Array<SubmitPresentStage>&& present_ops);
     GraphEventRef Sync(ERHISyncDepth depth);
     GraphEventRef Sync(Swapchain* swapchain);
     void Drain();
@@ -119,23 +122,26 @@ public:
     void Shutdown();
 
 private:
+    class SubmissionRunnable;
+
     void             BindSubmitBatchRootBoundary(SubmissionBatch& batch);
     OrderedBatchRuntimeState InitOrderedBatchRuntimeState(SubmissionBatch& batch);
+    void             MaterializeTranslateBatches(SubmissionBatch& batch);
     void             RunOrderedSubmitBatch(SubmissionBatch& batch);
     void             ScanBatchReadiness(OrderedBatchRuntimeState& state);
     uint32           FlushPendingReady(OrderedBatchRuntimeState& state);
     bool             TryResolveWaitSyncPoints(
-                         std::span<const SyncPointId> wait_syncpoints,
-                         Array<ResolvedSyncPoint>&    out_resolved_waits
+                         std::span<const SyncPointRef> wait_syncpoints,
+                         Array<WaitEvent>&            out_resolved_waits
                      ) const;
     Array<WaitEvent> BuildResolvedWaits(
         const OrderedBatchRuntimeState& state,
         const SubmitInfo&               submit,
-        std::span<const ResolvedSyncPoint> resolved_waits
+        std::span<const WaitEvent>      resolved_waits
     ) const;
     void             PublishResolvedSyncPoint(
-                         SyncPointId             syncpoint_id,
-                         const ResolvedSyncPoint& resolved_syncpoint
+                         const SyncPointRef& syncpoint,
+                         WaitEvent           resolved_wait
                      );
     RootRhiBoundary  BuildBatchTailBoundary(const OrderedBatchRuntimeState& state) const;
     void             ExecutePresentStages(
@@ -159,8 +165,6 @@ private:
     void             AttachSyncDependencies(SubmissionBatch& batch);
 
 private:
-    class SubmissionRunnable;
-
     VulkanInterruptRuntime& interrupt_runtime;
     VkCommandQueue&         graphics_queue_owner;
     VkCommandQueue&         compute_queue_owner;
@@ -171,13 +175,14 @@ private:
     std::mutex              submission_mutex{};
     std::condition_variable submission_cv{};
     std::deque<SubmissionBatch> submission_queue{};
-    SubmissionRunnable*     submission_runnable{nullptr};
-    RunnableThread*         submission_thread{nullptr};
+    RunnableThread*        submission_thread{nullptr};
+    SubmissionRunnable*    submission_runnable{nullptr};
 
     RootRhiBoundary         pending_rhi_boundary{};
     std::mutex              present_context_mutex{};
     std::array<std::unique_ptr<SubmissionPresentContext>, static_cast<size_t>(EQueueType::Num)>
         present_contexts{};
+    uint64 next_submit_seq{0};
 };
 
 } // namespace Moer::Render

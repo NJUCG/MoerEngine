@@ -1,4 +1,5 @@
 #include "VulkanSubmissionExecutorPrivate.h"
+#include "VulkanThreadHeartbeat.h"
 
 namespace Moer::Render {
 
@@ -9,20 +10,6 @@ struct PendingPreprocessBatch {
     uint64            op_seq_base{0};
     uint64            trace_frame{0};
 };
-
-static GraphEventArray CollectRecordCompleteDependencies(const Array<ExecutorOp>& ops) {
-    GraphEventArray dependencies{};
-    for (const ExecutorOp& op : ops) {
-        const auto* submit_op = std::get_if<ExecutorSubmitOp>(&op);
-        if (submit_op == nullptr) {
-            continue;
-        }
-        for (const CmdSubmit& submit : submit_op->submits) {
-            AppendUniqueDependency(dependencies, submit.record_complete_event);
-        }
-    }
-    return dependencies;
-}
 
 static GraphEventRef CreateCompletedExecutorEvent() {
     GraphEventRef event = GraphEvent::CreateGraphEvent();
@@ -46,7 +33,6 @@ public:
         }
 
         auto request         = std::make_shared<PendingPreprocessBatch>();
-        GraphEventArray record_complete_dependencies = CollectRecordCompleteDependencies(ops);
         request->ops         = std::move(ops);
         request->op_seq_base = op_seq_base;
         request->trace_frame = trace_frame;
@@ -72,13 +58,10 @@ public:
                 TRACE_SCOPE_CAT("VulkanSubmissionExecutor.TranslateSchedule", "RHI");
                 translate_pipeline.Dispatch(
                     std::move(pipeline_batch),
-                    request->trace_frame,
-                    translate_dispatch_pipe,
-                    translate_pipe,
-                    submission_runtime
+                    request->trace_frame
                 );
             },
-            std::move(record_complete_dependencies),
+            {},
             EThread::AnyThread_NormalPri
         );
     }
@@ -87,7 +70,8 @@ public:
         if (!b_enable.load(std::memory_order_acquire)) {
             return CreateCompletedExecutorEvent();
         }
-        FlushInternal(ERHIFlushDepth::SubmitGPU);
+        GraphEventRef request_completion = EnqueueSubmitRequest();
+        request_completion->Wait(EThread::UNKNOWN_THREAD);
         return submission_runtime.Sync(depth);
     }
 
@@ -95,7 +79,8 @@ public:
         if (!b_enable.load(std::memory_order_acquire)) {
             return CreateCompletedExecutorEvent();
         }
-        FlushInternal(ERHIFlushDepth::SubmitGPU);
+        GraphEventRef request_completion = EnqueueSubmitRequest();
+        request_completion->Wait(EThread::UNKNOWN_THREAD);
         return submission_runtime.Sync(swapchain);
     }
 
@@ -112,28 +97,36 @@ public:
             return;
         }
 
-        FlushInternal(ERHIFlushDepth::SubmitGPU);
+        GraphEventRef request_completion = EnqueueSubmitRequest();
+        request_completion->Wait(EThread::UNKNOWN_THREAD);
         submission_runtime.Shutdown();
         interrupt_runtime.Shutdown();
     }
 
 private:
+    GraphEventRef EnqueueSubmitRequest() {
+        if (!b_enable.load(std::memory_order_acquire)) {
+            return CreateCompletedExecutorEvent();
+        }
+
+        GraphEventRef request_completion = GraphEvent::CreateGraphEvent();
+        preprocess_pipe.Enqueue(
+            [this, request_completion]() mutable {
+                translate_pipeline.EnqueuePendingSubmits(submission_runtime, request_completion);
+            },
+            {},
+            EThread::AnyThread_NormalPri
+        );
+        return request_completion;
+    }
+
     void FlushInternal(ERHIFlushDepth depth) {
-        WaitForPipe(preprocess_pipe);
         if (depth == ERHIFlushDepth::RHITranslate) {
-            WaitForPipe(translate_dispatch_pipe);
+            EnqueueSubmitRequest();
             return;
         }
 
-        WaitForPipe(translate_dispatch_pipe);
-        WaitForPipe(translate_pipe);
-        submission_runtime.Drain();
-    }
-
-    static void WaitForPipe(TaskPipe& pipe) {
-        if (GraphEventRef boundary = pipe.Close(); boundary) {
-            boundary->Wait(EThread::UNKNOWN_THREAD);
-        }
+        EnqueueSubmitRequest();
     }
 
 private:

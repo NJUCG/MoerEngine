@@ -13,6 +13,7 @@
 #include "string/StringConvert.h"
 #include "vulkan/vulkan_core.h"
 #include <functional>
+#include <chrono>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -20,6 +21,90 @@ namespace Moer::Render {
 static constexpr uint s_queue_max_frame_in_flight = 3;
 static constexpr uint s_query_max_storage         = 8 * 64;
 struct QueryCmd;
+class VkCommandQueue;
+class VkCopyQueue;
+class SubmissionPresentContext;
+
+struct PendingProfilerSample {
+    String     name{};
+    QueryToken token{};
+};
+
+struct ProfilerSubmitData {
+    UnorderedMap<String, double> cpu_timestamps{};
+    Array<PendingProfilerSample> pending_samples{};
+};
+
+enum class EVulkanSubmitPayloadType : uint8 {
+    Queue,
+    Copy,
+    Present,
+};
+
+enum class EVulkanSubmitPayloadPhase : uint8 {
+    Recording,
+    Wait,
+    Signal,
+    Closed,
+};
+
+struct VulkanSubmitPayload {
+    using Clock = std::chrono::steady_clock;
+
+    EVulkanSubmitPayloadType  type{EVulkanSubmitPayloadType::Queue};
+    EVulkanSubmitPayloadPhase phase{EVulkanSubmitPayloadPhase::Recording};
+    EQueueType                queue_type{EQueueType::Ignore};
+    VkCommandQueue*           queue_owner{nullptr};
+    VkCopyQueue*              copy_queue_owner{nullptr};
+    SubmissionPresentContext* present_context{nullptr};
+    VulkanCmdList*            cmd_list{nullptr};
+    WaitEvent                 completion{};
+    VkFence                   host_fence{VK_NULL_HANDLE};
+    bool                      owns_host_fence{false};
+    bool                      host_fence_failed{false};
+    bool                      has_frame_boundary_event{false};
+    bool                      tick_profiling{false};
+    bool                      scheduled_completion{false};
+    uint64                    timeline_value{0};
+    uint64                    op_seq{0};
+    GraphEventRef             completion_event{nullptr};
+    Clock::time_point         pending_since{};
+    uint32                    pending_warn_count{0};
+    UniquePtr<VulkanAllocator> allocator_owner{};
+    std::optional<VulkanQueryRuntime::SubmissionState> query_submission{};
+    std::optional<ProfilerSubmitData> profiler_submit_data{};
+    UniquePtr<VulkanPresentor> presentor{};
+    Array<std::function<void()>> callbacks{};
+    Array<GraphEventRef>       completion_events{};
+    Array<WaitEvent>           wait_events{};
+    Array<SignalEvent>         signal_events{};
+    Array<GPUEvent>            gpu_events{};
+
+    bool HasCommandBuffer() const {
+        return cmd_list != nullptr;
+    }
+
+    bool HasCompletionWork() const {
+        return allocator_owner != nullptr || query_submission.has_value() || !callbacks.empty() ||
+               !completion_events.empty() || !signal_events.empty() || !gpu_events.empty() ||
+               presentor != nullptr;
+    }
+};
+
+class VulkanQueueAccessScope {
+public:
+    VulkanQueueAccessScope(VkQueue queue, StringView operation);
+    ~VulkanQueueAccessScope();
+
+    VulkanQueueAccessScope(const VulkanQueueAccessScope&) = delete;
+    VulkanQueueAccessScope& operator=(const VulkanQueueAccessScope&) = delete;
+
+private:
+    VkQueue queue{VK_NULL_HANDLE};
+    uint64  thread_id{0};
+    bool    active{false};
+};
+
 class VkNativeQueue {
 public:
     VkNativeQueue(EQueueType _type, VulkanDevice& _device);
@@ -63,6 +148,7 @@ private:
     VkQueue                      queue;
     EQueueType                   type;
     bool                         supports_timestamp_queries{false};
+    bool                         validation_layer_enabled{false};
     
     // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
     // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
@@ -72,6 +158,8 @@ private:
 struct ProfilerStorage {
     ProfilerStorage(VulkanQueryRuntime& _query_runtime);
     void CollectProfiling();
+    ProfilerSubmitData DrainSubmitData();
+    void MergeSubmitData(ProfilerSubmitData&& submit_data);
     bool IsActive() const {
         return active;
     }
@@ -141,14 +229,9 @@ struct ProfilerStorage {
         }
     };
 
-    struct PendingSample {
-        String name{};
-        QueryToken  token{};
-    };
-
     UnorderedMap<String, Sample>            name2sample;
     UnorderedMap<String, Array<QueryToken>> active_scope_queries;
-    Array<PendingSample>                         pending_samples{};
+    Array<PendingProfilerSample>                 pending_samples{};
     Array<ResolvedGpuSample>                     resolved_gpu_samples{};
 
     uint64 cur_frame = 0;
@@ -156,32 +239,11 @@ struct ProfilerStorage {
 
 struct VulkanRecordedSubmit {
     std::optional<CmdSubmit>   submit{};
-    UniquePtr<VulkanAllocator> allocator{};
+    UniquePtr<VulkanAllocator> allocator_owner{};
+    Array<UniquePtr<VulkanSubmitPayload>> payloads{};
     bool                       has_cmd{false};
     double                     reorder_time_ms{0.0};
     double                     preprocess_time_ms{0.0};
-};
-
-struct VulkanQueueRuntimeSubmitResult {
-    WaitEvent                   completion{};
-    UniquePtr<VulkanAllocator>  allocator{};
-    Array<std::function<void()>> callbacks{};
-    Array<SignalEvent>          signal_events{};
-    Array<GPUEvent>             gpu_events{};
-    bool                        has_frame_boundary_event{false};
-    uint64                      timeline_value{0};
-    bool                        scheduled_completion{false};
-};
-
-struct VulkanCopyQueueRuntimeSubmitResult {
-    IOWaitEvt                   completion{};
-    UniquePtr<VulkanAllocator>  allocator{};
-    Array<std::function<void()>> callbacks{};
-    Array<IOSignalEvt>          signal_events{};
-    Array<GPUEvent>             gpu_events{};
-    bool                        has_frame_boundary_event{false};
-    uint64                      timeline_value{0};
-    bool                        scheduled_completion{false};
 };
 
 class VkCommandQueue : public CommandQueue {
@@ -207,12 +269,17 @@ public:
         // LOG_INFO(MOER_TEXT("Allocator count {}"), alloc_count);
         MoerDelete(timeline);
     }
-    VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr, TrackerSeed seed = {});
-    VulkanQueueRuntimeSubmitResult SubmitRecordedForRuntime(
-        VulkanRecordedSubmit&& _recorded,
-        std::span<const WaitEvent> runtime_waits,
-        uint64                 signal_value,
-        VkFence                _submit_fence = VK_NULL_HANDLE
+    VulkanRecordedSubmit Translate(
+        CmdSubmit&& _submit,
+        const CmdReorderer* _reordered = nullptr,
+        TrackerSeed seed = {},
+        VulkanAllocator* allocator_override = nullptr
+    );
+    UniquePtr<VulkanSubmitPayload> SubmitPayloadForRuntime(
+        UniquePtr<VulkanSubmitPayload>&& payload,
+        std::span<const WaitEvent>      runtime_waits,
+        uint64                          signal_value,
+        VkFence                         _submit_fence = VK_NULL_HANDLE
     );
 
     WaitEvent   Execute(CmdSubmit&& _submit) override;
@@ -220,9 +287,6 @@ public:
     void        Present(SwapchainRef _viewport, TextureView _view) override;
     void        Sync() override;
     ProfileData GetProfilerEntry() override;
-    std::mutex& GetSubmitMutex() {
-        return exec_mtx;
-    }
     uint64 GetTimelineHandle() const { return uint64(timeline); }
     void MarkExecutionComplete(uint64 _timeline);
     void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
@@ -231,6 +295,7 @@ public:
         UniquePtr<VulkanAllocator>&& _allocator,
         uint64                        _timeline
     );
+    void ResolveQueryCompletion(VulkanQueryRuntime::SubmissionState&& _submission);
     void AppendCompletionBoundary(const GraphEventRef& completion_event);
     void ResetCompletionBoundary() { completion_boundary = nullptr; }
     const GraphEventRef& GetCompletionBoundary() const { return completion_boundary; }
@@ -247,31 +312,14 @@ public:
 private:
     UniquePtr<VulkanAllocator> GetAllocator();
     void                       Complete(uint64 _timeline);
-#if defined(MOER_TRACE_ENABLED) && MOER_TRACE_ENABLED && defined(MOER_TRACE_GPU_ENABLED) && \
-    MOER_TRACE_GPU_ENABLED
-    void EmitResolvedGpuTraceEvents(const Array<ProfilerStorage::ResolvedGpuSample>& _samples);
-#endif
 
 private:
     uint64                                             last_frame = 0;
-    CircularQueue<uint64, s_queue_max_frame_in_flight> executed_queue;
     std::atomic<uint64>                                executed_frame = 0;
     VulkanFence*                                       timeline = nullptr;
     VkNativeQueue                                      queue;
     VulkanQueryRuntime                                 query_runtime;
     ProfilerStorage                                    profiler_storage;
-    ProfileData                                        cached_profiler_entry;
-    Array<ProfilerStorage::ResolvedGpuSample>          cached_gpu_samples;
-#if defined(MOER_TRACE_ENABLED) && MOER_TRACE_ENABLED && defined(MOER_TRACE_GPU_ENABLED) && \
-    MOER_TRACE_GPU_ENABLED
-    uint64_t gpu_trace_tick_anchor{0};
-    uint64_t gpu_trace_time_anchor_ns{0};
-    bool     gpu_trace_anchor_valid{false};
-#endif
-
-    std::mutex   exec_mtx;
-    std::mutex   translate_state_mtx;
-    std::mutex   alloc_mtx;
     GraphEventRef completion_boundary{nullptr};
 };
 class VkCopyQueue : public CopyQueue {
@@ -281,16 +329,21 @@ public:
     ~VkCopyQueue();
 
     IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
-    VulkanRecordedSubmit Translate(CmdSubmit&& _submit, const CmdReorderer* _reordered = nullptr);
-    VulkanCopyQueueRuntimeSubmitResult SubmitRecordedForRuntime(
-        VulkanRecordedSubmit&& _recorded,
-        std::span<const WaitEvent> runtime_waits,
-        uint64                 signal_value,
-        VkFence                _submit_fence = VK_NULL_HANDLE
+    VulkanRecordedSubmit Translate(
+        CmdSubmit&& _submit,
+        const CmdReorderer* _reordered = nullptr,
+        VulkanAllocator* allocator_override = nullptr
+    );
+    UniquePtr<VulkanSubmitPayload> SubmitPayloadForRuntime(
+        UniquePtr<VulkanSubmitPayload>&& payload,
+        std::span<const WaitEvent>      runtime_waits,
+        uint64                          signal_value,
+        VkFence                         _submit_fence = VK_NULL_HANDLE
     );
     IOWaitEvt Execute(CmdSubmit&& _submit) override;
     FenceRef  GetFenceHandle() override;
     uint64    GetTimelineHandle() const { return uint64(timeline.Get()); }
+    VulkanDevice& GetDevice() { return device; }
     void      Sync(uint64 _timeline) override;
     void      MarkExecutionComplete(uint64 _timeline);
     void      ResolveAllocatorCompletion(
@@ -347,10 +400,6 @@ private:
     std::atomic<uint64>     executed_frame = 0;
     VulkanFenceRef          timeline       = nullptr;
     VkNativeQueue           queue;
-
-    std::mutex                                     exec_mutex;
-    std::mutex                                     translate_mutex;
-    std::mutex                                     alloc_mtx;
     GraphEventRef                                  completion_boundary{nullptr};
 };
 } // namespace Moer::Render

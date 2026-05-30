@@ -38,6 +38,7 @@ do {
     Write-Host "[$Label] Log : $Log"
     Write-Host "[$Label] Will kill after $TimeoutSec s..."
 
+    $RunStart = Get-Date
     $survived = Invoke-ExeTimed -ExePath $Exe -WorkDir $BinDir -LogFile $Log `
                                 -ExtraArgs $ExtraArgs -TimeoutSec $TimeoutSec
     Merge-Stderr $Log "$Log.stderr.tmp"
@@ -54,6 +55,22 @@ do {
     $errorLines = Test-LogForErrors -LogFile $Log
     $descriptorHeapCapability = Get-DescriptorHeapCapabilityState -LogFile $Log
     $runtimeUnsupported = $descriptorHeapCapability.State -eq "Skipped"
+
+    $werEvents = @(Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=$RunStart} -ErrorAction SilentlyContinue |
+        Where-Object {
+            ($_.ProviderName -eq 'Application Error' -or $_.ProviderName -eq 'Windows Error Reporting') -and
+            $_.Message -match [regex]::Escape((Split-Path $Exe -Leaf))
+        })
+    if ($werEvents.Count -gt 0) {
+        Write-Host "[$Label] Windows crash reports detected:" -ForegroundColor Red
+        $werEvents | Select-Object -First 4 | ForEach-Object {
+            Write-Host "  $($_.TimeCreated) $($_.ProviderName) event $($_.Id)"
+        }
+        $werEvents | Select-Object TimeCreated,ProviderName,Id,Message |
+            Format-List | Out-File $CrashLog -Encoding UTF8 -Append
+        Write-Summary "[$Label] Windows crash reports detected ($($werEvents.Count) events)."
+        $failed = $true
+    }
 
     if ($errorLines) {
         Write-Host "[$Label] Errors/validation issues detected:" -ForegroundColor Red

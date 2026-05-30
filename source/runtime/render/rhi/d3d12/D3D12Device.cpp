@@ -1158,21 +1158,38 @@ struct D3D12CommandPreprocessVisitor {
         // we not ignore _cmd.IsQueueTransition()
         ASSERT(!_cmd.IsQueueTransition());
 
-        for (const auto& barrier : _cmd.ReadBuffers()) {
+        auto infer_pass_type = [](const BarrierState& state) {
+            if ((state.stage & ERHIPipelineStageFlags::PS_TRANSFER) != ERHIPipelineStageFlags::PS_NONE) {
+                return EPassType::Copy;
+            }
+            if ((state.stage & ERHIPipelineStageFlags::PS_COMPUTE_SHADER) != ERHIPipelineStageFlags::PS_NONE) {
+                return EPassType::Compute;
+            }
+            if ((state.stage & ERHIPipelineStageFlags::PS_RAY_TRACING_SHADER) != ERHIPipelineStageFlags::PS_NONE ||
+                (state.stage & ERHIPipelineStageFlags::PS_ACCELERATION_STRUCTURE_BUILD) !=
+                    ERHIPipelineStageFlags::PS_NONE) {
+                return EPassType::Raytracing;
+            }
+            return EPassType::Graphics;
+        };
+
+        for (const auto& barrier : _cmd.Buffers()) {
             D3D12Buffer* buffer = reinterpret_cast<D3D12Buffer*>(barrier.handle);
-            tracker.RecordState(buffer, barrier.state, barrier.pass_type, false);
+            tracker.RecordState(
+                buffer,
+                barrier.tracked_state.value_or(TryGetTrackedBufferState(barrier.dst_state).value()),
+                infer_pass_type(barrier.dst_state),
+                barrier.access_write
+            );
         }
-        for (const auto& barrier : _cmd.WriteBuffers()) {
-            D3D12Buffer* buffer = reinterpret_cast<D3D12Buffer*>(barrier.handle);
-            tracker.RecordState(buffer, barrier.state, barrier.pass_type, true);
-        }
-        for (const auto& barrier : _cmd.ReadTextures()) {
+        for (const auto& barrier : _cmd.Textures()) {
             D3D12Texture* texture = reinterpret_cast<D3D12Texture*>(barrier.handle);
-            tracker.RecordState(texture, barrier.state, barrier.pass_type, false);
-        }
-        for (const auto& barrier : _cmd.WriteTextures()) {
-            D3D12Texture* texture = reinterpret_cast<D3D12Texture*>(barrier.handle);
-            tracker.RecordState(texture, barrier.state, barrier.pass_type, true);
+            tracker.RecordState(
+                texture,
+                barrier.tracked_state.value_or(TryGetTrackedTextureState(barrier.dst_state).value()),
+                infer_pass_type(barrier.dst_state),
+                barrier.access_write
+            );
         }
     }
 
@@ -1369,7 +1386,7 @@ struct D3D12CommandVisitor {
     }
 
     void Visit(const DispatchCmd& _cmd) {
-        PipelineHandle& pso = _cmd.Pipeline();
+        PipelineHandle pso = _cmd.Pipeline();
         cmd_list.SetPso(pso);
 
         const auto& args = _cmd.Args({}); // todo cached args
@@ -2617,15 +2634,18 @@ void D3D12ResourceStateTracker::RecordState(
                 .access = D3D12_BARRIER_ACCESS_NO_ACCESS
             };
             break;
-        case ETextureState::TRANSFER:
+        case ETextureState::TRANSFER_SRC:
+        case ETextureState::TRANSFER_DST:
             desc = {
-                .layout = _is_write ? D3D12_BARRIER_LAYOUT_COPY_DEST : D3D12_BARRIER_LAYOUT_COPY_SOURCE,
+                .layout = _state == ETextureState::TRANSFER_DST ? D3D12_BARRIER_LAYOUT_COPY_DEST :
+                                                                  D3D12_BARRIER_LAYOUT_COPY_SOURCE,
                 .sync   = D3D12_BARRIER_SYNC_COPY,
-                .access = _is_write ? D3D12_BARRIER_ACCESS_COPY_DEST : D3D12_BARRIER_ACCESS_COPY_SOURCE
+                .access = _state == ETextureState::TRANSFER_DST ? D3D12_BARRIER_ACCESS_COPY_DEST :
+                                                                  D3D12_BARRIER_ACCESS_COPY_SOURCE
             };
             break;
         case ETextureState::SHADER_RESOURCE:
-        case ETextureState::SAMPLE:
+        case ETextureState::SAMPLED:
             DASSERT(!_is_write);
             DASSERT(_pass_type != EPassType::Copy);
             desc = {
@@ -2644,14 +2664,15 @@ void D3D12ResourceStateTracker::RecordState(
                 .access = D3D12_BARRIER_ACCESS_RENDER_TARGET
             };
             break;
-        case ETextureState::DEPTH_STENCIL:
+        case ETextureState::DEPTH_STENCIL_READ:
+        case ETextureState::DEPTH_STENCIL_WRITE:
             DASSERT(_pass_type == EPassType::Graphics);
             desc = {
-                .layout = _is_write ? D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE :
-                                      D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_READ,
+                .layout = _state == ETextureState::DEPTH_STENCIL_WRITE ? D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE :
+                                                                          D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_READ,
                 .sync   = D3D12_BARRIER_SYNC_COPY,
-                .access = _is_write ? D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE :
-                                      D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ
+                .access = _state == ETextureState::DEPTH_STENCIL_WRITE ? D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE :
+                                                                          D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ
             };
             break;
         case ETextureState::UNORDERED_ACCESS:
@@ -2713,23 +2734,25 @@ void D3D12ResourceStateTracker::RecordState(
         case EBufferState::UNDEFINED:
             desc = {.sync = D3D12_BARRIER_SYNC_NONE, .access = D3D12_BARRIER_ACCESS_NO_ACCESS};
             break;
-        case EBufferState::TRANSFER:
+        case EBufferState::TRANSFER_SRC:
+        case EBufferState::TRANSFER_DST:
             desc = {
                 .sync   = D3D12_BARRIER_SYNC_COPY,
-                .access = _is_write ? D3D12_BARRIER_ACCESS_COPY_DEST : D3D12_BARRIER_ACCESS_COPY_SOURCE
+                .access = _state == EBufferState::TRANSFER_DST ? D3D12_BARRIER_ACCESS_COPY_DEST :
+                                                                 D3D12_BARRIER_ACCESS_COPY_SOURCE
             };
             break;
-        case EBufferState::VERTEX:
+        case EBufferState::VERTEX_BUFFER:
             DASSERT(!_is_write);
             DASSERT(_pass_type == EPassType::Graphics);
             desc = {.sync = D3D12_BARRIER_SYNC_VERTEX_SHADING, .access = D3D12_BARRIER_ACCESS_VERTEX_BUFFER};
             break;
-        case EBufferState::INDEX:
+        case EBufferState::INDEX_BUFFER:
             DASSERT(!_is_write);
             DASSERT(_pass_type == EPassType::Graphics);
             desc = {.sync = D3D12_BARRIER_SYNC_VERTEX_SHADING, .access = D3D12_BARRIER_ACCESS_INDEX_BUFFER};
             break;
-        case EBufferState::INDIRECT:
+        case EBufferState::INDIRECT_ARGUMENT:
             DASSERT(!_is_write); // if want to update indirect args, use uav state
             DASSERT(_pass_type != EPassType::Copy);
             desc = {
@@ -2755,6 +2778,28 @@ void D3D12ResourceStateTracker::RecordState(
                 .sync   = _pass_type == EPassType::Graphics ? D3D12_BARRIER_SYNC_PIXEL_SHADING :
                                                               D3D12_BARRIER_SYNC_COMPUTE_SHADING,
                 .access = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS
+            };
+            break;
+        case EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT:
+            DASSERT(!_is_write);
+            desc = {
+                .sync   = D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE,
+                .access = D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ
+            };
+            break;
+        case EBufferState::ACCELERATION_STRUCTURE_READ:
+            DASSERT(!_is_write);
+            DASSERT(_pass_type != EPassType::Copy);
+            desc = {
+                .sync   = D3D12_BARRIER_SYNC_RAYTRACING,
+                .access = D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ
+            };
+            break;
+        case EBufferState::ACCELERATION_STRUCTURE_WRITE:
+            DASSERT(_is_write);
+            desc = {
+                .sync   = D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE,
+                .access = D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE
             };
             break;
         default:

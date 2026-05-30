@@ -76,7 +76,7 @@ inline float2 NdirToOctSigned(float3 _v) {
 inline float3 OctToNdirSigned(float2 _p) {
     float3 n = float3(_p.x, _p.y, 1.f - abs(_p.x) - abs(_p.y));
     float  t = Max(-n.z, 0.f);
-    n.xy += Select(n.xy, float2(t), float2(-t)); // flip xy back alone corresponding
+    n.xy += Select(n.xy, float2(-t), float2(t)); // flip xy back alone corresponding
                                                  // diagnal
 
     return Normalizef(n);

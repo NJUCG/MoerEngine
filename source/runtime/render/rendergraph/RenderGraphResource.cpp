@@ -74,9 +74,9 @@ bool RGBufferRange::Overlaps(const RGBufferRange& other) const {
 
 bool RGTextureStateWrites(Render::ETextureState state) {
     switch (state) {
-        case Render::ETextureState::TRANSFER:
+        case Render::ETextureState::TRANSFER_DST:
         case Render::ETextureState::RENDER_TARGET:
-        case Render::ETextureState::DEPTH_STENCIL:
+        case Render::ETextureState::DEPTH_STENCIL_WRITE:
         case Render::ETextureState::UNORDERED_ACCESS:
             return true;
         default:
@@ -86,20 +86,13 @@ bool RGTextureStateWrites(Render::ETextureState state) {
 
 bool RGBufferStateWrites(Render::EBufferState state) {
     switch (state) {
-        case Render::EBufferState::TRANSFER:
+        case Render::EBufferState::TRANSFER_DST:
         case Render::EBufferState::UNORDERED_ACCESS:
+        case Render::EBufferState::ACCELERATION_STRUCTURE_WRITE:
             return true;
         default:
             return false;
     }
-}
-
-bool RGTextureStateConflicts(Render::ETextureState lhs, Render::ETextureState rhs) {
-    return RGTextureStateWrites(lhs) || RGTextureStateWrites(rhs);
-}
-
-bool RGBufferStateConflicts(Render::EBufferState lhs, Render::EBufferState rhs) {
-    return RGBufferStateWrites(lhs) || RGBufferStateWrites(rhs);
 }
 
 void RGTransientResource::ResetCompileState() {
@@ -134,11 +127,38 @@ void RGResourceCompileInfo::RecordAccess(uint32_t pass_index, bool writes) {
     access_write = writes;
 }
 
-RGTexture::RGTexture(StringView name, PooledTextureRef texture, bool registered) :
-    m_name(name),
+RGResource::RGResource(
+    StringView resource_name,
+    ERGResourceKind resource_kind,
+    bool imported_resource,
+    bool transient_resource
+) :
+    name(resource_name),
+    kind(resource_kind),
+    imported(imported_resource) {
+    transient.enabled = transient_resource;
+}
+
+RGTexture::RGTexture(StringView name, const RGTextureDesc& desc) :
+    RGResource(name, ERGResourceKind::Texture, false, true),
+    m_desc(desc) {}
+
+RGTexture::RGTexture(StringView name, PooledTextureRef texture, bool imported) :
+    RGResource(name, ERGResourceKind::Texture, imported, false),
     m_desc(texture ? texture->Desc() : RGTextureDesc{}),
-    m_texture(std::move(texture)),
-    m_registered(registered) {}
+    m_texture(std::move(texture)) {}
+
+void RGTexture::Bind(PooledTextureRef texture) {
+    assert(texture && texture->IsAllocated());
+    m_desc    = texture->Desc();
+    m_texture = std::move(texture);
+}
+
+void RGTexture::ReleaseTransient() {
+    if (!imported) {
+        m_texture.reset();
+    }
+}
 
 Render::TextureView RGTexture::GetView(const RGTextureRange& range) const {
     auto* texture = m_texture ? m_texture->RHI().Get() : nullptr;
@@ -148,11 +168,26 @@ Render::TextureView RGTexture::GetView(const RGTextureRange& range) const {
         .Slice(range.array_min, range.array_count);
 }
 
-RGBuffer::RGBuffer(StringView name, PooledBufferRef buffer, bool registered) :
-    m_name(name),
+RGBuffer::RGBuffer(StringView name, const RGBufferDesc& desc) :
+    RGResource(name, ERGResourceKind::Buffer, false, true),
+    m_desc(desc) {}
+
+RGBuffer::RGBuffer(StringView name, PooledBufferRef buffer, bool imported) :
+    RGResource(name, ERGResourceKind::Buffer, imported, false),
     m_desc(buffer ? buffer->Desc() : RGBufferDesc{}),
-    m_buffer(std::move(buffer)),
-    m_registered(registered) {}
+    m_buffer(std::move(buffer)) {}
+
+void RGBuffer::Bind(PooledBufferRef buffer) {
+    assert(buffer && buffer->IsAllocated());
+    m_desc   = buffer->Desc();
+    m_buffer = std::move(buffer);
+}
+
+void RGBuffer::ReleaseTransient() {
+    if (!imported) {
+        m_buffer.reset();
+    }
+}
 
 Render::BufferView RGBuffer::GetView(const RGBufferRange& range) const {
     auto* buffer = m_buffer ? m_buffer->RHI().Get() : nullptr;

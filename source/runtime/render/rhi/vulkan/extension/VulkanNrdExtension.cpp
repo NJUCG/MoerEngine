@@ -13,8 +13,29 @@
 
 namespace Moer::Render::Ext {
 
+namespace {
+
+void FreezeResourceSnapshot(const nrd::ResourceSnapshot& source, nrd::ResourceSnapshot& target) {
+    target.restoreInitialState = source.restoreInitialState;
+    for (size_t slot_index = 0; slot_index < source.slots.size(); ++slot_index) {
+        const nrd::Resource* resource = source.slots[slot_index];
+        if (resource == nullptr || resource->nri.texture == nullptr) {
+            continue;
+        }
+
+        target.SetResource(static_cast<nrd::ResourceType>(slot_index), *resource);
+    }
+}
+
+} // namespace
+
 class VkNRDInterface final : public NRDInterface {
     friend class VkNrdDenoiseCmd;
+
+    struct DispatchSyncState {
+        RHITranslateFence inflight_translate_fence{};
+        bool              begin_frame_pending{true};
+    };
 
 private:
     void InitializeNri(VulkanDevice* _device) {
@@ -171,9 +192,17 @@ public:
         InitializeIntegration(_max_frame_in_flight, _frame_width, _frame_height);
     }
 
+    ~VkNRDInterface() override {
+        MOER_ASSERT(!HasPendingTranslateWork(), "NRDInterface destroyed while translate work is still pending");
+    }
+
+    bool HasPendingTranslateWork() const override {
+        return sync_state.inflight_translate_fence.event &&
+               !sync_state.inflight_translate_fence.event->IsComplete();
+    }
+
     void Begin() override {
-        // Must be called once on a frame start
-        nrd.integration.NewFrame();
+        sync_state.begin_frame_pending = true;
         ResetResourceSnapshot();
     }
 
@@ -308,6 +337,7 @@ public:
 private:
     Array<CustomDispatchCmd::ResourceUsage>            resource_usages;
     StaticArray<uint8, uint8(EResourceSlot::SLOT_NUM)> resource_usages_indices = {};
+    DispatchSyncState                                   sync_state{};
 
     constexpr nrd::ResourceType ResourceSlot(const EResourceSlot _index) {
         switch (_index) {
@@ -339,8 +369,20 @@ private:
 
 UniquePtr<NRDInterface>
 VkNRDExtension::CreateInterface(uint8 _max_frame_in_flight, uint16 _frame_width, uint16 _frame_height) {
+    CollectRetiredInterfaces();
 
     return MakeUnique<VkNRDInterface>(m_device, _max_frame_in_flight, _frame_width, _frame_height);
+}
+
+void VkNRDExtension::CollectRetiredInterfaces() {
+    auto iter = retired_interfaces.begin();
+    while (iter != retired_interfaces.end()) {
+        if (!(*iter) || !(*iter)->HasPendingTranslateWork()) {
+            iter = retired_interfaces.erase(iter);
+            continue;
+        }
+        ++iter;
+    }
 }
 
 UniquePtr<NRDInterface> VkNRDExtension::RecreateInterface(
@@ -348,28 +390,58 @@ UniquePtr<NRDInterface> VkNRDExtension::RecreateInterface(
     uint16                  _frame_width,
     uint16                  _frame_height
 ) {
+    CollectRetiredInterfaces();
+    const uint8 max_frame_in_flight = _interface ? _interface->MaxFrameInFlight() : 0;
+    if (_interface) {
+        if (_interface->HasPendingTranslateWork()) {
+            retired_interfaces.emplace_back(std::move(_interface));
+        } else {
+            _interface.reset();
+        }
+    }
 
-    auto* vk_interface = static_cast<VkNRDInterface*>(_interface.get());
-
-    vk_interface->Reinitialize(_frame_width, _frame_height);
-
-    return std::move(_interface);
+    return MakeUnique<VkNRDInterface>(m_device, max_frame_in_flight, _frame_width, _frame_height);
 }
 
 class VkNrdDenoiseCmd final : public VkCustomDispatchCmd {
 private:
     std::span<const ResourceUsage> GetResourceUsages() const override {
-        return nrd_interface.resource_usages;
+        return resource_usages;
     }
 
 private:
     VkNRDInterface& nrd_interface;
-    nrd::Denoiser   denoiser;
+    Array<ResourceUsage>      resource_usages{};
+    mutable nrd::ResourceSnapshot resource_snapshot{};
+    nrd::CommonSettings       common_settings{};
+    std::optional<nrd::ReblurSettings> reblur_settings{};
+    std::optional<nrd::RelaxSettings>  relax_settings{};
+    bool                      begin_frame{false};
+    uint8                     motion_vector_usage_index{0};
+    nrd::Denoiser             denoiser;
 
 public:
-    VkNrdDenoiseCmd(VkNRDInterface& _nrd, const nrd::Denoiser _denoiser) :
+    VkNrdDenoiseCmd(
+        VkNRDInterface&        _nrd,
+        const nrd::Denoiser    _denoiser,
+        Array<ResourceUsage>&& _resource_usages,
+        const nrd::ResourceSnapshot& _resource_snapshot,
+        const nrd::CommonSettings& _common_settings,
+        std::optional<nrd::ReblurSettings> _reblur_settings,
+        std::optional<nrd::RelaxSettings>  _relax_settings,
+        bool                     _begin_frame,
+        uint8                  _motion_vector_usage_index
+    ) :
         nrd_interface(_nrd),
-        denoiser(_denoiser) {}
+        resource_usages(std::move(_resource_usages)),
+        common_settings(_common_settings),
+        reblur_settings(std::move(_reblur_settings)),
+        relax_settings(std::move(_relax_settings)),
+        begin_frame(_begin_frame),
+        motion_vector_usage_index(_motion_vector_usage_index),
+        denoiser(_denoiser) {
+        FreezeResourceSnapshot(_resource_snapshot, resource_snapshot);
+    }
 
     EQueueType GetQueueType() const override {
         return EQueueType::Graphics;
@@ -378,6 +450,15 @@ public:
     void Execute(const VkDispatchContext& _context) const override {
         auto& nrd_integration = nrd_interface.nrd.integration;
         auto& nri             = nrd_interface.nrd.nri;
+        if (begin_frame) {
+            nrd_integration.NewFrame();
+            nrd_integration.SetCommonSettings(common_settings);
+        }
+        if (reblur_settings.has_value()) {
+            nrd_integration.SetDenoiserSettings(nrd::Identifier(denoiser), &reblur_settings.value());
+        } else if (relax_settings.has_value()) {
+            nrd_integration.SetDenoiserSettings(nrd::Identifier(denoiser), &relax_settings.value());
+        }
         //=======================================================================================================
         // RENDER - DENOISE
         //=======================================================================================================
@@ -393,7 +474,7 @@ public:
         }
 
         const nrd::Identifier denoiser_id = nrd::Identifier(denoiser);
-        auto& resource_snapshot = nrd_interface.nrd.resource_snapshot;
+        auto& resource_snapshot = this->resource_snapshot;
         nrd_integration.Denoise(&denoiser_id, 1, *nri.cmd_list, resource_snapshot);
 
         for (size_t resource_index = 0; resource_index < resource_snapshot.uniqueNum; ++resource_index) {
@@ -405,11 +486,9 @@ public:
         }
 
         // The motion vector has been trasitioned to GENERAL layout by NRD REBLUR Denoisers, so we need to flush the state
-        auto mv_usage_slot =
-            nrd_interface.resource_usages_indices[uint8(NRDInterface::EResourceSlot::MOTION_VECTOR)];
-        if (denoiser < nrd::Denoiser::RELAX_DIFFUSE && mv_usage_slot) {
+        if (denoiser < nrd::Denoiser::RELAX_DIFFUSE && motion_vector_usage_index != 0) {
             auto* mv = ResourceCast(
-                std::get<TextureView>(nrd_interface.resource_usages[mv_usage_slot - 1].resource).GetTexture()
+                std::get<TextureView>(resource_usages[motion_vector_usage_index - 1].resource).GetTexture()
             );
             auto* vk_tracker = (VkTracker*)_context.user_data;
             vk_tracker->FlushSrcState(
@@ -419,12 +498,46 @@ public:
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
             );
         }
+
         // IMPORTANT: NRD integration binds own descriptor pool, don't forget to re-bind back your pool (heap)
     }
 };
 
 void VkNRDInterface::Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, StringView _name) {
-    _cmd_list.AddCustomCommand(MakeUnique<VkNrdDenoiseCmd>(*this, _denoiser), _name);
+    if (sync_state.inflight_translate_fence.event && sync_state.inflight_translate_fence.event->IsComplete()) {
+        sync_state.inflight_translate_fence = {};
+    }
+
+    if (sync_state.inflight_translate_fence.event && !sync_state.inflight_translate_fence.event->IsComplete()) {
+        GraphEventRef record_dependency = GraphEvent::CreateGraphEvent();
+        if (const GraphEventRef& existing_record_event = _cmd_list.GetRecordCompleteEvent(); existing_record_event) {
+            record_dependency->WaitUntil(existing_record_event);
+        }
+        record_dependency->WaitUntil(sync_state.inflight_translate_fence.event);
+        record_dependency->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+        _cmd_list.SetRecordCompleteEvent(std::move(record_dependency));
+    }
+
+    const bool begin_frame = sync_state.begin_frame_pending;
+    sync_state.begin_frame_pending = false;
+    sync_state.inflight_translate_fence = RHITranslateFence::Create();
+    RHITranslateFence translate_fence = sync_state.inflight_translate_fence;
+
+    _cmd_list.AddCustomCommand(
+        MakeUnique<VkNrdDenoiseCmd>(
+            *this,
+            _denoiser,
+            Array<CustomDispatchCmd::ResourceUsage>(resource_usages.begin(), resource_usages.end()),
+            nrd.resource_snapshot,
+            PendingCommonSettings(),
+            PendingReblurSettings(_denoiser),
+            PendingRelaxSettings(_denoiser),
+            begin_frame,
+            resource_usages_indices[uint8(EResourceSlot::MOTION_VECTOR)]
+        ),
+        _name
+    );
+    _cmd_list.TranslateFence(std::move(translate_fence));
 }
 
 } // namespace Moer::Render::Ext

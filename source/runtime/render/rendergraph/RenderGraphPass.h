@@ -5,6 +5,7 @@
 #include "string/String.h"
 
 #include <cstdint>
+#include <cassert>
 #include <functional>
 #include <limits>
 #include <typeindex>
@@ -20,14 +21,16 @@ concept RGParameterAccessProvider =
 
 class RGContext {
 public:
-    explicit RGContext(RenderGraph& graph) : m_graph(graph) {}
+    RGContext() = default;
+    explicit RGContext(RenderGraph& graph) : m_graph(&graph) {}
 
     RenderGraph& Graph() const {
-        return m_graph;
+        assert(m_graph != nullptr);
+        return *m_graph;
     }
 
 private:
-    RenderGraph& m_graph;
+    RenderGraph* m_graph{nullptr};
 };
 
 class RGSetupContext {
@@ -45,10 +48,13 @@ private:
 };
 
 enum class ERGPassFlags : uint8_t {
-    None     = 0,
-    Graphics = 1 << 0,
-    Compute  = 1 << 1,
-    Copy     = 1 << 2
+    None              = 0,
+    Graphics          = 1 << 0,
+    Compute           = 1 << 1,
+    Copy              = 1 << 2,
+    ComputeShader     = 1 << 3,
+    RaytracingShader  = 1 << 4,
+    Serial            = 1 << 5
 };
 
 constexpr ERGPassFlags operator|(ERGPassFlags lhs, ERGPassFlags rhs) {
@@ -63,6 +69,7 @@ RENDER_API Render::EQueueType RGPassQueue(ERGPassFlags flags);
 RENDER_API EPassType          RGPassType(ERGPassFlags flags);
 RENDER_API bool               RGPassHasValidQueueFlags(ERGPassFlags flags);
 RENDER_API bool               RGPassHasQueue(ERGPassFlags flags);
+RENDER_API bool               RGPassIsSerial(ERGPassFlags flags);
 
 class RGParameterAccessCollector {
 public:
@@ -70,7 +77,7 @@ public:
 
     // Called by parameter DeclareRGAccess() implementations to register one texture dependency.
     void AddTextureAccess(const RGTextureAccess& access) {
-        if (!access.handle) {
+        if (access.texture == nullptr) {
             return;
         }
         m_texture_accesses.push_back(access);
@@ -99,7 +106,7 @@ public:
 
     // Called by parameter DeclareRGAccess() implementations to register one buffer dependency.
     void AddBufferAccess(const RGBufferAccess& access) {
-        if (!access.handle) {
+        if (access.buffer == nullptr) {
             return;
         }
         m_buffer_accesses.push_back(access);
@@ -160,11 +167,13 @@ public:
     const Moer::Array<RGBufferAccess>& Buffers() const {
         return m_buffer_accesses;
     }
-
+    Render::EQueueType Queue() const {
+        return m_queue;
+    }
 private:
-    Render::EQueueType           m_queue{Render::EQueueType::Ignore};
-    Moer::Array<RGTextureAccess> m_texture_accesses{};
-    Moer::Array<RGBufferAccess>  m_buffer_accesses{};
+    Render::EQueueType                      m_queue{Render::EQueueType::Ignore};
+    Moer::Array<RGTextureAccess>            m_texture_accesses{};
+    Moer::Array<RGBufferAccess>             m_buffer_accesses{};
 };
 
 inline void CollectRGParameterAccess(RGParameterAccessCollector&) {}
@@ -194,27 +203,43 @@ void CollectRGParameterAccess(RGParameterAccessCollector& collector, const T& ac
         Moer::Render::CollectRGParameterAccess(collector __VA_OPT__(, ) __VA_ARGS__); \
     }
 
-enum class ERGPassExecutionMode : uint8_t {
-    Serial,
-    Parallel
+struct RGCompiledTextureTransition {
+    RGTexture*            texture{nullptr};
+    RGTextureRange        range{};
+    Render::ETextureState src_state{Render::ETextureState::UNDEFINED};
+    Render::ETextureState state{Render::ETextureState::UNDEFINED};
+    Render::EQueueType    src_queue{Render::EQueueType::Ignore};
+    Render::EQueueType    dst_queue{Render::EQueueType::Ignore};
+};
+
+struct RGCompiledBufferTransition {
+    RGBuffer*            buffer{nullptr};
+    RGBufferRange        range{};
+    Render::EBufferState src_state{Render::EBufferState::UNDEFINED};
+    Render::EBufferState state{Render::EBufferState::UNDEFINED};
+    Render::EQueueType   src_queue{Render::EQueueType::Ignore};
+    Render::EQueueType   dst_queue{Render::EQueueType::Ignore};
 };
 
 struct RGPass {
     static constexpr uint32_t invalid_pass = std::numeric_limits<uint32_t>::max();
     static constexpr size_t   queue_count  = static_cast<size_t>(Render::EQueueType::Num);
 
-    using ParallelExecute = std::function<void(RHICommandList& cmd_list, RGContext context)>;
-    using SerialExecute   = std::function<void(RGContext context)>;
+    using Execute = std::function<void(RHICommandList* cmd_list, RGContext context)>;
 
     struct CompileInfo {
         uint32_t                                 last_pass{invalid_pass};
         Moer::StaticArray<uint32_t, queue_count> last_pass_by_queue{};
         Moer::StaticArray<uint32_t, queue_count> next_pass_by_queue{};
+        Moer::Array<RGCompiledTextureTransition> texture_transitions{};
+        Moer::Array<RGCompiledBufferTransition>  buffer_transitions{};
 
         void Reset() {
             last_pass = invalid_pass;
             last_pass_by_queue.fill(invalid_pass);
             next_pass_by_queue.fill(invalid_pass);
+            texture_transitions.clear();
+            buffer_transitions.clear();
         }
     };
 
@@ -223,19 +248,26 @@ struct RGPass {
     std::type_index              parameter_type{typeid(void)};
     uint32_t                     parameter_size{0};
     ERGPassFlags                 flags{ERGPassFlags::None};
-    ERGPassExecutionMode         execution_mode{ERGPassExecutionMode::Parallel};
     uint32_t                     workload{1};
-    ParallelExecute              parallel_execute{};
-    SerialExecute                serial_execute{};
+    bool                         serial{false};
+    Execute                      execute{};
     Moer::Array<RGTextureAccess> texture_accesses{};
     Moer::Array<RGBufferAccess>  buffer_accesses{};
     CompileInfo                  compile{};
 };
 
 struct RGSetupPass {
+    enum class EMode : uint8_t {
+        Lambda,
+        CommandList
+    };
+
+    using Execute = std::function<void(RHICommandList* cmd_list, RGSetupContext& setup)>;
+
     String name{};
-    // Empty callbacks are legal no-op slots for future compiled setup scheduling.
-    std::function<void(RGSetupContext& setup)> execute{};
+    Render::EQueueType queue{Render::EQueueType::Ignore};
+    EMode              mode{EMode::Lambda};
+    Execute            execute{};
 };
 
 } // namespace Moer::Render

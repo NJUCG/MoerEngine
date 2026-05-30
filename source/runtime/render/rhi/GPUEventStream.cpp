@@ -65,6 +65,29 @@ bool IsMatchingEndEvent(GPUEvent::EType begin_type, GPUEvent::EType end_type) {
            (begin_type == GPUEvent::EType::BeginEvent && end_type == GPUEvent::EType::EndEvent);
 }
 
+bool IsSyntheticQueueRoot(const GPUEventNode& node) {
+    if (node.depth != 0) {
+        return false;
+    }
+    const Utf8String node_name = PlatformToUtf8(node.name);
+    return std::string_view(node_name.Native()) == "GPU";
+}
+
+template<typename Visitor>
+void VisitTraceVisibleNodes(const Array<GPUEventNode>& nodes, uint32 depth_bias, Visitor&& visitor) {
+    for (const GPUEventNode& node : nodes) {
+        if (IsSyntheticQueueRoot(node)) {
+            VisitTraceVisibleNodes(node.children, depth_bias + 1, visitor);
+            continue;
+        }
+
+        GPUEventNode rebased = node;
+        rebased.depth = rebased.depth >= depth_bias ? rebased.depth - depth_bias : 0;
+        visitor(rebased);
+        VisitTraceVisibleNodes(node.children, depth_bias, visitor);
+    }
+}
+
 struct BuildNode {
     GPUEventNode      node{};
     GPUEvent::EType   begin_type{GPUEvent::EType::BeginGPU};
@@ -318,13 +341,13 @@ ResolvedGPUFrame ResolveFrameFromPrefix(
 }
 
 void EmitFrameToTrace(const ResolvedGPUFrame& frame) {
-    if (!frame.valid) {
+    if (!frame.valid || !Moer::Trace::IsRecording()) {
         return;
     }
     ForEachQueueRoot(frame.queue_roots, [](EQueueType queue, const Array<GPUEventNode>& roots) {
         const uint64 track_id = Moer::Trace::MakeGpuQueueTrackId(0u, QueueTrackIndex(queue));
         Utf8String track_name = Utf8Printf("GPU0/Queue({})", QueueTypeName(queue));
-        VisitNodes(roots, [&](const GPUEventNode& node) {
+        VisitTraceVisibleNodes(roots, 0, [&](const GPUEventNode& node) {
             Utf8String node_name = PlatformToUtf8(node.name);
             Moer::Trace::EmitScope(Moer::Trace::EmitScopeDesc{
                 .name        = std::string_view(node_name.Native()),
@@ -346,7 +369,7 @@ void EmitFrameToProfileDump(const ResolvedGPUFrame& frame) {
     }
 
     ForEachQueueRoot(frame.queue_roots, [&](EQueueType queue, const Array<GPUEventNode>& roots) {
-        VisitNodes(roots, [&](const GPUEventNode& node) {
+        VisitTraceVisibleNodes(roots, 0, [&](const GPUEventNode& node) {
             Utf8String node_name = PlatformToUtf8(node.name);
             DUMP_STREAM(Moer::ProfileDump::Templates::GpuScopeTemplate)
                 << frame.frame_index

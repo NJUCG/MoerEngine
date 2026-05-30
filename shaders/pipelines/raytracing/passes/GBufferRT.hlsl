@@ -89,6 +89,10 @@ float3 UintHashToColor(uint _idx) {
 #if !USE_RAYQUERY
     uint2 pixel_pos = DispatchRaysIndex().xy;
 #endif
+    if (any(pixel_pos >= uint2(gbuffer_constants.main_view.rect))) {
+        return;
+    }
+
     RayDesc ray = Moer::SetupPrimaryRay(pixel_pos, gbuffer_constants.main_view);
 
     uint instance_mask = Moer::RTVM_ALL;
@@ -198,9 +202,12 @@ float3 UintHashToColor(uint _idx) {
         // 写入 GBuffer
         gbuffer_view_depth[pixel_pos]     = view_depth;
         gbuffer_clip_depth[pixel_pos]     = clip_depth;
-        gbuffer_diffuse_albedo[pixel_pos] = Moer::Pack_R11G11B10_UFLOAT(mat_sample.diffuse_albedo);
-        gbuffer_specular_roughness[pixel_pos] =
-            Moer::Pack_R8G8B8A8_Gamma_UFLOAT(float4(mat_sample.specular_f0, mat_sample.roughness));
+                gbuffer_diffuse_albedo[pixel_pos] = param.debug_normal_sample != 0
+                                                                                                ? Moer::Pack_R8G8B8A8_UFLOAT(float4(geom.normal * 0.5f + 0.5f, 1.0f))
+                                                                                                : Moer::Pack_R11G11B10_UFLOAT(mat_sample.diffuse_albedo);
+        gbuffer_specular_roughness[pixel_pos] = param.debug_normal_sample != 0
+                                                                                                    ? Moer::Pack_R8G8B8A8_UFLOAT(float4(geom.tangent * 0.5f + 0.5f, 1.0f))
+                                                  : Moer::Pack_R8G8B8A8_Gamma_UFLOAT(float4(mat_sample.specular_f0, mat_sample.roughness));
         gbuffer_normal[pixel_pos] = Math::NdirToOctUnorm32(mat_sample.normal);
 
         gbuffer_emissive[pixel_pos] = float4(mat_sample.emissive, max_glass_hit_t);

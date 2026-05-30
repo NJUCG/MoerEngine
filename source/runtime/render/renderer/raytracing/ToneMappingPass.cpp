@@ -11,6 +11,48 @@
 
 namespace Moer::Render::Raytracing {
 
+namespace {
+
+struct RGToneMappingUploadParams {
+    DEFINE_RG_BUFFER_ACCESS(constants, EBufferState::TRANSFER_DST);
+    DEFINE_RG_PARAMETER_ACCESS(constants);
+};
+
+struct RGToneMappingResetExposureParams {
+    DEFINE_RG_BUFFER_ACCESS(exposure, EBufferState::TRANSFER_DST);
+    DEFINE_RG_PARAMETER_ACCESS(exposure);
+};
+
+struct RGToneMappingResetHistogramParams {
+    DEFINE_RG_BUFFER_ACCESS(histogram, EBufferState::TRANSFER_DST);
+    DEFINE_RG_PARAMETER_ACCESS(histogram);
+};
+
+struct RGToneMappingHistogramParams {
+    DEFINE_RG_BUFFER_ACCESS(constants, EBufferState::SHADER_RESOURCE);
+    DEFINE_RG_TEXTURE_ACCESS(source, ETextureState::SHADER_RESOURCE);
+    DEFINE_RG_BUFFER_ACCESS(histogram, EBufferState::UNORDERED_ACCESS);
+    DEFINE_RG_PARAMETER_ACCESS(constants, source, histogram);
+};
+
+struct RGToneMappingExposureParams {
+    DEFINE_RG_BUFFER_ACCESS(constants, EBufferState::SHADER_RESOURCE);
+    DEFINE_RG_BUFFER_ACCESS(histogram, EBufferState::SHADER_RESOURCE);
+    DEFINE_RG_BUFFER_ACCESS(exposure, EBufferState::UNORDERED_ACCESS);
+    DEFINE_RG_PARAMETER_ACCESS(constants, histogram, exposure);
+};
+
+struct RGToneMappingRenderParams {
+    DEFINE_RG_BUFFER_ACCESS(constants, EBufferState::SHADER_RESOURCE);
+    DEFINE_RG_TEXTURE_ACCESS(source, ETextureState::SHADER_RESOURCE);
+    DEFINE_RG_BUFFER_ACCESS(exposure, EBufferState::SHADER_RESOURCE);
+    DEFINE_RG_TEXTURE_ACCESS(color_lut, ETextureState::SAMPLED);
+    DEFINE_RG_TEXTURE_ACCESS(target, ETextureState::RENDER_TARGET);
+    DEFINE_RG_PARAMETER_ACCESS(constants, source, exposure, color_lut, target);
+};
+
+} // namespace
+
 ToneMappingPass::ToneMappingPass(
     RenderDevice&  _device,
     ShaderManager& _manager,
@@ -47,9 +89,8 @@ ToneMappingPass::ToneMappingPass(
 
     if (_info.color_lut) {
         color_lut = _info.color_lut;
-        if (color_lut->GetHeight() * color_lut->GetHeight() != color_lut->GetWidth()) {
-            //
-            color_lut_size = 0;
+        if (color_lut->GetHeight() * color_lut->GetHeight() == color_lut->GetWidth()) {
+            color_lut_size = color_lut->GetHeight();
         }
     }
 
@@ -65,67 +106,63 @@ ToneMappingPass::ToneMappingPass(
 static constexpr float g_min_log_luminance = -10; // TODO: figure out how to set these properly
 static constexpr float g_max_log_luminamce = 4;
 
-void ToneMappingPass::Process(
-    CommandList& _cmd_list,
-    RTContext&   _rt_ctx,
-    Params       _params,
-    TextureRef   _src_tex,
-    TextureRef   _target
-) {
+ToneMappingPass::PreparedCommand ToneMappingPass::Prepare(Params _params, TextureRef _src_tex) {
     bool b_enable_lut = _params.enable_color_lut && color_lut_size > 0;
 
-    _cmd_list.PushScopeWithTimeScope(MOER_TEXT("ToneMappingPass"));
-    ToneMappingParams params{};
-    params.log_luminance_scale          = 1.f / (g_max_log_luminamce - g_min_log_luminance);
-    params.log_luminance_bias           = -g_min_log_luminance * params.log_luminance_scale;
-    params.log_luminance_scale_exposure = g_max_log_luminamce - g_min_log_luminance;
-    params.log_luminance_bias_exposure  = g_min_log_luminance;
-    params.histogram_low_percentile     = std::min(0.99f, std::max(0.f, _params.histogram_low_percentile));
-    params.histogram_high_percentile =
+    PreparedCommand command{};
+    command.params.log_luminance_scale          = 1.f / (g_max_log_luminamce - g_min_log_luminance);
+    command.params.log_luminance_bias           = -g_min_log_luminance * command.params.log_luminance_scale;
+    command.params.log_luminance_scale_exposure = g_max_log_luminamce - g_min_log_luminance;
+    command.params.log_luminance_bias_exposure  = g_min_log_luminance;
+    command.params.histogram_low_percentile     = std::min(0.99f, std::max(0.f, _params.histogram_low_percentile));
+    command.params.histogram_high_percentile =
         std::min(1.f, std::max(_params.histogram_high_percentile, _params.histogram_low_percentile));
-    params.eye_adaptation_speed_up   = _params.eye_adaptation_speed_up;
-    params.eye_adaptation_speed_down = _params.eye_adaptation_speed_down;
-    params.min_adapted_luminance     = _params.min_adapted_luminance;
-    params.max_adapted_luminance     = _params.max_adapted_luminance;
-    params.frame_time                = frame_time;
-    params.view_origin               = uint2(0, 0);
-    params.view_size                 = uint2(_src_tex->GetExtent().x, _src_tex->GetExtent().y);
-    params.exposure_scale            = std::exp2f(_params.exposure_bias);
-    params.white_point_inv_squared   = 1.f / (_params.white_point * _params.white_point);
-    params.source_slice              = 0;
-    params.color_lut_size =
+    command.params.eye_adaptation_speed_up   = _params.eye_adaptation_speed_up;
+    command.params.eye_adaptation_speed_down = _params.eye_adaptation_speed_down;
+    command.params.min_adapted_luminance     = _params.min_adapted_luminance;
+    command.params.max_adapted_luminance     = _params.max_adapted_luminance;
+    command.params.frame_time                = frame_time;
+    command.params.view_origin               = uint2(0, 0);
+    command.params.view_size                 = uint2(_src_tex->GetExtent().x, _src_tex->GetExtent().y);
+    command.params.exposure_scale            = std::exp2f(_params.exposure_bias);
+    command.params.white_point_inv_squared   = 1.f / (_params.white_point * _params.white_point);
+    command.params.source_slice              = 0;
+    command.params.color_lut_size =
         b_enable_lut ? float2(color_lut_size * color_lut_size, color_lut_size) : float2(0.f);
-    params.color_lut_size_inv =
+    command.params.color_lut_size_inv =
         b_enable_lut ? float2(1.f / (color_lut_size * color_lut_size), 1.f / color_lut_size) : float2(0.f);
-    params.frame_idx = frame_idx;
-    params.enabled   = _params.enable_tone_mapping ? 1 : 0;
+    command.params.frame_idx = frame_idx;
+    command.params.enabled   = _params.enable_tone_mapping ? 1 : 0;
 
     if (!b_enabled != _params.enable_tone_mapping) {
-        b_enabled = _params.enable_tone_mapping;
-        ResetExposure(_cmd_list);
+        b_enabled              = _params.enable_tone_mapping;
+        command.reset_exposure = true;
     }
 
-    upload_data.resize(sizeof(ToneMappingParams));
-    upload_data.assign((byte*)&params, (byte*)&params + sizeof(ToneMappingParams));
+    return command;
+}
+
+ToneMappingPass::RecordResources ToneMappingPass::CaptureResources(TextureRef _src_tex, TextureRef _target) const {
+    return RecordResources{.src_tex = _src_tex, .target = _target, .color_lut = color_lut};
+}
+
+void ToneMappingPass::RecordConstantsUpload(CommandList& _cmd_list, const PreparedCommand& _command) {
+    Array<byte> upload_data(sizeof(ToneMappingParams));
+    upload_data.assign((byte*)&_command.params, (byte*)&_command.params + sizeof(ToneMappingParams));
 
     _cmd_list.CopyFrom(std::move(upload_data), tone_mapping_constants->GetView());
-
-    ResetHistogram(_cmd_list);
-    ComputeHistogram(_cmd_list, _src_tex);
-    ComputeExposure(_cmd_list, _params);
-    Render(_cmd_list, _rt_ctx, _params, _src_tex, _target);
-    _cmd_list.PopScopeWithTimeScope();
 }
 
 void ToneMappingPass::Render(
     CommandList& _cmd_list,
-    RTContext&   _rt_ctx,
-    Params       _params,
     TextureRef   _src_tex,
-    TextureRef   _target
+    TextureRef   _target,
+    TextureRef   _color_lut
 ) {
+    TextureRef lut = _color_lut ? _color_lut : _src_tex;
 
     bool draw_indirect = false;
+    Array<byte> upload_data;
 
     if (draw_indirect) {
         DrawCmdData draw_cmd_data{};
@@ -186,7 +223,7 @@ void ToneMappingPass::Render(
                 tone_mapping_constants,
                 _src_tex,
                 exposure_buffer,
-                color_lut,
+                lut,
                 linear_clamp_sampler
             )
             ////////////////////////////////////////////// DrawIndexedIndirect using gpu counter buffer
@@ -236,7 +273,7 @@ void ToneMappingPass::Render(
                 tone_mapping_constants,
                 _src_tex,
                 exposure_buffer,
-                color_lut,
+                lut,
                 linear_clamp_sampler
             )
             .Draw(MOER_TEXT("ToneMapping"),
@@ -264,9 +301,108 @@ void ToneMappingPass::ComputeHistogram(CommandList& _cmd_list, TextureRef _src_t
         );
 }
 
-void ToneMappingPass::ComputeExposure(CommandList& _cmd_list, Params _params) {
+void ToneMappingPass::ComputeExposure(CommandList& _cmd_list) {
     _cmd_list.Compute(exposure_pipeline, tone_mapping_constants, histogram_buffer, exposure_buffer)
         .Dispatch(uint3(1, 1, 1), MOER_TEXT("Calculate Exposure"));
+}
+
+void ToneMappingPass::AddPasses(
+    RenderGraph&                 _graph,
+    const RTGraphFrameResources& _rg,
+    const RTContext&             _rt_ctx,
+    Params                       _params,
+    TextureRef                   _src_tex,
+    TextureRef                   _target
+) {
+    auto* command   = _graph.Alloc<PreparedCommand>(Prepare(_params, _src_tex));
+    auto* resources = _graph.Alloc<RecordResources>(CaptureResources(_src_tex, _target));
+
+    RGBuffer* constants = _graph.ImportBuffer(
+        MOER_TEXT("RT.ToneMapping.constants"), tone_mapping_constants, EQueueType::Graphics
+    );
+    RGBuffer* histogram = _graph.ImportBuffer(
+        MOER_TEXT("RT.ToneMapping.histogram"), histogram_buffer, EQueueType::Graphics
+    );
+    RGBuffer* exposure = _graph.ImportBuffer(MOER_TEXT("RT.ToneMapping.exposure"), exposure_buffer, EQueueType::Graphics);
+    RGTexture* source  = RTGraphTextureForFrameTexture(_rg, _rt_ctx, _src_tex);
+    RGTexture* target  = RTGraphTextureForFrameTexture(_rg, _rt_ctx, _target);
+    RGTexture* lut     = ImportRTTextureIfValid(_graph, MOER_TEXT("RT.ToneMapping.color_lut"), color_lut);
+
+    auto* upload_params      = _graph.Alloc<RGToneMappingUploadParams>();
+    upload_params->constants = RGBufferView{.buffer = constants};
+    _graph.AddPass(
+        MOER_TEXT("RT.ToneMapping.UploadConstants"),
+        upload_params,
+        ERGPassFlags::Graphics,
+        [this, command](RHICommandList& cmd_list, RGContext) {
+            RecordConstantsUpload(cmd_list, *command);
+        }
+    );
+
+    if (command->reset_exposure) {
+        auto* reset_exposure_params     = _graph.Alloc<RGToneMappingResetExposureParams>();
+        reset_exposure_params->exposure = RGBufferView{.buffer = exposure};
+        _graph.AddPass(
+            MOER_TEXT("RT.ToneMapping.ResetExposure"),
+            reset_exposure_params,
+            ERGPassFlags::Graphics,
+            [this](RHICommandList& cmd_list, RGContext) {
+                ResetExposure(cmd_list);
+            }
+        );
+    }
+
+    auto* reset_histogram_params      = _graph.Alloc<RGToneMappingResetHistogramParams>();
+    reset_histogram_params->histogram = RGBufferView{.buffer = histogram};
+    _graph.AddPass(
+        MOER_TEXT("RT.ToneMapping.ResetHistogram"),
+        reset_histogram_params,
+        ERGPassFlags::Graphics,
+        [this](RHICommandList& cmd_list, RGContext) {
+            ResetHistogram(cmd_list);
+        }
+    );
+
+    auto* histogram_params      = _graph.Alloc<RGToneMappingHistogramParams>();
+    histogram_params->constants = RGBufferView{.buffer = constants};
+    histogram_params->source    = RTWholeTextureView(source);
+    histogram_params->histogram = RGBufferView{.buffer = histogram};
+    _graph.AddPass(
+        MOER_TEXT("RT.ToneMapping.Histogram"),
+        histogram_params,
+        kRTGraphComputePassFlags,
+        [this, resources](RHICommandList& cmd_list, RGContext) {
+            ComputeHistogram(cmd_list, resources->src_tex);
+        }
+    );
+
+    auto* exposure_params      = _graph.Alloc<RGToneMappingExposureParams>();
+    exposure_params->constants = RGBufferView{.buffer = constants};
+    exposure_params->histogram = RGBufferView{.buffer = histogram};
+    exposure_params->exposure  = RGBufferView{.buffer = exposure};
+    _graph.AddPass(
+        MOER_TEXT("RT.ToneMapping.Exposure"),
+        exposure_params,
+        kRTGraphComputePassFlags,
+        [this](RHICommandList& cmd_list, RGContext) {
+            ComputeExposure(cmd_list);
+        }
+    );
+
+    auto* render_params      = _graph.Alloc<RGToneMappingRenderParams>();
+    render_params->constants = RGBufferView{.buffer = constants};
+    render_params->source    = RTWholeTextureView(source);
+    render_params->exposure  = RGBufferView{.buffer = exposure};
+    render_params->color_lut = RTWholeTextureView(lut);
+    render_params->target    = RTWholeTextureView(target);
+    _graph.AddPass(
+        MOER_TEXT("RT.ToneMapping.Render"),
+        render_params,
+        ERGPassFlags::Graphics,
+        [this, resources](RHICommandList& cmd_list, RGContext) {
+            Render(cmd_list, resources->src_tex, resources->target, resources->color_lut);
+        }
+    );
 }
 
 void ToneMappingPass::AdvanceFrame(float _elapsed_time) {

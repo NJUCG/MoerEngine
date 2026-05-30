@@ -120,7 +120,11 @@ public:
         VkFormat          _format = VK_FORMAT_UNDEFINED
     );
     void FreeBufferDescIdx(uint _idx);
-    uint GetImageDescIdx(const TextureView* _in_image, VkImageLayout _layout);
+    uint GetImageDescIdx(
+        const TextureView* _in_image,
+        VkImageLayout      _layout,
+        VkDescriptorType   _descriptor_type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
+    );
     void FreeImageDescIdx(uint _idx);
     uint GetSamplerDescIdx(Sampler _sampler);
     uint GetAccelDescIdx(VulkanAccelerationStructure* _as);

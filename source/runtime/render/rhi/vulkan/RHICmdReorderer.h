@@ -464,7 +464,7 @@ public:
     }
 
     int64 GetLastLayerWrite(RangeHandle* _handle, const Range& _range) {
-        int64 layer = _handle->GetMaxReadLayer(_range);
+        int64 layer = std::max(_handle->GetMaxReadLayer(_range), _handle->GetMaxWriteLayer(_range));
         if (m_max_bdls_layer >= layer) {
             //check contains certain resource
             for (auto&& i : m_bindless_handles) {
@@ -504,22 +504,23 @@ public:
         return GetLayerWithOffset(layer + 1);
     }
 
-    void AddCmd(Command const* _cmd, uint64 _layer) {
-        if (m_cmd_lists.size() <= _layer) {
-            m_cmd_lists.resize(_layer + 1);
+    void AddCmd(Command const* _cmd, int64 _layer) {
+        const uint64 resolved_layer = _layer < 0 ? static_cast<uint64>(m_cmd_lists.size()) : static_cast<uint64>(_layer);
+        if (m_cmd_lists.size() <= resolved_layer) {
+            m_cmd_lists.resize(resolved_layer + 1);
         }
-        auto&            last = m_cmd_lists[_layer];
+        auto&            last = m_cmd_lists[resolved_layer];
         CommandListNode* ptr  = m_arena.Malloc<CommandListNode>();
         new (ptr) CommandListNode(_cmd, nullptr);
         last.head = last.head ? last.head : ptr;
         if (last.tail) {
             last.tail->next = ptr;
         }
-        m_cmd_lists[_layer].tail = ptr;
+        m_cmd_lists[resolved_layer].tail = ptr;
         RHITRACE_LOG(
             verbose,
             "[RHITrace][Reorder][AssignCmd] layer={} cmd_type={} name={}",
-            _layer,
+            resolved_layer,
             uint(_cmd->Type()),
             _cmd->name
         );
@@ -894,40 +895,27 @@ public:
         Array<RangeHandle*> barrier_resources;
         Array<Range>        barrier_ranges;
         //reserve
-        barrier_resources.reserve(
-            _cmd->ReadBuffers().size() + _cmd->ReadTextures().size() + _cmd->WriteBuffers().size() +
-            _cmd->WriteTextures().size()
-        );
-        barrier_ranges.reserve(
-            _cmd->ReadBuffers().size() + _cmd->ReadTextures().size() + _cmd->WriteBuffers().size() +
-            _cmd->WriteTextures().size()
-        );
+        barrier_resources.reserve(_cmd->Buffers().size() + _cmd->Textures().size());
+        barrier_ranges.reserve(_cmd->Buffers().size() + _cmd->Textures().size());
 
-        for (const auto& [handle, state, pass_type, offset, size] : _cmd->ReadBuffers()) {
+        for (const auto& buffer : _cmd->Buffers()) {
             RangeHandle* range_handle =
-                static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
-            layer = GetLastLayerRead(range_handle, Range(offset, size));
-        }
-        for (const auto& [handle, state, pass_type, mip_level, mip_cnt, array_layer, array_count] : _cmd->ReadTextures()) {
-            RangeHandle* range_handle =
-                static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
-            layer = GetLastLayerRead(range_handle, Range(mip_level, mip_cnt));
+                static_cast<RangeHandle*>(GetHandle(buffer.handle, ResourceType::Texture_Buffer));
+            layer = GetLastLayerRead(range_handle, Range(buffer.offset, buffer.byte_size));
+            if (buffer.access_write) {
+                barrier_resources.emplace_back(range_handle);
+                barrier_ranges.emplace_back(Range(buffer.offset, buffer.byte_size));
+            }
         }
 
-        for (auto& [handle, state, pass_type, offset, size] : _cmd->WriteBuffers()) {
+        for (const auto& texture : _cmd->Textures()) {
             RangeHandle* range_handle =
-                static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
-            layer = GetLastLayerRead(range_handle, Range(offset, size));
-            barrier_resources.emplace_back(range_handle);
-            barrier_ranges.emplace_back(Range(offset, size));
-        }
-
-        for (const auto& [handle, state, pass_type, mip_level, mip_cnt, array_layer, array_count] : _cmd->WriteTextures()) {
-            RangeHandle* range_handle =
-                static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
-            layer = GetLastLayerRead(range_handle, Range(mip_level, mip_cnt));
-            barrier_resources.emplace_back(range_handle);
-            barrier_ranges.emplace_back(Range(mip_level, mip_cnt));
+                static_cast<RangeHandle*>(GetHandle(texture.handle, ResourceType::Texture_Buffer));
+            layer = GetLastLayerRead(range_handle, Range(texture.mip_level, texture.mip_cnt));
+            if (texture.access_write) {
+                barrier_resources.emplace_back(range_handle);
+                barrier_ranges.emplace_back(Range(texture.mip_level, texture.mip_cnt));
+            }
         }
         for (uint i = 0; i < barrier_resources.size(); ++i) {
             RangeHandle* range_handle = barrier_resources[i];

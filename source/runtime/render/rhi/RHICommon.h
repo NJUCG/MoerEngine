@@ -654,23 +654,29 @@ namespace Moer::Render {
 //one state a time
 enum class EBufferState : uint32 {
     UNDEFINED,
-    TRANSFER,
-    VERTEX,
-    INDEX,
-    INDIRECT,
+    TRANSFER_SRC,
+    TRANSFER_DST,
+    VERTEX_BUFFER,
+    INDEX_BUFFER,
+    INDIRECT_ARGUMENT,
     SHADER_RESOURCE,
     UNORDERED_ACCESS,
+    ACCELERATION_STRUCTURE_BUILD_INPUT,
+    ACCELERATION_STRUCTURE_READ,
+    ACCELERATION_STRUCTURE_WRITE,
     Num
 };
 //one state a time
 enum class ETextureState : uint32 {
     UNDEFINED,
-    TRANSFER,
+    TRANSFER_SRC,
+    TRANSFER_DST,
     SHADER_RESOURCE,
+    SAMPLED,
     RENDER_TARGET,
-    DEPTH_STENCIL,
+    DEPTH_STENCIL_READ,
+    DEPTH_STENCIL_WRITE,
     UNORDERED_ACCESS,
-    SAMPLE,
     Num
 };
 } // namespace Moer::Render

@@ -38,6 +38,7 @@
 #include "rhi/vulkan/VulkanDevice.h"
 #include "rhi/vulkan/VulkanSwapChain.h"
 #include "shader/ShaderCompiler.h"
+#include "string/StringConvert.h"
 #include "shader/ShaderResourceManager.h"
 #include "string/Format.h"
 #include "taskgraph/TaskSystem.h"
@@ -51,10 +52,14 @@
 namespace Moer::Render::Tests {
 int RunRHICommandListRGBaselineTest();
 int RunRenderGraphContractFoundationTest();
+int RunRenderGraphTextureCopyReadbackTest();
+int RunRenderGraphDispatchBindlessReadbackTest();
+int RunRenderGraphRayQueryTriangleHitTest();
+int RunRenderGraphRayQuerySceneBindlessReadbackTest();
+int RunRenderGraphRayQueryGBufferOutputReadbackTest();
 }
 
 namespace {
-
 using namespace Moer;
 using namespace Moer::Render;
 
@@ -372,7 +377,7 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
         );
         return false;
     }
-    if (store.events.size() != 3 || store.tracks.size() != 2 || store.min_ts != 0 || store.max_ts != 90000) {
+    if (store.events.size() != 3 || store.tracks.size() != 3 || store.min_ts != 0 || store.max_ts != 90000) {
         LOG_ERROR(
             MOER_TEXT("Profile consumer normalized store mismatch: events={} tracks={} min={} max={}"),
             store.events.size(),
@@ -390,12 +395,9 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
         LOG_ERROR(MOER_TEXT("Profile consumer normalized store missing CPU or GPU scope event."));
         return false;
     }
-
-    const uint64_t graphics_track_id = Moer::Trace::MakeGpuQueueTrackId(0u, 0u);
     if (gpu_event->track_type != Moer::Profiler::ProfileTrackType::GPUQueue ||
-        gpu_event->track_id != graphics_track_id ||
         gpu_event->ts_begin_ns != 50000 || gpu_event->ts_end_ns != 80000 ||
-        !Utf8Equals(gpu_event->category, "timing.gpu_scope") || !Utf8Equals(gpu_event->track_name, "GPU0/Queue(Graphics)")) {
+        !Utf8Equals(gpu_event->category, "timing.gpu_scope") || !Utf8Equals(gpu_event->track_name, "Graphics")) {
         LOG_ERROR(
             MOER_TEXT("Profile consumer normalized GPU event mismatch: begin={} end={} category={} track={}"),
             gpu_event->ts_begin_ns,
@@ -406,11 +408,11 @@ bool AssertProfileConsumerNormalizedStore(const Moer::Profiler::ProfileStore& st
         return false;
     }
     if (gpu_alias_event->track_type != Moer::Profiler::ProfileTrackType::GPUQueue ||
-        gpu_alias_event->track_id != graphics_track_id ||
         gpu_alias_event->ts_begin_ns != 85000 || gpu_alias_event->ts_end_ns != 90000 ||
-        !Utf8Equals(gpu_alias_event->track_name, "GPU0/Queue(Graphics)")) {
+        !Utf8Equals(gpu_alias_event->track_name, "GPU0/Queue(Graphics)") ||
+        gpu_alias_event->track_id == gpu_event->track_id) {
         LOG_ERROR(
-            MOER_TEXT("Profile consumer GPU queue track alias was not merged: begin={} end={} track_id={} track={}"),
+            MOER_TEXT("Profile consumer GPU queue track normalization mismatch: begin={} end={} track_id={} track={}"),
             gpu_alias_event->ts_begin_ns,
             gpu_alias_event->ts_end_ns,
             gpu_alias_event->track_id,
@@ -946,9 +948,8 @@ int RunProfileConsumerFileLoadTest() {
     Moer::ProfileDump::FlushThreadLocal();
 
     Moer::Profiler::ProfileStore store{};
-    const std::string output_path_utf8 = output_path.generic_string();
     const bool        loaded = Moer::Profiler::LoadProfileDumpFile(
-        Moer::Utf8StringView(output_path_utf8.data(), output_path_utf8.size()),
+        Moer::StringView(output_path.native().data(), output_path.native().size()),
         store,
         true
     );
@@ -957,8 +958,10 @@ int RunProfileConsumerFileLoadTest() {
         LOG_ERROR(MOER_TEXT("Profile consumer file load failed."));
         return 1;
     }
-    const std::string expected_session_name = output_path.filename().string();
-    if (std::string_view(store.metadata.session_name.data(), store.metadata.session_name.size()) != expected_session_name) {
+    const Moer::Utf8String expected_session_name =
+        Moer::PlatformToUtf8(Moer::StringView(output_path.filename().native().data(), output_path.filename().native().size()));
+    if (std::string_view(store.metadata.session_name.data(), store.metadata.session_name.size()) !=
+        std::string_view(expected_session_name.data(), expected_session_name.size())) {
         LOG_ERROR(MOER_TEXT("Profile consumer file load session name mismatch: {}"), store.metadata.session_name);
         return 1;
     }
@@ -1114,26 +1117,21 @@ int RunTraceConsumerDecodeTest() {
         );
         return 1;
     }
-    if (!decoder.TimeOriginNs().has_value() || decoder.TimeOriginNs().value() != metadata.start_ts_ns) {
-        LOG_ERROR(MOER_TEXT("Trace consumer decoded time origin mismatch."));
-        return 1;
-    }
-
     Moer::Profiler::ProfileStore store{};
     store.SetSessionName(std::move(decoded_session_name));
-    store.AppendEvents(decoded_events, decoder.TimeOriginNs());
+    store.AppendEvents(decoded_events);
     const auto* scope_event = FindProfileConsumerEvent(store, "TraceScope");
     const auto* counter_event = FindProfileConsumerEvent(store, "TraceCounter");
     if (scope_event == nullptr || counter_event == nullptr) {
         LOG_ERROR(MOER_TEXT("Trace consumer normalized store missing decoded events."));
         return 1;
     }
-    if (scope_event->ts_begin_ns != 1000 || scope_event->ts_end_ns != 4000 ||
+    if (scope_event->ts_begin_ns != 0 || scope_event->ts_end_ns != 3000 ||
         !Utf8Equals(scope_event->track_name, "TraceThread")) {
         LOG_ERROR(MOER_TEXT("Trace consumer scope normalization mismatch."));
         return 1;
     }
-    if (counter_event->type != Moer::Profiler::ProfileEventType::Counter || counter_event->ts_begin_ns != 4500 ||
+    if (counter_event->type != Moer::Profiler::ProfileEventType::Counter || counter_event->ts_begin_ns != 3500 ||
         counter_event->counter_value != 3.5) {
         LOG_ERROR(MOER_TEXT("Trace consumer counter decode mismatch."));
         return 1;
@@ -1148,9 +1146,8 @@ int RunTraceConsumerDecodeTest() {
     }
 
     Moer::Profiler::ProfileStore csv_store{};
-    const std::string csv_path_utf8 = csv_path.generic_string();
     if (!Moer::Profiler::LoadProfilerCaptureFile(
-            Moer::Utf8StringView(csv_path_utf8.data(), csv_path_utf8.size()),
+            Moer::StringView(csv_path.native().data(), csv_path.native().size()),
             csv_store,
             true
         )) {
@@ -1174,44 +1171,6 @@ int RunTraceConsumerDecodeTest() {
         return 1;
     }
 
-    const std::filesystem::path csv_origin_path = MakeProfileDumpTestPath(MOER_ASCII_TEXT("trace_consumer_csv_origin_test.csv"));
-    {
-        std::ofstream csv(csv_origin_path, std::ios::binary);
-        csv << MOER_ASCII_TEXT("#moer_trace_csv_version=1\n");
-        csv << MOER_ASCII_TEXT("#session_id=7\n");
-        csv << MOER_ASCII_TEXT("#time_origin_ns=1000\n");
-        csv << MOER_ASCII_TEXT("#session_name=TraceUnit\n");
-        csv << MOER_ASCII_TEXT("event_id,session_id,type,track_type,track_id,depth,ts_begin_ns,ts_end_ns,counter,name,category,track_name,args\n");
-        csv << MOER_ASCII_TEXT("11,7,0,0,42,1,2000,5000,0,\"TraceScope\",\"Trace\",\"TraceThread\",\"\"\n");
-        csv << MOER_ASCII_TEXT("12,7,2,0,42,0,5500,5500,3.5,\"TraceCounter\",\"Trace\",\"TraceThread\",\"\"\n");
-    }
-
-    Moer::Profiler::ProfileStore csv_origin_store{};
-    const std::string csv_origin_path_utf8 = csv_origin_path.generic_string();
-    if (!Moer::Profiler::LoadProfilerCaptureFile(
-            Moer::Utf8StringView(csv_origin_path_utf8.data(), csv_origin_path_utf8.size()),
-            csv_origin_store,
-            true
-        )) {
-        LOG_ERROR(MOER_TEXT("Trace consumer CSV origin load failed."));
-        return 1;
-    }
-    const auto* csv_origin_scope = FindProfileConsumerEvent(csv_origin_store, MOER_ASCII_TEXT("TraceScope"));
-    const auto* csv_origin_counter = FindProfileConsumerEvent(csv_origin_store, MOER_ASCII_TEXT("TraceCounter"));
-    if (csv_origin_scope == nullptr || csv_origin_counter == nullptr) {
-        LOG_ERROR(MOER_TEXT("Trace consumer CSV origin normalized store missing decoded events."));
-        return 1;
-    }
-    if (!csv_origin_store.metadata.has_time_origin || csv_origin_store.metadata.time_origin_ns != 1000 ||
-        csv_origin_store.min_ts != 0 || csv_origin_scope->ts_begin_ns != 1000 || csv_origin_scope->ts_end_ns != 4000) {
-        LOG_ERROR(MOER_TEXT("Trace consumer CSV origin scope normalization mismatch."));
-        return 1;
-    }
-    if (csv_origin_counter->type != Moer::Profiler::ProfileEventType::Counter ||
-        csv_origin_counter->ts_begin_ns != 4500 || csv_origin_counter->counter_value != 3.5) {
-        LOG_ERROR(MOER_TEXT("Trace consumer CSV origin counter decode mismatch."));
-        return 1;
-    }
     return 0;
 }
 
@@ -1469,12 +1428,9 @@ int RunTranslateExecutionClassRoundTripTest() {
 int RunTrackedStateCommandRoundTripTest() {
     BarrierCmd sync_only_barrier(
         0,
-        0,
-        0,
-        0,
         EQueueType::Graphics,
         EQueueType::Graphics,
-        EBarrierTrackedState::Skip
+        ETrackedStateUpdateMode::Skip
     );
     if (sync_only_barrier.ShouldUpdateTrackedState()) {
         LOG_ERROR(MOER_TEXT("Barrier tracked-state skip flag did not round-trip"));
@@ -1509,6 +1465,24 @@ int RunTrackedStateCommandRoundTripTest() {
     if (tracked_buffer.state != EBufferState::SHADER_RESOURCE ||
         tracked_buffer.owner_queue != EQueueType::Compute || !tracked_buffer.access_write) {
         LOG_ERROR(MOER_TEXT("SetTrackedState command stored the wrong buffer state"));
+        return 1;
+    }
+
+    Array<TrackedTextureState> explicit_textures{};
+    Array<TrackedBufferState>  explicit_buffers{};
+    explicit_buffers.emplace_back(TrackedBufferState{
+        .buffer = BufferView(nullptr, 0, 0, 1),
+        .state = EBufferState::UNORDERED_ACCESS,
+        .owner_queue = EQueueType::Graphics,
+        .access_write = true
+    });
+    CommandList explicit_cmd(EQueueType::Graphics);
+    explicit_cmd.SetExplicitTrackedState(std::move(explicit_textures), std::move(explicit_buffers));
+    explicit_cmd.LambdaCommand([] {});
+    CmdSubmit explicit_submit = explicit_cmd.Submit();
+    if (explicit_submit.preprocess_mode != ERHISubmitPreprocessMode::ExplicitStateNoSync ||
+        explicit_submit.explicit_tracked_buffers.size() != 1) {
+        LOG_ERROR(MOER_TEXT("Explicit submit preprocessing metadata did not round-trip"));
         return 1;
     }
 
@@ -1639,7 +1613,7 @@ int RunRHITranslateMultiQueueReadbackTest() {
 
         std::fill(readback_data.begin(), readback_data.end(), 0u);
         CommandList readback_cmd(EQueueType::Graphics);
-        GraphEventRef readback_event = readback_cmd.ReadbackCopy(dst->GetView(), ToByteSpan(readback_data));
+        SyncPointRef readback_event = readback_cmd.ReadbackCopy(dst->GetView(), ToByteSpan(readback_data));
 
         Array<CommandList> frame_cmds{};
         frame_cmds.emplace_back(std::move(upload_cmd));
@@ -1649,7 +1623,7 @@ int RunRHITranslateMultiQueueReadbackTest() {
 
         RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
         if (readback_event) {
-            readback_event->Wait();
+            readback_event->WaitHost();
         }
 
         if (!ValidateResult(iter, final_expected, readback_data)) {
@@ -1679,7 +1653,7 @@ int RunMultiCommandListSubmitOrderingTest() {
     upload_cmd.CopyFrom(ToByteSpan(upload_values), buffer->GetView());
 
     CommandList readback_cmd(EQueueType::Graphics);
-    GraphEventRef readback_event =
+    SyncPointRef readback_event =
         readback_cmd.ReadbackCopy(buffer->GetView(), ToByteSpan(readback_values));
 
     Array<CommandList> frame_cmds{};
@@ -1688,7 +1662,7 @@ int RunMultiCommandListSubmitOrderingTest() {
 
     RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
     if (readback_event) {
-        readback_event->Wait();
+        readback_event->WaitHost();
     }
 
     if (!ValidateResult(0u, upload_values, readback_values)) {
@@ -1696,6 +1670,52 @@ int RunMultiCommandListSubmitOrderingTest() {
     }
 
     LOG_INFO(MOER_TEXT("Multi-commandlist submit ordering test passed"));
+    return 0;
+}
+int RunRecordingSubmitOrderingTest() {
+    auto& device = RenderDevice::Get();
+    auto buffer = device.CreateBuffer<uint32_t>(
+        MOER_TEXT("translate_recording_submit_order"),
+        kElementCount,
+        EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC
+    );
+
+    std::vector<uint32_t> initial_values(kElementCount);
+    std::vector<uint32_t> recording_values(kElementCount);
+    std::vector<uint32_t> readback_values(kElementCount, 0u);
+    for (uint32_t i = 0; i < kElementCount; ++i) {
+        initial_values[i] = 0x330000u + i * 5u + 1u;
+        recording_values[i] = 0x440000u + i * 7u + 3u;
+    }
+
+    CommandList initial_cmd(EQueueType::Graphics);
+    initial_cmd.CopyFrom(ToByteSpan(initial_values), buffer->GetView());
+    Array<CommandList> initial_cmds{};
+    initial_cmds.emplace_back(std::move(initial_cmd));
+    RHIExecutor::Get().Submit(std::move(initial_cmds), ERHIExecSubmitFlags::None);
+
+    SharedPtr<CommandList> recording_cmd = MakeShared<CommandList>(EQueueType::Graphics);
+    recording_cmd->CopyFrom(ToByteSpan(recording_values), buffer->GetView());
+    Array<SharedPtr<CommandList>> recording_cmds{};
+    recording_cmds.emplace_back(std::move(recording_cmd));
+    RHIExecutor::Get().SubmitRecording(std::move(recording_cmds), ERHIExecSubmitFlags::None);
+
+    CommandList readback_cmd(EQueueType::Graphics);
+    SyncPointRef readback_event =
+        readback_cmd.ReadbackCopy(buffer->GetView(), ToByteSpan(readback_values));
+    Array<CommandList> readback_cmds{};
+    readback_cmds.emplace_back(std::move(readback_cmd));
+    RHIExecutor::Get().Submit(std::move(readback_cmds), ERHIExecSubmitFlags::FlushGPU);
+    if (readback_event) {
+        readback_event->WaitHost();
+    }
+
+    if (!ValidateResult(0u, recording_values, readback_values)) {
+        LOG_ERROR(MOER_TEXT("SubmitRecording order was not preserved between ordinary submits"));
+        return 1;
+    }
+
+    LOG_INFO(MOER_TEXT("Recording submit ordering test passed"));
     return 0;
 }
 
@@ -1719,7 +1739,7 @@ int RunSerialControlTranslateOrderingTest() {
 
     CommandList readback_cmd(EQueueType::Graphics);
     readback_cmd.SetTranslateExecutionClass(ERHITranslateExecutionClass::SerialControl);
-    GraphEventRef readback_event =
+    SyncPointRef readback_event =
         readback_cmd.ReadbackCopy(buffer->GetView(), ToByteSpan(readback_values));
 
     Array<CommandList> frame_cmds{};
@@ -1728,7 +1748,7 @@ int RunSerialControlTranslateOrderingTest() {
 
     RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
     if (readback_event) {
-        readback_event->Wait();
+        readback_event->WaitHost();
     }
 
     if (!ValidateResult(0u, upload_values, readback_values)) {
@@ -1769,14 +1789,14 @@ int RunGraphicsCopyScopeRoundTripTest() {
             auto copy_scope = graphics_cmd.BeginCopyScope();
             copy_scope.CopyFrom(ToByteSpan(upload_values), transfer_buffer->GetView());
         }
-        GraphEventRef readback_event =
+        SyncPointRef readback_event =
             graphics_cmd.ReadbackCopy(transfer_buffer->GetView(), ToByteSpan(readback_values));
 
         Array<CommandList> frame_cmds{};
         frame_cmds.emplace_back(std::move(graphics_cmd));
         SubmitAndWait(std::move(frame_cmds));
         if (readback_event) {
-            readback_event->Wait();
+            readback_event->WaitHost();
         }
 
         if (!ValidateResult(iter, upload_values, readback_values)) {
@@ -1846,14 +1866,24 @@ int RunBindlessBufferReadbackTest() {
         cmd.Compute(pipeline, args, output->GetView(), bindless_array)
             .Dispatch((kElementCount + 63u) / 64u, MOER_TEXT("BindlessBufferReadbackDispatch"));
 
-        GraphEventRef readback_event =
+        cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                output->GetView(),
+                EBufferState::UNORDERED_ACCESS,
+                EBufferState::TRANSFER_SRC,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics
+        );
+        SyncPointRef readback_event =
             cmd.ReadbackCopy(output->GetView(), ToByteSpan(readback_values));
 
         Array<CommandList> frame_cmds{};
         frame_cmds.emplace_back(std::move(cmd));
         RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
         if (readback_event) {
-            readback_event->Wait();
+            readback_event->WaitHost();
         }
 
         return ValidateResult(iter, expected_values, readback_values);
@@ -1899,14 +1929,24 @@ int RunBindlessTextureReadbackTest() {
         std::fill(readback_values.begin(), readback_values.end(), 0u);
 
         CommandList readback_cmd(EQueueType::Graphics);
-        GraphEventRef readback_event =
+        readback_cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                output->GetView(),
+                EBufferState::UNORDERED_ACCESS,
+                EBufferState::TRANSFER_SRC,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics
+        );
+        SyncPointRef readback_event =
             readback_cmd.ReadbackCopy(output->GetView(), ToByteSpan(readback_values));
 
         Array<CommandList> frame_cmds{};
         frame_cmds.emplace_back(std::move(readback_cmd));
         RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
         if (readback_event) {
-            readback_event->Wait();
+            readback_event->WaitHost();
         }
 
         for (size_t i = 0; i < expected.size(); ++i) {
@@ -2197,14 +2237,24 @@ int RunMultiBindlessArrayReadbackTest() {
     std::vector<uint32_t> readback_values(4u, 0u);
     {
         CommandList readback_cmd(EQueueType::Graphics);
-        GraphEventRef readback_event =
+        readback_cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                output->GetView(),
+                EBufferState::UNORDERED_ACCESS,
+                EBufferState::TRANSFER_SRC,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics
+        );
+        SyncPointRef readback_event =
             readback_cmd.ReadbackCopy(output->GetView(), ToByteSpan(readback_values));
 
         Array<CommandList> frame_cmds{};
         frame_cmds.emplace_back(std::move(readback_cmd));
         RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
         if (readback_event) {
-            readback_event->Wait();
+            readback_event->WaitHost();
         }
     }
 
@@ -2261,21 +2311,41 @@ int RunMultiCopyScopeOrderingTest() {
         auto copy_scope = graphics_cmd.BeginCopyScope();
         copy_scope.CopyFrom(ToByteSpan(values_a), buffer_a->GetView());
     }
-    GraphEventRef readback_a_event = graphics_cmd.ReadbackCopy(buffer_a->GetView(), ToByteSpan(readback_a));
+    graphics_cmd.Barriers(
+        {BarrierCreateInfo::Transition(
+            buffer_a->GetView(),
+            EBufferState::TRANSFER_DST,
+            EBufferState::TRANSFER_SRC,
+            EPassType::Copy
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics
+    );
+    SyncPointRef readback_a_event = graphics_cmd.ReadbackCopy(buffer_a->GetView(), ToByteSpan(readback_a));
     {
         auto copy_scope = graphics_cmd.BeginCopyScope();
         copy_scope.CopyFrom(ToByteSpan(values_b), buffer_b->GetView());
     }
-    GraphEventRef readback_b_event = graphics_cmd.ReadbackCopy(buffer_b->GetView(), ToByteSpan(readback_b));
+    graphics_cmd.Barriers(
+        {BarrierCreateInfo::Transition(
+            buffer_b->GetView(),
+            EBufferState::TRANSFER_DST,
+            EBufferState::TRANSFER_SRC,
+            EPassType::Copy
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics
+    );
+    SyncPointRef readback_b_event = graphics_cmd.ReadbackCopy(buffer_b->GetView(), ToByteSpan(readback_b));
 
     Array<CommandList> frame_cmds{};
     frame_cmds.emplace_back(std::move(graphics_cmd));
     SubmitAndWait(std::move(frame_cmds));
     if (readback_a_event) {
-        readback_a_event->Wait();
+        readback_a_event->WaitHost();
     }
     if (readback_b_event) {
-        readback_b_event->Wait();
+        readback_b_event->WaitHost();
     }
 
     if (!ValidateResult(0u, values_a, readback_a)) {
@@ -2308,13 +2378,23 @@ int RunCopyScopeUnknownFirstUseTest() {
         auto copy_scope = graphics_cmd.BeginCopyScope();
         copy_scope.CopyFrom(ToByteSpan(upload_values), buffer->GetView());
     }
-    GraphEventRef readback_event = graphics_cmd.ReadbackCopy(buffer->GetView(), ToByteSpan(readback_values));
+    graphics_cmd.Barriers(
+        {BarrierCreateInfo::Transition(
+            buffer->GetView(),
+            EBufferState::TRANSFER_DST,
+            EBufferState::TRANSFER_SRC,
+            EPassType::Copy
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics
+    );
+    SyncPointRef readback_event = graphics_cmd.ReadbackCopy(buffer->GetView(), ToByteSpan(readback_values));
 
     Array<CommandList> frame_cmds{};
     frame_cmds.emplace_back(std::move(graphics_cmd));
     SubmitAndWait(std::move(frame_cmds));
     if (readback_event) {
-        readback_event->Wait();
+        readback_event->WaitHost();
     }
 
     if (!ValidateResult(0u, upload_values, readback_values)) {
@@ -2336,7 +2416,7 @@ int RunGpuEventStreamHierarchyTest() {
     );
 
     std::vector<uint32_t> readback_values(kElementCount, 0u);
-    GraphEventRef readback_event{nullptr};
+    SyncPointRef readback_event{};
 
     CommandList graphics_cmd(EQueueType::Graphics);
     {
@@ -2347,6 +2427,16 @@ int RunGpuEventStreamHierarchyTest() {
             graphics_cmd.ClearResource(buffer->GetView(), 0x55u);
         }
     }
+    graphics_cmd.Barriers(
+        {BarrierCreateInfo::Transition(
+            buffer->GetView(),
+            EBufferState::TRANSFER_DST,
+            EBufferState::TRANSFER_SRC,
+            EPassType::Copy
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics
+    );
     readback_event =
         graphics_cmd.ReadbackCopy(buffer->GetView(), ToByteSpan(readback_values));
     graphics_cmd.TickFrame();
@@ -2355,7 +2445,7 @@ int RunGpuEventStreamHierarchyTest() {
     frame_cmds.emplace_back(std::move(graphics_cmd));
     RHIExecutor::Get().Submit(std::move(frame_cmds), ERHIExecSubmitFlags::FlushGPU);
     if (readback_event) {
-        readback_event->Wait();
+        readback_event->WaitHost();
     }
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
@@ -2511,7 +2601,17 @@ int RunPresentWithCopyScopeTests() {
             auto copy_scope = graphics_cmd.BeginCopyScope();
             copy_scope.CopyFrom(ToByteSpan(upload_values), output->GetView());
         }
-        GraphEventRef readback_event =
+        graphics_cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                output->GetView(),
+                ETextureState::TRANSFER_DST,
+                ETextureState::TRANSFER_SRC,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics
+        );
+        SyncPointRef readback_event =
             graphics_cmd.ReadbackCopy(output->GetView(), ToByteSpan(readback_values));
         graphics_cmd.TickFrame();
 
@@ -2525,7 +2625,7 @@ int RunPresentWithCopyScopeTests() {
             &present_request
         );
         if (readback_event) {
-            readback_event->Wait();
+            readback_event->WaitHost();
         }
         RHIExecutor::Get().Sync(swapchain);
 
@@ -2583,9 +2683,29 @@ int RunPresentTests() {
 
         CommandList graphics_cmd(EQueueType::Graphics);
         graphics_cmd.ClearResource(graphics_buffer->GetView(), iter + 1u);
-        GraphEventRef readback_event =
+        graphics_cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                graphics_buffer->GetView(),
+                EBufferState::TRANSFER_DST,
+                EBufferState::TRANSFER_SRC,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics
+        );
+        SyncPointRef readback_event =
             graphics_cmd.ReadbackCopy(graphics_buffer->GetView(), ToByteSpan(readback_values));
         graphics_cmd.CopyFrom(ToByteSpan(output_values), output->GetView());
+        graphics_cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                output->GetView(),
+                ETextureState::TRANSFER_DST,
+                ETextureState::TRANSFER_SRC,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics
+        );
         graphics_cmd.TickFrame();
 
         Array<CommandList> frame_cmds{};
@@ -2598,7 +2718,7 @@ int RunPresentTests() {
             &present_request
         );
         if (readback_event) {
-            readback_event->Wait();
+            readback_event->WaitHost();
         }
 
         if (!ValidateUniformValue(iter, iter + 1u, readback_values)) {
@@ -2742,10 +2862,56 @@ int main(int argc, char** argv) {
         return shutdown_and_return(rg_contract_ret);
     }
 
+    const int rg_texture_readback_ret = RunNamedTestCase(
+        "RenderGraphTextureCopyReadback",
+        TestCases::RunRenderGraphTextureCopyReadbackTest
+    );
+    if (rg_texture_readback_ret != 0) {
+        return shutdown_and_return(rg_texture_readback_ret);
+    }
+
+    const int rg_dispatch_bindless_ret = RunNamedTestCase(
+        "RenderGraphDispatchBindlessReadback",
+        TestCases::RunRenderGraphDispatchBindlessReadbackTest
+    );
+    if (rg_dispatch_bindless_ret != 0) {
+        return shutdown_and_return(rg_dispatch_bindless_ret);
+    }
+
+    const int rg_ray_query_ret = RunNamedTestCase(
+        "RenderGraphRayQueryTriangleHit",
+        TestCases::RunRenderGraphRayQueryTriangleHitTest
+    );
+    if (rg_ray_query_ret != 0) {
+        return shutdown_and_return(rg_ray_query_ret);
+    }
+
+    const int rg_ray_scene_bindless_ret = RunNamedTestCase(
+        "RenderGraphRayQuerySceneBindlessReadback",
+        TestCases::RunRenderGraphRayQuerySceneBindlessReadbackTest
+    );
+    if (rg_ray_scene_bindless_ret != 0) {
+        return shutdown_and_return(rg_ray_scene_bindless_ret);
+    }
+
+    const int rg_gbuffer_output_ret = RunNamedTestCase(
+        "RenderGraphRayQueryGBufferOutputReadback",
+        TestCases::RunRenderGraphRayQueryGBufferOutputReadbackTest
+    );
+    if (rg_gbuffer_output_ret != 0) {
+        return shutdown_and_return(rg_gbuffer_output_ret);
+    }
+
     const int multi_cmd_order_ret =
         RunNamedTestCase("MultiCommandListSubmitOrdering", RunMultiCommandListSubmitOrderingTest);
     if (multi_cmd_order_ret != 0) {
         return shutdown_and_return(multi_cmd_order_ret);
+    }
+
+    const int recording_order_ret =
+        RunNamedTestCase("RecordingSubmitOrdering", RunRecordingSubmitOrderingTest);
+    if (recording_order_ret != 0) {
+        return shutdown_and_return(recording_order_ret);
     }
 
     const int serial_control_ret = RunNamedTestCase(

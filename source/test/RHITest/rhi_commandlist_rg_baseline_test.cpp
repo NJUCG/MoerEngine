@@ -418,22 +418,52 @@ int RunRHICommandListRGBaselineTest() {
 
     CommandList readback_cmd(EQueueType::Graphics);
     readback_cmd.PushScopeWithTimeScope(MOER_TEXT("RGBaseline.ReadbackPass"));
-    GraphEventRef compute_readback_event = readback_cmd.ReadbackCopy(
+    readback_cmd.Barriers(
+        {
+            BarrierCreateInfo::Transition(
+                copied_compute_buffer->GetView(),
+                EBufferState::TRANSFER_DST,
+                EBufferState::TRANSFER_SRC,
+                EPassType::Copy
+            ),
+            BarrierCreateInfo::Transition(
+                copied_texture->GetView(),
+                ETextureState::TRANSFER_DST,
+                ETextureState::TRANSFER_SRC,
+                EPassType::Copy
+            ),
+            BarrierCreateInfo::Transition(
+                buffer_texture->GetView(),
+                ETextureState::TRANSFER_DST,
+                ETextureState::TRANSFER_SRC,
+                EPassType::Copy
+            ),
+            BarrierCreateInfo::Transition(
+                raster_target->GetView(),
+                ETextureState::RENDER_TARGET,
+                ETextureState::TRANSFER_SRC,
+                EPassType::Copy
+            )
+        },
+        EQueueType::Graphics,
+        EQueueType::Graphics
+    );
+    SyncPointRef compute_readback_event = readback_cmd.ReadbackCopy(
         copied_compute_buffer->GetView(),
         ToByteSpan(readback_compute),
         MOER_TEXT("RGBaselineReadbackComputeBuffer")
     );
-    GraphEventRef copied_texture_event = readback_cmd.ReadbackCopy(
+    SyncPointRef copied_texture_event = readback_cmd.ReadbackCopy(
         copied_texture->GetView(),
         ToByteSpan(copied_texture_readback),
         MOER_TEXT("RGBaselineReadbackCopiedTexture")
     );
-    GraphEventRef buffer_texture_event = readback_cmd.ReadbackCopy(
+    SyncPointRef buffer_texture_event = readback_cmd.ReadbackCopy(
         buffer_texture->GetView(),
         ToByteSpan(buffer_texture_readback),
         MOER_TEXT("RGBaselineReadbackBufferTexture")
     );
-    GraphEventRef raster_readback_event = readback_cmd.ReadbackCopy(
+    SyncPointRef raster_readback_event = readback_cmd.ReadbackCopy(
         raster_target->GetView(),
         ToByteSpan(raster_readback),
         MOER_TEXT("RGBaselineReadbackRasterTarget")
@@ -452,16 +482,16 @@ int RunRHICommandListRGBaselineTest() {
     const auto begin_time = std::chrono::steady_clock::now();
     SubmitAndWait(std::move(command_lists));
     if (compute_readback_event) {
-        compute_readback_event->Wait();
+        compute_readback_event->WaitHost();
     }
     if (copied_texture_event) {
-        copied_texture_event->Wait();
+        copied_texture_event->WaitHost();
     }
     if (buffer_texture_event) {
-        buffer_texture_event->Wait();
+        buffer_texture_event->WaitHost();
     }
     if (raster_readback_event) {
-        raster_readback_event->Wait();
+        raster_readback_event->WaitHost();
     }
     const auto end_time = std::chrono::steady_clock::now();
 

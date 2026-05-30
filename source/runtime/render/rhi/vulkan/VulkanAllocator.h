@@ -10,6 +10,9 @@
 
 namespace Moer::Render {
 
+enum class EVulkanSubmitPayloadType : uint8;
+struct VulkanSubmitPayload;
+
 class VulkanCmdAllocator : public VulkanDeviceObject {
 private:
     VkQueueFlags  queue_type;
@@ -52,18 +55,25 @@ public:
     virtual ~VulkanAllocatorBase();
 
     VulkanCmdList& GetCmdList() {
-        return cmd_list.value();
+        return active_cmd_list != nullptr ? *active_cmd_list : cmd_list.value();
     }
+    VulkanSubmitPayload& BeginPayload(EVulkanSubmitPayloadType payload_type, EQueueType queue_type);
+    VulkanSubmitPayload& GetCurrentPayload(EVulkanSubmitPayloadType payload_type, EQueueType queue_type);
+    VulkanCmdList& BeginSubmitContext();
+    void EndSubmitContext();
+    void AddSubmitWait(WaitEvent event, EVulkanSubmitPayloadType payload_type, EQueueType queue_type);
+    void AddSubmitSignal(SignalEvent event, EVulkanSubmitPayloadType payload_type, EQueueType queue_type);
+    Array<UniquePtr<VulkanSubmitPayload>> ReleasePendingPayloads();
     VkTracker& GetTracker() {
         return tracker;
     }
     void ResetCmdList();
     void AddOnComplete(std::function<void()>&& _func) {
-        on_complete.push_back(std::move(_func));
+        submit_on_complete.push_back(std::move(_func));
     }
     void AddCompletionEvent(GraphEventRef _event) {
         if (_event) {
-            completion_events.push_back(std::move(_event));
+            submit_completion_events.push_back(std::move(_event));
         }
     }
 
@@ -71,13 +81,26 @@ public:
     virtual void Reset();
 
 protected:
+    EQueueType                         allocator_queue_type{EQueueType::Ignore};
     std::optional<VulkanCmdAllocator> cmd_allocator;
     std::optional<VulkanCmdList>      cmd_list;
+    Array<UniquePtr<VulkanCmdList>>   extra_cmd_lists{};
+    VulkanCmdList*                    active_cmd_list{nullptr};
+    uint32                            next_cmd_list_index{0};
+    UniquePtr<VulkanSubmitPayload>    current_payload{};
+    Array<UniquePtr<VulkanSubmitPayload>> pending_payloads{};
 
     Array<std::function<void()>> on_complete;
     Array<GraphEventRef>         completion_events;
+    Array<std::function<void()>> submit_on_complete;
+    Array<GraphEventRef>         submit_completion_events;
 
     VkTracker tracker;
+
+private:
+    VulkanSubmitPayload& GetOrCreateCurrentPayload(EVulkanSubmitPayloadType payload_type, EQueueType queue_type);
+    void CloseCurrentPayload();
+    bool CurrentPayloadHasWork() const;
 };
 
 class VkNativeQueryPool {
@@ -182,7 +205,5 @@ private:
 
     ScratchAllocator      scratch_allocator;
     ShaderBufferAllocator shader_buffer_allocator;
-
-    VkNativeQueryPool timestamp_pool;
 };
 } // namespace Moer::Render

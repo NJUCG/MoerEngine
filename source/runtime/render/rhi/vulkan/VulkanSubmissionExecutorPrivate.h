@@ -27,6 +27,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -263,16 +264,29 @@ struct PendingSubmitTask {
     SubmissionKey key{};
     EQueueType    queue{EQueueType::Ignore};
     uint32        translate_index{0};
-    SyncPointId   signal_syncpoint{0};
-    Array<SyncPointId> wait_syncpoints{};
-    GraphEventArray    task_dependencies{};
-    GraphEventRef      completion_event{nullptr};
+    SyncPointRef  signal_syncpoint{};
+    Array<SyncPointRef> wait_syncpoints{};
+    GraphEventArray     task_dependencies{};
+    GraphEventRef       completion_event{nullptr};
 };
 
 struct TranslatePipelineBatch {
     Array<QueueTranslateInfo> translate_ops{};
     Array<PendingSubmitTask>  submit_ops{};
     Array<SubmitPresentStage> present_ops{};
+};
+
+struct TranslateSubmitState {
+    std::shared_ptr<TranslateBatch>     current_batch{};
+    Array<std::shared_ptr<TranslateBatch>> batches{};
+    Array<SubmitPresentStage>           present_ops{};
+};
+
+struct TranslatePipelineRuntimeState {
+    std::mutex          mutex{};
+    TaskPipe            dispatch_pipe{};
+    TranslateSubmitState submit_state{};
+    GraphEventRef       last_serial_translate_event{nullptr};
 };
 
 class SubmissionPreprocessor {
@@ -293,14 +307,15 @@ public:
 
     void Dispatch(
         TranslatePipelineBatch&& pipeline_batch,
-        uint64                   trace_frame,
-        TaskPipe&                translate_dispatch_pipe,
-        TaskPipe&                translate_pipe,
-        VulkanSubmissionRuntime& submission_runtime
+        uint64                   trace_frame
     );
 
+    void EnqueuePendingSubmits(VulkanSubmissionRuntime& submission_runtime, GraphEventRef completion_event);
+    void FlushDispatch();
+
 private:
-    std::atomic_uint64_t next_syncpoint_id{1};
+    TranslatePipelineRuntimeState state{};
+
 };
 
 inline bool SubmissionKeyLess(const SubmissionKey& lhs, const SubmissionKey& rhs) {

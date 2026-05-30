@@ -41,7 +41,7 @@ static constexpr std::string_view s_denoiser_mode_names[] = {"None", "ReBlur", "
 static constexpr std::string_view s_aa_mode_names[]     = {"TAA"};
 static constexpr std::string_view s_jitter_mode_names[] = {"MSAA", "Halton", "R2", "White Noise"};
 static constexpr std::string_view s_final_color_names[] = {
-    "SceneColor"
+    "SceneColor",
     "DI",
     "Emissive",
     "Diffuse",
@@ -52,7 +52,11 @@ static constexpr std::string_view s_final_color_names[] = {
     "Motion",
     "Grid",
     "Material",
-    "Position"
+    "Position",
+    "CameraPosition",
+    "PrimaryRay",
+    "ViewParam",
+    "Custom"
 };
 
 static constexpr std::string_view s_exported_texture_names[] = {"LDR", "HDR"};
@@ -70,6 +74,9 @@ RaytracingUI::RaytracingUI(RaytracingConfig& config) : config(config) {
     final_color_map["Grid"]       = EFinalColor::EFC_GRID;
     final_color_map["Material"]   = EFinalColor::EFC_MATERIAL;
     final_color_map["Position"]   = EFinalColor::EFC_POSITION;
+    final_color_map["CameraPosition"] = EFinalColor::EFC_CAMERA_POSITION;
+    final_color_map["PrimaryRay"]     = EFinalColor::EFC_PRIMARY_RAY;
+    final_color_map["ViewParam"]      = EFinalColor::EFC_VIEW_PARAM;
     final_color_map["Custom"]     = EFinalColor::EFC_CUSTOM;
 }
 

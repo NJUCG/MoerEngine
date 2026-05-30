@@ -12,9 +12,10 @@
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIImpl.h"
 #include "rhi/RHIResource.h"
 #include "rhi/plugin/NrdPlugin.h"
-#include "rhi/vulkan/VulkanRHITrace.h"
+#include "rhi/vulkan/VulkanThreadHeartbeat.h"
 #include "scene/GpuScene.h"
 #include "string/Format.h"
 #include "string/String.h"
@@ -30,16 +31,22 @@
 #include "GBufferPass.h"
 #include "LightingPass.h"
 #include "PreprocessLightPass.h"
+#include "RaytracingGraphResources.h"
 #include "RTResource.h"
 #include "ShaderUtils.h"
 #include "ToneMappingPass.h"
 #include "VisualizePass.h"
 
 // 3rd party
+#include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <cstdint>
 #include <stb/stb_image_write.h>
 
 namespace Moer::Render::Raytracing {
+
+static constexpr ERGPassFlags s_rg_graphics_compute_pass = ERGPassFlags::Graphics | ERGPassFlags::ComputeShader;
 
 union FloatBits {
     float        f;
@@ -47,80 +54,6 @@ union FloatBits {
 };
 
 static Box3D scene_bounding{};
-
-struct RGRaytracingPrepareLightsParams {
-    DEFINE_RG_TEXTURE_ACCESS(local_light_pdf_tex, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_BUFFER_ACCESS(primitive_to_light_buf, EBufferState::UNORDERED_ACCESS);
-    DEFINE_RG_BUFFER_ACCESS(task_buf, EBufferState::UNORDERED_ACCESS);
-    DEFINE_RG_BUFFER_ACCESS(prim_light_buf, EBufferState::UNORDERED_ACCESS);
-    DEFINE_RG_BUFFER_ACCESS(light_mapping_buf, EBufferState::UNORDERED_ACCESS);
-    DEFINE_RG_BUFFER_ACCESS(light_data_buf, EBufferState::UNORDERED_ACCESS);
-
-    DEFINE_RG_PARAMETER_ACCESS(
-        local_light_pdf_tex,
-        primitive_to_light_buf,
-        task_buf,
-        prim_light_buf,
-        light_mapping_buf,
-        light_data_buf
-    );
-};
-
-struct RGRaytracingGBufferParams {
-    DEFINE_RG_TEXTURE_ACCESS(view_depth, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(diffuse_albedo, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(specular_roughness, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(normal, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(emission, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(motion, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(clip_depth, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(normal_roughness, ETextureState::UNORDERED_ACCESS);
-
-    DEFINE_RG_PARAMETER_ACCESS(
-        view_depth,
-        diffuse_albedo,
-        specular_roughness,
-        normal,
-        emission,
-        motion,
-        clip_depth,
-        normal_roughness
-    );
-};
-
-struct RGRaytracingLightingParams {
-    DEFINE_RG_TEXTURE_ACCESS(view_depth, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(normal_roughness, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(diffuse_lighting, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(specular_lighting, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(temporal_sample_pos, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(gradients, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(restir_luminance, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(prev_diffuse_lighting, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_BUFFER_ACCESS(light_reservoir_buf, EBufferState::UNORDERED_ACCESS);
-    DEFINE_RG_BUFFER_ACCESS(ris_buf, EBufferState::UNORDERED_ACCESS);
-    DEFINE_RG_BUFFER_ACCESS(ris_light_data_buf, EBufferState::UNORDERED_ACCESS);
-    DEFINE_RG_BUFFER_ACCESS(neighbor_offset_buf, EBufferState::SHADER_RESOURCE);
-    DEFINE_RG_BUFFER_ACCESS(light_data_buf, EBufferState::SHADER_RESOURCE);
-    DEFINE_RG_BUFFER_ACCESS(light_mapping_buf, EBufferState::SHADER_RESOURCE);
-
-    DEFINE_RG_PARAMETER_ACCESS(
-        view_depth,
-        normal_roughness,
-        diffuse_lighting,
-        specular_lighting,
-        temporal_sample_pos,
-        gradients,
-        restir_luminance,
-        prev_diffuse_lighting,
-        light_reservoir_buf,
-        ris_buf,
-        ris_light_data_buf,
-        neighbor_offset_buf,
-        light_data_buf,
-        light_mapping_buf
-    );
-};
 
 struct RGRaytracingNrdParams {
     DEFINE_RG_TEXTURE_ACCESS(motion, ETextureState::SHADER_RESOURCE);
@@ -142,69 +75,6 @@ struct RGRaytracingNrdParams {
     );
 };
 
-struct RGRaytracingCompositionParams {
-    DEFINE_RG_TEXTURE_ACCESS(view_depth, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(diffuse_albedo, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(specular_roughness, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(normal, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(emission, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(diffuse_lighting, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(specular_lighting, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(denoised_diffuse_lighting, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(denoised_specular_lighting, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(hdr_color, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(motion, ETextureState::UNORDERED_ACCESS);
-
-    DEFINE_RG_PARAMETER_ACCESS(
-        view_depth,
-        diffuse_albedo,
-        specular_roughness,
-        normal,
-        emission,
-        diffuse_lighting,
-        specular_lighting,
-        denoised_diffuse_lighting,
-        denoised_specular_lighting,
-        hdr_color,
-        motion
-    );
-};
-
-struct RGRaytracingAntiAliasParams {
-    DEFINE_RG_TEXTURE_ACCESS(hdr_color, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(motion, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(feedback_color_ping, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(resolved_color, ETextureState::UNORDERED_ACCESS);
-    DEFINE_RG_TEXTURE_ACCESS(feedback_color_pong, ETextureState::UNORDERED_ACCESS);
-
-    DEFINE_RG_PARAMETER_ACCESS(hdr_color, motion, feedback_color_ping, resolved_color, feedback_color_pong);
-};
-
-struct RGRaytracingToneMappingParams {
-    DEFINE_RG_TEXTURE_ACCESS(resolved_color, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(ldr_color, ETextureState::RENDER_TARGET);
-
-    DEFINE_RG_PARAMETER_ACCESS(resolved_color, ldr_color);
-};
-
-struct RGRaytracingVisualizeParams {
-    DEFINE_RG_TEXTURE_ACCESS(ldr_color, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(diffuse_lighting, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(specular_lighting, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(view_depth, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(emission, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(debug_color, ETextureState::UNORDERED_ACCESS);
-
-    DEFINE_RG_PARAMETER_ACCESS(
-        ldr_color,
-        diffuse_lighting,
-        specular_lighting,
-        view_depth,
-        emission,
-        debug_color
-    );
-};
-
 struct RGRaytracingShowTextureParams {
     DEFINE_RG_TEXTURE_ACCESS(selected_texture, ETextureState::SHADER_RESOURCE);
     DEFINE_RG_TEXTURE_ACCESS(ldr_color, ETextureState::UNORDERED_ACCESS);
@@ -212,134 +82,25 @@ struct RGRaytracingShowTextureParams {
     DEFINE_RG_PARAMETER_ACCESS(selected_texture, ldr_color);
 };
 
-struct RGRaytracingFrameResources {
-    RenderGraphHandle view_depth{};
-    RenderGraphHandle diffuse_albedo{};
-    RenderGraphHandle specular_roughness{};
-    RenderGraphHandle normal{};
-    RenderGraphHandle emission{};
-    RenderGraphHandle motion{};
-    RenderGraphHandle clip_depth{};
-    RenderGraphHandle prev_view_depth{};
-    RenderGraphHandle prev_diffuse_albedo{};
-    RenderGraphHandle prev_specular_roughness{};
-    RenderGraphHandle prev_normal{};
-    RenderGraphHandle normal_roughness{};
-    RenderGraphHandle diffuse_lighting{};
-    RenderGraphHandle prev_diffuse_lighting{};
-    RenderGraphHandle specular_lighting{};
-    RenderGraphHandle prev_specular_lighting{};
-    RenderGraphHandle temporal_sample_pos{};
-    RenderGraphHandle gradients{};
-    RenderGraphHandle restir_luminance{};
-    RenderGraphHandle prev_luminance{};
-    RenderGraphHandle denoised_diffuse_lighting{};
-    RenderGraphHandle denoised_specular_lighting{};
-    RenderGraphHandle debug_color{};
-    RenderGraphHandle ldr_color{};
-    RenderGraphHandle hdr_color{};
-    RenderGraphHandle feedback_color_ping{};
-    RenderGraphHandle feedback_color_pong{};
-    RenderGraphHandle resolved_color{};
-    RenderGraphHandle local_light_pdf_tex{};
-    RenderGraphHandle light_mapping_buf{};
-    RenderGraphHandle prim_light_buf{};
-    RenderGraphHandle task_buf{};
-    RenderGraphHandle primitive_to_light_buf{};
-    RenderGraphHandle light_data_buf{};
-    RenderGraphHandle ris_buf{};
-    RenderGraphHandle ris_light_data_buf{};
-    RenderGraphHandle neighbor_offset_buf{};
-    RenderGraphHandle light_reservoir_buf{};
+struct RGRaytracingCommandParams {
+    DEFINE_RG_PARAMETER_ACCESS();
 };
 
-static RenderGraphHandle
-ImportTextureIfValid(RenderGraph& graph, StringView name, const TextureRef& texture) {
-    return texture ? graph.ImportTexture(name, texture, EQueueType::Graphics) : RenderGraphHandle{};
-}
+struct RGRaytracingBuildTlasParams {
+    DEFINE_RG_BUFFER_ACCESS(tlas_buffer, EBufferState::ACCELERATION_STRUCTURE_WRITE);
+    DEFINE_RG_BUFFER_ACCESS_ARRAY(related_geometry_buffers);
+    DEFINE_RG_PARAMETER_ACCESS(tlas_buffer, related_geometry_buffers);
+};
 
-static RenderGraphHandle ImportBufferIfValid(RenderGraph& graph, StringView name, const BufferRef& buffer) {
-    return buffer ? graph.ImportBuffer(name, buffer, EQueueType::Graphics) : RenderGraphHandle{};
-}
+struct RTPreparedSceneUpdateCommand {
+    UniquePtr<Command> command{};
+};
 
-static RGRaytracingFrameResources
-ImportRaytracingFrameResources(RenderGraph& graph, const RTContext& rt_ctx) {
-    const FrameResources& frame_rt = rt_ctx.frame_rt;
-    return RGRaytracingFrameResources{
-        .view_depth = ImportTextureIfValid(graph, MOER_TEXT("RT.view_depth"), frame_rt.view_depth),
-        .diffuse_albedo =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.diffuse_albedo"), frame_rt.diffuse_albedo),
-        .specular_roughness =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.specular_roughness"), frame_rt.specular_roughness),
-        .normal     = ImportTextureIfValid(graph, MOER_TEXT("RT.normal"), frame_rt.normal),
-        .emission   = ImportTextureIfValid(graph, MOER_TEXT("RT.emission"), frame_rt.emission),
-        .motion     = ImportTextureIfValid(graph, MOER_TEXT("RT.motion"), frame_rt.motion),
-        .clip_depth = ImportTextureIfValid(graph, MOER_TEXT("RT.clip_depth"), frame_rt.clip_depth),
-        .prev_view_depth =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.prev_view_depth"), frame_rt.prev_view_depth),
-        .prev_diffuse_albedo =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.prev_diffuse_albedo"), frame_rt.prev_diffuse_albedo),
-        .prev_specular_roughness = ImportTextureIfValid(
-            graph, MOER_TEXT("RT.prev_specular_roughness"), frame_rt.prev_specular_roughness
-        ),
-        .prev_normal = ImportTextureIfValid(graph, MOER_TEXT("RT.prev_normal"), frame_rt.prev_normal),
-        .normal_roughness =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.normal_roughness"), frame_rt.normal_roughness),
-        .diffuse_lighting =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.diffuse_lighting"), frame_rt.diffuse_lighting),
-        .prev_diffuse_lighting = ImportTextureIfValid(
-            graph, MOER_TEXT("RT.prev_diffuse_lighting"), frame_rt.prev_diffuse_lighting
-        ),
-        .specular_lighting =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.specular_lighting"), frame_rt.specular_lighting),
-        .prev_specular_lighting = ImportTextureIfValid(
-            graph, MOER_TEXT("RT.prev_specular_lighting"), frame_rt.prev_specular_lighting
-        ),
-        .temporal_sample_pos =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.temporal_sample_pos"), frame_rt.temporal_sample_pos),
-        .gradients = ImportTextureIfValid(graph, MOER_TEXT("RT.gradients"), frame_rt.gradients),
-        .restir_luminance =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.restir_luminance"), frame_rt.restir_luminance),
-        .prev_luminance =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.prev_luminance"), frame_rt.prev_luminance),
-        .denoised_diffuse_lighting = ImportTextureIfValid(
-            graph, MOER_TEXT("RT.denoised_diffuse_lighting"), frame_rt.denoised_diffuse_lighting
-        ),
-        .denoised_specular_lighting = ImportTextureIfValid(
-            graph, MOER_TEXT("RT.denoised_specular_lighting"), frame_rt.denoised_specular_lighting
-        ),
-        .debug_color = ImportTextureIfValid(graph, MOER_TEXT("RT.debug_color"), frame_rt.debug_color),
-        .ldr_color   = ImportTextureIfValid(graph, MOER_TEXT("RT.ldr_color"), frame_rt.ldr_color),
-        .hdr_color   = ImportTextureIfValid(graph, MOER_TEXT("RT.hdr_color"), frame_rt.hdr_color),
-        .feedback_color_ping =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.feedback_color_ping"), frame_rt.feedback_color_ping),
-        .feedback_color_pong =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.feedback_color_pong"), frame_rt.feedback_color_pong),
-        .resolved_color =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.resolved_color"), frame_rt.resolved_color),
-        .local_light_pdf_tex =
-            ImportTextureIfValid(graph, MOER_TEXT("RT.local_light_pdf_tex"), rt_ctx.local_light_pdf_tex),
-        .light_mapping_buf =
-            ImportBufferIfValid(graph, MOER_TEXT("RT.light_mapping_buf"), rt_ctx.light_mapping_buf),
-        .prim_light_buf = ImportBufferIfValid(graph, MOER_TEXT("RT.prim_light_buf"), rt_ctx.prim_light_buf),
-        .task_buf       = ImportBufferIfValid(graph, MOER_TEXT("RT.task_buf"), rt_ctx.task_buf),
-        .primitive_to_light_buf =
-            ImportBufferIfValid(graph, MOER_TEXT("RT.primitive_to_light_buf"), rt_ctx.primitive_to_light_buf),
-        .light_data_buf = ImportBufferIfValid(graph, MOER_TEXT("RT.light_data_buf"), rt_ctx.light_data_buf),
-        .ris_buf        = ImportBufferIfValid(graph, MOER_TEXT("RT.ris_buf"), rt_ctx.ris_buf),
-        .ris_light_data_buf =
-            ImportBufferIfValid(graph, MOER_TEXT("RT.ris_light_data_buf"), rt_ctx.ris_light_data_buf),
-        .neighbor_offset_buf =
-            ImportBufferIfValid(graph, MOER_TEXT("RT.neighbor_offset_buf"), rt_ctx.neighbor_offset_buf),
-        .light_reservoir_buf =
-            ImportBufferIfValid(graph, MOER_TEXT("RT.light_reservoir_buf"), rt_ctx.light_reservoir_buf)
-    };
-}
+struct RGRaytracingLowDiscrepancyParams {
+    DEFINE_RG_BUFFER_ACCESS(neighbor_offset_buf, EBufferState::UNORDERED_ACCESS);
 
-static RenderGraphHandle
-CurrentFrameTexture(bool current_frame, RenderGraphHandle current, RenderGraphHandle previous) {
-    return current_frame ? current : previous;
-}
+    DEFINE_RG_PARAMETER_ACCESS(neighbor_offset_buf);
+};
 
 RaytracingRenderer::RaytracingRenderer(
     uint2&                        _resolution,
@@ -414,8 +175,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     timer.Start();
     uint64                last_time               = 0ull;
     bool                  b_feedback_valid        = false;
-    bool                  b_trace_capture_started = false;
-    bool                  b_trace_capture_armed   = false;
     bool                  b_export                = false;
     String                selected_material_texture_name{};
     bool                  b_final_show_texture = false;
@@ -428,7 +187,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     //////////////////////////////////////////////////////////////////////////
     // passes
     //////////////////////////////////////////////////////////////////////////
-    SetRHITraceRuntimeEnabled(false);
     UniquePtr<PrepareLightPass> prepare_light_pass = MakeUnique<PrepareLightPass>(device, manager, scene);
     UniquePtr<GBufferPass>      g_buffer_pass      = MakeUnique<GBufferPass>(device, manager);
     UniquePtr<LightingPass>     lighting_pass      = MakeUnique<LightingPass>(manager);
@@ -476,8 +234,19 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         });
     };
 
+    auto&      thread_heartbeat = VulkanThreadHeartbeat::Get();
+    auto       main_thread_heartbeat =
+        thread_heartbeat.Register(MOER_TEXT("RaytracingRenderer.Main"), MOER_TEXT("EnterLoop"));
+    auto       pulse_main_thread             = [&](const PlatformChar* stage) {
+        thread_heartbeat.Pulse(main_thread_heartbeat, stage);
+    };
+
+    pulse_main_thread(MOER_TEXT("EnterLoop"));
+
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         TRACE_SCOPE_CAT("Raytracing.Frame", "Frame");
+
+        pulse_main_thread(MOER_TEXT("Begin"));
 
         PumpAsyncLoads();
 
@@ -487,6 +256,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         auto window_state = TickWindowContext(hooks);
         bool skip_present = false;
+
+        pulse_main_thread(MOER_TEXT("WindowTick"));
 
         if (window_state == EWindowState::Hiding) {
             std::this_thread::yield();
@@ -530,8 +301,13 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         timer.Start();
 
         Array<CommandList> pre_frame_cmd_lists{};
+        bool               advance_rt_frame             = false;
+        bool               advance_post_process_history = false;
+        bool               advance_rt_scene             = false;
+        float              post_process_frame_time      = 0.f;
 
         if (scene.IsReady() && runtime_assets.IsReady()) {
+            pulse_main_thread(MOER_TEXT("SceneReady"));
 
             // 处理场景加载过程中遗留的命令
             // The gfx CommandList contains a CopyScope for all CPU→GPU uploads.
@@ -570,10 +346,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
                 rt_ctx->SetBindlessHandles(scene.GetGpuSceneRes());
                 rt_ctx->SetRaytracingScene(rt_scene);
-                rt_ctx->FillLowDiscrepancySequence(cmd_list);
-
-                cmd_list.UpdateBindlessArray(bindless_array);
-
                 if (hooks.on_register_renderer_config_section) {
 
                     auto& debug_queue = gfx_queue;
@@ -661,15 +433,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 rt_ctx->CreateEnvMapResources(env_tex_with_hdl, cmd_list);
             }
 
-            if (scene.IsReady()) {
-                TRACE_SCOPE_CAT("Raytracing.BuildTLAS", "Frame");
-                for (size_t i = 0; i < rt_scene->GetInstanceCount(); i++) {
-                    auto& instance = rt_scene->GetInstance(i);
-                    rt_scene->MarkModified(instance.instance_id);
-                }
-                cmd_list.UpdateRaytracingScene(rt_scene);
-            }
-
             if (!tone_mapping_pass) {
                 ToneMappingPass::CreateInfo info{};
                 info.color_lut    = rt_ctx->default_res.black_tex;
@@ -680,7 +443,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
             // prepare frame
             {
-                rt_ctx->FillLowDiscrepancySequence(cmd_list);
                 camera.Tick(editor_config);
             }
 
@@ -799,387 +561,219 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     ~(s_primitive_alloc_chunk - 1),
                 max_primitives
             );
-            cmd_list.UpdateBindlessArray(bindless_array);
 
             rt_ctx->Tick(camera, pixel_jitter);
 
-            RenderGraph                      raytracing_graph;
-            const RGRaytracingFrameResources rg_rt =
-                ImportRaytracingFrameResources(raytracing_graph, *rt_ctx);
-            const bool              current_rt_frame = rt_ctx->b_current_frame;
-            const RenderGraphHandle current_view_depth =
-                CurrentFrameTexture(current_rt_frame, rg_rt.view_depth, rg_rt.prev_view_depth);
-            const RenderGraphHandle current_diffuse_albedo =
-                CurrentFrameTexture(current_rt_frame, rg_rt.diffuse_albedo, rg_rt.prev_diffuse_albedo);
-            const RenderGraphHandle current_specular_roughness = CurrentFrameTexture(
-                current_rt_frame, rg_rt.specular_roughness, rg_rt.prev_specular_roughness
-            );
-            const RenderGraphHandle current_normal =
-                CurrentFrameTexture(current_rt_frame, rg_rt.normal, rg_rt.prev_normal);
-            const RenderGraphHandle current_restir_luminance =
-                CurrentFrameTexture(current_rt_frame, rg_rt.restir_luminance, rg_rt.prev_luminance);
-
-            {
-                auto* params                = raytracing_graph.Alloc<RGRaytracingPrepareLightsParams>();
-                params->local_light_pdf_tex = RGTextureView{
-                    .handle = rg_rt.local_light_pdf_tex,
-                };
-                params->primitive_to_light_buf = RGBufferView{
-                    .handle = rg_rt.primitive_to_light_buf,
-                };
-                params->task_buf = RGBufferView{
-                    .handle = rg_rt.task_buf,
-                };
-                params->prim_light_buf = RGBufferView{
-                    .handle = rg_rt.prim_light_buf,
-                };
-                params->light_mapping_buf = RGBufferView{
-                    .handle = rg_rt.light_mapping_buf,
-                };
-                params->light_data_buf = RGBufferView{
-                    .handle = rg_rt.light_data_buf,
-                };
-                raytracing_graph.AddPass(
-                    MOER_TEXT("RT.PrepareLights"),
-                    params,
-                    ERGPassFlags::Graphics,
-                    [pass    = prepare_light_pass.get(),
-                     context = rt_ctx.get()](CommandList& graph_cmd_list, RGContext) {
-                        pass->Process(graph_cmd_list, *context);
-                    }
-                );
+            UniquePtr<Command> update_rt_scene_command{};
+            if (rt_scene) {
+                update_rt_scene_command = rt_scene->UpdateScene();
             }
 
-            {
-                auto* params       = raytracing_graph.Alloc<RGRaytracingGBufferParams>();
-                params->view_depth = RGTextureView{
-                    .handle = current_view_depth,
-                };
-                params->diffuse_albedo = RGTextureView{
-                    .handle = current_diffuse_albedo,
-                };
-                params->specular_roughness = RGTextureView{
-                    .handle = current_specular_roughness,
-                };
-                params->normal = RGTextureView{
-                    .handle = current_normal,
-                };
-                params->emission = RGTextureView{
-                    .handle = rg_rt.emission,
-                };
-                params->motion = RGTextureView{
-                    .handle = rg_rt.motion,
-                };
-                params->clip_depth = RGTextureView{
-                    .handle = rg_rt.clip_depth,
-                };
-                params->normal_roughness = RGTextureView{
-                    .handle = rg_rt.normal_roughness,
-                };
-                raytracing_graph.AddPass(
-                    MOER_TEXT("RT.GBuffer"),
-                    params,
-                    ERGPassFlags::Graphics,
-                    [pass    = g_buffer_pass.get(),
-                     context = rt_ctx.get()](CommandList& graph_cmd_list, RGContext) {
-                        pass->Process(graph_cmd_list, *context);
-                    }
-                );
-            }
+            RenderGraph                 raytracing_graph;
+            const RTGraphFrameResources rg_rt = ImportRTGraphFrameResources(raytracing_graph, *rt_ctx);
+            RGTexture*                  current_view_depth = rg_rt.current_view_depth;
 
-            {
-                auto* params       = raytracing_graph.Alloc<RGRaytracingLightingParams>();
-                params->view_depth = RGTextureView{
-                    .handle = current_view_depth,
-                };
-                params->normal_roughness = RGTextureView{
-                    .handle = rg_rt.normal_roughness,
-                };
-                params->diffuse_lighting = RGTextureView{
-                    .handle = rg_rt.diffuse_lighting,
-                };
-                params->specular_lighting = RGTextureView{
-                    .handle = rg_rt.specular_lighting,
-                };
-                params->temporal_sample_pos = RGTextureView{
-                    .handle = rg_rt.temporal_sample_pos,
-                };
-                params->gradients = RGTextureView{
-                    .handle = rg_rt.gradients,
-                };
-                params->restir_luminance = RGTextureView{
-                    .handle = current_restir_luminance,
-                };
-                params->prev_diffuse_lighting = RGTextureView{
-                    .handle = rg_rt.prev_diffuse_lighting,
-                };
-                params->light_reservoir_buf = RGBufferView{
-                    .handle = rg_rt.light_reservoir_buf,
-                };
-                params->ris_buf = RGBufferView{
-                    .handle = rg_rt.ris_buf,
-                };
-                params->ris_light_data_buf = RGBufferView{
-                    .handle = rg_rt.ris_light_data_buf,
-                };
+            if (auto low_discrepancy_command = rt_ctx->PrepareLowDiscrepancySequence(); low_discrepancy_command.enabled) {
+                auto* params                = raytracing_graph.Alloc<RGRaytracingLowDiscrepancyParams>();
                 params->neighbor_offset_buf = RGBufferView{
-                    .handle = rg_rt.neighbor_offset_buf,
+                    .buffer = rg_rt.neighbor_offset_buf,
                 };
-                params->light_data_buf = RGBufferView{
-                    .handle = rg_rt.light_data_buf,
-                };
-                params->light_mapping_buf = RGBufferView{
-                    .handle = rg_rt.light_mapping_buf,
-                };
+                auto* command = raytracing_graph.Alloc<RTContext::LowDiscrepancySequenceCommand>(
+                    low_discrepancy_command
+                );
                 raytracing_graph.AddPass(
-                    MOER_TEXT("RT.Lighting"),
+                    MOER_TEXT("RT.GenerateLowDiscrepancySequence"),
                     params,
-                    ERGPassFlags::Graphics,
-                    [pass    = lighting_pass.get(),
-                     context = rt_ctx.get()](CommandList& graph_cmd_list, RGContext) {
-                        pass->Process(graph_cmd_list, *context);
+                    s_rg_graphics_compute_pass,
+                    [context = rt_ctx.get(), command](CommandList& graph_cmd_list, RGContext) {
+                        context->RecordLowDiscrepancySequence(graph_cmd_list, *command);
                     }
                 );
             }
+
+            {
+                auto* params = raytracing_graph.Alloc<RGRaytracingCommandParams>();
+                raytracing_graph.AddPass(
+                    MOER_TEXT("RT.UpdateBindlessArray"),
+                    params,
+                    s_rg_graphics_compute_pass,
+                    [bdls = bindless_array](CommandList& graph_cmd_list, RGContext) {
+                        graph_cmd_list.Barriers(
+                            EQueueType::Graphics,
+                            EQueueType::Graphics,
+                            EPassType::Compute,
+                            WriteBindlessArray{bdls, EBufferState::UNORDERED_ACCESS}
+                        );
+                        graph_cmd_list.UpdateBindlessArray(bdls);
+                        graph_cmd_list.Barriers(
+                            EQueueType::Graphics,
+                            EQueueType::Graphics,
+                            EPassType::Compute,
+                            ReadBindlessArray{bdls, EBufferState::SHADER_RESOURCE}
+                        );
+                    }
+                );
+            }
+
+            if (update_rt_scene_command) {
+                assert(update_rt_scene_command->Type() == Command::EType::BuildTLAS);
+                const auto* update_cmd = static_cast<const UpdateRaytracingSceneCmd*>(update_rt_scene_command.get());
+                RaytracingTlasRef tlas(reinterpret_cast<RaytracingTlas*>(update_cmd->TlasHandle()));
+                RGBuffer* tlas_buffer = ImportRTTlasBufferIfValid(
+                    raytracing_graph,
+                    MOER_TEXT("RT.BuildTLAS.tlas_buffer"),
+                    tlas
+                );
+                auto* related_geometry_buffers = raytracing_graph.Alloc<RGBufferAccessArray>(
+                    static_cast<uint32_t>(update_cmd->RelatedGeometries().size())
+                );
+                uint32_t geometry_index = 0;
+                for (const auto& [geometry_handle, instance_count] : update_cmd->RelatedGeometries()) {
+                    (void)instance_count;
+                    RaytracingGeometryRef geometry(reinterpret_cast<RaytracingGeometry*>(geometry_handle));
+                    String geometry_name(MOER_TEXT("RT.BuildTLAS.geometry_buffer_"));
+                    RGAppendDecimal(geometry_name, geometry_index++);
+                    RGBuffer* geometry_buffer = ImportRTGeometryBufferIfValid(raytracing_graph, geometry_name, geometry);
+                    related_geometry_buffers->AddAccess(
+                        RGBufferView{.buffer = geometry_buffer},
+                        EBufferState::ACCELERATION_STRUCTURE_READ
+                    );
+                }
+
+                auto* params = raytracing_graph.Alloc<RGRaytracingBuildTlasParams>();
+                params->tlas_buffer = RGBufferView{.buffer = tlas_buffer};
+                params->related_geometry_buffers = related_geometry_buffers;
+                auto* command = raytracing_graph.Alloc<RTPreparedSceneUpdateCommand>();
+                command->command = std::move(update_rt_scene_command);
+                raytracing_graph.AddPass(
+                    MOER_TEXT("RT.BuildTLAS"),
+                    params,
+                    ERGPassFlags::Graphics,
+                    [command](CommandList& graph_cmd_list, RGContext) {
+                        graph_cmd_list.UpdateRaytracingScene(std::move(command->command));
+                    }
+                );
+            }
+
+            prepare_light_pass->AddPasses(raytracing_graph, rg_rt, *rt_ctx);
+            g_buffer_pass->AddPasses(raytracing_graph, rg_rt, *rt_ctx);
+            lighting_pass->AddPasses(raytracing_graph, rg_rt, *rt_ctx);
 
 //////////////////////////////////////////////////////////////////////////
 // NRD
 //////////////////////////////////////////////////////////////////////////
 #if WITH_NRD
             {
-                auto* params   = raytracing_graph.Alloc<RGRaytracingNrdParams>();
-                params->motion = RGTextureView{
-                    .handle = rg_rt.motion,
-                };
-                params->normal_roughness = RGTextureView{
-                    .handle = rg_rt.normal_roughness,
-                };
-                params->view_depth = RGTextureView{
-                    .handle = current_view_depth,
-                };
-                params->diffuse_lighting = RGTextureView{
-                    .handle = rg_rt.diffuse_lighting,
-                };
-                params->specular_lighting = RGTextureView{
-                    .handle = rg_rt.specular_lighting,
-                };
-                params->denoised_diffuse_lighting = RGTextureView{
-                    .handle = rg_rt.denoised_diffuse_lighting,
-                };
-                params->denoised_specular_lighting = RGTextureView{
-                    .handle = rg_rt.denoised_specular_lighting,
-                };
-                raytracing_graph.AddPass(
-                    MOER_TEXT("RT.NRD"),
-                    params,
-                    ERGPassFlags::Graphics,
-                    [&](CommandList& graph_cmd_list, RGContext) {
-                        bool          b_current_frame = rt_ctx->b_current_frame;
-                        const auto&   frame_rt        = rt_ctx->frame_rt;
-                        nrd::Denoiser denoiser        = nrd::Denoiser::MAX_NUM;
-                        switch (ui_config.denoiser_cfg.denoiser_type) {
-                            case s_denoiser_mode_reblur:
-                                denoiser = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
-                                break;
-                            case s_denoiser_mode_relax:
-                                denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
-                                break;
-                        }
+                nrd::Denoiser denoiser = nrd::Denoiser::MAX_NUM;
+                switch (ui_config.denoiser_cfg.denoiser_type) {
+                    case s_denoiser_mode_reblur:
+                        denoiser = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
+                        break;
+                    case s_denoiser_mode_relax:
+                        denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
+                        break;
+                }
 
-                        if (denoiser == nrd::Denoiser::MAX_NUM) {
-                            return;
-                        }
+                if (denoiser != nrd::Denoiser::MAX_NUM) {
+                    const bool  b_current_frame = rt_ctx->b_current_frame;
+                    const auto& frame_rt        = rt_ctx->frame_rt;
+                    nrd_interface->Begin();
+                    nrd_interface->UpdateCommonSettings(
+                        nrd_time++,
+                        Vector2ui(resolution.x, resolution.y),
+                        pixel_jitter,
+                        Transpose(camera.GetViewMatrix()),
+                        Transpose(camera.GetProjectionMatrix())
+                    );
+                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, frame_rt.motion);
+                    nrd_interface->SetInput(
+                        Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS,
+                        frame_rt.normal_roughness
+                    );
+                    nrd_interface->SetInput(
+                        Ext::NRDInterface::EResourceSlot::VIEW_Z,
+                        b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth
+                    );
+                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, frame_rt.diffuse_lighting);
+                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_SPECULAR, frame_rt.specular_lighting);
+                    nrd_interface->SetOutput(
+                        Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE,
+                        frame_rt.denoised_diffuse_lighting
+                    );
+                    nrd_interface->SetOutput(
+                        Ext::NRDInterface::EResourceSlot::OUT_SPECULAR,
+                        frame_rt.denoised_specular_lighting
+                    );
 
-                        nrd_interface->Begin();
-                        nrd_interface->UpdateCommonSettings(
-                            nrd_time++,
-                            Vector2ui(resolution.x, resolution.y),
-                            pixel_jitter,
-                            Transpose(camera.GetViewMatrix()),
-                            Transpose(camera.GetProjectionMatrix())
-                        );
-                        nrd_interface->SetInput(
-                            Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, frame_rt.motion
-                        );
-                        nrd_interface->SetInput(
-                            Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, frame_rt.normal_roughness
-                        );
-                        nrd_interface->SetInput(
-                            Ext::NRDInterface::EResourceSlot::VIEW_Z,
-                            b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth
-                        );
-                        nrd_interface->SetInput(
-                            Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, frame_rt.diffuse_lighting
-                        );
-                        nrd_interface->SetInput(
-                            Ext::NRDInterface::EResourceSlot::IN_SPECULAR, frame_rt.specular_lighting
-                        );
-                        nrd_interface->SetOutput(
-                            Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE, frame_rt.denoised_diffuse_lighting
-                        );
-                        nrd_interface->SetOutput(
-                            Ext::NRDInterface::EResourceSlot::OUT_SPECULAR,
-                            frame_rt.denoised_specular_lighting
-                        );
-                        nrd_interface->Denoise(graph_cmd_list, denoiser, MOER_TEXT("Radiance Denoising"));
-                    }
-                );
+                    auto* params   = raytracing_graph.Alloc<RGRaytracingNrdParams>();
+                    params->motion = RGTextureView{
+                        .texture = rg_rt.motion,
+                    };
+                    params->normal_roughness = RGTextureView{
+                        .texture = rg_rt.normal_roughness,
+                    };
+                    params->view_depth = RGTextureView{
+                        .texture = current_view_depth,
+                    };
+                    params->diffuse_lighting = RGTextureView{
+                        .texture = rg_rt.diffuse_lighting,
+                    };
+                    params->specular_lighting = RGTextureView{
+                        .texture = rg_rt.specular_lighting,
+                    };
+                    params->denoised_diffuse_lighting = RGTextureView{
+                        .texture = rg_rt.denoised_diffuse_lighting,
+                    };
+                    params->denoised_specular_lighting = RGTextureView{
+                        .texture = rg_rt.denoised_specular_lighting,
+                    };
+                    raytracing_graph.AddPass(
+                        MOER_TEXT("RT.NRD"),
+                        params,
+                        s_rg_graphics_compute_pass,
+                        [nrd = nrd_interface.get(), denoiser](CommandList& graph_cmd_list, RGContext) {
+                            nrd->Denoise(graph_cmd_list, denoiser, MOER_TEXT("Radiance Denoising"));
+                        }
+                    );
+                }
             }
 #endif
 
-            {
-                auto* params       = raytracing_graph.Alloc<RGRaytracingCompositionParams>();
-                params->view_depth = RGTextureView{
-                    .handle = current_view_depth,
-                };
-                params->diffuse_albedo = RGTextureView{
-                    .handle = current_diffuse_albedo,
-                };
-                params->specular_roughness = RGTextureView{
-                    .handle = current_specular_roughness,
-                };
-                params->normal = RGTextureView{
-                    .handle = current_normal,
-                };
-                params->emission = RGTextureView{
-                    .handle = rg_rt.emission,
-                };
-                params->diffuse_lighting = RGTextureView{
-                    .handle = rg_rt.diffuse_lighting,
-                };
-                params->specular_lighting = RGTextureView{
-                    .handle = rg_rt.specular_lighting,
-                };
-                params->denoised_diffuse_lighting = RGTextureView{
-                    .handle = rg_rt.denoised_diffuse_lighting,
-                };
-                params->denoised_specular_lighting = RGTextureView{
-                    .handle = rg_rt.denoised_specular_lighting,
-                };
-                params->hdr_color = RGTextureView{
-                    .handle = rg_rt.hdr_color,
-                };
-                params->motion = RGTextureView{
-                    .handle = rg_rt.motion,
-                };
-                raytracing_graph.AddPass(
-                    MOER_TEXT("RT.Composition"),
-                    params,
-                    ERGPassFlags::Graphics,
-                    [pass    = composition_pass.get(),
-                     context = rt_ctx.get()](CommandList& graph_cmd_list, RGContext) {
-                        pass->Process(graph_cmd_list, *context);
-                    }
-                );
-            }
+            composition_pass->AddPass(raytracing_graph, rg_rt, *rt_ctx);
 
             if (uses_post_process_output) {
-                auto* aa_rg_params      = raytracing_graph.Alloc<RGRaytracingAntiAliasParams>();
-                aa_rg_params->hdr_color = RGTextureView{
-                    .handle = rg_rt.hdr_color,
-                };
-                aa_rg_params->motion = RGTextureView{
-                    .handle = rg_rt.motion,
-                };
-                aa_rg_params->feedback_color_ping = RGTextureView{
-                    .handle = rg_rt.feedback_color_ping,
-                };
-                aa_rg_params->resolved_color = RGTextureView{
-                    .handle = rg_rt.resolved_color,
-                };
-                aa_rg_params->feedback_color_pong = RGTextureView{
-                    .handle = rg_rt.feedback_color_pong,
-                };
-                raytracing_graph.AddPass(
-                    MOER_TEXT("RT.AntiAlias"),
-                    aa_rg_params,
-                    ERGPassFlags::Graphics,
-                    [pass = antialias_pass.get(), context = rt_ctx.get(), aa_params, b_feedback_valid](
-                        CommandList& graph_cmd_list, RGContext
-                    ) {
-                        pass->Process(
-                            graph_cmd_list,
-                            *context,
-                            aa_params,
-                            b_feedback_valid,
-                            context->frame_rt.hdr_color,
-                            context->frame_rt.resolved_color
-                        );
-                    }
+                antialias_pass->AddPass(
+                    raytracing_graph,
+                    rg_rt,
+                    *rt_ctx,
+                    aa_params,
+                    b_feedback_valid,
+                    rt_ctx->frame_rt.hdr_color,
+                    rt_ctx->frame_rt.resolved_color
                 );
 
-                auto* tone_rg_params           = raytracing_graph.Alloc<RGRaytracingToneMappingParams>();
-                tone_rg_params->resolved_color = RGTextureView{
-                    .handle = rg_rt.resolved_color,
-                };
-                tone_rg_params->ldr_color = RGTextureView{
-                    .handle = rg_rt.ldr_color,
-                };
-                raytracing_graph.AddPass(
-                    MOER_TEXT("RT.ToneMapping"),
-                    tone_rg_params,
-                    ERGPassFlags::Graphics,
-                    [pass    = tone_mapping_pass.get(),
-                     context = rt_ctx.get(),
-                     tone_params](CommandList& graph_cmd_list, RGContext) {
-                        pass->Process(
-                            graph_cmd_list,
-                            *context,
-                            tone_params,
-                            context->frame_rt.resolved_color,
-                            context->frame_rt.ldr_color
-                        );
-                    }
+                tone_mapping_pass->AddPasses(
+                    raytracing_graph,
+                    rg_rt,
+                    *rt_ctx,
+                    tone_params,
+                    rt_ctx->frame_rt.resolved_color,
+                    rt_ctx->frame_rt.ldr_color
                 );
             } else {
                 b_feedback_valid = false;
             }
 
-            {
-                auto* params      = raytracing_graph.Alloc<RGRaytracingVisualizeParams>();
-                params->ldr_color = RGTextureView{
-                    .handle = rg_rt.ldr_color,
-                };
-                params->diffuse_lighting = RGTextureView{
-                    .handle = rg_rt.diffuse_lighting,
-                };
-                params->specular_lighting = RGTextureView{
-                    .handle = rg_rt.specular_lighting,
-                };
-                params->view_depth = RGTextureView{
-                    .handle = current_view_depth,
-                };
-                params->emission = RGTextureView{
-                    .handle = rg_rt.emission,
-                };
-                params->debug_color = RGTextureView{
-                    .handle = rg_rt.debug_color,
-                };
-                raytracing_graph.AddPass(
-                    MOER_TEXT("RT.Visualize"),
-                    params,
-                    ERGPassFlags::Graphics,
-                    [pass    = visualize_pass.get(),
-                     context = rt_ctx.get(),
-                     visualize_config,
-                     bdls = bindless_array](CommandList& graph_cmd_list, RGContext) {
-                        pass->Process(graph_cmd_list, *context, visualize_config, bdls);
-                    }
-                );
-            }
+            visualize_pass->AddPass(raytracing_graph, rg_rt, *rt_ctx, visualize_config);
 
             if (b_final_show_texture && material_textures.contains(selected_material_texture_name)) {
                 TextureRef        texture          = material_textures[selected_material_texture_name].tex;
-                RenderGraphHandle selected_texture = ImportTextureIfValid(
+                RGTexture* selected_texture = ImportRTTextureIfValid(
                     raytracing_graph, MOER_TEXT("RT.selected_material_texture"), texture
                 );
                 auto* params             = raytracing_graph.Alloc<RGRaytracingShowTextureParams>();
-                params->selected_texture = RGTextureView{
-                    .handle = selected_texture,
-                };
-                params->ldr_color = RGTextureView{
-                    .handle = rg_rt.ldr_color,
-                };
+                params->selected_texture = RTWholeTextureView(selected_texture);
+                params->ldr_color        = RTWholeTextureView(rg_rt.ldr_color);
                 const uint selected_texture_handle = material_textures[selected_material_texture_name].hdl;
                 ShowTextureParams show_texture_params{};
                 show_texture_params.dst_dim      = resolution;
@@ -1189,28 +783,46 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 raytracing_graph.AddPass(
                     MOER_TEXT("RT.ShowTexture"),
                     params,
-                    ERGPassFlags::Graphics,
-                    [&, show_texture_params, texture](CommandList& graph_cmd_list, RGContext) {
-                        sd_utils.ShowTexture(
+                    s_rg_graphics_compute_pass,
+                    [shader_utils = &sd_utils,
+                     bdls = bindless_array,
+                     show_texture_params,
+                     texture,
+                     dst_texture = rt_ctx->frame_rt.ldr_color](CommandList& graph_cmd_list, RGContext) {
+                        shader_utils->ShowTexture(
                             graph_cmd_list,
-                            bindless_array,
+                            bdls,
                             show_texture_params,
                             texture,
-                            rt_ctx->frame_rt.ldr_color
+                            dst_texture
                         );
                     }
                 );
             }
-            raytracing_graph.Dispatch(&cmd_list);
+            if (!cmd_list.IsEmpty()) {
+                pre_frame_cmd_lists.emplace_back(std::move(cmd_list));
+                cmd_list = CommandList(EQueueType::Graphics);
+            }
+            if (!pre_frame_cmd_lists.empty()) {
+                pulse_main_thread(MOER_TEXT("PreFrameSubmitBegin"));
+                RHIExecutor::Get().Submit(std::move(pre_frame_cmd_lists), ERHIExecSubmitFlags::None);
+                pre_frame_cmd_lists.clear();
+                pulse_main_thread(MOER_TEXT("PreFrameSubmitEnd"));
+            }
+            raytracing_graph.ExportTexture(rg_rt.debug_color, ETextureState::SAMPLED, EQueueType::Graphics);
+            if (uses_post_process_output || b_final_show_texture) {
+                raytracing_graph.ExportTexture(rg_rt.ldr_color, ETextureState::SAMPLED, EQueueType::Graphics);
+            }
+            pulse_main_thread(MOER_TEXT("GraphDispatchBegin"));
+            raytracing_graph.Dispatch();
+            pulse_main_thread(MOER_TEXT("GraphDispatchEnd"));
+            advance_rt_frame             = true;
+            advance_post_process_history = uses_post_process_output;
+            advance_rt_scene             = rt_scene != nullptr;
+            post_process_frame_time      = camera.GetDeltaTime();
             // copy normal to output
             //  cmd_list.CopyFrom(out_direct_lighting->GetView(),
             //  scene_color->GetView());
-            rt_ctx->AdvanceFrame();
-            if (uses_post_process_output) {
-                tone_mapping_pass->AdvanceFrame(camera.GetDeltaTime());
-                antialias_pass->AdvanceFrame();
-                b_feedback_valid = true;
-            }
 
             //////////////////////////////////////////////////////////////////////////
             // handle export
@@ -1237,20 +849,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             }
         }
 
-        const bool ready_for_history_trace =
-            scene.IsReady() && runtime_assets.IsReady() && !first_load && !b_new_env_map && b_feedback_valid;
-        if (ready_for_history_trace && !b_trace_capture_started) {
-            if (!b_trace_capture_armed) {
-                b_trace_capture_armed = true;
-            } else {
-                ResetRHITraceFrameIndex();
-                b_trace_capture_started = true;
-            }
-        } else if (!ready_for_history_trace) {
-            b_trace_capture_armed = false;
-        }
-        SetRHITraceRuntimeEnabled(b_trace_capture_started);
-
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);
         TextureRef final_color =
@@ -1268,10 +866,6 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             }
         }
 
-        if (rt_scene) {
-            rt_scene->AdvanceFrame();
-        }
-
         const bool should_close_now = WindowContext::ShouldClose(WindowContext::GetMainWindow());
         if (should_close_now) {
             // Avoid extra present work in the closing frame to reduce shutdown deadlock risk.
@@ -1283,15 +877,29 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         cmd_list.Signal(timeline, time).DeleteResources().TickProfiling().TickFrame();
         Array<CommandList> frame_cmd_lists = std::move(pre_frame_cmd_lists);
         frame_cmd_lists.emplace_back(std::move(cmd_list));
+        pulse_main_thread(MOER_TEXT("PresentSubmitBegin"));
         RHIExecutor::Get().Submit(
             std::move(frame_cmd_lists),
             ERHIExecSubmitFlags::FlushGPU,
             skip_present ? nullptr : &present_request
         );
+        if (advance_rt_frame) {
+            rt_ctx->AdvanceFrame();
+            if (advance_post_process_history) {
+                tone_mapping_pass->AdvanceFrame(post_process_frame_time);
+                antialias_pass->AdvanceFrame();
+                b_feedback_valid = true;
+            }
+        }
+        if (advance_rt_scene && rt_scene) {
+            rt_scene->AdvanceFrame();
+        }
+        pulse_main_thread(MOER_TEXT("PresentSubmitEnd"));
         cmd_list = CommandList(EQueueType::Graphics);
 
         if (!skip_present && !editor_config->play_mode_enabled && hooks.on_present_windows) {
             hooks.on_present_windows();
+            pulse_main_thread(MOER_TEXT("PresentWindowEnd"));
         }
         if (should_close_now) {
             break;
@@ -1305,9 +913,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         timeline->Wait(time);
         gfx_queue.Sync();
     }
-
-    SetRHITraceRuntimeEnabled(true);
-
+    thread_heartbeat.Unregister(main_thread_heartbeat);
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
     for (auto& buf : allocated_buf) {
         bindless_array->UnbindBuffer(buf);

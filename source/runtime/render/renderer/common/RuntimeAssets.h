@@ -23,8 +23,8 @@ public:
     RuntimeAssets(std::filesystem::path _assets_path, Render::RenderDevice& _device);
     ~RuntimeAssets();
     bool               IsReady() const;
-    Render::TextureRef GetTexture(std::string_view _name) const;
-    Render::BufferRef  GetBuffer(std::string_view _name) const;
+    Render::TextureRef GetTexture(StringView _name) const;
+    Render::BufferRef  GetBuffer(StringView _name) const;
     Render::TextureRef GetDefaultEnvMap() const;
 
     // Called from the main thread to submit pending recorded uploads.
@@ -33,13 +33,14 @@ public:
 
 private:
     void RecordTextureUploads();
+    static Array<std::byte> LoadFileBytes(const std::filesystem::path& path);
 
 private:
     std::filesystem::path assets_path;
     Render::RenderDevice& device;
-    std::string_view      default_env_map_name;
+    String                default_env_map_name;
 
-    UnorderedMap<std::string, Render::TextureRef> textures;
+    UnorderedMap<String, Render::TextureRef> textures;
 
     std::atomic_bool b_recorded = false;
     std::atomic_bool b_loaded   = false;

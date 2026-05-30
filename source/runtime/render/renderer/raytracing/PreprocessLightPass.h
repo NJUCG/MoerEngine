@@ -1,7 +1,7 @@
 #ifndef MOER_PREPARE_LIGHTS_PASS_H
 #define MOER_PREPARE_LIGHTS_PASS_H
 
-#include "RTResource.h"
+#include "RaytracingGraphResources.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHIResource.h"
@@ -29,11 +29,38 @@ public:
 };
 class PrepareLightPass {
 public:
+    struct PreparedCommand {
+        Array<uint>                  primitive_to_light;
+        Array<PrepareLightsTask>     tasks;
+        Array<PolymorphicLightInfo>  prim_light_infos;
+        PrepareLightsParams          params{};
+        uint                         dispatch_light_count = 0;
+    };
+
+    struct RecordResources {
+        BufferRef          primitive_to_light_buf;
+        BufferRef          task_buf;
+        BufferRef          prim_light_buf;
+        BufferRef          light_mapping_buf;
+        BufferRef          light_data_buf;
+        TextureRef         local_light_pdf_tex;
+        Array<TextureView> local_light_pdf_mips;
+        BindlessArrayRef   bindless_array;
+        ShaderUtils*       shader_utils = nullptr;
+    };
+
     PrepareLightPass(class RenderDevice& _device, class ShaderManager& _manager, Scene& _scene);
-    void Process(class CommandList& _cmd_list, RTContext& _rt_ctx);
+    void AddPasses(RenderGraph& _graph, const RTGraphFrameResources& _rg, RTContext& _rt_ctx);
     void CountEmissiveInstances(uint& _num_emissive_meshes, uint& _num_emissive_triangles);
 
 private:
+    PreparedCommand Prepare(RTContext& _rt_ctx);
+    static RecordResources CaptureResources(RTContext& _rt_ctx);
+    void RecordUploads(CommandList& _cmd_list, const PreparedCommand& _command, const RecordResources& _resources);
+    void RecordClears(CommandList& _cmd_list, const RecordResources& _resources);
+    void RecordPrepareLights(CommandList& _cmd_list, const PreparedCommand& _command, const RecordResources& _resources);
+    void RecordGenerateMips(CommandList& _cmd_list, RecordResources& _resources);
+
     class RenderDevice&  device;
     class ShaderManager& manager;
     Scene&               scene;

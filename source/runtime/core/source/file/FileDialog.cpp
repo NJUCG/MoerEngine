@@ -1,6 +1,7 @@
 #include "file/FileDialog.h"
 
 #include "log/LogSystem.h"
+#include "string/StringConvert.h"
 #if MOER_CORE_HAS_NFD
 #include "../../../../../3rdparty/nativefiledialog-extended-1.2.1/src/include/nfd.hpp"
 
@@ -79,8 +80,8 @@ EOpenFileStatus OpenFile(const OpenFileRequest& request) {
 
     if (native_result == NFD_OKAY && selected_path) {
         if (request.callback) {
-            const Utf8String selected_path_utf8 = Utf8String(selected_path.get());
-            request.callback(selected_path_utf8, request.user_data);
+            const String selected_path_text = Utf8ToPlatform(Utf8StringView(selected_path.get()));
+            request.callback(selected_path_text, request.user_data);
         }
         return EOpenFileStatus::Success;
     }

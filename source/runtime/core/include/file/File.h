@@ -18,7 +18,7 @@ enum class EReadFileStatus : uint8_t {
 using ReadBinaryCallback = void (*)(std::span<const std::byte> data, void* user_data);
 
 struct ReadBinaryRequest {
-    Utf8StringView     path{};
+    StringView         path{};
     ReadBinaryCallback callback{nullptr};
     void*              user_data{nullptr};
 };

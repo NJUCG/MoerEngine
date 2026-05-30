@@ -12,6 +12,57 @@ inline static uint DivCeil(uint _a, uint _b) {
     return (_a + _b - 1) / _b;
 }
 
+namespace {
+
+TextureView MakeMipChainView(std::span<TextureView> mips) {
+    assert(!mips.empty());
+    Texture* texture = mips.front().GetTexture();
+    assert(texture != nullptr);
+    return texture->GetView(mips.front().format, mips.front().mip_level, static_cast<uint8>(mips.size()));
+}
+
+void FinalizeMipChainState(CommandList& cmd_list, std::span<TextureView> mips, ETextureState final_state) {
+    if (mips.empty()) {
+        return;
+    }
+
+    Array<TrackedTextureState> textures;
+    textures.emplace_back(TrackedTextureState{
+        .texture      = MakeMipChainView(mips),
+        .state        = final_state,
+        .owner_queue  = cmd_list.GetQueueType(),
+        .access_write = false,
+    });
+    cmd_list.SetTrackedState(std::move(textures), Array<TrackedBufferState>{});
+}
+
+void EmitMipChainBarrier(
+    CommandList&              cmd_list,
+    std::span<TextureView>    mips,
+    uint                      src_mip_level,
+    uint                      write_begin,
+    uint                      write_count
+) {
+    Array<BarrierCreateInfo> barriers;
+    const BarrierState       uav_state = MakeBarrierState(ETextureState::UNORDERED_ACCESS, EPassType::Compute);
+
+    if (src_mip_level < mips.size()) {
+        barriers.emplace_back(BarrierCreateInfo::Transition(mips[src_mip_level], uav_state, uav_state));
+    }
+    for (uint write_index = 0; write_index < write_count; ++write_index) {
+        const uint mip_index = write_begin + write_index;
+        barriers.emplace_back(BarrierCreateInfo::Transition(mips[mip_index], uav_state, uav_state));
+    }
+
+    if (barriers.empty()) {
+        return;
+    }
+
+    cmd_list.Barriers(barriers, ETrackedStateUpdateMode::Skip);
+}
+
+} // namespace
+
 static constexpr EPixelFormat s_supported_formats[] = {
     PF_R32G32B32A32_SFLOAT,
     PF_R16G16B16A16_SFLOAT,
@@ -97,26 +148,45 @@ void ShaderUtils::GenerateLowDiscrepancySequence(
 void ShaderUtils::GenerateMipPdf(
     CommandList&           _cmd_list,
     const TextureView&     _env_map,
-    std::span<TextureView> _integrated_mips
+    std::span<TextureView> _integrated_mips,
+    ETextureState          _final_state
 ) {
-    using T = std::remove_const_t<std::remove_reference_t<const TextureView&>>;
+    if (_integrated_mips.empty()) {
+        return;
+    }
+
     PreprocessEnvironmentMapParams param;
     uint                           width  = _env_map.extent.x;
     uint                           height = _env_map.extent.y;
-    //5 mips in one dispatch
+
     for (uint i = 0; i < _integrated_mips.size(); i += 5) {
         param.src_mip_level  = i;
         param.num_mip_levels = _integrated_mips.size();
         param.src_size       = uint2(width, height);
+
+        const uint write_begin = i == 0 ? 0u : i + 1;
+        const uint write_count = i == 0 ? std::min<uint>(6u, uint(_integrated_mips.size()))
+                                        : std::min<uint>(5u, uint(_integrated_mips.size() - i - 1));
+        EmitMipChainBarrier(_cmd_list, _integrated_mips, i, write_begin, write_count);
 
         _cmd_list.Compute(generate_mip_pdf_pipeline, _env_map, _integrated_mips, param)
             .Dispatch(uint3(DivCeil(width, 32), DivCeil(height, 32), 1), MOER_TEXT("GenerateMipPdf"));
         width  = std::max(1u, width >> 5);
         height = std::max(1u, height >> 5);
     }
+
+    FinalizeMipChainState(_cmd_list, _integrated_mips, _final_state);
 }
 
-void ShaderUtils::GenerateMips(CommandList& _cmd_list, std::span<TextureView> _mips) {
+void ShaderUtils::GenerateMips(
+    CommandList&           _cmd_list,
+    std::span<TextureView> _mips,
+    ETextureState          _final_state
+) {
+    if (_mips.empty()) {
+        return;
+    }
+
     BuildMipsParam param;
 
     uint width  = _mips[0].extent.x;
@@ -141,11 +211,18 @@ void ShaderUtils::GenerateMips(CommandList& _cmd_list, std::span<TextureView> _m
         param.num_mip_levels = _mips.size();
         param.src_mip_level  = i;
         param.src_size       = uint2(width, height);
+
+        const uint write_begin = i + 1;
+        const uint write_count = i + 1 >= _mips.size() ? 0u : std::min<uint>(5u, uint(_mips.size() - i - 1));
+        EmitMipChainBarrier(_cmd_list, _mips, i, write_begin, write_count);
+
         _cmd_list.Compute(generate_mips_pipeline, _mips, param)
             .Dispatch(uint3(DivCeil(width, 32), DivCeil(height, 32), 1), MOER_TEXT("GenerateMips"));
         width  = std::max(1u, width >> 5);
         height = std::max(1u, height >> 5);
     }
+
+    FinalizeMipChainState(_cmd_list, _mips, _final_state);
 }
 
 void ShaderUtils::ShowTexture(

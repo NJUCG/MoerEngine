@@ -31,7 +31,7 @@ inline void RGAppendDecimal(String& target, uint64_t value) {
 struct RGCompiledHazardEdge {
     uint32_t           src_pass{0};
     uint32_t           dst_pass{0};
-    RenderGraphHandle  resource{};
+    RGResource*        resource{nullptr};
     ERGResourceKind    resource_kind{ERGResourceKind::Texture};
     uint8_t            flags{0};
     Render::EQueueType src_queue{Render::EQueueType::Ignore};
@@ -63,10 +63,25 @@ struct RGCompiledPlan {
     Moer::Array<RGCompiledExecutionBatch> execution_batches{};
 };
 
+class RenderGraph;
+
+class RENDER_API RGTransientResourceAllocator {
+public:
+    RGTransientResourceAllocator(PooledTexturePool& texture_pool, PooledBufferPool& buffer_pool);
+
+    static RGTransientResourceAllocator& Global();
+
+    void Allocate(RenderGraph& graph);
+    void Release(RenderGraph& graph);
+
+private:
+    PooledTexturePool& m_texture_pool;
+    PooledBufferPool&  m_buffer_pool;
+};
+
 class RENDER_API RenderGraph {
 public:
-    RenderGraph();
-    RenderGraph(PooledTexturePool& texture_pool, PooledBufferPool& buffer_pool);
+    RenderGraph() = default;
     RenderGraph(const RenderGraph&)            = delete;
     RenderGraph& operator=(const RenderGraph&) = delete;
     ~RenderGraph();
@@ -74,7 +89,7 @@ public:
     template<typename T, typename... Args>
         requires std::is_constructible_v<T, Args...>
     T* Alloc(Args&&... args) {
-        assert(m_phase == ERGPhase::Setup && "RenderGraph parameters must be allocated during setup");
+        assert(!m_compiled && "RenderGraph parameters must be allocated before compile");
         auto* value = MoerNew(T)(std::forward<Args>(args)...);
         m_allocations.push_back(
             RGAllocation{
@@ -90,24 +105,19 @@ public:
         return value;
     }
 
-    RenderGraphHandle CreateTexture(StringView name, const RGTextureDesc& desc);
-    RenderGraphHandle CreateBuffer(StringView name, const RGBufferDesc& desc);
-    RenderGraphHandle
-    RegisterTexture(StringView name, PooledTextureRef texture, Render::EQueueType owner_queue);
-    RenderGraphHandle RegisterBuffer(StringView name, PooledBufferRef buffer, Render::EQueueType owner_queue);
-    RenderGraphHandle
-    ImportTexture(StringView name, Render::TextureRef texture, Render::EQueueType owner_queue);
-    RenderGraphHandle ImportBuffer(StringView name, Render::BufferRef buffer, Render::EQueueType owner_queue);
-    void              ExportTexture(
-        RenderGraphHandle     handle,
-        Render::ETextureState final_state,
-        Render::EQueueType    owner_queue
-    );
-    void
-    ExportBuffer(RenderGraphHandle handle, Render::EBufferState final_state, Render::EQueueType owner_queue);
+    RGTexture* CreateTexture(StringView name, const RGTextureDesc& desc);
+    RGBuffer*  CreateBuffer(StringView name, const RGBufferDesc& desc);
+    RGTexture* RegisterTexture(StringView name, PooledTextureRef texture, Render::EQueueType owner_queue);
+    RGBuffer*  RegisterBuffer(StringView name, PooledBufferRef buffer, Render::EQueueType owner_queue);
+    RGTexture* ImportTexture(StringView name, Render::TextureRef texture, Render::EQueueType owner_queue);
+    RGBuffer*  ImportBuffer(StringView name, Render::BufferRef buffer, Render::EQueueType owner_queue);
+    void       ExportTexture(RGTexture* texture, Render::ETextureState final_state, Render::EQueueType owner_queue);
+    void       ExportBuffer(RGBuffer* buffer, Render::EBufferState final_state, Render::EQueueType owner_queue);
 
     using SetupExecute = std::function<void(RGSetupContext& setup)>;
     void AddSetupPass(StringView name, SetupExecute&& setup);
+    using SetupCommandExecute = std::function<void(RHICommandList& cmd_list, RGSetupContext& setup)>;
+    void AddSetupPass(StringView name, Render::EQueueType queue, SetupCommandExecute&& setup);
 
     template<typename T, typename Execute>
     void AddPass(T* parameters, ERGPassFlags flags, Execute&& execute) {
@@ -118,62 +128,52 @@ public:
 
     template<typename T, typename Execute>
     void AddPass(StringView name, T* parameters, ERGPassFlags flags, Execute&& execute) {
+        assert(!m_compiled && "RenderGraph passes must be added before compile");
         assert(parameters && "RenderGraph pass parameters must be graph-owned");
         using ExecuteType                  = std::remove_cvref_t<Execute>;
         constexpr bool is_parallel_execute = std::is_invocable_v<ExecuteType&, RHICommandList&, RGContext>;
-        constexpr bool is_serial_execute   = std::is_invocable_v<ExecuteType&, RGContext>;
         static_assert(
-            is_parallel_execute != is_serial_execute,
-            "AddPass lambda must be either [](RHICommandList&, RGContext) for parallel work or [](RGContext) "
-            "for serial work"
+            is_parallel_execute,
+            "AddPass lambda must be [](RHICommandList&, RGContext); use ERGPassFlags::Serial for ordered main-thread execution"
         );
-        if constexpr (is_parallel_execute) {
-            assert(RGPassHasQueue(flags) && "Parallel RenderGraph passes require one queue flag");
-        } else {
-            assert(flags == ERGPassFlags::None && "Serial RenderGraph passes must not declare queue flags");
-        }
+        assert(RGPassHasQueue(flags) && "RenderGraph passes require one queue flag");
+        const bool serial = RGPassIsSerial(flags);
 
         Moer::Array<RGTextureAccess> texture_accesses{};
         Moer::Array<RGBufferAccess>  buffer_accesses{};
-        if constexpr (is_parallel_execute && RGParameterAccessProvider<T>) {
-            RGParameterAccessCollector collector{RGPassQueue(flags)};
-            parameters->DeclareRGAccess(collector);
-            texture_accesses = collector.Textures();
-            buffer_accesses  = collector.Buffers();
+        if constexpr (RGParameterAccessProvider<T>) {
+            assert(!serial && "Serial RenderGraph passes must not declare RG resource access");
+            if (!serial) {
+                RGParameterAccessCollector collector{RGPassQueue(flags)};
+                parameters->DeclareRGAccess(collector);
+                texture_accesses = collector.Textures();
+                buffer_accesses  = collector.Buffers();
+            }
         }
 
-        if constexpr (is_parallel_execute) {
-            RGPass::ParallelExecute parallel_execute = std::forward<Execute>(execute);
-            AddPassInternal(
-                String(name),
-                parameters,
-                std::type_index(typeid(T)),
-                static_cast<uint32_t>(sizeof(T)),
-                flags,
-                ERGPassExecutionMode::Parallel,
-                std::move(texture_accesses),
-                std::move(buffer_accesses),
-                std::move(parallel_execute),
-                {}
-            );
-        } else {
-            RGPass::SerialExecute serial_execute = std::forward<Execute>(execute);
-            AddPassInternal(
-                String(name),
-                parameters,
-                std::type_index(typeid(T)),
-                static_cast<uint32_t>(sizeof(T)),
-                flags,
-                ERGPassExecutionMode::Serial,
-                {},
-                {},
-                {},
-                std::move(serial_execute)
-            );
-        }
+        RGPass::Execute pass_execute = [execute = std::forward<Execute>(execute)](
+                                            RHICommandList* cmd_list,
+                                            RGContext       context
+                                        ) mutable {
+            assert(cmd_list != nullptr);
+            execute(*cmd_list, context);
+        };
+
+        AddPassInternal(
+            String(name),
+            parameters,
+            std::type_index(typeid(T)),
+            static_cast<uint32_t>(sizeof(T)),
+            flags,
+            serial,
+            std::move(texture_accesses),
+            std::move(buffer_accesses),
+            std::move(pass_execute)
+        );
     }
 
     void Dispatch(RHICommandList* cmd_list = nullptr);
+    void Dispatch(RGTransientResourceAllocator& allocator, RHICommandList* cmd_list = nullptr);
     void Reset();
 
     const RGCompiledPlan& GetCompiledPlan() const {
@@ -182,18 +182,14 @@ public:
     const Moer::Array<RGPass>& GetPasses() const {
         return m_passes;
     }
-    const Moer::Array<RGResource>& GetResources() const {
+    const Moer::Array<RGResource*>& GetResources() const {
         return m_resources;
     }
-    const RGTexture& GetTexture(RenderGraphHandle handle) const;
-    const RGBuffer&  GetBuffer(RenderGraphHandle handle) const;
+    const RGTexture& GetTexture(const RGTexture* texture) const;
+    const RGBuffer&  GetBuffer(const RGBuffer* buffer) const;
 
 private:
-    enum class ERGPhase : uint8_t {
-        Setup,
-        Compiled,
-        Dispatched
-    };
+    friend class RGTransientResourceAllocator;
 
     struct RGAllocation {
         void* ptr{nullptr};
@@ -202,39 +198,50 @@ private:
         uint32_t        size{0};
     };
 
+    struct RGExecutionState {
+        ~RGExecutionState();
+
+        Moer::UniquePtr<RenderGraph>          graph{};
+        Moer::Array<Moer::UniquePtr<RGTexture>> textures{};
+        Moer::Array<Moer::UniquePtr<RGBuffer>>  buffers{};
+        Moer::Array<RGResource*>                resources{};
+        Moer::Array<RGPass>                     passes{};
+        Moer::Array<RGAllocation>               allocations{};
+        RGCompiledPlan                          compiled_plan{};
+    };
+
     uint32_t AddPassInternal(
-        String                    name,
-        void*                     parameters,
-        std::type_index           type,
-        uint32_t                  size,
-        ERGPassFlags              flags,
-        ERGPassExecutionMode      execution_mode,
+        String                         name,
+        void*                          parameters,
+        std::type_index                type,
+        uint32_t                       size,
+        ERGPassFlags                   flags,
+        bool                           serial,
         Moer::Array<RGTextureAccess>&& texture_accesses,
         Moer::Array<RGBufferAccess>&&  buffer_accesses,
-        RGPass::ParallelExecute&& parallel_execute,
-        RGPass::SerialExecute&&   serial_execute
+        RGPass::Execute&&              execute
     );
-    void              RunSetupPasses();
-    void              Compile();
-    void              AllocateTransientResources();
-    void              ReleaseTransientResources();
-    void              DispatchBatched();
-    void              EmitFinalTrackedStates(RHICommandList& cmd_list) const;
-    RGResource&       CheckedResource(RenderGraphHandle handle);
-    const RGResource& CheckedResource(RenderGraphHandle handle) const;
-    RenderGraphHandle AddResource(RGResource&& resource);
-    void              ValidateSetup() const;
-    void              BuildCompileMetadata();
+    void       RunSetupPasses();
+    void       Compile(RGTransientResourceAllocator& allocator);
+    void       DispatchBatched();
+    void       EmitFinalTrackedStates(RHICommandList& cmd_list) const;
+    void       EmitPassTransitions(RHICommandList& cmd_list, const RGPass& pass) const;
+    SharedPtr<RGExecutionState> DetachExecutionState();
+    RGTexture* AddTexture(Moer::UniquePtr<RGTexture> texture);
+    RGBuffer*  AddBuffer(Moer::UniquePtr<RGBuffer> buffer);
+    void       ValidateSetup() const;
+    void       BuildResourceStateRanges();
+    void       BuildCompileMetadata();
 
-    ERGPhase                  m_phase{ERGPhase::Setup};
-    bool                      m_setup_executed{false};
-    Moer::Array<RGResource>   m_resources{};
-    Moer::Array<RGSetupPass>  m_setup_passes{};
-    Moer::Array<RGPass>       m_passes{};
-    Moer::Array<RGAllocation> m_allocations{};
-    RGCompiledPlan            m_compiled_plan{};
-    PooledTexturePool*        m_texture_pool{nullptr};
-    PooledBufferPool*         m_buffer_pool{nullptr};
+    bool                          m_setup_executed{false};
+    bool                          m_compiled{false};
+    Moer::Array<Moer::UniquePtr<RGTexture>> m_textures{};
+    Moer::Array<Moer::UniquePtr<RGBuffer>>  m_buffers{};
+    Moer::Array<RGResource*>       m_resources{};
+    Moer::Array<RGSetupPass>       m_setup_passes{};
+    Moer::Array<RGPass>            m_passes{};
+    Moer::Array<RGAllocation>      m_allocations{};
+    RGCompiledPlan                 m_compiled_plan{};
 };
 
 } // namespace Moer::Render

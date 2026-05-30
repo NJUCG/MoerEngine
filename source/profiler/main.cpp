@@ -9,6 +9,7 @@
 #include "renderer/common/ui/synapse/Synapse.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "string/StringConvert.h"
 #include "taskgraph/ThreadManager.h"
 #include "window/WindowContext.h"
 
@@ -30,6 +31,17 @@ using namespace Moer::Render;
 using namespace Moer::Profiler;
 
 static constexpr uint32_t trace_packet_magic = 0x4D525443u;
+
+struct CapturePathSelectionContext {
+    String*     file_path{nullptr};
+    Utf8String* display_path{nullptr};
+};
+
+void StoreSelectedCapturePath(StringView selected_path, void* user_data) {
+    auto& context = *static_cast<CapturePathSelectionContext*>(user_data);
+    *context.file_path = String(selected_path);
+    *context.display_path = PlatformToUtf8(selected_path);
+}
 
 class ProfilerIngestServer;
 
@@ -157,7 +169,7 @@ private:
                     break;
                 }
                 if (!events.empty()) {
-                    m_store.AppendEvents(events, m_trace_decoder.TimeOriginNs());
+                    m_store.AppendEvents(events);
                 }
                 continue;
             }
@@ -1208,10 +1220,13 @@ int RunProfilerMain(int argc, const char** argv) {
 
     TimelineViewState timeline_state{};
     timeline_state.auto_follow = true;
+    String capture_file_path{};
     Utf8String capture_path{};
+    CapturePathSelectionContext capture_path_context{.file_path = &capture_file_path, .display_path = &capture_path};
     if (argc > 1 && argv[1] != nullptr && argv[1][0] != '\0') {
         capture_path = ToProfilerString(argv[1]);
-        if (!LoadProfilerCaptureFile(capture_path, store, true)) {
+        capture_file_path = Utf8ToPlatform(capture_path);
+        if (!LoadProfilerCaptureFile(capture_file_path, store, true)) {
             LOG_WARNING(MOER_TEXT("Failed to load profiler capture `{}`."), capture_path);
         }
     }
@@ -1254,13 +1269,11 @@ int RunProfilerMain(int argc, const char** argv) {
                 }};
                 const FileDialog::EOpenFileStatus status = FileDialog::OpenFile(FileDialog::OpenFileRequest{
                     .filters = capture_filters,
-                    .callback = [](Utf8StringView selected_path, void* user_data) {
-                        *static_cast<Utf8String*>(user_data) = Utf8String(selected_path);
-                    },
-                    .user_data = &capture_path,
+                    .callback = StoreSelectedCapturePath,
+                    .user_data = &capture_path_context,
                 });
                 if (status == FileDialog::EOpenFileStatus::Success) {
-                    if (!LoadProfilerCaptureFile(capture_path, store, true)) {
+                    if (!LoadProfilerCaptureFile(capture_file_path, store, true)) {
                         LOG_WARNING(MOER_TEXT("Profiler capture load failed: {}"), capture_path);
                     }
                 }
